@@ -90,6 +90,26 @@ class _State:
         return False
 
 
+# Static preset items for the model_preset EnumProperty.
+# Must be a module-level constant — callbacks can fail during class registration.
+_MODEL_PRESET_ITEMS: list[tuple[str, str, str]] = [
+    ("_custom", "Custom (manual entry)", "Manually specify repo ID and filename"),
+    ("gemma4_26b_q4", "Gemma 4 26B A4B (Q4_K_M)", "[Excellent] 16-20 GB RAM, ~16 GB disk"),
+    ("gemma4_26b_q8", "Gemma 4 26B A4B (Q8_0)", "[Excellent] 24-28 GB RAM, ~28 GB disk"),
+    ("qwen35_35b_q4", "Qwen3.6 35B A3B (Q4_K_M)", "[Excellent] 12-16 GB RAM, ~12 GB disk"),
+    ("qwen35_35b_q8", "Qwen3.6 35B A3B (Q8_0)", "[Excellent] 20-24 GB RAM, ~20 GB disk"),
+    ("qwen3coder_30b", "Qwen3-Coder 30B A3B (Q4_K_M)", "[Strong] 12-16 GB RAM, ~12 GB disk"),
+    ("llama4_scout_q4", "Llama 4 Scout 109B (Q4_K_M)", "[Strong] 20-24 GB RAM, ~20 GB disk"),
+    ("qwen25_7b_q8", "Qwen 2.5 7B Instruct (Q8_0)", "[Strong] 6-8 GB RAM, ~7 GB disk"),
+    ("qwen25_14b_q8", "Qwen 2.5 14B Instruct (Q8_0)", "[Strong] 10-14 GB RAM, ~14 GB disk"),
+    ("qwen25_32b_q8", "Qwen 2.5 32B Instruct (Q8_0)", "[Strong] 20-24 GB RAM, ~24 GB disk"),
+    ("qwen3_8b_q8", "Qwen3 8B (Q8_0)", "[Strong] 6-8 GB RAM, ~8 GB disk"),
+    ("deepseek_r1_7b", "DeepSeek-R1 7B (Q4_K_M)", "[Moderate] 6-8 GB RAM, ~5 GB disk"),
+    ("deepseek_r1_14b", "DeepSeek-R1 14B (Q4_K_M)", "[Moderate] 10-12 GB RAM, ~9 GB disk"),
+    ("deepseek_r1_32b", "DeepSeek-R1 32B (Q4_K_M)", "[Moderate] 18-22 GB RAM, ~19 GB disk"),
+]
+
+
 class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
     bl_idname = __package__
 
@@ -206,18 +226,64 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
     model_repo_id: StringProperty(  # type: ignore[valid-type]
         name="Model Repo ID",
-        default="HeYujie/Qwen3.5-35B-A3B-abliterated-GGUF",
+        default="unsloth/gemma-4-26B-A4B-it-GGUF",
     )
 
     model_filename: StringProperty(  # type: ignore[valid-type]
         name="Model Filename",
-        default="Qwen3.5-35B-A3B-abliterated-Q8_0.gguf",
+        default="gemma-4-26B-A4B-it-Q4_K_M.gguf",
     )
 
     downloaded_models_dir: StringProperty(  # type: ignore[valid-type]
         name="Models Directory",
         default=str(Path.home() / "blender_mcp_models"),
         subtype='DIR_PATH',
+    )
+
+    # ── Model Preset ─────────────────────────────────────────────────
+
+    def _update_model_preset(self, _context: bpy.types.Context) -> None:
+        """When user picks a preset, auto-fill repo_id and filename."""
+        llm = _get_llm_manager()
+        preset = llm.get_preset_by_id(self.model_preset)
+        if preset is not None:
+            self.model_repo_id = preset.repo_id
+            self.model_filename = preset.filename
+            # Build info string for display.
+            self.model_preset_info = (
+                "Capability: {cap}  |  RAM: {ram}  |  Disk: {disk}\n{desc}"
+            ).format(
+                cap=preset.capability,
+                ram=preset.ram_gb,
+                disk=preset.disk_gb,
+                desc=preset.description,
+            )
+        else:
+            self.model_preset_info = ""
+
+    model_preset: EnumProperty(  # type: ignore[valid-type]
+        name="Recommended Model",
+        description="Select a curated model preset. Picking one auto-fills the repo and filename below",
+        items=_MODEL_PRESET_ITEMS,
+        update=_update_model_preset,
+        default="gemma4_26b_q4",
+    )
+
+    model_preset_info: StringProperty(  # type: ignore[valid-type]
+        name="",
+        default="",
+    )
+
+    # ── Existing Model Selector ──────────────────────────────────────
+
+    existing_model_path: StringProperty(  # type: ignore[valid-type]
+        name="Existing Model Path",
+        description=(
+            "When set, this absolute path is used directly instead of "
+            "resolving via repo/filename. Set by selecting an existing model."
+        ),
+        default="",
+        subtype='FILE_PATH',
     )
 
     remote_api_url: StringProperty(  # type: ignore[valid-type]
@@ -286,6 +352,40 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         box.prop(self, "llm_mode", expand=True)
 
         if self.llm_mode == "local":
+            # ── Recommended Models (presets) ─────────────────────────
+            box.label(text="Step 1: Pick a Model", icon='VIEWZOOM')
+            box.prop(self, "model_preset", text="")
+            if self.model_preset != "_custom" and self.model_preset_info:
+                info_box = box.box()
+                for line in self.model_preset_info.split("\n"):
+                    info_box.label(text=line, icon='INFO')
+
+            llm_state = _get_llm_manager().get_state()
+            if not llm_state.is_running:
+                row = box.row(align=True)
+                row.operator("blmcp.download_model", icon="IMPORT")
+                if llm_state.error:
+                    box.label(text=llm_state.error, icon="ERROR")
+                if llm_state.download_progress:
+                    box.label(text=llm_state.download_progress, icon="INFO")
+            else:
+                row = box.row(align=True)
+                row.operator("blmcp.stop_llm", icon="CANCEL")
+                row.label(text="Running: {:s}".format(llm_state.model_name), icon="CHECKMARK")
+
+            # ── Existing Models (scanner) ────────────────────────────
+            box.label(text="Or use an existing model:", icon='FILE_FOLDER')
+            row = box.row(align=True)
+            row.prop(self, "existing_model_path", text="")
+            row.operator("blmcp.scan_existing_models", icon="FILE_REFRESH", text="Scan")
+            if self.existing_model_path:
+                box.label(
+                    text="Using: {:s}".format(os.path.basename(self.existing_model_path)),
+                    icon='CHECKMARK',
+                )
+
+            # ── Advanced: manual repo/filename ───────────────────────
+            box.label(text="Advanced Settings", icon='SETTINGS')
             box.prop(self, "llama_path")
             box.prop(self, "model_repo_id")
             box.prop(self, "model_filename")
@@ -295,20 +395,8 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             row = box.row(align=True)
             row.operator("blmcp.open_hf_cache", icon="FILE_FOLDER", text="Hugging Face Cache")
             row.operator("blmcp.clear_hf_cache", icon="TRASH", text="Clear Cache")
+            row.operator("blmcp.start_llm", icon="PLAY")
 
-            llm_state = _get_llm_manager().get_state()
-            if not llm_state.is_running:
-                row = box.row(align=True)
-                row.operator("blmcp.download_model", icon="IMPORT")
-                row.operator("blmcp.start_llm", icon="PLAY")
-                if llm_state.error:
-                    box.label(text=llm_state.error, icon="ERROR")
-                if llm_state.download_progress:
-                    box.label(text=llm_state.download_progress, icon="INFO")
-            else:
-                row = box.row(align=True)
-                row.operator("blmcp.stop_llm", icon="CANCEL")
-                row.label(text="Running: {:s}".format(llm_state.model_name), icon="CHECKMARK")
         else:
             box.prop(self, "remote_api_url")
             box.prop(self, "remote_api_key")
@@ -320,6 +408,7 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         box = layout.box()
         box.label(text="Agent Control", icon='WORKSPACE')
         box.prop(self, "agent_autostart")
+        box.label(text="Step 2: Start the Agent", icon='INFO')
 
         agent_state = _get_agent_controller()._agent_state
         row = box.row()
@@ -630,7 +719,12 @@ class _BLMCP_OT_start_llm(bpy.types.Operator):  # type: ignore[misc]
         import threading
 
         def _do_start():
-            llm.start_local_llama()
+            # If an existing model path is set, use it directly.
+            existing_path = prefs.existing_model_path
+            if existing_path and os.path.isfile(existing_path):
+                llm.start_local_llama(model_path=existing_path)
+            else:
+                llm.start_local_llama()
 
         thread = threading.Thread(target=_do_start, daemon=True)
         thread.start()
@@ -649,6 +743,109 @@ class _BLMCP_OT_stop_llm(bpy.types.Operator):  # type: ignore[misc]
         llm = _get_llm_manager()
         llm.stop_local_llama()
         self.report({"INFO"}, "llama-server stopped")
+        return {"FINISHED"}
+
+
+class _BLMCP_OT_scan_existing_models(bpy.types.Operator):  # type: ignore[misc]
+    """Scan for existing GGUF models and populate the existing_model_path."""
+    bl_idname = "blmcp.scan_existing_models"
+    bl_label = "Scan for Models"
+    bl_description = "Scan the models directory and HuggingFace cache for GGUF model files"
+
+    _models: list[dict] = []
+    _scan_done: bool = False
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        llm = _get_llm_manager()
+        prefs = context.preferences.addons[__package__].preferences
+
+        _BLMCP_OT_scan_existing_models._scan_done = False
+
+        import threading
+
+        def _do_scan():
+            models = llm.scan_existing_models(models_dir=prefs.downloaded_models_dir)
+            _BLMCP_OT_scan_existing_models._models = models
+            _BLMCP_OT_scan_existing_models._scan_done = True
+
+        self.report({"INFO"}, "Scanning for models...")
+        thread = threading.Thread(target=_do_scan, daemon=True)
+        thread.start()
+
+        # Poll for completion, then show results.
+        bpy.app.timers.register(
+            _scan_poll_timer(context),
+            first_interval=0.25,
+            persistent=True,
+        )
+        return {"FINISHED"}
+
+
+def _scan_poll_timer(context: bpy.types.Context):
+    """Return a timer callback that shows scan results when done."""
+    # Capture stable references before the closure.
+    wm = context.window_manager
+
+    def _poll() -> float | None:
+        if not _BLMCP_OT_scan_existing_models._scan_done:
+            return 0.25  # Keep polling
+        models = _BLMCP_OT_scan_existing_models._models
+
+        def _show_menu():
+            if not models:
+                def _empty_menu(_s, _c):
+                    _s.layout.label(text="No GGUF models found.", icon='INFO')
+                wm.popup_menu(_empty_menu, title="Scan Results", icon='FILE_FOLDER')
+            else:
+                def _draw_menu(_s, _c):
+                    layout = _s.layout
+                    layout.label(text="Found {:d} model(s):".format(len(models)), icon='INFO')
+                    for m in models:
+                        src_icon = 'FILE_FOLDER' if m["source"] == "models_dir" else 'URL'
+                        op = layout.operator(
+                            "blmcp.select_existing_model",
+                            text="[{:s}] {:s} ({:s})".format(m["source"], m["filename"], m["size_gb"]),
+                            icon=src_icon,
+                        )
+                        op.model_path = m["path"]
+                wm.popup_menu(_draw_menu, title="Select Existing Model", icon='FILE_FOLDER')
+
+            # Redraw preferences.
+            for w in bpy.data.window_managers:
+                for win in w.windows:
+                    for area in win.screen.areas:
+                        if area.type == 'PREFERENCES':
+                            area.tag_redraw()
+
+        bpy.app.timers.register(_show_menu, first_interval=0.1)
+        return None
+    return _poll
+
+
+class _BLMCP_OT_select_existing_model(bpy.types.Operator):  # type: ignore[misc]
+    """Select a model from the scan results and set it as the active model."""
+    bl_idname = "blmcp.select_existing_model"
+    bl_label = "Use This Model"
+    bl_description = "Use the selected model file directly"
+
+    model_path: StringProperty(  # type: ignore[valid-type]
+        name="Model Path",
+        default="",
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        if not self.model_path or not os.path.isfile(self.model_path):
+            self.report({"ERROR"}, "Model file not found: {:s}".format(self.model_path))
+            return {"CANCELLED"}
+
+        # Set the existing model path and clear preset selection.
+        prefs.existing_model_path = self.model_path
+        prefs.model_preset = "_custom"
+        self.report(
+            {"INFO"},
+            "Using existing model: {:s}".format(os.path.basename(self.model_path)),
+        )
         return {"FINISHED"}
 
 
@@ -793,6 +990,8 @@ _classes = (
     _BLMCP_OT_download_model,
     _BLMCP_OT_start_llm,
     _BLMCP_OT_stop_llm,
+    _BLMCP_OT_scan_existing_models,
+    _BLMCP_OT_select_existing_model,
     _BLMCP_OT_test_remote_api,
     _BLMCP_OT_ping_agent,
     _BLMCP_OT_open_hf_cache,
@@ -868,7 +1067,12 @@ def _autostart_agent_timer() -> None:
 
         llm_state = _llm.get_state()
         if not llm_state.is_running:
-            _llm.start_local_llama()
+            # If an existing model path is set, use it directly.
+            existing_path = prefs.existing_model_path
+            if existing_path and os.path.isfile(existing_path):
+                _llm.start_local_llama(model_path=existing_path)
+            else:
+                _llm.start_local_llama()
 
     print("Agent auto-start: full agent running on ports bridge={:d} mcp={:d} llm={:d}".format(
         _bridge_port, _mcp_port, _llm_port))

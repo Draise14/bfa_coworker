@@ -80,11 +80,11 @@ def _get_system_prompt() -> str:
                     prompts = yaml.safe_load(fh)
                 _system_prompt = str(prompts.get("initial_instructions", ""))
                 if _system_prompt:
-                    print("[blender_mcp] _get_system_prompt: loaded {:d} chars from {:s}".format(
+                    print("[🛠️Coworker] _get_system_prompt: loaded {:d} chars from {:s}".format(
                         len(_system_prompt), str(prompt_path)))
                     return _system_prompt
             except Exception as ex:  # pylint: disable=broad-exception-caught
-                print("[blender_mcp] _get_system_prompt: error loading {:s}: {:s}".format(
+                print("[🛠️Coworker] _get_system_prompt: error loading {:s}: {:s}".format(
                     str(prompt_path), str(ex)))
 
     # Fallback: a brief built-in system prompt.
@@ -253,7 +253,7 @@ def start_mcp_server(
 
     try:
         if _use_module:
-            print("[blender_mcp] start_mcp_server: running {:s} -m blmcp with PYTHONPATH={:s}".format(mcp_exe, env.get("PYTHONPATH", "(unset)")))
+            print("[🛠️Coworker] start_mcp_server: running {:s} -m blmcp with PYTHONPATH={:s}".format(mcp_exe, env.get("PYTHONPATH", "(unset)")))
             proc = subprocess.Popen(
                 [mcp_exe, "-m", "blmcp", "--transport", "http", "--port", str(port)],
                 stdout=subprocess.PIPE,
@@ -289,10 +289,10 @@ def start_mcp_server(
     _mcp_server_process = proc
     _agent_state.mcp_server_running = True
     _agent_state.error = ""
-    print("[blender_mcp] start_mcp_server: launched pid={:d}".format(proc.pid))
-    print("[blender_mcp] start_mcp_server: command = {:s}".format(
+    print("[🛠️Coworker] start_mcp_server: launched pid={:d}".format(proc.pid))
+    print("[🛠️Coworker] start_mcp_server: command = {:s}".format(
         str(mcp_exe or "python -m blmcp")))
-    print("[blender_mcp] start_mcp_server: BLENDER_MCP_HOST={:s} BLENDER_MCP_PORT={:d}".format(
+    print("[🛠️Coworker] start_mcp_server: BLENDER_MCP_HOST={:s} BLENDER_MCP_PORT={:d}".format(
         blender_host, blender_port))
 
     # Quick health check — read stderr for startup errors.
@@ -301,9 +301,9 @@ def start_mcp_server(
     if proc.poll() is not None:
         # Process already exited — read stderr.
         stderr_output = proc.stderr.read().decode(errors="replace") if proc.stderr else ""
-        print("[blender_mcp] start_mcp_server: process already exited with code {:d}".format(
+        print("[🛠️Coworker] start_mcp_server: process already exited with code {:d}".format(
             proc.returncode))
-        print("[blender_mcp] start_mcp_server: stderr = {:s}".format(stderr_output[:500]))
+        print("[🛠️Coworker] start_mcp_server: stderr = {:s}".format(stderr_output[:500]))
         _agent_state.error = "MCP server exited immediately: {:s}".format(stderr_output[:200])
         _agent_state.mcp_server_running = False
         _mcp_server_process = None
@@ -344,23 +344,23 @@ async def list_mcp_tools(port: int = _MCP_SERVER_DEFAULT_PORT) -> list[dict[str,
     standard MCP list-tools mechanism.
     """
     url = "http://127.0.0.1:{:d}/".format(port)
-    print("[blender_mcp] list_mcp_tools: trying {:s}".format(url))
+    print("[🛠️Coworker] list_mcp_tools: trying {:s}".format(url))
     try:
         # Try the MCP streamable-HTTP POST endpoint first.
         import httpx  # pylint: disable=import-error
         async with httpx.AsyncClient(timeout=10) as client:
             payload = {"jsonrpc": "2.0", "id": "1", "method": "tools/list"}
-            print("[blender_mcp] list_mcp_tools: POST {:s} with {:s}".format(url, json.dumps(payload)))
+            print("[🛠️Coworker] list_mcp_tools: POST {:s} with {:s}".format(url, json.dumps(payload)))
             resp = await client.post(url, json=payload)
-            print("[blender_mcp] list_mcp_tools: status={:d}".format(resp.status_code))
+            print("[🛠️Coworker] list_mcp_tools: status={:d}".format(resp.status_code))
             if resp.status_code == 200:
                 data = resp.json()
                 tools = data.get("result", {}).get("tools", [])
-                print("[blender_mcp] list_mcp_tools: httpx returned {:d} tools".format(len(tools)))
+                print("[🛠️Coworker] list_mcp_tools: httpx returned {:d} tools".format(len(tools)))
                 return tools
-            print("[blender_mcp] list_mcp_tools: httpx unexpected status {:d}".format(resp.status_code))
+            print("[🛠️Coworker] list_mcp_tools: httpx unexpected status {:d}".format(resp.status_code))
     except Exception as ex:  # pylint: disable=broad-exception-caught
-        print("[blender_mcp] list_mcp_tools: httpx failed — {:s}".format(str(ex)))
+        print("[🛠️Coworker] list_mcp_tools: httpx failed — {:s}".format(str(ex)))
 
     # Fallback: use urllib (synchronous, but simpler).
     try:
@@ -375,37 +375,37 @@ async def list_mcp_tools(port: int = _MCP_SERVER_DEFAULT_PORT) -> list[dict[str,
             },
             method="POST",
         )
-        print("[blender_mcp] list_mcp_tools: urllib POST {:s}".format(url))
+        print("[🛠️Coworker] list_mcp_tools: urllib POST {:s}".format(url))
         with urllib.request.urlopen(req, timeout=10) as resp:
             raw = resp.read().decode()
-            print("[blender_mcp] list_mcp_tools: urllib status={:d}, {:d} bytes".format(resp.status, len(raw)))
-            print("[blender_mcp] list_mcp_tools: urllib first 300 chars: {:s}".format(raw[:300]))
+            print("[🛠️Coworker] list_mcp_tools: urllib status={:d}, {:d} bytes".format(resp.status, len(raw)))
+            print("[🛠️Coworker] list_mcp_tools: urllib first 300 chars: {:s}".format(raw[:300]))
             # FastMCP in stateless_http mode returns SSE
             # (``event: message`` / ``data: {...}``) even for
             # single-response JSON-RPC calls.
             data = _parse_sse_json(raw)
             if data is None:
-                print("[blender_mcp] list_mcp_tools: urllib SSE parse returned None")
+                print("[🛠️Coworker] list_mcp_tools: urllib SSE parse returned None")
                 return []
             tools = data.get("result", {}).get("tools", [])
-            print("[blender_mcp] list_mcp_tools: urllib returned {:d} tools".format(len(tools)))
+            print("[🛠️Coworker] list_mcp_tools: urllib returned {:d} tools".format(len(tools)))
             return tools
     except Exception as ex:  # pylint: disable=broad-exception-caught
-        print("[blender_mcp] list_mcp_tools: urllib failed — {:s}".format(str(ex)))
+        print("[🛠️Coworker] list_mcp_tools: urllib failed — {:s}".format(str(ex)))
 
     return []
 
 
 def _list_tools_sync(port: int = _MCP_SERVER_DEFAULT_PORT) -> list[dict[str, Any]]:
     """Synchronous wrapper for listing MCP tools."""
-    print("[blender_mcp] _list_tools_sync: port={:d}".format(port))
+    print("[🛠️Coworker] _list_tools_sync: port={:d}".format(port))
     future = schedule_coro(list_mcp_tools(port))
     try:
         result = future.result(timeout=15)
-        print("[blender_mcp] _list_tools_sync: got {:d} tools".format(len(result)) if result else "[blender_mcp] _list_tools_sync: got 0 tools")
+        print("[🛠️Coworker] _list_tools_sync: got {:d} tools".format(len(result)) if result else "[🛠️Coworker] _list_tools_sync: got 0 tools")
         return result
     except Exception as ex:  # pylint: disable=broad-exception-caught
-        print("[blender_mcp] _list_tools_sync: FAILED — {:s}".format(str(ex)))
+        print("[🛠️Coworker] _list_tools_sync: FAILED — {:s}".format(str(ex)))
         return []
 
 
@@ -445,17 +445,17 @@ def _openai_chat_completions(
     if api_key:
         headers["Authorization"] = "Bearer {:s}".format(api_key)
 
-    print("[blender_mcp] _openai_chat_completions: POST {:s}".format(url))
-    print("[blender_mcp] _openai_chat_completions:   messages = {:d}, tools = {:d}, body = {:d} bytes".format(
+    print("[🛠️Coworker] _openai_chat_completions: POST {:s}".format(url))
+    print("[🛠️Coworker] _openai_chat_completions:   messages = {:d}, tools = {:d}, body = {:d} bytes".format(
         len(messages), len(tools), len(data_bytes)))
 
     req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=_STREAM_TIMEOUT) as resp:
             raw = resp.read().decode()
-            print("[blender_mcp] _openai_chat_completions: status={:d}, response={:d} bytes".format(
+            print("[🛠️Coworker] _openai_chat_completions: status={:d}, response={:d} bytes".format(
                 resp.status, len(raw)))
-            print("[blender_mcp] _openai_chat_completions: first 500 chars: {:s}".format(raw[:500]))
+            print("[🛠️Coworker] _openai_chat_completions: first 500 chars: {:s}".format(raw[:500]))
             result: dict[str, Any] = json.loads(raw)
             # Log the assistant message content and any tool calls.
             choice = result.get("choices", [{}])[0]
@@ -463,17 +463,17 @@ def _openai_chat_completions(
             finish = choice.get("finish_reason", "")
             content = msg.get("content") or ""
             tool_calls = msg.get("tool_calls") or []
-            print("[blender_mcp] _openai_chat_completions: finish_reason={:s}".format(finish))
-            print("[blender_mcp] _openai_chat_completions: content   = {:s}".format(
+            print("[🛠️Coworker] _openai_chat_completions: finish_reason={:s}".format(finish))
+            print("[🛠️Coworker] _openai_chat_completions: content   = {:s}".format(
                 repr(content[:200]) if content else "(empty)"))
-            print("[blender_mcp] _openai_chat_completions: tool_calls= {:d}".format(len(tool_calls)))
+            print("[🛠️Coworker] _openai_chat_completions: tool_calls= {:d}".format(len(tool_calls)))
             for i, tc in enumerate(tool_calls):
                 fn = tc.get("function", {})
-                print("[blender_mcp] _openai_chat_completions:   tool[{:d}] = {:s}({:s})".format(
+                print("[🛠️Coworker] _openai_chat_completions:   tool[{:d}] = {:s}({:s})".format(
                     i, fn.get("name", "?"), str(fn.get("arguments", ""))[:120]))
             return result
     except (urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
-        print("[blender_mcp] _openai_chat_completions: FAILED — {:s}".format(str(ex)))
+        print("[🛠️Coworker] _openai_chat_completions: FAILED — {:s}".format(str(ex)))
         _agent_state.error = "LLM request failed: {:s}".format(str(ex))
         return None
 
@@ -519,7 +519,7 @@ def _call_mcp_tool_sync(
         },
         method="POST",
     )
-    print("[blender_mcp] _call_mcp_tool_sync: {:s} args={:s}".format(
+    print("[🛠️Coworker] _call_mcp_tool_sync: {:s} args={:s}".format(
         tool_name, json.dumps(arguments)[:200]))
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
@@ -527,11 +527,11 @@ def _call_mcp_tool_sync(
             # FastMCP in stateless_http mode wraps the JSON-RPC
             # response in SSE (``event: message`` / ``data: {...}``).
             result = _parse_sse_text_response(raw)
-            print("[blender_mcp] _call_mcp_tool_sync: result = {:s}".format(
+            print("[🛠️Coworker] _call_mcp_tool_sync: result = {:s}".format(
                 result[:300]))
             return result
     except (urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
-        print("[blender_mcp] _call_mcp_tool_sync: FAILED — {:s}".format(str(ex)))
+        print("[🛠️Coworker] _call_mcp_tool_sync: FAILED — {:s}".format(str(ex)))
         return "Error calling tool '{:s}': {:s}".format(tool_name, str(ex))
 
 
@@ -559,7 +559,7 @@ def run_conversation_turn(
     if not history or history[0].get("role") != "system":
         system_text = _get_system_prompt()
         history.insert(0, {"role": "system", "content": system_text})
-        print("[blender_mcp] run_conversation_turn: inserted system prompt ({:d} chars)".format(
+        print("[🛠️Coworker] run_conversation_turn: inserted system prompt ({:d} chars)".format(
             len(system_text)))
 
     history.append({"role": "user", "content": user_message})
@@ -668,7 +668,7 @@ def run_conversation_turn(
     # If we hit the iteration limit, the LLM kept calling tools.
     # Add an explicit instruction to summarize and make one final call.
     if iterations >= _MAX_TOOL_ITERATIONS:
-        print("[blender_mcp] run_conversation_turn: hit max iterations, forcing summary")
+        print("[🛠️Coworker] run_conversation_turn: hit max iterations, forcing summary")
         history.append({
             "role": "user",
             "content": "All tool calls are complete. Please summarize what was done in 1-2 sentences.",

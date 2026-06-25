@@ -24,7 +24,7 @@ MCP_SRC_DIR = os.path.join(SCRIPT_DIR, "mcp")
 MCP_VENV_DIR = os.path.join(MCP_SRC_DIR, ".venv")
 # The addon will have a vendor/.venv/ subdirectory with blmcp + dependencies.
 VENDOR_VENV_DIR = os.path.join(ADDON_DIR, "vendor", ".venv")
-DIST_DIR = os.path.join(SCRIPT_DIR, "dist")
+DIST_DIR = os.path.join(SCRIPT_DIR, "releases")
 
 # Find Blender executable.
 def find_blender() -> str:

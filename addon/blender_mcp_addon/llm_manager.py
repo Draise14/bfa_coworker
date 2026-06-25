@@ -92,6 +92,8 @@ class LLMState:
     model_name: str = ""
     error: str = ""
     download_progress: str = ""
+    download_progress_eta: str = ""  # ETA estimate, e.g. "3m 24s remaining"
+    download_progress_pct: float = 0.0  # 0.0 to 100.0
 
 
 # ---------------------------------------------------------------------------
@@ -122,8 +124,8 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~16 GB",
         capability="Excellent",
         description=(
-            "Google's latest — native function calling with 6 dedicated control tokens. "/n
-            "Tool calling accuracy 86.4%. 256K context. Apache 2.0. "/n
+            "Google's latest — native function calling with 6 dedicated control tokens.\n"
+            "Tool calling accuracy 86.4%. 256K context. Apache 2.0.\n"
             "Best overall choice for local MCP agent work."
         ),
     ),
@@ -136,7 +138,7 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~28 GB",
         capability="Excellent",
         description=(
-            "Higher quality variant of Gemma 4. Needs more RAM but delivers "/n
+            "Higher quality variant of Gemma 4. Needs more RAM but delivers\n"
             "better precision. Native function calling with 6 dedicated control tokens."
         ),
     ),
@@ -149,8 +151,8 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~12 GB",
         capability="Excellent",
         description=(
-            "Qwen's latest MoE — only ~3B active parameters per token. "/n
-            "Excellent efficiency. Native multimodal agents with built-in MCP support. "/n
+            "Qwen's latest MoE — only ~3B active parameters per token.\n"
+            "Excellent efficiency. Native multimodal agents with built-in MCP support.\n"
             "Great balance of performance and resource usage."
         ),
     ),
@@ -163,11 +165,53 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~20 GB",
         capability="Excellent",
         description=(
-            "Higher precision Qwen3.6 MoE. ~3B active params per token. "/n
+            "Higher precision Qwen3.6 MoE. ~3B active params per token.\n"
             "Best quality-to-resources ratio among MoE models."
         ),
     ),
     # ── Strong ──────────────────────────────────────────────────────
+    ModelPreset(
+        identifier="gpt_oss_20b",
+        name="GPT-OSS 20B (MXFP4)",
+        repo_id="ggml-org/gpt-oss-20b-GGUF",
+        filename="gpt-oss-20b-mxfp4.gguf",
+        ram_gb="8-12 GB",
+        disk_gb="~12 GB",
+        capability="Strong",
+        description=(
+            "Official llama.cpp reference model. 20B parameters in MXFP4 format.\n"
+            "Excellent baseline for MCP tool use testing. Lightweight enough\n"
+            "for most modern hardware with 16 GB+ RAM."
+        ),
+    ),
+    ModelPreset(
+        identifier="gemma3_4b_qat",
+        name="Gemma 3 4B (QAT Q4_0)",
+        repo_id="google/gemma-3-4b-it-qat-q4_0-gguf",
+        filename="gemma-3-4b-it-q4_0.gguf",
+        ram_gb="4-6 GB",
+        disk_gb="~3 GB",
+        capability="Strong",
+        description=(
+            "Google's lightweight Gemma 3 with Quantization-Aware Training.\n"
+            "Runs on almost any hardware. Good introduction to local LLMs.\n"
+            "Also serves as a vision-language model with mmproj."
+        ),
+    ),
+    ModelPreset(
+        identifier="gemma3_12b_qat",
+        name="Gemma 3 12B (QAT Q4_0)",
+        repo_id="google/gemma-3-12b-it-qat-q4_0-gguf",
+        filename="gemma-3-12b-it-q4_0.gguf",
+        ram_gb="8-12 GB",
+        disk_gb="~7 GB",
+        capability="Strong",
+        description=(
+            "Google's mid-range Gemma 3 with Quantization-Aware Training.\n"
+            "Great balance of quality and resource usage. Vision-language capable.\n"
+            "Recommended entry point for users with 12+ GB RAM."
+        ),
+    ),
     ModelPreset(
         identifier="qwen3coder_30b",
         name="Qwen3-Coder 30B A3B (Q4_K_M)",
@@ -177,8 +221,8 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~12 GB",
         capability="Strong",
         description=(
-            "Specialized for coding agent tasks with strong tool calling. "/n
-            "256K context. Excels at long-horizon reasoning and recovery "/n
+            "Specialized for coding agent tasks with strong tool calling.\n"
+            "256K context. Excels at long-horizon reasoning and recovery\n"
             "from execution failures."
         ),
     ),
@@ -191,8 +235,8 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~20 GB",
         capability="Strong",
         description=(
-            "Meta's MoE — 109B total / 17B active per forward pass. "/n
-            "Natively multimodal. Optimized for agentic workflows and tool calling. "/n
+            "Meta's MoE — 109B total / 17B active per forward pass.\n"
+            "Natively multimodal. Optimized for agentic workflows and tool calling.\n"
             "Outperforms Gemma 3 and Mistral 3.1."
         ),
     ),
@@ -205,8 +249,8 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~7 GB",
         capability="Strong",
         description=(
-            "Lightweight and fast. Great for lower-end hardware. "/n
-            "Native tool calling via Hermes-style template. "/n
+            "Lightweight and fast. Great for lower-end hardware.\n"
+            "Native tool calling via Hermes-style template.\n"
             "A solid entry-level choice."
         ),
     ),
@@ -219,7 +263,7 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~14 GB",
         capability="Strong",
         description=(
-            "Mid-range Qwen 2.5. Good balance of capability and resource usage. "/n
+            "Mid-range Qwen 2.5. Good balance of capability and resource usage.\n"
             "Native tool calling support."
         ),
     ),
@@ -232,7 +276,7 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~24 GB",
         capability="Strong",
         description=(
-            "Large Qwen 2.5 for users with ample RAM. "/n
+            "Large Qwen 2.5 for users with ample RAM.\n"
             "Strong tool calling and reasoning capabilities."
         ),
     ),
@@ -240,12 +284,12 @@ PRESET_MODELS: list[ModelPreset] = [
         identifier="qwen3_8b_q8",
         name="Qwen3 8B (Q8_0)",
         repo_id="Qwen/Qwen3-8B-GGUF",
-        filename="qwen3-8b-q8_0.gguf",
+        filename="Qwen3-8B-Q8_0.gguf",
         ram_gb="6-8 GB",
         disk_gb="~8 GB",
         capability="Strong",
         description=(
-            "Latest Qwen3 dense model. Supports thinking mode for complex "/n
+            "Latest Qwen3 dense model. Supports thinking mode for complex\n"
             "tool chains. Good entry point for limited hardware."
         ),
     ),
@@ -259,8 +303,8 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~5 GB",
         capability="Moderate",
         description=(
-            "Best for reasoning-heavy tasks. Less reliable at strict tool "/n
-            "schemas. Community tool-calling variants available. "/n
+            "Best for reasoning-heavy tasks. Less reliable at strict tool\n"
+            "schemas. Community tool-calling variants available.\n"
             "Smallest R1 variant — runs on most hardware."
         ),
     ),
@@ -273,7 +317,7 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~9 GB",
         capability="Moderate",
         description=(
-            "Mid-range DeepSeek-R1 distilled. Better reasoning than 7B "/n
+            "Mid-range DeepSeek-R1 distilled. Better reasoning than 7B\n"
             "but still moderate tool calling reliability."
         ),
     ),
@@ -286,7 +330,7 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~19 GB",
         capability="Moderate",
         description=(
-            "Largest DeepSeek-R1 distilled variant. Strong reasoning "/n
+            "Largest DeepSeek-R1 distilled variant. Strong reasoning\n"
             "capabilities but tool calling may need community fine-tunes."
         ),
     ),
@@ -396,6 +440,8 @@ def get_state() -> LLMState:
             model_name=_state.model_name,
             error=_state.error,
             download_progress=_state.download_progress,
+            download_progress_eta=_state.download_progress_eta,
+            download_progress_pct=_state.download_progress_pct,
         )
 
 
@@ -479,6 +525,63 @@ def _set_download_progress(msg: str) -> None:
         _state.download_progress = msg
 
 
+def _set_download_progress_eta(eta: str, pct: float) -> None:
+    with _lock:
+        _state.download_progress_eta = eta
+        _state.download_progress_pct = pct
+
+
+def _clear_download_state() -> None:
+    """Clear download progress, ETA, and error. Called before a new download."""
+    with _lock:
+        _state.download_progress = ""
+        _state.download_progress_eta = ""
+        _state.download_progress_pct = 0.0
+        _state.error = ""
+
+
+def _format_bytes(bytes_val: float) -> str:
+    """Format bytes to a human-readable string (KB/MB/GB)."""
+    if bytes_val >= 1024 ** 3:
+        return "{:.1f} GB".format(bytes_val / (1024 ** 3))
+    if bytes_val >= 1024 ** 2:
+        return "{:.0f} MB".format(bytes_val / (1024 ** 2))
+    if bytes_val >= 1024:
+        return "{:.0f} KB".format(bytes_val / 1024)
+    return "{:.0f} B".format(bytes_val)
+
+
+def _format_eta(seconds: float) -> str:
+    """Format seconds into a concise ETA string like '3m 24s remaining'."""
+    if seconds < 0 or seconds > 86400:
+        return "calculating..."
+    mins, secs = divmod(int(seconds), 60)
+    if mins > 0:
+        return "{:d}m {:02d}s remaining".format(mins, secs)
+    return "{:d}s remaining".format(secs)
+
+
+def _get_hf_file_size(repo_id: str, filename: str) -> int | None:
+    """Get the total file size of a HuggingFace model file via a HEAD request.
+
+    Returns the size in bytes, or ``None`` if it cannot be determined.
+    """
+    url = "https://huggingface.co/{:s}/resolve/main/{:s}".format(repo_id, filename)
+    print("[🛠️Coworker] _get_hf_file_size: checking {:s}".format(url))
+    try:
+        req = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            size_str = resp.headers.get("Content-Length")
+            if size_str:
+                size = int(size_str)
+                print("[🛠️Coworker] _get_hf_file_size: size = {:d} bytes ({:s})".format(
+                    size, _format_bytes(size)))
+                return size
+    except (urllib.error.URLError, OSError, ValueError) as ex:
+        print("[🛠️Coworker] _get_hf_file_size: failed — {:s}".format(str(ex)))
+    return None
+
+
 def download_model(
     repo_id: str | None = None,
     filename: str | None = None,
@@ -489,6 +592,9 @@ def download_model(
 
     Uses the configured repo/file or the provided overrides.
     Returns the path to the downloaded model, or ``None`` on failure.
+
+    Progress is tracked by monitoring the destination file's growth on disk
+    and comparing it against the total file size from HuggingFace.
     """
     with _lock:
         r = repo_id or _config.model_repo_id
@@ -511,6 +617,9 @@ def download_model(
     print("[🛠️Coworker] download_model: models_dir = {:s}".format(str(models_dir)))
     print("[🛠️Coworker] download_model: dest = {:s}".format(str(dest)))
 
+    # Clear stale state before starting.
+    _clear_download_state()
+
     # Check if already downloaded.
     if dest.exists():
         print("[🛠️Coworker] download_model: already exists, skipping download")
@@ -519,14 +628,32 @@ def download_model(
             progress_callback("Model already downloaded: {:s}".format(str(dest)))
         return dest
 
-    _set_download_progress("Downloading {:s}/{:s} ...".format(r, f))
+    # Get the total file size from HuggingFace via HEAD request.
+    total_bytes = _get_hf_file_size(r, f)
+    if total_bytes is not None:
+        _set_download_progress("Downloading {:s} ({:s}) ...".format(f, _format_bytes(total_bytes)))
+    else:
+        _set_download_progress("Downloading {:s} ...".format(f))
     if progress_callback:
         progress_callback("Downloading {:s}/{:s} ...".format(r, f))
 
+    import time
+    import re
+
+    _MODEL_DOWNLOAD_TIMEOUT = 3600  # 1 hour max for large models.
+
     try:
         print("[🛠️Coworker] download_model: running llama-cli download...")
-        # Use Popen with line-by-line streaming so the user can see
-        # download progress in real time in the Blender console.
+
+        # Redirect HuggingFace cache to live inside the user's models
+        # directory so downloads go directly to the configured location
+        # instead of ~/.cache/huggingface/hub/.
+        hf_cache_dir = models_dir / ".hf_cache"
+        hf_cache_dir.mkdir(parents=True, exist_ok=True)
+        env = os.environ.copy()
+        env["HF_HOME"] = str(hf_cache_dir)
+        env["HF_HUB_CACHE"] = str(hf_cache_dir)
+
         proc = subprocess.Popen(
             [
                 llama_cli,
@@ -538,28 +665,121 @@ def download_model(
             stderr=subprocess.STDOUT,
             text=True,
             errors="replace",
+            env=env,
         )
-        # Stream output line by line, passing each line through
-        # the progress callback (and printing to console).
-        for line in proc.stdout:
-            line = line.rstrip("\n\r")
-            if line:
-                print("[llama-cli] {:s}".format(line))
-                if progress_callback:
-                    progress_callback(line)
-        proc.wait(timeout=_MODEL_DOWNLOAD_TIMEOUT)
+
+        # ── Progress monitoring via file growth ──────────────────────
+        # llama-cli writes directly to the destination file. We poll its
+        # size at regular intervals to compute percentage and ETA.
+        start_time = time.time()
+        last_bytes = 0
+        last_check = time.time()
+        eta_samples: list[tuple[float, float]] = []  # (time, bytes) samples
+
+        def _poll_progress() -> tuple[str, float]:
+            """Check the destination file, update progress state.
+
+            Returns (display_text, percentage_float).
+            """
+            nonlocal last_bytes, last_check
+            now = time.time()
+            if not dest.exists():
+                return _state.download_progress, _state.download_progress_pct
+            try:
+                current_bytes = dest.stat().st_size
+            except OSError:
+                return _state.download_progress, _state.download_progress_pct
+
+            if current_bytes > last_bytes and total_bytes and total_bytes > 0:
+                elapsed = now - last_check
+                if elapsed > 0:
+                    rate_bps = (current_bytes - last_bytes) / elapsed
+                    eta_samples.append((now, rate_bps))
+                    # Keep a rolling 30-second window.
+                    while eta_samples and eta_samples[0][0] < now - 30:
+                        eta_samples.pop(0)
+
+                last_bytes = current_bytes
+                last_check = now
+
+                pct = min(99.9, current_bytes / total_bytes * 100.0)
+                downloaded_str = _format_bytes(current_bytes)
+                total_str = _format_bytes(total_bytes)
+
+                # Compute ETA from average rate.
+                eta_str = ""
+                if eta_samples:
+                    avg_rate = sum(s[1] for s in eta_samples) / len(eta_samples)
+                    if avg_rate > 0:
+                        remaining = (total_bytes - current_bytes) / avg_rate
+                        eta_str = _format_eta(remaining)
+
+                text = "Downloaded {:s} / {:s} ({:.1f}%)".format(
+                    downloaded_str, total_str, pct)
+                if eta_str:
+                    text = "{:s}  |  {:s}".format(text, eta_str)
+
+                _set_download_progress(text)
+                _set_download_progress_eta(eta_str, pct)
+                return text, pct
+
+            return _state.download_progress, _state.download_progress_pct
+
+        # Read console output in a background thread so we can poll file
+        # growth on the main thread without blocking.
+        console_lines: list[str] = []
+
+        def _read_console():
+            for line in proc.stdout:
+                line = line.rstrip("\n\r")
+                if line:
+                    console_lines.append(line)
+
+        console_thread = threading.Thread(target=_read_console, daemon=True)
+        console_thread.start()
+
+        # Poll file growth until the process finishes.
+        # We also print console output periodically.
+        last_print = time.time()
+        while console_thread.is_alive():
+            # Poll progress every 0.5s.
+            _poll_progress()
+            # Print console output in batches.
+            now = time.time()
+            if now - last_print > 2.0 and console_lines:
+                for cl in console_lines:
+                    # Filter noise — only print meaningful lines.
+                    clean = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', cl).strip()
+                    if clean and not clean.startswith("load_backend"):
+                        print("[llama-cli] {:s}".format(clean))
+                console_lines.clear()
+                last_print = now
+            time.sleep(0.5)
+
+        # Final progress check.
+        text, pct = _poll_progress()
+
+        # Print any remaining console output.
+        for cl in console_lines:
+            clean = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', cl).strip()
+            if clean:
+                print("[llama-cli] {:s}".format(clean))
+
+        proc.wait(timeout=10)
         if proc.returncode != 0:
             raise subprocess.CalledProcessError(proc.returncode, proc.args)
         print("[🛠️Coworker] download_model: llama-cli completed successfully")
     except subprocess.CalledProcessError as ex:
         print("[🛠️Coworker] download_model: llama-cli failed: {:s}".format(str(ex)))
         _set_error("Download failed: {:s}".format(str(ex)))
+        _set_download_progress_eta("", 0.0)
         if progress_callback:
             progress_callback("Download failed: {:s}".format(str(ex)))
         return None
     except subprocess.TimeoutExpired:
-        print("[🛠️Coworker] download_model: download timed out after {:d}s".format(_MODEL_DOWNLOAD_TIMEOUT))
-        _set_error("Download timed out after {:d}s".format(_MODEL_DOWNLOAD_TIMEOUT))
+        print("[🛠️Coworker] download_model: download timed out")
+        _set_error("Download timed out")
+        _set_download_progress_eta("", 0.0)
         try:
             proc.kill()
         except Exception:  # pylint: disable=broad-exception-caught
@@ -571,18 +791,22 @@ def download_model(
         return None
 
     if dest.exists():
-        print("[🛠️Coworker] download_model: file found at expected path {:s}".format(str(dest)))
-        _set_download_progress("Downloaded to {:s}".format(str(dest)))
+        size_str = _format_bytes(dest.stat().st_size)
+        print("[🛠️Coworker] download_model: file found at expected path {:s} ({:s})".format(
+            str(dest), size_str))
+        _set_download_progress("Download complete: {:s} ({:s})".format(f, size_str))
+        _set_download_progress_eta("", 100.0)
         if progress_callback:
             progress_callback("Downloaded to {:s}".format(str(dest)))
         return dest
 
-    # llama-cli may put the file in a subdirectory named after the repo.
-    # Search recursively for the file in the models directory.
-    print("[🛠️Coworker] download_model: file not at expected path, searching recursively...")
+    # llama-cli may put the file inside the .hf_cache/ subfolder.
+    # Search recursively for the file in the models directory + .hf_cache.
+    print("[🛠️Coworker] download_model: file not at expected path, searching...")
     for found in models_dir.rglob(f):
         print("[🛠️Coworker] download_model: found at {:s}".format(str(found)))
-        _set_download_progress("Downloaded to {:s}".format(str(found)))
+        _set_download_progress("Download complete: {:s}".format(f))
+        _set_download_progress_eta("", 100.0)
         if progress_callback:
             progress_callback("Downloaded to {:s}".format(str(found)))
         return found
@@ -599,30 +823,45 @@ def _find_model_in_hf_cache(repo_id: str, filename: str) -> str | None:
     The HF cache layout is:
       ~/.cache/huggingface/hub/models--{org}--{repo}/snapshots/{hash}/{filename}
 
+    Also searches the local models directory's ``.hf_cache/`` subfolder since
+    downloads are redirected there (see ``download_model``).
+
     Returns the full path to the model if found, or ``None``.
     """
     # Normalize the repo_id for the cache directory name.
     cache_dir_name = "models--{:s}".format(repo_id.replace("/", "--"))
 
-    # Check the standard HF cache location.
-    hf_cache = Path.home() / ".cache" / "huggingface" / "hub" / cache_dir_name
-    if not hf_cache.is_dir():
-        # Also check HF_HOME / HF_HUB_CACHE env vars.
-        hf_home = os.environ.get("HF_HOME") or os.environ.get("HF_HUB_CACHE")
-        if hf_home:
-            hf_cache = Path(hf_home) / "hub" / cache_dir_name
+    # Collect all possible cache roots to search.
+    cache_roots: list[Path] = []
 
-    if not hf_cache.is_dir():
-        print("[🛠️Coworker] _find_model_in_hf_cache: cache dir not found at {:s}".format(str(hf_cache)))
-        return None
+    # 1. Local models dir .hf_cache (primary — redirected downloads).
+    with _lock:
+        local_models = _config.downloaded_models_dir
+    if local_models and os.path.isdir(local_models):
+        cache_roots.append(Path(local_models) / ".hf_cache" / "hub")
+    else:
+        default_local = Path.home() / "blender_mcp_models"
+        cache_roots.append(default_local / ".hf_cache" / "hub")
 
-    # Walk the snapshots directory looking for the filename.
-    for root, _dirs, files in os.walk(str(hf_cache)):
-        for candidate in files:
-            if candidate == filename:
-                found = os.path.join(root, candidate)
-                print("[🛠️Coworker] _find_model_in_hf_cache: found {:s}".format(found))
-                return found
+    # 2. Standard HF cache location.
+    cache_roots.append(Path.home() / ".cache" / "huggingface" / "hub")
+
+    # 3. HF_HOME / HF_HUB_CACHE env var.
+    hf_home = os.environ.get("HF_HOME") or os.environ.get("HF_HUB_CACHE")
+    if hf_home:
+        cache_roots.append(Path(hf_home) / "hub")
+
+    for root in cache_roots:
+        cache_dir = root / cache_dir_name
+        if not cache_dir.is_dir():
+            continue
+        # Walk the snapshots directory looking for the filename.
+        for walk_root, _dirs, files in os.walk(str(cache_dir)):
+            for candidate in files:
+                if candidate == filename:
+                    found = os.path.join(walk_root, candidate)
+                    print("[🛠️Coworker] _find_model_in_hf_cache: found {:s}".format(found))
+                    return found
 
     print("[🛠️Coworker] _find_model_in_hf_cache: {:s} not found in cache".format(filename))
     return None
@@ -712,7 +951,6 @@ def start_local_llama(
     try:
         if sys.platform == "win32":
             # Build the full llama-server command line.
-            # Add --verbose to see detailed logs in the console window.
             server_cmd = '"{exe}" --jinja --verbose --host 127.0.0.1 --port {port} --ctx-size {ctx} {modelarg}'.format(
                 exe=server_exe,
                 port=port,
@@ -721,6 +959,14 @@ def start_local_llama(
                          if use_hf
                          else '--model "{model}"'.format(model=str(model_path))),
             )
+
+            # Redirect HF cache into models dir so all downloads are
+            # consolidated in the user's configured models directory.
+            hf_cache_dir = _get_models_dir() / ".hf_cache"
+            hf_cache_dir.mkdir(parents=True, exist_ok=True)
+            env = os.environ.copy()
+            env["HF_HOME"] = str(hf_cache_dir)
+            env["HF_HUB_CACHE"] = str(hf_cache_dir)
 
             # Use ``start`` to open a NEW console window, and ``cmd /k``
             # so the window stays open after the server exits (crashes).
@@ -732,7 +978,8 @@ def start_local_llama(
 
             print("[🛠️Coworker] start_local_llama: WIN32 path")
             print("[🛠️Coworker] start_local_llama:   cmd = {:s}".format(cmd_str))
-            proc = subprocess.Popen(cmd_str, shell=True)
+            print("[🛠️Coworker] start_local_llama:   HF_HOME = {:s}".format(str(hf_cache_dir)))
+            proc = subprocess.Popen(cmd_str, shell=True, env=env)
             print("[🛠️Coworker] start_local_llama:   Popen returned pid={:d}".format(proc.pid))
         else:
             # Linux / macOS: detach from the parent process group so the

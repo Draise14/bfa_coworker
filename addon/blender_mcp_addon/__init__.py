@@ -98,6 +98,9 @@ _MODEL_PRESET_ITEMS: list[tuple[str, str, str]] = [
     ("gemma4_26b_q8", "Gemma 4 26B A4B (Q8_0)", "[Excellent] 24-28 GB RAM, ~28 GB disk"),
     ("qwen35_35b_q4", "Qwen3.6 35B A3B (Q4_K_M)", "[Excellent] 12-16 GB RAM, ~12 GB disk"),
     ("qwen35_35b_q8", "Qwen3.6 35B A3B (Q8_0)", "[Excellent] 20-24 GB RAM, ~20 GB disk"),
+    ("gpt_oss_20b", "GPT-OSS 20B (MXFP4)", "[Strong] 8-12 GB RAM, ~12 GB disk"),
+    ("gemma3_4b_qat", "Gemma 3 4B (QAT Q4_0)", "[Strong] 4-6 GB RAM, ~3 GB disk"),
+    ("gemma3_12b_qat", "Gemma 3 12B (QAT Q4_0)", "[Strong] 8-12 GB RAM, ~7 GB disk"),
     ("qwen3coder_30b", "Qwen3-Coder 30B A3B (Q4_K_M)", "[Strong] 12-16 GB RAM, ~12 GB disk"),
     ("llama4_scout_q4", "Llama 4 Scout 109B (Q4_K_M)", "[Strong] 20-24 GB RAM, ~20 GB disk"),
     ("qwen25_7b_q8", "Qwen 2.5 7B Instruct (Q8_0)", "[Strong] 6-8 GB RAM, ~7 GB disk"),
@@ -357,17 +360,33 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             box.prop(self, "model_preset", text="")
             if self.model_preset != "_custom" and self.model_preset_info:
                 info_box = box.box()
+                info_box.label(text="Model Information", icon='INFO')
                 for line in self.model_preset_info.split("\n"):
-                    info_box.label(text=line, icon='INFO')
+                    info_box.label(text=line)
 
             llm_state = _get_llm_manager().get_state()
             if not llm_state.is_running:
                 row = box.row(align=True)
+                box.prop(self, "downloaded_models_dir")
                 row.operator("blmcp.download_model", icon="IMPORT")
                 if llm_state.error:
                     box.label(text=llm_state.error, icon="ERROR")
                 if llm_state.download_progress:
-                    box.label(text=llm_state.download_progress, icon="INFO")
+                    # Show progress with ETA if available.
+                    prog_text = llm_state.download_progress
+                    if llm_state.download_progress_eta:
+                        prog_text = "{:s}  |  {:s}".format(
+                            prog_text, llm_state.download_progress_eta,
+                        )
+                    box.label(text=prog_text, icon='INFO')
+                    # Show progress bar if we have a percentage.
+                    pct = llm_state.download_progress_pct
+                    if pct > 0:
+                        row = box.row(align=True)
+                        row.progress(
+                            factor=pct / 100.0,
+                            type='BAR',
+                        )
             else:
                 row = box.row(align=True)
                 row.operator("blmcp.stop_llm", icon="CANCEL")
@@ -389,7 +408,7 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             box.prop(self, "llama_path")
             box.prop(self, "model_repo_id")
             box.prop(self, "model_filename")
-            box.prop(self, "downloaded_models_dir")
+
 
             # ── Models directory row ─────────────────────────────────
             row = box.row(align=True)
@@ -624,7 +643,8 @@ class _BLMCP_OT_download_model(bpy.types.Operator):  # type: ignore[misc]
         if self._timer is not None:
             bpy.app.timers.unregister(self._timer)
 
-        context.area.tag_redraw()
+        if context and context.area:
+            context.area.tag_redraw()
 
         if self._result:
             self.report({"INFO"}, "Download complete: {:s}".format(str(self._result)))

@@ -51,10 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and update all internal imports.
 - [ ] **Interface & Operator Modularization** — Split `__init__.py` into
   separate modules (`preferences.py`, `operators_server.py`, `operators_llm.py`,
-  `operators_agent.py`, `operators_hf.py`) for easier maintenance.
+  `operators_agent.py`, `operators_hf.py`) for easier maintenance
 
 #### Medium Priority
-- [ ] **Add history chat to a text with a button to open it** - so we can copy and paste the results and save the log from the chat
+- [ ] **Add history chat to a text file with a button to open it in a floating window** - so we can copy and paste the results and save the log from the chat
 - [ ] **SKILL.md Update** — Rewrite `.github/skills/self-contained-blender-mcp/SKILL.md`
   to reflect current project goals and branding.
 - [ ] **DOCUMENTATION.md** — Create user-facing documentation covering

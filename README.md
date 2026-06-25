@@ -1,145 +1,224 @@
 # Bforartists Coworker (Blender MCP Fork)
-Blender MCP fork with a self-contained local setup
 
-## Overview
+> **⚠️ WORK IN PROGRESS** — This is an active fork under heavy development.
+> See [TODO](#todo) below for planned features and known gaps.
 
-A lightweight MCP (Model Context Protocol) server for Blender.
-It offers a natural language interface with Blender's Python API,
-improving access to documentation, and allowing users to explore
-and understand complex setups.
+A self-contained Blender add-on that bundles an LLM agent, MCP server, and
+in-Blender chat UI — no external tools, no manual server setup, no Python
+environment wrangling. Install the add-on, pick a model, start chatting.
 
-This is a fork to make the model management, LLM downloading and opt-in, and server spinup, MCP Bridge setup and internal chat all self-contained and easily setup after installing the addon - without needing to setup and install any third-party interfaces or servers and dependencies. Plug in, download model, start agent.
+---
 
-Alternatively, allow an easy way to use API keys to interface with Blender or Bforartists.
+## Quick Start
 
-Read the documentation at [blender.org/lab/mcp-server](https://www.blender.org/lab/mcp-server/)
+### 1. Install the Add-on
 
-----
+- Open Blender → **Edit → Preferences → Add-ons**
+- Click **Install from Disk...** and select the built `.zip` (or point to the
+  `addon/blender_mcp_addon/` directory for development)
+- Search for **"MCP"** and enable the add-on
+
+### 2. Pick a Model
+
+In the add-on preferences you'll see the **LLM Configuration** section:
+
+- **Recommended Models** — A curated dropdown of 13 tested GGUF models
+  (Gemma 4, Qwen3, Llama 4 Scout, etc.) with tooltips showing RAM
+  requirements, disk size, and capability rating. Select one and it
+  auto-fills the repo ID and filename.
+- **Scan for Existing Models** — Click the **Scan** button to search your
+  configured models directory and HuggingFace cache for `.gguf` files you
+  already have. Found models appear in a popup for one-click selection.
+- **Advanced Settings** — Manually enter a HuggingFace repo ID and filename,
+  or adjust the **Context Window Size** if a model needs more/less tokens.
+
+### 3. Download & Start
+
+Click **Download & Start**. The add-on launches `llama-server` which
+auto-downloads the model from HuggingFace (progress visible in the
+llama-server console window). Once the model is ready, the server stays
+running in the background.
+
+### 4. Start the Agent
+
+In the **Agent Control** section, click **Start Agent**. This launches the
+MCP bridge server and connects it to the local LLM. The status indicators
+should all show green.
+
+### 5. Chat!
+
+Open the **3D Viewport sidebar** (press `N` if hidden) and find the
+**MCP** tab. Type your message in the input box and press **Send**. The
+agent will think, call Blender tools as needed, and respond.
+
+That's it. No command line, no Docker, no separate Python installs.
+
+---
+
+## How It's Self-Contained
+
+This fork wraps the original [Blender MCP](https://www.blender.org/lab/mcp-server/)
+into a single add-on experience:
+
+| What you'd normally need to set up manually | What this add-on does for you |
+|---|---|
+| Install & configure `llama.cpp` separately | Detects `llama-server` on PATH or lets you set the path — then launches it automatically |
+| Download GGUF models manually | Built-in download via `llama-server`, or scan for models you already have |
+| Run an MCP bridge server | Auto-started when you click **Start Agent** |
+| Run a separate chat client | Chat UI lives in Blender's 3D Viewport sidebar |
+| Wire up API keys (optional) | Remote API mode with URL + key fields in preferences |
+
+Alternatively, you can use a remote API (OpenAI, OpenRouter, Anthropic) by
+entering the URL and API key in preferences — no local LLM required.
+
+Original upstream documentation: [blender.org/lab/mcp-server](https://www.blender.org/lab/mcp-server/)
+
+---
+
+## Architecture
 
 The project is deliberately small, maintainable, and does no more than
 necessary. It has two components that communicate over a TCP socket:
 
 - A **Blender add-on** that runs inside Blender and executes requests.
-- An **MCP server** that runs as a separate process, launched by the
-  MCP client (e.g. [Llama.cpp](https://projects.blender.org/lab/blender_mcp/wiki/Llama.cpp)).
+- An **MCP server** that runs as a separate process.
 
 The data flow is:
+
 ```
 MCP Client  ⇐ MCP/stdio ⇒  blender-mcp  ⇐ TCP socket ⇒  Blender Add-on
 ```
 
+In this fork the "MCP Client" is the built-in agent controller, which
+talks to the local LLM or remote API, then relays tool calls to the
+MCP server over HTTP:
 
-## Blender Add-on
+```
+Chat UI → Agent Controller → [Local LLM / Remote API]
+                ↓
+        MCP Server (blender-mcp)
+                ↓
+        Bridge Server (inside Blender)
+                ↓
+        Blender executes the code
+```
 
-Located in ``addon/blender_mcp_addon/``.
+---
 
-A Blender extension that allows the MCP server to communicate with a
-running Blender instance. It must be installed and enabled for any of
-the MCP tools to work.
+## MCP Tools
 
-The add-on provides a preferences panel for configuring the host, port,
-and an optional auto-start setting.
+The MCP server provides the following tools that the LLM can call:
 
-### Functionality Overview
+- **execute_blender_code** — Execute Python code in the connected Blender instance
+- **get_blendfile_summary_datablocks** — Summary of the blend file: data-block counts,
+  active workspace, and render engine
+- **get_blendfile_summary_missing_files** — Report missing external file references
+  (images, libraries, fonts, sounds, movie clips, caches, sequences)
+- **get_blendfile_summary_of_linked_libraries** — Tree of directly and indirectly
+  linked library files
+- **get_blendfile_summary_path_info** — Blend file's path, save status, age, backups
+- **get_blendfile_summary_usage_guess** — Guess primary use-cases (scored 0–100)
+- **get_object_detail_summary** — Structured summary of an object by name
+- **get_objects_summary** — Scene collection hierarchy and their objects
+- **get_python_api_docs** — Blender Python API docs for a given identifier
+- **get_screenshot_of_area_as_image** — Screenshot of a single Blender area (PNG)
+- **get_screenshot_of_window_as_image** — Screenshot of the entire Blender window (PNG)
+- **get_screenshot_of_window_as_json** — JSON description of window layout and selection
+- **jump_to_tab_by_name** — Switch the active workspace tab
+- **jump_to_tab_by_space_type** — Switch to a workspace by space type
+- **jump_to_view3d_object_by_name** — Focus the 3D viewport on an object
+- **render_thumbnail_to_path** — Render a small low-quality thumbnail
+- **render_viewport_to_path** — Render the current scene to a path
 
-Note that this is intended to be a fairly minimal add-on.
+CLI variants (suffixed `_for_cli`) are also available for background Blender
+mode.
 
-Connectivity
-   - Auto-start (optional), is non-blocking any issues can be viewed from the preferences.
-   - Configurable polling intervals (active and idle rates) from preferences to avoid excessive overhead.
-   - Client timeout protection - stalled connections are evicted.
-   - Start/stop operators accessible from the preferences panel.
-   - Deferred responses are supported only by the interactive add-on server;
-     background mode requires requests to complete synchronously and rejects deferred results.
-
-
-
+---
 
 ## MCP Server
 
 Located in ``mcp/blmcp/``, installed as a Python package with the
-entry point ``blender-mcp``.
-
-An MCP client launches this process and communicates with it over
-stdio. The server connects to the add-on's TCP socket to relay
-requests to Blender.
+entry point ``blender-mcp``. The server connects to the add-on's TCP
+socket to relay requests to Blender.
 
 ``mcp/blmcp/data/``
-   Data files bundled with the package.
+   - ``prompts.yml`` — instructions sent to the LLM at connection time
+   - ``api/`` — Blender Python API reference in RST format
+   - ``manual/`` — Blender user manual excerpts in RST format
 
-   - ``prompts.yml`` provides instructions sent to the LLM at
-     connection time.
-   - ``api/`` contains Blender Python API reference in RST format.
-   - ``manual/`` contains Blender user manual excerpts in RST format.
+``mcp/blmcp/tools/`` — Each tool is a single module, auto-discovered at startup.
+Modules ending in ``_toolcode`` contain code that runs inside Blender and are
+skipped during discovery.
 
-``mcp/blmcp/tools/``
-   Each tool is a single module, auto-discovered at startup.
-   Modules ending in ``_toolcode`` contain code that runs inside
-   Blender (sent to the addon for execution) and are skipped during
-   discovery.
+``mcp/blmcp/tools_helpers/`` — Shared utilities used by tools. Tools do not
+import from each other; shared logic lives here.
 
-``mcp/blmcp/tools_helpers/``
-   Shared utilities used by tools. Tools should not import from each
-   other; shared logic lives here instead.
+---
 
+## Features
 
-### Tools
-- ``execute_blender_code``
-   - Execute Python code in the connected Blender instance.
-- ``execute_blender_code_for_cli``
-   - Execute Python code in a background Blender process.
-- ``get_blendfile_summary_datablocks``
-   - Return a summary of the blend file: data-block counts, active workspace,
-   and render engine.
-- ``get_blendfile_summary_datablocks_for_cli``
-   - Return a data-block summary by opening *blend_file* in background
-   Blender.
-- ``get_blendfile_summary_missing_files``
-   - Report external file references that are missing from disk (images,
-   libraries, fonts, sounds, movie clips, caches, sequences).
-- ``get_blendfile_summary_missing_files_for_cli``
-   - Report missing file references by opening *blend_file* in background
-   Blender.
-- ``get_blendfile_summary_of_linked_libraries``
-   - Return a tree of directly and indirectly linked library files.
-- ``get_blendfile_summary_of_linked_libraries_for_cli``
-   - Return linked-library info by opening *blend_file* in background
-   Blender.
-- ``get_blendfile_summary_path_info``
-   - Simple/fast access to the blend file's path, save status, age, and
-   backups.
-- ``get_blendfile_summary_path_info_for_cli``
-   - Return path info by opening *blend_file* in background Blender.
-- ``get_blendfile_summary_usage_guess``
-   - Guess the primary use-cases of the current blend file (scored 0-100 with
-   certainty).
-- ``get_blendfile_summary_usage_guess_for_cli``
-   - Guess use-cases by opening *blend_file* in background Blender.
-- ``get_object_detail_summary``
-   - Return a structured summary of the object identified by *name*.
-- ``get_objects_summary``
-   - Return the scene's collection hierarchy and their objects.
-- ``get_python_api_docs``
-   - Return the Blender Python API docs for *identifier*, or list modules
-   matching a trailing-``*`` discovery pattern.
-- ``get_screenshot_of_area_as_image``
-   - Take a screenshot of a single Blender area and return it as a PNG image.
-- ``get_screenshot_of_window_as_image``
-   - Take a screenshot of the entire Blender window and return it as a PNG
-   image.
-- ``get_screenshot_of_window_as_json``
-   - Return a JSON description of the Blender window layout, areas, active
-   object, and selection.
-- ``jump_to_tab_by_name``
-   - Switch the active workspace tab to *name*.
-- ``jump_to_tab_by_space_type``
-   - Switch to a workspace whose main area matches *space_type*.
-- ``jump_to_view3d_object_by_name``
-   - Move the 3D viewport to focus on an object by *name*.
-- ``jump_to_view3d_object_data_by_name``
-   - Move the 3D viewport to the object whose data block matches *name*.
-- ``render_thumbnail_to_path``
-   - Render a small, low-quality thumbnail to *output_path* (temporarily
-   overrides settings).
-- ``render_viewport_to_path``
-   - Render the current scene to *output_path* using current render settings.
+- **No external dependencies** — `llama-server` is the only requirement
+- **Built-in model download** — auto-downloads from HuggingFace
+- **Curated model presets** — 13 tested GGUF models with RAM/disk/capability info
+- **Existing model scanner** — finds `.gguf` files on your machine
+- **Adjustable context window** — tune `--ctx-size` per model (2048–262144)
+- **Remote API support** — also works with OpenAI, OpenRouter, Anthropic
+- **In-Blender chat UI** — 3D Viewport sidebar, no separate client needed
+
+---
+
+## Requirements
+
+- **Blender 5.1+** (or Bforartists equivalent)
+- **llama-server** — from [llama.cpp](https://github.com/ggml-org/llama.cpp)
+  releases. Must be on your PATH or set in preferences.
+- **~4–28 GB RAM** depending on model (see preset tooltips)
+- **~5–37 GB disk** for model storage
+
+---
+
+## Configuration
+
+All settings are in **Edit → Preferences → Add-ons → MCP**.
+
+| Section | Setting | Description |
+|---------|---------|-------------|
+| LLM Config | Mode | Local (llama.cpp) or Remote API |
+| | Recommended Model | Curated preset dropdown |
+| | Scan | Find existing `.gguf` files |
+| | Models Directory | Where downloaded models live |
+| | Advanced | Repo ID, filename, context window size |
+| Agent Control | Auto-Start | Launch agent when Blender starts |
+| | Start/Stop | Manual agent control |
+| | Ping | Check all connections (bridge, MCP, LLM) |
+
+---
+
+## TODO
+
+The following items are tracked in [CHANGELOG.md](CHANGELOG.md):
+
+### High Priority
+- [ ] **Addon Branding Rename** — Rename all `blmcp`/`blender_mcp` references
+      to `bfa_coworker`/`bfacw`
+- [ ] **Module Rename** — Rename `blender_mcp_addon` → `mcp_addon`
+- [ ] **Interface Modularization** — Split `__init__.py` into separate
+      preference/operator modules
+
+### Medium Priority
+- [ ] **Chat History Export** — Save conversation log to a text file
+- [ ] **SKILL.md Update** — Rewrite agent skill file for current branding
+- [ ] **User Documentation** — Full install/usage/troubleshooting guide
+- [ ] **GGUF Header Parsing** — Auto-detect model params for non-presets
+
+### Low Priority
+- [ ] **System RAM Detection** — Filter presets that exceed available RAM
+- [ ] **Download Progress Bar** — Visual progress in preferences panel
+- [ ] **Local Model Generator** — Integrate Ultrashape / Hunyuan
+- [ ] **CC0 Resource Downloader** — Polyhaven, AmbientCG, Sketchfab
+
+---
+
+## License
+
+GPL-3.0-or-later — see [LICENSE](LICENSE).

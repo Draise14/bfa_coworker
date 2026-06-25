@@ -94,22 +94,13 @@ class _State:
 # Must be a module-level constant — callbacks can fail during class registration.
 _MODEL_PRESET_ITEMS: list[tuple[str, str, str]] = [
     ("_custom", "Custom (manual entry)", "Manually specify repo ID and filename"),
-    ("gemma4_26b_q4", "Gemma 4 26B A4B (Q4_K_M)", "[Excellent] 16-20 GB RAM, ~16 GB disk"),
-    ("gemma4_26b_q8", "Gemma 4 26B A4B (Q8_0)", "[Excellent] 24-28 GB RAM, ~28 GB disk"),
-    ("qwen35_35b_q4", "Qwen3.6 35B A3B (Q4_K_M)", "[Excellent] 12-16 GB RAM, ~12 GB disk"),
-    ("qwen35_35b_q8", "Qwen3.6 35B A3B (Q8_0)", "[Excellent] 20-24 GB RAM, ~20 GB disk"),
-    ("gpt_oss_20b", "GPT-OSS 20B (MXFP4)", "[Strong] 8-12 GB RAM, ~12 GB disk"),
-    ("gemma3_4b_qat", "Gemma 3 4B (QAT Q4_0)", "[Strong] 4-6 GB RAM, ~3 GB disk"),
-    ("gemma3_12b_qat", "Gemma 3 12B (QAT Q4_0)", "[Strong] 8-12 GB RAM, ~7 GB disk"),
-    ("qwen3coder_30b", "Qwen3-Coder 30B A3B (Q4_K_M)", "[Strong] 12-16 GB RAM, ~12 GB disk"),
-    ("llama4_scout_q4", "Llama 4 Scout 109B (Q4_K_M)", "[Strong] 20-24 GB RAM, ~20 GB disk"),
-    ("qwen25_7b_q8", "Qwen 2.5 7B Instruct (Q8_0)", "[Strong] 6-8 GB RAM, ~7 GB disk"),
-    ("qwen25_14b_q8", "Qwen 2.5 14B Instruct (Q8_0)", "[Strong] 10-14 GB RAM, ~14 GB disk"),
-    ("qwen25_32b_q8", "Qwen 2.5 32B Instruct (Q8_0)", "[Strong] 20-24 GB RAM, ~24 GB disk"),
-    ("qwen3_8b_q8", "Qwen3 8B (Q8_0)", "[Strong] 6-8 GB RAM, ~8 GB disk"),
-    ("deepseek_r1_7b", "DeepSeek-R1 7B (Q4_K_M)", "[Moderate] 6-8 GB RAM, ~5 GB disk"),
-    ("deepseek_r1_14b", "DeepSeek-R1 14B (Q4_K_M)", "[Moderate] 10-12 GB RAM, ~9 GB disk"),
-    ("deepseek_r1_32b", "DeepSeek-R1 32B (Q4_K_M)", "[Moderate] 18-22 GB RAM, ~19 GB disk"),
+    ("gemma4_26b_q4", "Gemma 4 26B A4B (UD-Q4_K_M)", "[Strong] 16-20 GB RAM, ~17 GB disk"),
+    ("gemma4_26b_q8", "Gemma 4 26B A4B (Q8_0)", "[Excellent] 24-28 GB RAM, ~27 GB disk"),
+    ("qwen36_35b_q4", "Qwen3.6 35B A3B (UD-Q4_K_M)", "[Medium] 12-16 GB RAM, ~22 GB disk"),
+    ("qwen36_35b_q8", "Qwen3.6 35B A3B (Q8_0)", "[Excellent] 20-24 GB RAM, ~37 GB disk"),
+    ("gpt_oss_20b_q4", "GPT-OSS 20B (Q4_K_M)", "[Medium] 8-12 GB RAM, ~12 GB disk"),
+    ("qwen3_8b_q4", "Qwen3 8B (Q4_K_M)", "[Light] 4-6 GB RAM, ~5 GB disk"),
+    ("qwen3_8b_q8", "Qwen3 8B (Q8_0)", "[Light] 6-8 GB RAM, ~9 GB disk"),
 ]
 
 
@@ -234,7 +225,7 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
     model_filename: StringProperty(  # type: ignore[valid-type]
         name="Model Filename",
-        default="gemma-4-26B-A4B-it-Q4_K_M.gguf",
+        default="gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
     )
 
     downloaded_models_dir: StringProperty(  # type: ignore[valid-type]
@@ -252,6 +243,8 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         if preset is not None:
             self.model_repo_id = preset.repo_id
             self.model_filename = preset.filename
+            # Clear existing model path — using preset now.
+            self.existing_model_path = ""
             # Build info string for display.
             self.model_preset_info = (
                 "Capability: {cap}  |  RAM: {ram}  |  Disk: {disk}\n{desc}"
@@ -261,6 +254,12 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 disk=preset.disk_gb,
                 desc=preset.description,
             )
+            # Sync to llm_manager config immediately.
+            cfg = llm.get_config()
+            cfg.model_repo_id = preset.repo_id
+            cfg.model_filename = preset.filename
+            cfg.downloaded_models_dir = self.downloaded_models_dir
+            llm.set_config(cfg)
         else:
             self.model_preset_info = ""
 
@@ -325,30 +324,6 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         del context
         layout = self.layout
 
-        # ── Bridge Server Section ─────────────────────────────────────
-        box = layout.box()
-        box.label(text="MCP Bridge Server", icon='NETWORK_DRIVE')
-        box.prop(self, "host")
-        box.prop(self, "port")
-        box.prop(self, "port_offset")
-        box.prop(self, "use_autostart")
-        box.prop(self, "autostart_delay")
-        box.prop(self, "timer_interval_active")
-        box.prop(self, "timer_interval_idle")
-        box.prop(self, "timer_interval_idle_delay")
-        box.prop(self, "use_log")
-
-        row = box.row()
-        if mcp_to_blender_server.is_running():
-            row.operator("blmcp.server_stop", icon="CANCEL")
-            row.label(text="Server is running", icon="CHECKMARK")
-        else:
-            row.operator("blmcp.server_start", icon="PLAY")
-            row.label(text="Server is stopped", icon="X")
-
-        if _State.autostart_error:
-            box.label(text=_State.autostart_error, icon="ERROR")
-
         # ── LLM Configuration ─────────────────────────────────────────
         box = layout.box()
         box.label(text="LLM Configuration", icon='SETTINGS')
@@ -356,7 +331,7 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
         if self.llm_mode == "local":
             # ── Recommended Models (presets) ─────────────────────────
-            box.label(text="Step 1: Pick a Model", icon='VIEWZOOM')
+            box.label(text="Pick a Model", icon='VIEWZOOM')
             box.prop(self, "model_preset", text="")
             if self.model_preset != "_custom" and self.model_preset_info:
                 info_box = box.box()
@@ -364,57 +339,48 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 for line in self.model_preset_info.split("\n"):
                     info_box.label(text=line)
 
+            # ── Download or use existing ─────────────────────────────
             llm_state = _get_llm_manager().get_state()
             if not llm_state.is_running:
                 row = box.row(align=True)
-                box.prop(self, "downloaded_models_dir")
-                row.operator("blmcp.download_model", icon="IMPORT")
+                row.operator("blmcp.download_model", icon="IMPORT", text="Download & Start")
                 if llm_state.error:
                     box.label(text=llm_state.error, icon="ERROR")
                 if llm_state.download_progress:
-                    # Show progress with ETA if available.
                     prog_text = llm_state.download_progress
                     if llm_state.download_progress_eta:
-                        prog_text = "{:s}  |  {:s}".format(
-                            prog_text, llm_state.download_progress_eta,
-                        )
+                        prog_text = "{:s}  |  {:s}".format(prog_text, llm_state.download_progress_eta)
                     box.label(text=prog_text, icon='INFO')
-                    # Show progress bar if we have a percentage.
                     pct = llm_state.download_progress_pct
                     if pct > 0:
                         row = box.row(align=True)
-                        row.progress(
-                            factor=pct / 100.0,
-                            type='BAR',
-                        )
-            else:
-                row = box.row(align=True)
-                row.operator("blmcp.stop_llm", icon="CANCEL")
-                row.label(text="Running: {:s}".format(llm_state.model_name), icon="CHECKMARK")
+                        row.progress(factor=pct / 100.0, type='BAR')
 
-            # ── Existing Models (scanner) ────────────────────────────
+            # ── Scan for existing models ────────────────────────────
             box.label(text="Or use an existing model:", icon='FILE_FOLDER')
             row = box.row(align=True)
-            row.prop(self, "existing_model_path", text="")
             row.operator("blmcp.scan_existing_models", icon="FILE_REFRESH", text="Scan")
+            box.prop(self, "downloaded_models_dir")
             if self.existing_model_path:
                 box.label(
                     text="Using: {:s}".format(os.path.basename(self.existing_model_path)),
                     icon='CHECKMARK',
                 )
 
-            # ── Advanced: manual repo/filename ───────────────────────
-            box.label(text="Advanced Settings", icon='SETTINGS')
-            box.prop(self, "llama_path")
+            # ── Current model status ─────────────────────────────────
+            if llm_state.is_running:
+                box.label(
+                    text="Active model: {:s}".format(llm_state.model_name or "Unknown"),
+                    icon='CONSOLE',
+                )
+
+            # ── Advanced ─────────────────────────────────────────────
+            box.label(text="Advanced", icon='SETTINGS')
             box.prop(self, "model_repo_id")
             box.prop(self, "model_filename")
-
-
-            # ── Models directory row ─────────────────────────────────
             row = box.row(align=True)
             row.operator("blmcp.open_hf_cache", icon="FILE_FOLDER", text="Hugging Face Cache")
             row.operator("blmcp.clear_hf_cache", icon="TRASH", text="Clear Cache")
-            row.operator("blmcp.start_llm", icon="PLAY")
 
         else:
             box.prop(self, "remote_api_url")
@@ -427,7 +393,6 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         box = layout.box()
         box.label(text="Agent Control", icon='WORKSPACE')
         box.prop(self, "agent_autostart")
-        box.label(text="Step 2: Start the Agent", icon='INFO')
 
         agent_state = _get_agent_controller()._agent_state
         row = box.row()
@@ -444,7 +409,6 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         # ── Ping button ────────────────────────────────────────────
         row = box.row()
         row.operator("blmcp.ping_agent", icon="FILE_REFRESH")
-        # Show last ping result if available.
         ping = _BLMCP_OT_ping_agent._result
         if ping:
             status_icon = "CHECKMARK" if ping.get("all_ok") else "ERROR"
@@ -455,7 +419,10 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 ("llm_chat", "Chat"),
             ]:
                 val = ping.get(key, "—")
-                box.label(text="{:<6s} {:s}".format(label + ":", val), icon=status_icon if val.startswith("OK") else "ERROR")
+                box.label(
+                    text="{:<6s} {:s}".format(label + ":", val),
+                    icon=status_icon if val.startswith("OK") else "ERROR",
+                )
 
 
 class _BLMCP_OT_server_start(bpy.types.Operator):  # type: ignore[misc]
@@ -603,11 +570,10 @@ def _get_agent_controller():
 class _BLMCP_OT_download_model(bpy.types.Operator):  # type: ignore[misc]
     bl_idname = "blmcp.download_model"
     bl_label = "Download Model"
-    bl_description = "Download the configured GGUF model via llama-cli"
+    bl_description = "Download the configured GGUF model via llama-server (auto-downloads with progress in console)"
 
     _timer: float | None = None
     _thread = None
-    _result: Path | None = None
     _error: str = ""
     _done: bool = False
     _start_msg_shown: bool = False
@@ -620,15 +586,16 @@ class _BLMCP_OT_download_model(bpy.types.Operator):  # type: ignore[misc]
         state = llm.get_state()
 
         if not self._start_msg_shown:
-            self.report({"INFO"}, "Download started — watching console for progress")
+            self.report({"INFO"}, "Download started — see llama-server console for progress")
             self._start_msg_shown = True
 
         # Show progress if it changed.
         prog = state.download_progress
         if prog and prog != self._latest_progress:
             self._latest_progress = prog
-            # Report significant lines (percentages, completion, errors)
-            if "%" in prog or "Complete" in prog or "Downloaded" in prog or "Error" in prog or "fail" in prog.lower():
+            if "Error" in prog or "fail" in prog.lower() or "timed out" in prog.lower():
+                self.report({"ERROR"}, prog)
+            elif "complete" in prog.lower() or "running" in prog.lower():
                 self.report({"INFO"}, prog)
 
         if not self._done:
@@ -646,11 +613,11 @@ class _BLMCP_OT_download_model(bpy.types.Operator):  # type: ignore[misc]
         if context and context.area:
             context.area.tag_redraw()
 
-        if self._result:
-            self.report({"INFO"}, "Download complete: {:s}".format(str(self._result)))
+        if state.is_running and not state.error:
+            self.report({"INFO"}, "Model downloaded and llama-server is running")
             return {"FINISHED"}
         else:
-            self.report({"ERROR"}, "Download failed: {:s}".format(self._error or "Unknown error"))
+            self.report({"ERROR"}, self._error or "Download failed")
             return {"CANCELLED"}
 
     def execute(self, context: bpy.types.Context) -> set[str]:
@@ -661,6 +628,8 @@ class _BLMCP_OT_download_model(bpy.types.Operator):  # type: ignore[misc]
         cfg.model_repo_id = prefs.model_repo_id
         cfg.model_filename = prefs.model_filename
         cfg.downloaded_models_dir = prefs.downloaded_models_dir
+        _bridge_port, _mcp_port, _llm_port = _effective_ports(prefs)
+        cfg.local_port = _llm_port
         llm.set_config(cfg)
 
         models_dir = Path(prefs.downloaded_models_dir) if prefs.downloaded_models_dir else (Path.home() / "blender_mcp_models")
@@ -670,34 +639,17 @@ class _BLMCP_OT_download_model(bpy.types.Operator):  # type: ignore[misc]
             return {"FINISHED"}
 
         self._done = False
-        self._result = None
         self._error = ""
         self._start_msg_shown = False
         self._latest_progress = ""
 
-        import threading
-
-        def _update_progress(msg: str) -> None:
-            llm._set_download_progress(msg)
-
-        def _do_download():
-            try:
-                result = llm.download_model(progress_callback=_update_progress)
-                self._result = result
-                if result is None:
-                    self._error = llm.get_state().error
-            except Exception as ex:  # pylint: disable=broad-exception-caught
-                self._error = str(ex)
-            finally:
-                llm._set_download_progress("")
-                self._done = True
-
-        self._thread = threading.Thread(target=_do_download, daemon=True)
-        self._thread.start()
+        # download_model now launches llama-server which auto-downloads.
+        # It returns None immediately — we poll state for completion.
+        llm.download_model(progress_callback=None)
 
         self._timer = bpy.app.timers.register(
             _make_download_poll(self),
-            first_interval=0.25,
+            first_interval=0.5,
             persistent=True,
         )
 
@@ -707,7 +659,11 @@ class _BLMCP_OT_download_model(bpy.types.Operator):  # type: ignore[misc]
 
 def _make_download_poll(op):
     def _poll() -> float | None:
-        if op._done:
+        llm = _get_llm_manager()
+        state = llm.get_state()
+        if state.is_running or state.error:
+            op._done = True
+            op._error = state.error
             return None
         for wm in bpy.data.window_managers:
             for win in wm.windows:
@@ -862,6 +818,15 @@ class _BLMCP_OT_select_existing_model(bpy.types.Operator):  # type: ignore[misc]
         # Set the existing model path and clear preset selection.
         prefs.existing_model_path = self.model_path
         prefs.model_preset = "_custom"
+        # Keep repo_id/filename so the model is identifiable.
+        # model_filename is always the basename.
+        prefs.model_filename = os.path.basename(self.model_path)
+        # Sync to llm_manager config immediately.
+        llm = _get_llm_manager()
+        cfg = llm.get_config()
+        cfg.model_filename = os.path.basename(self.model_path)
+        cfg.downloaded_models_dir = prefs.downloaded_models_dir
+        llm.set_config(cfg)
         self.report(
             {"INFO"},
             "Using existing model: {:s}".format(os.path.basename(self.model_path)),

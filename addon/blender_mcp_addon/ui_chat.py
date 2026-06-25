@@ -26,6 +26,7 @@ __all__ = (
 )
 
 import json
+import os
 from pathlib import Path
 
 import bpy  # pylint: disable=import-error
@@ -268,13 +269,28 @@ class BLMCP_OT_agent_start(Operator):  # type: ignore[misc]
         # Step 3: Start the LLM backend (only in local mode).
         # This can be slow (model download or server startup), so it runs
         # on a background thread to avoid freezing Blender's UI.
+        prefs = context.preferences.addons[__package__].preferences
+        # Sync preferences to llm_manager config before starting.
         llm_cfg = llm_manager.get_config()
+        llm_cfg.llama_path = prefs.llama_path
+        llm_cfg.model_repo_id = prefs.model_repo_id
+        llm_cfg.model_filename = prefs.model_filename
+        llm_cfg.downloaded_models_dir = prefs.downloaded_models_dir
+        _bridge_port, _mcp_port, _llm_port = _effective_ports(prefs)
+        llm_cfg.local_port = _llm_port
+        llm_manager.set_config(llm_cfg)
+
         if llm_cfg.mode == "local":
             llm_state = llm_manager.get_state()
             if not llm_state.is_running:
 
                 def _start_llm_backend():
-                    llm_manager.start_local_llama()
+                    # If an existing model path is set, use it directly.
+                    existing_path = prefs.existing_model_path
+                    if existing_path and os.path.isfile(existing_path):
+                        llm_manager.start_local_llama(model_path=existing_path)
+                    else:
+                        llm_manager.start_local_llama()
                     # Update status on the main thread.
                     def _update():
                         state = llm_manager.get_state()

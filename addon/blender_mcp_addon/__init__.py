@@ -320,6 +320,22 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         max=100,
     )
 
+    local_ctx_size: IntProperty(  # type: ignore[valid-type]
+        name="Context Window Size",
+        description=(
+            "Context window size (in tokens) passed to llama-server via --ctx-size.\n"
+            "Larger values allow longer conversations but use more RAM.\n"
+            "Decrease if you get Jinja errors (context overflow) or out-of-memory.\n"
+            "Small models (8B) work well at 4096. MoE models can use 8192-16384.\n"
+            "Gemma 4 supports up to 262144."
+        ),
+        default=8192,
+        min=2048,
+        max=262144,
+        step=1024,
+        subtype='UNSIGNED',
+    )
+
     def draw(self, context: bpy.types.Context) -> None:
         del context
         layout = self.layout
@@ -378,6 +394,7 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             box.label(text="Advanced", icon='SETTINGS')
             box.prop(self, "model_repo_id")
             box.prop(self, "model_filename")
+            box.prop(self, "local_ctx_size")
             row = box.row(align=True)
             row.operator("blmcp.open_hf_cache", icon="FILE_FOLDER", text="Hugging Face Cache")
             row.operator("blmcp.clear_hf_cache", icon="TRASH", text="Clear Cache")
@@ -628,6 +645,7 @@ class _BLMCP_OT_download_model(bpy.types.Operator):  # type: ignore[misc]
         cfg.model_repo_id = prefs.model_repo_id
         cfg.model_filename = prefs.model_filename
         cfg.downloaded_models_dir = prefs.downloaded_models_dir
+        cfg.local_ctx_size = prefs.local_ctx_size
         _bridge_port, _mcp_port, _llm_port = _effective_ports(prefs)
         cfg.local_port = _llm_port
         llm.set_config(cfg)
@@ -688,6 +706,7 @@ class _BLMCP_OT_start_llm(bpy.types.Operator):  # type: ignore[misc]
         cfg.model_repo_id = prefs.model_repo_id
         cfg.model_filename = prefs.model_filename
         cfg.downloaded_models_dir = prefs.downloaded_models_dir
+        cfg.local_ctx_size = prefs.local_ctx_size
         _bridge_port, _mcp_port, _llm_port = _effective_ports(prefs)
         cfg.local_port = _llm_port
         llm.set_config(cfg)
@@ -826,6 +845,7 @@ class _BLMCP_OT_select_existing_model(bpy.types.Operator):  # type: ignore[misc]
         cfg = llm.get_config()
         cfg.model_filename = os.path.basename(self.model_path)
         cfg.downloaded_models_dir = prefs.downloaded_models_dir
+        cfg.local_ctx_size = prefs.local_ctx_size
         llm.set_config(cfg)
         self.report(
             {"INFO"},
@@ -1047,6 +1067,7 @@ def _autostart_agent_timer() -> None:
         _llm_cfg.model_repo_id = prefs.model_repo_id
         _llm_cfg.model_filename = prefs.model_filename
         _llm_cfg.downloaded_models_dir = prefs.downloaded_models_dir
+        _llm_cfg.local_ctx_size = prefs.local_ctx_size
         _llm_cfg.local_port = _llm_port
         _llm.set_config(_llm_cfg)
 

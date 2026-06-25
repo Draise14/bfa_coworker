@@ -34,8 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### TODO (Future Plans)
 
 #### High Priority
-- [ ] **Bug:** Make local model detection and "link" more robust
-- [ ]  **Abstract command, make it more robust if it cannot do it:** - {{- raise_exception(\"Message has tool role, but there was n...\n                                           ^\nError: Jinja Exception: Message has tool role, but there was no previous assistant message with a tool call!","type":"server_error"}} then ther server fails
+- [x] **Bug:** Make local model detection and "link" more robust
+- [x] **Context Window Setting & Tool-Message Safety Fix** — Added
+  `local_ctx_size` IntProperty (2048-262144, default 8192) exposed in
+  Advanced Settings so users can tune the context window per model to
+  avoid Jinja errors and OOM. The preferences value is now passed to
+  `llama-server --ctx-size`. Also fixed history slicing to drop orphaned
+  `tool`-role messages that lost their `assistant`/`tool_calls` pair
+  during conversation trimming — preventing the fatal `Message has tool
+  role, but there was no previous assistant message with a tool call!`
+  Jinja exception.
 - [ ] **Addon Branding Rename** — Change all `blmcp` / `blender_mcp` references to
   `bfa_coworker` / `bfacw`. Update operator IDs, panel IDs, class names, and
   UI labels.
@@ -61,3 +69,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RAM and filter/hide presets that exceed system capacity.
 - [ ] **Download Progress Bar** — Replace text-based download progress with a
   visual progress bar in the preferences panel.
+- [ ] **Add Model Generator** locally, Ultrashape, Hunyuan, similar to here: https://github.com/ahujasid/blender-mcp
+- [ ] **Add CC0 resource downloader** from Polyhaven, AmbientC00, Sketchfab, etc, similar to here: https://github.com/ahujasid/blender-mcp

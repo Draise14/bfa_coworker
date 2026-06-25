@@ -98,6 +98,30 @@ def _get_system_prompt() -> str:
     return _system_prompt
 
 
+def _drop_orphaned_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Remove ``tool``-role messages that have no preceding ``assistant``
+    message with ``tool_calls``.  This is a safety fix: slicing a
+    conversation history can break tool-call pairs, and llama-server
+    ``--jinja`` will throw a hard error when it encounters an orphaned
+    tool message.
+    """
+    cleaned: list[dict[str, Any]] = []
+    for msg in messages:
+        if msg.get("role") == "tool":
+            # Find the preceding assistant message IN THE CLEANED LIST
+            # (i.e. what we are sending to the LLM).
+            has_pair = any(
+                p.get("role") == "assistant" and p.get("tool_calls")
+                for p in reversed(cleaned)
+            )
+            if not has_pair:
+                # Drop this orphaned tool message.
+                continue
+        cleaned.append(msg)
+    return cleaned
+
+
 # ---------------------------------------------------------------------------
 # SSE (Server-Sent Events) parser
 # FastMCP in stateless_http mode returns SSE streams even for
@@ -595,13 +619,18 @@ def run_conversation_turn(
 
         # Slice history to avoid unbounded context growth.
         # Always keep the system prompt (index 0) if present.
+        # Must preserve tool-call pairs: each "tool" role message
+        # MUST follow an "assistant" message with "tool_calls".
         if len(history) > _MAX_HISTORY_MESSAGES:
             keep = min(_MAX_HISTORY_MESSAGES, len(history))
             # Keep system message + last N messages.
             if history[0].get("role") == "system":
                 history_to_send = [history[0]] + history[-(keep - 1):]
+                # Walk forward from the system message and remove any
+                # orphaned "tool" messages that lost their assistant pair.
+                history_to_send = _drop_orphaned_tool_messages(history_to_send)
             else:
-                history_to_send = history[-keep:]
+                history_to_send = _drop_orphaned_tool_messages(history[-keep:])
         else:
             history_to_send = history
 

@@ -347,6 +347,7 @@ def get_config() -> LLMConfig:
             model_filename=_config.model_filename,
             downloaded_models_dir=_config.downloaded_models_dir,
             local_port=_config.local_port,
+            local_ctx_size=_config.local_ctx_size,
             remote_api_url=_config.remote_api_url,
             remote_api_key=_config.remote_api_key,
             remote_model=_config.remote_model,

@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### TODO (Future Plans)
 
 #### High Priority
+- [ ] **Bug:** Make local model detection and "link" more robust
+- [ ]  **Abstract command, make it more robust if it cannot do it:** - {{- raise_exception(\"Message has tool role, but there was n...\n                                           ^\nError: Jinja Exception: Message has tool role, but there was no previous assistant message with a tool call!","type":"server_error"}} then ther server fails
 - [ ] **Addon Branding Rename** — Change all `blmcp` / `blender_mcp` references to
   `bfa_coworker` / `bfacw`. Update operator IDs, panel IDs, class names, and
   UI labels.
@@ -44,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `operators_agent.py`, `operators_hf.py`) for easier maintenance.
 
 #### Medium Priority
+- [ ] **Add history chat to a text with a button to open it** - so we can copy and paste the results and save the log from the chat
 - [ ] **SKILL.md Update** — Rewrite `.github/skills/self-contained-blender-mcp/SKILL.md`
   to reflect current project goals and branding.
 - [ ] **DOCUMENTATION.md** — Create user-facing documentation covering

@@ -22,15 +22,14 @@ environment wrangling. Install the add-on, pick a model, start chatting.
 
 In the add-on preferences you'll see the **LLM Configuration** section:
 
-- **Recommended Models** — A curated dropdown of 13 tested GGUF models
-  (Gemma 4, Qwen3, Llama 4 Scout, etc.) with tooltips showing RAM
+- **Recommended Models** — A curated dropdown of tested GGUF models
+  (Gemma 4, Qwen3, Llama 4 Scout, GPT OSS. etc.) with tooltips showing RAM
   requirements, disk size, and capability rating. Select one and it
   auto-fills the repo ID and filename.
 - **Scan for Existing Models** — Click the **Scan** button to search your
   configured models directory and HuggingFace cache for `.gguf` files you
   already have. Found models appear in a popup for one-click selection.
-- **Advanced Settings** — Manually enter a HuggingFace repo ID and filename,
-  or adjust the **Context Window Size** if a model needs more/less tokens.
+- **Advanced Settings** — Manually enter a HuggingFace repo ID and filename to download automatically.
 
 ### 3. Download & Start
 
@@ -161,7 +160,7 @@ import from each other; shared logic lives here.
 - **Built-in model download** — auto-downloads from HuggingFace
 - **Curated model presets** — 13 tested GGUF models with RAM/disk/capability info
 - **Existing model scanner** — finds `.gguf` files on your machine
-- **Adjustable context window** — tune `--ctx-size` per model (2048–262144)
+- **Adjustable context window** — tune `--ctx-size` per model (2048–262144) (WIP)
 - **Remote API support** — also works with OpenAI, OpenRouter, Anthropic
 - **In-Blender chat UI** — 3D Viewport sidebar, no separate client needed
 
@@ -199,9 +198,7 @@ All settings are in **Edit → Preferences → Add-ons → MCP**.
 The following items are tracked in [CHANGELOG.md](CHANGELOG.md):
 
 ### High Priority
-- [ ] **Addon Branding Rename** — Rename all `blmcp`/`blender_mcp` references
-      to `bfa_coworker`/`bfacw`
-- [ ] **Module Rename** — Rename `blender_mcp_addon` → `mcp_addon`
+- [ ] **Addon Branding Rename** — Rename blender branding references
 - [ ] **Interface Modularization** — Split `__init__.py` into separate
       preference/operator modules
 
@@ -214,8 +211,9 @@ The following items are tracked in [CHANGELOG.md](CHANGELOG.md):
 ### Low Priority
 - [ ] **System RAM Detection** — Filter presets that exceed available RAM
 - [ ] **Download Progress Bar** — Visual progress in preferences panel
-- [ ] **Local Model Generator** — Integrate Ultrashape / Hunyuan
+- [ ] **Local Model Generator** — Integrate Ultrashape / Hunyuan / Trellis2
 - [ ] **CC0 Resource Downloader** — Polyhaven, AmbientCG, Sketchfab
+- [ ] **Integrated pre-prompted tools for UX operators** to allow repetitive work with contextual application that an MCP can do in a smart way. this requires some design and integration into different editors and interface. 
 
 ---
 

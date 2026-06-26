@@ -3,9 +3,12 @@
 > **⚠️ WORK IN PROGRESS** — This is an active fork under heavy development.
 > See [TODO](#todo) below for planned features and known gaps.
 
+
 A self-contained Blender add-on that bundles an LLM agent, MCP server, and
 in-Blender chat UI — no external tools, no manual server setup, no Python
 environment wrangling. Install the add-on, pick a model, start chatting.
+
+**⚠️ Windows only for now**
 
 ---
 
@@ -201,6 +204,7 @@ The following items are tracked in [CHANGELOG.md](CHANGELOG.md):
 - [ ] **Addon Branding Rename** — Rename blender branding references
 - [ ] **Interface Modularization** — Split `__init__.py` into separate
       preference/operator modules
+- [ ] **Get going on Linux and Mac** at the moment this is Windows only.
 
 ### Medium Priority
 - [ ] **Chat History Export** — Save conversation log to a text file

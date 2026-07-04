@@ -20,6 +20,7 @@ __all__ = (
     "scan_existing_models",
     "find_llama_server",
     "download_model",
+    "download_llama_server",
     "start_local_llama",
     "stop_local_llama",
     "health_check",
@@ -31,6 +32,7 @@ __all__ = (
     "_set_download_progress",
 )
 
+import io
 import json
 import os
 import shutil
@@ -39,6 +41,7 @@ import sys
 import threading
 import urllib.error
 import urllib.request
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -52,6 +55,9 @@ _LOCAL_LLM_HEALTH_URL = "http://127.0.0.1:{:d}/health"
 _LOCAL_LLM_CHAT_URL = "http://127.0.0.1:{:d}/v1/chat/completions"
 _MODEL_DOWNLOAD_TIMEOUT = 300  # seconds
 
+# llama-server release download.
+_LLAMA_SERVER_VERSION = "b5027"
+
 # Common install locations for llama-server on Windows.
 _LLAMA_SEARCH_PATHS_WIN = [
     # PATH is searched automatically via shutil.which().
@@ -60,6 +66,18 @@ _LLAMA_SEARCH_PATHS_WIN = [
     os.path.join(os.environ.get("PROGRAMFILES", ""), "llama.cpp", "llama-server.exe"),
     os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "llama.cpp", "llama-server.exe"),
 ]
+
+
+def _get_bundled_llama_dir() -> Path:
+    """Return the directory where the addon stores its bundled llama-server binaries.
+
+    Uses ``~/.cache/blender_mcp_llama/`` so it persists across addon updates
+    and does not require Blender's bpy module.  The directory is created on
+    first access.
+    """
+    base = Path.home() / ".cache" / "blender_mcp_llama"
+    base.mkdir(parents=True, exist_ok=True)
+    return base
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +395,12 @@ def find_llama_server() -> str | None:
         if os.path.isfile(path):
             print("[🛠️Coworker] find_llama_server: found at {:s}".format(path))
             return path
+    # Check the bundled directory (auto-downloaded by download_llama_server).
+    bundled = _get_bundled_llama_dir() / "llama-server.exe"
+    print("[🛠️Coworker] find_llama_server:   checking bundled {:s}".format(str(bundled)))
+    if bundled.is_file():
+        print("[🛠️Coworker] find_llama_server: found bundled at {:s}".format(str(bundled)))
+        return str(bundled)
     print("[🛠️Coworker] find_llama_server: NOT FOUND")
     return None
 
@@ -617,6 +641,159 @@ def _find_model_in_hf_cache(repo_id: str, filename: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# llama-server binary download
+
+def download_llama_server(
+    progress_callback: Callable[[str], None] | None = None,
+) -> str | None:
+    """
+    Download and extract the ``llama-server`` binary from GitHub releases.
+
+    Downloads the latest compatible release zip from the
+    ``ggml-org/llama.cpp`` repository and extracts ``llama-server.exe``
+    (or the platform-equivalent binary) into the bundled directory
+    (``~/.cache/blender_mcp_llama/``).
+
+    Returns the absolute path to the extracted binary, or ``None`` on
+    failure.  Progress is reported via ``_state.download_progress`` and
+    the optional *progress_callback*.
+    """
+    _clear_download_state()
+
+    # Determine platform and architecture.
+    if sys.platform == "win32":
+        platform = "win"
+        arch = "x64"
+        binary_name = "llama-server.exe"
+        variant = "cuda"  # CUDA variant works on CPU-only systems too.
+    elif sys.platform == "darwin":
+        platform = "macos"
+        arch = "arm64" if os.uname().machine == "arm64" else "x64"
+        binary_name = "llama-server"
+        variant = "metal"
+    else:
+        platform = "ubuntu"
+        arch = "x64"
+        binary_name = "llama-server"
+        variant = "cuda"
+
+    tag = _LLAMA_SERVER_VERSION
+    # Build the download URL.
+    # Format: llama-{tag}-bin-{platform}-{variant}-{arch}.zip
+    url = (
+        "https://github.com/ggml-org/llama.cpp/releases/download/{tag}/"
+        "llama-{tag}-bin-{platform}-{variant}-{arch}.zip"
+    ).format(tag=tag, platform=platform, variant=variant, arch=arch)
+
+    dest_dir = _get_bundled_llama_dir()
+    dest_binary = dest_dir / binary_name
+
+    # Check if already downloaded.
+    if dest_binary.is_file():
+        msg = "llama-server already downloaded at {:s}".format(str(dest_binary))
+        print("[🛠️Coworker] download_llama_server: {:s}".format(msg))
+        _set_download_progress(msg)
+        if progress_callback:
+            progress_callback(msg)
+        return str(dest_binary)
+
+    _set_download_progress("Downloading llama-server from {:s} ...".format(url))
+    if progress_callback:
+        progress_callback("Downloading llama-server ({:s}) ...".format(tag))
+
+    print("[🛠️Coworker] download_llama_server: url = {:s}".format(url))
+    print("[🛠️Coworker] download_llama_server: dest_dir = {:s}".format(str(dest_dir)))
+
+    try:
+        # Stream the zip download with progress.
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            total_size = int(resp.headers.get("Content-Length", "0"))
+            downloaded = 0
+            chunk_size = 64 * 1024  # 64 KB
+            data = io.BytesIO()
+
+            while True:
+                chunk = resp.read(chunk_size)
+                if not chunk:
+                    break
+                data.write(chunk)
+                downloaded += len(chunk)
+                if total_size > 0:
+                    pct = downloaded / total_size * 100.0
+                    _set_download_progress_eta(
+                        "{:.0f}% of {:s}".format(pct, _format_bytes(total_size)),
+                        pct,
+                    )
+                    msg = "Downloading llama-server ... {:.0f}% ({:s} / {:s})".format(
+                        pct, _format_bytes(downloaded), _format_bytes(total_size),
+                    )
+                else:
+                    msg = "Downloading llama-server ... {:s}".format(_format_bytes(downloaded))
+                _set_download_progress(msg)
+                if progress_callback:
+                    progress_callback(msg)
+
+        # Extract the zip.
+        _set_download_progress("Extracting llama-server ...")
+        if progress_callback:
+            progress_callback("Extracting llama-server ...")
+
+        data.seek(0)
+        with zipfile.ZipFile(data) as zf:
+            # Find the binary inside the zip (may be in a subdirectory).
+            binary_members = [
+                m for m in zf.namelist()
+                if m.endswith(binary_name) or m.endswith("/" + binary_name)
+            ]
+            if not binary_members:
+                _set_error(
+                    "Could not find {:s} in the downloaded archive".format(binary_name)
+                )
+                return None
+
+            # Extract to a temp name first, then rename atomically.
+            temp_dir = dest_dir / ".tmp_extract"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            zf.extract(binary_members[0], str(temp_dir))
+            extracted = temp_dir / binary_members[0]
+            # Move to final location.
+            if dest_binary.exists():
+                dest_binary.unlink()
+            shutil.move(str(extracted), str(dest_binary))
+            # Cleanup temp dir.
+            shutil.rmtree(str(temp_dir), ignore_errors=True)
+
+        # Make executable on non-Windows.
+        if sys.platform != "win32":
+            dest_binary.chmod(dest_binary.stat().st_mode | 0o111)
+
+        msg = "llama-server installed at {:s}".format(str(dest_binary))
+        print("[🛠️Coworker] download_llama_server: {:s}".format(msg))
+        _set_download_progress(msg)
+        if progress_callback:
+            progress_callback(msg)
+        return str(dest_binary)
+
+    except urllib.error.HTTPError as ex:
+        err = "Failed to download llama-server (HTTP {:d}: {:s})".format(
+            ex.code, ex.reason
+        )
+        print("[🛠️Coworker] download_llama_server: {:s}".format(err))
+        _set_error(err)
+        if progress_callback:
+            progress_callback(err)
+        return None
+    except (urllib.error.URLError, OSError, zipfile.BadZipFile) as ex:
+        err = "Failed to download/extract llama-server: {:s}".format(str(ex))
+        print("[🛠️Coworker] download_llama_server: {:s}".format(err))
+        _set_error(err)
+        if progress_callback:
+            progress_callback(err)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Local LLM lifecycle
 
 
@@ -648,7 +825,10 @@ def start_local_llama(
     server_exe = find_llama_server()
     if not server_exe:
         print("[🛠️Coworker] start_local_llama: server_exe not found, aborting")
-        _set_error("llama-server not found — set the path in preferences")
+        _set_error(
+            "llama-server not found — use \"Download llama-server\" in preferences "
+            "or set the path manually"
+        )
         return None
 
     print("[🛠️Coworker] start_local_llama: server_exe = {:s}".format(server_exe))

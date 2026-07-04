@@ -21,7 +21,14 @@ environment wrangling. Install the add-on, pick a model, start chatting.
   `addon/blender_mcp_addon/` directory for development)
 - Search for **"MCP"** and enable the add-on
 
-### 2. Pick a Model
+### 2. Install llama-server (one click)
+
+If you don't have `llama-server` installed, the add-on preferences show a
+**"Download llama-server"** button. Click it — the add-on downloads the
+latest release from GitHub and unpacks it automatically to
+`~/.cache/blender_mcp_llama/`. No manual download, no PATH setup.
+
+### 3. Pick a Model
 
 In the add-on preferences you'll see the **LLM Configuration** section:
 
@@ -64,7 +71,7 @@ into a single add-on experience:
 
 | What you'd normally need to set up manually | What this add-on does for you |
 |---|---|
-| Install & configure `llama.cpp` separately | Detects `llama-server` on PATH or lets you set the path — then launches it automatically |
+| Install & configure `llama.cpp` separately | **Auto-downloads** `llama-server` from GitHub with one click, or detects it on PATH |
 | Download GGUF models manually | Built-in download via `llama-server`, or scan for models you already have |
 | Run an MCP bridge server | Auto-started when you click **Start Agent** |
 | Run a separate chat client | Chat UI lives in Blender's 3D Viewport sidebar |

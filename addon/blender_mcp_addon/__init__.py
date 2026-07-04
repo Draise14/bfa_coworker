@@ -346,6 +346,26 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         box.prop(self, "llm_mode", expand=True)
 
         if self.llm_mode == "local":
+            # ── llama-server binary ──────────────────────────────────
+            llm_state = _get_llm_manager().get_state()
+            llama_found = _get_llm_manager().find_llama_server()
+            row = box.row(align=True)
+            if llama_found:
+                row.label(text="llama-server: Installed", icon='CHECKMARK')
+            else:
+                row.label(text="llama-server: Not installed", icon='ERROR')
+                row.operator(
+                    "blmcp.download_llama_server",
+                    icon="IMPORT",
+                    text="Download llama-server",
+                )
+            if llm_state.download_progress and "llama-server" in llm_state.download_progress:
+                box.label(text=llm_state.download_progress, icon='INFO')
+                pct = llm_state.download_progress_pct
+                if pct > 0:
+                    row = box.row(align=True)
+                    row.progress(factor=pct / 100.0, type='BAR')
+
             # ── Recommended Models (presets) ─────────────────────────
             box.label(text="Pick a Model", icon='VIEWZOOM')
             box.prop(self, "model_preset", text="")
@@ -741,6 +761,98 @@ class _BLMCP_OT_stop_llm(bpy.types.Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
+class _BLMCP_OT_download_llama_server(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "blmcp.download_llama_server"
+    bl_label = "Download llama-server"
+    bl_description = "Download and install the llama-server binary from GitHub releases"
+
+    _timer: float | None = None
+    _thread: threading.Thread | None = None
+    _done: bool = False
+    _error: str = ""
+    _latest_progress: str = ""
+
+    def modal(self, context: bpy.types.Context, event: bpy.types.Event) -> set[str]:
+        del event
+
+        llm = _get_llm_manager()
+        state = llm.get_state()
+
+        # Show progress if it changed.
+        prog = state.download_progress
+        if prog and prog != self._latest_progress:
+            self._latest_progress = prog
+            if "Error" in prog or "fail" in prog.lower():
+                self.report({"ERROR"}, prog)
+            elif "installed" in prog.lower() or "already" in prog.lower():
+                self.report({"INFO"}, prog)
+
+        if not self._done:
+            for wm in bpy.data.window_managers:
+                for win in wm.windows:
+                    for area in win.screen.areas:
+                        if area.type == 'PREFERENCES':
+                            area.tag_redraw()
+            return {'PASS_THROUGH'}
+
+        if self._timer is not None:
+            bpy.app.timers.unregister(self._timer)
+
+        if context and context.area:
+            context.area.tag_redraw()
+
+        if self._error:
+            self.report({"ERROR"}, self._error)
+            return {"CANCELLED"}
+        else:
+            self.report({"INFO"}, "llama-server downloaded and installed")
+            return {"FINISHED"}
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        llm = _get_llm_manager()
+
+        # Check if already installed.
+        existing = llm.find_llama_server()
+        if existing:
+            self.report({"INFO"}, "llama-server already available at: {:s}".format(existing))
+            return {"FINISHED"}
+
+        self._done = False
+        self._error = ""
+        self._latest_progress = ""
+
+        def _do_download():
+            result = llm.download_llama_server()
+            if result is None:
+                self._error = llm.get_state().error or "Download failed"
+            self._done = True
+
+        self._thread = threading.Thread(target=_do_download, daemon=True)
+        self._thread.start()
+
+        self._timer = bpy.app.timers.register(
+            _make_llama_download_poll(self),
+            first_interval=0.5,
+            persistent=True,
+        )
+
+        context.window_manager.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+
+def _make_llama_download_poll(op):
+    def _poll() -> float | None:
+        if op._done:
+            return None
+        for wm in bpy.data.window_managers:
+            for win in wm.windows:
+                for area in win.screen.areas:
+                    if area.type == 'PREFERENCES':
+                        area.tag_redraw()
+        return 0.5
+    return _poll
+
+
 class _BLMCP_OT_scan_existing_models(bpy.types.Operator):  # type: ignore[misc]
     """Scan for existing GGUF models and populate the existing_model_path."""
     bl_idname = "blmcp.scan_existing_models"
@@ -995,6 +1107,7 @@ _classes = (
     _BLMCP_OT_download_model,
     _BLMCP_OT_start_llm,
     _BLMCP_OT_stop_llm,
+    _BLMCP_OT_download_llama_server,
     _BLMCP_OT_scan_existing_models,
     _BLMCP_OT_select_existing_model,
     _BLMCP_OT_test_remote_api,

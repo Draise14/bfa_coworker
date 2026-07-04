@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **llama-server Auto-Download** — One-click download and extraction of
+  `llama-server` from GitHub releases (ggml-org/llama.cpp) into
+  `~/.cache/blender_mcp_llama/`. No manual `llama.cpp` install needed.
 - **Model Presets** — Curated dropdown of 13 recommended GGUF models (Gemma 4,
   Qwen3.6, Qwen3-Coder, Llama 4 Scout, Qwen 2.5, Qwen3, DeepSeek-R1) with
   tooltips showing RAM requirements, disk size, and capability rating.
@@ -18,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one-click selection. Access via "Scan" button in preferences.
 - **"Last Used" Model Recall** — The last selected preset or existing model path
   is persisted across Blender sessions via built-in property storage.
+- **llama-server Auto-Download** — One-click download and extraction of
+  `llama-server` from GitHub releases (ggml-org/llama.cpp) into
+  `~/.cache/blender_mcp_llama/`. No manual `llama.cpp` install needed.
 - **Persistent Repo Memory** — Architecture, conventions, decisions, and
   deferred tasks tracked in `/memories/repo/` for the AI coding agent.
 - **CHANGELOG.md** — This file, tracking project changes.

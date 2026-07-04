@@ -6,8 +6,10 @@ Prerequisites
 =============
 
 - This repository.
-- `LLAMA.cpp <https://github.com/ggml-org/llama.cpp>`__ (version 8218 or newer).
 - Blender 5.1.
+
+``llama.cpp`` is optional — the add-on can auto-download ``llama-server``
+for you from the preferences UI (see `Auto-Download`_ below).
 
 
 Components
@@ -35,8 +37,23 @@ with a brief explanation of what they do.
    For the purpose of this document, we assume a graphical session.
 
 
-Setup
-=====
+Auto-Download (easiest)
+=======================
+
+The add-on preferences include a **"Download llama-server"** button that
+downloads the latest ``llama-server`` binary from GitHub releases and
+unpacks it to ``~/.cache/blender_mcp_llama/``.
+
+1. Open Blender → **Edit → Preferences → Add-ons** → find **Coworker**.
+2. In the **LLM Configuration** section, set mode to **Local**.
+3. If you see **"llama-server: Not installed"**, click **Download llama-server**.
+4. Once installed, pick a model preset and click **Download & Start**.
+
+No command line, no manual PATH setup, no separate ``llama.cpp`` install.
+
+
+Manual Setup
+============
 
 Using ``virtualenv`` is optional but assumed in the instructions below.
 

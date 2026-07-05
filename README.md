@@ -30,25 +30,33 @@ latest release from GitHub and unpacks it automatically to
 
 ### 3. Pick a Model
 
-In the add-on preferences you'll see the **LLM Configuration** section:
+In the add-on preferences you'll see the **LLM Configuration** section with
+models organized into three categories:
 
-- **Recommended Models** — A curated dropdown of tested GGUF models
-  (Gemma 4, Qwen3, Llama 4 Scout, GPT OSS. etc.) with tooltips showing RAM
-  requirements, disk size, and capability rating. Select one and it
-  auto-fills the repo ID and filename.
+| Category | VRAM | Best for |
+|---|---|---|
+| **Flagship** (24 GB+) | High-end GPUs (RTX 5090) | DeepSeek R1 32B, Qwen 2.5 Coder 32B, Gemma 4 26B Q8 |
+| **Mid-Range** (12-20 GB) | RTX 4090 / 3090 sweet spot | Mistral Small 3.1 24B (new default), Gemma 4/Gemma 3, Phi-4, GPT-OSS |
+| **Lightweight** (≤ 8 GB) | Any GPU / integrated | Llama 3.1 8B, Qwen3 8B, Phi-4 Q3 |
+
+Click a preset name to select it. The **Mid-Range** section is the default
+selection optimized for an **RTX 4090**.
+
+- **Custom Model** — Use the dropdown below the presets to manually enter a
+  repo ID and filename.
 - **Scan for Existing Models** — Click the **Scan** button to search your
   configured models directory and HuggingFace cache for `.gguf` files you
   already have. Found models appear in a popup for one-click selection.
 - **Advanced Settings** — Manually enter a HuggingFace repo ID and filename to download automatically.
 
-### 3. Download & Start
+### 4. Download & Start
 
 Click **Download & Start**. The add-on launches `llama-server` which
 auto-downloads the model from HuggingFace (progress visible in the
 llama-server console window). Once the model is ready, the server stays
 running in the background.
 
-### 4. Start the Agent
+### 5. Start the Agent
 
 In the **Agent Control** section, click **Start Agent**. This launches the
 MCP bridge server and connects it to the local LLM. The status indicators

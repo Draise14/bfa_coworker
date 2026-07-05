@@ -92,15 +92,23 @@ class _State:
 
 # Static preset items for the model_preset EnumProperty.
 # Must be a module-level constant — callbacks can fail during class registration.
+# Only the "custom" entry and a simple flat list — the UI categorizes them visually.
 _MODEL_PRESET_ITEMS: list[tuple[str, str, str]] = [
     ("_custom", "Custom (manual entry)", "Manually specify repo ID and filename"),
-    ("gemma4_26b_q4", "Gemma 4 26B A4B (UD-Q4_K_M)", "[Strong] 16-20 GB RAM, ~17 GB disk"),
-    ("gemma4_26b_q8", "Gemma 4 26B A4B (Q8_0)", "[Excellent] 24-28 GB RAM, ~27 GB disk"),
-    ("qwen36_35b_q4", "Qwen3.6 35B A3B (UD-Q4_K_M)", "[Medium] 12-16 GB RAM, ~22 GB disk"),
-    ("qwen36_35b_q8", "Qwen3.6 35B A3B (Q8_0)", "[Excellent] 20-24 GB RAM, ~37 GB disk"),
-    ("gpt_oss_20b_q4", "GPT-OSS 20B (Q4_K_M)", "[Medium] 8-12 GB RAM, ~12 GB disk"),
+    ("mistral_small_24b_q4", "Mistral Small 3.1 24B (Q4_K_M)", "[Mid] 12-16 GB RAM, ~14 GB disk"),
+    ("gemma4_26b_q4", "Gemma 4 26B A4B (UD-Q4_K_M)", "[Mid] 16-20 GB RAM, ~17 GB disk"),
+    ("gemma3_27b_q4", "Gemma 3 27B (Q4_K_M)", "[Mid] 16-20 GB RAM, ~16 GB disk"),
+    ("qwen36_35b_q4", "Qwen3.6 35B A3B (UD-Q4_K_M)", "[Mid] 12-16 GB RAM, ~22 GB disk"),
+    ("gpt_oss_20b_q4", "GPT-OSS 20B (Q4_K_M)", "[Mid] 8-12 GB RAM, ~12 GB disk"),
+    ("phi4_14b_q4", "Phi-4 14B (Q4_K_M)", "[Mid] 8-12 GB RAM, ~8 GB disk"),
+    ("gemma4_26b_q8", "Gemma 4 26B A4B (Q8_0)", "[Flagship] 24-28 GB RAM, ~27 GB disk"),
+    ("deepseek_r1_32b_q4", "DeepSeek R1 Distill 32B (Q4_K_M)", "[Flagship] 20-24 GB RAM, ~19 GB disk"),
+    ("qwen25_coder_32b_q4", "Qwen 2.5 Coder 32B (Q4_K_M)", "[Flagship] 20-24 GB RAM, ~19 GB disk"),
+    ("llama31_8b_q4", "Llama 3.1 8B (Q4_K_M)", "[Light] 4-6 GB RAM, ~5 GB disk"),
+    ("qwen35_9b_heretic_q4", "Qwen3.5 9B Claude 4.6 Heretic (Q4_K_M)", "[Light] 6-8 GB RAM, ~6 GB disk"),
     ("qwen3_8b_q4", "Qwen3 8B (Q4_K_M)", "[Light] 4-6 GB RAM, ~5 GB disk"),
     ("qwen3_8b_q8", "Qwen3 8B (Q8_0)", "[Light] 6-8 GB RAM, ~9 GB disk"),
+    ("phi4_14b_q3", "Phi-4 14B (Q3_K_M)", "[Light] 6-8 GB RAM, ~6 GB disk"),
 ]
 
 
@@ -220,12 +228,12 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
     model_repo_id: StringProperty(  # type: ignore[valid-type]
         name="Model Repo ID",
-        default="unsloth/gemma-4-26B-A4B-it-GGUF",
+        default="unsloth/Mistral-Small-3.1-24B-Instruct-2503-GGUF",
     )
 
     model_filename: StringProperty(  # type: ignore[valid-type]
         name="Model Filename",
-        default="gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+        default="Mistral-Small-3.1-24B-Instruct-2503-Q4_K_M.gguf",
     )
 
     downloaded_models_dir: StringProperty(  # type: ignore[valid-type]
@@ -268,7 +276,7 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         description="Select a curated model preset. Picking one auto-fills the repo and filename below",
         items=_MODEL_PRESET_ITEMS,
         update=_update_model_preset,
-        default="gemma4_26b_q4",
+        default="mistral_small_24b_q4",
     )
 
     model_preset_info: StringProperty(  # type: ignore[valid-type]
@@ -368,7 +376,38 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
             # ── Recommended Models (presets) ─────────────────────────
             box.label(text="Pick a Model", icon='VIEWZOOM')
-            box.prop(self, "model_preset", text="")
+
+            _CATEGORIES = [
+                ("flagship", "Flagship (24 GB+ VRAM)", 'SORT_ASC'),
+                ("mid_range", "Mid-Range (12-20 GB VRAM — 4090 Sweet Spot)", 'VIEWZOOM'),
+                ("lightweight", "Lightweight (\u2264 8 GB VRAM)", 'LIGHT_SUN'),
+            ]
+
+            llm = _get_llm_manager()
+            all_presets = llm.get_presets()
+
+            for cat_id, cat_label, cat_icon in _CATEGORIES:
+                cat_presets = [p for p in all_presets if p.category == cat_id]
+                if not cat_presets:
+                    continue
+                cat_box = box.box()
+                cat_box.label(text=cat_label, icon=cat_icon)
+                for preset in cat_presets:
+                    row = cat_box.row(align=True)
+                    op = row.operator(
+                        "blmcp.select_preset",
+                        text=preset.name,
+                        icon='CHECKBOX_HLT'
+                        if self.model_preset == preset.identifier
+                        else 'CHECKBOX_DEHLT',
+                    )
+                    op.preset_id = preset.identifier
+                    row.label(
+                        text="[{:s}] {:s}".format(preset.ram_gb, preset.capability),
+                    )
+
+            # Custom model entry.
+            box.prop(self, "model_preset", text="Custom Model")
             if self.model_preset != "_custom" and self.model_preset_info:
                 info_box = box.box()
                 info_box.label(text="Model Information", icon='INFO')
@@ -929,6 +968,27 @@ def _scan_poll_timer(context: bpy.types.Context):
     return _poll
 
 
+class _BLMCP_OT_select_preset(bpy.types.Operator):  # type: ignore[misc]
+    """Select a model preset from the categorized visual list."""
+    bl_idname = "blmcp.select_preset"
+    bl_label = "Select Preset"
+    bl_description = "Select this recommended model preset"
+
+    preset_id: StringProperty(  # type: ignore[valid-type]
+        name="Preset ID",
+        default="",
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        if self.preset_id:
+            prefs.model_preset = self.preset_id
+            # Trigger the update handler manually since EnumProperty
+            # assignment doesn't always fire the callback on all platforms.
+            prefs._update_model_preset(context)
+        return {"FINISHED"}
+
+
 class _BLMCP_OT_select_existing_model(bpy.types.Operator):  # type: ignore[misc]
     """Select a model from the scan results and set it as the active model."""
     bl_idname = "blmcp.select_existing_model"
@@ -1110,6 +1170,7 @@ _classes = (
     _BLMCP_OT_download_llama_server,
     _BLMCP_OT_scan_existing_models,
     _BLMCP_OT_select_existing_model,
+    _BLMCP_OT_select_preset,
     _BLMCP_OT_test_remote_api,
     _BLMCP_OT_ping_agent,
     _BLMCP_OT_open_hf_cache,

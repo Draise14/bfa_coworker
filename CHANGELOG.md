@@ -21,9 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one-click selection. Access via "Scan" button in preferences.
 - **"Last Used" Model Recall** — The last selected preset or existing model path
   is persisted across Blender sessions via built-in property storage.
-- **llama-server Auto-Download** — One-click download and extraction of
-  `llama-server` from GitHub releases (ggml-org/llama.cpp) into
-  `~/.cache/blender_mcp_llama/`. No manual `llama.cpp` install needed.
+- **Categorized Model Presets** — Presets reorganized into visual sections
+  (Flagship / Mid-Range / Lightweight) with per-category clickable buttons
+  replacing the flat dropdown. New presets: Mistral Small 3.1 24B, DeepSeek R1
+  Distill 32B, Qwen 2.5 Coder 32B, Gemma 3 27B, Phi-4 14B, Llama 3.1 8B.
+  Default preset is now Mistral Small 3.1 24B (RTX 4090 sweet spot).
 - **Persistent Repo Memory** — Architecture, conventions, decisions, and
   deferred tasks tracked in `/memories/repo/` for the AI coding agent.
 - **CHANGELOG.md** — This file, tracking project changes.

@@ -128,25 +128,12 @@ class ModelPreset:
     ram_gb: str  # e.g. "16-20 GB"
     disk_gb: str  # e.g. "~16 GB"
     capability: str  # "Excellent" | "Strong" | "Moderate"
+    category: str  # "flagship" | "mid_range" | "lightweight"
     description: str  # Longer tooltip text
 
 
 PRESET_MODELS: list[ModelPreset] = [
-    # ── Excellent ────────────────────────────────────────────────────
-    ModelPreset(
-        identifier="gemma4_26b_q4",
-        name="Gemma 4 26B A4B (UD-Q4_K_M)",
-        repo_id="unsloth/gemma-4-26B-A4B-it-GGUF",
-        filename="gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
-        ram_gb="16-20 GB",
-        disk_gb="~17 GB",
-        capability="Excellent",
-        description=(
-            "Google's latest — native function calling with 6 dedicated control tokens.\n"
-            "Tool calling accuracy 86.4%. 256K context. Apache 2.0.\n"
-            "Best overall choice for local MCP agent work."
-        ),
-    ),
+    # ── Flagship (Excellent, 24 GB+ VRAM) ───────────────────────────
     ModelPreset(
         identifier="gemma4_26b_q8",
         name="Gemma 4 26B A4B (Q8_0)",
@@ -155,9 +142,82 @@ PRESET_MODELS: list[ModelPreset] = [
         ram_gb="24-28 GB",
         disk_gb="~27 GB",
         capability="Excellent",
+        category="flagship",
         description=(
             "Higher quality variant of Gemma 4. Needs more RAM but delivers\n"
             "better precision. Native function calling with 6 dedicated control tokens."
+        ),
+    ),
+    ModelPreset(
+        identifier="deepseek_r1_32b_q4",
+        name="DeepSeek R1 Distill 32B (Q4_K_M)",
+        repo_id="unsloth/DeepSeek-R1-Distill-Qwen-32B-GGUF",
+        filename="DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf",
+        ram_gb="20-24 GB",
+        disk_gb="~19 GB",
+        capability="Excellent",
+        category="flagship",
+        description=(
+            "DeepSeek R1 reasoning distilled into Qwen 32B. Excellent for complex\n"
+            "multi-step tool orchestration. Fits 24 GB VRAM at Q4. MIT license."
+        ),
+    ),
+    ModelPreset(
+        identifier="qwen25_coder_32b_q4",
+        name="Qwen 2.5 Coder 32B (Q4_K_M)",
+        repo_id="unsloth/Qwen2.5-Coder-32B-Instruct-GGUF",
+        filename="Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf",
+        ram_gb="20-24 GB",
+        disk_gb="~19 GB",
+        capability="Excellent",
+        category="flagship",
+        description=(
+            "Top-tier code generation model. Excellent for Blender Python scripting.\n"
+            "Q4_K_M fits 24 GB VRAM. Apache 2.0."
+        ),
+    ),
+    # ── Mid-Range (Strong, 12-20 GB VRAM — RTX 4090 sweet spot) ────
+    ModelPreset(
+        identifier="mistral_small_24b_q4",
+        name="Mistral Small 3.1 24B (Q4_K_M)",
+        repo_id="unsloth/Mistral-Small-3.1-24B-Instruct-2503-GGUF",
+        filename="Mistral-Small-3.1-24B-Instruct-2503-Q4_K_M.gguf",
+        ram_gb="12-16 GB",
+        disk_gb="~14 GB",
+        capability="Strong",
+        category="mid_range",
+        description=(
+            "Mistral's compact 24B model. Native function calling, 128K context.\n"
+            "Excellent tool-use capabilities. Fits RTX 4090 at Q4. Apache 2.0."
+        ),
+    ),
+    ModelPreset(
+        identifier="gemma4_26b_q4",
+        name="Gemma 4 26B A4B (UD-Q4_K_M)",
+        repo_id="unsloth/gemma-4-26B-A4B-it-GGUF",
+        filename="gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+        ram_gb="16-20 GB",
+        disk_gb="~17 GB",
+        capability="Excellent",
+        category="mid_range",
+        description=(
+            "Google's latest — native function calling with 6 dedicated control tokens.\n"
+            "Tool calling accuracy 86.4%. 256K context. Apache 2.0.\n"
+            "Best overall choice for local MCP agent work."
+        ),
+    ),
+    ModelPreset(
+        identifier="gemma3_27b_q4",
+        name="Gemma 3 27B (Q4_K_M)",
+        repo_id="unsloth/gemma-3-27b-it-GGUF",
+        filename="gemma-3-27b-it-Q4_K_M.gguf",
+        ram_gb="16-20 GB",
+        disk_gb="~16 GB",
+        capability="Strong",
+        category="mid_range",
+        description=(
+            "Google's Gemma 3 at 27B params. Strong multilingual support.\n"
+            "Great for text-based tool calling. Apache 2.0."
         ),
     ),
     ModelPreset(
@@ -168,26 +228,13 @@ PRESET_MODELS: list[ModelPreset] = [
         ram_gb="12-16 GB",
         disk_gb="~22 GB",
         capability="Excellent",
+        category="mid_range",
         description=(
             "Qwen's latest MoE — only ~3B active parameters per token.\n"
             "Excellent efficiency. Native multimodal agents with built-in MCP support.\n"
             "Great balance of performance and resource usage."
         ),
     ),
-    ModelPreset(
-        identifier="qwen36_35b_q8",
-        name="Qwen3.6 35B A3B (Q8_0)",
-        repo_id="unsloth/Qwen3.6-35B-A3B-GGUF",
-        filename="Qwen3.6-35B-A3B-Q8_0.gguf",
-        ram_gb="20-24 GB",
-        disk_gb="~37 GB",
-        capability="Excellent",
-        description=(
-            "Higher precision Qwen3.6 MoE. ~3B active params per token.\n"
-            "Best quality-to-resources ratio among MoE models."
-        ),
-    ),
-    # ── Strong ──────────────────────────────────────────────────────
     ModelPreset(
         identifier="gpt_oss_20b_q4",
         name="GPT-OSS 20B (Q4_K_M)",
@@ -196,10 +243,57 @@ PRESET_MODELS: list[ModelPreset] = [
         ram_gb="8-12 GB",
         disk_gb="~12 GB",
         capability="Strong",
+        category="mid_range",
         description=(
             "OpenAI's open-weight reasoning model. 21B params / 3.6B active.\n"
             "Native function calling, structured outputs, and agentic capabilities.\n"
             "Runs within 16 GB RAM. Apache 2.0."
+        ),
+    ),
+    ModelPreset(
+        identifier="phi4_14b_q4",
+        name="Phi-4 14B (Q4_K_M)",
+        repo_id="unsloth/Phi-4-GGUF",
+        filename="Phi-4-Q4_K_M.gguf",
+        ram_gb="8-12 GB",
+        disk_gb="~8 GB",
+        capability="Strong",
+        category="mid_range",
+        description=(
+            "Microsoft's Phi-4 — punches well above its weight class.\n"
+            "Excellent reasoning for its size. Very low VRAM footprint.\n"
+            "MIT license."
+        ),
+    ),
+    # ── Lightweight (Moderate, ≤ 8 GB VRAM) ────────────────────────
+    ModelPreset(
+        identifier="qwen35_9b_heretic_q4",
+        name="Qwen3.5 9B Claude 4.6 Heretic (Q4_K_M)",
+        repo_id="mradermacher/Qwen3.5-9B-Claude-4.6-HighIQ-THINKING-HERETIC-UNCENSORED-GGUF",
+        filename="Qwen3.5-9B-Claude-4.6-HighIQ-THINKING-HERETIC-UNCENSORED.Q4_K_M.gguf",
+        ram_gb="6-8 GB",
+        disk_gb="~6 GB",
+        capability="Strong",
+        category="lightweight",
+        description=(
+            "Qwen3.5 9B fine-tuned with Claude 4.6 reasoning distillation.\n"
+            "Uncensored/heretic — no refusals. 256K context, vision capable.\n"
+            "Punches well above its weight for tool calling. Apache 2.0."
+        ),
+    ),
+    ModelPreset(
+        identifier="llama31_8b_q4",
+        name="Llama 3.1 8B (Q4_K_M)",
+        repo_id="unsloth/Meta-Llama-3.1-8B-Instruct-GGUF",
+        filename="Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+        ram_gb="4-6 GB",
+        disk_gb="~5 GB",
+        capability="Moderate",
+        category="lightweight",
+        description=(
+            "Meta's Llama 3.1 8B. Solid all-rounder, runs on any hardware.\n"
+            "Great for quick tests or resource-constrained setups.\n"
+            "Llama 3.1 Community license."
         ),
     ),
     ModelPreset(
@@ -210,6 +304,7 @@ PRESET_MODELS: list[ModelPreset] = [
         ram_gb="4-6 GB",
         disk_gb="~5 GB",
         capability="Strong",
+        category="lightweight",
         description=(
             "Latest Qwen3 dense model. Supports thinking mode for complex\n"
             "tool chains. Lightweight — runs on almost any hardware.\n"
@@ -224,9 +319,24 @@ PRESET_MODELS: list[ModelPreset] = [
         ram_gb="6-8 GB",
         disk_gb="~9 GB",
         capability="Strong",
+        category="lightweight",
         description=(
             "Higher precision Qwen3 8B. Better quality while still running\n"
             "on modest hardware. Supports thinking mode for complex tool chains."
+        ),
+    ),
+    ModelPreset(
+        identifier="phi4_14b_q3",
+        name="Phi-4 14B (Q3_K_M — ultra light)",
+        repo_id="unsloth/Phi-4-GGUF",
+        filename="Phi-4-Q3_K_M.gguf",
+        ram_gb="6-8 GB",
+        disk_gb="~6 GB",
+        capability="Moderate",
+        category="lightweight",
+        description=(
+            "Phi-4 at Q3_K_M — fits in 8 GB VRAM while keeping most of its\n"
+            "reasoning capability. Great for tight memory budgets."
         ),
     ),
 ]

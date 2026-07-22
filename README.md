@@ -83,10 +83,13 @@ into a single add-on experience:
 | Download GGUF models manually | Built-in download via `llama-server`, or scan for models you already have |
 | Run an MCP bridge server | Auto-started when you click **Start Agent** |
 | Run a separate chat client | Chat UI lives in Blender's 3D Viewport sidebar |
-| Wire up API keys (optional) | Remote API mode with URL + key fields in preferences |
+| Wire up API keys (optional) | Remote API mode with provider presets, URL auto-fill, and browseable model IDs |
 
-Alternatively, you can use a remote API (OpenAI, OpenRouter, Anthropic) by
-entering the URL and API key in preferences — no local LLM required.
+Alternatively, you can use a remote API (OpenRouter, OpenAI, Anthropic, etc.)
+by selecting the **Remote API** mode in preferences. Choose OpenRouter from
+the provider dropdown (auto-fills the API URL), paste your API key, enter a
+model ID (e.g. `openai/gpt-4o`), and click **Browse Models** to find models
+on openrouter.ai — no local LLM required.
 
 Original upstream documentation: [blender.org/lab/mcp-server](https://www.blender.org/lab/mcp-server/)
 
@@ -201,7 +204,11 @@ All settings are in **Edit → Preferences → Add-ons → MCP**.
 | Section | Setting | Description |
 |---------|---------|-------------|
 | LLM Config | Mode | Local (llama.cpp) or Remote API |
-| | Recommended Model | Curated preset dropdown |
+| | Provider | Remote API provider preset (auto-fills URL) |
+| | API URL / Key / Model | Remote API connection settings |
+| | Refresh Models | Fetch live model count from the API |
+| | Browse Models | Open openrouter.ai/models in browser |
+| | Recommended Model | Curated local model preset dropdown |
 | | Scan | Find existing `.gguf` files |
 | | Models Directory | Where downloaded models live |
 | | Advanced | Repo ID, filename, context window size |

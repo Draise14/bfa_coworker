@@ -36,7 +36,7 @@ A new module inside `addon/blender_mcp_addon/` that handles LLM lifecycle:
 | Responsibility | Detail |
 |---|---|
 | **Local mode** | Detect `llama-server.exe` (from PATH or configurable `llama_path`), download GGUF models via `llama-cli --hf-repo` / `--hf-file`, start/stop `llama-server` subprocess, health-check via `http://127.0.0.1:8080/health`. |
-| **Remote mode** | Store API key + base URL, validate connectivity with a lightweight request. |
+| **Remote mode** | Store API key + base URL, validate connectivity with a lightweight request. Provider presets (OpenRouter) auto-fill the API URL. Model name is a text field — use **Browse Models** to find model IDs on the provider's website. |
 | **State** | Expose `is_running`, `current_mode` ("local"/"remote"/"off"), `model_name`, `error` properties. |
 
 **Key functions:**
@@ -194,9 +194,10 @@ Extend the existing `_BlenderMCPPreferences` with new settings:
 | `model_repo_id` | String | Hugging Face repo ID (e.g. `HeYujie/Qwen3.5-35B-A3B-abliterated-GGUF`). |
 | `model_filename` | String | GGUF filename in the repo. |
 | `downloaded_models` | String | Directory to store downloaded models. |
-| `remote_api_url` | String | Base URL for remote API (e.g. `https://openrouter.ai/api/v1`). |
+| `remote_api_url` | String | Base URL for remote API (auto-filled from provider preset). |
 | `remote_api_key` | String | API key (stored, masked in UI). |
-| `remote_model` | String | Model name to use with the remote API. |
+| `remote_model` | String | Model ID to use with the remote API (e.g. `openai/gpt-4o`). |
+| `remote_provider` | Enum | Provider preset ("OpenRouter" or "Custom"). |
 | `mcp_server_port` | Int | Port for the internal MCP server. |
 | `auto_start_agent` | Bool | Start agent automatically with Blender. |
 
@@ -218,9 +219,13 @@ if self.llm_mode == "local":
     else:
         layout.operator("blmcp.stop_llm")
 else:  # remote
-    layout.prop(self, "remote_api_url")
-    layout.prop(self, "remote_api_key")
-    layout.prop(self, "remote_model")
+    layout.prop(self, "remote_provider")   # OpenRouter / Custom
+    layout.prop(self, "remote_api_url")    # auto-filled from provider
+    layout.prop(self, "remote_api_key")    # masked password field
+    layout.prop(self, "remote_model")       # model ID text field
+    layout.operator("blmcp.refresh_remote_models")  # fetch model count
+    layout.operator("blmcp.open_model_browser")     # browse openrouter.ai/models
+    layout.operator("blmcp.test_remote_api")        # test connection
 
 layout.separator()
 layout.label(text="Agent Control", icon="WORKSPACE")

@@ -44,21 +44,7 @@ import textwrap
 from . import agent_controller
 from . import llm_manager
 from . import mcp_to_blender_server
-
-# Default ports (kept in sync with __init__.py).
-_DEFAULT_BRIDGE_PORT = 9876
-_DEFAULT_MCP_PORT = 9191
-_DEFAULT_LLM_PORT = 8081
-
-
-def _effective_ports(prefs) -> tuple[int, int, int]:
-    """Return (bridge_port, mcp_port, llm_port) with offset applied."""
-    offset = getattr(prefs, 'port_offset', 0)
-    return (
-        _DEFAULT_BRIDGE_PORT + offset,
-        _DEFAULT_MCP_PORT + offset,
-        _DEFAULT_LLM_PORT + offset,
-    )
+from .shared import effective_ports
 
 
 _WRAP_WIDTH = 60
@@ -168,7 +154,7 @@ class BLMCP_OT_chat_send(Operator):  # type: ignore[misc]
 
         # Get effective ports from preferences.
         prefs = context.preferences.addons[__package__].preferences
-        _bridge_port, _mcp_port, _llm_port = _effective_ports(prefs)
+        _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
 
         def _do_turn():
             try:
@@ -244,7 +230,7 @@ class BLMCP_OT_agent_start(Operator):  # type: ignore[misc]
                 self.report({"ERROR"}, "Cannot start in background mode")
                 return {"CANCELLED"}
             prefs = context.preferences.addons[__package__].preferences
-            _bridge_port, _mcp_port, _llm_port = _effective_ports(prefs)
+            _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
             try:
                 mcp_to_blender_server.start(prefs.host, _bridge_port)
             except Exception as ex:  # pylint: disable=broad-exception-caught
@@ -262,7 +248,7 @@ class BLMCP_OT_agent_start(Operator):  # type: ignore[misc]
         # Step 2: Start the blender-mcp HTTP server.
         if not agent_controller._agent_state.mcp_server_running:
             prefs = context.preferences.addons[__package__].preferences
-            _bridge_port, _mcp_port, _llm_port = _effective_ports(prefs)
+            _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
             proc = agent_controller.start_mcp_server(port=_mcp_port, blender_port=_bridge_port)
             if proc is None:
                 self.report({"ERROR"}, agent_controller._agent_state.error)
@@ -280,7 +266,7 @@ class BLMCP_OT_agent_start(Operator):  # type: ignore[misc]
         llm_cfg.model_repo_id = prefs.model_repo_id
         llm_cfg.model_filename = prefs.model_filename
         llm_cfg.downloaded_models_dir = prefs.downloaded_models_dir
-        _bridge_port, _mcp_port, _llm_port = _effective_ports(prefs)
+        _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
         llm_cfg.local_port = _llm_port
         llm_cfg.local_ctx_size = prefs.local_ctx_size
         llm_cfg.remote_api_url = prefs.remote_api_url

@@ -223,13 +223,14 @@ All settings are in **Edit → Preferences → Add-ons → MCP**.
 The following items are tracked in [CHANGELOG.md](CHANGELOG.md):
 
 ### High Priority
-- [ ] **Addon Branding Rename** — Rename blender branding references
-- [ ] **Interface Modularization** — Split `__init__.py` into separate
+- [ ] **Addon Branding Rename** — Rename blender_mcp_addon branding references to "bfa_coworker" as the addon folder or "Coworker" for user sight and for short
+- [x] **Interface Modularization** — Split `__init__.py` into separate
       preference/operator modules
 - [ ] **Get going on Linux and Mac** at the moment this is Windows only.
 
 ### Medium Priority
 - [ ] **Chat History Export** — Save conversation log to a text file
+- [ ] Add better chat drawing in sidebar based on: https://projects.blender.org/blender/blender/pulls/154351
 - [ ] **SKILL.md Update** — Rewrite agent skill file for current branding
 - [ ] **User Documentation** — Full install/usage/troubleshooting guide
 - [ ] **GGUF Header Parsing** — Auto-detect model params for non-presets
@@ -239,7 +240,7 @@ The following items are tracked in [CHANGELOG.md](CHANGELOG.md):
 - [ ] **Download Progress Bar** — Visual progress in preferences panel
 - [ ] **Local Model Generator** — Integrate Ultrashape / Hunyuan / Trellis2
 - [ ] **CC0 Resource Downloader** — Polyhaven, AmbientCG, Sketchfab
-- [ ] **Integrated pre-prompted tools for UX operators** to allow repetitive work with contextual application that an MCP can do in a smart way. this requires some design and integration into different editors and interface. 
+- [ ] **Integrated pre-prompted tools for UX operators** to allow repetitive work with contextual application that an MCP can do in a smart way. this requires some design and integration into different editors and interface.
 
 ---
 

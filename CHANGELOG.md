@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Interface Modularization** — Split `__init__.py` (~1,437 lines) into
+  separate focused modules:
+  - `shared.py` — Constants, port helpers, lazy import wrappers, model/remote
+    preset items
+  - `preferences.py` — `_State` runtime state class + `_BlenderMCPPreferences`
+    (properties + `draw()` method)
+  - `operators_server.py` — Bridge server start/stop operators + autostart
+    timer + CLI handler
+  - `operators_llm.py` — LLM operators (download model, start/stop, download
+    llama-server, scan, select preset/existing model)
+  - `operators_agent.py` — Remote API operators (test connection, refresh
+    models, browse models, ping agent)
+  - `operators_hf.py` — HuggingFace cache operators (open, clear)
+  - `__init__.py` — Thin registration hub (~100 lines) importing all classes
+    and wiring `register()`/`unregister()`.
+- **Duplicated code removed** — `ui_chat.py` now imports `effective_ports()`
+  from `.shared` instead of duplicating the port constants and helper function.
+
 ### Added
 
 - **llama-server Auto-Download** — One-click download and extraction of

@@ -441,8 +441,14 @@ def _openai_chat_completions(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
     api_key: str | None = None,
+    model: str | None = None,
 ) -> dict[str, Any] | None:
-    """POST to a chat completions endpoint and return the parsed JSON response."""
+    """POST to a chat completions endpoint and return the parsed JSON response.
+
+    *model* — when provided, included in the request body. Required for
+    remote APIs (OpenRouter, OpenAI, etc.). Omitted for local llama-server
+    which auto-detects the model.
+    """
     body: dict[str, Any] = {
         "messages": messages,
         "stream": False,
@@ -457,6 +463,8 @@ def _openai_chat_completions(
         "top_p": 0.9,
         "repeat_penalty": 1.05,
     }
+    if model:
+        body["model"] = model
     if tools:
         body["tools"] = tools
 
@@ -470,6 +478,7 @@ def _openai_chat_completions(
         headers["Authorization"] = "Bearer {:s}".format(api_key)
 
     print("[🛠️Coworker] _openai_chat_completions: POST {:s}".format(url))
+    print("[🛠️Coworker] _openai_chat_completions:   model = {:s}".format(model or "(auto-detect)"))
     print("[🛠️Coworker] _openai_chat_completions:   messages = {:d}, tools = {:d}, body = {:d} bytes".format(
         len(messages), len(tools), len(data_bytes)))
 
@@ -565,6 +574,7 @@ def run_conversation_turn(
     on_status: Callable[[str], None] | None = None,
     llm_url: str | None = None,
     api_key: str | None = None,
+    model: str | None = None,
     mcp_port: int = _MCP_SERVER_DEFAULT_PORT,
 ) -> list[dict[str, Any]]:
     """
@@ -634,7 +644,7 @@ def run_conversation_turn(
         else:
             history_to_send = history
 
-        response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key)
+        response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model)
         if response is None:
             _agent_state.is_thinking = False
             _agent_state.error = "No response from LLM"
@@ -702,7 +712,7 @@ def run_conversation_turn(
             "role": "user",
             "content": "All tool calls are complete. Please summarize what was done in 1-2 sentences.",
         })
-        final_response = _openai_chat_completions(llm_url, history, openai_tools, api_key)
+        final_response = _openai_chat_completions(llm_url, history, openai_tools, api_key, model)
         if final_response:
             final_choice = final_response.get("choices", [{}])[0]
             final_msg = final_choice.get("message", {})

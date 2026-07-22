@@ -15,8 +15,14 @@ __all__ = (
     "LLMConfig",
     "LLMState",
     "ModelPreset",
+    "RemoteProviderPreset",
+    "RemoteModelPreset",
     "get_presets",
     "get_preset_by_id",
+    "get_remote_providers",
+    "get_remote_provider_by_id",
+    "get_curated_remote_models",
+    "fetch_remote_models",
     "scan_existing_models",
     "find_llama_server",
     "download_model",
@@ -130,6 +136,32 @@ class ModelPreset:
     capability: str  # "Excellent" | "Strong" | "Moderate"
     category: str  # "flagship" | "mid_range" | "lightweight"
     description: str  # Longer tooltip text
+
+
+# ---------------------------------------------------------------------------
+# Remote Provider Presets
+
+@dataclass
+class RemoteProviderPreset:
+    """Metadata for a curated remote API provider preset."""
+
+    identifier: str
+    name: str
+    base_url: str  # e.g. "https://openrouter.ai/api"
+    description: str  # Tooltip text shown in the provider dropdown
+    api_key_help: str  # e.g. "Get a key from openrouter.ai/keys"
+    models: list["RemoteModelPreset"] = field(default_factory=list)
+
+
+@dataclass
+class RemoteModelPreset:
+    """Metadata for a curated remote model shown in the model dropdown."""
+
+    identifier: str  # Full model ID, e.g. "anthropic/claude-sonnet-4.6"
+    name: str  # Display name, e.g. "Claude 4.6 Sonnet"
+    provider_name: str  # e.g. "Anthropic"
+    description: str  # Short tooltip
+    context_window: int = 200000  # Default context window size
 
 
 PRESET_MODELS: list[ModelPreset] = [
@@ -353,6 +385,178 @@ def get_preset_by_id(identifier: str) -> ModelPreset | None:
         if p.identifier == identifier:
             return p
     return None
+
+
+# ---------------------------------------------------------------------------
+# Remote Provider Presets — OpenRouter curated models
+
+PRESET_REMOTE_PROVIDERS: list[RemoteProviderPreset] = [
+    RemoteProviderPreset(
+        identifier="openrouter",
+        name="OpenRouter",
+        base_url="https://openrouter.ai/api",
+        description=(
+            "One API key gives access to 300+ models from OpenAI, Anthropic,\n"
+            "DeepSeek, Meta, Google, and more. OpenAI-compatible API.\n"
+            "Get a key at openrouter.ai/keys"
+        ),
+        api_key_help="Create a key at https://openrouter.ai/keys",
+        models=[
+            RemoteModelPreset(
+                identifier="anthropic/claude-sonnet-4.6",
+                name="Claude 4.6 Sonnet",
+                provider_name="Anthropic",
+                description="Best all-around — strong coding, tool use, and reasoning. 200K context.",
+                context_window=200000,
+            ),
+            RemoteModelPreset(
+                identifier="openai/gpt-4.1",
+                name="GPT-4.1",
+                provider_name="OpenAI",
+                description="OpenAI's latest flagship. Excellent coding and instruction following.",
+                context_window=1000000,
+            ),
+            RemoteModelPreset(
+                identifier="openai/gpt-4o",
+                name="GPT-4o",
+                provider_name="OpenAI",
+                description="Fast multimodal model. Great for quick tool-calling tasks.",
+                context_window=128000,
+            ),
+            RemoteModelPreset(
+                identifier="deepseek/deepseek-chat-v3-0324",
+                name="DeepSeek Chat V3",
+                provider_name="DeepSeek",
+                description="Very cost-effective. Strong performance for Blender scripting.",
+                context_window=131072,
+            ),
+            RemoteModelPreset(
+                identifier="google/gemini-2.5-flash",
+                name="Gemini 2.5 Flash",
+                provider_name="Google",
+                description="Fast, cheap, and capable. Good for quick Blender tasks.",
+                context_window=1048576,
+            ),
+            RemoteModelPreset(
+                identifier="meta-llama/llama-4-maverick",
+                name="Llama 4 Maverick",
+                provider_name="Meta",
+                description="Open-weight model. Strong tool calling. 128K context.",
+                context_window=131072,
+            ),
+            RemoteModelPreset(
+                identifier="qwen/qwen3.6-35b-a3b",
+                name="Qwen3.6 35B A3B",
+                provider_name="Qwen",
+                description="MoE architecture — efficient, strong coding. Native MCP support.",
+                context_window=131072,
+            ),
+            RemoteModelPreset(
+                identifier="mistralai/mistral-small-3.1-24b",
+                name="Mistral Small 3.1 24B",
+                provider_name="Mistral",
+                description="Compact but capable. Native function calling, 128K context.",
+                context_window=131072,
+            ),
+            RemoteModelPreset(
+                identifier="openai/gpt-5-mini",
+                name="GPT-5 Mini",
+                provider_name="OpenAI",
+                description="Fast and affordable. Great for simpler Blender tasks.",
+                context_window=262144,
+            ),
+            RemoteModelPreset(
+                identifier="google/gemini-2.5-pro",
+                name="Gemini 2.5 Pro",
+                provider_name="Google",
+                description="Google's most capable model. Excellent reasoning. 1M context.",
+                context_window=1048576,
+            ),
+        ],
+    ),
+]
+
+
+def get_remote_providers() -> list[RemoteProviderPreset]:
+    """Return the full list of curated remote provider presets."""
+    return list(PRESET_REMOTE_PROVIDERS)
+
+
+def get_remote_provider_by_id(identifier: str) -> RemoteProviderPreset | None:
+    """Look up a remote provider preset by its identifier. Returns ``None`` if not found."""
+    for p in PRESET_REMOTE_PROVIDERS:
+        if p.identifier == identifier:
+            return p
+    return None
+
+
+def get_curated_remote_models(provider_id: str) -> list[RemoteModelPreset]:
+    """Return the curated model list for a given provider."""
+    provider = get_remote_provider_by_id(provider_id)
+    if provider is None:
+        return []
+    return list(provider.models)
+
+
+def fetch_remote_models(
+    base_url: str,
+    api_key: str,
+) -> tuple[list[dict], str]:
+    """
+    Fetch the live model list from a remote API's ``/v1/models`` endpoint.
+
+    Supports OpenAI-compatible and OpenRouter-style responses.
+
+    Returns a tuple of ``(models, error)``:
+      - ``models`` is a list of dicts with keys ``id``, ``name``, ``owned_by``.
+      - ``error`` is an empty string on success, or a message on failure.
+    """
+    base = base_url.rstrip("/")
+    if not base.endswith("/v1"):
+        url = "{:s}/v1/models".format(base)
+    else:
+        url = "{:s}/models".format(base)
+
+    print("[🛠️Coworker] fetch_remote_models: GET {:s}".format(url))
+
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": "Bearer {:s}".format(api_key)},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw = resp.read().decode()
+            data = json.loads(raw)
+
+            # OpenRouter wraps models in a "data" array; OpenAI uses a flat array.
+            model_list = data.get("data", data if isinstance(data, list) else [])
+            if isinstance(model_list, dict):
+                model_list = []
+
+            models: list[dict] = []
+            for m in model_list:
+                if not isinstance(m, dict):
+                    continue
+                mid = m.get("id", "")
+                if not mid:
+                    continue
+                models.append({
+                    "id": mid,
+                    "name": mid,
+                    "owned_by": m.get("owned_by", ""),
+                })
+
+            # Sort alphabetically by id.
+            models.sort(key=lambda x: x["id"].lower())
+
+            print("[🛠️Coworker] fetch_remote_models: {:d} models found".format(len(models)))
+            return models, ""
+
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
+        msg = "Failed to fetch models: {:s}".format(str(ex))
+        print("[🛠️Coworker] fetch_remote_models: {:s}".format(msg))
+        return [], msg
 
 
 def scan_existing_models(

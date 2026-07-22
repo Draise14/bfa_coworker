@@ -21,6 +21,7 @@ from bpy.props import (
 )  # pylint: disable=import-error
 
 import os
+import threading
 from pathlib import Path
 
 from . import mcp_to_blender_server
@@ -109,6 +110,12 @@ _MODEL_PRESET_ITEMS: list[tuple[str, str, str]] = [
     ("qwen3_8b_q4", "Qwen3 8B (Q4_K_M)", "[Light] 4-6 GB RAM, ~5 GB disk"),
     ("qwen3_8b_q8", "Qwen3 8B (Q8_0)", "[Light] 6-8 GB RAM, ~9 GB disk"),
     ("phi4_14b_q3", "Phi-4 14B (Q3_K_M)", "[Light] 6-8 GB RAM, ~6 GB disk"),
+]
+
+# Static preset items for the remote_provider EnumProperty.
+_REMOTE_PROVIDER_ITEMS: list[tuple[str, str, str]] = [
+    ("openrouter", "OpenRouter", "One key → 300+ models (OpenAI, Anthropic, DeepSeek, etc.)"),
+    ("_custom", "Custom (manual entry)", "Manually specify API URL and model name"),
 ]
 
 
@@ -298,17 +305,56 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
     remote_api_url: StringProperty(  # type: ignore[valid-type]
         name="API URL",
-        default="",
+        default="https://openrouter.ai/api",
+        description="Base URL for the OpenAI-compatible API endpoint",
     )
 
     remote_api_key: StringProperty(  # type: ignore[valid-type]
         name="API Key",
         default="",
         subtype='PASSWORD',
+        description="Your API key. Get one at openrouter.ai/keys",
     )
+
+    # ── Remote Provider ────────────────────────────────────────────
+
+    def _update_remote_provider(self, _context: bpy.types.Context) -> None:
+        """When user picks a provider, auto-fill the API URL."""
+        llm = _get_llm_manager()
+        provider = llm.get_remote_provider_by_id(self.remote_provider)
+        if provider is not None:
+            self.remote_api_url = provider.base_url
+            # Sync to llm_manager config.
+            cfg = llm.get_config()
+            cfg.remote_api_url = provider.base_url
+            llm.set_config(cfg)
+
+    remote_provider: EnumProperty(  # type: ignore[valid-type]
+        name="Provider",
+        description="Select a remote API provider. Auto-fills the API URL",
+        items=_REMOTE_PROVIDER_ITEMS,
+        update=_update_remote_provider,
+        default="openrouter",
+    )
+
+    # ── Remote Model ───────────────────────────────────────────────
 
     remote_model: StringProperty(  # type: ignore[valid-type]
         name="Model Name",
+        default="",
+        description=(
+            "Model ID to use for completions (e.g. 'openai/gpt-4o').\n"
+            "Browse models at openrouter.ai/models"
+        ),
+    )
+
+    remote_models_count: IntProperty(  # type: ignore[valid-type]
+        name="Models Available",
+        default=0,
+    )
+
+    remote_models_fetch_error: StringProperty(  # type: ignore[valid-type]
+        name="",
         default="",
     )
 
@@ -459,9 +505,49 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             row.operator("blmcp.clear_hf_cache", icon="TRASH", text="Clear Cache")
 
         else:
+            # ── Remote Provider ─────────────────────────────────────
+            box.label(text="Provider", icon='WORLD')
+            box.prop(self, "remote_provider")
+
+            # Show provider description when a known provider is selected.
+            if self.remote_provider != "_custom":
+                provider = _get_llm_manager().get_remote_provider_by_id(self.remote_provider)
+                if provider is not None:
+                    for line in provider.description.split("\n"):
+                        box.label(text=line, icon='INFO')
+
+            # ── API URL & Key ───────────────────────────────────────
             box.prop(self, "remote_api_url")
             box.prop(self, "remote_api_key")
+
+            row = box.row(align=True)
+            row.label(text="API Key Help:", icon='HELP')
+            if self.remote_provider != "_custom":
+                provider = _get_llm_manager().get_remote_provider_by_id(self.remote_provider)
+                if provider is not None:
+                    row.label(text=provider.api_key_help)
+                else:
+                    row.label(text="Enter your API key for the remote service")
+            else:
+                row.label(text="Enter your API key for the remote service")
+
+            # ── Model ───────────────────────────────────────────────
+            box.label(text="Model", icon='VIEWZOOM')
             box.prop(self, "remote_model")
+            row = box.row(align=True)
+            row.operator("blmcp.refresh_remote_models", icon="FILE_REFRESH", text="Refresh Models")
+            row.operator("blmcp.open_model_browser", icon="URL", text="Browse Models")
+
+            # Show fetch status.
+            if self.remote_models_count > 0:
+                box.label(
+                    text="{:d} models available from the API".format(self.remote_models_count),
+                    icon='CHECKMARK',
+                )
+            if self.remote_models_fetch_error:
+                box.label(text=self.remote_models_fetch_error, icon='ERROR')
+
+            # ── Test Connection ─────────────────────────────────────
             row = box.row()
             row.operator("blmcp.test_remote_api", icon="URL")
 
@@ -1049,6 +1135,47 @@ class _BLMCP_OT_test_remote_api(bpy.types.Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
+class _BLMCP_OT_refresh_remote_models(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "blmcp.refresh_remote_models"
+    bl_label = "Refresh Models"
+    bl_description = "Fetch the live model list from the remote API"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        if not prefs.remote_api_url:
+            self.report({"ERROR"}, "No API URL configured — select a provider first")
+            return {"CANCELLED"}
+        if not prefs.remote_api_key:
+            self.report({"ERROR"}, "No API key configured")
+            return {"CANCELLED"}
+
+        llm = _get_llm_manager()
+        models, error = llm.fetch_remote_models(prefs.remote_api_url, prefs.remote_api_key)
+
+        if error:
+            prefs.remote_models_count = 0
+            prefs.remote_models_fetch_error = error
+            self.report({"ERROR"}, error)
+            return {"CANCELLED"}
+
+        prefs.remote_models_count = len(models)
+        prefs.remote_models_fetch_error = ""
+
+        self.report({"INFO"}, "{:d} models available from the API".format(len(models)))
+        return {"FINISHED"}
+
+
+class _BLMCP_OT_open_model_browser(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "blmcp.open_model_browser"
+    bl_label = "Browse Models"
+    bl_description = "Open openrouter.ai/models in your browser to find model IDs"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        import webbrowser
+        webbrowser.open("https://openrouter.ai/models")
+        return {"FINISHED"}
+
+
 class _BLMCP_OT_ping_agent(bpy.types.Operator):  # type: ignore[misc]
     bl_idname = "blmcp.ping_agent"
     bl_label = "Ping"
@@ -1172,6 +1299,8 @@ _classes = (
     _BLMCP_OT_select_existing_model,
     _BLMCP_OT_select_preset,
     _BLMCP_OT_test_remote_api,
+    _BLMCP_OT_refresh_remote_models,
+    _BLMCP_OT_open_model_browser,
     _BLMCP_OT_ping_agent,
     _BLMCP_OT_open_hf_cache,
     _BLMCP_OT_clear_hf_cache,
@@ -1204,7 +1333,7 @@ def register() -> None:
             )
 
         # If agent autostart is also enabled, schedule the full agent startup.
-        if prefs.agent_autostart and prefs.llm_mode == "local":
+        if prefs.agent_autostart:
             bpy.app.timers.register(
                 _autostart_agent_timer,
                 first_interval=prefs.autostart_delay + 2.0,
@@ -1237,6 +1366,7 @@ def _autostart_agent_timer() -> None:
     if prefs.llm_mode == "local":
         _llm = _get_llm_manager()
         _llm_cfg = _llm.get_config()
+        _llm_cfg.mode = prefs.llm_mode
         _llm_cfg.llama_path = prefs.llama_path
         _llm_cfg.model_repo_id = prefs.model_repo_id
         _llm_cfg.model_filename = prefs.model_filename

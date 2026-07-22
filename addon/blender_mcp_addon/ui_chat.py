@@ -157,9 +157,11 @@ class BLMCP_OT_chat_send(Operator):  # type: ignore[misc]
         llm_cfg = llm_manager.get_config()
         llm_url = None
         api_key = None
+        model = None
         if llm_cfg.mode == "remote":
             llm_url = llm_cfg.remote_api_url
             api_key = llm_cfg.remote_api_key
+            model = llm_cfg.remote_model or None
 
         # Run the conversation turn in a background thread.
         import threading
@@ -176,6 +178,7 @@ class BLMCP_OT_chat_send(Operator):  # type: ignore[misc]
                     on_status=lambda s: _update_status(s),
                     llm_url=llm_url or None,
                     api_key=api_key or None,
+                    model=model,
                     mcp_port=_mcp_port,
                 )
             except Exception as ex:  # pylint: disable=broad-exception-caught
@@ -272,12 +275,17 @@ class BLMCP_OT_agent_start(Operator):  # type: ignore[misc]
         prefs = context.preferences.addons[__package__].preferences
         # Sync preferences to llm_manager config before starting.
         llm_cfg = llm_manager.get_config()
+        llm_cfg.mode = prefs.llm_mode
         llm_cfg.llama_path = prefs.llama_path
         llm_cfg.model_repo_id = prefs.model_repo_id
         llm_cfg.model_filename = prefs.model_filename
         llm_cfg.downloaded_models_dir = prefs.downloaded_models_dir
         _bridge_port, _mcp_port, _llm_port = _effective_ports(prefs)
         llm_cfg.local_port = _llm_port
+        llm_cfg.local_ctx_size = prefs.local_ctx_size
+        llm_cfg.remote_api_url = prefs.remote_api_url
+        llm_cfg.remote_api_key = prefs.remote_api_key
+        llm_cfg.remote_model = prefs.remote_model
         llm_manager.set_config(llm_cfg)
 
         if llm_cfg.mode == "local":

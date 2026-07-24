@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blender Authors
+# (Bforartists-maintained fork)
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -14,11 +15,11 @@ and runs the MCP tools verifying they give correct results.
 This runs in both background & foreground mode (headless)
 where it's possible to check that taking screenshots works properly.
 
-Defaults to ``blender`` and ``blender-mcp`` from ``PATH``.
-Override with ``BLENDER_BIN`` and ``BLENDER_MCP`` environment variables.
+Defaults to ``blender`` and ``bfa-coworker-mcp`` from ``PATH``.
+Override with ``BLENDER_BIN`` and ``BFACW_MCP`` environment variables.
 
 Foreground tests run headless via a Wayland display server (Weston).
-Set ``BLENDER_MCP_FOREGROUND=1`` to use the real display instead.
+Set ``BFACW_FOREGROUND=1`` to use the real display instead.
 """
 
 __all__ = ()
@@ -62,7 +63,7 @@ _PORT_INTERACTIVE = 9878
 _TIMEOUT_SCALE = float(os.environ.get("GLOBAL_TIMEOUT_SCALE", "1"))
 
 # Maximum time to wait for Blender to start (seconds).
-_TIMEOUT_STARTUP = int(int(os.environ.get("BLENDER_MCP_TIMEOUT", "10")) * _TIMEOUT_SCALE)
+_TIMEOUT_STARTUP = int(int(os.environ.get("BFACW_TIMEOUT", "10")) * _TIMEOUT_SCALE)
 
 # Maximum time to wait for a local process to respond or exit (seconds).
 _TIMEOUT_LOCAL_PROC = int(10 * _TIMEOUT_SCALE)
@@ -260,7 +261,7 @@ class _TestServerMixin:
     @classmethod
     def setUpClass(cls) -> None:
         blender_bin = os.environ.get("BLENDER_BIN", "blender")
-        blender_mcp = os.environ.get("BLENDER_MCP", "blender-mcp")
+        blender_mcp = os.environ.get("BFACW_MCP", "bfa-coworker-mcp")
 
         cls._tmpdir = tempfile.TemporaryDirectory()
         tmpdir = cls._tmpdir.name
@@ -269,7 +270,7 @@ class _TestServerMixin:
         env = _blender_env(tmpdir)
 
         # Build the extension zip.
-        addon_src = os.path.join(_REPO_DIR, "addon", "blender_mcp_addon")
+        addon_src = os.path.join(_REPO_DIR, "addon", "bfa_coworker")
         _run_blender(
             [
                 blender_bin, "--command", "extension", "build",
@@ -279,7 +280,7 @@ class _TestServerMixin:
             env=env,
         )
 
-        zips = glob.glob(os.path.join(tmpdir, "mcp-*.zip"))
+        zips = glob.glob(os.path.join(tmpdir, "bfa_coworker-*.zip"))
         if not zips:
             raise RuntimeError("Extension build did not produce a zip")
 
@@ -305,7 +306,7 @@ class _TestServerMixin:
                     (
                         "import bpy; "
                         "prefs = bpy.context.preferences.addons"
-                        "['bl_ext.user_default.mcp'].preferences; "
+                        "['bl_ext.user_default.bfa_coworker'].preferences; "
                         "prefs.port = {:d}; "
                         "prefs.autostart_delay = 0.0; "
                         "bpy.ops.wm.save_userpref()"
@@ -317,7 +318,7 @@ class _TestServerMixin:
         # Start a headless display server for non-background tests.
         # Registered before Blender so cleanup order is Blender first,
         # then the display server (LIFO).
-        if not cls._background and not os.environ.get("BLENDER_MCP_FOREGROUND"):
+        if not cls._background and not os.environ.get("BFACW_FOREGROUND"):
             cls._weston_proc = _start_headless_display(env)
             cls.addClassCleanup(_stop_headless_display, cls._weston_proc)
 
@@ -334,7 +335,7 @@ class _TestServerMixin:
             blender_args.extend(["--gpu-backend", "vulkan"])
         if not cls._interactive:
             blender_args.extend([
-                "--command", "blender_mcp", "--port", str(cls._port),
+                "--command", "bfa_coworker", "--port", str(cls._port),
             ])
 
         cls._blender_proc = subprocess.Popen(
@@ -349,7 +350,7 @@ class _TestServerMixin:
         _wait_for_port(cls._port, _TIMEOUT_STARTUP, cls._blender_proc, output)
 
         mcp_env = _blender_env(tmpdir)
-        mcp_env["BLENDER_MCP_PORT"] = str(cls._port)
+        mcp_env["BFACW_PORT"] = str(cls._port)
         mcp_env["BLENDER_PATH"] = blender_bin
 
         cls._client = MCPClient(shlex.split(blender_mcp), env=mcp_env)
@@ -1086,12 +1087,50 @@ def test_binaries_available() -> bool:
     Check required binaries are available, print errors for any that are missing.
     """
     blender_bin = os.environ.get("BLENDER_BIN", "blender")
-    blender_mcp = os.environ.get("BLENDER_MCP", "blender-mcp")
+    blender_mcp = os.environ.get("BFACW_MCP", "bfa-coworker-mcp")
     ok = True
     if not shutil.which(blender_bin):
         print("ERROR: '{:s}' not found in PATH (set BLENDER_BIN)".format(blender_bin))
         ok = False
     if not shutil.which(blender_mcp):
+        print("ERROR: '{:s}' not found in PATH (set BFACW_MCP)".format(blender_mcp))
+ True
+    _port = _PORT_BACKGROUND
+
+
+class TestForegroundServer(_TestServerMixin, unittest.TestCase):
+    """
+    Run all tests against Blender without ``--background`` (full GUI).
+    """
+
+    _background = False
+    _port = _PORT_FOREGROUND
+
+
+class TestInteractiveServer(_TestServerMixin, unittest.TestCase):
+    """
+    Run all tests against Blender in interactive mode (timer-based polling).
+    """
+
+    _background = False
+    _interactive = True
+    _port = _PORT_INTERACTIVE
+
+
+BLENDER_VERSION_MIN = (5, 1)
+
+
+def test_binaries_available() -> bool:
+    """
+    Check required binaries are available, print errors for any that are missing.
+    """
+    blender_bin = os.environ.get("BLENDER_BIN", "blender")
+    blender_mcp = os.environ.get("BLENDER_MCP", "blender-mcp")
+    ok = True
+    if not shutil.which(blender_bin):
+        print("ERROR: '{:s}' not found in PATH (set BLENDER_BIN)".format(blender_bin))
+        ok = False
+exit(1)    unittest.main()    if not shutil.which(blender_mcp):
         print("ERROR: '{:s}' not found in PATH (set BLENDER_MCP)".format(blender_mcp))
         ok = False
     return ok
@@ -1127,3 +1166,4 @@ if __name__ == "__main__":
     if not test_blender_version():
         sys.exit(1)
     unittest.main()
+exit(1)    unittest.main()

@@ -1,7 +1,7 @@
-# Blender MCPB Extension
+# Bforartists Coworker MCP Server
 
 ## Description
-A lightweight MCP (Model Context Protocol) server for Blender.
+A lightweight MCP (Model Context Protocol) server for Blender, part of the Coworker project.
 
 Allows LLM assistants to interact with a running Blender instance – inspecting scenes, executing Python code, rendering, and navigating the interface.
 
@@ -10,17 +10,22 @@ It supports running arbitrary Python code within Blender. This allows for advanc
 
 ## Installation
 
-The MCP Server can be installed via: `pip install git+https://projects.blender.org/lab/blender_mcp.git#subdirectory=mcp`. It requires an add-on in Blender for this to work.
+The MCP Server can be installed via: `pip install git+https://github.com/bforartists/bfa_coworker.git#subdirectory=mcp`. It requires the Coworker add-on in Blender for this to work.
 
 ### Add-on
-* Install the Blender Lab [Extensions repository](https://docs.blender.org/manual/en/latest/editors/preferences/extensions.html#repositories): `https://lab.blender.org/`
-* Find the MCP add-on, install and enable it.
+* Install the Bforartists Coworker add-on from the repository
+* Enable it in preferences
 
 ## Examples
 
-You can find more examples in the [documentation](https://www.blender.org/lab/mcp-server/).
-
 ### Example 1: Data-block renaming: fix types
+
+**Demo file**: [Pebble Scattering](https://www.blender.org/download/demo/geometry-nodes/fields/pebble_scattering.blend)
+
+**User prompt**: "With the current open Blender file fix the name of all the data-blocks to remove typos. Report back which data-blocks got fixed."
+
+**Expected behaviour:**
+- `GRP-rocks` → `GRP-pebble` [optionally, this is more opiniated]
 
 **Demo file**: [Pebble Scattering](https://www.blender.org/download/demo/geometry-nodes/fields/pebble_scattering.blend)
 

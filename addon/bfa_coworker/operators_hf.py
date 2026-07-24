@@ -7,8 +7,8 @@ Operators for HuggingFace cache management.
 """
 
 __all__ = (
-    "_BLMCP_OT_open_hf_cache",
-    "_BLMCP_OT_clear_hf_cache",
+    "_BFACW_OT_open_hf_cache",
+    "_BFACW_OT_clear_hf_cache",
 )
 
 import bpy  # pylint: disable=import-error
@@ -17,8 +17,8 @@ import os
 import shutil
 
 
-class _BLMCP_OT_open_hf_cache(bpy.types.Operator):  # type: ignore[misc]
-    bl_idname = "blmcp.open_hf_cache"
+class _BFACW_OT_open_hf_cache(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "bfacw.open_hf_cache"
     bl_label = "Open HF Cache"
     bl_description = "Open the HuggingFace cache folder where models are cached"
 
@@ -34,8 +34,8 @@ class _BLMCP_OT_open_hf_cache(bpy.types.Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
-class _BLMCP_OT_clear_hf_cache(bpy.types.Operator):  # type: ignore[misc]
-    bl_idname = "blmcp.clear_hf_cache"
+class _BFACW_OT_clear_hf_cache(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "bfacw.clear_hf_cache"
     bl_label = "Clear HF Cache"
     bl_description = "Delete all cached HuggingFace models (frees disk space)"
 

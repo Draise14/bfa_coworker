@@ -7,13 +7,13 @@ Operators for local LLM management: download, start/stop, scan, select.
 """
 
 __all__ = (
-    "_BLMCP_OT_download_model",
-    "_BLMCP_OT_start_llm",
-    "_BLMCP_OT_stop_llm",
-    "_BLMCP_OT_download_llama_server",
-    "_BLMCP_OT_scan_existing_models",
-    "_BLMCP_OT_select_preset",
-    "_BLMCP_OT_select_existing_model",
+    "_BFACW_OT_download_model",
+    "_BFACW_OT_start_llm",
+    "_BFACW_OT_stop_llm",
+    "_BFACW_OT_download_llama_server",
+    "_BFACW_OT_scan_existing_models",
+    "_BFACW_OT_select_preset",
+    "_BFACW_OT_select_existing_model",
 )
 
 import bpy  # pylint: disable=import-error
@@ -29,8 +29,8 @@ from .shared import effective_ports, get_llm_manager
 # ---------------------------------------------------------------------------
 # Download Model
 
-class _BLMCP_OT_download_model(bpy.types.Operator):  # type: ignore[misc]
-    bl_idname = "blmcp.download_model"
+class _BFACW_OT_download_model(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "bfacw.download_model"
     bl_label = "Download Model"
     bl_description = "Download the configured GGUF model via llama-server (auto-downloads with progress in console)"
 
@@ -95,7 +95,7 @@ class _BLMCP_OT_download_model(bpy.types.Operator):  # type: ignore[misc]
         cfg.local_port = _llm_port
         llm.set_config(cfg)
 
-        models_dir = Path(prefs.downloaded_models_dir) if prefs.downloaded_models_dir else (Path.home() / "blender_mcp_models")
+        models_dir = Path(prefs.downloaded_models_dir) if prefs.downloaded_models_dir else (Path.home() / "bfa_coworker_models")
         model_path = models_dir / prefs.model_filename if prefs.model_filename else None
         if model_path and model_path.exists():
             self.report({"INFO"}, "Model already downloaded at: {:s}".format(str(model_path)))
@@ -140,8 +140,8 @@ def _make_download_poll(op):
 # ---------------------------------------------------------------------------
 # Start Local LLM
 
-class _BLMCP_OT_start_llm(bpy.types.Operator):  # type: ignore[misc]
-    bl_idname = "blmcp.start_llm"
+class _BFACW_OT_start_llm(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "bfacw.start_llm"
     bl_label = "Start Local LLM"
     bl_description = "Start the local llama-server with the configured model"
 
@@ -177,8 +177,8 @@ class _BLMCP_OT_start_llm(bpy.types.Operator):  # type: ignore[misc]
 # ---------------------------------------------------------------------------
 # Stop Local LLM
 
-class _BLMCP_OT_stop_llm(bpy.types.Operator):  # type: ignore[misc]
-    bl_idname = "blmcp.stop_llm"
+class _BFACW_OT_stop_llm(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "bfacw.stop_llm"
     bl_label = "Stop Local LLM"
     bl_description = "Stop the local llama-server"
 
@@ -193,8 +193,8 @@ class _BLMCP_OT_stop_llm(bpy.types.Operator):  # type: ignore[misc]
 # ---------------------------------------------------------------------------
 # Download llama-server
 
-class _BLMCP_OT_download_llama_server(bpy.types.Operator):  # type: ignore[misc]
-    bl_idname = "blmcp.download_llama_server"
+class _BFACW_OT_download_llama_server(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "bfacw.download_llama_server"
     bl_label = "Download llama-server"
     bl_description = "Download and install the llama-server binary from GitHub releases"
 
@@ -288,9 +288,9 @@ def _make_llama_download_poll(op):
 # ---------------------------------------------------------------------------
 # Scan Existing Models
 
-class _BLMCP_OT_scan_existing_models(bpy.types.Operator):  # type: ignore[misc]
+class _BFACW_OT_scan_existing_models(bpy.types.Operator):  # type: ignore[misc]
     """Scan for existing GGUF models and populate the existing_model_path."""
-    bl_idname = "blmcp.scan_existing_models"
+    bl_idname = "bfacw.scan_existing_models"
     bl_label = "Scan for Models"
     bl_description = "Scan the models directory and HuggingFace cache for GGUF model files"
 
@@ -301,12 +301,12 @@ class _BLMCP_OT_scan_existing_models(bpy.types.Operator):  # type: ignore[misc]
         llm = get_llm_manager()
         prefs = context.preferences.addons[__package__].preferences
 
-        _BLMCP_OT_scan_existing_models._scan_done = False
+        _BFACW_OT_scan_existing_models._scan_done = False
 
         def _do_scan():
             models = llm.scan_existing_models(models_dir=prefs.downloaded_models_dir)
-            _BLMCP_OT_scan_existing_models._models = models
-            _BLMCP_OT_scan_existing_models._scan_done = True
+            _BFACW_OT_scan_existing_models._models = models
+            _BFACW_OT_scan_existing_models._scan_done = True
 
         self.report({"INFO"}, "Scanning for models...")
         thread = threading.Thread(target=_do_scan, daemon=True)
@@ -327,9 +327,9 @@ def _scan_poll_timer(context: bpy.types.Context):
     wm = context.window_manager
 
     def _poll() -> float | None:
-        if not _BLMCP_OT_scan_existing_models._scan_done:
+        if not _BFACW_OT_scan_existing_models._scan_done:
             return 0.25  # Keep polling
-        models = _BLMCP_OT_scan_existing_models._models
+        models = _BFACW_OT_scan_existing_models._models
 
         def _show_menu():
             if not models:
@@ -343,7 +343,7 @@ def _scan_poll_timer(context: bpy.types.Context):
                     for m in models:
                         src_icon = 'FILE_FOLDER' if m["source"] == "models_dir" else 'URL'
                         op = layout.operator(
-                            "blmcp.select_existing_model",
+                            "bfacw.select_existing_model",
                             text="[{:s}] {:s} ({:s})".format(m["source"], m["filename"], m["size_gb"]),
                             icon=src_icon,
                         )
@@ -365,9 +365,9 @@ def _scan_poll_timer(context: bpy.types.Context):
 # ---------------------------------------------------------------------------
 # Select Preset
 
-class _BLMCP_OT_select_preset(bpy.types.Operator):  # type: ignore[misc]
+class _BFACW_OT_select_preset(bpy.types.Operator):  # type: ignore[misc]
     """Select a model preset from the categorized visual list."""
-    bl_idname = "blmcp.select_preset"
+    bl_idname = "bfacw.select_preset"
     bl_label = "Select Preset"
     bl_description = "Select this recommended model preset"
 
@@ -389,9 +389,9 @@ class _BLMCP_OT_select_preset(bpy.types.Operator):  # type: ignore[misc]
 # ---------------------------------------------------------------------------
 # Select Existing Model
 
-class _BLMCP_OT_select_existing_model(bpy.types.Operator):  # type: ignore[misc]
+class _BFACW_OT_select_existing_model(bpy.types.Operator):  # type: ignore[misc]
     """Select a model from the scan results and set it as the active model."""
-    bl_idname = "blmcp.select_existing_model"
+    bl_idname = "bfacw.select_existing_model"
     bl_label = "Use This Model"
     bl_description = "Use the selected model file directly"
 

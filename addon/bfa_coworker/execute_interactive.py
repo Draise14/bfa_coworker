@@ -32,7 +32,7 @@ def run() -> float | None:
         import sys
         print(
             "Error: unhandled exception in the MCP server timer.\n"
-            "This may be a bug in Blender-MCP, as errors should not be raised at this point, continuing:\n"
+            "This may be a bug in Coworker, as errors should not be raised at this point, continuing:\n"
             "{:s}".format(traceback.format_exc()),
             file=sys.stderr,
         )

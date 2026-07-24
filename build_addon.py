@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Build script for the Blender MCP extension.
+Build script for the Coworker extension.
 
 Usage:
     python build_addon.py                  # Build the addon
@@ -19,7 +19,7 @@ import sys
 
 # Paths relative to this script.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ADDON_DIR = os.path.join(SCRIPT_DIR, "addon", "blender_mcp_addon")
+ADDON_DIR = os.path.join(SCRIPT_DIR, "addon", "bfa_coworker")
 MCP_SRC_DIR = os.path.join(SCRIPT_DIR, "mcp")
 MCP_VENV_DIR = os.path.join(MCP_SRC_DIR, ".venv")
 # The addon will have a vendor/.venv/ subdirectory with blmcp + dependencies.
@@ -58,7 +58,7 @@ def _bundle_venv() -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build the Blender MCP extension.")
+    parser = argparse.ArgumentParser(description="Build the Coworker extension.")
     parser.add_argument("--install", action="store_true", help="Install after build")
     parser.add_argument("--enable", action="store_true", help="Enable after install")
     parser.add_argument("--blender", default=find_blender(), help="Blender executable path")

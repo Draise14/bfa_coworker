@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blender Authors
+# (Bforartists-maintained fork)
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -350,7 +351,7 @@ class TestMCPServer(unittest.TestCase):
         """
         Checks that the server reports the expected public name.
         """
-        self.assertEqual(self._server_info.name, "blender-mcp")
+        self.assertEqual(self._server_info.name, "bfa-coworker")
 
     # -----------------------------------------------------------------
     # Instructions.
@@ -579,8 +580,7 @@ class TestMainConfiguration(unittest.TestCase):
             result = blmcp.main()
         self.assertEqual(result, 0)
         fastmcp_cls.assert_called_once_with(
-            "blender-mcp",
-            instructions=str(self._prompts["initial_instructions"]),
+            "bfa-coworker",
         )
         mcp_instance.run.assert_called_once_with(transport="stdio")
 

@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blender Authors
+# (Bforartists-maintained fork)
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -57,7 +58,7 @@ def main() -> int:
     with open(os.path.join(data_dir, "prompts.yml"), encoding="utf-8") as fh:
         prompts = yaml.safe_load(fh)
 
-    mcp = FastMCP("blender-mcp", instructions=str(prompts["initial_instructions"]))
+    mcp = FastMCP("bfa-coworker", instructions=str(prompts["initial_instructions"]))
 
     # Auto-discover and register all tools (they are never un-registered).
     import blmcp.tools as tools_pkg

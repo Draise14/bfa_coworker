@@ -1,12 +1,12 @@
 schema_version = "1.0.0"
 
-id = "mcp"
-version = "1.1.33"
-name = "MCP"
-tagline = "MCP server add-on for LLM interaction"
-maintainer = "Blender Lab"
+id = "bfa_coworker"
+version = "1.1.35"
+name = "Coworker"
+tagline = "AI coworker for Blender — MCP-powered agent"
+maintainer = "Bforartists"
 type = "add-on"
-website = "https://www.blender.org/lab/mcp-server/"
+website = "https://github.com/bforartists/bfa_coworker"
 blender_version_min = "5.1.0"
 
 license = [

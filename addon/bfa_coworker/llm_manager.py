@@ -77,11 +77,11 @@ _LLAMA_SEARCH_PATHS_WIN = [
 def _get_bundled_llama_dir() -> Path:
     """Return the directory where the addon stores its bundled llama-server binaries.
 
-    Uses ``~/.cache/blender_mcp_llama/`` so it persists across addon updates
+    Uses ``~/.cache/bfa_coworker_llama/`` so it persists across addon updates
     and does not require Blender's bpy module.  The directory is created on
     first access.
     """
-    base = Path.home() / ".cache" / "blender_mcp_llama"
+    base = Path.home() / ".cache" / "bfa_coworker_llama"
     base.mkdir(parents=True, exist_ok=True)
     return base
 
@@ -729,8 +729,8 @@ def _get_models_dir() -> Path:
     if custom and os.path.isdir(custom):
         print("[🛠️Coworker] _get_models_dir: using custom dir {:s}".format(custom))
         return Path(custom)
-    # Default: <user_home>/blender_mcp_models/
-    default = Path.home() / "blender_mcp_models"
+    # Default: <user_home>/bfa_coworker_models/
+    default = Path.home() / "bfa_coworker_models"
     default.mkdir(parents=True, exist_ok=True)
     print("[🛠️Coworker] _get_models_dir: using default dir {:s}".format(str(default)))
     return default
@@ -927,7 +927,7 @@ def _find_model_in_hf_cache(repo_id: str, filename: str) -> str | None:
     if local_models and os.path.isdir(local_models):
         cache_roots.append(Path(local_models) / ".hf_cache" / "hub")
     else:
-        default_local = Path.home() / "blender_mcp_models"
+        default_local = Path.home() / "bfa_coworker_models"
         cache_roots.append(default_local / ".hf_cache" / "hub")
 
     # 2. Standard HF cache location.
@@ -966,7 +966,7 @@ def download_llama_server(
     Downloads the latest compatible release zip from the
     ``ggml-org/llama.cpp`` repository and extracts ``llama-server.exe``
     (or the platform-equivalent binary) into the bundled directory
-    (``~/.cache/blender_mcp_llama/``).
+    (``~/.cache/bfa_coworker_llama/``).
 
     Returns the absolute path to the extracted binary, or ``None`` on
     failure.  Progress is reported via ``_state.download_progress`` and

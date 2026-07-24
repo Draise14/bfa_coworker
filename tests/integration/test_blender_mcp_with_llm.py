@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blender Authors
+# (Bforartists-maintained fork)
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -575,7 +576,7 @@ class TestChatClient(unittest.TestCase):
         # -----------
         # Build addon
         with _StatusReport("Building addon") as st:
-            addon_src = os.path.join(_REPO_DIR, "addon", "blender_mcp_addon")
+            addon_src = os.path.join(_REPO_DIR, "addon", "bfa_coworker")
             _run_blender(
                 [
                     blender_bin, "--command", "extension", "build",
@@ -584,7 +585,7 @@ class TestChatClient(unittest.TestCase):
                 ],
                 env=env,
             )
-            zips = glob.glob(os.path.join(tmpdir, "mcp-*.zip"))
+            zips = glob.glob(os.path.join(tmpdir, "bfa_coworker-*.zip"))
             if not zips:
                 raise RuntimeError("Extension build did not produce a zip")
             st.status("OK")
@@ -612,7 +613,7 @@ class TestChatClient(unittest.TestCase):
                     (
                         "import bpy; "
                         "prefs = bpy.context.preferences.addons"
-                        "['bl_ext.user_default.mcp'].preferences; "
+                        "['bl_ext.user_default.bfa_coworker'].preferences; "
                         "prefs.port = {:d}; "
                         "prefs.autostart_delay = 0.0; "
                         "bpy.ops.wm.save_userpref()"
@@ -624,7 +625,7 @@ class TestChatClient(unittest.TestCase):
 
         # ----------------
         # Headless display
-        if not _env_nonzero("BLENDER_MCP_FOREGROUND"):
+        if not _env_nonzero("BFACW_FOREGROUND"):
             with _StatusReport("Starting headless display") as st:
                 weston_proc, weston_ini = _start_headless_display(env)
                 cls.addClassCleanup(_stop_headless_display, weston_proc, weston_ini)
@@ -665,7 +666,7 @@ class TestChatClient(unittest.TestCase):
 
         # ----------------------------
         # Store paths for test methods
-        cls._blender_mcp_cmd = os.path.join(venv_bin_dir, "blender-mcp")
+        cls._blender_mcp_cmd = os.path.join(venv_bin_dir, "bfa-coworker-mcp")
         cls._blender_bin = blender_bin
         cls._env = env
 
@@ -803,7 +804,7 @@ class TestChatClient(unittest.TestCase):
         in assertion messages.
         """
         env = self._env.copy()
-        env["BLENDER_MCP_PORT"] = str(_PORT_BLENDER)
+        env["BFACW_PORT"] = str(_PORT_BLENDER)
         env["BLENDER_PATH"] = self._blender_bin
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if api_key:

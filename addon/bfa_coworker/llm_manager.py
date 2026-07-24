@@ -136,6 +136,7 @@ class ModelPreset:
     capability: str  # "Excellent" | "Strong" | "Moderate"
     category: str  # "flagship" | "mid_range" | "lightweight"
     description: str  # Longer tooltip text
+    context_size: int = 8192  # Native context window size in tokens
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +176,7 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~27 GB",
         capability="Excellent",
         category="flagship",
+        context_size=262144,
         description=(
             "Higher quality variant of Gemma 4. Needs more RAM but delivers\n"
             "better precision. Native function calling with 6 dedicated control tokens."
@@ -189,6 +191,7 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~19 GB",
         capability="Excellent",
         category="flagship",
+        context_size=131072,
         description=(
             "DeepSeek R1 reasoning distilled into Qwen 32B. Excellent for complex\n"
             "multi-step tool orchestration. Fits 24 GB VRAM at Q4. MIT license."
@@ -203,6 +206,7 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~19 GB",
         capability="Excellent",
         category="flagship",
+        context_size=32768,
         description=(
             "Top-tier code generation model. Excellent for Blender Python scripting.\n"
             "Q4_K_M fits 24 GB VRAM. Apache 2.0."
@@ -218,6 +222,7 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~14 GB",
         capability="Strong",
         category="mid_range",
+        context_size=131072,
         description=(
             "Mistral's compact 24B model. Native function calling, 128K context.\n"
             "Excellent tool-use capabilities. Fits RTX 4090 at Q4. Apache 2.0."
@@ -232,6 +237,7 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~17 GB",
         capability="Excellent",
         category="mid_range",
+        context_size=262144,
         description=(
             "Google's latest — native function calling with 6 dedicated control tokens.\n"
             "Tool calling accuracy 86.4%. 256K context. Apache 2.0.\n"
@@ -247,6 +253,7 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~16 GB",
         capability="Strong",
         category="mid_range",
+        context_size=8192,
         description=(
             "Google's Gemma 3 at 27B params. Strong multilingual support.\n"
             "Great for text-based tool calling. Apache 2.0."
@@ -261,6 +268,7 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~22 GB",
         capability="Excellent",
         category="mid_range",
+        context_size=131072,
         description=(
             "Qwen's latest MoE — only ~3B active parameters per token.\n"
             "Excellent efficiency. Native multimodal agents with built-in MCP support.\n"
@@ -276,6 +284,7 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~12 GB",
         capability="Strong",
         category="mid_range",
+        context_size=32768,
         description=(
             "OpenAI's open-weight reasoning model. 21B params / 3.6B active.\n"
             "Native function calling, structured outputs, and agentic capabilities.\n"
@@ -291,6 +300,7 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~8 GB",
         capability="Strong",
         category="mid_range",
+        context_size=16384,
         description=(
             "Microsoft's Phi-4 — punches well above its weight class.\n"
             "Excellent reasoning for its size. Very low VRAM footprint.\n"
@@ -307,6 +317,7 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~6 GB",
         capability="Strong",
         category="lightweight",
+        context_size=262144,
         description=(
             "Qwen3.5 9B fine-tuned with Claude 4.6 reasoning distillation.\n"
             "Uncensored/heretic — no refusals. 256K context, vision capable.\n"
@@ -322,6 +333,7 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~5 GB",
         capability="Moderate",
         category="lightweight",
+        context_size=131072,
         description=(
             "Meta's Llama 3.1 8B. Solid all-rounder, runs on any hardware.\n"
             "Great for quick tests or resource-constrained setups.\n"
@@ -337,6 +349,7 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~5 GB",
         capability="Strong",
         category="lightweight",
+        context_size=32768,
         description=(
             "Latest Qwen3 dense model. Supports thinking mode for complex\n"
             "tool chains. Lightweight — runs on almost any hardware.\n"
@@ -352,6 +365,7 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~9 GB",
         capability="Strong",
         category="lightweight",
+        context_size=32768,
         description=(
             "Higher precision Qwen3 8B. Better quality while still running\n"
             "on modest hardware. Supports thinking mode for complex tool chains."
@@ -366,6 +380,7 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~6 GB",
         capability="Moderate",
         category="lightweight",
+        context_size=16384,
         description=(
             "Phi-4 at Q3_K_M — fits in 8 GB VRAM while keeping most of its\n"
             "reasoning capability. Great for tight memory budgets."

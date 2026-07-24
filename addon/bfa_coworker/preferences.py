@@ -216,7 +216,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
     # ── Model Preset ─────────────────────────────────────────────────
 
     def _update_model_preset(self, _context: bpy.types.Context) -> None:
-        """When user picks a preset, auto-fill repo_id and filename."""
+        """When user picks a preset, auto-fill repo_id, filename, and context size."""
         llm = get_llm_manager()
         preset = llm.get_preset_by_id(self.model_preset)
         if preset is not None:
@@ -224,13 +224,16 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             self.model_filename = preset.filename
             # Clear existing model path — using preset now.
             self.existing_model_path = ""
+            # Auto-set context window to the preset's native size.
+            self.local_ctx_size = preset.context_size
             # Build info string for display.
             self.model_preset_info = (
-                "Capability: {cap}  |  RAM: {ram}  |  Disk: {disk}\n{desc}"
+                "Capability: {cap}  |  RAM: {ram}  |  Disk: {disk}  |  Context: {ctx:,} tokens\n{desc}"
             ).format(
                 cap=preset.capability,
                 ram=preset.ram_gb,
                 disk=preset.disk_gb,
+                ctx=preset.context_size,
                 desc=preset.description,
             )
             # Sync to llm_manager config immediately.
@@ -238,6 +241,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             cfg.model_repo_id = preset.repo_id
             cfg.model_filename = preset.filename
             cfg.downloaded_models_dir = self.downloaded_models_dir
+            cfg.local_ctx_size = preset.context_size
             llm.set_config(cfg)
         else:
             self.model_preset_info = ""
@@ -342,15 +346,15 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         name="Context Window Size",
         description=(
             "Context window size (in tokens) passed to llama-server via --ctx-size.\n"
+            "Auto-set when you pick a model preset; you can still adjust it here.\n"
             "Larger values allow longer conversations but use more RAM.\n"
-            "Decrease if you get Jinja errors (context overflow) or out-of-memory.\n"
-            "Small models (8B) work well at 4096. MoE models can use 8192-16384.\n"
-            "Gemma 4 supports up to 262144."
+            "Decrease if you get context overflow errors or out-of-memory.\n"
+            "Gemma 4 supports up to 262144; 8B models work well at 8192-32768."
         ),
         default=8192,
         min=2048,
         max=262144,
-        step=1024,
+        step=10,
         subtype='UNSIGNED',
     )
 
@@ -499,6 +503,19 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             # ── Model ───────────────────────────────────────────────
             box.label(text="Model", icon='VIEWZOOM')
             box.prop(self, "remote_model")
+
+            # Show context window for the selected curated remote model.
+            if self.remote_provider != "_custom" and self.remote_model:
+                provider = llm.get_remote_provider_by_id(self.remote_provider)
+                if provider is not None:
+                    for rmodel in provider.models:
+                        if rmodel.identifier == self.remote_model:
+                            box.label(
+                                text="Context window: {:,} tokens".format(rmodel.context_window),
+                                icon='INFO',
+                            )
+                            break
+
             row = box.row(align=True)
             row.operator("bfacw.refresh_remote_models", icon="FILE_REFRESH", text="Refresh Models")
             row.operator("bfacw.open_model_browser", icon="URL", text="Browse Models")

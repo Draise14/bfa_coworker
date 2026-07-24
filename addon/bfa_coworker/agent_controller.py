@@ -246,7 +246,8 @@ def start_mcp_server(
     if not mcp_exe:
         # Look for the MCP virtual environment.  Walk up from this
         # file to find the workspace root, then check:
-        #   mcp/.venv/Scripts/python.exe
+        #   mcp/.venv/Scripts/python.exe  (development layout)
+        #   vendor/python_env/Scripts/python.exe  (installed-addon layout)
         _this_dir = Path(__file__).resolve().parent
         _py = None
         _p = _this_dir
@@ -257,6 +258,12 @@ def start_mcp_server(
                 break
             _p = _p.parent
 
+        # Also check vendor/python_env/ (installed addon layout).
+        if not _py:
+            _candidate = _this_dir / "vendor" / "python_env" / "Scripts" / "python.exe"
+            if _candidate.is_file():
+                _py = _candidate
+
         # Hard fallback.
         if not _py:
             _candidate = Path("c:/bfa_coworker/mcp/.venv/Scripts/python.exe")
@@ -266,6 +273,12 @@ def start_mcp_server(
         if _py:
             mcp_exe = str(_py)
             _use_module = True
+            # Ensure the vendor venv's site-packages is on PYTHONPATH so
+            # that blmcp (and its dependencies) are importable even when
+            # editable-install metadata is missing or stale.
+            _sp = str(Path(mcp_exe).resolve().parent.parent / "Lib" / "site-packages")
+            existing = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = _sp + (os.pathsep + existing if existing else "")
         else:
             mcp_exe = shutil.which("python") or "python"
             _use_module = True

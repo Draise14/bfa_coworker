@@ -3,7 +3,7 @@ schema_version = "1.0.0"
 id = "bfa_coworker"
 version = "1.1.35"
 name = "Coworker"
-tagline = "AI coworker for Blender — MCP-powered agent"
+tagline = "Chat based coworker — an MCP-powered agent"
 maintainer = "Bforartists"
 type = "add-on"
 website = "https://github.com/bforartists/bfa_coworker"
@@ -16,4 +16,4 @@ license = [
 tags = ["Development"]
 
 [permissions]
-network = "Runs a local TCP socket server for MCP client communication"
+network = "Local TCP server for MCP clients and online LLM API access"

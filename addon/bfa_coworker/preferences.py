@@ -373,7 +373,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 row.label(text="llama-server: Installed", icon='CHECKMARK')
             else:
                 row.label(text="llama-server: Not installed", icon='ERROR')
-                    row.operator(
+                row.operator(
                     "bfacw.download_llama_server",
                     icon="IMPORT",
                     text="Download llama-server",

@@ -22,8 +22,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ADDON_DIR = os.path.join(SCRIPT_DIR, "addon", "bfa_coworker")
 MCP_SRC_DIR = os.path.join(SCRIPT_DIR, "mcp")
 MCP_VENV_DIR = os.path.join(MCP_SRC_DIR, ".venv")
-# The addon will have a vendor/.venv/ subdirectory with blmcp + dependencies.
-VENDOR_VENV_DIR = os.path.join(ADDON_DIR, "vendor", ".venv")
+# The addon will have a vendor/python_env/ subdirectory with blmcp + dependencies.
+# (Named python_env rather than .venv because Blender's extension build
+# excludes hidden directories starting with ".".)
+VENDOR_VENV_DIR = os.path.join(ADDON_DIR, "vendor", "python_env")
 DIST_DIR = os.path.join(SCRIPT_DIR, "releases")
 
 # Find Blender executable.
@@ -34,7 +36,7 @@ def find_blender() -> str:
 
 
 def _bundle_venv() -> None:
-    """Copy the MCP .venv into vendor/.venv inside the addon."""
+    """Copy the MCP .venv into vendor/python_env inside the addon."""
     print("=" * 60)
     print("Bundling MCP virtual environment into extension...")
     print("  Source: {:s}".format(MCP_VENV_DIR))
@@ -54,6 +56,27 @@ def _bundle_venv() -> None:
         if '__pycache__' in dirs:
             shutil.rmtree(os.path.join(root, '__pycache__'))
 
+    # Strip editable-install files — they contain machine-specific absolute
+    # paths and won't work when the venv is moved to another location.
+    site_packages = os.path.join(VENDOR_VENV_DIR, "Lib", "site-packages")
+    if os.path.isdir(site_packages):
+        for f in os.listdir(site_packages):
+            if f.startswith("__editable__"):
+                fpath = os.path.join(site_packages, f)
+                if os.path.isfile(fpath):
+                    os.remove(fpath)
+                    print("  Removed editable install: {:s}".format(f))
+
+    # Copy the blmcp package source into the vendor venv as a regular
+    # (non-editable) package so it's always importable.
+    blmcp_src = os.path.join(SCRIPT_DIR, "mcp", "blmcp")
+    blmcp_dst = os.path.join(site_packages, "blmcp")
+    if os.path.isdir(blmcp_src):
+        if os.path.isdir(blmcp_dst):
+            shutil.rmtree(blmcp_dst)
+        shutil.copytree(blmcp_src, blmcp_dst, ignore=shutil.ignore_patterns("__pycache__"))
+        print("  Copied blmcp package to vendor venv: {:s}".format(blmcp_dst))
+
     print("Bundled successfully!")
 
 
@@ -67,7 +90,7 @@ def main() -> int:
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Step 0: Bundle the MCP .venv into vendor/.venv.
+    # Step 0: Bundle the MCP .venv into vendor/python_env.
     _bundle_venv()
 
     # Step 1: Build.

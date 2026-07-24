@@ -7,8 +7,8 @@ Operators for starting/stopping the MCP bridge server.
 """
 
 __all__ = (
-    "_BLMCP_OT_server_start",
-    "_BLMCP_OT_server_stop",
+    "_BFACW_OT_server_start",
+    "_BFACW_OT_server_stop",
     "_autostart_timer",
     "_cli_execute_handler",
 )
@@ -20,18 +20,18 @@ from .preferences import _State
 from .shared import STATE_OFFLINE_ERROR_MESSAGE, effective_ports
 
 
-class _BLMCP_OT_server_start(bpy.types.Operator):  # type: ignore[misc]
-    bl_idname = "blmcp.server_start"
-    bl_label = "Start MCP Bridge Server"
+class _BFACW_OT_server_start(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "bfacw.server_start"
+    bl_label = "Start Bridge Server"
     bl_description = "Start the MCP socket bridge server that the MCP server can connect to"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         from . import execute_interactive
 
         # Timers do not fire in background mode. Use the CLI command instead:
-        # `blender --background file.blend --command blender_mcp`.
+        # `blender --background file.blend --command bfa_coworker`.
         if bpy.app.background:
-            self.report({"ERROR"}, "Use `--command blender_mcp` to start the MCP bridge server in background mode")
+            self.report({"ERROR"}, "Use `--command bfa_coworker` to start the MCP bridge server in background mode")
             return {"CANCELLED"}
         if not _State.startup_online_ok_or_error():
             self.report({"ERROR"}, STATE_OFFLINE_ERROR_MESSAGE)
@@ -56,13 +56,13 @@ class _BLMCP_OT_server_start(bpy.types.Operator):  # type: ignore[misc]
             execute_interactive.run,
             first_interval=mcp_to_blender_server.TIMER_INTERVAL_ACTIVE,
             persistent=True)
-        self.report({"INFO"}, "MCP server started on {:s}:{:d}".format(prefs.host, _bridge_port))
+        self.report({"INFO"}, "Bridge server started on {:s}:{:d}".format(prefs.host, _bridge_port))
         return {"FINISHED"}
 
 
-class _BLMCP_OT_server_stop(bpy.types.Operator):  # type: ignore[misc]
-    bl_idname = "blmcp.server_stop"
-    bl_label = "Stop MCP Server"
+class _BFACW_OT_server_stop(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "bfacw.server_stop"
+    bl_label = "Stop Server"
     bl_description = "Stop the MCP Bridge Server"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
@@ -118,7 +118,7 @@ def _autostart_timer() -> None:
 
 def _cli_execute_handler(argv: list[str]) -> int:
     """
-    Callback for the CLI: ``blender -c blender_mcp``.
+    Callback for the CLI: ``blender -c bfa_coworker``.
     """
     if not _State.startup_online_ok_or_error():
         return 1

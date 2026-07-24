@@ -7,10 +7,10 @@ Operators for remote API testing, model browsing, and agent ping.
 """
 
 __all__ = (
-    "_BLMCP_OT_test_remote_api",
-    "_BLMCP_OT_refresh_remote_models",
-    "_BLMCP_OT_open_model_browser",
-    "_BLMCP_OT_ping_agent",
+    "_BFACW_OT_test_remote_api",
+    "_BFACW_OT_refresh_remote_models",
+    "_BFACW_OT_open_model_browser",
+    "_BFACW_OT_ping_agent",
 )
 
 import bpy  # pylint: disable=import-error
@@ -20,8 +20,8 @@ import threading
 from .shared import effective_ports, get_llm_manager, get_agent_controller
 
 
-class _BLMCP_OT_test_remote_api(bpy.types.Operator):  # type: ignore[misc]
-    bl_idname = "blmcp.test_remote_api"
+class _BFACW_OT_test_remote_api(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "bfacw.test_remote_api"
     bl_label = "Test Connection"
     bl_description = "Test the remote API connection"
 
@@ -43,8 +43,8 @@ class _BLMCP_OT_test_remote_api(bpy.types.Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
-class _BLMCP_OT_refresh_remote_models(bpy.types.Operator):  # type: ignore[misc]
-    bl_idname = "blmcp.refresh_remote_models"
+class _BFACW_OT_refresh_remote_models(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "bfacw.refresh_remote_models"
     bl_label = "Refresh Models"
     bl_description = "Fetch the live model list from the remote API"
 
@@ -73,8 +73,8 @@ class _BLMCP_OT_refresh_remote_models(bpy.types.Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
-class _BLMCP_OT_open_model_browser(bpy.types.Operator):  # type: ignore[misc]
-    bl_idname = "blmcp.open_model_browser"
+class _BFACW_OT_open_model_browser(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "bfacw.open_model_browser"
     bl_label = "Browse Models"
     bl_description = "Open openrouter.ai/models in your browser to find model IDs"
 
@@ -84,8 +84,8 @@ class _BLMCP_OT_open_model_browser(bpy.types.Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
-class _BLMCP_OT_ping_agent(bpy.types.Operator):  # type: ignore[misc]
-    bl_idname = "blmcp.ping_agent"
+class _BFACW_OT_ping_agent(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "bfacw.ping_agent"
     bl_label = "Ping"
     bl_description = "Test connectivity to MCP server and LLM backend"
 
@@ -97,7 +97,7 @@ class _BLMCP_OT_ping_agent(bpy.types.Operator):  # type: ignore[misc]
         _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
 
         def _do_ping():
-            _BLMCP_OT_ping_agent._result = _ac.ping_agent(
+            _BFACW_OT_ping_agent._result = _ac.ping_agent(
                 mcp_port=_mcp_port, llm_port=_llm_port,
             )
 
@@ -105,7 +105,7 @@ class _BLMCP_OT_ping_agent(bpy.types.Operator):  # type: ignore[misc]
         thread.start()
         thread.join(timeout=35)
 
-        result = _BLMCP_OT_ping_agent._result
+        result = _BFACW_OT_ping_agent._result
 
         if not result:
             self.report({"ERROR"}, "Ping timed out or failed")

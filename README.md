@@ -8,7 +8,7 @@ A self-contained Blender add-on that bundles an LLM agent, MCP server, and
 in-Blender chat UI — no external tools, no manual server setup, no Python
 environment wrangling. Install the add-on, pick a model, start chatting.
 
-**⚠️ Windows only for now**
+**⚠️ Windows tested only for now**
 
 ---
 
@@ -18,15 +18,15 @@ environment wrangling. Install the add-on, pick a model, start chatting.
 
 - Open Blender → **Edit → Preferences → Add-ons**
 - Click **Install from Disk...** and select the built `.zip` (or point to the
-  `addon/blender_mcp_addon/` directory for development)
-- Search for **"MCP"** and enable the add-on
+  `addon/bfa_coworker/` directory for development)
+- Search for **"Coworker"** and enable the add-on
 
 ### 2. Install llama-server (one click)
 
 If you don't have `llama-server` installed, the add-on preferences show a
 **"Download llama-server"** button. Click it — the add-on downloads the
 latest release from GitHub and unpacks it automatically to
-`~/.cache/blender_mcp_llama/`. No manual download, no PATH setup.
+`~/.cache/bfa_coworker_llama/`. No manual download, no PATH setup.
 
 ### 3. Pick a Model
 
@@ -76,7 +76,6 @@ That's it. No command line, no Docker, no separate Python installs.
 
 This fork wraps the original [Blender MCP](https://www.blender.org/lab/mcp-server/)
 into a single add-on experience:
-
 | What you'd normally need to set up manually | What this add-on does for you |
 |---|---|
 | Install & configure `llama.cpp` separately | **Auto-downloads** `llama-server` from GitHub with one click, or detects it on PATH |
@@ -106,7 +105,7 @@ necessary. It has two components that communicate over a TCP socket:
 The data flow is:
 
 ```
-MCP Client  ⇐ MCP/stdio ⇒  blender-mcp  ⇐ TCP socket ⇒  Blender Add-on
+MCP Client  ⇐ MCP/stdio ⇒  bfa-coworker-mcp  ⇐ TCP socket ⇒  Blender Add-on
 ```
 
 In this fork the "MCP Client" is the built-in agent controller, which
@@ -116,7 +115,7 @@ MCP server over HTTP:
 ```
 Chat UI → Agent Controller → [Local LLM / Remote API]
                 ↓
-        MCP Server (blender-mcp)
+        MCP Server (bfa-coworker-mcp)
                 ↓
         Bridge Server (inside Blender)
                 ↓
@@ -158,7 +157,7 @@ mode.
 ## MCP Server
 
 Located in ``mcp/blmcp/``, installed as a Python package with the
-entry point ``blender-mcp``. The server connects to the add-on's TCP
+entry point ``bfa-coworker-mcp``. The server connects to the add-on's TCP
 socket to relay requests to Blender.
 
 ``mcp/blmcp/data/``
@@ -223,7 +222,7 @@ All settings are in **Edit → Preferences → Add-ons → MCP**.
 The following items are tracked in [CHANGELOG.md](CHANGELOG.md):
 
 ### High Priority
-- [ ] **Addon Branding Rename** — Rename blender_mcp_addon branding references to "bfa_coworker" as the addon folder or "Coworker" for user sight and for short
+- [x] **Addon Branding Rename** — Rename blender_mcp_addon branding references to "bfa_coworker" as the addon folder or "Coworker" for user sight and for short
 - [x] **Interface Modularization** — Split `__init__.py` into separate
       preference/operator modules
 - [ ] **Get going on Linux and Mac** at the moment this is Windows only.

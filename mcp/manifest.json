@@ -1,15 +1,15 @@
 {
   "manifest_version": "0.4",
-  "name": "Blender",
+  "name": "Bforartists Coworker",
   "version": "1.0.0",
   "description": "Natural language interface with the Python API and documentation",
-  "long_description": "Blender MCP offers a natural language interface with Blender's Python API, improving access to documentation, and allowing users to explore and understand complex setups. \n\nAn add-on is required to use the MCP Server, please follow the [instructions](https://lab.blender.org/mcp-server/#addon).",
+  "long_description": "Bforartists Coworker offers a natural language interface with Blender's Python API, improving access to documentation, and allowing users to explore and understand complex setups. \n\nAn add-on is required to use the Coworker MCP Server, please follow the instructions at the homepage.",
   "author": {
-    "name": "Blender Lab",
-    "url": "https://www.blender.org/lab/"
+    "name": "Bforartists",
+    "url": "https://github.com/bforartists/"
   },
-  "homepage": "https://www.blender.org/lab/mcp-server/",
-  "support": "https://projects.blender.org/lab/blender_mcp/issues/",
+  "homepage": "https://github.com/bforartists/bfa_coworker",
+  "support": "https://github.com/bforartists/bfa_coworker/issues/",
   "icon": "blender_icon.png",
   "server": {
     "type": "uv",
@@ -18,14 +18,12 @@
       "command": "uv",
       "args": [
         "run",
-        "blender-mcp"
+        "bfa-coworker-mcp"
       ]
     }
   },
   "license": "GPL-3.0-or-later",
-  "privacy_policies": [
-    "https://www.blender.org/privacy-policy/"
-  ],
+  "privacy_policies": [],
   "compatibility": {
     "runtimes": {
       "python": ">= 3.10"
@@ -33,6 +31,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://projects.blender.org/lab/blender_mcp"
+    "url": "https://github.com/bforartists/bfa_coworker"
   }
 }

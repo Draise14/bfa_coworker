@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blender Authors
+# (Bforartists-maintained fork)
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -102,7 +103,7 @@ def main(params: Params) -> Result:
 
     size_limit = params.size_limit_in_bytes if params.size_limit_in_bytes > 0 else _IMAGE_SIZE_LIMIT_IN_BYTES
 
-    with tempfile.TemporaryDirectory(prefix="blmcp_screenshot_") as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="bfacw_screenshot_") as tmpdir:
         filepath_screenshot = os.path.join(tmpdir, "screenshot.png")
         with context.temp_override(window=window, area=area):
             try:

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Blender Chat Panel — provides an in-Blender chat interface to the MCP agent.
+Bforartists Coworker Chat Panel — provides an in-Blender chat interface to the MCP agent.
 
 Registers a ``VIEW_3D`` sidebar panel with conversation history, multi-line
 input, send/clear/stop buttons, and a status bar.
@@ -13,13 +13,13 @@ Also registers a Text Editor side panel for prompt-based interaction.
 
 __all__ = (
     "ChatHistoryProperties",
-    "BLMCP_PT_chat_panel",
-    "BLMCP_PT_chat_text_editor",
-    "BLMCP_OT_chat_send",
-    "BLMCP_OT_chat_clear",
-    "BLMCP_OT_chat_stop",
-    "BLMCP_OT_agent_start",
-    "BLMCP_OT_agent_stop",
+    "BFACW_PT_chat_panel",
+    "BFACW_PT_chat_text_editor",
+    "BFACW_OT_chat_send",
+    "BFACW_OT_chat_clear",
+    "BFACW_OT_chat_stop",
+    "BFACW_OT_agent_start",
+    "BFACW_OT_agent_stop",
     "chat_timer_update",
     "register",
     "unregister",
@@ -65,7 +65,7 @@ def _wrap_text(text: str, width: int = _WRAP_WIDTH) -> str:
 
 def _chat_history_dir() -> Path:
     """Return the directory where chat history JSON files are stored."""
-    base = Path(bpy.utils.user_resource("SCRIPTS")) / "blender_mcp_chat_history"
+    base = Path(bpy.utils.user_resource("SCRIPTS")) / "bfa_coworker_chat_history"
     base.mkdir(parents=True, exist_ok=True)
     return base
 
@@ -118,15 +118,15 @@ def _save_chat_history() -> None:
 # ---------------------------------------------------------------------------
 # Operators
 
-class BLMCP_OT_chat_send(Operator):  # type: ignore[misc]
+class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
     """Send the current input to the MCP agent."""
-    bl_idname = "blmcp.chat_send"
+    bl_idname = "bfacw.chat_send"
     bl_label = "Send"
     bl_description = "Send your message to the MCP agent"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         wm = context.window_manager
-        props = wm.blmcp_chat_props  # type: ignore[attr-defined]
+        props = wm.bfacw_chat_props  # type: ignore[attr-defined]
         message = props.chat_input.strip()
         if not message:
             return {"CANCELLED"}
@@ -184,9 +184,9 @@ class BLMCP_OT_chat_send(Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
-class BLMCP_OT_chat_clear(Operator):  # type: ignore[misc]
+class BFACW_OT_chat_clear(Operator):  # type: ignore[misc]
     """Clear the conversation history."""
-    bl_idname = "blmcp.chat_clear"
+    bl_idname = "bfacw.chat_clear"
     bl_label = "Clear"
     bl_description = "Clear the conversation history"
 
@@ -198,9 +198,9 @@ class BLMCP_OT_chat_clear(Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
-class BLMCP_OT_chat_stop(Operator):  # type: ignore[misc]
+class BFACW_OT_chat_stop(Operator):  # type: ignore[misc]
     """Stop the current generation."""
-    bl_idname = "blmcp.chat_stop"
+    bl_idname = "bfacw.chat_stop"
     bl_label = "Stop"
     bl_description = "Stop the current generation"
 
@@ -208,21 +208,21 @@ class BLMCP_OT_chat_stop(Operator):  # type: ignore[misc]
         agent_controller._agent_state.is_thinking = False
         agent_controller._agent_state.status_text = "Stopped"
         wm = context.window_manager
-        props = wm.blmcp_chat_props  # type: ignore[attr-defined]
+        props = wm.bfacw_chat_props  # type: ignore[attr-defined]
         props.chat_status = "Stopped"
         _redraw_areas(context)
         return {"FINISHED"}
 
 
-class BLMCP_OT_agent_start(Operator):  # type: ignore[misc]
+class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
     """Start the agent: MCP bridge, MCP server, and LLM backend."""
-    bl_idname = "blmcp.agent_start"
+    bl_idname = "bfacw.agent_start"
     bl_label = "Start Agent"
     bl_description = "Start the MCP bridge, MCP server, and LLM backend"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         wm = context.window_manager
-        props = wm.blmcp_chat_props  # type: ignore[attr-defined]
+        props = wm.bfacw_chat_props  # type: ignore[attr-defined]
 
         # Step 1: Start the MCP bridge server (inside Blender).
         if not mcp_to_blender_server.is_running():
@@ -245,7 +245,7 @@ class BLMCP_OT_agent_start(Operator):  # type: ignore[misc]
             )
             self.report({"INFO"}, "Bridge server started")
 
-        # Step 2: Start the blender-mcp HTTP server.
+        # Step 2: Start the MCP HTTP server.
         if not agent_controller._agent_state.mcp_server_running:
             prefs = context.preferences.addons[__package__].preferences
             _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
@@ -317,15 +317,15 @@ class BLMCP_OT_agent_start(Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
-class BLMCP_OT_agent_stop(Operator):  # type: ignore[misc]
+class BFACW_OT_agent_stop(Operator):  # type: ignore[misc]
     """Stop the agent and all subprocesses."""
-    bl_idname = "blmcp.agent_stop"
+    bl_idname = "bfacw.agent_stop"
     bl_label = "Stop Agent"
     bl_description = "Stop the MCP server and LLM backend"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         wm = context.window_manager
-        props = wm.blmcp_chat_props  # type: ignore[attr-defined]
+        props = wm.bfacw_chat_props  # type: ignore[attr-defined]
 
         # Stop LLM.
         llm_manager.stop_local_llama()
@@ -369,13 +369,13 @@ def chat_timer_update() -> float | None:
 # ---------------------------------------------------------------------------
 # Panels
 
-class BLMCP_PT_chat_panel(Panel):  # type: ignore[misc]
+class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
     """Chat panel in the 3D Viewport sidebar."""
-    bl_label = "MCP Chat"
-    bl_idname = "BLMCP_PT_chat_panel"
+    bl_label = "Coworker Chat"
+    bl_idname = "BFACW_PT_chat_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "MCP"
+    bl_category = "Coworker"
     bl_options = {'DEFAULT_CLOSED'}
 
     @classmethod
@@ -385,15 +385,15 @@ class BLMCP_PT_chat_panel(Panel):  # type: ignore[misc]
     def draw(self, context: bpy.types.Context) -> None:
         layout = self.layout
         wm = context.window_manager
-        props = wm.blmcp_chat_props  # type: ignore[attr-defined]
+        props = wm.bfacw_chat_props  # type: ignore[attr-defined]
         state = agent_controller._agent_state
 
         # Agent control buttons.
         row = layout.row(align=True)
         if state.mcp_server_running:
-            row.operator("blmcp.agent_stop", icon="CANCEL", text="Stop Agent")
+            row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop Agent")
         else:
-            row.operator("blmcp.agent_start", icon="PLAY", text="Start Agent")
+            row.operator("bfacw.agent_start", icon="PLAY", text="Start Agent")
 
         # Status.
         status = props.chat_status
@@ -429,10 +429,10 @@ class BLMCP_PT_chat_panel(Panel):  # type: ignore[misc]
         row = layout.row(align=True)
         row.scale_y = 1.5
         if state.is_thinking:
-            row.operator("blmcp.chat_stop", icon="PAUSE", text="Stop")
+            row.operator("bfacw.chat_stop", icon="PAUSE", text="Stop")
         else:
-            row.operator("blmcp.chat_send", icon="PLAY", text="Send")
-        row.operator("blmcp.chat_clear", icon="X", text="Clear")
+            row.operator("bfacw.chat_send", icon="PLAY", text="Send")
+        row.operator("bfacw.chat_clear", icon="X", text="Clear")
 
         layout.separator()
 
@@ -470,13 +470,13 @@ class BLMCP_PT_chat_panel(Panel):  # type: ignore[misc]
             layout.label(text="No messages yet. Start the agent and type below.", icon='INFO')
 
 
-class BLMCP_PT_chat_text_editor(Panel):  # type: ignore[misc]
+class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
     """Chat panel in the Text Editor sidebar."""
-    bl_label = "MCP Chat"
-    bl_idname = "BLMCP_PT_chat_text_editor"
+    bl_label = "Coworker Chat"
+    bl_idname = "BFACW_PT_chat_text_editor"
     bl_space_type = 'TEXT_EDITOR'
     bl_region_type = 'UI'
-    bl_category = "MCP"
+    bl_category = "Coworker"
     bl_options = {'DEFAULT_CLOSED'}
 
     @classmethod
@@ -486,16 +486,16 @@ class BLMCP_PT_chat_text_editor(Panel):  # type: ignore[misc]
     def draw(self, context: bpy.types.Context) -> None:
         layout = self.layout
         wm = context.window_manager
-        props = wm.blmcp_chat_props  # type: ignore[attr-defined]
+        props = wm.bfacw_chat_props  # type: ignore[attr-defined]
         state = agent_controller._agent_state
 
         # Status bar.
         row = layout.row(align=True)
         if state.mcp_server_running:
-            row.operator("blmcp.agent_stop", icon="CANCEL", text="Stop")
+            row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop")
             row.label(text="Running", icon='CHECKMARK')
         else:
-            row.operator("blmcp.agent_start", icon="PLAY", text="Start")
+            row.operator("bfacw.agent_start", icon="PLAY", text="Start")
             row.label(text="Stopped", icon='X')
 
         layout.separator()
@@ -506,10 +506,10 @@ class BLMCP_PT_chat_text_editor(Panel):  # type: ignore[misc]
         row = layout.row(align=True)
         row.scale_y = 1.5
         if state.is_thinking:
-            row.operator("blmcp.chat_stop", icon="PAUSE", text="Stop")
+            row.operator("bfacw.chat_stop", icon="PAUSE", text="Stop")
         else:
-            row.operator("blmcp.chat_send", icon="PLAY", text="Send")
-        row.operator("blmcp.chat_clear", icon="X", text="Clear")
+            row.operator("bfacw.chat_send", icon="PLAY", text="Send")
+        row.operator("bfacw.chat_clear", icon="X", text="Clear")
 
         layout.separator()
 
@@ -541,24 +541,24 @@ def _redraw_areas(context: bpy.types.Context | None) -> None:
 
 _classes = (
     ChatHistoryProperties,
-    BLMCP_OT_chat_send,
-    BLMCP_OT_chat_clear,
-    BLMCP_OT_chat_stop,
-    BLMCP_OT_agent_start,
-    BLMCP_OT_agent_stop,
-    BLMCP_PT_chat_panel,
-    BLMCP_PT_chat_text_editor,
+    BFACW_OT_chat_send,
+    BFACW_OT_chat_clear,
+    BFACW_OT_chat_stop,
+    BFACW_OT_agent_start,
+    BFACW_OT_agent_stop,
+    BFACW_PT_chat_panel,
+    BFACW_PT_chat_text_editor,
 )
 
 
 def register() -> None:
     # Idempotent registration — unregister old classes first if re-enabling.
-    if hasattr(bpy.types.WindowManager, "blmcp_chat_props"):
+    if hasattr(bpy.types.WindowManager, "bfacw_chat_props"):
         unregister()
 
     for cls in _classes:
         bpy.utils.register_class(cls)
-    bpy.types.WindowManager.blmcp_chat_props = bpy.props.PointerProperty(type=ChatHistoryProperties)  # type: ignore[attr-defined]
+    bpy.types.WindowManager.bfacw_chat_props = bpy.props.PointerProperty(type=ChatHistoryProperties)  # type: ignore[attr-defined]
 
     # Register the chat UI update timer.
     if not bpy.app.background:
@@ -572,8 +572,8 @@ def unregister() -> None:
     if bpy.app.timers.is_registered(chat_timer_update):
         bpy.app.timers.unregister(chat_timer_update)
 
-    if hasattr(bpy.types.WindowManager, "blmcp_chat_props"):
-        del bpy.types.WindowManager.blmcp_chat_props  # type: ignore[attr-defined]
+    if hasattr(bpy.types.WindowManager, "bfacw_chat_props"):
+        del bpy.types.WindowManager.bfacw_chat_props  # type: ignore[attr-defined]
     for cls in reversed(_classes):
         try:
             bpy.utils.unregister_class(cls)

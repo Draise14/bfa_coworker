@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blender Authors
+# (Bforartists-maintained fork)
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -24,8 +25,8 @@ _RECV_BUFFER_SIZE = 65536
 
 
 def get_connection_params() -> tuple[str, int]:
-    host = os.environ.get("BLENDER_MCP_HOST", _DEFAULT_HOST)
-    port = int(os.environ.get("BLENDER_MCP_PORT", str(_DEFAULT_PORT)))
+    host = os.environ.get("BFACW_HOST", _DEFAULT_HOST)
+    port = int(os.environ.get("BFACW_PORT", str(_DEFAULT_PORT)))
     return host, port
 
 

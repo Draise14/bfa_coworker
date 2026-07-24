@@ -8,7 +8,7 @@ Add-on preferences definition and runtime state tracking.
 
 __all__ = (
     "_State",
-    "_BlenderMCPPreferences",
+    "_BFACW_Preferences",
 )
 
 import bpy  # pylint: disable=import-error
@@ -20,6 +20,7 @@ from bpy.props import (
     EnumProperty,
 )  # pylint: disable=import-error
 
+import os
 from pathlib import Path
 
 from . import mcp_to_blender_server
@@ -82,7 +83,7 @@ class _State:
         return False
 
 
-class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
+class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
     bl_idname = __package__
 
     host: StringProperty(  # type: ignore[valid-type]
@@ -208,7 +209,7 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
     downloaded_models_dir: StringProperty(  # type: ignore[valid-type]
         name="Models Directory",
-        default=str(Path.home() / "blender_mcp_models"),
+        default=str(Path.home() / "bfa_coworker_models"),
         subtype='DIR_PATH',
     )
 
@@ -363,164 +364,169 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         box.prop(self, "llm_mode", expand=True)
 
         if self.llm_mode == "local":
-            self._draw_local_llm_config(box)
+            # ── llama-server binary ──────────────────────────────────
+            llm = get_llm_manager()
+            llm_state = llm.get_state()
+            llama_found = llm.find_llama_server()
+            row = box.row(align=True)
+            if llama_found:
+                row.label(text="llama-server: Installed", icon='CHECKMARK')
+            else:
+                row.label(text="llama-server: Not installed", icon='ERROR')
+                    row.operator(
+                    "bfacw.download_llama_server",
+                    icon="IMPORT",
+                    text="Download llama-server",
+                )
+            if llm_state.download_progress and "llama-server" in llm_state.download_progress:
+                box.label(text=llm_state.download_progress, icon='INFO')
+                pct = llm_state.download_progress_pct
+                if pct > 0:
+                    row = box.row(align=True)
+                    row.progress(factor=pct / 100.0, type='BAR')
+
+            # ── Recommended Models (presets) ─────────────────────────
+            box.label(text="Pick a Model", icon='VIEWZOOM')
+
+            _CATEGORIES = [
+                ("flagship", "Flagship (24 GB+ VRAM)", 'SORT_ASC'),
+                ("mid_range", "Mid-Range (12-20 GB VRAM — 4090 Sweet Spot)", 'VIEWZOOM'),
+                ("lightweight", "Lightweight (\u2264 8 GB VRAM)", 'LIGHT_SUN'),
+            ]
+
+            all_presets = llm.get_presets()
+
+            for cat_id, cat_label, cat_icon in _CATEGORIES:
+                cat_presets = [p for p in all_presets if p.category == cat_id]
+                if not cat_presets:
+                    continue
+                cat_box = box.box()
+                cat_box.label(text=cat_label, icon=cat_icon)
+                for preset in cat_presets:
+                    row = cat_box.row(align=True)
+                    op = row.operator(
+                        "bfacw.select_preset",
+                        text=preset.name,
+                        icon='CHECKBOX_HLT'
+                        if self.model_preset == preset.identifier
+                        else 'CHECKBOX_DEHLT',
+                    )
+                    op.preset_id = preset.identifier
+                    row.label(
+                        text="[{:s}] {:s}".format(preset.ram_gb, preset.capability),
+                    )
+
+            # Custom model entry.
+            box.prop(self, "model_preset", text="Custom Model")
+            if self.model_preset != "_custom" and self.model_preset_info:
+                info_box = box.box()
+                info_box.label(text="Model Information", icon='INFO')
+                for line in self.model_preset_info.split("\n"):
+                    info_box.label(text=line)
+
+            # ── Download or use existing ─────────────────────────────
+            llm_state = llm.get_state()
+            if not llm_state.is_running:
+                row = box.row(align=True)
+                row.operator("bfacw.download_model", icon="IMPORT", text="Download & Start")
+                if llm_state.error:
+                    box.label(text=llm_state.error, icon="ERROR")
+                if llm_state.download_progress:
+                    prog_text = llm_state.download_progress
+                    if llm_state.download_progress_eta:
+                        prog_text = "{:s}  |  {:s}".format(prog_text, llm_state.download_progress_eta)
+                    box.label(text=prog_text, icon='INFO')
+                    pct = llm_state.download_progress_pct
+                    if pct > 0:
+                        row = box.row(align=True)
+                        row.progress(factor=pct / 100.0, type='BAR')
+
+            # ── Scan for existing models ────────────────────────────
+            box.label(text="Or use an existing model:", icon='FILE_FOLDER')
+            row = box.row(align=True)
+            row.operator("bfacw.scan_existing_models", icon="FILE_REFRESH", text="Scan")
+            box.prop(self, "downloaded_models_dir")
+            if self.existing_model_path:
+                box.label(
+                    text="Using: {:s}".format(os.path.basename(self.existing_model_path)),
+                    icon='CHECKMARK',
+                )
+
+            # ── Current model status ─────────────────────────────────
+            if llm_state.is_running:
+                box.label(
+                    text="Active model: {:s}".format(llm_state.model_name or "Unknown"),
+                    icon='CONSOLE',
+                )
+
+            # ── Advanced ─────────────────────────────────────────────
+            box.label(text="Advanced", icon='SETTINGS')
+            box.prop(self, "model_repo_id")
+            box.prop(self, "model_filename")
+            box.prop(self, "local_ctx_size")
+            row = box.row(align=True)
+            row.operator("bfacw.open_hf_cache", icon="FILE_FOLDER", text="Hugging Face Cache")
+            row.operator("bfacw.clear_hf_cache", icon="TRASH", text="Clear Cache")
+
         else:
-            self._draw_remote_api_config(box)
+            # ── Remote Provider ─────────────────────────────────────
+            llm = get_llm_manager()
+            box.label(text="Provider", icon='WORLD')
+            box.prop(self, "remote_provider")
+
+            # Show provider description when a known provider is selected.
+            if self.remote_provider != "_custom":
+                provider = llm.get_remote_provider_by_id(self.remote_provider)
+                if provider is not None:
+                    for line in provider.description.split("\n"):
+                        box.label(text=line, icon='INFO')
+
+            # ── API URL & Key ───────────────────────────────────────
+            box.prop(self, "remote_api_url")
+            box.prop(self, "remote_api_key")
+
+            row = box.row(align=True)
+            row.label(text="API Key Help:", icon='HELP')
+            if self.remote_provider != "_custom":
+                provider = llm.get_remote_provider_by_id(self.remote_provider)
+                if provider is not None:
+                    row.label(text=provider.api_key_help)
+                else:
+                    row.label(text="Enter your API key for the remote service")
+            else:
+                row.label(text="Enter your API key for the remote service")
+
+            # ── Model ───────────────────────────────────────────────
+            box.label(text="Model", icon='VIEWZOOM')
+            box.prop(self, "remote_model")
+            row = box.row(align=True)
+            row.operator("bfacw.refresh_remote_models", icon="FILE_REFRESH", text="Refresh Models")
+            row.operator("bfacw.open_model_browser", icon="URL", text="Browse Models")
+
+            # Show fetch status.
+            if self.remote_models_count > 0:
+                box.label(
+                    text="{:d} models available from the API".format(self.remote_models_count),
+                    icon='CHECKMARK',
+                )
+            if self.remote_models_fetch_error:
+                box.label(text=self.remote_models_fetch_error, icon='ERROR')
+
+            # ── Test Connection ─────────────────────────────────────
+            row = box.row()
+            row.operator("bfacw.test_remote_api", icon="URL")
 
         # ── Agent Control ─────────────────────────────────────────────
         box = layout.box()
-        box.label(text="Agent Control", icon='PLAY')
+        box.label(text="Agent Control", icon='WORKSPACE')
+        box.prop(self, "agent_autostart")
         row = box.row()
-        row.prop(self, "agent_autostart")
-        row = box.row(align=True)
-        row.operator("blmcp.server_start", icon='PLAY')
-        row.operator("blmcp.server_stop", icon='PAUSE')
-        row = box.row(align=True)
-        row.operator("blmcp.ping_agent", icon='VIEWZOOM')
-
-        # Show ping results if available.
-        self._draw_ping_result(box)
-
-        # ── Startup State ─────────────────────────────────────────────
-        if _State.autostart_error:
-            box = layout.box()
-            box.label(text="Startup State", icon='ERROR')
-            box.label(text=_State.autostart_error, icon='INFO')
-
-    def _draw_local_llm_config(self, box) -> None:
-        """Draw the local LLM configuration section."""
-        llm = get_llm_manager()
-        state = llm.get_state()
-
-        # ── Model Presets (categorized) ───────────────────────────────
-        sub = box.box()
-        sub.label(text="Recommended Models", icon='SEO')
-        presets = llm.get_presets()
-
-        # Helper to draw a preset button row.
-        def _draw_preset_row(parent, label_text, icon):
-            row = parent.row(align=True)
-            row.label(text=label_text, icon=icon)
-            row.operator("blmcp.select_preset", text="", icon='LAYER_ACTIVE').preset_id = ""
-
-        # Flagship section.
-        flagship = [p for p in presets if p.capability == "Flagship"]
-        if flagship:
-            sub.separator()
-            sub.label(text="Flagship (24 GB+ VRAM)", icon='SORTALPHA')
-            for p in flagship:
-                row = sub.row(align=True)
-                op = row.operator("blmcp.select_preset", text=p.name, icon='LAYER_ACTIVE')
-                op.preset_id = p.id
-                row.label(text="RAM: {:s} | Disk: {:s}".format(p.ram_gb, p.disk_gb))
-
-        # Mid-Range section.
-        mid = [p for p in presets if p.capability == "Mid"]
-        if mid:
-            sub.separator()
-            sub.label(text="Mid-Range (12-20 GB VRAM)", icon='SORTALPHA')
-            for p in mid:
-                row = sub.row(align=True)
-                op = row.operator("blmcp.select_preset", text=p.name, icon='LAYER_ACTIVE')
-                op.preset_id = p.id
-                row.label(text="RAM: {:s} | Disk: {:s}".format(p.ram_gb, p.disk_gb))
-
-        # Lightweight section.
-        light = [p for p in presets if p.capability == "Light"]
-        if light:
-            sub.separator()
-            sub.label(text="Lightweight (<= 8 GB VRAM)", icon='SORTALPHA')
-            for p in light:
-                row = sub.row(align=True)
-                op = sub.row(align=True).operator("blmcp.select_preset", text=p.name, icon='LAYER_ACTIVE')
-                op.preset_id = p.id
-                sub.row(align=True).label(text="RAM: {:s} | Disk: {:s}".format(p.ram_gb, p.disk_gb))
-
-        # ── Preset dropdown (fallback) ────────────────────────────────
-        sub.separator()
-        sub.label(text="Custom Model", icon='FILE')
-        sub.prop(self, "model_preset", text="")
-        if self.model_preset_info:
-            sub.label(text=self.model_preset_info, icon='INFO')
-
-        # ── Advanced Settings ─────────────────────────────────────────
-        sub.separator()
-        sub.label(text="Advanced Settings", icon='SETTINGS')
-        sub.prop(self, "model_repo_id")
-        sub.prop(self, "model_filename")
-        sub.prop(self, "downloaded_models_dir")
-        sub.prop(self, "local_ctx_size")
-
-        # ── Existing Model Scan ───────────────────────────────────────
-        sub.separator()
-        row = sub.row(align=True)
-        row.operator("blmcp.scan_existing_models", icon='FILE_FOLDER')
-        row.operator("blmcp.open_hf_cache", icon='URL')
-        row.operator("blmcp.clear_hf_cache", icon='CANCEL')
-
-        if self.existing_model_path:
-            sub.label(
-                text="Using existing: {:s}".format(self.existing_model_path),
-                icon='CHECKBOX_HLT',
-            )
-
-        # ── Download & Start ──────────────────────────────────────────
-        box.separator()
-        row = box.row(align=True)
-        if state.is_running:
-            row.operator("blmcp.stop_llm", icon='PAUSE', text="Stop Local LLM")
-            status_text = "llama-server is running on port {:d}".format(state.port)
-            row.label(text=status_text, icon='CHECKBOX_HLT')
-        elif state.error:
-            row.operator("blmcp.download_model", icon='FILE', text="Download & Start")
-            row.operator("blmcp.start_llm", icon='PLAY', text="Start Local LLM")
-            box.label(text=state.error, icon='ERROR')
-        else:
-            row.operator("blmcp.download_model", icon='FILE', text="Download & Start")
-            row.operator("blmcp.start_llm", icon='PLAY', text="Start Local LLM")
-
-        # ── Download Progress ─────────────────────────────────────────
-        if state.download_progress:
-            box.label(text=state.download_progress, icon='INFO')
-
-        # ── llama-server download ─────────────────────────────────────
-        box.separator()
-        box.operator("blmcp.download_llama_server", icon='IMPORT')
-        row = box.row()
-        row.label(text="llama-server path:", icon='FILE')
-        row.prop(self, "llama_path", text="")
-
-    def _draw_remote_api_config(self, box) -> None:
-        """Draw the remote API configuration section."""
-        box.separator()
-        box.prop(self, "remote_provider")
-        box.prop(self, "remote_api_url")
-        box.prop(self, "remote_api_key")
-
-        row = box.row(align=True)
-        row.operator("blmcp.test_remote_api", icon='VIEWZOOM')
-        row.operator("blmcp.refresh_remote_models", icon='FILE_REFRESH')
-        row.operator("blmcp.open_model_browser", icon='URL')
-
-        if self.remote_models_count > 0:
-            box.label(
-                text="{:d} models available".format(self.remote_models_count),
-                icon='INFO',
-            )
-        if self.remote_models_fetch_error:
-            box.label(text=self.remote_models_fetch_error, icon='ERROR')
-
-        box.prop(self, "remote_model")
-
-        # ── Agent Control (also shown in remote mode) ─────────────
-
-    def _draw_ping_result(self, box) -> None:
-        """Draw the ping result indicators."""
+        row.operator("bfacw.ping_agent", icon="FILE_REFRESH", text="Check Status")
         # Lazy import to avoid circular dependency.
         from . import operators_agent as _oa
-        ping = _oa._BLMCP_OT_ping_agent._result
+        ping = _oa._BFACW_OT_ping_agent._result
         if ping:
-            status_icon = "CHECKBOX_HLT"
+            status_icon = "CHECKMARK" if ping.get("all_ok") else "ERROR"
             for key, label in [
                 ("bridge_server", "Bridge"),
                 ("mcp_server", "MCP"),

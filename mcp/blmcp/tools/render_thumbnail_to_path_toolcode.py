@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blender Authors
+# (Bforartists-maintained fork)
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -62,7 +63,7 @@ def main(params: Params) -> Result | Callable[[], dict[str, object] | None]:
     use_deferred = not bpy.app.background
 
     # Resolve the output path inside the MCP scratch directory.
-    output_path = os.path.join(bpy.app.tempdir, "blender_mcp", os.path.basename(params.output_path))
+    output_path = os.path.join(bpy.app.tempdir, "bfa_coworker", os.path.basename(params.output_path))
 
     scene = bpy.context.scene
     rd = scene.render

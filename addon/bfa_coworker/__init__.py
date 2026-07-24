@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Blender add-on that provides an MCP socket bridge-server.
+Bforartists Coworker add-on that provides an MCP socket bridge-server.
 """
 
 __all__ = (
@@ -15,31 +15,31 @@ import bpy  # pylint: disable=import-error
 import os
 
 from . import mcp_to_blender_server
-from .preferences import _State, _BlenderMCPPreferences
+from .preferences import _State, _BFACW_Preferences
 from .operators_server import (
-    _BLMCP_OT_server_start,
-    _BLMCP_OT_server_stop,
+    _BFACW_OT_server_start,
+    _BFACW_OT_server_stop,
     _autostart_timer,
     _cli_execute_handler,
 )
 from .operators_llm import (
-    _BLMCP_OT_download_model,
-    _BLMCP_OT_start_llm,
-    _BLMCP_OT_stop_llm,
-    _BLMCP_OT_download_llama_server,
-    _BLMCP_OT_scan_existing_models,
-    _BLMCP_OT_select_preset,
-    _BLMCP_OT_select_existing_model,
+    _BFACW_OT_download_model,
+    _BFACW_OT_start_llm,
+    _BFACW_OT_stop_llm,
+    _BFACW_OT_download_llama_server,
+    _BFACW_OT_scan_existing_models,
+    _BFACW_OT_select_preset,
+    _BFACW_OT_select_existing_model,
 )
 from .operators_agent import (
-    _BLMCP_OT_test_remote_api,
-    _BLMCP_OT_refresh_remote_models,
-    _BLMCP_OT_open_model_browser,
-    _BLMCP_OT_ping_agent,
+    _BFACW_OT_test_remote_api,
+    _BFACW_OT_refresh_remote_models,
+    _BFACW_OT_open_model_browser,
+    _BFACW_OT_ping_agent,
 )
 from .operators_hf import (
-    _BLMCP_OT_open_hf_cache,
-    _BLMCP_OT_clear_hf_cache,
+    _BFACW_OT_open_hf_cache,
+    _BFACW_OT_clear_hf_cache,
 )
 from .shared import (
     effective_ports,
@@ -51,22 +51,22 @@ from .shared import (
 _cli_commands: list[object] = []
 
 _classes = (
-    _BlenderMCPPreferences,
-    _BLMCP_OT_server_start,
-    _BLMCP_OT_server_stop,
-    _BLMCP_OT_download_model,
-    _BLMCP_OT_start_llm,
-    _BLMCP_OT_stop_llm,
-    _BLMCP_OT_download_llama_server,
-    _BLMCP_OT_scan_existing_models,
-    _BLMCP_OT_select_existing_model,
-    _BLMCP_OT_select_preset,
-    _BLMCP_OT_test_remote_api,
-    _BLMCP_OT_refresh_remote_models,
-    _BLMCP_OT_open_model_browser,
-    _BLMCP_OT_ping_agent,
-    _BLMCP_OT_open_hf_cache,
-    _BLMCP_OT_clear_hf_cache,
+    _BFACW_Preferences,
+    _BFACW_OT_server_start,
+    _BFACW_OT_server_stop,
+    _BFACW_OT_download_model,
+    _BFACW_OT_start_llm,
+    _BFACW_OT_stop_llm,
+    _BFACW_OT_download_llama_server,
+    _BFACW_OT_scan_existing_models,
+    _BFACW_OT_select_existing_model,
+    _BFACW_OT_select_preset,
+    _BFACW_OT_test_remote_api,
+    _BFACW_OT_refresh_remote_models,
+    _BFACW_OT_open_model_browser,
+    _BFACW_OT_ping_agent,
+    _BFACW_OT_open_hf_cache,
+    _BFACW_OT_clear_hf_cache,
 )
 
 
@@ -76,7 +76,7 @@ def register() -> None:
 
     for cls in _classes:
         bpy.utils.register_class(cls)
-    _cli_commands.append(bpy.utils.register_cli_command("blender_mcp", _cli_execute_handler))
+    _cli_commands.append(bpy.utils.register_cli_command("bfa_coworker", _cli_execute_handler))
 
     # Register the chat UI modules.
     from . import ui_chat
@@ -117,7 +117,7 @@ def _autostart_agent_timer() -> None:
     print("Agent auto-start: using ports bridge={:d} mcp={:d} llm={:d}".format(
         _bridge_port, _mcp_port, _llm_port))
 
-    # Start the blender-mcp HTTP server.
+    # Start the MCP HTTP server.
     _ac = get_agent_controller()
     if not _ac._agent_state.mcp_server_running:
         proc = _ac.start_mcp_server(port=_mcp_port, blender_port=_bridge_port)

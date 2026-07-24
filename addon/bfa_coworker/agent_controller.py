@@ -5,7 +5,7 @@
 """
 Agent Controller — orchestrates the conversation loop inside Blender.
 
-Manages the ``blender-mcp`` MCP server subprocess and the LLM conversation
+Manages the MCP server subprocess and the LLM conversation
 loop. All async I/O runs on a background daemon thread and communicates
 results back via ``bpy.app.timers`` for Blender UI integration.
 """
@@ -65,12 +65,11 @@ def _get_system_prompt() -> str:
         return _system_prompt
 
     # Search for prompts.yml relative to this file's location.
-    # Typical layout: addon/blender_mcp_addon/agent_controller.py
+    # Typical layout: addon/bfa_coworker/agent_controller.py
     # and            mcp/blmcp/data/prompts.yml
     this_dir = Path(__file__).resolve().parent
     candidates = [
         this_dir.parent.parent / "mcp" / "blmcp" / "data" / "prompts.yml",
-        Path("c:/blender_mcp/mcp/blmcp/data/prompts.yml"),
     ]
     for prompt_path in candidates:
         if prompt_path.is_file():
@@ -222,7 +221,7 @@ def start_mcp_server(
     blender_port: int = 9876,
 ) -> subprocess.Popen | None:
     """
-    Launch ``blender-mcp`` as a subprocess with HTTP transport.
+    Launch the MCP server as a subprocess with HTTP transport.
 
     Returns the ``Popen`` handle, or ``None`` on failure.
     """
@@ -232,17 +231,17 @@ def start_mcp_server(
         _agent_state.error = "MCP server is already running"
         return None
 
-    # Find blender-mcp executable.
+    # Find the MCP server executable.
     mcp_exe = (
-        shutil.which("blender-mcp") or
-        shutil.which("blender-mcp.exe") or
-        shutil.which("blender-mcp.bat")
+        shutil.which("bfa-coworker-mcp") or
+        shutil.which("bfa-coworker-mcp.exe") or
+        shutil.which("bfa-coworker-mcp.bat")
     )
 
     _use_module = False
     env = os.environ.copy()
-    env["BLENDER_MCP_HOST"] = blender_host
-    env["BLENDER_MCP_PORT"] = str(blender_port)
+    env["BFACW_HOST"] = blender_host
+    env["BFACW_PORT"] = str(blender_port)
 
     if not mcp_exe:
         # Look for the MCP virtual environment.  Walk up from this
@@ -260,7 +259,7 @@ def start_mcp_server(
 
         # Hard fallback.
         if not _py:
-            _candidate = Path("c:/blender_mcp/mcp/.venv/Scripts/python.exe")
+            _candidate = Path("c:/bfa_coworker/mcp/.venv/Scripts/python.exe")
             if _candidate.is_file():
                 _py = _candidate
 
@@ -304,10 +303,10 @@ def start_mcp_server(
                 creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
             )
     except FileNotFoundError as ex:
-        _agent_state.error = "Failed to launch blender-mcp: {:s}".format(str(ex))
+        _agent_state.error = "Failed to launch MCP server: {:s}".format(str(ex))
         return None
     except OSError as ex:
-        _agent_state.error = "Failed to launch blender-mcp: {:s}".format(str(ex))
+        _agent_state.error = "Failed to launch MCP server: {:s}".format(str(ex))
         return None
 
     _mcp_server_process = proc
@@ -316,7 +315,7 @@ def start_mcp_server(
     print("[🛠️Coworker] start_mcp_server: launched pid={:d}".format(proc.pid))
     print("[🛠️Coworker] start_mcp_server: command = {:s}".format(
         str(mcp_exe or "python -m blmcp")))
-    print("[🛠️Coworker] start_mcp_server: BLENDER_MCP_HOST={:s} BLENDER_MCP_PORT={:d}".format(
+    print("[🛠️Coworker] start_mcp_server: BFACW_HOST={:s} BFACW_PORT={:d}".format(
         blender_host, blender_port))
 
     # Quick health check — read stderr for startup errors.
@@ -337,7 +336,7 @@ def start_mcp_server(
 
 
 def stop_mcp_server() -> None:
-    """Terminate the ``blender-mcp`` subprocess."""
+    """Terminate the MCP server subprocess."""
     global _mcp_server_process
 
     proc = _mcp_server_process
@@ -471,8 +470,8 @@ def _openai_chat_completions(
     data_bytes = json.dumps(body).encode()
     headers = {
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://blender.org",
-        "X-OpenRouter-Title": "Blender MCP",
+        "HTTP-Referer": "https://bforartists.org",
+        "X-OpenRouter-Title": "Bforartists Coworker",
     }
     if api_key:
         headers["Authorization"] = "Bearer {:s}".format(api_key)

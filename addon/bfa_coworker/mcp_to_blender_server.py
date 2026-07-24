@@ -316,7 +316,7 @@ def _execute_code_from_request(
             _ExecResult({
                 "status": "error",
                 "message": (
-                    "Internal error: a blender_mcp tool sent a request without the required 'strict_json' boolean key. "
+                    "Internal error: a Coworker tool sent a request without the required 'strict_json' boolean key. "
                     "This is a bug in the tool that generated this code"
                 ),
             }),

@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blender Authors
+# (Bforartists-maintained fork)
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -239,7 +240,7 @@ async def _run(
     # Pass environment variables the MCP server needs to connect to Blender.
     # StdioServerParameters only inherits a small safe-list by default.
     env: dict[str, str] = {}
-    for key in ("BLENDER_MCP_HOST", "BLENDER_MCP_PORT", "BLENDER_PATH"):
+    for key in ("BFACW_HOST", "BFACW_PORT", "BLENDER_PATH"):
         value = os.environ.get(key)
         if value is not None:
             env[key] = value
@@ -394,8 +395,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--server-command",
-        default="blender-mcp",
-        help="Command to launch the MCP server (default: blender-mcp).",
+        default="bfa-coworker-mcp",
+        help="Command to launch the MCP server (default: bfa-coworker-mcp).",
     )
     parser.add_argument(
         "-p", "--prompt",

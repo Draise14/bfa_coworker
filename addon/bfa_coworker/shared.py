@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Shared constants, helpers, and lazy-import wrappers for the blender_mcp add-on.
+Shared constants, helpers, and lazy-import wrappers for the Coworker add-on.
 """
 
 __all__ = (

@@ -5,7 +5,7 @@
 """
 CLI command handler for running the MCP server in background mode.
 
-Started via ``blender --background file.blend --command blender_mcp``.
+Started via ``blender --background file.blend --command bfa_coworker``.
 """
 
 __all__ = (
@@ -23,9 +23,9 @@ def cli_execute(argv: list[str]) -> int:
     Block and serve MCP requests until interrupted.
     """
     parser = argparse.ArgumentParser(
-        prog="blender_mcp",
+        prog="bfa_coworker",
         description=(
-            "Start the Blender MCP server. "
+            "Start the Bforartists Coworker server. "
             "Deferred responses are not supported in background mode; "
             "each request must complete before returning."
         ),
@@ -49,7 +49,7 @@ def cli_execute(argv: list[str]) -> int:
         print("Error: {:s}".format(str(ex)))
         return 1
 
-    print("MCP server started on {:s}:{:d}, press Ctrl+C to exit.".format(args.host, args.port))
+    print("Coworker bridge server started on {:s}:{:d}, press Ctrl+C to exit.".format(args.host, args.port))
 
     try:
         execute_blocking.run()

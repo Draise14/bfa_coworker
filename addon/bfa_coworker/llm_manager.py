@@ -44,6 +44,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import threading
 import urllib.error
 import urllib.request
@@ -62,7 +63,7 @@ _LOCAL_LLM_CHAT_URL = "http://127.0.0.1:{:d}/v1/chat/completions"
 _MODEL_DOWNLOAD_TIMEOUT = 300  # seconds
 
 # llama-server release download.
-_LLAMA_SERVER_VERSION = "b5027"
+_LLAMA_SERVER_VERSION = "b10154"
 
 # Common install locations for llama-server on Windows.
 _LLAMA_SEARCH_PATHS_WIN = [
@@ -975,29 +976,41 @@ def download_llama_server(
     _clear_download_state()
 
     # Determine platform and architecture.
+    # Asset naming convention (as of b10154):
+    #   Windows: llama-{tag}-bin-win-{variant}-{arch}.zip
+    #   macOS:   llama-{tag}-bin-macos-{arch}.tar.gz
+    #   Ubuntu:  llama-{tag}-bin-ubuntu-{variant}-{arch}.tar.gz
     if sys.platform == "win32":
         platform = "win"
         arch = "x64"
         binary_name = "llama-server.exe"
-        variant = "cuda"  # CUDA variant works on CPU-only systems too.
+        variant = "cpu"  # CPU variant works everywhere, no CUDA DLLs needed.
+        archive_ext = ".zip"
     elif sys.platform == "darwin":
         platform = "macos"
         arch = "arm64" if os.uname().machine == "arm64" else "x64"
         binary_name = "llama-server"
-        variant = "metal"
+        variant = ""
+        archive_ext = ".tar.gz"
     else:
         platform = "ubuntu"
         arch = "x64"
         binary_name = "llama-server"
-        variant = "cuda"
+        variant = "cpu"
+        archive_ext = ".tar.gz"
 
     tag = _LLAMA_SERVER_VERSION
     # Build the download URL.
-    # Format: llama-{tag}-bin-{platform}-{variant}-{arch}.zip
-    url = (
-        "https://github.com/ggml-org/llama.cpp/releases/download/{tag}/"
-        "llama-{tag}-bin-{platform}-{variant}-{arch}.zip"
-    ).format(tag=tag, platform=platform, variant=variant, arch=arch)
+    if variant:
+        url = (
+            "https://github.com/ggml-org/llama.cpp/releases/download/{tag}/"
+            "llama-{tag}-bin-{platform}-{variant}-{arch}{ext}"
+        ).format(tag=tag, platform=platform, variant=variant, arch=arch, ext=archive_ext)
+    else:
+        url = (
+            "https://github.com/ggml-org/llama.cpp/releases/download/{tag}/"
+            "llama-{tag}-bin-{platform}-{arch}{ext}"
+        ).format(tag=tag, platform=platform, arch=arch, ext=archive_ext)
 
     dest_dir = _get_bundled_llama_dir()
     dest_binary = dest_dir / binary_name
@@ -1048,35 +1061,49 @@ def download_llama_server(
                 if progress_callback:
                     progress_callback(msg)
 
-        # Extract the zip.
+        # Extract the archive.
         _set_download_progress("Extracting llama-server ...")
         if progress_callback:
             progress_callback("Extracting llama-server ...")
 
         data.seek(0)
-        with zipfile.ZipFile(data) as zf:
-            # Find the binary inside the zip (may be in a subdirectory).
-            binary_members = [
-                m for m in zf.namelist()
-                if m.endswith(binary_name) or m.endswith("/" + binary_name)
-            ]
-            if not binary_members:
-                _set_error(
-                    "Could not find {:s} in the downloaded archive".format(binary_name)
-                )
-                return None
+        if archive_ext == ".zip":
+            with zipfile.ZipFile(data) as zf:
+                binary_members = [
+                    m for m in zf.namelist()
+                    if m.endswith(binary_name) or m.endswith("/" + binary_name)
+                ]
+                if not binary_members:
+                    _set_error(
+                        "Could not find {:s} in the downloaded archive".format(binary_name)
+                    )
+                    return None
+                temp_dir = dest_dir / ".tmp_extract"
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                zf.extract(binary_members[0], str(temp_dir))
+                extracted = temp_dir / binary_members[0]
+        else:
+            with tarfile.open(fileobj=data, mode="r:gz") as tf:
+                binary_members = [
+                    m for m in tf.getmembers()
+                    if m.name.endswith(binary_name) or m.name.endswith("/" + binary_name)
+                ]
+                if not binary_members:
+                    _set_error(
+                        "Could not find {:s} in the downloaded archive".format(binary_name)
+                    )
+                    return None
+                temp_dir = dest_dir / ".tmp_extract"
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                tf.extract(binary_members[0], str(temp_dir))
+                extracted = temp_dir / binary_members[0].name
 
-            # Extract to a temp name first, then rename atomically.
-            temp_dir = dest_dir / ".tmp_extract"
-            temp_dir.mkdir(parents=True, exist_ok=True)
-            zf.extract(binary_members[0], str(temp_dir))
-            extracted = temp_dir / binary_members[0]
-            # Move to final location.
-            if dest_binary.exists():
-                dest_binary.unlink()
-            shutil.move(str(extracted), str(dest_binary))
-            # Cleanup temp dir.
-            shutil.rmtree(str(temp_dir), ignore_errors=True)
+        # Move to final location.
+        if dest_binary.exists():
+            dest_binary.unlink()
+        shutil.move(str(extracted), str(dest_binary))
+        # Cleanup temp dir.
+        shutil.rmtree(str(temp_dir), ignore_errors=True)
 
         # Make executable on non-Windows.
         if sys.platform != "win32":

@@ -426,9 +426,10 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
             # ── Download or use existing ─────────────────────────────
             llm_state = llm.get_state()
-            if not llm_state.is_running:
-                row = box.row(align=True)
-                row.operator("bfacw.download_model", icon="IMPORT", text="Download & Start")
+            if not llm_state.is_running or llm_state.download_active:
+                if not llm_state.download_active:
+                    row = box.row(align=True)
+                    row.operator("bfacw.download_model", icon="IMPORT", text="Download & Start")
                 if llm_state.error:
                     box.label(text=llm_state.error, icon="ERROR")
                 if llm_state.download_progress:

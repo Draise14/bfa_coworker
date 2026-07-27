@@ -119,6 +119,7 @@ class LLMState:
     download_progress: str = ""
     download_progress_eta: str = ""  # ETA estimate, e.g. "3m 24s remaining"
     download_progress_pct: float = 0.0  # 0.0 to 100.0
+    download_active: bool = False  # True while a model download is in progress
 
 
 # ---------------------------------------------------------------------------
@@ -749,12 +750,13 @@ def _set_download_progress_eta(eta: str, pct: float) -> None:
 
 
 def _clear_download_state() -> None:
-    """Clear download progress, ETA, and error. Called before a new download."""
+    """Clear download progress, ETA, error, and active flag. Called before a new download."""
     with _lock:
         _state.download_progress = ""
         _state.download_progress_eta = ""
         _state.download_progress_pct = 0.0
         _state.error = ""
+        _state.download_active = False
 
 
 def _format_bytes(bytes_val: float) -> str:
@@ -851,6 +853,10 @@ def download_model(
     if progress_callback:
         progress_callback("Starting llama-server to auto-download {:s}/{:s}...".format(r, f))
 
+    # Mark download as active so the UI poll knows we're still working.
+    with _lock:
+        _state.download_active = True
+
     # Launch llama-server, which auto-downloads the model.
     # We use a background thread and poll the health endpoint.
     import threading
@@ -895,6 +901,10 @@ def download_model(
             _set_error("Download failed: {:s}".format(str(ex)))
             if progress_callback:
                 progress_callback("Download failed: {:s}".format(str(ex)))
+        finally:
+            # Download is done (success or failure) — clear the active flag.
+            with _lock:
+                _state.download_active = False
 
     thread = threading.Thread(target=_do_download, daemon=True)
     thread.start()

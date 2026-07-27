@@ -50,6 +50,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **llama-server download URL** — Updated from ancient tag `b5027` (404) to
+  `b10154`. Fixed asset naming to match current release convention
+  (`win-cpu-x64.zip`, `macos-arm64.tar.gz`, `ubuntu-cpu-x64.tar.gz`).
+  Added `tarfile` support for `.tar.gz` extraction on macOS/Linux.
+- **Model download poll signal** — The "Download & Start" button was
+  disappearing immediately because the poll timer checked `state.is_running`
+  (set on process launch) instead of waiting for the actual download to
+  complete. Added `download_active` flag to `LLMState` so the UI correctly
+  distinguishes "server is running" from "a download is in progress".
+- **UI refresh after download** — Both llama-server and model download
+  operators now redraw all `PREFERENCES` areas on completion instead of
+  only `context.area`, so the green checkmark / status text appears
+  immediately without requiring a Blender restart.
+- **Download button visibility during download** — The "Download & Start"
+  button and progress bar now stay visible while `download_active` is true,
+  even though the server process has already started.
+
 - **MCP server Python path resolution** — The bundled `uv`-managed `.venv` was
   not portable across machines because `pyvenv.cfg` hardcoded a machine-specific
   Python path (e.g. `C:\Users\USER\AppData\Roaming\uv\python\cpython-3.12.9-...`).

@@ -72,8 +72,12 @@ class _BFACW_OT_download_model(bpy.types.Operator):  # type: ignore[misc]
         if self._timer is not None:
             bpy.app.timers.unregister(self._timer)
 
-        if context and context.area:
-            context.area.tag_redraw()
+        # Redraw all PREFERENCES areas so the status updates immediately.
+        for wm in bpy.data.window_managers:
+            for win in wm.windows:
+                for area in win.screen.areas:
+                    if area.type == 'PREFERENCES':
+                        area.tag_redraw()
 
         if state.is_running and not state.error:
             self.report({"INFO"}, "Model downloaded and llama-server is running")
@@ -124,7 +128,9 @@ def _make_download_poll(op):
     def _poll() -> float | None:
         llm = get_llm_manager()
         state = llm.get_state()
-        if state.is_running or state.error:
+        # Download is done when the active flag clears AND
+        # either the server is running or there was an error.
+        if not state.download_active and (state.is_running or state.error):
             op._done = True
             op._error = state.error
             return None
@@ -230,8 +236,12 @@ class _BFACW_OT_download_llama_server(bpy.types.Operator):  # type: ignore[misc]
         if self._timer is not None:
             bpy.app.timers.unregister(self._timer)
 
-        if context and context.area:
-            context.area.tag_redraw()
+        # Redraw all PREFERENCES areas so the status updates immediately.
+        for wm in bpy.data.window_managers:
+            for win in wm.windows:
+                for area in win.screen.areas:
+                    if area.type == 'PREFERENCES':
+                        area.tag_redraw()
 
         if self._error:
             self.report({"ERROR"}, self._error)

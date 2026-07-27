@@ -215,6 +215,117 @@ def schedule_coro(coro) -> concurrent.futures.Future:
 _mcp_server_process: subprocess.Popen | None = None
 
 
+def _find_blender_python() -> str | None:
+    """Return the path to Blender's bundled Python executable.
+
+    Blender ships with its own Python interpreter.  On Windows the Python
+    binary lives at ``{sys.prefix}/bin/python.exe``; on Linux/macOS it is
+    ``{sys.prefix}/bin/python3``.
+
+    We do **not** use ``sys.executable`` here because in Blender's embedded
+    Python that points to the Blender executable (``blender.exe``), not a
+    Python interpreter.
+
+    Returns ``None`` if no suitable Python is found (unlikely in a running
+    Blender add-on, but handled gracefully).
+    """
+    if sys.platform == "win32":
+        # Standard Blender layout: sys.prefix/bin/python.exe
+        py_path = Path(sys.prefix) / "bin" / "python.exe"
+        if py_path.is_file():
+            return str(py_path)
+        # Some installations put python.exe directly in sys.prefix.
+        py_path = Path(sys.prefix) / "python.exe"
+        if py_path.is_file():
+            return str(py_path)
+        return None
+
+    # Linux/macOS
+    py_path = Path(sys.prefix) / "bin" / "python3"
+    return str(py_path) if py_path.is_file() else None
+
+
+def _find_vendor_pythonpath() -> str:
+    """Build a PYTHONPATH string pointing at the addon's vendor directories.
+
+    Returns a ``os.pathsep``-joined string suitable for the ``PYTHONPATH``
+    environment variable.  The returned path includes:
+
+    * ``vendor/deps/`` — pip-installed pure-Python dependencies
+      (mcp, pyyaml, docutils, and their transitive deps).
+    * ``vendor/`` — parent of ``vendor/blmcp/``, so ``import blmcp``
+      resolves to ``vendor/blmcp/__init__.py``.
+
+    If a directory does not exist, it is silently omitted so the addon
+    can fall back gracefully during development.
+    """
+    this_dir = Path(__file__).resolve().parent
+    vendor_dir = this_dir / "vendor"
+    parts: list[str] = []
+
+    deps_dir = vendor_dir / "deps"
+    if deps_dir.is_dir():
+        parts.append(str(deps_dir))
+
+    # Add vendor/ itself so blmcp resolves from vendor/blmcp/.
+    if vendor_dir.is_dir():
+        parts.append(str(vendor_dir))
+
+    return os.pathsep.join(parts)
+
+
+def _ensure_vendor_deps() -> bool:
+    """Check that vendor/deps/ exists with required packages; auto-install if missing.
+
+    This handles the case where a user installs the addon from source
+    (e.g. by copying the addon directory) without running ``build_addon.py``
+    first.  If ``vendor/deps/`` is missing or empty, we attempt to install
+    the required packages using Blender's ``pip``.
+
+    Returns ``True`` if the deps are available (or were installed), ``False``
+    if installation failed.
+    """
+    this_dir = Path(__file__).resolve().parent
+    deps_dir = this_dir / "vendor" / "deps"
+
+    # Quick check: does vendor/deps/ exist and contain any packages?
+    if deps_dir.is_dir() and any(deps_dir.iterdir()):
+        return True
+
+    print("[🛠️Coworker] _ensure_vendor_deps: vendor/deps/ is missing or empty — attempting auto-install...")
+
+    # Try to install using Blender's pip.
+    blender_py = _find_blender_python()
+    if not blender_py:
+        print("[🛠️Coworker] _ensure_vendor_deps: cannot find Blender's Python for auto-install")
+        return False
+
+    try:
+        deps_dir.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            [blender_py, "-m", "pip", "install",
+             "--target", str(deps_dir),
+             "--no-compile",
+             "mcp[cli]>=1.2.0",
+             "pyyaml",
+             "docutils",
+             ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            print("[🛠️Coworker] _ensure_vendor_deps: pip install failed (exit {:d})".format(
+                result.returncode))
+            print("[🛠️Coworker] _ensure_vendor_deps: stderr = {:s}".format(result.stderr[-300:]))
+            return False
+        print("[🛠️Coworker] _ensure_vendor_deps: auto-install succeeded")
+        return True
+    except Exception as ex:
+        print("[🛠️Coworker] _ensure_vendor_deps: auto-install failed — {:s}".format(str(ex)))
+        return False
+
+
 def start_mcp_server(
     port: int = _MCP_SERVER_DEFAULT_PORT,
     blender_host: str = "localhost",
@@ -222,6 +333,12 @@ def start_mcp_server(
 ) -> subprocess.Popen | None:
     """
     Launch the MCP server as a subprocess with HTTP transport.
+
+    Python resolution order:
+    1. ``bfa-coworker-mcp`` console_scripts entry point (if user has it on PATH).
+    2. Blender's bundled Python (``sys.prefix/bin/python.exe``) with
+       ``vendor/deps/`` and ``vendor/blmcp/`` on ``PYTHONPATH``.
+    3. ``python`` from PATH as a last resort.
 
     Returns the ``Popen`` handle, or ``None`` on failure.
     """
@@ -231,65 +348,61 @@ def start_mcp_server(
         _agent_state.error = "MCP server is already running"
         return None
 
-    # Find the MCP server executable.
+    env = os.environ.copy()
+    env["BFACW_HOST"] = blender_host
+    env["BFACW_PORT"] = str(blender_port)
+
+    # --- Resolution order ---
+
+    mcp_exe: str | None = None
+    use_module = False
+
+    # 1. Check for a pip-installed console_scripts entry point.
     mcp_exe = (
         shutil.which("bfa-coworker-mcp") or
         shutil.which("bfa-coworker-mcp.exe") or
         shutil.which("bfa-coworker-mcp.bat")
     )
 
-    _use_module = False
-    env = os.environ.copy()
-    env["BFACW_HOST"] = blender_host
-    env["BFACW_PORT"] = str(blender_port)
-
+    # 2. Fall back to Blender's bundled Python with vendor deps.
     if not mcp_exe:
-        # Look for the MCP virtual environment.  Walk up from this
-        # file to find the workspace root, then check:
-        #   mcp/.venv/Scripts/python.exe  (development layout)
-        #   vendor/python_env/Scripts/python.exe  (installed-addon layout)
-        _this_dir = Path(__file__).resolve().parent
-        _py = None
-        _p = _this_dir
-        for _depth in range(6):
-            _candidate = _p / "mcp" / ".venv" / "Scripts" / "python.exe"
-            if _candidate.is_file():
-                _py = _candidate
-                break
-            _p = _p.parent
+        # Ensure vendor dependencies are available (auto-install if missing).
+        if not _ensure_vendor_deps():
+            _agent_state.error = (
+                "MCP server dependencies not found in vendor/deps/. "
+                "Run 'python build_addon.py' to build the extension, "
+                "or install manually: pip install --target vendor/deps/ mcp[cli] pyyaml docutils"
+            )
+            return None
 
-        # Also check vendor/python_env/ (installed addon layout).
-        if not _py:
-            _candidate = _this_dir / "vendor" / "python_env" / "Scripts" / "python.exe"
-            if _candidate.is_file():
-                _py = _candidate
+        # Build PYTHONPATH from vendor directories.
+        vendor_pythonpath = _find_vendor_pythonpath()
+        existing_pp = env.get("PYTHONPATH", "")
+        if vendor_pythonpath:
+            env["PYTHONPATH"] = vendor_pythonpath + (os.pathsep + existing_pp if existing_pp else "")
 
-        # Hard fallback.
-        if not _py:
-            _candidate = Path("c:/bfa_coworker/mcp/.venv/Scripts/python.exe")
-            if _candidate.is_file():
-                _py = _candidate
+        blender_py = _find_blender_python()
+        if blender_py:
+            mcp_exe = blender_py
+            use_module = True
+            print("[🛠️Coworker] start_mcp_server: using Blender's Python at {:s}".format(mcp_exe))
 
-        if _py:
-            mcp_exe = str(_py)
-            _use_module = True
-            # Ensure the vendor venv's site-packages is on PYTHONPATH so
-            # that blmcp (and its dependencies) are importable even when
-            # editable-install metadata is missing or stale.
-            _sp = str(Path(mcp_exe).resolve().parent.parent / "Lib" / "site-packages")
-            existing = env.get("PYTHONPATH", "")
-            env["PYTHONPATH"] = _sp + (os.pathsep + existing if existing else "")
-        else:
-            mcp_exe = shutil.which("python") or "python"
-            _use_module = True
+    # 3. Last resort: system python.
+    if not mcp_exe:
+        mcp_exe = shutil.which("python") or "python"
+        use_module = True
+        print("[🛠️Coworker] start_mcp_server: falling back to system python at {:s}".format(mcp_exe))
 
     if not mcp_exe:
         _agent_state.error = "Cannot find Python to run MCP server"
         return None
 
+    # --- Launch ---
+
     try:
-        if _use_module:
-            print("[🛠️Coworker] start_mcp_server: running {:s} -m blmcp with PYTHONPATH={:s}".format(mcp_exe, env.get("PYTHONPATH", "(unset)")))
+        if use_module:
+            print("[🛠️Coworker] start_mcp_server: running {:s} -m blmcp with PYTHONPATH={:s}".format(
+                mcp_exe, env.get("PYTHONPATH", "(unset)")))
             proc = subprocess.Popen(
                 [mcp_exe, "-m", "blmcp", "--transport", "http", "--port", str(port)],
                 stdout=subprocess.PIPE,
@@ -297,19 +410,9 @@ def start_mcp_server(
                 env=env,
                 creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
             )
-        elif mcp_exe:
+        else:
             proc = subprocess.Popen(
                 [mcp_exe, "--transport", "http", "--port", str(port)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=env,
-                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
-            )
-        else:
-            # Final fallback: try system python.
-            proc = subprocess.Popen(
-                [shutil.which("python") or "python", "-m", "blmcp",
-                 "--transport", "http", "--port", str(port)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,
@@ -326,8 +429,7 @@ def start_mcp_server(
     _agent_state.mcp_server_running = True
     _agent_state.error = ""
     print("[🛠️Coworker] start_mcp_server: launched pid={:d}".format(proc.pid))
-    print("[🛠️Coworker] start_mcp_server: command = {:s}".format(
-        str(mcp_exe or "python -m blmcp")))
+    print("[🛠️Coworker] start_mcp_server: command = {:s}".format(str(mcp_exe or "python -m blmcp")))
     print("[🛠️Coworker] start_mcp_server: BFACW_HOST={:s} BFACW_PORT={:d}".format(
         blender_host, blender_port))
 
@@ -335,7 +437,6 @@ def start_mcp_server(
     import time
     time.sleep(0.5)
     if proc.poll() is not None:
-        # Process already exited — read stderr.
         stderr_output = proc.stderr.read().decode(errors="replace") if proc.stderr else ""
         print("[🛠️Coworker] start_mcp_server: process already exited with code {:d}".format(
             proc.returncode))

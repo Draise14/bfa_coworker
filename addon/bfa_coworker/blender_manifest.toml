@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "bfa_coworker"
-version = "1.1.35"
+version = "1.1.36"
 name = "Coworker"
 tagline = "Chat based coworker — an MCP-powered agent"
 maintainer = "Bforartists"

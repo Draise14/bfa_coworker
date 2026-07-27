@@ -5,7 +5,63 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+### TODO (Future Plans)
+
+#### High Priority
+- [x] **Bug:** Make local model detection and "link" more robust
+- [x] **Context Window Setting & Tool-Message Safety Fix** — Added
+  `local_ctx_size` IntProperty (2048-262144, default 8192) exposed in
+  Advanced Settings so users can tune the context window per model to
+  avoid Jinja errors and OOM. The preferences value is now passed to
+  `llama-server --ctx-size`. Also fixed history slicing to drop orphaned
+  `tool`-role messages that lost their `assistant`/`tool_calls` pair
+  during conversation trimming — preventing the fatal `Message has tool
+  role, but there was no previous assistant message with a tool call!`
+  Jinja exception.
+- [ ] **Addon Branding Rename** — Change all `blmcp` / `blender_mcp` references to
+  `bfa_coworker` / `bfacw`. Update operator IDs, panel IDs, class names, and
+  UI labels.
+- [ ] **Module Rename** — Rename `blender_mcp_addon` directory to `mcp_addon`
+  and update all internal imports.
+- [ ] **Interface & Operator Modularization** — Split `__init__.py` into
+  separate modules (`preferences.py`, `operators_server.py`, `operators_llm.py`,
+  `operators_agent.py`, `operators_hf.py`) for easier maintenance
+
+#### Medium Priority
+- [ ] **Add history chat to a text file with a button to open it in a floating window** - so we can copy and paste the results and save the log from the chat
+- [ ] **SKILL.md Update** — Rewrite `.github/skills/self-contained-blender-mcp/SKILL.md`
+  to reflect current project goals and branding.
+- [ ] **DOCUMENTATION.md** — Create user-facing documentation covering
+  installation, quick start, model management, remote API setup, and
+  troubleshooting.
+- [ ] **GGUF Header Parsing** — Read GGUF file headers to detect parameter
+  count and quantization for non-preset models, enabling auto-populated
+  RAM/disk estimates.
+
+#### Low Priority
+- [ ] **System RAM Detection** — Use platform-specific API to detect available
+  RAM and filter/hide presets that exceed system capacity.
+- [ ] **Download Progress Bar** — Replace text-based download progress with a
+  visual progress bar in the preferences panel.
+- [ ] **Add Model Generator** locally, Ultrashape, Hunyuan, similar to here: https://github.com/ahujasid/blender-mcp
+- [ ] **Add CC0 resource downloader** from Polyhaven, AmbientC00, Sketchfab, etc, similar to here: https://github.com/ahujasid/blender-mcp
+
 ## [Unreleased]
+
+### Fixed
+
+- **MCP server Python path resolution** — The bundled `uv`-managed `.venv` was
+  not portable across machines because `pyvenv.cfg` hardcoded a machine-specific
+  Python path (e.g. `C:\Users\USER\AppData\Roaming\uv\python\cpython-3.12.9-...`).
+  Replaced with a portable approach:
+  - `build_addon.py` now installs pure-Python dependencies into `vendor/deps/`
+    via `pip install --target` and copies `blmcp` source into `vendor/blmcp/`.
+  - `agent_controller.py` uses Blender's own Python (`sys.executable`) to launch
+    the MCP server, with `vendor/deps/` and `vendor/blmcp/` on `PYTHONPATH`.
+  - Added `_ensure_vendor_deps()` auto-install fallback for source installs.
+  - Removed the old `vendor/python_env/` layout entirely.
+
+## [v1.1.35]
 
 ### Changed
 
@@ -59,43 +115,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path directly to `start_local_llama()`.
 - `_autostart_agent_timer` also respects `existing_model_path` for auto-start.
 
-### TODO (Future Plans)
-
-#### High Priority
-- [x] **Bug:** Make local model detection and "link" more robust
-- [x] **Context Window Setting & Tool-Message Safety Fix** — Added
-  `local_ctx_size` IntProperty (2048-262144, default 8192) exposed in
-  Advanced Settings so users can tune the context window per model to
-  avoid Jinja errors and OOM. The preferences value is now passed to
-  `llama-server --ctx-size`. Also fixed history slicing to drop orphaned
-  `tool`-role messages that lost their `assistant`/`tool_calls` pair
-  during conversation trimming — preventing the fatal `Message has tool
-  role, but there was no previous assistant message with a tool call!`
-  Jinja exception.
-- [ ] **Addon Branding Rename** — Change all `blmcp` / `blender_mcp` references to
-  `bfa_coworker` / `bfacw`. Update operator IDs, panel IDs, class names, and
-  UI labels.
-- [ ] **Module Rename** — Rename `blender_mcp_addon` directory to `mcp_addon`
-  and update all internal imports.
-- [ ] **Interface & Operator Modularization** — Split `__init__.py` into
-  separate modules (`preferences.py`, `operators_server.py`, `operators_llm.py`,
-  `operators_agent.py`, `operators_hf.py`) for easier maintenance
-
-#### Medium Priority
-- [ ] **Add history chat to a text file with a button to open it in a floating window** - so we can copy and paste the results and save the log from the chat
-- [ ] **SKILL.md Update** — Rewrite `.github/skills/self-contained-blender-mcp/SKILL.md`
-  to reflect current project goals and branding.
-- [ ] **DOCUMENTATION.md** — Create user-facing documentation covering
-  installation, quick start, model management, remote API setup, and
-  troubleshooting.
-- [ ] **GGUF Header Parsing** — Read GGUF file headers to detect parameter
-  count and quantization for non-preset models, enabling auto-populated
-  RAM/disk estimates.
-
-#### Low Priority
-- [ ] **System RAM Detection** — Use platform-specific API to detect available
-  RAM and filter/hide presets that exceed system capacity.
-- [ ] **Download Progress Bar** — Replace text-based download progress with a
-  visual progress bar in the preferences panel.
-- [ ] **Add Model Generator** locally, Ultrashape, Hunyuan, similar to here: https://github.com/ahujasid/blender-mcp
-- [ ] **Add CC0 resource downloader** from Polyhaven, AmbientC00, Sketchfab, etc, similar to here: https://github.com/ahujasid/blender-mcp

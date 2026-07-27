@@ -21,11 +21,15 @@ import sys
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ADDON_DIR = os.path.join(SCRIPT_DIR, "addon", "bfa_coworker")
 MCP_SRC_DIR = os.path.join(SCRIPT_DIR, "mcp")
-MCP_VENV_DIR = os.path.join(MCP_SRC_DIR, ".venv")
-# The addon will have a vendor/python_env/ subdirectory with blmcp + dependencies.
-# (Named python_env rather than .venv because Blender's extension build
-# excludes hidden directories starting with ".".)
-VENDOR_VENV_DIR = os.path.join(ADDON_DIR, "vendor", "python_env")
+# The addon will have vendor/deps/ (pip-installed pure-Python deps)
+# and vendor/blmcp/ (blmcp source package) instead of a bundled .venv.
+# (The old vendor/python_env/ layout was not portable across machines
+# because uv-created venvs hardcode the base Python path in pyvenv.cfg.)
+VENDOR_DIR = os.path.join(ADDON_DIR, "vendor")
+VENDOR_DEPS_DIR = os.path.join(VENDOR_DIR, "deps")
+VENDOR_BLMCP_DIR = os.path.join(VENDOR_DIR, "blmcp")
+# Old layout — kept for cleanup.
+VENDOR_VENV_DIR = os.path.join(VENDOR_DIR, "python_env")
 DIST_DIR = os.path.join(SCRIPT_DIR, "releases")
 
 # Find Blender executable.
@@ -35,47 +39,70 @@ def find_blender() -> str:
     return blender
 
 
-def _bundle_venv() -> None:
-    """Copy the MCP .venv into vendor/python_env inside the addon."""
+def _bundle_deps_and_source() -> None:
+    """Install MCP dependencies and copy blmcp source into the addon's vendor directory.
+
+    This replaces the old approach of copying the uv-managed .venv (which was
+    not portable because pyvenv.cfg hardcodes a machine-specific Python path).
+
+    New layout::
+
+        vendor/
+        ├── deps/          # pip-installed pure-Python packages (mcp, pyyaml, docutils)
+        └── blmcp/         # blmcp source package (copied from mcp/blmcp/)
+
+    Uses ``sys.executable`` for ``pip install``.  If the resulting compiled
+    extensions don't match Blender's Python version, the addon's
+    ``_ensure_vendor_deps()`` will auto-reinstall them at runtime.
+    """
     print("=" * 60)
-    print("Bundling MCP virtual environment into extension...")
-    print("  Source: {:s}".format(MCP_VENV_DIR))
-    print("  Dest:   {:s}".format(VENDOR_VENV_DIR))
+    print("Bundling MCP dependencies and source into extension...")
 
-    if not os.path.isdir(MCP_VENV_DIR):
-        print("ERROR: {:s} not found — run 'cd mcp && uv sync' first".format(MCP_VENV_DIR))
-        sys.exit(1)
-
+    # Clean old vendor/python_env/ if it exists.
     if os.path.isdir(VENDOR_VENV_DIR):
+        print("  Removing old vendor/python_env/ (non-portable layout)...")
         shutil.rmtree(VENDOR_VENV_DIR)
 
-    shutil.copytree(MCP_VENV_DIR, VENDOR_VENV_DIR)
+    # Clean any previous vendor/deps/ and vendor/blmcp/.
+    if os.path.isdir(VENDOR_DEPS_DIR):
+        shutil.rmtree(VENDOR_DEPS_DIR)
+    if os.path.isdir(VENDOR_BLMCP_DIR):
+        shutil.rmtree(VENDOR_BLMCP_DIR)
 
-    # Remove __pycache__ to save space.
-    for root, dirs, _files in os.walk(VENDOR_VENV_DIR):
+    # Step 1: Install dependencies into vendor/deps/.
+    os.makedirs(VENDOR_DEPS_DIR, exist_ok=True)
+    print("  Installing dependencies to {:s} using {:s}...".format(VENDOR_DEPS_DIR, sys.executable))
+    pip_cmd = [
+        sys.executable, "-m", "pip", "install",
+        "--target", VENDOR_DEPS_DIR,
+        "--no-compile",  # Skip .pyc to save space.
+        "mcp[cli]>=1.2.0",
+        "pyyaml",
+        "docutils",
+    ]
+    result = subprocess.run(pip_cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print("ERROR: pip install failed with exit code {:d}".format(result.returncode))
+        print("stdout:", result.stdout[-500:])
+        print("stderr:", result.stderr[-500:])
+        sys.exit(1)
+    print("  Dependencies installed successfully.")
+
+    # Remove __pycache__ from deps to save space.
+    for root, dirs, _files in os.walk(VENDOR_DEPS_DIR):
         if '__pycache__' in dirs:
             shutil.rmtree(os.path.join(root, '__pycache__'))
 
-    # Strip editable-install files — they contain machine-specific absolute
-    # paths and won't work when the venv is moved to another location.
-    site_packages = os.path.join(VENDOR_VENV_DIR, "Lib", "site-packages")
-    if os.path.isdir(site_packages):
-        for f in os.listdir(site_packages):
-            if f.startswith("__editable__"):
-                fpath = os.path.join(site_packages, f)
-                if os.path.isfile(fpath):
-                    os.remove(fpath)
-                    print("  Removed editable install: {:s}".format(f))
-
-    # Copy the blmcp package source into the vendor venv as a regular
-    # (non-editable) package so it's always importable.
+    # Step 2: Copy blmcp source into vendor/blmcp/.
     blmcp_src = os.path.join(SCRIPT_DIR, "mcp", "blmcp")
-    blmcp_dst = os.path.join(site_packages, "blmcp")
-    if os.path.isdir(blmcp_src):
-        if os.path.isdir(blmcp_dst):
-            shutil.rmtree(blmcp_dst)
-        shutil.copytree(blmcp_src, blmcp_dst, ignore=shutil.ignore_patterns("__pycache__"))
-        print("  Copied blmcp package to vendor venv: {:s}".format(blmcp_dst))
+    if not os.path.isdir(blmcp_src):
+        print("ERROR: {:s} not found".format(blmcp_src))
+        sys.exit(1)
+    shutil.copytree(
+        blmcp_src, VENDOR_BLMCP_DIR,
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+    print("  Copied blmcp package to {:s}".format(VENDOR_BLMCP_DIR))
 
     print("Bundled successfully!")
 
@@ -90,8 +117,8 @@ def main() -> int:
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Step 0: Bundle the MCP .venv into vendor/python_env.
-    _bundle_venv()
+    # Step 0: Bundle MCP deps and source into vendor/.
+    _bundle_deps_and_source()
 
     # Step 1: Build.
     print("\n" + "=" * 60)

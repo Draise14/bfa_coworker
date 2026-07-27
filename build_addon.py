@@ -39,6 +39,47 @@ def find_blender() -> str:
     return blender
 
 
+def _find_python_with_pip() -> str:
+    """Find a Python executable that has ``pip`` installed.
+
+    Tries candidates in order:
+    1. ``sys.executable`` (current Python).
+    2. ``python`` / ``python3`` from PATH (if different from current).
+    3. ``uv`` (can install without pip).
+
+    Exits with an error if nothing is found.
+    """
+
+    candidates: list[str] = [sys.executable]
+
+    # Add system python from PATH if different.
+    for name in ("python", "python3"):
+        py = shutil.which(name)
+        if py and py.lower() != sys.executable.lower():
+            candidates.append(py)
+
+    for py in candidates:
+        try:
+            result = subprocess.run(
+                [py, "-m", "pip", "--version"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                print("  Using Python with pip: {:s}".format(py))
+                return py
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            continue
+
+    # Last resort: uv (can act as a pip replacement).
+    uv_path = shutil.which("uv")
+    if uv_path:
+        print("  Using uv as pip replacement: {:s}".format(uv_path))
+        return "uv"
+
+    print("ERROR: cannot find pip. Install pip or run: uv pip install --target deps/ mcp[cli] pyyaml docutils")
+    sys.exit(2)
+
+
 def _bundle_deps_and_source() -> None:
     """Install MCP dependencies and copy blmcp source into the addon's vendor directory.
 
@@ -51,9 +92,9 @@ def _bundle_deps_and_source() -> None:
         ├── deps/          # pip-installed pure-Python packages (mcp, pyyaml, docutils)
         └── blmcp/         # blmcp source package (copied from mcp/blmcp/)
 
-    Uses ``sys.executable`` for ``pip install``.  If the resulting compiled
+    Uses sys.executable for pip install.  If the resulting compiled
     extensions don't match Blender's Python version, the addon's
-    ``_ensure_vendor_deps()`` will auto-reinstall them at runtime.
+    _ensure_vendor_deps() will auto-reinstall them at runtime.
     """
     print("=" * 60)
     print("Bundling MCP dependencies and source into extension...")
@@ -69,17 +110,31 @@ def _bundle_deps_and_source() -> None:
     if os.path.isdir(VENDOR_BLMCP_DIR):
         shutil.rmtree(VENDOR_BLMCP_DIR)
 
+    # Find a Python with pip.
+    pip_python = _find_python_with_pip()
+
     # Step 1: Install dependencies into vendor/deps/.
     os.makedirs(VENDOR_DEPS_DIR, exist_ok=True)
-    print("  Installing dependencies to {:s} using {:s}...".format(VENDOR_DEPS_DIR, sys.executable))
-    pip_cmd = [
-        sys.executable, "-m", "pip", "install",
-        "--target", VENDOR_DEPS_DIR,
-        "--no-compile",  # Skip .pyc to save space.
-        "mcp[cli]>=1.2.0",
-        "pyyaml",
-        "docutils",
-    ]
+    print("  Installing dependencies to {:s}...".format(VENDOR_DEPS_DIR))
+
+    if pip_python == "uv":
+        pip_cmd = [
+            "uv", "pip", "install",
+            "--target", VENDOR_DEPS_DIR,
+            "mcp[cli]>=1.2.0",
+            "pyyaml",
+            "docutils",
+        ]
+    else:
+        pip_cmd = [
+            pip_python, "-m", "pip", "install",
+            "--target", VENDOR_DEPS_DIR,
+            "--no-compile",  # Skip .pyc to save space.
+            "mcp[cli]>=1.2.0",
+            "pyyaml",
+            "docutils",
+        ]
+
     result = subprocess.run(pip_cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print("ERROR: pip install failed with exit code {:d}".format(result.returncode))

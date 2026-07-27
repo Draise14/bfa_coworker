@@ -46,7 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [ ] **Add Model Generator** locally, Ultrashape, Hunyuan, similar to here: https://github.com/ahujasid/blender-mcp
 - [ ] **Add CC0 resource downloader** from Polyhaven, AmbientC00, Sketchfab, etc, similar to here: https://github.com/ahujasid/blender-mcp
 
-## [Unreleased]
+## [Unreleased - v1.1.36]
 
 ### Fixed
 
@@ -56,9 +56,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Replaced with a portable approach:
   - `build_addon.py` now installs pure-Python dependencies into `vendor/deps/`
     via `pip install --target` and copies `blmcp` source into `vendor/blmcp/`.
-  - `agent_controller.py` uses Blender's own Python (`sys.executable`) to launch
-    the MCP server, with `vendor/deps/` and `vendor/blmcp/` on `PYTHONPATH`.
+  - `agent_controller.py` uses Blender's own Python (`sys.prefix/bin/python.exe`)
+    to launch the MCP server, with `vendor/deps/` and `vendor/` on `PYTHONPATH`.
   - Added `_ensure_vendor_deps()` auto-install fallback for source installs.
+  - Added `_find_python_with_pip()` to `build_addon.py` so the build script
+    finds a Python with pip even when `sys.executable` is a uv-managed venv
+    that lacks pip.
   - Removed the old `vendor/python_env/` layout entirely.
 
 ## [v1.1.35]

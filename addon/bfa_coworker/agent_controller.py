@@ -367,17 +367,18 @@ def _ensure_vendor_deps() -> bool:
         return False
 
 
-def _start_pipe_drainer(proc: subprocess.Popen) -> tuple[list[threading.Thread], list[str]]:
+def _start_pipe_drainer(proc: subprocess.Popen) -> tuple[list[threading.Thread], list[str], list[str]]:
     """Spawn background threads to drain stdout/stderr pipes.
 
     Without this, ``subprocess.PIPE`` buffers (4 KB on Windows) fill up
     and the child process blocks on write, never reaching ``mcp.run()``.
-    Collected stderr lines are appended to *stderr_lines* for diagnostics.
+    Collected lines are appended to the returned lists for diagnostics.
 
-    Returns ``(drainer_threads, stderr_lines)``.
+    Returns ``(drainer_threads, stdout_lines, stderr_lines)``.
     """
+    stdout_lines: list[str] = []
     stderr_lines: list[str] = []
-    stderr_lock = threading.Lock()
+    lock = threading.Lock()
     threads: list[threading.Thread] = []
 
     def _drain_stderr() -> None:
@@ -385,16 +386,16 @@ def _start_pipe_drainer(proc: subprocess.Popen) -> tuple[list[threading.Thread],
             return
         for line in proc.stderr:
             decoded = line.decode(errors="replace").rstrip("\n\r")
-            with stderr_lock:
+            with lock:
                 stderr_lines.append(decoded)
 
     def _drain_stdout() -> None:
         if proc.stdout is None:
             return
-        # Just consume stdout to keep the pipe from filling —
-        # we don't need its content for diagnostics.
-        for _line in proc.stdout:
-            pass
+        for line in proc.stdout:
+            decoded = line.decode(errors="replace").rstrip("\n\r")
+            with lock:
+                stdout_lines.append(decoded)
 
     t1 = threading.Thread(target=_drain_stderr, daemon=True)
     t1.start()
@@ -404,7 +405,7 @@ def _start_pipe_drainer(proc: subprocess.Popen) -> tuple[list[threading.Thread],
     t2.start()
     threads.append(t2)
 
-    return threads, stderr_lines
+    return threads, stdout_lines, stderr_lines
 
 
 def _kill_process_on_port(port: int) -> None:
@@ -570,7 +571,7 @@ def start_mcp_server(
 
     # Spawn background threads to drain stdout/stderr pipes.
     # Without this, PIPE buffers fill and the child process deadlocks.
-    _drainer_thread, _stderr_lines = _start_pipe_drainer(proc)
+    _drainer_threads, _stdout_lines, _stderr_lines = _start_pipe_drainer(proc)
 
     # Quick health check — wait for the server to import and bind.
     import time
@@ -579,14 +580,16 @@ def start_mcp_server(
         # Process exited — collect from drainer.
         time.sleep(0.5)  # Let drainer finish reading.
         stderr_output = "\n".join(_stderr_lines[-100:])
-        stdout_output = ""  # stdout is drained but we only care about stderr
+        stdout_output = "\n".join(_stdout_lines[-100:])
+        error_detail = (stderr_output or stdout_output or "no output")
         print("[🛠️Coworker] start_mcp_server: process already exited with code {:d}".format(
             proc.returncode))
         if stderr_output:
             print("[🛠️Coworker] start_mcp_server: stderr (tail) = {:s}".format(stderr_output[-1500:]))
+        if stdout_output:
+            print("[🛠️Coworker] start_mcp_server: stdout (tail) = {:s}".format(stdout_output[-1500:]))
 
         # Check if it's a ModuleNotFoundError (likely wrong Python version).
-        error_detail = stderr_output or "no output"
         if "ModuleNotFoundError" in error_detail or "ImportError" in error_detail:
             if _retry_depth >= 1:
                 print("[🛠️Coworker] start_mcp_server: import error after retry — giving up")
@@ -614,14 +617,19 @@ def start_mcp_server(
         _mcp_server_process = None
         return None
 
-    # Process is still alive but not yet listening?
-    # Log any stderr captured so far for diagnostics.
+    # Process is still alive — log all collected output for diagnostics.
+    if _stdout_lines:
+        print("[🛠️Coworker] start_mcp_server: process alive, stdout so far ({:d} lines):".format(
+            len(_stdout_lines)))
+        for line in _stdout_lines[-15:]:
+            print("[🛠️Coworker] start_mcp_server:   stdout | {:s}".format(line))
     if _stderr_lines:
-        recent = _stderr_lines[-10:]
         print("[🛠️Coworker] start_mcp_server: process alive, stderr so far ({:d} lines):".format(
             len(_stderr_lines)))
-        for line in recent:
+        for line in _stderr_lines[-15:]:
             print("[🛠️Coworker] start_mcp_server:   stderr | {:s}".format(line))
+    if not _stdout_lines and not _stderr_lines:
+        print("[🛠️Coworker] start_mcp_server: WARNING — process alive but no stdout/stderr after 3s")
 
     return proc
 

@@ -85,6 +85,7 @@ MODEL_PRESET_ITEMS: list[tuple[str, str, str]] = [
     ("deepseek_r1_32b_q4", "DeepSeek R1 Distill 32B (Q4_K_M)", "[Flagship] 20-24 GB RAM, ~19 GB disk"),
     ("qwen25_coder_32b_q4", "Qwen 2.5 Coder 32B (Q4_K_M)", "[Flagship] 20-24 GB RAM, ~19 GB disk"),
     ("llama31_8b_q4", "Llama 3.1 8B (Q4_K_M)", "[Light] 4-6 GB RAM, ~5 GB disk"),
+    ("gemma3_12b_vision_q4", "Gemma 3 12B Vision (Q4_K_M)", "[Light] 6-8 GB RAM, ~7 GB disk \U0001f441\U0000fe0f"),
     ("qwen35_9b_heretic_q4", "Qwen3.5 9B Claude 4.6 Heretic (Q4_K_M)", "[Light] 6-8 GB RAM, ~6 GB disk"),
     ("qwen3_8b_q4", "Qwen3 8B (Q4_K_M)", "[Light] 4-6 GB RAM, ~5 GB disk"),
     ("qwen3_8b_q8", "Qwen3 8B (Q8_0)", "[Light] 6-8 GB RAM, ~9 GB disk"),

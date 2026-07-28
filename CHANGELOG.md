@@ -9,23 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### High Priority
 - [x] **Bug:** Make local model detection and "link" more robust
-- [x] **Context Window Setting & Tool-Message Safety Fix** — Added
-  `local_ctx_size` IntProperty (2048-262144, default 8192) exposed in
-  Advanced Settings so users can tune the context window per model to
-  avoid Jinja errors and OOM. The preferences value is now passed to
-  `llama-server --ctx-size`. Also fixed history slicing to drop orphaned
-  `tool`-role messages that lost their `assistant`/`tool_calls` pair
-  during conversation trimming — preventing the fatal `Message has tool
-  role, but there was no previous assistant message with a tool call!`
-  Jinja exception.
-- [ ] **Addon Branding Rename** — Change all `blmcp` / `blender_mcp` references to
-  `bfa_coworker` / `bfacw`. Update operator IDs, panel IDs, class names, and
-  UI labels.
-- [ ] **Module Rename** — Rename `blender_mcp_addon` directory to `mcp_addon`
-  and update all internal imports.
-- [ ] **Interface & Operator Modularization** — Split `__init__.py` into
-  separate modules (`preferences.py`, `operators_server.py`, `operators_llm.py`,
-  `operators_agent.py`, `operators_hf.py`) for easier maintenance
+
 
 #### Medium Priority
 - [ ] **Add history chat to a text file with a button to open it in a floating window** - so we can copy and paste the results and save the log from the chat
@@ -48,7 +32,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased - v1.1.36]
 
+### Added
+
+- **Direct GGUF Download** — New `_download_gguf_direct()` function streams model files from HuggingFace in 64 KB chunks with real-time progress (percentage, speed, ETA, progress bar). No more reliance on `llama-server` console for download progress.
+- **Always-Visible Download Button** — The "Download & Start" button never disappears. States: "Download & Start" → "Downloading…" (disabled) → "Already Downloaded" (disabled). Progress/error always shown below.
+- **Clear HTTP Error Messages** — 401 → suggests HF_TOKEN, 403 → suggests granting access at huggingface.co, 404 → suggests checking repo/file name.
+- **HF_TOKEN Support** — New `hf_token` field (password-masked) in Advanced preferences. Passed to both direct download and llama-server subprocess. Also auto-detects `HF_TOKEN` / `HUGGINGFACE_TOKEN` environment variables.
+- **Fallback Download** — If direct download fails for non-auth reasons (network restrictions, proxy), falls back to `llama-server --hf-repo/--hf-file` with 15-minute timeout and subprocess crash detection.
+
+### Changed
+
+- **Download Model** — Rewritten from polling `llama-server` health endpoint to direct HTTP chunked download with real progress data. llama-server is started after download completes.
+- **No new dependencies** — All download logic uses only `urllib.request` (stdlib).
+
 ### Fixed
+
+- 401/403 errors from HuggingFace are now surfaced immediately with actionable messages, instead of silently failing inside the llama-server subprocess.
+- Download button no longer disappears after clicking it — it always remains visible.
+
+### Added
 
 - **llama-server download URL** — Updated from ancient tag `b5027` (404) to
   `b10154`. Fixed asset naming to match current release convention

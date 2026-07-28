@@ -238,6 +238,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             cfg.model_repo_id = preset.repo_id
             cfg.model_filename = preset.filename
             cfg.downloaded_models_dir = self.downloaded_models_dir
+            cfg.hf_token = self.hf_token
             llm.set_config(cfg)
         else:
             self.model_preset_info = ""
@@ -354,6 +355,17 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         subtype='UNSIGNED',
     )
 
+    hf_token: StringProperty(  # type: ignore[valid-type]
+        name="HuggingFace Token",
+        default="",
+        subtype='PASSWORD',
+        description=(
+            "Optional HuggingFace token for gated models.\n"
+            "Get one at https://huggingface.co/settings/tokens\n"
+            "Only needed for models that require authentication."
+        ),
+    )
+
     def draw(self, context: bpy.types.Context) -> None:
         del context
         layout = self.layout
@@ -426,21 +438,46 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
             # ── Download or use existing ─────────────────────────────
             llm_state = llm.get_state()
-            if not llm_state.is_running or llm_state.download_active:
-                if not llm_state.download_active:
+
+            # Determine download button state.
+            models_dir = Path(self.downloaded_models_dir) if self.downloaded_models_dir else (Path.home() / "bfa_coworker_models")
+            model_file = models_dir / self.model_filename if self.model_filename else None
+            model_exists = model_file and model_file.exists()
+
+            if llm_state.download_active:
+                btn_text = "Downloading \u2026"
+                btn_icon = 'RENDERLAYERS'
+                btn_enabled = False
+            elif model_exists:
+                btn_text = "Already Downloaded"
+                btn_icon = 'CHECKMARK'
+                btn_enabled = False
+            elif llm_state.is_running:
+                btn_text = "Model Running"
+                btn_icon = 'CONSOLE'
+                btn_enabled = False
+            else:
+                btn_text = "Download Model"
+                btn_icon = "IMPORT"
+                btn_enabled = True
+
+            row = box.row(align=True)
+            row.operator("bfacw.download_model", icon=btn_icon, text=btn_text)
+            if not btn_enabled:
+                row.enabled = False
+
+            # Always show progress/error areas.
+            if llm_state.error:
+                box.label(text=llm_state.error, icon="ERROR")
+            if llm_state.download_progress:
+                prog_text = llm_state.download_progress
+                if llm_state.download_progress_eta:
+                    prog_text = "{:s}  |  {:s}".format(prog_text, llm_state.download_progress_eta)
+                box.label(text=prog_text, icon='INFO')
+                pct = llm_state.download_progress_pct
+                if pct > 0:
                     row = box.row(align=True)
-                    row.operator("bfacw.download_model", icon="IMPORT", text="Download & Start")
-                if llm_state.error:
-                    box.label(text=llm_state.error, icon="ERROR")
-                if llm_state.download_progress:
-                    prog_text = llm_state.download_progress
-                    if llm_state.download_progress_eta:
-                        prog_text = "{:s}  |  {:s}".format(prog_text, llm_state.download_progress_eta)
-                    box.label(text=prog_text, icon='INFO')
-                    pct = llm_state.download_progress_pct
-                    if pct > 0:
-                        row = box.row(align=True)
-                        row.progress(factor=pct / 100.0, type='BAR')
+                    row.progress(factor=pct / 100.0, type='BAR')
 
             # ── Scan for existing models ────────────────────────────
             box.label(text="Or use an existing model:", icon='FILE_FOLDER')
@@ -465,6 +502,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             box.prop(self, "model_repo_id")
             box.prop(self, "model_filename")
             box.prop(self, "local_ctx_size")
+            box.prop(self, "hf_token")
             row = box.row(align=True)
             row.operator("bfacw.open_hf_cache", icon="FILE_FOLDER", text="Hugging Face Cache")
             row.operator("bfacw.clear_hf_cache", icon="TRASH", text="Clear Cache")

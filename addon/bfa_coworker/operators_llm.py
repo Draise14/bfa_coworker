@@ -32,7 +32,7 @@ from .shared import effective_ports, get_llm_manager
 class _BFACW_OT_download_model(bpy.types.Operator):  # type: ignore[misc]
     bl_idname = "bfacw.download_model"
     bl_label = "Download Model"
-    bl_description = "Download the configured GGUF model via llama-server (auto-downloads with progress in console)"
+    bl_description = "Download the configured GGUF model from HuggingFace and start llama-server"
 
     _timer: float | None = None
     _thread = None
@@ -40,6 +40,7 @@ class _BFACW_OT_download_model(bpy.types.Operator):  # type: ignore[misc]
     _done: bool = False
     _start_msg_shown: bool = False
     _latest_progress: str = ""
+    _model_dest: str = ""  # Path to check after download
 
     def modal(self, context: bpy.types.Context, event: bpy.types.Event) -> set[str]:
         del event
@@ -48,16 +49,16 @@ class _BFACW_OT_download_model(bpy.types.Operator):  # type: ignore[misc]
         state = llm.get_state()
 
         if not self._start_msg_shown:
-            self.report({"INFO"}, "Download started — see llama-server console for progress")
+            self.report({"INFO"}, "Download started — see Preferences for progress")
             self._start_msg_shown = True
 
         # Show progress if it changed.
         prog = state.download_progress
         if prog and prog != self._latest_progress:
             self._latest_progress = prog
-            if "Error" in prog or "fail" in prog.lower() or "timed out" in prog.lower():
+            if "error" in prog.lower() or "timed out" in prog.lower():
                 self.report({"ERROR"}, prog)
-            elif "complete" in prog.lower() or "running" in prog.lower():
+            elif "complete" in prog.lower():
                 self.report({"INFO"}, prog)
 
         if not self._done:
@@ -82,9 +83,17 @@ class _BFACW_OT_download_model(bpy.types.Operator):  # type: ignore[misc]
         if state.is_running and not state.error:
             self.report({"INFO"}, "Model downloaded and llama-server is running")
             return {"FINISHED"}
-        else:
-            self.report({"ERROR"}, self._error or "Download failed")
+        # If the model file was downloaded, report success even if there's
+        # a stale error from a transient direct-download failure.
+        model_path = Path(self._model_dest) if self._model_dest else None
+        if model_path and model_path.exists():
+            self.report({"INFO"}, "Model downloaded to {:s}".format(str(model_path)))
+            return {"FINISHED"}
+        if self._error:
+            self.report({"ERROR"}, self._error)
             return {"CANCELLED"}
+        self.report({"ERROR"}, self._error or "Download failed")
+        return {"CANCELLED"}
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         llm = get_llm_manager()
@@ -95,23 +104,22 @@ class _BFACW_OT_download_model(bpy.types.Operator):  # type: ignore[misc]
         cfg.model_filename = prefs.model_filename
         cfg.downloaded_models_dir = prefs.downloaded_models_dir
         cfg.local_ctx_size = prefs.local_ctx_size
+        cfg.hf_token = prefs.hf_token
         _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
         cfg.local_port = _llm_port
         llm.set_config(cfg)
 
+        # Store expected model path for completion check.
         models_dir = Path(prefs.downloaded_models_dir) if prefs.downloaded_models_dir else (Path.home() / "bfa_coworker_models")
-        model_path = models_dir / prefs.model_filename if prefs.model_filename else None
-        if model_path and model_path.exists():
-            self.report({"INFO"}, "Model already downloaded at: {:s}".format(str(model_path)))
-            return {"FINISHED"}
+        if prefs.model_filename:
+            self._model_dest = str(models_dir / prefs.model_filename)
 
         self._done = False
         self._error = ""
         self._start_msg_shown = False
         self._latest_progress = ""
 
-        # download_model now launches llama-server which auto-downloads.
-        # It returns None immediately — we poll state for completion.
+        # download_model returns None immediately — we poll state for completion.
         llm.download_model(progress_callback=None)
 
         self._timer = bpy.app.timers.register(
@@ -129,10 +137,13 @@ def _make_download_poll(op):
         llm = get_llm_manager()
         state = llm.get_state()
         # Download is done when the active flag clears AND
-        # either the server is running or there was an error.
-        if not state.download_active and (state.is_running or state.error):
+        # either the server is running, the model file exists, or there was an error.
+        if not state.download_active:
             op._done = True
             op._error = state.error
+            # If no error but model file exists, check if we should auto-set existing_model_path.
+            if not state.error and op._model_dest and Path(op._model_dest).exists():
+                pass  # The model file is there — download succeeded.
             return None
         for wm in bpy.data.window_managers:
             for win in wm.windows:
@@ -161,6 +172,7 @@ class _BFACW_OT_start_llm(bpy.types.Operator):  # type: ignore[misc]
         cfg.model_filename = prefs.model_filename
         cfg.downloaded_models_dir = prefs.downloaded_models_dir
         cfg.local_ctx_size = prefs.local_ctx_size
+        cfg.hf_token = prefs.hf_token
         _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
         cfg.local_port = _llm_port
         llm.set_config(cfg)

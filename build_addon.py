@@ -43,19 +43,47 @@ def _find_python_with_pip() -> str:
     """Find a Python executable that has ``pip`` installed.
 
     Tries candidates in order:
+    0. Blender's bundled Python (discovered from BLENDER_BIN/bin/python or BLENDER_PYTHON env).
     1. ``sys.executable`` (current Python).
     2. ``python`` / ``python3`` from PATH (if different from current).
-    3. ``uv`` (can install without pip).
+    3. ``uv`` (can act without pip).
 
     Exits with an error if nothing is found.
     """
 
-    candidates: list[str] = [sys.executable]
+    candidates: list[str] = []
+
+    # 0. Blender's bundled Python – ALWAYS try first so C extensions match.
+    blender_py = os.environ.get("BLENDER_PYTHON")
+    if not blender_py:
+        blender_bin = os.environ.get("BLENDER_BIN")
+        if blender_bin:
+            blender_dir = os.path.dirname(blender_bin)
+            # Blender layout varies: blender.exe lives at e.g.
+            # {install}/blender.exe with Python at {install}/{version}/python/bin/python.exe
+            # or {install}/python/bin/python.exe.
+            candidates_py: list[str] = [
+                os.path.join(blender_dir, "python", "bin", "python.exe"),
+            ]
+            # Also check one level down (versioned folder like 5.2/python/...).
+            if os.path.isdir(blender_dir):
+                for entry in os.listdir(blender_dir):
+                    candidate = os.path.join(blender_dir, entry, "python", "bin", "python.exe")
+                    if os.path.isfile(candidate):
+                        candidates_py.append(candidate)
+            for c in candidates_py:
+                if os.path.isfile(c):
+                    blender_py = c
+                    break
+    if blender_py and os.path.isfile(blender_py):
+        candidates.append(blender_py)
+
+    candidates.append(sys.executable)
 
     # Add system python from PATH if different.
     for name in ("python", "python3"):
         py = shutil.which(name)
-        if py and py.lower() != sys.executable.lower():
+        if py and py not in candidates:
             candidates.append(py)
 
     for py in candidates:
@@ -125,6 +153,8 @@ def _bundle_deps_and_source() -> None:
             "pyyaml",
             "docutils",
         ]
+        if sys.platform == "win32":
+            pip_cmd.append("pywin32")
     else:
         pip_cmd = [
             pip_python, "-m", "pip", "install",
@@ -134,6 +164,8 @@ def _bundle_deps_and_source() -> None:
             "pyyaml",
             "docutils",
         ]
+        if sys.platform == "win32":
+            pip_cmd.append("pywin32")
 
     result = subprocess.run(pip_cmd, capture_output=True, text=True)
     if result.returncode != 0:

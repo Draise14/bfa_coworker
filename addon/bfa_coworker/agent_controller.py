@@ -38,6 +38,14 @@ from pathlib import Path
 from typing import Any
 
 
+def _ensure_vendor_on_path() -> None:
+    """Add vendor/deps/ to sys.path so httpx/pydantic imports work in-process."""
+    agent_dir = Path(__file__).resolve().parent
+    vendor_deps = agent_dir / "vendor" / "deps"
+    if vendor_deps.is_dir() and str(vendor_deps) not in sys.path:
+        sys.path.insert(0, str(vendor_deps))
+
+
 # ---------------------------------------------------------------------------
 # Constants
 
@@ -213,6 +221,8 @@ def schedule_coro(coro) -> concurrent.futures.Future:
 # MCP server subprocess management
 
 _mcp_server_process: subprocess.Popen | None = None
+_mcp_launch_retry_count: int = 0
+_mcp_shutting_down: bool = False
 
 
 def _find_blender_python() -> str | None:
@@ -277,7 +287,7 @@ def _find_vendor_pythonpath() -> str:
 def _ensure_vendor_deps() -> bool:
     """Check that vendor/deps/ exists with required packages; auto-install if missing.
 
-    This handles the case where a user installs the addon from source
+    Handles the case where a user installs the addon from source
     (e.g. by copying the addon directory) without running ``build_addon.py``
     first.  If ``vendor/deps/`` is missing or empty, we attempt to install
     the required packages using Blender's ``pip``.
@@ -288,8 +298,8 @@ def _ensure_vendor_deps() -> bool:
     this_dir = Path(__file__).resolve().parent
     deps_dir = this_dir / "vendor" / "deps"
 
-    # Quick check: does vendor/deps/ exist and contain any packages?
-    if deps_dir.is_dir() and any(deps_dir.iterdir()):
+    # Quick check: does vendor/deps/ exist and contain mcp?
+    if deps_dir.is_dir() and (deps_dir / "mcp" / "__init__.py").is_file():
         return True
 
     print("[🛠️Coworker] _ensure_vendor_deps: vendor/deps/ is missing or empty — attempting auto-install...")
@@ -300,25 +310,56 @@ def _ensure_vendor_deps() -> bool:
         print("[🛠️Coworker] _ensure_vendor_deps: cannot find Blender's Python for auto-install")
         return False
 
+    # Bootstrap pip if needed (ensurepip is stdlib, always available).
+    try:
+        subprocess.run(
+            [blender_py, "-m", "ensurepip", "--upgrade"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass  # pip may already be installed.
+
     try:
         deps_dir.mkdir(parents=True, exist_ok=True)
+        pip_packages = ["mcp[cli]>=1.2.0", "pyyaml", "docutils"]
+        if sys.platform == "win32":
+            pip_packages.append("pywin32")
         result = subprocess.run(
             [blender_py, "-m", "pip", "install",
              "--target", str(deps_dir),
              "--no-compile",
-             "mcp[cli]>=1.2.0",
-             "pyyaml",
-             "docutils",
-             ],
+             ] + pip_packages,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=180,
         )
         if result.returncode != 0:
             print("[🛠️Coworker] _ensure_vendor_deps: pip install failed (exit {:d})".format(
                 result.returncode))
-            print("[🛠️Coworker] _ensure_vendor_deps: stderr = {:s}".format(result.stderr[-300:]))
+            print("[🛠️Coworker] _ensure_vendor_deps: stderr = {:s}".format(result.stderr[-2000:] or "(empty)"))
+            print("[🛠️Coworker] _ensure_vendor_deps: stdout = {:s}".format(result.stdout[-2000:] or "(empty)"))
             return False
+        # Verify that the critical import actually works.
+        blender_py_verify = _find_blender_python()
+        if blender_py_verify:
+            vendor_pp = _find_vendor_pythonpath()
+            verify_env = os.environ.copy()
+            if vendor_pp:
+                verify_env["PYTHONPATH"] = vendor_pp
+            verify = subprocess.run(
+                [blender_py_verify, "-c", "import mcp.server.fastmcp"],
+                capture_output=True, text=True, timeout=30, env=verify_env,
+            )
+            if verify.returncode != 0:
+                print("[🛠️Coworker] _ensure_vendor_deps: post-install import verification FAILED")
+                print("[🛠️Coworker] _ensure_vendor_deps: verify stderr = {:s}".format(
+                    verify.stderr[-1500:] or "(empty)"))
+                return False
+            print("[🛠️Coworker] _ensure_vendor_deps: post-install import verification OK")
+        # Clean __pycache__ to save space.
+        for root, dirs, _files in os.walk(str(deps_dir)):
+            if '__pycache__' in dirs:
+                shutil.rmtree(os.path.join(root, '__pycache__'), ignore_errors=True)
         print("[🛠️Coworker] _ensure_vendor_deps: auto-install succeeded")
         return True
     except Exception as ex:
@@ -326,10 +367,81 @@ def _ensure_vendor_deps() -> bool:
         return False
 
 
+def _start_pipe_drainer(proc: subprocess.Popen) -> tuple[list[threading.Thread], list[str]]:
+    """Spawn background threads to drain stdout/stderr pipes.
+
+    Without this, ``subprocess.PIPE`` buffers (4 KB on Windows) fill up
+    and the child process blocks on write, never reaching ``mcp.run()``.
+    Collected stderr lines are appended to *stderr_lines* for diagnostics.
+
+    Returns ``(drainer_threads, stderr_lines)``.
+    """
+    stderr_lines: list[str] = []
+    stderr_lock = threading.Lock()
+    threads: list[threading.Thread] = []
+
+    def _drain_stderr() -> None:
+        if proc.stderr is None:
+            return
+        for line in proc.stderr:
+            decoded = line.decode(errors="replace").rstrip("\n\r")
+            with stderr_lock:
+                stderr_lines.append(decoded)
+
+    def _drain_stdout() -> None:
+        if proc.stdout is None:
+            return
+        # Just consume stdout to keep the pipe from filling —
+        # we don't need its content for diagnostics.
+        for _line in proc.stdout:
+            pass
+
+    t1 = threading.Thread(target=_drain_stderr, daemon=True)
+    t1.start()
+    threads.append(t1)
+
+    t2 = threading.Thread(target=_drain_stdout, daemon=True)
+    t2.start()
+    threads.append(t2)
+
+    return threads, stderr_lines
+
+
+def _kill_process_on_port(port: int) -> None:
+    """Kill any process listening on *port* (platform-independent)."""
+    if sys.platform == "win32":
+        try:
+            result = subprocess.run(
+                ["netstat", "-ano"],
+                capture_output=True, text=True, timeout=10,
+            )
+            for line in result.stdout.splitlines():
+                if ":{} ".format(port) in line and "LISTENING" in line:
+                    parts = line.strip().split()
+                    pid = parts[-1]
+                    subprocess.run(
+                        ["taskkill", "/f", "/pid", pid],
+                        capture_output=True, timeout=5,
+                    )
+                    print("[🛠️Coworker] _kill_process_on_port: killed PID {:s} on port {:d}".format(pid, port))
+                    break
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+    else:
+        try:
+            subprocess.run(
+                ["fuser", "-k", "{:d}/tcp".format(port)],
+                capture_output=True, timeout=10,
+            )
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+
+
 def start_mcp_server(
     port: int = _MCP_SERVER_DEFAULT_PORT,
     blender_host: str = "localhost",
     blender_port: int = 9876,
+    _retry_depth: int = 0,
 ) -> subprocess.Popen | None:
     """
     Launch the MCP server as a subprocess with HTTP transport.
@@ -340,13 +452,36 @@ def start_mcp_server(
        ``vendor/deps/`` and ``vendor/blmcp/`` on ``PYTHONPATH``.
     3. ``python`` from PATH as a last resort.
 
+    *``_retry_depth``* is an internal parameter to cap dependency reinstall
+    retries at 1 to prevent infinite recursion when imports keep failing.
+
     Returns the ``Popen`` handle, or ``None`` on failure.
     """
-    global _mcp_server_process
+    global _mcp_server_process, _mcp_launch_retry_count, _mcp_shutting_down
 
-    if _mcp_server_process is not None and _mcp_server_process.poll() is None:
-        _agent_state.error = "MCP server is already running"
+    if _mcp_shutting_down:
+        print("[🛠️Coworker] start_mcp_server: shutdown in progress — skipping launch")
         return None
+
+    # Kill existing process if known.
+    if _mcp_server_process is not None:
+        try:
+            _mcp_server_process.terminate()
+            _mcp_server_process.wait(timeout=3)
+        except Exception:  # pylint: disable=broad-exception-caught
+            try:
+                _mcp_server_process.kill()
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+        _mcp_server_process = None
+        # Brief delay for OS to release the port.
+        import time
+        time.sleep(0.5)
+
+    # Kill any stale process occupying the port (from addon reinstall or crash).
+    _kill_process_on_port(port)
+    import time
+    time.sleep(0.5)  # Let OS release the port.
 
     env = os.environ.copy()
     env["BFACW_HOST"] = blender_host
@@ -433,41 +568,90 @@ def start_mcp_server(
     print("[🛠️Coworker] start_mcp_server: BFACW_HOST={:s} BFACW_PORT={:d}".format(
         blender_host, blender_port))
 
-    # Quick health check — read stderr for startup errors.
+    # Spawn background threads to drain stdout/stderr pipes.
+    # Without this, PIPE buffers fill and the child process deadlocks.
+    _drainer_thread, _stderr_lines = _start_pipe_drainer(proc)
+
+    # Quick health check — wait for the server to import and bind.
     import time
-    time.sleep(0.5)
+    time.sleep(3.0)
     if proc.poll() is not None:
-        stderr_output = proc.stderr.read().decode(errors="replace") if proc.stderr else ""
+        # Process exited — collect from drainer.
+        time.sleep(0.5)  # Let drainer finish reading.
+        stderr_output = "\n".join(_stderr_lines[-100:])
+        stdout_output = ""  # stdout is drained but we only care about stderr
         print("[🛠️Coworker] start_mcp_server: process already exited with code {:d}".format(
             proc.returncode))
-        print("[🛠️Coworker] start_mcp_server: stderr = {:s}".format(stderr_output[:500]))
-        _agent_state.error = "MCP server exited immediately: {:s}".format(stderr_output[:200])
+        if stderr_output:
+            print("[🛠️Coworker] start_mcp_server: stderr (tail) = {:s}".format(stderr_output[-1500:]))
+
+        # Check if it's a ModuleNotFoundError (likely wrong Python version).
+        error_detail = stderr_output or "no output"
+        if "ModuleNotFoundError" in error_detail or "ImportError" in error_detail:
+            if _retry_depth >= 1:
+                print("[🛠️Coworker] start_mcp_server: import error after retry — giving up")
+                _agent_state.error = "MCP server import failed after reinstall: {:s}".format(
+                    error_detail.split("\n")[-1].strip()[:200])
+                _agent_state.mcp_server_running = False
+                _mcp_server_process = None
+                return None
+            print("[🛠️Coworker] start_mcp_server: import error detected — attempting dependency reinstall")
+            # Clear deps and retry once with Blender's Python.
+            agent_dir = Path(__file__).resolve().parent
+            deps_dir = agent_dir / "vendor" / "deps"
+            if deps_dir.is_dir():
+                shutil.rmtree(str(deps_dir), ignore_errors=True)
+                if _ensure_vendor_deps():
+                    # Try launching again (depth-limited).
+                    print("[🛠️Coworker] start_mcp_server: deps reinstalled — retrying launch (attempt {:d})".format(
+                        _retry_depth + 1))
+                    return start_mcp_server(
+                        port=port, blender_host=blender_host, blender_port=blender_port,
+                        _retry_depth=_retry_depth + 1,
+                    )
+        _agent_state.error = "MCP server exited immediately: {:s}".format(error_detail[:200])
         _agent_state.mcp_server_running = False
         _mcp_server_process = None
         return None
+
+    # Process is still alive but not yet listening?
+    # Log any stderr captured so far for diagnostics.
+    if _stderr_lines:
+        recent = _stderr_lines[-10:]
+        print("[🛠️Coworker] start_mcp_server: process alive, stderr so far ({:d} lines):".format(
+            len(_stderr_lines)))
+        for line in recent:
+            print("[🛠️Coworker] start_mcp_server:   stderr | {:s}".format(line))
 
     return proc
 
 
 def stop_mcp_server() -> None:
     """Terminate the MCP server subprocess."""
-    global _mcp_server_process
+    global _mcp_server_process, _mcp_shutting_down
 
-    proc = _mcp_server_process
-    if proc is None:
+    if _mcp_shutting_down:
         return
 
+    _mcp_shutting_down = True
     try:
-        proc.terminate()
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=5)
-    except Exception:  # pylint: disable=broad-exception-caught
-        pass
+        proc = _mcp_server_process
+        if proc is None:
+            return
 
-    _mcp_server_process = None
-    _agent_state.mcp_server_running = False
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+
+        _mcp_server_process = None
+        _agent_state.mcp_server_running = False
+    finally:
+        _mcp_shutting_down = False
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +666,10 @@ async def list_mcp_tools(port: int = _MCP_SERVER_DEFAULT_PORT) -> list[dict[str,
     """
     url = "http://127.0.0.1:{:d}/".format(port)
     print("[🛠️Coworker] list_mcp_tools: trying {:s}".format(url))
+
+    # Lazy path setup (avoids policy violation at module level).
+    _ensure_vendor_on_path()
+
     try:
         # Try the MCP streamable-HTTP POST endpoint first.
         import httpx  # pylint: disable=import-error
@@ -539,7 +727,8 @@ def _list_tools_sync(port: int = _MCP_SERVER_DEFAULT_PORT) -> list[dict[str, Any
     future = schedule_coro(list_mcp_tools(port))
     try:
         result = future.result(timeout=15)
-        print("[🛠️Coworker] _list_tools_sync: got {:d} tools".format(len(result)) if result else "[🛠️Coworker] _list_tools_sync: got 0 tools")
+        count = len(result) if result else 0
+        print("[🛠️Coworker] _list_tools_sync: got {:d} tools".format(count))
         return result
     except Exception as ex:  # pylint: disable=broad-exception-caught
         print("[🛠️Coworker] _list_tools_sync: FAILED — {:s}".format(str(ex)))

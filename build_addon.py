@@ -149,7 +149,9 @@ def _bundle_deps_and_source() -> None:
         pip_cmd = [
             "uv", "pip", "install",
             "--target", VENDOR_DEPS_DIR,
-            "mcp[cli]>=1.2.0",
+            # Pin below 2.0: FastMCP was removed from mcp 2.0.0, but blmcp
+            # imports ``from mcp.server.fastmcp import FastMCP``.
+            "mcp[cli]>=1.2.0,<2.0.0",
             "pyyaml",
             "docutils",
         ]
@@ -160,7 +162,7 @@ def _bundle_deps_and_source() -> None:
             pip_python, "-m", "pip", "install",
             "--target", VENDOR_DEPS_DIR,
             "--no-compile",  # Skip .pyc to save space.
-            "mcp[cli]>=1.2.0",
+            "mcp[cli]>=1.2.0,<2.0.0",
             "pyyaml",
             "docutils",
         ]

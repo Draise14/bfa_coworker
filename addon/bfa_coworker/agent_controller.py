@@ -362,7 +362,7 @@ def _ensure_vendor_deps() -> bool:
 
     try:
         deps_dir.mkdir(parents=True, exist_ok=True)
-        pip_packages = ["mcp[cli]>=1.2.0", "pyyaml", "docutils"]
+        pip_packages = ["mcp[cli]>=1.2.0,<2.0.0", "pyyaml", "docutils"]
         if sys.platform == "win32":
             pip_packages.append("pywin32")
         result = subprocess.run(

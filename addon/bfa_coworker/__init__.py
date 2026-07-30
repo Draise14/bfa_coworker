@@ -24,6 +24,7 @@ from .operators_server import (
 )
 from .operators_llm import (
     _BFACW_OT_download_model,
+    _BFACW_OT_cancel_download,
     _BFACW_OT_start_llm,
     _BFACW_OT_stop_llm,
     _BFACW_OT_download_llama_server,
@@ -56,6 +57,7 @@ _classes = (
     _BFACW_OT_server_start,
     _BFACW_OT_server_stop,
     _BFACW_OT_download_model,
+    _BFACW_OT_cancel_download,
     _BFACW_OT_start_llm,
     _BFACW_OT_stop_llm,
     _BFACW_OT_download_llama_server,

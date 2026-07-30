@@ -75,6 +75,65 @@ _LLAMA_SEARCH_PATHS_WIN = [
 ]
 
 
+def _ps_quote(cmd: str) -> str:
+    """Quote a command line for embedding in a PowerShell -Command string.
+
+    Wraps in single quotes and escapes embedded single quotes by doubling.
+    """
+    return "'{:s}'".format(cmd.replace("'", "''"))
+
+
+class _PidProcess:
+    """Minimal Popen-like wrapper around a known PID.
+
+    Used on Windows where llama-server is launched via PowerShell
+    ``Start-Process`` (to get a visible console window) and we only have
+    the real server PID, not a ``subprocess.Popen`` handle. Implements the
+    subset of the Popen API used by :func:`stop_local_llama`.
+    """
+
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+
+    def poll(self) -> int | None:
+        """Return ``None`` if the process is still running, else 0."""
+        if sys.platform != "win32":
+            return None
+        try:
+            # tasklist /FI filters by PID; if found, the process is alive.
+            result = subprocess.run(
+                ["tasklist", "/FI", "PID eq {:d}".format(self.pid), "/NH"],
+                capture_output=True, timeout=5, text=True,
+            )
+            if str(self.pid) in result.stdout:
+                return None  # Still running.
+            return 0  # Exited.
+        except Exception:  # pylint: disable=broad-exception-caught
+            return None  # Assume running on error.
+
+    def terminate(self) -> None:
+        """Terminate the process by PID (forceful on Windows)."""
+        if sys.platform == "win32":
+            subprocess.run(
+                ["taskkill", "/PID", str(self.pid), "/T", "/F"],
+                capture_output=True, timeout=5,
+            )
+
+    def kill(self) -> None:
+        """Force-kill the process (same as terminate on Windows)."""
+        self.terminate()
+
+    def wait(self, timeout: float | None = None) -> int:
+        """Wait for the process to exit, up to *timeout* seconds."""
+        import time as _time
+        deadline = _time.monotonic() + (timeout if timeout is not None else 5)
+        while _time.monotonic() < deadline:
+            if self.poll() is not None:
+                return 0
+            _time.sleep(0.2)
+        raise subprocess.TimeoutExpired(cmd=str(self.pid), timeout=timeout or 5)
+
+
 def _get_bundled_llama_dir() -> Path:
     """Return the directory where the addon stores its bundled llama-server binaries.
 
@@ -643,6 +702,8 @@ _lock = threading.Lock()
 _config: LLMConfig = LLMConfig()
 _state: LLMState = LLMState()
 _llama_process: subprocess.Popen | None = None
+# Set to request cancellation of an in-progress model download.
+_download_cancel_event = threading.Event()
 
 
 def get_state() -> LLMState:
@@ -779,6 +840,43 @@ def _clear_download_state() -> None:
         _state.download_active = False
 
 
+def cancel_download() -> None:
+    """Request cancellation of an in-progress model download.
+
+    The download thread checks the cancel event between chunks and aborts,
+    deleting the partial file. Safe to call even if no download is active.
+    """
+    print("[🛠️Coworker] cancel_download: cancellation requested")
+    _download_cancel_event.set()
+
+
+def _check_disk_space(dest: Path, required_bytes: int | None) -> bool:
+    """Verify there is enough free disk space for the download.
+
+    Returns ``True`` if space is sufficient (or size unknown), ``False``
+    otherwise. Sets an error message when space is insufficient.
+    """
+    if required_bytes is None or required_bytes <= 0:
+        return True
+    try:
+        usage = shutil.disk_usage(str(dest.parent if dest.parent.exists() else dest))
+    except OSError as ex:
+        print("[🛠️Coworker] _check_disk_space: could not query disk usage — {:s}".format(str(ex)))
+        return True  # Can't determine — let the download try anyway.
+    # Require the file size plus a 5% safety margin.
+    needed = int(required_bytes * 1.05)
+    if usage.free < needed:
+        msg = (
+            "Not enough disk space: need {:s} but only {:s} free on {:s}"
+        ).format(_format_bytes(needed), _format_bytes(usage.free), str(dest.parent))
+        print("[🛠️Coworker] _check_disk_space: {:s}".format(msg))
+        _set_error(msg)
+        return False
+    print("[🛠️Coworker] _check_disk_space: OK — {:s} free, need {:s}".format(
+        _format_bytes(usage.free), _format_bytes(needed)))
+    return True
+
+
 def _format_bytes(bytes_val: float) -> str:
     """Format bytes to a human-readable string (KB/MB/GB)."""
     if bytes_val >= 1024 ** 3:
@@ -853,6 +951,12 @@ def _download_gguf_direct(
     else:
         size_hint = "unknown size"
 
+    # Pre-flight: verify enough disk space before committing to a multi-GB download.
+    if not _check_disk_space(dest, total_bytes):
+        if progress_callback:
+            progress_callback(get_state().error or "Not enough disk space")
+        return False
+
     _set_download_progress("Downloading {:s} ({:s}) ...".format(filename, size_hint))
     if progress_callback:
         progress_callback("Downloading {:s} ({:s}) ...".format(filename, size_hint))
@@ -880,6 +984,17 @@ def _download_gguf_direct(
 
             with open(str(dest), "wb") as f_out:
                 while True:
+                    # Check for user-requested cancellation between chunks.
+                    if _download_cancel_event.is_set():
+                        print("[🛠️Coworker] _download_gguf_direct: cancelled by user")
+                        f_out.close()
+                        if dest.exists():
+                            dest.unlink()
+                        _set_download_progress("Download cancelled")
+                        _set_download_progress_eta("", 0.0)
+                        if progress_callback:
+                            progress_callback("Download cancelled")
+                        return False
                     chunk = resp.read(chunk_size)
                     if not chunk:
                         break
@@ -1010,6 +1125,7 @@ def download_model(
 
     # Clear stale state before starting.
     _clear_download_state()
+    _download_cancel_event.clear()
 
     # Check if already downloaded.
     if dest.exists():
@@ -1041,6 +1157,10 @@ def download_model(
                     progress_callback("Model downloaded to {:s}".format(str(dest)))
                 return
 
+            # Cancelled — don't fall through to the fallback path.
+            if _download_cancel_event.is_set():
+                return
+
             # ── Fallback: llama-server --hf-repo/--hf-file ──────────
             # If direct download failed for a non-auth reason (network
             # restrictions, proxy issues), try the server's built-in downloader.
@@ -1068,6 +1188,10 @@ def download_model(
             deadline = time.time() + 900  # 15 minute timeout for fallback
             poll_interval = 2.0
             while time.time() < deadline:
+                if _download_cancel_event.is_set():
+                    print("[🛠️Coworker] download_model: fallback cancelled by user")
+                    _set_download_progress("Download cancelled")
+                    return
                 if health_check():
                     _set_download_progress(
                         "Download complete — llama-server is running on port {:d}".format(
@@ -1453,17 +1577,37 @@ def start_local_llama(
             if cfg_token:
                 env["HF_TOKEN"] = cfg_token
 
-            # Use ``start`` to open a NEW console window, and ``cmd /k``
-            # so the window stays open after the server exits (crashes).
-            # subprocess.list2cmdline handles spaces in paths correctly.
+            # Launch llama-server in a NEW console window via PowerShell so
+            # we capture the REAL server PID (not a cmd.exe wrapper). This
+            # lets terminate()/kill() target the actual server process.
+            # PassThru returns the Process object; we select its Id.
             cmd_line = subprocess.list2cmdline(args)
-            cmd_str = 'start "Coworker" cmd /k {}'.format(cmd_line)
+            ps_cmd = (
+                "$p = Start-Process -FilePath {:s} -PassThru; "
+                "$p.Id"
+            ).format(_ps_quote(cmd_line))
 
-            print("[🛠️Coworker] start_local_llama: WIN32 path")
-            print("[🛠️Coworker] start_local_llama:   cmd = {:s}".format(cmd_str))
+            print("[🛠️Coworker] start_local_llama: WIN32 path (PowerShell Start-Process)")
+            print("[🛠️Coworker] start_local_llama:   cmd = {:s}".format(cmd_line))
             print("[🛠️Coworker] start_local_llama:   HF_HOME = {:s}".format(str(hf_cache_dir)))
-            proc = subprocess.Popen(cmd_str, shell=True, env=env)
-            print("[🛠️Coworker] start_local_llama:   Popen returned pid={:d}".format(proc.pid))
+            proc = subprocess.Popen(
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            # Read the real server PID from PowerShell's stdout.
+            try:
+                out, _err = proc.communicate(timeout=15)
+                server_pid = int(out.strip().splitlines()[-1])
+                print("[🛠️Coworker] start_local_llama:   server pid={:d}".format(server_pid))
+                # Re-wrap as a Popen-like handle targeting the real PID so
+                # terminate()/kill() hit llama-server, not the launcher.
+                proc = _PidProcess(server_pid)
+            except (ValueError, IndexError, subprocess.TimeoutExpired) as ex:
+                print("[🛠️Coworker] start_local_llama:   could not get server PID ({:s}), "
+                      "falling back to image-name kill".format(str(ex)))
         else:
             # Linux / macOS: detach from the parent process group so the
             # server survives Blender exiting.  We redirect stdio to
@@ -1596,6 +1740,32 @@ def health_check(url: str | None = None) -> bool:
     except (urllib.error.URLError, OSError) as ex:
         print("[🛠️Coworker] health_check: connection failed — {:s}".format(str(ex)))
         return False
+
+
+def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | _PidProcess | None" = None) -> bool:
+    """Block until the local llama-server answers a health check.
+
+    Polls :func:`health_check` until it succeeds or *timeout* seconds elapse.
+    If *proc* is given and the process exits early, returns ``False``
+    immediately with an error set. Returns ``True`` when the server is ready.
+    """
+    import time as _time
+    deadline = _time.monotonic() + timeout
+    poll = 0.5
+    print("[🛠️Coworker] wait_until_ready: waiting up to {:.0f}s for llama-server...".format(timeout))
+    while _time.monotonic() < deadline:
+        if health_check():
+            print("[🛠️Coworker] wait_until_ready: server is ready")
+            return True
+        if proc is not None and proc.poll() is not None:
+            _set_error("llama-server exited during startup (check model path and port)")
+            print("[🛠️Coworker] wait_until_ready: process exited early")
+            return False
+        _time.sleep(poll)
+        poll = min(poll * 1.5, 3.0)
+    _set_error("llama-server did not become ready within {:.0f}s".format(timeout))
+    print("[🛠️Coworker] wait_until_ready: timed out")
+    return False
 
 
 def check_remote_api(base_url: str, api_key: str) -> bool:

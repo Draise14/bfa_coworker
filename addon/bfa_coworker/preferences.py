@@ -507,6 +507,9 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             row.operator("bfacw.download_model", icon=btn_icon, text=btn_text)
             if not btn_enabled:
                 row.enabled = False
+            # Show a cancel button while a download is active.
+            if llm_state.download_active:
+                row.operator("bfacw.cancel_download", icon='CANCEL', text="Cancel")
 
             # Always show progress/error areas.
             if llm_state.error:

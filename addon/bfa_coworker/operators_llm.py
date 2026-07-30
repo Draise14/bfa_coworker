@@ -8,6 +8,7 @@ Operators for local LLM management: download, start/stop, scan, select.
 
 __all__ = (
     "_BFACW_OT_download_model",
+    "_BFACW_OT_cancel_download",
     "_BFACW_OT_start_llm",
     "_BFACW_OT_stop_llm",
     "_BFACW_OT_download_llama_server",
@@ -60,6 +61,11 @@ class _BFACW_OT_download_model(bpy.types.Operator):  # type: ignore[misc]
                 self.report({"ERROR"}, prog)
             elif "complete" in prog.lower():
                 self.report({"INFO"}, prog)
+
+        # Surface errors from the error field (not just progress text).
+        if state.error and state.error != self._error:
+            self._error = state.error
+            self.report({"ERROR"}, state.error)
 
         if not self._done:
             # Re-draw preferences so the progress label updates.
@@ -155,6 +161,22 @@ def _make_download_poll(op):
 
 
 # ---------------------------------------------------------------------------
+# Cancel Download
+
+class _BFACW_OT_cancel_download(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "bfacw.cancel_download"
+    bl_label = "Cancel Download"
+    bl_description = "Cancel the in-progress model download"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        del context
+        llm = get_llm_manager()
+        llm.cancel_download()
+        self.report({"INFO"}, "Cancelling download...")
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
 # Start Local LLM
 
 class _BFACW_OT_start_llm(bpy.types.Operator):  # type: ignore[misc]
@@ -181,9 +203,30 @@ class _BFACW_OT_start_llm(bpy.types.Operator):  # type: ignore[misc]
             # If an existing model path is set, use it directly.
             existing_path = prefs.existing_model_path
             if existing_path and os.path.isfile(existing_path):
-                llm.start_local_llama(model_path=existing_path)
+                proc = llm.start_local_llama(model_path=existing_path)
             else:
-                llm.start_local_llama()
+                proc = llm.start_local_llama()
+            if proc is None:
+                return  # Error already set by start_local_llama.
+            # Wait for the server to become healthy and surface the result.
+            ready = llm.wait_until_ready(timeout=120.0, proc=proc)
+            state = llm.get_state()
+            if ready:
+                state_error = ""
+            else:
+                state_error = state.error or "llama-server failed to start"
+            # Report back on the main thread via a timer.
+            def _report():
+                # Redraw preferences so the status updates.
+                for wm in bpy.data.window_managers:
+                    for win in wm.windows:
+                        for area in win.screen.areas:
+                            if area.type == 'PREFERENCES':
+                                area.tag_redraw()
+                return None
+            bpy.app.timers.register(_report, first_interval=0.1)
+            if state_error:
+                print("[🛠️Coworker] start_llm: {:s}".format(state_error))
 
         thread = threading.Thread(target=_do_start, daemon=True)
         thread.start()

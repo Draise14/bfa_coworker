@@ -948,32 +948,45 @@ def _openai_chat_completions(
         len(messages), len(tools), len(data_bytes)))
 
     req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=_STREAM_TIMEOUT) as resp:
-            raw = resp.read().decode()
-            print("[🛠️Coworker] _openai_chat_completions: status={:d}, response={:d} bytes".format(
-                resp.status, len(raw)))
-            print("[🛠️Coworker] _openai_chat_completions: first 500 chars: {:s}".format(raw[:500]))
-            result: dict[str, Any] = json.loads(raw)
-            # Log the assistant message content and any tool calls.
-            choice = result.get("choices", [{}])[0]
-            msg = choice.get("message", {})
-            finish = choice.get("finish_reason", "")
-            content = msg.get("content") or ""
-            tool_calls = msg.get("tool_calls") or []
-            print("[🛠️Coworker] _openai_chat_completions: finish_reason={:s}".format(finish))
-            print("[🛠️Coworker] _openai_chat_completions: content   = {:s}".format(
-                repr(content[:200]) if content else "(empty)"))
-            print("[🛠️Coworker] _openai_chat_completions: tool_calls= {:d}".format(len(tool_calls)))
-            for i, tc in enumerate(tool_calls):
-                fn = tc.get("function", {})
-                print("[🛠️Coworker] _openai_chat_completions:   tool[{:d}] = {:s}({:s})".format(
-                    i, fn.get("name", "?"), str(fn.get("arguments", ""))[:120]))
-            return result
-    except (urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
-        print("[🛠️Coworker] _openai_chat_completions: FAILED — {:s}".format(str(ex)))
-        _agent_state.error = "LLM request failed: {:s}".format(str(ex))
-        return None
+
+    # Retry loop for transient failures (e.g. server just became ready
+    # but the HTTP worker hasn't started yet).
+    import time as _time
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            with urllib.request.urlopen(req, timeout=_STREAM_TIMEOUT) as resp:
+                raw = resp.read().decode()
+                print("[🛠️Coworker] _openai_chat_completions: status={:d}, response={:d} bytes".format(
+                    resp.status, len(raw)))
+                print("[🛠️Coworker] _openai_chat_completions: first 500 chars: {:s}".format(raw[:500]))
+                result: dict[str, Any] = json.loads(raw)
+                # Log the assistant message content and any tool calls.
+                choice = result.get("choices", [{}])[0]
+                msg = choice.get("message", {})
+                finish = choice.get("finish_reason", "")
+                content = msg.get("content") or ""
+                tool_calls = msg.get("tool_calls") or []
+                print("[🛠️Coworker] _openai_chat_completions: finish_reason={:s}".format(finish))
+                print("[🛠️Coworker] _openai_chat_completions: content   = {:s}".format(
+                    repr(content[:200]) if content else "(empty)"))
+                print("[🛠️Coworker] _openai_chat_completions: tool_calls= {:d}".format(len(tool_calls)))
+                for i, tc in enumerate(tool_calls):
+                    fn = tc.get("function", {})
+                    print("[🛠️Coworker] _openai_chat_completions:   tool[{:d}] = {:s}({:s})".format(
+                        i, fn.get("name", "?"), str(fn.get("arguments", ""))[:120]))
+                return result
+        except (urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
+            if attempt < max_retries - 1:
+                print("[🛠️Coworker] _openai_chat_completions: attempt {:d}/{:d} FAILED — {:s}, retrying in 2s...".format(
+                    attempt + 1, max_retries, str(ex)))
+                _time.sleep(2)
+                continue
+            print("[🛠️Coworker] _openai_chat_completions: all {:d} attempts FAILED — {:s}".format(
+                max_retries, str(ex)))
+            _agent_state.error = "LLM request failed: {:s}".format(str(ex))
+            return None
+    return None
 
 
 def _mcp_tools_to_openai(mcp_tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1074,12 +1087,14 @@ def run_conversation_turn(
     _agent_state.streaming_text = ""
 
     # Determine LLM URL.
+    llm_port_local: int | None = None
     if llm_url is None:
         # Use local llama-server default.  Read the configured port
         # from llm_manager so we stay in sync.
         from . import llm_manager as _llm_mgr
         _llm_cfg = _llm_mgr.get_config()
         llm_url = _LLM_CHAT_URL.format(_llm_cfg.local_port)
+        llm_port_local = _llm_cfg.local_port
     else:
         # Remote API URL — ensure it ends with /v1/chat/completions.
         base = llm_url.rstrip("/")
@@ -1088,6 +1103,19 @@ def run_conversation_turn(
                 llm_url = "{:s}/chat/completions".format(base)
             else:
                 llm_url = "{:s}/v1/chat/completions".format(base)
+
+    # Wait for local LLM port to become ready.
+    # The model can take 30-120s to load into memory before the server
+    # accepts connections. Without this wait, the first chat request
+    # would fail with "connection refused".
+    if llm_port_local is not None:
+        print("[🛠️Coworker] run_conversation_turn: waiting for LLM on 127.0.0.1:{:d}...".format(llm_port_local))
+        if not _wait_for_port("127.0.0.1", llm_port_local, timeout=120.0):
+            _agent_state.is_thinking = False
+            _agent_state.error = "LLM server did not become ready after 120s"
+            if on_status:
+                on_status("Error: LLM server not ready")
+            return history
 
     iterations = 0
     while iterations < _MAX_TOOL_ITERATIONS:

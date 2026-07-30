@@ -75,65 +75,6 @@ _LLAMA_SEARCH_PATHS_WIN = [
 ]
 
 
-def _ps_quote(cmd: str) -> str:
-    """Quote a command line for embedding in a PowerShell -Command string.
-
-    Wraps in single quotes and escapes embedded single quotes by doubling.
-    """
-    return "'{:s}'".format(cmd.replace("'", "''"))
-
-
-class _PidProcess:
-    """Minimal Popen-like wrapper around a known PID.
-
-    Used on Windows where llama-server is launched via PowerShell
-    ``Start-Process`` (to get a visible console window) and we only have
-    the real server PID, not a ``subprocess.Popen`` handle. Implements the
-    subset of the Popen API used by :func:`stop_local_llama`.
-    """
-
-    def __init__(self, pid: int) -> None:
-        self.pid = pid
-
-    def poll(self) -> int | None:
-        """Return ``None`` if the process is still running, else 0."""
-        if sys.platform != "win32":
-            return None
-        try:
-            # tasklist /FI filters by PID; if found, the process is alive.
-            result = subprocess.run(
-                ["tasklist", "/FI", "PID eq {:d}".format(self.pid), "/NH"],
-                capture_output=True, timeout=5, text=True,
-            )
-            if str(self.pid) in result.stdout:
-                return None  # Still running.
-            return 0  # Exited.
-        except Exception:  # pylint: disable=broad-exception-caught
-            return None  # Assume running on error.
-
-    def terminate(self) -> None:
-        """Terminate the process by PID (forceful on Windows)."""
-        if sys.platform == "win32":
-            subprocess.run(
-                ["taskkill", "/PID", str(self.pid), "/T", "/F"],
-                capture_output=True, timeout=5,
-            )
-
-    def kill(self) -> None:
-        """Force-kill the process (same as terminate on Windows)."""
-        self.terminate()
-
-    def wait(self, timeout: float | None = None) -> int:
-        """Wait for the process to exit, up to *timeout* seconds."""
-        import time as _time
-        deadline = _time.monotonic() + (timeout if timeout is not None else 5)
-        while _time.monotonic() < deadline:
-            if self.poll() is not None:
-                return 0
-            _time.sleep(0.2)
-        raise subprocess.TimeoutExpired(cmd=str(self.pid), timeout=timeout or 5)
-
-
 def _get_bundled_llama_dir() -> Path:
     """Return the directory where the addon stores its bundled llama-server binaries.
 
@@ -701,7 +642,7 @@ def scan_existing_models(
 _lock = threading.Lock()
 _config: LLMConfig = LLMConfig()
 _state: LLMState = LLMState()
-_llama_process: "subprocess.Popen | _PidProcess | None" = None
+_llama_process: "subprocess.Popen | None" = None
 # Set to request cancellation of an in-progress model download.
 _download_cancel_event = threading.Event()
 
@@ -1512,7 +1453,7 @@ def download_llama_server(
 def start_local_llama(
     model_path: Path | str | None = None,
     port: int | None = None,
-) -> "subprocess.Popen | _PidProcess | None":
+) -> "subprocess.Popen | None":
     """
     Launch ``llama-server`` as a subprocess.
 
@@ -1595,95 +1536,58 @@ def start_local_llama(
     print("[🛠️Coworker] start_local_llama: platform = {:s}".format(sys.platform))
 
     try:
+        # Build args and environment (shared across platforms).
+        args = [
+            server_exe,
+            '--jinja',
+            '--verbose',
+            '--host', '127.0.0.1',
+            '--port', str(port),
+            '--ctx-size', str(ctx_size),
+        ]
+        if use_hf:
+            args.extend(['--hf-repo', hf_repo, '--hf-file', hf_file])
+        else:
+            args.extend(['--model', str(model_path)])
+
+        # Redirect HF cache into models dir so all downloads are
+        # consolidated in the user's configured models directory.
+        hf_cache_dir = _get_models_dir() / ".hf_cache"
+        hf_cache_dir.mkdir(parents=True, exist_ok=True)
+        env = os.environ.copy()
+        env["HF_HOME"] = str(hf_cache_dir)
+        env["HF_HUB_CACHE"] = str(hf_cache_dir)
+        # Pass HF_TOKEN for gated models.
+        with _lock:
+            cfg_token = _config.hf_token
+        if cfg_token:
+            env["HF_TOKEN"] = cfg_token
+
         if sys.platform == "win32":
-            # Build args as a list, then use subprocess.list2cmdline
-            # for proper Windows quoting (handles spaces in paths).
-            args = [
-                server_exe,
-                '--jinja',
-                '--verbose',
-                '--host', '127.0.0.1',
-                '--port', str(port),
-                '--ctx-size', str(ctx_size),
-            ]
-            if use_hf:
-                args.extend(['--hf-repo', hf_repo, '--hf-file', hf_file])
-            else:
-                args.extend(['--model', str(model_path)])
-
-            # Redirect HF cache into models dir so all downloads are
-            # consolidated in the user's configured models directory.
-            hf_cache_dir = _get_models_dir() / ".hf_cache"
-            hf_cache_dir.mkdir(parents=True, exist_ok=True)
-            env = os.environ.copy()
-            env["HF_HOME"] = str(hf_cache_dir)
-            env["HF_HUB_CACHE"] = str(hf_cache_dir)
-            # Pass HF_TOKEN for gated models.
-            with _lock:
-                cfg_token = _config.hf_token
-            if cfg_token:
-                env["HF_TOKEN"] = cfg_token
-
-            # Launch llama-server in a NEW console window via PowerShell so
-            # we capture the REAL server PID (not a cmd.exe wrapper). This
-            # lets terminate()/kill() target the actual server process.
-            # -FilePath takes ONLY the executable; the args go to -ArgumentList
-            # as individually-quoted tokens. PassThru returns the Process
-            # object; we emit its Id on stdout for the parent to read.
-            exe_ps = _ps_quote(server_exe)
-            arg_tokens = " ".join(_ps_quote(a) for a in args[1:])
-            ps_cmd = (
-                "$p = Start-Process -FilePath {:s} -ArgumentList {:s} -PassThru; "
-                "$p.Id"
-            ).format(exe_ps, arg_tokens)
-
-            print("[🛠️Coworker] start_local_llama: WIN32 path (PowerShell Start-Process)")
-            print("[🛠️Coworker] start_local_llama:   exe = {:s}".format(server_exe))
-            print("[🛠️Coworker] start_local_llama:   ps_cmd = {:s}".format(ps_cmd))
+            # Launch llama-server in a NEW console window so the user can
+            # see server output and close the window to stop it.
+            # subprocess.CREATE_NEW_CONSOLE (0x00000010) gives us a proper
+            # Popen handle that terminates the actual server, not a wrapper.
+            # This avoids the broken PowerShell Start-Process path which
+            # silently fails to capture the PID and never starts the server.
+            print("[🛠️Coworker] start_local_llama: WIN32 path (CREATE_NEW_CONSOLE)")
+            print("[🛠️Coworker] start_local_llama:   args = {:s}".format(str(args)))
             print("[🛠️Coworker] start_local_llama:   HF_HOME = {:s}".format(str(hf_cache_dir)))
-            proc = subprocess.Popen(
-                ["powershell", "-NoProfile", "-Command", ps_cmd],
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            # Read the real server PID from PowerShell's stdout. Scan for a
-            # pure-numeric line rather than assuming the last line, in case
-            # PowerShell emits warnings/progress noise alongside the PID.
-            try:
-                out, _err = proc.communicate(timeout=15)
-                pid_line = next(
-                    (ln.strip() for ln in out.splitlines() if ln.strip().isdigit()),
-                    None,
+            creationflags = subprocess.CREATE_NEW_CONSOLE  # type: ignore[attr-defined]
+            with open(os.devnull, 'w') as devnull:
+                proc = subprocess.Popen(
+                    args,
+                    stdin=devnull,
+                    stdout=devnull,
+                    stderr=devnull,
+                    creationflags=creationflags,
+                    env=env,
                 )
-                if pid_line is None:
-                    raise ValueError("no numeric PID in output: {:s}".format(out.strip()[:200]))
-                server_pid = int(pid_line)
-                print("[🛠️Coworker] start_local_llama:   server pid={:d}".format(server_pid))
-                # Re-wrap as a Popen-like handle targeting the real PID so
-                # terminate()/kill() hit llama-server, not the launcher.
-                proc = _PidProcess(server_pid)
-            except (ValueError, IndexError, subprocess.TimeoutExpired) as ex:
-                print("[🛠️Coworker] start_local_llama:   could not get server PID ({:s}), "
-                      "falling back to image-name kill".format(str(ex)))
+            print("[🛠️Coworker] start_local_llama:   Popen returned pid={:d}".format(proc.pid))
         else:
             # Linux / macOS: detach from the parent process group so the
             # server survives Blender exiting.  We redirect stdio to
             # /dev/null so it doesn't hijack the Blender console.
-            args = [
-                server_exe,
-                '--jinja',
-                '--verbose',
-                '--host', '127.0.0.1',
-                '--port', str(port),
-                '--ctx-size', str(ctx_size),
-            ]
-            if use_hf:
-                args.extend(['--hf-repo', hf_repo, '--hf-file', hf_file])
-            else:
-                args.extend(['--model', str(model_path)])
-
             print("[🛠️Coworker] start_local_llama: POSIX path (start_new_session=True)")
             print("[🛠️Coworker] start_local_llama:   args = {:s}".format(str(args)))
             with open(os.devnull, 'w') as devnull:
@@ -1745,9 +1649,9 @@ def stop_local_llama() -> None:
 
     _llama_process = None
 
-    # Fallback: kill any remaining llama-server process by image name.
-    # This catches orphaned processes (e.g. when launched via
-    # CREATE_NEW_CONSOLE the Popen handle may not be the server itself).
+    # Fallback: kill any remaining llama-server processes by image name.
+    # This catches orphaned processes from previous sessions that may
+    # still be holding the port.
     try:
         if sys.platform == "win32":
             print("[🛠️Coworker] stop_local_llama:   running taskkill /f /im llama-server.exe")
@@ -1801,7 +1705,7 @@ def health_check(url: str | None = None) -> bool:
         return False
 
 
-def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | _PidProcess | None" = None) -> bool:
+def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = None) -> bool:
     """Block until the local llama-server answers a health check.
 
     Polls :func:`health_check` until it succeeds or *timeout* seconds elapse.

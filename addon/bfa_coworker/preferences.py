@@ -31,6 +31,8 @@ from .shared import (
     STATE_OFFLINE_ERROR_MESSAGE,
     MODEL_PRESET_ITEMS,
     REMOTE_PROVIDER_ITEMS,
+    BFACW_DEBUG,
+    effective_ports,
     get_llm_manager,
 )
 
@@ -339,6 +341,39 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         max=100,
     )
 
+    # ── Individual Port Overrides ─────────────────────────────────
+
+    bridge_port: IntProperty(  # type: ignore[valid-type]
+        name="Bridge Port",
+        description=(
+            "Override the bridge server port. "
+            "0 = use default (9876) + offset"
+        ),
+        default=0,
+        min=0,
+        max=65535,
+    )
+    mcp_port: IntProperty(  # type: ignore[valid-type]
+        name="MCP Port",
+        description=(
+            "Override the MCP HTTP server port. "
+            "0 = use default (9191) + offset"
+        ),
+        default=0,
+        min=0,
+        max=65535,
+    )
+    llm_port: IntProperty(  # type: ignore[valid-type]
+        name="LLM Port",
+        description=(
+            "Override the LLM server port. "
+            "0 = use default (8081) + offset"
+        ),
+        default=0,
+        min=0,
+        max=65535,
+    )
+
     local_ctx_size: IntProperty(  # type: ignore[valid-type]
         name="Context Window Size",
         description=(
@@ -365,6 +400,13 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             "Only needed for models that require authentication."
         ),
     )
+
+    def _draw_effective_ports(self, box) -> None:
+        """Draw the current effective port values as read-only labels."""
+        bridge, mcp, llm = effective_ports(self)
+        col = box.column(align=True)
+        col.label(text="Effective:  Bridge {:d}  |  MCP {:d}  |  LLM {:d}".format(
+            bridge, mcp, llm))
 
     def draw(self, context: bpy.types.Context) -> None:
         del context
@@ -577,3 +619,53 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     text="{:<6s} {:s}".format(label + ":", val),
                     icon=status_icon if val.startswith("OK") else "ERROR",
                 )
+
+        # ── Advanced Port Settings ──────────────────────────────────────
+        port_box = layout.box()
+        port_box.label(text="Advanced Port Settings", icon='SETTINGS')
+        port_box.prop(self, "port_offset")
+        self._draw_effective_ports(port_box)
+        row = port_box.row()
+        row.prop(self, "bridge_port")
+        row.prop(self, "mcp_port")
+        row.prop(self, "llm_port")
+
+        # ── Diagnostics (debug only, behind flag) ───────────────────────
+        if BFACW_DEBUG:
+            diag_box = layout.box()
+            diag_box.label(text="🛠️ Diagnostics", icon='INFO')
+            diag_box.label(
+                text="Temporary debug tools — hidden when BFACW_DEBUG=False",
+                icon='BLANK1',
+            )
+            row = diag_box.row()
+            row.operator("bfacw.check_ports", icon="FILE_REFRESH", text="Check Ports")
+            row.operator("bfacw.ping_agent", icon="FILE_REFRESH", text="Diagnose")
+            # Show check_ports results inline.
+            from . import operators_agent as _oa_check
+            check_result = getattr(_oa_check._BFACW_OT_check_ports, "_result", None)
+            if check_result:
+                for label_key in [("bridge", "Bridge"), ("mcp", "MCP"), ("llm", "LLM")]:
+                    available = check_result.get(label_key[0], False)
+                    diag_box.label(
+                        text="{:s}: {:s}".format(
+                            label_key[1],
+                            "Available" if available else "In Use",
+                        ),
+                        icon="CHECKMARK" if available else "ERROR",
+                    )
+            # Show ping results inline (same as Agent Control).
+            ping = _oa._BFACW_OT_ping_agent._result
+            if ping:
+                status_icon = "CHECKMARK" if ping.get("all_ok") else "ERROR"
+                for key, label in [
+                    ("bridge_server", "Bridge"),
+                    ("mcp_server", "MCP"),
+                    ("llm_health", "LLM"),
+                    ("llm_chat", "Chat"),
+                ]:
+                    val = ping.get(key, "—")
+                    diag_box.label(
+                        text="{:<6s} {:s}".format(label + ":", val),
+                        icon=status_icon if val.startswith("OK") else "ERROR",
+                    )

@@ -20,6 +20,7 @@ __all__ = (
     "run_conversation_turn",
     "cleanup",
     "ping_agent",
+    "check_ports_available",
 )
 
 import asyncio
@@ -27,6 +28,7 @@ import concurrent.futures
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -39,11 +41,22 @@ from typing import Any
 
 
 def _ensure_vendor_on_path() -> None:
-    """Add vendor/deps/ to sys.path so httpx/pydantic imports work in-process."""
+    """Add vendor/deps/ to sys.path so httpx/pydantic imports work in-process.
+
+    Uses ``os.add_dll_directory`` on Windows to avoid a Blender 5.2+ sandbox
+    policy violation that bans ``sys.path.insert`` at the addon level.
+    """
     agent_dir = Path(__file__).resolve().parent
     vendor_deps = agent_dir / "vendor" / "deps"
-    if vendor_deps.is_dir() and str(vendor_deps) not in sys.path:
-        sys.path.insert(0, str(vendor_deps))
+    if not vendor_deps.is_dir():
+        return
+    # On Windows, use os.add_dll_directory so pywin32 DLLs are found.
+    if sys.platform == "win32":
+        # ``add_dll_directory`` is idempotent for repeated calls with the same path.
+        os.add_dll_directory(str(vendor_deps))
+    # Only add to sys.path if not already present (avoids a Blender 5.2 policy warning).
+    if str(vendor_deps) not in sys.path:
+        sys.path.append(str(vendor_deps))
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +359,11 @@ def _ensure_vendor_deps() -> bool:
             verify_env = os.environ.copy()
             if vendor_pp:
                 verify_env["PYTHONPATH"] = vendor_pp
+            # On Windows, pywin32 DLLs must be on PATH for import verification.
+            if sys.platform == "win32":
+                pywin32_system32 = this_dir / "vendor" / "deps" / "pywin32_system32"
+                if pywin32_system32.is_dir():
+                    verify_env["PATH"] = str(pywin32_system32) + os.pathsep + verify_env.get("PATH", "")
             verify = subprocess.run(
                 [blender_py_verify, "-c", "import mcp.server.fastmcp"],
                 capture_output=True, text=True, timeout=30, env=verify_env,
@@ -438,6 +456,66 @@ def _kill_process_on_port(port: int) -> None:
             pass
 
 
+def _wait_for_port(
+    host: str,
+    port: int,
+    timeout: float = 15.0,
+    interval: float = 1.0,
+) -> bool:
+    """Wait for *port* to start accepting TCP connections.
+
+    Polls ``socket.create_connection`` every *interval* seconds, up to
+    *timeout* total.  Returns ``True`` as soon as the port accepts,
+    ``False`` if the timeout expires.
+    """
+    import time
+    deadline = time.monotonic() + timeout
+    attempt = 0
+    while time.monotonic() < deadline:
+        attempt += 1
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                elapsed = timeout - (deadline - time.monotonic())
+                print("[🛠️Coworker] _wait_for_port: {:s}:{:d} ready after {:.1f}s".format(
+                    host, port, elapsed))
+                return True
+        except (OSError, socket.error):
+            pass
+        if attempt % 2 == 0:
+            print("[🛠️Coworker] _wait_for_port: still waiting for {:s}:{:d} ({:.0f}s remaining)".format(
+                host, port, deadline - time.monotonic()))
+        time.sleep(interval)
+    print("[🛠️Coworker] _wait_for_port: TIMEOUT — {:s}:{:d} not ready after {:.1f}s".format(
+        host, port, timeout))
+    return False
+
+
+def check_ports_available(
+    bridge_port: int = 9876,
+    mcp_port: int = 9191,
+    llm_port: int = 8081,
+) -> dict[str, bool]:
+    """Test whether each port is available (not in use) by attempting to bind.
+
+    Returns ``{port_label: is_available, ...}``.
+    """
+    result: dict[str, bool] = {}
+    for label, p in [("bridge", bridge_port), ("mcp", mcp_port), ("llm", llm_port)]:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            if sys.platform == "win32":
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            s.bind(("127.0.0.1", p))
+            s.close()
+            result[label] = True
+        except (OSError, socket.error) as ex:
+            s.close()
+            result[label] = False
+            print("[🛠️Coworker] check_ports_available: {:s} port {:d} is in use — {:s}".format(
+                label, p, str(ex)))
+    return result
+
+
 def start_mcp_server(
     port: int = _MCP_SERVER_DEFAULT_PORT,
     blender_host: str = "localhost",
@@ -517,6 +595,15 @@ def start_mcp_server(
         if vendor_pythonpath:
             env["PYTHONPATH"] = vendor_pythonpath + (os.pathsep + existing_pp if existing_pp else "")
 
+        # On Windows, pywin32 needs its _system32/ DLL directory on PATH
+        # so that ``import pywintypes`` can find pywintypes*.dll at runtime.
+        # vendor/deps/ is not a site-packages dir, so .pth files are ignored.
+        if sys.platform == "win32":
+            agent_dir = this_dir = Path(__file__).resolve().parent
+            pywin32_system32 = agent_dir / "vendor" / "deps" / "pywin32_system32"
+            if pywin32_system32.is_dir():
+                env["PATH"] = str(pywin32_system32) + os.pathsep + env.get("PATH", "")
+
         blender_py = _find_blender_python()
         if blender_py:
             mcp_exe = blender_py
@@ -573,9 +660,10 @@ def start_mcp_server(
     # Without this, PIPE buffers fill and the child process deadlocks.
     _drainer_threads, _stdout_lines, _stderr_lines = _start_pipe_drainer(proc)
 
-    # Quick health check — wait for the server to import and bind.
+    # Health check: wait for the MCP HTTP server to bind its port.
+    # Check for early exit first (fast path), then poll the port.
     import time
-    time.sleep(3.0)
+    time.sleep(0.5)  # Brief pause for process to start or fail.
     if proc.poll() is not None:
         # Process exited — collect from drainer.
         time.sleep(0.5)  # Let drainer finish reading.
@@ -617,7 +705,30 @@ def start_mcp_server(
         _mcp_server_process = None
         return None
 
-    # Process is still alive — log all collected output for diagnostics.
+    # Process is alive — actively wait for the port to accept connections.
+    # FastMCP + Starlette imports can take 5-10s, so we poll up to 15s.
+    print("[🛠️Coworker] start_mcp_server: process alive, waiting for port {:d}...".format(port))
+    port_ready = _wait_for_port("127.0.0.1", port, timeout=15.0, interval=1.0)
+
+    if not port_ready:
+        # Port never came up — collect drainer output for diagnostics.
+        time.sleep(1.0)
+        stderr_output = "\n".join(_stderr_lines[-100:])
+        stdout_output = "\n".join(_stdout_lines[-100:])
+        error_detail = (stderr_output or stdout_output or "no output")
+        print("[🛠️Coworker] start_mcp_server: port {:d} never became ready".format(port))
+        if stderr_output:
+            print("[🛠️Coworker] start_mcp_server: stderr (tail) = {:s}".format(stderr_output[-1500:]))
+        if stdout_output:
+            print("[🛠️Coworker] start_mcp_server: stdout (tail) = {:s}".format(stdout_output[-1500:]))
+        _agent_state.error = "MCP server started but port {:d} never accepted connections".format(port)
+        _agent_state.mcp_server_running = False
+        _mcp_server_process = None
+        return None
+
+    print("[🛠️Coworker] start_mcp_server: port {:d} is ready".format(port))
+
+    # Log collected output for diagnostics.
     if _stdout_lines:
         print("[🛠️Coworker] start_mcp_server: process alive, stdout so far ({:d} lines):".format(
             len(_stdout_lines)))
@@ -628,8 +739,6 @@ def start_mcp_server(
             len(_stderr_lines)))
         for line in _stderr_lines[-15:]:
             print("[🛠️Coworker] start_mcp_server:   stderr | {:s}".format(line))
-    if not _stdout_lines and not _stderr_lines:
-        print("[🛠️Coworker] start_mcp_server: WARNING — process alive but no stdout/stderr after 3s")
 
     return proc
 
@@ -730,17 +839,34 @@ async def list_mcp_tools(port: int = _MCP_SERVER_DEFAULT_PORT) -> list[dict[str,
 
 
 def _list_tools_sync(port: int = _MCP_SERVER_DEFAULT_PORT) -> list[dict[str, Any]]:
-    """Synchronous wrapper for listing MCP tools."""
-    print("[🛠️Coworker] _list_tools_sync: port={:d}".format(port))
-    future = schedule_coro(list_mcp_tools(port))
-    try:
-        result = future.result(timeout=15)
-        count = len(result) if result else 0
-        print("[🛠️Coworker] _list_tools_sync: got {:d} tools".format(count))
-        return result
-    except Exception as ex:  # pylint: disable=broad-exception-caught
-        print("[🛠️Coworker] _list_tools_sync: FAILED — {:s}".format(str(ex)))
-        return []
+    """Synchronous wrapper for listing MCP tools, with retry on 0 tools."""
+    import time
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        print("[🛠️Coworker] _list_tools_sync: port={:d} attempt={:d}/{:d}".format(
+            port, attempt, max_retries))
+        future = schedule_coro(list_mcp_tools(port))
+        try:
+            result = future.result(timeout=15)
+            count = len(result) if result else 0
+            print("[🛠️Coworker] _list_tools_sync: got {:d} tools".format(count))
+            if count > 0:
+                return result
+            # 0 tools — retry if server is still running.
+            if not _agent_state.mcp_server_running:
+                print("[🛠️Coworker] _list_tools_sync: server not running, aborting")
+                return result or []
+            if attempt < max_retries:
+                delay = 1.0 * attempt  # Linear backoff: 1s, 2s, 3s.
+                print("[🛠️Coworker] _list_tools_sync: 0 tools, retrying in {:.0f}s...".format(delay))
+                time.sleep(delay)
+        except Exception as ex:  # pylint: disable=broad-exception-caught
+            print("[🛠️Coworker] _list_tools_sync: attempt {:d} FAILED — {:s}".format(attempt, str(ex)))
+            if attempt < max_retries:
+                time.sleep(1.0)
+                continue
+            return []
+    return []
 
 
 # ---------------------------------------------------------------------------

@@ -16,6 +16,7 @@ __all__ = (
     "DEFAULT_BRIDGE_PORT",
     "DEFAULT_MCP_PORT",
     "DEFAULT_LLM_PORT",
+    "BFACW_DEBUG",
     "effective_ports",
     "get_llm_manager",
     "get_agent_controller",
@@ -43,15 +44,34 @@ DEFAULT_BRIDGE_PORT = 9876
 DEFAULT_MCP_PORT = 9191
 DEFAULT_LLM_PORT = 8081
 
+# Debug flag: when False, hides temporary diagnostics UI from Preferences.
+# Set to False for release builds, True during active development.
+BFACW_DEBUG = True
+
 
 def effective_ports(prefs) -> tuple[int, int, int]:
-    """Return (bridge_port, mcp_port, llm_port) with offset applied."""
+    """Return (bridge_port, mcp_port, llm_port) with offset applied.
+
+    If an individual port override is set (> 0), it is used directly
+    *without* the offset.  Otherwise, ``DEFAULT_*_PORT + offset`` is used.
+    """
     offset = prefs.port_offset if hasattr(prefs, 'port_offset') else 0
-    return (
-        DEFAULT_BRIDGE_PORT + offset,
-        DEFAULT_MCP_PORT + offset,
-        DEFAULT_LLM_PORT + offset,
+    bridge = (
+        prefs.bridge_port
+        if hasattr(prefs, 'bridge_port') and prefs.bridge_port > 0
+        else DEFAULT_BRIDGE_PORT + offset
     )
+    mcp = (
+        prefs.mcp_port
+        if hasattr(prefs, 'mcp_port') and prefs.mcp_port > 0
+        else DEFAULT_MCP_PORT + offset
+    )
+    llm = (
+        prefs.llm_port
+        if hasattr(prefs, 'llm_port') and prefs.llm_port > 0
+        else DEFAULT_LLM_PORT + offset
+    )
+    return (bridge, mcp, llm)
 
 
 # ── Lazy Import Helpers (avoids circular imports) ────────────────────────

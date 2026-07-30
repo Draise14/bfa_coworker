@@ -701,7 +701,7 @@ def scan_existing_models(
 _lock = threading.Lock()
 _config: LLMConfig = LLMConfig()
 _state: LLMState = LLMState()
-_llama_process: subprocess.Popen | None = None
+_llama_process: "subprocess.Popen | _PidProcess | None" = None
 # Set to request cancellation of an in-progress model download.
 _download_cancel_event = threading.Event()
 
@@ -800,6 +800,18 @@ def find_llama_server() -> str | None:
     print("[🛠️Coworker] find_llama_server: NOT FOUND")
     _find_llama_server_cache = None
     return None
+
+
+def invalidate_llama_server_cache() -> None:
+    """Reset the ``find_llama_server`` cache so the next call re-searches.
+
+    Call this after the user installs llama-server externally or changes
+    the configured path, so the addon detects it without a Blender restart.
+    """
+    global _find_llama_server_cache, _find_llama_server_checked
+    print("[🛠️Coworker] invalidate_llama_server_cache: cache cleared")
+    _find_llama_server_checked = False
+    _find_llama_server_cache = None
 
 
 # ---------------------------------------------------------------------------
@@ -1470,7 +1482,7 @@ def download_llama_server(
 def start_local_llama(
     model_path: Path | str | None = None,
     port: int | None = None,
-) -> subprocess.Popen | None:
+) -> "subprocess.Popen | _PidProcess | None":
     """
     Launch ``llama-server`` as a subprocess.
 
@@ -1493,6 +1505,11 @@ def start_local_llama(
             return None
 
     server_exe = find_llama_server()
+    if not server_exe:
+        # Re-search once in case the user installed llama-server since the
+        # first (cached) lookup. This avoids requiring a Blender restart.
+        invalidate_llama_server_cache()
+        server_exe = find_llama_server()
     if not server_exe:
         print("[🛠️Coworker] start_local_llama: server_exe not found, aborting")
         _set_error(

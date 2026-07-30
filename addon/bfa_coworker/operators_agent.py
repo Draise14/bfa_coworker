@@ -11,6 +11,7 @@ __all__ = (
     "_BFACW_OT_refresh_remote_models",
     "_BFACW_OT_open_model_browser",
     "_BFACW_OT_ping_agent",
+    "_BFACW_OT_check_ports",
 )
 
 import bpy  # pylint: disable=import-error
@@ -18,6 +19,7 @@ import bpy  # pylint: disable=import-error
 import threading
 
 from .shared import effective_ports, get_llm_manager, get_agent_controller
+from . import agent_controller as _ac_mod
 
 
 class _BFACW_OT_test_remote_api(bpy.types.Operator):  # type: ignore[misc]
@@ -84,6 +86,47 @@ class _BFACW_OT_open_model_browser(bpy.types.Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
+class _BFACW_OT_check_ports(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "bfacw.check_ports"
+    bl_label = "Check Ports"
+    bl_description = "Test whether the default ports are available or in use"
+
+    _result: dict = {}  # class-level storage for display in draw()
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+
+        def _do_check():
+            _BFACW_OT_check_ports._result = _ac_mod.check_ports_available(
+                bridge_port=_bridge_port,
+                mcp_port=_mcp_port,
+                llm_port=_llm_port,
+            )
+
+        thread = threading.Thread(target=_do_check, daemon=True)
+        thread.start()
+        thread.join(timeout=10)
+
+        result = _BFACW_OT_check_ports._result
+        if not result:
+            self.report({"ERROR"}, "Port check timed out")
+            return {"CANCELLED"}
+
+        lines = []
+        for label_key in [("bridge", "Bridge"), ("mcp", "MCP"), ("llm", "LLM")]:
+            available = result.get(label_key[0], False)
+            lines.append("{:s}: {:s}".format(label_key[1], "Available" if available else "In Use"))
+
+        summary = "  |  ".join(lines)
+        if all(result.values()):
+            self.report({"INFO"}, "All ports available — {:s}".format(summary))
+        else:
+            self.report({"WARNING"}, "Some ports in use — {:s}".format(summary))
+
+        return {"FINISHED"}
+
+
 class _BFACW_OT_ping_agent(bpy.types.Operator):  # type: ignore[misc]
     bl_idname = "bfacw.ping_agent"
     bl_label = "Ping"
@@ -98,7 +141,7 @@ class _BFACW_OT_ping_agent(bpy.types.Operator):  # type: ignore[misc]
 
         def _do_ping():
             _BFACW_OT_ping_agent._result = _ac.ping_agent(
-                mcp_port=_mcp_port, llm_port=_llm_port,
+                mcp_port=_mcp_port, llm_port=_llm_port, bridge_port=_bridge_port,
             )
 
         thread = threading.Thread(target=_do_ping, daemon=True)

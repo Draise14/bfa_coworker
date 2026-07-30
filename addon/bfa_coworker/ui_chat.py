@@ -205,7 +205,7 @@ class BFACW_OT_chat_stop(Operator):  # type: ignore[misc]
     bl_description = "Stop the current generation"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        agent_controller._agent_state.is_thinking = False
+        agent_controller.request_stop()
         agent_controller._agent_state.status_text = "Stopped"
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
@@ -394,6 +394,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop Agent")
         else:
             row.operator("bfacw.agent_start", icon="PLAY", text="Start Agent")
+        row.operator("bfacw.view_log", icon='TEXT', text="Log")
 
         # Status.
         status = props.chat_status
@@ -411,6 +412,16 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             'ERROR' if state.error else
             'X'
         ))
+
+        # Tool count — surfaces silent tool-loading failures.
+        if state.mcp_server_running:
+            if state.tool_count > 0:
+                layout.label(text="Tools: {:d} loaded".format(state.tool_count), icon='MODIFIER')
+            else:
+                layout.label(
+                    text="Tools: none loaded — MCP may still be starting",
+                    icon='ERROR',
+                )
 
         # LLM info.
         llm_state = llm_manager.get_state()
@@ -528,6 +539,53 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
+# Log Viewer
+
+class BFACW_OT_view_log(Operator):  # type: ignore[misc]
+    """Show the recent Coworker log in a scrollable popup."""
+    bl_idname = "bfacw.view_log"
+    bl_label = "View Log"
+    bl_description = "Show recent diagnostic log lines"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        from . import log as _log
+        lines = _log.read_tail(60)
+        wm = context.window_manager
+
+        def _draw(_self, _ctx):
+            layout = _self.layout
+            if not lines:
+                layout.label(text="Log is empty.", icon='INFO')
+                return
+            log_path = _log.get_log_path()
+            layout.label(text=str(log_path), icon='TEXT')
+            layout.separator()
+            col = layout.column(align=True)
+            for ln in lines:
+                col.label(text=ln if ln else " ")
+
+        wm.popup_menu(_draw, title="Coworker Log (last {:d} lines)".format(len(lines)), icon='TEXT')
+        return {"FINISHED"}
+
+
+class BFACW_OT_open_log(Operator):  # type: ignore[misc]
+    """Open the Coworker log file in the OS default viewer."""
+    bl_idname = "bfacw.open_log"
+    bl_label = "Open Log File"
+    bl_description = "Open the log file in the default external editor"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        del context
+        from . import log as _log
+        path = _log.get_log_path()
+        # Touch the file so it exists even if nothing has been logged yet.
+        path.touch(exist_ok=True)
+        import os as _os
+        _os.startfile(str(path))  # type: ignore[attr-defined]  # Windows-only addon path
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 
 def _redraw_areas(context: bpy.types.Context | None) -> None:
@@ -546,6 +604,8 @@ _classes = (
     BFACW_OT_chat_stop,
     BFACW_OT_agent_start,
     BFACW_OT_agent_stop,
+    BFACW_OT_view_log,
+    BFACW_OT_open_log,
     BFACW_PT_chat_panel,
     BFACW_PT_chat_text_editor,
 )

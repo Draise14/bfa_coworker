@@ -16,6 +16,7 @@ __all__ = (
     "DEFAULT_BRIDGE_PORT",
     "DEFAULT_MCP_PORT",
     "DEFAULT_LLM_PORT",
+    "BFACW_DEBUG",
     "effective_ports",
     "get_llm_manager",
     "get_agent_controller",
@@ -43,15 +44,34 @@ DEFAULT_BRIDGE_PORT = 9876
 DEFAULT_MCP_PORT = 9191
 DEFAULT_LLM_PORT = 8081
 
+# Debug flag: when False, hides temporary diagnostics UI from Preferences.
+# Set to False for release builds, True during active development.
+BFACW_DEBUG = True
+
 
 def effective_ports(prefs) -> tuple[int, int, int]:
-    """Return (bridge_port, mcp_port, llm_port) with offset applied."""
+    """Return (bridge_port, mcp_port, llm_port) with offset applied.
+
+    If an individual port override is set (> 0), it is used directly
+    *without* the offset.  Otherwise, ``DEFAULT_*_PORT + offset`` is used.
+    """
     offset = prefs.port_offset if hasattr(prefs, 'port_offset') else 0
-    return (
-        DEFAULT_BRIDGE_PORT + offset,
-        DEFAULT_MCP_PORT + offset,
-        DEFAULT_LLM_PORT + offset,
+    bridge = (
+        prefs.bridge_port
+        if hasattr(prefs, 'bridge_port') and prefs.bridge_port > 0
+        else DEFAULT_BRIDGE_PORT + offset
     )
+    mcp = (
+        prefs.mcp_port
+        if hasattr(prefs, 'mcp_port') and prefs.mcp_port > 0
+        else DEFAULT_MCP_PORT + offset
+    )
+    llm = (
+        prefs.llm_port
+        if hasattr(prefs, 'llm_port') and prefs.llm_port > 0
+        else DEFAULT_LLM_PORT + offset
+    )
+    return (bridge, mcp, llm)
 
 
 # ── Lazy Import Helpers (avoids circular imports) ────────────────────────
@@ -85,6 +105,7 @@ MODEL_PRESET_ITEMS: list[tuple[str, str, str]] = [
     ("deepseek_r1_32b_q4", "DeepSeek R1 Distill 32B (Q4_K_M)", "[Flagship] 20-24 GB RAM, ~19 GB disk"),
     ("qwen25_coder_32b_q4", "Qwen 2.5 Coder 32B (Q4_K_M)", "[Flagship] 20-24 GB RAM, ~19 GB disk"),
     ("llama31_8b_q4", "Llama 3.1 8B (Q4_K_M)", "[Light] 4-6 GB RAM, ~5 GB disk"),
+    ("gemma3_12b_vision_q4", "Gemma 3 12B Vision (Q4_K_M)", "[Light] 6-8 GB RAM, ~7 GB disk \U0001f441\U0000fe0f"),
     ("qwen35_9b_heretic_q4", "Qwen3.5 9B Claude 4.6 Heretic (Q4_K_M)", "[Light] 6-8 GB RAM, ~6 GB disk"),
     ("qwen3_8b_q4", "Qwen3 8B (Q4_K_M)", "[Light] 4-6 GB RAM, ~5 GB disk"),
     ("qwen3_8b_q8", "Qwen3 8B (Q8_0)", "[Light] 6-8 GB RAM, ~9 GB disk"),

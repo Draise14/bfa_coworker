@@ -48,8 +48,8 @@ def main() -> int:
         parser.add_argument(
             "--port", "-p",
             type=int,
-            default=8000,
-            help="Port to bind to for HTTP transports (default: 8000).",
+            default=9191,
+            help="Port to bind to for HTTP transports (default: 9191).",
         )
     args = parser.parse_args()
 

@@ -24,6 +24,7 @@ from .operators_server import (
 )
 from .operators_llm import (
     _BFACW_OT_download_model,
+    _BFACW_OT_cancel_download,
     _BFACW_OT_start_llm,
     _BFACW_OT_stop_llm,
     _BFACW_OT_download_llama_server,
@@ -36,6 +37,7 @@ from .operators_agent import (
     _BFACW_OT_refresh_remote_models,
     _BFACW_OT_open_model_browser,
     _BFACW_OT_ping_agent,
+    _BFACW_OT_check_ports,
 )
 from .operators_hf import (
     _BFACW_OT_open_hf_cache,
@@ -55,6 +57,7 @@ _classes = (
     _BFACW_OT_server_start,
     _BFACW_OT_server_stop,
     _BFACW_OT_download_model,
+    _BFACW_OT_cancel_download,
     _BFACW_OT_start_llm,
     _BFACW_OT_stop_llm,
     _BFACW_OT_download_llama_server,
@@ -65,12 +68,21 @@ _classes = (
     _BFACW_OT_refresh_remote_models,
     _BFACW_OT_open_model_browser,
     _BFACW_OT_ping_agent,
+    _BFACW_OT_check_ports,
     _BFACW_OT_open_hf_cache,
     _BFACW_OT_clear_hf_cache,
 )
 
 
 def register() -> None:
+    # Start file-based logging as early as possible so all subsequent
+    # print() diagnostics are captured to disk.
+    from . import log
+    log.install_print_tee()
+    # Coalesce Blender 5.3+ "Policy Violation" warnings from vendored deps
+    # into a single summary line instead of a console flood.
+    log.install_policy_warning_filter()
+
     # Clear stale CLI command handles from a previous registration.
     _cli_commands.clear()
 

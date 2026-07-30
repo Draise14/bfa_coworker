@@ -102,6 +102,7 @@ class LLMConfig:
     downloaded_models_dir: str = ""
     local_port: int = _LOCAL_LLM_DEFAULT_PORT
     local_ctx_size: int = 8192
+    hf_token: str = ""  # HuggingFace token for gated models
     # Remote mode
     remote_api_url: str = ""
     remote_api_key: str = ""
@@ -178,8 +179,9 @@ PRESET_MODELS: list[ModelPreset] = [
         capability="Excellent",
         category="flagship",
         description=(
-            "Higher quality variant of Gemma 4. Needs more RAM but delivers\n"
-            "better precision. Native function calling with 6 dedicated control tokens."
+            "Higher quality variant of Gemma 4. Vision-capable for viewport renders.\n"
+            "Needs more RAM but delivers better precision.\n"
+            "Native function calling with 6 dedicated control tokens."
         ),
     ),
     ModelPreset(
@@ -235,9 +237,10 @@ PRESET_MODELS: list[ModelPreset] = [
         capability="Excellent",
         category="mid_range",
         description=(
-            "Google's latest — native function calling with 6 dedicated control tokens.\n"
-            "Tool calling accuracy 86.4%. 256K context. Apache 2.0.\n"
-            "Best overall choice for local MCP agent work."
+            "Google's latest — vision-capable, native function calling with\n"
+            "6 dedicated control tokens. Tool calling accuracy 86.4%.\n"
+            "256K context. Apache 2.0. Best overall choice for local MCP agent work.\n"
+            "Sees your Blender viewport renders!"
         ),
     ),
     ModelPreset(
@@ -250,8 +253,8 @@ PRESET_MODELS: list[ModelPreset] = [
         capability="Strong",
         category="mid_range",
         description=(
-            "Google's Gemma 3 at 27B params. Strong multilingual support.\n"
-            "Great for text-based tool calling. Apache 2.0."
+            "Google's Gemma 3 at 27B params. Vision-capable for viewport renders.\n"
+            "Strong multilingual support. Great for text-based tool calling. Apache 2.0."
         ),
     ),
     ModelPreset(
@@ -316,18 +319,18 @@ PRESET_MODELS: list[ModelPreset] = [
         ),
     ),
     ModelPreset(
-        identifier="llama31_8b_q4",
-        name="Llama 3.1 8B (Q4_K_M)",
-        repo_id="unsloth/Meta-Llama-3.1-8B-Instruct-GGUF",
-        filename="Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
-        ram_gb="4-6 GB",
-        disk_gb="~5 GB",
-        capability="Moderate",
+        identifier="gemma3_12b_vision_q4",
+        name="Gemma 3 12B Vision (Q4_K_M)",
+        repo_id="unsloth/gemma-3-12b-it-GGUF",
+        filename="gemma-3-12b-it-Q4_K_M.gguf",
+        ram_gb="6-8 GB",
+        disk_gb="~7 GB",
+        capability="Strong",
         category="lightweight",
         description=(
-            "Meta's Llama 3.1 8B. Solid all-rounder, runs on any hardware.\n"
-            "Great for quick tests or resource-constrained setups.\n"
-            "Llama 3.1 Community license."
+            "Google's Gemma 3 12B — vision-capable, sees your viewport!\n"
+            "Strong multimodal understanding. 128K context. Apache 2.0.\n"
+            "Best lightweight choice with vision support."
         ),
     ),
     ModelPreset(
@@ -639,7 +642,9 @@ def scan_existing_models(
 _lock = threading.Lock()
 _config: LLMConfig = LLMConfig()
 _state: LLMState = LLMState()
-_llama_process: subprocess.Popen | None = None
+_llama_process: "subprocess.Popen | None" = None
+# Set to request cancellation of an in-progress model download.
+_download_cancel_event = threading.Event()
 
 
 def get_state() -> LLMState:
@@ -653,6 +658,7 @@ def get_state() -> LLMState:
             download_progress=_state.download_progress,
             download_progress_eta=_state.download_progress_eta,
             download_progress_pct=_state.download_progress_pct,
+            download_active=_state.download_active,
         )
 
 
@@ -666,6 +672,7 @@ def set_config(cfg: LLMConfig) -> None:
         _config.downloaded_models_dir = cfg.downloaded_models_dir
         _config.local_port = cfg.local_port
         _config.local_ctx_size = cfg.local_ctx_size
+        _config.hf_token = cfg.hf_token
         _config.remote_api_url = cfg.remote_api_url
         _config.remote_api_key = cfg.remote_api_key
         _config.remote_model = cfg.remote_model
@@ -682,6 +689,7 @@ def get_config() -> LLMConfig:
             downloaded_models_dir=_config.downloaded_models_dir,
             local_port=_config.local_port,
             local_ctx_size=_config.local_ctx_size,
+            hf_token=_config.hf_token,
             remote_api_url=_config.remote_api_url,
             remote_api_key=_config.remote_api_key,
             remote_model=_config.remote_model,
@@ -691,18 +699,29 @@ def get_config() -> LLMConfig:
 # ---------------------------------------------------------------------------
 # llama-server detection
 
+_find_llama_server_cache: str | None = None
+_find_llama_server_checked: bool = False
+
+
 def find_llama_server() -> str | None:
     """Search PATH and common install locations for ``llama-server``."""
+    global _find_llama_server_cache, _find_llama_server_checked
+    if _find_llama_server_checked:
+        return _find_llama_server_cache
+    _find_llama_server_checked = True
+
     print("[🛠️Coworker] find_llama_server: searching for llama-server...")
     # Search PATH first.
     exe = shutil.which("llama-server")
     if exe:
         print("[🛠️Coworker] find_llama_server: found via 'llama-server' -> {:s}".format(exe))
+        _find_llama_server_cache = exe
         return exe
     print("[🛠️Coworker] find_llama_server: 'llama-server' not on PATH, trying 'llama-server.exe'")
     exe = shutil.which("llama-server.exe")
     if exe:
         print("[🛠️Coworker] find_llama_server: found via 'llama-server.exe' -> {:s}".format(exe))
+        _find_llama_server_cache = exe
         return exe
     # Fall back to known install paths.
     print("[🛠️Coworker] find_llama_server: not on PATH, checking known install dirs...")
@@ -710,15 +729,30 @@ def find_llama_server() -> str | None:
         print("[🛠️Coworker] find_llama_server:   checking {:s}".format(path))
         if os.path.isfile(path):
             print("[🛠️Coworker] find_llama_server: found at {:s}".format(path))
+            _find_llama_server_cache = path
             return path
     # Check the bundled directory (auto-downloaded by download_llama_server).
     bundled = _get_bundled_llama_dir() / "llama-server.exe"
     print("[🛠️Coworker] find_llama_server:   checking bundled {:s}".format(str(bundled)))
     if bundled.is_file():
         print("[🛠️Coworker] find_llama_server: found bundled at {:s}".format(str(bundled)))
+        _find_llama_server_cache = str(bundled)
         return str(bundled)
     print("[🛠️Coworker] find_llama_server: NOT FOUND")
+    _find_llama_server_cache = None
     return None
+
+
+def invalidate_llama_server_cache() -> None:
+    """Reset the ``find_llama_server`` cache so the next call re-searches.
+
+    Call this after the user installs llama-server externally or changes
+    the configured path, so the addon detects it without a Blender restart.
+    """
+    global _find_llama_server_cache, _find_llama_server_checked
+    print("[🛠️Coworker] invalidate_llama_server_cache: cache cleared")
+    _find_llama_server_checked = False
+    _find_llama_server_cache = None
 
 
 # ---------------------------------------------------------------------------
@@ -728,9 +762,28 @@ def _get_models_dir() -> Path:
     """Return the directory where downloaded models are stored."""
     with _lock:
         custom = _config.downloaded_models_dir
-    if custom and os.path.isdir(custom):
-        print("[🛠️Coworker] _get_models_dir: using custom dir {:s}".format(custom))
-        return Path(custom)
+    if custom:
+        custom_path = Path(custom)
+        if custom_path.exists():
+            if custom_path.is_dir():
+                print("[🛠️Coworker] _get_models_dir: using custom dir {:s}".format(str(custom_path)))
+                return custom_path
+            print(
+                "[🛠️Coworker] _get_models_dir: custom models dir exists but is not a directory: {:s}".format(
+                    str(custom_path)
+                )
+            )
+        else:
+            try:
+                custom_path.mkdir(parents=True, exist_ok=True)
+                print("[🛠️Coworker] _get_models_dir: created custom dir {:s}".format(str(custom_path)))
+                return custom_path
+            except OSError as ex:
+                print(
+                    "[🛠️Coworker] _get_models_dir: failed to create custom dir {:s}: {:s}".format(
+                        str(custom_path), str(ex)
+                    )
+                )
     # Default: <user_home>/bfa_coworker_models/
     default = Path.home() / "bfa_coworker_models"
     default.mkdir(parents=True, exist_ok=True)
@@ -759,6 +812,43 @@ def _clear_download_state() -> None:
         _state.download_active = False
 
 
+def cancel_download() -> None:
+    """Request cancellation of an in-progress model download.
+
+    The download thread checks the cancel event between chunks and aborts,
+    deleting the partial file. Safe to call even if no download is active.
+    """
+    print("[🛠️Coworker] cancel_download: cancellation requested")
+    _download_cancel_event.set()
+
+
+def _check_disk_space(dest: Path, required_bytes: int | None) -> bool:
+    """Verify there is enough free disk space for the download.
+
+    Returns ``True`` if space is sufficient (or size unknown), ``False``
+    otherwise. Sets an error message when space is insufficient.
+    """
+    if required_bytes is None or required_bytes <= 0:
+        return True
+    try:
+        usage = shutil.disk_usage(str(dest.parent if dest.parent.exists() else dest))
+    except OSError as ex:
+        print("[🛠️Coworker] _check_disk_space: could not query disk usage — {:s}".format(str(ex)))
+        return True  # Can't determine — let the download try anyway.
+    # Require the file size plus a 5% safety margin.
+    needed = int(required_bytes * 1.05)
+    if usage.free < needed:
+        msg = (
+            "Not enough disk space: need {:s} but only {:s} free on {:s}"
+        ).format(_format_bytes(needed), _format_bytes(usage.free), str(dest.parent))
+        print("[🛠️Coworker] _check_disk_space: {:s}".format(msg))
+        _set_error(msg)
+        return False
+    print("[🛠️Coworker] _check_disk_space: OK — {:s} free, need {:s}".format(
+        _format_bytes(usage.free), _format_bytes(needed)))
+    return True
+
+
 def _format_bytes(bytes_val: float) -> str:
     """Format bytes to a human-readable string (KB/MB/GB)."""
     if bytes_val >= 1024 ** 3:
@@ -778,6 +868,12 @@ def _format_eta(seconds: float) -> str:
     if mins > 0:
         return "{:d}m {:02d}s remaining".format(mins, secs)
     return "{:d}s remaining".format(secs)
+
+
+def _get_time() -> float:
+    """Return the current monotonic time (seconds)."""
+    import time as _time
+    return _time.monotonic()
 
 
 def _get_hf_file_size(repo_id: str, filename: str) -> int | None:
@@ -801,18 +897,199 @@ def _get_hf_file_size(repo_id: str, filename: str) -> int | None:
     return None
 
 
+def _download_gguf_direct(
+    repo_id: str,
+    filename: str,
+    dest: Path,
+    progress_callback: Callable[[str], None] | None = None,
+) -> bool:
+    """
+    Download a GGUF model file directly from HuggingFace via HTTP.
+
+    Streams the file in 64 KB chunks with real progress reporting (percentage,
+    ETA, speed). Handles 401/403/404 errors with clear actionable messages.
+
+    Returns ``True`` on success, ``False`` on failure.
+    """
+    url = "https://huggingface.co/{:s}/resolve/main/{:s}".format(repo_id, filename)
+    print("[🛠️Coworker] _download_gguf_direct: url = {:s}".format(url))
+    print("[🛠️Coworker] _download_gguf_direct: dest = {:s}".format(str(dest)))
+
+    # Get file size first (informational + progress calculation).
+    total_bytes = _get_hf_file_size(repo_id, filename)
+    if total_bytes is not None:
+        size_hint = _format_bytes(total_bytes)
+        print("[🛠️Coworker] _download_gguf_direct: total size = {:s}".format(size_hint))
+    else:
+        size_hint = "unknown size"
+
+    # Pre-flight: verify enough disk space before committing to a multi-GB download.
+    if not _check_disk_space(dest, total_bytes):
+        if progress_callback:
+            progress_callback(get_state().error or "Not enough disk space")
+        return False
+
+    _set_download_progress("Downloading {:s} ({:s}) ...".format(filename, size_hint))
+    if progress_callback:
+        progress_callback("Downloading {:s} ({:s}) ...".format(filename, size_hint))
+
+    try:
+        req = urllib.request.Request(url, method="GET")
+        # Pass HF_TOKEN if available (from env var, or configured token).
+        hf_token = ""
+        with _lock:
+            hf_token = _config.hf_token
+        if not hf_token:
+            hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN") or ""
+        if hf_token:
+            req.add_header("Authorization", "Bearer {:s}".format(hf_token))
+
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            # Apply a per-chunk socket read timeout so a stalled connection
+            # mid-download raises instead of hanging forever. 60s between
+            # chunks is generous for any live connection.
+            try:
+                raw_sock = getattr(getattr(resp, "fp", None), "raw", None)
+                sock = getattr(raw_sock, "_sock", None) if raw_sock is not None else None
+                if sock is not None:
+                    sock.settimeout(60.0)
+            except (AttributeError, OSError):
+                pass  # Best-effort — if we can't set it, read() uses the default.
+
+            actual_total = int(resp.headers.get("Content-Length", "0")) or total_bytes or 0
+            downloaded = 0
+            chunk_size = 64 * 1024  # 64 KB
+            start_time = _get_time()
+            last_update = start_time
+
+            # Ensure parent directory exists.
+            dest.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(str(dest), "wb") as f_out:
+                while True:
+                    # Check for user-requested cancellation between chunks.
+                    if _download_cancel_event.is_set():
+                        print("[🛠️Coworker] _download_gguf_direct: cancelled by user")
+                        f_out.close()
+                        if dest.exists():
+                            dest.unlink()
+                        _set_download_progress("Download cancelled")
+                        _set_download_progress_eta("", 0.0)
+                        if progress_callback:
+                            progress_callback("Download cancelled")
+                        return False
+                    chunk = resp.read(chunk_size)
+                    if not chunk:
+                        break
+                    f_out.write(chunk)
+                    downloaded += len(chunk)
+                    now = _get_time()
+
+                    # Update progress every 200ms to avoid flooding the UI.
+                    if now - last_update < 0.2 and actual_total > 0:
+                        continue
+
+                    last_update = now
+                    if actual_total > 0:
+                        pct = downloaded / actual_total * 100.0
+                        # Calculate speed and ETA.
+                        elapsed = now - start_time
+                        if elapsed > 0:
+                            speed_bps = downloaded / elapsed
+                            remaining_bytes = actual_total - downloaded
+                            eta_secs = remaining_bytes / speed_bps if speed_bps > 0 else 0
+                            speed_str = "{:s}/s".format(_format_bytes(speed_bps))
+                            eta_str = _format_eta(eta_secs)
+                            _set_download_progress_eta(
+                                "{:.0f}% of {:s} — {:s}".format(pct, _format_bytes(actual_total), eta_str),
+                                pct,
+                            )
+                            msg = "Downloading {:s} ... {:.0f}% ({:s} / {:s}) — {:s}".format(
+                                filename, pct,
+                                _format_bytes(downloaded),
+                                _format_bytes(actual_total),
+                                speed_str,
+                            )
+                        else:
+                            _set_download_progress_eta(
+                                "{:.0f}% of {:s}".format(pct, _format_bytes(actual_total)),
+                                pct,
+                            )
+                            msg = "Downloading {:s} ... {:.0f}% ({:s} / {:s})".format(
+                                filename, pct,
+                                _format_bytes(downloaded),
+                                _format_bytes(actual_total),
+                            )
+                    else:
+                        msg = "Downloading {:s} ... {:s}".format(filename, _format_bytes(downloaded))
+                    _set_download_progress(msg)
+                    if progress_callback:
+                        progress_callback(msg)
+
+        # Verify the file is not empty/corrupt (basic check).
+        if dest.stat().st_size == 0:
+            dest.unlink()
+            _set_error("Downloaded file is empty — the server may be blocking the request")
+            return False
+
+        print("[🛠️Coworker] _download_gguf_direct: download complete — {:s} ({:s})".format(
+            str(dest), _format_bytes(dest.stat().st_size)))
+        _set_download_progress("Download complete: {:s}".format(filename))
+        if progress_callback:
+            progress_callback("Download complete: {:s}".format(filename))
+        return True
+
+    except urllib.error.HTTPError as ex:
+        # Clean up partial download.
+        if dest.exists():
+            dest.unlink()
+        if ex.code == 401:
+            msg = (
+                "HuggingFace returned 401 (Unauthorized) for {:s}.\n"
+                "This repo may require authentication.\n"
+                "Set the HF_TOKEN environment variable or use a different model."
+            ).format(repo_id)
+        elif ex.code == 403:
+            msg = (
+                "HuggingFace returned 403 (Forbidden) for {:s}.\n"
+                "The model may be gated. Visit https://huggingface.co/{:s} to request access."
+            ).format(repo_id, repo_id)
+        elif ex.code == 404:
+            msg = (
+                "HuggingFace returned 404 (Not Found) for {:s}/{:s}.\n"
+                "The file may not exist. Check the repo ID and filename."
+            ).format(repo_id, filename)
+        else:
+            msg = "Failed to download model (HTTP {:d}: {:s})".format(ex.code, ex.reason)
+        print("[🛠️Coworker] _download_gguf_direct: {:s}".format(msg))
+        _set_error(msg)
+        if progress_callback:
+            progress_callback(msg)
+        return False
+
+    except (urllib.error.URLError, OSError) as ex:
+        # Clean up partial download.
+        if dest.exists():
+            dest.unlink()
+        msg = "Network error while downloading: {:s}".format(str(ex))
+        print("[🛠️Coworker] _download_gguf_direct: {:s}".format(msg))
+        _set_error(msg)
+        if progress_callback:
+            progress_callback(msg)
+        return False
+
+
 def download_model(
     repo_id: str | None = None,
     filename: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> Path | None:
     """
-    Download a GGUF model by launching ``llama-server`` which auto-downloads
-    the model from HuggingFace and displays a real progress bar in its
-    console window.
+    Download a GGUF model from HuggingFace.
 
-    This is simpler and more reliable than ``llama-cli`` — the server's own
-    download progress is visible to the user in the console.
+    Uses direct HTTP download (streaming with progress). If the direct
+    download fails for a non-auth reason, falls back to launching
+    ``llama-server --hf-repo/--hf-file`` as a last resort.
 
     Returns the path to the downloaded model, or ``None`` on failure.
     """
@@ -831,6 +1108,7 @@ def download_model(
 
     # Clear stale state before starting.
     _clear_download_state()
+    _download_cancel_event.clear()
 
     # Check if already downloaded.
     if dest.exists():
@@ -840,26 +1118,10 @@ def download_model(
             progress_callback("Model already downloaded: {:s}".format(str(dest)))
         return dest
 
-    # Show the total file size if we can get it (informational only).
-    total_bytes = _get_hf_file_size(r, f)
-    if total_bytes is not None:
-        size_hint = " ({:s})".format(_format_bytes(total_bytes))
-    else:
-        size_hint = ""
-
-    _set_download_progress(
-        "Downloading{:s} — see the Coworker llama-server console window for progress".format(size_hint)
-    )
-    if progress_callback:
-        progress_callback("Starting llama-server to auto-download {:s}/{:s}...".format(r, f))
-
     # Mark download as active so the UI poll knows we're still working.
     with _lock:
         _state.download_active = True
 
-    # Launch llama-server, which auto-downloads the model.
-    # We use a background thread and poll the health endpoint.
-    import threading
     import time
 
     server_port = _LOCAL_LLM_DEFAULT_PORT
@@ -867,10 +1129,38 @@ def download_model(
         server_port = _config.local_port or _LOCAL_LLM_DEFAULT_PORT
 
     def _do_download():
-        """Start llama-server. If the model doesn't exist locally it
-        will auto-download showing a progress bar in its console window.
-        We poll for health to know when it's ready."""
+        """Try direct HTTP download first, then fall back to llama-server."""
         try:
+            # ── Primary: direct HTTP download ────────────────────────
+            success = _download_gguf_direct(r, f, dest, progress_callback)
+            if success:
+                # Download succeeded — report and done.
+                _set_download_progress("Download complete: {:s}".format(f))
+                if progress_callback:
+                    progress_callback("Model downloaded to {:s}".format(str(dest)))
+                return
+
+            # Cancelled — don't fall through to the fallback path.
+            if _download_cancel_event.is_set():
+                return
+
+            # ── Fallback: llama-server --hf-repo/--hf-file ──────────
+            # If direct download failed for a non-auth reason (network
+            # restrictions, proxy issues), try the server's built-in downloader.
+            error_state = get_state().error or ""
+            if "401" in error_state or "403" in error_state or "404" in error_state:
+                # Auth/gating/not-found — don't retry, just surface the error.
+                return
+
+            print("[🛠️Coworker] download_model: direct download failed, falling back to llama-server --hf-repo")
+            _set_download_progress("Downloading via llama-server...")
+            if progress_callback:
+                progress_callback("Trying alternate download method...")
+
+            # Clear the temporary error from the direct attempt before trying the fallback.
+            with _lock:
+                _state.error = ""
+
             proc = start_local_llama(port=server_port)
             if proc is None:
                 error = get_state().error or "llama-server failed to start"
@@ -878,11 +1168,14 @@ def download_model(
                 return
 
             # Poll health until server is ready (download finished).
-            deadline = time.time() + 3600  # 1 hour timeout
+            deadline = time.time() + 900  # 15 minute timeout for fallback
             poll_interval = 2.0
             while time.time() < deadline:
+                if _download_cancel_event.is_set():
+                    print("[🛠️Coworker] download_model: fallback cancelled by user")
+                    _set_download_progress("Download cancelled")
+                    return
                 if health_check():
-                    # Download complete and server is running!
                     _set_download_progress(
                         "Download complete — llama-server is running on port {:d}".format(
                             server_port
@@ -891,11 +1184,16 @@ def download_model(
                     if progress_callback:
                         progress_callback("Model downloaded and server running")
                     return
+                # Check if the process died.
+                if proc.poll() is not None:
+                    error = "llama-server process exited unexpectedly during download"
+                    print("[🛠️Coworker] download_model: {:s}".format(error))
+                    _set_error(error)
+                    return
                 time.sleep(poll_interval)
-                # Increase poll interval gradually.
                 poll_interval = min(poll_interval * 1.2, 15.0)
 
-            _set_error("Download timed out after 1 hour")
+            _set_error("Model download timed out (fallback) after 15 minutes")
 
         except Exception as ex:  # pylint: disable=broad-exception-caught
             _set_error("Download failed: {:s}".format(str(ex)))
@@ -1124,6 +1422,10 @@ def download_llama_server(
         _set_download_progress(msg)
         if progress_callback:
             progress_callback(msg)
+        # Invalidate the cache so find_llama_server picks up the new binary.
+        global _find_llama_server_checked, _find_llama_server_cache
+        _find_llama_server_checked = False
+        _find_llama_server_cache = None
         return str(dest_binary)
 
     except urllib.error.HTTPError as ex:
@@ -1151,7 +1453,7 @@ def download_llama_server(
 def start_local_llama(
     model_path: Path | str | None = None,
     port: int | None = None,
-) -> subprocess.Popen | None:
+) -> "subprocess.Popen | None":
     """
     Launch ``llama-server`` as a subprocess.
 
@@ -1174,6 +1476,11 @@ def start_local_llama(
             return None
 
     server_exe = find_llama_server()
+    if not server_exe:
+        # Re-search once in case the user installed llama-server since the
+        # first (cached) lookup. This avoids requiring a Blender restart.
+        invalidate_llama_server_cache()
+        server_exe = find_llama_server()
     if not server_exe:
         print("[🛠️Coworker] start_local_llama: server_exe not found, aborting")
         _set_error(
@@ -1229,58 +1536,58 @@ def start_local_llama(
     print("[🛠️Coworker] start_local_llama: platform = {:s}".format(sys.platform))
 
     try:
+        # Build args and environment (shared across platforms).
+        args = [
+            server_exe,
+            '--jinja',
+            '--verbose',
+            '--host', '127.0.0.1',
+            '--port', str(port),
+            '--ctx-size', str(ctx_size),
+        ]
+        if use_hf:
+            args.extend(['--hf-repo', hf_repo, '--hf-file', hf_file])
+        else:
+            args.extend(['--model', str(model_path)])
+
+        # Redirect HF cache into models dir so all downloads are
+        # consolidated in the user's configured models directory.
+        hf_cache_dir = _get_models_dir() / ".hf_cache"
+        hf_cache_dir.mkdir(parents=True, exist_ok=True)
+        env = os.environ.copy()
+        env["HF_HOME"] = str(hf_cache_dir)
+        env["HF_HUB_CACHE"] = str(hf_cache_dir)
+        # Pass HF_TOKEN for gated models.
+        with _lock:
+            cfg_token = _config.hf_token
+        if cfg_token:
+            env["HF_TOKEN"] = cfg_token
+
         if sys.platform == "win32":
-            # Build args as a list, then use subprocess.list2cmdline
-            # for proper Windows quoting (handles spaces in paths).
-            args = [
-                server_exe,
-                '--jinja',
-                '--verbose',
-                '--host', '127.0.0.1',
-                '--port', str(port),
-                '--ctx-size', str(ctx_size),
-            ]
-            if use_hf:
-                args.extend(['--hf-repo', hf_repo, '--hf-file', hf_file])
-            else:
-                args.extend(['--model', str(model_path)])
-
-            # Redirect HF cache into models dir so all downloads are
-            # consolidated in the user's configured models directory.
-            hf_cache_dir = _get_models_dir() / ".hf_cache"
-            hf_cache_dir.mkdir(parents=True, exist_ok=True)
-            env = os.environ.copy()
-            env["HF_HOME"] = str(hf_cache_dir)
-            env["HF_HUB_CACHE"] = str(hf_cache_dir)
-
-            # Use ``start`` to open a NEW console window, and ``cmd /k``
-            # so the window stays open after the server exits (crashes).
-            # subprocess.list2cmdline handles spaces in paths correctly.
-            cmd_line = subprocess.list2cmdline(args)
-            cmd_str = 'start "Coworker" cmd /k {}'.format(cmd_line)
-
-            print("[🛠️Coworker] start_local_llama: WIN32 path")
-            print("[🛠️Coworker] start_local_llama:   cmd = {:s}".format(cmd_str))
+            # Launch llama-server in a NEW console window so the user can
+            # see server output and close the window to stop it.
+            # subprocess.CREATE_NEW_CONSOLE (0x00000010) gives us a proper
+            # Popen handle that terminates the actual server, not a wrapper.
+            # This avoids the broken PowerShell Start-Process path which
+            # silently fails to capture the PID and never starts the server.
+            print("[🛠️Coworker] start_local_llama: WIN32 path (CREATE_NEW_CONSOLE)")
+            print("[🛠️Coworker] start_local_llama:   args = {:s}".format(str(args)))
             print("[🛠️Coworker] start_local_llama:   HF_HOME = {:s}".format(str(hf_cache_dir)))
-            proc = subprocess.Popen(cmd_str, shell=True, env=env)
+            creationflags = subprocess.CREATE_NEW_CONSOLE  # type: ignore[attr-defined]
+            with open(os.devnull, 'w') as devnull:
+                proc = subprocess.Popen(
+                    args,
+                    stdin=devnull,
+                    stdout=devnull,
+                    stderr=devnull,
+                    creationflags=creationflags,
+                    env=env,
+                )
             print("[🛠️Coworker] start_local_llama:   Popen returned pid={:d}".format(proc.pid))
         else:
             # Linux / macOS: detach from the parent process group so the
             # server survives Blender exiting.  We redirect stdio to
             # /dev/null so it doesn't hijack the Blender console.
-            args = [
-                server_exe,
-                '--jinja',
-                '--verbose',
-                '--host', '127.0.0.1',
-                '--port', str(port),
-                '--ctx-size', str(ctx_size),
-            ]
-            if use_hf:
-                args.extend(['--hf-repo', hf_repo, '--hf-file', hf_file])
-            else:
-                args.extend(['--model', str(model_path)])
-
             print("[🛠️Coworker] start_local_llama: POSIX path (start_new_session=True)")
             print("[🛠️Coworker] start_local_llama:   args = {:s}".format(str(args)))
             with open(os.devnull, 'w') as devnull:
@@ -1342,9 +1649,9 @@ def stop_local_llama() -> None:
 
     _llama_process = None
 
-    # Fallback: kill any remaining llama-server process by image name.
-    # This catches orphaned processes (e.g. when launched via
-    # CREATE_NEW_CONSOLE the Popen handle may not be the server itself).
+    # Fallback: kill any remaining llama-server processes by image name.
+    # This catches orphaned processes from previous sessions that may
+    # still be holding the port.
     try:
         if sys.platform == "win32":
             print("[🛠️Coworker] stop_local_llama:   running taskkill /f /im llama-server.exe")
@@ -1396,6 +1703,32 @@ def health_check(url: str | None = None) -> bool:
     except (urllib.error.URLError, OSError) as ex:
         print("[🛠️Coworker] health_check: connection failed — {:s}".format(str(ex)))
         return False
+
+
+def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = None) -> bool:
+    """Block until the local llama-server answers a health check.
+
+    Polls :func:`health_check` until it succeeds or *timeout* seconds elapse.
+    If *proc* is given and the process exits early, returns ``False``
+    immediately with an error set. Returns ``True`` when the server is ready.
+    """
+    import time as _time
+    deadline = _time.monotonic() + timeout
+    poll = 0.5
+    print("[🛠️Coworker] wait_until_ready: waiting up to {:.0f}s for llama-server...".format(timeout))
+    while _time.monotonic() < deadline:
+        if health_check():
+            print("[🛠️Coworker] wait_until_ready: server is ready")
+            return True
+        if proc is not None and proc.poll() is not None:
+            _set_error("llama-server exited during startup (check model path and port)")
+            print("[🛠️Coworker] wait_until_ready: process exited early")
+            return False
+        _time.sleep(poll)
+        poll = min(poll * 1.5, 3.0)
+    _set_error("llama-server did not become ready within {:.0f}s".format(timeout))
+    print("[🛠️Coworker] wait_until_ready: timed out")
+    return False
 
 
 def check_remote_api(base_url: str, api_key: str) -> bool:

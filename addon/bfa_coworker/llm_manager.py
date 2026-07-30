@@ -821,9 +821,28 @@ def _get_models_dir() -> Path:
     """Return the directory where downloaded models are stored."""
     with _lock:
         custom = _config.downloaded_models_dir
-    if custom and os.path.isdir(custom):
-        print("[🛠️Coworker] _get_models_dir: using custom dir {:s}".format(custom))
-        return Path(custom)
+    if custom:
+        custom_path = Path(custom)
+        if custom_path.exists():
+            if custom_path.is_dir():
+                print("[🛠️Coworker] _get_models_dir: using custom dir {:s}".format(str(custom_path)))
+                return custom_path
+            print(
+                "[🛠️Coworker] _get_models_dir: custom models dir exists but is not a directory: {:s}".format(
+                    str(custom_path)
+                )
+            )
+        else:
+            try:
+                custom_path.mkdir(parents=True, exist_ok=True)
+                print("[🛠️Coworker] _get_models_dir: created custom dir {:s}".format(str(custom_path)))
+                return custom_path
+            except OSError as ex:
+                print(
+                    "[🛠️Coworker] _get_models_dir: failed to create custom dir {:s}: {:s}".format(
+                        str(custom_path), str(ex)
+                    )
+                )
     # Default: <user_home>/bfa_coworker_models/
     default = Path.home() / "bfa_coworker_models"
     default.mkdir(parents=True, exist_ok=True)

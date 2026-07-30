@@ -132,3 +132,72 @@ def install_print_tee() -> None:
     if sys.stderr is not None and not isinstance(sys.stderr, _TeeStream):
         sys.stderr = _TeeStream(sys.stderr)  # type: ignore[assignment]
     write("=== Coworker log session started ===")
+
+
+# ---------------------------------------------------------------------------
+# Blender policy-warning coalescing
+
+_policy_warning_count = 0
+_policy_warning_modules: set[str] = set()
+_policy_summary_printed = False
+_original_showwarning = None
+
+
+def _coalescing_showwarning(message, category, filename, lineno, file=None, line=None):
+    """Consolidate Blender 'Policy Violation' warnings into a single summary.
+
+    Blender 5.3's addon sandbox emits one warning per vendored package
+    (httpx, click, rich, pygments, ...) plus one for ``sys.path``. These
+    flood the console. We count them and emit ONE summary line instead.
+    Non-policy warnings pass through unchanged.
+    """
+    global _policy_warning_count, _policy_summary_printed
+    text = str(message)
+    if "Policy Violation" in text or "policy violation" in text:
+        _policy_warning_count += 1
+        # Try to extract the module name for the summary.
+        # Common forms: "Policy Violation with top level module: httpx"
+        #               "Policy Violation with sys.path: .../vendor/deps"
+        mod = ""
+        for token in ("top level module:", "sys.path:"):
+            if token in text:
+                mod = text.split(token, 1)[1].strip().split()[0].rstrip(",.")
+                break
+        if mod:
+            _policy_warning_modules.add(mod)
+        write("Suppressed policy warning: {:s}".format(text), level="WARN")
+        # Print the summary once, after a short batch of warnings has had a
+        # chance to accumulate. Using a count threshold coalesces the burst.
+        if not _policy_summary_printed and _policy_warning_count >= 5:
+            _policy_summary_printed = True
+            print_policy_warning_summary()
+        return  # Swallow — do NOT print to console.
+    # Not a policy warning — pass through to the original handler.
+    if _original_showwarning is not None:
+        _original_showwarning(message, category, filename, lineno, file, line)
+
+
+def install_policy_warning_filter() -> None:
+    """Replace ``warnings.showwarning`` to coalesce policy-violation spam.
+
+    The summary line is printed once automatically after the first burst of
+    policy warnings (see ``_coalescing_showwarning``). Individual warnings
+    are still recorded to the log file. Safe to call multiple times.
+    """
+    global _original_showwarning
+    import warnings
+    if _original_showwarning is None:
+        _original_showwarning = warnings.showwarning
+    warnings.showwarning = _coalescing_showwarning
+
+
+def print_policy_warning_summary() -> None:
+    """Print a one-line summary of suppressed policy warnings, if any."""
+    if _policy_warning_count:
+        mods = ", ".join(sorted(_policy_warning_modules)) or "vendor packages"
+        print(
+            "[🛠️Coworker] Blender policy: suppressed {:d} sandbox warning(s) "
+            "for {:s} (expected; vendored deps still load — see log)".format(
+                _policy_warning_count, mods
+            )
+        )

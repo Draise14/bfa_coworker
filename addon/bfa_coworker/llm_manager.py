@@ -1608,15 +1608,19 @@ def start_local_llama(
             # Launch llama-server in a NEW console window via PowerShell so
             # we capture the REAL server PID (not a cmd.exe wrapper). This
             # lets terminate()/kill() target the actual server process.
-            # PassThru returns the Process object; we select its Id.
-            cmd_line = subprocess.list2cmdline(args)
+            # -FilePath takes ONLY the executable; the args go to -ArgumentList
+            # as individually-quoted tokens. PassThru returns the Process
+            # object; we emit its Id on stdout for the parent to read.
+            exe_ps = _ps_quote(server_exe)
+            arg_tokens = " ".join(_ps_quote(a) for a in args[1:])
             ps_cmd = (
-                "$p = Start-Process -FilePath {:s} -PassThru; "
+                "$p = Start-Process -FilePath {:s} -ArgumentList {:s} -PassThru; "
                 "$p.Id"
-            ).format(_ps_quote(cmd_line))
+            ).format(exe_ps, arg_tokens)
 
             print("[🛠️Coworker] start_local_llama: WIN32 path (PowerShell Start-Process)")
-            print("[🛠️Coworker] start_local_llama:   cmd = {:s}".format(cmd_line))
+            print("[🛠️Coworker] start_local_llama:   exe = {:s}".format(server_exe))
+            print("[🛠️Coworker] start_local_llama:   ps_cmd = {:s}".format(ps_cmd))
             print("[🛠️Coworker] start_local_llama:   HF_HOME = {:s}".format(str(hf_cache_dir)))
             proc = subprocess.Popen(
                 ["powershell", "-NoProfile", "-Command", ps_cmd],
@@ -1625,10 +1629,18 @@ def start_local_llama(
                 stderr=subprocess.PIPE,
                 text=True,
             )
-            # Read the real server PID from PowerShell's stdout.
+            # Read the real server PID from PowerShell's stdout. Scan for a
+            # pure-numeric line rather than assuming the last line, in case
+            # PowerShell emits warnings/progress noise alongside the PID.
             try:
                 out, _err = proc.communicate(timeout=15)
-                server_pid = int(out.strip().splitlines()[-1])
+                pid_line = next(
+                    (ln.strip() for ln in out.splitlines() if ln.strip().isdigit()),
+                    None,
+                )
+                if pid_line is None:
+                    raise ValueError("no numeric PID in output: {:s}".format(out.strip()[:200]))
+                server_pid = int(pid_line)
                 print("[🛠️Coworker] start_local_llama:   server pid={:d}".format(server_pid))
                 # Re-wrap as a Popen-like handle targeting the real PID so
                 # terminate()/kill() hit llama-server, not the launcher.

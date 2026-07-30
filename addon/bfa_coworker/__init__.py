@@ -75,6 +75,11 @@ _classes = (
 
 
 def register() -> None:
+    # Start file-based logging as early as possible so all subsequent
+    # print() diagnostics are captured to disk.
+    from . import log
+    log.install_print_tee()
+
     # Clear stale CLI command handles from a previous registration.
     _cli_commands.clear()
 

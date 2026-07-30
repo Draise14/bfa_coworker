@@ -985,6 +985,17 @@ def _download_gguf_direct(
             req.add_header("Authorization", "Bearer {:s}".format(hf_token))
 
         with urllib.request.urlopen(req, timeout=120) as resp:
+            # Apply a per-chunk socket read timeout so a stalled connection
+            # mid-download raises instead of hanging forever. 60s between
+            # chunks is generous for any live connection.
+            try:
+                raw_sock = getattr(getattr(resp, "fp", None), "raw", None)
+                sock = getattr(raw_sock, "_sock", None) if raw_sock is not None else None
+                if sock is not None:
+                    sock.settimeout(60.0)
+            except (AttributeError, OSError):
+                pass  # Best-effort — if we can't set it, read() uses the default.
+
             actual_total = int(resp.headers.get("Content-Length", "0")) or total_bytes or 0
             downloaded = 0
             chunk_size = 64 * 1024  # 64 KB

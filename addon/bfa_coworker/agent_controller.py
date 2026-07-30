@@ -195,11 +195,28 @@ class AgentState:
     is_thinking: bool = False
     status_text: str = "Idle"
     error: str = ""
+    tool_count: int = 0  # Number of MCP tools available (0 = not loaded yet)
     conversation_history: list[dict[str, Any]] = field(default_factory=list)
     streaming_text: str = ""
 
 
 _agent_state = AgentState()
+
+# Set to request the in-flight conversation turn to abort. The conversation
+# loop checks this between iterations and inside the LLM request path.
+_stop_event = threading.Event()
+
+
+def request_stop() -> None:
+    """Request the current generation to stop as soon as possible."""
+    print("[🛠️Coworker] request_stop: stop requested")
+    _stop_event.set()
+    _agent_state.is_thinking = False
+
+
+def clear_stop() -> None:
+    """Clear the stop flag before starting a new turn."""
+    _stop_event.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -841,7 +858,7 @@ async def list_mcp_tools(port: int = _MCP_SERVER_DEFAULT_PORT) -> list[dict[str,
 def _list_tools_sync(port: int = _MCP_SERVER_DEFAULT_PORT) -> list[dict[str, Any]]:
     """Synchronous wrapper for listing MCP tools, with retry on 0 tools."""
     import time
-    max_retries = 3
+    max_retries = 5
     for attempt in range(1, max_retries + 1):
         print("[🛠️Coworker] _list_tools_sync: port={:d} attempt={:d}/{:d}".format(
             port, attempt, max_retries))
@@ -851,13 +868,14 @@ def _list_tools_sync(port: int = _MCP_SERVER_DEFAULT_PORT) -> list[dict[str, Any
             count = len(result) if result else 0
             print("[🛠️Coworker] _list_tools_sync: got {:d} tools".format(count))
             if count > 0:
+                _agent_state.tool_count = count
                 return result
             # 0 tools — retry if server is still running.
             if not _agent_state.mcp_server_running:
                 print("[🛠️Coworker] _list_tools_sync: server not running, aborting")
                 return result or []
             if attempt < max_retries:
-                delay = 1.0 * attempt  # Linear backoff: 1s, 2s, 3s.
+                delay = min(1.0 * attempt, 4.0)  # Backoff: 1s, 2s, 3s, 4s.
                 print("[🛠️Coworker] _list_tools_sync: 0 tools, retrying in {:.0f}s...".format(delay))
                 time.sleep(delay)
         except Exception as ex:  # pylint: disable=broad-exception-caught
@@ -1023,6 +1041,7 @@ def run_conversation_turn(
 
     This is a BLOCKING call — run it via ``schedule_coro`` or in a thread.
     """
+    clear_stop()
     history = _agent_state.conversation_history
 
     # Ensure the first message is the system prompt.
@@ -1062,6 +1081,14 @@ def run_conversation_turn(
     iterations = 0
     while iterations < _MAX_TOOL_ITERATIONS:
         iterations += 1
+
+        # Abort early if the user pressed Stop.
+        if _stop_event.is_set():
+            print("[🛠️Coworker] run_conversation_turn: aborted by user")
+            _agent_state.is_thinking = False
+            if on_status:
+                on_status("Stopped")
+            return history
 
         # Slice history to avoid unbounded context growth.
         # Always keep the system prompt (index 0) if present.
@@ -1108,6 +1135,12 @@ def run_conversation_turn(
 
             # Process each tool call.
             for tc in raw_tool_calls:
+                if _stop_event.is_set():
+                    print("[🛠️Coworker] run_conversation_turn: aborted during tool calls")
+                    _agent_state.is_thinking = False
+                    if on_status:
+                        on_status("Stopped")
+                    return history
                 fn = tc.get("function", {})
                 try:
                     args = json.loads(fn.get("arguments", "{}"))

@@ -307,6 +307,17 @@ def _find_vendor_pythonpath() -> str:
     if deps_dir.is_dir():
         parts.append(str(deps_dir))
 
+        # pywin32 layout: the importable ``pywintypes``/``pythoncom`` modules
+        # live in ``win32/lib/`` and are normally exposed via a ``pywin32.pth``
+        # file.  ``.pth`` files are only processed for real site-packages
+        # directories at interpreter startup — NOT for PYTHONPATH entries.
+        # Since the MCP subprocess only gets these dirs via PYTHONPATH, the
+        # .pth is ignored, so we must add the pywin32 subdirectories directly.
+        for sub in ("win32", "win32/lib", "win32com", "win32comext"):
+            sub_dir = deps_dir / sub
+            if sub_dir.is_dir():
+                parts.append(str(sub_dir))
+
     # Add vendor/ itself so blmcp resolves from vendor/blmcp/.
     if vendor_dir.is_dir():
         parts.append(str(vendor_dir))

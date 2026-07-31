@@ -86,11 +86,14 @@ def _get_system_prompt() -> str:
         return _system_prompt
 
     # Search for prompts.yml relative to this file's location.
-    # Typical layout: addon/bfa_coworker/agent_controller.py
-    # and            mcp/blmcp/data/prompts.yml
+    # Dev layout: addon/bfa_coworker/agent_controller.py
+    #             mcp/blmcp/data/prompts.yml
+    # Deployed:   .../extensions/.../bfa_coworker/
+    #             vendor/blmcp/data/prompts.yml
     this_dir = Path(__file__).resolve().parent
     candidates = [
-        this_dir.parent.parent / "mcp" / "blmcp" / "data" / "prompts.yml",
+        this_dir.parent.parent / "mcp" / "blmcp" / "data" / "prompts.yml",  # dev layout
+        this_dir / "vendor" / "blmcp" / "data" / "prompts.yml",               # deployed layout
     ]
     for prompt_path in candidates:
         if prompt_path.is_file():
@@ -980,8 +983,10 @@ def _openai_chat_completions(
                 # Log reasoning content (chain-of-thought) for debugging.
                 reasoning = msg.get("reasoning_content") or ""
                 if reasoning:
-                    print("[🛠️Coworker] _openai_chat_completions: reasoning = {:s}...".format(
-                        reasoning[:500]))
+                    print("[🛠️Coworker] _openai_chat_completions: reasoning ({:d} chars):".format(
+                        len(reasoning)))
+                    print(reasoning)
+                    print("[🛠️Coworker] _openai_chat_completions: --- end reasoning ---")
                 return result
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
             if attempt < max_retries - 1:

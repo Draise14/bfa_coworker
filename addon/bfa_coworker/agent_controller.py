@@ -907,18 +907,20 @@ def _openai_chat_completions(
     tools: list[dict[str, Any]],
     api_key: str | None = None,
     model: str | None = None,
+    max_tokens: int | None = None,
 ) -> dict[str, Any] | None:
     """POST to a chat completions endpoint and return the parsed JSON response.
 
     *model* — when provided, included in the request body. Required for
     remote APIs (OpenRouter, OpenAI, etc.). Omitted for local llama-server
     which auto-detects the model.
+    *max_tokens* — max output tokens per call. ``None`` uses 16384 default.
     """
     body: dict[str, Any] = {
         "messages": messages,
         "stream": False,
         # Cap output so the model doesn't generate endlessly.
-        "max_tokens": 4096,
+        "max_tokens": max_tokens if max_tokens is not None else 16384,
         # Parameters tuned for small local models (Gemma 4 26B etc.):
         # - temperature: 0.3 gives focused, non-erratic output
         # - top_p: 0.9 limits random tail tokens
@@ -975,6 +977,11 @@ def _openai_chat_completions(
                     fn = tc.get("function", {})
                     print("[🛠️Coworker] _openai_chat_completions:   tool[{:d}] = {:s}({:s})".format(
                         i, fn.get("name", "?"), str(fn.get("arguments", ""))[:120]))
+                # Log reasoning content (chain-of-thought) for debugging.
+                reasoning = msg.get("reasoning_content") or ""
+                if reasoning:
+                    print("[🛠️Coworker] _openai_chat_completions: reasoning = {:s}...".format(
+                        reasoning[:500]))
                 return result
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
             if attempt < max_retries - 1:
@@ -1117,6 +1124,12 @@ def run_conversation_turn(
                 on_status("Error: LLM server not ready")
             return history
 
+    # Resolve max_tokens from config (local or remote).
+    from . import llm_manager as _llm_mgr
+    _llm_cfg = _llm_mgr.get_config()
+    max_tokens = _llm_cfg.local_max_tokens if llm_port_local is not None else 16384
+    print("[🛠️Coworker] run_conversation_turn: using max_tokens={:d}".format(max_tokens))
+
     iterations = 0
     while iterations < _MAX_TOOL_ITERATIONS:
         iterations += 1
@@ -1146,7 +1159,7 @@ def run_conversation_turn(
         else:
             history_to_send = history
 
-        response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model)
+        response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model, max_tokens)
         if response is None:
             _agent_state.is_thinking = False
             _agent_state.error = "No response from LLM"
@@ -1160,6 +1173,59 @@ def run_conversation_turn(
 
         # Extract text content.
         content = msg.get("content") or ""
+
+        # ── Auto-continue on finish_reason=length ─────────────────────
+        # Reasoning models (Qwen, DeepSeek, Gemma 4) can hit the token
+        # limit mid-reasoning before emitting tool calls or text.
+        # We detect this and ask the model to continue.
+        continue_attempts = 0
+        while finish_reason == "length" and continue_attempts < 2:
+            continue_attempts += 1
+            print("[🛠️Coworker] run_conversation_turn: finish_reason=length, "
+                  "auto-continue attempt {:d}/2".format(continue_attempts))
+
+            # Append partial assistant message to history so the model
+            # can pick up where it left off.
+            partial_msg: dict[str, Any] = {"role": "assistant", "content": content}
+            if msg.get("tool_calls"):
+                partial_msg["tool_calls"] = msg["tool_calls"]
+            history.append(partial_msg)
+
+            # Send a brief continuation prompt.
+            history.append({"role": "user", "content": "Continue."})
+
+            # Re-request with the same max_tokens.
+            continue_response = _openai_chat_completions(
+                llm_url, history, openai_tools, api_key, model, max_tokens,
+            )
+            if continue_response is None:
+                break
+
+            # Pop the "Continue." user message so it doesn't pollute history.
+            history.pop()
+            # Pop the partial assistant message — we'll replace it with the
+            # concatenated version.
+            history.pop()
+
+            # Merge results: concatenate content, merge tool_calls.
+            cont_choice = continue_response.get("choices", [{}])[0]
+            cont_msg = cont_choice.get("message", {})
+            cont_content = cont_msg.get("content") or ""
+            cont_tool_calls = cont_msg.get("tool_calls") or []
+
+            content = content + cont_content
+            if cont_tool_calls:
+                # Merge tool calls from continuation.
+                existing = msg.get("tool_calls") or []
+                msg["tool_calls"] = existing + cont_tool_calls
+            msg["content"] = content
+            finish_reason = cont_choice.get("finish_reason", "")
+            print("[🛠️Coworker] run_conversation_turn:   after continue: "
+                  "finish_reason={:s}, content_len={:d}, tool_calls={:d}".format(
+                      finish_reason, len(content), len(msg.get("tool_calls") or [])))
+
+        # ── End auto-continue ─────────────────────────────────────────
+
         if content and on_text:
             on_text(content)
             _agent_state.streaming_text = content
@@ -1220,7 +1286,7 @@ def run_conversation_turn(
             "role": "user",
             "content": "All tool calls are complete. Please summarize what was done in 1-2 sentences.",
         })
-        final_response = _openai_chat_completions(llm_url, history, openai_tools, api_key, model)
+        final_response = _openai_chat_completions(llm_url, history, openai_tools, api_key, model, max_tokens)
         if final_response:
             final_choice = final_response.get("choices", [{}])[0]
             final_msg = final_choice.get("message", {})

@@ -229,7 +229,31 @@ def _execute_code(
         try:
             exec(code, namespace)
         except Exception:  # pylint: disable=broad-exception-caught
-            response: dict[str, object] = {"status": "error", "message": traceback.format_exc()}
+            # Truncate traceback to last 3 frames + exception message.
+            # Full tracebacks are verbose and eat context window space.
+            tb_str = traceback.format_exc()
+            tb_lines = tb_str.splitlines()
+            if len(tb_lines) > 8:
+                # Keep: "Traceback (most recent call last):" + last 3 frames
+                # + blank line + exception type + message.
+                # Typical format:
+                #   Traceback (most recent call last):
+                #     File "...", line N, in ...
+                #       code
+                #     File "...", line N, in ...
+                #       code
+                #     File "...", line N, in ...
+                #       code
+                #   ExceptionType: message
+                # We keep header + last 3 frame pairs (file+code) + exception.
+                header = tb_lines[0]  # "Traceback (most recent call last):"
+                # Find the exception line (last non-empty line).
+                exc_line = tb_lines[-1] if tb_lines[-1].strip() else tb_lines[-2]
+                # Take last 6 lines before the exception (3 frames × 2 lines each).
+                frame_lines = tb_lines[-7:-1] if len(tb_lines) >= 8 else tb_lines[1:-1]
+                tb_str = "{:s}\n{:s}\n{:s}".format(header, "\n".join(frame_lines), exc_line)
+                tb_str += "\n[Traceback truncated to last 3 frames]"
+            response: dict[str, object] = {"status": "error", "message": tb_str}
             if captured.stdout:
                 response["stdout"] = captured.stdout
             if captured.stderr:

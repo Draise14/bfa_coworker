@@ -86,14 +86,11 @@ def _get_system_prompt() -> str:
         return _system_prompt
 
     # Search for prompts.yml relative to this file's location.
-    # Dev layout: addon/bfa_coworker/agent_controller.py
-    #             mcp/blmcp/data/prompts.yml
-    # Deployed:   .../extensions/.../bfa_coworker/
-    #             vendor/blmcp/data/prompts.yml
+    # Typical layout: addon/bfa_coworker/agent_controller.py
+    # and            mcp/blmcp/data/prompts.yml
     this_dir = Path(__file__).resolve().parent
     candidates = [
-        this_dir.parent.parent / "mcp" / "blmcp" / "data" / "prompts.yml",  # dev layout
-        this_dir / "vendor" / "blmcp" / "data" / "prompts.yml",               # deployed layout
+        this_dir.parent.parent / "mcp" / "blmcp" / "data" / "prompts.yml",
     ]
     for prompt_path in candidates:
         if prompt_path.is_file():

@@ -38,25 +38,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
-
-def _ensure_vendor_on_path() -> None:
-    """Add vendor/deps/ to sys.path so httpx/pydantic imports work in-process.
-
-    Uses ``os.add_dll_directory`` on Windows to avoid a Blender 5.2+ sandbox
-    policy violation that bans ``sys.path.insert`` at the addon level.
-    """
-    agent_dir = Path(__file__).resolve().parent
-    vendor_deps = agent_dir / "vendor" / "deps"
-    if not vendor_deps.is_dir():
-        return
-    # On Windows, use os.add_dll_directory so pywin32 DLLs are found.
-    if sys.platform == "win32":
-        # ``add_dll_directory`` is idempotent for repeated calls with the same path.
-        os.add_dll_directory(str(vendor_deps))
-    # Only add to sys.path if not already present (avoids a Blender 5.2 policy warning).
-    if str(vendor_deps) not in sys.path:
-        sys.path.append(str(vendor_deps))
+import textwrap
 
 
 # ---------------------------------------------------------------------------
@@ -95,10 +77,14 @@ def _get_system_prompt() -> str:
     for prompt_path in candidates:
         if prompt_path.is_file():
             try:
-                import yaml  # pylint: disable=import-error
                 with open(str(prompt_path), encoding="utf-8") as fh:
-                    prompts = yaml.safe_load(fh)
-                _system_prompt = str(prompts.get("initial_instructions", ""))
+                    raw = fh.read()
+                # Parse single-key YAML with literal block scalar (|) without yaml lib.
+                # Format: "initial_instructions: |\n  indented text..."
+                marker = "initial_instructions: |"
+                if marker in raw:
+                    _, _, body = raw.partition(marker)
+                    _system_prompt = textwrap.dedent(body).strip()
                 if _system_prompt:
                     print("[🛠️Coworker] _get_system_prompt: loaded {:d} chars from {:s}".format(
                         len(_system_prompt), str(prompt_path)))
@@ -812,27 +798,7 @@ async def list_mcp_tools(port: int = _MCP_SERVER_DEFAULT_PORT) -> list[dict[str,
     url = "http://127.0.0.1:{:d}/".format(port)
     print("[🛠️Coworker] list_mcp_tools: trying {:s}".format(url))
 
-    # Lazy path setup (avoids policy violation at module level).
-    _ensure_vendor_on_path()
-
-    try:
-        # Try the MCP streamable-HTTP POST endpoint first.
-        import httpx  # pylint: disable=import-error
-        async with httpx.AsyncClient(timeout=10) as client:
-            payload = {"jsonrpc": "2.0", "id": "1", "method": "tools/list"}
-            print("[🛠️Coworker] list_mcp_tools: POST {:s} with {:s}".format(url, json.dumps(payload)))
-            resp = await client.post(url, json=payload)
-            print("[🛠️Coworker] list_mcp_tools: status={:d}".format(resp.status_code))
-            if resp.status_code == 200:
-                data = resp.json()
-                tools = data.get("result", {}).get("tools", [])
-                print("[🛠️Coworker] list_mcp_tools: httpx returned {:d} tools".format(len(tools)))
-                return tools
-            print("[🛠️Coworker] list_mcp_tools: httpx unexpected status {:d}".format(resp.status_code))
-    except Exception as ex:  # pylint: disable=broad-exception-caught
-        print("[🛠️Coworker] list_mcp_tools: httpx failed — {:s}".format(str(ex)))
-
-    # Fallback: use urllib (synchronous, but simpler).
+    # Use urllib (stdlib, avoids Blender sandbox policy violation from vendored httpx).
     try:
         payload = {"jsonrpc": "2.0", "id": "1", "method": "tools/list"}
         data_bytes = json.dumps(payload).encode()

@@ -38,6 +38,10 @@ from .operators_agent import (
     _BFACW_OT_open_model_browser,
     _BFACW_OT_ping_agent,
     _BFACW_OT_check_ports,
+    _BFACW_OT_benchmark_objects,
+    _BFACW_OT_benchmark_scene,
+    _BFACW_OT_benchmark_animation,
+    _BFACW_OT_benchmark_collections,
 )
 from .operators_hf import (
     _BFACW_OT_open_hf_cache,
@@ -69,6 +73,10 @@ _classes = (
     _BFACW_OT_open_model_browser,
     _BFACW_OT_ping_agent,
     _BFACW_OT_check_ports,
+    _BFACW_OT_benchmark_objects,
+    _BFACW_OT_benchmark_scene,
+    _BFACW_OT_benchmark_animation,
+    _BFACW_OT_benchmark_collections,
     _BFACW_OT_open_hf_cache,
     _BFACW_OT_clear_hf_cache,
 )

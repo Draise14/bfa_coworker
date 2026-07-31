@@ -664,6 +664,13 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             row = diag_box.row()
             row.operator("bfacw.check_ports", icon="FILE_REFRESH", text="Check Ports")
             row.operator("bfacw.ping_agent", icon="FILE_REFRESH", text="Diagnose")
+            # ── Benchmark tests ──────────────────────────────────────
+            diag_box.label(text="Benchmarks (send test prompts to agent)", icon='RENDER_RESULT')
+            bench_row = diag_box.row(align=True)
+            bench_row.operator("bfacw.benchmark_objects", icon="MESH_CUBE", text="Objects")
+            bench_row.operator("bfacw.benchmark_scene", icon="SCENE_DATA", text="Scene")
+            bench_row.operator("bfacw.benchmark_animation", icon="ANIM", text="Animation")
+            bench_row.operator("bfacw.benchmark_collections", icon="OUTLINER_COLLECTION", text="Collections")
             # Show check_ports results inline.
             from . import operators_agent as _oa_check
             check_result = getattr(_oa_check._BFACW_OT_check_ports, "_result", None)

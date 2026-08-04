@@ -102,6 +102,7 @@ class LLMConfig:
     downloaded_models_dir: str = ""
     local_port: int = _LOCAL_LLM_DEFAULT_PORT
     local_ctx_size: int = 8192
+    local_max_tokens: int = 16384  # Max output tokens per API call
     hf_token: str = ""  # HuggingFace token for gated models
     # Remote mode
     remote_api_url: str = ""
@@ -139,6 +140,8 @@ class ModelPreset:
     capability: str  # "Excellent" | "Strong" | "Moderate"
     category: str  # "flagship" | "mid_range" | "lightweight"
     description: str  # Longer tooltip text
+    context_window: int = 131072  # Context window size in tokens
+    max_tokens: int = 16384  # Max output tokens per API call
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +181,8 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~27 GB",
         capability="Excellent",
         category="flagship",
+        context_window=262144,
+        max_tokens=16384,
         description=(
             "Higher quality variant of Gemma 4. Vision-capable for viewport renders.\n"
             "Needs more RAM but delivers better precision.\n"
@@ -193,6 +198,8 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~19 GB",
         capability="Excellent",
         category="flagship",
+        context_window=131072,
+        max_tokens=16384,
         description=(
             "DeepSeek R1 reasoning distilled into Qwen 32B. Excellent for complex\n"
             "multi-step tool orchestration. Fits 24 GB VRAM at Q4. MIT license."
@@ -207,6 +214,8 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~19 GB",
         capability="Excellent",
         category="flagship",
+        context_window=131072,
+        max_tokens=16384,
         description=(
             "Top-tier code generation model. Excellent for Blender Python scripting.\n"
             "Q4_K_M fits 24 GB VRAM. Apache 2.0."
@@ -222,6 +231,8 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~14 GB",
         capability="Strong",
         category="mid_range",
+        context_window=131072,
+        max_tokens=8192,
         description=(
             "Mistral's compact 24B model. Native function calling, 128K context.\n"
             "Excellent tool-use capabilities. Fits RTX 4090 at Q4. Apache 2.0."
@@ -236,6 +247,8 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~17 GB",
         capability="Excellent",
         category="mid_range",
+        context_window=262144,
+        max_tokens=16384,
         description=(
             "Google's latest — vision-capable, native function calling with\n"
             "6 dedicated control tokens. Tool calling accuracy 86.4%.\n"
@@ -252,6 +265,8 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~16 GB",
         capability="Strong",
         category="mid_range",
+        context_window=131072,
+        max_tokens=8192,
         description=(
             "Google's Gemma 3 at 27B params. Vision-capable for viewport renders.\n"
             "Strong multilingual support. Great for text-based tool calling. Apache 2.0."
@@ -266,6 +281,8 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~22 GB",
         capability="Excellent",
         category="mid_range",
+        context_window=131072,
+        max_tokens=16384,
         description=(
             "Qwen's latest MoE — only ~3B active parameters per token.\n"
             "Excellent efficiency. Native multimodal agents with built-in MCP support.\n"
@@ -281,6 +298,8 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~12 GB",
         capability="Strong",
         category="mid_range",
+        context_window=131072,
+        max_tokens=8192,
         description=(
             "OpenAI's open-weight reasoning model. 21B params / 3.6B active.\n"
             "Native function calling, structured outputs, and agentic capabilities.\n"
@@ -296,6 +315,8 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~8 GB",
         capability="Strong",
         category="mid_range",
+        context_window=131072,
+        max_tokens=8192,
         description=(
             "Microsoft's Phi-4 — punches well above its weight class.\n"
             "Excellent reasoning for its size. Very low VRAM footprint.\n"
@@ -312,6 +333,8 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~6 GB",
         capability="Strong",
         category="lightweight",
+        context_window=262144,
+        max_tokens=8192,
         description=(
             "Qwen3.5 9B fine-tuned with Claude 4.6 reasoning distillation.\n"
             "Uncensored/heretic — no refusals. 256K context, vision capable.\n"
@@ -327,6 +350,8 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~7 GB",
         capability="Strong",
         category="lightweight",
+        context_window=131072,
+        max_tokens=4096,
         description=(
             "Google's Gemma 3 12B — vision-capable, sees your viewport!\n"
             "Strong multimodal understanding. 128K context. Apache 2.0.\n"
@@ -342,6 +367,8 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~5 GB",
         capability="Strong",
         category="lightweight",
+        context_window=131072,
+        max_tokens=4096,
         description=(
             "Latest Qwen3 dense model. Supports thinking mode for complex\n"
             "tool chains. Lightweight — runs on almost any hardware.\n"
@@ -357,6 +384,8 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~9 GB",
         capability="Strong",
         category="lightweight",
+        context_window=131072,
+        max_tokens=4096,
         description=(
             "Higher precision Qwen3 8B. Better quality while still running\n"
             "on modest hardware. Supports thinking mode for complex tool chains."
@@ -371,6 +400,8 @@ PRESET_MODELS: list[ModelPreset] = [
         disk_gb="~6 GB",
         capability="Moderate",
         category="lightweight",
+        context_window=131072,
+        max_tokens=4096,
         description=(
             "Phi-4 at Q3_K_M — fits in 8 GB VRAM while keeping most of its\n"
             "reasoning capability. Great for tight memory budgets."
@@ -672,6 +703,7 @@ def set_config(cfg: LLMConfig) -> None:
         _config.downloaded_models_dir = cfg.downloaded_models_dir
         _config.local_port = cfg.local_port
         _config.local_ctx_size = cfg.local_ctx_size
+        _config.local_max_tokens = cfg.local_max_tokens
         _config.hf_token = cfg.hf_token
         _config.remote_api_url = cfg.remote_api_url
         _config.remote_api_key = cfg.remote_api_key
@@ -689,6 +721,7 @@ def get_config() -> LLMConfig:
             downloaded_models_dir=_config.downloaded_models_dir,
             local_port=_config.local_port,
             local_ctx_size=_config.local_ctx_size,
+            local_max_tokens=_config.local_max_tokens,
             hf_token=_config.hf_token,
             remote_api_url=_config.remote_api_url,
             remote_api_key=_config.remote_api_key,
@@ -1531,6 +1564,11 @@ def start_local_llama(
 
     with _lock:
         ctx_size = _config.local_ctx_size or 8192
+    # Auto-upgrade from the old 8192 default to 32768 for existing users.
+    # 8192 is too small for system prompt + tools + conversation.
+    if ctx_size <= 8192:
+        ctx_size = 32768
+        print("[🛠️Coworker] start_local_llama: auto-upgraded ctx_size from 8192 to 32768")
     print("[🛠️Coworker] start_local_llama: using ctx_size {:d}".format(ctx_size))
 
     print("[🛠️Coworker] start_local_llama: platform = {:s}".format(sys.platform))

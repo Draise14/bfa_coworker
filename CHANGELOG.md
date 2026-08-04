@@ -9,24 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### High Priority
 - [x] **Bug:** Make local model detection and "link" more robust
-
+- [x] **Download Progress Bar** — Replace text-based download progress with a visual progress bar in the preferences panel.
+- [x] **Cancel Downloads** — Add a cancel button for in-progress downloads.
 
 #### Medium Priority
 - [ ] **Add history chat to a text file with a button to open it in a floating window** - so we can copy and paste the results and save the log from the chat
-- [ ] **SKILL.md Update** — Rewrite `.github/skills/self-contained-blender-mcp/SKILL.md`
-  to reflect current project goals and branding.
-- [ ] **DOCUMENTATION.md** — Create user-facing documentation covering
-  installation, quick start, model management, remote API setup, and
-  troubleshooting.
-- [ ] **GGUF Header Parsing** — Read GGUF file headers to detect parameter
-  count and quantization for non-preset models, enabling auto-populated
-  RAM/disk estimates.
+- [ ] **SKILL.md Update** — Rewrite `.github/skills/self-contained-blender-mcp/SKILL.md` to reflect current project goals and branding.
+- [ ] **DOCUMENTATION.md** — Create user-facing documentation covering installation, quick start, model management, remote API setup, and troubleshooting.
+- [ ] **GGUF Header Parsing** — Read GGUF file headers to detect parameter count and quantization for non-preset models, enabling auto-populated RAM/disk estimates.
 
 #### Low Priority
-- [ ] **System RAM Detection** — Use platform-specific API to detect available
-  RAM and filter/hide presets that exceed system capacity.
-- [ ] **Download Progress Bar** — Replace text-based download progress with a
-  visual progress bar in the preferences panel.
+- [ ] **System RAM Detection** — Use platform-specific API to detect available RAM and filter/hide presets that exceed system capacity.
 - [ ] **Add Model Generator** locally, Ultrashape, Hunyuan, similar to here: https://github.com/ahujasid/blender-mcp
 - [ ] **Add CC0 resource downloader** from Polyhaven, AmbientC00, Sketchfab, etc, similar to here: https://github.com/ahujasid/blender-mcp
 
@@ -34,54 +27,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Direct GGUF Download** — New `_download_gguf_direct()` function streams model files from HuggingFace in 64 KB chunks with real-time progress (percentage, speed, ETA, progress bar). No more reliance on `llama-server` console for download progress.
+- **Cancel Downloads** — New `cancel_download()` function and `_BFACW_OT_cancel_download` operator. Thread-safe cancellation via `threading.Event`. Partial files are cleared on abort. Cancel button appears in UI while a download is active.
+- **Disk Space Detection** — Pre-flight disk space check before multi-GB downloads via `_check_disk_space()` using `shutil.disk_usage()`. Requires file size + 5% margin. Sets actionable error if insufficient space.
+- **Download Progress Bar** — Real-time visual progress bar (`row.progress(factor=..., type='BAR')`) in the preferences panel showing percentage, speed, ETA, and file size. Replaces the old text-only progress display.
 - **Always-Visible Download Button** — The "Download & Start" button never disappears. States: "Download & Start" → "Downloading…" (disabled) → "Already Downloaded" (disabled). Progress/error always shown below.
 - **Clear HTTP Error Messages** — 401 → suggests HF_TOKEN, 403 → suggests granting access at huggingface.co, 404 → suggests checking repo/file name.
 - **HF_TOKEN Support** — New `hf_token` field (password-masked) in Advanced preferences. Passed to both direct download and llama-server subprocess. Also auto-detects `HF_TOKEN` / `HUGGINGFACE_TOKEN` environment variables.
 - **Fallback Download** — If direct download fails for non-auth reasons (network restrictions, proxy), falls back to `llama-server --hf-repo/--hf-file` with 15-minute timeout and subprocess crash detection.
+- **Direct GGUF Download** — New `_download_gguf_direct()` function streams model files from HuggingFace in 64 KB chunks with real-time progress (percentage, speed, ETA, progress bar). No more reliance on `llama-server` console for download progress.
+- **llama-server Binary Download** — One-click download and extraction of `llama-server` from GitHub releases (tag `b10154`). Supports Windows (zip), macOS/Linux (tar.gz). Extracts to `~/.cache/bfa_coworker_llama/`.
+- **File Size Pre-Fetch** — `_get_hf_file_size()` performs HEAD request to HuggingFace to get file size before download, enabling accurate progress estimates.
+- **ETA Formatting** — `_format_eta()` shows human-readable ETA ("3m 24s remaining") during downloads.
+- **Model Presets (14 curated)** — Categorized visual sections: Flagship (24 GB+ VRAM), Mid-Range (12-20 GB), Lightweight (≤ 8 GB). Includes Gemma 4 26B, DeepSeek R1 Distill 32B, Qwen 2.5 Coder 32B, Mistral Small 3.1 24B, Gemma 3 27B, Qwen3.6 35B A3B, GPT-OSS 20B, Phi-4 14B, Qwen3.5 9B Heretic, Gemma 3 12B Vision, Qwen3 8B, Phi-4 14B Q3. Each preset has pre-configured `context_window` and `max_tokens` values.
+- **Remote Provider Presets** — OpenRouter provider with 10 curated models (Claude 4.6 Sonnet, GPT-4.1, GPT-4o, DeepSeek Chat V3, Gemini 2.5 Flash/Pro, Llama 4 Maverick, Qwen3.6 35B, Mistral Small 3.1, GPT-5 Mini). Live model listing via `/v1/models` endpoint.
+- **Existing Model Scanner** — Scans both the configured models directory and HuggingFace cache for `.gguf` files. Found models appear in a dropdown for one-click selection.
+- **"Last Used" Model Recall** — The last selected preset or existing model path is persisted across Blender sessions via built-in property storage.
+- **Port Configuration** — Individual port overrides (bridge, MCP, LLM) plus a global `port_offset`. Effective ports shown as read-only labels via `_draw_effective_ports()`.
+- **Max Output Tokens** — New `local_max_tokens` field in config and preferences. Per-preset default values (16384 flagship, 8192 mid-range, 4096 lightweight). Auto-continue on `finish_reason=length` with concatenation (max 2 attempts).
+- **Context Window Auto-Set** — Selecting a preset auto-sets `--ctx-size` to `min(preset.context_window, 65536)`. Default raised from 8192 to 32768. Existing users auto-upgraded on first server start.
+- **Reasoning Content Logging** — Full chain-of-thought from reasoning models (Qwen, DeepSeek, Gemma 4) logged to console for debugging. No truncation.
+- **Benchmark Tests** — Four benchmark buttons in Diagnostics section: Objects (random objects in colored groups), Scene (ground + columns + lighting), Animation (torus with keyframes), Collections (SET/LIT/ANIM with color tags). Each runs through the full agent pipeline.
+- **System Prompt Path Fix** — `_get_system_prompt()` now searches both dev layout (`mcp/blmcp/data/prompts.yml`) and deployed layout (`vendor/blmcp/data/prompts.yml`). The full 3000+ char Blender system prompt is now loaded in deployed addons.
+- **Orphaned Tool Message Cleanup** — `_drop_orphaned_tool_messages()` removes tool-role messages without preceding assistant `tool_calls`, preventing Jinja template errors from llama-server on sliced conversation history.
+- **SSE Parser** — `_parse_sse_json()` / `_parse_sse_text_response()` for FastMCP stateless_http mode (used by `streamable-http` transport).
+- **Thread-Safe Stop Mechanism** — `request_stop()` / `clear_stop()` for clean interruption of the conversation loop.
+- **Pipe Drainer** — Background threads (`_start_pipe_drainer()`) to drain stdout/stderr pipes from subprocesses, preventing deadlock.
+- **Port Killer** — `_kill_process_on_port()` uses netstat+taskkill (Windows) or fuser (Linux) to clean up orphaned processes.
+- **Port Availability Check** — `check_ports_available()` tests bridge/MCP/LLM ports by attempting to bind with `SO_EXCLUSIVEADDRUSE`.
+- **Logging Infrastructure** — File-based logging via `print()` tee (`log.install_print_tee()`). Blender 5.3+ policy violation warning coalescer (`log.install_policy_warning_filter()`).
+- **Timer Interval Configuration** — `timer_interval_active` (0.05–5.0s), `timer_interval_idle` (0.1–10.0s), `timer_interval_idle_delay` (1.0–60.0s) for fine-tuning polling behavior.
+- **Tool Logging Toggle** — `use_log` preference to log every tool request/response to the console.
 
 ### Changed
 
 - **Download Model** — Rewritten from polling `llama-server` health endpoint to direct HTTP chunked download with real progress data. llama-server is started after download completes.
 - **No new dependencies** — All download logic uses only `urllib.request` (stdlib).
+- **Model Preset Refinement** — All 14 presets now carry `context_window` and `max_tokens` metadata. Preset selection auto-configures both the server's `--ctx-size` and the API's `max_tokens`.
+- **Server Launch Refinement** — `start_local_llama()` resolves model from local file → HF cache → `--hf-repo/--hf-file`. Auto-upgrades `ctx_size` from 8192 to 32768. Redirects HF cache to models dir. Passes `HF_TOKEN` for gated models. Uses `CREATE_NEW_CONSOLE` on Windows for proper PID tracking.
+- **Server Stop Refinement** — `stop_local_llama()` now has graceful terminate + fallback `taskkill`/`pkill` for orphaned processes.
+- **Port Handling Refinement** — Migrated from hardcoded ports to configurable offsets + per-port overrides with effective-port display.
+- **MCP Server Python Path Resolution** — Replaced the bundled `uv`-managed `.venv` (non-portable, hardcoded machine-specific paths) with a portable approach:
+  - `build_addon.py` installs pure-Python dependencies into `vendor/deps/` via `pip install --target` and copies `blmcp` source into `vendor/blmcp/`.
+  - `agent_controller.py` uses Blender's own Python (`sys.prefix/bin/python.exe`) with `vendor/deps/` and `vendor/` on `PYTHONPATH`.
+  - `_ensure_vendor_deps()` auto-install fallback for source installs.
+  - `_find_python_with_pip()` in `build_addon.py` finds a Python with pip even when `sys.executable` is a uv-managed venv.
+  - Removed the old `vendor/python_env/` layout entirely.
+- **`max_tokens` Default** — Raised from 4096 to 16384 (per-preset: 16384 flagship, 8192 mid-range, 4096 lightweight). Replaces hardcoded value with configurable parameter.
+- **`--ctx-size` Default** — Raised from 8192 to 32768. Auto-set from preset's `context_window` (capped at 65536 for consumer GPU safety).
+- **Interface Modularization** — Split `__init__.py` (~1,437 lines) into separate focused modules: `shared.py`, `preferences.py`, `operators_server.py`, `operators_llm.py`, `operators_agent.py`, `operators_hf.py`.
+- **Duplicated code removed** — `ui_chat.py` now imports `effective_ports()` from `.shared` instead of duplicating port constants.
+- **Diagnostics Section** — Expanded with Check Ports, Diagnose (ping), and four Benchmark buttons — all gated behind `BFACW_DEBUG` flag.
 
 ### Fixed
 
-- 401/403 errors from HuggingFace are now surfaced immediately with actionable messages, instead of silently failing inside the llama-server subprocess.
-- Download button no longer disappears after clicking it — it always remains visible.
-
-### Added
-
-- **llama-server download URL** — Updated from ancient tag `b5027` (404) to
-  `b10154`. Fixed asset naming to match current release convention
-  (`win-cpu-x64.zip`, `macos-arm64.tar.gz`, `ubuntu-cpu-x64.tar.gz`).
-  Added `tarfile` support for `.tar.gz` extraction on macOS/Linux.
-- **Model download poll signal** — The "Download & Start" button was
-  disappearing immediately because the poll timer checked `state.is_running`
-  (set on process launch) instead of waiting for the actual download to
-  complete. Added `download_active` flag to `LLMState` so the UI correctly
-  distinguishes "server is running" from "a download is in progress".
-- **UI refresh after download** — Both llama-server and model download
-  operators now redraw all `PREFERENCES` areas on completion instead of
-  only `context.area`, so the green checkmark / status text appears
-  immediately without requiring a Blender restart.
-- **Download button visibility during download** — The "Download & Start"
-  button and progress bar now stay visible while `download_active` is true,
-  even though the server process has already started.
-
-- **MCP server Python path resolution** — The bundled `uv`-managed `.venv` was
-  not portable across machines because `pyvenv.cfg` hardcoded a machine-specific
-  Python path (e.g. `C:\Users\USER\AppData\Roaming\uv\python\cpython-3.12.9-...`).
-  Replaced with a portable approach:
-  - `build_addon.py` now installs pure-Python dependencies into `vendor/deps/`
-    via `pip install --target` and copies `blmcp` source into `vendor/blmcp/`.
-  - `agent_controller.py` uses Blender's own Python (`sys.prefix/bin/python.exe`)
-    to launch the MCP server, with `vendor/deps/` and `vendor/` on `PYTHONPATH`.
-  - Added `_ensure_vendor_deps()` auto-install fallback for source installs.
-  - Added `_find_python_with_pip()` to `build_addon.py` so the build script
-    finds a Python with pip even when `sys.executable` is a uv-managed venv
-    that lacks pip.
-  - Removed the old `vendor/python_env/` layout entirely.
+- **401/403/404 errors** from HuggingFace are now surfaced immediately with actionable messages, instead of silently failing inside the llama-server subprocess.
+- **Download button disappearing** — No longer disappears after clicking. Always remains visible with correct state (Downloading… / Already Downloaded / Download & Start).
+- **`finish_reason=length` truncation** — Reasoning models (Qwen, DeepSeek, Gemma 4) that hit the token limit mid-reasoning now auto-continue: partial output is appended, "Continue." is sent, results are concatenated (max 2 attempts).
+- **System prompt not loading in deployed addon** — Added `vendor/blmcp/data/prompts.yml` path so the full 3000+ char prompt is found in installed builds.
+- **Orphaned tool messages in sliced history** — `_drop_orphaned_tool_messages()` prevents Jinja template errors when history truncation breaks tool-call pairs.
+- **Subprocess pipe deadlock** — Pipe drainer threads prevent Blender from hanging when subprocess output fills the pipe buffer.
+- **Orphaned server processes** — Port killer + fallback taskkill/pkill clean up stale processes on port conflicts.
+- **Traceback verbosity** — Error tracebacks from failed Blender code execution are truncated to last 3 frames + exception message, preserving context window space for the LLM.
+- **UI not refreshing after download** — Both llama-server and model download operators now redraw all `PREFERENCES` areas on completion instead of only `context.area`.
 
 ## [v1.1.35]
 

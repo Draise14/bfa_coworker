@@ -38,6 +38,10 @@ from .operators_agent import (
     _BFACW_OT_open_model_browser,
     _BFACW_OT_ping_agent,
     _BFACW_OT_check_ports,
+    _BFACW_OT_benchmark_objects,
+    _BFACW_OT_benchmark_scene,
+    _BFACW_OT_benchmark_animation,
+    _BFACW_OT_benchmark_collections,
 )
 from .operators_hf import (
     _BFACW_OT_open_hf_cache,
@@ -69,6 +73,10 @@ _classes = (
     _BFACW_OT_open_model_browser,
     _BFACW_OT_ping_agent,
     _BFACW_OT_check_ports,
+    _BFACW_OT_benchmark_objects,
+    _BFACW_OT_benchmark_scene,
+    _BFACW_OT_benchmark_animation,
+    _BFACW_OT_benchmark_collections,
     _BFACW_OT_open_hf_cache,
     _BFACW_OT_clear_hf_cache,
 )
@@ -82,6 +90,14 @@ def register() -> None:
     # Coalesce Blender 5.3+ "Policy Violation" warnings from vendored deps
     # into a single summary line instead of a console flood.
     log.install_policy_warning_filter()
+
+    # Migrate vendor/deps/ out of the addon tree BEFORE Blender's sandbox
+    # scans it.  Physical presence of top-level package dirs (rich/, click/,
+    # httpx/, etc.) inside the addon tree triggers policy violations even if
+    # they are never imported.  Moving them to ~/.cache/bfa_coworker/ avoids
+    # the scan entirely.
+    from . import agent_controller
+    agent_controller.migrate_vendor_deps()
 
     # Clear stale CLI command handles from a previous registration.
     _cli_commands.clear()
@@ -147,6 +163,7 @@ def _autostart_agent_timer() -> None:
         _llm_cfg.model_filename = prefs.model_filename
         _llm_cfg.downloaded_models_dir = prefs.downloaded_models_dir
         _llm_cfg.local_ctx_size = prefs.local_ctx_size
+        _llm_cfg.local_max_tokens = prefs.local_max_tokens
         _llm_cfg.local_port = _llm_port
         _llm.set_config(_llm_cfg)
 

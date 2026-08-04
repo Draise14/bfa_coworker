@@ -218,12 +218,16 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
     # ── Model Preset ─────────────────────────────────────────────────
 
     def _update_model_preset(self, _context: bpy.types.Context) -> None:
-        """When user picks a preset, auto-fill repo_id and filename."""
+        """When user picks a preset, auto-fill repo_id, filename, ctx_size, and max_tokens."""
         llm = get_llm_manager()
         preset = llm.get_preset_by_id(self.model_preset)
         if preset is not None:
             self.model_repo_id = preset.repo_id
             self.model_filename = preset.filename
+            # Auto-set context window from preset (capped at 65536 for consumer GPU safety).
+            self.local_ctx_size = min(preset.context_window, 65536)
+            # Auto-set max output tokens from preset.
+            self.local_max_tokens = preset.max_tokens
             # Clear existing model path — using preset now.
             self.existing_model_path = ""
             # Build info string for display.
@@ -240,6 +244,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             cfg.model_repo_id = preset.repo_id
             cfg.model_filename = preset.filename
             cfg.downloaded_models_dir = self.downloaded_models_dir
+            cfg.local_ctx_size = self.local_ctx_size
+            cfg.local_max_tokens = self.local_max_tokens
             cfg.hf_token = self.hf_token
             llm.set_config(cfg)
         else:
@@ -380,12 +386,25 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             "Context window size (in tokens) passed to llama-server via --ctx-size.\n"
             "Larger values allow longer conversations but use more RAM.\n"
             "Decrease if you get Jinja errors (context overflow) or out-of-memory.\n"
-            "Small models (8B) work well at 4096. MoE models can use 8192-16384.\n"
-            "Gemma 4 supports up to 262144."
+            "Default 32768 works for most models. Gemma 4 supports up to 262144."
         ),
-        default=8192,
-        min=2048,
+        default=32768,
+        min=4096,
         max=262144,
+        step=1024,
+        subtype='UNSIGNED',
+    )
+
+    local_max_tokens: IntProperty(  # type: ignore[valid-type]
+        name="Max Output Tokens",
+        description=(
+            "Maximum tokens per LLM API call (reasoning + content + tool calls).\n"
+            "Reasoning models need more headroom. If output gets cut off, raise this.\n"
+            "Auto-continue will retry if the model hits this limit mid-generation."
+        ),
+        default=16384,
+        min=512,
+        max=131072,
         step=1024,
         subtype='UNSIGNED',
     )
@@ -547,6 +566,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             box.prop(self, "model_repo_id")
             box.prop(self, "model_filename")
             box.prop(self, "local_ctx_size")
+            box.prop(self, "local_max_tokens")
             box.prop(self, "hf_token")
             row = box.row(align=True)
             row.operator("bfacw.open_hf_cache", icon="FILE_FOLDER", text="Hugging Face Cache")
@@ -644,6 +664,13 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             row = diag_box.row()
             row.operator("bfacw.check_ports", icon="FILE_REFRESH", text="Check Ports")
             row.operator("bfacw.ping_agent", icon="FILE_REFRESH", text="Diagnose")
+            # ── Benchmark tests ──────────────────────────────────────
+            diag_box.label(text="Benchmarks (send test prompts to agent)", icon='RENDER_RESULT')
+            bench_row = diag_box.row(align=True)
+            bench_row.operator("bfacw.benchmark_objects", icon="MESH_CUBE", text="Objects")
+            bench_row.operator("bfacw.benchmark_scene", icon="SCENE_DATA", text="Scene")
+            bench_row.operator("bfacw.benchmark_animation", icon="ANIM", text="Animation")
+            bench_row.operator("bfacw.benchmark_collections", icon="OUTLINER_COLLECTION", text="Collections")
             # Show check_ports results inline.
             from . import operators_agent as _oa_check
             check_result = getattr(_oa_check._BFACW_OT_check_ports, "_result", None)

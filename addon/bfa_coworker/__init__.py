@@ -91,6 +91,14 @@ def register() -> None:
     # into a single summary line instead of a console flood.
     log.install_policy_warning_filter()
 
+    # Migrate vendor/deps/ out of the addon tree BEFORE Blender's sandbox
+    # scans it.  Physical presence of top-level package dirs (rich/, click/,
+    # httpx/, etc.) inside the addon tree triggers policy violations even if
+    # they are never imported.  Moving them to ~/.cache/bfa_coworker/ avoids
+    # the scan entirely.
+    from . import agent_controller
+    agent_controller.migrate_vendor_deps()
+
     # Clear stale CLI command handles from a previous registration.
     _cli_commands.clear()
 

@@ -31,6 +31,7 @@ from .operators_llm import (
     _BFACW_OT_scan_existing_models,
     _BFACW_OT_select_preset,
     _BFACW_OT_select_existing_model,
+    _BFACW_OT_open_models_dir,
 )
 from .operators_agent import (
     _BFACW_OT_test_remote_api,
@@ -42,10 +43,6 @@ from .operators_agent import (
     _BFACW_OT_benchmark_scene,
     _BFACW_OT_benchmark_animation,
     _BFACW_OT_benchmark_collections,
-)
-from .operators_hf import (
-    _BFACW_OT_open_hf_cache,
-    _BFACW_OT_clear_hf_cache,
 )
 from .shared import (
     effective_ports,
@@ -68,6 +65,7 @@ _classes = (
     _BFACW_OT_scan_existing_models,
     _BFACW_OT_select_existing_model,
     _BFACW_OT_select_preset,
+    _BFACW_OT_open_models_dir,
     _BFACW_OT_test_remote_api,
     _BFACW_OT_refresh_remote_models,
     _BFACW_OT_open_model_browser,
@@ -77,8 +75,6 @@ _classes = (
     _BFACW_OT_benchmark_scene,
     _BFACW_OT_benchmark_animation,
     _BFACW_OT_benchmark_collections,
-    _BFACW_OT_open_hf_cache,
-    _BFACW_OT_clear_hf_cache,
 )
 
 

@@ -9,6 +9,14 @@ Usage:
     python build_addon.py                  # Build the addon
     python build_addon.py --install        # Build and install
     python build_addon.py --install --enable  # Build, install, and enable
+
+Set the environment like this in Powershell:
+    $env:BLENDER_BIN="D:\Software\Blender\stable\blender-5.2.0-lts.fbe6228777e7\blender.exe"
+    python build_addon.py
+
+This will persist, or use this command with the path to the Blender executable:
+    python build_addon.py --blender "D:\Software\Blender\stable\blender-5.2.0-lts.fbe6228777e7\blender.exe"
+
 """
 
 import argparse
@@ -226,13 +234,13 @@ def main() -> int:
         print("ERROR: Build failed with exit code {:d}".format(result.returncode))
         return result.returncode
 
-    # Find the built zip.
-    zips = [f for f in os.listdir(args.output_dir) if f.endswith(".zip")]
+    # Find the newest built zip (by modification time).
+    zips = [os.path.join(args.output_dir, f) for f in os.listdir(args.output_dir) if f.endswith(".zip")]
     if not zips:
         print("ERROR: No .zip file found in {:s}".format(args.output_dir))
         return 1
 
-    zip_path = os.path.join(args.output_dir, zips[0])
+    zip_path = max(zips, key=os.path.getmtime)
     print("Built: {:s}".format(zip_path))
 
     # Step 2: Install (optional).

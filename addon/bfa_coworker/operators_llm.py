@@ -15,6 +15,7 @@ __all__ = (
     "_BFACW_OT_scan_existing_models",
     "_BFACW_OT_select_preset",
     "_BFACW_OT_select_existing_model",
+    "_BFACW_OT_open_models_dir",
 )
 
 import bpy  # pylint: disable=import-error
@@ -25,6 +26,8 @@ import threading
 from pathlib import Path
 
 from .shared import effective_ports, get_llm_manager
+
+import webbrowser
 
 
 # ---------------------------------------------------------------------------
@@ -488,4 +491,24 @@ class _BFACW_OT_select_existing_model(bpy.types.Operator):  # type: ignore[misc]
             {"INFO"},
             "Using existing model: {:s}".format(os.path.basename(self.model_path)),
         )
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# Open Models Directory
+
+class _BFACW_OT_open_models_dir(bpy.types.Operator):  # type: ignore[misc]
+    """Open the models download directory in the system file browser."""
+    bl_idname = "bfacw.open_models_dir"
+    bl_label = "Open Models Directory"
+    bl_description = "Open the models download folder in your file browser"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        models_dir = prefs.downloaded_models_dir
+        if not models_dir:
+            models_dir = str(Path.home() / "bfa_coworker_models")
+        import webbrowser
+        webbrowser.open(models_dir)
+        self.report({"INFO"}, "Opened {:s}".format(models_dir))
         return {"FINISHED"}

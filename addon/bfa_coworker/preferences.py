@@ -547,6 +547,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             box.label(text="Or use an existing model:", icon='FILE_FOLDER')
             row = box.row(align=True)
             row.operator("bfacw.scan_existing_models", icon="FILE_REFRESH", text="Scan")
+            row.operator("bfacw.open_models_dir", icon="FILE_FOLDER", text="Open Folder")
             box.prop(self, "downloaded_models_dir")
             if self.existing_model_path:
                 box.label(
@@ -568,9 +569,6 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             box.prop(self, "local_ctx_size")
             box.prop(self, "local_max_tokens")
             box.prop(self, "hf_token")
-            row = box.row(align=True)
-            row.operator("bfacw.open_hf_cache", icon="FILE_FOLDER", text="Hugging Face Cache")
-            row.operator("bfacw.clear_hf_cache", icon="TRASH", text="Clear Cache")
 
         else:
             # ── Remote Provider ─────────────────────────────────────

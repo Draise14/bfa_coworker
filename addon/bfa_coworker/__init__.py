@@ -48,6 +48,7 @@ from .shared import (
     effective_ports,
     get_llm_manager,
     get_agent_controller,
+    get_gen_controller,
 )
 
 # Store the CLI handle, only for correct register/unregister.
@@ -105,6 +106,17 @@ def register() -> None:
     # Register the chat UI modules.
     from . import ui_chat
     ui_chat.register()
+
+    # Discover generative plugins (Tier 5).
+    # This scans gen_plugins/ and populates the registry.
+    # Safe to call — discovery is idempotent.
+    try:
+        from .gen_plugins import discover, PLUGIN_REGISTRY
+        discover()
+        print("[🛠️Coworker] gen_plugins: {:d} plugins registered".format(
+            len(PLUGIN_REGISTRY)))
+    except Exception as ex:
+        print("[🛠️Coworker] gen_plugins: discovery skipped — {:s}".format(str(ex)))
 
     # Defer auto-start so the server does not slow down Blender's startup.
     if not bpy.app.background:
@@ -183,6 +195,12 @@ def unregister() -> None:
     # Clean up subprocesses.
     get_llm_manager().cleanup()
     get_agent_controller().cleanup()
+
+    # Clean up generative controller (Tier 5).
+    try:
+        get_gen_controller().cleanup()
+    except Exception:
+        pass
 
     # Unregister chat UI.
     ui_chat.unregister()

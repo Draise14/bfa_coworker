@@ -13,6 +13,7 @@ __all__ = (
     "STATE_OFFLINE_ERROR_MESSAGE",
     "MODEL_PRESET_ITEMS",
     "REMOTE_PROVIDER_ITEMS",
+    "GEN_BACKEND_ITEMS",
     "DEFAULT_BRIDGE_PORT",
     "DEFAULT_MCP_PORT",
     "DEFAULT_LLM_PORT",
@@ -20,6 +21,7 @@ __all__ = (
     "effective_ports",
     "get_llm_manager",
     "get_agent_controller",
+    "get_gen_controller",
 )
 
 import os
@@ -88,6 +90,12 @@ def get_agent_controller():
     return _m
 
 
+def get_gen_controller():
+    """Lazy import of gen_controller module."""
+    from . import gen_controller as _m
+    return _m
+
+
 # ── Static EnumProperty Items ────────────────────────────────────────────
 
 # Static preset items for the model_preset EnumProperty.
@@ -119,3 +127,33 @@ _REMOTE_PROVIDER_ITEMS: list[tuple[str, str, str]] = [
 ]
 
 REMOTE_PROVIDER_ITEMS: list[tuple[str, str, str]] = _REMOTE_PROVIDER_ITEMS
+
+# Static preset items for the gen_backend EnumProperty.
+_GEN_BACKEND_ITEMS: list[tuple[str, str, str]] = [
+    (
+        "local",
+        "Local (Built-in)",
+        "Run generative models locally via diffusers/torch — "
+        "models downloaded on first use from HuggingFace",
+    ),
+    (
+        "pallaidium",
+        "Pallaidium Bridge",
+        "Bridge to Pallaidium addon if installed — "
+        "access 50+ models through Pallaidium's pipeline",
+    ),
+    (
+        "comfyui",
+        "ComfyUI",
+        "Connect to a local ComfyUI server — "
+        "use custom workflows as generation models",
+    ),
+    (
+        "remote",
+        "Remote API",
+        "Use a remote OpenAI-compatible generation API "
+        "(e.g. fal.ai, LocalAI)",
+    ),
+]
+
+GEN_BACKEND_ITEMS: list[tuple[str, str, str]] = _GEN_BACKEND_ITEMS

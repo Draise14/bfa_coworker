@@ -420,6 +420,59 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         ),
     )
 
+    # ── Generation (Tier 5) Properties ──────────────────────────────
+
+    gen_backend: EnumProperty(  # type: ignore[valid-type]
+        name="Generation Backend",
+        description="Which backend to use for image/video/audio generation",
+        items=[
+            ("local", "Local (Built-in)", "Run generative models locally via diffusers/torch"),
+            ("pallaidium", "Pallaidium Bridge", "Bridge to Pallaidium addon if installed"),
+            ("comfyui", "ComfyUI", "Connect to a local ComfyUI server"),
+            ("remote", "Remote API", "Use a remote OpenAI-compatible generation API"),
+        ],
+        default="local",
+    )
+
+    gen_models_dir: StringProperty(  # type: ignore[valid-type]
+        name="Gen Models Directory",
+        description="Directory where generative AI models are downloaded and cached",
+        default=str(Path.home() / "bfa_coworker_gen_models"),
+        subtype='DIR_PATH',
+    )
+
+    gen_output_dir: StringProperty(  # type: ignore[valid-type]
+        name="Output Directory",
+        description="Directory where generated media (images, videos, audio) is saved",
+        default=str(Path.home() / "bfa_coworker_generated"),
+        subtype='DIR_PATH',
+    )
+
+    gen_auto_download: BoolProperty(  # type: ignore[valid-type]
+        name="Auto-Download Models",
+        description="Automatically download generative models when first used",
+        default=True,
+    )
+
+    gen_comfyui_url: StringProperty(  # type: ignore[valid-type]
+        name="ComfyUI URL",
+        description="URL of the ComfyUI server (default: http://127.0.0.1:8188)",
+        default="http://127.0.0.1:8188",
+    )
+
+    gen_remote_url: StringProperty(  # type: ignore[valid-type]
+        name="Remote Gen API URL",
+        description="Base URL for the remote generation API (OpenAI /v1 dialect)",
+        default="",
+    )
+
+    gen_remote_key: StringProperty(  # type: ignore[valid-type]
+        name="Remote Gen API Key",
+        default="",
+        subtype='PASSWORD',
+        description="API key for the remote generation service",
+    )
+
     def _draw_effective_ports(self, box) -> None:
         """Draw the current effective port values as read-only labels."""
         bridge, mcp, llm = effective_ports(self)
@@ -617,6 +670,59 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             # ── Test Connection ─────────────────────────────────────
             row = box.row()
             row.operator("bfacw.test_remote_api", icon="URL")
+
+        # ── Generation (Tier 5) ────────────────────────────────────────
+        gen_box = layout.box()
+        gen_box.label(text="Generative AI (Image / Video / Audio)", icon='RENDER_RESULT')
+        gen_box.prop(self, "gen_backend")
+
+        if self.gen_backend == "local":
+            gen_box.label(
+                text="Models are downloaded from HuggingFace on first use.",
+                icon='INFO',
+            )
+            gen_box.prop(self, "gen_auto_download")
+            gen_box.prop(self, "gen_models_dir")
+            gen_box.prop(self, "gen_output_dir")
+
+            # Show available plugins.
+            try:
+                from .gen_plugins import get_plugins_by_type
+                for mtype, label, icon in [
+                    ("image", "Image Models", 'IMAGE_DATA'),
+                    ("video", "Video Models", 'SEQUENCE'),
+                    ("audio", "Audio Models", 'SPEAKER'),
+                    ("text", "Text Models", 'TEXT'),
+                ]:
+                    plugins = get_plugins_by_type(mtype)
+                    if plugins:
+                        gen_box.label(
+                            text="{:s}: {:d} available".format(label, len(plugins)),
+                            icon=icon,
+                        )
+            except Exception:
+                pass
+
+        elif self.gen_backend == "pallaidium":
+            gen_box.label(
+                text="Pallaidium addon must be installed and enabled separately.",
+                icon='INFO',
+            )
+            gen_box.label(
+                text="Models will be discovered from Pallaidium's plugin registry.",
+                icon='BLANK1',
+            )
+
+        elif self.gen_backend == "comfyui":
+            gen_box.prop(self, "gen_comfyui_url")
+            gen_box.label(
+                text="ComfyUI must be running with API enabled.",
+                icon='INFO',
+            )
+
+        elif self.gen_backend == "remote":
+            gen_box.prop(self, "gen_remote_url")
+            gen_box.prop(self, "gen_remote_key")
 
         # ── Agent Control ─────────────────────────────────────────────
         box = layout.box()

@@ -46,6 +46,9 @@ from .operators_agent import (
     BFACW_OT_copy_mcp_config,
     BFACW_OT_mcp_server_start,
     BFACW_OT_mcp_server_stop,
+    BFACW_OT_save_provider,
+    BFACW_OT_delete_provider,
+    BFACW_OT_load_provider,
 )
 from .shared import (
     effective_ports,
@@ -83,6 +86,9 @@ _classes = (
     BFACW_OT_copy_mcp_config,
     BFACW_OT_mcp_server_start,
     BFACW_OT_mcp_server_stop,
+    BFACW_OT_save_provider,
+    BFACW_OT_delete_provider,
+    BFACW_OT_load_provider,
 )
 
 

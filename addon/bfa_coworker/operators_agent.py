@@ -19,6 +19,9 @@ __all__ = (
     "BFACW_OT_copy_mcp_config",
     "BFACW_OT_mcp_server_start",
     "BFACW_OT_mcp_server_stop",
+    "BFACW_OT_save_provider",
+    "BFACW_OT_delete_provider",
+    "BFACW_OT_load_provider",
 )
 
 import bpy  # pylint: disable=import-error
@@ -386,3 +389,99 @@ class BFACW_OT_mcp_server_stop(bpy.types.Operator):  # type: ignore[misc]
         _ac_mod.stop_mcp_server()
         self.report({"INFO"}, "MCP server stopped")
         return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# BYOK Multi-Provider (Tier 2)
+
+class BFACW_OT_save_provider(bpy.types.Operator):  # type: ignore[misc]
+    """Save the current remote API configuration as a named provider profile."""
+    bl_idname = "bfacw.save_provider"
+    bl_label = "Save Provider"
+    bl_description = "Save the current remote API configuration as a named profile"
+
+    profile_name: bpy.props.StringProperty(  # type: ignore[valid-type]
+        name="Profile Name",
+        default="",
+        description="A name for this provider profile (e.g. 'OpenAI', 'Anthropic')",
+    )
+
+    def invoke(self, context: bpy.types.Context, event: bpy.types.Event) -> set[str]:
+        del event
+        wm = context.window_manager
+        return wm.invoke_props_dialog(self, width=400)
+
+    def draw(self, context: bpy.types.Context) -> None:
+        del context
+        layout = self.layout
+        layout.prop(self, "profile_name")
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        name = self.profile_name.strip()
+        if not name:
+            self.report({"ERROR"}, "Profile name cannot be empty")
+            return {"CANCELLED"}
+
+        profile = {
+            "name": name,
+            "provider": prefs.remote_provider,
+            "api_url": prefs.remote_api_url,
+            "api_key": prefs.remote_api_key,
+            "model": prefs.remote_model,
+        }
+
+        providers = prefs._get_saved_providers()
+        # Replace existing profile with same name.
+        providers = [p for p in providers if p.get("name") != name]
+        providers.append(profile)
+        prefs._set_saved_providers(providers)
+
+        self.report({"INFO"}, "Saved provider profile '{:s}'".format(name))
+        return {"FINISHED"}
+
+
+class BFACW_OT_delete_provider(bpy.types.Operator):  # type: ignore[misc]
+    """Delete a saved provider profile."""
+    bl_idname = "bfacw.delete_provider"
+    bl_label = "Delete Provider"
+    bl_description = "Delete a saved provider profile"
+
+    profile_name: bpy.props.StringProperty(  # type: ignore[valid-type]
+        name="Profile Name",
+        default="",
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        providers = prefs._get_saved_providers()
+        providers = [p for p in providers if p.get("name") != self.profile_name]
+        prefs._set_saved_providers(providers)
+        self.report({"INFO"}, "Deleted provider profile '{:s}'".format(self.profile_name))
+        return {"FINISHED"}
+
+
+class BFACW_OT_load_provider(bpy.types.Operator):  # type: ignore[misc]
+    """Load a saved provider profile into the current remote API configuration."""
+    bl_idname = "bfacw.load_provider"
+    bl_label = "Load Provider"
+    bl_description = "Load a saved provider profile"
+
+    profile_name: bpy.props.StringProperty(  # type: ignore[valid-type]
+        name="Profile Name",
+        default="",
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        providers = prefs._get_saved_providers()
+        for p in providers:
+            if p.get("name") == self.profile_name:
+                prefs.remote_provider = p.get("provider", "_custom")
+                prefs.remote_api_url = p.get("api_url", "")
+                prefs.remote_api_key = p.get("api_key", "")
+                prefs.remote_model = p.get("model", "")
+                self.report({"INFO"}, "Loaded provider profile '{:s}'".format(self.profile_name))
+                return {"FINISHED"}
+        self.report({"ERROR"}, "Profile '{:s}' not found".format(self.profile_name))
+        return {"CANCELLED"}

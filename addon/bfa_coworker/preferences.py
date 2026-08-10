@@ -524,6 +524,27 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         max=65535,
     )
 
+    # ── BYOK Provider Profiles (Tier 2) ─────────────────────────────────
+
+    saved_providers_json: StringProperty(  # type: ignore[valid-type]
+        name="Saved Providers",
+        description="JSON-serialized list of saved provider profiles",
+        default="[]",
+    )
+
+    def _get_saved_providers(self) -> list[dict]:
+        """Deserialize saved provider profiles from JSON."""
+        import json as _json
+        try:
+            return _json.loads(self.saved_providers_json)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    def _set_saved_providers(self, providers: list[dict]) -> None:
+        """Serialize saved provider profiles to JSON."""
+        import json as _json
+        self.saved_providers_json = _json.dumps(providers)
+
     def _draw_effective_ports(self, box) -> None:
         """Draw the current effective port values as read-only labels."""
         bridge, mcp, llm = effective_ports(self)
@@ -765,6 +786,30 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         # ── Test Connection ─────────────────────────────────────
         row = box.row()
         row.operator("bfacw.test_remote_api", icon="URL")
+
+        # ── Saved Provider Profiles (BYOK, Tier 2) ──────────────
+        box.separator()
+        box.label(text="Saved Provider Profiles", icon='BOOKMARKS')
+        providers = self._get_saved_providers()
+        if providers:
+            for p in providers:
+                row = box.row(align=True)
+                op = row.operator(
+                    "bfacw.load_provider",
+                    text="{:s} ({:s})".format(p.get("name", "?"), p.get("model", "?")),
+                    icon='FILE_TICK',
+                )
+                op.profile_name = p.get("name", "")
+                op = row.operator(
+                    "bfacw.delete_provider",
+                    text="",
+                    icon='X',
+                )
+                op.profile_name = p.get("name", "")
+        else:
+            box.label(text="No saved profiles. Configure above and save.", icon='INFO')
+        row = box.row()
+        row.operator("bfacw.save_provider", icon="ADD", text="Save Current as Profile")
 
     # ── Tab: Generative AI ─────────────────────────────────────────────
 

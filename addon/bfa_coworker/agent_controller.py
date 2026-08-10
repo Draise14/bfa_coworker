@@ -107,6 +107,42 @@ def _get_system_prompt() -> str:
     return _system_prompt
 
 
+def _get_system_prompt_with_rules() -> str:
+    """Return the system prompt with project rules prepended."""
+    base = _get_system_prompt()
+    try:
+        import bpy  # pylint: disable=import-error
+        rules_dir = Path(bpy.utils.user_resource("SCRIPTS")) / "bfa_coworker_rules"
+        rules_parts = []
+        global_rules = rules_dir / "global.md"
+        if global_rules.exists():
+            rules_parts.append(global_rules.read_text(encoding="utf-8"))
+        # Also check for blend-specific rules.
+        if bpy.data.filepath:
+            stem = Path(bpy.data.filepath).stem
+            blend_rules = rules_dir / "{:s}.md".format(stem)
+            if blend_rules.exists():
+                rules_parts.append(blend_rules.read_text(encoding="utf-8"))
+        if rules_parts:
+            rules_text = "\n\n".join(rules_parts)
+            return (
+                "## Project Rules\n"
+                "The following project rules MUST be followed:\n\n"
+                "{:s}\n\n"
+                "## Instructions\n"
+                "{:s}"
+            ).format(rules_text, base)
+    except Exception:
+        pass
+    return base
+
+
+def _clear_system_prompt_cache() -> None:
+    """Clear the cached system prompt so it's rebuilt on next call."""
+    global _system_prompt
+    _system_prompt = None
+
+
 def _drop_orphaned_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Remove ``tool``-role messages that have no preceding ``assistant``
@@ -1318,7 +1354,7 @@ def run_conversation_turn(
 
     # Ensure the first message is the system prompt.
     if not history or history[0].get("role") != "system":
-        system_text = _get_system_prompt()
+        system_text = _get_system_prompt_with_rules()
         history.insert(0, {"role": "system", "content": system_text})
         print("[🛠️Coworker] run_conversation_turn: inserted system prompt ({:d} chars)".format(
             len(system_text)))

@@ -16,6 +16,9 @@ __all__ = (
     "_BFACW_OT_benchmark_scene",
     "_BFACW_OT_benchmark_animation",
     "_BFACW_OT_benchmark_collections",
+    "BFACW_OT_copy_mcp_config",
+    "BFACW_OT_mcp_server_start",
+    "BFACW_OT_mcp_server_stop",
 )
 
 import bpy  # pylint: disable=import-error
@@ -307,3 +310,79 @@ def _run_benchmark(context: bpy.types.Context, bench_key: str) -> None:
 
     thread = threading.Thread(target=_do_benchmark, daemon=True)
     thread.start()
+
+
+# ---------------------------------------------------------------------------
+# Copy MCP Client Config (External Harness)
+
+class BFACW_OT_copy_mcp_config(bpy.types.Operator):  # type: ignore[misc]
+    """Copy MCP client configuration to the clipboard."""
+    bl_idname = "bfacw.copy_mcp_config"
+    bl_label = "Copy MCP Config"
+    bl_description = "Copy the MCP client configuration to the clipboard"
+
+    client_type: bpy.props.EnumProperty(  # type: ignore[valid-type]
+        name="Client",
+        items=[
+            ("claude", "Claude Desktop", "Claude Desktop config format"),
+            ("vscode", "VS Code / Cursor", "VS Code / Cursor config format"),
+        ],
+        default="claude",
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        _bridge_port, _, _ = effective_ports(prefs)
+        config = _ac_mod.generate_mcp_client_config(
+            client_type=self.client_type,
+            blender_host=prefs.host,
+            blender_port=_bridge_port,
+        )
+        context.window_manager.clipboard = config
+        self.report({"INFO"}, "MCP config copied to clipboard")
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# MCP Server Start (Network Mode)
+
+class BFACW_OT_mcp_server_start(bpy.types.Operator):  # type: ignore[misc]
+    """Start the MCP server in Network mode."""
+    bl_idname = "bfacw.mcp_server_start"
+    bl_label = "Start MCP Server"
+    bl_description = "Start the MCP HTTP server for external clients"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        _bridge_port, _mcp_port, _ = effective_ports(prefs)
+
+        mcp_host = prefs.mcp_server_host
+        mcp_port = prefs.mcp_server_port_override if prefs.mcp_server_port_override > 0 else _mcp_port
+
+        proc = _ac_mod.start_mcp_server_network(
+            host=mcp_host,
+            port=mcp_port,
+            blender_host=prefs.host,
+            blender_port=_bridge_port,
+        )
+        if proc is None:
+            self.report({"ERROR"}, _ac_mod._agent_state.error)
+            return {"CANCELLED"}
+
+        self.report({"INFO"}, "MCP server started on {:s}:{:d}".format(mcp_host, mcp_port))
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# MCP Server Stop
+
+class BFACW_OT_mcp_server_stop(bpy.types.Operator):  # type: ignore[misc]
+    """Stop the MCP server."""
+    bl_idname = "bfacw.mcp_server_stop"
+    bl_label = "Stop MCP Server"
+    bl_description = "Stop the MCP HTTP server"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        _ac_mod.stop_mcp_server()
+        self.report({"INFO"}, "MCP server stopped")
+        return {"FINISHED"}

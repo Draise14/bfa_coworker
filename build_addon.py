@@ -5,16 +5,16 @@
 """
 Build script for the Coworker extension.
 
-Usage:
+Step1 - Set the build environment like this in Powershell:
+    $env:BLENDER_BIN="D:\Software\Blender\stable\blender-5.2.0-lts.fbe6228777e7\blender.exe"
+    python build_addon.py
+
+Step2 - Usage:
     python build_addon.py                  # Build the addon
     python build_addon.py --install        # Build and install
     python build_addon.py --install --enable  # Build, install, and enable
 
-Set the environment like this in Powershell:
-    $env:BLENDER_BIN="D:\Software\Blender\stable\blender-5.2.0-lts.fbe6228777e7\blender.exe"
-    python build_addon.py
-
-This will persist, or use this command with the path to the Blender executable:
+The environment will persist, or use this command with the path to the Blender executable, example:
     python build_addon.py --blender "D:\Software\Blender\stable\blender-5.2.0-lts.fbe6228777e7\blender.exe"
 
 """

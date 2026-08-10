@@ -15,6 +15,7 @@ __all__ = (
     "ensure_event_loop",
     "schedule_coro",
     "start_mcp_server",
+    "start_mcp_server_network",
     "stop_mcp_server",
     "list_mcp_tools",
     "run_conversation_turn",
@@ -22,6 +23,7 @@ __all__ = (
     "ping_agent",
     "check_ports_available",
     "migrate_vendor_deps",
+    "generate_mcp_client_config",
 )
 
 import asyncio
@@ -185,6 +187,14 @@ class AgentState:
     tool_count: int = 0  # Number of MCP tools available (0 = not loaded yet)
     conversation_history: list[dict[str, Any]] = field(default_factory=list)
     streaming_text: str = ""
+
+    # ── Liveness tracking (Tier 1) ─────────────────────────────────
+    last_bridge_activity: float = 0.0
+    last_mcp_activity: float = 0.0
+    last_llm_activity: float = 0.0
+    bridge_live: bool = False
+    mcp_live: bool = False
+    llm_live: bool = False
 
 
 _agent_state = AgentState()
@@ -571,6 +581,81 @@ def check_ports_available(
     return result
 
 
+def _resolve_mcp_python() -> tuple[str | None, bool]:
+    """Resolve the Python executable and whether to use ``-m blmcp``.
+
+    Resolution order:
+    1. ``bfa-coworker-mcp`` console_scripts entry point (if user has it on PATH).
+    2. Blender's bundled Python (``sys.prefix/bin/python.exe``) with
+       ``vendor/deps/`` and ``vendor/blmcp/`` on ``PYTHONPATH``.
+    3. ``python`` from PATH as a last resort.
+
+    Returns ``(python_path, use_module)`` where *use_module* is True
+    when the MCP server should be launched via ``python -m blmcp``.
+    """
+    mcp_exe: str | None = None
+    use_module = False
+
+    # 1. Check for a pip-installed console_scripts entry point.
+    mcp_exe = (
+        shutil.which("bfa-coworker-mcp") or
+        shutil.which("bfa-coworker-mcp.exe") or
+        shutil.which("bfa-coworker-mcp.bat")
+    )
+
+    # 2. Fall back to Blender's bundled Python with vendor deps.
+    if not mcp_exe:
+        if not _ensure_vendor_deps():
+            _agent_state.error = (
+                "MCP server dependencies not found in vendor deps cache. "
+                "Run 'python build_addon.py' to build the extension, "
+                "or install manually: pip install --target ~/.cache/bfa_coworker/vendor_deps/ mcp[cli] pyyaml docutils"
+            )
+            return (None, False)
+
+        blender_py = _find_blender_python()
+        if blender_py:
+            mcp_exe = blender_py
+            use_module = True
+            print("[🛠️Coworker] _resolve_mcp_python: using Blender's Python at {:s}".format(mcp_exe))
+
+    # 3. Last resort: system python.
+    if not mcp_exe:
+        mcp_exe = shutil.which("python") or "python"
+        use_module = True
+        print("[🛠️Coworker] _resolve_mcp_python: falling back to system python at {:s}".format(mcp_exe))
+
+    return (mcp_exe, use_module)
+
+
+def _build_mcp_env(
+    blender_host: str = "localhost",
+    blender_port: int = 9876,
+) -> dict[str, str]:
+    """Build environment dict for the MCP server subprocess.
+
+    Sets ``BFACW_HOST``, ``BFACW_PORT``, and configures ``PYTHONPATH``
+    with vendor directories when using Blender's Python.
+    """
+    env = os.environ.copy()
+    env["BFACW_HOST"] = blender_host
+    env["BFACW_PORT"] = str(blender_port)
+
+    # Build PYTHONPATH from vendor directories.
+    vendor_pythonpath = _find_vendor_pythonpath()
+    existing_pp = env.get("PYTHONPATH", "")
+    if vendor_pythonpath:
+        env["PYTHONPATH"] = vendor_pythonpath + (os.pathsep + existing_pp if existing_pp else "")
+
+    # On Windows, pywin32 needs its _system32/ DLL directory on PATH.
+    if sys.platform == "win32":
+        pywin32_system32 = _get_vendor_deps_dir() / "pywin32_system32"
+        if pywin32_system32.is_dir():
+            env["PATH"] = str(pywin32_system32) + os.pathsep + env.get("PATH", "")
+
+    return env
+
+
 def start_mcp_server(
     port: int = _MCP_SERVER_DEFAULT_PORT,
     blender_host: str = "localhost",
@@ -617,58 +702,10 @@ def start_mcp_server(
     import time
     time.sleep(0.5)  # Let OS release the port.
 
-    env = os.environ.copy()
-    env["BFACW_HOST"] = blender_host
-    env["BFACW_PORT"] = str(blender_port)
+    env = _build_mcp_env(blender_host=blender_host, blender_port=blender_port)
 
     # --- Resolution order ---
-
-    mcp_exe: str | None = None
-    use_module = False
-
-    # 1. Check for a pip-installed console_scripts entry point.
-    mcp_exe = (
-        shutil.which("bfa-coworker-mcp") or
-        shutil.which("bfa-coworker-mcp.exe") or
-        shutil.which("bfa-coworker-mcp.bat")
-    )
-
-    # 2. Fall back to Blender's bundled Python with vendor deps.
-    if not mcp_exe:
-        # Ensure vendor dependencies are available (auto-install if missing).
-        if not _ensure_vendor_deps():
-            _agent_state.error = (
-                "MCP server dependencies not found in vendor deps cache. "
-                "Run 'python build_addon.py' to build the extension, "
-                "or install manually: pip install --target ~/.cache/bfa_coworker/vendor_deps/ mcp[cli] pyyaml docutils"
-            )
-            return None
-
-        # Build PYTHONPATH from vendor directories.
-        vendor_pythonpath = _find_vendor_pythonpath()
-        existing_pp = env.get("PYTHONPATH", "")
-        if vendor_pythonpath:
-            env["PYTHONPATH"] = vendor_pythonpath + (os.pathsep + existing_pp if existing_pp else "")
-
-        # On Windows, pywin32 needs its _system32/ DLL directory on PATH
-        # so that ``import pywintypes`` can find pywintypes*.dll at runtime.
-        # The vendor deps cache is not a site-packages dir, so .pth files are ignored.
-        if sys.platform == "win32":
-            pywin32_system32 = _get_vendor_deps_dir() / "pywin32_system32"
-            if pywin32_system32.is_dir():
-                env["PATH"] = str(pywin32_system32) + os.pathsep + env.get("PATH", "")
-
-        blender_py = _find_blender_python()
-        if blender_py:
-            mcp_exe = blender_py
-            use_module = True
-            print("[🛠️Coworker] start_mcp_server: using Blender's Python at {:s}".format(mcp_exe))
-
-    # 3. Last resort: system python.
-    if not mcp_exe:
-        mcp_exe = shutil.which("python") or "python"
-        use_module = True
-        print("[🛠️Coworker] start_mcp_server: falling back to system python at {:s}".format(mcp_exe))
+    mcp_exe, use_module = _resolve_mcp_python()
 
     if not mcp_exe:
         _agent_state.error = "Cannot find Python to run MCP server"
@@ -822,6 +859,195 @@ def stop_mcp_server() -> None:
         _agent_state.mcp_server_running = False
     finally:
         _mcp_shutting_down = False
+
+
+# ---------------------------------------------------------------------------
+# MCP server — Network mode (External Harness)
+
+def start_mcp_server_network(
+    host: str = "127.0.0.1",
+    port: int = 9191,
+    blender_host: str = "localhost",
+    blender_port: int = 9876,
+) -> subprocess.Popen | None:
+    """Launch the MCP server in network (HTTP) mode for external clients.
+
+    This is similar to ``start_mcp_server()`` but binds to a configurable
+    *host*:*port* instead of always using 127.0.0.1.  Useful for:
+    - Browser-based MCP clients on the same machine
+    - Remote MCP clients on the same network (use with caution)
+
+    Returns the ``Popen`` handle, or ``None`` on failure.
+    """
+    global _mcp_server_process, _mcp_shutting_down
+
+    if _mcp_shutting_down:
+        print("[🛠️Coworker] start_mcp_server_network: shutdown in progress — skipping")
+        return None
+
+    # Kill existing process if known.
+    if _mcp_server_process is not None:
+        try:
+            _mcp_server_process.terminate()
+            _mcp_server_process.wait(timeout=3)
+        except Exception:  # pylint: disable=broad-exception-caught
+            try:
+                _mcp_server_process.kill()
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+        _mcp_server_process = None
+        import time
+        time.sleep(0.5)
+
+    # Kill any stale process on the port.
+    _kill_process_on_port(port)
+    import time
+    time.sleep(0.5)
+
+    env = _build_mcp_env(blender_host=blender_host, blender_port=blender_port)
+
+    # --- Resolution order ---
+    mcp_exe, use_module = _resolve_mcp_python()
+
+    if not mcp_exe:
+        _agent_state.error = "Cannot find Python to run MCP server"
+        return None
+
+    try:
+        if use_module:
+            proc = subprocess.Popen(
+                [mcp_exe, "-m", "blmcp", "--transport", "http",
+                 "--host", host, "--port", str(port)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+            )
+        else:
+            proc = subprocess.Popen(
+                [mcp_exe, "--transport", "http",
+                 "--host", host, "--port", str(port)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+            )
+    except (FileNotFoundError, OSError) as ex:
+        _agent_state.error = "Failed to launch MCP server: {:s}".format(str(ex))
+        return None
+
+    _mcp_server_process = proc
+    _agent_state.mcp_server_running = True
+    _agent_state.error = ""
+
+    # Drain pipes.
+    _start_pipe_drainer(proc)
+
+    # Wait for port.
+    import time
+    time.sleep(0.5)
+    if proc.poll() is not None:
+        _agent_state.error = "MCP server exited immediately"
+        _agent_state.mcp_server_running = False
+        _mcp_server_process = None
+        return None
+
+    port_ready = _wait_for_port(host, port, timeout=15.0, interval=1.0)
+    if not port_ready:
+        _agent_state.error = "MCP server port {:d} never accepted connections".format(port)
+        _agent_state.mcp_server_running = False
+        _mcp_server_process = None
+        return None
+
+    return proc
+
+
+# ---------------------------------------------------------------------------
+# MCP client config generation (External Harness)
+
+def generate_mcp_client_config(
+    client_type: str = "claude",
+    blender_host: str = "localhost",
+    blender_port: int = 9876,
+) -> str:
+    """Generate MCP client configuration JSON for external tools.
+
+    *client_type*: ``"claude"`` (Claude Desktop), ``"vscode"`` (VS Code / Cursor),
+    or ``"generic"`` (generic JSON-RPC config).
+
+    Returns a JSON string suitable for the client's config file.
+    """
+    if client_type == "claude":
+        config = {
+            "mcpServers": {
+                "bfa-coworker": {
+                    "command": "python",
+                    "args": ["-m", "blmcp", "--transport", "stdio"],
+                    "env": {
+                        "BFACW_HOST": blender_host,
+                        "BFACW_PORT": str(blender_port),
+                    },
+                }
+            }
+        }
+    elif client_type == "vscode":
+        config = {
+            "servers": {
+                "bfa-coworker": {
+                    "type": "stdio",
+                    "command": "python",
+                    "args": ["-m", "blmcp", "--transport", "stdio"],
+                    "env": {
+                        "BFACW_HOST": blender_host,
+                        "BFACW_PORT": str(blender_port),
+                    },
+                }
+            }
+        }
+    else:
+        config = {
+            "command": "python",
+            "args": ["-m", "blmcp", "--transport", "stdio"],
+            "env": {
+                "BFACW_HOST": blender_host,
+                "BFACW_PORT": str(blender_port),
+            },
+        }
+
+    return json.dumps(config, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Operation History Log (Tier 1)
+
+def _log_operation(tool_name: str, params: dict, result: str) -> None:
+    """Append a tool execution to the operation history JSONL file."""
+    import time as _time
+    log_path = Path.home() / ".cache" / "bfa_coworker" / "operations.jsonl"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "timestamp": _time.time(),
+        "tool": tool_name,
+        "params": params,
+        "result": result[:500],  # Truncate for log size.
+    }
+    try:
+        with open(str(log_path), "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass  # Best-effort logging.
+
+
+# ---------------------------------------------------------------------------
+# Liveness Check (Tier 1)
+
+def _check_liveness() -> None:
+    """Update liveness booleans based on activity timestamps."""
+    import time as _time
+    now = _time.monotonic()
+    _agent_state.bridge_live = (now - _agent_state.last_bridge_activity) < 20.0
+    _agent_state.mcp_live = (now - _agent_state.last_mcp_activity) < 20.0
+    _agent_state.llm_live = (now - _agent_state.last_llm_activity) < 20.0
 
 
 # ---------------------------------------------------------------------------
@@ -1024,6 +1250,7 @@ def _call_mcp_tool_sync(
     port: int = _MCP_SERVER_DEFAULT_PORT,
 ) -> str:
     """Call an MCP tool synchronously via the HTTP endpoint."""
+    import time as _time
     url = "http://127.0.0.1:{:d}/".format(port)
     payload = {
         "jsonrpc": "2.0",
@@ -1054,6 +1281,9 @@ def _call_mcp_tool_sync(
             result = _parse_sse_text_response(raw)
             print("[🛠️Coworker] _call_mcp_tool_sync: result = {:s}".format(
                 result[:300]))
+            # Update liveness and log operation.
+            _agent_state.last_mcp_activity = _time.monotonic()
+            _log_operation(tool_name, arguments, result)
             return result
     except (urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
         print("[🛠️Coworker] _call_mcp_tool_sync: FAILED — {:s}".format(str(ex)))
@@ -1068,6 +1298,7 @@ def run_conversation_turn(
     api_key: str | None = None,
     model: str | None = None,
     mcp_port: int = _MCP_SERVER_DEFAULT_PORT,
+    chat_mode: str = "AGENT",
 ) -> list[dict[str, Any]]:
     """
     Run a full conversation turn.
@@ -1076,6 +1307,9 @@ def run_conversation_turn(
     2. Appends user message to history.
     3. Sends to LLM, handles tool calls via MCP.
     4. Returns updated conversation history.
+
+    When *chat_mode* is ``"ASK"``, tool execution is skipped and the LLM
+    responds with text only (read-only Q&A).
 
     This is a BLOCKING call — run it via ``schedule_coro`` or in a thread.
     """
@@ -1091,9 +1325,13 @@ def run_conversation_turn(
 
     history.append({"role": "user", "content": user_message})
 
-    # Get MCP tools.
-    tools = _list_tools_sync(mcp_port)
-    openai_tools = _mcp_tools_to_openai(tools) if tools else []
+    # In Ask mode, skip tool listing and execution entirely.
+    if chat_mode == "ASK":
+        openai_tools = []
+    else:
+        # Get MCP tools.
+        tools = _list_tools_sync(mcp_port)
+        openai_tools = _mcp_tools_to_openai(tools) if tools else []
 
     if on_status:
         on_status("Thinking...")

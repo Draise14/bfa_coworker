@@ -9,6 +9,7 @@ Add-on preferences definition and runtime state tracking.
 __all__ = (
     "_State",
     "_BFACW_Preferences",
+    "BFACW_OT_pref_tab_select",
 )
 
 import bpy  # pylint: disable=import-error
@@ -31,6 +32,9 @@ from .shared import (
     STATE_OFFLINE_ERROR_MESSAGE,
     MODEL_PRESET_ITEMS,
     REMOTE_PROVIDER_ITEMS,
+    AGENT_MODE_ITEMS,
+    MCP_SERVER_MODE_ITEMS,
+    CHAT_MODE_ITEMS,
     BFACW_DEBUG,
     effective_ports,
     get_llm_manager,
@@ -473,6 +477,53 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         description="API key for the remote generation service",
     )
 
+    # ── Preferences Tab ──────────────────────────────────────────────────
+
+    pref_tab: EnumProperty(  # type: ignore[valid-type]
+        name="Tab",
+        items=[
+            ("LOCAL_LLM", "Local LLM", "Configure and download local models", 'CONSOLE', 0),
+            ("REMOTE_API", "Remote API", "Configure remote API access", 'WORLD', 1),
+            ("GENERATIVE_AI", "Generative AI", "Image/video/audio generation backends", 'RENDER_RESULT', 2),
+            ("ADVANCED", "Advanced", "External harness, ports, and diagnostics", 'SETTINGS', 3),
+        ],
+        default="LOCAL_LLM",
+    )
+
+    # ── Agent Mode ───────────────────────────────────────────────────────
+
+    agent_mode: EnumProperty(  # type: ignore[valid-type]
+        name="Agent Mode",
+        description="How the agent operates",
+        items=AGENT_MODE_ITEMS,
+        default="SELF_CONTAINED",
+    )
+
+    # ── MCP Server Mode (for External Harness) ───────────────────────────
+
+    mcp_server_mode: EnumProperty(  # type: ignore[valid-type]
+        name="MCP Server Mode",
+        description="How the MCP server is launched in External Harness mode",
+        items=MCP_SERVER_MODE_ITEMS,
+        default="STDIO",
+    )
+
+    # ── MCP Server Network Settings ──────────────────────────────────────
+
+    mcp_server_host: StringProperty(  # type: ignore[valid-type]
+        name="MCP Server Host",
+        description="Host for the MCP HTTP server in Network mode",
+        default="127.0.0.1",
+    )
+
+    mcp_server_port_override: IntProperty(  # type: ignore[valid-type]
+        name="MCP Server Port",
+        description="Port for the MCP HTTP server in Network mode (0 = use default 9191 + offset)",
+        default=0,
+        min=0,
+        max=65535,
+    )
+
     def _draw_effective_ports(self, box) -> None:
         """Draw the current effective port values as read-only labels."""
         bridge, mcp, llm = effective_ports(self)
@@ -484,192 +535,242 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         del context
         layout = self.layout
 
-        # ── LLM Configuration ─────────────────────────────────────────
+        # ── Tab selector row ────────────────────────────────────────────
+        row = layout.row(align=True)
+        row.scale_y = 1.3
+        for tab_id, tab_label, tab_icon in [
+            ("LOCAL_LLM", "Local LLM", 'CONSOLE'),
+            ("REMOTE_API", "Remote API", 'WORLD'),
+            ("GENERATIVE_AI", "Generative AI", 'RENDER_RESULT'),
+            ("ADVANCED", "Advanced", 'SETTINGS'),
+        ]:
+            is_active = (self.pref_tab == tab_id)
+            op = row.operator(
+                "bfacw.pref_tab_select",
+                text=tab_label,
+                icon=tab_icon,
+                depress=is_active,
+            )
+            op.tab_id = tab_id
+
+        layout.separator()
+
+        # ── Draw the active tab ────────────────────��────────────────────
+        if self.pref_tab == 'LOCAL_LLM':
+            self._draw_tab_local_llm(context)
+        elif self.pref_tab == 'REMOTE_API':
+            self._draw_tab_remote_api(context)
+        elif self.pref_tab == 'GENERATIVE_AI':
+            self._draw_tab_generative_ai(context)
+        elif self.pref_tab == 'ADVANCED':
+            self._draw_tab_advanced(context)
+
+    # ── Tab: Local LLM ─────────────────────────────────────────────────
+
+    def _draw_tab_local_llm(self, context: bpy.types.Context) -> None:
+        del context
+        layout = self.layout
+
+        # ── LLM Configuration (Local mode only) ────────────────────────
         box = layout.box()
-        box.label(text="LLM Configuration", icon='SETTINGS')
-        box.prop(self, "llm_mode", expand=True)
+        box.label(text="Local LLM Configuration", icon='CONSOLE')
 
-        if self.llm_mode == "local":
-            # ── llama-server binary ──────────────────────────────────
-            llm = get_llm_manager()
-            llm_state = llm.get_state()
-            llama_found = llm.find_llama_server()
-            row = box.row(align=True)
-            if llama_found:
-                row.label(text="llama-server: Installed", icon='CHECKMARK')
-            else:
-                row.label(text="llama-server: Not installed", icon='ERROR')
-                row.operator(
-                    "bfacw.download_llama_server",
-                    icon="IMPORT",
-                    text="Download llama-server",
-                )
-            if llm_state.download_progress and "llama-server" in llm_state.download_progress:
-                box.label(text=llm_state.download_progress, icon='INFO')
-                pct = llm_state.download_progress_pct
-                if pct > 0:
-                    row = box.row(align=True)
-                    row.progress(factor=pct / 100.0, type='BAR')
-
-            # ── Recommended Models (presets) ─────────────────────────
-            box.label(text="Pick a Model", icon='VIEWZOOM')
-
-            _CATEGORIES = [
-                ("flagship", "Flagship (24 GB+ VRAM)", 'SORT_ASC'),
-                ("mid_range", "Mid-Range (12-20 GB VRAM — 4090 Sweet Spot)", 'VIEWZOOM'),
-                ("lightweight", "Lightweight (\u2264 8 GB VRAM)", 'LIGHT_SUN'),
-            ]
-
-            all_presets = llm.get_presets()
-
-            for cat_id, cat_label, cat_icon in _CATEGORIES:
-                cat_presets = [p for p in all_presets if p.category == cat_id]
-                if not cat_presets:
-                    continue
-                cat_box = box.box()
-                cat_box.label(text=cat_label, icon=cat_icon)
-                for preset in cat_presets:
-                    row = cat_box.row(align=True)
-                    op = row.operator(
-                        "bfacw.select_preset",
-                        text=preset.name,
-                        icon='CHECKBOX_HLT'
-                        if self.model_preset == preset.identifier
-                        else 'CHECKBOX_DEHLT',
-                    )
-                    op.preset_id = preset.identifier
-                    row.label(
-                        text="[{:s}] {:s}".format(preset.ram_gb, preset.capability),
-                    )
-
-            # Custom model entry.
-            box.prop(self, "model_preset", text="Custom Model")
-            if self.model_preset != "_custom" and self.model_preset_info:
-                info_box = box.box()
-                info_box.label(text="Model Information", icon='INFO')
-                for line in self.model_preset_info.split("\n"):
-                    info_box.label(text=line)
-
-            # ── Download or use existing ─────────────────────────────
-            llm_state = llm.get_state()
-
-            # Determine download button state.
-            models_dir = Path(self.downloaded_models_dir) if self.downloaded_models_dir else (Path.home() / "bfa_coworker_models")
-            model_file = models_dir / self.model_filename if self.model_filename else None
-            model_exists = model_file and model_file.exists()
-
-            if llm_state.download_active:
-                btn_text = "Downloading \u2026"
-                btn_icon = 'RENDERLAYERS'
-                btn_enabled = False
-            elif model_exists:
-                btn_text = "Already Downloaded"
-                btn_icon = 'CHECKMARK'
-                btn_enabled = False
-            elif llm_state.is_running:
-                btn_text = "Model Running"
-                btn_icon = 'CONSOLE'
-                btn_enabled = False
-            else:
-                btn_text = "Download Model"
-                btn_icon = "IMPORT"
-                btn_enabled = True
-
-            row = box.row(align=True)
-            row.operator("bfacw.download_model", icon=btn_icon, text=btn_text)
-            if not btn_enabled:
-                row.enabled = False
-            # Show a cancel button while a download is active.
-            if llm_state.download_active:
-                row.operator("bfacw.cancel_download", icon='CANCEL', text="Cancel")
-
-            # Always show progress/error areas.
-            if llm_state.error:
-                box.label(text=llm_state.error, icon="ERROR")
-            if llm_state.download_progress:
-                prog_text = llm_state.download_progress
-                if llm_state.download_progress_eta:
-                    prog_text = "{:s}  |  {:s}".format(prog_text, llm_state.download_progress_eta)
-                box.label(text=prog_text, icon='INFO')
-                pct = llm_state.download_progress_pct
-                if pct > 0:
-                    row = box.row(align=True)
-                    row.progress(factor=pct / 100.0, type='BAR')
-
-            # ── Scan for existing models ────────────────────────────
-            box.label(text="Or use an existing model:", icon='FILE_FOLDER')
-            row = box.row(align=True)
-            row.operator("bfacw.scan_existing_models", icon="FILE_REFRESH", text="Scan")
-            row.operator("bfacw.open_models_dir", icon="FILE_FOLDER", text="Open Folder")
-            box.prop(self, "downloaded_models_dir")
-            if self.existing_model_path:
-                box.label(
-                    text="Using: {:s}".format(os.path.basename(self.existing_model_path)),
-                    icon='CHECKMARK',
-                )
-
-            # ── Current model status ─────────────────────────────────
-            if llm_state.is_running:
-                box.label(
-                    text="Active model: {:s}".format(llm_state.model_name or "Unknown"),
-                    icon='CONSOLE',
-                )
-
-            # ── Advanced ─────────────────────────────────────────────
-            box.label(text="Advanced", icon='SETTINGS')
-            box.prop(self, "model_repo_id")
-            box.prop(self, "model_filename")
-            box.prop(self, "local_ctx_size")
-            box.prop(self, "local_max_tokens")
-            box.prop(self, "hf_token")
-
+        # ── llama-server binary ──────────────────────────────────
+        llm = get_llm_manager()
+        llm_state = llm.get_state()
+        llama_found = llm.find_llama_server()
+        row = box.row(align=True)
+        if llama_found:
+            row.label(text="llama-server: Installed", icon='CHECKMARK')
         else:
-            # ── Remote Provider ─────────────────────────────────────
-            llm = get_llm_manager()
-            box.label(text="Provider", icon='WORLD')
-            box.prop(self, "remote_provider")
+            row.label(text="llama-server: Not installed", icon='ERROR')
+            row.operator(
+                "bfacw.download_llama_server",
+                icon="IMPORT",
+                text="Download llama-server",
+            )
+        if llm_state.download_progress and "llama-server" in llm_state.download_progress:
+            box.label(text=llm_state.download_progress, icon='INFO')
+            pct = llm_state.download_progress_pct
+            if pct > 0:
+                row = box.row(align=True)
+                row.progress(factor=pct / 100.0, type='BAR')
 
-            # Show provider description when a known provider is selected.
-            if self.remote_provider != "_custom":
-                provider = llm.get_remote_provider_by_id(self.remote_provider)
-                if provider is not None:
-                    for line in provider.description.split("\n"):
-                        box.label(text=line, icon='INFO')
+        # ── Recommended Models (presets) ─────────────────────────
+        box.label(text="Pick a Model", icon='VIEWZOOM')
 
-            # ── API URL & Key ───────────────────────────────────────
-            box.prop(self, "remote_api_url")
-            box.prop(self, "remote_api_key")
+        _CATEGORIES = [
+            ("flagship", "Flagship (24 GB+ VRAM)", 'SORT_ASC'),
+            ("mid_range", "Mid-Range (12-20 GB VRAM — 4090 Sweet Spot)", 'VIEWZOOM'),
+            ("lightweight", "Lightweight (\u2264 8 GB VRAM)", 'LIGHT_SUN'),
+        ]
 
-            row = box.row(align=True)
-            row.label(text="API Key Help:", icon='HELP')
-            if self.remote_provider != "_custom":
-                provider = llm.get_remote_provider_by_id(self.remote_provider)
-                if provider is not None:
-                    row.label(text=provider.api_key_help)
-                else:
-                    row.label(text="Enter your API key for the remote service")
+        all_presets = llm.get_presets()
+
+        for cat_id, cat_label, cat_icon in _CATEGORIES:
+            cat_presets = [p for p in all_presets if p.category == cat_id]
+            if not cat_presets:
+                continue
+            cat_box = box.box()
+            cat_box.label(text=cat_label, icon=cat_icon)
+            for preset in cat_presets:
+                row = cat_box.row(align=True)
+                op = row.operator(
+                    "bfacw.select_preset",
+                    text=preset.name,
+                    icon='CHECKBOX_HLT'
+                    if self.model_preset == preset.identifier
+                    else 'CHECKBOX_DEHLT',
+                )
+                op.preset_id = preset.identifier
+                row.label(
+                    text="[{:s}] {:s}".format(preset.ram_gb, preset.capability),
+                )
+
+        # Custom model entry.
+        box.prop(self, "model_preset", text="Custom Model")
+        if self.model_preset != "_custom" and self.model_preset_info:
+            info_box = box.box()
+            info_box.label(text="Model Information", icon='INFO')
+            for line in self.model_preset_info.split("\n"):
+                info_box.label(text=line)
+
+        # ── Download or use existing ─────────────────────────────
+        llm_state = llm.get_state()
+
+        # Determine download button state.
+        models_dir = Path(self.downloaded_models_dir) if self.downloaded_models_dir else (Path.home() / "bfa_coworker_models")
+        model_file = models_dir / self.model_filename if self.model_filename else None
+        model_exists = model_file and model_file.exists()
+
+        if llm_state.download_active:
+            btn_text = "Downloading \u2026"
+            btn_icon = 'RENDERLAYERS'
+            btn_enabled = False
+        elif model_exists:
+            btn_text = "Already Downloaded"
+            btn_icon = 'CHECKMARK'
+            btn_enabled = False
+        elif llm_state.is_running:
+            btn_text = "Model Running"
+            btn_icon = 'CONSOLE'
+            btn_enabled = False
+        else:
+            btn_text = "Download Model"
+            btn_icon = "IMPORT"
+            btn_enabled = True
+
+        row = box.row(align=True)
+        row.operator("bfacw.download_model", icon=btn_icon, text=btn_text)
+        if not btn_enabled:
+            row.enabled = False
+        # Show a cancel button while a download is active.
+        if llm_state.download_active:
+            row.operator("bfacw.cancel_download", icon='CANCEL', text="Cancel")
+
+        # Always show progress/error areas.
+        if llm_state.error:
+            box.label(text=llm_state.error, icon="ERROR")
+        if llm_state.download_progress:
+            prog_text = llm_state.download_progress
+            if llm_state.download_progress_eta:
+                prog_text = "{:s}  |  {:s}".format(prog_text, llm_state.download_progress_eta)
+            box.label(text=prog_text, icon='INFO')
+            pct = llm_state.download_progress_pct
+            if pct > 0:
+                row = box.row(align=True)
+                row.progress(factor=pct / 100.0, type='BAR')
+
+        # ── Scan for existing models ────────────────────────────
+        box.label(text="Or use an existing model:", icon='FILE_FOLDER')
+        row = box.row(align=True)
+        row.operator("bfacw.scan_existing_models", icon="FILE_REFRESH", text="Scan")
+        row.operator("bfacw.open_models_dir", icon="FILE_FOLDER", text="Open Folder")
+        box.prop(self, "downloaded_models_dir")
+        if self.existing_model_path:
+            box.label(
+                text="Using: {:s}".format(os.path.basename(self.existing_model_path)),
+                icon='CHECKMARK',
+            )
+
+        # ── Current model status ─────────────────────────────────
+        if llm_state.is_running:
+            box.label(
+                text="Active model: {:s}".format(llm_state.model_name or "Unknown"),
+                icon='CONSOLE',
+            )
+
+        # ── Advanced ─────────────────────────────────────────────
+        box.label(text="Advanced", icon='SETTINGS')
+        box.prop(self, "model_repo_id")
+        box.prop(self, "model_filename")
+        box.prop(self, "local_ctx_size")
+        box.prop(self, "local_max_tokens")
+        box.prop(self, "hf_token")
+
+    # ── Tab: Remote API ────────────────────────────────────────────────
+
+    def _draw_tab_remote_api(self, context: bpy.types.Context) -> None:
+        del context
+        layout = self.layout
+
+        # ── Remote API Configuration ────────────────────────────────────
+        box = layout.box()
+        box.label(text="Remote API Configuration", icon='WORLD')
+
+        llm = get_llm_manager()
+
+        # ── Remote Provider ─────────────────────────────────────
+        box.label(text="Provider", icon='WORLD')
+        box.prop(self, "remote_provider")
+
+        # Show provider description when a known provider is selected.
+        if self.remote_provider != "_custom":
+            provider = llm.get_remote_provider_by_id(self.remote_provider)
+            if provider is not None:
+                for line in provider.description.split("\n"):
+                    box.label(text=line, icon='INFO')
+
+        # ── API URL & Key ───────────────────────────────────────
+        box.prop(self, "remote_api_url")
+        box.prop(self, "remote_api_key")
+
+        row = box.row(align=True)
+        row.label(text="API Key Help:", icon='HELP')
+        if self.remote_provider != "_custom":
+            provider = llm.get_remote_provider_by_id(self.remote_provider)
+            if provider is not None:
+                row.label(text=provider.api_key_help)
             else:
                 row.label(text="Enter your API key for the remote service")
+        else:
+            row.label(text="Enter your API key for the remote service")
 
-            # ── Model ───────────────────────────────────────────────
-            box.label(text="Model", icon='VIEWZOOM')
-            box.prop(self, "remote_model")
-            row = box.row(align=True)
-            row.operator("bfacw.refresh_remote_models", icon="FILE_REFRESH", text="Refresh Models")
-            row.operator("bfacw.open_model_browser", icon="URL", text="Browse Models")
+        # ── Model ───────────────────────────────────────────────
+        box.label(text="Model", icon='VIEWZOOM')
+        box.prop(self, "remote_model")
+        row = box.row(align=True)
+        row.operator("bfacw.refresh_remote_models", icon="FILE_REFRESH", text="Refresh Models")
+        row.operator("bfacw.open_model_browser", icon="URL", text="Browse Models")
 
-            # Show fetch status.
-            if self.remote_models_count > 0:
-                box.label(
-                    text="{:d} models available from the API".format(self.remote_models_count),
-                    icon='CHECKMARK',
-                )
-            if self.remote_models_fetch_error:
-                box.label(text=self.remote_models_fetch_error, icon='ERROR')
+        # Show fetch status.
+        if self.remote_models_count > 0:
+            box.label(
+                text="{:d} models available from the API".format(self.remote_models_count),
+                icon='CHECKMARK',
+            )
+        if self.remote_models_fetch_error:
+            box.label(text=self.remote_models_fetch_error, icon='ERROR')
 
-            # ── Test Connection ─────────────────────────────────────
-            row = box.row()
-            row.operator("bfacw.test_remote_api", icon="URL")
+        # ── Test Connection ─────────────────────────────────────
+        row = box.row()
+        row.operator("bfacw.test_remote_api", icon="URL")
+
+    # ── Tab: Generative AI ─────────────────────────────────────────────
+
+    def _draw_tab_generative_ai(self, context: bpy.types.Context) -> None:
+        del context
+        layout = self.layout
 
         # ── Generation (Tier 5) ────────────────────────────────────────
         gen_box = layout.box()
@@ -724,6 +825,73 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             gen_box.prop(self, "gen_remote_url")
             gen_box.prop(self, "gen_remote_key")
 
+    # ── Tab: Advanced ──────────────────────────────────────────────────
+
+    def _draw_tab_advanced(self, context: bpy.types.Context) -> None:
+        del context
+        layout = self.layout
+
+        # ── Agent Mode ─────────────────────────────────────────────────
+        box = layout.box()
+        box.label(text="Agent Mode", icon='WORKSPACE')
+        box.prop(self, "agent_mode", expand=True)
+
+        # ── Bridge Server ──────────────────────────────────────────────
+        bridge_box = layout.box()
+        bridge_box.label(text="Bridge Server", icon='NETWORK_DRIVE')
+        bridge_box.prop(self, "host")
+        bridge_box.prop(self, "port")
+        from . import mcp_to_blender_server as _mbs
+        if _mbs.is_running():
+            _bridge_port, _, _ = effective_ports(self)
+            bridge_box.label(
+                text="Status: Running on {:s}:{:d}".format(self.host, _bridge_port),
+                icon='CHECKMARK',
+            )
+        else:
+            bridge_box.label(text="Status: Stopped", icon='X')
+
+        # ── MCP Server (External Harness) ──────────────────────────────
+        mcp_box = layout.box()
+        mcp_box.label(text="MCP Server (External Harness)", icon='SETTINGS')
+        mcp_box.prop(self, "mcp_server_mode", expand=True)
+
+        if self.mcp_server_mode == "STDIO":
+            # Show config snippet for Claude Desktop.
+            mcp_box.label(text="Claude Desktop Config:", icon='COPYDOWN')
+            config_json = (
+                '{\n'
+                '  "mcpServers": {\n'
+                '    "bfa-coworker": {\n'
+                '      "command": "python",\n'
+                '      "args": ["-m", "blmcp", "--transport", "stdio"],\n'
+                '      "env": {\n'
+                '        "BFACW_HOST": "' + self.host + '",\n'
+                '        "BFACW_PORT": "' + str(self.port) + '"\n'
+                '      }\n'
+                '    }\n'
+                '  }\n'
+                '}'
+            )
+            mcp_box.label(text=config_json, icon='BLANK1')
+            row = mcp_box.row()
+            row.operator("bfacw.copy_mcp_config", icon="COPYDOWN", text="Copy to Clipboard")
+
+        elif self.mcp_server_mode == "NETWORK":
+            mcp_box.prop(self, "mcp_server_host")
+            mcp_box.prop(self, "mcp_server_port_override")
+            if self.mcp_server_host not in ("127.0.0.1", "localhost", "::1"):
+                mcp_box.label(
+                    text="\u26a0 Binding to non-localhost exposes the MCP server to your network!",
+                    icon='ERROR',
+                )
+            row = mcp_box.row(align=True)
+            from . import agent_controller as _ac
+            if _ac._agent_state.mcp_server_running:
+                row.operator("bfacw.mcp_server_stop", icon="CANCEL", text="Stop MCP Server")
+            else:
+                row.operator("bfacw.mcp_server_start", icon="PLAY", text="Start MCP Server")
+
         # ── Agent Control ─────────────────────────────────────────────
         box = layout.box()
         box.label(text="Agent Control", icon='WORKSPACE')
@@ -741,15 +909,15 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 ("llm_health", "LLM"),
                 ("llm_chat", "Chat"),
             ]:
-                val = ping.get(key, "—")
+                val = ping.get(key, "\u2014")
                 box.label(
                     text="{:<6s} {:s}".format(label + ":", val),
                     icon=status_icon if val.startswith("OK") else "ERROR",
                 )
 
-        # ── Advanced Port Settings ──────────────────────────────────────
+        # ── Port Settings ──────────────────────────────────────────────
         port_box = layout.box()
-        port_box.label(text="Advanced Port Settings", icon='SETTINGS')
+        port_box.label(text="Port Settings", icon='SETTINGS')
         port_box.prop(self, "port_offset")
         self._draw_effective_ports(port_box)
         row = port_box.row()
@@ -760,9 +928,9 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         # ── Diagnostics (debug only, behind flag) ───────────────────────
         if BFACW_DEBUG:
             diag_box = layout.box()
-            diag_box.label(text="🛠️ Diagnostics", icon='INFO')
+            diag_box.label(text="\U0001f6e0\ufe0f Diagnostics", icon='INFO')
             diag_box.label(
-                text="Temporary debug tools — hidden when BFACW_DEBUG=False",
+                text="Temporary debug tools \u2014 hidden when BFACW_DEBUG=False",
                 icon='BLANK1',
             )
             row = diag_box.row()
@@ -798,8 +966,29 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     ("llm_health", "LLM"),
                     ("llm_chat", "Chat"),
                 ]:
-                    val = ping.get(key, "—")
+                    val = ping.get(key, "\u2014")
                     diag_box.label(
                         text="{:<6s} {:s}".format(label + ":", val),
                         icon=status_icon if val.startswith("OK") else "ERROR",
                     )
+
+
+# ---------------------------------------------------------------------------
+# Preferences Tab Selector Operator
+
+class BFACW_OT_pref_tab_select(bpy.types.Operator):  # type: ignore[misc]
+    """Switch to a different preferences tab."""
+    bl_idname = "bfacw.pref_tab_select"
+    bl_label = "Select Preferences Tab"
+    bl_description = "Switch to this preferences tab"
+    bl_options = {'INTERNAL'}
+
+    tab_id: StringProperty(  # type: ignore[valid-type]
+        name="Tab ID",
+        default="LOCAL_LLM",
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        prefs.pref_tab = self.tab_id
+        return {'FINISHED'}

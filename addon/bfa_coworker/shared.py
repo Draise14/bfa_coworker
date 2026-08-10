@@ -14,6 +14,9 @@ __all__ = (
     "MODEL_PRESET_ITEMS",
     "REMOTE_PROVIDER_ITEMS",
     "GEN_BACKEND_ITEMS",
+    "AGENT_MODE_ITEMS",
+    "MCP_SERVER_MODE_ITEMS",
+    "CHAT_MODE_ITEMS",
     "DEFAULT_BRIDGE_PORT",
     "DEFAULT_MCP_PORT",
     "DEFAULT_LLM_PORT",
@@ -157,3 +160,52 @@ _GEN_BACKEND_ITEMS: list[tuple[str, str, str]] = [
 ]
 
 GEN_BACKEND_ITEMS: list[tuple[str, str, str]] = _GEN_BACKEND_ITEMS
+
+# ── Agent Mode EnumProperty Items ────────────────────────────────────────
+
+AGENT_MODE_ITEMS: list[tuple[str, str, str]] = [
+    (
+        "SELF_CONTAINED",
+        "Self-Contained",
+        "Built-in chat UI with managed local LLM or remote API — "
+        "everything runs inside Blender (recommended for new users)",
+    ),
+    (
+        "EXTERNAL_HARNESS",
+        "External Harness",
+        "Bridge-only mode — run the TCP bridge server inside Blender "
+        "and connect an external MCP client (Claude Desktop, Cursor, "
+        "VS Code, or any MCP-compatible tool)",
+    ),
+]
+
+# ── MCP Server Mode EnumProperty Items ───────────────────────────────────
+
+MCP_SERVER_MODE_ITEMS: list[tuple[str, str, str]] = [
+    (
+        "MANAGED",
+        "Managed (HTTP)",
+        "The addon manages the MCP server as a subprocess with HTTP transport — "
+        "used by the built-in chat UI",
+    ),
+    (
+        "STDIO",
+        "Stdio (External Client)",
+        "The MCP server runs via stdio — for external MCP clients like "
+        "Claude Desktop, Cursor, or VS Code. The addon provides config snippets "
+        "but does NOT manage the server process",
+    ),
+    (
+        "NETWORK",
+        "Network (HTTP Server)",
+        "The MCP server listens on a configurable host:port with HTTP transport — "
+        "for browser-based clients or remote connections",
+    ),
+]
+
+# ── Chat Mode EnumProperty Items (Tier 1: Agent/Ask Toggle) ──────────────
+
+CHAT_MODE_ITEMS: list[tuple[str, str, str]] = [
+    ("AGENT", "Agent", "LLM can execute tools and modify the scene"),
+    ("ASK", "Ask", "LLM answers questions without modifying anything"),
+]

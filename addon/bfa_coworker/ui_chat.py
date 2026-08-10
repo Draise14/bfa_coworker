@@ -32,6 +32,7 @@ from pathlib import Path
 import bpy  # pylint: disable=import-error
 from bpy.props import (  # pylint: disable=import-error
     StringProperty,
+    EnumProperty,
 )
 from bpy.types import (  # pylint: disable=import-error
     Operator,
@@ -44,7 +45,7 @@ import textwrap
 from . import agent_controller
 from . import llm_manager
 from . import mcp_to_blender_server
-from .shared import effective_ports
+from .shared import effective_ports, CHAT_MODE_ITEMS
 
 
 _WRAP_WIDTH = 60
@@ -90,6 +91,13 @@ class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
     chat_status: StringProperty(  # type: ignore[valid-type]
         name="Status",
         default="Idle",
+    )
+
+    chat_mode: EnumProperty(  # type: ignore[valid-type]
+        name="Mode",
+        description="Agent mode: LLM can execute tools. Ask mode: read-only Q&A",
+        items=CHAT_MODE_ITEMS,
+        default="AGENT",
     )
 
 
@@ -166,6 +174,7 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
                     api_key=api_key or None,
                     model=model,
                     mcp_port=_mcp_port,
+                    chat_mode=props.chat_mode,
                 )
             except Exception as ex:  # pylint: disable=broad-exception-caught
                 agent_controller._agent_state.error = str(ex)
@@ -221,6 +230,51 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
     bl_description = "Start the MCP bridge, MCP server, and LLM backend"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+
+        # In External Harness mode, only start the bridge server.
+        if prefs.agent_mode == "EXTERNAL_HARNESS":
+            return self._start_bridge_only(context)
+
+        return self._start_full_agent(context)
+
+    def _start_bridge_only(self, context: bpy.types.Context) -> set[str]:
+        """Start only the bridge server (External Harness mode)."""
+        wm = context.window_manager
+        props = wm.bfacw_chat_props  # type: ignore[attr-defined]
+
+        if mcp_to_blender_server.is_running():
+            self.report({"INFO"}, "Bridge server already running")
+            _bridge_port, _, _ = effective_ports(
+                context.preferences.addons[__package__].preferences)
+            props.chat_status = "External Harness — Bridge on port {:d}".format(_bridge_port)
+            return {"FINISHED"}
+
+        if bpy.app.background:
+            self.report({"ERROR"}, "Cannot start in background mode")
+            return {"CANCELLED"}
+
+        prefs = context.preferences.addons[__package__].preferences
+        _bridge_port, _, _ = effective_ports(prefs)
+        try:
+            mcp_to_blender_server.start(prefs.host, _bridge_port)
+        except Exception as ex:  # pylint: disable=broad-exception-caught
+            self.report({"ERROR"}, "Bridge server failed: {:s}".format(str(ex)))
+            return {"CANCELLED"}
+
+        from . import execute_interactive
+        bpy.app.timers.register(
+            execute_interactive.run,
+            first_interval=mcp_to_blender_server.TIMER_INTERVAL_ACTIVE,
+            persistent=True,
+        )
+
+        props.chat_status = "External Harness — Bridge on port {:d}".format(_bridge_port)
+        self.report({"INFO"}, "Bridge server started on port {:d}".format(_bridge_port))
+        _redraw_areas(context)
+        return {"FINISHED"}
+
+    def _start_full_agent(self, context: bpy.types.Context) -> set[str]:
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
 
@@ -387,34 +441,68 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
         state = agent_controller._agent_state
+        prefs = context.preferences.addons[__package__].preferences
+        is_harness = (prefs.agent_mode == "EXTERNAL_HARNESS")
 
         # Agent control buttons.
         row = layout.row(align=True)
         row.scale_y = 2.0
-        if state.mcp_server_running:
-            row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop Agent")
+        if is_harness:
+            if mcp_to_blender_server.is_running():
+                row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop Bridge")
+            else:
+                row.operator("bfacw.agent_start", icon="PLAY", text="Start Bridge")
         else:
-            row.operator("bfacw.agent_start", icon="PLAY", text="Start Agent")
+            if state.mcp_server_running:
+                row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop Agent")
+            else:
+                row.operator("bfacw.agent_start", icon="PLAY", text="Start Agent")
 
         # Status.
-        status = props.chat_status
-        if state.is_thinking:
-            status = "Thinking..."
-        elif not state.mcp_server_running:
-            status = "Offline"
-        elif state.error:
-            status = "Error: {:s}".format(state.error)
+        if is_harness:
+            bridge_running = mcp_to_blender_server.is_running()
+            if bridge_running:
+                _bridge_port, _, _ = effective_ports(prefs)
+                status = "External Harness — Bridge on port {:d}".format(_bridge_port)
+            else:
+                status = "Bridge Offline"
+        else:
+            status = props.chat_status
+            if state.is_thinking:
+                status = "Thinking..."
+            elif not state.mcp_server_running:
+                status = "Offline"
+            elif state.error:
+                status = "Error: {:s}".format(state.error)
 
         row = layout.row()
+        is_ok = (mcp_to_blender_server.is_running() if is_harness else state.mcp_server_running)
         row.label(text="Status: {:s}".format(status), icon=(
-            'CHECKMARK' if state.mcp_server_running and not state.is_thinking else
+            'CHECKMARK' if is_ok and not state.is_thinking else
             'SORTTIME' if state.is_thinking else
             'ERROR' if state.error else
             'X'
         ))
 
-        # Tool count — surfaces silent tool-loading failures.
-        if state.mcp_server_running:
+        # Liveness dots (Tier 1).
+        if not is_harness and state.mcp_server_running:
+            agent_controller._check_liveness()
+            liveness_row = layout.row(align=True)
+            liveness_row.label(
+                text="Bridge: {:s}".format("\u25cf" if state.bridge_live else "\u25cb"),
+                icon='NETWORK_DRIVE',
+            )
+            liveness_row.label(
+                text="MCP: {:s}".format("\u25cf" if state.mcp_live else "\u25cb"),
+                icon='SETTINGS',
+            )
+            liveness_row.label(
+                text="LLM: {:s}".format("\u25cf" if state.llm_live else "\u25cb"),
+                icon='CONSOLE',
+            )
+
+        # Tool count.
+        if not is_harness and state.mcp_server_running:
             if state.tool_count > 0:
                 layout.label(text="Tools: {:d} loaded".format(state.tool_count), icon='MODIFIER')
             else:
@@ -424,26 +512,76 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 )
 
         # LLM info.
-        llm_state = llm_manager.get_state()
-        if llm_state.is_running:
-            layout.label(text="Model: {:s}".format(llm_state.model_name or "Local LLM"), icon='CONSOLE')
-        llm_cfg = llm_manager.get_config()
-        if llm_cfg.mode == "remote" and llm_cfg.remote_model:
-            layout.label(text="Model: {:s}".format(llm_cfg.remote_model), icon='WORLD')
+        if not is_harness:
+            llm_state = llm_manager.get_state()
+            if llm_state.is_running:
+                layout.label(text="Model: {:s}".format(llm_state.model_name or "Local LLM"), icon='CONSOLE')
+            llm_cfg = llm_manager.get_config()
+            if llm_cfg.mode == "remote" and llm_cfg.remote_model:
+                layout.label(text="Model: {:s}".format(llm_cfg.remote_model), icon='WORLD')
 
-        layout.separator()
+        # ── External Harness: Config & Instructions ──
+        if is_harness and mcp_to_blender_server.is_running():
+            box = layout.box()
+            box.label(text="Connect an External MCP Client", icon='WORLD')
 
-        # Input area (multi-line textbox) — always at top.
-        layout.textbox(props, "chat_input")
+            # Copy config buttons.
+            row = box.row(align=True)
+            op = row.operator("bfacw.copy_mcp_config", text="Claude Desktop Config", icon='COPYDOWN')
+            op.client_type = "claude"
+            op = row.operator("bfacw.copy_mcp_config", text="VS Code Config", icon='COPYDOWN')
+            op.client_type = "vscode"
 
-        # Action buttons.
-        row = layout.row(align=True)
-        row.scale_y = 1.5
-        if state.is_thinking:
-            row.operator("bfacw.chat_stop", icon="PAUSE", text="Stop")
+            # Instructions.
+            box.label(text="1. Copy the config above to your clipboard", icon='DOT')
+            box.label(text="2. Paste into your MCP client's config file", icon='DOT')
+            box.label(text="3. Restart your MCP client", icon='DOT')
+            box.label(text="4. The client will connect to Blender's bridge", icon='DOT')
+
+            # MCP server mode selector.
+            box.separator()
+            box.label(text="MCP Server Mode:", icon='SETTINGS')
+            box.prop(prefs, "mcp_server_mode", expand=True)
+
+            if prefs.mcp_server_mode == "NETWORK":
+                box.prop(prefs, "mcp_server_host")
+                row = box.row(align=True)
+                row.prop(prefs, "mcp_server_port_override")
+                if prefs.mcp_server_host not in ("127.0.0.1", "localhost", "::1"):
+                    box.label(
+                        text="\u26a0 Binding to non-localhost exposes the MCP server to your network!",
+                        icon='ERROR',
+                    )
+                row = box.row(align=True)
+                if agent_controller._agent_state.mcp_server_running:
+                    row.operator("bfacw.mcp_server_stop", icon="CANCEL", text="Stop MCP Server")
+                else:
+                    row.operator("bfacw.mcp_server_start", icon="PLAY", text="Start MCP Server")
+
+            layout.separator()
+
+        # ── In harness mode, disable chat input ──
+        if is_harness:
+            layout.label(text="Chat is handled by your external MCP client.", icon='INFO')
+            layout.label(text="Messages below are read-only monitoring.", icon='INFO')
         else:
-            row.operator("bfacw.chat_send", icon="PLAY", text="Send")
-        row.operator("bfacw.chat_clear", icon="X", text="Clear")
+            # Agent/Ask mode toggle (Tier 1).
+            row = layout.row(align=True)
+            row.prop(props, "chat_mode", expand=True)
+
+            layout.separator()
+
+            # Input area (multi-line textbox).
+            layout.textbox(props, "chat_input")
+
+            # Action buttons.
+            row = layout.row(align=True)
+            row.scale_y = 1.5
+            if state.is_thinking:
+                row.operator("bfacw.chat_stop", icon="PAUSE", text="Stop")
+            else:
+                row.operator("bfacw.chat_send", icon="PLAY", text="Send")
+            row.operator("bfacw.chat_clear", icon="X", text="Clear")
 
         layout.separator()
 
@@ -499,28 +637,47 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
         state = agent_controller._agent_state
+        prefs = context.preferences.addons[__package__].preferences
+        is_harness = (prefs.agent_mode == "EXTERNAL_HARNESS")
 
         # Status bar.
         row = layout.row(align=True)
-        if state.mcp_server_running:
-            row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop")
-            row.label(text="Running", icon='CHECKMARK')
+        if is_harness:
+            if mcp_to_blender_server.is_running():
+                row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop Bridge")
+                row.label(text="Bridge Running", icon='CHECKMARK')
+            else:
+                row.operator("bfacw.agent_start", icon="PLAY", text="Start Bridge")
+                row.label(text="Bridge Stopped", icon='X')
         else:
-            row.operator("bfacw.agent_start", icon="PLAY", text="Start")
-            row.label(text="Stopped", icon='X')
+            if state.mcp_server_running:
+                row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop")
+                row.label(text="Running", icon='CHECKMARK')
+            else:
+                row.operator("bfacw.agent_start", icon="PLAY", text="Start")
+                row.label(text="Stopped", icon='X')
 
         layout.separator()
 
-        # Input (multi-line textbox) — always at top.
-        layout.textbox(props, "chat_input")
+        if not is_harness:
+            # Agent/Ask mode toggle (Tier 1).
+            row = layout.row(align=True)
+            row.prop(props, "chat_mode", expand=True)
 
-        row = layout.row(align=True)
-        row.scale_y = 1.5
-        if state.is_thinking:
-            row.operator("bfacw.chat_stop", icon="PAUSE", text="Stop")
+            layout.separator()
+
+            # Input (multi-line textbox).
+            layout.textbox(props, "chat_input")
+
+            row = layout.row(align=True)
+            row.scale_y = 1.5
+            if state.is_thinking:
+                row.operator("bfacw.chat_stop", icon="PAUSE", text="Stop")
+            else:
+                row.operator("bfacw.chat_send", icon="PLAY", text="Send")
+            row.operator("bfacw.chat_clear", icon="X", text="Clear")
         else:
-            row.operator("bfacw.chat_send", icon="PLAY", text="Send")
-        row.operator("bfacw.chat_clear", icon="X", text="Clear")
+            layout.label(text="Chat handled by external MCP client.", icon='INFO')
 
         layout.separator()
 

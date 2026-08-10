@@ -6,10 +6,30 @@ Prerequisites
 =============
 
 - This repository.
-- Blender 5.1.
+- Blender 5.1+ (or Bforartists equivalent).
 
 ``llama.cpp`` is optional — the add-on can auto-download ``llama-server``
 for you from the preferences UI (see `Auto-Download`_ below).
+
+
+Quick Start (Self-Contained)
+============================
+
+The add-on is fully self-contained — no command line, no Docker, no separate
+Python installs needed.
+
+1. Open Blender → **Edit → Preferences → Add-ons** → find **Coworker**.
+2. In the **LLM Configuration** section, set mode to **Local**.
+3. If you see **"llama-server: Not installed"**, click **Download llama-server**.
+4. Pick a model preset (Flagship / Mid-Range / Lightweight) and click
+   **Download & Start**. The model downloads directly from HuggingFace with
+   a real-time progress bar showing percentage, speed, and ETA.
+5. In the **Agent Control** section, click **Start Agent**.
+6. Open the **3D Viewport sidebar** (press ``N`` if hidden) and find the
+   **Coworker** tab. Type your message and press **Send**.
+
+That's it. No manual ``llama.cpp`` install, no PATH setup, no separate
+chat client.
 
 
 Components
@@ -21,17 +41,23 @@ with a brief explanation of what they do.
 ``llama.cpp`` (external project)
    Runs the LLM model.
 
-``chat_client``: ``./chat_client/chat_client.py``
-   A simple text mode chat client that connects ``llama.cpp`` to ``blender_mcp``.
+``bfa-coworker-mcp``: ``./mcp/``
+   The MCP server that provides tools and connects the agent controller
+   to the add-on's bridge server.
 
-``blender_mcp``: ``./mcp/``
-   The MCP server that provides tools and connects the ``chat_client`` to ``blender_mcp_addon``.
+``bfa_coworker`` add-on: ``./addon/bfa_coworker/``
+   The Blender add-on containing:
+   - ``llm_manager.py`` — LLM lifecycle (download, start/stop, health check)
+   - ``agent_controller.py`` — Conversation orchestrator (MCP client + LLM API calls)
+   - ``ui_chat.py`` — In-Blender chat panel (3D Viewport + Text Editor)
+   - ``mcp_to_blender_server.py`` — TCP socket bridge server
+   - ``preferences.py`` — Add-on preferences with all configuration
 
-``blender_mcp_addon``: ``./addon/``
-   The Blender MCP add-on which connects Blender to the ``blender_mcp`` server.
+``chat_client``: ``./chat_client/chat_client.py`` (optional/legacy)
+   A simple text mode chat client for testing. Not needed for normal use.
 
 ``blender``: (external project)
-   An instance of Blender running ``blender_mcp_addon``,
+   An instance of Blender running the ``bfa_coworker`` add-on,
    this can run in background or with a GUI.
 
    For the purpose of this document, we assume a graphical session.
@@ -42,7 +68,7 @@ Auto-Download (easiest)
 
 The add-on preferences include a **"Download llama-server"** button that
 downloads the latest ``llama-server`` binary from GitHub releases and
-unpacks it to ``~/.cache/blender_mcp_llama/``.
+unpacks it to ``~/.cache/bfa_coworker_llama/``.
 
 1. Open Blender → **Edit → Preferences → Add-ons** → find **Coworker**.
 2. In the **LLM Configuration** section, set mode to **Local**.
@@ -50,6 +76,15 @@ unpacks it to ``~/.cache/blender_mcp_llama/``.
 4. Once installed, pick a model preset and click **Download & Start**.
 
 No command line, no manual PATH setup, no separate ``llama.cpp`` install.
+
+The download uses direct HTTP streaming in 64 KB chunks with real-time
+progress (percentage, speed, ETA, visual progress bar). If the model
+requires authentication, set your **HuggingFace Token** in the Advanced
+section. The add-on also checks the ``HF_TOKEN`` and
+``HUGGINGFACE_TOKEN`` environment variables.
+
+You can cancel an in-progress download at any time — partial files are
+cleaned up automatically.
 
 
 Manual Setup
@@ -63,19 +98,19 @@ Create & Activate a Virtual Environment:
       virtualenv .venv -p python
       source .venv/bin/activate
 
-Install Requirements & Blender MCP:
+Install Requirements & MCP Server:
    .. code-block::
 
       pip install -r mcp/requirements.txt
       pip install -e mcp
 
-   Check that ``blender-mcp`` runs (it will do nothing, press Ctrl-C to exit).
+   Check that ``bfa-coworker-mcp`` runs (it will do nothing, press Ctrl-C to exit).
 
 Build the Blender Extension:
    .. code-block::
 
-      blender -c extension build --source-dir ./addon/blender_mcp_addon
-      blender -c extension install-file blender_mcp_addon-0.1.0.zip --repo=user_default
+      blender -c extension build --source-dir ./addon/bfa_coworker
+      blender -c extension install-file bfa_coworker-1.1.36.zip --repo=user_default
 
 Download a Model via LLAMA.cpp:
    .. code-block::
@@ -91,14 +126,12 @@ Download a Model via LLAMA.cpp:
    You can visit ``http://127.0.0.1:8080/`` to check this is working.
 
 
-Usage
-=====
+Alternative Usage (Advanced)
+============================
 
-There are two ways you can interact with the chat:
-text mode client & the LLAMA.CPP web UI.
-
-The web UI currently gives a much nicer experience with feedback while it's processing.
-The text client is mainly useful for tests.
+The primary workflow is the self-contained chat UI inside Blender (see
+`Quick Start`_ above). The following are alternative/legacy methods for
+testing and advanced use cases.
 
 
 Text Mode Client
@@ -116,7 +149,7 @@ Run the chat client:
 
       python chat_client/chat_client.py openai --api-url http://localhost:8080
 
-   Note that this will start ``blender-mcp``.
+   Note that this will start ``bfa-coworker-mcp``.
 
 Run Blender:
    Ensure "Online Access" is enabled.
@@ -133,14 +166,14 @@ Ensure the ``llama-server`` is running:
 
       llama-server --jinja --hf-repo $HF_REPO --hf-file $HF_FILE
 
-Run ``blender-mcp`` with HTTP enabled:
+Run ``bfa-coworker-mcp`` with HTTP enabled:
    Activate the virtual-environment (if you haven't already).
 
    .. code-block::
 
-      blender-mcp --transport http --port 9191
+      bfa-coworker-mcp --transport http --port 9191
 
-Connect LLAMA.CPP to ``blender-mcp``:
+Connect LLAMA.CPP to ``bfa-coworker-mcp``:
    - Open ``http://127.0.0.1:8080/`` in a web browser - you should see a chat prompt.
    - Click on the "Cog" icon at the top right.
    - Click on the "MCP" section in the settings.
@@ -149,7 +182,7 @@ Connect LLAMA.CPP to ``blender-mcp``:
    - Click on "Update", you should see server instructions, tools ... etc.
    - Enable the MCP server (a switch at the top right).
 
-     NOTE: for each new chat, you will need to enable ``blender-mcp`` from the web UI.
+     NOTE: for each new chat, you will need to enable ``bfa-coworker-mcp`` from the web UI.
 
 Run Blender:
    Ensure "Online Access" is enabled.

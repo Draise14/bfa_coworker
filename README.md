@@ -51,10 +51,15 @@ selection optimized for an **RTX 4090**.
 
 ### 4. Download & Start
 
-Click **Download & Start**. The add-on launches `llama-server` which
-auto-downloads the model from HuggingFace (progress visible in the
-llama-server console window). Once the model is ready, the server stays
-running in the background.
+Click **Download & Start**. The add-on downloads the GGUF model directly
+from HuggingFace in 64 KB chunks with a real-time progress bar showing
+percentage, speed, and ETA. Once the download completes, `llama-server`
+starts automatically and loads the model. The server stays running in the
+background.
+
+> **Tip:** If the model requires authentication, set your **HuggingFace
+> Token** in the Advanced section. The add-on also checks the `HF_TOKEN`
+> and `HUGGINGFACE_TOKEN` environment variables.
 
 ### 5. Start the Agent
 
@@ -65,7 +70,7 @@ should all show green.
 ### 5. Chat!
 
 Open the **3D Viewport sidebar** (press `N` if hidden) and find the
-**MCP** tab. Type your message in the input box and press **Send**. The
+**Coworker** tab. Type your message in the input box and press **Send**. The
 agent will think, call Blender tools as needed, and respond.
 
 That's it. No command line, no Docker, no separate Python installs.
@@ -79,7 +84,7 @@ into a single add-on experience:
 | What you'd normally need to set up manually | What this add-on does for you |
 |---|---|
 | Install & configure `llama.cpp` separately | **Auto-downloads** `llama-server` from GitHub with one click, or detects it on PATH |
-| Download GGUF models manually | Built-in download via `llama-server`, or scan for models you already have |
+| Download GGUF models manually | Direct HTTP download with real-time progress bar, or scan for models you already have |
 | Run an MCP bridge server | Auto-started when you click **Start Agent** |
 | Run a separate chat client | Chat UI lives in Blender's 3D Viewport sidebar |
 | Wire up API keys (optional) | Remote API mode with provider presets, URL auto-fill, and browseable model IDs |
@@ -146,8 +151,11 @@ The MCP server provides the following tools that the LLM can call:
 - **jump_to_tab_by_name** — Switch the active workspace tab
 - **jump_to_tab_by_space_type** — Switch to a workspace by space type
 - **jump_to_view3d_object_by_name** — Focus the 3D viewport on an object
+- **jump_to_view3d_object_data_by_name** — Focus the 3D viewport on an object's data
 - **render_thumbnail_to_path** — Render a small low-quality thumbnail
 - **render_viewport_to_path** — Render the current scene to a path
+- **search_api_docs** — Search the Blender Python API reference
+- **search_manual_docs** — Search the Blender user manual
 
 CLI variants (suffixed `_for_cli`) are also available for background Blender
 mode.
@@ -177,12 +185,28 @@ import from each other; shared logic lives here.
 ## Features
 
 - **No external dependencies** — `llama-server` is the only requirement
-- **Built-in model download** — auto-downloads from HuggingFace
-- **Curated model presets** — 13 tested GGUF models with RAM/disk/capability info
-- **Existing model scanner** — finds `.gguf` files on your machine
-- **Adjustable context window** — tune `--ctx-size` per model (2048–262144) (WIP)
-- **Remote API support** — also works with OpenAI, OpenRouter, Anthropic
-- **In-Blender chat UI** — 3D Viewport sidebar, no separate client needed
+- **One-click llama-server download** — auto-downloads from GitHub releases
+- **Direct GGUF download** — streams from HuggingFace in 64 KB chunks with real-time
+  progress bar (percentage, speed, ETA)
+- **Cancel downloads** — abort in-progress downloads; partial files are cleaned up
+- **Disk space pre-check** — verifies sufficient space before multi-GB downloads
+- **HF_TOKEN support** — access gated models via token field or environment variable
+- **Fallback download** — if direct download fails, falls back to `llama-server --hf-repo`
+- **Curated model presets** — 14 tested GGUF models with RAM/disk/capability info,
+  organized into Flagship / Mid-Range / Lightweight categories
+- **Existing model scanner** — finds `.gguf` files in HF cache and custom directories
+- **Adjustable context window** — tune `--ctx-size` per model (4096–262144), auto-set from preset
+- **Max output tokens** — per-preset defaults (16384 flagship, 8192 mid-range, 4096 lightweight),
+  with auto-continue on truncation
+- **Remote API support** — OpenRouter, OpenAI, Anthropic with provider presets and model browser
+- **In-Blender chat UI** — 3D Viewport sidebar + Text Editor panel, no separate client needed
+- **Port configuration** — individual port overrides plus global offset
+- **Timer interval tuning** — configurable polling intervals for active/idle states
+- **Tool logging toggle** — log every tool request/response to console
+- **Diagnostics section** — port checks, ping, and four benchmark tests (Objects, Scene,
+  Animation, Collections)
+- **Reasoning content logging** — full chain-of-thought from reasoning models logged to console
+- **Portable vendor deps** — pure-Python deps installed to `vendor/deps/` (no hardcoded paths)
 
 ---
 
@@ -198,7 +222,7 @@ import from each other; shared logic lives here.
 
 ## Configuration
 
-All settings are in **Edit → Preferences → Add-ons → MCP**.
+All settings are in **Edit → Preferences → Add-ons → Coworker**.
 
 | Section | Setting | Description |
 |---------|---------|-------------|
@@ -207,13 +231,22 @@ All settings are in **Edit → Preferences → Add-ons → MCP**.
 | | API URL / Key / Model | Remote API connection settings |
 | | Refresh Models | Fetch live model count from the API |
 | | Browse Models | Open openrouter.ai/models in browser |
-| | Recommended Model | Curated local model preset dropdown |
-| | Scan | Find existing `.gguf` files |
-| | Models Directory | Where downloaded models live |
-| | Advanced | Repo ID, filename, context window size |
-| Agent Control | Auto-Start | Launch agent when Blender starts |
+| | Recommended Model | Curated local model preset (Flagship/Mid/Light) |
+| | Scan | Find existing `.gguf` files on your machine |
+| | Models Directory | Where downloaded models are stored |
+| | Advanced | Repo ID, filename, context window, max tokens, HF token |
+| Agent Control | Auto-Start Agent | Launch agent when Blender starts |
 | | Start/Stop | Manual agent control |
 | | Ping | Check all connections (bridge, MCP, LLM) |
+| Ports | Port Offset | Global offset added to all default ports |
+| | Bridge / MCP / LLM | Individual port overrides (0 = default + offset) |
+| Diagnostics | Check Ports | Verify ports are available |
+| | Diagnose | Full connectivity test (ping all endpoints) |
+| | Benchmarks | Run Objects/Scene/Animation/Collections benchmarks |
+| Timer | Active Interval | Polling rate while processing (0.05–5.0s) |
+| | Idle Interval | Polling rate while idle (0.1–10.0s) |
+| | Idle Delay | Seconds before switching to idle interval |
+| Misc | Log | Toggle tool request/response logging |
 
 ---
 
@@ -222,10 +255,13 @@ All settings are in **Edit → Preferences → Add-ons → MCP**.
 The following items are tracked in [CHANGELOG.md](CHANGELOG.md):
 
 ### High Priority
-- [x] **Addon Branding Rename** — Rename blender_mcp_addon branding references to "bfa_coworker" as the addon folder or "Coworker" for user sight and for short
-- [x] **Interface Modularization** — Split `__init__.py` into separate
-      preference/operator modules
-- [ ] **Get going on Linux and Mac** at the moment this is Windows only.
+- [x] **Addon Branding Rename** — Rename blender_mcp_addon branding references to "bfa_coworker"
+- [x] **Interface Modularization** — Split `__init__.py` into separate modules
+- [x] **Download Progress Bar** — Visual progress bar in preferences panel
+- [x] **Cancel Downloads** — Abort in-progress downloads with cleanup
+- [x] **HF_TOKEN Support** — Access gated models via token field
+- [x] **Portable Vendor Deps** — Replaced non-portable bundled .venv with pip --target
+- [ ] **Get going on Linux and Mac** — Currently Windows only
 
 ### Medium Priority
 - [ ] **Chat History Export** — Save conversation log to a text file
@@ -236,7 +272,6 @@ The following items are tracked in [CHANGELOG.md](CHANGELOG.md):
 
 ### Low Priority
 - [ ] **System RAM Detection** — Filter presets that exceed available RAM
-- [ ] **Download Progress Bar** — Visual progress in preferences panel
 - [ ] **Local Model Generator** — Integrate Ultrashape / Hunyuan / Trellis2
 - [ ] **CC0 Resource Downloader** — Polyhaven, AmbientCG, Sketchfab
 - [ ] **Integrated pre-prompted tools for UX operators** to allow repetitive work with contextual application that an MCP can do in a smart way. this requires some design and integration into different editors and interface.

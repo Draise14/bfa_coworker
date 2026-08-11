@@ -1362,31 +1362,32 @@ def _format_tool_error(result_text: str) -> str:
     """Extract a human-readable summary from a tool error result.
 
     Parses ``{"status": "error", "message": "Traceback..."}`` and returns
-    just the exception type and message, e.g.
-    ``"AttributeError: 'NoneType' object has no attribute 'name'"``.
+    a friendly message like ``"I had trouble with that step — AttributeError"``.
 
     Returns *result_text* unchanged if it doesn't match the error pattern.
     """
     if '"status": "error"' not in result_text:
         return result_text
 
-    # Try to extract just the last line of the traceback — that's the exception.
+    # Try to extract just the exception type from the traceback.
     import re
-    # Match the message field content.
     m = re.search(r'"message":\s*"([^"]*(?:\\.[^"]*)*)"', result_text, re.DOTALL)
     if m:
         raw_msg = m.group(1)
-        # Unescape JSON escapes.
         raw_msg = raw_msg.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
         lines = raw_msg.strip().splitlines()
-        # The last meaningful line is usually the exception.
+        # Walk backwards to find the actual exception line (skip Traceback, File, and blank lines).
         for line in reversed(lines):
             stripped = line.strip()
-            if stripped and not stripped.startswith("Traceback") and not stripped.startswith("["):
-                # Clean up: remove leading "File ..." context if it's the only thing.
-                if "Error" in stripped or "Error" in stripped.lower():
-                    return "Tool failed \u2014 {:s}".format(stripped)
-                return "Tool failed \u2014 {:s}".format(stripped)
+            if not stripped:
+                continue
+            if stripped.startswith("Traceback") or stripped.startswith("["):
+                continue
+            if stripped.startswith("File"):
+                continue
+            # This is the actual exception — extract just the type.
+            exc_type = stripped.split(":")[0].strip() if ":" in stripped else stripped
+            return "This work attempt failed, trying again \u2014 {:s}".format(exc_type)
     return result_text
 
 
@@ -1402,7 +1403,6 @@ def _tool_result_summary(result_text: str, max_len: int = 150) -> str:
     import re
     m = re.search(r'"status":\s*"ok"', result_text)
     if m:
-        # Try to extract a message field.
         msg_m = re.search(r'"message":\s*"([^"]*)"', result_text)
         if msg_m:
             return msg_m.group(1)[:max_len]

@@ -133,6 +133,22 @@ def _draw_tool_summary(layout: bpy.types.UILayout, content: str, summary: str) -
         _draw_multiline(detail_box, raw_preview, width=_WRAP_WIDTH)
 
 
+def _draw_tool_inline(
+    layout: bpy.types.UILayout,
+    tool_name: str,
+    display: str,
+    is_error: bool,
+) -> None:
+    """Draw a tool result as a sub-box inside the agent's message box."""
+    tool_box = layout.box()
+    row = tool_box.row()
+    row.label(
+        text="\u2699 {:s}".format(tool_name),
+        icon='CANCEL' if is_error else 'TOOL_SETTINGS',
+    )
+    _draw_multiline(tool_box, display)
+
+
 # ---------------------------------------------------------------------------
 # Properties
 
@@ -852,43 +868,88 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 _draw_multiline(box, state.streaming_text[:300] + "...")
                 box.separator()
 
-            for msg in reversed(history[-20:]):  # Show last 20, newest first.
+            # Group messages into turns (user → assistant + tools).
+            turns: list[list[dict]] = []
+            current_turn: list[dict] = []
+            for msg in history:
                 role = msg.get("role", "")
-                content = msg.get("content", "")
-                tool_name = msg.get("name", "")
-                summary = msg.get("summary", "")
-
                 if role == "user":
+                    if current_turn:
+                        turns.append(current_turn)
+                    current_turn = [msg]
+                elif role in ("assistant", "tool", "reasoning"):
+                    current_turn.append(msg)
+            if current_turn:
+                turns.append(current_turn)
+
+            # Draw turns in reverse (newest first).
+            for turn in reversed(turns[-10:]):
+                # Separate messages by role for proper ordering.
+                user_msg = None
+                assistant_msg = None
+                tool_msgs = []
+                reasoning_msgs = []
+                for msg in turn:
+                    role = msg.get("role", "")
+                    if role == "user":
+                        user_msg = msg
+                    elif role == "assistant":
+                        assistant_msg = msg
+                    elif role == "tool":
+                        tool_msgs.append(msg)
+                    elif role == "reasoning":
+                        reasoning_msgs.append(msg)
+
+                # Draw user message.
+                if user_msg:
                     msg_box = box.box()
                     row = msg_box.row()
                     row.label(text="You:", icon='USER')
-                    _draw_multiline(msg_box, content)
-                elif role == "assistant":
-                    msg_box = box.box()
-                    row = msg_box.row()
-                    row.label(text="Agent:", icon='CONSOLE')
+                    _draw_multiline(msg_box, user_msg.get("content", ""))
+
+                # Draw reasoning (before assistant, since it precedes it).
+                for r_msg in reasoning_msgs:
+                    _draw_reasoning(box, r_msg.get("content", ""))
+
+                # Draw assistant message with tool sub-boxes inside.
+                if assistant_msg:
+                    has_tool_calls = bool(assistant_msg.get("tool_calls"))
+                    a_box = box.box()
+                    row = a_box.row()
+                    if has_tool_calls:
+                        row.label(text="Agent (running tools...):", icon='CONSOLE')
+                    else:
+                        row.label(text="Agent:", icon='CONSOLE')
+                    content = assistant_msg.get("content", "")
                     if content:
-                        _draw_multiline(msg_box, content)
-                elif role == "tool":
-                    msg_box = box.box()
-                    row = msg_box.row()
-                    is_error = (
-                        '"status": "error"' in (content or "") or
-                        (content or "").startswith("Error")
-                    )
-                    row.label(
-                        text="[Tool] {:s}:".format(tool_name),
-                        icon='CANCEL' if is_error else 'TOOL_SETTINGS',
-                    )
-                    # Prefer the human-readable summary if available, otherwise
-                    # show truncated content.
-                    display = summary if summary else (content or "")
-                    if not summary and len(display) > 200:
-                        display = display[:200] + "..."
-                    _draw_multiline(msg_box, display)
-                elif role == "reasoning":
-                    # Reasoning: show collapsed by default with a distinct style.
-                    _draw_reasoning(box, content)
+                        _draw_multiline(a_box, content)
+                    # Draw tool results as sub-boxes inside the assistant box.
+                    for t_msg in tool_msgs:
+                        t_content = t_msg.get("content", "")
+                        t_summary = t_msg.get("summary", "")
+                        t_name = t_msg.get("name", "")
+                        is_error = (
+                            '"status": "error"' in (t_content or "") or
+                            (t_content or "").startswith("Error")
+                        )
+                        display = t_summary if t_summary else (t_content or "")
+                        if not t_summary and len(display) > 200:
+                            display = display[:200] + "..."
+                        _draw_tool_inline(a_box, t_name, display, is_error)
+                elif tool_msgs:
+                    # Orphaned tool messages (no assistant) — draw directly.
+                    for t_msg in tool_msgs:
+                        t_content = t_msg.get("content", "")
+                        t_summary = t_msg.get("summary", "")
+                        t_name = t_msg.get("name", "")
+                        is_error = (
+                            '"status": "error"' in (t_content or "") or
+                            (t_content or "").startswith("Error")
+                        )
+                        display = t_summary if t_summary else (t_content or "")
+                        if not t_summary and len(display) > 200:
+                            display = display[:200] + "..."
+                        _draw_tool_inline(box, t_name, display, is_error)
 
                 box.separator()
         else:

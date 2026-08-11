@@ -88,6 +88,7 @@ def _draw_reasoning(layout: bpy.types.UILayout, text: str) -> None:
 
     lines = text.strip().split("\n")
     preview_lines = lines[:3]
+    remaining_lines = lines[3:]
 
     # Outer box for the reasoning section.
     outer = layout.box()
@@ -101,13 +102,15 @@ def _draw_reasoning(layout: bpy.types.UILayout, text: str) -> None:
         _draw_multiline(outer, line)
 
     # Collapsible panel for full reasoning (closed by default).
-    header, body = outer.panel("reasoning_full", default_closed=True)
-    header.label(text="Show full reasoning ({:d} lines)".format(len(lines)))
+    # Only shows lines beyond the preview to avoid duplication.
+    if remaining_lines:
+        header, body = outer.panel("reasoning_full", default_closed=True)
+        header.label(text="Show full reasoning ({:d} more lines)".format(len(remaining_lines)))
 
-    if body:
-        body.separator()
-        for line in lines:
-            _draw_multiline(body, line)
+        if body:
+            body.separator()
+            for line in remaining_lines:
+                _draw_multiline(body, line)
 
 
 def _draw_tool_summary(layout: bpy.types.UILayout, content: str, summary: str) -> None:

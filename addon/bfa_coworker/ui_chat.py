@@ -78,34 +78,36 @@ def _draw_multiline(layout: bpy.types.UILayout, text: str, width: int = _WRAP_WI
 
 
 def _draw_reasoning(layout: bpy.types.UILayout, text: str) -> None:
-    """Draw reasoning (chain-of-thought) content, collapsed by default.
+    """Draw reasoning (chain-of-thought) content in a collapsible panel.
 
-    Reasoning can be very long (hundreds of tokens).  We show the first
-    3 lines as a preview and the rest inside a collapsible sub-layout.
+    Shows a box with a "Thinking:" label and preview of the first 3 lines.
+    Inside the box, a collapsible panel reveals the full reasoning.
     """
     if not text:
         return
 
-    row = layout.row()
-    row.label(text="Thinking:", icon='CONSOLE')
-
     lines = text.strip().split("\n")
     preview_lines = lines[:3]
-    remaining_lines = lines[3:]
 
-    # Show a dimmed preview of the first few lines inside a box.
-    preview_box = layout.box()
+    # Outer box for the reasoning section.
+    outer = layout.box()
+
+    # Row with "Thinking:" label.
+    row = outer.row()
+    row.label(text="Thinking:", icon='CONSOLE')
+
+    # Preview of first 3 lines.
     for line in preview_lines:
-        _draw_multiline(preview_box, line)
+        _draw_multiline(outer, line)
 
-    if remaining_lines:
-        # Show count and a hint for the rest.
-        row = layout.row()
-        row.label(
-            text="  (+{:d} more lines \u2014 see terminal for full reasoning)".format(
-                len(remaining_lines)),
-            icon='SORTSIZE',
-        )
+    # Collapsible panel for full reasoning.
+    header, body = outer.panel("reasoning_full")
+    header.label(text="Show full reasoning ({:d} lines)".format(len(lines)))
+
+    if body:
+        body.separator()
+        for line in lines:
+            _draw_multiline(body, line)
 
 
 def _draw_tool_summary(layout: bpy.types.UILayout, content: str, summary: str) -> None:

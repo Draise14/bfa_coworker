@@ -61,6 +61,76 @@ def _wrap_text(text: str, width: int = _WRAP_WIDTH) -> str:
     )
 
 
+def _draw_multiline(layout: bpy.types.UILayout, text: str, width: int = _WRAP_WIDTH) -> None:
+    """Draw multi-line text in a layout, using multiline_label if available.
+
+    In Blender 5.3+, ``UILayout.multiline_label(text=...)`` natively wraps
+    long text across multiple lines.  For older versions we fall back to
+    one ``label()`` call per wrapped line.
+    """
+    if not text:
+        return
+    if hasattr(layout, "multiline_label"):
+        layout.multiline_label(text=text)
+    else:
+        for line in _wrap_text(text, width=width).split("\n"):
+            layout.label(text=line)
+
+
+def _draw_reasoning(layout: bpy.types.UILayout, text: str) -> None:
+    """Draw reasoning (chain-of-thought) content, collapsed by default.
+
+    Reasoning can be very long (hundreds of tokens).  We show the first
+    3 lines as a preview and the rest inside a collapsible sub-layout.
+    """
+    if not text:
+        return
+
+    row = layout.row()
+    row.label(text="Thinking:", icon='CONSOLE')
+
+    lines = text.strip().split("\n")
+    preview_lines = lines[:3]
+    remaining_lines = lines[3:]
+
+    # Show a dimmed preview of the first few lines inside a box.
+    preview_box = layout.box()
+    for line in preview_lines:
+        _draw_multiline(preview_box, line)
+
+    if remaining_lines:
+        # Show count and a hint for the rest.
+        row = layout.row()
+        row.label(
+            text="  (+{:d} more lines \u2014 see terminal for full reasoning)".format(
+                len(remaining_lines)),
+            icon='SORT',
+        )
+
+
+def _draw_tool_summary(layout: bpy.types.UILayout, content: str, summary: str) -> None:
+    """Draw a tool result with a human-readable summary.
+
+    Shows the summary prominently.  If the full content differs from the
+    summary (e.g., contains a traceback), show a collapsed detail section.
+    """
+    if not summary and not content:
+        return
+
+    display = summary if summary else content
+    _draw_multiline(layout, display)
+
+    # If there's a summary different from raw content, show the raw version
+    # collapsed as a detail section.
+    if summary and summary != content and len(content) > len(summary):
+        detail_box = layout.box()
+        detail_row = detail_box.row()
+        detail_row.label(text="Details:", icon='TEXT')
+        # Show truncated raw content.
+        raw_preview = content[:300] + ("..." if len(content) > 300 else "")
+        _draw_multiline(detail_box, raw_preview, width=_WRAP_WIDTH)
+
+
 # ---------------------------------------------------------------------------
 # Properties
 
@@ -169,6 +239,7 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
                 agent_controller.run_conversation_turn(
                     user_message=message,
                     on_text=None,
+                    on_reasoning=lambda r: _update_streaming(context, r),
                     on_status=lambda s: _update_status(s),
                     llm_url=llm_url or None,
                     api_key=api_key or None,
@@ -187,6 +258,10 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             props.chat_status = text
             _redraw_areas(context)
 
+        def _update_streaming(ctx: bpy.types.Context, text: str) -> None:
+            """Called when reasoning or streaming text arrives — refresh UI."""
+            _redraw_areas(ctx)
+
         thread = threading.Thread(target=_do_turn, daemon=True)
         thread.start()
 
@@ -202,6 +277,8 @@ class BFACW_OT_chat_clear(Operator):  # type: ignore[misc]
     def execute(self, context: bpy.types.Context) -> set[str]:
         agent_controller._agent_state.conversation_history.clear()
         agent_controller._agent_state.streaming_text = ""
+        agent_controller._agent_state.reasoning_text = ""
+        agent_controller._agent_state.thinking_dots = 0
         _save_chat_history()
         _redraw_areas(context)
         return {"FINISHED"}
@@ -569,10 +646,17 @@ class BFACW_OT_agent_stop(Operator):  # type: ignore[misc]
 
 def chat_timer_update() -> float | None:
     """
-    Timer callback that periodically redraws chat areas.
+    Timer callback that periodically redraws chat areas and animates
+    the "Thinking..." indicator.
 
     Registered when the add-on starts, runs while Blender is alive.
     """
+    from . import agent_controller as _ac
+
+    # Animate thinking dots.
+    if _ac._agent_state.is_thinking:
+        _ac._agent_state.thinking_dots += 1
+
     # Redraw all chat panels.
     for wm in bpy.data.window_managers:
         for win in wm.windows:
@@ -633,7 +717,9 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         else:
             status = props.chat_status
             if state.is_thinking:
-                status = "Thinking..."
+                # Animated thinking dots (cycled by timer).
+                dots = [".", "..", "...", "...."]
+                status = "Thinking{:s}".format(dots[state.thinking_dots % 4])
             elif not state.mcp_server_running:
                 status = "Offline"
             elif state.error:
@@ -757,30 +843,47 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         history = state.conversation_history
         if history:
             box = layout.box()
+            # Show a streaming preview if we're thinking and streaming text exists.
+            if state.is_thinking and state.streaming_text:
+                preview_row = box.row()
+                preview_row.label(text="Agent (live):", icon='CONSOLE')
+                _draw_multiline(box, state.streaming_text[:300] + "...")
+                box.separator()
+
             for msg in reversed(history[-20:]):  # Show last 20, newest first.
                 role = msg.get("role", "")
                 content = msg.get("content", "")
                 tool_name = msg.get("name", "")
+                summary = msg.get("summary", "")
 
                 if role == "user":
                     row = box.row()
                     row.label(text="You:", icon='USER')
-                    for line in _wrap_text(content).split("\n"):
-                        box.label(text=line)
+                    _draw_multiline(box, content)
                 elif role == "assistant":
                     row = box.row()
                     row.label(text="Agent:", icon='CONSOLE')
                     if content:
-                        for line in _wrap_text(content).split("\n"):
-                            box.label(text=line)
+                        _draw_multiline(box, content)
                 elif role == "tool":
                     row = box.row()
-                    row.label(text="[Tool] {:s}:".format(tool_name), icon='TOOL_SETTINGS')
-                    c = content or ""
-                    if len(c) > 200:
-                        c = c[:200] + "..."
-                    for line in _wrap_text(c).split("\n"):
-                        box.label(text=line)
+                    is_error = (
+                        '"status": "error"' in (content or "") or
+                        (content or "").startswith("Error")
+                    )
+                    row.label(
+                        text="[Tool] {:s}:".format(tool_name),
+                        icon='CANCEL' if is_error else 'TOOL_SETTINGS',
+                    )
+                    # Prefer the human-readable summary if available, otherwise
+                    # show truncated content.
+                    display = summary if summary else (content or "")
+                    if not summary and len(display) > 200:
+                        display = display[:200] + "..."
+                    _draw_multiline(box, display)
+                elif role == "reasoning":
+                    # Reasoning: show collapsed by default with a distinct style.
+                    _draw_reasoning(box, content)
 
                 box.separator()
         else:
@@ -861,7 +964,14 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
             for msg in reversed(history[-10:]):
                 role = msg.get("role", "")
                 content = msg.get("content", "")
-                preview = content[:80] + "..." if content and len(content) > 80 else (content or "")
+                summary = msg.get("summary", "")
+                if role == "reasoning":
+                    preview = "Thinking... ({:d} chars)".format(len(content or ""))
+                elif role == "tool":
+                    display = summary if summary else (content or "")
+                    preview = display[:80] + "..." if display and len(display) > 80 else (display or "")
+                else:
+                    preview = content[:80] + "..." if content and len(content) > 80 else (content or "")
                 box.label(text="[{:s}] {:s}".format(role, preview))
         else:
             layout.label(text="No conversation yet.", icon='INFO')

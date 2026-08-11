@@ -553,7 +553,6 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             bridge, mcp, llm))
 
     def draw(self, context: bpy.types.Context) -> None:
-        del context
         layout = self.layout
 
         # ── Tab selector row ────────────────────────────────────────────
@@ -576,7 +575,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
         layout.separator()
 
-        # ── Draw the active tab ────────────────────��────────────────────
+        # ── Draw the active tab ─────────────────────────────────────────
         if self.pref_tab == 'LOCAL_LLM':
             self._draw_tab_local_llm(context)
         elif self.pref_tab == 'REMOTE_API':
@@ -820,6 +819,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         # ── Generation (Tier 5) ────────────────────────────────────────
         gen_box = layout.box()
         gen_box.label(text="Generative AI (Image / Video / Audio)", icon='RENDER_RESULT')
+        gen_box.label(text="Experimental (WIP)", icon='WARNING')
         gen_box.prop(self, "gen_backend")
 
         if self.gen_backend == "local":
@@ -869,6 +869,17 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         elif self.gen_backend == "remote":
             gen_box.prop(self, "gen_remote_url")
             gen_box.prop(self, "gen_remote_key")
+
+        # ── Poly Haven Asset Test (Tier 1) ─────────────────────────────
+        ph_box = layout.box()
+        ph_box.label(text="Poly Haven Asset Download (Test)", icon='WORLD')
+        ph_box.label(
+            text="Download a free CC0 HDRI or texture to test the Poly Haven integration.",
+            icon='INFO',
+        )
+        row = ph_box.row(align=True)
+        row.operator("bfacw.test_polyhaven_hdri", icon='WORLD', text="Download Test HDRI")
+        row.operator("bfacw.test_polyhaven_texture", icon='TEXTURE', text="Download Test Texture")
 
     # ── Tab: Advanced ──────────────────────────────────────────────────
 

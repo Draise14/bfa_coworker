@@ -116,6 +116,12 @@ class _TeeStream:
         except Exception:  # pylint: disable=broad-exception-caught
             pass
 
+    def isatty(self) -> bool:
+        try:
+            return self._original.isatty()
+        except Exception:
+            return False
+
 
 def install_print_tee() -> None:
     """Redirect ``sys.stdout``/``sys.stderr`` so all ``print()`` output is logged.

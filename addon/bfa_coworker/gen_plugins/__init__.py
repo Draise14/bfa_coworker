@@ -58,6 +58,10 @@ def discover() -> None:
 
     plugins_dir = Path(__file__).resolve().parent
 
+    package_root = __package__
+    if package_root.endswith(".gen_plugins"):
+        package_root = package_root[: -len(".gen_plugins")]
+
     for py_file in sorted(plugins_dir.rglob("*.py")):
         # Skip private modules, templates, and the base/init files.
         if py_file.name.startswith("_"):
@@ -69,9 +73,9 @@ def discover() -> None:
 
         # Build a synthetic module name so relative imports work.
         # e.g. gen_plugins/image/flux_klein_9b.py
-        #   → bfa_coworker.gen_plugins.image.flux_klein_9b
-        rel = py_file.relative_to(plugins_dir.parent.parent)
-        mod_name = "bfa_coworker." + str(
+        #   → <package_root>.gen_plugins.image.flux_klein_9b
+        rel = py_file.relative_to(plugins_dir.parent)
+        mod_name = package_root + "." + str(
             rel.with_suffix("")
         ).replace("\\", ".").replace("/", ".")
 

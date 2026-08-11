@@ -225,6 +225,8 @@ def main() -> int:
 
     build_cmd = [
         args.blender,
+        "--background",
+        "--factory-startup",
         "--command", "extension", "build",
         "--source-dir", ADDON_DIR,
         "--output-dir", args.output_dir,

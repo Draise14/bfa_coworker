@@ -49,6 +49,8 @@ from .operators_agent import (
     BFACW_OT_save_provider,
     BFACW_OT_delete_provider,
     BFACW_OT_load_provider,
+    BFACW_OT_test_polyhaven_hdri,
+    BFACW_OT_test_polyhaven_texture,
 )
 from .shared import (
     effective_ports,
@@ -89,6 +91,8 @@ _classes = (
     BFACW_OT_save_provider,
     BFACW_OT_delete_provider,
     BFACW_OT_load_provider,
+    BFACW_OT_test_polyhaven_hdri,
+    BFACW_OT_test_polyhaven_texture,
 )
 
 

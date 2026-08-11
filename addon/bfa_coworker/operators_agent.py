@@ -22,6 +22,8 @@ __all__ = (
     "BFACW_OT_save_provider",
     "BFACW_OT_delete_provider",
     "BFACW_OT_load_provider",
+    "BFACW_OT_test_polyhaven_hdri",
+    "BFACW_OT_test_polyhaven_texture",
 )
 
 import bpy  # pylint: disable=import-error
@@ -210,6 +212,16 @@ _BENCHMARK_PROMPTS = {
         "Create three collections: \"SET\", \"LIT\", \"ANIM\". Assign them the "
         "correct color tags: SET = blue, LIT = yellow, ANIM = red. Add a cube "
         "to SET, a point light to LIT, and an empty to ANIM."
+    ),
+    "polyhaven_hdri": (
+        "Use the search_polyhaven_assets tool to find a sunset HDRI, "
+        "then use download_polyhaven_asset to download and apply it "
+        "as the world environment. Asset ID: sunset_meadow, type: hdris."
+    ),
+    "polyhaven_texture": (
+        "Use the search_polyhaven_assets tool to find a brick wall texture, "
+        "then use download_polyhaven_asset to download and apply it "
+        "as a material on the active object. Asset ID: brick_wall_001, type: textures."
     ),
 }
 
@@ -485,3 +497,66 @@ class BFACW_OT_load_provider(bpy.types.Operator):  # type: ignore[misc]
                 return {"FINISHED"}
         self.report({"ERROR"}, "Profile '{:s}' not found".format(self.profile_name))
         return {"CANCELLED"}
+
+
+# ---------------------------------------------------------------------------
+# Poly Haven Test Operators
+
+class BFACW_OT_test_polyhaven_hdri(bpy.types.Operator):  # type: ignore[misc]
+    """Download a test HDRI from Poly Haven to verify the integration."""
+    bl_idname = "bfacw.test_polyhaven_hdri"
+    bl_label = "Download Test HDRI"
+    bl_description = "Download a sunset HDRI from Poly Haven and set it as world environment"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        # Use the MCP tool via agent controller if running, else direct download.
+        if get_agent_controller()._agent_state.mcp_server_running:
+            self.report({"INFO"}, "Sending Poly Haven HDRI download request to agent...")
+            _run_benchmark(context, "polyhaven_hdri")
+            return {"FINISHED"}
+
+        # Direct download fallback.
+        self.report({"INFO"}, "Agent not running. Starting direct download...")
+        import threading
+        def _do_download():
+            try:
+                from . import agent_controller as _ac
+                result = _ac._call_mcp_tool_sync(
+                    "download_polyhaven_asset",
+                    {"asset_id": "sunset_meadow", "asset_type": "hdris", "resolution": "2k"},
+                )
+                print("[🛠️Coworker] Poly Haven test HDRI result: {:s}".format(str(result)[:200]))
+            except Exception as ex:
+                print("[🛠️Coworker] Poly Haven test HDRI failed: {:s}".format(str(ex)))
+        thread = threading.Thread(target=_do_download, daemon=True)
+        thread.start()
+        return {"FINISHED"}
+
+
+class BFACW_OT_test_polyhaven_texture(bpy.types.Operator):  # type: ignore[misc]
+    """Download a test texture from Poly Haven to verify the integration."""
+    bl_idname = "bfacw.test_polyhaven_texture"
+    bl_label = "Download Test Texture"
+    bl_description = "Download a brick texture from Poly Haven and apply it as a material"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        if get_agent_controller()._agent_state.mcp_server_running:
+            self.report({"INFO"}, "Sending Poly Haven texture download request to agent...")
+            _run_benchmark(context, "polyhaven_texture")
+            return {"FINISHED"}
+
+        self.report({"INFO"}, "Agent not running. Starting direct download...")
+        import threading
+        def _do_download():
+            try:
+                from . import agent_controller as _ac
+                result = _ac._call_mcp_tool_sync(
+                    "download_polyhaven_asset",
+                    {"asset_id": "brick_wall_001", "asset_type": "textures", "resolution": "2k"},
+                )
+                print("[🛠️Coworker] Poly Haven test texture result: {:s}".format(str(result)[:200]))
+            except Exception as ex:
+                print("[🛠️Coworker] Poly Haven test texture failed: {:s}".format(str(ex)))
+        thread = threading.Thread(target=_do_download, daemon=True)
+        thread.start()
+        return {"FINISHED"}

@@ -104,7 +104,7 @@ def _draw_reasoning(layout: bpy.types.UILayout, text: str) -> None:
         row.label(
             text="  (+{:d} more lines \u2014 see terminal for full reasoning)".format(
                 len(remaining_lines)),
-            icon='SORT',
+            icon='SORTSIZE',
         )
 
 

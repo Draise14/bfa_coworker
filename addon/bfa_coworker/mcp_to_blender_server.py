@@ -303,6 +303,15 @@ def _execute_code(
         response["stdout"] = captured.stdout
     if captured.stderr:
         response["stderr"] = captured.stderr
+
+    # Update bridge activity timestamp for liveness tracking.
+    try:
+        from . import agent_controller as _ac
+        import time as _time
+        _ac._agent_state.last_bridge_activity = _time.monotonic()
+    except Exception:
+        pass
+
     return _ExecResult(response)
 
 

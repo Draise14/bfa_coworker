@@ -16,6 +16,14 @@ __all__ = (
     "_BFACW_OT_benchmark_scene",
     "_BFACW_OT_benchmark_animation",
     "_BFACW_OT_benchmark_collections",
+    "BFACW_OT_copy_mcp_config",
+    "BFACW_OT_mcp_server_start",
+    "BFACW_OT_mcp_server_stop",
+    "BFACW_OT_save_provider",
+    "BFACW_OT_delete_provider",
+    "BFACW_OT_load_provider",
+    "BFACW_OT_test_polyhaven_hdri",
+    "BFACW_OT_test_polyhaven_texture",
 )
 
 import bpy  # pylint: disable=import-error
@@ -205,6 +213,16 @@ _BENCHMARK_PROMPTS = {
         "correct color tags: SET = blue, LIT = yellow, ANIM = red. Add a cube "
         "to SET, a point light to LIT, and an empty to ANIM."
     ),
+    "polyhaven_hdri": (
+        "Use the search_polyhaven_assets tool to find a sunset HDRI, "
+        "then use download_polyhaven_asset to download and apply it "
+        "as the world environment. Asset ID: belfast_sunset, type: hdris."
+    ),
+    "polyhaven_texture": (
+        "Use the search_polyhaven_assets tool to find a brick wall texture, "
+        "then use download_polyhaven_asset to download and apply it "
+        "as a material on the active object. Asset ID: brick_wall_001, type: textures."
+    ),
 }
 
 
@@ -307,3 +325,238 @@ def _run_benchmark(context: bpy.types.Context, bench_key: str) -> None:
 
     thread = threading.Thread(target=_do_benchmark, daemon=True)
     thread.start()
+
+
+# ---------------------------------------------------------------------------
+# Copy MCP Client Config (External Harness)
+
+class BFACW_OT_copy_mcp_config(bpy.types.Operator):  # type: ignore[misc]
+    """Copy MCP client configuration to the clipboard."""
+    bl_idname = "bfacw.copy_mcp_config"
+    bl_label = "Copy MCP Config"
+    bl_description = "Copy the MCP client configuration to the clipboard"
+
+    client_type: bpy.props.EnumProperty(  # type: ignore[valid-type]
+        name="Client",
+        items=[
+            ("claude", "Claude Desktop", "Claude Desktop config format"),
+            ("vscode", "VS Code / Cursor", "VS Code / Cursor config format"),
+        ],
+        default="claude",
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        _bridge_port, _, _ = effective_ports(prefs)
+        config = _ac_mod.generate_mcp_client_config(
+            client_type=self.client_type,
+            blender_host=prefs.host,
+            blender_port=_bridge_port,
+        )
+        context.window_manager.clipboard = config
+        self.report({"INFO"}, "MCP config copied to clipboard")
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# MCP Server Start (Network Mode)
+
+class BFACW_OT_mcp_server_start(bpy.types.Operator):  # type: ignore[misc]
+    """Start the MCP server in Network mode."""
+    bl_idname = "bfacw.mcp_server_start"
+    bl_label = "Start MCP Server"
+    bl_description = "Start the MCP HTTP server for external clients"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        _bridge_port, _mcp_port, _ = effective_ports(prefs)
+
+        mcp_host = prefs.mcp_server_host
+        mcp_port = prefs.mcp_server_port_override if prefs.mcp_server_port_override > 0 else _mcp_port
+
+        proc = _ac_mod.start_mcp_server_network(
+            host=mcp_host,
+            port=mcp_port,
+            blender_host=prefs.host,
+            blender_port=_bridge_port,
+        )
+        if proc is None:
+            self.report({"ERROR"}, _ac_mod._agent_state.error)
+            return {"CANCELLED"}
+
+        self.report({"INFO"}, "MCP server started on {:s}:{:d}".format(mcp_host, mcp_port))
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# MCP Server Stop
+
+class BFACW_OT_mcp_server_stop(bpy.types.Operator):  # type: ignore[misc]
+    """Stop the MCP server."""
+    bl_idname = "bfacw.mcp_server_stop"
+    bl_label = "Stop MCP Server"
+    bl_description = "Stop the MCP HTTP server"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        _ac_mod.stop_mcp_server()
+        self.report({"INFO"}, "MCP server stopped")
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# BYOK Multi-Provider (Tier 2)
+
+class BFACW_OT_save_provider(bpy.types.Operator):  # type: ignore[misc]
+    """Save the current remote API configuration as a named provider profile."""
+    bl_idname = "bfacw.save_provider"
+    bl_label = "Save Provider"
+    bl_description = "Save the current remote API configuration as a named profile"
+
+    profile_name: bpy.props.StringProperty(  # type: ignore[valid-type]
+        name="Profile Name",
+        default="",
+        description="A name for this provider profile (e.g. 'OpenAI', 'Anthropic')",
+    )
+
+    def invoke(self, context: bpy.types.Context, event: bpy.types.Event) -> set[str]:
+        del event
+        wm = context.window_manager
+        return wm.invoke_props_dialog(self, width=400)
+
+    def draw(self, context: bpy.types.Context) -> None:
+        del context
+        layout = self.layout
+        layout.prop(self, "profile_name")
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        name = self.profile_name.strip()
+        if not name:
+            self.report({"ERROR"}, "Profile name cannot be empty")
+            return {"CANCELLED"}
+
+        profile = {
+            "name": name,
+            "provider": prefs.remote_provider,
+            "api_url": prefs.remote_api_url,
+            "api_key": prefs.remote_api_key,
+            "model": prefs.remote_model,
+        }
+
+        providers = prefs._get_saved_providers()
+        # Replace existing profile with same name.
+        providers = [p for p in providers if p.get("name") != name]
+        providers.append(profile)
+        prefs._set_saved_providers(providers)
+
+        self.report({"INFO"}, "Saved provider profile '{:s}'".format(name))
+        return {"FINISHED"}
+
+
+class BFACW_OT_delete_provider(bpy.types.Operator):  # type: ignore[misc]
+    """Delete a saved provider profile."""
+    bl_idname = "bfacw.delete_provider"
+    bl_label = "Delete Provider"
+    bl_description = "Delete a saved provider profile"
+
+    profile_name: bpy.props.StringProperty(  # type: ignore[valid-type]
+        name="Profile Name",
+        default="",
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        providers = prefs._get_saved_providers()
+        providers = [p for p in providers if p.get("name") != self.profile_name]
+        prefs._set_saved_providers(providers)
+        self.report({"INFO"}, "Deleted provider profile '{:s}'".format(self.profile_name))
+        return {"FINISHED"}
+
+
+class BFACW_OT_load_provider(bpy.types.Operator):  # type: ignore[misc]
+    """Load a saved provider profile into the current remote API configuration."""
+    bl_idname = "bfacw.load_provider"
+    bl_label = "Load Provider"
+    bl_description = "Load a saved provider profile"
+
+    profile_name: bpy.props.StringProperty(  # type: ignore[valid-type]
+        name="Profile Name",
+        default="",
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        providers = prefs._get_saved_providers()
+        for p in providers:
+            if p.get("name") == self.profile_name:
+                prefs.remote_provider = p.get("provider", "_custom")
+                prefs.remote_api_url = p.get("api_url", "")
+                prefs.remote_api_key = p.get("api_key", "")
+                prefs.remote_model = p.get("model", "")
+                self.report({"INFO"}, "Loaded provider profile '{:s}'".format(self.profile_name))
+                return {"FINISHED"}
+        self.report({"ERROR"}, "Profile '{:s}' not found".format(self.profile_name))
+        return {"CANCELLED"}
+
+
+# ---------------------------------------------------------------------------
+# Poly Haven Test Operators
+
+class BFACW_OT_test_polyhaven_hdri(bpy.types.Operator):  # type: ignore[misc]
+    """Download a test HDRI from Poly Haven to verify the integration."""
+    bl_idname = "bfacw.test_polyhaven_hdri"
+    bl_label = "Download Test HDRI"
+    bl_description = "Download a sunset HDRI from Poly Haven and set it as world environment"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        # Use the MCP tool via agent controller if running, else direct download.
+        if get_agent_controller()._agent_state.mcp_server_running:
+            self.report({"INFO"}, "Sending Poly Haven HDRI download request to agent...")
+            _run_benchmark(context, "polyhaven_hdri")
+            return {"FINISHED"}
+
+        # Direct download fallback.
+        self.report({"INFO"}, "Agent not running. Starting direct download...")
+        import threading
+        def _do_download():
+            try:
+                from . import agent_controller as _ac
+                result = _ac._call_mcp_tool_sync(
+                    "download_polyhaven_asset",
+                    {"asset_id": "sunset_meadow", "asset_type": "hdris", "resolution": "2k"},
+                )
+                print("[🛠️Coworker] Poly Haven test HDRI result: {:s}".format(str(result)[:200]))
+            except Exception as ex:
+                print("[🛠️Coworker] Poly Haven test HDRI failed: {:s}".format(str(ex)))
+        thread = threading.Thread(target=_do_download, daemon=True)
+        thread.start()
+        return {"FINISHED"}
+
+
+class BFACW_OT_test_polyhaven_texture(bpy.types.Operator):  # type: ignore[misc]
+    """Download a test texture from Poly Haven to verify the integration."""
+    bl_idname = "bfacw.test_polyhaven_texture"
+    bl_label = "Download Test Texture"
+    bl_description = "Download a brick texture from Poly Haven and apply it as a material"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        if get_agent_controller()._agent_state.mcp_server_running:
+            self.report({"INFO"}, "Sending Poly Haven texture download request to agent...")
+            _run_benchmark(context, "polyhaven_texture")
+            return {"FINISHED"}
+
+        self.report({"INFO"}, "Agent not running. Starting direct download...")
+        import threading
+        def _do_download():
+            try:
+                from . import agent_controller as _ac
+                result = _ac._call_mcp_tool_sync(
+                    "download_polyhaven_asset",
+                    {"asset_id": "brick_wall_001", "asset_type": "textures", "resolution": "2k"},
+                )
+                print("[🛠️Coworker] Poly Haven test texture result: {:s}".format(str(result)[:200]))
+            except Exception as ex:
+                print("[🛠️Coworker] Poly Haven test texture failed: {:s}".format(str(ex)))
+        thread = threading.Thread(target=_do_download, daemon=True)
+        thread.start()
+        return {"FINISHED"}

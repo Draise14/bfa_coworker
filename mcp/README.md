@@ -69,4 +69,4 @@ Depending on whether or not the RENDER context was used (as oppose to the VIEWPO
 See our privacy policy: https://www.blender.org/privacy-policy/
 
 ## Support
-For issues: https://projects.blender.org/lab/blender_mcp/issues
+For issues: https://github.com/bforartists/bfa_coworker/issues

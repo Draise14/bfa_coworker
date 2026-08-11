@@ -13,6 +13,10 @@ __all__ = (
     "STATE_OFFLINE_ERROR_MESSAGE",
     "MODEL_PRESET_ITEMS",
     "REMOTE_PROVIDER_ITEMS",
+    "GEN_BACKEND_ITEMS",
+    "AGENT_MODE_ITEMS",
+    "MCP_SERVER_MODE_ITEMS",
+    "CHAT_MODE_ITEMS",
     "DEFAULT_BRIDGE_PORT",
     "DEFAULT_MCP_PORT",
     "DEFAULT_LLM_PORT",
@@ -20,6 +24,7 @@ __all__ = (
     "effective_ports",
     "get_llm_manager",
     "get_agent_controller",
+    "get_gen_controller",
 )
 
 import os
@@ -88,6 +93,12 @@ def get_agent_controller():
     return _m
 
 
+def get_gen_controller():
+    """Lazy import of gen_controller module."""
+    from . import gen_controller as _m
+    return _m
+
+
 # ── Static EnumProperty Items ────────────────────────────────────────────
 
 # Static preset items for the model_preset EnumProperty.
@@ -119,3 +130,82 @@ _REMOTE_PROVIDER_ITEMS: list[tuple[str, str, str]] = [
 ]
 
 REMOTE_PROVIDER_ITEMS: list[tuple[str, str, str]] = _REMOTE_PROVIDER_ITEMS
+
+# Static preset items for the gen_backend EnumProperty.
+_GEN_BACKEND_ITEMS: list[tuple[str, str, str]] = [
+    (
+        "local",
+        "Local (Built-in)",
+        "Run generative models locally via diffusers/torch — "
+        "models downloaded on first use from HuggingFace",
+    ),
+    (
+        "pallaidium",
+        "Pallaidium Bridge",
+        "Bridge to Pallaidium addon if installed — "
+        "access 50+ models through Pallaidium's pipeline",
+    ),
+    (
+        "comfyui",
+        "ComfyUI",
+        "Connect to a local ComfyUI server — "
+        "use custom workflows as generation models",
+    ),
+    (
+        "remote",
+        "Remote API",
+        "Use a remote OpenAI-compatible generation API "
+        "(e.g. fal.ai, LocalAI)",
+    ),
+]
+
+GEN_BACKEND_ITEMS: list[tuple[str, str, str]] = _GEN_BACKEND_ITEMS
+
+# ── Agent Mode EnumProperty Items ────────────────────────────────────────
+
+AGENT_MODE_ITEMS: list[tuple[str, str, str]] = [
+    (
+        "SELF_CONTAINED",
+        "Self-Contained",
+        "Built-in chat UI with managed local LLM or remote API — "
+        "everything runs inside Blender (recommended for new users)",
+    ),
+    (
+        "EXTERNAL_HARNESS",
+        "External Harness",
+        "Bridge-only mode — run the TCP bridge server inside Blender "
+        "and connect an external MCP client (Claude Desktop, Cursor, "
+        "VS Code, or any MCP-compatible tool)",
+    ),
+]
+
+# ── MCP Server Mode EnumProperty Items ───────────────────────────────────
+
+MCP_SERVER_MODE_ITEMS: list[tuple[str, str, str]] = [
+    (
+        "MANAGED",
+        "Managed (HTTP)",
+        "The addon manages the MCP server as a subprocess with HTTP transport — "
+        "used by the built-in chat UI",
+    ),
+    (
+        "STDIO",
+        "Stdio (External Client)",
+        "The MCP server runs via stdio — for external MCP clients like "
+        "Claude Desktop, Cursor, or VS Code. The addon provides config snippets "
+        "but does NOT manage the server process",
+    ),
+    (
+        "NETWORK",
+        "Network (HTTP Server)",
+        "The MCP server listens on a configurable host:port with HTTP transport — "
+        "for browser-based clients or remote connections",
+    ),
+]
+
+# ── Chat Mode EnumProperty Items (Tier 1: Agent/Ask Toggle) ──────────────
+
+CHAT_MODE_ITEMS: list[tuple[str, str, str]] = [
+    ("AGENT", "Agent", "LLM can execute tools and modify the scene"),
+    ("ASK", "Ask", "LLM answers questions without modifying anything"),
+]

@@ -15,7 +15,7 @@ import bpy  # pylint: disable=import-error
 import os
 
 from . import mcp_to_blender_server
-from .preferences import _State, _BFACW_Preferences
+from .preferences import _State, _BFACW_Preferences, BFACW_OT_pref_tab_select
 from .operators_server import (
     _BFACW_OT_server_start,
     _BFACW_OT_server_stop,
@@ -43,11 +43,20 @@ from .operators_agent import (
     _BFACW_OT_benchmark_scene,
     _BFACW_OT_benchmark_animation,
     _BFACW_OT_benchmark_collections,
+    BFACW_OT_copy_mcp_config,
+    BFACW_OT_mcp_server_start,
+    BFACW_OT_mcp_server_stop,
+    BFACW_OT_save_provider,
+    BFACW_OT_delete_provider,
+    BFACW_OT_load_provider,
+    BFACW_OT_test_polyhaven_hdri,
+    BFACW_OT_test_polyhaven_texture,
 )
 from .shared import (
     effective_ports,
     get_llm_manager,
     get_agent_controller,
+    get_gen_controller,
 )
 
 # Store the CLI handle, only for correct register/unregister.
@@ -55,6 +64,7 @@ _cli_commands: list[object] = []
 
 _classes = (
     _BFACW_Preferences,
+    BFACW_OT_pref_tab_select,
     _BFACW_OT_server_start,
     _BFACW_OT_server_stop,
     _BFACW_OT_download_model,
@@ -75,6 +85,14 @@ _classes = (
     _BFACW_OT_benchmark_scene,
     _BFACW_OT_benchmark_animation,
     _BFACW_OT_benchmark_collections,
+    BFACW_OT_copy_mcp_config,
+    BFACW_OT_mcp_server_start,
+    BFACW_OT_mcp_server_stop,
+    BFACW_OT_save_provider,
+    BFACW_OT_delete_provider,
+    BFACW_OT_load_provider,
+    BFACW_OT_test_polyhaven_hdri,
+    BFACW_OT_test_polyhaven_texture,
 )
 
 
@@ -105,6 +123,17 @@ def register() -> None:
     # Register the chat UI modules.
     from . import ui_chat
     ui_chat.register()
+
+    # Discover generative plugins (Tier 5).
+    # This scans gen_plugins/ and populates the registry.
+    # Safe to call — discovery is idempotent.
+    try:
+        from .gen_plugins import discover, PLUGIN_REGISTRY
+        discover()
+        print("[🛠️Coworker] gen_plugins: {:d} plugins registered".format(
+            len(PLUGIN_REGISTRY)))
+    except Exception as ex:
+        print("[🛠️Coworker] gen_plugins: discovery skipped — {:s}".format(str(ex)))
 
     # Defer auto-start so the server does not slow down Blender's startup.
     if not bpy.app.background:
@@ -137,6 +166,12 @@ def _autostart_agent_timer() -> None:
 
     prefs = bpy.context.preferences.addons[__package__].preferences
     _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+
+    # In External Harness mode, only the bridge server is needed.
+    # The MCP server and LLM are managed externally.
+    if prefs.agent_mode == "EXTERNAL_HARNESS":
+        print("Agent auto-start: External Harness mode — bridge only")
+        return
 
     print("Agent auto-start: using ports bridge={:d} mcp={:d} llm={:d}".format(
         _bridge_port, _mcp_port, _llm_port))
@@ -183,6 +218,12 @@ def unregister() -> None:
     # Clean up subprocesses.
     get_llm_manager().cleanup()
     get_agent_controller().cleanup()
+
+    # Clean up generative controller (Tier 5).
+    try:
+        get_gen_controller().cleanup()
+    except Exception:
+        pass
 
     # Unregister chat UI.
     ui_chat.unregister()

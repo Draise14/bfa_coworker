@@ -903,8 +903,10 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             if current_turn:
                 turns.append(current_turn)
 
-            # Draw turns in chronological order (oldest first, waterfall).
-            for turn in turns[-10:]:
+            # Draw turns in reverse order (newest first, top to bottom).
+            # Limit to last 3 turns so the user always sees the latest
+            # activity without excessive scrolling.
+            for turn in reversed(turns[-3:]):
                 # Separate messages by role for proper ordering.
                 user_msg = None
                 assistant_msg = None

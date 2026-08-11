@@ -552,6 +552,58 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         col.label(text="Effective:  Bridge {:d}  |  MCP {:d}  |  LLM {:d}".format(
             bridge, mcp, llm))
 
+    # ── Diagnostics (debug only, behind flag) ───────────────────────────
+
+    def _draw_diagnostics(self, layout) -> None:
+        """Draw the diagnostics panel below all tabs when BFACW_DEBUG is enabled."""
+        if not BFACW_DEBUG:
+            return
+        diag_box = layout.box()
+        diag_box.label(text="\U0001f6e0\ufe0f Diagnostics", icon='INFO')
+        diag_box.label(
+            text="Temporary debug tools \u2014 hidden when BFACW_DEBUG=False",
+            icon='BLANK1',
+        )
+        row = diag_box.row()
+        row.operator("bfacw.check_ports", icon="FILE_REFRESH", text="Check Ports")
+        row.operator("bfacw.ping_agent", icon="FILE_REFRESH", text="Diagnose")
+        # ── Benchmark tests ──────────────────────────────────────────
+        diag_box.label(text="Benchmarks (send test prompts to agent)", icon='RENDER_RESULT')
+        bench_row = diag_box.row(align=True)
+        bench_row.operator("bfacw.benchmark_objects", icon="MESH_CUBE", text="Objects")
+        bench_row.operator("bfacw.benchmark_scene", icon="SCENE_DATA", text="Scene")
+        bench_row.operator("bfacw.benchmark_animation", icon="ANIM", text="Animation")
+        bench_row.operator("bfacw.benchmark_collections", icon="OUTLINER_COLLECTION", text="Collections")
+        # Show check_ports results inline.
+        from . import operators_agent as _oa_check
+        check_result = getattr(_oa_check._BFACW_OT_check_ports, "_result", None)
+        if check_result:
+            for label_key in [("bridge", "Bridge"), ("mcp", "MCP"), ("llm", "LLM")]:
+                available = check_result.get(label_key[0], False)
+                diag_box.label(
+                    text="{:s}: {:s}".format(
+                        label_key[1],
+                        "Available" if available else "In Use",
+                    ),
+                    icon="CHECKMARK" if available else "ERROR",
+                )
+        # Show ping results inline (same as Agent Control).
+        from . import operators_agent as _oa
+        ping = _oa._BFACW_OT_ping_agent._result
+        if ping:
+            status_icon = "CHECKMARK" if ping.get("all_ok") else "ERROR"
+            for key, label in [
+                ("bridge_server", "Bridge"),
+                ("mcp_server", "MCP"),
+                ("llm_health", "LLM"),
+                ("llm_chat", "Chat"),
+            ]:
+                val = ping.get(key, "\u2014")
+                diag_box.label(
+                    text="{:<6s} {:s}".format(label + ":", val),
+                    icon=status_icon if val.startswith("OK") else "ERROR",
+                )
+
     def draw(self, context: bpy.types.Context) -> None:
         layout = self.layout
 
@@ -584,6 +636,9 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             self._draw_tab_generative_ai(context)
         elif self.pref_tab == 'ADVANCED':
             self._draw_tab_advanced(context)
+
+        # ── Diagnostics (debug only, behind flag) ───────────────────────
+        self._draw_diagnostics(layout)
 
     # ── Tab: Local LLM ─────────────────────────────────────────────────
 
@@ -980,53 +1035,6 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         row.prop(self, "bridge_port")
         row.prop(self, "mcp_port")
         row.prop(self, "llm_port")
-
-        # ── Diagnostics (debug only, behind flag) ───────────────────────
-        if BFACW_DEBUG:
-            diag_box = layout.box()
-            diag_box.label(text="\U0001f6e0\ufe0f Diagnostics", icon='INFO')
-            diag_box.label(
-                text="Temporary debug tools \u2014 hidden when BFACW_DEBUG=False",
-                icon='BLANK1',
-            )
-            row = diag_box.row()
-            row.operator("bfacw.check_ports", icon="FILE_REFRESH", text="Check Ports")
-            row.operator("bfacw.ping_agent", icon="FILE_REFRESH", text="Diagnose")
-            # ── Benchmark tests ──────────────────────────────────────
-            diag_box.label(text="Benchmarks (send test prompts to agent)", icon='RENDER_RESULT')
-            bench_row = diag_box.row(align=True)
-            bench_row.operator("bfacw.benchmark_objects", icon="MESH_CUBE", text="Objects")
-            bench_row.operator("bfacw.benchmark_scene", icon="SCENE_DATA", text="Scene")
-            bench_row.operator("bfacw.benchmark_animation", icon="ANIM", text="Animation")
-            bench_row.operator("bfacw.benchmark_collections", icon="OUTLINER_COLLECTION", text="Collections")
-            # Show check_ports results inline.
-            from . import operators_agent as _oa_check
-            check_result = getattr(_oa_check._BFACW_OT_check_ports, "_result", None)
-            if check_result:
-                for label_key in [("bridge", "Bridge"), ("mcp", "MCP"), ("llm", "LLM")]:
-                    available = check_result.get(label_key[0], False)
-                    diag_box.label(
-                        text="{:s}: {:s}".format(
-                            label_key[1],
-                            "Available" if available else "In Use",
-                        ),
-                        icon="CHECKMARK" if available else "ERROR",
-                    )
-            # Show ping results inline (same as Agent Control).
-            ping = _oa._BFACW_OT_ping_agent._result
-            if ping:
-                status_icon = "CHECKMARK" if ping.get("all_ok") else "ERROR"
-                for key, label in [
-                    ("bridge_server", "Bridge"),
-                    ("mcp_server", "MCP"),
-                    ("llm_health", "LLM"),
-                    ("llm_chat", "Chat"),
-                ]:
-                    val = ping.get(key, "\u2014")
-                    diag_box.label(
-                        text="{:<6s} {:s}".format(label + ":", val),
-                        icon=status_icon if val.startswith("OK") else "ERROR",
-                    )
 
 
 # ---------------------------------------------------------------------------

@@ -40,6 +40,7 @@ from bpy.types import (  # pylint: disable=import-error
     PropertyGroup,
 )
 
+import random
 import textwrap
 
 from . import agent_controller
@@ -49,6 +50,20 @@ from .shared import effective_ports, CHAT_MODE_ITEMS
 
 
 _WRAP_WIDTH = 60
+
+# Randomized thinking labels for variety.
+_THINKING_LABELS = [
+    "Considering",
+    "Expanding",
+    "Scheming",
+    "Working",
+    "Adjusting",
+    "Thinking",
+    "Planning",
+    "Figuring",
+    "Reasoning",
+    "Pondering",
+]
 
 
 def _wrap_text(text: str, width: int = _WRAP_WIDTH) -> str:
@@ -80,7 +95,7 @@ def _draw_multiline(layout: bpy.types.UILayout, text: str, width: int = _WRAP_WI
 def _draw_reasoning(layout: bpy.types.UILayout, text: str) -> None:
     """Draw reasoning (chain-of-thought) content in a collapsible panel.
 
-    Shows a box with a "Thinking:" label and preview of the first 3 lines.
+    Shows a box with a randomized thinking label and preview of the first 3 lines.
     Inside the box, a collapsible panel reveals the full reasoning.
     """
     if not text:
@@ -90,12 +105,15 @@ def _draw_reasoning(layout: bpy.types.UILayout, text: str) -> None:
     preview_lines = lines[:3]
     remaining_lines = lines[3:]
 
+    # Pick a random thinking label for variety.
+    label = random.choice(_THINKING_LABELS)
+
     # Outer box for the reasoning section.
     outer = layout.box()
 
-    # Row with "Thinking:" label.
+    # Row with thinking label.
     row = outer.row()
-    row.label(text="Thinking:", icon='CONSOLE')
+    row.label(text="{:s}:".format(label), icon='CONSOLE')
 
     # Preview of first 3 lines.
     for line in preview_lines:
@@ -885,8 +903,8 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             if current_turn:
                 turns.append(current_turn)
 
-            # Draw turns in reverse (newest first).
-            for turn in reversed(turns[-10:]):
+            # Draw turns in chronological order (oldest first, waterfall).
+            for turn in turns[-10:]:
                 # Separate messages by role for proper ordering.
                 user_msg = None
                 assistant_msg = None

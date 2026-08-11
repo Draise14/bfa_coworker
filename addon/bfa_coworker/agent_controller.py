@@ -1385,9 +1385,9 @@ def _format_tool_error(result_text: str) -> str:
                 continue
             if stripped.startswith("File"):
                 continue
-            # This is the actual exception — extract just the type.
+            # This is the actual exception.
             exc_type = stripped.split(":")[0].strip() if ":" in stripped else stripped
-            return "This work attempt failed, trying again \u2014 {:s}".format(exc_type)
+            return "Work had an error \u2014 {:s}, trying again".format(exc_type)
     return result_text
 
 

@@ -62,16 +62,16 @@ def _wrap_text(text: str, width: int = _WRAP_WIDTH) -> str:
 
 
 def _draw_multiline(layout: bpy.types.UILayout, text: str, width: int = _WRAP_WIDTH) -> None:
-    """Draw multi-line text in a layout, using multiline_label if available.
+    """Draw multi-line text in a layout, using ``label_multiline`` if available.
 
-    In Blender 5.3+, ``UILayout.multiline_label(text=...)`` natively wraps
+    In Blender 5.3+, ``UILayout.label_multiline(text=...)`` natively wraps
     long text across multiple lines.  For older versions we fall back to
     one ``label()`` call per wrapped line.
     """
     if not text:
         return
-    if hasattr(layout, "multiline_label"):
-        layout.multiline_label(text=text)
+    if hasattr(layout, "label_multiline"):
+        layout.label_multiline(text=text)
     else:
         for line in _wrap_text(text, width=width).split("\n"):
             layout.label(text=line)

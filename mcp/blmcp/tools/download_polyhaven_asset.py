@@ -14,7 +14,7 @@ __all__ = (
 )
 
 import json
-import os
+import urllib.parse
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -24,7 +24,8 @@ from mcp.types import ToolAnnotations  # pylint: disable=import-error,no-name-in
 from blmcp.tools_helpers.connection import send_code  # pylint: disable=import-error
 
 
-_POLYHAVEN_DL = "https://dl.polyhaven.com"
+_POLYHAVEN_API = "https://api.polyhaven.com"
+_POLYHAVEN_DL = "https://dl.polyhaven.org/file/ph-assets"
 _CACHE_DIR = Path.home() / ".cache" / "bfa_coworker" / "polyhaven"
 
 
@@ -39,6 +40,70 @@ def _download_file(url: str, dest: Path) -> str | None:
         return None
     except (urllib.error.URLError, OSError) as ex:
         return str(ex)
+
+
+def _resolve_polyhaven_file_url(asset_id: str, asset_type: str, resolution: str) -> tuple[str, str] | tuple[None, None]:
+    """Resolve a Poly Haven asset download URL via the public API."""
+    url = f"{_POLYHAVEN_API}/files/{asset_id}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "bfa-coworker/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+    except (urllib.error.URLError, json.JSONDecodeError):
+        return None, None
+
+    def _pick_url(entry: dict[str, object], preferred_ext: tuple[str, ...]) -> str | None:
+        if not isinstance(entry, dict):
+            return None
+        desired = entry.get(resolution)
+        if not isinstance(desired, dict):
+            return None
+        for ext in preferred_ext:
+            candidate = desired.get(ext)
+            if isinstance(candidate, dict) and "url" in candidate:
+                return candidate["url"]
+        for candidate in desired.values():
+            if isinstance(candidate, dict) and "url" in candidate:
+                return candidate["url"]
+        return None
+
+    asset_url: str | None = None
+    if asset_type == "hdris":
+        entry = data.get("hdri", {})
+        asset_url = _pick_url(entry, ("hdr", "exr"))
+    elif asset_type == "textures":
+        texture_entry = None
+        for color_key in ("Diffuse", "BaseColor", "Color", "Albedo"):
+            if color_key in data and isinstance(data[color_key], dict):
+                texture_entry = data[color_key]
+                break
+        if texture_entry is None:
+            for value in data.values():
+                if isinstance(value, dict) and resolution in value:
+                    texture_entry = value
+                    break
+        if texture_entry is not None:
+            asset_url = _pick_url(texture_entry, ("jpg", "png", "exr"))
+    else:
+        for model_key in ("gltf", "glb", "fbx", "obj", "usd"):
+            candidate = data.get(model_key)
+            if candidate is not None:
+                if isinstance(candidate, dict) and "url" in candidate:
+                    asset_url = candidate["url"]
+                elif isinstance(candidate, dict):
+                    for value in candidate.values():
+                        if isinstance(value, dict) and "url" in value:
+                            asset_url = value["url"]
+                            break
+                elif isinstance(candidate, str):
+                    asset_url = candidate
+                break
+
+    if not asset_url:
+        return None, None
+
+    filename = Path(urllib.parse.urlparse(asset_url).path).name
+    return asset_url, filename
 
 
 def register(mcp: FastMCP) -> None:
@@ -74,39 +139,18 @@ def register(mcp: FastMCP) -> None:
         if resolution not in ("1k", "2k", "4k", "8k"):
             return "Invalid resolution '{:s}'. Choose '1k', '2k', '4k', or '8k'.".format(resolution)
 
-        # Determine file extension and download URL.
-        if asset_type == "hdris":
-            ext = "hdr" if resolution in ("1k", "2k") else "exr"
-            file_url = "{:s}/{:s}/{:s}/{:s}_{:s}.{:s}".format(
-                _POLYHAVEN_DL, asset_type, asset_id, asset_id, resolution, ext
-            )
-            dest = _CACHE_DIR / asset_type / "{:s}_{:s}.{:s}".format(asset_id, resolution, ext)
-        elif asset_type == "textures":
-            ext = "jpg" if resolution in ("1k", "2k") else "png"
-            file_url = "{:s}/{:s}/{:s}/{:s}_{:s}.{:s}".format(
-                _POLYHAVEN_DL, asset_type, asset_id, asset_id, resolution, ext
-            )
-            dest = _CACHE_DIR / asset_type / "{:s}_{:s}.{:s}".format(asset_id, resolution, ext)
-        else:
-            # Models: try glTF first, fall back to FBX.
-            file_url = "{:s}/{:s}/{:s}/{:s}.gltf".format(
-                _POLYHAVEN_DL, asset_type, asset_id, asset_id
-            )
-            dest = _CACHE_DIR / asset_type / "{:s}.gltf".format(asset_id)
+        # Resolve the current download URL for this asset via the Poly Haven API.
+        file_url, filename = _resolve_polyhaven_file_url(asset_id, asset_type, resolution)
+        if not file_url:
+            return "Download failed: could not resolve Poly Haven download URL for asset '{:s}'".format(asset_id)
+
+        dest = _CACHE_DIR / asset_type / filename
 
         # Download if not cached.
         if not dest.exists():
             error = _download_file(file_url, dest)
             if error:
-                # Try FBX fallback for models.
-                if asset_type == "models":
-                    file_url = "{:s}/{:s}/{:s}/{:s}.fbx".format(
-                        _POLYHAVEN_DL, asset_type, asset_id, asset_id
-                    )
-                    dest = _CACHE_DIR / asset_type / "{:s}.fbx".format(asset_id)
-                    error = _download_file(file_url, dest)
-                if error:
-                    return "Download failed: {:s}".format(error)
+                return "Download failed: {:s}".format(error)
 
         # Import into Blender via the bridge.
         if asset_type == "hdris":

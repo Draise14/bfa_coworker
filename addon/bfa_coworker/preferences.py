@@ -440,7 +440,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
     gen_models_dir: StringProperty(  # type: ignore[valid-type]
         name="Gen Models Directory",
-        description="Directory where generative AI models are downloaded and cached",
+        description="Directory where generative models are downloaded and cached",
         default=str(Path.home() / "bfa_coworker_gen_models"),
         subtype='DIR_PATH',
     )
@@ -484,7 +484,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         items=[
             ("LOCAL_LLM", "Local LLM", "Configure and download local models", 'CONSOLE', 0),
             ("REMOTE_API", "Remote API", "Configure remote API access", 'WORLD', 1),
-            ("GENERATIVE_AI", "Generative AI", "Image/video/audio generation backends", 'RENDER_RESULT', 2),
+            ("GENERATIVE", "Generative", "Image/video/audio generation backends", 'RENDER_RESULT', 2),
             ("ADVANCED", "Advanced", "External harness, ports, and diagnostics", 'SETTINGS', 3),
         ],
         default="LOCAL_LLM",
@@ -561,7 +561,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         for tab_id, tab_label, tab_icon in [
             ("LOCAL_LLM", "Local LLM", 'CONSOLE'),
             ("REMOTE_API", "Remote API", 'WORLD'),
-            ("GENERATIVE_AI", "Generative AI", 'RENDER_RESULT'),
+            ("GENERATIVE", "Generative", 'RENDER_RESULT'),
             ("ADVANCED", "Advanced", 'SETTINGS'),
         ]:
             is_active = (self.pref_tab == tab_id)
@@ -580,7 +580,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             self._draw_tab_local_llm(context)
         elif self.pref_tab == 'REMOTE_API':
             self._draw_tab_remote_api(context)
-        elif self.pref_tab == 'GENERATIVE_AI':
+        elif self.pref_tab == 'GENERATIVE':
             self._draw_tab_generative_ai(context)
         elif self.pref_tab == 'ADVANCED':
             self._draw_tab_advanced(context)
@@ -810,7 +810,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         row = box.row()
         row.operator("bfacw.save_provider", icon="ADD", text="Save Current as Profile")
 
-    # ── Tab: Generative AI ─────────────────────────────────────────────
+    # ── Tab: Generative ─────────────────────────────────────────────
 
     def _draw_tab_generative_ai(self, context: bpy.types.Context) -> None:
         del context
@@ -818,7 +818,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
         # ── Generation (Tier 5) ────────────────────────────────────────
         gen_box = layout.box()
-        gen_box.label(text="Generative AI (Image / Video / Audio)", icon='RENDER_RESULT')
+        gen_box.label(text="Generative (Image / Video / Audio)", icon='RENDER_RESULT')
         gen_box.label(text="Experimental (WIP)", icon='WARNING')
         gen_box.prop(self, "gen_backend")
 

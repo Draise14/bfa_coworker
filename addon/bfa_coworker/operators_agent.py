@@ -216,7 +216,7 @@ _BENCHMARK_PROMPTS = {
     "polyhaven_hdri": (
         "Use the search_polyhaven_assets tool to find a sunset HDRI, "
         "then use download_polyhaven_asset to download and apply it "
-        "as the world environment. Asset ID: sunset_meadow, type: hdris."
+        "as the world environment. Asset ID: belfast_sunset, type: hdris."
     ),
     "polyhaven_texture": (
         "Use the search_polyhaven_assets tool to find a brick wall texture, "

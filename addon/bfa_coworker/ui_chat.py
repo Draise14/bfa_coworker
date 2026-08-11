@@ -100,8 +100,8 @@ def _draw_reasoning(layout: bpy.types.UILayout, text: str) -> None:
     for line in preview_lines:
         _draw_multiline(outer, line)
 
-    # Collapsible panel for full reasoning.
-    header, body = outer.panel("reasoning_full")
+    # Collapsible panel for full reasoning (closed by default).
+    header, body = outer.panel("reasoning_full", default_closed=True)
     header.label(text="Show full reasoning ({:d} lines)".format(len(lines)))
 
     if body:
@@ -859,16 +859,19 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 summary = msg.get("summary", "")
 
                 if role == "user":
-                    row = box.row()
+                    msg_box = box.box()
+                    row = msg_box.row()
                     row.label(text="You:", icon='USER')
-                    _draw_multiline(box, content)
+                    _draw_multiline(msg_box, content)
                 elif role == "assistant":
-                    row = box.row()
+                    msg_box = box.box()
+                    row = msg_box.row()
                     row.label(text="Agent:", icon='CONSOLE')
                     if content:
-                        _draw_multiline(box, content)
+                        _draw_multiline(msg_box, content)
                 elif role == "tool":
-                    row = box.row()
+                    msg_box = box.box()
+                    row = msg_box.row()
                     is_error = (
                         '"status": "error"' in (content or "") or
                         (content or "").startswith("Error")
@@ -882,7 +885,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     display = summary if summary else (content or "")
                     if not summary and len(display) > 200:
                         display = display[:200] + "..."
-                    _draw_multiline(box, display)
+                    _draw_multiline(msg_box, display)
                 elif role == "reasoning":
                     # Reasoning: show collapsed by default with a distinct style.
                     _draw_reasoning(box, content)

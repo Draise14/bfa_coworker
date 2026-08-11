@@ -40,7 +40,6 @@ from bpy.types import (  # pylint: disable=import-error
     PropertyGroup,
 )
 
-import random
 import textwrap
 
 from . import agent_controller
@@ -50,20 +49,6 @@ from .shared import effective_ports, CHAT_MODE_ITEMS
 
 
 _WRAP_WIDTH = 60
-
-# Randomized thinking labels for variety.
-_THINKING_LABELS = [
-    "Considering",
-    "Expanding",
-    "Scheming",
-    "Working",
-    "Adjusting",
-    "Thinking",
-    "Planning",
-    "Figuring",
-    "Reasoning",
-    "Pondering",
-]
 
 
 def _wrap_text(text: str, width: int = _WRAP_WIDTH) -> str:
@@ -92,11 +77,20 @@ def _draw_multiline(layout: bpy.types.UILayout, text: str, width: int = _WRAP_WI
             layout.label(text=line)
 
 
-def _draw_reasoning(layout: bpy.types.UILayout, text: str) -> None:
+def _draw_reasoning(
+    layout: bpy.types.UILayout,
+    text: str,
+    label: str = "Thinking",
+    is_thinking: bool = False,
+    thinking_dots: int = 0,
+) -> None:
     """Draw reasoning (chain-of-thought) content in a collapsible panel.
 
-    Shows a box with a randomized thinking label and preview of the first 3 lines.
+    Shows a box with a thinking label and preview of the first 3 lines.
+    While *is_thinking* is True, the label animates with dots.
     Inside the box, a collapsible panel reveals the full reasoning.
+    The *label* is stored when the reasoning was first captured so it
+    doesn't flicker on every redraw.
     """
     if not text:
         return
@@ -105,15 +99,21 @@ def _draw_reasoning(layout: bpy.types.UILayout, text: str) -> None:
     preview_lines = lines[:3]
     remaining_lines = lines[3:]
 
-    # Pick a random thinking label for variety.
-    label = random.choice(_THINKING_LABELS)
+    # Animate the label with dots while thinking.
+    if is_thinking:
+        dots = [".", "..", "...", "...."]
+        display_label = "{:s}{:s}".format(label, dots[thinking_dots % 4])
+        icon = 'CONSOLE'
+    else:
+        display_label = label
+        icon = 'CHECKMARK'
 
     # Outer box for the reasoning section.
     outer = layout.box()
 
     # Row with thinking label.
     row = outer.row()
-    row.label(text="{:s}:".format(label), icon='CONSOLE')
+    row.label(text="{:s}:".format(display_label), icon=icon)
 
     # Preview of first 3 lines.
     for line in preview_lines:
@@ -930,7 +930,13 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
 
                 # Draw reasoning (before assistant, since it precedes it).
                 for r_msg in reasoning_msgs:
-                    _draw_reasoning(box, r_msg.get("content", ""))
+                    _draw_reasoning(
+                        box,
+                        r_msg.get("content", ""),
+                        r_msg.get("label", "Thinking"),
+                        is_thinking=state.is_thinking,
+                        thinking_dots=state.thinking_dots,
+                    )
 
                 # Draw assistant message with tool sub-boxes inside.
                 if assistant_msg:

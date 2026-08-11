@@ -1602,7 +1602,15 @@ def run_conversation_turn(
             print("[🛠️Coworker] run_conversation_turn: reasoning ({:d} chars) — storing in history".format(
                 len(reasoning)))
             _agent_state.reasoning_text = reasoning
-            history.append({"role": "reasoning", "content": reasoning})
+            # Pick a random thinking label that sticks for this reasoning block.
+            import random as _random
+            _thinking_labels = [
+                "Considering", "Expanding", "Scheming", "Working",
+                "Adjusting", "Thinking", "Planning", "Figuring",
+                "Reasoning", "Pondering",
+            ]
+            label = _random.choice(_thinking_labels)
+            history.append({"role": "reasoning", "content": reasoning, "label": label})
             if on_reasoning:
                 on_reasoning(reasoning)
 

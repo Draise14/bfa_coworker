@@ -183,18 +183,20 @@ AGENT_MODE_ITEMS: list[tuple[str, str, str]] = [
 # ── Operating Mode EnumProperty Items ────────────────────────────────────
 # Unified top-level selector that combines agent_mode + llm_mode.
 
-OPERATING_MODE_ITEMS: list[tuple[str, str, str, str]] = [
+OPERATING_MODE_ITEMS: list[tuple[str, str, str, str, int]] = [
     (
         "LOCAL_LLM",
         "Local LLM",
         "Run a local LLM via llama-server — everything runs on your machine",
         "CONSOLE",
+        0,
     ),
     (
         "REMOTE_API",
         "Remote API",
         "Use a remote API like OpenAI or OpenRouter — no local LLM needed",
         "WORLD",
+        1,
     ),
     (
         "EXTERNAL_HARNESS",
@@ -202,6 +204,7 @@ OPERATING_MODE_ITEMS: list[tuple[str, str, str, str]] = [
         "Bridge-only mode — connect an external MCP client "
         "(Claude Desktop, Cursor, VS Code, etc.)",
         "NETWORK_DRIVE",
+        2,
     ),
 ]
 

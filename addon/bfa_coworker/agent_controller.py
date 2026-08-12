@@ -1466,14 +1466,21 @@ def run_conversation_turn(
     # Determine LLM URL.
     llm_port_local: int | None = None
     if llm_url is None:
-        # Use local llama-server default.  Read the configured port
-        # from llm_manager so we stay in sync.
+        # No URL provided — resolve from config mode.
         from . import llm_manager as _llm_mgr
         _llm_cfg = _llm_mgr.get_config()
-        llm_url = _LLM_CHAT_URL.format(_llm_cfg.local_port)
-        llm_port_local = _llm_cfg.local_port
-    else:
-        # Remote API URL — ensure it ends with /v1/chat/completions.
+        if _llm_cfg.mode == "remote":
+            # Build remote URL from config.
+            llm_url = _llm_cfg.remote_api_url
+            api_key = _llm_cfg.remote_api_key or api_key
+            model = _llm_cfg.remote_model or model
+        else:
+            # Use local llama-server default.
+            llm_url = _LLM_CHAT_URL.format(_llm_cfg.local_port)
+            llm_port_local = _llm_cfg.local_port
+
+    # Ensure URL ends with /v1/chat/completions (for both local and remote).
+    if llm_url:
         base = llm_url.rstrip("/")
         if not base.endswith("/chat/completions"):
             if base.endswith("/v1"):

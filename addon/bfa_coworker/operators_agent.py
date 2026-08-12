@@ -295,6 +295,9 @@ def _run_benchmark(context: bpy.types.Context, bench_key: str) -> None:
 
     # Resolve LLM config (same as chat_send).
     llm = get_llm_manager()
+    # Sync prefs to config first.
+    from . import ui_chat as _ui_chat
+    _ui_chat._sync_prefs_to_config(prefs)
     llm_cfg = llm.get_config()
     llm_url = None
     api_key = None

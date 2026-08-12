@@ -96,6 +96,23 @@ _classes = (
 )
 
 
+def _migrate_operating_mode() -> None:
+    """Migrate legacy agent_mode + llm_mode to the new operating_mode."""
+    try:
+        prefs = bpy.context.preferences.addons[__package__].preferences
+        # Only migrate if operating_mode is still the default (not yet set).
+        if prefs.operating_mode != "LOCAL_LLM":
+            return
+        # Check if agent_mode was explicitly set to EXTERNAL_HARNESS.
+        if prefs.agent_mode == "EXTERNAL_HARNESS":
+            prefs.operating_mode = "EXTERNAL_HARNESS"
+        elif prefs.llm_mode == "remote":
+            prefs.operating_mode = "REMOTE_API"
+        # else: LOCAL_LLM is already the default, nothing to do.
+    except Exception:
+        pass  # Best-effort migration.
+
+
 def register() -> None:
     # Start file-based logging as early as possible so all subsequent
     # print() diagnostics are captured to disk.
@@ -119,6 +136,9 @@ def register() -> None:
     for cls in _classes:
         bpy.utils.register_class(cls)
     _cli_commands.append(bpy.utils.register_cli_command("bfa_coworker", _cli_execute_handler))
+
+    # Migrate operating_mode from legacy agent_mode + llm_mode.
+    _migrate_operating_mode()
 
     # Register the chat UI modules.
     from . import ui_chat
@@ -169,7 +189,7 @@ def _autostart_agent_timer() -> None:
 
     # In External Harness mode, only the bridge server is needed.
     # The MCP server and LLM are managed externally.
-    if prefs.agent_mode == "EXTERNAL_HARNESS":
+    if prefs.operating_mode == "EXTERNAL_HARNESS":
         print("Agent auto-start: External Harness mode — bridge only")
         return
 
@@ -185,10 +205,10 @@ def _autostart_agent_timer() -> None:
             return
 
     # Start local LLM if configured.
-    if prefs.llm_mode == "local":
+    if prefs.operating_mode == "LOCAL_LLM":
         _llm = get_llm_manager()
         _llm_cfg = _llm.get_config()
-        _llm_cfg.mode = prefs.llm_mode
+        _llm_cfg.mode = "local"
         _llm_cfg.llama_path = prefs.llama_path
         _llm_cfg.model_repo_id = prefs.model_repo_id
         _llm_cfg.model_filename = prefs.model_filename
@@ -206,6 +226,15 @@ def _autostart_agent_timer() -> None:
                 _llm.start_local_llama(model_path=existing_path)
             else:
                 _llm.start_local_llama()
+    elif prefs.operating_mode == "REMOTE_API":
+        # Remote mode — sync remote prefs to config so chat_send finds them.
+        _llm = get_llm_manager()
+        _llm_cfg = _llm.get_config()
+        _llm_cfg.mode = "remote"
+        _llm_cfg.remote_api_url = prefs.remote_api_url
+        _llm_cfg.remote_api_key = prefs.remote_api_key
+        _llm_cfg.remote_model = prefs.remote_model
+        _llm.set_config(_llm_cfg)
 
     print("Agent auto-start: full agent running on ports bridge={:d} mcp={:d} llm={:d}".format(
         _bridge_port, _mcp_port, _llm_port))

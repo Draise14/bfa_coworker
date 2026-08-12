@@ -34,6 +34,7 @@ from .shared import (
     REMOTE_PROVIDER_ITEMS,
     AGENT_MODE_ITEMS,
     MCP_SERVER_MODE_ITEMS,
+    OPERATING_MODE_ITEMS,
     CHAT_MODE_ITEMS,
     BFACW_DEBUG,
     effective_ports,
@@ -188,6 +189,25 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
     # ── LLM Configuration Properties ─────────────────────────────────
 
+    def _update_llm_mode(self, _context: bpy.types.Context) -> None:
+        """Sync llm_mode to llm_manager config and stop local LLM if switching to remote."""
+        llm = get_llm_manager()
+        cfg = llm.get_config()
+        cfg.mode = self.llm_mode
+        cfg.remote_api_url = self.remote_api_url
+        cfg.remote_api_key = self.remote_api_key
+        cfg.remote_model = self.remote_model
+        cfg.llama_path = self.llama_path
+        cfg.model_repo_id = self.model_repo_id
+        cfg.model_filename = self.model_filename
+        cfg.downloaded_models_dir = self.downloaded_models_dir
+        cfg.local_ctx_size = self.local_ctx_size
+        cfg.local_max_tokens = self.local_max_tokens
+        llm.set_config(cfg)
+        # If switching to remote, stop any running local LLM.
+        if self.llm_mode == "remote":
+            llm.stop_local_llama()
+
     llm_mode: EnumProperty(  # type: ignore[valid-type]
         name="LLM Mode",
         items=[
@@ -195,6 +215,32 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             ("remote", "Remote API", "Use a remote API like OpenAI or OpenRouter"),
         ],
         default="local",
+        update=_update_llm_mode,
+    )
+
+    # ── Unified Operating Mode ──────────────────────────────────────────
+
+    def _update_operating_mode(self, _context: bpy.types.Context) -> None:
+        """Sync operating_mode to agent_mode and llm_mode, and switch to the relevant tab."""
+        if self.operating_mode == "LOCAL_LLM":
+            self.agent_mode = "SELF_CONTAINED"
+            self.llm_mode = "local"
+            self.pref_tab = "LOCAL_LLM"
+        elif self.operating_mode == "REMOTE_API":
+            self.agent_mode = "SELF_CONTAINED"
+            self.llm_mode = "remote"
+            self.pref_tab = "REMOTE_API"
+        elif self.operating_mode == "EXTERNAL_HARNESS":
+            self.agent_mode = "EXTERNAL_HARNESS"
+            # llm_mode stays as-is (not used in harness mode)
+            self.pref_tab = "ADVANCED"
+
+    operating_mode: EnumProperty(  # type: ignore[valid-type]
+        name="Operating Mode",
+        description="Select how the agent connects to an LLM",
+        items=OPERATING_MODE_ITEMS,
+        default="LOCAL_LLM",
+        update=_update_operating_mode,
     )
 
     llama_path: StringProperty(  # type: ignore[valid-type]
@@ -607,6 +653,12 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
     def draw(self, context: bpy.types.Context) -> None:
         layout = self.layout
 
+        # ── Operating Mode selector (top-level, always visible) ─────────
+        box = layout.box()
+        box.label(text="Operating Mode", icon='TOOL_SETTINGS')
+        box.row().prop(self, "operating_mode", expand=True)
+        layout.separator()
+
         # ── Tab selector row ────────────────────────────────────────────
         row = layout.row(align=True)
         row.scale_y = 1.3
@@ -616,6 +668,13 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             ("GENERATIVE", "Generative", 'RENDER_RESULT'),
             ("ADVANCED", "Advanced", 'SETTINGS'),
         ]:
+            # Hide irrelevant tabs based on operating mode.
+            if self.operating_mode == "LOCAL_LLM" and tab_id == "REMOTE_API":
+                continue
+            if self.operating_mode == "REMOTE_API" and tab_id == "LOCAL_LLM":
+                continue
+            if self.operating_mode == "EXTERNAL_HARNESS" and tab_id in ("LOCAL_LLM", "REMOTE_API"):
+                continue
             is_active = (self.pref_tab == tab_id)
             op = row.operator(
                 "bfacw.pref_tab_select",
@@ -629,9 +688,15 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
         # ── Draw the active tab ─────────────────────────────────────────
         if self.pref_tab == 'LOCAL_LLM':
-            self._draw_tab_local_llm(context)
+            if self.operating_mode == "LOCAL_LLM":
+                self._draw_tab_local_llm(context)
+            else:
+                self.pref_tab = "ADVANCED"
         elif self.pref_tab == 'REMOTE_API':
-            self._draw_tab_remote_api(context)
+            if self.operating_mode == "REMOTE_API":
+                self._draw_tab_remote_api(context)
+            else:
+                self.pref_tab = "ADVANCED"
         elif self.pref_tab == 'GENERATIVE':
             self._draw_tab_generative_ai(context)
         elif self.pref_tab == 'ADVANCED':
@@ -942,10 +1007,10 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         del context
         layout = self.layout
 
-        # ── Agent Mode ─────────────────────────────────────────────────
+        # ── Operating Mode ─────────────────────────────────────────────
         box = layout.box()
-        box.label(text="Agent Mode", icon='WORKSPACE')
-        box.prop(self, "agent_mode", expand=True)
+        box.label(text="Operating Mode", icon='WORKSPACE')
+        box.prop(self, "operating_mode", expand=True)
 
         # ── Bridge Server ──────────────────────────────────────────────
         bridge_box = layout.box()

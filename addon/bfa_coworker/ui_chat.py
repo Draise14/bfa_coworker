@@ -48,6 +48,28 @@ from . import mcp_to_blender_server
 from .shared import effective_ports, CHAT_MODE_ITEMS
 
 
+def _sync_prefs_to_config(prefs: bpy.types.AddonPreferences) -> None:
+    """Copy all relevant preference fields into llm_manager._config."""
+    llm_cfg = llm_manager.get_config()
+    # Derive mode from operating_mode.
+    if prefs.operating_mode == "LOCAL_LLM":
+        llm_cfg.mode = "local"
+    elif prefs.operating_mode == "REMOTE_API":
+        llm_cfg.mode = "remote"
+    else:
+        llm_cfg.mode = "local"  # fallback for harness mode
+    llm_cfg.llama_path = prefs.llama_path
+    llm_cfg.model_repo_id = prefs.model_repo_id
+    llm_cfg.model_filename = prefs.model_filename
+    llm_cfg.downloaded_models_dir = prefs.downloaded_models_dir
+    llm_cfg.local_ctx_size = prefs.local_ctx_size
+    llm_cfg.local_max_tokens = prefs.local_max_tokens
+    llm_cfg.remote_api_url = prefs.remote_api_url
+    llm_cfg.remote_api_key = prefs.remote_api_key
+    llm_cfg.remote_model = prefs.remote_model
+    llm_manager.set_config(llm_cfg)
+
+
 _WRAP_WIDTH = 60
 
 
@@ -256,7 +278,9 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
         props.chat_input = ""
         props.chat_status = "Thinking..."
 
-        # Get LLM config.
+        # Sync preferences to config, then read LLM config.
+        prefs = context.preferences.addons[__package__].preferences
+        _sync_prefs_to_config(prefs)
         llm_cfg = llm_manager.get_config()
         llm_url = None
         api_key = None
@@ -270,7 +294,6 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
         import threading
 
         # Get effective ports from preferences.
-        prefs = context.preferences.addons[__package__].preferences
         _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
 
         def _do_turn():
@@ -513,7 +536,7 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         prefs = context.preferences.addons[__package__].preferences
 
         # In External Harness mode, only start the bridge server.
-        if prefs.agent_mode == "EXTERNAL_HARNESS":
+        if prefs.operating_mode == "EXTERNAL_HARNESS":
             return self._start_bridge_only(context)
 
         return self._start_full_agent(context)
@@ -594,18 +617,10 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         # on a background thread to avoid freezing Blender's UI.
         prefs = context.preferences.addons[__package__].preferences
         # Sync preferences to llm_manager config before starting.
+        _sync_prefs_to_config(prefs)
         llm_cfg = llm_manager.get_config()
-        llm_cfg.mode = prefs.llm_mode
-        llm_cfg.llama_path = prefs.llama_path
-        llm_cfg.model_repo_id = prefs.model_repo_id
-        llm_cfg.model_filename = prefs.model_filename
-        llm_cfg.downloaded_models_dir = prefs.downloaded_models_dir
         _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
         llm_cfg.local_port = _llm_port
-        llm_cfg.local_ctx_size = prefs.local_ctx_size
-        llm_cfg.remote_api_url = prefs.remote_api_url
-        llm_cfg.remote_api_key = prefs.remote_api_key
-        llm_cfg.remote_model = prefs.remote_model
         llm_manager.set_config(llm_cfg)
 
         if llm_cfg.mode == "local":
@@ -729,7 +744,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
         state = agent_controller._agent_state
         prefs = context.preferences.addons[__package__].preferences
-        is_harness = (prefs.agent_mode == "EXTERNAL_HARNESS")
+        is_harness = (prefs.operating_mode == "EXTERNAL_HARNESS")
 
         # Agent control buttons.
         row = layout.row(align=True)
@@ -789,6 +804,14 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 text="LLM: {:s}".format("\u25cf" if state.llm_live else "\u25cb"),
                 icon='CONSOLE',
             )
+
+        # Mode indicator.
+        if not is_harness:
+            mode_row = layout.row(align=True)
+            if prefs.operating_mode == "REMOTE_API":
+                mode_row.label(text="Mode: Remote API", icon='URL')
+            else:
+                mode_row.label(text="Mode: Local LLM", icon='CONSOLE')
 
         # Tool count.
         if not is_harness and state.mcp_server_running:
@@ -1004,7 +1027,7 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
         state = agent_controller._agent_state
         prefs = context.preferences.addons[__package__].preferences
-        is_harness = (prefs.agent_mode == "EXTERNAL_HARNESS")
+        is_harness = (prefs.operating_mode == "EXTERNAL_HARNESS")
 
         # Status bar.
         row = layout.row(align=True)

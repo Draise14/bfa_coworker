@@ -233,7 +233,10 @@ def _parse_sse_text_response(raw: str) -> str:
     """
     Parse SSE body for a tool result, extracting text content blocks.
 
-    Returns the concatenated text or an error string.
+    Handles both ``type: "text"`` and ``type: "image"`` content blocks.
+    For images, returns a descriptive message so the LLM knows the
+    screenshot was captured (the image data is not passed to the LLM
+    via this path — it goes through the MCP ``Image`` return type).
     """
     result = _parse_sse_json(raw)
     if result is None:
@@ -242,10 +245,19 @@ def _parse_sse_text_response(raw: str) -> str:
         return "Error: {:s}".format(str(result["error"]))
     content = result.get("result", {}).get("content", [])
     texts = []
+    has_image = False
     for block in content:
-        if isinstance(block, dict) and block.get("type") == "text":
-            texts.append(block.get("text", ""))
-    return "\n".join(texts) if texts else "Error: no text content in tool result"
+        if isinstance(block, dict):
+            block_type = block.get("type", "")
+            if block_type == "text":
+                texts.append(block.get("text", ""))
+            elif block_type in ("image", "image/png", "image/jpeg", "image/webp"):
+                has_image = True
+    if texts:
+        return "\n".join(texts)
+    if has_image:
+        return "Screenshot captured successfully (image data returned to LLM)"
+    return "Error: no text content in tool result"
 
 
 # ---------------------------------------------------------------------------

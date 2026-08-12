@@ -123,15 +123,8 @@ group_output = group.nodes.get("Group Output")
 ```
 
 ### Socket Types
-| socket_type | Use |
-|-------------|-----|
-| `NodeSocketFloat` | Float value |
-| `NodeSocketInt` | Integer |
-| `NodeSocketBool` | Boolean |
-| `NodeSocketColor` | RGBA color |
-| `NodeSocketVector` | XYZ vector |
-| `NodeSocketShader` | Shader socket |
-| `NodeSocketString` | String |
+
+`NodeSocket{Float,Int,Bool,Color,Vector,Shader,String}`
 
 ### Compositor Node Groups
 For compositor node groups, use `type='CompositorNodeTree'` and socket types like

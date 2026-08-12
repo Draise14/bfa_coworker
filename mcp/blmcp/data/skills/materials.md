@@ -22,29 +22,16 @@ nodes.clear()  # Remove default nodes if starting fresh
 
 ## Correct Node Type Identifiers
 
-When creating nodes via `nodes.new(type=...)`, use these exact bl_idname values:
+Use `nodes.new(type=...)` with these bl_idname values:
 
-| Node | bl_idname |
-|------|-----------|
-| Principled BSDF | `ShaderNodeBsdfPrincipled` |
-| Emission | `ShaderNodeEmission` |
-| Material Output | `ShaderNodeOutputMaterial` |
-| Noise Texture | `ShaderNodeTexNoise` |
-| Image Texture | `ShaderNodeTexImage` |
-| ColorRamp | `ShaderNodeValToRGB` |
-| Normal Map | `ShaderNodeNormalMap` |
-| Bump | `ShaderNodeBump` |
-| Mix Shader | `ShaderNodeMixShader` |
-| Add Shader | `ShaderNodeAddShader` |
-| Texture Coordinate | `ShaderNodeTexCoord` |
-| Mapping | `ShaderNodeMapping` |
-| Separate Color | `ShaderNodeSeparateColor` |
-| Combine Color | `ShaderNodeCombineColor` |
-| Math | `ShaderNodeMath` |
-| RGB Curves | `ShaderNodeRGBCurve` |
-| Group Input | `NodeGroupInput` |
-| Group Output | `NodeGroupOutput` |
-| Frame | `NodeFrame` |
+| Category | bl_idname values |
+|----------|-----------------|
+| Shaders | `ShaderNodeBsdfPrincipled`, `ShaderNodeEmission`, `ShaderNodeMixShader`, `ShaderNodeAddShader` |
+| Output | `ShaderNodeOutputMaterial` |
+| Textures | `ShaderNodeTexNoise`, `ShaderNodeTexImage`, `ShaderNodeTexCoord` |
+| Color | `ShaderNodeValToRGB`, `ShaderNodeSeparateColor`, `ShaderNodeCombineColor`, `ShaderNodeRGBCurve` |
+| Vector/Math | `ShaderNodeMapping`, `ShaderNodeNormalMap`, `ShaderNodeBump`, `ShaderNodeMath` |
+| Group | `NodeGroupInput`, `NodeGroupOutput`, `NodeFrame` |
 
 ## Common Node Patterns
 

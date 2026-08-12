@@ -301,7 +301,7 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
                 agent_controller.run_conversation_turn(
                     user_message=message,
                     on_text=None,
-                    on_reasoning=lambda r: _update_streaming(context, r),
+                    on_reasoning=lambda r: _update_streaming(r),
                     on_status=lambda s: _update_status(s),
                     llm_url=llm_url or None,
                     api_key=api_key or None,
@@ -314,15 +314,15 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             finally:
                 _save_chat_history()
                 _update_status("Idle")
-                _redraw_areas(context)
+                _redraw_areas_safe()
 
         def _update_status(text: str) -> None:
             props.chat_status = text
-            _redraw_areas(context)
+            _redraw_areas_safe()
 
-        def _update_streaming(ctx: bpy.types.Context, text: str) -> None:
+        def _update_streaming(text: str) -> None:
             """Called when reasoning or streaming text arrives — refresh UI."""
-            _redraw_areas(ctx)
+            _redraw_areas_safe()
 
         thread = threading.Thread(target=_do_turn, daemon=True)
         thread.start()
@@ -1102,6 +1102,20 @@ def _redraw_areas(context: bpy.types.Context | None) -> None:
     """Force redraw of all panels."""
     if context and context.area:
         context.area.tag_redraw()
+
+
+def _redraw_areas_safe() -> None:
+    """Defer a panel redraw to the main thread via a timer.
+
+    Safe to call from background threads where the operator's
+    ``context`` may have been invalidated after ``execute()``
+    returned.  Uses ``bpy.app.timers`` to access ``bpy.context``
+    on the main thread where it is always valid.
+    """
+    bpy.app.timers.register(
+        lambda: _redraw_areas(bpy.context),
+        first_interval=0.0,
+    )
 
 
 # ---------------------------------------------------------------------------

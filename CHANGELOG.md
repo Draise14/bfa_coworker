@@ -14,16 +14,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Medium Priority
 - [ ] **Add history chat to a text file with a button to open it in a floating window** - so we can copy and paste the results and save the log from the chat
-- [ ] **SKILL.md Update** — Rewrite `.github/skills/self-contained-blender-mcp/SKILL.md` to reflect current project goals and branding.
+- [x] **SKILL.md Update** — Rewrite `.github/skills/self-contained-blender-mcp/SKILL.md` to reflect current project goals and branding.
 - [ ] **DOCUMENTATION.md** — Create user-facing documentation covering installation, quick start, model management, remote API setup, and troubleshooting.
 - [ ] **GGUF Header Parsing** — Read GGUF file headers to detect parameter count and quantization for non-preset models, enabling auto-populated RAM/disk estimates.
 
 #### Low Priority
 - [ ] **System RAM Detection** — Use platform-specific API to detect available RAM and filter/hide presets that exceed system capacity.
 - [ ] **Add Model Generator** locally, Ultrashape, Hunyuan, similar to here: https://github.com/ahujasid/blender-mcp
-- [ ] **Add CC0 resource downloader** from Polyhaven, AmbientC00, Sketchfab, etc, similar to here: https://github.com/ahujasid/blender-mcp
+- [x] **Add CC0 resource downloader** from Polyhaven, AmbientC00, Sketchfab, etc — Polyhaven tools implemented in v1.1.37.
 
-## [Unreleased - v1.1.36]
+## [Unreleased - v1.1.37]
+
+### Added
+
+- **Polyhaven Tools** — New tools for downloading CC0 resources from Polyhaven (models, HDRIs, textures) directly from the agent. Supports URL-based setup and test build.
+- **Generative Plugin Foundation** — Tier 5 foundation: image gen plugins with auto-discovery, controller, and plugin base classes. Supports audio, image, text, and video plugin types.
+- **Version-Aware Skills System** — New searchable domain skills system with version-aware Blender API skills (`blender_50_51.md`, `blender_52.md`, `blender_53.md`). User custom skills support.
+- **Copy Content Button** — New button in chat UI that copies the full conversation history to clipboard.
+- **Stepped Benchmark Tests** — Replaced single-prompt benchmarks with 6 multi-step test suites (Scene Build, Animation, Modifiers, Assets+Mat, Baseline, Error Handling). Steps are clicked in order, each building on the last. Progress tracked per-suite with Reset support.
+- **Tool Testing** — Added `tests/tool_smoke_test.py` for automated tool smoke testing.
+
+### Changed
+
+- **New Addon Interface** — Redesigned preferences panel with 4 tabs (General, LLM, Remote, Diagnostics). Debugging panel moved out of tabs into its own section.
+- **Unified Operating Mode Selector** — Combined local/remote mode into a single dropdown selector. Improved reasoning content display with better verbosity.
+- **Skills Improvements** — Multiple skill file enhancements: animation curve understanding, material creation smarts, operator mode switching, Blender 5.3 API nuances, sequencer versioning API.
+- **Polyhaven URL Setup** — Right URL configuration for Polyhaven integration.
+
+### Fixed
+
+- **Remote API Mode** — Fixed remote API mode not working correctly. Unified Operating Mode selector resolves mode conflicts.
+- **Python Context Internal State Bug** — Fixed internal state bug in Python context handling.
+- **No Text Content in Tool Result** — Fixed error when screenshot tool returns no text content.
+- **Debugging Panel Layout** — Moved debugging panel out of tabs per user feedback.
+
+## [v1.1.36] - 2026-08-12
 
 ### Added
 

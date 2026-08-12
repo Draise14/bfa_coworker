@@ -628,7 +628,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         # ── Multi-Step Test Suites ────────────────────────────────────
         diag_box.label(text="Test Suites (multi-step artist workflows)", icon='RENDER_RESULT')
         diag_box.label(
-            text="Click steps in order — each builds on the last. "
+            text="Click any step to run it (steps build on each other). "
                  "Use Reset to start over.",
             icon='BLANK1',
         )
@@ -642,13 +642,17 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             ("error_handling","Errors",        'ERROR',               3),
         ]
 
+        from . import operators_agent as _oa_suite
+
+        # Grid layout: 3 columns.
+        grid = diag_box.grid_flow(row_major=True, columns=3, even_columns=True, even_rows=True)
+
         for suite_key, suite_label, suite_icon, total_steps in _SUITE_META:
-            suite_box = diag_box.box()
+            suite_box = grid.box()
             suite_header = suite_box.row()
             suite_header.label(text=suite_label, icon=suite_icon)
 
             # Show progress.
-            from . import operators_agent as _oa_suite
             step_idx = _oa_suite._test_suite_progress.get(suite_key, 0)
             suite_header.label(
                 text="Step {:d}/{:d}".format(step_idx, total_steps),
@@ -673,8 +677,6 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     icon=step_icon,
                 )
                 op.suite = suite_key
-                if not is_current and not is_done:
-                    step_row.enabled = False
 
             # Reset button at the bottom of each suite.
             reset_row = suite_box.row(align=True)

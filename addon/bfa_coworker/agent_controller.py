@@ -1248,7 +1248,7 @@ def _openai_chat_completions(
                     print("[🛠️Coworker] _openai_chat_completions:   tool[{:d}] = {:s}({:s})".format(
                         i, fn.get("name", "?"), str(fn.get("arguments", ""))[:120]))
                 # Log reasoning content (chain-of-thought) for debugging.
-                reasoning = msg.get("reasoning_content") or ""
+                reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
                 if reasoning:
                     print("[🛠️Coworker] _openai_chat_completions: reasoning ({:d} chars):".format(
                         len(reasoning)))
@@ -1604,7 +1604,10 @@ def run_conversation_turn(
         # ── End auto-continue ─────────────────────────────────────────
 
         # Deliver reasoning (chain-of-thought) to UI if present.
-        reasoning = msg.get("reasoning_content") or ""
+        # Different providers use different field names:
+        #   - Local llama-server / DeepSeek: "reasoning_content"
+        #   - OpenRouter: "reasoning"
+        reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
         if reasoning:
             print("[🛠️Coworker] run_conversation_turn: reasoning ({:d} chars) — storing in history".format(
                 len(reasoning)))

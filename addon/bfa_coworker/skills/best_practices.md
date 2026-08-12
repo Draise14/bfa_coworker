@@ -45,6 +45,22 @@ Wrap ALL GP brush access in `try/except AttributeError`. The `gpencil_paint.brus
 `gpencil_sculpt.brush`, `gpencil_vertex.brush`, and `gpencil_weight.brush` paths
 may not exist on all Blender versions.
 
+## VSE / Sequencer — Use `strips` (Blender 5.x+)
+
+In Blender 5.x, `SequenceEditor.sequences` was renamed to `SequenceEditor.strips`
+(top-level) and `SequenceEditor.strips_all` (all strips recursively).
+
+```python
+# Blender 5.x (correct)
+editor = bpy.context.scene.sequence_editor
+if editor:
+    for strip in editor.strips:  # NOT editor.sequences
+        print(strip.name, strip.type)
+```
+
+The old `sequence_editor.sequences` does NOT exist in Blender 5.x.
+Always use `strips` or `strips_all` when accessing VSE content.
+
 ## Operators vs Data API
 
 - Prefer `bpy.ops.*` for standard actions (adding primitives, applying modifiers).

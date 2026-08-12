@@ -19,3 +19,60 @@ Prefer this over manual `textwrap.fill()` when drawing multi-line content.
 
 `bpy.app.online_access` controls whether the addon can make network requests.
 Auto-start is skipped when offline unless `--online-mode` is passed at launch.
+
+## Blender 5.x API Changes
+
+### VSE / Sequencer — `strips` replaces `sequences`
+
+In Blender 5.x, `SequenceEditor.sequences` was renamed to `SequenceEditor.strips`
+(top-level strips only) and `SequenceEditor.strips_all` (all strips recursively
+including metastrips).
+
+```python
+# Blender 5.x (correct)
+editor = bpy.context.scene.sequence_editor
+if editor:
+    for strip in editor.strips:       # Top-level strips
+        print(strip.name, strip.type)
+    for strip in editor.strips_all:   # All strips (including inside metastrips)
+        print(strip.name, strip.type)
+```
+
+The old `sequence_editor.sequences` does NOT exist in Blender 5.x.
+Always use `strips` or `strips_all` when accessing VSE content.
+
+### Modifier Creation
+
+In Bforartists, use `bpy.ops.object.modifier_add(type='NODES')` to add a
+Geometry Nodes modifier. The `obj.modifiers.new("GN", 'NODES')` pattern
+may not work the same way.
+
+```python
+# Bforartists: use operator
+bpy.ops.object.modifier_add(type='NODES')
+mod = bpy.context.active_object.modifiers[-1]  # Capture last added
+
+# Then set the node group
+mod.node_group = bpy.data.node_groups.get("MyGroup")
+```
+
+### Sequencer Modifiers
+
+Sequencer strip modifiers in Bforartists may use different type identifiers
+than Blender. Always check available modifier types on a strip before
+assuming a specific type exists.
+
+```python
+# Check available modifier types
+strip = bpy.context.scene.sequence_editor.active_strip
+if strip and hasattr(strip, 'modifiers'):
+    for mod in strip.modifiers:
+        print(mod.type, mod.name)
+```
+
+### General Rule
+
+When in doubt, prefer `bpy.ops.*` operators over direct data API access.
+Bforartists maintains operator parity with Blender but may differ in
+internal data structures. Operators handle defaults and context correctly
+on both platforms.

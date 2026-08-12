@@ -39,3 +39,8 @@ Do NOT use `"VALUE"` — it does not exist anymore.
 `context.tool_settings.gpencil_sculpt` exists but `.brush` does NOT exist in 5.2+.
 Use `try/except AttributeError` for ALL GP tool_settings brush paths:
 `gpencil_paint.brush`, `gpencil_sculpt.brush`, `gpencil_vertex.brush`, `gpencil_weight.brush`.
+
+## VSE / Sequencer — `strips` replaces `sequences`
+
+In Blender 5.x, `SequenceEditor.sequences` was renamed to `SequenceEditor.strips`.
+Use `editor.strips` (top-level) or `editor.strips_all` (all strips recursively).

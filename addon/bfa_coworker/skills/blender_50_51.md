@@ -25,3 +25,8 @@ Node group interface socket types use the `"VALUE"` identifier for float sockets
 ## GP Sculpt Brush
 
 `context.tool_settings.gpencil_sculpt.brush` exists and is directly accessible.
+
+## VSE / Sequencer
+
+In 5.0-5.1, use `sequence_editor.sequences` to access strips.
+This was renamed to `sequence_editor.strips` in 5.x.

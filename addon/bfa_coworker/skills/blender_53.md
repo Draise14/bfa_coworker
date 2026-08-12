@@ -41,6 +41,49 @@ if editor:
 The old `sequence_editor.sequences` does NOT exist in Blender 5.x.
 Always use `strips` or `strips_all` when accessing VSE content.
 
+### NodesModifier — `panels` Removed
+
+`NodesModifier.panels` was removed in 5.3. Use `NodeTreeInterface.root_panel`
+to access the top-level panel in the node tree interface hierarchy:
+
+```python
+# 5.3+ (correct)
+panel = mod.node_group.interface.root_panel
+```
+
+### Object & PoseBone — `convert_rotation_mode()`
+
+New method to convert rotation between modes:
+
+```python
+obj.convert_rotation_mode(mode='QUATERNION')
+pose_bone.convert_rotation_mode(mode='XYZ')
+```
+
+### Preferences — Renamed Properties
+
+- `geometry_nodes_stack_limit` → `nodes_stack_limit` (on PreferencesSystem)
+- `use_inverse_smooth_pressure` → `use_smooth_pressure` (on Brush)
+
+### Theme — Removed Properties
+
+- `ThemeSpaceGeneric.header_text`, `header_text_hi`, `title` — removed
+- `ThemeSpaceGradient.header_text`, `header_text_hi`, `title` — removed
+- `ThemeFileBrowser.selected_file` — removed
+
+### WindowManager — Undo Stack
+
+Read-only access to the undo stack:
+
+```python
+stack = bpy.context.window_manager.undo_stack
+```
+
+### bpy.data.all_ids — Order Changed
+
+The order of IDs in `bpy.data.all_ids` is now an internal implementation detail.
+Do NOT rely on or assume any specific ordering.
+
 ### Modifier Creation
 
 In Bforartists, use `bpy.ops.object.modifier_add(type='NODES')` to add a

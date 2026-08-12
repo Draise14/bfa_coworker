@@ -133,6 +133,14 @@ def register() -> None:
     # Clear stale CLI command handles from a previous registration.
     _cli_commands.clear()
 
+    # Safety unregister in case of stale registration from a previous error.
+    for cls in reversed(_classes):
+        try:
+            if hasattr(bpy.types, cls.__name__):
+                bpy.utils.unregister_class(cls)
+        except Exception:
+            pass
+
     for cls in _classes:
         bpy.utils.register_class(cls)
     _cli_commands.append(bpy.utils.register_cli_command("bfa_coworker", _cli_execute_handler))

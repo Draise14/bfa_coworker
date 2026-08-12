@@ -450,9 +450,38 @@ Run these tests after implementing the skills system (Track A). All tests are ma
 
 Run these after implementing each tool domain (Track B). Each tool should be tested in isolation first, then in end-to-end LLM conversations.
 
-#### Per-Tool Smoke Test
+#### Automated Smoke Test (Recommended)
 
-For each new tool, verify via direct MCP call:
+A standalone smoke test script is provided at `tests/tool_smoke_test.py`. It calls every
+MCP tool with minimal arguments and reports pass/fail for each.
+
+**Prerequisites**: Blender running with the Coworker addon enabled and the MCP server
+started (default port 9191).
+
+```bash
+# Run all tool tests
+python tests/tool_smoke_test.py
+
+# Verbose output (show errors)
+python tests/tool_smoke_test.py --verbose
+
+# Test specific tools
+python tests/tool_smoke_test.py --filter get_objects_summary,execute_blender_code
+
+# List available tools without testing
+python tests/tool_smoke_test.py --list
+
+# Custom port
+python tests/tool_smoke_test.py --port 9192
+```
+
+Exit code 0 = all passed, 1 = any failed. Expected failures (tools that need
+specific arguments like a valid blend file path) are tracked separately and
+don't count as failures.
+
+#### Per-Tool Manual Smoke Test
+
+For manual verification of a single tool via direct HTTP call:
 
 ```python
 # Using the MCP server's HTTP endpoint
@@ -510,4 +539,6 @@ print(resp.json())
 | Custom skills text not injected | Text field empty | Type something in the Custom Skills field |
 | Tool not found by LLM | Tool not registered | Check `tools/call` directly via HTTP |
 | Tool returns error | Toolcode has bug | Check Blender console for traceback |
-| LLM keeps calling `execute_blender_code` instead of tool | Tool description unclear | Update tool description in `.py` file
+| LLM keeps calling `execute_blender_code` instead of tool | Tool description unclear | Update tool description in `.py` file| Smoke test can't connect | MCP server not running | Start the agent from the Chat panel or Preferences |
+| Smoke test shows "expected failure" | Tool needs specific args | Check `_TOOL_EXPECTED_FAILURES` in `tool_smoke_test.py` |
+| Smoke test shows unexpected failure | Tool or server bug | Run with `--verbose` to see the error, check Blender console |

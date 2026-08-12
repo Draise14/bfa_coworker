@@ -29,6 +29,12 @@ initial_instructions: |
   The `execute_blender_code` tool is a last resort, if there are other tools that provide
   the functionality you need, use those instead.
 
+  ⚠️ **CRITICAL — Geometry Nodes modifier socket access (5.2+):**
+  Never use `"Socket_3" in modifier` or `identifier in modifier` — it raises
+  `TypeError: bpy_prop_collection.__contains__` on Blender 5.2+. The old ID property
+  dict was removed. Use `getattr(modifier.properties.inputs, "Socket_3")` instead.
+  See `data/skills/modifiers.md` for the correct pattern.
+
   Prefer operators (`bpy.ops`) for standard actions (adding primitives, applying modifiers,
   setting origins) - they handle defaults and context. Use the data API (`bpy.data`) for
   precise control or to avoid side effects.

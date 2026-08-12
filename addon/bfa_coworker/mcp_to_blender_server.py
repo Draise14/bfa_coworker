@@ -265,6 +265,17 @@ def _execute_code(
                 frame_lines = tb_lines[-7:-1] if len(tb_lines) >= 8 else tb_lines[1:-1]
                 tb_str = "{:s}\n{:s}\n{:s}".format(header, "\n".join(frame_lines), exc_line)
                 tb_str += "\n[Traceback truncated to last 3 frames]"
+            # Detect common LLM mistakes and append actionable hints.
+            if "__contains__: expected a string or a tuple of strings" in tb_str:
+                tb_str += (
+                    "\n\nHINT: You used `identifier in modifier` to check a Geometry Nodes socket. "
+                    "This pattern is REMOVED in Blender 5.2+. "
+                    "Use `getattr(modifier.properties.inputs, identifier)` instead:\n"
+                    "    try:\n"
+                    "        socket = getattr(mod.properties.inputs, \"Socket_3\")\n"
+                    "    except AttributeError:\n"
+                    "        pass  # Socket doesn't exist"
+                )
             response: dict[str, object] = {"status": "error", "message": tb_str}
             if captured.stdout:
                 response["stdout"] = captured.stdout

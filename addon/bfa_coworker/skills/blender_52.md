@@ -4,7 +4,13 @@ These are breaking changes from 5.0-5.1. All patterns below apply to 5.2+.
 
 ## Geometry Nodes Modifier — ID Property Dict REMOVED
 
-The old `modifier['["Socket_N"]']` dict-style access is completely gone. Use:
+⚠️ **CRITICAL: `identifier in modifier` is BROKEN in 5.2+**
+
+The old `modifier['["Socket_N"]']` dict-style access is completely gone.
+Using `"Socket_3" in modifier` raises:
+`TypeError: bpy_prop_collection.__contains__: expected a string or a tuple of strings`
+
+Use `getattr(modifier.properties.inputs, ...)` instead:
 
 ```python
 # Reading a socket value (5.2+)

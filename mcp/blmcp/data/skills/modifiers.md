@@ -10,20 +10,26 @@ Order matters. The stack evaluates top-to-bottom:
 
 ## Geometry Nodes Modifier
 
-### 5.0-5.1
+### ⚠️ CRITICAL: `in modifier` is BROKEN in 5.2+
+
+**Never** use `"Socket_3" in modifier` or `identifier in modifier` — it raises
+`TypeError: bpy_prop_collection.__contains__: expected a string or a tuple of strings`
+in Blender 5.2+. The old ID property dict was completely removed.
+
+### 5.0-5.1 (old, do NOT use on 5.2+)
 ```python
 mod = obj.modifiers.new("GN", 'NODES')
 mod['["Socket_3"]'] = 1.0  # Set float input
-if "Socket_3" in mod:       # Check existence
+if "Socket_3" in mod:       # ❌ CRASHES on 5.2+
     pass
 ```
 
-### 5.2+
+### 5.2+ (correct)
 ```python
 mod = obj.modifiers.new("GN", 'NODES')
 socket = getattr(mod.properties.inputs, "Socket_3")
 socket.value = 1.0  # Set float input
-# Check existence:
+# Check existence (use try/except, NOT `in`):
 try:
     getattr(mod.properties.inputs, "Socket_3")
 except AttributeError:

@@ -5,22 +5,44 @@ Use the data API (`bpy.data.*`) for precise control or batch operations.
 
 ## Object Creation
 
-```python
-bpy.ops.mesh.primitive_cube_add(size=2.0, location=(0,0,0))
-bpy.ops.mesh.primitive_uv_sphere_add(radius=1.0, location=(0,0,0))
-bpy.ops.mesh.primitive_cylinder_add(radius=1.0, depth=2.0, location=(0,0,0))
-bpy.ops.mesh.primitive_plane_add(size=2.0, location=(0,0,0))
-bpy.ops.mesh.primitive_monkey_add(size=2.0, location=(0,0,0))
-```
+All use `bpy.ops.<category>.<name>(location=(0,0,0), ...)`:
+
+| Category | Pattern |
+|----------|---------|
+| Mesh | `mesh.primitive_{cube,uv_sphere,cylinder,plane,monkey,torus,ico_sphere,cone,grid}_add` |
+| Light | `object.light_add(type={POINT,SUN,SPOT,AREA})` |
+| Camera | `object.camera_add` |
+| Empty | `object.empty_add(type=PLAIN_AXES)` |
+| Curve | `curve.primitive_{bezier_curve,bezier_circle}_add` |
+| Text | `object.text_add` |
+| Armature | `object.armature_add` |
+| Lattice | `object.lattice_add` |
+| GPencil | `object.grease_pencil_add` |
+| Metaball | `object.metaball_add(type=BALL)` |
+| Light Probe | `object.lightprobe_add(type=SPHERE)` |
+| Force Field | `object.effector_add(type=FORCE)` |
+| Speaker | `object.speaker_add` |
 
 ## Mode Switching
 
-```python
-bpy.ops.object.mode_set(mode='OBJECT')    # From any mode
-bpy.ops.object.mode_set(mode='EDIT')      # Enter edit mode
-bpy.ops.object.mode_set(mode='SCULPT')    # Enter sculpt mode
-bpy.ops.object.mode_set(mode='POSE')      # Enter pose mode (armature)
-```
+All use `bpy.ops.object.mode_set(mode=...)`:
+
+| Mode | Use For |
+|------|---------|
+| `OBJECT` | Default object mode |
+| `EDIT` | Mesh, curve, armature editing |
+| `SCULPT` | Mesh sculpting |
+| `VERTEX_PAINT` | Vertex colors |
+| `WEIGHT_PAINT` | Vertex group weights |
+| `TEXTURE_PAINT` | Image texture painting |
+| `POSE` | Armature posing |
+| `GPENCIL_EDIT` | Grease Pencil editing |
+| `GPENCIL_SCULPT` | Grease Pencil sculpting |
+| `GPENCIL_PAINT` | Grease Pencil drawing |
+| `GPENCIL_WEIGHT` | Grease Pencil weight paint |
+| `GPENCIL_VERTEX` | Grease Pencil vertex paint |
+| `EDIT_CURVES` | Curves object editing |
+| `SCULPT_CURVES` | Curves object sculpting |
 
 ## Modifier Operations
 
@@ -57,12 +79,17 @@ bpy.ops.object.origin_set(type='ORIGIN_GEOMETRY')  # Set origin to geometry cent
 
 ## Mode-Dependent Operators
 
-Many operators require specific modes:
-- `bpy.ops.mesh.*` — Edit mode only
-- `bpy.ops.sculpt.*` — Sculpt mode only
-- `bpy.ops.pose.*` — Pose mode only (armature selected)
+| Operator prefix | Required mode |
+|----------------|---------------|
+| `bpy.ops.mesh.*` | `EDIT` |
+| `bpy.ops.sculpt.*` | `SCULPT` |
+| `bpy.ops.pose.*` | `POSE` |
+| `bpy.ops.paint.*` | `VERTEX_PAINT`, `WEIGHT_PAINT`, or `TEXTURE_PAINT` |
+| `bpy.ops.gpencil.*` / `bpy.ops.grease_pencil.*` | Any `GPENCIL_*` mode |
+| `bpy.ops.curves.*` | `EDIT_CURVES` or `SCULPT_CURVES` |
+| `bpy.ops.texture.*` | `TEXTURE_PAINT` |
 
-Wrong mode → operator fails silently or does nothing. Always verify mode first.
+Wrong mode → operator fails silently. Always verify mode first.
 
 ## Node Group Creation (5.x Interface API)
 

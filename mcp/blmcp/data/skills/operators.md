@@ -63,3 +63,53 @@ Many operators require specific modes:
 - `bpy.ops.pose.*` — Pose mode only (armature selected)
 
 Wrong mode → operator fails silently or does nothing. Always verify mode first.
+
+## Node Group Creation (5.x Interface API)
+
+In Blender 5.x, node group inputs/outputs are managed through `NodeTreeInterface`,
+NOT by adding `NodeGroupInput`/`NodeGroupOutput` nodes directly.
+
+### Creating a Node Group
+```python
+# Create the group (type can be 'ShaderNodeTree', 'CompositorNodeTree', 'GeometryNodeTree')
+group = bpy.data.node_groups.new(name="MyGroup", type='ShaderNodeTree')
+
+# Add input sockets via the interface
+group.interface.new_socket(
+    name="Color",
+    description="Input color",
+    in_out='INPUT',
+    socket_type='NodeSocketColor',
+)
+
+# Add output sockets
+group.interface.new_socket(
+    name="Output",
+    description="Shader output",
+    in_out='OUTPUT',
+    socket_type='NodeSocketShader',
+)
+
+# Group Input and Output nodes are auto-created by the interface
+group_input = group.nodes.get("Group Input")
+group_output = group.nodes.get("Group Output")
+```
+
+### Socket Types
+| socket_type | Use |
+|-------------|-----|
+| `NodeSocketFloat` | Float value |
+| `NodeSocketInt` | Integer |
+| `NodeSocketBool` | Boolean |
+| `NodeSocketColor` | RGBA color |
+| `NodeSocketVector` | XYZ vector |
+| `NodeSocketShader` | Shader socket |
+| `NodeSocketString` | String |
+
+### Compositor Node Groups
+For compositor node groups, use `type='CompositorNodeTree'` and socket types like
+`NodeSocketColor`, `NodeSocketFloat`, `NodeSocketVector`.
+
+### Geometry Node Groups
+For geometry node groups, use `type='GeometryNodeTree'` and geometry-specific
+socket types like `NodeSocketGeometry`, `NodeSocketMaterial`.

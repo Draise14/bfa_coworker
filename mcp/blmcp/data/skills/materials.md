@@ -20,7 +20,51 @@ links = mat.node_tree.links
 nodes.clear()  # Remove default nodes if starting fresh
 ```
 
+## Correct Node Type Identifiers
+
+When creating nodes via `nodes.new(type=...)`, use these exact bl_idname values:
+
+| Node | bl_idname |
+|------|-----------|
+| Principled BSDF | `ShaderNodeBsdfPrincipled` |
+| Emission | `ShaderNodeEmission` |
+| Material Output | `ShaderNodeOutputMaterial` |
+| Noise Texture | `ShaderNodeTexNoise` |
+| Image Texture | `ShaderNodeTexImage` |
+| ColorRamp | `ShaderNodeValToRGB` |
+| Normal Map | `ShaderNodeNormalMap` |
+| Bump | `ShaderNodeBump` |
+| Mix Shader | `ShaderNodeMixShader` |
+| Add Shader | `ShaderNodeAddShader` |
+| Texture Coordinate | `ShaderNodeTexCoord` |
+| Mapping | `ShaderNodeMapping` |
+| Separate Color | `ShaderNodeSeparateColor` |
+| Combine Color | `ShaderNodeCombineColor` |
+| Math | `ShaderNodeMath` |
+| RGB Curves | `ShaderNodeRGBCurve` |
+| Group Input | `NodeGroupInput` |
+| Group Output | `NodeGroupOutput` |
+| Frame | `NodeFrame` |
+
 ## Common Node Patterns
+
+### Emission Material (no lighting needed)
+```python
+mat = bpy.data.materials.new(name="MAT_Emit")
+mat.use_nodes = True
+nodes = mat.node_tree.nodes
+links = mat.node_tree.links
+nodes.clear()
+
+emit = nodes.new('ShaderNodeEmission')
+emit.location = (-200, 0)
+emit.inputs[0].default_value = (0.55, 0.60, 0.81, 1.0)  # RGBA color
+emit.inputs[1].default_value = 1.0  # Strength
+
+output = nodes.new('ShaderNodeOutputMaterial')
+output.location = (0, 0)
+links.new(emit.outputs['Emission'], output.inputs['Surface'])
+```
 
 ### Texture → Principled
 ```
@@ -37,14 +81,86 @@ Noise Texture (Fac) → ColorRamp → Principled BSDF Roughness
 ### Glass / Transparent
 Set Principled BSDF Transmission to 1.0, Roughness low. Use Cycles for best results.
 
+## Node Groups (5.x Interface API)
+
+In Blender 5.x, node group inputs/outputs are managed through `NodeTreeInterface`,
+NOT by adding `NodeGroupInput`/`NodeGroupOutput` nodes directly.
+
+### Creating a Node Group with Custom Inputs
+```python
+# Create the node group
+group = bpy.data.node_groups.new(name="MyGroup", type='ShaderNodeTree')
+
+# Add input sockets via the interface (5.x API)
+group.interface.new_socket(
+    name="Color",
+    description="Input color",
+    in_out='INPUT',
+    socket_type='NodeSocketColor',
+)
+group.interface.new_socket(
+    name="Strength",
+    description="Input strength",
+    in_out='INPUT',
+    socket_type='NodeSocketFloat',
+)
+
+# Add output sockets
+group.interface.new_socket(
+    name="Output",
+    description="Shader output",
+    in_out='OUTPUT',
+    socket_type='NodeSocketShader',
+)
+
+# Now add nodes to the group
+nodes = group.nodes
+links = group.links
+nodes.clear()
+
+# Group Input and Output nodes are auto-created by the interface
+group_input = group.nodes.get("Group Input")
+group_output = group.nodes.get("Group Output")
+
+# Add internal nodes
+emit = nodes.new('ShaderNodeEmission')
+emit.location = (-200, 0)
+links.new(group_input.outputs['Color'], emit.inputs['Color'])
+links.new(group_input.outputs['Strength'], emit.inputs['Strength'])
+links.new(emit.outputs['Emission'], group_output.inputs['Output'])
+```
+
+### Socket Types for `new_socket()`
+| socket_type | Purpose |
+|-------------|---------|
+| `NodeSocketFloat` | Float value |
+| `NodeSocketInt` | Integer |
+| `NodeSocketBool` | Boolean |
+| `NodeSocketColor` | RGBA color |
+| `NodeSocketVector` | XYZ vector |
+| `NodeSocketShader` | Shader socket |
+| `NodeSocketString` | String |
+
+### Assigning a Material to Objects
+```python
+# Single material to one object
+obj.data.materials.append(mat)
+
+# Replace first slot
+obj.data.materials[0] = mat
+
+# Assign to all objects in a collection
+for obj in collection.objects:
+    if obj.type == 'MESH':
+        if not obj.data.materials:
+            obj.data.materials.append(mat)
+        else:
+            obj.data.materials[0] = mat
+```
+
 ## Version Notes (5.2+)
 
 - Node sockets are RNA structs — set `.default_value` on the socket, not the node
 - When connecting, check `socket.type` compatibility before linking
-
-## Assigning Materials
-
-```python
-obj.data.materials.append(mat)        # Add to material slots
-obj.data.materials[0] = mat           # Replace first slot
-```
+- `NodeTreeInterface.new_socket()` replaces the old `group_inputs.new()` pattern
+- Group Input/Output nodes are auto-created by the interface — do NOT create them manually

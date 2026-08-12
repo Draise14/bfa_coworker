@@ -195,22 +195,22 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
     # ── Scene Building Workflow ──────────────────────────────────────
     # Tests object creation, collections, materials, lighting, camera
     "scene_build": [
-        (1, "Objects",
-         "Let's set up a scene. First, create a round ground plane — "
-         "add a cylinder, scale it to 12x12 wide and make it very flat "
-         "(0.1 tall). Name it \"Ground\"."),
+        (1, "Ground",
+         "I'm setting up a scene. First, create a round ground plane — "
+         "add a cylinder, scale it wide and flat like a stage floor. "
+         "Name it \"Ground\"."),
         (2, "Props",
-         "Now scatter some objects on the ground: add 3 cubes, 3 spheres, "
-         "and 3 cylinders. Arrange them in a loose circle around the center. "
-         "Scale each one randomly between 0.5 and 1.5 so they look varied."),
+         "Now scatter some objects on the ground: add a few cubes, "
+         "spheres, and cylinders. Arrange them in a loose circle "
+         "around the center. Vary their sizes so they look interesting."),
         (3, "Collections",
-         "Organize things into collections. Create three collections with "
-         "color tags: \"Props\" (blue), \"Ground\" (green), and "
+         "Organize things into collections. Create three collections "
+         "with color tags: \"Props\" (blue), \"Ground\" (green), and "
          "\"Lighting\" (yellow). Move the ground into Ground, "
          "all the scattered objects into Props."),
         (4, "Materials",
-         "Give each object in the Props collection a material. Use a mix: "
-         "some metallic (gold/copper), some rough (stone/concrete), "
+         "Give each object in the Props collection a material. Use a "
+         "mix: some metallic (gold/copper), some rough (stone/concrete), "
          "and one glass. Name each material after the object."),
         (5, "Lighting",
          "Now light the scene. Add a Sun lamp angled from above-right "
@@ -218,53 +218,64 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
          "for fill. Put both in the Lighting collection."),
         (6, "Camera",
          "Place the camera to frame the whole scene from a slight "
-         "high angle — like a product shot. Set the camera to 50mm "
-         "focal length. Render at 1920x1080."),
+         "high angle — like a product shot. Use a nice portrait "
+         "focal length. Render at a decent HD resolution."),
     ],
     # ── Animation Workflow ──────────────────────────────────────────
     # Tests keyframes, timeline, motion paths
     "animation": [
         (1, "Ball",
          "Create a sphere at the origin, name it \"Bouncing Ball\". "
-         "Give it a shiny red material."),
+         "Give it a shiny red rubber material with smooth shading."),
         (2, "Floor",
-         "Add a flat plane below the ball as a floor — position it "
-         "at (0, 0, -1), scale it 5x5. Give it a simple white material."),
+         "Add floor below the ball as a floor — position it "
+         "just under the ball and scale it wide enoguh for the animation. Give it a simple "
+         "floor material."),
         (3, "Bounce Keys",
-         "Animate the ball bouncing. Set keyframes on the Z location: "
-         "frame 1 at Z=0, frame 10 at Z=4, frame 20 at Z=0, "
-         "frame 30 at Z=3, frame 40 at Z=0, frame 50 at Z=1.5, "
-         "frame 60 at Z=0. Set the timeline to 60 frames."),
+         "Animate the ball bouncing up and down. "
+         "It starts on the floor, jumps up high, comes back down, "
+         "then does a few smaller bounces that settle back to the "
+         "floor. Make the whole animation about 4 seconds long at "
+         "30 fps."),
         (4, "Squash & Stretch",
-         "Add squash and stretch to the bounce. On the Z scale: "
-         "at the peak of each bounce (frames 10, 30, 50) scale Z=1.0, "
-         "at each landing (frames 1, 20, 40, 60) scale Z=0.6 "
-         "and scale X/Y to 1.3 to flatten it."),
+         "Add squash and stretch to the bounce. When the ball hits "
+         "the floor it should flatten (squash), and when it's in the "
+         "air it should elongate slightly (stretch). Keyframe the "
+         "scale to match the motion."),
         (5, "Camera Move",
-         "Add a camera orbiting the ball. Animate the camera location "
-         "in a slow arc: frame 1 at (6, -6, 3), frame 60 at (-6, 6, 3). "
-         "Make the camera always look at the ball."),
+         "Add a camera that slowly orbits horizontally around the ball as it "
+         "bounces. Keep the camera aimed at the ball the whole time "
+         "so the viewer sees the bounce from a changing angle."),
     ],
     # ── Modifier Chain Workflow ─────────────────────────────────────
     # Tests modifier stacking, applying, and mesh operations
+    # Goal: build a sculpt-ready head base mesh
     "modifiers": [
-        (1, "Base",
-         "Create a cube at the origin, name it \"Workpiece\". "
-         "Scale it to (2, 1, 1.5) so it's not a perfect cube."),
+        (1, "Rough Head",
+         "I want to make a head for sculpting. Start with a subdivided cube — "
+         "roughly head-sized. Stretch it a bit taller than wide and "
+         "slightly narrower on the sides to suggest a skull shape. "),
         (2, "Subdivide",
-         "Add a Subdivision Surface modifier with 2 levels of "
-         "subdivision. Set it to Catmull-Clark."),
-        (3, "Smooth",
-         "Add a Smooth modifier set to 5 iterations to round it out."),
-        (4, "Mirror",
-         "Add a Mirror modifier on the X axis so changes "
-         "mirror symmetrically."),
-        (5, "Bevel",
-         "Add a Bevel modifier with width 0.05, segments 2, "
-         "limit method set to Angle."),
-        (6, "Apply",
-         "Apply all modifiers in order. Then add a Remesh modifier "
-         "set to Blocks mode with octree depth 5."),
+         "Smooth it out, enough levels to look smooth but "
+         "not too dense yet."),
+        (3, "Mirror",
+         "Mirror it so we only need to "
+         "sculpt one side. Make sure clipping is on so the center "
+         "seam stays clean. I want this procedural in half. "),
+        (4, "Apply & Cut",
+         "Apply the Mirror modifier. Then go into Edit Mode and "
+         "delete the left half. "
+         "Mirror again — this way the center "
+         "line is perfectly flat and ready for sculpting."),
+        (5, "Jaw & Chin",
+         "Now shape the jawline. In Edit Mode, pull the bottom-front "
+         "vertices forward a bit to suggest a chin. Widen the lower "
+         "sides slightly for the jaw. Keep it symmetrical through "
+         "the Mirror modifier."),
+        (6, "Finalize",
+         "Apply all remaining modifiers. Then add a remesh "
+         "modifier with a nice resolutions so it's ready for "
+         "sculpting. Name it \"Sculpt_Ready_Head\"."),
     ],
     # ── Asset & Material Workflow ───────────────────────────────────
     # Tests Poly Haven integration, material assignment, world setup
@@ -273,30 +284,49 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
          "Download a sunset HDRI from Poly Haven and set it as "
          "the world environment. Asset: belfast_sunset, type: hdris."),
         (2, "Objects",
-         "Create a shaderball (a UV sphere with 3 subdivisions) "
-         "at the origin. Add a plane below it as a display surface."),
+         "Create a shaderball (a smooth UV sphere) at the origin. "
+         "Add a plane below it as a display surface."),
         (3, "Texture",
          "Download a brick wall texture from Poly Haven and apply "
          "it as a material on the plane. Asset: brick_wall_001, "
          "type: textures."),
         (4, "Material",
          "Create a glass material for the shaderball: high "
-         "transmission, roughness 0.05, IOR 1.45. Name it \"Glass\"."),
+         "transmission, low roughness, and a realistic IOR "
+         "for glass. Name it \"Glass\"."),
         (5, "Render",
          "Add three-point lighting: a key light from the right, "
          "fill from the left, rim light from behind. Set the camera "
-         "to frame the shaderball nicely. Render at 1920x1080."),
+         "to frame the shaderball nicely. Render at HD resolution."),
     ],
-    # ── Baseline Latency (quick sanity) ─────────────────────────────
+    # ── Baseline Latency (quick sanity — fun scene) ─────────────────
     "baseline": [
-        (1, "Cube",
-         "Create a cube at the origin."),
-        (2, "Material",
-         "Give the cube a bright red material."),
-        (3, "Light",
-         "Add a sun lamp and point it at the cube."),
-        (4, "Render",
-         "Render the scene at 1280x720."),
+        (1, "Stone Ring",
+         "Can you make a stonehenge? First, create a ring of stone "
+         "pillars — tall, rough-hewn blocks arranged in a circle "
+         "around the center, evenly spaced. Make them look like "
+         "standing stones. Name them \"Pillar_1\" through \"Pillar_8\"."),
+        (2, "Lintels",
+         "Now add lintels on top of the pillars. For each pair of "
+         "adjacent pillars, create a horizontal beam resting on top. "
+         "Make each one thick enough to look like a solid stone "
+         "crossbeam. Name them \"Lintel_1\" through \"Lintel_8\"."),
+        (3, "Ground",
+         "Add a large flat ground plane beneath the circle — a wide "
+         "flat disc. Give it a grassy green material."),
+        (4, "Material",
+         "Give all the stone pillars and lintels a rough stone "
+         "material: high roughness, low specular, a warm gray color. "
+         "Use a noise texture to add some surface variation."),
+        (5, "Lighting",
+         "Add dramatic lighting: a sun lamp angled low from the east "
+         "(like sunrise) with warm orange tint, and a faint blue fill "
+         "light from the opposite side for contrast."),
+        (6, "Camera",
+         "Place the camera at a low angle looking up at the stones, "
+         "framing the circle with the sun behind the pillars. "
+         "Use a wide focal length for a dramatic shot. "
+         "Render at HD resolution."),
     ],
     # ── Error Handling (ambiguous prompts) ──────────────────────────
     "error_handling": [

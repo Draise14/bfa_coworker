@@ -638,7 +638,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             ("animation",     "Animation",     'ANIM',                5),
             ("modifiers",     "Modifiers",     'MODIFIER',            6),
             ("assets_materials", "Assets+Mat", 'TEXTURE',             5),
-            ("baseline",      "Baseline",      'CONSOLE',             4),
+            ("baseline",      "Baseline",      'CONSOLE',             6),
             ("error_handling","Errors",        'ERROR',               3),
         ]
 

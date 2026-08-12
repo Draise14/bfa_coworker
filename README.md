@@ -261,11 +261,11 @@ order, and each builds on the previous one.
 
 | Suite | Steps | What It Tests |
 |---|---|---|
-| **Scene Build** | 6 | Object creation, collections with color tags, materials (metallic/rough/glass), lighting (Sun + Point), camera placement, rendering |
-| **Animation** | 5 | Sphere creation, floor plane, bouncing-ball keyframes, squash & stretch (scale keyframes), orbiting camera |
-| **Modifiers** | 6 | Base mesh, Subdivision Surface, Smooth, Mirror, Bevel, Apply + Remesh |
+| **Scene Build** | 6 | Ground plane → scatter props → colored collections → materials (metallic/rough/glass) → lighting → camera + render |
+| **Animation** | 5 | Bouncing ball → floor → keyframed bounce → squash & stretch → orbiting camera |
+| **Modifiers** | 6 | Sculpt-ready head: UV sphere → Subdiv → Mirror → cut & re-mirror → shape jaw/chin → Multires |
 | **Assets+Mat** | 5 | Poly Haven HDRI download, shaderball creation, texture download, glass material, three-point lighting + render |
-| **Baseline** | 4 | Quick sanity: cube → red material → sun lamp → render |
+| **Baseline** | 6 | Mini Stonehenge: stone ring → lintels → ground → stone material → dramatic lighting → camera + render |
 | **Errors** | 3 | Vague prompt ("make it nicer"), impossible request, contradiction — tests graceful failure |
 
 ### How to Run

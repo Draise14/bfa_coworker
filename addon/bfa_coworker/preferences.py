@@ -570,6 +570,18 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         max=65535,
     )
 
+    # ── Skills (Tier 6) ────────────────────────────────────────────────
+
+    custom_skills_text: StringProperty(  # type: ignore[valid-type]
+        name="Custom Skills",
+        description=(
+            "Extra instructions or skills injected into every conversation.\n"
+            "Use for project-specific conventions, tool preferences,\n"
+            "or custom workflow rules. Markdown format supported."
+        ),
+        default="",
+    )
+
     # ── BYOK Provider Profiles (Tier 2) ─────────────────────────────────
 
     saved_providers_json: StringProperty(  # type: ignore[valid-type]
@@ -1100,6 +1112,45 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         row.prop(self, "bridge_port")
         row.prop(self, "mcp_port")
         row.prop(self, "llm_port")
+
+        # ── Skills ─────────────────────────────────────────────────────
+        skills_box = layout.box()
+        skills_box.label(text="Skills", icon='TEXT')
+        try:
+            import bpy  # pylint: disable=import-error
+            version_str = ".".join(str(v) for v in bpy.app.version[:3])
+            skills_box.label(
+                text="Blender {:s}".format(version_str),
+                icon='BLENDER',
+            )
+        except Exception:
+            pass
+        # Show loaded skill files.
+        try:
+            from . import skills as _skills_mod  # pylint: disable=import-error
+            loaded = _skills_mod.list_loaded_skills()
+            if loaded:
+                col = skills_box.column(align=True)
+                col.label(text="Loaded Skills:", icon='CHECKMARK')
+                for name in loaded:
+                    col.label(text="  \u2022 {:s}".format(name))
+            else:
+                skills_box.label(text="No skills loaded", icon='INFO')
+        except Exception:
+            skills_box.label(text="Skills module not available", icon='ERROR')
+        row = skills_box.row()
+        row.operator("bfacw.reload_skills", icon="FILE_REFRESH", text="Reload Skills")
+
+        # ── Custom Skills ──────────────────────────────────────────────
+        custom_box = layout.box()
+        custom_box.label(text="Custom Skills", icon='GREASEPENCIL')
+        custom_box.label(
+            text="Extra instructions injected into every conversation. "
+                 "Use for project-specific conventions, tool preferences, "
+                 "or workflow rules. Markdown format supported.",
+            icon='INFO',
+        )
+        custom_box.prop(self, "custom_skills_text")
 
 
 # ---------------------------------------------------------------------------

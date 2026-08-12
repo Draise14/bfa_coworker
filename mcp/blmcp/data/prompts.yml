@@ -18,6 +18,9 @@ initial_instructions: |
       properties, enum values, etc.
     * `data/manual/` - Blender user manual (RST files mirroring the official manual structure).
       Consult for conceptual explanations, workflow guidance, and feature overviews.
+    * `data/skills/` - Domain-specific skill references (Markdown files).
+      Search for detailed guidance on materials, modifiers, mesh editing,
+      rendering, animation, collections, transformations, and operators.
 
   # Executing Code
 

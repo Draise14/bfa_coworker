@@ -563,3 +563,20 @@ class BFACW_OT_test_polyhaven_texture(bpy.types.Operator):  # type: ignore[misc]
         thread = threading.Thread(target=_do_download, daemon=True)
         thread.start()
         return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# Reload Skills
+
+class BFACW_OT_reload_skills(bpy.types.Operator):  # type: ignore[misc]
+    """Reload the built-in skills and system prompt cache."""
+    bl_idname = "bfacw.reload_skills"
+    bl_label = "Reload Skills"
+    bl_description = "Reload built-in skills and clear the system prompt cache"
+    bl_options = {'INTERNAL'}
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        from . import agent_controller as _ac
+        _ac._clear_system_prompt_cache()
+        self.report({"INFO"}, "Skills and system prompt cache cleared")
+        return {"FINISHED"}

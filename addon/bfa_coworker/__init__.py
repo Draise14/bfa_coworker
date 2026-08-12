@@ -51,6 +51,7 @@ from .operators_agent import (
     BFACW_OT_load_provider,
     BFACW_OT_test_polyhaven_hdri,
     BFACW_OT_test_polyhaven_texture,
+    BFACW_OT_reload_skills,
 )
 from .shared import (
     effective_ports,
@@ -93,6 +94,7 @@ _classes = (
     BFACW_OT_load_provider,
     BFACW_OT_test_polyhaven_hdri,
     BFACW_OT_test_polyhaven_texture,
+    BFACW_OT_reload_skills,
 )
 
 

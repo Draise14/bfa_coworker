@@ -109,39 +109,78 @@ def _get_system_prompt() -> str:
 
 
 def _get_system_prompt_with_rules() -> str:
-    """Return the system prompt with project rules prepended."""
+    """Return the system prompt with skills, project rules, and version info."""
     base = _get_system_prompt()
     try:
         import bpy  # pylint: disable=import-error
+
+        # ── Blender version announcement ──────────────────────
+        version_str = ".".join(str(v) for v in bpy.app.version[:3])
+        version_header = (
+            "You are connected to Blender {:s}. "
+            "All code you write must be compatible with this version."
+        ).format(version_str)
+
+        # ── Built-in skills (version-aware, from addon/skills/) ──
+        try:
+            from . import skills as _skills_mod  # pylint: disable=import-error
+            # Get user custom skills text from preferences.
+            custom_text = ""
+            try:
+                prefs = bpy.context.preferences.addons[__package__].preferences
+                if hasattr(prefs, "custom_skills_text"):
+                    custom_text = prefs.custom_skills_text or ""
+            except Exception:
+                pass
+            skills_block = _skills_mod.get_always_loaded_skills(
+                bpy_version=bpy.app.version,
+                custom_text=custom_text,
+            )
+        except Exception:
+            skills_block = ""
+
+        # ── Project rules (user .md files) ────────────────────
         rules_dir = Path(bpy.utils.user_resource("SCRIPTS")) / "bfa_coworker_rules"
         rules_parts = []
         global_rules = rules_dir / "global.md"
         if global_rules.exists():
             rules_parts.append(global_rules.read_text(encoding="utf-8"))
-        # Also check for blend-specific rules.
         if bpy.data.filepath:
             stem = Path(bpy.data.filepath).stem
             blend_rules = rules_dir / "{:s}.md".format(stem)
             if blend_rules.exists():
                 rules_parts.append(blend_rules.read_text(encoding="utf-8"))
+
+        # ── Assemble ──────────────────────────────────────────
+        parts: list[str] = [version_header]
+
+        if skills_block:
+            parts.append("## Built-in Skills\n{:s}".format(skills_block))
+
         if rules_parts:
             rules_text = "\n\n".join(rules_parts)
-            return (
+            parts.append(
                 "## Project Rules\n"
                 "The following project rules MUST be followed:\n\n"
-                "{:s}\n\n"
-                "## Instructions\n"
-                "{:s}"
-            ).format(rules_text, base)
+                "{:s}".format(rules_text)
+            )
+
+        parts.append("## Instructions\n{:s}".format(base))
+        return "\n\n".join(parts)
     except Exception:
         pass
     return base
 
 
 def _clear_system_prompt_cache() -> None:
-    """Clear the cached system prompt so it's rebuilt on next call."""
+    """Clear the cached system prompt and skills so they're rebuilt on next call."""
     global _system_prompt
     _system_prompt = None
+    try:
+        from . import skills as _skills_mod  # pylint: disable=import-error
+        _skills_mod.clear_cache()
+    except Exception:
+        pass
 
 
 def _drop_orphaned_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

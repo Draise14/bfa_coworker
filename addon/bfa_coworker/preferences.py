@@ -625,13 +625,65 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         row = diag_box.row()
         row.operator("bfacw.check_ports", icon="FILE_REFRESH", text="Check Ports")
         row.operator("bfacw.ping_agent", icon="FILE_REFRESH", text="Diagnose")
-        # ── Benchmark tests ──────────────────────────────────────────
-        diag_box.label(text="Benchmarks (send test prompts to agent)", icon='RENDER_RESULT')
-        bench_row = diag_box.row(align=True)
-        bench_row.operator("bfacw.benchmark_objects", icon="MESH_CUBE", text="Objects")
-        bench_row.operator("bfacw.benchmark_scene", icon="SCENE_DATA", text="Scene")
-        bench_row.operator("bfacw.benchmark_animation", icon="ANIM", text="Animation")
-        bench_row.operator("bfacw.benchmark_collections", icon="OUTLINER_COLLECTION", text="Collections")
+        # ── Multi-Step Test Suites ────────────────────────────────────
+        diag_box.label(text="Test Suites (multi-step artist workflows)", icon='RENDER_RESULT')
+        diag_box.label(
+            text="Click steps in order — each builds on the last. "
+                 "Use Reset to start over.",
+            icon='BLANK1',
+        )
+
+        _SUITE_META = [
+            ("scene_build",   "Scene Build",   'MESH_CUBE',           6),
+            ("animation",     "Animation",     'ANIM',                5),
+            ("modifiers",     "Modifiers",     'MODIFIER',            6),
+            ("assets_materials", "Assets+Mat", 'TEXTURE',             5),
+            ("baseline",      "Baseline",      'CONSOLE',             4),
+            ("error_handling","Errors",        'ERROR',               3),
+        ]
+
+        for suite_key, suite_label, suite_icon, total_steps in _SUITE_META:
+            suite_box = diag_box.box()
+            suite_header = suite_box.row()
+            suite_header.label(text=suite_label, icon=suite_icon)
+
+            # Show progress.
+            from . import operators_agent as _oa_suite
+            step_idx = _oa_suite._test_suite_progress.get(suite_key, 0)
+            suite_header.label(
+                text="Step {:d}/{:d}".format(step_idx, total_steps),
+                icon='INFO',
+            )
+
+            # Step buttons in a column.
+            suite = _oa_suite._TEST_SUITES.get(suite_key, [])
+            for s_num, s_label, _ in suite:
+                step_row = suite_box.row(align=True)
+                is_done = step_idx > s_num
+                is_current = step_idx == s_num
+                if is_done:
+                    step_icon = 'CHECKBOX_HLT'
+                elif is_current:
+                    step_icon = 'RADIOBUT_ON'
+                else:
+                    step_icon = 'RADIOBUT_OFF'
+                op = step_row.operator(
+                    "bfacw.test_step",
+                    text="{:d}. {:s}".format(s_num, s_label),
+                    icon=step_icon,
+                )
+                op.suite = suite_key
+                if not is_current and not is_done:
+                    step_row.enabled = False
+
+            # Reset button at the bottom of each suite.
+            reset_row = suite_box.row(align=True)
+            reset_op = reset_row.operator(
+                "bfacw.test_step_reset",
+                icon='LOOP_BACK',
+                text="Reset",
+            )
+            reset_op.suite = suite_key
         # Show check_ports results inline.
         from . import operators_agent as _oa_check
         check_result = getattr(_oa_check._BFACW_OT_check_ports, "_result", None)

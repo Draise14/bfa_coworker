@@ -663,8 +663,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         row = layout.row(align=True)
         row.scale_y = 1.3
         for tab_id, tab_label, tab_icon in [
-            ("LOCAL_LLM", "Local LLM", 'CONSOLE'),
-            ("REMOTE_API", "Remote API", 'WORLD'),
+            ("LOCAL_LLM", "Local Settings", 'CONSOLE'),
+            ("REMOTE_API", "Remote Settings", 'WORLD'),
             ("GENERATIVE", "Generative", 'RENDER_RESULT'),
             ("ADVANCED", "Advanced", 'SETTINGS'),
         ]:

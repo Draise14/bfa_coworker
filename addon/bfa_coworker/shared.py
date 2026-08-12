@@ -16,6 +16,7 @@ __all__ = (
     "GEN_BACKEND_ITEMS",
     "AGENT_MODE_ITEMS",
     "MCP_SERVER_MODE_ITEMS",
+    "OPERATING_MODE_ITEMS",
     "CHAT_MODE_ITEMS",
     "DEFAULT_BRIDGE_PORT",
     "DEFAULT_MCP_PORT",
@@ -176,6 +177,34 @@ AGENT_MODE_ITEMS: list[tuple[str, str, str]] = [
         "Bridge-only mode — run the TCP bridge server inside Blender "
         "and connect an external MCP client (Claude Desktop, Cursor, "
         "VS Code, or any MCP-compatible tool)",
+    ),
+]
+
+# ── Operating Mode EnumProperty Items ────────────────────────────────────
+# Unified top-level selector that combines agent_mode + llm_mode.
+
+OPERATING_MODE_ITEMS: list[tuple[str, str, str, str, int]] = [
+    (
+        "LOCAL_LLM",
+        "Local LLM",
+        "Run a local LLM via llama-server — everything runs on your machine",
+        "CONSOLE",
+        0,
+    ),
+    (
+        "REMOTE_API",
+        "Remote API",
+        "Use a remote API like OpenAI or OpenRouter — no local LLM needed",
+        "WORLD",
+        1,
+    ),
+    (
+        "EXTERNAL_HARNESS",
+        "External Harness",
+        "Bridge-only mode — connect an external MCP client "
+        "(Claude Desktop, Cursor, VS Code, etc.)",
+        "NETWORK_DRIVE",
+        2,
     ),
 ]
 

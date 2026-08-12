@@ -28,9 +28,12 @@ __all__ = (
 
 import json
 import math
+import random
+import re
 import select
 import socket
 import sys
+import time
 import traceback
 from collections.abc import Callable
 from typing import NamedTuple
@@ -224,7 +227,16 @@ def _execute_code(
     from .capture_output import CaptureOutput
     from .weak_sandbox import WeakSandboxForLLM
 
-    namespace: dict[str, object] = {"result": {}}
+    # Pre-populate common modules so LLM-generated code doesn't need to
+    # import them explicitly — reduces a common failure mode.
+    namespace: dict[str, object] = {
+        "result": {},
+        "math": math,
+        "random": random,
+        "time": time,
+        "json": json,
+        "re": re,
+    }
     with CaptureOutput() as captured, WeakSandboxForLLM():
         try:
             exec(code, namespace)

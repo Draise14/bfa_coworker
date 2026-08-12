@@ -35,6 +35,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -223,6 +224,8 @@ class AgentState:
     tool_count: int = 0  # Number of MCP tools available (0 = not loaded yet)
     conversation_history: list[dict[str, Any]] = field(default_factory=list)
     streaming_text: str = ""
+    reasoning_text: str = ""  # Chain-of-thought from reasoning models
+    thinking_dots: int = 0  # Animated spinner state (0-3)
 
     # ── Liveness tracking (Tier 1) ─────────────────────────────────
     last_bridge_activity: float = 0.0
@@ -1245,7 +1248,7 @@ def _openai_chat_completions(
                     print("[🛠️Coworker] _openai_chat_completions:   tool[{:d}] = {:s}({:s})".format(
                         i, fn.get("name", "?"), str(fn.get("arguments", ""))[:120]))
                 # Log reasoning content (chain-of-thought) for debugging.
-                reasoning = msg.get("reasoning_content") or ""
+                reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
                 if reasoning:
                     print("[🛠️Coworker] _openai_chat_completions: reasoning ({:d} chars):".format(
                         len(reasoning)))
@@ -1326,10 +1329,94 @@ def _call_mcp_tool_sync(
         return "Error calling tool '{:s}': {:s}".format(tool_name, str(ex))
 
 
+# ── Friendly tool names for UI status ─────────────────────────────
+
+_TOOL_FRIENDLY_NAMES: dict[str, str] = {
+    "execute_blender_code": "Running code in Blender",
+    "get_blendfile_summary_datablocks_toolcode": "Reading scene data",
+    "download_polyhaven_asset": "Downloading asset",
+    "get_object_info": "Inspecting object",
+    "create_object": "Creating object",
+    "modify_object": "Modifying object",
+    "delete_object": "Removing object",
+    "set_material": "Applying material",
+    "render_scene": "Rendering",
+}
+
+
+def _friendly_tool_status(tool_name: str) -> str:
+    """Return a user-friendly status string for a tool name."""
+    friendly = _TOOL_FRIENDLY_NAMES.get(tool_name)
+    if friendly:
+        return "{:s}...".format(friendly)
+    # Fallback: convert camelCase/snake_case to readable text.
+    import re
+    readable = re.sub(r"_+", " ", tool_name)
+    readable = re.sub(r"([a-z])([A-Z])", r"\1 \2", readable)
+    return "{:s}...".format(readable.capitalize())
+
+
+# ── Tool error formatting ─────────────────────────────────────────
+
+def _format_tool_error(result_text: str) -> str:
+    """Extract a human-readable summary from a tool error result.
+
+    Parses ``{"status": "error", "message": "Traceback..."}`` and returns
+    a friendly message like ``"I had trouble with that step — AttributeError"``.
+
+    Returns *result_text* unchanged if it doesn't match the error pattern.
+    """
+    if '"status": "error"' not in result_text:
+        return result_text
+
+    # Try to extract just the exception type from the traceback.
+    import re
+    m = re.search(r'"message":\s*"([^"]*(?:\\.[^"]*)*)"', result_text, re.DOTALL)
+    if m:
+        raw_msg = m.group(1)
+        raw_msg = raw_msg.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+        lines = raw_msg.strip().splitlines()
+        # Walk backwards to find the actual exception line (skip Traceback, File, and blank lines).
+        for line in reversed(lines):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("Traceback") or stripped.startswith("["):
+                continue
+            if stripped.startswith("File"):
+                continue
+            # This is the actual exception.
+            exc_type = stripped.split(":")[0].strip() if ":" in stripped else stripped
+            return "Work had an error \u2014 {:s}, trying again".format(exc_type)
+    return result_text
+
+
+def _tool_result_summary(result_text: str, max_len: int = 150) -> str:
+    """Return a short summary of a tool result for UI display.
+
+    For errors, uses ``_format_tool_error``. For successes, extracts a brief
+    status or truncates the result.
+    """
+    if '"status": "error"' in result_text:
+        return _format_tool_error(result_text)
+    # Try to extract a success message.
+    import re
+    m = re.search(r'"status":\s*"ok"', result_text)
+    if m:
+        msg_m = re.search(r'"message":\s*"([^"]*)"', result_text)
+        if msg_m:
+            return msg_m.group(1)[:max_len]
+        return "Done"
+    if len(result_text) <= max_len:
+        return result_text
+    return result_text[:max_len] + "..."
+
+
 def run_conversation_turn(
     user_message: str,
     on_text: Callable[[str], None] | None = None,
     on_status: Callable[[str], None] | None = None,
+    on_reasoning: Callable[[str], None] | None = None,
     llm_url: str | None = None,
     api_key: str | None = None,
     model: str | None = None,
@@ -1373,18 +1460,27 @@ def run_conversation_turn(
         on_status("Thinking...")
     _agent_state.is_thinking = True
     _agent_state.streaming_text = ""
+    _agent_state.reasoning_text = ""
+    _agent_state.thinking_dots = 0
 
     # Determine LLM URL.
     llm_port_local: int | None = None
     if llm_url is None:
-        # Use local llama-server default.  Read the configured port
-        # from llm_manager so we stay in sync.
+        # No URL provided — resolve from config mode.
         from . import llm_manager as _llm_mgr
         _llm_cfg = _llm_mgr.get_config()
-        llm_url = _LLM_CHAT_URL.format(_llm_cfg.local_port)
-        llm_port_local = _llm_cfg.local_port
-    else:
-        # Remote API URL — ensure it ends with /v1/chat/completions.
+        if _llm_cfg.mode == "remote":
+            # Build remote URL from config.
+            llm_url = _llm_cfg.remote_api_url
+            api_key = _llm_cfg.remote_api_key or api_key
+            model = _llm_cfg.remote_model or model
+        else:
+            # Use local llama-server default.
+            llm_url = _LLM_CHAT_URL.format(_llm_cfg.local_port)
+            llm_port_local = _llm_cfg.local_port
+
+    # Ensure URL ends with /v1/chat/completions (for both local and remote).
+    if llm_url:
         base = llm_url.rstrip("/")
         if not base.endswith("/chat/completions"):
             if base.endswith("/v1"):
@@ -1507,6 +1603,29 @@ def run_conversation_turn(
 
         # ── End auto-continue ─────────────────────────────────────────
 
+        # Deliver reasoning (chain-of-thought) to UI if present.
+        # Different providers use different field names:
+        #   - Local llama-server / DeepSeek: "reasoning_content"
+        #   - OpenRouter: "reasoning"
+        reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
+        if reasoning:
+            print("[🛠️Coworker] run_conversation_turn: reasoning ({:d} chars) — storing in history".format(
+                len(reasoning)))
+            _agent_state.reasoning_text = reasoning
+            # Pick a random thinking label that sticks for this reasoning block.
+            import random as _random
+            _thinking_labels = [
+                "Considering", "Expanding", "Scheming", "Working",
+                "Adjusting", "Thinking", "Planning", "Figuring",
+                "Reasoning", "Pondering",
+            ]
+            label = _random.choice(_thinking_labels)
+            history.append({"role": "reasoning", "content": reasoning, "label": label})
+            if on_reasoning:
+                on_reasoning(reasoning)
+
+            _agent_state.last_llm_activity = time.monotonic()
+
         if content and on_text:
             on_text(content)
             _agent_state.streaming_text = content
@@ -1537,10 +1656,13 @@ def run_conversation_turn(
                 tool_id = tc.get("id", "")
 
                 if on_status:
-                    on_status("Running tool: {:s}".format(tool_name))
+                    on_status(_friendly_tool_status(tool_name))
 
                 # Call the MCP tool.
                 result_text = _call_mcp_tool_sync(tool_name, args, mcp_port)
+
+                # Build a human-readable summary for the UI.
+                result_summary = _tool_result_summary(result_text)
 
                 # Add tool result to history.
                 history.append({
@@ -1548,6 +1670,7 @@ def run_conversation_turn(
                     "tool_call_id": tool_id,
                     "name": tool_name,
                     "content": result_text,
+                    "summary": result_summary,
                 })
 
             # After processing tool calls, ask the LLM for a final text response.
@@ -1592,6 +1715,8 @@ def cleanup() -> None:
     stop_mcp_server()
     _agent_state.conversation_history.clear()
     _agent_state.streaming_text = ""
+    _agent_state.reasoning_text = ""
+    _agent_state.thinking_dots = 0
     _agent_state.is_thinking = False
 
 

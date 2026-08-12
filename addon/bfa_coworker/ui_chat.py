@@ -48,6 +48,28 @@ from . import mcp_to_blender_server
 from .shared import effective_ports, CHAT_MODE_ITEMS
 
 
+def _sync_prefs_to_config(prefs: bpy.types.AddonPreferences) -> None:
+    """Copy all relevant preference fields into llm_manager._config."""
+    llm_cfg = llm_manager.get_config()
+    # Derive mode from operating_mode.
+    if prefs.operating_mode == "LOCAL_LLM":
+        llm_cfg.mode = "local"
+    elif prefs.operating_mode == "REMOTE_API":
+        llm_cfg.mode = "remote"
+    else:
+        llm_cfg.mode = "local"  # fallback for harness mode
+    llm_cfg.llama_path = prefs.llama_path
+    llm_cfg.model_repo_id = prefs.model_repo_id
+    llm_cfg.model_filename = prefs.model_filename
+    llm_cfg.downloaded_models_dir = prefs.downloaded_models_dir
+    llm_cfg.local_ctx_size = prefs.local_ctx_size
+    llm_cfg.local_max_tokens = prefs.local_max_tokens
+    llm_cfg.remote_api_url = prefs.remote_api_url
+    llm_cfg.remote_api_key = prefs.remote_api_key
+    llm_cfg.remote_model = prefs.remote_model
+    llm_manager.set_config(llm_cfg)
+
+
 _WRAP_WIDTH = 60
 
 
@@ -59,6 +81,115 @@ def _wrap_text(text: str, width: int = _WRAP_WIDTH) -> str:
         textwrap.fill(line, width=width)
         for line in text.split("\n")
     )
+
+
+def _draw_multiline(layout: bpy.types.UILayout, text: str, width: int = _WRAP_WIDTH) -> None:
+    """Draw multi-line text in a layout, using ``label_multiline`` if available.
+
+    In Blender 5.3+, ``UILayout.label_multiline(text=...)`` natively wraps
+    long text across multiple lines.  For older versions we fall back to
+    one ``label()`` call per wrapped line.
+    """
+    if not text:
+        return
+    if hasattr(layout, "label_multiline"):
+        layout.label_multiline(text=text)
+    else:
+        for line in _wrap_text(text, width=width).split("\n"):
+            layout.label(text=line)
+
+
+def _draw_reasoning(
+    layout: bpy.types.UILayout,
+    text: str,
+    label: str = "Thinking",
+    is_thinking: bool = False,
+    thinking_dots: int = 0,
+) -> None:
+    """Draw reasoning (chain-of-thought) content in a collapsible panel.
+
+    Shows a box with a thinking label and preview of the first 3 lines.
+    While *is_thinking* is True, the label animates with dots.
+    Inside the box, a collapsible panel reveals the full reasoning.
+    The *label* is stored when the reasoning was first captured so it
+    doesn't flicker on every redraw.
+    """
+    if not text:
+        return
+
+    lines = text.strip().split("\n")
+    preview_lines = lines[:3]
+    remaining_lines = lines[3:]
+
+    # Animate the label with dots while thinking.
+    if is_thinking:
+        dots = [".", "..", "...", "...."]
+        display_label = "{:s}{:s}".format(label, dots[thinking_dots % 4])
+        icon = 'CONSOLE'
+    else:
+        display_label = label
+        icon = 'CHECKMARK'
+
+    # Outer box for the reasoning section.
+    outer = layout.box()
+
+    # Row with thinking label.
+    row = outer.row()
+    row.label(text="{:s}:".format(display_label), icon=icon)
+
+    # Preview of first 3 lines.
+    for line in preview_lines:
+        _draw_multiline(outer, line)
+
+    # Collapsible panel for full reasoning (closed by default).
+    # Only shows lines beyond the preview to avoid duplication.
+    if remaining_lines:
+        header, body = outer.panel("reasoning_full", default_closed=True)
+        header.label(text="Show full reasoning ({:d} more lines)".format(len(remaining_lines)))
+
+        if body:
+            body.separator()
+            for line in remaining_lines:
+                _draw_multiline(body, line)
+
+
+def _draw_tool_summary(layout: bpy.types.UILayout, content: str, summary: str) -> None:
+    """Draw a tool result with a human-readable summary.
+
+    Shows the summary prominently.  If the full content differs from the
+    summary (e.g., contains a traceback), show a collapsed detail section.
+    """
+    if not summary and not content:
+        return
+
+    display = summary if summary else content
+    _draw_multiline(layout, display)
+
+    # If there's a summary different from raw content, show the raw version
+    # collapsed as a detail section.
+    if summary and summary != content and len(content) > len(summary):
+        detail_box = layout.box()
+        detail_row = detail_box.row()
+        detail_row.label(text="Details:", icon='TEXT')
+        # Show truncated raw content.
+        raw_preview = content[:300] + ("..." if len(content) > 300 else "")
+        _draw_multiline(detail_box, raw_preview, width=_WRAP_WIDTH)
+
+
+def _draw_tool_inline(
+    layout: bpy.types.UILayout,
+    tool_name: str,
+    display: str,
+    is_error: bool,
+) -> None:
+    """Draw a tool result as a sub-box inside the agent's message box."""
+    tool_box = layout.box()
+    row = tool_box.row()
+    row.label(
+        text="\u2699 {:s}".format(tool_name),
+        icon='CANCEL' if is_error else 'TOOL_SETTINGS',
+    )
+    _draw_multiline(tool_box, display)
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +278,9 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
         props.chat_input = ""
         props.chat_status = "Thinking..."
 
-        # Get LLM config.
+        # Sync preferences to config, then read LLM config.
+        prefs = context.preferences.addons[__package__].preferences
+        _sync_prefs_to_config(prefs)
         llm_cfg = llm_manager.get_config()
         llm_url = None
         api_key = None
@@ -161,7 +294,6 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
         import threading
 
         # Get effective ports from preferences.
-        prefs = context.preferences.addons[__package__].preferences
         _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
 
         def _do_turn():
@@ -169,6 +301,7 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
                 agent_controller.run_conversation_turn(
                     user_message=message,
                     on_text=None,
+                    on_reasoning=lambda r: _update_streaming(context, r),
                     on_status=lambda s: _update_status(s),
                     llm_url=llm_url or None,
                     api_key=api_key or None,
@@ -187,6 +320,10 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             props.chat_status = text
             _redraw_areas(context)
 
+        def _update_streaming(ctx: bpy.types.Context, text: str) -> None:
+            """Called when reasoning or streaming text arrives — refresh UI."""
+            _redraw_areas(ctx)
+
         thread = threading.Thread(target=_do_turn, daemon=True)
         thread.start()
 
@@ -202,6 +339,8 @@ class BFACW_OT_chat_clear(Operator):  # type: ignore[misc]
     def execute(self, context: bpy.types.Context) -> set[str]:
         agent_controller._agent_state.conversation_history.clear()
         agent_controller._agent_state.streaming_text = ""
+        agent_controller._agent_state.reasoning_text = ""
+        agent_controller._agent_state.thinking_dots = 0
         _save_chat_history()
         _redraw_areas(context)
         return {"FINISHED"}
@@ -397,7 +536,7 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         prefs = context.preferences.addons[__package__].preferences
 
         # In External Harness mode, only start the bridge server.
-        if prefs.agent_mode == "EXTERNAL_HARNESS":
+        if prefs.operating_mode == "EXTERNAL_HARNESS":
             return self._start_bridge_only(context)
 
         return self._start_full_agent(context)
@@ -478,18 +617,10 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         # on a background thread to avoid freezing Blender's UI.
         prefs = context.preferences.addons[__package__].preferences
         # Sync preferences to llm_manager config before starting.
+        _sync_prefs_to_config(prefs)
         llm_cfg = llm_manager.get_config()
-        llm_cfg.mode = prefs.llm_mode
-        llm_cfg.llama_path = prefs.llama_path
-        llm_cfg.model_repo_id = prefs.model_repo_id
-        llm_cfg.model_filename = prefs.model_filename
-        llm_cfg.downloaded_models_dir = prefs.downloaded_models_dir
         _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
         llm_cfg.local_port = _llm_port
-        llm_cfg.local_ctx_size = prefs.local_ctx_size
-        llm_cfg.remote_api_url = prefs.remote_api_url
-        llm_cfg.remote_api_key = prefs.remote_api_key
-        llm_cfg.remote_model = prefs.remote_model
         llm_manager.set_config(llm_cfg)
 
         if llm_cfg.mode == "local":
@@ -569,10 +700,17 @@ class BFACW_OT_agent_stop(Operator):  # type: ignore[misc]
 
 def chat_timer_update() -> float | None:
     """
-    Timer callback that periodically redraws chat areas.
+    Timer callback that periodically redraws chat areas and animates
+    the "Thinking..." indicator.
 
     Registered when the add-on starts, runs while Blender is alive.
     """
+    from . import agent_controller as _ac
+
+    # Animate thinking dots.
+    if _ac._agent_state.is_thinking:
+        _ac._agent_state.thinking_dots += 1
+
     # Redraw all chat panels.
     for wm in bpy.data.window_managers:
         for win in wm.windows:
@@ -606,7 +744,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
         state = agent_controller._agent_state
         prefs = context.preferences.addons[__package__].preferences
-        is_harness = (prefs.agent_mode == "EXTERNAL_HARNESS")
+        is_harness = (prefs.operating_mode == "EXTERNAL_HARNESS")
 
         # Agent control buttons.
         row = layout.row(align=True)
@@ -633,7 +771,9 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         else:
             status = props.chat_status
             if state.is_thinking:
-                status = "Thinking..."
+                # Animated thinking dots (cycled by timer).
+                dots = [".", "..", "...", "...."]
+                status = "Thinking{:s}".format(dots[state.thinking_dots % 4])
             elif not state.mcp_server_running:
                 status = "Offline"
             elif state.error:
@@ -664,6 +804,14 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 text="LLM: {:s}".format("\u25cf" if state.llm_live else "\u25cb"),
                 icon='CONSOLE',
             )
+
+        # Mode indicator.
+        if not is_harness:
+            mode_row = layout.row(align=True)
+            if prefs.operating_mode == "REMOTE_API":
+                mode_row.label(text="Mode: Remote API", icon='URL')
+            else:
+                mode_row.label(text="Mode: Local LLM", icon='CONSOLE')
 
         # Tool count.
         if not is_harness and state.mcp_server_running:
@@ -757,30 +905,103 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         history = state.conversation_history
         if history:
             box = layout.box()
-            for msg in reversed(history[-20:]):  # Show last 20, newest first.
-                role = msg.get("role", "")
-                content = msg.get("content", "")
-                tool_name = msg.get("name", "")
+            # Show a streaming preview if we're thinking and streaming text exists.
+            if state.is_thinking and state.streaming_text:
+                preview_row = box.row()
+                preview_row.label(text="Agent (live):", icon='CONSOLE')
+                _draw_multiline(box, state.streaming_text[:300] + "...")
+                box.separator()
 
+            # Group messages into turns (user → assistant + tools).
+            turns: list[list[dict]] = []
+            current_turn: list[dict] = []
+            for msg in history:
+                role = msg.get("role", "")
                 if role == "user":
-                    row = box.row()
+                    if current_turn:
+                        turns.append(current_turn)
+                    current_turn = [msg]
+                elif role in ("assistant", "tool", "reasoning"):
+                    current_turn.append(msg)
+            if current_turn:
+                turns.append(current_turn)
+
+            # Draw turns in reverse order (newest first, top to bottom).
+            # Limit to last 3 turns so the user always sees the latest
+            # activity without excessive scrolling.
+            for turn in reversed(turns[-3:]):
+                # Separate messages by role for proper ordering.
+                user_msg = None
+                assistant_msg = None
+                tool_msgs = []
+                reasoning_msgs = []
+                for msg in turn:
+                    role = msg.get("role", "")
+                    if role == "user":
+                        user_msg = msg
+                    elif role == "assistant":
+                        assistant_msg = msg
+                    elif role == "tool":
+                        tool_msgs.append(msg)
+                    elif role == "reasoning":
+                        reasoning_msgs.append(msg)
+
+                # Draw user message.
+                if user_msg:
+                    msg_box = box.box()
+                    row = msg_box.row()
                     row.label(text="You:", icon='USER')
-                    for line in _wrap_text(content).split("\n"):
-                        box.label(text=line)
-                elif role == "assistant":
-                    row = box.row()
-                    row.label(text="Agent:", icon='CONSOLE')
+                    _draw_multiline(msg_box, user_msg.get("content", ""))
+
+                # Draw reasoning (before assistant, since it precedes it).
+                for r_msg in reasoning_msgs:
+                    _draw_reasoning(
+                        box,
+                        r_msg.get("content", ""),
+                        r_msg.get("label", "Thinking"),
+                        is_thinking=state.is_thinking,
+                        thinking_dots=state.thinking_dots,
+                    )
+
+                # Draw assistant message with tool sub-boxes inside.
+                if assistant_msg:
+                    has_tool_calls = bool(assistant_msg.get("tool_calls"))
+                    a_box = box.box()
+                    row = a_box.row()
+                    if has_tool_calls:
+                        row.label(text="Agent (running tools...):", icon='CONSOLE')
+                    else:
+                        row.label(text="Agent:", icon='CONSOLE')
+                    content = assistant_msg.get("content", "")
                     if content:
-                        for line in _wrap_text(content).split("\n"):
-                            box.label(text=line)
-                elif role == "tool":
-                    row = box.row()
-                    row.label(text="[Tool] {:s}:".format(tool_name), icon='TOOL_SETTINGS')
-                    c = content or ""
-                    if len(c) > 200:
-                        c = c[:200] + "..."
-                    for line in _wrap_text(c).split("\n"):
-                        box.label(text=line)
+                        _draw_multiline(a_box, content)
+                    # Draw tool results as sub-boxes inside the assistant box.
+                    for t_msg in tool_msgs:
+                        t_content = t_msg.get("content", "")
+                        t_summary = t_msg.get("summary", "")
+                        t_name = t_msg.get("name", "")
+                        is_error = (
+                            '"status": "error"' in (t_content or "") or
+                            (t_content or "").startswith("Error")
+                        )
+                        display = t_summary if t_summary else (t_content or "")
+                        if not t_summary and len(display) > 200:
+                            display = display[:200] + "..."
+                        _draw_tool_inline(a_box, t_name, display, is_error)
+                elif tool_msgs:
+                    # Orphaned tool messages (no assistant) — draw directly.
+                    for t_msg in tool_msgs:
+                        t_content = t_msg.get("content", "")
+                        t_summary = t_msg.get("summary", "")
+                        t_name = t_msg.get("name", "")
+                        is_error = (
+                            '"status": "error"' in (t_content or "") or
+                            (t_content or "").startswith("Error")
+                        )
+                        display = t_summary if t_summary else (t_content or "")
+                        if not t_summary and len(display) > 200:
+                            display = display[:200] + "..."
+                        _draw_tool_inline(box, t_name, display, is_error)
 
                 box.separator()
         else:
@@ -806,7 +1027,7 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
         state = agent_controller._agent_state
         prefs = context.preferences.addons[__package__].preferences
-        is_harness = (prefs.agent_mode == "EXTERNAL_HARNESS")
+        is_harness = (prefs.operating_mode == "EXTERNAL_HARNESS")
 
         # Status bar.
         row = layout.row(align=True)
@@ -861,7 +1082,14 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
             for msg in reversed(history[-10:]):
                 role = msg.get("role", "")
                 content = msg.get("content", "")
-                preview = content[:80] + "..." if content and len(content) > 80 else (content or "")
+                summary = msg.get("summary", "")
+                if role == "reasoning":
+                    preview = "Thinking... ({:d} chars)".format(len(content or ""))
+                elif role == "tool":
+                    display = summary if summary else (content or "")
+                    preview = display[:80] + "..." if display and len(display) > 80 else (display or "")
+                else:
+                    preview = content[:80] + "..." if content and len(content) > 80 else (content or "")
                 box.label(text="[{:s}] {:s}".format(role, preview))
         else:
             layout.label(text="No conversation yet.", icon='INFO')

@@ -74,15 +74,18 @@ Delete objects with unlinking enabled to cleanly remove from all collections:
 
 ## Script Authoring Workflow (Avoiding Duplicates)
 
-The system automatically detects when you are iterating on the same task and
-undoes the previous attempt before running revised code. To get the best results:
+The system tracks what you create during a turn and tells you what already exists.
+When you iterate on the same task, you'll see a context message listing what you've
+already made — modify those entities instead of creating duplicates.
 
 1. **Inspect first** — use dedicated scene exploration tools before writing code.
 2. **Plan the complete script** — think through all steps before executing.
 3. **Execute once** — include all desired properties, modifiers, and materials
    in a single `execute_blender_code` call.
-4. **If it fails** — the system cleans up the failed attempt automatically.
+4. **If it fails** — the system undoes the failed attempt automatically.
    Just fix the code and retry.
+5. **If you see a context message** listing entities you've already created,
+   modify those existing entities rather than creating new ones.
 
 For multiple independent objects, either:
 - **Batch them** into one `execute_blender_code` call, or

@@ -1531,7 +1531,8 @@ def _extract_code_operations(code: str) -> set[str]:
     """Extract operation signatures from a code string for overlap detection.
 
     Returns a set of strings representing operations: ``bpy.ops`` calls,
-    ``bpy.data.*.new/remove`` calls, and quoted name literals.
+    ``bpy.data.*.new/remove`` calls, node tree operations, material
+    assignment, modifier operations, and quoted name literals.
     """
     ops: set[str] = set()
     # Extract bpy.ops.* calls (e.g. bpy.ops.mesh.primitive_cube_add).
@@ -1540,6 +1541,33 @@ def _extract_code_operations(code: str) -> set[str]:
     # Extract bpy.data.*.new() / .remove() / .load() calls.
     for m in re.finditer(r"bpy\.data\.([a-z_]+)\.(new|remove|load)", code):
         ops.add("data:{:s}.{:s}".format(m.group(1), m.group(2)))
+    # Extract node tree node creation (e.g. .node_tree.nodes.new('ShaderNodeBsdfPrincipled')).
+    for m in re.finditer(r"\.node_tree\.nodes\.new\('([^']+)'\)", code):
+        ops.add("node:new:{:s}".format(m.group(1)))
+    # Extract node tree link creation.
+    if re.search(r"\.node_tree\.links\.new\(", code):
+        ops.add("node:link")
+    # Extract node tree node removal.
+    if re.search(r"\.node_tree\.nodes\.remove\(", code):
+        ops.add("node:remove")
+    # Extract node tree node clear.
+    if re.search(r"\.node_tree\.nodes\.clear\(", code):
+        ops.add("node:clear")
+    # Extract material assignment via .data.materials.append().
+    for m in re.finditer(r"\.data\.materials\.append\(([^)]+)\)", code):
+        ops.add("mat:append:{:s}".format(m.group(1).strip().strip('"\'')))
+    # Extract material assignment via .active_material =.
+    for m in re.finditer(r"\.active_material\s*=\s*([^\s;#]+)", code):
+        ops.add("mat:assign:{:s}".format(m.group(1).strip()))
+    # Extract material slot assignment.
+    for m in re.finditer(r"\.material_slots\[\d+\]\.material\s*=\s*([^\s;#]+)", code):
+        ops.add("mat:slot:{:s}".format(m.group(1).strip()))
+    # Extract modifier creation.
+    for m in re.finditer(r"\.modifiers\.new\(name=([^,]+),?\s*type=([^)]+)\)", code):
+        ops.add("mod:new:{:s}".format(m.group(2).strip().strip('"\'')))
+    # Extract modifier removal.
+    if re.search(r"\.modifiers\.remove\(", code):
+        ops.add("mod:remove")
     # Extract quoted string literals that look like names (2+ chars, no spaces).
     for m in re.finditer(r'"([A-Za-z_][A-Za-z0-9_.]{1,40})"', code):
         ops.add("name:{:s}".format(m.group(1)))
@@ -1556,6 +1584,189 @@ def _codes_overlap(prev_code: str, new_code: str) -> bool:
     prev_ops = _extract_code_operations(prev_code)
     new_ops = _extract_code_operations(new_code)
     return bool(prev_ops & new_ops)
+
+
+# ---------------------------------------------------------------------------
+# Entity snapshot / diff — track what the LLM creates during a turn
+
+@dataclass
+class _EntitySnapshot:
+    """Snapshot of all datablock names in the scene at a point in time."""
+    object_names: set[str] = field(default_factory=set)
+    mesh_names: set[str] = field(default_factory=set)
+    material_names: set[str] = field(default_factory=set)
+    node_group_names: set[str] = field(default_factory=set)
+    image_names: set[str] = field(default_factory=set)
+    light_names: set[str] = field(default_factory=set)
+    camera_names: set[str] = field(default_factory=set)
+    collection_names: set[str] = field(default_factory=set)
+    curve_names: set[str] = field(default_factory=set)
+    grease_pencil_names: set[str] = field(default_factory=set)
+    armature_names: set[str] = field(default_factory=set)
+    text_names: set[str] = field(default_factory=set)
+
+    @staticmethod
+    def _snapshot_code() -> str:
+        """Return Python code that collects all datablock names and returns them as a dict."""
+        return (
+            "import bpy\n"
+            "result = {\n"
+            "    'object_names':       sorted(o.name for o in bpy.data.objects),\n"
+            "    'mesh_names':         sorted(m.name for m in bpy.data.meshes),\n"
+            "    'material_names':     sorted(m.name for m in bpy.data.materials),\n"
+            "    'node_group_names':   sorted(g.name for g in bpy.data.node_groups),\n"
+            "    'image_names':        sorted(i.name for i in bpy.data.images),\n"
+            "    'light_names':        sorted(l.name for l in bpy.data.lights),\n"
+            "    'camera_names':       sorted(c.name for c in bpy.data.cameras),\n"
+            "    'collection_names':   sorted(c.name for c in bpy.data.collections),\n"
+            "    'curve_names':        sorted(c.name for c in bpy.data.curves),\n"
+            "    'grease_pencil_names': sorted(g.name for g in bpy.data.grease_pencils),\n"
+            "    'armature_names':     sorted(a.name for a in bpy.data.armatures),\n"
+            "    'text_names':         sorted(t.name for t in bpy.data.texts),\n"
+            "}\n"
+        )
+
+    @classmethod
+    def from_dict(cls, data: dict[str, list[str]]) -> "_EntitySnapshot":
+        """Build a snapshot from the dict returned by the snapshot code."""
+        return cls(
+            object_names=set(data.get("object_names", [])),
+            mesh_names=set(data.get("mesh_names", [])),
+            material_names=set(data.get("material_names", [])),
+            node_group_names=set(data.get("node_group_names", [])),
+            image_names=set(data.get("image_names", [])),
+            light_names=set(data.get("light_names", [])),
+            camera_names=set(data.get("camera_names", [])),
+            collection_names=set(data.get("collection_names", [])),
+            curve_names=set(data.get("curve_names", [])),
+            grease_pencil_names=set(data.get("grease_pencil_names", [])),
+            armature_names=set(data.get("armature_names", [])),
+            text_names=set(data.get("text_names", [])),
+        )
+
+
+@dataclass
+class _EntityDiff:
+    """Difference between two snapshots — entities created in between."""
+    object_names: set[str] = field(default_factory=set)
+    mesh_names: set[str] = field(default_factory=set)
+    material_names: set[str] = field(default_factory=set)
+    node_group_names: set[str] = field(default_factory=set)
+    image_names: set[str] = field(default_factory=set)
+    light_names: set[str] = field(default_factory=set)
+    camera_names: set[str] = field(default_factory=set)
+    collection_names: set[str] = field(default_factory=set)
+    curve_names: set[str] = field(default_factory=set)
+    grease_pencil_names: set[str] = field(default_factory=set)
+    armature_names: set[str] = field(default_factory=set)
+    text_names: set[str] = field(default_factory=set)
+
+    def is_empty(self) -> bool:
+        """Return ``True`` if no entities were created."""
+        return not any(vars(self).values())
+
+    def merge(self, other: "_EntityDiff") -> None:
+        """Merge another diff into this one (union of all sets)."""
+        for field_name in vars(self):
+            getattr(self, field_name).update(getattr(other, field_name))
+
+    def summary(self) -> str:
+        """Return a human-readable summary like 'objects: Cube, Sphere; materials: RedMat'."""
+        parts: list[str] = []
+        labels = [
+            ("objects", "object_names"),
+            ("meshes", "mesh_names"),
+            ("materials", "material_names"),
+            ("node groups", "node_group_names"),
+            ("images", "image_names"),
+            ("lights", "light_names"),
+            ("cameras", "camera_names"),
+            ("collections", "collection_names"),
+            ("curves", "curve_names"),
+            ("grease pencils", "grease_pencil_names"),
+            ("armatures", "armature_names"),
+            ("texts", "text_names"),
+        ]
+        for label, field_name in labels:
+            names = getattr(self, field_name)
+            if names:
+                sorted_names = sorted(names)
+                if len(sorted_names) <= 5:
+                    parts.append("{:s}: {:s}".format(label, ", ".join(sorted_names)))
+                else:
+                    parts.append("{:s}: {:s} (+{:d} more)".format(
+                        label, ", ".join(sorted_names[:5]), len(sorted_names) - 5))
+        return "; ".join(parts) if parts else "(none)"
+
+
+def _take_snapshot(mcp_port: int) -> _EntitySnapshot | None:
+    """Take a snapshot of all datablock names via an MCP tool call.
+
+    Returns ``None`` if the snapshot call fails (best-effort).
+    """
+    raw = _call_mcp_tool_sync(
+        "execute_blender_code",
+        {"code": _EntitySnapshot._snapshot_code()},
+        mcp_port,
+    )
+    try:
+        data = json.loads(raw)
+        if data.get("status") == "ok":
+            return _EntitySnapshot.from_dict(data.get("result", {}))
+    except (json.JSONDecodeError, TypeError):
+        pass
+    print("[🛠️Coworker] _take_snapshot: failed to parse snapshot result")
+    return None
+
+
+def _diff_snapshot(
+    prev: _EntitySnapshot,
+    mcp_port: int,
+) -> _EntityDiff | None:
+    """Take a new snapshot and diff it against *prev*.
+
+    Returns ``None`` if the snapshot call fails.
+    """
+    raw = _call_mcp_tool_sync(
+        "execute_blender_code",
+        {"code": _EntitySnapshot._snapshot_code()},
+        mcp_port,
+    )
+    try:
+        data = json.loads(raw)
+        if data.get("status") == "ok":
+            current = _EntitySnapshot.from_dict(data.get("result", {}))
+            return _diff_snapshots(prev, current)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return None
+
+
+def _diff_snapshots(
+    prev: _EntitySnapshot,
+    current: _EntitySnapshot,
+) -> _EntityDiff:
+    """Compute the diff between two snapshots."""
+    diff = _EntityDiff()
+    for field_name in vars(diff):
+        prev_set = getattr(prev, field_name)
+        curr_set = getattr(current, field_name)
+        new_items = curr_set - prev_set
+        getattr(diff, field_name).update(new_items)
+    return diff
+
+
+def _entity_diff_to_context_message(diff: _EntityDiff) -> str:
+    """Format an entity diff as a system-level context message for the LLM."""
+    summary = diff.summary()
+    if diff.is_empty():
+        return ""
+    return (
+        "[System: So far this turn you have created:\n"
+        "{:s}\n"
+        "If you need to modify these, reference them by name. "
+        "If you need something different, create new entities with distinct names.]"
+    ).format(summary)
 
 
 # ---------------------------------------------------------------------------
@@ -1637,12 +1848,29 @@ def run_conversation_turn(
     except Exception:
         pass  # Best-effort; don't break the agent loop.
 
+    # ── Take initial entity snapshot ──────────────────────────────────
+    # Captures all datablock names before any code execution this turn.
+    # Used to detect newly created entities after each step.
+    if chat_mode != "ASK":
+        _turn_snapshot = _take_snapshot(mcp_port)
+        if _turn_snapshot is not None:
+            print("[🛠️Coworker] run_conversation_turn: initial entity snapshot taken")
+        else:
+            print("[🛠️Coworker] run_conversation_turn: initial entity snapshot FAILED (continuing without)")
+
     # ── Smart undo tracking (per-turn) ────────────────────────────────
     # Tracks the last execute_blender_code call to detect iteration and
     # auto-undo duplicates. Reset at the start of each turn.
     _prev_code: str | None = None
     _prev_code_errored: bool = False
     _undo_pushed: bool = False  # True once we've pushed the first undo state.
+
+    # ── Entity tracking (per-turn) ────────────────────────────────────
+    # Snapshots the scene at turn start and diffs after each code execution
+    # so the LLM knows what it has already created.
+    _turn_snapshot: _EntitySnapshot | None = None
+    _turn_entities: _EntityDiff = _EntityDiff()
+    _entity_context_injected: bool = False  # True once we've injected entity context.
 
     # ── Spiral detection (per-turn) ───────────────────────────────────
     # Tracks consecutive identical tool errors to break LLM retry loops.
@@ -1868,15 +2096,23 @@ def run_conversation_turn(
                 # ── Smart undo: auto-undo before re-executing code ─────
                 # If this is execute_blender_code and the previous call
                 # errored, undo to clean up partial effects before retrying.
-                # NOTE: We do NOT undo on overlap detection — the LLM often
-                # iterates on a successful result (e.g. tweaking a material),
-                # and undoing that is counterproductive.
+                # On successful overlap (same operations detected), inject
+                # context so the LLM knows what already exists.
                 if tool_name == "execute_blender_code" and _prev_code is not None:
                     should_undo = False
                     reason = ""
                     if _prev_code_errored:
                         should_undo = True
                         reason = "previous call errored"
+                    elif _codes_overlap(_prev_code, args.get("code", "")):
+                        # Overlap detected on a successful previous call.
+                        # Inject context instead of auto-undoing.
+                        if not _turn_entities.is_empty():
+                            ctx = _entity_diff_to_context_message(_turn_entities)
+                            if ctx:
+                                print("[🛠️Coworker] run_conversation_turn: overlap detected — injecting entity context")
+                                history.append({"role": "system", "content": ctx})
+                                _entity_context_injected = True
                     if should_undo:
                         print("[🛠️Coworker] run_conversation_turn: smart undo triggered — {:s}".format(reason))
                         # Undo to the state before the previous execute_blender_code.
@@ -1960,6 +2196,34 @@ def run_conversation_turn(
                                 "result = {'status': 'ok', 'message': 'step bookmark pushed'}"
                             )},
                             mcp_port)
+
+                    # ── Entity diff: detect newly created datablocks ───
+                    if not _prev_code_errored and _turn_snapshot is not None:
+                        step_diff = _diff_snapshot(_turn_snapshot, mcp_port)
+                        if step_diff is not None and not step_diff.is_empty():
+                            # Merge into running total.
+                            _turn_entities.merge(step_diff)
+                            # Update the baseline snapshot so the next diff
+                            # only catches NEW entities (not cumulative).
+                            fresh_raw = _call_mcp_tool_sync(
+                                "execute_blender_code",
+                                {"code": _EntitySnapshot._snapshot_code()},
+                                mcp_port,
+                            )
+                            try:
+                                fresh_data = json.loads(fresh_raw)
+                                if fresh_data.get("status") == "ok":
+                                    _turn_snapshot = _EntitySnapshot.from_dict(
+                                        fresh_data.get("result", {}))
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                            # Inject context message about what was created.
+                            ctx = _entity_diff_to_context_message(_turn_entities)
+                            if ctx and not _entity_context_injected:
+                                print("[🛠️Coworker] run_conversation_turn: entity context injected — {:s}".format(
+                                    _turn_entities.summary()))
+                                history.append({"role": "system", "content": ctx})
+                                _entity_context_injected = True
 
                     # ── Save to text editor memory bank ────────────────
                     if not _prev_code_errored:

@@ -43,3 +43,10 @@ Only fall back to raw code for:
 
 - `get_operation_history(count=N)` — Check recent tool calls to avoid repeating failed operations.
   Use this before attempting any destructive change.
+
+## Entity Tracking
+
+After each `execute_blender_code` call, the system snapshots the scene and detects
+newly created datablocks (objects, materials, node groups, etc.). A context message
+is injected into the conversation listing what you've created so far this turn.
+Use this information to modify existing entities instead of creating duplicates.

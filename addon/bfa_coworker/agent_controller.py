@@ -1804,6 +1804,25 @@ def run_conversation_turn(
                     _prev_code = args.get("code", "")
                     _prev_code_errored = '"status": "error"' in result_text
 
+                    # ── Save to text editor memory bank ────────────────
+                    if not _prev_code_errored:
+                        try:
+                            import bpy as _bpy  # pylint: disable=import-error
+                            prefs = _bpy.context.preferences.addons[__package__].preferences
+                            if getattr(prefs, "save_code_to_text_editor", True):
+                                from datetime import datetime as _datetime
+                                ts = _datetime.now().strftime("%H-%M-%S")
+                                name = "Coworker_{:s}".format(ts)
+                                # Remove old text block with same name if it exists.
+                                existing = _bpy.data.texts.get(name)
+                                if existing is not None:
+                                    _bpy.data.texts.remove(existing)
+                                text_block = _bpy.data.texts.new(name)
+                                text_block.write(_prev_code)
+                                print("[🛠️Coworker] run_conversation_turn: saved code to text editor '{:s}'".format(name))
+                        except Exception:
+                            pass  # Best-effort; don't break the agent loop.
+
                 # Build a human-readable summary for the UI.
                 result_summary = _tool_result_summary(result_text)
 

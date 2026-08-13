@@ -196,13 +196,13 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
     # Tests object creation, collections, materials, lighting, camera
     "scene_build": [
         (1, "Ground",
-         "I'm setting up a scene. First, create a round ground plane — "
-         "add a cylinder, scale it wide and flat like a stage floor. "
+         "I'm setting up a scene. First, create a rounded ground — "
+         "like a stage floor or backdrop. "
          "Name it \"Ground\"."),
         (2, "Props",
-         "Now scatter some objects on the ground: add a few cubes, "
-         "spheres, and cylinders. Arrange them in a loose circle "
-         "around the center. Vary their sizes so they look interesting."),
+         "Now scatter some random objects on the ground: add a few cubes, "
+         "spheres, and cylinders. Arrange them in a loose circle like toys "
+         "around the center. Vary their sizes and shapes so they look interesting."),
         (3, "Collections",
          "Organize things into collections. Create three collections "
          "with color tags: \"Props\" (blue), \"Ground\" (green), and "
@@ -226,26 +226,27 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
     "animation": [
         (1, "Ball",
          "Create a sphere at the origin, name it \"Bouncing Ball\". "
-         "Give it a shiny red rubber material with smooth shading."),
+         "Give it a shiny red rubber material with smooth shading and a bit of SSS."),
         (2, "Floor",
-         "Add floor below the ball as a floor — position it "
-         "just under the ball and scale it wide enoguh for the animation. Give it a simple "
-         "floor material."),
+         "Add floor below the ball — position it "
+         "just under the ball and scale it wide enoguh for the animation. "
+         "Give it a simple tiled floor material (like a gym floor) and name it \"Floor\"."),
         (3, "Bounce Keys",
          "Animate the ball bouncing up and down. "
          "It starts on the floor, jumps up high, comes back down, "
          "then does a few smaller bounces that settle back to the "
          "floor. Make the whole animation about 4 seconds long at "
-         "30 fps."),
+         "30 fps. Try make the hit on the ground feel solid and the bounces feel natural."),
         (4, "Squash & Stretch",
          "Add squash and stretch to the bounce. When the ball hits "
          "the floor it should flatten (squash), and when it's in the "
          "air it should elongate slightly (stretch). Keyframe the "
          "scale to match the motion."),
         (5, "Camera Move",
-         "Add a camera that slowly orbits horizontally around the ball as it "
-         "bounces. Keep the camera aimed at the ball the whole time "
-         "so the viewer sees the bounce from a changing angle."),
+         "Add a camera that slowly moves around the ball. "
+         "Keep the camera tracked a little towards the ball the whole time "
+         "so the viewer sees the bounce but follow it. "
+         "Make sure the framing covers the full arc."),
     ],
     # ── Modifier Chain Workflow ─────────────────────────────────────
     # Tests modifier stacking, applying, and mesh operations
@@ -257,13 +258,13 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
          "slightly narrower on the sides to suggest a skull shape. "),
         (2, "Subdivide",
          "Smooth it out, enough levels to look smooth but "
-         "not too dense yet."),
+         "not too dense yet. add in a bit of a squarish shape. Keep it symmetrical."),
         (3, "Mirror",
-         "Mirror it so we only need to "
+         "Chop it in half and mirror it so we only need to "
          "sculpt one side. Make sure clipping is on so the center "
-         "seam stays clean. I want this procedural in half. "),
+         "seam stays clean. Apply a remesh. I want this procedural and in half. "),
         (4, "Apply & Cut",
-         "Apply the Mirror modifier. Then go into Edit Mode and "
+         "Apply the Mirror modifier. Then cut it in half along the center line — "
          "delete the left half. "
          "Mirror again — this way the center "
          "line is perfectly flat and ready for sculpting."),
@@ -281,23 +282,22 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
     # Tests Poly Haven integration, material assignment, world setup
     "assets_materials": [
         (1, "World",
-         "Download a sunset HDRI from Poly Haven and set it as "
-         "the world environment. Asset: belfast_sunset, type: hdris."),
+         "Download a sunset HDRI and set it as "
+         "the world environment."),
         (2, "Objects",
-         "Create a shaderball (a smooth UV sphere) at the origin. "
+         "Create a shaderball at the origin. "
          "Add a plane below it as a display surface."),
         (3, "Texture",
          "Download a brick wall texture from Poly Haven and apply "
-         "it as a material on the plane. Asset: brick_wall_001, "
-         "type: textures."),
+         "it as a material on the plane."),
         (4, "Material",
          "Create a glass material for the shaderball: high "
          "transmission, low roughness, and a realistic IOR "
          "for glass. Name it \"Glass\"."),
         (5, "Render",
-         "Add three-point lighting: a key light from the right, "
+         "Add three-point lighting for EEVEE: a key light from the right, "
          "fill from the left, rim light from behind. Set the camera "
-         "to frame the shaderball nicely. Render at HD resolution."),
+         "to frame the shaderball nicely. Frame and render at square res."),
     ],
     # ── Baseline Latency (quick sanity — fun scene) ─────────────────
     "baseline": [
@@ -326,7 +326,7 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
          "Place the camera at a low angle looking up at the stones, "
          "framing the circle with the sun behind the pillars. "
          "Use a wide focal length for a dramatic shot. "
-         "Render at HD resolution."),
+         "Frame and render at square resolution."),
     ],
     # ── Error Handling (ambiguous prompts) ──────────────────────────
     "error_handling": [

@@ -239,7 +239,19 @@ def _execute_code(
     }
     with CaptureOutput() as captured, WeakSandboxForLLM():
         try:
+            # Sync depsgraph before executing LLM code. Objects created in
+            # a previous call may have stale layer-collection data, and
+            # accessing properties like obj.users_collection can trigger
+            # a null-pointer dereference (EXCEPTION_ACCESS_VIOLATION in
+            # pyrna_struct_CreatePyObject / layer_collection_sync).
+            try:
+                import bpy as _bpy_dg  # pylint: disable=import-error
+                _bpy_dg.context.view_layer.update()
+            except Exception:
+                pass  # Best-effort; view_layer may not be available.
+
             exec(code, namespace)
+
             # Force a depsgraph update after successful code execution.
             # Without this, creating many objects in a single call can leave
             # the depsgraph in an inconsistent state, causing a hard crash

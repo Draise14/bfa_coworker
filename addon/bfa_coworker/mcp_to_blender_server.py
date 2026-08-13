@@ -276,6 +276,13 @@ def _execute_code(
                     "    except AttributeError:\n"
                     "        pass  # Socket doesn't exist"
                 )
+            if "Context missing active object" in tb_str or "Context missing object" in tb_str:
+                tb_str += (
+                    "\n\nHINT: The scene has no active object. "
+                    "Many operators (mode_set, transform, etc.) require an active object. "
+                    "Create an object first with `bpy.ops.mesh.primitive_cube_add()` or "
+                    "check `bpy.context.active_object` before calling mode-dependent operators."
+                )
             response: dict[str, object] = {"status": "error", "message": tb_str}
             if captured.stdout:
                 response["stdout"] = captured.stdout

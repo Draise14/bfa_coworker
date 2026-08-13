@@ -1471,6 +1471,60 @@ def _tool_result_summary(result_text: str, max_len: int = 150) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Spiral detection helpers — break repeated error loops
+
+def _extract_error_signature(result_text: str) -> str:
+    """Extract a normalized error signature from a tool result.
+
+    Returns a canonical string like ``"RuntimeError: Context missing active object"``
+    that can be compared across different code attempts (ignoring line numbers).
+    Returns empty string if the result is not an error.
+    """
+    if '"status": "error"' not in result_text:
+        return ""
+    import re
+    m = re.search(r'"message":\s*"([^"]*(?:\\.[^"]*)*)"', result_text, re.DOTALL)
+    if not m:
+        return ""
+    raw = m.group(1).replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+    lines = raw.strip().splitlines()
+    for line in reversed(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("Traceback") or stripped.startswith("["):
+            continue
+        if stripped.startswith("File"):
+            continue
+        sig = stripped.replace("[Traceback truncated to last 3 frames]", "").strip()
+        return sig
+    return ""
+
+
+def _spiral_corrective_message(error_sig: str) -> str:
+    """Return a corrective user message based on the repeated error signature."""
+    sig_lower = error_sig.lower()
+    if "context missing active object" in sig_lower or "context missing object" in sig_lower:
+        return (
+            "[System: You keep getting 'Context missing active object'. "
+            "The scene is empty \u2014 there are no objects to operate on. "
+            "Create an object first (e.g. bpy.ops.mesh.primitive_cube_add()) "
+            "before calling mode-dependent operators.]"
+        )
+    if "context missing" in sig_lower:
+        return (
+            "[System: You keep getting a 'Context missing' error. "
+            "Check that the required context (active object, selected objects, etc.) "
+            "exists before calling this operator.]"
+        )
+    return (
+        "[System: You've hit the same error multiple times in a row. "
+        "Stop and reconsider your approach. Read the error message carefully "
+        "and try a different strategy.]"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Smart undo helpers — detect code iteration and auto-undo duplicates
 
 def _extract_code_operations(code: str) -> set[str]:
@@ -1566,12 +1620,33 @@ def run_conversation_turn(
 
     history.append({"role": "user", "content": user_message})
 
+    # ── Pre-flight empty-scene check ──────────────────────────────────
+    # Small local models often call mode-dependent operators (mode_set, etc.)
+    # on an empty scene, which fails with "Context missing active object".
+    # Warn the LLM upfront so it creates objects first.
+    try:
+        import bpy as _bpy  # pylint: disable=import-error
+        if len(_bpy.data.objects) == 0:
+            _empty_note = (
+                "[Note: The Blender scene is currently empty \u2014 no objects exist. "
+                "You must create objects before using mode-dependent operators "
+                "like bpy.ops.object.mode_set().]"
+            )
+            history.append({"role": "user", "content": _empty_note})
+            print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: empty scene detected, injected pre-flight note")
+    except Exception:
+        pass  # Best-effort; don't break the agent loop.
+
     # ── Smart undo tracking (per-turn) ────────────────────────────────
     # Tracks the last execute_blender_code call to detect iteration and
     # auto-undo duplicates. Reset at the start of each turn.
     _prev_code: str | None = None
     _prev_code_errored: bool = False
     _undo_pushed: bool = False  # True once we've pushed the first undo state.
+
+    # ── Spiral detection (per-turn) ───────────────────────────────────
+    # Tracks consecutive identical tool errors to break LLM retry loops.
+    _consecutive_errors: list[str] = []
 
     # In Ask mode, skip tool listing and execution entirely.
     if chat_mode == "ASK":
@@ -1866,6 +1941,31 @@ def run_conversation_turn(
                     "content": truncated,
                     "summary": result_summary,
                 })
+
+                # ── Spiral detection: break repeated error loops ──────
+                if tool_name == "execute_blender_code":
+                    error_sig = _extract_error_signature(truncated)
+                    if error_sig:
+                        if _consecutive_errors and error_sig != _consecutive_errors[-1]:
+                            _consecutive_errors.clear()
+                        _consecutive_errors.append(error_sig)
+                        if len(_consecutive_errors) >= 3:
+                            print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: spiral detected \u2014 "
+                                  "same error 3\u00d7 in a row: {:s}".format(error_sig))
+                            # Truncate: remove the last 3 assistant+tool message pairs.
+                            removed = 0
+                            for i in range(len(history) - 1, -1, -1):
+                                if removed >= 3:
+                                    break
+                                if history[i].get("role") == "assistant" and history[i].get("tool_calls"):
+                                    del history[i:]
+                                    removed += 1
+                            print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: truncated {:d} failed attempt(s) from history".format(removed))
+                            corrective = _spiral_corrective_message(error_sig)
+                            history.append({"role": "user", "content": corrective})
+                            _consecutive_errors.clear()
+                    else:
+                        _consecutive_errors.clear()
 
             # After processing tool calls, ask the LLM for a final text response.
             # We send ONE more request without looping. If the model decides to

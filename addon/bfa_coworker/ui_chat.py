@@ -105,6 +105,7 @@ def _draw_reasoning(
     label: str = "Thinking",
     is_thinking: bool = False,
     thinking_dots: int = 0,
+    message_index: int = -1,
 ) -> None:
     """Draw reasoning (chain-of-thought) content in a collapsible panel.
 
@@ -133,9 +134,12 @@ def _draw_reasoning(
     # Outer box for the reasoning section.
     outer = layout.box()
 
-    # Row with thinking label.
+    # Row with thinking label and copy button.
     row = outer.row()
     row.label(text="{:s}:".format(display_label), icon=icon)
+    if message_index >= 0:
+        op = row.operator("bfacw.copy_message", text="", icon='COPYDOWN')
+        op.message_index = message_index
 
     # Preview of first 3 lines.
     for line in preview_lines:
@@ -181,6 +185,7 @@ def _draw_tool_inline(
     tool_name: str,
     display: str,
     is_error: bool,
+    message_index: int = -1,
 ) -> None:
     """Draw a tool result as a sub-box inside the agent's message box."""
     tool_box = layout.box()
@@ -189,6 +194,9 @@ def _draw_tool_inline(
         text="\u2699 {:s}".format(tool_name),
         icon='CANCEL' if is_error else 'TOOL_SETTINGS',
     )
+    if message_index >= 0:
+        op = row.operator("bfacw.copy_message", text="", icon='COPYDOWN')
+        op.message_index = message_index
     _draw_multiline(tool_box, display)
 
 
@@ -301,7 +309,7 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
                 agent_controller.run_conversation_turn(
                     user_message=message,
                     on_text=None,
-                    on_reasoning=lambda r: _update_streaming(context, r),
+                    on_reasoning=lambda r: _update_streaming(r),
                     on_status=lambda s: _update_status(s),
                     llm_url=llm_url or None,
                     api_key=api_key or None,
@@ -314,15 +322,15 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             finally:
                 _save_chat_history()
                 _update_status("Idle")
-                _redraw_areas(context)
+                _redraw_areas_safe()
 
         def _update_status(text: str) -> None:
             props.chat_status = text
-            _redraw_areas(context)
+            _redraw_areas_safe()
 
-        def _update_streaming(ctx: bpy.types.Context, text: str) -> None:
+        def _update_streaming(text: str) -> None:
             """Called when reasoning or streaming text arrives — refresh UI."""
-            _redraw_areas(ctx)
+            _redraw_areas_safe()
 
         thread = threading.Thread(target=_do_turn, daemon=True)
         thread.start()
@@ -331,16 +339,18 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
 
 
 class BFACW_OT_chat_clear(Operator):  # type: ignore[misc]
-    """Clear the conversation history."""
+    """Clear the conversation history and start a fresh thread."""
     bl_idname = "bfacw.chat_clear"
-    bl_label = "Clear"
-    bl_description = "Clear the conversation history"
+    bl_label = "New Thread"
+    bl_description = "Clear conversation history and start a fresh thread (system prompt stays)"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         agent_controller._agent_state.conversation_history.clear()
         agent_controller._agent_state.streaming_text = ""
         agent_controller._agent_state.reasoning_text = ""
         agent_controller._agent_state.thinking_dots = 0
+        # Clear cached system prompt so project rules are reloaded on next turn.
+        agent_controller._clear_system_prompt_cache()
         _save_chat_history()
         _redraw_areas(context)
         return {"FINISHED"}
@@ -359,6 +369,52 @@ class BFACW_OT_chat_stop(Operator):  # type: ignore[misc]
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
         props.chat_status = "Stopped"
         _redraw_areas(context)
+        return {"FINISHED"}
+
+
+class BFACW_OT_copy_message(Operator):  # type: ignore[misc]
+    """Copy a message from the conversation history to the clipboard."""
+    bl_idname = "bfacw.copy_message"
+    bl_label = "Copy Message"
+    bl_description = "Copy this message\'s content to the clipboard"
+
+    message_index: bpy.props.IntProperty(  # type: ignore[valid-type]
+        name="Message Index",
+        description="Index into conversation_history",
+        default=-1,
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        history = agent_controller._agent_state.conversation_history
+        if self.message_index < 0 or self.message_index >= len(history):
+            self.report({"ERROR"}, "Message not found (stale index)")
+            return {"CANCELLED"}
+        msg = history[self.message_index]
+        role = msg.get("role", "")
+        content = msg.get("content", "") or ""
+
+        # Build clipboard text with context.
+        parts = []
+        if role == "tool":
+            name = msg.get("name", "")
+            summary = msg.get("summary", "")
+            if name:
+                parts.append("[Tool: {:s}]".format(name))
+            if summary and summary != content:
+                parts.append(summary)
+            if content:
+                parts.append("--- Full output ---")
+                parts.append(content)
+        elif role == "reasoning":
+            label = msg.get("label", "Thinking")
+            parts.append("[{:s}]".format(label))
+            parts.append(content)
+        else:
+            if content:
+                parts.append(content)
+
+        context.window_manager.clipboard = "\n\n".join(parts)
+        self.report({"INFO"}, "Message copied to clipboard")
         return {"FINISHED"}
 
 
@@ -897,7 +953,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 row.operator("bfacw.chat_stop", icon="PAUSE", text="Stop")
             else:
                 row.operator("bfacw.chat_send", icon="PLAY", text="Send")
-            row.operator("bfacw.chat_clear", icon="X", text="Clear")
+            row.operator("bfacw.chat_clear", icon="X", text="New Thread")
 
         layout.separator()
 
@@ -951,6 +1007,8 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     msg_box = box.box()
                     row = msg_box.row()
                     row.label(text="You:", icon='USER')
+                    op = row.operator("bfacw.copy_message", text="", icon='COPYDOWN')
+                    op.message_index = history.index(user_msg)
                     _draw_multiline(msg_box, user_msg.get("content", ""))
 
                 # Draw reasoning (before assistant, since it precedes it).
@@ -961,6 +1019,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         r_msg.get("label", "Thinking"),
                         is_thinking=state.is_thinking,
                         thinking_dots=state.thinking_dots,
+                        message_index=history.index(r_msg),
                     )
 
                 # Draw assistant message with tool sub-boxes inside.
@@ -972,6 +1031,8 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         row.label(text="Agent (running tools...):", icon='CONSOLE')
                     else:
                         row.label(text="Agent:", icon='CONSOLE')
+                    op = row.operator("bfacw.copy_message", text="", icon='COPYDOWN')
+                    op.message_index = history.index(assistant_msg)
                     content = assistant_msg.get("content", "")
                     if content:
                         _draw_multiline(a_box, content)
@@ -987,7 +1048,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         display = t_summary if t_summary else (t_content or "")
                         if not t_summary and len(display) > 200:
                             display = display[:200] + "..."
-                        _draw_tool_inline(a_box, t_name, display, is_error)
+                        _draw_tool_inline(a_box, t_name, display, is_error, message_index=history.index(t_msg))
                 elif tool_msgs:
                     # Orphaned tool messages (no assistant) — draw directly.
                     for t_msg in tool_msgs:
@@ -1001,7 +1062,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         display = t_summary if t_summary else (t_content or "")
                         if not t_summary and len(display) > 200:
                             display = display[:200] + "..."
-                        _draw_tool_inline(box, t_name, display, is_error)
+                        _draw_tool_inline(box, t_name, display, is_error, message_index=history.index(t_msg))
 
                 box.separator()
         else:
@@ -1068,7 +1129,7 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
                 row.operator("bfacw.chat_stop", icon="PAUSE", text="Stop")
             else:
                 row.operator("bfacw.chat_send", icon="PLAY", text="Send")
-            row.operator("bfacw.chat_clear", icon="X", text="Clear")
+            row.operator("bfacw.chat_clear", icon="X", text="New Thread")
         else:
             layout.label(text="Chat handled by external MCP client.", icon='INFO')
 
@@ -1104,6 +1165,20 @@ def _redraw_areas(context: bpy.types.Context | None) -> None:
         context.area.tag_redraw()
 
 
+def _redraw_areas_safe() -> None:
+    """Defer a panel redraw to the main thread via a timer.
+
+    Safe to call from background threads where the operator's
+    ``context`` may have been invalidated after ``execute()``
+    returned.  Uses ``bpy.app.timers`` to access ``bpy.context``
+    on the main thread where it is always valid.
+    """
+    bpy.app.timers.register(
+        lambda: _redraw_areas(bpy.context),
+        first_interval=0.0,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Registration helpers
 
@@ -1118,6 +1193,7 @@ _classes = (
     BFACW_OT_reload_rules,
     BFACW_OT_agent_start,
     BFACW_OT_agent_stop,
+    BFACW_OT_copy_message,
 
     BFACW_PT_chat_panel,
     BFACW_PT_chat_text_editor,

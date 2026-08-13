@@ -570,6 +570,18 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         max=65535,
     )
 
+    # ── Skills (Tier 6) ────────────────────────────────────────────────
+
+    custom_skills_text: StringProperty(  # type: ignore[valid-type]
+        name="Custom Skills",
+        description=(
+            "Extra instructions or skills injected into every conversation.\n"
+            "Use for project-specific conventions, tool preferences,\n"
+            "or custom workflow rules. Markdown format supported."
+        ),
+        default="",
+    )
+
     # ── BYOK Provider Profiles (Tier 2) ─────────────────────────────────
 
     saved_providers_json: StringProperty(  # type: ignore[valid-type]
@@ -613,13 +625,67 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         row = diag_box.row()
         row.operator("bfacw.check_ports", icon="FILE_REFRESH", text="Check Ports")
         row.operator("bfacw.ping_agent", icon="FILE_REFRESH", text="Diagnose")
-        # ── Benchmark tests ──────────────────────────────────────────
-        diag_box.label(text="Benchmarks (send test prompts to agent)", icon='RENDER_RESULT')
-        bench_row = diag_box.row(align=True)
-        bench_row.operator("bfacw.benchmark_objects", icon="MESH_CUBE", text="Objects")
-        bench_row.operator("bfacw.benchmark_scene", icon="SCENE_DATA", text="Scene")
-        bench_row.operator("bfacw.benchmark_animation", icon="ANIM", text="Animation")
-        bench_row.operator("bfacw.benchmark_collections", icon="OUTLINER_COLLECTION", text="Collections")
+        # ── Multi-Step Test Suites ────────────────────────────────────
+        diag_box.label(text="Test Suites (multi-step artist workflows)", icon='RENDER_RESULT')
+        diag_box.label(
+            text="Click any step to run it (steps build on each other). "
+                 "Use Reset to start over.",
+            icon='BLANK1',
+        )
+
+        _SUITE_META = [
+            ("scene_build",   "Scene Build",   'MESH_CUBE',           6),
+            ("animation",     "Animation",     'ANIM',                5),
+            ("modifiers",     "Modifiers",     'MODIFIER',            6),
+            ("assets_materials", "Assets+Mat", 'TEXTURE',             5),
+            ("baseline",      "Baseline",      'CONSOLE',             6),
+            ("error_handling","Errors",        'ERROR',               3),
+        ]
+
+        from . import operators_agent as _oa_suite
+
+        # Grid layout: 3 columns.
+        grid = diag_box.grid_flow(row_major=True, columns=3, even_columns=True, even_rows=True)
+
+        for suite_key, suite_label, suite_icon, total_steps in _SUITE_META:
+            suite_box = grid.box()
+            suite_header = suite_box.row()
+            suite_header.label(text=suite_label, icon=suite_icon)
+
+            # Show progress.
+            step_idx = _oa_suite._test_suite_progress.get(suite_key, 0)
+            suite_header.label(
+                text="Step {:d}/{:d}".format(step_idx, total_steps),
+                icon='INFO',
+            )
+
+            # Step buttons in a column.
+            suite = _oa_suite._TEST_SUITES.get(suite_key, [])
+            for s_num, s_label, _ in suite:
+                step_row = suite_box.row(align=True)
+                is_done = step_idx > s_num
+                is_current = step_idx == s_num
+                if is_done:
+                    step_icon = 'CHECKBOX_HLT'
+                elif is_current:
+                    step_icon = 'RADIOBUT_ON'
+                else:
+                    step_icon = 'RADIOBUT_OFF'
+                op = step_row.operator(
+                    "bfacw.test_step",
+                    text="{:d}. {:s}".format(s_num, s_label),
+                    icon=step_icon,
+                )
+                op.suite = suite_key
+
+            # Reset button at the bottom of each suite.
+            reset_row = suite_box.row(align=True)
+            reset_op = reset_row.operator(
+                "bfacw.test_step_reset",
+                icon='LOOP_BACK',
+                text="Reset",
+            )
+            reset_op.suite = suite_key
         # Show check_ports results inline.
         from . import operators_agent as _oa_check
         check_result = getattr(_oa_check._BFACW_OT_check_ports, "_result", None)
@@ -1100,6 +1166,45 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         row.prop(self, "bridge_port")
         row.prop(self, "mcp_port")
         row.prop(self, "llm_port")
+
+        # ── Skills ─────────────────────────────────────────────────────
+        skills_box = layout.box()
+        skills_box.label(text="Skills", icon='TEXT')
+        try:
+            import bpy  # pylint: disable=import-error
+            version_str = ".".join(str(v) for v in bpy.app.version[:3])
+            skills_box.label(
+                text="Blender {:s}".format(version_str),
+                icon='BLENDER',
+            )
+        except Exception:
+            pass
+        # Show loaded skill files.
+        try:
+            from . import skills as _skills_mod  # pylint: disable=import-error
+            loaded = _skills_mod.list_loaded_skills()
+            if loaded:
+                col = skills_box.column(align=True)
+                col.label(text="Loaded Skills:", icon='CHECKMARK')
+                for name in loaded:
+                    col.label(text="  \u2022 {:s}".format(name))
+            else:
+                skills_box.label(text="No skills loaded", icon='INFO')
+        except Exception:
+            skills_box.label(text="Skills module not available", icon='ERROR')
+        row = skills_box.row()
+        row.operator("bfacw.reload_skills", icon="FILE_REFRESH", text="Reload Skills")
+
+        # ── Custom Skills ──────────────────────────────────────────────
+        custom_box = layout.box()
+        custom_box.label(text="Custom Skills", icon='GREASEPENCIL')
+        custom_box.label(
+            text="Extra instructions injected into every conversation. "
+                 "Use for project-specific conventions, tool preferences, "
+                 "or workflow rules. Markdown format supported.",
+            icon='INFO',
+        )
+        custom_box.prop(self, "custom_skills_text")
 
 
 # ---------------------------------------------------------------------------

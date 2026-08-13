@@ -250,6 +250,50 @@ All settings are in **Edit → Preferences → Add-ons → Coworker**.
 
 ---
 
+## Test Suites (QA / Benchmarking)
+
+The add-on includes built-in multi-step test suites accessible from the
+**Diagnostics** panel in preferences (visible when `BFACW_DEBUG=True`).
+Each suite simulates a real artist workflow — steps must be clicked in
+order, and each builds on the previous one.
+
+### Available Suites
+
+| Suite | Steps | What It Tests |
+|---|---|---|
+| **Scene Build** | 6 | Ground plane → scatter props → colored collections → materials (metallic/rough/glass) → lighting → camera + render |
+| **Animation** | 5 | Bouncing ball → floor → keyframed bounce → squash & stretch → orbiting camera |
+| **Modifiers** | 6 | Sculpt-ready head: UV sphere → Subdiv → Mirror → cut & re-mirror → shape jaw/chin → Multires |
+| **Assets+Mat** | 5 | Poly Haven HDRI download, shaderball creation, texture download, glass material, three-point lighting + render |
+| **Baseline** | 6 | Mini Stonehenge: stone ring → lintels → ground → stone material → dramatic lighting → camera + render |
+| **Errors** | 3 | Vague prompt ("make it nicer"), impossible request, contradiction — tests graceful failure |
+
+### How to Run
+
+1. Enable **BFACW_DEBUG** in `shared.py` (or set the env var).
+2. Open **Edit → Preferences → Add-ons → Coworker**.
+3. Scroll to the **Diagnostics** section at the bottom.
+4. Pick a suite and click **Step 1** — the agent processes it.
+5. Once it completes, **Step 2** becomes clickable, and so on.
+6. Use **Reset** to restart a suite from step 1.
+
+### What to Look For
+
+- **Correctness** — Does the result match what you asked for?
+- **Latency** — How long does each step take from click to completion?
+- **Chaining** — Does the agent remember context from previous steps?
+- **Error handling** — Does it fail gracefully on bad prompts?
+- **Model comparison** — Run the same suite on different models (e.g.
+  Mistral 24B vs. Gemma 4 26B) and compare results.
+
+### Logging
+
+All test steps are logged to the Blender console with the prefix
+`[🛠️Coworker] test suite '<name>':`. Check the console for timing,
+status updates, and any errors.
+
+---
+
 ## TODO
 
 The following items are tracked in [CHANGELOG.md](CHANGELOG.md):

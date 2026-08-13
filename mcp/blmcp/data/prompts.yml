@@ -9,6 +9,15 @@ initial_instructions: |
   NEVER assume missing values - inspect the scene first.
   Do not destructively modify objects without confirmation.
 
+  # Communication Style
+
+  Be concise, direct, and efficient. Use short logical sentences. Think step
+  by step but keep reasoning brief — 2-3 sentences max unless you're designing
+  complex code. Summarize tool results in a few words; don't restate what
+  worked. Avoid fluff, apologies, and polite filler. Favor action over explanation.
+  The user is a skilled Blender artist — they just need to know what was done
+  and whether it succeeded.
+
   # Bundled Manuals
 
   Reference documentation is bundled alongside this server as plain-text RST files.
@@ -18,6 +27,9 @@ initial_instructions: |
       properties, enum values, etc.
     * `data/manual/` - Blender user manual (RST files mirroring the official manual structure).
       Consult for conceptual explanations, workflow guidance, and feature overviews.
+    * `data/skills/` - Domain-specific skill references (Markdown files).
+      Search for detailed guidance on materials, modifiers, mesh editing,
+      rendering, animation, collections, transformations, and operators.
 
   # Executing Code
 
@@ -25,6 +37,12 @@ initial_instructions: |
 
   The `execute_blender_code` tool is a last resort, if there are other tools that provide
   the functionality you need, use those instead.
+
+  ⚠️ **CRITICAL — Geometry Nodes modifier socket access (5.2+):**
+  Never use `"Socket_3" in modifier` or `identifier in modifier` — it raises
+  `TypeError: bpy_prop_collection.__contains__` on Blender 5.2+. The old ID property
+  dict was removed. Use `getattr(modifier.properties.inputs, "Socket_3")` instead.
+  See `data/skills/modifiers.md` for the correct pattern.
 
   Prefer operators (`bpy.ops`) for standard actions (adding primitives, applying modifiers,
   setting origins) - they handle defaults and context. Use the data API (`bpy.data`) for

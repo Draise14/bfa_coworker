@@ -39,10 +39,8 @@ from .operators_agent import (
     _BFACW_OT_open_model_browser,
     _BFACW_OT_ping_agent,
     _BFACW_OT_check_ports,
-    _BFACW_OT_benchmark_objects,
-    _BFACW_OT_benchmark_scene,
-    _BFACW_OT_benchmark_animation,
-    _BFACW_OT_benchmark_collections,
+    _BFACW_OT_test_step,
+    _BFACW_OT_test_step_reset,
     BFACW_OT_copy_mcp_config,
     BFACW_OT_mcp_server_start,
     BFACW_OT_mcp_server_stop,
@@ -51,6 +49,7 @@ from .operators_agent import (
     BFACW_OT_load_provider,
     BFACW_OT_test_polyhaven_hdri,
     BFACW_OT_test_polyhaven_texture,
+    BFACW_OT_reload_skills,
 )
 from .shared import (
     effective_ports,
@@ -81,10 +80,8 @@ _classes = (
     _BFACW_OT_open_model_browser,
     _BFACW_OT_ping_agent,
     _BFACW_OT_check_ports,
-    _BFACW_OT_benchmark_objects,
-    _BFACW_OT_benchmark_scene,
-    _BFACW_OT_benchmark_animation,
-    _BFACW_OT_benchmark_collections,
+    _BFACW_OT_test_step,
+    _BFACW_OT_test_step_reset,
     BFACW_OT_copy_mcp_config,
     BFACW_OT_mcp_server_start,
     BFACW_OT_mcp_server_stop,
@@ -93,6 +90,7 @@ _classes = (
     BFACW_OT_load_provider,
     BFACW_OT_test_polyhaven_hdri,
     BFACW_OT_test_polyhaven_texture,
+    BFACW_OT_reload_skills,
 )
 
 

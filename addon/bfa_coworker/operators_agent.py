@@ -12,10 +12,8 @@ __all__ = (
     "_BFACW_OT_open_model_browser",
     "_BFACW_OT_ping_agent",
     "_BFACW_OT_check_ports",
-    "_BFACW_OT_benchmark_objects",
-    "_BFACW_OT_benchmark_scene",
-    "_BFACW_OT_benchmark_animation",
-    "_BFACW_OT_benchmark_collections",
+    "_BFACW_OT_test_step",
+    "_BFACW_OT_test_step_reset",
     "BFACW_OT_copy_mcp_config",
     "BFACW_OT_mcp_server_start",
     "BFACW_OT_mcp_server_stop",
@@ -186,116 +184,243 @@ class _BFACW_OT_ping_agent(bpy.types.Operator):  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
-# Benchmark operators — test prompts for the MCP agent
+# Multi-Step Test Suites — natural artist workflow sequences
+#
+# Each test suite is a list of (step_number, label, prompt) tuples.
+# Steps are designed to be run in order, building on each other like
+# a real artist would work. The prompts use natural language — as if
+# you're asking a colleague to do something.
 
-_BENCHMARK_PROMPTS = {
-    "objects": (
-        "Create 12 random objects (mix of cubes, spheres, cylinders, cones, toruses) "
-        "distributed in 3 groups around the scene. Assign each group to its own "
-        "collection: \"Group_A\", \"Group_B\", \"Group_C\". Give each collection's "
-        "objects a random color. Position groups at (-5, 3, 0), (5, -2, 2), and "
-        "(0, -5, -3)."
-    ),
-    "scene": (
-        "Set up a scene: add a round ground plane (a flat cylinder scaled wide), "
-        "place 6 stone columns (cylinders) in a circle on the ground. Add a "
-        "sun light and a point light for warm illumination. Place the camera to "
-        "frame the columns from a dramatic low angle. Render at 1920x1080."
-    ),
-    "animation": (
-        "Switch to the Animation workspace. Create a torus at the world origin. "
-        "Animate it with keyframes: frame 1 at origin, frame 30 at (0, 0, 5), "
-        "frame 60 at (5, 0, 5), frame 90 at (5, 0, 0), frame 120 back at origin. "
-        "Make the animation loop seamlessly. Set the timeline range from 1 to 120."
-    ),
-    "collections": (
-        "Create three collections: \"SET\", \"LIT\", \"ANIM\". Assign them the "
-        "correct color tags: SET = blue, LIT = yellow, ANIM = red. Add a cube "
-        "to SET, a point light to LIT, and an empty to ANIM."
-    ),
-    "polyhaven_hdri": (
-        "Use the search_polyhaven_assets tool to find a sunset HDRI, "
-        "then use download_polyhaven_asset to download and apply it "
-        "as the world environment. Asset ID: belfast_sunset, type: hdris."
-    ),
-    "polyhaven_texture": (
-        "Use the search_polyhaven_assets tool to find a brick wall texture, "
-        "then use download_polyhaven_asset to download and apply it "
-        "as a material on the active object. Asset ID: brick_wall_001, type: textures."
-    ),
+_TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
+    # ── Scene Building Workflow ──────────────────────────────────────
+    # Tests object creation, collections, materials, lighting, camera
+    "scene_build": [
+        (1, "Ground",
+         "I'm setting up a scene. First, create a rounded ground — "
+         "like a stage floor or backdrop. "
+         "Name it \"Ground\"."),
+        (2, "Props",
+         "Now scatter some random objects on the ground: add a few cubes, "
+         "spheres, and cylinders. Arrange them in a loose circle like toys "
+         "around the center. Vary their sizes and shapes so they look interesting."),
+        (3, "Collections",
+         "Organize things into collections. Create three collections "
+         "with color tags: \"Props\" (blue), \"Ground\" (green), and "
+         "\"Lighting\" (yellow). Move the ground into Ground, "
+         "all the scattered objects into Props."),
+        (4, "Materials",
+         "Give each object in the Props collection a material. Use a "
+         "mix: some metallic (gold/copper), some rough (stone/concrete), "
+         "and one glass. Name each material after the object."),
+        (5, "Lighting",
+         "Now light the scene. Add a Sun lamp angled from above-right "
+         "for key light, and a warm-colored Point light near the center "
+         "for fill. Put both in the Lighting collection."),
+        (6, "Camera",
+         "Place the camera to frame the whole scene from a slight "
+         "high angle — like a product shot. Use a nice portrait "
+         "focal length. Render at a decent HD resolution."),
+    ],
+    # ── Animation Workflow ──────────────────────────────────────────
+    # Tests keyframes, timeline, motion paths
+    "animation": [
+        (1, "Ball",
+         "Create a sphere at the origin, name it \"Bouncing Ball\". "
+         "Give it a shiny red rubber material with smooth shading and a bit of SSS."),
+        (2, "Floor",
+         "Add floor below the ball — position it "
+         "just under the ball and scale it wide enoguh for the animation. "
+         "Give it a simple tiled floor material (like a gym floor) and name it \"Floor\"."),
+        (3, "Bounce Keys",
+         "Animate the ball bouncing up and down. "
+         "It starts on the floor, jumps up high, comes back down, "
+         "then does a few smaller bounces that settle back to the "
+         "floor. Make the whole animation about 4 seconds long at "
+         "30 fps. Try make the hit on the ground feel solid and the bounces feel natural."),
+        (4, "Squash & Stretch",
+         "Add squash and stretch to the bounce. When the ball hits "
+         "the floor it should flatten (squash), and when it's in the "
+         "air it should elongate slightly (stretch). Keyframe the "
+         "scale to match the motion."),
+        (5, "Camera Move",
+         "Add a camera that slowly moves around the ball. "
+         "Keep the camera tracked a little towards the ball the whole time "
+         "so the viewer sees the bounce but follow it. "
+         "Make sure the framing covers the full arc."),
+    ],
+    # ── Modifier Chain Workflow ─────────────────────────────────────
+    # Tests modifier stacking, applying, and mesh operations
+    # Goal: build a sculpt-ready head base mesh
+    "modifiers": [
+        (1, "Rough Head",
+         "I want to make a head for sculpting. Start with a subdivided cube — "
+         "roughly head-sized. Stretch it a bit taller than wide and "
+         "slightly narrower on the sides to suggest a skull shape. "),
+        (2, "Subdivide",
+         "Smooth it out, enough levels to look smooth but "
+         "not too dense yet. add in a bit of a squarish shape. Keep it symmetrical."),
+        (3, "Mirror",
+         "Chop it in half and mirror it so we only need to "
+         "sculpt one side. Make sure clipping is on so the center "
+         "seam stays clean. Apply a remesh. I want this procedural and in half. "),
+        (4, "Apply & Cut",
+         "Apply the Mirror modifier. Then cut it in half along the center line — "
+         "delete the left half. "
+         "Mirror again — this way the center "
+         "line is perfectly flat and ready for sculpting."),
+        (5, "Jaw & Chin",
+         "Now shape the jawline. In Edit Mode, pull the bottom-front "
+         "vertices forward a bit to suggest a chin. Widen the lower "
+         "sides slightly for the jaw. Keep it symmetrical through "
+         "the Mirror modifier."),
+        (6, "Finalize",
+         "Apply all remaining modifiers. Then add a remesh "
+         "modifier with a nice resolutions so it's ready for "
+         "sculpting. Name it \"Sculpt_Ready_Head\"."),
+    ],
+    # ── Asset & Material Workflow ───────────────────────────────────
+    # Tests Poly Haven integration, material assignment, world setup
+    "assets_materials": [
+        (1, "World",
+         "Download a sunset HDRI and set it as "
+         "the world environment."),
+        (2, "Objects",
+         "Create a shaderball at the origin. "
+         "Add a plane below it as a display surface."),
+        (3, "Texture",
+         "Download a brick wall texture from Poly Haven and apply "
+         "it as a material on the plane."),
+        (4, "Material",
+         "Create a glass material for the shaderball: high "
+         "transmission, low roughness, and a realistic IOR "
+         "for glass. Name it \"Glass\"."),
+        (5, "Render",
+         "Add three-point lighting for EEVEE: a key light from the right, "
+         "fill from the left, rim light from behind. Set the camera "
+         "to frame the shaderball nicely. Frame and render at square res."),
+    ],
+    # ── Baseline Latency (quick sanity — fun scene) ─────────────────
+    "baseline": [
+        (1, "Stone Ring",
+         "Can you make a stonehenge? First, create a ring of stone "
+         "pillars — tall, rough-hewn blocks arranged in a circle "
+         "around the center, evenly spaced. Make them look like "
+         "standing stones. Name them \"Pillar_1\" through \"Pillar_8\"."),
+        (2, "Lintels",
+         "Now add lintels on top of the pillars. For each pair of "
+         "adjacent pillars, create a horizontal beam resting on top. "
+         "Make each one thick enough to look like a solid stone "
+         "crossbeam. Name them \"Lintel_1\" through \"Lintel_8\"."),
+        (3, "Ground",
+         "Add a large flat ground plane beneath the circle — a wide "
+         "flat disc. Give it a grassy green material."),
+        (4, "Material",
+         "Give all the stone pillars and lintels a rough stone "
+         "material: high roughness, low specular, a warm gray color. "
+         "Use a noise texture to add some surface variation."),
+        (5, "Lighting",
+         "Add dramatic lighting: a sun lamp angled low from the east "
+         "(like sunrise) with warm orange tint, and a faint blue fill "
+         "light from the opposite side for contrast."),
+        (6, "Camera",
+         "Place the camera at a low angle looking up at the stones, "
+         "framing the circle with the sun behind the pillars. "
+         "Use a wide focal length for a dramatic shot. "
+         "Frame and render at square resolution."),
+    ],
+    # ── Error Handling (ambiguous prompts) ──────────────────────────
+    "error_handling": [
+        (1, "Vague",
+         "Make it nicer."),
+        (2, "Impossible",
+         "Render a 16K IMAX movie with 10 million polygons."),
+        (3, "Contradiction",
+         "Delete everything but keep all objects."),
+    ],
 }
 
-
-class _BFACW_OT_benchmark_objects(bpy.types.Operator):  # type: ignore[misc]
-    bl_idname = "bfacw.benchmark_objects"
-    bl_label = "Objects"
-    bl_description = "Benchmark: create random objects in colored groups"
-
-    def execute(self, context: bpy.types.Context) -> set[str]:
-        if not get_agent_controller()._agent_state.mcp_server_running:
-            self.report({"ERROR"}, "Agent is not running. Start it from Preferences.")
-            return {"CANCELLED"}
-        _run_benchmark(context, "objects")
-        self.report({"INFO"}, "Benchmark 'objects' started — check console")
-        return {"FINISHED"}
+# Track which step the user is on for each suite.
+# Keyed by suite name, value is the current step index (0-based).
+_test_suite_progress: dict[str, int] = {}
 
 
-class _BFACW_OT_benchmark_scene(bpy.types.Operator):  # type: ignore[misc]
-    bl_idname = "bfacw.benchmark_scene"
-    bl_label = "Scene"
-    bl_description = "Benchmark: setup scene with ground, columns, lighting, camera"
+class _BFACW_OT_test_step(bpy.types.Operator):  # type: ignore[misc]
+    """Run the next step in a multi-step test suite."""
+    bl_idname = "bfacw.test_step"
+    bl_label = "Run Step"
+    bl_description = "Run the next step in this test suite"
+
+    suite: bpy.props.StringProperty(  # type: ignore[valid-type]
+        name="Suite",
+        default="",
+    )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         if not get_agent_controller()._agent_state.mcp_server_running:
             self.report({"ERROR"}, "Agent is not running. Start it from Preferences.")
             return {"CANCELLED"}
-        _run_benchmark(context, "scene")
-        self.report({"INFO"}, "Benchmark 'scene' started — check console")
+
+        suite = _TEST_SUITES.get(self.suite)
+        if not suite:
+            self.report({"ERROR"}, "Unknown test suite '{:s}'".format(self.suite))
+            return {"CANCELLED"}
+
+        # Get current step index.
+        step_idx = _test_suite_progress.get(self.suite, 0)
+        if step_idx >= len(suite):
+            self.report({"INFO"}, "All steps completed! Reset to run again.")
+            return {"FINISHED"}
+
+        step_num, step_label, prompt = suite[step_idx]
+        _run_test_step(context, self.suite, step_num, step_label, prompt)
+
+        # Advance progress.
+        _test_suite_progress[self.suite] = step_idx + 1
+
+        total = len(suite)
+        remaining = total - (step_idx + 1)
+        if remaining == 0:
+            self.report({"INFO"}, "Step {:d}/{:d} '{:s}' done — all finished!".format(
+                step_num, total, step_label))
+        else:
+            self.report({"INFO"}, "Step {:d}/{:d} '{:s}' done — {:d} more to go".format(
+                step_num, total, step_label, remaining))
         return {"FINISHED"}
 
 
-class _BFACW_OT_benchmark_animation(bpy.types.Operator):  # type: ignore[misc]
-    bl_idname = "bfacw.benchmark_animation"
-    bl_label = "Animation"
-    bl_description = "Benchmark: animate a torus with keyframes"
+class _BFACW_OT_test_step_reset(bpy.types.Operator):  # type: ignore[misc]
+    """Reset progress for a test suite so it starts from step 1 again."""
+    bl_idname = "bfacw.test_step_reset"
+    bl_label = "Reset"
+    bl_description = "Reset this test suite back to step 1"
+
+    suite: bpy.props.StringProperty(  # type: ignore[valid-type]
+        name="Suite",
+        default="",
+    )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        if not get_agent_controller()._agent_state.mcp_server_running:
-            self.report({"ERROR"}, "Agent is not running. Start it from Preferences.")
-            return {"CANCELLED"}
-        _run_benchmark(context, "animation")
-        self.report({"INFO"}, "Benchmark 'animation' started — check console")
+        del context
+        _test_suite_progress.pop(self.suite, None)
+        self.report({"INFO"}, "Test suite '{:s}' reset to step 1".format(self.suite))
         return {"FINISHED"}
 
 
-class _BFACW_OT_benchmark_collections(bpy.types.Operator):  # type: ignore[misc]
-    bl_idname = "bfacw.benchmark_collections"
-    bl_label = "Collections"
-    bl_description = "Benchmark: create SET/LIT/ANIM collections with color tags"
-
-    def execute(self, context: bpy.types.Context) -> set[str]:
-        if not get_agent_controller()._agent_state.mcp_server_running:
-            self.report({"ERROR"}, "Agent is not running. Start it from Preferences.")
-            return {"CANCELLED"}
-        _run_benchmark(context, "collections")
-        self.report({"INFO"}, "Benchmark 'collections' started — check console")
-        return {"FINISHED"}
-
-
-def _run_benchmark(context: bpy.types.Context, bench_key: str) -> None:
-    """Run a benchmark prompt through the full agent pipeline in a background thread."""
+def _run_test_step(
+    context: bpy.types.Context,
+    suite_key: str,
+    step_num: int,
+    step_label: str,
+    prompt: str,
+) -> None:
+    """Run a single test step through the full agent pipeline in a background thread."""
     _ac = get_agent_controller()
-
-    prompt = _BENCHMARK_PROMPTS.get(bench_key, "")
-    if not prompt:
-        return
 
     prefs = context.preferences.addons[__package__].preferences
     _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
 
     # Resolve LLM config (same as chat_send).
     llm = get_llm_manager()
-    # Sync prefs to config first.
     from . import ui_chat as _ui_chat
     _ui_chat._sync_prefs_to_config(prefs)
     llm_cfg = llm.get_config()
@@ -307,26 +432,30 @@ def _run_benchmark(context: bpy.types.Context, bench_key: str) -> None:
         api_key = llm_cfg.remote_api_key
         model = llm_cfg.remote_model or None
 
-    print("[🛠️Coworker] benchmark: starting '{:s}' test...".format(bench_key))
-    print("[🛠️Coworker] benchmark: prompt = {:s}".format(prompt))
+    print("[🛠️Coworker] test suite '{:s}': step {:d}/{:s} starting...".format(
+        suite_key, step_num, step_label))
+    print("[🛠️Coworker] test suite '{:s}': prompt = {:s}".format(suite_key, prompt))
 
-    def _do_benchmark():
+    def _do_step():
         try:
             _ac.run_conversation_turn(
                 user_message=prompt,
                 on_text=None,
-                on_status=lambda s: print("[🛠️Coworker] benchmark: status = {:s}".format(s)),
+                on_status=lambda s: print("[🛠️Coworker] test suite '{:s}': status = {:s}".format(
+                    suite_key, s)),
                 llm_url=llm_url or None,
                 api_key=api_key or None,
                 model=model,
                 mcp_port=_mcp_port,
             )
-            print("[🛠️Coworker] benchmark: '{:s}' completed".format(bench_key))
+            print("[🛠️Coworker] test suite '{:s}': step {:d}/{:s} completed".format(
+                suite_key, step_num, step_label))
         except Exception as ex:
-            print("[🛠️Coworker] benchmark: '{:s}' FAILED — {:s}".format(bench_key, str(ex)))
+            print("[🛠️Coworker] test suite '{:s}': step {:d}/{:s} FAILED — {:s}".format(
+                suite_key, step_num, step_label, str(ex)))
             _ac._agent_state.error = str(ex)
 
-    thread = threading.Thread(target=_do_benchmark, daemon=True)
+    thread = threading.Thread(target=_do_step, daemon=True)
     thread.start()
 
 
@@ -515,7 +644,9 @@ class BFACW_OT_test_polyhaven_hdri(bpy.types.Operator):  # type: ignore[misc]
         # Use the MCP tool via agent controller if running, else direct download.
         if get_agent_controller()._agent_state.mcp_server_running:
             self.report({"INFO"}, "Sending Poly Haven HDRI download request to agent...")
-            _run_benchmark(context, "polyhaven_hdri")
+            _run_test_step(context, "polyhaven", 1, "HDRI",
+                           "Download a sunset HDRI from Poly Haven and set it as "
+                           "the world environment. Asset: belfast_sunset, type: hdris.")
             return {"FINISHED"}
 
         # Direct download fallback.
@@ -545,7 +676,10 @@ class BFACW_OT_test_polyhaven_texture(bpy.types.Operator):  # type: ignore[misc]
     def execute(self, context: bpy.types.Context) -> set[str]:
         if get_agent_controller()._agent_state.mcp_server_running:
             self.report({"INFO"}, "Sending Poly Haven texture download request to agent...")
-            _run_benchmark(context, "polyhaven_texture")
+            _run_test_step(context, "polyhaven", 2, "Texture",
+                           "Download a brick wall texture from Poly Haven and apply "
+                           "it as a material on the active object. "
+                           "Asset: brick_wall_001, type: textures.")
             return {"FINISHED"}
 
         self.report({"INFO"}, "Agent not running. Starting direct download...")
@@ -562,4 +696,21 @@ class BFACW_OT_test_polyhaven_texture(bpy.types.Operator):  # type: ignore[misc]
                 print("[🛠️Coworker] Poly Haven test texture failed: {:s}".format(str(ex)))
         thread = threading.Thread(target=_do_download, daemon=True)
         thread.start()
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# Reload Skills
+
+class BFACW_OT_reload_skills(bpy.types.Operator):  # type: ignore[misc]
+    """Reload the built-in skills and system prompt cache."""
+    bl_idname = "bfacw.reload_skills"
+    bl_label = "Reload Skills"
+    bl_description = "Reload built-in skills and clear the system prompt cache"
+    bl_options = {'INTERNAL'}
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        from . import agent_controller as _ac
+        _ac._clear_system_prompt_cache()
+        self.report({"INFO"}, "Skills and system prompt cache cleared")
         return {"FINISHED"}

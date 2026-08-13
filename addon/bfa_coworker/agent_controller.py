@@ -30,6 +30,7 @@ import asyncio
 import concurrent.futures
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -1469,6 +1470,40 @@ def _tool_result_summary(result_text: str, max_len: int = 150) -> str:
     return result_text[:max_len] + "..."
 
 
+# ---------------------------------------------------------------------------
+# Smart undo helpers — detect code iteration and auto-undo duplicates
+
+def _extract_code_operations(code: str) -> set[str]:
+    """Extract operation signatures from a code string for overlap detection.
+
+    Returns a set of strings representing operations: ``bpy.ops`` calls,
+    ``bpy.data.*.new/remove`` calls, and quoted name literals.
+    """
+    ops: set[str] = set()
+    # Extract bpy.ops.* calls (e.g. bpy.ops.mesh.primitive_cube_add).
+    for m in re.finditer(r"bpy\.ops\.([a-z_]+)\.([a-z_]+)", code):
+        ops.add("op:{:s}.{:s}".format(m.group(1), m.group(2)))
+    # Extract bpy.data.*.new() / .remove() / .load() calls.
+    for m in re.finditer(r"bpy\.data\.([a-z_]+)\.(new|remove|load)", code):
+        ops.add("data:{:s}.{:s}".format(m.group(1), m.group(2)))
+    # Extract quoted string literals that look like names (2+ chars, no spaces).
+    for m in re.finditer(r'"([A-Za-z_][A-Za-z0-9_.]{1,40})"', code):
+        ops.add("name:{:s}".format(m.group(1)))
+    return ops
+
+
+def _codes_overlap(prev_code: str, new_code: str) -> bool:
+    """Return ``True`` if two code strings share operations (indicating iteration).
+
+    Compares extracted operations from both code strings. If they share
+    any ``bpy.ops`` calls, ``bpy.data.new/remove`` calls, or name literals,
+    the new code is likely iterating on the same task as the previous code.
+    """
+    prev_ops = _extract_code_operations(prev_code)
+    new_ops = _extract_code_operations(new_code)
+    return bool(prev_ops & new_ops)
+
+
 def run_conversation_turn(
     user_message: str,
     on_text: Callable[[str], None] | None = None,
@@ -1504,6 +1539,13 @@ def run_conversation_turn(
             len(system_text)))
 
     history.append({"role": "user", "content": user_message})
+
+    # ── Smart undo tracking (per-turn) ────────────────────────────────
+    # Tracks the last execute_blender_code call to detect iteration and
+    # auto-undo duplicates. Reset at the start of each turn.
+    _prev_code: str | None = None
+    _prev_code_errored: bool = False
+    _undo_pushed: bool = False  # True once we've pushed the first undo state.
 
     # In Ask mode, skip tool listing and execution entirely.
     if chat_mode == "ASK":
@@ -1722,8 +1764,45 @@ def run_conversation_turn(
                 if on_status:
                     on_status(_friendly_tool_status(tool_name))
 
+                # ── Smart undo: auto-undo before re-executing code ─────
+                # If this is execute_blender_code and we've already run it
+                # this turn, check whether the new code is iterating on the
+                # same task (overlapping operations) or retrying after an
+                # error. If so, undo the previous attempt first.
+                if tool_name == "execute_blender_code" and _prev_code is not None:
+                    new_code = args.get("code", "")
+                    should_undo = False
+                    reason = ""
+                    if _prev_code_errored:
+                        should_undo = True
+                        reason = "previous call errored"
+                    elif _codes_overlap(_prev_code, new_code):
+                        should_undo = True
+                        reason = "iterating on same task (overlapping operations)"
+                    if should_undo:
+                        print("[🛠️Coworker] run_conversation_turn: smart undo triggered — {:s}".format(reason))
+                        # Undo to the state before the previous execute_blender_code.
+                        _call_mcp_tool_sync("execute_blender_code",
+                            {"code": "bpy.ops.ed.undo()"}, mcp_port)
+                        # Push a fresh undo state so the next iteration can undo this one.
+                        _call_mcp_tool_sync("execute_blender_code",
+                            {"code": "bpy.ops.ed.undo_push(message=\"bfa_coworker_pre_script\")"},
+                            mcp_port)
+
+                # ── Push initial undo state before first code execution ─
+                if tool_name == "execute_blender_code" and not _undo_pushed:
+                    _call_mcp_tool_sync("execute_blender_code",
+                        {"code": "bpy.ops.ed.undo_push(message=\"bfa_coworker_pre_script\")"},
+                        mcp_port)
+                    _undo_pushed = True
+
                 # Call the MCP tool.
                 result_text = _call_mcp_tool_sync(tool_name, args, mcp_port)
+
+                # ── Track code execution for smart undo ────────────────
+                if tool_name == "execute_blender_code":
+                    _prev_code = args.get("code", "")
+                    _prev_code_errored = '"status": "error"' in result_text
 
                 # Build a human-readable summary for the UI.
                 result_summary = _tool_result_summary(result_text)

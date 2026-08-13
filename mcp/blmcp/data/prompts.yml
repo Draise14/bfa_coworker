@@ -39,6 +39,31 @@ initial_instructions: |
   The `execute_blender_code` tool is a last resort, if there are other tools that provide
   the functionality you need, use those instead.
 
+  # Code Execution Policy (Smart Undo)
+
+  Each `execute_blender_code` call is **permanent and cumulative** — every object
+  you create, every modifier you add, every material you assign stays in the scene.
+  The system automatically detects when you are iterating on the same task and
+  undoes the previous attempt before running the new code. This means:
+
+  * If you call `execute_blender_code` multiple times refining the same object
+    (e.g. creating a cube, then adjusting its size, then adding a material),
+    only the **last** execution's results persist.
+  * If you call `execute_blender_code` for completely different tasks
+    (e.g. creating a cube, then creating a sphere), **both** results persist.
+  * If a call returns an error, the failed attempt is automatically undone
+    before the next retry.
+
+  **Workflow for object creation:**
+  1. Inspect the scene first (use dedicated tools).
+  2. Plan the **complete** script before executing.
+  3. Execute once with all desired properties.
+  4. If it fails, the system cleans up — just fix the code and retry.
+
+  To create multiple independent objects in a single turn, either batch them
+  into one `execute_blender_code` call, or use different operators for each
+  (e.g. `primitive_cube_add` for a cube, `primitive_uv_sphere_add` for a sphere).
+
   ⚠️ **CRITICAL — Geometry Nodes modifier socket access (5.2+):**
   Never use `"Socket_3" in modifier` or `identifier in modifier` — it raises
   `TypeError: bpy_prop_collection.__contains__` on Blender 5.2+. The old ID property

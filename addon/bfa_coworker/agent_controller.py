@@ -1706,6 +1706,71 @@ def _entity_diff_to_context_message(diff: _EntityDiff) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Undo helper — generates code that works in any workspace
+
+def _undo_code(action: str, message: str = "", extra_result: str = "") -> str:
+    """Generate Blender Python code for undo/push that works in any workspace.
+
+    Falls back to any available area type when ``VIEW_3D`` is not present
+    (e.g. Scripting workspace).  Without this fallback, the ``for...else``
+    loop silently skips and the undo never fires, leaving duplicate objects.
+
+    *action* — ``"undo"`` or ``"push"``.
+    *message* — undo step name (only used when *action* is ``"push"``).
+    *extra_result* — optional extra JSON keys to append to the result dict
+        (e.g. ``'\\n    "snapshot": {...},\\n'``).
+    """
+    if action == "undo":
+        body = "bpy.ops.ed.undo()"
+    else:
+        body = "bpy.ops.ed.undo_push(message='{:s}')".format(message)
+    return (
+        "import bpy\n"
+        "result = {{'status': 'ok', 'message': '{:s} executed'{:s}}}\n"
+        "# Try VIEW_3D first, fall back to any area type.\n"
+        "for w in bpy.context.window_manager.windows:\n"
+        "    for a in w.screen.areas:\n"
+        "        if a.type == 'VIEW_3D':\n"
+        "            with bpy.context.temp_override(window=w, area=a):\n"
+        "                {:s}\n"
+        "            break\n"
+        "    else:\n"
+        "        continue\n"
+        "    break\n"
+        "else:\n"
+        "    # No VIEW_3D found — try any area in any window.\n"
+        "    for w in bpy.context.window_manager.windows:\n"
+        "        for a in w.screen.areas:\n"
+        "            with bpy.context.temp_override(window=w, area=a):\n"
+        "                {:s}\n"
+        "            break\n"
+        "        else:\n"
+        "            continue\n"
+        "        break\n"
+    ).format(action, extra_result, body, body)
+
+
+# Snapshot JSON keys used as extra_result for merged undo+snapshot calls.
+_SNAPSHOT_EXTRA = (
+    ",\n"
+    "    'snapshot': {\n"
+    "        'object_names':       sorted(o.name for o in bpy.data.objects),\n"
+    "        'mesh_names':         sorted(m.name for m in bpy.data.meshes),\n"
+    "        'material_names':     sorted(m.name for m in bpy.data.materials),\n"
+    "        'node_group_names':   sorted(g.name for g in bpy.data.node_groups),\n"
+    "        'image_names':        sorted(i.name for i in bpy.data.images),\n"
+    "        'light_names':        sorted(l.name for l in bpy.data.lights),\n"
+    "        'camera_names':       sorted(c.name for c in bpy.data.cameras),\n"
+    "        'collection_names':   sorted(c.name for c in bpy.data.collections),\n"
+    "        'curve_names':        sorted(c.name for c in bpy.data.curves),\n"
+    "        'grease_pencil_names': sorted(g.name for g in bpy.data.grease_pencils),\n"
+    "        'armature_names':     sorted(a.name for a in bpy.data.armatures),\n"
+    "        'text_names':         sorted(t.name for t in bpy.data.texts),\n"
+    "    }\n"
+)
+
+
+# ---------------------------------------------------------------------------
 # Text editor memory bank helpers
 
 _code_sequence_counter: int = 0
@@ -2045,70 +2110,17 @@ def run_conversation_turn(
                         # Must use context override — bpy.ops.ed.undo() needs a window context
                         # which isn't available in the bridge server's exec() namespace.
                         _call_mcp_tool_sync("execute_blender_code",
-                            {"code": (
-                                "import bpy\n"
-                                "for w in bpy.context.window_manager.windows:\n"
-                                "    for a in w.screen.areas:\n"
-                                "        if a.type == 'VIEW_3D':\n"
-                                "            with bpy.context.temp_override(window=w, area=a):\n"
-                                "                bpy.ops.ed.undo()\n"
-                                "            break\n"
-                                "    else:\n"
-                                "        continue\n"
-                                "    break\n"
-                                "result = {'status': 'ok', 'message': 'undo executed'}"
-                            )}, mcp_port)
+                            {"code": _undo_code("undo")}, mcp_port)
                         # Push a fresh undo state so the next iteration can undo this one.
                         _call_mcp_tool_sync("execute_blender_code",
-                            {"code": (
-                                "import bpy\n"
-                                "for w in bpy.context.window_manager.windows:\n"
-                                "    for a in w.screen.areas:\n"
-                                "        if a.type == 'VIEW_3D':\n"
-                                "            with bpy.context.temp_override(window=w, area=a):\n"
-                                "                bpy.ops.ed.undo_push(message='bfa_coworker_pre_script')\n"
-                                "            break\n"
-                                "    else:\n"
-                                "        continue\n"
-                                "    break\n"
-                                "result = {'status': 'ok', 'message': 'undo push executed'}"
-                            )},
+                            {"code": _undo_code("push", "bfa_coworker_pre_script")},
                             mcp_port)
 
                 # ── Push initial undo state + initial snapshot (merged) ─
                 # Merging saves 1 round-trip at the start of each turn.
                 if tool_name == "execute_blender_code" and not _undo_pushed:
                     merged_init_raw = _call_mcp_tool_sync("execute_blender_code",
-                        {"code": (
-                            "import bpy\n"
-                            "for w in bpy.context.window_manager.windows:\n"
-                            "    for a in w.screen.areas:\n"
-                            "        if a.type == 'VIEW_3D':\n"
-                            "            with bpy.context.temp_override(window=w, area=a):\n"
-                            "                bpy.ops.ed.undo_push(message='bfa_coworker_pre_script')\n"
-                            "            break\n"
-                            "    else:\n"
-                            "        continue\n"
-                            "    break\n"
-                            "result = {\n"
-                            "    'status': 'ok',\n"
-                            "    'message': 'undo push executed',\n"
-                            "    'snapshot': {\n"
-                            "        'object_names':       sorted(o.name for o in bpy.data.objects),\n"
-                            "        'mesh_names':         sorted(m.name for m in bpy.data.meshes),\n"
-                            "        'material_names':     sorted(m.name for m in bpy.data.materials),\n"
-                            "        'node_group_names':   sorted(g.name for g in bpy.data.node_groups),\n"
-                            "        'image_names':        sorted(i.name for i in bpy.data.images),\n"
-                            "        'light_names':        sorted(l.name for l in bpy.data.lights),\n"
-                            "        'camera_names':       sorted(c.name for c in bpy.data.cameras),\n"
-                            "        'collection_names':   sorted(c.name for c in bpy.data.collections),\n"
-                            "        'curve_names':        sorted(c.name for c in bpy.data.curves),\n"
-                            "        'grease_pencil_names': sorted(g.name for g in bpy.data.grease_pencils),\n"
-                            "        'armature_names':     sorted(a.name for a in bpy.data.armatures),\n"
-                            "        'text_names':         sorted(t.name for t in bpy.data.texts),\n"
-                            "    },\n"
-                            "}"
-                        )},
+                        {"code": _undo_code("push", "bfa_coworker_pre_script", extra_result=_SNAPSHOT_EXTRA)},
                         mcp_port)
                     _undo_pushed = True
                     # Parse initial snapshot from merged result.
@@ -2137,36 +2149,7 @@ def run_conversation_turn(
                     # saves 2 round-trips per iteration vs separate calls.
                     if not _prev_code_errored:
                         merged_raw = _call_mcp_tool_sync("execute_blender_code",
-                            {"code": (
-                                "import bpy\n"
-                                "for w in bpy.context.window_manager.windows:\n"
-                                "    for a in w.screen.areas:\n"
-                                "        if a.type == 'VIEW_3D':\n"
-                                "            with bpy.context.temp_override(window=w, area=a):\n"
-                                "                bpy.ops.ed.undo_push(message='bfa_coworker_step')\n"
-                                "            break\n"
-                                "    else:\n"
-                                "        continue\n"
-                                "    break\n"
-                                "result = {\n"
-                                "    'status': 'ok',\n"
-                                "    'message': 'step bookmark pushed',\n"
-                                "    'snapshot': {\n"
-                                "        'object_names':       sorted(o.name for o in bpy.data.objects),\n"
-                                "        'mesh_names':         sorted(m.name for m in bpy.data.meshes),\n"
-                                "        'material_names':     sorted(m.name for m in bpy.data.materials),\n"
-                                "        'node_group_names':   sorted(g.name for g in bpy.data.node_groups),\n"
-                                "        'image_names':        sorted(i.name for i in bpy.data.images),\n"
-                                "        'light_names':        sorted(l.name for l in bpy.data.lights),\n"
-                                "        'camera_names':       sorted(c.name for c in bpy.data.cameras),\n"
-                                "        'collection_names':   sorted(c.name for c in bpy.data.collections),\n"
-                                "        'curve_names':        sorted(c.name for c in bpy.data.curves),\n"
-                                "        'grease_pencil_names': sorted(g.name for g in bpy.data.grease_pencils),\n"
-                                "        'armature_names':     sorted(a.name for a in bpy.data.armatures),\n"
-                                "        'text_names':         sorted(t.name for t in bpy.data.texts),\n"
-                                "    },\n"
-                                "}"
-                            )},
+                            {"code": _undo_code("push", "bfa_coworker_step", extra_result=_SNAPSHOT_EXTRA)},
                             mcp_port)
                         # Parse snapshot from merged result.
                         try:

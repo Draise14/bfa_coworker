@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Polyhaven Tools** — New tools for downloading CC0 resources from Polyhaven (models, HDRIs, textures) directly from the agent. Supports URL-based setup and test build.
-- **Generative Plugin Foundation** — Tier 5 foundation: image gen plugins with auto-discovery, controller, and plugin base classes. Supports audio, image, text, and video plugin types.
+- **Generative Plugin Foundation** — Tier 5 foundation: image gen plugins with auto-discovery, controller, and plugin base classes. Supports audio, image, text, and video plugin types, usability still WIP (not usable).
 - **Version-Aware Skills System** — New searchable domain skills system with version-aware Blender API skills (`blender_50_51.md`, `blender_52.md`, `blender_53.md`). User custom skills support.
 - **Copy Content Button** — New button in chat UI that copies the full conversation history to clipboard.
 - **Stepped Benchmark Tests** — Replaced single-prompt benchmarks with 6 multi-step test suites (Scene Build, Animation, Modifiers, Assets+Mat, Baseline, Error Handling). Steps are clicked in order, each building on the last. Progress tracked per-suite with Reset support.

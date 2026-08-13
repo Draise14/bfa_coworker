@@ -129,6 +129,31 @@ if strip and hasattr(strip, 'modifiers'):
         print(mod.type, mod.name)
 ```
 
+### Animation — Layered Animation System (5.0+)
+
+`Action.fcurves` was **removed** in Blender 5.0. F-Curves now live in the
+layered animation system: `action.layers → strips → channelbag(slot) → fcurves`.
+
+**CRITICAL**: Never manually create slots, layers, strips, or channelbags.
+The `keyframe_insert()` API handles all of this internally and is the **only
+safe way** to create keyframes. Manually creating slots with
+`action.slots.new()` or channelbags with `strip.channelbag(slot, ensure=True)`
+can leave the animation data in a corrupted state that causes a **hard crash**
+(EXCEPTION_ACCESS_VIOLATION in `channelbag_for_action_slot`) during EEVEE
+viewport redraw.
+
+```python
+# SAFE — always use keyframe_insert()
+obj.keyframe_insert(data_path="location", frame=10)
+
+# DANGEROUS — never do this manually:
+#   action.slots.new(...)
+#   strip.channelbag(slot, ensure=True)
+```
+
+To read existing F-Curves (read-only), use the helper from the `animation.md`
+skill. Never create slots or channelbags yourself.
+
 ### General Rule
 
 When in doubt, prefer `bpy.ops.*` operators over direct data API access.

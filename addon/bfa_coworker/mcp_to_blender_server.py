@@ -313,6 +313,14 @@ def _execute_code(
                     "To disable auto-smooth, set the angle to 0:\n"
                     "    mesh.auto_smooth_angle = 0"
                 )
+            if "has no attribute 'fcurves'" in tb_str and "Action" in tb_str:
+                tb_str += (
+                    "\n\nHINT: `Action.fcurves` was REMOVED in Blender 5.0+ (layered animation system). "
+                    "Use `keyframe_insert()` for all keyframe creation:\n"
+                    "    obj.keyframe_insert(data_path=\"location\", frame=10)\n"
+                    "To read existing F-Curves, use the read-only helper from the animation.md skill. "
+                    "Never access `action.fcurves` directly."
+                )
             response: dict[str, object] = {"status": "error", "message": tb_str}
             if captured.stdout:
                 response["stdout"] = captured.stdout

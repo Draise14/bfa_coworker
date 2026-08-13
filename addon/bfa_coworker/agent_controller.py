@@ -1595,6 +1595,13 @@ def run_conversation_turn(
                 on_status("Error: No response from LLM")
             return history
 
+        # Safety: if the LLM returned HTTP 500, the context may be too large
+        # for the model.  Log the approximate body size for debugging.
+        body_approx = len(json.dumps(history_to_send, default=str))
+        if body_approx > 30000:
+            print("[🛠️Coworker] run_conversation_turn: WARNING — history body is {:d} bytes, "
+                  "may exceed model context window".format(body_approx))
+
         choice = response.get("choices", [{}])[0]
         msg = choice.get("message", {})
         finish_reason = choice.get("finish_reason", "")
@@ -1715,12 +1722,23 @@ def run_conversation_turn(
                 # Build a human-readable summary for the UI.
                 result_summary = _tool_result_summary(result_text)
 
+                # Truncate tool result content in history to avoid context bloat.
+                # Full results can be thousands of chars (scene dumps, etc.) and
+                # balloon the prompt past small local models' context windows.
+                # The LLM only needs the gist of past tool results — the current
+                # turn's result is still available in the truncated form.
+                _MAX_TOOL_RESULT_CHARS = 500
+                truncated = result_text[:_MAX_TOOL_RESULT_CHARS]
+                if len(result_text) > _MAX_TOOL_RESULT_CHARS:
+                    truncated += "\n...[+{:d} more chars]".format(
+                        len(result_text) - _MAX_TOOL_RESULT_CHARS)
+
                 # Add tool result to history.
                 history.append({
                     "role": "tool",
                     "tool_call_id": tool_id,
                     "name": tool_name,
-                    "content": result_text,
+                    "content": truncated,
                     "summary": result_summary,
                 })
 

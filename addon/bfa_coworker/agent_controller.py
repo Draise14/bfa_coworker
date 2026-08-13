@@ -1726,6 +1726,11 @@ def _undo_code(action: str, message: str = "", extra_result: str = "") -> str:
         body = "bpy.ops.ed.undo_push(message='{:s}')".format(message)
     return (
         "import bpy\n"
+        "def _sn(seq):\n"
+        "    try:\n"
+        "        return sorted(x.name for x in seq)\n"
+        "    except Exception:\n"
+        "        return []\n"
         "result = {{'status': 'ok', 'message': '{:s} executed'{:s}}}\n"
         "# Try VIEW_3D first, fall back to any area type.\n"
         "for w in bpy.context.window_manager.windows:\n"
@@ -1751,21 +1756,24 @@ def _undo_code(action: str, message: str = "", extra_result: str = "") -> str:
 
 
 # Snapshot JSON keys used as extra_result for merged undo+snapshot calls.
+# Each datablock iteration is wrapped in a try/except so that a single
+# corrupted datablock (e.g. from a depsgraph crash) doesn't kill the
+# entire snapshot — the other datablock types are still captured.
 _SNAPSHOT_EXTRA = (
     ",\n"
     "    'snapshot': {\n"
-    "        'object_names':       sorted(o.name for o in bpy.data.objects),\n"
-    "        'mesh_names':         sorted(m.name for m in bpy.data.meshes),\n"
-    "        'material_names':     sorted(m.name for m in bpy.data.materials),\n"
-    "        'node_group_names':   sorted(g.name for g in bpy.data.node_groups),\n"
-    "        'image_names':        sorted(i.name for i in bpy.data.images),\n"
-    "        'light_names':        sorted(l.name for l in bpy.data.lights),\n"
-    "        'camera_names':       sorted(c.name for c in bpy.data.cameras),\n"
-    "        'collection_names':   sorted(c.name for c in bpy.data.collections),\n"
-    "        'curve_names':        sorted(c.name for c in bpy.data.curves),\n"
-    "        'grease_pencil_names': sorted(g.name for g in bpy.data.grease_pencils),\n"
-    "        'armature_names':     sorted(a.name for a in bpy.data.armatures),\n"
-    "        'text_names':         sorted(t.name for t in bpy.data.texts),\n"
+    "        'object_names':       _sn(bpy.data.objects),\n"
+    "        'mesh_names':         _sn(bpy.data.meshes),\n"
+    "        'material_names':     _sn(bpy.data.materials),\n"
+    "        'node_group_names':   _sn(bpy.data.node_groups),\n"
+    "        'image_names':        _sn(bpy.data.images),\n"
+    "        'light_names':        _sn(bpy.data.lights),\n"
+    "        'camera_names':       _sn(bpy.data.cameras),\n"
+    "        'collection_names':   _sn(bpy.data.collections),\n"
+    "        'curve_names':        _sn(bpy.data.curves),\n"
+    "        'grease_pencil_names': _sn(bpy.data.grease_pencils),\n"
+    "        'armature_names':     _sn(bpy.data.armatures),\n"
+    "        'text_names':         _sn(bpy.data.texts),\n"
     "    }\n"
 )
 

@@ -209,6 +209,76 @@ def _encode_response(response: dict[str, object]) -> bytes:
     return (json.dumps(response) + "\0").encode("utf-8")
 
 
+def _safe_depsgraph_sync(allow_full_sync: bool = True) -> None:
+    """
+    Synchronize the depsgraph using the safest available strategy.
+
+    Blender 5.3 can crash (EXCEPTION_ACCESS_VIOLATION in
+    ``deg_eval_copy_is_expanded``) when ``view_layer.update()`` is called
+    after collection-manipulation operations (creating collections, moving
+    objects between them, setting color tags).  This helper tries multiple
+    strategies in order of safety:
+
+    1. Tag each object for update (lightweight, no full rebuild).
+    2. Fall back to ``view_layer.update()`` only if tagging is unavailable
+       and *allow_full_sync* is ``True``.
+
+    :param allow_full_sync: When ``False``, only the lightweight
+        ``update_tag()`` strategy is attempted.  Use this after code that
+        manipulates collections, where a full depsgraph rebuild is known
+        to crash in Blender 5.3.
+    """
+    try:
+        import bpy as _bpy  # pylint: disable=import-error
+    except ImportError:
+        return  # Not running inside Blender.
+
+    # ── Strategy 1: Tag each object for update ──────────────────────
+    # This is the safest approach — it marks objects as needing a
+    # re-evaluation without triggering a full depsgraph rebuild.
+    # The rebuild is what crashes in Blender 5.3 after collection ops.
+    try:
+        for _obj in _bpy.data.objects:
+            try:
+                _obj.update_tag()
+            except (ReferenceError, AttributeError):
+                pass  # Object may have been deleted mid-iteration.
+        # print("[🛠️Coworker] _safe_depsgraph_sync: used update_tag strategy")
+        return
+    except Exception:  # pylint: disable=broad-exception-caught
+        if not allow_full_sync:
+            return  # Don't fall through to view_layer.update().
+        pass  # Fall through to strategy 2.
+
+    # ── Strategy 2: Full view_layer.update() ────────────────────────
+    # This is the traditional approach.  It can crash in Blender 5.3
+    # after collection manipulation, but is the only option when
+    # update_tag() is not available (e.g. very old Blender versions).
+    try:
+        _bpy.context.view_layer.update()
+        # print("[🛠️Coworker] _safe_depsgraph_sync: used view_layer.update strategy")
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass  # Best-effort; view_layer may not be available.
+
+
+def _code_touches_collections(code: str) -> bool:
+    """Heuristic check: does *code* manipulate collections?
+
+    Returns ``True`` if the code contains patterns that are known to
+    trigger depsgraph crashes in Blender 5.3 after a full
+    ``view_layer.update()``.
+    """
+    _COLLECTION_PATTERNS = (
+        "collections.new",
+        ".unlink(",
+        ".link(",
+        "color_tag",
+        "children.link",
+        "objects.unlink",
+    )
+    return any(p in code for p in _COLLECTION_PATTERNS)
+
+
 def _execute_code(
         code: str,
         strict_json: bool,
@@ -244,11 +314,7 @@ def _execute_code(
             # accessing properties like obj.users_collection can trigger
             # a null-pointer dereference (EXCEPTION_ACCESS_VIOLATION in
             # pyrna_struct_CreatePyObject / layer_collection_sync).
-            try:
-                import bpy as _bpy_dg  # pylint: disable=import-error
-                _bpy_dg.context.view_layer.update()
-            except Exception:
-                pass  # Best-effort; view_layer may not be available.
+            _safe_depsgraph_sync()
 
             exec(code, namespace)
 
@@ -257,11 +323,9 @@ def _execute_code(
             # the depsgraph in an inconsistent state, causing a hard crash
             # (EXCEPTION_ACCESS_VIOLATION in layer_collection_sync) on the
             # next viewport redraw timer tick.
-            try:
-                import bpy as _bpy_dg  # pylint: disable=import-error
-                _bpy_dg.context.view_layer.update()
-            except Exception:
-                pass  # Best-effort; view_layer may not be available.
+            # If the code manipulates collections, skip the full sync to
+            # avoid the Blender 5.3 crash in deg_eval_copy_is_expanded.
+            _safe_depsgraph_sync(allow_full_sync=not _code_touches_collections(code))
         except Exception:  # pylint: disable=broad-exception-caught
             # Truncate traceback to last 3 frames + exception message.
             # Full tracebacks are verbose and eat context window space.

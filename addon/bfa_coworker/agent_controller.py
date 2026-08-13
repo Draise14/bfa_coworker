@@ -101,7 +101,9 @@ def _get_system_prompt() -> str:
     _system_prompt = (
         "You are a Blender automation assistant. "
         "You have access to tools that can execute Python code in Blender. "
-        "Be concise. Execute code to complete the user's request, "
+        "Be concise, direct, and efficient. Use short logical sentences. "
+        "Summarize tool results in a few words. Avoid fluff and polite filler. "
+        "Execute code to complete the user's request, "
         "then respond with a brief summary of what was done. "
         "Do NOT repeat tool calls that have already succeeded."
     )
@@ -118,7 +120,10 @@ def _get_system_prompt_with_rules() -> str:
         version_str = ".".join(str(v) for v in bpy.app.version[:3])
         version_header = (
             "You are connected to Blender {:s}. "
-            "All code you write must be compatible with this version."
+            "All code you write must be compatible with this version.\n\n"
+            "STYLE: Be concise, direct, and efficient. Use short logical sentences. "
+            "Keep reasoning brief — 2-3 sentences max unless designing complex code. "
+            "Summarize tool results in a few words. Avoid fluff, apologies, and polite filler."
         ).format(version_str)
 
         # ── Built-in skills (version-aware, from addon/skills/) ──

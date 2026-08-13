@@ -339,16 +339,18 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
 
 
 class BFACW_OT_chat_clear(Operator):  # type: ignore[misc]
-    """Clear the conversation history."""
+    """Clear the conversation history and start a fresh thread."""
     bl_idname = "bfacw.chat_clear"
-    bl_label = "Clear"
-    bl_description = "Clear the conversation history"
+    bl_label = "New Thread"
+    bl_description = "Clear conversation history and start a fresh thread (system prompt stays)"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         agent_controller._agent_state.conversation_history.clear()
         agent_controller._agent_state.streaming_text = ""
         agent_controller._agent_state.reasoning_text = ""
         agent_controller._agent_state.thinking_dots = 0
+        # Clear cached system prompt so project rules are reloaded on next turn.
+        agent_controller._clear_system_prompt_cache()
         _save_chat_history()
         _redraw_areas(context)
         return {"FINISHED"}
@@ -951,7 +953,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 row.operator("bfacw.chat_stop", icon="PAUSE", text="Stop")
             else:
                 row.operator("bfacw.chat_send", icon="PLAY", text="Send")
-            row.operator("bfacw.chat_clear", icon="X", text="Clear")
+            row.operator("bfacw.chat_clear", icon="X", text="New Thread")
 
         layout.separator()
 
@@ -1127,7 +1129,7 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
                 row.operator("bfacw.chat_stop", icon="PAUSE", text="Stop")
             else:
                 row.operator("bfacw.chat_send", icon="PLAY", text="Send")
-            row.operator("bfacw.chat_clear", icon="X", text="Clear")
+            row.operator("bfacw.chat_clear", icon="X", text="New Thread")
         else:
             layout.label(text="Chat handled by external MCP client.", icon='INFO')
 

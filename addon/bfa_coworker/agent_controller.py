@@ -1866,20 +1866,17 @@ def run_conversation_turn(
                     on_status(_friendly_tool_status(tool_name))
 
                 # ── Smart undo: auto-undo before re-executing code ─────
-                # If this is execute_blender_code and we've already run it
-                # this turn, check whether the new code is iterating on the
-                # same task (overlapping operations) or retrying after an
-                # error. If so, undo the previous attempt first.
+                # If this is execute_blender_code and the previous call
+                # errored, undo to clean up partial effects before retrying.
+                # NOTE: We do NOT undo on overlap detection — the LLM often
+                # iterates on a successful result (e.g. tweaking a material),
+                # and undoing that is counterproductive.
                 if tool_name == "execute_blender_code" and _prev_code is not None:
-                    new_code = args.get("code", "")
                     should_undo = False
                     reason = ""
                     if _prev_code_errored:
                         should_undo = True
                         reason = "previous call errored"
-                    elif _codes_overlap(_prev_code, new_code):
-                        should_undo = True
-                        reason = "iterating on same task (overlapping operations)"
                     if should_undo:
                         print("[🛠️Coworker] run_conversation_turn: smart undo triggered — {:s}".format(reason))
                         # Undo to the state before the previous execute_blender_code.

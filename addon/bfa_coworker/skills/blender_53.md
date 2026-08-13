@@ -84,6 +84,22 @@ stack = bpy.context.window_manager.undo_stack
 The order of IDs in `bpy.data.all_ids` is now an internal implementation detail.
 Do NOT rely on or assume any specific ordering.
 
+### Mesh — `use_auto_smooth` Removed
+
+`Mesh.use_auto_smooth` was removed in Blender 5.3. Auto-smooth is now implicit
+when `auto_smooth_angle > 0`. Set the angle directly:
+
+```python
+# Blender 5.3+ (correct)
+mesh.auto_smooth_angle = radians(30)  # Enables auto-smooth at 30°
+
+# To disable auto-smooth:
+mesh.auto_smooth_angle = 0
+```
+
+The old `mesh.use_auto_smooth = True` / `mesh.use_auto_smooth = False` pattern
+will raise `AttributeError: 'Mesh' object has no attribute 'use_auto_smooth'`.
+
 ### Modifier Creation
 
 In Bforartists, use `bpy.ops.object.modifier_add(type='NODES')` to add a

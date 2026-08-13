@@ -283,6 +283,14 @@ def _execute_code(
                     "Create an object first with `bpy.ops.mesh.primitive_cube_add()` or "
                     "check `bpy.context.active_object` before calling mode-dependent operators."
                 )
+            if "use_auto_smooth" in tb_str and "has no attribute" in tb_str:
+                tb_str += (
+                    "\n\nHINT: `mesh.use_auto_smooth` was REMOVED in Blender 5.3. "
+                    "Use `mesh.auto_smooth_angle` directly instead:\n"
+                    "    mesh.auto_smooth_angle = radians(30)  # Sets angle, auto-smooth is implicit\n"
+                    "To disable auto-smooth, set the angle to 0:\n"
+                    "    mesh.auto_smooth_angle = 0"
+                )
             response: dict[str, object] = {"status": "error", "message": tb_str}
             if captured.stdout:
                 response["stdout"] = captured.stdout

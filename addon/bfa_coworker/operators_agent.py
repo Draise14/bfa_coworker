@@ -196,15 +196,15 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
     # Tests object creation, collections, materials, lighting, camera
     "scene_build": [
         (1, "Ground",
-         "I'm setting up a scene. First, create a rounded ground — "
-         "like a stage floor or backdrop. "
+         "I'm setting up a scene to render. First, create a rounded corner ground mesh — "
+         "like a large stage floor or backdrop. "
          "Name it \"Ground\"."),
         (2, "Props",
-         "Now scatter some random objects on the ground: add a few cubes, "
-         "spheres, and cylinders. Arrange them in a loose circle like toys "
-         "around the center. Vary their sizes and shapes so they look interesting."),
+         "Now scatter some random cartoon objects on the ground, like rocks, bushes, trees."
+         "Arrange them in a loose circle like toys"
+         "around the center. Vary their, viewport colors, sizes and shapes so they look interesting."),
         (3, "Collections",
-         "Organize things into collections. Create three collections "
+         "Organize everything into collections. Create three collections "
          "with color tags: \"Props\" (blue), \"Ground\" (green), and "
          "\"Lighting\" (yellow). Move the ground into Ground, "
          "all the scattered objects into Props."),
@@ -218,8 +218,8 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
          "for fill. Put both in the Lighting collection."),
         (6, "Camera",
          "Place the camera to frame the whole scene from a slight "
-         "high angle — like a product shot. Use a nice portrait "
-         "focal length. Render at a decent HD resolution."),
+         "high angle — like a long shot. Use a nice portrait "
+         "focal length. Render at a decent HD resolution with EEVEE."),
     ],
     # ── Animation Workflow ──────────────────────────────────────────
     # Tests keyframes, timeline, motion paths

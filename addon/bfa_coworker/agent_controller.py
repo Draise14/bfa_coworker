@@ -1632,7 +1632,7 @@ def run_conversation_turn(
                 "You must create objects before using mode-dependent operators "
                 "like bpy.ops.object.mode_set().]"
             )
-            history.append({"role": "user", "content": _empty_note})
+            history.append({"role": "system", "content": _empty_note})
             print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: empty scene detected, injected pre-flight note")
     except Exception:
         pass  # Best-effort; don't break the agent loop.
@@ -1942,6 +1942,27 @@ def run_conversation_turn(
                 if tool_name == "execute_blender_code":
                     _prev_code = args.get("code", "")
                     _prev_code_errored = '"status": "error"' in result_text
+
+                    # ── Push bookmark after each successful execution ───
+                    # This ensures undo only rolls back the LAST step, not
+                    # everything since the turn began. Without this, a failed
+                    # step 3 would wipe successful steps 1 and 2.
+                    if not _prev_code_errored:
+                        _call_mcp_tool_sync("execute_blender_code",
+                            {"code": (
+                                "import bpy\n"
+                                "for w in bpy.context.window_manager.windows:\n"
+                                "    for a in w.screen.areas:\n"
+                                "        if a.type == 'VIEW_3D':\n"
+                                "            with bpy.context.temp_override(window=w, area=a):\n"
+                                "                bpy.ops.ed.undo_push(message='bfa_coworker_step')\n"
+                                "            break\n"
+                                "    else:\n"
+                                "        continue\n"
+                                "    break\n"
+                                "result = {'status': 'ok', 'message': 'step bookmark pushed'}"
+                            )},
+                            mcp_port)
 
                     # ── Save to text editor memory bank ────────────────
                     if not _prev_code_errored:

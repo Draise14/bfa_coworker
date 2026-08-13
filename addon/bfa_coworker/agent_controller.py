@@ -1605,27 +1605,6 @@ class _EntitySnapshot:
     armature_names: set[str] = field(default_factory=set)
     text_names: set[str] = field(default_factory=set)
 
-    @staticmethod
-    def _snapshot_code() -> str:
-        """Return Python code that collects all datablock names and returns them as a dict."""
-        return (
-            "import bpy\n"
-            "result = {\n"
-            "    'object_names':       sorted(o.name for o in bpy.data.objects),\n"
-            "    'mesh_names':         sorted(m.name for m in bpy.data.meshes),\n"
-            "    'material_names':     sorted(m.name for m in bpy.data.materials),\n"
-            "    'node_group_names':   sorted(g.name for g in bpy.data.node_groups),\n"
-            "    'image_names':        sorted(i.name for i in bpy.data.images),\n"
-            "    'light_names':        sorted(l.name for l in bpy.data.lights),\n"
-            "    'camera_names':       sorted(c.name for c in bpy.data.cameras),\n"
-            "    'collection_names':   sorted(c.name for c in bpy.data.collections),\n"
-            "    'curve_names':        sorted(c.name for c in bpy.data.curves),\n"
-            "    'grease_pencil_names': sorted(g.name for g in bpy.data.grease_pencils),\n"
-            "    'armature_names':     sorted(a.name for a in bpy.data.armatures),\n"
-            "    'text_names':         sorted(t.name for t in bpy.data.texts),\n"
-            "}\n"
-        )
-
     @classmethod
     def from_dict(cls, data: dict[str, list[str]]) -> "_EntitySnapshot":
         """Build a snapshot from the dict returned by the snapshot code."""
@@ -1697,49 +1676,6 @@ class _EntityDiff:
                     parts.append("{:s}: {:s} (+{:d} more)".format(
                         label, ", ".join(sorted_names[:5]), len(sorted_names) - 5))
         return "; ".join(parts) if parts else "(none)"
-
-
-def _take_snapshot(mcp_port: int) -> _EntitySnapshot | None:
-    """Take a snapshot of all datablock names via an MCP tool call.
-
-    Returns ``None`` if the snapshot call fails (best-effort).
-    """
-    raw = _call_mcp_tool_sync(
-        "execute_blender_code",
-        {"code": _EntitySnapshot._snapshot_code()},
-        mcp_port,
-    )
-    try:
-        data = json.loads(raw)
-        if data.get("status") == "ok":
-            return _EntitySnapshot.from_dict(data.get("result", {}))
-    except (json.JSONDecodeError, TypeError):
-        pass
-    print("[🛠️Coworker] _take_snapshot: failed to parse snapshot result")
-    return None
-
-
-def _diff_snapshot(
-    prev: _EntitySnapshot,
-    mcp_port: int,
-) -> _EntityDiff | None:
-    """Take a new snapshot and diff it against *prev*.
-
-    Returns ``None`` if the snapshot call fails.
-    """
-    raw = _call_mcp_tool_sync(
-        "execute_blender_code",
-        {"code": _EntitySnapshot._snapshot_code()},
-        mcp_port,
-    )
-    try:
-        data = json.loads(raw)
-        if data.get("status") == "ok":
-            current = _EntitySnapshot.from_dict(data.get("result", {}))
-            return _diff_snapshots(prev, current)
-    except (json.JSONDecodeError, TypeError):
-        pass
-    return None
 
 
 def _diff_snapshots(
@@ -1848,16 +1784,6 @@ def run_conversation_turn(
     except Exception:
         pass  # Best-effort; don't break the agent loop.
 
-    # ── Take initial entity snapshot ──────────────────────────────────
-    # Captures all datablock names before any code execution this turn.
-    # Used to detect newly created entities after each step.
-    if chat_mode != "ASK":
-        _turn_snapshot = _take_snapshot(mcp_port)
-        if _turn_snapshot is not None:
-            print("[🛠️Coworker] run_conversation_turn: initial entity snapshot taken")
-        else:
-            print("[🛠️Coworker] run_conversation_turn: initial entity snapshot FAILED (continuing without)")
-
     # ── Smart undo tracking (per-turn) ────────────────────────────────
     # Tracks the last execute_blender_code call to detect iteration and
     # auto-undo duplicates. Reset at the start of each turn.
@@ -1866,8 +1792,8 @@ def run_conversation_turn(
     _undo_pushed: bool = False  # True once we've pushed the first undo state.
 
     # ── Entity tracking (per-turn) ────────────────────────────────────
-    # Snapshots the scene at turn start and diffs after each code execution
-    # so the LLM knows what it has already created.
+    # Initial snapshot is taken lazily inside the first undo push (merged
+    # into a single round-trip). Reset at the start of each turn.
     _turn_snapshot: _EntitySnapshot | None = None
     _turn_entities: _EntityDiff = _EntityDiff()
     _entity_context_injected: bool = False  # True once we've injected entity context.
@@ -2149,9 +2075,10 @@ def run_conversation_turn(
                             )},
                             mcp_port)
 
-                # ── Push initial undo state before first code execution ─
+                # ── Push initial undo state + initial snapshot (merged) ─
+                # Merging saves 1 round-trip at the start of each turn.
                 if tool_name == "execute_blender_code" and not _undo_pushed:
-                    _call_mcp_tool_sync("execute_blender_code",
+                    merged_init_raw = _call_mcp_tool_sync("execute_blender_code",
                         {"code": (
                             "import bpy\n"
                             "for w in bpy.context.window_manager.windows:\n"
@@ -2163,10 +2090,39 @@ def run_conversation_turn(
                             "    else:\n"
                             "        continue\n"
                             "    break\n"
-                            "result = {'status': 'ok', 'message': 'undo push executed'}"
+                            "result = {\n"
+                            "    'status': 'ok',\n"
+                            "    'message': 'undo push executed',\n"
+                            "    'snapshot': {\n"
+                            "        'object_names':       sorted(o.name for o in bpy.data.objects),\n"
+                            "        'mesh_names':         sorted(m.name for m in bpy.data.meshes),\n"
+                            "        'material_names':     sorted(m.name for m in bpy.data.materials),\n"
+                            "        'node_group_names':   sorted(g.name for g in bpy.data.node_groups),\n"
+                            "        'image_names':        sorted(i.name for i in bpy.data.images),\n"
+                            "        'light_names':        sorted(l.name for l in bpy.data.lights),\n"
+                            "        'camera_names':       sorted(c.name for c in bpy.data.cameras),\n"
+                            "        'collection_names':   sorted(c.name for c in bpy.data.collections),\n"
+                            "        'curve_names':        sorted(c.name for c in bpy.data.curves),\n"
+                            "        'grease_pencil_names': sorted(g.name for g in bpy.data.grease_pencils),\n"
+                            "        'armature_names':     sorted(a.name for a in bpy.data.armatures),\n"
+                            "        'text_names':         sorted(t.name for t in bpy.data.texts),\n"
+                            "    },\n"
+                            "}"
                         )},
                         mcp_port)
                     _undo_pushed = True
+                    # Parse initial snapshot from merged result.
+                    try:
+                        init_data = json.loads(merged_init_raw)
+                        if init_data.get("status") == "ok":
+                            snap_data = init_data.get("result", {}).get("snapshot")
+                            if snap_data:
+                                _turn_snapshot = _EntitySnapshot.from_dict(snap_data)
+                                print("[🛠️Coworker] run_conversation_turn: initial entity snapshot taken")
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    if _turn_snapshot is None:
+                        print("[🛠️Coworker] run_conversation_turn: initial entity snapshot FAILED (continuing without)")
 
                 # Call the MCP tool.
                 result_text = _call_mcp_tool_sync(tool_name, args, mcp_port)
@@ -2176,12 +2132,11 @@ def run_conversation_turn(
                     _prev_code = args.get("code", "")
                     _prev_code_errored = '"status": "error"' in result_text
 
-                    # ── Push bookmark after each successful execution ───
-                    # This ensures undo only rolls back the LAST step, not
-                    # everything since the turn began. Without this, a failed
-                    # step 3 would wipe successful steps 1 and 2.
+                    # ── Push bookmark + entity snapshot (merged) ───────
+                    # Merging these into a single execute_blender_code call
+                    # saves 2 round-trips per iteration vs separate calls.
                     if not _prev_code_errored:
-                        _call_mcp_tool_sync("execute_blender_code",
+                        merged_raw = _call_mcp_tool_sync("execute_blender_code",
                             {"code": (
                                 "import bpy\n"
                                 "for w in bpy.context.window_manager.windows:\n"
@@ -2193,37 +2148,46 @@ def run_conversation_turn(
                                 "    else:\n"
                                 "        continue\n"
                                 "    break\n"
-                                "result = {'status': 'ok', 'message': 'step bookmark pushed'}"
+                                "result = {\n"
+                                "    'status': 'ok',\n"
+                                "    'message': 'step bookmark pushed',\n"
+                                "    'snapshot': {\n"
+                                "        'object_names':       sorted(o.name for o in bpy.data.objects),\n"
+                                "        'mesh_names':         sorted(m.name for m in bpy.data.meshes),\n"
+                                "        'material_names':     sorted(m.name for m in bpy.data.materials),\n"
+                                "        'node_group_names':   sorted(g.name for g in bpy.data.node_groups),\n"
+                                "        'image_names':        sorted(i.name for i in bpy.data.images),\n"
+                                "        'light_names':        sorted(l.name for l in bpy.data.lights),\n"
+                                "        'camera_names':       sorted(c.name for c in bpy.data.cameras),\n"
+                                "        'collection_names':   sorted(c.name for c in bpy.data.collections),\n"
+                                "        'curve_names':        sorted(c.name for c in bpy.data.curves),\n"
+                                "        'grease_pencil_names': sorted(g.name for g in bpy.data.grease_pencils),\n"
+                                "        'armature_names':     sorted(a.name for a in bpy.data.armatures),\n"
+                                "        'text_names':         sorted(t.name for t in bpy.data.texts),\n"
+                                "    },\n"
+                                "}"
                             )},
                             mcp_port)
-
-                    # ── Entity diff: detect newly created datablocks ───
-                    if not _prev_code_errored and _turn_snapshot is not None:
-                        step_diff = _diff_snapshot(_turn_snapshot, mcp_port)
-                        if step_diff is not None and not step_diff.is_empty():
-                            # Merge into running total.
-                            _turn_entities.merge(step_diff)
-                            # Update the baseline snapshot so the next diff
-                            # only catches NEW entities (not cumulative).
-                            fresh_raw = _call_mcp_tool_sync(
-                                "execute_blender_code",
-                                {"code": _EntitySnapshot._snapshot_code()},
-                                mcp_port,
-                            )
-                            try:
-                                fresh_data = json.loads(fresh_raw)
-                                if fresh_data.get("status") == "ok":
-                                    _turn_snapshot = _EntitySnapshot.from_dict(
-                                        fresh_data.get("result", {}))
-                            except (json.JSONDecodeError, TypeError):
-                                pass
-                            # Inject context message about what was created.
-                            ctx = _entity_diff_to_context_message(_turn_entities)
-                            if ctx and not _entity_context_injected:
-                                print("[🛠️Coworker] run_conversation_turn: entity context injected — {:s}".format(
-                                    _turn_entities.summary()))
-                                history.append({"role": "system", "content": ctx})
-                                _entity_context_injected = True
+                        # Parse snapshot from merged result.
+                        try:
+                            merged_data = json.loads(merged_raw)
+                            if merged_data.get("status") == "ok":
+                                snap_data = merged_data.get("result", {}).get("snapshot")
+                                if snap_data and _turn_snapshot is not None:
+                                    current_snap = _EntitySnapshot.from_dict(snap_data)
+                                    step_diff = _diff_snapshots(_turn_snapshot, current_snap)
+                                    if not step_diff.is_empty():
+                                        _turn_entities.merge(step_diff)
+                                        _turn_snapshot = current_snap
+                                        # Inject context message once per turn.
+                                        ctx = _entity_diff_to_context_message(_turn_entities)
+                                        if ctx and not _entity_context_injected:
+                                            print("[🛠️Coworker] run_conversation_turn: entity context injected — {:s}".format(
+                                                _turn_entities.summary()))
+                                            history.append({"role": "system", "content": ctx})
+                                            _entity_context_injected = True
+                        except (json.JSONDecodeError, TypeError):
+                            pass
 
                     # ── Save to text editor memory bank ────────────────
                     if not _prev_code_errored:

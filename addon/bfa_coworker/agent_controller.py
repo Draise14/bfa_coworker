@@ -1504,6 +1504,32 @@ def _codes_overlap(prev_code: str, new_code: str) -> bool:
     return bool(prev_ops & new_ops)
 
 
+# ---------------------------------------------------------------------------
+# Text editor memory bank helpers
+
+_code_sequence_counter: int = 0
+
+
+def _next_code_sequence() -> str:
+    """Return the next zero-padded 3-digit sequence number (001, 002, ...)."""
+    global _code_sequence_counter
+    _code_sequence_counter += 1
+    return "{:03d}".format(_code_sequence_counter)
+
+
+def _clear_coworker_text_blocks() -> None:
+    """Remove all Coworker_* text datablocks from Blender's text editor."""
+    global _code_sequence_counter
+    _code_sequence_counter = 0
+    try:
+        import bpy as _bpy  # pylint: disable=import-error
+        for text_block in list(_bpy.data.texts):
+            if text_block.name.startswith("Coworker_"):
+                _bpy.data.texts.remove(text_block)
+    except Exception:
+        pass  # Best-effort.
+
+
 def run_conversation_turn(
     user_message: str,
     on_text: Callable[[str], None] | None = None,
@@ -1810,13 +1836,8 @@ def run_conversation_turn(
                             import bpy as _bpy  # pylint: disable=import-error
                             prefs = _bpy.context.preferences.addons[__package__].preferences
                             if getattr(prefs, "save_code_to_text_editor", True):
-                                from datetime import datetime as _datetime
-                                ts = _datetime.now().strftime("%H-%M-%S")
-                                name = "Coworker_{:s}".format(ts)
-                                # Remove old text block with same name if it exists.
-                                existing = _bpy.data.texts.get(name)
-                                if existing is not None:
-                                    _bpy.data.texts.remove(existing)
+                                seq = _next_code_sequence()
+                                name = "Coworker_{:s}".format(seq)
                                 text_block = _bpy.data.texts.new(name)
                                 text_block.write(_prev_code)
                                 print("[🛠️Coworker] run_conversation_turn: saved code to text editor '{:s}'".format(name))

@@ -349,6 +349,8 @@ class BFACW_OT_chat_clear(Operator):  # type: ignore[misc]
         agent_controller._agent_state.streaming_text = ""
         agent_controller._agent_state.reasoning_text = ""
         agent_controller._agent_state.thinking_dots = 0
+        # Clear Coworker_* text datablocks from the text editor.
+        agent_controller._clear_coworker_text_blocks()
         # Clear cached system prompt so project rules are reloaded on next turn.
         agent_controller._clear_system_prompt_cache()
         _save_chat_history()

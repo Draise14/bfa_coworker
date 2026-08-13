@@ -1883,17 +1883,55 @@ def run_conversation_turn(
                     if should_undo:
                         print("[🛠️Coworker] run_conversation_turn: smart undo triggered — {:s}".format(reason))
                         # Undo to the state before the previous execute_blender_code.
+                        # Must use context override — bpy.ops.ed.undo() needs a window context
+                        # which isn't available in the bridge server's exec() namespace.
                         _call_mcp_tool_sync("execute_blender_code",
-                            {"code": "bpy.ops.ed.undo()"}, mcp_port)
+                            {"code": (
+                                "import bpy\n"
+                                "for w in bpy.context.window_manager.windows:\n"
+                                "    for a in w.screen.areas:\n"
+                                "        if a.type == 'VIEW_3D':\n"
+                                "            with bpy.context.temp_override(window=w, area=a):\n"
+                                "                bpy.ops.ed.undo()\n"
+                                "            break\n"
+                                "    else:\n"
+                                "        continue\n"
+                                "    break\n"
+                                "result = {'status': 'ok', 'message': 'undo executed'}"
+                            )}, mcp_port)
                         # Push a fresh undo state so the next iteration can undo this one.
                         _call_mcp_tool_sync("execute_blender_code",
-                            {"code": "bpy.ops.ed.undo_push(message=\"bfa_coworker_pre_script\")"},
+                            {"code": (
+                                "import bpy\n"
+                                "for w in bpy.context.window_manager.windows:\n"
+                                "    for a in w.screen.areas:\n"
+                                "        if a.type == 'VIEW_3D':\n"
+                                "            with bpy.context.temp_override(window=w, area=a):\n"
+                                "                bpy.ops.ed.undo_push(message='bfa_coworker_pre_script')\n"
+                                "            break\n"
+                                "    else:\n"
+                                "        continue\n"
+                                "    break\n"
+                                "result = {'status': 'ok', 'message': 'undo push executed'}"
+                            )},
                             mcp_port)
 
                 # ── Push initial undo state before first code execution ─
                 if tool_name == "execute_blender_code" and not _undo_pushed:
                     _call_mcp_tool_sync("execute_blender_code",
-                        {"code": "bpy.ops.ed.undo_push(message=\"bfa_coworker_pre_script\")"},
+                        {"code": (
+                            "import bpy\n"
+                            "for w in bpy.context.window_manager.windows:\n"
+                            "    for a in w.screen.areas:\n"
+                            "        if a.type == 'VIEW_3D':\n"
+                            "            with bpy.context.temp_override(window=w, area=a):\n"
+                            "                bpy.ops.ed.undo_push(message='bfa_coworker_pre_script')\n"
+                            "            break\n"
+                            "    else:\n"
+                            "        continue\n"
+                            "    break\n"
+                            "result = {'status': 'ok', 'message': 'undo push executed'}"
+                        )},
                         mcp_port)
                     _undo_pushed = True
 

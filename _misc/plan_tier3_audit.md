@@ -243,7 +243,7 @@ Execute in this order. Each fix is independently verifiable.
 - [x] Fix 8: Verify collection heuristic catches jump_to_view3d mutations
 - [x] Perf 1: Skip snapshot on read-only tool results
 - [x] Phase 1: Scene-aware domain pre-detection
-- [ ] Phase 2: Domain-aware skill auto-injection
+- [x] Phase 2: Domain-aware skill auto-injection
 - [ ] Phase 3: Result trimming middleware
 - [ ] Phase 4: Composite tool wrappers
 - [ ] Phase 5: User skill loader

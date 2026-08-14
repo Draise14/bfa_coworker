@@ -63,6 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Collection Heuristic Hardening** — Added `layer_col.exclude` and `layer_col.hide_viewport` to `_code_touches_collections()` patterns, catching collection mutations from `jump_to_view3d_*` tool templates that were previously missed. Prevents Blender 5.3 depsgraph crash after full `view_layer.update()` following collection edits.
 - **Read-Only Snapshot Skip** — Added `_code_is_readonly()` heuristic that detects read-only code (no `bpy.ops`, `.new()`, `.remove()`, etc.) and skips the costly 12-datablock entity snapshot on those calls. Saves significant overhead when the LLM makes many inspection calls between mutation calls.
 - **Scene-Aware Domain Pre-Detection** — Added `_detect_domain_from_scene()` that scans `bpy.data` for armatures, actions, materials, node groups, lights, cameras, meshes, sequencer strips, and geometry nodes modifiers. Pre-loads matching domains before the turn starts, so the LLM has the right tools even when the user's prompt is vague about what exists in the scene.
+- **Domain-Aware Skill Auto-Injection** — Added `_DOMAIN_SKILL_MAP` and `get_domain_skills()` to bundle domain skill files (`animation.md`, `materials.md`, `mesh_editing.md`, `modifiers.md`, `rendering.md`) into the system prompt when matching domains are detected. The LLM gets version-aware API rules upfront without needing to search for them.
 
 ## [v1.1.36] - 2026-08-12
 

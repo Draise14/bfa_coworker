@@ -2266,6 +2266,21 @@ def _run_conversation_turn_inner(
         _detected_domains.update(_scene_domains)
         _loaded_domains.update(_detected_domains)
         openai_tools = _build_tool_set(_all_tools, _detected_domains)
+
+        # ── Domain skill auto-injection ────────────────────────────────
+        # Inject relevant skill files (e.g. animation.md, materials.md)
+        # into the system prompt so the LLM has version-aware API rules
+        # for the detected domains without needing to search for them.
+        if _detected_domains:
+            try:
+                from . import skills as _skills_mod  # pylint: disable=import-error
+                _domain_skills_text = _skills_mod.get_domain_skills(_detected_domains)
+                if _domain_skills_text:
+                    history.append({"role": "system", "content": _domain_skills_text})
+                    print("[🛠️Coworker] run_conversation_turn: domain skills injected for {:s}".format(
+                        ",".join(sorted(_detected_domains))))
+            except Exception:
+                pass  # Best-effort; don't break the agent loop.
     else:
         _all_tools = openai_tools  # Unused in remote mode, but keep for consistency.
 

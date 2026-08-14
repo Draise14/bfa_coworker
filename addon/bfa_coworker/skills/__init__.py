@@ -17,6 +17,7 @@ discovered by the LLM through the existing bundled-docs search tools.
 
 __all__ = (
     "get_always_loaded_skills",
+    "get_domain_skills",
     "list_loaded_skills",
     "clear_cache",
 )
@@ -143,3 +144,61 @@ def _build_final(built_in: str, custom_text: str) -> str:
     if custom_text and custom_text.strip():
         result += "\n\n## User Custom Skills\n{:s}".format(custom_text.strip())
     return result
+
+
+# ── Domain-to-skill mapping ────────────────────────────────────────
+# Maps domain keys (from _TOOL_DOMAINS in agent_controller.py) to
+# skill filenames in mcp/blmcp/data/skills/ (or vendor/blmcp/data/skills/
+# in deployed builds).
+
+_DOMAIN_SKILL_MAP: dict[str, list[str]] = {
+    "animation": ["animation.md"],
+    "material": ["materials.md"],
+    "modeling": ["mesh_editing.md", "modifiers.md"],
+    "lighting": [],  # No dedicated skill file yet.
+    "rendering": ["rendering.md"],
+    "vse": [],
+    "geometry_nodes": ["modifiers.md"],
+}
+
+
+def get_domain_skills(domains: set[str]) -> str:
+    """Load and concatenate skill files for the given domain set.
+
+    Searches both the dev layout (``mcp/blmcp/data/skills/``) and the
+    deployed layout (``vendor/blmcp/data/skills/``) for each skill file.
+    Returns empty string if no domain skills are found or if no matching
+    files exist.
+    """
+    if not domains:
+        return ""
+
+    # Collect skill filenames from all requested domains.
+    filenames: set[str] = set()
+    for d in domains:
+        for fname in _DOMAIN_SKILL_MAP.get(d, []):
+            filenames.add(fname)
+
+    if not filenames:
+        return ""
+
+    # Search paths: dev layout first, then deployed layout.
+    this_dir = Path(__file__).resolve().parent
+    search_paths = [
+        this_dir.parent.parent.parent / "mcp" / "blmcp" / "data" / "skills",  # dev
+        this_dir.parent.parent / "vendor" / "blmcp" / "data" / "skills",  # deployed
+    ]
+
+    parts: list[str] = []
+    for fname in sorted(filenames):
+        for sp in search_paths:
+            fpath = sp / fname
+            text = _read_skill(fpath)
+            if text:
+                parts.append(text)
+                break
+
+    if not parts:
+        return ""
+
+    return "## Domain Skills\n{:s}".format("\n\n---\n\n".join(parts))

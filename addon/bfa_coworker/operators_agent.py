@@ -342,6 +342,8 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
 # Track which step the user is on for each suite.
 # Keyed by suite name, value is the current step index (0-based).
 _test_suite_progress: dict[str, int] = {}
+# Busy guard: True while a step thread is running for a given suite.
+_test_suite_running: dict[str, bool] = {}
 
 
 class _BFACW_OT_test_step(bpy.types.Operator):  # type: ignore[misc]
@@ -363,6 +365,11 @@ class _BFACW_OT_test_step(bpy.types.Operator):  # type: ignore[misc]
         suite = _TEST_SUITES.get(self.suite)
         if not suite:
             self.report({"ERROR"}, "Unknown test suite '{:s}'".format(self.suite))
+            return {"CANCELLED"}
+
+        # Busy guard: don't start a new step while one is running.
+        if _test_suite_running.get(self.suite, False):
+            self.report({"WARNING"}, "A step is already running for this suite.")
             return {"CANCELLED"}
 
         # Get current step index.
@@ -437,6 +444,7 @@ def _run_test_step(
     print("[🛠️Coworker] test suite '{:s}': prompt = {:s}".format(suite_key, prompt))
 
     def _do_step():
+        _test_suite_running[suite_key] = True
         try:
             _ac.run_conversation_turn(
                 user_message=prompt,
@@ -454,6 +462,8 @@ def _run_test_step(
             print("[🛠️Coworker] test suite '{:s}': step {:d}/{:s} FAILED — {:s}".format(
                 suite_key, step_num, step_label, str(ex)))
             _ac._agent_state.error = str(ex)
+        finally:
+            _test_suite_running[suite_key] = False
 
     thread = threading.Thread(target=_do_step, daemon=True)
     thread.start()

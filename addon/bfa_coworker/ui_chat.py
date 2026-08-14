@@ -27,6 +27,7 @@ __all__ = (
 
 import json
 import os
+import threading
 from pathlib import Path
 
 import bpy  # pylint: disable=import-error
@@ -252,14 +253,20 @@ def _load_chat_history() -> list[dict]:
     return []
 
 
+# Thread lock for history serialization — prevents concurrent threads
+# from writing partial dumps when a turn finishes while another is active.
+_history_save_lock = threading.Lock()
+
+
 def _save_chat_history() -> None:
-    """Save conversation history to disk."""
+    """Save conversation history to disk (thread-safe)."""
     path = _chat_history_path()
-    try:
-        with open(str(path), "w", encoding="utf-8") as fh:
-            json.dump(agent_controller._agent_state.conversation_history, fh, indent=2)
-    except OSError:
-        pass
+    with _history_save_lock:
+        try:
+            with open(str(path), "w", encoding="utf-8") as fh:
+                json.dump(agent_controller._agent_state.conversation_history, fh, indent=2)
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +287,11 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
 
         if not agent_controller._agent_state.mcp_server_running:
             self.report({"ERROR"}, "Agent is not running. Start it from Preferences or the Chat panel.")
+            return {"CANCELLED"}
+
+        # Double-click guard: don't start a new turn while one is running.
+        if agent_controller._agent_state.turn_active:
+            self.report({"WARNING"}, "Already processing a message.")
             return {"CANCELLED"}
 
         # Clear input.

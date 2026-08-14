@@ -53,6 +53,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Python Context Internal State Bug** — Fixed internal state bug in Python context handling.
 - **No Text Content in Tool Result** — Fixed error when screenshot tool returns no text content.
 - **Debugging Panel Layout** — Moved debugging panel out of tabs per user feedback.
+- **Re-Entrancy Guard for Conversation Turns** — Added `turn_active` flag to `AgentState` preventing overlapping `run_conversation_turn()` calls from corrupting shared history. Chat send and test step buttons now check `turn_active` before spawning threads, eliminating the primary "two balls" duplicate-object root cause.
+- **Undo Code Silent Fallback Fix** — `_undo_code()` now returns an explicit `{"status": "error"}` when no window/area is available for undo/push, instead of silently returning `{"status": "ok"}` and leaving the scene dirty.
+- **`ValueError` Removed from Code-Bug Skip** — `_error_is_code_bug()` no longer treats `ValueError` as a pure code-bug, since it can fire after objects have been created. Prevents the smart-undo system from skipping undo when side effects exist.
+- **Auto-Continue Tool Call Deduplication** — When `finish_reason=length` triggers auto-continue, tool calls from the continuation are now deduplicated by ID before merging, preventing duplicate tool execution.
+- **Test Suite Busy Guard** — Added `_test_suite_running` tracking to prevent launching concurrent test steps for the same suite. Progress no longer advances until the step thread completes.
+- **Thread-Safe History Save** — Added `_history_save_lock` to `_save_chat_history()` preventing concurrent threads from writing partial conversation dumps.
+- **Test File Tail Cleanup** — Removed duplicated `TestForegroundServer`/`TestInteractiveServer` class definitions and malformed `exit(1)    unittest.main()` line from `tests/test_blender_mcp_with_blender.py`.
 
 ## [v1.1.36] - 2026-08-12
 

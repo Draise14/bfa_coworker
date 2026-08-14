@@ -459,6 +459,9 @@ class AgentState:
     mcp_live: bool = False
     llm_live: bool = False
 
+    # ── Re-entrancy guard ──────────────────────────────────────────
+    turn_active: bool = False  # True while a conversation turn is in progress.
+
 
 _agent_state = AgentState()
 
@@ -1639,17 +1642,20 @@ def _tool_result_summary(result_text: str, max_len: int = 150) -> str:
 def _error_is_code_bug(error_text: str) -> bool:
     """Return ``True`` if *error_text* is a pure code bug with no side effects.
 
-    Code-bug errors (KeyError, AttributeError, TypeError, NameError,
-    ValueError) fail before creating any objects or modifying the scene.
-    There's nothing to undo — skipping the undo saves 2 round-trips and
-    avoids depsgraph crashes from undo+push on empty scenes.
+    Code-bug errors (KeyError, AttributeError, TypeError, NameError) fail
+    before creating any objects or modifying the scene.  There's nothing to
+    undo — skipping the undo saves 2 round-trips and avoids depsgraph crashes
+    from undo+push on empty scenes.
+
+    NOTE: ``ValueError`` is deliberately excluded from this list because it
+    can fire *after* objects have been created (e.g. a cube added then bad
+    geometry math).  Undoing such errors is essential to prevent duplicates.
     """
     _CODE_BUG_PATTERNS = (
         "KeyError:",
         "AttributeError:",
         "TypeError:",
         "NameError:",
-        "ValueError:",
         "Node type",
         "undefined",
     )
@@ -1938,7 +1944,9 @@ def _undo_code(action: str, message: str = "", extra_result: str = "") -> str:
         "        else:\n"
         "            continue\n"
         "        break\n"
-    ).format(action, extra_result, body, body)
+        "    else:\n"
+        "        result = {{'status': 'error', 'message': 'No window/area available for {:s}'}}\n"
+    ).format(action, extra_result, body, body, action)
 
 
 # Snapshot JSON keys used as extra_result for merged undo+snapshot calls.
@@ -2013,6 +2021,34 @@ def run_conversation_turn(
     responds with text only (read-only Q&A).
 
     This is a BLOCKING call — run it via ``schedule_coro`` or in a thread.
+    """
+    # ── Re-entrancy guard ──────────────────────────────────────────────
+    if _agent_state.turn_active:
+        print("[🛠️Coworker] run_conversation_turn: re-entrancy blocked — turn already active")
+        return _agent_state.conversation_history
+    _agent_state.turn_active = True
+    try:
+        return _run_conversation_turn_inner(
+            user_message, on_text, on_status, on_reasoning,
+            llm_url, api_key, model, mcp_port, chat_mode,
+        )
+    finally:
+        _agent_state.turn_active = False
+
+
+def _run_conversation_turn_inner(
+    user_message: str,
+    on_text: Callable[[str], None] | None = None,
+    on_status: Callable[[str], None] | None = None,
+    on_reasoning: Callable[[str], None] | None = None,
+    llm_url: str | None = None,
+    api_key: str | None = None,
+    model: str | None = None,
+    mcp_port: int = _MCP_SERVER_DEFAULT_PORT,
+    chat_mode: str = "AGENT",
+) -> list[dict[str, Any]]:
+    """
+    Inner body of ``run_conversation_turn`` — wrapped by the re-entrancy guard.
     """
     clear_stop()
     history = _agent_state.conversation_history
@@ -2232,9 +2268,14 @@ def run_conversation_turn(
 
             content = content + cont_content
             if cont_tool_calls:
-                # Merge tool calls from continuation.
+                # Merge tool calls from continuation, deduplicating by ID.
                 existing = msg.get("tool_calls") or []
-                msg["tool_calls"] = existing + cont_tool_calls
+                seen_ids = {tc.get("id") for tc in existing if tc.get("id")}
+                for tc in cont_tool_calls:
+                    if tc.get("id") not in seen_ids:
+                        existing.append(tc)
+                        seen_ids.add(tc.get("id"))
+                msg["tool_calls"] = existing
             msg["content"] = content
             finish_reason = cont_choice.get("finish_reason", "")
             print("[🛠️Coworker] run_conversation_turn:   after continue: "

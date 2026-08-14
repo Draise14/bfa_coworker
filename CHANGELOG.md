@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Hybrid Tool Domain System** — Cascaded tool loading for local models: surface tools (code execution + scene inspection) always loaded; domain tools (animation, material, modeling, lighting, rendering, VSE, geometry nodes) pre-detected from user prompt keywords or loaded on-demand via `load_tools` meta-tool. Keeps context window small (~8 tools vs 30) while giving the LLM access to all tools when needed. Remote mode unaffected.
+- **Smart Undo Skip for Code-Bug Errors** — `_error_is_code_bug()` detects pure code-bug errors (KeyError, AttributeError, TypeError, NameError, ValueError, "Node type undefined") that fail before creating any objects. Skips the undo+push round-trips, saving 2 HTTP calls per retry and avoiding depsgraph crashes from undo on empty scenes.
+- **Blender 5.3 Material Node Hint** — Added to `skills/blender_53.md`: when `mat.use_nodes = True`, Blender auto-creates Principled BSDF + Material Output already connected. LLM should find them by iterating `node.type` instead of `nodes.new('BSDF_PRINCIPLED')` which doesn't work in Bforartists 5.3.
+- **Reasoning Content Stripped from LLM Requests** — `_strip_reasoning_from_history()` removes non-standard `"reasoning"`-role messages before sending to the LLM, saving 500-3,000 tokens per request. Reasoning is still stored in full history for UI display.
 - **Polyhaven Tools** — New tools for downloading CC0 resources from Polyhaven (models, HDRIs, textures) directly from the agent. Supports URL-based setup and test build.
 - **Generative Plugin Foundation** — Tier 5 foundation: image gen plugins with auto-discovery, controller, and plugin base classes. Supports audio, image, text, and video plugin types, usability still WIP (not usable).
 - **Version-Aware Skills System** — New searchable domain skills system with version-aware Blender API skills (`blender_50_51.md`, `blender_52.md`, `blender_53.md`). User custom skills support.
@@ -43,6 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Depsgraph Crashes in Blender 5.3** — Replaced crash-prone `view_layer.update()` calls with `_safe_depsgraph_sync()` that uses `update_tag()` on each object (lightweight, no full rebuild). Added `_code_touches_collections()` and `_code_is_undo_or_push()` heuristics to skip full depsgraph sync after collection-manipulation and undo/push operations. Removed before-exec depsgraph sync entirely — tagging objects before smart undo caused stale-object crashes in `pyrna_struct_CreatePyObject`.
+- **Defensive Entity Snapshots** — `_SNAPSHOT_EXTRA` now wraps each datablock iteration in try/except via `_sn()` helper, so a single corrupted datablock doesn't crash the entire snapshot.
 - **Remote API Mode** — Fixed remote API mode not working correctly. Unified Operating Mode selector resolves mode conflicts.
 - **Python Context Internal State Bug** — Fixed internal state bug in Python context handling.
 - **No Text Content in Tool Result** — Fixed error when screenshot tool returns no text content.

@@ -100,6 +100,35 @@ mesh.auto_smooth_angle = 0
 The old `mesh.use_auto_smooth = True` / `mesh.use_auto_smooth = False` pattern
 will raise `AttributeError: 'Mesh' object has no attribute 'use_auto_smooth'`.
 
+### Material Nodes — Default Nodes Already Exist
+
+When you create a new material and set `mat.use_nodes = True`, Blender
+automatically creates a Principled BSDF node and a Material Output node
+already connected.  Do NOT try to create them manually with
+`nodes.new('BSDF_PRINCIPLED')` or `nodes.new('OUTPUT_MATERIAL')` — these
+node type identifiers may not work in Bforartists 5.3.
+
+Instead, find the existing nodes by iterating:
+
+```python
+mat = bpy.data.materials.new(name="MyMat")
+mat.use_nodes = True
+nodes = mat.node_tree.nodes
+principled = None
+for node in nodes:
+    if node.type == 'BSDF_PRINCIPLED':
+        principled = node
+        break
+# Now set inputs on principled:
+principled.inputs["Base Color"].default_value = (1, 0, 0, 1)
+principled.inputs["Roughness"].default_value = 0.2
+```
+
+To inspect available input names on a node, use:
+```python
+print([i.name for i in principled.inputs])
+```
+
 ### Modifier Creation
 
 In Bforartists, use `bpy.ops.object.modifier_add(type='NODES')` to add a

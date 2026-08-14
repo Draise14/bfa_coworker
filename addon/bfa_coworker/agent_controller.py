@@ -227,49 +227,156 @@ def _strip_reasoning_from_history(messages: list[dict[str, Any]]) -> list[dict[s
     return [m for m in messages if m.get("role") != "reasoning"]
 
 
-# ── Essential tools for local mode ─────────────────────────────────
-# Local models have limited context windows.  Sending all 30+ tool
-# schemas (each with full JSON inputSchema) can consume thousands of
-# tokens.  We send only the essential tools that the LLM actually needs
-# for code execution and scene inspection.
-_LOCAL_ESSENTIAL_TOOLS = frozenset({
+# ── Tool domain system (hybrid: pre-detect + on-demand) ────────────
+# Surface tools are always loaded — they cover code execution and basic
+# scene inspection.  Domain tools are loaded based on the user's prompt
+# (pre-detected) or on-demand via the ``load_tools`` meta-tool.
+#
+# This keeps the context window small for local models while still
+# giving the LLM access to all tools when needed.
+
+_SURFACE_TOOLS = frozenset({
     "execute_blender_code",
-    "get_blendfile_summary_datablocks_toolcode",
-    "get_object_info",
-    "create_object",
-    "modify_object",
-    "delete_object",
-    "set_material",
-    "render_scene",
-    "get_screenshot_of_area_as_image_toolcode",
-    "get_screenshot_of_window_as_image_toolcode",
-    "download_polyhaven_asset",
-    "jump_to_view3d_object_by_name_toolcode",
-    "jump_to_view3d_object_data_by_name_toolcode",
-    "jump_to_tab_by_name_toolcode",
-    "jump_to_tab_by_space_type_toolcode",
+    "get_blendfile_summary_datablocks",
+    "get_object_detail_summary",
+    "get_objects_summary",
 })
 
+_TOOL_DOMAINS: dict[str, frozenset[str]] = {
+    "animation": frozenset({
+        "jump_to_view3d_object_by_name",
+        "jump_to_view3d_object_data_by_name",
+        "render_viewport_to_path",
+    }),
+    "material": frozenset({
+        "download_polyhaven_asset",
+        "search_polyhaven_assets",
+        "get_screenshot_of_area_as_image",
+        "render_viewport_to_path",
+    }),
+    "modeling": frozenset({
+        "jump_to_view3d_object_by_name",
+        "jump_to_view3d_object_data_by_name",
+        "jump_to_tab_by_name",
+        "jump_to_tab_by_space_type",
+        "get_screenshot_of_area_as_image",
+    }),
+    "lighting": frozenset({
+        "download_polyhaven_asset",
+        "search_polyhaven_assets",
+        "render_viewport_to_path",
+        "get_screenshot_of_area_as_image",
+    }),
+    "rendering": frozenset({
+        "render_viewport_to_path",
+        "get_screenshot_of_area_as_image",
+        "get_screenshot_of_window_as_image",
+    }),
+    "vse": frozenset({
+        "jump_to_tab_by_name",
+        "jump_to_tab_by_space_type",
+    }),
+    "geometry_nodes": frozenset({
+        "jump_to_view3d_object_by_name",
+        "jump_to_view3d_object_data_by_name",
+        "get_screenshot_of_area_as_image",
+    }),
+}
 
-def _filter_tools_for_local(
-    openai_tools: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Filter OpenAI-format tools to only the essential ones for local mode.
+_DOMAIN_KEYWORDS: dict[str, list[str]] = {
+    "animation": [
+        "animate", "keyframe", "fcurve", "armature", "bone", "rig",
+        "pose", "timeline", "action", "bounce", "walk cycle", "driver",
+    ],
+    "material": [
+        "material", "shader", "texture", "node", "bsdf", "principled",
+        "pbr", "glass", "metal", "rubber", "sss", "subsurface",
+    ],
+    "modeling": [
+        "mesh", "edit", "extrude", "bevel", "loop cut", "knife",
+        "sculpt", "boolean", "subdivide", "merge", "bridge",
+    ],
+    "lighting": [
+        "light", "lamp", "sun", "point", "area", "hdri",
+        "world", "environment", "illuminat", "three-point",
+    ],
+    "rendering": [
+        "render", "camera", "eevee", "cycles", "output",
+        "resolution", "frame", "focal length", "depth of field",
+    ],
+    "vse": [
+        "sequencer", "strip", "video", "audio", "clip", "edit",
+        "cut", "vse", "timeline",
+    ],
+    "geometry_nodes": [
+        "geometry node", "node group", "modifier", "simulation",
+        "geonode", "procedural",
+    ],
+}
 
-    Local models have limited context windows (32K tokens).  Sending all
-    30+ tool schemas with full JSON inputSchema can consume 3,000-5,000
-    tokens.  We keep only the tools the LLM actually needs.
+# Synthetic tool schema for on-demand domain loading.
+# This is NOT a real MCP tool — the conversation loop intercepts it.
+_LOAD_TOOLS_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "load_tools",
+        "description": (
+            "Load additional domain-specific Blender tools. "
+            "Call this when you need tools for a specific domain: "
+            + ", ".join(sorted(_TOOL_DOMAINS.keys()))
+            + ". Surface tools (code execution, scene inspection) "
+            "are always available."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "domain": {
+                    "type": "string",
+                    "enum": sorted(_TOOL_DOMAINS.keys()),
+                    "description": "The domain to load tools for.",
+                }
+            },
+            "required": ["domain"],
+        },
+    },
+}
 
-    *openai_tools* is already in OpenAI format where the tool name is at
-    ``tool["function"]["name"]``.
+
+def _detect_domain(prompt: str) -> str | None:
+    """Heuristic: detect the Blender domain from a user prompt.
+
+    Returns a domain key from ``_TOOL_DOMAINS``, or ``None`` if no
+    domain is detected (surface tools only).
     """
+    prompt_lower = prompt.lower()
+    for domain, keywords in _DOMAIN_KEYWORDS.items():
+        if any(kw in prompt_lower for kw in keywords):
+            return domain
+    return None
+
+
+def _build_tool_set(
+    all_openai_tools: list[dict[str, Any]],
+    domain: str | None,
+) -> list[dict[str, Any]]:
+    """Build the tool set for local mode: surface + domain + load_tools.
+
+    *all_openai_tools* — the full list of all available tools in OpenAI format.
+    *domain* — pre-detected domain, or ``None`` for surface only.
+    """
+    allowed = set(_SURFACE_TOOLS)
+    if domain and domain in _TOOL_DOMAINS:
+        allowed.update(_TOOL_DOMAINS[domain])
+
     filtered = [
-        t for t in openai_tools
-        if t.get("function", {}).get("name") in _LOCAL_ESSENTIAL_TOOLS
+        t for t in all_openai_tools
+        if t.get("function", {}).get("name") in allowed
     ]
-    if len(filtered) < len(openai_tools):
-        print("[🛠️Coworker] _filter_tools_for_local: {:d} → {:d} tools".format(
-            len(openai_tools), len(filtered)))
+    # Always include the load_tools meta-tool.
+    filtered.append(_LOAD_TOOLS_SCHEMA)
+
+    print("[🛠️Coworker] _build_tool_set: {:d} → {:d} tools (domain={:s})".format(
+        len(all_openai_tools), len(filtered), domain or "none"))
     return filtered
 
 
@@ -1529,6 +1636,26 @@ def _tool_result_summary(result_text: str, max_len: int = 150) -> str:
     return result_text[:max_len] + "..."
 
 
+def _error_is_code_bug(error_text: str) -> bool:
+    """Return ``True`` if *error_text* is a pure code bug with no side effects.
+
+    Code-bug errors (KeyError, AttributeError, TypeError, NameError,
+    ValueError) fail before creating any objects or modifying the scene.
+    There's nothing to undo — skipping the undo saves 2 round-trips and
+    avoids depsgraph crashes from undo+push on empty scenes.
+    """
+    _CODE_BUG_PATTERNS = (
+        "KeyError:",
+        "AttributeError:",
+        "TypeError:",
+        "NameError:",
+        "ValueError:",
+        "Node type",
+        "undefined",
+    )
+    return any(p in error_text for p in _CODE_BUG_PATTERNS)
+
+
 # ---------------------------------------------------------------------------
 # Spiral detection helpers — break repeated error loops
 
@@ -1921,6 +2048,7 @@ def run_conversation_turn(
     # auto-undo duplicates. Reset at the start of each turn.
     _prev_code: str | None = None
     _prev_code_errored: bool = False
+    _prev_code_error: str = ""  # Error text for code-bug detection.
     _undo_pushed: bool = False  # True once we've pushed the first undo state.
 
     # ── Entity tracking (per-turn) ────────────────────────────────────
@@ -1993,12 +2121,18 @@ def run_conversation_turn(
     max_tokens = _llm_cfg.local_max_tokens if llm_port_local is not None else 16384
     print("[🛠️Coworker] run_conversation_turn: using max_tokens={:d}".format(max_tokens))
 
-    # ── Filter tools for local mode ───────────────────────────────────
-    # Local models have limited context windows.  Sending all 30+ tool
-    # schemas with full JSON inputSchema can consume thousands of tokens.
-    # We keep only the essential tools the LLM actually needs.
+    # ── Tool domain system (hybrid: pre-detect + on-demand) ────────────
+    # Pre-detect the domain from the user's prompt (0 extra round-trips).
+    # The LLM can also call ``load_tools`` mid-turn to switch domains.
+    _loaded_domains: set[str] = set()
     if llm_port_local is not None and openai_tools:
-        openai_tools = _filter_tools_for_local(openai_tools)
+        _all_tools = openai_tools  # Keep full list for on-demand loading.
+        _detected = _detect_domain(user_message)
+        if _detected:
+            _loaded_domains.add(_detected)
+        openai_tools = _build_tool_set(_all_tools, _detected)
+    else:
+        _all_tools = openai_tools  # Unused in remote mode, but keep for consistency.
 
     iterations = 0
     while iterations < _MAX_TOOL_ITERATIONS:
@@ -2161,6 +2295,39 @@ def run_conversation_turn(
                 tool_name = fn.get("name", "")
                 tool_id = tc.get("id", "")
 
+                # ── load_tools meta-tool (on-demand domain loading) ────
+                # Intercepted here — not sent to the MCP server.
+                if tool_name == "load_tools" and llm_port_local is not None:
+                    domain = args.get("domain", "")
+                    if domain in _TOOL_DOMAINS and domain not in _loaded_domains:
+                        _loaded_domains.add(domain)
+                        # Rebuild with all loaded domains.
+                        _combined = set(_SURFACE_TOOLS)
+                        for d in _loaded_domains:
+                            _combined.update(_TOOL_DOMAINS.get(d, set()))
+                        openai_tools = [
+                            t for t in _all_tools
+                            if t.get("function", {}).get("name") in _combined
+                        ]
+                        openai_tools.append(_LOAD_TOOLS_SCHEMA)
+                        print("[🛠️Coworker] run_conversation_turn: load_tools '{:s}' — now {:d} tools".format(
+                            domain, len(openai_tools)))
+                        history.append({
+                            "role": "tool",
+                            "tool_call_id": tool_id,
+                            "name": "load_tools",
+                            "content": "Loaded {:s} tools. {:d} tools now available.".format(
+                                domain, len(openai_tools)),
+                        })
+                    else:
+                        history.append({
+                            "role": "tool",
+                            "tool_call_id": tool_id,
+                            "name": "load_tools",
+                            "content": "Domain '{:s}' already loaded or unknown.".format(domain),
+                        })
+                    continue  # Skip MCP call — handled locally.
+
                 if on_status:
                     on_status(_friendly_tool_status(tool_name))
 
@@ -2169,12 +2336,20 @@ def run_conversation_turn(
                 # errored, undo to clean up partial effects before retrying.
                 # On successful overlap (same operations detected), inject
                 # context so the LLM knows what already exists.
+                #
+                # Skip undo for pure code-bug errors (KeyError, AttributeError,
+                # TypeError, NameError, ValueError) — these fail before creating
+                # any objects, so there's nothing to undo.  Undoing wastes 2
+                # round-trips and can trigger depsgraph crashes.
                 if tool_name == "execute_blender_code" and _prev_code is not None:
                     should_undo = False
                     reason = ""
                     if _prev_code_errored:
-                        should_undo = True
-                        reason = "previous call errored"
+                        if _error_is_code_bug(_prev_code_error):
+                            print("[🛠️Coworker] run_conversation_turn: smart undo SKIPPED — code-bug error, no side effects")
+                        else:
+                            should_undo = True
+                            reason = "previous call errored"
                     elif _codes_overlap(_prev_code, args.get("code", "")):
                         # Overlap detected on a successful previous call.
                         # Inject context instead of auto-undoing.
@@ -2223,6 +2398,7 @@ def run_conversation_turn(
                 if tool_name == "execute_blender_code":
                     _prev_code = args.get("code", "")
                     _prev_code_errored = '"status": "error"' in result_text
+                    _prev_code_error = result_text if _prev_code_errored else ""
 
                     # ── Push bookmark + entity snapshot (merged) ───────
                     # Merging these into a single execute_blender_code call

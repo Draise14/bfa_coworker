@@ -214,6 +214,65 @@ def _drop_orphaned_tool_messages(messages: list[dict[str, Any]]) -> list[dict[st
     return cleaned
 
 
+def _strip_reasoning_from_history(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Remove ``reasoning``-role messages from history before sending to the LLM.
+
+    Reasoning content (chain-of-thought) is stored in history for the UI
+    but uses a non-standard ``"reasoning"`` role that most LLM APIs don't
+    recognize.  Sending it wastes context window tokens without providing
+    useful signal.  We keep it in the full history for UI display but
+    strip it before each LLM request.
+    """
+    return [m for m in messages if m.get("role") != "reasoning"]
+
+
+# ── Essential tools for local mode ─────────────────────────────────
+# Local models have limited context windows.  Sending all 30+ tool
+# schemas (each with full JSON inputSchema) can consume thousands of
+# tokens.  We send only the essential tools that the LLM actually needs
+# for code execution and scene inspection.
+_LOCAL_ESSENTIAL_TOOLS = frozenset({
+    "execute_blender_code",
+    "get_blendfile_summary_datablocks_toolcode",
+    "get_object_info",
+    "create_object",
+    "modify_object",
+    "delete_object",
+    "set_material",
+    "render_scene",
+    "get_screenshot_of_area_as_image_toolcode",
+    "get_screenshot_of_window_as_image_toolcode",
+    "download_polyhaven_asset",
+    "jump_to_view3d_object_by_name_toolcode",
+    "jump_to_view3d_object_data_by_name_toolcode",
+    "jump_to_tab_by_name_toolcode",
+    "jump_to_tab_by_space_type_toolcode",
+})
+
+
+def _filter_tools_for_local(
+    openai_tools: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Filter OpenAI-format tools to only the essential ones for local mode.
+
+    Local models have limited context windows (32K tokens).  Sending all
+    30+ tool schemas with full JSON inputSchema can consume 3,000-5,000
+    tokens.  We keep only the tools the LLM actually needs.
+
+    *openai_tools* is already in OpenAI format where the tool name is at
+    ``tool["function"]["name"]``.
+    """
+    filtered = [
+        t for t in openai_tools
+        if t.get("function", {}).get("name") in _LOCAL_ESSENTIAL_TOOLS
+    ]
+    if len(filtered) < len(openai_tools):
+        print("[🛠️Coworker] _filter_tools_for_local: {:d} → {:d} tools".format(
+            len(openai_tools), len(filtered)))
+    return filtered
+
+
 # ---------------------------------------------------------------------------
 # SSE (Server-Sent Events) parser
 # FastMCP in stateless_http mode returns SSE streams even for
@@ -1934,6 +1993,13 @@ def run_conversation_turn(
     max_tokens = _llm_cfg.local_max_tokens if llm_port_local is not None else 16384
     print("[🛠️Coworker] run_conversation_turn: using max_tokens={:d}".format(max_tokens))
 
+    # ── Filter tools for local mode ───────────────────────────────────
+    # Local models have limited context windows.  Sending all 30+ tool
+    # schemas with full JSON inputSchema can consume thousands of tokens.
+    # We keep only the essential tools the LLM actually needs.
+    if llm_port_local is not None and openai_tools:
+        openai_tools = _filter_tools_for_local(openai_tools)
+
     iterations = 0
     while iterations < _MAX_TOOL_ITERATIONS:
         iterations += 1
@@ -1962,6 +2028,12 @@ def run_conversation_turn(
                 history_to_send = _drop_orphaned_tool_messages(history[-keep:])
         else:
             history_to_send = history
+
+        # Strip reasoning messages before sending to the LLM.
+        # Reasoning (chain-of-thought) uses a non-standard "reasoning"
+        # role that wastes context window tokens without providing
+        # useful signal to the model.
+        history_to_send = _strip_reasoning_from_history(history_to_send)
 
         response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model, max_tokens)
         if response is None:

@@ -1701,6 +1701,56 @@ def _tool_result_summary(result_text: str, max_len: int = 150) -> str:
     return result_text[:max_len] + "..."
 
 
+def _trim_tool_result(result_text: str, max_chars: int = 500) -> str:
+    """Smart-trim a tool result for LLM context, stripping JSON boilerplate.
+
+    Unlike the old hard 500-char cut, this function:
+    - Strips the outer ``{"status": ..., "result": ...}`` wrapper and
+      keeps only the meaningful inner data.
+    - For error results, preserves the full error message.
+    - For success results, extracts the ``result`` sub-field if present,
+      giving the LLM more structured data within the same token budget.
+    - Falls back to a hard truncation for non-JSON or unparseable content.
+    """
+    if len(result_text) <= max_chars:
+        return result_text
+
+    # Try to parse as JSON.
+    try:
+        data = json.loads(result_text)
+    except (json.JSONDecodeError, TypeError):
+        # Not JSON — fall back to hard truncation.
+        return result_text[:max_chars] + "\n...[+{:d} more chars]".format(
+            len(result_text) - max_chars)
+
+    if not isinstance(data, dict):
+        return result_text[:max_chars] + "\n...[+{:d} more chars]".format(
+            len(result_text) - max_chars)
+
+    status = data.get("status", "")
+
+    # Error results: preserve the full message — it's critical for debugging.
+    if status == "error":
+        msg = data.get("message", "") or ""
+        if len(msg) <= max_chars:
+            return "{{\"status\": \"error\", \"message\": \"{:s}\"}}".format(msg[:max_chars])
+        return "{{\"status\": \"error\", \"message\": \"{:s}\"}}".format(
+            msg[:max_chars] + "...")
+
+    # Success results: extract the inner result field.
+    if status == "ok":
+        inner = data.get("result", {}) or data.get("message", "")
+        inner_str = json.dumps(inner, default=str) if not isinstance(inner, str) else inner
+        if len(inner_str) <= max_chars:
+            return inner_str
+        return inner_str[:max_chars] + "\n...[+{:d} more chars]".format(
+            len(inner_str) - max_chars)
+
+    # Unknown format — just return the raw status + truncated content.
+    return "(status={:s}) {:s}".format(
+        status, result_text[:max_chars - 40] + "...")
+
+
 def _error_is_code_bug(error_text: str) -> bool:
     """Return ``True`` if *error_text* is a pure code bug with no side effects.
 
@@ -2609,11 +2659,9 @@ def _run_conversation_turn_inner(
                 # balloon the prompt past small local models' context windows.
                 # The LLM only needs the gist of past tool results — the current
                 # turn's result is still available in the truncated form.
+                # Use smart trimming: strip JSON boilerplate, keep structured fields.
                 _MAX_TOOL_RESULT_CHARS = 500
-                truncated = result_text[:_MAX_TOOL_RESULT_CHARS]
-                if len(result_text) > _MAX_TOOL_RESULT_CHARS:
-                    truncated += "\n...[+{:d} more chars]".format(
-                        len(result_text) - _MAX_TOOL_RESULT_CHARS)
+                truncated = _trim_tool_result(result_text, max_chars=_MAX_TOOL_RESULT_CHARS)
 
                 # Add tool result to history.
                 history.append({

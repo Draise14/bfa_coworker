@@ -244,7 +244,7 @@ Execute in this order. Each fix is independently verifiable.
 - [x] Perf 1: Skip snapshot on read-only tool results
 - [x] Phase 1: Scene-aware domain pre-detection
 - [x] Phase 2: Domain-aware skill auto-injection
-- [ ] Phase 3: Result trimming middleware
+- [x] Phase 3: Result trimming middleware
 - [ ] Phase 4: Composite tool wrappers
 - [ ] Phase 5: User skill loader
 

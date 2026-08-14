@@ -355,18 +355,80 @@ def _detect_domain(prompt: str) -> str | None:
     return None
 
 
+def _detect_domain_from_scene() -> set[str]:
+    """Detect domains from the current scene content.
+
+    Scans ``bpy.data`` for objects, materials, lights, cameras, modifiers,
+    sequencer strips, etc. and returns a set of domain keys that match
+    what's already in the scene.  This runs in addition to keyword-based
+    detection — if the scene has armatures with animation data, the
+    "animation" domain is pre-loaded even if the user didn't type "animate".
+    """
+    domains: set[str] = set()
+    try:
+        import bpy as _bpy  # pylint: disable=import-error
+
+        # Animation: armatures, actions, or keyframe data.
+        if _bpy.data.armatures or _bpy.data.actions:
+            domains.add("animation")
+        else:
+            # Check if any object has animation data.
+            for _obj in _bpy.data.objects:
+                if getattr(_obj, "animation_data", None) and _obj.animation_data.action:
+                    domains.add("animation")
+                    break
+
+        # Material: any materials or node groups with shader nodes.
+        if _bpy.data.materials or _bpy.data.node_groups:
+            domains.add("material")
+
+        # Modeling: meshes with edit-mode potential (any mesh object).
+        if _bpy.data.meshes:
+            domains.add("modeling")
+
+        # Lighting: any light objects or world setup.
+        if _bpy.data.lights or _bpy.data.worlds:
+            domains.add("lighting")
+
+        # Rendering: cameras or render settings indicate rendering intent.
+        if _bpy.data.cameras:
+            domains.add("rendering")
+
+        # VSE: any sequencer strips.
+        for _scene in _bpy.data.scenes:
+            if _scene.sequence_editor and _scene.sequence_editor.strips:
+                domains.add("vse")
+                break
+
+        # Geometry Nodes: any object with a geometry nodes modifier.
+        for _obj in _bpy.data.objects:
+            for _mod in getattr(_obj, "modifiers", []):
+                if _mod.type == "NODES":
+                    domains.add("geometry_nodes")
+                    break
+            if "geometry_nodes" in domains:
+                break
+
+    except Exception:
+        pass  # Best-effort; not running inside Blender.
+
+    return domains
+
+
 def _build_tool_set(
     all_openai_tools: list[dict[str, Any]],
-    domain: str | None,
+    domains: set[str] | None,
 ) -> list[dict[str, Any]]:
-    """Build the tool set for local mode: surface + domain + load_tools.
+    """Build the tool set for local mode: surface + domains + load_tools.
 
     *all_openai_tools* — the full list of all available tools in OpenAI format.
-    *domain* — pre-detected domain, or ``None`` for surface only.
+    *domains* — set of pre-detected domains, or ``None`` for surface only.
     """
     allowed = set(_SURFACE_TOOLS)
-    if domain and domain in _TOOL_DOMAINS:
-        allowed.update(_TOOL_DOMAINS[domain])
+    if domains:
+        for d in domains:
+            if d in _TOOL_DOMAINS:
+                allowed.update(_TOOL_DOMAINS[d])
 
     filtered = [
         t for t in all_openai_tools
@@ -375,8 +437,8 @@ def _build_tool_set(
     # Always include the load_tools meta-tool.
     filtered.append(_LOAD_TOOLS_SCHEMA)
 
-    print("[🛠️Coworker] _build_tool_set: {:d} → {:d} tools (domain={:s})".format(
-        len(all_openai_tools), len(filtered), domain or "none"))
+    print("[🛠️Coworker] _build_tool_set: {:d} → {:d} tools (domains={:s})".format(
+        len(all_openai_tools), len(filtered), ",".join(sorted(domains)) if domains else "none"))
     return filtered
 
 
@@ -2189,15 +2251,21 @@ def _run_conversation_turn_inner(
     print("[🛠️Coworker] run_conversation_turn: using max_tokens={:d}".format(max_tokens))
 
     # ── Tool domain system (hybrid: pre-detect + on-demand) ────────────
-    # Pre-detect the domain from the user's prompt (0 extra round-trips).
-    # The LLM can also call ``load_tools`` mid-turn to switch domains.
+    # Pre-detect the domain from the user's prompt AND from the current
+    # scene content (0 extra round-trips).  The LLM can also call
+    # ``load_tools`` mid-turn to switch domains.
     _loaded_domains: set[str] = set()
     if llm_port_local is not None and openai_tools:
         _all_tools = openai_tools  # Keep full list for on-demand loading.
-        _detected = _detect_domain(user_message)
-        if _detected:
-            _loaded_domains.add(_detected)
-        openai_tools = _build_tool_set(_all_tools, _detected)
+        _detected_domains: set[str] = set()
+        _kw_domain = _detect_domain(user_message)
+        if _kw_domain:
+            _detected_domains.add(_kw_domain)
+        # Also detect domains from scene content (armatures, materials, etc.).
+        _scene_domains = _detect_domain_from_scene()
+        _detected_domains.update(_scene_domains)
+        _loaded_domains.update(_detected_domains)
+        openai_tools = _build_tool_set(_all_tools, _detected_domains)
     else:
         _all_tools = openai_tools  # Unused in remote mode, but keep for consistency.
 

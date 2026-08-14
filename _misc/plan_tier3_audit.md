@@ -241,7 +241,7 @@ Execute in this order. Each fix is independently verifiable.
 - [x] Fix 6: History save lock
 - [x] Fix 7: Test file tail cleanup (remove duplicates)
 - [x] Fix 8: Verify collection heuristic catches jump_to_view3d mutations
-- [ ] Perf 1: Skip snapshot on read-only tool results
+- [x] Perf 1: Skip snapshot on read-only tool results
 - [ ] Phase 1: Scene-aware domain pre-detection
 - [ ] Phase 2: Domain-aware skill auto-injection
 - [ ] Phase 3: Result trimming middleware

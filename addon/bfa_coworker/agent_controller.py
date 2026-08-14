@@ -1778,6 +1778,37 @@ def _codes_overlap(prev_code: str, new_code: str) -> bool:
     return bool(prev_ops & new_ops)
 
 
+def _code_is_readonly(code: str) -> bool:
+    """Return ``True`` if *code* appears to be read-only (no scene mutations).
+
+    Read-only code only inspects the scene (e.g. ``len(bpy.data.objects)``)
+    and doesn't create, modify, or delete any datablocks.  Skipping the
+    entity snapshot for read-only code saves 12 datablock iterations per
+    successful execution — a significant saving when the LLM makes many
+    inspection calls between mutation calls.
+    """
+    _MUTATION_PATTERNS = (
+        "bpy.ops.",
+        ".new(",
+        ".remove(",
+        ".load(",
+        ".clear(",
+        ".link(",
+        ".unlink(",
+        ".append(",
+        ".active_material",
+        ".material_slots",
+        ".modifiers.",
+        "collections.new",
+        "color_tag",
+        "children.link",
+        "objects.unlink",
+        "layer_col.exclude",
+        "layer_col.hide_viewport",
+    )
+    return not any(p in code for p in _MUTATION_PATTERNS)
+
+
 # ---------------------------------------------------------------------------
 # Entity snapshot / diff — track what the LLM creates during a turn
 
@@ -2414,9 +2445,11 @@ def _run_conversation_turn_inner(
 
                 # ── Push initial undo state + initial snapshot (merged) ─
                 # Merging saves 1 round-trip at the start of each turn.
+                # Skip entity snapshot for read-only code (no scene mutations).
                 if tool_name == "execute_blender_code" and not _undo_pushed:
+                    _init_extra = _SNAPSHOT_EXTRA if not _code_is_readonly(args.get("code", "") or "") else ""
                     merged_init_raw = _call_mcp_tool_sync("execute_blender_code",
-                        {"code": _undo_code("push", "bfa_coworker_pre_script", extra_result=_SNAPSHOT_EXTRA)},
+                        {"code": _undo_code("push", "bfa_coworker_pre_script", extra_result=_init_extra)},
                         mcp_port)
                     _undo_pushed = True
                     # Parse initial snapshot from merged result.
@@ -2444,9 +2477,11 @@ def _run_conversation_turn_inner(
                     # ── Push bookmark + entity snapshot (merged) ───────
                     # Merging these into a single execute_blender_code call
                     # saves 2 round-trips per iteration vs separate calls.
+                    # Skip entity snapshot for read-only code (no scene mutations).
                     if not _prev_code_errored:
+                        _step_extra = _SNAPSHOT_EXTRA if not _code_is_readonly(_prev_code or "") else ""
                         merged_raw = _call_mcp_tool_sync("execute_blender_code",
-                            {"code": _undo_code("push", "bfa_coworker_step", extra_result=_SNAPSHOT_EXTRA)},
+                            {"code": _undo_code("push", "bfa_coworker_step", extra_result=_step_extra)},
                             mcp_port)
                         # Parse snapshot from merged result.
                         try:

@@ -279,6 +279,16 @@ def _code_touches_collections(code: str) -> bool:
     return any(p in code for p in _COLLECTION_PATTERNS)
 
 
+def _code_is_undo_or_push(code: str) -> bool:
+    """Heuristic check: is *code* an undo/push operation?
+
+    Undo/push operations trigger depsgraph notifiers.  If we've tagged
+    objects with ``update_tag()`` before the undo, the event loop will
+    try to evaluate those now-stale tagged objects and crash.
+    """
+    return "bpy.ops.ed.undo()" in code or "bpy.ops.ed.undo_push(" in code
+
+
 def _execute_code(
         code: str,
         strict_json: bool,
@@ -309,12 +319,16 @@ def _execute_code(
     }
     with CaptureOutput() as captured, WeakSandboxForLLM():
         try:
-            # Sync depsgraph before executing LLM code. Objects created in
-            # a previous call may have stale layer-collection data, and
-            # accessing properties like obj.users_collection can trigger
-            # a null-pointer dereference (EXCEPTION_ACCESS_VIOLATION in
-            # pyrna_struct_CreatePyObject / layer_collection_sync).
-            _safe_depsgraph_sync()
+            # NOTE: We intentionally do NOT sync the depsgraph before
+            # executing LLM code.  Tagging all objects with update_tag()
+            # schedules a massive depsgraph evaluation.  If the smart-undo
+            # system then fires bpy.ops.ed.undo() (reverting the scene),
+            # the event loop tries to evaluate those now-stale tagged
+            # objects and crashes with EXCEPTION_ACCESS_VIOLATION in
+            # pyrna_struct_CreatePyObject.
+            #
+            # A Python-level exception from stale layer-collection data
+            # is always preferable to an unrecoverable C-level segfault.
 
             exec(code, namespace)
 
@@ -323,9 +337,14 @@ def _execute_code(
             # the depsgraph in an inconsistent state, causing a hard crash
             # (EXCEPTION_ACCESS_VIOLATION in layer_collection_sync) on the
             # next viewport redraw timer tick.
-            # If the code manipulates collections, skip the full sync to
-            # avoid the Blender 5.3 crash in deg_eval_copy_is_expanded.
-            _safe_depsgraph_sync(allow_full_sync=not _code_touches_collections(code))
+            # If the code manipulates collections or is an undo/push op,
+            # skip the full sync to avoid Blender 5.3 depsgraph crashes.
+            _safe_depsgraph_sync(
+                allow_full_sync=(
+                    not _code_touches_collections(code)
+                    and not _code_is_undo_or_push(code)
+                )
+            )
         except Exception:  # pylint: disable=broad-exception-caught
             # Truncate traceback to last 3 frames + exception message.
             # Full tracebacks are verbose and eat context window space.

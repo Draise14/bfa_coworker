@@ -1765,19 +1765,20 @@ def _trim_tool_result(result_text: str, max_chars: int = 500) -> str:
 def _error_is_code_bug(error_text: str) -> bool:
     """Return ``True`` if *error_text* is a pure code bug with no side effects.
 
-    Code-bug errors (KeyError, AttributeError, TypeError, NameError) fail
-    before creating any objects or modifying the scene.  There's nothing to
-    undo — skipping the undo saves 2 round-trips and avoids depsgraph crashes
+    Code-bug errors (KeyError, AttributeError, NameError) fail before
+    creating any objects or modifying the scene.  There's nothing to undo
+    — skipping the undo saves 2 round-trips and avoids depsgraph crashes
     from undo+push on empty scenes.
 
-    NOTE: ``ValueError`` is deliberately excluded from this list because it
-    can fire *after* objects have been created (e.g. a cube added then bad
-    geometry math).  Undoing such errors is essential to prevent duplicates.
+    NOTE: ``ValueError`` and ``TypeError`` are deliberately excluded from
+    this list because they can fire *after* objects have been created
+    (e.g. a cube added then bad geometry math, or objects created then
+    a wrong enum value set).  Undoing such errors is essential to prevent
+    duplicates.
     """
     _CODE_BUG_PATTERNS = (
         "KeyError:",
         "AttributeError:",
-        "TypeError:",
         "NameError:",
         "Node type",
         "undefined",
@@ -2049,6 +2050,52 @@ def _entity_diff_to_context_message(diff: _EntityDiff) -> str:
         "If you need to modify these, reference them by name. "
         "If you need something different, create new entities with distinct names.]"
     ).format(summary)
+
+
+def _build_cleanup_code(diff: _EntityDiff) -> str:
+    """Generate Blender Python code to delete entities created by a failed execution.
+
+    Uses the entity diff to remove objects, meshes, materials, lights, cameras,
+    collections, curves, grease pencils, armatures, and node groups that were
+    created since the last snapshot.  This is a fallback when ``bpy.ops.ed.undo()``
+    fails (e.g. no window/area available, or undo stack is empty).
+    """
+    parts: list[str] = [
+        "import bpy",
+        "result = {'status': 'ok', 'cleaned': []}",
+        "",
+    ]
+    # Map diff field names to bpy.data collection names and item types.
+    _DATA_MAP = (
+        ("object_names", "objects", "Object"),
+        ("mesh_names", "meshes", "Mesh"),
+        ("material_names", "materials", "Material"),
+        ("light_names", "lights", "Light"),
+        ("camera_names", "cameras", "Camera"),
+        ("collection_names", "collections", "Collection"),
+        ("curve_names", "curves", "Curve"),
+        ("grease_pencil_names", "grease_pencils", "GreasePencil"),
+        ("armature_names", "armatures", "Armature"),
+        ("node_group_names", "node_groups", "NodeGroup"),
+        ("image_names", "images", "Image"),
+        ("text_names", "texts", "Text"),
+    )
+    for field, coll, _label in _DATA_MAP:
+        names = getattr(diff, field, set())
+        if names:
+            names_str = ", ".join(repr(n) for n in sorted(names))
+            parts.append(
+                "# Remove {:d} {:s}\n"
+                "for _name in [{:s}]:\n"
+                "    _item = bpy.data.{:s}.get(_name)\n"
+                "    if _item:\n"
+                "        bpy.data.{:s}.remove(_item)\n"
+                "        result['cleaned'].append(_name)".format(
+                    len(names), coll, names_str, coll, coll))
+    parts.append("")
+    parts.append("result['message'] = 'Cleaned up {:d} orphaned datablocks'".format(
+        sum(len(getattr(diff, f, set())) for f, _, _ in _DATA_MAP)))
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -2580,8 +2627,16 @@ def _run_conversation_turn_inner(
                         # Undo to the state before the previous execute_blender_code.
                         # Must use context override — bpy.ops.ed.undo() needs a window context
                         # which isn't available in the bridge server's exec() namespace.
-                        _call_mcp_tool_sync("execute_blender_code",
+                        _undo_result = _call_mcp_tool_sync("execute_blender_code",
                             {"code": _undo_code("undo")}, mcp_port)
+                        # Check if undo actually succeeded — if not, fall back to
+                        # retroactive entity cleanup using the snapshot diff.
+                        if '"status": "error"' in _undo_result:
+                            print("[🛠️Coworker] run_conversation_turn: undo FAILED — falling back to entity cleanup")
+                            _cleanup_code = _build_cleanup_code(_turn_entities)
+                            if _cleanup_code:
+                                _call_mcp_tool_sync("execute_blender_code",
+                                    {"code": _cleanup_code}, mcp_port)
                         # Push a fresh undo state so the next iteration can undo this one.
                         _call_mcp_tool_sync("execute_blender_code",
                             {"code": _undo_code("push", "bfa_coworker_pre_script")},

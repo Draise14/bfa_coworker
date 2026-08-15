@@ -430,8 +430,8 @@ def _table(headers: list[str], rows: list[list[str]]) -> str:
 
 
 def _link(text: str, page: str) -> str:
-    """Return a GitHub Wiki link."""
-    return f"[[{page}|{text}]]"
+    """Return a standard markdown link (works on GitHub Wikis)."""
+    return f"[{text}]({page})"
 
 
 # ── Home.md ──────────────────────────────────────────────────────────────
@@ -509,10 +509,10 @@ graph TB
 
 | Section | Pages |
 |---------|-------|
-| {_link("Quick Start", "Quick-Start")} | Install → Configure → Chat in 3 steps |
-| {_link("User Documentation", "User-Documentation/Installation")} | Installation, Configuration, Chat Interface, Local LLM, Remote API, Generative AI, Troubleshooting |
-| {_link("Developer Documentation", "Developer-Documentation/Architecture")} | Architecture, Addon Structure, MCP Server, MCP Tools, Plugin System, Skills, Building, Contributing |
-| {_link("API & Glossary", "API-Glossary/Operators-Reference")} | Operators Reference, Preferences Reference, MCP Tools Reference, Glossary |
+| [Quick Start](Quick-Start) | Install → Configure → Chat in 3 steps |
+| [User Documentation](User-Documentation/Installation) | Installation, Configuration, Chat Interface, Local LLM, Remote API, Generative AI, Troubleshooting |
+| [Developer Documentation](Developer-Documentation/Architecture) | Architecture, Addon Structure, MCP Server, MCP Tools, Plugin System, Skills, Building, Contributing |
+| [API & Glossary](API-Glossary/Operators-Reference) | Operators Reference, Preferences Reference, MCP Tools Reference, Glossary |
 
 ---
 
@@ -532,30 +532,30 @@ graph TB
 def generate_sidebar() -> str:
     """Generate the _Sidebar.md navigation."""
     return _header("Sidebar") + """
-- [[Home]]
-- [[Quick-Start]]
+- [Home](Home)
+- [Quick Start](Quick-Start)
 - **User Documentation**
-  - [[User-Documentation/Installation|Installation]]
-  - [[User-Documentation/Configuration|Configuration]]
-  - [[User-Documentation/Chat-Interface|Chat Interface]]
-  - [[User-Documentation/Local-LLM-Setup|Local LLM Setup]]
-  - [[User-Documentation/Remote-API-Setup|Remote API Setup]]
-  - [[User-Documentation/Generative-AI|Generative AI]]
-  - [[User-Documentation/Troubleshooting|Troubleshooting]]
+  - [Installation](User-Documentation/Installation)
+  - [Configuration](User-Documentation/Configuration)
+  - [Chat Interface](User-Documentation/Chat-Interface)
+  - [Local LLM Setup](User-Documentation/Local-LLM-Setup)
+  - [Remote API Setup](User-Documentation/Remote-API-Setup)
+  - [Generative AI](User-Documentation/Generative-AI)
+  - [Troubleshooting](User-Documentation/Troubleshooting)
 - **Developer Documentation**
-  - [[Developer-Documentation/Architecture|Architecture]]
-  - [[Developer-Documentation/Addon-Structure|Addon Structure]]
-  - [[Developer-Documentation/MCP-Server|MCP Server]]
-  - [[Developer-Documentation/MCP-Tools|MCP Tools]]
-  - [[Developer-Documentation/Plugin-System|Plugin System]]
-  - [[Developer-Documentation/Skills-System|Skills System]]
-  - [[Developer-Documentation/Building-and-Testing|Building & Testing]]
-  - [[Developer-Documentation/Contributing|Contributing]]
+  - [Architecture](Developer-Documentation/Architecture)
+  - [Addon Structure](Developer-Documentation/Addon-Structure)
+  - [MCP Server](Developer-Documentation/MCP-Server)
+  - [MCP Tools](Developer-Documentation/MCP-Tools)
+  - [Plugin System](Developer-Documentation/Plugin-System)
+  - [Skills System](Developer-Documentation/Skills-System)
+  - [Building & Testing](Developer-Documentation/Building-and-Testing)
+  - [Contributing](Developer-Documentation/Contributing)
 - **API & Glossary**
-  - [[API-Glossary/Operators-Reference|Operators Reference]]
-  - [[API-Glossary/Preferences-Reference|Preferences Reference]]
-  - [[API-Glossary/MCP-Tools-Reference|MCP Tools Reference]]
-  - [[API-Glossary/Glossary|Glossary]]
+  - [Operators Reference](API-Glossary/Operators-Reference)
+  - [Preferences Reference](API-Glossary/Preferences-Reference)
+  - [MCP Tools Reference](API-Glossary/MCP-Tools-Reference)
+  - [Glossary](API-Glossary/Glossary)
 """
 
 

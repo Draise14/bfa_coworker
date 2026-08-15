@@ -1207,6 +1207,8 @@ def download_model(
                 _set_download_progress("Download complete: {:s}".format(f))
                 if progress_callback:
                     progress_callback("Model downloaded to {:s}".format(str(dest)))
+                # Also download the mmproj file if the preset has one.
+                _download_mmproj_if_needed(r, f, models_dir, progress_callback)
                 return
 
             # Cancelled — don't fall through to the fallback path.
@@ -1676,6 +1678,11 @@ def start_local_llama(
             args.extend(['--hf-repo', hf_repo, '--hf-file', hf_file])
         else:
             args.extend(['--model', str(model_path)])
+            # Add --mmproj if a projector file exists next to the model.
+            mmproj_path = _resolve_mmproj_path(model_path)
+            if mmproj_path:
+                args.extend(['--mmproj', str(mmproj_path)])
+                print("[🛠️Coworker] start_local_llama: using mmproj at {:s}".format(str(mmproj_path)))
 
         # Redirect HF cache into models dir so all downloads are
         # consolidated in the user's configured models directory.
@@ -1892,6 +1899,62 @@ def check_remote_api(base_url: str, api_key: str) -> bool:
 
 # ---------------------------------------------------------------------------
 # Internal helpers
+
+def _resolve_mmproj_path(model_path: Path) -> Path | None:
+    """Resolve the mmproj file path next to a model file.
+
+    Looks for a projector file (e.g. ``mmproj-F16.gguf``, ``mmproj.gguf``)
+    in the same directory as the model. Returns ``None`` if not found.
+    """
+    model_dir = model_path.parent if model_path else None
+    if not model_dir or not model_dir.is_dir():
+        return None
+    # Common projector filenames.
+    for candidate in ("mmproj-F16.gguf", "mmproj.gguf", "mmproj-BF16.gguf"):
+        candidate_path = model_dir / candidate
+        if candidate_path.is_file():
+            return candidate_path
+    return None
+
+
+def _download_mmproj_if_needed(
+    repo_id: str,
+    model_filename: str,
+    models_dir: Path,
+    progress_callback: Callable[[str], None] | None = None,
+) -> None:
+    """Download the mmproj file for a vision-capable model if not already present.
+
+    Looks up the preset by model filename to find the correct projector filename.
+    Skips if the projector already exists or the model doesn't have one.
+    """
+    # Find the preset that matches this model filename.
+    mmproj_fname = ""
+    for p in PRESET_MODELS:
+        if p.filename == model_filename and p.mmproj_filename:
+            mmproj_fname = p.mmproj_filename
+            break
+    if not mmproj_fname:
+        return  # No projector needed for this model.
+
+    mmproj_dest = models_dir / mmproj_fname
+    if mmproj_dest.exists():
+        print("[🛠️Coworker] _download_mmproj_if_needed: {:s} already exists".format(str(mmproj_dest)))
+        return
+
+    print("[🛠️Coworker] _download_mmproj_if_needed: downloading {:s} from {:s}".format(mmproj_fname, repo_id))
+    _set_download_progress("Downloading vision projector {:s} ...".format(mmproj_fname))
+    if progress_callback:
+        progress_callback("Downloading vision projector {:s} ...".format(mmproj_fname))
+
+    # Reuse the direct download function for the projector file.
+    success = _download_gguf_direct(repo_id, mmproj_fname, mmproj_dest, progress_callback)
+    if success:
+        print("[🛠️Coworker] _download_mmproj_if_needed: {:s} downloaded to {:s}".format(mmproj_fname, str(mmproj_dest)))
+    else:
+        print("[🛠️Coworker] _download_mmproj_if_needed: failed to download {:s}".format(mmproj_fname))
+        # Non-fatal — the model can still run without vision.
+
 
 def _set_error(msg: str) -> None:
     with _lock:

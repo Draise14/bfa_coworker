@@ -506,6 +506,25 @@ def _parse_sse_text_response(raw: str) -> str:
     return "Error: no text content in tool result"
 
 
+def _extract_image_from_tool_result(result: dict) -> str | None:
+    """
+    Extract a base64-encoded image from a tool result's content blocks.
+
+    Returns the data URI string (e.g. ``"data:image/png;base64,..."``)
+    if an image block is found, or ``None`` if there's no image.
+    """
+    content = result.get("result", {}).get("content", [])
+    for block in content:
+        if isinstance(block, dict):
+            block_type = block.get("type", "")
+            if block_type in ("image", "image/png", "image/jpeg", "image/webp"):
+                data = block.get("data", "") or block.get("source", {}).get("data", "")
+                if data:
+                    mime = block_type if block_type.startswith("image/") else "image/png"
+                    return "data:{:s};base64,{:s}".format(mime, data)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Data types
 
@@ -534,6 +553,9 @@ class AgentState:
 
     # ── Re-entrancy guard ──────────────────────────────────────────
     turn_active: bool = False  # True while a conversation turn is in progress.
+
+    # ── Vision pipeline ────────────────────────────────────────────
+    _pending_image: str | None = None  # Base64 data URI of last screenshot
 
 
 _agent_state = AgentState()
@@ -2263,6 +2285,10 @@ def _run_conversation_turn_inner(
 
     history.append({"role": "user", "content": user_message})
 
+    # Clear any pending screenshot image from a previous turn — the user
+    # is starting fresh, so the old screenshot is stale.
+    _agent_state._pending_image = None
+
     # ── Pre-flight empty-scene check ──────────────────────────────────
     # Small local models often call mode-dependent operators (mode_set, etc.)
     # on an empty scene, which fails with "Context missing active object".
@@ -2426,6 +2452,23 @@ def _run_conversation_turn_inner(
         # role that wastes context window tokens without providing
         # useful signal to the model.
         history_to_send = _strip_reasoning_from_history(history_to_send)
+
+        # ── Inject screenshot images into the next user message ───────
+        # If the last tool result contained an image (screenshot), inject
+        # it as an image_url content block in the next user message so
+        # vision-capable models can "see" the viewport.
+        _pending_image: str | None = getattr(_agent_state, "_pending_image", None)
+        if _pending_image and history_to_send and history_to_send[-1].get("role") == "user":
+            # Prepend the image to the existing user message content.
+            existing = history_to_send[-1]["content"]
+            if isinstance(existing, str):
+                history_to_send[-1]["content"] = [
+                    {"type": "image_url", "image_url": {"url": _pending_image}},
+                    {"type": "text", "text": existing},
+                ]
+            elif isinstance(existing, list):
+                existing.insert(0, {"type": "image_url", "image_url": {"url": _pending_image}})
+            _agent_state._pending_image = None  # Clear after use
 
         response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model, max_tokens)
         if response is None:
@@ -2737,6 +2780,20 @@ def _run_conversation_turn_inner(
                     "content": truncated,
                     "summary": result_summary,
                 })
+
+                # ── Extract screenshot image for vision-capable models ─
+                # If the tool result contains an image (screenshot), store
+                # it on the agent state so it can be injected into the next
+                # user message as an image_url content block.
+                if tool_name in ("get_screenshot_of_area_as_image", "get_screenshot_of_window_as_image"):
+                    try:
+                        result_obj = json.loads(result_text)
+                        img_data = _extract_image_from_tool_result(result_obj)
+                        if img_data:
+                            _agent_state._pending_image = img_data
+                            print("[🛠️Coworker] run_conversation_turn: screenshot image captured for vision model")
+                    except (json.JSONDecodeError, TypeError):
+                        pass
 
                 # ── Spiral detection: break repeated error loops ──────
                 if tool_name == "execute_blender_code":

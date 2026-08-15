@@ -509,10 +509,10 @@ graph TB
 
 | Section | Pages |
 |---------|-------|
-| [Quick Start](Quick-Start) | Install → Configure → Chat in 3 steps |
-| [User Documentation](User-Documentation/Installation) | Installation, Configuration, Chat Interface, Local LLM, Remote API, Generative AI, Troubleshooting |
-| [Developer Documentation](Developer-Documentation/Architecture) | Architecture, Addon Structure, MCP Server, MCP Tools, Plugin System, Skills, Building, Contributing |
-| [API & Glossary](API-Glossary/Operators-Reference) | Operators Reference, Preferences Reference, MCP Tools Reference, Glossary |
+| [Quick Start](Quick-Start.md) | Install → Configure → Chat in 3 steps |
+| [User Documentation](User-Documentation/Installation.md) | Installation, Configuration, Chat Interface, Local LLM, Remote API, Generative AI, Troubleshooting |
+| [Developer Documentation](Developer-Documentation/Architecture.md) | Architecture, Addon Structure, MCP Server, MCP Tools, Plugin System, Skills, Building, Contributing |
+| [API & Glossary](API-Glossary/Operators-Reference.md) | Operators Reference, Preferences Reference, MCP Tools Reference, Glossary |
 
 ---
 
@@ -532,30 +532,30 @@ graph TB
 def generate_sidebar() -> str:
     """Generate the _Sidebar.md navigation."""
     return _header("Sidebar") + """
-- [Home](Home)
-- [Quick Start](Quick-Start)
+- [Home](Home.md)
+- [Quick Start](Quick-Start.md)
 - **User Documentation**
-  - [Installation](User-Documentation/Installation)
-  - [Configuration](User-Documentation/Configuration)
-  - [Chat Interface](User-Documentation/Chat-Interface)
-  - [Local LLM Setup](User-Documentation/Local-LLM-Setup)
-  - [Remote API Setup](User-Documentation/Remote-API-Setup)
-  - [Generative AI](User-Documentation/Generative-AI)
-  - [Troubleshooting](User-Documentation/Troubleshooting)
+  - [Installation](User-Documentation/Installation.md)
+  - [Configuration](User-Documentation/Configuration.md)
+  - [Chat Interface](User-Documentation/Chat-Interface.md)
+  - [Local LLM Setup](User-Documentation/Local-LLM-Setup.md)
+  - [Remote API Setup](User-Documentation/Remote-API-Setup.md)
+  - [Generative AI](User-Documentation/Generative-AI.md)
+  - [Troubleshooting](User-Documentation/Troubleshooting.md)
 - **Developer Documentation**
-  - [Architecture](Developer-Documentation/Architecture)
-  - [Addon Structure](Developer-Documentation/Addon-Structure)
-  - [MCP Server](Developer-Documentation/MCP-Server)
-  - [MCP Tools](Developer-Documentation/MCP-Tools)
-  - [Plugin System](Developer-Documentation/Plugin-System)
-  - [Skills System](Developer-Documentation/Skills-System)
-  - [Building & Testing](Developer-Documentation/Building-and-Testing)
-  - [Contributing](Developer-Documentation/Contributing)
+  - [Architecture](Developer-Documentation/Architecture.md)
+  - [Addon Structure](Developer-Documentation/Addon-Structure.md)
+  - [MCP Server](Developer-Documentation/MCP-Server.md)
+  - [MCP Tools](Developer-Documentation/MCP-Tools.md)
+  - [Plugin System](Developer-Documentation/Plugin-System.md)
+  - [Skills System](Developer-Documentation/Skills-System.md)
+  - [Building & Testing](Developer-Documentation/Building-and-Testing.md)
+  - [Contributing](Developer-Documentation/Contributing.md)
 - **API & Glossary**
-  - [Operators Reference](API-Glossary/Operators-Reference)
-  - [Preferences Reference](API-Glossary/Preferences-Reference)
-  - [MCP Tools Reference](API-Glossary/MCP-Tools-Reference)
-  - [Glossary](API-Glossary/Glossary)
+  - [Operators Reference](API-Glossary/Operators-Reference.md)
+  - [Preferences Reference](API-Glossary/Preferences-Reference.md)
+  - [MCP Tools Reference](API-Glossary/MCP-Tools-Reference.md)
+  - [Glossary](API-Glossary/Glossary.md)
 """
 
 

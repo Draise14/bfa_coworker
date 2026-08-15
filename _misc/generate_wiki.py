@@ -455,7 +455,9 @@ def generate_home(manifest: dict, operators: list, tools: list) -> str:
 
 ## Overview
 
-**Bforartists Coworker** is a self-contained Blender add-on that bundles an LLM agent, MCP server, and in-Blender chat UI — no external tools, no manual server setup, no Python environment wrangling. Install the add-on, pick a model, start chatting.
+**Bforartists Coworker** is a self-contained add-on for **Blender / Bforartists** that bundles an LLM agent, MCP server, and in-Blender chat UI — no external tools, no manual server setup, no Python environment wrangling. Install the add-on, pick a model, start chatting.
+
+> 🏡 **Built for [Bforartists](https://github.com/Bforartists/Bforartists)** — a fork of Blender with an artist-friendly UI. Also compatible with official Blender {blender_min}+.
 
 {_screenshot(
     "Full Blender window with Coworker chat panel open in the 3D View sidebar",
@@ -470,14 +472,14 @@ def generate_home(manifest: dict, operators: list, tools: list) -> str:
 
 | Feature | Description |
 |---------|-------------|
-| **Self-Contained** | Everything bundled — no external tools or Python setup needed |
-| **Local LLM** | Download and run models locally via llama.cpp (16 curated presets) |
-| **Remote API** | Connect to OpenAI, OpenRouter, or any OpenAI-compatible API |
-| **MCP Tools** | 24+ dedicated tools for scene inspection, navigation, rendering, and more |
-| **Chat UI** | In-Blender chat panel with streaming responses, reasoning display, @mentions |
-| **Generative AI** | Experimental image/video/audio generation via plugins |
-| **Poly Haven** | Download CC0 assets (HDRIs, textures) directly from the agent |
-| **Test Suites** | Built-in multi-step artist workflow benchmarks |
+| 📦 **Self-Contained** | Everything bundled — no external tools or Python setup needed |
+| 🧠 **Local LLM** | Download and run models locally via llama.cpp (16 curated presets) |
+| ☁️ **Remote API** | Connect to OpenAI, OpenRouter, or any OpenAI-compatible API |
+| 🔧 **MCP Tools** | 24+ dedicated tools for scene inspection, navigation, rendering, and more |
+| 💬 **Chat UI** | In-Blender chat panel with streaming responses, reasoning display, @mentions |
+| 🎨 **Generative AI** | Experimental image/video/audio generation via plugins |
+| 🌐 **Poly Haven** | Download CC0 assets (HDRIs, textures) directly from the agent |
+| 🧪 **Test Suites** | Built-in multi-step artist workflow benchmarks |
 
 ---
 
@@ -509,21 +511,21 @@ graph TB
 
 | Section | Pages |
 |---------|-------|
-| [Quick Start](Quick-Start.md) | Install → Configure → Chat in 3 steps |
-| [User Documentation](User-Documentation/Installation.md) | Installation, Configuration, Chat Interface, Local LLM, Remote API, Generative AI, Troubleshooting |
-| [Developer Documentation](Developer-Documentation/Architecture.md) | Architecture, Addon Structure, MCP Server, MCP Tools, Plugin System, Skills, Building, Contributing |
-| [API & Glossary](API-Glossary/Operators-Reference.md) | Operators Reference, Preferences Reference, MCP Tools Reference, Glossary |
+| 🚀 [[Quick-Start]] | Install → Configure → Chat in 3 steps |
+| 👤 [[User-Documentation/Installation|User Documentation]] | Installation, Configuration, Chat Interface, Local LLM, Remote API, Generative AI, Troubleshooting |
+| 🛠️ [[Developer-Documentation/Architecture|Developer Documentation]] | Architecture, Addon Structure, MCP Server, MCP Tools, Plugin System, Skills, Building, Contributing |
+| 📋 [[API-Glossary/Operators-Reference|API & Glossary]] | Operators Reference, Preferences Reference, MCP Tools Reference, Glossary |
 
 ---
 
 ## Quick Stats
 
-- **{len(operators)}** Operator classes registered
-- **{len(tools)}** MCP tools available
-- **16** Curated model presets (Flagship, Mid-Range, Lightweight)
-- **10** Remote provider presets (OpenRouter)
-- **6** Built-in test suites
-- **4** Generative plugin types (Image, Video, Audio, Text)
+- 🎯 **{len(operators)}** Operator classes registered
+- 🔧 **{len(tools)}** MCP tools available
+- 🧠 **16** Curated model presets (Flagship, Mid-Range, Lightweight)
+- ☁️ **10** Remote provider presets (OpenRouter)
+- 🧪 **6** Built-in test suites
+- 🎨 **4** Generative plugin types (Image, Video, Audio, Text)
 """
 
 
@@ -532,30 +534,30 @@ graph TB
 def generate_sidebar() -> str:
     """Generate the _Sidebar.md navigation."""
     return _header("Sidebar") + """
-- [Home](Home.md)
-- [Quick Start](Quick-Start.md)
-- **User Documentation**
-  - [Installation](User-Documentation/Installation.md)
-  - [Configuration](User-Documentation/Configuration.md)
-  - [Chat Interface](User-Documentation/Chat-Interface.md)
-  - [Local LLM Setup](User-Documentation/Local-LLM-Setup.md)
-  - [Remote API Setup](User-Documentation/Remote-API-Setup.md)
-  - [Generative AI](User-Documentation/Generative-AI.md)
-  - [Troubleshooting](User-Documentation/Troubleshooting.md)
-- **Developer Documentation**
-  - [Architecture](Developer-Documentation/Architecture.md)
-  - [Addon Structure](Developer-Documentation/Addon-Structure.md)
-  - [MCP Server](Developer-Documentation/MCP-Server.md)
-  - [MCP Tools](Developer-Documentation/MCP-Tools.md)
-  - [Plugin System](Developer-Documentation/Plugin-System.md)
-  - [Skills System](Developer-Documentation/Skills-System.md)
-  - [Building & Testing](Developer-Documentation/Building-and-Testing.md)
-  - [Contributing](Developer-Documentation/Contributing.md)
-- **API & Glossary**
-  - [Operators Reference](API-Glossary/Operators-Reference.md)
-  - [Preferences Reference](API-Glossary/Preferences-Reference.md)
-  - [MCP Tools Reference](API-Glossary/MCP-Tools-Reference.md)
-  - [Glossary](API-Glossary/Glossary.md)
+- 🏠 [[Home|Home]]
+- 🚀 [[Quick-Start|Quick Start]]
+- 👤 **User Documentation**
+  - 📥 [[User-Documentation/Installation|Installation]]
+  - ⚙️ [[User-Documentation/Configuration|Configuration]]
+  - 💬 [[User-Documentation/Chat-Interface|Chat Interface]]
+  - 🖥️ [[User-Documentation/Local-LLM-Setup|Local LLM Setup]]
+  - ☁️ [[User-Documentation/Remote-API-Setup|Remote API Setup]]
+  - 🎨 [[User-Documentation/Generative-AI|Generative AI]]
+  - 🔧 [[User-Documentation/Troubleshooting|Troubleshooting]]
+- 🛠️ **Developer Documentation**
+  - 🏗️ [[Developer-Documentation/Architecture|Architecture]]
+  - 📁 [[Developer-Documentation/Addon-Structure|Addon Structure]]
+  - 🔌 [[Developer-Documentation/MCP-Server|MCP Server]]
+  - 🔧 [[Developer-Documentation/MCP-Tools|MCP Tools]]
+  - 🧩 [[Developer-Documentation/Plugin-System|Plugin System]]
+  - 📚 [[Developer-Documentation/Skills-System|Skills System]]
+  - 🧪 [[Developer-Documentation/Building-and-Testing|Building & Testing]]
+  - 🤝 [[Developer-Documentation/Contributing|Contributing]]
+- 📋 **API & Glossary**
+  - 🎯 [[API-Glossary/Operators-Reference|Operators Reference]]
+  - 📊 [[API-Glossary/Preferences-Reference|Preferences Reference]]
+  - 🔧 [[API-Glossary/MCP-Tools-Reference|MCP Tools Reference]]
+  - 📖 [[API-Glossary/Glossary|Glossary]]
 """
 
 
@@ -567,9 +569,10 @@ def generate_footer() -> str:
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![GitHub](https://img.shields.io/badge/GitHub-bfa__coworker-blue)](https://github.com/bforartists/bfa_coworker)
 
-**Bforartists Coworker** — An MCP-powered agent for Blender.
+**Bforartists Coworker** — An MCP-powered agent for Blender / Bforartists.
 
 - [Main Repository](https://github.com/bforartists/bfa_coworker)
+- [Bforartists](https://github.com/Bforartists/Bforartists) — The artist-friendly Blender fork
 - [Report an Issue](https://github.com/bforartists/bfa_coworker/issues)
 - [Blender MCP Upstream](https://www.blender.org/lab/mcp-server)
 """
@@ -584,10 +587,10 @@ def generate_quick_start(manifest: dict) -> str:
 
 ---
 
-## Step 1: Install the Add-on
+## 📥 Step 1: Install the Add-on
 
 1. Download the latest release (`bfa_coworker-{version}.zip`) from the [releases page](https://github.com/bforartists/bfa_coworker/releases).
-2. Open Blender → **Edit** → **Preferences** → **Add-ons**.
+2. Open Blender / Bforartists → **Edit** → **Preferences** → **Add-ons**.
 3. Click the **▼** dropdown and choose **Install from Disk...**.
 4. Select the downloaded `.zip` file.
 5. Enable the add-on by checking the checkbox next to **"Coworker"**.
@@ -601,11 +604,11 @@ def generate_quick_start(manifest: dict) -> str:
 
 ---
 
-## Step 2: Choose Your Operating Mode
+## ⚙️ Step 2: Choose Your Operating Mode
 
 You have two options:
 
-### Option A: Local LLM (Self-Contained)
+### 🖥️ Option A: Local LLM (Self-Contained)
 
 Best for privacy and offline use. Requires a compatible GPU with sufficient VRAM.
 
@@ -624,7 +627,7 @@ Best for privacy and offline use. Requires a compatible GPU with sufficient VRAM
     "1. Operating Mode selector, 2. Model preset buttons, 3. Download button, 4. Progress bar area"
 )}
 
-### Option B: Remote API
+### ☁️ Option B: Remote API
 
 Best for maximum model quality without local hardware requirements.
 
@@ -644,12 +647,14 @@ Best for maximum model quality without local hardware requirements.
 
 ---
 
-## Step 3: Start Chatting
+## 💬 Step 3: Start Chatting
 
 1. Open the **3D Viewport**.
 2. Press **N** to open the sidebar.
 3. Click the **Coworker** tab.
 4. Type your message in the input field and press **Send** (or Ctrl+Enter).
+
+> 💡 This add-on is developed primarily for **Bforartists** ([github.com/Bforartists/Bforartists](https://github.com/Bforartists/Bforartists)), a fork of Blender with an artist-friendly UI. It also works with official Blender.
 
 {_screenshot(
     "3D Viewport with Coworker chat panel open, showing a conversation in progress",
@@ -660,7 +665,7 @@ Best for maximum model quality without local hardware requirements.
 
 ---
 
-## Next Steps
+## 📚 Next Steps
 
 - Explore the [[User-Documentation/Configuration|Configuration]] page for detailed settings
 - Learn about the [[User-Documentation/Chat-Interface|Chat Interface]] features
@@ -679,25 +684,25 @@ def generate_installation(manifest: dict) -> str:
 
 ---
 
-## Requirements
+## 📋 Requirements
 
-- **Blender** {blender_min}+ (Bforartists or official Blender build)
-- **Operating System**: Windows (primary), macOS/Linux (experimental)
-- **Network**: Online access required for model downloads and remote API usage
-- **Disk Space**: Varies by model — 4 GB to 40+ GB for local LLM models
-- **RAM/VRAM**: Varies by model — see model presets for details
+- 🟢 **Blender / Bforartists** {blender_min}+ (Bforartists or official Blender build)
+- 💻 **Operating System**: Windows (primary), macOS/Linux (experimental)
+- 🌐 **Network**: Online access required for model downloads and remote API usage
+- 💾 **Disk Space**: Varies by model — 4 GB to 40+ GB for local LLM models
+- 🧠 **RAM/VRAM**: Varies by model — see model presets for details
 
 ---
 
-## Download
+## 📦 Download
 
-### Option 1: GitHub Releases (Recommended)
+### ⬇️ Option 1: GitHub Releases (Recommended)
 
 1. Go to the [releases page](https://github.com/bforartists/bfa_coworker/releases).
 2. Download the latest `bfa_coworker-{version}.zip`.
 3. Do **not** extract the zip — Blender installs it directly.
 
-### Option 2: Build from Source
+### 🔨 Option 2: Build from Source
 
 ```bash
 git clone https://github.com/bforartists/bfa_coworker.git
@@ -709,9 +714,9 @@ The built `.zip` will be in the `dist/` directory.
 
 ---
 
-## Install in Blender
+## 🔌 Install in Blender / Bforartists
 
-1. Open Blender.
+1. Open Blender or Bforartists.
 2. Go to **Edit** → **Preferences** → **Add-ons**.
 3. Click the **▼** button at the top of the Add-ons list.
 4. Select **Install from Disk...**.
@@ -728,7 +733,7 @@ The built `.zip` will be in the `dist/` directory.
 
 ---
 
-## First Launch
+## 🚀 First Launch
 
 After enabling the add-on:
 
@@ -737,6 +742,8 @@ After enabling the add-on:
 3. Choose your [[Quick-Start|operating mode]] (Local LLM or Remote API).
 4. Open the **3D Viewport**, press **N** to open the sidebar, and click the **Coworker** tab.
 5. Start chatting!
+
+> 💡 This add-on is developed primarily for **Bforartists** ([github.com/Bforartists/Bforartists](https://github.com/Bforartists/Bforartists)), a fork of Blender with an artist-friendly UI. It also works with official Blender {blender_min}+.
 
 {_screenshot(
     "3D Viewport sidebar showing the Coworker chat panel for the first time",
@@ -747,7 +754,7 @@ After enabling the add-on:
 
 ---
 
-## Updating
+## 🔄 Updating
 
 1. Download the new `.zip` from the releases page.
 2. In Blender Preferences → Add-ons, expand the Coworker entry.
@@ -757,7 +764,7 @@ After enabling the add-on:
 
 ---
 
-## Uninstalling
+## 🗑️ Uninstalling
 
 1. Go to **Edit** → **Preferences** → **Add-ons**.
 2. Find **Coworker** in the list.
@@ -775,7 +782,7 @@ The Coworker add-on preferences are organized into **4 tabs**, plus a top-level 
 
 ---
 
-## Operating Mode Selector
+## 🎛️ Operating Mode Selector
 
 At the top of the preferences panel, you'll find the **Operating Mode** selector. This controls how the agent connects to an LLM:
 
@@ -794,15 +801,15 @@ At the top of the preferences panel, you'll find the **Operating Mode** selector
 
 ---
 
-## Tab 1: Local LLM
+## 🖥️ Tab 1: Local LLM
 
 Configure and download local models for the self-contained agent.
 
-### llama-server Status
+### ✅ llama-server Status
 - Shows whether the `llama-server` binary is installed
 - **Download llama-server** button if not found
 
-### Model Presets
+### 📊 Model Presets
 Curated model presets organized by hardware capability:
 
 | Category | VRAM | Example Models |
@@ -811,18 +818,18 @@ Curated model presets organized by hardware capability:
 | **Mid-Range** | 12-20 GB | Mistral Small 3.1 24B, Gemma 3 27B, Phi-4 14B |
 | **Lightweight** | ≤ 8 GB | Qwen3 8B, Gemma 3 12B Vision, Phi-4 14B Q3 |
 
-### Download & Start
+### ⬇️ Download & Start
 - Select a preset → click **Download Model**
 - Progress bar shows percentage, speed, ETA
 - After download, llama-server starts automatically
 - **Cancel** button available during download
 
-### Existing Models
+### 📂 Existing Models
 - **Scan** button to find `.gguf` files in your models directory
 - **Open Folder** to browse the models directory
 - Direct path selection for custom model files
 
-### Advanced Settings
+### ⚙️ Advanced Settings
 - Model Repo ID (HuggingFace)
 - Model Filename
 - Context Window Size (4096–262144 tokens)
@@ -838,15 +845,15 @@ Curated model presets organized by hardware capability:
 
 ---
 
-## Tab 2: Remote API
+## ☁️ Tab 2: Remote API
 
 Configure access to remote LLM providers.
 
-### Provider Selection
+### 🏢 Provider Selection
 - **OpenRouter** (default) — 10 curated models
 - **Custom** — Manual URL entry for any OpenAI-compatible API
 
-### Connection Settings
+### 🔗 Connection Settings
 - API URL (auto-filled by provider selection)
 - API Key (masked input)
 - Model Name (e.g., `openai/gpt-4o`)
@@ -854,7 +861,7 @@ Configure access to remote LLM providers.
 - **Browse Models** — Open openrouter.ai/models in your browser
 - **Test Connection** — Verify the API is reachable
 
-### Saved Provider Profiles
+### 💾 Saved Provider Profiles
 - Save multiple provider configurations
 - Load and delete saved profiles
 - Useful for switching between different API services
@@ -868,11 +875,11 @@ Configure access to remote LLM providers.
 
 ---
 
-## Tab 3: Generative
+## 🎨 Tab 3: Generative
 
 Experimental image/video/audio generation backends.
 
-### Backend Selection
+### 🔙 Backend Selection
 | Backend | Description |
 |---------|-------------|
 | **Local (Built-in)** | Run generative models locally via diffusers/torch |
@@ -880,7 +887,7 @@ Experimental image/video/audio generation backends.
 | **ComfyUI** | Connect to a local ComfyUI server |
 | **Remote API** | Use a remote OpenAI-compatible generation API |
 
-### Poly Haven Test
+### 🌐 Poly Haven Test
 - **Download Test HDRI** — Test CC0 HDRI download
 - **Download Test Texture** — Test CC0 texture download
 
@@ -893,32 +900,32 @@ Experimental image/video/audio generation backends.
 
 ---
 
-## Tab 4: Advanced
+## ⚙️ Tab 4: Advanced
 
 Port settings, external harness configuration, skills, and diagnostics.
 
-### Bridge Server
+### 🌉 Bridge Server
 - Host and port configuration
 - Server status indicator (Running/Stopped)
 
-### MCP Server (External Harness)
+### 🔌 MCP Server (External Harness)
 - **STDIO mode** — Claude Desktop config snippet with copy button
 - **Network mode** — Host/port settings with start/stop controls
 
-### Agent Control
+### 🤖 Agent Control
 - Auto-Start Agent toggle
 - Check Status button (pings bridge, MCP, and LLM)
 
-### Port Settings
+### 🔌 Port Settings
 - Port Offset (global offset for all ports)
 - Individual overrides for Bridge, MCP, and LLM ports
 - Effective ports display (read-only)
 
-### Skills
+### 📚 Skills
 - Shows loaded skill files for the current Blender version
 - Custom Skills text area for project-specific instructions
 
-### Text Editor Memory Bank
+### 📝 Text Editor Memory Bank
 - Toggle to save executed code to new text datablocks
 
 {_screenshot(
@@ -930,7 +937,7 @@ Port settings, external harness configuration, skills, and diagnostics.
 
 ---
 
-## Diagnostics Panel
+## 🩺 Diagnostics Panel
 
 When `BFACW_DEBUG=True`, a diagnostics panel appears below all tabs with:
 
@@ -953,7 +960,7 @@ When `BFACW_DEBUG=True`, a diagnostics panel appears below all tabs with:
 
 ---
 
-## Preference Properties Reference
+## 📖 Preference Properties Reference
 
 See the full [[API-Glossary/Preferences-Reference|Preferences Reference]] for a complete list of all configurable properties.
 """
@@ -965,7 +972,7 @@ def generate_chat_interface() -> str:
 
 ---
 
-## Overview
+## 💬 Overview
 
 The Coworker chat panel provides an in-Blender interface for interacting with the AI agent. It's available in the **3D Viewport sidebar** and the **Text Editor sidebar**.
 
@@ -980,13 +987,13 @@ The Coworker chat panel provides an in-Blender interface for interacting with th
 
 ## Panel Layout
 
-### Header Section
+### 📋 Header Section
 - **Agent Status** — Shows current state (Idle, Thinking..., Running, Stopped)
 - **Liveness Dots** — Green/yellow/red indicators for Bridge, MCP, and LLM
 - **Mode Indicator** — Shows current chat mode (Agent or Ask)
 - **Tool Count** — Number of tools available to the agent
 
-### Conversation History
+### 💭 Conversation History
 - Messages grouped into turns (user + agent response)
 - Newest messages appear at the top
 - Each turn shows:
@@ -994,7 +1001,7 @@ The Coworker chat panel provides an in-Blender interface for interacting with th
   - **Agent response** with reasoning (collapsible) and tool results
   - **Tool results** shown in sub-boxes with summary and expandable details
 
-### Input Area
+### ⌨️ Input Area
 - Multi-line text input field
 - **@mention** button for searching and inserting object names
 - **Send** button (or Ctrl+Enter)
@@ -1010,19 +1017,19 @@ The Coworker chat panel provides an in-Blender interface for interacting with th
 
 ---
 
-## Chat Modes
+## 🔄 Chat Modes
 
-### Agent Mode
+### 🤖 Agent Mode
 The LLM can execute tools — create objects, modify scenes, render, etc. Full agent capabilities.
 
-### Ask Mode
+### ❓ Ask Mode
 Read-only Q&A mode. The LLM can search documentation and inspect the scene but cannot make changes.
 
 Toggle between modes using the dropdown in the chat panel header.
 
 ---
 
-## @Mentions
+## @️ Mentions
 
 Type `@` in the chat input or click the **@** button to open the object search popup. This lets you:
 
@@ -1032,7 +1039,7 @@ Type `@` in the chat input or click the **@** button to open the object search p
 
 ---
 
-## Project Rules
+## 📜 Project Rules
 
 You can add custom instructions that are injected into every conversation:
 
@@ -1049,7 +1056,7 @@ Rules are useful for:
 
 ---
 
-## Conversation History
+## 💾 Conversation History
 
 - Chat history is automatically saved per `.blend` file
 - Stored as JSON in `scripts/bfa_coworker_chat_history/`
@@ -1059,7 +1066,7 @@ Rules are useful for:
 
 ---
 
-## Text Editor Panel
+## 📝 Text Editor Panel
 
 The Coworker panel is also available in the **Text Editor** sidebar, providing the same chat interface for users who prefer working with text editors.
 
@@ -1078,7 +1085,7 @@ def generate_local_llm_setup() -> str:
 
 ---
 
-## Overview
+## 🧠 Overview
 
 The Coworker add-on can download and run LLM models locally using **llama.cpp** (`llama-server`). This gives you:
 
@@ -1089,9 +1096,9 @@ The Coworker add-on can download and run LLM models locally using **llama.cpp** 
 
 ---
 
-## Requirements
+## 📋 Requirements
 
-- **GPU**: NVIDIA (CUDA), AMD (ROCm), or Apple Silicon (Metal)
+- 🎮 **GPU**: NVIDIA (CUDA), AMD (ROCm), or Apple Silicon (Metal)
 - **VRAM**: 4 GB minimum (lightweight models), 12 GB+ recommended (mid-range), 24 GB+ (flagship)
 - **RAM**: 16 GB system RAM minimum
 - **Disk Space**: 4–40 GB depending on model size
@@ -1099,7 +1106,7 @@ The Coworker add-on can download and run LLM models locally using **llama.cpp** 
 
 ---
 
-## Step 1: Install llama-server
+## ⬇️ Step 1: Install llama-server
 
 The add-on can download `llama-server` automatically:
 
@@ -1121,9 +1128,9 @@ Alternatively, install manually:
 
 ---
 
-## Step 2: Choose a Model
+## 📊 Step 2: Choose a Model
 
-### Option A: Use a Preset (Recommended)
+### ⭐ Option A: Use a Preset (Recommended)
 
 The add-on includes **16 curated model presets** organized by hardware capability:
 
@@ -1150,7 +1157,7 @@ To select a preset:
     "1. Flagship category, 2. Mid-Range category, 3. Lightweight category, 4. Selected preset, 5. Download button"
 )}
 
-### Option B: Use an Existing Model
+### 📂 Option B: Use an Existing Model
 
 If you already have a GGUF file:
 
@@ -1159,7 +1166,7 @@ If you already have a GGUF file:
 3. Or click **Open Folder** and place your `.gguf` file in the models directory.
 4. The add-on uses the model directly without downloading.
 
-### Option C: Custom Model
+### 🔧 Option C: Custom Model
 
 For advanced users:
 1. Set **Model Repo ID** to a HuggingFace repo (e.g., `unsloth/Mistral-Small-3.1-24B-Instruct-2503-GGUF`).
@@ -1168,7 +1175,7 @@ For advanced users:
 
 ---
 
-## Step 3: Download & Start
+## ⬇️ Step 3: Download & Start
 
 1. After selecting a preset or configuring a custom model, click **Download Model**.
 2. The download progress bar shows:
@@ -1188,25 +1195,25 @@ For advanced users:
 
 ---
 
-## Managing the Local LLM
+## 🎮 Managing the Local LLM
 
-### Start / Stop
+### ▶️ Start / Stop
 - **Start Local LLM** — Starts llama-server with the configured model
 - **Stop Local LLM** — Stops llama-server gracefully (with fallback kill)
 
-### Status Indicators
+### 📊 Status Indicators
 - **Active model** — Shows which model is currently loaded
 - **Running** — Green indicator when llama-server is healthy
 - **Error** — Red indicator with error message
 
-### Port Configuration
+### 🔌 Port Configuration
 - Default LLM port: **8081**
 - Can be changed via Port Offset or individual override in Advanced tab
 - Effective ports shown as read-only labels
 
 ---
 
-## Advanced Settings
+## ⚙️ Advanced Settings
 
 | Setting | Description | Default |
 |---------|-------------|---------|
@@ -1239,7 +1246,7 @@ def generate_remote_api_setup() -> str:
 
 ---
 
-## Overview
+## ☁️ Overview
 
 The Coworker add-on supports any OpenAI-compatible API, including:
 
@@ -1251,26 +1258,26 @@ The Coworker add-on supports any OpenAI-compatible API, including:
 
 ---
 
-## Quick Setup
+## 🚀 Quick Setup
 
 ### Step 1: Select Operating Mode
 
 1. Go to **Edit** → **Preferences** → **Add-ons** → **Coworker**.
 2. Set **Operating Mode** to **"Remote API"**.
 
-### Step 2: Choose a Provider
+### 🏢 Step 2: Choose a Provider
 
 1. In the **Remote API** tab, select a provider from the dropdown.
 2. **OpenRouter** is pre-configured with 10 curated models.
 3. Select **Custom** to enter any OpenAI-compatible endpoint manually.
 
-### Step 3: Enter Credentials
+### 🔑 Step 3: Enter Credentials
 
 1. **API URL** — Auto-filled by provider selection (e.g., `https://openrouter.ai/api`).
 2. **API Key** — Enter your key (masked for security).
 3. **Model Name** — Enter the model ID (e.g., `openai/gpt-4o`).
 
-### Step 4: Test Connection
+### ✅ Step 4: Test Connection
 
 Click **Test Connection** to verify everything works. A success message confirms connectivity.
 
@@ -1283,21 +1290,21 @@ Click **Test Connection** to verify everything works. A success message confirms
 
 ---
 
-## Provider Presets
+## 🏢 Provider Presets
 
-### OpenRouter (Default)
+### 🌐 OpenRouter (Default)
 - 10 curated models including Claude 4.6 Sonnet, GPT-4.1, GPT-4o, DeepSeek Chat V3, Gemini 2.5 Flash/Pro, Llama 4 Maverick, Qwen3.6 35B, Mistral Small 3.1, GPT-5 Mini
 - Live model listing via `/v1/models` endpoint
 - API key from [openrouter.ai/keys](https://openrouter.ai/keys)
 
-### Custom Provider
+### 🔧 Custom Provider
 - Any OpenAI-compatible API endpoint
 - Manual URL and key entry
 - Flexible for self-hosted or private API services
 
 ---
 
-## Saved Provider Profiles
+## 💾 Saved Provider Profiles
 
 You can save multiple provider configurations and switch between them:
 
@@ -1321,7 +1328,7 @@ This is useful for:
 
 ---
 
-## Model Browser
+## 🔍 Model Browser
 
 Click **Browse Models** to open [openrouter.ai/models](https://openrouter.ai/models) in your web browser. This lets you:
 
@@ -1332,7 +1339,7 @@ Click **Browse Models** to open [openrouter.ai/models](https://openrouter.ai/mod
 
 ---
 
-## API Key Security
+## 🔒 API Key Security
 
 - API keys are stored in Blender's preferences (not in the .blend file)
 - Keys are masked in the UI
@@ -1341,15 +1348,15 @@ Click **Browse Models** to open [openrouter.ai/models](https://openrouter.ai/mod
 
 ---
 
-## Troubleshooting
+## 🔧 Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
-| **Connection failed** | Check URL and API key |
-| **Model not found** | Verify the model ID is correct |
-| **Rate limited** | Wait and retry, or upgrade your API plan |
-| **Slow responses** | Try a faster model or check your internet connection |
-| **Authentication error** | Regenerate your API key |
+| ❌ **Connection failed** | Check URL and API key |
+| 🔍 **Model not found** | Verify the model ID is correct |
+| ⏱️ **Rate limited** | Wait and retry, or upgrade your API plan |
+| 🐢 **Slow responses** | Try a faster model or check your internet connection |
+| 🔑 **Authentication error** | Regenerate your API key |
 
 See [[User-Documentation/Troubleshooting|Troubleshooting]] for more help.
 """
@@ -1361,13 +1368,13 @@ def generate_generative_ai() -> str:
 
 ---
 
-## Overview
+## 🎨 Overview
 
-The Coworker add-on includes an experimental generative AI system for creating images, videos, and audio directly from Blender. This is a **Work in Progress** feature.
+The Coworker add-on includes an experimental generative AI system for creating images, videos, and audio directly from Blender / Bforartists. This is a **Work in Progress** feature.
 
 ---
 
-## Backends
+## 🔙 Backends
 
 | Backend | Description | Status |
 |---------|-------------|--------|
@@ -1385,7 +1392,7 @@ The Coworker add-on includes an experimental generative AI system for creating i
 
 ---
 
-## Plugin System
+## 🧩 Plugin System
 
 The generative system uses a plugin architecture:
 
@@ -1400,7 +1407,7 @@ Plugins are auto-discovered from the `gen_plugins/` directory. Each plugin exten
 
 ---
 
-## Poly Haven Integration
+## 🌐 Poly Haven Integration
 
 The add-on includes tools for downloading CC0 assets from [Poly Haven](https://polyhaven.com/):
 
@@ -1421,23 +1428,23 @@ Test buttons are available in the Generative tab:
 
 ---
 
-## Configuration
+## ⚙️ Configuration
 
-### Local Backend
+### 🖥️ Local Backend
 - **Models Directory** — Where generative models are cached
 - **Output Directory** — Where generated media is saved
 - **Auto-Download Models** — Download models on first use
 
-### ComfyUI Backend
+### 🔗 ComfyUI Backend
 - **ComfyUI URL** — URL of your ComfyUI server (default: `http://127.0.0.1:8188`)
 
-### Remote Backend
+### ☁️ Remote Backend
 - **Remote Gen API URL** — OpenAI-compatible generation endpoint
 - **Remote Gen API Key** — API key for the remote service
 
 ---
 
-## Creating Custom Plugins
+## 🧩 Creating Custom Plugins
 
 See the [[Developer-Documentation/Plugin-System|Plugin System]] developer documentation for details on creating custom generative plugins.
 """
@@ -1459,12 +1466,12 @@ The add-on uses three ports by default:
 | MCP Server | 9191 | HTTP server for tool calls |
 | LLM Server | 8081 | llama-server API endpoint |
 
-### Symptoms
+### ⚠️ Symptoms
 - Agent fails to start
 - "Port already in use" errors
 - Intermittent connection failures
 
-### Solutions
+### ✅ Solutions
 
 1. **Check Ports** — Use the **Check Ports** button in the Diagnostics panel.
 2. **Port Offset** — Increase the Port Offset in Advanced tab by 1, 2, 3...
@@ -1480,70 +1487,70 @@ The add-on uses three ports by default:
 
 ---
 
-## Model Download Issues
+## ⬇️ Model Download Issues
 
-### 401 Unauthorized
+### 🔒 401 Unauthorized
 - The model requires authentication.
 - Set a **HuggingFace Token** in Advanced settings.
 - Get a token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
 
-### 403 Forbidden
+### 🚫 403 Forbidden
 - You don't have access to this model.
 - Visit the model page on HuggingFace and grant access.
 - Some models require accepting terms of use.
 
-### 404 Not Found
+### 🔍 404 Not Found
 - Check the **Model Repo ID** and **Model Filename**.
 - Verify the repo exists at huggingface.co.
 - Check the filename matches exactly (case-sensitive).
 
-### Download Stalls or Times Out
+### ⏱️ Download Stalls or Times Out
 - Check your internet connection.
 - Try a smaller model.
 - The add-on falls back to `llama-server --hf-repo/--hf-file` if direct download fails.
 
-### Insufficient Disk Space
+### 💾 Insufficient Disk Space
 - The add-on checks disk space before downloading.
 - Free up space or change the models directory.
 
 ---
 
-## LLM Server Issues
+## 🖥️ LLM Server Issues
 
-### llama-server Won't Start
+### 🚫 llama-server Won't Start
 - Re-download the llama-server binary.
 - Check the binary path in Advanced settings.
 - Try running `llama-server` manually from the command line.
 
-### Out of Memory
+### 💥 Out of Memory
 - Reduce **Context Window Size** (try 8192).
 - Use a smaller model preset.
 - Close other GPU-intensive applications.
 
-### Slow Responses
+### 🐢 Slow Responses
 - Use a smaller model.
 - Reduce context window size.
 - Check if another process is using the GPU.
 
-### Jinja Template Errors
+### ⚠️ Jinja Template Errors
 - Reduce context window size.
 - The error means the context is full — the model can't process more tokens.
 
 ---
 
-## Connection Issues
+## 🔗 Connection Issues
 
-### Agent Shows "Not Running"
+### ⛔ Agent Shows "Not Running"
 - Start the agent from the Chat panel or Preferences.
 - Check that the bridge server is running.
 - Verify ports are not in use.
 
-### "Online Access Must Be Enabled"
+### 🌐 "Online Access Must Be Enabled"
 - Blender requires online access permission.
 - Enable it in Blender's System Preferences.
 - Or use `--online-mode` from the command line.
 
-### Remote API Connection Fails
+### ❌ Remote API Connection Fails
 - Check the API URL and key.
 - Verify your internet connection.
 - Check the API provider's status page.
@@ -1551,24 +1558,24 @@ The add-on uses three ports by default:
 
 ---
 
-## Chat Issues
+## 💬 Chat Issues
 
-### Messages Not Sending
+### 📤 Messages Not Sending
 - Check that the agent is running.
 - Check for the "Already processing" warning (double-click guard).
 - Clear the conversation with **New Thread**.
 
-### Responses Are Cut Off
+### ✂️ Responses Are Cut Off
 - Increase **Max Output Tokens**.
 - The add-on auto-continues on truncation (max 2 attempts).
 
-### Wrong Model Responding
+### 🤔 Wrong Model Responding
 - Check the configured model in Preferences.
 - Verify the operating mode (Local vs Remote).
 
 ---
 
-## Log Files
+## 📝 Log Files
 
 The add-on writes logs to:
 
@@ -1586,12 +1593,13 @@ Enable **Log** in Advanced settings to print every tool request/response to the 
 
 ---
 
-## Getting Help
+## 🆘 Getting Help
 
 1. Check the log file for error details.
 2. Use the **Diagnose** button in the Diagnostics panel.
 3. Search or ask on the [GitHub Issues](https://github.com/bforartists/bfa_coworker/issues) page.
 4. Include the log file content when reporting issues.
+5. Mention whether you're using **Bforartists** or official **Blender** and which version.
 """
 
 
@@ -1605,7 +1613,7 @@ def generate_architecture() -> str:
 
 ## System Overview
 
-The Coworker add-on is a **3-component system** that enables AI-powered interaction with Blender:
+The Coworker add-on is a **3-component system** that enables AI-powered interaction with **Blender / Bforartists**:
 
 ```mermaid
 graph TB
@@ -1642,7 +1650,7 @@ graph TB
 
 ### 1. Blender Add-on (`addon/bfa_coworker/`)
 
-Runs inside Blender's Python environment. Provides:
+Runs inside Blender / Bforartists' Python environment. Provides:
 
 - **Chat Panel** (`ui_chat.py`) — In-Blender UI for conversation
 - **Agent Controller** (`agent_controller.py`) — Orchestrates LLM conversations, manages MCP server, handles tool calls
@@ -1986,14 +1994,14 @@ The `tools_helpers/` directory provides shared utilities:
 
 ## Communication with Blender
 
-The MCP server communicates with the Blender addon through a **TCP socket bridge**:
+The MCP server communicates with the Blender / Bforartists addon through a **TCP socket bridge**:
 
 1. MCP server receives a tool call from the LLM
 2. MCP server sends Python code to the bridge server via TCP
 3. Bridge server executes the code in Blender's context
 4. Results are returned through the same channel
 
-For tools that need Blender's UI (screenshots, navigation), the bridge server runs in interactive mode with timer-based polling.
+For tools that need Blender / Bforartists' UI (screenshots, navigation), the bridge server runs in interactive mode with timer-based polling.
 """
 
 
@@ -2342,7 +2350,7 @@ def generate_building_and_testing() -> str:
 
 ### Prerequisites
 - Python 3.10+
-- Blender 5.1+
+- Blender / Bforartists 5.1+
 - Git
 
 ### Build Command
@@ -2566,7 +2574,7 @@ def my_function(param: str) -> bool:
 
 ## Upstream Sync
 
-This project is a fork of [Blender MCP](https://www.blender.org/lab/mcp-server).
+This project is a fork of [Blender MCP](https://www.blender.org/lab/mcp-server), maintained primarily for **Bforartists** ([github.com/Bforartists/Bforartists](https://github.com/Bforartists/Bforartists)).
 To sync with upstream changes:
 
 ```bash

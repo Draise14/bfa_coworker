@@ -141,6 +141,9 @@ check_all: check_ruff check_mypy check_vulture check_license check_ascii check_n
 readme_update:
 	$(PYTHON) _misc/readme_update_from_tools.py
 
+wiki:
+	$(PYTHON) _misc/generate_wiki.py --output-dir ../bfa_coworker.wiki
+
 update_reference_manual:
 	@test -n "$(MANUAL_DIR)" || { echo "Usage: make update_reference_manual MANUAL_DIR=/path/to/blender/manual"; exit 1; }
 	$(PYTHON) _misc/update_reference_manual.py "$(MANUAL_DIR)"

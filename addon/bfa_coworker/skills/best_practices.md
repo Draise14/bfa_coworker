@@ -71,3 +71,24 @@ Always use `strips` or `strips_all` when accessing VSE content.
 
 Delete objects with unlinking enabled to cleanly remove from all collections:
 `bpy.data.objects.remove(obj, do_unlink=True)`.
+
+## Script Authoring Workflow (Avoiding Duplicates)
+
+The system tracks what you create during a turn and tells you what already exists.
+When you iterate on the same task, you'll see a context message listing what you've
+already made — modify those entities instead of creating duplicates.
+
+1. **Inspect first** — use dedicated scene exploration tools before writing code.
+2. **Plan the complete script** — think through all steps before executing.
+3. **Execute once** — include all desired properties, modifiers, and materials
+   in a single `execute_blender_code` call.
+4. **If it fails** — the system undoes the failed attempt automatically.
+   Just fix the code and retry.
+5. **If you see a context message** listing entities you've already created,
+   modify those existing entities rather than creating new ones.
+
+For multiple independent objects, either:
+- **Batch them** into one `execute_blender_code` call, or
+- **Use different operators** for each (e.g., `primitive_cube_add` for a cube,
+  `primitive_uv_sphere_add` for a sphere) — the system detects different
+  operators and keeps both results.

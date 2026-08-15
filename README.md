@@ -131,34 +131,48 @@ Chat UI → Agent Controller → [Local LLM / Remote API]
 
 ## MCP Tools
 
-The MCP server provides the following tools that the LLM can call:
+The MCP server provides 30+ tools that the LLM can call. For local models
+with limited context windows, tools are loaded in a **hybrid cascaded system**:
+
+| Tier | When Loaded | Tools |
+|---|---|---|
+| **Surface** | Always | `execute_blender_code`, `get_blendfile_summary_datablocks`, `get_object_detail_summary`, `get_objects_summary` |
+| **Domain** | Pre-detected from prompt keywords, or on-demand via `load_tools` | animation, material, modeling, lighting, rendering, VSE, geometry nodes |
+| **Full** | Remote API mode | All 30+ tools |
+
+The LLM can call `load_tools(domain="animation")` mid-turn to load
+additional domain-specific tools. Remote mode always gets the full tool set.
+
+### Surface Tools (always available)
 
 - **execute_blender_code** — Execute Python code in the connected Blender instance
-- **get_blendfile_summary_datablocks** — Summary of the blend file: data-block counts,
-  active workspace, and render engine
-- **get_blendfile_summary_missing_files** — Report missing external file references
-  (images, libraries, fonts, sounds, movie clips, caches, sequences)
-- **get_blendfile_summary_of_linked_libraries** — Tree of directly and indirectly
-  linked library files
-- **get_blendfile_summary_path_info** — Blend file's path, save status, age, backups
-- **get_blendfile_summary_usage_guess** — Guess primary use-cases (scored 0–100)
+- **get_blendfile_summary_datablocks** — Summary of the blend file: data-block counts, active workspace, and render engine
 - **get_object_detail_summary** — Structured summary of an object by name
 - **get_objects_summary** — Scene collection hierarchy and their objects
+
+### Domain Tools (loaded on-demand)
+
+- **animation**: `jump_to_view3d_object_by_name`, `jump_to_view3d_object_data_by_name`, `render_viewport_to_path`
+- **material**: `download_polyhaven_asset`, `search_polyhaven_assets`, `get_screenshot_of_area_as_image`, `render_viewport_to_path`
+- **modeling**: `jump_to_view3d_object_by_name`, `jump_to_view3d_object_data_by_name`, `jump_to_tab_by_name`, `jump_to_tab_by_space_type`, `get_screenshot_of_area_as_image`
+- **lighting**: `download_polyhaven_asset`, `search_polyhaven_assets`, `render_viewport_to_path`, `get_screenshot_of_area_as_image`
+- **rendering**: `render_viewport_to_path`, `get_screenshot_of_area_as_image`, `get_screenshot_of_window_as_image`
+- **vse**: `jump_to_tab_by_name`, `jump_to_tab_by_space_type`
+- **geometry_nodes**: `jump_to_view3d_object_by_name`, `jump_to_view3d_object_data_by_name`, `get_screenshot_of_area_as_image`
+
+### Full Tool List (remote mode)
+
+- **get_blendfile_summary_missing_files** — Report missing external file references
+- **get_blendfile_summary_of_linked_libraries** — Tree of linked library files
+- **get_blendfile_summary_path_info** — Blend file's path, save status, age, backups
+- **get_blendfile_summary_usage_guess** — Guess primary use-cases (scored 0–100)
 - **get_python_api_docs** — Blender Python API docs for a given identifier
-- **get_screenshot_of_area_as_image** — Screenshot of a single Blender area (PNG)
-- **get_screenshot_of_window_as_image** — Screenshot of the entire Blender window (PNG)
 - **get_screenshot_of_window_as_json** — JSON description of window layout and selection
-- **jump_to_tab_by_name** — Switch the active workspace tab
-- **jump_to_tab_by_space_type** — Switch to a workspace by space type
-- **jump_to_view3d_object_by_name** — Focus the 3D viewport on an object
-- **jump_to_view3d_object_data_by_name** — Focus the 3D viewport on an object's data
 - **render_thumbnail_to_path** — Render a small low-quality thumbnail
-- **render_viewport_to_path** — Render the current scene to a path
 - **search_api_docs** — Search the Blender Python API reference
 - **search_manual_docs** — Search the Blender user manual
 
-CLI variants (suffixed `_for_cli`) are also available for background Blender
-mode.
+CLI variants (suffixed `_for_cli`) are also available for background Blender mode.
 
 ---
 

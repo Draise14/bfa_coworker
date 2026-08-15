@@ -27,8 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Hybrid Tool Domain System** — Cascaded tool loading for local models: surface tools (code execution + scene inspection) always loaded; domain tools (animation, material, modeling, lighting, rendering, VSE, geometry nodes) pre-detected from user prompt keywords or loaded on-demand via `load_tools` meta-tool. Keeps context window small (~8 tools vs 30) while giving the LLM access to all tools when needed. Remote mode unaffected.
+- **Smart Undo Skip for Code-Bug Errors** — `_error_is_code_bug()` detects pure code-bug errors (KeyError, AttributeError, TypeError, NameError, ValueError, "Node type undefined") that fail before creating any objects. Skips the undo+push round-trips, saving 2 HTTP calls per retry and avoiding depsgraph crashes from undo on empty scenes.
+- **Blender 5.3 Material Node Hint** — Added to `skills/blender_53.md`: when `mat.use_nodes = True`, Blender auto-creates Principled BSDF + Material Output already connected. LLM should find them by iterating `node.type` instead of `nodes.new('BSDF_PRINCIPLED')` which doesn't work in Bforartists 5.3.
+- **Reasoning Content Stripped from LLM Requests** — `_strip_reasoning_from_history()` removes non-standard `"reasoning"`-role messages before sending to the LLM, saving 500-3,000 tokens per request. Reasoning is still stored in full history for UI display.
 - **Polyhaven Tools** — New tools for downloading CC0 resources from Polyhaven (models, HDRIs, textures) directly from the agent. Supports URL-based setup and test build.
-- **Generative Plugin Foundation** — Tier 5 foundation: image gen plugins with auto-discovery, controller, and plugin base classes. Supports audio, image, text, and video plugin types.
+- **Generative Plugin Foundation** — Tier 5 foundation: image gen plugins with auto-discovery, controller, and plugin base classes. Supports audio, image, text, and video plugin types, usability still WIP (not usable).
 - **Version-Aware Skills System** — New searchable domain skills system with version-aware Blender API skills (`blender_50_51.md`, `blender_52.md`, `blender_53.md`). User custom skills support.
 - **Copy Content Button** — New button in chat UI that copies the full conversation history to clipboard.
 - **Stepped Benchmark Tests** — Replaced single-prompt benchmarks with 6 multi-step test suites (Scene Build, Animation, Modifiers, Assets+Mat, Baseline, Error Handling). Steps are clicked in order, each building on the last. Progress tracked per-suite with Reset support.
@@ -43,10 +47,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Depsgraph Crashes in Blender 5.3** — Replaced crash-prone `view_layer.update()` calls with `_safe_depsgraph_sync()` that uses `update_tag()` on each object (lightweight, no full rebuild). Added `_code_touches_collections()` and `_code_is_undo_or_push()` heuristics to skip full depsgraph sync after collection-manipulation and undo/push operations. Removed before-exec depsgraph sync entirely — tagging objects before smart undo caused stale-object crashes in `pyrna_struct_CreatePyObject`.
+- **Defensive Entity Snapshots** — `_SNAPSHOT_EXTRA` now wraps each datablock iteration in try/except via `_sn()` helper, so a single corrupted datablock doesn't crash the entire snapshot.
 - **Remote API Mode** — Fixed remote API mode not working correctly. Unified Operating Mode selector resolves mode conflicts.
 - **Python Context Internal State Bug** — Fixed internal state bug in Python context handling.
 - **No Text Content in Tool Result** — Fixed error when screenshot tool returns no text content.
 - **Debugging Panel Layout** — Moved debugging panel out of tabs per user feedback.
+- **Re-Entrancy Guard for Conversation Turns** — Added `turn_active` flag to `AgentState` preventing overlapping `run_conversation_turn()` calls from corrupting shared history. Chat send and test step buttons now check `turn_active` before spawning threads, eliminating the primary "two balls" duplicate-object root cause.
+- **Undo Code Silent Fallback Fix** — `_undo_code()` now returns an explicit `{"status": "error"}` when no window/area is available for undo/push, instead of silently returning `{"status": "ok"}` and leaving the scene dirty.
+- **`ValueError` Removed from Code-Bug Skip** — `_error_is_code_bug()` no longer treats `ValueError` as a pure code-bug, since it can fire after objects have been created. Prevents the smart-undo system from skipping undo when side effects exist.
+- **`TypeError` Removed from Code-Bug Skip** — `_error_is_code_bug()` no longer treats `TypeError` as a pure code-bug, since enum validation errors (e.g. `enum "4" not found in ('NONE', 'COLOR_01', ...)`) can fire after objects are created. Prevents duplicate objects from skipped undo on type errors.
+- **Retroactive Entity Cleanup Fallback** — Added `_build_cleanup_code()` that generates Blender Python code to delete orphaned datablocks when `bpy.ops.ed.undo()` fails (no window/area, empty undo stack). The smart-undo system now checks the undo result and falls back to direct entity deletion using the snapshot diff.
+- **Auto-Continue Tool Call Deduplication** — When `finish_reason=length` triggers auto-continue, tool calls from the continuation are now deduplicated by ID before merging, preventing duplicate tool execution.
+- **Test Suite Busy Guard** — Added `_test_suite_running` tracking to prevent launching concurrent test steps for the same suite. Progress no longer advances until the step thread completes.
+- **Thread-Safe History Save** — Added `_history_save_lock` to `_save_chat_history()` preventing concurrent threads from writing partial conversation dumps.
+- **Test File Tail Cleanup** — Removed duplicated `TestForegroundServer`/`TestInteractiveServer` class definitions and malformed `exit(1)    unittest.main()` line from `tests/test_blender_mcp_with_blender.py`.
+- **Collection Heuristic Hardening** — Added `layer_col.exclude` and `layer_col.hide_viewport` to `_code_touches_collections()` patterns, catching collection mutations from `jump_to_view3d_*` tool templates that were previously missed. Prevents Blender 5.3 depsgraph crash after full `view_layer.update()` following collection edits.
+- **Read-Only Snapshot Skip** — Added `_code_is_readonly()` heuristic that detects read-only code (no `bpy.ops`, `.new()`, `.remove()`, etc.) and skips the costly 12-datablock entity snapshot on those calls. Saves significant overhead when the LLM makes many inspection calls between mutation calls.
+- **Scene-Aware Domain Pre-Detection** — Added `_detect_domain_from_scene()` that scans `bpy.data` for armatures, actions, materials, node groups, lights, cameras, meshes, sequencer strips, and geometry nodes modifiers. Pre-loads matching domains before the turn starts, so the LLM has the right tools even when the user's prompt is vague about what exists in the scene.
+- **Domain-Aware Skill Auto-Injection** — Added `_DOMAIN_SKILL_MAP` and `get_domain_skills()` to bundle domain skill files (`animation.md`, `materials.md`, `mesh_editing.md`, `modifiers.md`, `rendering.md`) into the system prompt when matching domains are detected. The LLM gets version-aware API rules upfront without needing to search for them.
+- **Result Trimming Middleware** — Added `_trim_tool_result()` that strips JSON boilerplate (`{"status": "ok", "result": ...}`) and keeps only the meaningful inner data when truncating tool results for LLM context. Error messages are preserved in full within the budget; success results have their inner `result` fields extracted, giving the LLM more structured data at the same 500-char limit.
+- **Composite Tool Wrappers** — Three new MCP tools that combine multi-step operations into a single call:
+  - `setup_pbr_material` — creates a PBR material with Principled BSDF + normal map + displacement, optionally downloading Polyhaven textures. Saves 3-5 round-trips.
+  - `batch_keyframe_insert` — keyframes multiple objects across multiple frames with location/rotation/scale in one call. Saves N round-trips per object per frame.
+  - `three_point_lighting_rig` — creates key, fill, and rim lights tracking a target object. Saves 3-5 round-trips.
+  All three registered in their respective domains (animation, material, lighting, rendering).
+- **User Skill Loader** — Added `get_user_skills()` that scans `SCRIPTS/bfa_coworker_skills/` for `.md` files and injects them into the system prompt alongside built-in skills. Users can drop custom skill files into this directory to teach the LLM project-specific conventions, API overrides, or workflow patterns without modifying the addon.
 
 ## [v1.1.36] - 2026-08-12
 

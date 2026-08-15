@@ -582,6 +582,17 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default="",
     )
 
+    # ── Text Editor Memory Bank ────────────────────────────────────────
+
+    save_code_to_text_editor: BoolProperty(  # type: ignore[valid-type]
+        name="Save Executed Code to Text Editor",
+        description=(
+            "After each successful execute_blender_code call, save the code\n"
+            "to a new text datablock (Coworker_HH-MM-SS) for review and reuse"
+        ),
+        default=True,
+    )
+
     # ── BYOK Provider Profiles (Tier 2) ─────────────────────────────────
 
     saved_providers_json: StringProperty(  # type: ignore[valid-type]
@@ -1205,6 +1216,16 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             icon='INFO',
         )
         custom_box.prop(self, "custom_skills_text")
+
+        # ── Text Editor Memory Bank ───────────────────────────────────
+        mem_box = layout.box()
+        mem_box.label(text="Text Editor Memory Bank", icon='TEXT')
+        mem_box.label(
+            text="Save executed code to timestamped text datablocks\n"
+                 "(Coworker_HH-MM-SS) for review and reuse.",
+            icon='INFO',
+        )
+        mem_box.prop(self, "save_code_to_text_editor")
 
 
 # ---------------------------------------------------------------------------

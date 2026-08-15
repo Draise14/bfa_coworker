@@ -1094,44 +1094,6 @@ def test_binaries_available() -> bool:
         ok = False
     if not shutil.which(blender_mcp):
         print("ERROR: '{:s}' not found in PATH (set BFACW_MCP)".format(blender_mcp))
- True
-    _port = _PORT_BACKGROUND
-
-
-class TestForegroundServer(_TestServerMixin, unittest.TestCase):
-    """
-    Run all tests against Blender without ``--background`` (full GUI).
-    """
-
-    _background = False
-    _port = _PORT_FOREGROUND
-
-
-class TestInteractiveServer(_TestServerMixin, unittest.TestCase):
-    """
-    Run all tests against Blender in interactive mode (timer-based polling).
-    """
-
-    _background = False
-    _interactive = True
-    _port = _PORT_INTERACTIVE
-
-
-BLENDER_VERSION_MIN = (5, 1)
-
-
-def test_binaries_available() -> bool:
-    """
-    Check required binaries are available, print errors for any that are missing.
-    """
-    blender_bin = os.environ.get("BLENDER_BIN", "blender")
-    blender_mcp = os.environ.get("BLENDER_MCP", "blender-mcp")
-    ok = True
-    if not shutil.which(blender_bin):
-        print("ERROR: '{:s}' not found in PATH (set BLENDER_BIN)".format(blender_bin))
-        ok = False
-exit(1)    unittest.main()    if not shutil.which(blender_mcp):
-        print("ERROR: '{:s}' not found in PATH (set BLENDER_MCP)".format(blender_mcp))
         ok = False
     return ok
 
@@ -1166,4 +1128,3 @@ if __name__ == "__main__":
     if not test_blender_version():
         sys.exit(1)
     unittest.main()
-exit(1)    unittest.main()

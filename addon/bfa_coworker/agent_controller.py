@@ -30,6 +30,7 @@ import asyncio
 import concurrent.futures
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -101,11 +102,10 @@ def _get_system_prompt() -> str:
     _system_prompt = (
         "You are a Blender automation assistant. "
         "You have access to tools that can execute Python code in Blender. "
-        "Be concise, direct, and efficient. Use short logical sentences. "
+        "Think aloud in full paragraphs. Explain your reasoning step by step. "
         "Summarize tool results in a few words. Avoid fluff and polite filler. "
         "Execute code to complete the user's request, "
-        "then respond with a brief summary of what was done. "
-        "Do NOT repeat tool calls that have already succeeded."
+        "then respond with a brief summary of what was done."
     )
     return _system_prompt
 
@@ -121,9 +121,11 @@ def _get_system_prompt_with_rules() -> str:
         version_header = (
             "You are connected to Blender {:s}. "
             "All code you write must be compatible with this version.\n\n"
-            "STYLE: Be concise, direct, and efficient. Use short logical sentences. "
-            "Keep reasoning brief — 2-3 sentences max unless designing complex code. "
-            "Summarize tool results in a few words. Avoid fluff, apologies, and polite filler."
+            "STYLE: Think aloud in full paragraphs. Explain your reasoning step by step — "
+            "what you observe, what you plan to do, and why. The user should be able to "
+            "follow your thought process. Be thorough but not repetitive. "
+            "When reporting tool results, be brief — just state what happened and whether "
+            "it succeeded."
         ).format(version_str)
 
         # ── Built-in skills (version-aware, from addon/skills/) ──
@@ -141,6 +143,13 @@ def _get_system_prompt_with_rules() -> str:
                 bpy_version=bpy.app.version,
                 custom_text=custom_text,
             )
+            # ── User skills (from SCRIPTS/bfa_coworker_skills/*.md) ──
+            user_skills_block = _skills_mod.get_user_skills()
+            if user_skills_block:
+                if skills_block:
+                    skills_block += "\n\n{:s}".format(user_skills_block)
+                else:
+                    skills_block = user_skills_block
         except Exception:
             skills_block = ""
 
@@ -210,6 +219,238 @@ def _drop_orphaned_tool_messages(messages: list[dict[str, Any]]) -> list[dict[st
                 continue
         cleaned.append(msg)
     return cleaned
+
+
+def _strip_reasoning_from_history(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Remove ``reasoning``-role messages from history before sending to the LLM.
+
+    Reasoning content (chain-of-thought) is stored in history for the UI
+    but uses a non-standard ``"reasoning"`` role that most LLM APIs don't
+    recognize.  Sending it wastes context window tokens without providing
+    useful signal.  We keep it in the full history for UI display but
+    strip it before each LLM request.
+    """
+    return [m for m in messages if m.get("role") != "reasoning"]
+
+
+# ── Tool domain system (hybrid: pre-detect + on-demand) ────────────
+# Surface tools are always loaded — they cover code execution and basic
+# scene inspection.  Domain tools are loaded based on the user's prompt
+# (pre-detected) or on-demand via the ``load_tools`` meta-tool.
+#
+# This keeps the context window small for local models while still
+# giving the LLM access to all tools when needed.
+
+_SURFACE_TOOLS = frozenset({
+    "execute_blender_code",
+    "get_blendfile_summary_datablocks",
+    "get_object_detail_summary",
+    "get_objects_summary",
+})
+
+_TOOL_DOMAINS: dict[str, frozenset[str]] = {
+    "animation": frozenset({
+        "jump_to_view3d_object_by_name",
+        "jump_to_view3d_object_data_by_name",
+        "render_viewport_to_path",
+        "batch_keyframe_insert",
+    }),
+    "material": frozenset({
+        "download_polyhaven_asset",
+        "search_polyhaven_assets",
+        "get_screenshot_of_area_as_image",
+        "render_viewport_to_path",
+        "setup_pbr_material",
+    }),
+    "modeling": frozenset({
+        "jump_to_view3d_object_by_name",
+        "jump_to_view3d_object_data_by_name",
+        "jump_to_tab_by_name",
+        "jump_to_tab_by_space_type",
+        "get_screenshot_of_area_as_image",
+    }),
+    "lighting": frozenset({
+        "download_polyhaven_asset",
+        "search_polyhaven_assets",
+        "render_viewport_to_path",
+        "get_screenshot_of_area_as_image",
+        "three_point_lighting_rig",
+    }),
+    "rendering": frozenset({
+        "render_viewport_to_path",
+        "get_screenshot_of_area_as_image",
+        "get_screenshot_of_window_as_image",
+        "three_point_lighting_rig",
+    }),
+    "vse": frozenset({
+        "jump_to_tab_by_name",
+        "jump_to_tab_by_space_type",
+    }),
+    "geometry_nodes": frozenset({
+        "jump_to_view3d_object_by_name",
+        "jump_to_view3d_object_data_by_name",
+        "get_screenshot_of_area_as_image",
+    }),
+}
+
+_DOMAIN_KEYWORDS: dict[str, list[str]] = {
+    "animation": [
+        "animate", "keyframe", "fcurve", "armature", "bone", "rig",
+        "pose", "timeline", "action", "bounce", "walk cycle", "driver",
+    ],
+    "material": [
+        "material", "shader", "texture", "node", "bsdf", "principled",
+        "pbr", "glass", "metal", "rubber", "sss", "subsurface",
+    ],
+    "modeling": [
+        "mesh", "edit", "extrude", "bevel", "loop cut", "knife",
+        "sculpt", "boolean", "subdivide", "merge", "bridge",
+    ],
+    "lighting": [
+        "light", "lamp", "sun", "point", "area", "hdri",
+        "world", "environment", "illuminat", "three-point",
+    ],
+    "rendering": [
+        "render", "camera", "eevee", "cycles", "output",
+        "resolution", "frame", "focal length", "depth of field",
+    ],
+    "vse": [
+        "sequencer", "strip", "video", "audio", "clip", "edit",
+        "cut", "vse", "timeline",
+    ],
+    "geometry_nodes": [
+        "geometry node", "node group", "modifier", "simulation",
+        "geonode", "procedural",
+    ],
+}
+
+# Synthetic tool schema for on-demand domain loading.
+# This is NOT a real MCP tool — the conversation loop intercepts it.
+_LOAD_TOOLS_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "load_tools",
+        "description": (
+            "Load additional domain-specific Blender tools. "
+            "Call this when you need tools for a specific domain: "
+            + ", ".join(sorted(_TOOL_DOMAINS.keys()))
+            + ". Surface tools (code execution, scene inspection) "
+            "are always available."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "domain": {
+                    "type": "string",
+                    "enum": sorted(_TOOL_DOMAINS.keys()),
+                    "description": "The domain to load tools for.",
+                }
+            },
+            "required": ["domain"],
+        },
+    },
+}
+
+
+def _detect_domain(prompt: str) -> str | None:
+    """Heuristic: detect the Blender domain from a user prompt.
+
+    Returns a domain key from ``_TOOL_DOMAINS``, or ``None`` if no
+    domain is detected (surface tools only).
+    """
+    prompt_lower = prompt.lower()
+    for domain, keywords in _DOMAIN_KEYWORDS.items():
+        if any(kw in prompt_lower for kw in keywords):
+            return domain
+    return None
+
+
+def _detect_domain_from_scene() -> set[str]:
+    """Detect domains from the current scene content.
+
+    Scans ``bpy.data`` for objects, materials, lights, cameras, modifiers,
+    sequencer strips, etc. and returns a set of domain keys that match
+    what's already in the scene.  This runs in addition to keyword-based
+    detection — if the scene has armatures with animation data, the
+    "animation" domain is pre-loaded even if the user didn't type "animate".
+    """
+    domains: set[str] = set()
+    try:
+        import bpy as _bpy  # pylint: disable=import-error
+
+        # Animation: armatures, actions, or keyframe data.
+        if _bpy.data.armatures or _bpy.data.actions:
+            domains.add("animation")
+        else:
+            # Check if any object has animation data.
+            for _obj in _bpy.data.objects:
+                if getattr(_obj, "animation_data", None) and _obj.animation_data.action:
+                    domains.add("animation")
+                    break
+
+        # Material: any materials or node groups with shader nodes.
+        if _bpy.data.materials or _bpy.data.node_groups:
+            domains.add("material")
+
+        # Modeling: meshes with edit-mode potential (any mesh object).
+        if _bpy.data.meshes:
+            domains.add("modeling")
+
+        # Lighting: any light objects or world setup.
+        if _bpy.data.lights or _bpy.data.worlds:
+            domains.add("lighting")
+
+        # Rendering: cameras or render settings indicate rendering intent.
+        if _bpy.data.cameras:
+            domains.add("rendering")
+
+        # VSE: any sequencer strips.
+        for _scene in _bpy.data.scenes:
+            if _scene.sequence_editor and _scene.sequence_editor.strips:
+                domains.add("vse")
+                break
+
+        # Geometry Nodes: any object with a geometry nodes modifier.
+        for _obj in _bpy.data.objects:
+            for _mod in getattr(_obj, "modifiers", []):
+                if _mod.type == "NODES":
+                    domains.add("geometry_nodes")
+                    break
+            if "geometry_nodes" in domains:
+                break
+
+    except Exception:
+        pass  # Best-effort; not running inside Blender.
+
+    return domains
+
+
+def _build_tool_set(
+    all_openai_tools: list[dict[str, Any]],
+    domains: set[str] | None,
+) -> list[dict[str, Any]]:
+    """Build the tool set for local mode: surface + domains + load_tools.
+
+    *all_openai_tools* — the full list of all available tools in OpenAI format.
+    *domains* — set of pre-detected domains, or ``None`` for surface only.
+    """
+    allowed = set(_SURFACE_TOOLS)
+    if domains:
+        for d in domains:
+            if d in _TOOL_DOMAINS:
+                allowed.update(_TOOL_DOMAINS[d])
+
+    filtered = [
+        t for t in all_openai_tools
+        if t.get("function", {}).get("name") in allowed
+    ]
+    # Always include the load_tools meta-tool.
+    filtered.append(_LOAD_TOOLS_SCHEMA)
+
+    print("[🛠️Coworker] _build_tool_set: {:d} → {:d} tools (domains={:s})".format(
+        len(all_openai_tools), len(filtered), ",".join(sorted(domains)) if domains else "none"))
+    return filtered
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +531,9 @@ class AgentState:
     bridge_live: bool = False
     mcp_live: bool = False
     llm_live: bool = False
+
+    # ── Re-entrancy guard ──────────────────────────────────────────
+    turn_active: bool = False  # True while a conversation turn is in progress.
 
 
 _agent_state = AgentState()
@@ -1468,6 +1712,493 @@ def _tool_result_summary(result_text: str, max_len: int = 150) -> str:
     return result_text[:max_len] + "..."
 
 
+def _trim_tool_result(result_text: str, max_chars: int = 500) -> str:
+    """Smart-trim a tool result for LLM context, stripping JSON boilerplate.
+
+    Unlike the old hard 500-char cut, this function:
+    - Strips the outer ``{"status": ..., "result": ...}`` wrapper and
+      keeps only the meaningful inner data.
+    - For error results, preserves the full error message.
+    - For success results, extracts the ``result`` sub-field if present,
+      giving the LLM more structured data within the same token budget.
+    - Falls back to a hard truncation for non-JSON or unparseable content.
+    """
+    if len(result_text) <= max_chars:
+        return result_text
+
+    # Try to parse as JSON.
+    try:
+        data = json.loads(result_text)
+    except (json.JSONDecodeError, TypeError):
+        # Not JSON — fall back to hard truncation.
+        return result_text[:max_chars] + "\n...[+{:d} more chars]".format(
+            len(result_text) - max_chars)
+
+    if not isinstance(data, dict):
+        return result_text[:max_chars] + "\n...[+{:d} more chars]".format(
+            len(result_text) - max_chars)
+
+    status = data.get("status", "")
+
+    # Error results: preserve the full message — it's critical for debugging.
+    if status == "error":
+        msg = data.get("message", "") or ""
+        if len(msg) <= max_chars:
+            return "{{\"status\": \"error\", \"message\": \"{:s}\"}}".format(msg[:max_chars])
+        return "{{\"status\": \"error\", \"message\": \"{:s}\"}}".format(
+            msg[:max_chars] + "...")
+
+    # Success results: extract the inner result field.
+    if status == "ok":
+        inner = data.get("result", {}) or data.get("message", "")
+        inner_str = json.dumps(inner, default=str) if not isinstance(inner, str) else inner
+        if len(inner_str) <= max_chars:
+            return inner_str
+        return inner_str[:max_chars] + "\n...[+{:d} more chars]".format(
+            len(inner_str) - max_chars)
+
+    # Unknown format — just return the raw status + truncated content.
+    return "(status={:s}) {:s}".format(
+        status, result_text[:max_chars - 40] + "...")
+
+
+def _error_is_code_bug(error_text: str) -> bool:
+    """Return ``True`` if *error_text* is a pure code bug with no side effects.
+
+    Code-bug errors (KeyError, AttributeError, NameError) fail before
+    creating any objects or modifying the scene.  There's nothing to undo
+    — skipping the undo saves 2 round-trips and avoids depsgraph crashes
+    from undo+push on empty scenes.
+
+    NOTE: ``ValueError`` and ``TypeError`` are deliberately excluded from
+    this list because they can fire *after* objects have been created
+    (e.g. a cube added then bad geometry math, or objects created then
+    a wrong enum value set).  Undoing such errors is essential to prevent
+    duplicates.
+    """
+    _CODE_BUG_PATTERNS = (
+        "KeyError:",
+        "AttributeError:",
+        "NameError:",
+        "Node type",
+        "undefined",
+    )
+    return any(p in error_text for p in _CODE_BUG_PATTERNS)
+
+
+# ---------------------------------------------------------------------------
+# Spiral detection helpers — break repeated error loops
+
+def _extract_error_signature(result_text: str) -> str:
+    """Extract a normalized error signature from a tool result.
+
+    Returns a canonical string like ``"RuntimeError: Context missing active object"``
+    that can be compared across different code attempts (ignoring line numbers).
+    Returns empty string if the result is not an error.
+    """
+    if '"status": "error"' not in result_text:
+        return ""
+    import re
+    m = re.search(r'"message":\s*"([^"]*(?:\\.[^"]*)*)"', result_text, re.DOTALL)
+    if not m:
+        return ""
+    raw = m.group(1).replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+    lines = raw.strip().splitlines()
+    for line in reversed(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("Traceback") or stripped.startswith("["):
+            continue
+        if stripped.startswith("File"):
+            continue
+        sig = stripped.replace("[Traceback truncated to last 3 frames]", "").strip()
+        return sig
+    return ""
+
+
+def _spiral_corrective_message(error_sig: str) -> str:
+    """Return a corrective user message based on the repeated error signature."""
+    sig_lower = error_sig.lower()
+    if "context missing active object" in sig_lower or "context missing object" in sig_lower:
+        return (
+            "[System: You keep getting 'Context missing active object'. "
+            "The scene is empty \u2014 there are no objects to operate on. "
+            "Create an object first (e.g. bpy.ops.mesh.primitive_cube_add()) "
+            "before calling mode-dependent operators.]"
+        )
+    if "context missing" in sig_lower:
+        return (
+            "[System: You keep getting a 'Context missing' error. "
+            "Check that the required context (active object, selected objects, etc.) "
+            "exists before calling this operator.]"
+        )
+    return (
+        "[System: You've hit the same error multiple times in a row. "
+        "Stop and reconsider your approach. Read the error message carefully "
+        "and try a different strategy.]"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Smart undo helpers — detect code iteration and auto-undo duplicates
+
+def _extract_code_operations(code: str) -> set[str]:
+    """Extract operation signatures from a code string for overlap detection.
+
+    Returns a set of strings representing operations: ``bpy.ops`` calls,
+    ``bpy.data.*.new/remove`` calls, node tree operations, material
+    assignment, modifier operations, and quoted name literals.
+    """
+    ops: set[str] = set()
+    # Extract bpy.ops.* calls (e.g. bpy.ops.mesh.primitive_cube_add).
+    for m in re.finditer(r"bpy\.ops\.([a-z_]+)\.([a-z_]+)", code):
+        ops.add("op:{:s}.{:s}".format(m.group(1), m.group(2)))
+    # Extract bpy.data.*.new() / .remove() / .load() calls.
+    for m in re.finditer(r"bpy\.data\.([a-z_]+)\.(new|remove|load)", code):
+        ops.add("data:{:s}.{:s}".format(m.group(1), m.group(2)))
+    # Extract node tree node creation (e.g. .node_tree.nodes.new('ShaderNodeBsdfPrincipled')).
+    for m in re.finditer(r"\.node_tree\.nodes\.new\('([^']+)'\)", code):
+        ops.add("node:new:{:s}".format(m.group(1)))
+    # Extract node tree link creation.
+    if re.search(r"\.node_tree\.links\.new\(", code):
+        ops.add("node:link")
+    # Extract node tree node removal.
+    if re.search(r"\.node_tree\.nodes\.remove\(", code):
+        ops.add("node:remove")
+    # Extract node tree node clear.
+    if re.search(r"\.node_tree\.nodes\.clear\(", code):
+        ops.add("node:clear")
+    # Extract material assignment via .data.materials.append().
+    for m in re.finditer(r"\.data\.materials\.append\(([^)]+)\)", code):
+        ops.add("mat:append:{:s}".format(m.group(1).strip().strip('"\'')))
+    # Extract material assignment via .active_material =.
+    for m in re.finditer(r"\.active_material\s*=\s*([^\s;#]+)", code):
+        ops.add("mat:assign:{:s}".format(m.group(1).strip()))
+    # Extract material slot assignment.
+    for m in re.finditer(r"\.material_slots\[\d+\]\.material\s*=\s*([^\s;#]+)", code):
+        ops.add("mat:slot:{:s}".format(m.group(1).strip()))
+    # Extract modifier creation.
+    for m in re.finditer(r"\.modifiers\.new\(name=([^,]+),?\s*type=([^)]+)\)", code):
+        ops.add("mod:new:{:s}".format(m.group(2).strip().strip('"\'')))
+    # Extract modifier removal.
+    if re.search(r"\.modifiers\.remove\(", code):
+        ops.add("mod:remove")
+    # Extract quoted string literals that look like names (2+ chars, no spaces).
+    for m in re.finditer(r'"([A-Za-z_][A-Za-z0-9_.]{1,40})"', code):
+        ops.add("name:{:s}".format(m.group(1)))
+    return ops
+
+
+def _codes_overlap(prev_code: str, new_code: str) -> bool:
+    """Return ``True`` if two code strings share operations (indicating iteration).
+
+    Compares extracted operations from both code strings. If they share
+    any ``bpy.ops`` calls, ``bpy.data.new/remove`` calls, or name literals,
+    the new code is likely iterating on the same task as the previous code.
+    """
+    prev_ops = _extract_code_operations(prev_code)
+    new_ops = _extract_code_operations(new_code)
+    return bool(prev_ops & new_ops)
+
+
+def _code_is_readonly(code: str) -> bool:
+    """Return ``True`` if *code* appears to be read-only (no scene mutations).
+
+    Read-only code only inspects the scene (e.g. ``len(bpy.data.objects)``)
+    and doesn't create, modify, or delete any datablocks.  Skipping the
+    entity snapshot for read-only code saves 12 datablock iterations per
+    successful execution — a significant saving when the LLM makes many
+    inspection calls between mutation calls.
+    """
+    _MUTATION_PATTERNS = (
+        "bpy.ops.",
+        ".new(",
+        ".remove(",
+        ".load(",
+        ".clear(",
+        ".link(",
+        ".unlink(",
+        ".append(",
+        ".active_material",
+        ".material_slots",
+        ".modifiers.",
+        "collections.new",
+        "color_tag",
+        "children.link",
+        "objects.unlink",
+        "layer_col.exclude",
+        "layer_col.hide_viewport",
+    )
+    return not any(p in code for p in _MUTATION_PATTERNS)
+
+
+# ---------------------------------------------------------------------------
+# Entity snapshot / diff — track what the LLM creates during a turn
+
+@dataclass
+class _EntitySnapshot:
+    """Snapshot of all datablock names in the scene at a point in time."""
+    object_names: set[str] = field(default_factory=set)
+    mesh_names: set[str] = field(default_factory=set)
+    material_names: set[str] = field(default_factory=set)
+    node_group_names: set[str] = field(default_factory=set)
+    image_names: set[str] = field(default_factory=set)
+    light_names: set[str] = field(default_factory=set)
+    camera_names: set[str] = field(default_factory=set)
+    collection_names: set[str] = field(default_factory=set)
+    curve_names: set[str] = field(default_factory=set)
+    grease_pencil_names: set[str] = field(default_factory=set)
+    armature_names: set[str] = field(default_factory=set)
+    text_names: set[str] = field(default_factory=set)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, list[str]]) -> "_EntitySnapshot":
+        """Build a snapshot from the dict returned by the snapshot code."""
+        return cls(
+            object_names=set(data.get("object_names", [])),
+            mesh_names=set(data.get("mesh_names", [])),
+            material_names=set(data.get("material_names", [])),
+            node_group_names=set(data.get("node_group_names", [])),
+            image_names=set(data.get("image_names", [])),
+            light_names=set(data.get("light_names", [])),
+            camera_names=set(data.get("camera_names", [])),
+            collection_names=set(data.get("collection_names", [])),
+            curve_names=set(data.get("curve_names", [])),
+            grease_pencil_names=set(data.get("grease_pencil_names", [])),
+            armature_names=set(data.get("armature_names", [])),
+            text_names=set(data.get("text_names", [])),
+        )
+
+
+@dataclass
+class _EntityDiff:
+    """Difference between two snapshots — entities created in between."""
+    object_names: set[str] = field(default_factory=set)
+    mesh_names: set[str] = field(default_factory=set)
+    material_names: set[str] = field(default_factory=set)
+    node_group_names: set[str] = field(default_factory=set)
+    image_names: set[str] = field(default_factory=set)
+    light_names: set[str] = field(default_factory=set)
+    camera_names: set[str] = field(default_factory=set)
+    collection_names: set[str] = field(default_factory=set)
+    curve_names: set[str] = field(default_factory=set)
+    grease_pencil_names: set[str] = field(default_factory=set)
+    armature_names: set[str] = field(default_factory=set)
+    text_names: set[str] = field(default_factory=set)
+
+    def is_empty(self) -> bool:
+        """Return ``True`` if no entities were created."""
+        return not any(vars(self).values())
+
+    def merge(self, other: "_EntityDiff") -> None:
+        """Merge another diff into this one (union of all sets)."""
+        for field_name in vars(self):
+            getattr(self, field_name).update(getattr(other, field_name))
+
+    def summary(self) -> str:
+        """Return a human-readable summary like 'objects: Cube, Sphere; materials: RedMat'."""
+        parts: list[str] = []
+        labels = [
+            ("objects", "object_names"),
+            ("meshes", "mesh_names"),
+            ("materials", "material_names"),
+            ("node groups", "node_group_names"),
+            ("images", "image_names"),
+            ("lights", "light_names"),
+            ("cameras", "camera_names"),
+            ("collections", "collection_names"),
+            ("curves", "curve_names"),
+            ("grease pencils", "grease_pencil_names"),
+            ("armatures", "armature_names"),
+            ("texts", "text_names"),
+        ]
+        for label, field_name in labels:
+            names = getattr(self, field_name)
+            if names:
+                sorted_names = sorted(names)
+                if len(sorted_names) <= 5:
+                    parts.append("{:s}: {:s}".format(label, ", ".join(sorted_names)))
+                else:
+                    parts.append("{:s}: {:s} (+{:d} more)".format(
+                        label, ", ".join(sorted_names[:5]), len(sorted_names) - 5))
+        return "; ".join(parts) if parts else "(none)"
+
+
+def _diff_snapshots(
+    prev: _EntitySnapshot,
+    current: _EntitySnapshot,
+) -> _EntityDiff:
+    """Compute the diff between two snapshots."""
+    diff = _EntityDiff()
+    for field_name in vars(diff):
+        prev_set = getattr(prev, field_name)
+        curr_set = getattr(current, field_name)
+        new_items = curr_set - prev_set
+        getattr(diff, field_name).update(new_items)
+    return diff
+
+
+def _entity_diff_to_context_message(diff: _EntityDiff) -> str:
+    """Format an entity diff as a system-level context message for the LLM."""
+    summary = diff.summary()
+    if diff.is_empty():
+        return ""
+    return (
+        "[System: So far this turn you have created:\n"
+        "{:s}\n"
+        "If you need to modify these, reference them by name. "
+        "If you need something different, create new entities with distinct names.]"
+    ).format(summary)
+
+
+def _build_cleanup_code(diff: _EntityDiff) -> str:
+    """Generate Blender Python code to delete entities created by a failed execution.
+
+    Uses the entity diff to remove objects, meshes, materials, lights, cameras,
+    collections, curves, grease pencils, armatures, and node groups that were
+    created since the last snapshot.  This is a fallback when ``bpy.ops.ed.undo()``
+    fails (e.g. no window/area available, or undo stack is empty).
+    """
+    parts: list[str] = [
+        "import bpy",
+        "result = {'status': 'ok', 'cleaned': []}",
+        "",
+    ]
+    # Map diff field names to bpy.data collection names and item types.
+    _DATA_MAP = (
+        ("object_names", "objects", "Object"),
+        ("mesh_names", "meshes", "Mesh"),
+        ("material_names", "materials", "Material"),
+        ("light_names", "lights", "Light"),
+        ("camera_names", "cameras", "Camera"),
+        ("collection_names", "collections", "Collection"),
+        ("curve_names", "curves", "Curve"),
+        ("grease_pencil_names", "grease_pencils", "GreasePencil"),
+        ("armature_names", "armatures", "Armature"),
+        ("node_group_names", "node_groups", "NodeGroup"),
+        ("image_names", "images", "Image"),
+        ("text_names", "texts", "Text"),
+    )
+    for field, coll, _label in _DATA_MAP:
+        names = getattr(diff, field, set())
+        if names:
+            names_str = ", ".join(repr(n) for n in sorted(names))
+            parts.append(
+                "# Remove {:d} {:s}\n"
+                "for _name in [{:s}]:\n"
+                "    _item = bpy.data.{:s}.get(_name)\n"
+                "    if _item:\n"
+                "        bpy.data.{:s}.remove(_item)\n"
+                "        result['cleaned'].append(_name)".format(
+                    len(names), coll, names_str, coll, coll))
+    parts.append("")
+    parts.append("result['message'] = 'Cleaned up {:d} orphaned datablocks'".format(
+        sum(len(getattr(diff, f, set())) for f, _, _ in _DATA_MAP)))
+    return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Undo helper — generates code that works in any workspace
+
+def _undo_code(action: str, message: str = "", extra_result: str = "") -> str:
+    """Generate Blender Python code for undo/push that works in any workspace.
+
+    Falls back to any available area type when ``VIEW_3D`` is not present
+    (e.g. Scripting workspace).  Without this fallback, the ``for...else``
+    loop silently skips and the undo never fires, leaving duplicate objects.
+
+    *action* — ``"undo"`` or ``"push"``.
+    *message* — undo step name (only used when *action* is ``"push"``).
+    *extra_result* — optional extra JSON keys to append to the result dict
+        (e.g. ``'\\n    "snapshot": {...},\\n'``).
+    """
+    if action == "undo":
+        body = "bpy.ops.ed.undo()"
+    else:
+        body = "bpy.ops.ed.undo_push(message='{:s}')".format(message)
+    return (
+        "import bpy\n"
+        "def _sn(seq):\n"
+        "    try:\n"
+        "        return sorted(x.name for x in seq)\n"
+        "    except Exception:\n"
+        "        return []\n"
+        "result = {{'status': 'ok', 'message': '{:s} executed'{:s}}}\n"
+        "# Try VIEW_3D first, fall back to any area type.\n"
+        "for w in bpy.context.window_manager.windows:\n"
+        "    for a in w.screen.areas:\n"
+        "        if a.type == 'VIEW_3D':\n"
+        "            with bpy.context.temp_override(window=w, area=a):\n"
+        "                {:s}\n"
+        "            break\n"
+        "    else:\n"
+        "        continue\n"
+        "    break\n"
+        "else:\n"
+        "    # No VIEW_3D found — try any area in any window.\n"
+        "    for w in bpy.context.window_manager.windows:\n"
+        "        for a in w.screen.areas:\n"
+        "            with bpy.context.temp_override(window=w, area=a):\n"
+        "                {:s}\n"
+        "            break\n"
+        "        else:\n"
+        "            continue\n"
+        "        break\n"
+        "    else:\n"
+        "        result = {{'status': 'error', 'message': 'No window/area available for {:s}'}}\n"
+    ).format(action, extra_result, body, body, action)
+
+
+# Snapshot JSON keys used as extra_result for merged undo+snapshot calls.
+# Each datablock iteration is wrapped in a try/except so that a single
+# corrupted datablock (e.g. from a depsgraph crash) doesn't kill the
+# entire snapshot — the other datablock types are still captured.
+_SNAPSHOT_EXTRA = (
+    ",\n"
+    "    'snapshot': {\n"
+    "        'object_names':       _sn(bpy.data.objects),\n"
+    "        'mesh_names':         _sn(bpy.data.meshes),\n"
+    "        'material_names':     _sn(bpy.data.materials),\n"
+    "        'node_group_names':   _sn(bpy.data.node_groups),\n"
+    "        'image_names':        _sn(bpy.data.images),\n"
+    "        'light_names':        _sn(bpy.data.lights),\n"
+    "        'camera_names':       _sn(bpy.data.cameras),\n"
+    "        'collection_names':   _sn(bpy.data.collections),\n"
+    "        'curve_names':        _sn(bpy.data.curves),\n"
+    "        'grease_pencil_names': _sn(bpy.data.grease_pencils),\n"
+    "        'armature_names':     _sn(bpy.data.armatures),\n"
+    "        'text_names':         _sn(bpy.data.texts),\n"
+    "    }\n"
+)
+
+
+# ---------------------------------------------------------------------------
+# Text editor memory bank helpers
+
+_code_sequence_counter: int = 0
+
+
+def _next_code_sequence() -> str:
+    """Return the next zero-padded 3-digit sequence number (001, 002, ...)."""
+    global _code_sequence_counter
+    _code_sequence_counter += 1
+    return "{:03d}".format(_code_sequence_counter)
+
+
+def _clear_coworker_text_blocks() -> None:
+    """Remove all Coworker_* text datablocks from Blender's text editor."""
+    global _code_sequence_counter
+    _code_sequence_counter = 0
+    try:
+        import bpy as _bpy  # pylint: disable=import-error
+        for text_block in list(_bpy.data.texts):
+            if text_block.name.startswith("Coworker_"):
+                _bpy.data.texts.remove(text_block)
+    except Exception:
+        pass  # Best-effort.
+
+
 def run_conversation_turn(
     user_message: str,
     on_text: Callable[[str], None] | None = None,
@@ -1492,6 +2223,34 @@ def run_conversation_turn(
 
     This is a BLOCKING call — run it via ``schedule_coro`` or in a thread.
     """
+    # ── Re-entrancy guard ──────────────────────────────────────────────
+    if _agent_state.turn_active:
+        print("[🛠️Coworker] run_conversation_turn: re-entrancy blocked — turn already active")
+        return _agent_state.conversation_history
+    _agent_state.turn_active = True
+    try:
+        return _run_conversation_turn_inner(
+            user_message, on_text, on_status, on_reasoning,
+            llm_url, api_key, model, mcp_port, chat_mode,
+        )
+    finally:
+        _agent_state.turn_active = False
+
+
+def _run_conversation_turn_inner(
+    user_message: str,
+    on_text: Callable[[str], None] | None = None,
+    on_status: Callable[[str], None] | None = None,
+    on_reasoning: Callable[[str], None] | None = None,
+    llm_url: str | None = None,
+    api_key: str | None = None,
+    model: str | None = None,
+    mcp_port: int = _MCP_SERVER_DEFAULT_PORT,
+    chat_mode: str = "AGENT",
+) -> list[dict[str, Any]]:
+    """
+    Inner body of ``run_conversation_turn`` — wrapped by the re-entrancy guard.
+    """
     clear_stop()
     history = _agent_state.conversation_history
 
@@ -1503,6 +2262,42 @@ def run_conversation_turn(
             len(system_text)))
 
     history.append({"role": "user", "content": user_message})
+
+    # ── Pre-flight empty-scene check ──────────────────────────────────
+    # Small local models often call mode-dependent operators (mode_set, etc.)
+    # on an empty scene, which fails with "Context missing active object".
+    # Warn the LLM upfront so it creates objects first.
+    try:
+        import bpy as _bpy  # pylint: disable=import-error
+        if len(_bpy.data.objects) == 0:
+            _empty_note = (
+                "[Note: The Blender scene is currently empty \u2014 no objects exist. "
+                "You must create objects before using mode-dependent operators "
+                "like bpy.ops.object.mode_set().]"
+            )
+            history.append({"role": "system", "content": _empty_note})
+            print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: empty scene detected, injected pre-flight note")
+    except Exception:
+        pass  # Best-effort; don't break the agent loop.
+
+    # ── Smart undo tracking (per-turn) ────────────────────────────────
+    # Tracks the last execute_blender_code call to detect iteration and
+    # auto-undo duplicates. Reset at the start of each turn.
+    _prev_code: str | None = None
+    _prev_code_errored: bool = False
+    _prev_code_error: str = ""  # Error text for code-bug detection.
+    _undo_pushed: bool = False  # True once we've pushed the first undo state.
+
+    # ── Entity tracking (per-turn) ────────────────────────────────────
+    # Initial snapshot is taken lazily inside the first undo push (merged
+    # into a single round-trip). Reset at the start of each turn.
+    _turn_snapshot: _EntitySnapshot | None = None
+    _turn_entities: _EntityDiff = _EntityDiff()
+    _entity_context_injected: bool = False  # True once we've injected entity context.
+
+    # ── Spiral detection (per-turn) ───────────────────────────────────
+    # Tracks consecutive identical tool errors to break LLM retry loops.
+    _consecutive_errors: list[str] = []
 
     # In Ask mode, skip tool listing and execution entirely.
     if chat_mode == "ASK":
@@ -1563,6 +2358,40 @@ def run_conversation_turn(
     max_tokens = _llm_cfg.local_max_tokens if llm_port_local is not None else 16384
     print("[🛠️Coworker] run_conversation_turn: using max_tokens={:d}".format(max_tokens))
 
+    # ── Tool domain system (hybrid: pre-detect + on-demand) ────────────
+    # Pre-detect the domain from the user's prompt AND from the current
+    # scene content (0 extra round-trips).  The LLM can also call
+    # ``load_tools`` mid-turn to switch domains.
+    _loaded_domains: set[str] = set()
+    if llm_port_local is not None and openai_tools:
+        _all_tools = openai_tools  # Keep full list for on-demand loading.
+        _detected_domains: set[str] = set()
+        _kw_domain = _detect_domain(user_message)
+        if _kw_domain:
+            _detected_domains.add(_kw_domain)
+        # Also detect domains from scene content (armatures, materials, etc.).
+        _scene_domains = _detect_domain_from_scene()
+        _detected_domains.update(_scene_domains)
+        _loaded_domains.update(_detected_domains)
+        openai_tools = _build_tool_set(_all_tools, _detected_domains)
+
+        # ── Domain skill auto-injection ────────────────────────────────
+        # Inject relevant skill files (e.g. animation.md, materials.md)
+        # into the system prompt so the LLM has version-aware API rules
+        # for the detected domains without needing to search for them.
+        if _detected_domains:
+            try:
+                from . import skills as _skills_mod  # pylint: disable=import-error
+                _domain_skills_text = _skills_mod.get_domain_skills(_detected_domains)
+                if _domain_skills_text:
+                    history.append({"role": "system", "content": _domain_skills_text})
+                    print("[🛠️Coworker] run_conversation_turn: domain skills injected for {:s}".format(
+                        ",".join(sorted(_detected_domains))))
+            except Exception:
+                pass  # Best-effort; don't break the agent loop.
+    else:
+        _all_tools = openai_tools  # Unused in remote mode, but keep for consistency.
+
     iterations = 0
     while iterations < _MAX_TOOL_ITERATIONS:
         iterations += 1
@@ -1591,6 +2420,12 @@ def run_conversation_turn(
                 history_to_send = _drop_orphaned_tool_messages(history[-keep:])
         else:
             history_to_send = history
+
+        # Strip reasoning messages before sending to the LLM.
+        # Reasoning (chain-of-thought) uses a non-standard "reasoning"
+        # role that wastes context window tokens without providing
+        # useful signal to the model.
+        history_to_send = _strip_reasoning_from_history(history_to_send)
 
         response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model, max_tokens)
         if response is None:
@@ -1655,9 +2490,14 @@ def run_conversation_turn(
 
             content = content + cont_content
             if cont_tool_calls:
-                # Merge tool calls from continuation.
+                # Merge tool calls from continuation, deduplicating by ID.
                 existing = msg.get("tool_calls") or []
-                msg["tool_calls"] = existing + cont_tool_calls
+                seen_ids = {tc.get("id") for tc in existing if tc.get("id")}
+                for tc in cont_tool_calls:
+                    if tc.get("id") not in seen_ids:
+                        existing.append(tc)
+                        seen_ids.add(tc.get("id"))
+                msg["tool_calls"] = existing
             msg["content"] = content
             finish_reason = cont_choice.get("finish_reason", "")
             print("[🛠️Coworker] run_conversation_turn:   after continue: "
@@ -1718,11 +2558,164 @@ def run_conversation_turn(
                 tool_name = fn.get("name", "")
                 tool_id = tc.get("id", "")
 
+                # ── load_tools meta-tool (on-demand domain loading) ────
+                # Intercepted here — not sent to the MCP server.
+                if tool_name == "load_tools" and llm_port_local is not None:
+                    domain = args.get("domain", "")
+                    if domain in _TOOL_DOMAINS and domain not in _loaded_domains:
+                        _loaded_domains.add(domain)
+                        # Rebuild with all loaded domains.
+                        _combined = set(_SURFACE_TOOLS)
+                        for d in _loaded_domains:
+                            _combined.update(_TOOL_DOMAINS.get(d, set()))
+                        openai_tools = [
+                            t for t in _all_tools
+                            if t.get("function", {}).get("name") in _combined
+                        ]
+                        openai_tools.append(_LOAD_TOOLS_SCHEMA)
+                        print("[🛠️Coworker] run_conversation_turn: load_tools '{:s}' — now {:d} tools".format(
+                            domain, len(openai_tools)))
+                        history.append({
+                            "role": "tool",
+                            "tool_call_id": tool_id,
+                            "name": "load_tools",
+                            "content": "Loaded {:s} tools. {:d} tools now available.".format(
+                                domain, len(openai_tools)),
+                        })
+                    else:
+                        history.append({
+                            "role": "tool",
+                            "tool_call_id": tool_id,
+                            "name": "load_tools",
+                            "content": "Domain '{:s}' already loaded or unknown.".format(domain),
+                        })
+                    continue  # Skip MCP call — handled locally.
+
                 if on_status:
                     on_status(_friendly_tool_status(tool_name))
 
+                # ── Smart undo: auto-undo before re-executing code ─────
+                # If this is execute_blender_code and the previous call
+                # errored, undo to clean up partial effects before retrying.
+                # On successful overlap (same operations detected), inject
+                # context so the LLM knows what already exists.
+                #
+                # Skip undo for pure code-bug errors (KeyError, AttributeError,
+                # TypeError, NameError, ValueError) — these fail before creating
+                # any objects, so there's nothing to undo.  Undoing wastes 2
+                # round-trips and can trigger depsgraph crashes.
+                if tool_name == "execute_blender_code" and _prev_code is not None:
+                    should_undo = False
+                    reason = ""
+                    if _prev_code_errored:
+                        if _error_is_code_bug(_prev_code_error):
+                            print("[🛠️Coworker] run_conversation_turn: smart undo SKIPPED — code-bug error, no side effects")
+                        else:
+                            should_undo = True
+                            reason = "previous call errored"
+                    elif _codes_overlap(_prev_code, args.get("code", "")):
+                        # Overlap detected on a successful previous call.
+                        # Inject context instead of auto-undoing.
+                        if not _turn_entities.is_empty():
+                            ctx = _entity_diff_to_context_message(_turn_entities)
+                            if ctx:
+                                print("[🛠️Coworker] run_conversation_turn: overlap detected — injecting entity context")
+                                history.append({"role": "system", "content": ctx})
+                                _entity_context_injected = True
+                    if should_undo:
+                        print("[🛠️Coworker] run_conversation_turn: smart undo triggered — {:s}".format(reason))
+                        # Undo to the state before the previous execute_blender_code.
+                        # Must use context override — bpy.ops.ed.undo() needs a window context
+                        # which isn't available in the bridge server's exec() namespace.
+                        _undo_result = _call_mcp_tool_sync("execute_blender_code",
+                            {"code": _undo_code("undo")}, mcp_port)
+                        # Check if undo actually succeeded — if not, fall back to
+                        # retroactive entity cleanup using the snapshot diff.
+                        if '"status": "error"' in _undo_result:
+                            print("[🛠️Coworker] run_conversation_turn: undo FAILED — falling back to entity cleanup")
+                            _cleanup_code = _build_cleanup_code(_turn_entities)
+                            if _cleanup_code:
+                                _call_mcp_tool_sync("execute_blender_code",
+                                    {"code": _cleanup_code}, mcp_port)
+                        # Push a fresh undo state so the next iteration can undo this one.
+                        _call_mcp_tool_sync("execute_blender_code",
+                            {"code": _undo_code("push", "bfa_coworker_pre_script")},
+                            mcp_port)
+
+                # ── Push initial undo state + initial snapshot (merged) ─
+                # Merging saves 1 round-trip at the start of each turn.
+                # Skip entity snapshot for read-only code (no scene mutations).
+                if tool_name == "execute_blender_code" and not _undo_pushed:
+                    _init_extra = _SNAPSHOT_EXTRA if not _code_is_readonly(args.get("code", "") or "") else ""
+                    merged_init_raw = _call_mcp_tool_sync("execute_blender_code",
+                        {"code": _undo_code("push", "bfa_coworker_pre_script", extra_result=_init_extra)},
+                        mcp_port)
+                    _undo_pushed = True
+                    # Parse initial snapshot from merged result.
+                    try:
+                        init_data = json.loads(merged_init_raw)
+                        if init_data.get("status") == "ok":
+                            snap_data = init_data.get("result", {}).get("snapshot")
+                            if snap_data:
+                                _turn_snapshot = _EntitySnapshot.from_dict(snap_data)
+                                print("[🛠️Coworker] run_conversation_turn: initial entity snapshot taken")
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    if _turn_snapshot is None:
+                        print("[🛠️Coworker] run_conversation_turn: initial entity snapshot FAILED (continuing without)")
+
                 # Call the MCP tool.
                 result_text = _call_mcp_tool_sync(tool_name, args, mcp_port)
+
+                # ── Track code execution for smart undo ────────────────
+                if tool_name == "execute_blender_code":
+                    _prev_code = args.get("code", "")
+                    _prev_code_errored = '"status": "error"' in result_text
+                    _prev_code_error = result_text if _prev_code_errored else ""
+
+                    # ── Push bookmark + entity snapshot (merged) ───────
+                    # Merging these into a single execute_blender_code call
+                    # saves 2 round-trips per iteration vs separate calls.
+                    # Skip entity snapshot for read-only code (no scene mutations).
+                    if not _prev_code_errored:
+                        _step_extra = _SNAPSHOT_EXTRA if not _code_is_readonly(_prev_code or "") else ""
+                        merged_raw = _call_mcp_tool_sync("execute_blender_code",
+                            {"code": _undo_code("push", "bfa_coworker_step", extra_result=_step_extra)},
+                            mcp_port)
+                        # Parse snapshot from merged result.
+                        try:
+                            merged_data = json.loads(merged_raw)
+                            if merged_data.get("status") == "ok":
+                                snap_data = merged_data.get("result", {}).get("snapshot")
+                                if snap_data and _turn_snapshot is not None:
+                                    current_snap = _EntitySnapshot.from_dict(snap_data)
+                                    step_diff = _diff_snapshots(_turn_snapshot, current_snap)
+                                    if not step_diff.is_empty():
+                                        _turn_entities.merge(step_diff)
+                                        _turn_snapshot = current_snap
+                                        # Inject context message once per turn.
+                                        ctx = _entity_diff_to_context_message(_turn_entities)
+                                        if ctx and not _entity_context_injected:
+                                            print("[🛠️Coworker] run_conversation_turn: entity context injected — {:s}".format(
+                                                _turn_entities.summary()))
+                                            history.append({"role": "system", "content": ctx})
+                                            _entity_context_injected = True
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+
+                    # ── Save to text editor memory bank ────────────────
+                    if not _prev_code_errored:
+                        try:
+                            import bpy as _bpy  # pylint: disable=import-error
+                            prefs = _bpy.context.preferences.addons[__package__].preferences
+                            if getattr(prefs, "save_code_to_text_editor", True):
+                                seq = _next_code_sequence()
+                                name = "Coworker_{:s}".format(seq)
+                                text_block = _bpy.data.texts.new(name)
+                                text_block.write(_prev_code)
+                                print("[🛠️Coworker] run_conversation_turn: saved code to text editor '{:s}'".format(name))
+                        except Exception:
+                            pass  # Best-effort; don't break the agent loop.
 
                 # Build a human-readable summary for the UI.
                 result_summary = _tool_result_summary(result_text)
@@ -1732,11 +2725,9 @@ def run_conversation_turn(
                 # balloon the prompt past small local models' context windows.
                 # The LLM only needs the gist of past tool results — the current
                 # turn's result is still available in the truncated form.
+                # Use smart trimming: strip JSON boilerplate, keep structured fields.
                 _MAX_TOOL_RESULT_CHARS = 500
-                truncated = result_text[:_MAX_TOOL_RESULT_CHARS]
-                if len(result_text) > _MAX_TOOL_RESULT_CHARS:
-                    truncated += "\n...[+{:d} more chars]".format(
-                        len(result_text) - _MAX_TOOL_RESULT_CHARS)
+                truncated = _trim_tool_result(result_text, max_chars=_MAX_TOOL_RESULT_CHARS)
 
                 # Add tool result to history.
                 history.append({
@@ -1746,6 +2737,31 @@ def run_conversation_turn(
                     "content": truncated,
                     "summary": result_summary,
                 })
+
+                # ── Spiral detection: break repeated error loops ──────
+                if tool_name == "execute_blender_code":
+                    error_sig = _extract_error_signature(truncated)
+                    if error_sig:
+                        if _consecutive_errors and error_sig != _consecutive_errors[-1]:
+                            _consecutive_errors.clear()
+                        _consecutive_errors.append(error_sig)
+                        if len(_consecutive_errors) >= 3:
+                            print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: spiral detected \u2014 "
+                                  "same error 3\u00d7 in a row: {:s}".format(error_sig))
+                            # Truncate: remove the last 3 assistant+tool message pairs.
+                            removed = 0
+                            for i in range(len(history) - 1, -1, -1):
+                                if removed >= 3:
+                                    break
+                                if history[i].get("role") == "assistant" and history[i].get("tool_calls"):
+                                    del history[i:]
+                                    removed += 1
+                            print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: truncated {:d} failed attempt(s) from history".format(removed))
+                            corrective = _spiral_corrective_message(error_sig)
+                            history.append({"role": "user", "content": corrective})
+                            _consecutive_errors.clear()
+                    else:
+                        _consecutive_errors.clear()
 
             # After processing tool calls, ask the LLM for a final text response.
             # We send ONE more request without looping. If the model decides to

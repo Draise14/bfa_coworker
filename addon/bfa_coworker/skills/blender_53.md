@@ -84,6 +84,51 @@ stack = bpy.context.window_manager.undo_stack
 The order of IDs in `bpy.data.all_ids` is now an internal implementation detail.
 Do NOT rely on or assume any specific ordering.
 
+### Mesh — `use_auto_smooth` Removed
+
+`Mesh.use_auto_smooth` was removed in Blender 5.3. Auto-smooth is now implicit
+when `auto_smooth_angle > 0`. Set the angle directly:
+
+```python
+# Blender 5.3+ (correct)
+mesh.auto_smooth_angle = radians(30)  # Enables auto-smooth at 30°
+
+# To disable auto-smooth:
+mesh.auto_smooth_angle = 0
+```
+
+The old `mesh.use_auto_smooth = True` / `mesh.use_auto_smooth = False` pattern
+will raise `AttributeError: 'Mesh' object has no attribute 'use_auto_smooth'`.
+
+### Material Nodes — Default Nodes Already Exist
+
+When you create a new material and set `mat.use_nodes = True`, Blender
+automatically creates a Principled BSDF node and a Material Output node
+already connected.  Do NOT try to create them manually with
+`nodes.new('BSDF_PRINCIPLED')` or `nodes.new('OUTPUT_MATERIAL')` — these
+node type identifiers may not work in Bforartists 5.3.
+
+Instead, find the existing nodes by iterating:
+
+```python
+mat = bpy.data.materials.new(name="MyMat")
+mat.use_nodes = True
+nodes = mat.node_tree.nodes
+principled = None
+for node in nodes:
+    if node.type == 'BSDF_PRINCIPLED':
+        principled = node
+        break
+# Now set inputs on principled:
+principled.inputs["Base Color"].default_value = (1, 0, 0, 1)
+principled.inputs["Roughness"].default_value = 0.2
+```
+
+To inspect available input names on a node, use:
+```python
+print([i.name for i in principled.inputs])
+```
+
 ### Modifier Creation
 
 In Bforartists, use `bpy.ops.object.modifier_add(type='NODES')` to add a
@@ -112,6 +157,31 @@ if strip and hasattr(strip, 'modifiers'):
     for mod in strip.modifiers:
         print(mod.type, mod.name)
 ```
+
+### Animation — Layered Animation System (5.0+)
+
+`Action.fcurves` was **removed** in Blender 5.0. F-Curves now live in the
+layered animation system: `action.layers → strips → channelbag(slot) → fcurves`.
+
+**CRITICAL**: Never manually create slots, layers, strips, or channelbags.
+The `keyframe_insert()` API handles all of this internally and is the **only
+safe way** to create keyframes. Manually creating slots with
+`action.slots.new()` or channelbags with `strip.channelbag(slot, ensure=True)`
+can leave the animation data in a corrupted state that causes a **hard crash**
+(EXCEPTION_ACCESS_VIOLATION in `channelbag_for_action_slot`) during EEVEE
+viewport redraw.
+
+```python
+# SAFE — always use keyframe_insert()
+obj.keyframe_insert(data_path="location", frame=10)
+
+# DANGEROUS — never do this manually:
+#   action.slots.new(...)
+#   strip.channelbag(slot, ensure=True)
+```
+
+To read existing F-Curves (read-only), use the helper from the `animation.md`
+skill. Never create slots or channelbags yourself.
 
 ### General Rule
 

@@ -198,6 +198,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         cfg.remote_api_key = self.remote_api_key
         cfg.remote_model = self.remote_model
         cfg.llama_path = self.llama_path
+        cfg.llama_backend = self.llama_backend
         cfg.model_repo_id = self.model_repo_id
         cfg.model_filename = self.model_filename
         cfg.downloaded_models_dir = self.downloaded_models_dir
@@ -247,16 +248,51 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         name="llama-server Path",
         default="",
         subtype='FILE_PATH',
+        description=(
+            "Path to a custom llama-server.exe. Leave empty to use the bundled version.\n"
+            "To add a custom llama.cpp installation to PATH:\n"
+            "  Windows: System Properties → Environment Variables → Path → add the folder\n"
+            "  macOS/Linux: export PATH=\"/path/to/llama.cpp/build/bin:$PATH\"\n"
+            "The addon bundles its own copy — only set this if you need a specific build."
+        ),
+    )
+
+    def _update_llama_backend(self, _context: bpy.types.Context) -> None:
+        """Sync llama_backend to llm_manager config."""
+        llm = get_llm_manager()
+        cfg = llm.get_config()
+        cfg.llama_backend = self.llama_backend
+        llm.set_config(cfg)
+        # Invalidate the find_llama_server cache so the new backend binary is found.
+        llm.invalidate_llama_server_cache()
+
+    llama_backend: EnumProperty(  # type: ignore[valid-type]
+        name="GPU Backend",
+        description=(
+            "Select the GPU backend for llama-server.\n"
+            "  Auto — detect NVIDIA (CUDA), AMD/Intel (Vulkan), or CPU\n"
+            "  CUDA — NVIDIA GPUs (RTX 20xx+; 3090/4090/5090 recommended)\n"
+            "  Vulkan — AMD Radeon, Intel Arc, or NVIDIA fallback\n"
+            "  CPU — no GPU acceleration"
+        ),
+        items=[
+            ("auto", "Auto (Detect)", "Auto-detect the best backend for your GPU"),
+            ("cuda", "CUDA 12.4", "NVIDIA GPUs — RTX 20xx+ (3090/4090/5090 recommended)"),
+            ("vulkan", "Vulkan", "AMD Radeon, Intel Arc, or NVIDIA fallback"),
+            ("cpu", "CPU", "No GPU acceleration — runs on CPU only"),
+        ],
+        default="auto",
+        update=_update_llama_backend,
     )
 
     model_repo_id: StringProperty(  # type: ignore[valid-type]
         name="Model Repo ID",
-        default="unsloth/Mistral-Small-3.1-24B-Instruct-2503-GGUF",
+        default="unsloth/gpt-oss-20b-GGUF",
     )
 
     model_filename: StringProperty(  # type: ignore[valid-type]
         name="Model Filename",
-        default="Mistral-Small-3.1-24B-Instruct-2503-Q4_K_M.gguf",
+        default="gpt-oss-20b-Q4_K_M.gguf",
     )
 
     downloaded_models_dir: StringProperty(  # type: ignore[valid-type]
@@ -306,7 +342,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         description="Select a curated model preset. Picking one auto-fills the repo and filename below",
         items=MODEL_PRESET_ITEMS,
         update=_update_model_preset,
-        default="mistral_small_24b_q4",
+        default="gpt_oss_20b_q4",
     )
 
     model_preset_info: StringProperty(  # type: ignore[valid-type]
@@ -806,12 +842,19 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 icon="IMPORT",
                 text="Download llama-server",
             )
-        if llm_state.download_progress and "llama-server" in llm_state.download_progress:
-            box.label(text=llm_state.download_progress, icon='INFO')
+        # GPU backend selector.
+        box.prop(self, "llama_backend")
+        # Unified progress block for llama-server download.
+        if llm_state.download_kind == "llama_server":
+            if llm_state.download_progress:
+                box.label(text=llm_state.download_progress, icon='INFO')
             pct = llm_state.download_progress_pct
             if pct > 0:
                 row = box.row(align=True)
                 row.progress(factor=pct / 100.0, type='BAR')
+            if llm_state.download_active:
+                row = box.row(align=True)
+                row.operator("bfacw.cancel_download", icon='CANCEL', text="Cancel")
 
         # ── Recommended Models (presets) ─────────────────────────
         box.label(text="Pick a Model", icon='VIEWZOOM')
@@ -885,18 +928,19 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         if llm_state.download_active:
             row.operator("bfacw.cancel_download", icon='CANCEL', text="Cancel")
 
-        # Always show progress/error areas.
-        if llm_state.error:
-            box.label(text=llm_state.error, icon="ERROR")
-        if llm_state.download_progress:
-            prog_text = llm_state.download_progress
-            if llm_state.download_progress_eta:
-                prog_text = "{:s}  |  {:s}".format(prog_text, llm_state.download_progress_eta)
-            box.label(text=prog_text, icon='INFO')
-            pct = llm_state.download_progress_pct
-            if pct > 0:
-                row = box.row(align=True)
-                row.progress(factor=pct / 100.0, type='BAR')
+        # Always show progress/error areas (model downloads only).
+        if llm_state.download_kind == "model":
+            if llm_state.error:
+                box.label(text=llm_state.error, icon="ERROR")
+            if llm_state.download_progress:
+                prog_text = llm_state.download_progress
+                if llm_state.download_progress_eta:
+                    prog_text = "{:s}  |  {:s}".format(prog_text, llm_state.download_progress_eta)
+                box.label(text=prog_text, icon='INFO')
+                pct = llm_state.download_progress_pct
+                if pct > 0:
+                    row = box.row(align=True)
+                    row.progress(factor=pct / 100.0, type='BAR')
 
         # ── Scan for existing models ────────────────────────────
         box.label(text="Or use an existing model:", icon='FILE_FOLDER')

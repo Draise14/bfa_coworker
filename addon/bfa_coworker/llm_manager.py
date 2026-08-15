@@ -104,6 +104,7 @@ class LLMConfig:
     local_ctx_size: int = 8192
     local_max_tokens: int = 16384  # Max output tokens per API call
     hf_token: str = ""  # HuggingFace token for gated models
+    llama_backend: str = "auto"  # "auto" | "cpu" | "cuda" | "vulkan"
     # Remote mode
     remote_api_url: str = ""
     remote_api_key: str = ""
@@ -122,6 +123,7 @@ class LLMState:
     download_progress_eta: str = ""  # ETA estimate, e.g. "3m 24s remaining"
     download_progress_pct: float = 0.0  # 0.0 to 100.0
     download_active: bool = False  # True while a model download is in progress
+    download_kind: str = ""  # "model" | "llama_server" | ""
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +144,10 @@ class ModelPreset:
     description: str  # Longer tooltip text
     context_window: int = 131072  # Context window size in tokens
     max_tokens: int = 16384  # Max output tokens per API call
+    vision: bool = False  # Whether the model supports image input
+    mmproj_filename: str = ""  # Projector filename for vision (e.g. "mmproj-F16.gguf")
+    hardware_note: str = ""  # Hardware recommendation (RAM + GPU gen, e.g. "RTX 3090/4090/5090")
+    why: str = ""  # One-line "why pick this" per sub-tier
 
 
 # ---------------------------------------------------------------------------
@@ -171,124 +177,71 @@ class RemoteModelPreset:
 
 
 PRESET_MODELS: list[ModelPreset] = [
-    # ── Flagship (Excellent, 24 GB+ VRAM) ───────────────────────────
+    # ── Flagship (24 GB+ VRAM) ──────────────────────────────────────
     ModelPreset(
-        identifier="gemma4_26b_q8",
-        name="Gemma 4 26B A4B (Q8_0)",
-        repo_id="unsloth/gemma-4-26B-A4B-it-GGUF",
-        filename="gemma-4-26B-A4B-it-Q8_0.gguf",
+        identifier="qwen38_27b_q8",
+        name="Qwen3.8-27B (Q8_0)",
+        repo_id="unsloth/Qwen3.8-27B-GGUF",
+        filename="Qwen3.8-27B-Q8_0.gguf",
         ram_gb="24-28 GB",
-        disk_gb="~27 GB",
+        disk_gb="~29 GB",
         capability="Excellent",
         category="flagship",
         context_window=262144,
         max_tokens=16384,
+        vision=True,
+        mmproj_filename="mmproj-F16.gguf",
+        hardware_note="RTX 3090/4090/5090 — 24 GB+ VRAM",
+        why="Latest Qwen3.8 — best coding + vision + agentic reasoning at high precision",
         description=(
-            "Higher quality variant of Gemma 4. Vision-capable for viewport renders.\n"
-            "Needs more RAM but delivers better precision.\n"
-            "Native function calling with 6 dedicated control tokens."
+            "Qwen3.8-27B at Q8_0 — the latest Qwen generation. Native vision-language,\n"
+            "thinking mode, and agentic tool calling. 262K context. Apache 2.0.\n"
+            "Best quality flagship for complex multi-step Blender tasks."
         ),
     ),
     ModelPreset(
-        identifier="deepseek_r1_32b_q4",
-        name="DeepSeek R1 Distill 32B (Q4_K_M)",
-        repo_id="unsloth/DeepSeek-R1-Distill-Qwen-32B-GGUF",
-        filename="DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf",
+        identifier="fable_fusion_27b_q6",
+        name="Fable Fusion 27B (Q6_K)",
+        repo_id="DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF",
+        filename="Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-Q6_K.gguf",
         ram_gb="20-24 GB",
-        disk_gb="~19 GB",
+        disk_gb="~24 GB",
         capability="Excellent",
         category="flagship",
-        context_window=131072,
-        max_tokens=16384,
-        description=(
-            "DeepSeek R1 reasoning distilled into Qwen 32B. Excellent for complex\n"
-            "multi-step tool orchestration. Fits 24 GB VRAM at Q4. MIT license."
-        ),
-    ),
-    ModelPreset(
-        identifier="qwen25_coder_32b_q4",
-        name="Qwen 2.5 Coder 32B (Q4_K_M)",
-        repo_id="unsloth/Qwen2.5-Coder-32B-Instruct-GGUF",
-        filename="Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf",
-        ram_gb="20-24 GB",
-        disk_gb="~19 GB",
-        capability="Excellent",
-        category="flagship",
-        context_window=131072,
-        max_tokens=16384,
-        description=(
-            "Top-tier code generation model. Excellent for Blender Python scripting.\n"
-            "Q4_K_M fits 24 GB VRAM. Apache 2.0."
-        ),
-    ),
-    # ── Mid-Range (Strong, 12-20 GB VRAM — RTX 4090 sweet spot) ────
-    ModelPreset(
-        identifier="mistral_small_24b_q4",
-        name="Mistral Small 3.1 24B (Q4_K_M)",
-        repo_id="unsloth/Mistral-Small-3.1-24B-Instruct-2503-GGUF",
-        filename="Mistral-Small-3.1-24B-Instruct-2503-Q4_K_M.gguf",
-        ram_gb="12-16 GB",
-        disk_gb="~14 GB",
-        capability="Strong",
-        category="mid_range",
-        context_window=131072,
-        max_tokens=8192,
-        description=(
-            "Mistral's compact 24B model. Native function calling, 128K context.\n"
-            "Excellent tool-use capabilities. Fits RTX 4090 at Q4. Apache 2.0."
-        ),
-    ),
-    ModelPreset(
-        identifier="gemma4_26b_q4",
-        name="Gemma 4 26B A4B (UD-Q4_K_M)",
-        repo_id="unsloth/gemma-4-26B-A4B-it-GGUF",
-        filename="gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
-        ram_gb="16-20 GB",
-        disk_gb="~17 GB",
-        capability="Excellent",
-        category="mid_range",
         context_window=262144,
         max_tokens=16384,
+        vision=True,
+        mmproj_filename="mmproj-F16.gguf",
+        hardware_note="RTX 3090/4090/5090 — 24 GB+ VRAM",
+        why="Top-ranked fine-tune — ARC-711 benchmark, uncensored, vision-capable",
         description=(
-            "Google's latest — vision-capable, native function calling with\n"
-            "6 dedicated control tokens. Tool calling accuracy 86.4%.\n"
-            "256K context. Apache 2.0. Best overall choice for local MCP agent work.\n"
-            "Sees your Blender viewport renders!"
+            "Multi-stage fine-tune of Qwen3.6-27B. Exceeds base model in 6/7 benchmarks.\n"
+            "Vision-capable, 256K context, uncensored. Apache 2.0.\n"
+            "The strongest open 27B fine-tune for agentic work."
         ),
     ),
     ModelPreset(
-        identifier="gemma3_27b_q4",
-        name="Gemma 3 27B (Q4_K_M)",
-        repo_id="unsloth/gemma-3-27b-it-GGUF",
-        filename="gemma-3-27b-it-Q4_K_M.gguf",
+        identifier="nail_35b_q4",
+        name="Nail 35B A3B (UD-Q4_K_XL)",
+        repo_id="peculiar-ragdoll/Nail-Qwen3.6-35B-A3B-GGUF",
+        filename="Nail-Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
         ram_gb="16-20 GB",
-        disk_gb="~16 GB",
-        capability="Strong",
-        category="mid_range",
-        context_window=131072,
-        max_tokens=8192,
-        description=(
-            "Google's Gemma 3 at 27B params. Vision-capable for viewport renders.\n"
-            "Strong multilingual support. Great for text-based tool calling. Apache 2.0."
-        ),
-    ),
-    ModelPreset(
-        identifier="qwen36_35b_q4",
-        name="Qwen3.6 35B A3B (UD-Q4_K_M)",
-        repo_id="unsloth/Qwen3.6-35B-A3B-GGUF",
-        filename="Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
-        ram_gb="12-16 GB",
         disk_gb="~22 GB",
         capability="Excellent",
-        category="mid_range",
-        context_window=131072,
+        category="flagship",
+        context_window=262144,
         max_tokens=16384,
+        vision=True,
+        mmproj_filename="mmproj-F16.gguf",
+        hardware_note="RTX 3090/4090/5090 — 24 GB+ VRAM (MoE, ~3.4B active)",
+        why="MoE efficiency — 3.4B active params, fast inference, sharpened template",
         description=(
-            "Qwen's latest MoE — only ~3B active parameters per token.\n"
-            "Excellent efficiency. Native multimodal agents with built-in MCP support.\n"
-            "Great balance of performance and resource usage."
+            "Qwen3.6-35B-A3B with improved chat template and force-applied terseness prompt.\n"
+            "~3.4B active params — runs fast on 24 GB cards. Vision-capable.\n"
+            "Apache 2.0. Best throughput-to-quality ratio in flagship tier."
         ),
     ),
+    # ── Mid-Range (16-20 GB VRAM) ───────────────────────────────────
     ModelPreset(
         identifier="gpt_oss_20b_q4",
         name="GPT-OSS 20B (Q4_K_M)",
@@ -299,112 +252,121 @@ PRESET_MODELS: list[ModelPreset] = [
         capability="Strong",
         category="mid_range",
         context_window=131072,
-        max_tokens=8192,
+        max_tokens=16384,
+        vision=False,
+        mmproj_filename="",
+        hardware_note="RTX 3090/4090 — 12 GB+ VRAM (MoE, 3.6B active)",
+        why="OpenAI's open-weight reasoning model — best Blender benchmarked default",
         description=(
             "OpenAI's open-weight reasoning model. 21B params / 3.6B active.\n"
             "Native function calling, structured outputs, and agentic capabilities.\n"
-            "Runs within 16 GB RAM. Apache 2.0."
+            "Runs within 16 GB RAM. Apache 2.0. Best-tested default for Blender."
         ),
     ),
     ModelPreset(
-        identifier="phi4_14b_q4",
-        name="Phi-4 14B (Q4_K_M)",
-        repo_id="unsloth/Phi-4-GGUF",
-        filename="Phi-4-Q4_K_M.gguf",
-        ram_gb="8-12 GB",
-        disk_gb="~8 GB",
-        capability="Strong",
+        identifier="qwen38_27b_q4",
+        name="Qwen3.8-27B (Q4_K_M)",
+        repo_id="unsloth/Qwen3.8-27B-GGUF",
+        filename="Qwen3.8-27B-Q4_K_M.gguf",
+        ram_gb="16-20 GB",
+        disk_gb="~17 GB",
+        capability="Excellent",
         category="mid_range",
-        context_window=131072,
-        max_tokens=8192,
-        description=(
-            "Microsoft's Phi-4 — punches well above its weight class.\n"
-            "Excellent reasoning for its size. Very low VRAM footprint.\n"
-            "MIT license."
-        ),
-    ),
-    # ── Lightweight (Moderate, ≤ 8 GB VRAM) ────────────────────────
-    ModelPreset(
-        identifier="qwen35_9b_heretic_q4",
-        name="Qwen3.5 9B Claude 4.6 Heretic (Q4_K_M)",
-        repo_id="mradermacher/Qwen3.5-9B-Claude-4.6-HighIQ-THINKING-HERETIC-UNCENSORED-GGUF",
-        filename="Qwen3.5-9B-Claude-4.6-HighIQ-THINKING-HERETIC-UNCENSORED.Q4_K_M.gguf",
-        ram_gb="6-8 GB",
-        disk_gb="~6 GB",
-        capability="Strong",
-        category="lightweight",
         context_window=262144,
-        max_tokens=8192,
+        max_tokens=16384,
+        vision=True,
+        mmproj_filename="mmproj-F16.gguf",
+        hardware_note="RTX 3090/4090 — 16 GB+ VRAM",
+        why="Latest Qwen3.8 at Q4 — vision + agentic, fits 16 GB cards",
         description=(
-            "Qwen3.5 9B fine-tuned with Claude 4.6 reasoning distillation.\n"
-            "Uncensored/heretic — no refusals. 256K context, vision capable.\n"
-            "Punches well above its weight for tool calling. Apache 2.0."
+            "Qwen3.8-27B at Q4_K_M — the latest Qwen generation. Native vision-language,\n"
+            "thinking mode, and agentic tool calling. 262K context. Apache 2.0.\n"
+            "Fits 16 GB VRAM while keeping excellent quality."
         ),
     ),
     ModelPreset(
-        identifier="gemma3_12b_vision_q4",
-        name="Gemma 3 12B Vision (Q4_K_M)",
-        repo_id="unsloth/gemma-3-12b-it-GGUF",
-        filename="gemma-3-12b-it-Q4_K_M.gguf",
-        ram_gb="6-8 GB",
-        disk_gb="~7 GB",
-        capability="Strong",
-        category="lightweight",
-        context_window=131072,
-        max_tokens=4096,
+        identifier="fable_fusion_27b_iq4",
+        name="Fable Fusion 27B (IQ4_XS)",
+        repo_id="DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF",
+        filename="Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-IQ4_XS.gguf",
+        ram_gb="12-16 GB",
+        disk_gb="~17 GB",
+        capability="Excellent",
+        category="mid_range",
+        context_window=262144,
+        max_tokens=16384,
+        vision=True,
+        mmproj_filename="mmproj-F16.gguf",
+        hardware_note="RTX 3090/4090 — 16 GB+ VRAM",
+        why="Fable Fusion at IQ4 — fits 16 GB, still top-tier reasoning",
         description=(
-            "Google's Gemma 3 12B — vision-capable, sees your viewport!\n"
-            "Strong multimodal understanding. 128K context. Apache 2.0.\n"
-            "Best lightweight choice with vision support."
+            "Fable Fusion 27B at IQ4_XS — smaller quant that still outperforms base Qwen3.6.\n"
+            "Vision-capable, 256K context. Apache 2.0.\n"
+            "Best mid-range choice for users with 16 GB cards."
         ),
     ),
+    # ── Lightweight (≤8 GB VRAM) ────────────────────────────────────
     ModelPreset(
-        identifier="qwen3_8b_q4",
-        name="Qwen3 8B (Q4_K_M)",
-        repo_id="Qwen/Qwen3-8B-GGUF",
-        filename="Qwen3-8B-Q4_K_M.gguf",
+        identifier="gemma4_e4b_q4",
+        name="Gemma 4 E4B (Q4_K_M)",
+        repo_id="unsloth/gemma-4-E4B-it-GGUF",
+        filename="gemma-4-E4B-it-Q4_K_M.gguf",
         ram_gb="4-6 GB",
         disk_gb="~5 GB",
         capability="Strong",
         category="lightweight",
         context_window=131072,
-        max_tokens=4096,
+        max_tokens=8192,
+        vision=True,
+        mmproj_filename="mmproj-F16.gguf",
+        hardware_note="Any GPU or integrated — 4 GB+ VRAM",
+        why="Google's small agentic model — vision + function calling, runs anywhere",
         description=(
-            "Latest Qwen3 dense model. Supports thinking mode for complex\n"
-            "tool chains. Lightweight — runs on almost any hardware.\n"
-            "Best entry point for limited RAM."
+            "Google's Gemma 4 E4B — 4.5B effective params with native function calling,\n"
+            "thinking mode, and vision. 128K context. Apache 2.0.\n"
+            "Best all-round light pick — runs on almost any hardware."
         ),
     ),
     ModelPreset(
-        identifier="qwen3_8b_q8",
-        name="Qwen3 8B (Q8_0)",
-        repo_id="Qwen/Qwen3-8B-GGUF",
-        filename="Qwen3-8B-Q8_0.gguf",
-        ram_gb="6-8 GB",
-        disk_gb="~9 GB",
+        identifier="qwen35_9b_dsv4_q4",
+        name="Qwen3.5-9B DeepSeek-V4-Flash (Q4_K_M)",
+        repo_id="Jackrong/Qwen3.5-9B-DeepSeek-V4-Flash-GGUF",
+        filename="Qwen3.5-9B-DeepSeek-V4-Flash-Q4_K_M.gguf",
+        ram_gb="4-6 GB",
+        disk_gb="~6 GB",
         capability="Strong",
         category="lightweight",
-        context_window=131072,
-        max_tokens=4096,
+        context_window=262144,
+        max_tokens=8192,
+        vision=True,
+        mmproj_filename="mmproj.gguf",
+        hardware_note="Any GPU — 4 GB+ VRAM",
+        why="DeepSeek-V4 distilled reasoning — best reasoning-per-GB in light tier",
         description=(
-            "Higher precision Qwen3 8B. Better quality while still running\n"
-            "on modest hardware. Supports thinking mode for complex tool chains."
+            "Qwen3.5-9B fine-tuned with DeepSeek-V4 reasoning distillation.\n"
+            "Vision-capable, 262K context. Apache 2.0.\n"
+            "Punches well above its weight for tool calling and reasoning."
         ),
     ),
     ModelPreset(
-        identifier="phi4_14b_q3",
-        name="Phi-4 14B (Q3_K_M — ultra light)",
-        repo_id="unsloth/Phi-4-GGUF",
-        filename="Phi-4-Q3_K_M.gguf",
+        identifier="qwen35_9b_q8",
+        name="Qwen3.5-9B (Q8_0)",
+        repo_id="unsloth/Qwen3.5-9B-GGUF",
+        filename="Qwen3.5-9B-Q8_0.gguf",
         ram_gb="6-8 GB",
-        disk_gb="~6 GB",
-        capability="Moderate",
+        disk_gb="~10 GB",
+        capability="Strong",
         category="lightweight",
-        context_window=131072,
-        max_tokens=4096,
+        context_window=262144,
+        max_tokens=8192,
+        vision=True,
+        mmproj_filename="mmproj-F16.gguf",
+        hardware_note="Any GPU — 8 GB+ VRAM",
+        why="Highest quality light quant — Q8_0 precision, vision, 262K context",
         description=(
-            "Phi-4 at Q3_K_M — fits in 8 GB VRAM while keeping most of its\n"
-            "reasoning capability. Great for tight memory budgets."
+            "Qwen3.5-9B at Q8_0 — highest quality quantization for the light tier.\n"
+            "Vision-capable, 262K context, thinking mode. Apache 2.0.\n"
+            "Best quality-to-size ratio for users with 8 GB+ VRAM."
         ),
     ),
 ]
@@ -690,6 +652,7 @@ def get_state() -> LLMState:
             download_progress_eta=_state.download_progress_eta,
             download_progress_pct=_state.download_progress_pct,
             download_active=_state.download_active,
+            download_kind=_state.download_kind,
         )
 
 
@@ -705,6 +668,7 @@ def set_config(cfg: LLMConfig) -> None:
         _config.local_ctx_size = cfg.local_ctx_size
         _config.local_max_tokens = cfg.local_max_tokens
         _config.hf_token = cfg.hf_token
+        _config.llama_backend = cfg.llama_backend
         _config.remote_api_url = cfg.remote_api_url
         _config.remote_api_key = cfg.remote_api_key
         _config.remote_model = cfg.remote_model
@@ -723,6 +687,7 @@ def get_config() -> LLMConfig:
             local_ctx_size=_config.local_ctx_size,
             local_max_tokens=_config.local_max_tokens,
             hf_token=_config.hf_token,
+            llama_backend=_config.llama_backend,
             remote_api_url=_config.remote_api_url,
             remote_api_key=_config.remote_api_key,
             remote_model=_config.remote_model,
@@ -737,14 +702,35 @@ _find_llama_server_checked: bool = False
 
 
 def find_llama_server() -> str | None:
-    """Search PATH and common install locations for ``llama-server``."""
+    """Search PATH and common install locations for ``llama-server``.
+
+    Prefers the active backend's bundled binary (e.g. ``llama-server-cuda.exe``)
+    over the generic ``llama-server.exe``.
+    """
     global _find_llama_server_cache, _find_llama_server_checked
     if _find_llama_server_checked:
         return _find_llama_server_cache
     _find_llama_server_checked = True
 
-    print("[🛠️Coworker] find_llama_server: searching for llama-server...")
-    # Search PATH first.
+    # Determine the active backend for bundled binary preference.
+    with _lock:
+        active_backend = _config.llama_backend
+    if active_backend == "auto":
+        active_backend = _detect_gpu_backend()
+
+    print("[🛠️Coworker] find_llama_server: searching for llama-server (backend={:s})...".format(active_backend))
+
+    # 1. Check the bundled directory for a backend-specific binary first.
+    bundled_dir = _get_bundled_llama_dir()
+    if active_backend and active_backend != "cpu":
+        backend_binary = bundled_dir / "llama-server-{backend}.exe".format(backend=active_backend)
+        print("[🛠️Coworker] find_llama_server:   checking bundled {:s}".format(str(backend_binary)))
+        if backend_binary.is_file():
+            print("[🛠️Coworker] find_llama_server: found bundled backend binary at {:s}".format(str(backend_binary)))
+            _find_llama_server_cache = str(backend_binary)
+            return str(backend_binary)
+
+    # 2. Search PATH first.
     exe = shutil.which("llama-server")
     if exe:
         print("[🛠️Coworker] find_llama_server: found via 'llama-server' -> {:s}".format(exe))
@@ -764,8 +750,8 @@ def find_llama_server() -> str | None:
             print("[🛠️Coworker] find_llama_server: found at {:s}".format(path))
             _find_llama_server_cache = path
             return path
-    # Check the bundled directory (auto-downloaded by download_llama_server).
-    bundled = _get_bundled_llama_dir() / "llama-server.exe"
+    # Check the generic bundled binary as last resort.
+    bundled = bundled_dir / "llama-server.exe"
     print("[🛠️Coworker] find_llama_server:   checking bundled {:s}".format(str(bundled)))
     if bundled.is_file():
         print("[🛠️Coworker] find_llama_server: found bundled at {:s}".format(str(bundled)))
@@ -843,6 +829,54 @@ def _clear_download_state() -> None:
         _state.download_progress_pct = 0.0
         _state.error = ""
         _state.download_active = False
+        _state.download_kind = ""
+
+
+def _set_download_kind(kind: str) -> None:
+    """Set the download kind ("model" | "llama_server" | "")."""
+    with _lock:
+        _state.download_kind = kind
+
+
+def _detect_gpu_backend() -> str:
+    """Detect the best GPU backend for llama-server on this machine.
+
+    Returns one of "cuda", "vulkan", or "cpu".
+    """
+    if sys.platform != "win32":
+        # Non-Windows: default to cpu (or vulkan on Linux if available).
+        # We don't auto-detect on macOS/Linux — user can override manually.
+        return "cpu"
+
+    # Windows detection.
+    # 1. Check for NVIDIA GPU via nvidia-smi.
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            print("[🛠️Coworker] _detect_gpu_backend: NVIDIA GPU detected -> cuda")
+            return "cuda"
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        pass
+
+    # 2. Check for AMD / Intel Arc GPU via wmic.
+    try:
+        result = subprocess.run(
+            ["wmic", "path", "win32_VideoController", "get", "name"],
+            capture_output=True, text=True, timeout=5,
+        )
+        output = result.stdout.lower()
+        if "amd" in output or "radeon" in output or "intel" in output:
+            print("[🛠️Coworker] _detect_gpu_backend: AMD/Intel GPU detected -> vulkan")
+            return "vulkan"
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        pass
+
+    # 3. Fallback to CPU.
+    print("[🛠️Coworker] _detect_gpu_backend: no compatible GPU detected -> cpu")
+    return "cpu"
 
 
 def cancel_download() -> None:
@@ -1141,6 +1175,7 @@ def download_model(
 
     # Clear stale state before starting.
     _clear_download_state()
+    _set_download_kind("model")
     _download_cancel_event.clear()
 
     # Check if already downloaded.
@@ -1301,6 +1336,7 @@ def _find_model_in_hf_cache(repo_id: str, filename: str) -> str | None:
 
 def download_llama_server(
     progress_callback: Callable[[str], None] | None = None,
+    backend: str | None = None,
 ) -> str | None:
     """
     Download and extract the ``llama-server`` binary from GitHub releases.
@@ -1310,11 +1346,20 @@ def download_llama_server(
     (or the platform-equivalent binary) into the bundled directory
     (``~/.cache/bfa_coworker_llama/``).
 
+    *backend* — one of ``"auto"``, ``"cpu"``, ``"cuda"``, ``"vulkan"``.
+      If ``None`` or ``"auto"``, auto-detects via :func:`_detect_gpu_backend`.
+      On Windows, CUDA 12.4 also downloads ``cudart`` DLLs.
+
     Returns the absolute path to the extracted binary, or ``None`` on
     failure.  Progress is reported via ``_state.download_progress`` and
     the optional *progress_callback*.
     """
     _clear_download_state()
+    _set_download_kind("llama_server")
+
+    # Resolve backend.
+    if backend is None or backend == "auto":
+        backend = _detect_gpu_backend()
 
     # Determine platform and architecture.
     # Asset naming convention (as of b10154):
@@ -1325,8 +1370,14 @@ def download_llama_server(
         platform = "win"
         arch = "x64"
         binary_name = "llama-server.exe"
-        variant = "cpu"  # CPU variant works everywhere, no CUDA DLLs needed.
         archive_ext = ".zip"
+        # Map backend to variant string.
+        if backend == "cuda":
+            variant = "cuda-12.4"
+        elif backend == "vulkan":
+            variant = "vulkan"
+        else:
+            variant = "cpu"
     elif sys.platform == "darwin":
         platform = "macos"
         arch = "arm64" if os.uname().machine == "arm64" else "x64"
@@ -1337,7 +1388,7 @@ def download_llama_server(
         platform = "ubuntu"
         arch = "x64"
         binary_name = "llama-server"
-        variant = "cpu"
+        variant = "vulkan" if backend == "vulkan" else "cpu"
         archive_ext = ".tar.gz"
 
     tag = _LLAMA_SERVER_VERSION
@@ -1353,8 +1404,21 @@ def download_llama_server(
             "llama-{tag}-bin-{platform}-{arch}{ext}"
         ).format(tag=tag, platform=platform, arch=arch, ext=archive_ext)
 
+    # CUDA cudart DLLs URL (Windows only).
+    cudart_url: str | None = None
+    if sys.platform == "win32" and backend == "cuda":
+        cudart_url = (
+            "https://github.com/ggml-org/llama.cpp/releases/download/{tag}/"
+            "cudart-llama-bin-win-cuda-12.4-x64.zip"
+        ).format(tag=tag)
+
     dest_dir = _get_bundled_llama_dir()
-    dest_binary = dest_dir / binary_name
+    # Use a backend-specific binary name so multiple backends can coexist.
+    backend_suffix = backend if backend != "cpu" else ""
+    if backend_suffix:
+        dest_binary = dest_dir / "llama-server-{backend}.exe".format(backend=backend_suffix)
+    else:
+        dest_binary = dest_dir / binary_name
 
     # Check if already downloaded.
     if dest_binary.is_file():
@@ -1365,7 +1429,7 @@ def download_llama_server(
             progress_callback(msg)
         return str(dest_binary)
 
-    _set_download_progress("Downloading llama-server from {:s} ...".format(url))
+    _set_download_progress("Downloading llama-server ({:s}) from {:s} ...".format(backend, url))
     if progress_callback:
         progress_callback("Downloading llama-server ({:s}) ...".format(tag))
 
@@ -1445,6 +1509,22 @@ def download_llama_server(
         shutil.move(str(extracted), str(dest_binary))
         # Cleanup temp dir.
         shutil.rmtree(str(temp_dir), ignore_errors=True)
+
+        # Download and extract cudart DLLs for CUDA backend.
+        if cudart_url:
+            _set_download_progress("Downloading CUDA runtime DLLs ...")
+            if progress_callback:
+                progress_callback("Downloading CUDA runtime DLLs ...")
+            try:
+                cudart_req = urllib.request.Request(cudart_url, method="GET")
+                with urllib.request.urlopen(cudart_req, timeout=120) as cudart_resp:
+                    cudart_data = io.BytesIO(cudart_resp.read())
+                with zipfile.ZipFile(cudart_data) as cudart_zf:
+                    cudart_zf.extractall(str(dest_dir))
+                print("[🛠️Coworker] download_llama_server: cudart DLLs extracted to {:s}".format(str(dest_dir)))
+            except (urllib.error.URLError, OSError, zipfile.BadZipFile) as ex:
+                print("[🛠️Coworker] download_llama_server: cudart download failed — {:s}".format(str(ex)))
+                # Non-fatal — the server may still work if CUDA is installed system-wide.
 
         # Make executable on non-Windows.
         if sys.platform != "win32":
@@ -1575,6 +1655,13 @@ def start_local_llama(
 
     try:
         # Build args and environment (shared across platforms).
+        # Determine GPU offload layers based on backend.
+        with _lock:
+            backend = _config.llama_backend
+        if backend == "auto":
+            backend = _detect_gpu_backend()
+        ngpu_layers = 99 if backend in ("cuda", "vulkan") else 0
+
         args = [
             server_exe,
             '--jinja',
@@ -1582,6 +1669,7 @@ def start_local_llama(
             '--host', '127.0.0.1',
             '--port', str(port),
             '--ctx-size', str(ctx_size),
+            '--n-gpu-layers', str(ngpu_layers),
         ]
         if use_hf:
             args.extend(['--hf-repo', hf_repo, '--hf-file', hf_file])

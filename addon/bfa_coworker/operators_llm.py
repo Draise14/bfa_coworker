@@ -310,6 +310,7 @@ class _BFACW_OT_download_llama_server(bpy.types.Operator):  # type: ignore[misc]
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         llm = get_llm_manager()
+        prefs = context.preferences.addons[__package__].preferences
 
         # Check if already installed.
         existing = llm.find_llama_server()
@@ -321,8 +322,11 @@ class _BFACW_OT_download_llama_server(bpy.types.Operator):  # type: ignore[misc]
         self._error = ""
         self._latest_progress = ""
 
+        # Get the selected backend from preferences.
+        backend = getattr(prefs, "llama_backend", "auto")
+
         def _do_download():
-            result = llm.download_llama_server()
+            result = llm.download_llama_server(backend=backend)
             if result is None:
                 self._error = llm.get_state().error or "Download failed"
             self._done = True

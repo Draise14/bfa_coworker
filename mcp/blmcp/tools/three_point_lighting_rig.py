@@ -74,8 +74,8 @@ def _build_rig_code(
         "result = {'status': 'ok', 'lights': []}\n"
         "\n"
         "# Find target object\n"
-        "if '{:s}':\n"
-        "    target = bpy.data.objects.get('{:s}')\n"
+        "if '{target}':\n"
+        "    target = bpy.data.objects.get('{target}')\n"
         "elif bpy.context.active_object:\n"
         "    target = bpy.context.active_object\n"
         "else:\n"
@@ -135,7 +135,7 @@ def _build_rig_code(
         "\n"
         "    result['message'] = 'Created 3-point lighting rig: Key, Fill, Rim'\n"
     ).format(
-        target=target, target=target,
+        target=target,
         key_energy=key_energy, key_color=key_color,
         fill_energy=fill_energy, fill_color=fill_color,
         rim_energy=rim_energy, rim_color=rim_color,

@@ -18,6 +18,7 @@ discovered by the LLM through the existing bundled-docs search tools.
 __all__ = (
     "get_always_loaded_skills",
     "get_domain_skills",
+    "get_user_skills",
     "list_loaded_skills",
     "clear_cache",
 )
@@ -202,3 +203,40 @@ def get_domain_skills(domains: set[str]) -> str:
         return ""
 
     return "## Domain Skills\n{:s}".format("\n\n---\n\n".join(parts))
+
+
+# ── User skill loader ──────────────────────────────────────────────
+# Loads custom .md skill files from the user's SCRIPTS directory.
+# Users can drop .md files into SCRIPTS/bfa_coworker_skills/ and they
+# will be loaded alongside the built-in skills on every conversation.
+
+_USER_SKILLS_DIR_NAME = "bfa_coworker_skills"
+
+
+def get_user_skills() -> str:
+    """Load and concatenate user skill files from the user skills directory.
+
+    Scans ``SCRIPTS/bfa_coworker_skills/`` for ``.md`` files and returns
+    their content as a single block prefixed with ``## User Skills``.
+    Returns empty string if no files are found or the directory doesn't
+    exist.
+    """
+    try:
+        import bpy  # pylint: disable=import-error
+        skills_dir = Path(bpy.utils.user_resource("SCRIPTS")) / _USER_SKILLS_DIR_NAME
+    except Exception:
+        return ""
+
+    if not skills_dir.is_dir():
+        return ""
+
+    parts: list[str] = []
+    for fpath in sorted(skills_dir.glob("*.md")):
+        text = _read_skill(fpath)
+        if text:
+            parts.append(text)
+
+    if not parts:
+        return ""
+
+    return "## User Skills\n{:s}".format("\n\n---\n\n".join(parts))

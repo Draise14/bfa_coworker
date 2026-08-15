@@ -70,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `batch_keyframe_insert` — keyframes multiple objects across multiple frames with location/rotation/scale in one call. Saves N round-trips per object per frame.
   - `three_point_lighting_rig` — creates key, fill, and rim lights tracking a target object. Saves 3-5 round-trips.
   All three registered in their respective domains (animation, material, lighting, rendering).
+- **User Skill Loader** — Added `get_user_skills()` that scans `SCRIPTS/bfa_coworker_skills/` for `.md` files and injects them into the system prompt alongside built-in skills. Users can drop custom skill files into this directory to teach the LLM project-specific conventions, API overrides, or workflow patterns without modifying the addon.
 
 ## [v1.1.36] - 2026-08-12
 

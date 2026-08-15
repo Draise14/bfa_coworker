@@ -143,6 +143,13 @@ def _get_system_prompt_with_rules() -> str:
                 bpy_version=bpy.app.version,
                 custom_text=custom_text,
             )
+            # ── User skills (from SCRIPTS/bfa_coworker_skills/*.md) ──
+            user_skills_block = _skills_mod.get_user_skills()
+            if user_skills_block:
+                if skills_block:
+                    skills_block += "\n\n{:s}".format(user_skills_block)
+                else:
+                    skills_block = user_skills_block
         except Exception:
             skills_block = ""
 

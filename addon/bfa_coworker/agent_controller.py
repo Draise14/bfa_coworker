@@ -247,12 +247,14 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "jump_to_view3d_object_by_name",
         "jump_to_view3d_object_data_by_name",
         "render_viewport_to_path",
+        "batch_keyframe_insert",
     }),
     "material": frozenset({
         "download_polyhaven_asset",
         "search_polyhaven_assets",
         "get_screenshot_of_area_as_image",
         "render_viewport_to_path",
+        "setup_pbr_material",
     }),
     "modeling": frozenset({
         "jump_to_view3d_object_by_name",
@@ -266,11 +268,13 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "search_polyhaven_assets",
         "render_viewport_to_path",
         "get_screenshot_of_area_as_image",
+        "three_point_lighting_rig",
     }),
     "rendering": frozenset({
         "render_viewport_to_path",
         "get_screenshot_of_area_as_image",
         "get_screenshot_of_window_as_image",
+        "three_point_lighting_rig",
     }),
     "vse": frozenset({
         "jump_to_tab_by_name",

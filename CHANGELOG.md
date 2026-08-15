@@ -65,6 +65,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Scene-Aware Domain Pre-Detection** — Added `_detect_domain_from_scene()` that scans `bpy.data` for armatures, actions, materials, node groups, lights, cameras, meshes, sequencer strips, and geometry nodes modifiers. Pre-loads matching domains before the turn starts, so the LLM has the right tools even when the user's prompt is vague about what exists in the scene.
 - **Domain-Aware Skill Auto-Injection** — Added `_DOMAIN_SKILL_MAP` and `get_domain_skills()` to bundle domain skill files (`animation.md`, `materials.md`, `mesh_editing.md`, `modifiers.md`, `rendering.md`) into the system prompt when matching domains are detected. The LLM gets version-aware API rules upfront without needing to search for them.
 - **Result Trimming Middleware** — Added `_trim_tool_result()` that strips JSON boilerplate (`{"status": "ok", "result": ...}`) and keeps only the meaningful inner data when truncating tool results for LLM context. Error messages are preserved in full within the budget; success results have their inner `result` fields extracted, giving the LLM more structured data at the same 500-char limit.
+- **Composite Tool Wrappers** — Three new MCP tools that combine multi-step operations into a single call:
+  - `setup_pbr_material` — creates a PBR material with Principled BSDF + normal map + displacement, optionally downloading Polyhaven textures. Saves 3-5 round-trips.
+  - `batch_keyframe_insert` — keyframes multiple objects across multiple frames with location/rotation/scale in one call. Saves N round-trips per object per frame.
+  - `three_point_lighting_rig` — creates key, fill, and rim lights tracking a target object. Saves 3-5 round-trips.
+  All three registered in their respective domains (animation, material, lighting, rendering).
 
 ## [v1.1.36] - 2026-08-12
 

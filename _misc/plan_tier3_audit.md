@@ -245,7 +245,7 @@ Execute in this order. Each fix is independently verifiable.
 - [x] Phase 1: Scene-aware domain pre-detection
 - [x] Phase 2: Domain-aware skill auto-injection
 - [x] Phase 3: Result trimming middleware
-- [ ] Phase 4: Composite tool wrappers
+- [x] Phase 4: Composite tool wrappers
 - [ ] Phase 5: User skill loader
 
 ---

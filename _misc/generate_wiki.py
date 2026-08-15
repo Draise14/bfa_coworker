@@ -511,7 +511,7 @@ graph TB
 
 | Section | Pages |
 |---------|-------|
-| 🚀 [[Quick-Start]] | Install → Configure → Chat in 3 steps |
+| 🚀 [[Quick-Start|Quick Start]] | Install → Configure → Chat in 3 steps |
 | 👤 [[User-Documentation/Installation|User Documentation]] | Installation, Configuration, Chat Interface, Local LLM, Remote API, Generative AI, Troubleshooting |
 | 🛠️ [[Developer-Documentation/Architecture|Developer Documentation]] | Architecture, Addon Structure, MCP Server, MCP Tools, Plugin System, Skills, Building, Contributing |
 | 📋 [[API-Glossary/Operators-Reference|API & Glossary]] | Operators Reference, Preferences Reference, MCP Tools Reference, Glossary |

@@ -260,7 +260,14 @@ class _BFACW_OT_stop_llm(bpy.types.Operator):  # type: ignore[misc]
 class _BFACW_OT_download_llama_server(bpy.types.Operator):  # type: ignore[misc]
     bl_idname = "bfacw.download_llama_server"
     bl_label = "Download llama-server"
-    bl_description = "Download and install the llama-server binary from GitHub releases"
+    bl_description = (
+        "Download and install the llama-server binary from GitHub releases.\n"
+        "Select the GPU backend above (Auto / CUDA / Vulkan / CPU) before downloading.\n"
+        "The addon bundles its own copy — no manual PATH setup needed.\n"
+        "To use a custom llama.cpp build instead, add its folder to your PATH:\n"
+        "  Windows: System Properties → Environment Variables → Path\n"
+        "  macOS/Linux: export PATH=\"/path/to/llama.cpp/build/bin:$PATH\""
+    )
 
     _timer: float | None = None
     _thread: threading.Thread | None = None

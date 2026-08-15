@@ -318,11 +318,16 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             self.existing_model_path = ""
             # Build info string for display.
             self.model_preset_info = (
-                "Capability: {cap}  |  RAM: {ram}  |  Disk: {disk}\n{desc}"
+                "Capability: {cap}  |  RAM: {ram}  |  Disk: {disk}\n"
+                "Hardware: {hw}\n"
+                "Why: {why}\n"
+                "{desc}"
             ).format(
                 cap=preset.capability,
                 ram=preset.ram_gb,
                 disk=preset.disk_gb,
+                hw=preset.hardware_note,
+                why=preset.why,
                 desc=preset.description,
             )
             # Sync to llm_manager config immediately.
@@ -333,6 +338,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             cfg.local_ctx_size = self.local_ctx_size
             cfg.local_max_tokens = self.local_max_tokens
             cfg.hf_token = self.hf_token
+            cfg.llama_backend = self.llama_backend
             llm.set_config(cfg)
         else:
             self.model_preset_info = ""
@@ -860,9 +866,9 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         box.label(text="Pick a Model", icon='VIEWZOOM')
 
         _CATEGORIES = [
-            ("flagship", "Flagship (24 GB+ VRAM)", 'SORT_ASC'),
-            ("mid_range", "Mid-Range (12-20 GB VRAM — 4090 Sweet Spot)", 'VIEWZOOM'),
-            ("lightweight", "Lightweight (\u2264 8 GB VRAM)", 'LIGHT_SUN'),
+            ("flagship", "Flagship (24 GB+ VRAM) — Best quality, needs high-end GPU", 'SORT_ASC'),
+            ("mid_range", "Mid-Range (16-20 GB VRAM) — Best balance, RTX 3090/4090 sweet spot", 'VIEWZOOM'),
+            ("lightweight", "Lightweight (\u2264 8 GB VRAM) — Runs on any GPU or integrated", 'LIGHT_SUN'),
         ]
 
         all_presets = llm.get_presets()
@@ -875,16 +881,23 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             cat_box.label(text=cat_label, icon=cat_icon)
             for preset in cat_presets:
                 row = cat_box.row(align=True)
+                # Single icon per model: IMAGE_DATA for vision, VIEWZOOM otherwise.
+                icon = 'IMAGE_DATA' if preset.vision else 'VIEWZOOM'
                 op = row.operator(
                     "bfacw.select_preset",
                     text=preset.name,
-                    icon='CHECKBOX_HLT'
-                    if self.model_preset == preset.identifier
-                    else 'CHECKBOX_DEHLT',
+                    icon=icon,
+                    depress=self.model_preset == preset.identifier,
                 )
                 op.preset_id = preset.identifier
-                row.label(
-                    text="[{:s}] {:s}".format(preset.ram_gb, preset.capability),
+                # Multiline label: hardware_note + why on subsequent lines.
+                col = row.column(align=True)
+                col.scale_y = 0.8
+                col.label(
+                    text="\u2502 {:s}".format(preset.hardware_note),
+                )
+                col.label(
+                    text="\u2514 {:s}".format(preset.why),
                 )
 
         # Custom model entry.

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""
+r"""
 Build script for the Coworker extension.
 
 Step1 - Set the build environment like this in Powershell:

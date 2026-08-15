@@ -24,23 +24,25 @@ environment wrangling. Install the add-on, pick a model, start chatting.
 ### 2. Install llama-server (one click)
 
 If you don't have `llama-server` installed, the add-on preferences show a
-**"Download llama-server"** button. Click it — the add-on downloads the
-latest release from GitHub and unpacks it automatically to
-`~/.cache/bfa_coworker_llama/`. No manual download, no PATH setup.
+**"Download llama-server"** button. Select your GPU backend (Auto / CUDA 12.4 /
+Vulkan / CPU) and click it — the add-on downloads the correct build from GitHub
+and unpacks it automatically to `~/.cache/bfa_coworker_llama/`. No manual
+download, no PATH setup. CUDA builds include bundled `cudart` DLLs.
 
 ### 3. Pick a Model
 
 In the add-on preferences you'll see the **LLM Configuration** section with
 models organized into three categories:
 
-| Category | VRAM | Best for |
+| Category | VRAM | Models |
 |---|---|---|
-| **Flagship** (24 GB+) | High-end GPUs (RTX 5090) | DeepSeek R1 32B, Qwen 2.5 Coder 32B, Gemma 4 26B Q8 |
-| **Mid-Range** (12-20 GB) | RTX 4090 / 3090 sweet spot | Mistral Small 3.1 24B (new default), Gemma 4/Gemma 3, Phi-4, GPT-OSS |
-| **Lightweight** (≤ 8 GB) | Any GPU / integrated | Llama 3.1 8B, Qwen3 8B, Phi-4 Q3 |
+| **Flagship** (24 GB+) | RTX 3090/4090/5090 | Qwen3.8-27B Q8, Fable Fusion 27B Q6, Nail 35B A3B |
+| **Mid-Range** (16-20 GB) | RTX 3090/4090 | **GPT-OSS 20B (default)**, Qwen3.8-27B Q4, Fable Fusion 27B IQ4 |
+| **Lightweight** (≤ 8 GB) | Any GPU / integrated | Gemma 4 E4B, Qwen3.5-9B DeepSeek-V4-Flash, Qwen3.5-9B Q8 |
 
-Click a preset name to select it. The **Mid-Range** section is the default
-selection optimized for an **RTX 4090**.
+Click a preset name to select it. Each preset shows its hardware recommendation,
+vision capability, and "why pick this" rationale. The **Mid-Range** section is
+the default selection optimized for an **RTX 4090**.
 
 - **Custom Model** — Use the dropdown below the presets to manually enter a
   repo ID and filename.

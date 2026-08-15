@@ -25,6 +25,7 @@ __all__ = (
     "fetch_remote_models",
     "scan_existing_models",
     "find_llama_server",
+    "invalidate_llama_server_cache",
     "download_model",
     "download_llama_server",
     "start_local_llama",

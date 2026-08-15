@@ -257,24 +257,19 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
          "roughly head-sized. Stretch it a bit taller than wide and "
          "slightly narrower on the sides to suggest a skull shape. "),
         (2, "Subdivide",
-         "Smooth it out, enough levels to look smooth but "
-         "not too dense yet. add in a bit of a squarish shape. Keep it symmetrical."),
-        (3, "Mirror",
-         "Chop it in half and mirror it so we only need to "
-         "sculpt one side. Make sure clipping is on so the center "
-         "seam stays clean. Apply a remesh. I want this procedural and in half. "),
+         "bevel and smooth it out, enough levels to look smooth but "
+         "not too dense yet. Make it a squarish shape. Keep it symmetrical."),
         (4, "Apply & Cut",
-         "Apply the Mirror modifier. Then cut it in half along the center line — "
+         "Cut it in half along the center line — "
          "delete the left half. "
-         "Mirror again — this way the center "
-         "line is perfectly flat and ready for sculpting."),
+         "Mirror modifier it — this way the center "
+         "line is perfectly flat and ready for sculpting dynamically."),
         (5, "Jaw & Chin",
-         "Now shape the jawline. In Edit Mode, pull the bottom-front "
+         "Now shape the jawline. In Edit Mode, select and pull the bottom-front "
          "vertices forward a bit to suggest a chin. Widen the lower "
-         "sides slightly for the jaw. Keep it symmetrical through "
-         "the Mirror modifier."),
+         "sides slightly for the jaw."),
         (6, "Finalize",
-         "Apply all remaining modifiers. Then add a remesh "
+         "Duplicate it, then apply all remaining modifiers. Then add a remesh "
          "modifier with a nice resolutions so it's ready for "
          "sculpting. Name it \"Sculpt_Ready_Head\"."),
     ],

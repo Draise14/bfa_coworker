@@ -1900,12 +1900,14 @@ def check_remote_api(base_url: str, api_key: str) -> bool:
 # ---------------------------------------------------------------------------
 # Internal helpers
 
-def _resolve_mmproj_path(model_path: Path) -> Path | None:
+def _resolve_mmproj_path(model_path: Path | str | None) -> Path | None:
     """Resolve the mmproj file path next to a model file.
 
     Looks for a projector file (e.g. ``mmproj-F16.gguf``, ``mmproj.gguf``)
     in the same directory as the model. Returns ``None`` if not found.
     """
+    if isinstance(model_path, str):
+        model_path = Path(model_path)
     model_dir = model_path.parent if model_path else None
     if not model_dir or not model_dir.is_dir():
         return None

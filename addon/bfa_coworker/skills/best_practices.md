@@ -92,3 +92,24 @@ For multiple independent objects, either:
 - **Use different operators** for each (e.g., `primitive_cube_add` for a cube,
   `primitive_uv_sphere_add` for a sphere) — the system detects different
   operators and keeps both results.
+
+## Primitive Operator Keywords
+
+Different primitive operators use DIFFERENT size keywords — using the wrong
+one raises ``TypeError: keyword "..." unrecognized``:
+
+| Operator | Size keyword |
+|---|---|
+| `primitive_cube_add` | `size=` |
+| `primitive_monkey_add` | `size=` |
+| `primitive_plane_add` | `size=` |
+| `primitive_grid_add` | `size=` |
+| `primitive_uv_sphere_add` | `radius=` |
+| `primitive_circle_add` | `radius=` |
+| `primitive_cylinder_add` | `radius=` + `depth=` |
+| `primitive_cone_add` | `radius1=` + `radius2=` + `depth=` |
+| `primitive_ico_sphere_add` | `radius=` |
+| `primitive_torus_add` | `major_radius=` + `minor_radius=` |
+
+When in doubt, call the operator with NO keyword arguments first to use
+defaults, then read ``bpy.context.active_object`` to inspect/set dimensions.

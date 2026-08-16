@@ -21,6 +21,7 @@ __all__ = (
     "run_conversation_turn",
     "cleanup",
     "ping_agent",
+    "warmup_agent",
     "check_ports_available",
     "migrate_vendor_deps",
     "generate_mcp_client_config",
@@ -2948,6 +2949,44 @@ def ping_agent(
         v.startswith("OK") for k, v in result.items() if k != "all_ok"
     )
     return result
+
+
+def warmup_agent(
+    on_status: Callable[[str], None] | None = None,
+    on_text: Callable[[str], None] | None = None,
+    mcp_port: int = _MCP_SERVER_DEFAULT_PORT,
+) -> None:
+    """
+    Warm up the agent: load MCP tools and post a welcome message.
+
+    This does a lightweight tool-list fetch (so ``tool_count`` is populated
+    and the UI shows the agent is ready) and posts a friendly welcome
+    message into the conversation history. It does NOT invoke the LLM —
+    that's deferred until the user's first real message.
+
+    Call this after the LLM backend is confirmed running but before the
+    user sends their first message.
+    """
+    # 1. Warm up tools (populate tool_count for UI).
+    if on_status:
+        on_status("Warming up tools...")
+    try:
+        tools = _list_tools_sync(mcp_port)
+        if tools:
+            _agent_state.tool_count = len(tools)
+            print("[🛠️Coworker] warmup_agent: {:d} tools loaded".format(len(tools)))
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[🛠️Coworker] warmup_agent: tool warmup failed — {:s}".format(str(ex)))
+
+    # 2. Post welcome message into history.
+    welcome = "Ok, now we are ready! How can I help?"
+    _agent_state.conversation_history.append({"role": "assistant", "content": welcome})
+    if on_text:
+        on_text(welcome)
+    if on_status:
+        on_status("Ready")
+
+    print("[🛠️Coworker] warmup_agent: welcome message posted")
 
 
 # ---------------------------------------------------------------------------

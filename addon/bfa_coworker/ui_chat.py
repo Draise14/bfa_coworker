@@ -698,16 +698,21 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
             if not llm_state.is_running:
 
                 def _start_llm_backend():
-                    # If an existing model path is set, use it directly.
                     existing_path = prefs.existing_model_path
                     if existing_path and os.path.isfile(existing_path):
                         llm_manager.start_local_llama(model_path=existing_path)
                     else:
                         llm_manager.start_local_llama()
-                    # Update status on the main thread.
                     def _update():
                         state = llm_manager.get_state()
                         if state.is_running:
+                            props.chat_status = "Warming up..."
+                            _redraw_areas(bpy.context)
+                            _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+                            agent_controller.warmup_agent(
+                                on_status=lambda s: setattr(props, "chat_status", s),
+                                mcp_port=_mcp_port,
+                            )
                             props.chat_status = "Connected"
                         else:
                             props.chat_status = "Error: " + (state.error or "LLM failed to start")
@@ -719,9 +724,23 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
                 thread.start()
                 props.chat_status = "Starting LLM backend..."
             else:
+                props.chat_status = "Warming up..."
+                _redraw_areas(context)
+                _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+                agent_controller.warmup_agent(
+                    on_status=lambda s: setattr(props, "chat_status", s),
+                    mcp_port=_mcp_port,
+                )
                 props.chat_status = "Connected"
         else:
             # In remote mode, no LLM backend is started.
+            props.chat_status = "Warming up..."
+            _redraw_areas(context)
+            _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+            agent_controller.warmup_agent(
+                on_status=lambda s: setattr(props, "chat_status", s),
+                mcp_port=_mcp_port,
+            )
             props.chat_status = "Connected"
 
         # Load chat history.

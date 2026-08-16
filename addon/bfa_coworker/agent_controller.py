@@ -1546,8 +1546,14 @@ def _openai_chat_completions(
 
     # Retry loop for transient failures (e.g. server just became ready
     # but the HTTP worker hasn't started yet).
+    # Also handles chat template crashes: custom GGUF templates (DavidAU
+    # fine-tunes, etc.) may 500 on the ``tools`` parameter.  We inject
+    # tool descriptions into the system prompt as text and retry without
+    # the ``tools`` JSON parameter, then parse text-based tool calls from
+    # the response.
     import time as _time
     max_retries = 3
+    tools_tried = bool(tools)
     for attempt in range(max_retries):
         try:
             with urllib.request.urlopen(req, timeout=_STREAM_TIMEOUT) as resp:
@@ -1577,8 +1583,59 @@ def _openai_chat_completions(
                         len(reasoning)))
                     print(reasoning)
                     print("[🛠️Coworker] _openai_chat_completions: --- end reasoning ---")
+                # If we fell back to text-based tool calling, parse text calls.
+                if not tools_tried and not tool_calls:
+                    text_calls = _parse_text_tool_calls(content)
+                    if text_calls:
+                        print("[🛠️Coworker] _openai_chat_completions: parsed {:d} text-based tool calls".format(
+                            len(text_calls)))
+                        msg["tool_calls"] = text_calls
+                        choice["finish_reason"] = "tool_calls"
+                        result["_text_tool_fallback"] = True
                 return result
-        except (urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
+        except (urllib.error.HTTPError, urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
+            # ── Chat template crash fallback: inject tools as text ────
+            # Some custom GGUF chat templates (e.g. Fable Fusion, DavidAU
+            # fine-tunes) 500 on the ``tools`` parameter.  We inject tool
+            # descriptions into the system prompt and retry without the
+            # ``tools`` JSON parameter, preserving full agent functionality.
+            if tools_tried and isinstance(ex, urllib.error.HTTPError) and ex.code == 500:
+                print("[🛠️Coworker] _openai_chat_completions: 500 error with tools — "
+                      "injecting tools as text and retrying")
+                tools_tried = False
+                # Build a text description of available tools.
+                tool_text = (
+                    "\n\nYou have access to the following tools. "
+                    "To call a tool, output a JSON block with the format:\n"
+                    '{"tool": "tool_name", "arguments": {"arg1": "value1"}}\n'
+                    "Available tools:\n"
+                )
+                for t in tools:
+                    fn = t.get("function", {})
+                    name = fn.get("name", "?")
+                    desc = fn.get("description", "")
+                    params = fn.get("parameters", {})
+                    props = params.get("properties", {})
+                    param_str = ", ".join(
+                        "{:s}: {:s}".format(k, v.get("description", "?"))
+                        for k, v in props.items()
+                    )[:200]
+                    tool_text += "- {:s}: {:s} ({:s})\n".format(name, desc, param_str)
+                # Inject into the last system message, or add a new one.
+                injected = False
+                for i in range(len(messages) - 1, -1, -1):
+                    if messages[i].get("role") == "system":
+                        messages[i]["content"] += tool_text
+                        injected = True
+                        break
+                if not injected:
+                    messages.insert(0, {"role": "system", "content": tool_text})
+                # Rebuild request without tools.
+                body.pop("tools", None)
+                body["messages"] = messages
+                data_bytes = json.dumps(body).encode()
+                req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
+                continue
             if attempt < max_retries - 1:
                 print("[🛠️Coworker] _openai_chat_completions: attempt {:d}/{:d} FAILED — {:s}, retrying in 2s...".format(
                     attempt + 1, max_retries, str(ex)))
@@ -1604,6 +1661,39 @@ def _mcp_tools_to_openai(mcp_tools: list[dict[str, Any]]) -> list[dict[str, Any]
             },
         })
     return result
+
+
+def _parse_text_tool_calls(content: str) -> list[dict[str, Any]]:
+    """Parse text-based tool calls from an LLM response.
+
+    Looks for JSON blocks matching the format::
+
+        {"tool": "tool_name", "arguments": {"arg1": "value1"}}
+
+    Returns a list of OpenAI-format tool call dicts, or an empty list
+    if no tool calls are found.
+    """
+    import re
+    tool_calls: list[dict[str, Any]] = []
+    # Match JSON blocks: {"tool": "...", "arguments": {...}}
+    pattern = r'\{"tool":\s*"([^"]+)"\s*,\s*"arguments":\s*(\{.*?\})\s*\}'
+    for match in re.finditer(pattern, content, re.DOTALL):
+        name = match.group(1)
+        args_str = match.group(2)
+        try:
+            args = json.loads(args_str)
+        except (json.JSONDecodeError, TypeError):
+            args = {}
+        tool_id = "text_tool_{:d}".format(len(tool_calls))
+        tool_calls.append({
+            "id": tool_id,
+            "type": "function",
+            "function": {
+                "name": name,
+                "arguments": json.dumps(args),
+            },
+        })
+    return tool_calls
 
 
 def _call_mcp_tool_sync(

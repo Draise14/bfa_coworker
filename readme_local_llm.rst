@@ -32,6 +32,38 @@ That's it. No manual ``llama.cpp`` install, no PATH setup, no separate
 chat client.
 
 
+Troubleshooting
+===============
+
+``llama-server`` crashes or never becomes ready
+   The add-on writes llama-server's full output to
+   ``~/.cache/bfa_coworker_llama/llama-server.log`` and automatically
+   surfaces the last lines when startup fails — check that file (or the
+   chat status bar) for the real error.  Common causes:
+
+   * **Truncated/corrupt model file** — the most common cause with local
+     files: a GGUF cut off mid-download or mid-copy makes llama-server die
+     with ``missing tensor ...`` after loading a few dozen layers.  The
+     add-on compares your file's size against HuggingFace and suggests
+     re-downloading when it detects this.  Delete the file and re-download.
+   * **Outdated llama-server build** — the curated presets (Qwen3.8,
+     Qwen3.6 fine-tunes, ...) need a recent llama.cpp.  Prefer the bundled
+     **Download llama-server** button over an older PATH/WinGet install;
+     the add-on logs the detected build version at launch.
+   * **Mismatched mmproj** — several vision presets share the generic
+     ``mmproj-F16.gguf`` filename, so when multiple models live in one
+     folder a single projector can end up attached to the wrong model and
+     llama-server exits with ``mismatch between text model ... and mmproj``.
+     The add-on now saves each model's projector under its own name
+     (``mmproj-F16-Qwen3.5-9B.gguf``), only uses a generic projector when it
+     is unambiguous, and runs vision models text-only instead of crashing
+     when no matching projector is found.  Fix stray files by deleting them
+     and re-downloading via the **Download & Start** button.
+   * **Context size too large** — 64K context on a 27B model needs many GB
+     of KV-cache memory.  If startup fails, lower **Context Size** in
+     preferences (16K-32K is plenty for agent work).
+
+
 Components
 ==========
 

@@ -30,6 +30,8 @@ __all__ = (
     "download_llama_server",
     "start_local_llama",
     "stop_local_llama",
+    "get_llama_process",
+    "get_llama_server_log_tail",
     "health_check",
     "check_remote_api",
     "get_state",
@@ -86,6 +88,192 @@ def _get_bundled_llama_dir() -> Path:
     base = Path.home() / ".cache" / "bfa_coworker_llama"
     base.mkdir(parents=True, exist_ok=True)
     return base
+
+
+# ---------------------------------------------------------------------------
+# llama-server log capture
+#
+# llama-server is launched with stdio redirected to this log file so that
+# startup failures (bad model path, mismatched mmproj, OOM, outdated binary,
+# ...) are visible to the addon instead of vanishing into a devnull/console
+# void.  On failure the tail is surfaced automatically (see
+# :func:`wait_until_ready` / :func:`get_llama_server_log_tail`).
+
+_LLAMA_SERVER_LOG_NAME = "llama-server.log"
+
+
+def _llama_server_log_path() -> Path:
+    """Return the path of the llama-server log file (recreated each launch)."""
+    return _get_bundled_llama_dir() / _LLAMA_SERVER_LOG_NAME
+
+
+def get_llama_server_log_tail(n_lines: int = 40, max_chars: int = 4000) -> str:
+    """Return the tail of the most recent llama-server log.
+
+    Used to surface the real startup error when llama-server exits early
+    or fails to become ready.  Returns an empty string if no log exists yet.
+    """
+    log_path = _llama_server_log_path()
+    if not log_path.is_file():
+        return ""
+    try:
+        with open(str(log_path), "r", encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return ""
+    tail = "".join(lines[-n_lines:]).strip()
+    if len(tail) > max_chars:
+        tail = tail[-max_chars:]
+        newline = tail.find("\n")
+        if newline != -1:
+            tail = tail[newline + 1:]
+    return tail
+
+
+_llama_server_version_cache: str = ""
+
+
+def _llama_server_version(server_exe: str) -> str:
+    """Return the llama-server build version string (cached per session).
+
+    The version is logged at launch — an outdated llama.cpp build is a common
+    reason a brand-new preset fails to load (unknown model architecture).
+    """
+    global _llama_server_version_cache
+    if _llama_server_version_cache:
+        return _llama_server_version_cache
+    try:
+        result = subprocess.run(
+            [server_exe, "--version"],
+            capture_output=True, text=True, timeout=10,
+        )
+        output = (result.stdout or result.stderr or "").strip()
+        _llama_server_version_cache = output.splitlines()[0] if output else "unknown"
+    except Exception:  # pylint: disable=broad-exception-caught
+        _llama_server_version_cache = "unknown"
+    return _llama_server_version_cache
+
+
+# ---------------------------------------------------------------------------
+# Truncated / corrupt model detection
+#
+# The most common "llama-server crashes at startup" cause with local files is
+# a GGUF that was cut off mid-download or mid-copy — llama-server fails with
+# ``missing tensor ...`` after loading a few dozen layers.  We compare the
+# local file size against the size on HuggingFace (for curated presets) and
+# surface an actionable hint.
+
+_hf_size_cache: dict[tuple[str, str], int | None] = {}
+
+
+def _hf_repo_file_size(repo_id: str, filename: str) -> int | None:
+    """Return the expected size (bytes) of a preset file on HuggingFace.
+
+    Uses a HEAD request to the HF ``resolve`` URL.  Cached per session.
+    Returns ``None`` when the size can't be determined (offline, gated repo,
+    network error) so callers can silently skip the check.
+    """
+    key = (repo_id, filename)
+    if key in _hf_size_cache:
+        return _hf_size_cache[key]
+    url = "https://huggingface.co/{:s}/resolve/main/{:s}".format(repo_id, filename)
+    req = urllib.request.Request(url, method="HEAD")
+    size: int | None = None
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            try:
+                size = int(resp.headers.get("Content-Length") or 0) or None
+            except (TypeError, ValueError):
+                size = None
+    except Exception:  # pylint: disable=broad-exception-caught
+        size = None
+    _hf_size_cache[key] = size
+    return size
+
+
+def check_model_file_integrity(model_path: Path | str | None) -> str:
+    """Return an actionable warning if a local model file looks truncated.
+
+    Only checks curated presets (the repo ID + filename are known).  Compares
+    the local file size against the size on HuggingFace; returns an empty
+    string when the file is fine or the check can't run.
+    """
+    if not model_path:
+        return ""
+    if isinstance(model_path, str):
+        model_path = Path(model_path)
+    if not model_path.is_file():
+        return ""
+    name = model_path.name.lower()
+    for preset in PRESET_MODELS:
+        if preset.filename.lower() != name:
+            continue
+        try:
+            local = model_path.stat().st_size
+        except OSError:
+            return ""
+        expected = _hf_repo_file_size(preset.repo_id, preset.filename)
+        if expected and local < expected * 0.995:
+            return (
+                "{:s} is likely truncated: it is {:.1f} GB on disk, but the file on "
+                "HuggingFace is {:.1f} GB. Delete it and re-download / re-copy the model "
+                "(a partial copy fails with \"missing tensor\")."
+            ).format(model_path.name, local / (1024 ** 3), expected / (1024 ** 3))
+        break
+    return ""
+
+
+_MODEL_LOAD_FAILURE_MARKERS = (
+    "missing tensor",
+    "error loading model",
+    "failed to load model",
+    "model file is too small",
+)
+
+
+def _log_looks_like_model_load_failure(tail: str) -> bool:
+    """True when the llama-server log tail shows a model-load failure."""
+    lowered = tail.lower()
+    return any(marker in lowered for marker in _MODEL_LOAD_FAILURE_MARKERS)
+
+
+_MMPROJ_MISMATCH_MARKERS = (
+    "you may be using wrong mmproj",
+    "mismatch between text model",
+    "failed to load multimodal model",
+    "failed to load vision model",
+)
+
+
+def _log_looks_like_mmproj_mismatch(tail: str) -> bool:
+    """True when the llama-server log tail shows a wrong-projector failure."""
+    lowered = tail.lower()
+    return any(marker in lowered for marker in _MMPROJ_MISMATCH_MARKERS)
+
+
+def _mmproj_mismatch_hint(model_path: Path | str | None) -> str:
+    """Actionable hint when llama-server dies because of a wrong projector."""
+    if isinstance(model_path, str):
+        model_path = Path(model_path)
+    model_name = model_path.name if model_path else ""
+    local_name = ""
+    for preset in PRESET_MODELS:
+        if preset.mmproj_filename and model_name and model_name.lower() == preset.filename.lower():
+            local_name = _local_mmproj_name(preset)
+            break
+    rename_hint = (
+        "rename it to {:s}".format(local_name)
+        if local_name else "use the addon's Download button"
+    )
+    return (
+        "The vision projector (mmproj) does not match this model — the generic "
+        "mmproj-F16.gguf / mmproj.gguf in the model folder belongs to a different "
+        "model, and several presets share the same generic projector filename, so "
+        "they overwrite each other. Fix: delete the stray projector and use the "
+        "addon's Download button (it saves each model's projector under its own "
+        "name), or {:s}. The model also runs fine without a projector (text-only, "
+        "no image input).".format(rename_hint)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -637,6 +825,7 @@ _lock = threading.Lock()
 _config: LLMConfig = LLMConfig()
 _state: LLMState = LLMState()
 _llama_process: "subprocess.Popen | None" = None
+_last_launched_model_path: Path | None = None
 # Set to request cancellation of an in-progress model download.
 _download_cancel_event = threading.Event()
 
@@ -1257,7 +1446,10 @@ def download_model(
                     return
                 # Check if the process died.
                 if proc.poll() is not None:
+                    tail = get_llama_server_log_tail()
                     error = "llama-server process exited unexpectedly during download"
+                    if tail:
+                        error += "\n\n--- llama-server.log (tail) ---\n{:s}".format(tail)
                     print("[🛠️Coworker] download_model: {:s}".format(error))
                     _set_error(error)
                     return
@@ -1566,6 +1758,11 @@ def download_llama_server(
 # Local LLM lifecycle
 
 
+def get_llama_process() -> "subprocess.Popen | None":
+    """Return the Popen handle of the currently running llama-server (or None)."""
+    return _llama_process
+
+
 def start_local_llama(
     model_path: Path | str | None = None,
     port: int | None = None,
@@ -1580,6 +1777,7 @@ def start_local_llama(
     Returns the ``Popen`` handle, or ``None`` on failure.
     """
     global _llama_process
+    global _last_launched_model_path
 
     print("[🛠️Coworker] start_local_llama: called")
     print("[🛠️Coworker] start_local_llama:   model_path={:s}".format(str(model_path)))
@@ -1606,6 +1804,7 @@ def start_local_llama(
         return None
 
     print("[🛠️Coworker] start_local_llama: server_exe = {:s}".format(server_exe))
+    print("[🛠️Coworker] start_local_llama: llama-server version = {:s}".format(_llama_server_version(server_exe)))
 
     # Resolve model source.  We prefer a local .gguf file, but fall back
     # to ``--hf-repo``/``--hf-file`` so llama-server can auto-download.
@@ -1623,15 +1822,21 @@ def start_local_llama(
 
     if model_path and os.path.isfile(str(model_path)):
         print("[🛠️Coworker] start_local_llama: local model file exists at {:s}".format(str(model_path)))
+        _last_launched_model_path = Path(model_path)
+        integrity_warning = check_model_file_integrity(model_path)
+        if integrity_warning:
+            print("[🛠️Coworker] start_local_llama: WARNING — {:s}".format(integrity_warning))
     else:
         # No local .gguf — try the HuggingFace cache first.
         print("[🛠️Coworker] start_local_llama: local model NOT found, checking HF cache...")
+        _last_launched_model_path = None
         with _lock:
             repo = _config.model_repo_id
             fname = _config.model_filename
         hf_cached = _find_model_in_hf_cache(repo, fname)
         if hf_cached:
             model_path = Path(hf_cached)
+            _last_launched_model_path = Path(hf_cached)
             print("[🛠️Coworker] start_local_llama: using HF cached model at {:s}".format(hf_cached))
         else:
             # Not in cache either — try --hf-repo/--hf-file as last resort.
@@ -1653,6 +1858,22 @@ def start_local_llama(
         ctx_size = 32768
         print("[🛠️Coworker] start_local_llama: auto-upgraded ctx_size from 8192 to 32768")
     print("[🛠️Coworker] start_local_llama: using ctx_size {:d}".format(ctx_size))
+
+    # Large context windows on big models need a LOT of KV-cache memory.
+    # Warn loudly so an OOM-ish startup failure is self-explanatory.
+    try:
+        model_bytes = (
+            os.path.getsize(str(model_path))
+            if model_path and os.path.isfile(str(model_path)) else 0
+        )
+    except OSError:
+        model_bytes = 0
+    if ctx_size > 32768 and model_bytes >= 12 * 1024 * 1024 * 1024:
+        print(
+            "[🛠️Coworker] start_local_llama: WARNING — {:d} context on a {:.1f} GB model "
+            "needs a very large KV cache; if llama-server fails to start, lower "
+            "Context Size in preferences (16K-32K is plenty for agent work)".format(
+                ctx_size, model_bytes / (1024 ** 3)))
 
     print("[🛠️Coworker] start_local_llama: platform = {:s}".format(sys.platform))
 
@@ -1697,9 +1918,21 @@ def start_local_llama(
         if cfg_token:
             env["HF_TOKEN"] = cfg_token
 
+        # Capture llama-server output to a log file — the child's stdio is
+        # otherwise invisible (devnull + a separate console on Windows), which
+        # turns every startup crash into a mystery.  The log tail is surfaced
+        # automatically on failure (see wait_until_ready).
+        try:
+            log_handle = open(str(_llama_server_log_path()), "w", encoding="utf-8", errors="replace")
+        except OSError as ex:
+            log_handle = None
+            print("[🛠️Coworker] start_local_llama: could not open log file — {:s}".format(str(ex)))
+        stdio_target = log_handle if log_handle is not None else subprocess.DEVNULL
+
         if sys.platform == "win32":
             # Launch llama-server in a NEW console window so the user can
-            # see server output and close the window to stop it.
+            # close the window to stop it.  Output goes to the log file
+            # (handles are passed explicitly; the console stays visible).
             # subprocess.CREATE_NEW_CONSOLE (0x00000010) gives us a proper
             # Popen handle that terminates the actual server, not a wrapper.
             # This avoids the broken PowerShell Start-Process path which
@@ -1707,32 +1940,31 @@ def start_local_llama(
             print("[🛠️Coworker] start_local_llama: WIN32 path (CREATE_NEW_CONSOLE)")
             print("[🛠️Coworker] start_local_llama:   args = {:s}".format(str(args)))
             print("[🛠️Coworker] start_local_llama:   HF_HOME = {:s}".format(str(hf_cache_dir)))
+            print("[🛠️Coworker] start_local_llama:   log = {:s}".format(str(_llama_server_log_path())))
             creationflags = subprocess.CREATE_NEW_CONSOLE  # type: ignore[attr-defined]
-            with open(os.devnull, 'w') as devnull:
-                proc = subprocess.Popen(
-                    args,
-                    stdin=devnull,
-                    stdout=devnull,
-                    stderr=devnull,
-                    creationflags=creationflags,
-                    env=env,
-                )
+            proc = subprocess.Popen(
+                args,
+                stdin=subprocess.DEVNULL,
+                stdout=stdio_target,
+                stderr=stdio_target,
+                creationflags=creationflags,
+                env=env,
+            )
             print("[🛠️Coworker] start_local_llama:   Popen returned pid={:d}".format(proc.pid))
         else:
             # Linux / macOS: detach from the parent process group so the
-            # server survives Blender exiting.  We redirect stdio to
-            # /dev/null so it doesn't hijack the Blender console.
+            # server survives Blender exiting.  We redirect stdio to the
+            # log file so it doesn't hijack the Blender console.
             print("[🛠️Coworker] start_local_llama: POSIX path (start_new_session=True)")
             print("[🛠️Coworker] start_local_llama:   args = {:s}".format(str(args)))
-            with open(os.devnull, 'w') as devnull:
-                proc = subprocess.Popen(
-                    args,
-                    stdin=devnull,
-                    stdout=devnull,
-                    stderr=devnull,
-                    start_new_session=True,
-                )
-                print("[🛠️Coworker] start_local_llama:   Popen returned pid={:d}".format(proc.pid))
+            proc = subprocess.Popen(
+                args,
+                stdin=subprocess.DEVNULL,
+                stdout=stdio_target,
+                stderr=stdio_target,
+                start_new_session=True,
+            )
+            print("[🛠️Coworker] start_local_llama:   Popen returned pid={:d}".format(proc.pid))
 
     except FileNotFoundError:
         print("[🛠️Coworker] start_local_llama: FileNotFoundError — binary not found")
@@ -1845,6 +2077,9 @@ def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = No
     Polls :func:`health_check` until it succeeds or *timeout* seconds elapse.
     If *proc* is given and the process exits early, returns ``False``
     immediately with an error set. Returns ``True`` when the server is ready.
+
+    On failure, the llama-server log tail is included in the error so the
+    real startup problem is visible instead of a generic message.
     """
     import time as _time
     deadline = _time.monotonic() + timeout
@@ -1855,12 +2090,34 @@ def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = No
             print("[🛠️Coworker] wait_until_ready: server is ready")
             return True
         if proc is not None and proc.poll() is not None:
-            _set_error("llama-server exited during startup (check model path and port)")
-            print("[🛠️Coworker] wait_until_ready: process exited early")
+            tail = get_llama_server_log_tail()
+            msg = "llama-server exited during startup (exit code {:d}) — check the model file, mmproj, and port".format(
+                proc.returncode)
+            # A truncated/corrupt GGUF is the most common local-model cause:
+            # llama-server dies with "missing tensor" after a few dozen layers.
+            # Surface an actionable "re-download" hint when we can confirm it.
+            if tail and _last_launched_model_path is not None:
+                # Truncated/corrupt GGUF -> suggest re-downloading.
+                if _log_looks_like_model_load_failure(tail):
+                    integrity_warning = check_model_file_integrity(_last_launched_model_path)
+                    if integrity_warning:
+                        msg += "\n\n{:s}".format(integrity_warning)
+                # Wrong mmproj -> explain the generic-name collision + fix.
+                if _log_looks_like_mmproj_mismatch(tail):
+                    msg += "\n\n{:s}".format(_mmproj_mismatch_hint(_last_launched_model_path))
+            if tail:
+                msg += "\n\n--- llama-server.log (tail) ---\n{:s}".format(tail)
+            _set_error(msg)
+            print("[🛠️Coworker] wait_until_ready: process exited early (rc={:d}){:s}".format(
+                proc.returncode, ":\n{:s}".format(tail) if tail else ""))
             return False
         _time.sleep(poll)
         poll = min(poll * 1.5, 3.0)
-    _set_error("llama-server did not become ready within {:.0f}s".format(timeout))
+    tail = get_llama_server_log_tail()
+    msg = "llama-server did not become ready within {:.0f}s".format(timeout)
+    if tail:
+        msg += "\n\n--- llama-server.log (tail) ---\n{:s}".format(tail)
+    _set_error(msg)
     print("[🛠️Coworker] wait_until_ready: timed out")
     return False
 
@@ -1900,22 +2157,134 @@ def check_remote_api(base_url: str, api_key: str) -> bool:
 # ---------------------------------------------------------------------------
 # Internal helpers
 
-def _resolve_mmproj_path(model_path: Path | str | None) -> Path | None:
-    """Resolve the mmproj file path next to a model file.
+_MIN_MMPROJ_BYTES = 1 * 1024 * 1024  # 1 MB — real projectors are 100s of MB
 
-    Looks for a projector file (e.g. ``mmproj-F16.gguf``, ``mmproj.gguf``)
-    in the same directory as the model. Returns ``None`` if not found.
+
+def _is_valid_mmproj(candidate: Path, model_name: str) -> bool:
+    """Basic sanity checks on a candidate mmproj file."""
+    del model_name  # Reserved for future checks (e.g. architecture match).
+    if not candidate.is_file():
+        return False
+    try:
+        size = candidate.stat().st_size
+    except OSError:
+        return False
+    if size < _MIN_MMPROJ_BYTES:
+        print(
+            "[🛠️Coworker] _resolve_mmproj_path: skipping {:s} — only {:.0f} KB "
+            "(truncated/broken download?)".format(str(candidate), size / 1024.0)
+        )
+        return False
+    return True
+
+
+def _local_mmproj_name(preset: "ModelPreset") -> str:
+    """Unique local filename for a preset's vision projector.
+
+    Several presets share the same generic HF filename (``mmproj-F16.gguf``),
+    so saving them all under that name makes them clobber each other when
+    multiple models live in one folder.  Each projector is kept under a
+    model-specific name derived from the repo, e.g. ``mmproj-F16-Qwen3.5-9B.gguf``.
+    """
+    repo_stem = preset.repo_id.rstrip("/").split("/")[-1]
+    if repo_stem.lower().endswith("-gguf"):
+        repo_stem = repo_stem[:-5]
+    base = os.path.splitext(preset.mmproj_filename)[0]
+    ext = os.path.splitext(preset.mmproj_filename)[1] or ".gguf"
+    return "{:s}-{:s}{:s}".format(base, repo_stem, ext)
+
+
+def _count_vision_models_in_dir(model_dir: Path | None) -> int:
+    """Count curated vision-preset model files present in *model_dir*."""
+    if not model_dir or not model_dir.is_dir():
+        return 0
+    files = {
+        entry.lower()
+        for entry in os.listdir(str(model_dir))
+        if os.path.isfile(os.path.join(str(model_dir), entry))
+    }
+    return sum(
+        1 for p in PRESET_MODELS
+        if p.mmproj_filename and p.filename.lower() in files
+    )
+
+
+def _resolve_mmproj_path(model_path: Path | str | None) -> Path | None:
+    """Resolve the mmproj (vision projector) file for a local model.
+
+    A mismatched projector makes llama-server exit at startup, so we only
+    attach one when we are confident it belongs to the model:
+
+    * If the model filename matches a curated preset that declares an
+      ``mmproj_filename`` (vision-capable model), prefer the per-model
+      projector file (``mmproj-F16-Qwen3.5-9B.gguf``).  Fall back to the
+      generic name (``mmproj-F16.gguf``) only when this folder holds exactly
+      one vision-preset model — otherwise the generic file could be another
+      model's projector.
+    * Otherwise, pick up a generic ``mmproj-*.gguf`` next to the model only
+      when the model name itself looks vision-capable (contains "vl" or
+      "vision").
+
+    Also rejects trivially small files (truncated downloads).
+    Returns ``None`` when no suitable projector is found.
     """
     if isinstance(model_path, str):
         model_path = Path(model_path)
     model_dir = model_path.parent if model_path else None
     if not model_dir or not model_dir.is_dir():
         return None
-    # Common projector filenames.
-    for candidate in ("mmproj-F16.gguf", "mmproj.gguf", "mmproj-BF16.gguf"):
-        candidate_path = model_dir / candidate
-        if candidate_path.is_file():
-            return candidate_path
+    model_name = (model_path.name or "").lower()
+
+    # 1. Curated preset match.
+    for preset in PRESET_MODELS:
+        if not preset.mmproj_filename:
+            continue
+        if model_name != preset.filename.lower():
+            continue
+
+        # Preferred: the per-model projector file (unique per preset).
+        candidates = [model_dir / _local_mmproj_name(preset)]
+        # Fallback: the generic name — but only when this folder holds exactly
+        # one vision-preset model, so the generic file can't be a different
+        # model's projector.
+        if _count_vision_models_in_dir(model_dir) == 1:
+            candidates.append(model_dir / preset.mmproj_filename)
+
+        for candidate in candidates:
+            if _is_valid_mmproj(candidate, model_name):
+                print(
+                    "[🛠️Coworker] _resolve_mmproj_path: using {:s} (preset {:s})".format(
+                        str(candidate), preset.identifier)
+                )
+                return candidate
+
+        # Explain why vision is unavailable so it isn't a mystery.
+        generic = model_dir / preset.mmproj_filename
+        if generic.is_file() and _count_vision_models_in_dir(model_dir) > 1:
+            print(
+                "[🛠️Coworker] _resolve_mmproj_path: {:s} is present but the folder contains several "
+                "vision models — one shared projector can't match them all, so it is not attached. "
+                "Use the addon's Download button (saves each projector under its own name) or rename "
+                "it to {:s}".format(generic.name, _local_mmproj_name(preset))
+            )
+        else:
+            print(
+                "[🛠️Coworker] _resolve_mmproj_path: preset {:s} needs {:s} but it is missing — "
+                "vision input will be unavailable".format(preset.identifier, _local_mmproj_name(preset))
+            )
+        return None
+
+    # 2. Non-preset model that looks vision-capable — generic projector names.
+    if "vl" in model_name or "vision" in model_name:
+        for candidate_name in ("mmproj-F16.gguf", "mmproj.gguf", "mmproj-BF16.gguf"):
+            candidate = model_dir / candidate_name
+            if _is_valid_mmproj(candidate, model_name):
+                print(
+                    "[🛠️Coworker] _resolve_mmproj_path: using {:s} for vision model {:s}".format(
+                        str(candidate), model_name)
+                )
+                return candidate
+
     return None
 
 
@@ -1929,30 +2298,44 @@ def _download_mmproj_if_needed(
 
     Looks up the preset by model filename to find the correct projector filename.
     Skips if the projector already exists or the model doesn't have one.
+
+    The projector is saved under a per-model name (see :func:`_local_mmproj_name`)
+    because several presets share the generic HF filename ``mmproj-F16.gguf`` —
+    saving them all under that name would clobber each other when multiple
+    vision models share one models folder.
     """
     # Find the preset that matches this model filename.
-    mmproj_fname = ""
+    preset = None
     for p in PRESET_MODELS:
         if p.filename == model_filename and p.mmproj_filename:
-            mmproj_fname = p.mmproj_filename
+            preset = p
             break
-    if not mmproj_fname:
+    if not preset:
         return  # No projector needed for this model.
 
-    mmproj_dest = models_dir / mmproj_fname
+    mmproj_fname = preset.mmproj_filename
+    local_name = _local_mmproj_name(preset)
+    mmproj_dest = models_dir / local_name
     if mmproj_dest.exists():
         print("[🛠️Coworker] _download_mmproj_if_needed: {:s} already exists".format(str(mmproj_dest)))
         return
 
-    print("[🛠️Coworker] _download_mmproj_if_needed: downloading {:s} from {:s}".format(mmproj_fname, repo_id))
-    _set_download_progress("Downloading vision projector {:s} ...".format(mmproj_fname))
+    print(
+        "[🛠️Coworker] _download_mmproj_if_needed: downloading {:s} as {:s} from {:s}".format(
+            mmproj_fname, local_name, repo_id)
+    )
+    _set_download_progress("Downloading vision projector {:s} ...".format(local_name))
     if progress_callback:
-        progress_callback("Downloading vision projector {:s} ...".format(mmproj_fname))
+        progress_callback("Downloading vision projector {:s} ...".format(local_name))
 
-    # Reuse the direct download function for the projector file.
+    # Reuse the direct download function for the projector file (source name
+    # is the HF filename, destination is the per-model local name).
     success = _download_gguf_direct(repo_id, mmproj_fname, mmproj_dest, progress_callback)
     if success:
-        print("[🛠️Coworker] _download_mmproj_if_needed: {:s} downloaded to {:s}".format(mmproj_fname, str(mmproj_dest)))
+        print(
+            "[🛠️Coworker] _download_mmproj_if_needed: {:s} downloaded to {:s}".format(
+                mmproj_fname, str(mmproj_dest))
+        )
     else:
         print("[🛠️Coworker] _download_mmproj_if_needed: failed to download {:s}".format(mmproj_fname))
         # Non-fatal — the model can still run without vision.

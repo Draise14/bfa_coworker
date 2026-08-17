@@ -937,14 +937,21 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         row.operator("bfacw.download_model", icon=btn_icon, text=btn_text)
         if not btn_enabled:
             row.enabled = False
-        # Show a cancel button while a download is active.
-        if llm_state.download_active:
-            row.operator("bfacw.cancel_download", icon='CANCEL', text="Cancel")
+        # The cancel button must NOT live in the same row as the (disabled)
+        # download button — row.enabled above greys out the entire row,
+        # including Cancel.  It lives with the progress bar instead, with a
+        # fallback row for the pre-progress phase (download just started).
+        if llm_state.download_active and llm_state.download_kind == "model" \
+                and llm_state.download_progress_pct <= 0:
+            cancel_row = box.row(align=True)
+            cancel_row.operator("bfacw.cancel_download", icon='CANCEL', text="Cancel Download")
 
         # Always show progress/error areas (model downloads only).
         if llm_state.download_kind == "model":
             if llm_state.error:
-                box.label(text=llm_state.error, icon="ERROR")
+                err_lines = llm_state.error.split("\n")
+                for i, line in enumerate(err_lines):
+                    box.label(text=line, icon="ERROR" if i == 0 else 'NONE')
             if llm_state.download_progress:
                 prog_text = llm_state.download_progress
                 if llm_state.download_progress_eta:
@@ -954,6 +961,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 if pct > 0:
                     row = box.row(align=True)
                     row.progress(factor=pct / 100.0, type='BAR')
+                    if llm_state.download_active:
+                        row.operator("bfacw.cancel_download", icon='CANCEL', text="Cancel")
 
         # ── Scan for existing models ────────────────────────────
         box.label(text="Or use an existing model:", icon='FILE_FOLDER')
@@ -966,6 +975,12 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 text="Using: {:s}".format(os.path.basename(self.existing_model_path)),
                 icon='CHECKMARK',
             )
+
+        # ── Startup / runtime errors (not download-related) ──────
+        if llm_state.error and llm_state.download_kind != "model":
+            err_lines = llm_state.error.split("\n")
+            for i, line in enumerate(err_lines):
+                box.label(text=line, icon="ERROR" if i == 0 else 'NONE')
 
         # ── Current model status ─────────────────────────────────
         if llm_state.is_running:

@@ -888,12 +888,17 @@ def _wait_for_port(
     port: int,
     timeout: float = 15.0,
     interval: float = 1.0,
+    proc: "subprocess.Popen | None" = None,
 ) -> bool:
     """Wait for *port* to start accepting TCP connections.
 
     Polls ``socket.create_connection`` every *interval* seconds, up to
     *timeout* total.  Returns ``True`` as soon as the port accepts,
     ``False`` if the timeout expires.
+
+    If *proc* is given, the wait aborts early (returns ``False``) the moment
+    the process exits — so a crashed llama-server surfaces immediately
+    instead of hanging for the full timeout.
     """
     import time
     deadline = time.monotonic() + timeout
@@ -908,6 +913,12 @@ def _wait_for_port(
                 return True
         except (OSError, socket.error):
             pass
+        if proc is not None:
+            rc = proc.poll()
+            if rc is not None:
+                print("[🛠️Coworker] _wait_for_port: {:s}:{:d} — process exited early (rc={:d}), aborting wait".format(
+                    host, port, rc))
+                return False
         if attempt % 2 == 0:
             print("[🛠️Coworker] _wait_for_port: still waiting for {:s}:{:d} ({:.0f}s remaining)".format(
                 host, port, deadline - time.monotonic()))
@@ -1546,6 +1557,9 @@ def _openai_chat_completions(
 
     # Retry loop for transient failures (e.g. server just became ready
     # but the HTTP worker hasn't started yet).
+    # Also handles 503 Service Unavailable — llama-server returns this
+    # while the model is still loading (can take 30-120s for large models).
+    # We retry 503 with exponential backoff up to 120s total.
     # Also handles chat template crashes: custom GGUF templates (DavidAU
     # fine-tunes, etc.) may 500 on the ``tools`` parameter.  We inject
     # tool descriptions into the system prompt as text and retry without
@@ -1553,8 +1567,10 @@ def _openai_chat_completions(
     # the response.
     import time as _time
     max_retries = 3
+    max_503_retries = 60  # Up to ~120s with exponential backoff for model loading.
     tools_tried = bool(tools)
-    for attempt in range(max_retries):
+    _503_attempts = 0
+    for attempt in range(max_retries + max_503_retries):
         try:
             with urllib.request.urlopen(req, timeout=_STREAM_TIMEOUT) as resp:
                 raw = resp.read().decode()
@@ -1636,13 +1652,24 @@ def _openai_chat_completions(
                 data_bytes = json.dumps(body).encode()
                 req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
                 continue
+            # ── 503 Service Unavailable: model still loading ──────────
+            # llama-server returns 503 while the model is loading into
+            # memory (can take 30-120s for large models).  Retry with
+            # exponential backoff up to 120s total.
+            if isinstance(ex, urllib.error.HTTPError) and ex.code == 503:
+                _503_attempts += 1
+                backoff = min(2.0 * _503_attempts, 10.0)  # 2s, 4s, 6s, ... 10s max
+                if _503_attempts % 5 == 0:
+                    print("[🛠️Coworker] _openai_chat_completions: 503 attempt {:d} — "
+                          "model still loading, retrying in {:.0f}s...".format(_503_attempts, backoff))
+                _time.sleep(backoff)
+                continue
             if attempt < max_retries - 1:
                 print("[🛠️Coworker] _openai_chat_completions: attempt {:d}/{:d} FAILED — {:s}, retrying in 2s...".format(
                     attempt + 1, max_retries, str(ex)))
                 _time.sleep(2)
                 continue
-            print("[🛠️Coworker] _openai_chat_completions: all {:d} attempts FAILED — {:s}".format(
-                max_retries, str(ex)))
+            print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — {:s}".format(str(ex)))
             _agent_state.error = "LLM request failed: {:s}".format(str(ex))
             return None
     return None
@@ -2462,9 +2489,19 @@ def _run_conversation_turn_inner(
     # would fail with "connection refused".
     if llm_port_local is not None:
         print("[🛠️Coworker] run_conversation_turn: waiting for LLM on 127.0.0.1:{:d}...".format(llm_port_local))
-        if not _wait_for_port("127.0.0.1", llm_port_local, timeout=120.0):
+        from . import llm_manager as _llm_mgr
+        if not _wait_for_port(
+            "127.0.0.1", llm_port_local, timeout=120.0, proc=_llm_mgr.get_llama_process()
+        ):
             _agent_state.is_thinking = False
-            _agent_state.error = "LLM server did not become ready after 120s"
+            _log_tail = _llm_mgr.get_llama_server_log_tail()
+            if _log_tail:
+                _agent_state.error = (
+                    "LLM server did not become ready — llama-server exited or is stuck.\n\n"
+                    "--- llama-server.log (tail) ---\n{:s}".format(_log_tail)
+                )
+            else:
+                _agent_state.error = "LLM server did not become ready after 120s"
             if on_status:
                 on_status("Error: LLM server not ready")
             return history
@@ -3067,6 +3104,28 @@ def warmup_agent(
             print("[🛠️Coworker] warmup_agent: {:d} tools loaded".format(len(tools)))
     except Exception as ex:  # pylint: disable=broad-exception-caught
         print("[🛠️Coworker] warmup_agent: tool warmup failed — {:s}".format(str(ex)))
+
+    # 1.5 In local mode, only post the welcome once the LLM backend is
+    #     actually healthy.  Posting it unconditionally right after Popen
+    #     is a lie — a mid-range model takes 30-120s to load, and a crashed
+    #     llama-server would otherwise still get a "we're ready!" message
+    #     (the "welcome message happens, then closes" symptom).
+    try:
+        from . import llm_manager as _llm_mgr
+        if _llm_mgr.get_config().mode == "local" and not _llm_mgr.health_check():
+            _tail = _llm_mgr.get_llama_server_log_tail()
+            _detail = "\n\n--- llama-server.log (tail) ---\n{:s}".format(_tail) if _tail else ""
+            _msg = (
+                "LLM backend is not ready yet — wait for the model to load, "
+                "or check the llama-server log (last lines above).{:s}".format(_detail)
+            )
+            _agent_state.error = _msg
+            if on_status:
+                on_status("Error: LLM backend not ready")
+            print("[🛠️Coworker] warmup_agent: LLM backend not ready — welcome suppressed")
+            return
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[🛠️Coworker] warmup_agent: health pre-check failed — {:s}".format(str(ex)))
 
     # 2. Post welcome message into history.
     welcome = "Ok, now we are ready! How can I help?"

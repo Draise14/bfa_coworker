@@ -695,60 +695,104 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
 
         if llm_cfg.mode == "local":
             llm_state = llm_manager.get_state()
+
+            def _set_chat_status(msg: str) -> None:
+                bpy.app.timers.register(
+                    lambda m=msg: setattr(props, "chat_status", m) or _redraw_areas_safe(),
+                    first_interval=0.0,
+                )
+
             if not llm_state.is_running:
 
                 def _start_llm_backend():
                     existing_path = prefs.existing_model_path
                     if existing_path and os.path.isfile(existing_path):
-                        llm_manager.start_local_llama(model_path=existing_path)
+                        proc = llm_manager.start_local_llama(model_path=existing_path)
                     else:
-                        llm_manager.start_local_llama()
-                    def _update():
-                        state = llm_manager.get_state()
-                        if state.is_running:
-                            props.chat_status = "Warming up..."
-                            _redraw_areas(bpy.context)
-                            _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
-                            agent_controller.warmup_agent(
-                                on_status=lambda s: setattr(props, "chat_status", s),
-                                mcp_port=_mcp_port,
-                            )
-                            props.chat_status = "Connected"
-                        else:
-                            props.chat_status = "Error: " + (state.error or "LLM failed to start")
-                        _redraw_areas(bpy.context)
-                    bpy.app.timers.register(_update, first_interval=1.0)
+                        proc = llm_manager.start_local_llama()
+                    if proc is None:
+                        _err = llm_manager.get_state().error or "llama-server failed to start"
+                        agent_controller._agent_state.error = _err
+                        _set_chat_status("Error: " + _err)
+                        return
+                    # Wait for the model to actually load before claiming
+                    # readiness.  Posting the welcome right after Popen makes
+                    # it appear even when llama-server crashes at startup
+                    # ("welcome message happens, then closes") and the first
+                    # real turn then hangs 120s on a dead port.
+                    _set_chat_status("Loading model... (large models can take a few minutes)")
+                    if not llm_manager.wait_until_ready(timeout=300.0, proc=proc):
+                        _err = llm_manager.get_state().error or "llama-server did not become ready"
+                        agent_controller._agent_state.error = _err
+                        _set_chat_status("Error: " + _err)
+                        return
+                    # Warm up tools + post welcome message (background thread).
+                    _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+                    agent_controller.warmup_agent(
+                        on_status=lambda s: bpy.app.timers.register(
+                            lambda s=s: setattr(props, "chat_status", s) or _redraw_areas_safe(),
+                            first_interval=0.0,
+                        ),
+                        mcp_port=_mcp_port,
+                    )
+                    # Mark connected on the main thread after warmup completes.
+                    _set_chat_status("Connected")
 
                 import threading
                 thread = threading.Thread(target=_start_llm_backend, daemon=True)
                 thread.start()
                 props.chat_status = "Starting LLM backend..."
             else:
+                # Already running — warmup in background thread, but only
+                # after the model has actually finished loading.
+                def _warmup_existing():
+                    if llm_manager.get_config().mode == "local":
+                        _set_chat_status("Loading model... (large models can take a few minutes)")
+                        if not llm_manager.wait_until_ready(
+                            timeout=300.0, proc=llm_manager.get_llama_process()
+                        ):
+                            _err = llm_manager.get_state().error or "llama-server did not become ready"
+                            agent_controller._agent_state.error = _err
+                            _set_chat_status("Error: " + _err)
+                            return
+                    _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+                    agent_controller.warmup_agent(
+                        on_status=lambda s: bpy.app.timers.register(
+                            lambda s=s: setattr(props, "chat_status", s) or _redraw_areas_safe(),
+                            first_interval=0.0,
+                        ),
+                        mcp_port=_mcp_port,
+                    )
+                    _set_chat_status("Connected")
+                threading.Thread(target=_warmup_existing, daemon=True).start()
                 props.chat_status = "Warming up..."
-                _redraw_areas(context)
-                _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
-                agent_controller.warmup_agent(
-                    on_status=lambda s: setattr(props, "chat_status", s),
-                    mcp_port=_mcp_port,
-                )
-                props.chat_status = "Connected"
         else:
             # In remote mode, no LLM backend is started.
+            def _warmup_remote():
+                _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+                agent_controller.warmup_agent(
+                    on_status=lambda s: bpy.app.timers.register(
+                        lambda s=s: setattr(props, "chat_status", s) or _redraw_areas_safe(),
+                        first_interval=0.0,
+                    ),
+                    mcp_port=_mcp_port,
+                )
+                bpy.app.timers.register(
+                    lambda: setattr(props, "chat_status", "Connected") or _redraw_areas_safe(),
+                    first_interval=0.0,
+                )
+            threading.Thread(target=_warmup_remote, daemon=True).start()
             props.chat_status = "Warming up..."
-            _redraw_areas(context)
-            _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
-            agent_controller.warmup_agent(
-                on_status=lambda s: setattr(props, "chat_status", s),
-                mcp_port=_mcp_port,
-            )
-            props.chat_status = "Connected"
 
         # Load chat history.
         history = _load_chat_history()
         if history:
             agent_controller._agent_state.conversation_history = history
 
-        if llm_cfg.mode != "local" or llm_manager.get_state().is_running:
+        # Local-mode status is driven by the background thread (Starting →
+        # Loading → Connected / Error: ...); only remote mode marks
+        # "Connected" here.
+        if llm_cfg.mode != "local":
             props.chat_status = "Connected"
 
         _redraw_areas(context)
@@ -870,12 +914,18 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
 
         row = layout.row()
         is_ok = (mcp_to_blender_server.is_running() if is_harness else state.mcp_server_running)
-        row.label(text="Status: {:s}".format(status), icon=(
+        row.label(text="Status:", icon=(
             'CHECKMARK' if is_ok and not state.is_thinking else
             'SORTTIME' if state.is_thinking else
             'ERROR' if state.error else
             'X'
         ))
+        if len(status) > 40 or "\n" in status:
+            # Long status (e.g. startup errors with the llama-server log tail)
+            # — wrap across multiple lines instead of clipping to one.
+            _draw_multiline(layout, status, width=_WRAP_WIDTH)
+        else:
+            row.label(text=status)
 
         # Liveness dots (Tier 1).
         if not is_harness and state.mcp_server_running:

@@ -16,10 +16,11 @@ __all__ = (
     "_BFACW_OT_select_preset",
     "_BFACW_OT_select_existing_model",
     "_BFACW_OT_open_models_dir",
+    "_BFACW_OT_set_ctx_preset",
 )
 
 import bpy  # pylint: disable=import-error
-from bpy.props import StringProperty  # pylint: disable=import-error
+from bpy.props import IntProperty, StringProperty  # pylint: disable=import-error
 
 import os
 import threading
@@ -462,6 +463,34 @@ class _BFACW_OT_select_preset(bpy.types.Operator):  # type: ignore[misc]
             # Trigger the update handler manually since EnumProperty
             # assignment doesn't always fire the callback on all platforms.
             prefs._update_model_preset(context)
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# Set Context Size Preset
+
+class _BFACW_OT_set_ctx_preset(bpy.types.Operator):  # type: ignore[misc]
+    """Set the LLM context window size from a preset button."""
+    bl_idname = "bfacw.set_ctx_preset"
+    bl_label = "Set Context Size"
+    bl_description = "Set the context window size for the local LLM"
+
+    value: IntProperty(  # type: ignore[valid-type]
+        name="Context Size",
+        description="Token count for the preset (0 = Custom, shows the manual slider)",
+        default=0,
+        min=0,
+        max=262144,
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        if self.value > 0:
+            prefs.local_ctx_size = self.value
+            prefs.local_ctx_preset = str(self.value)
+        else:
+            # Custom: keep the current value, just reveal the manual slider.
+            prefs.local_ctx_preset = "custom"
         return {"FINISHED"}
 
 

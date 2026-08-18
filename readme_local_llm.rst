@@ -32,6 +32,26 @@ That's it. No manual ``llama.cpp`` install, no PATH setup, no separate
 chat client.
 
 
+Context size presets
+====================
+
+You don't need to think about the context window — the add-on picks a
+safe size for you:
+
+- **Preset buttons** — the context window is set with one-click buttons
+  (``4K`` / ``8K`` / ``16K`` / ``32K`` / ``64K`` / ``128K``) instead of a
+  free-form slider, so it's hard to misconfigure.
+- **Hardware-aware recommendation** — when you pick a model preset, the
+  add-on detects your system RAM (and VRAM via ``nvidia-smi`` when a GPU
+  backend is used) and selects the largest preset that fits: model weights
+  *and* the KV cache must fit in memory. The recommendation is shown in
+  the preferences panel (``Recommended for your hardware ...``).
+- **Custom override** — the ``Custom`` button reveals a manual slider for
+  advanced users. Only use sizes larger than the recommendation if you
+  know your memory can take it — a context that is too large is the most
+  common cause of llama-server crashing at startup (GPU out of memory).
+
+
 Troubleshooting
 ===============
 

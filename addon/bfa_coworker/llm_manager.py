@@ -39,6 +39,13 @@ __all__ = (
     "get_config",
     "_get_models_dir",
     "_set_download_progress",
+    "detect_system_ram_gb",
+    "detect_vram_gb",
+    "recommend_context_size",
+    "hardware_context_hint",
+    "resolve_gpu_backend",
+    "ctx_preset_label",
+    "ctx_preset_sizes",
 )
 
 import io
@@ -1167,6 +1174,166 @@ def _detect_gpu_backend() -> str:
     # 3. Fallback to CPU.
     print("[🛠️Coworker] _detect_gpu_backend: no compatible GPU detected -> cpu")
     return "cpu"
+
+
+def resolve_gpu_backend(backend: str) -> str:
+    """Resolve a "auto" backend selector to a concrete backend name.
+
+    Returns ``cuda``, ``vulkan``, or ``cpu`` — the backend llama-server will
+    actually use (relevant for memory planning).
+    """
+    if backend != "auto":
+        return backend
+    return _detect_gpu_backend()
+
+
+# ---------------------------------------------------------------------------
+# Hardware-aware context-size recommendation
+#
+# A 64K+ context window on a 27B-class model puts many GB of KV cache into
+# VRAM/RAM and is the #1 cause of GPU out-of-memory crashes at startup.  We
+# detect the machine's memory and recommend a context size that fits, so new
+# users get something that "just works" instead of a slider to misconfigure.
+
+# Standard context sizes exposed as one-click preset buttons.
+ctx_preset_sizes: tuple[int, ...] = (4096, 8192, 16384, 32768, 65536, 131072)
+
+
+def ctx_preset_label(tokens: int) -> str:
+    """Return a short label like ``32K`` for a token count."""
+    return "{:d}K".format(max(1, tokens // 1024))
+
+
+def detect_system_ram_gb() -> float | None:
+    """Return total physical RAM in GB, or ``None`` if undetectable."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            class _MEMORYSTATUSEX(ctypes.Structure):  # type: ignore[misc]
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            stat = _MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                return stat.ullTotalPhys / (1024 ** 3)
+        elif sys.platform.startswith("linux"):
+            with open("/proc/meminfo", "r", encoding="utf-8") as fh:
+                for line in fh:
+                    if line.startswith("MemTotal:"):
+                        return int(line.split()[1]) / (1024 ** 2)
+        elif sys.platform == "darwin":
+            result = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip().isdigit():
+                return int(result.stdout.strip()) / (1024 ** 3)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return None
+
+
+def detect_vram_gb() -> float | None:
+    """Return the VRAM (GB) of the first NVIDIA GPU, or ``None``."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            first = result.stdout.strip().splitlines()[0].strip()
+            return float(first) / 1024.0
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired, ValueError):
+        pass
+    return None
+
+
+_hardware_detect_cache: dict[str, object] = {}
+_HARDWARE_CACHE_TTL = 30.0
+
+
+def _detect_hardware_cached() -> tuple[float | None, float | None]:
+    """Return (ram_gb, vram_gb), cached briefly so UI redraws don't spawn nvidia-smi."""
+    import time as _time
+    now = _time.monotonic()
+    if _hardware_detect_cache and now - float(_hardware_detect_cache.get("t", 0.0)) < _HARDWARE_CACHE_TTL:
+        return float(_hardware_detect_cache.get("ram") or 0.0) or None, \
+            float(_hardware_detect_cache.get("vram") or 0.0) or None
+    ram = detect_system_ram_gb()
+    vram = detect_vram_gb()
+    _hardware_detect_cache.clear()
+    _hardware_detect_cache["t"] = now
+    _hardware_detect_cache["ram"] = ram or 0.0
+    _hardware_detect_cache["vram"] = vram or 0.0
+    return ram, vram
+
+
+def recommend_context_size(
+    model_gb: float = 0.0,
+    backend: str = "auto",
+    ram_gb: float | None = None,
+    vram_gb: float | None = None,
+) -> int:
+    """Recommend a context size (tokens) that fits the detected hardware.
+
+    Heuristic: assume ~256 KB of KV-cache memory per token of context (an
+    upper bound for 27B-class GQA models — smaller models need far less),
+    i.e. ~4096 tokens per GB of budget.  The KV cache must fit in VRAM when
+    a GPU backend is used, otherwise in system RAM.  Returns one of
+    :data:`ctx_preset_sizes`.
+    """
+    if ram_gb is None or vram_gb is None:
+        _ram, _vram = _detect_hardware_cached()
+        if ram_gb is None:
+            ram_gb = _ram
+        if vram_gb is None:
+            vram_gb = _vram
+    resolved = resolve_gpu_backend(backend)
+    if resolved in ("cuda", "vulkan") and vram_gb:
+        # Weights + KV cache both live in VRAM; leave 1.5 GB headroom.
+        budget_gb = max(vram_gb - model_gb - 1.5, 1.5)
+    elif ram_gb:
+        # Weights in RAM; leave 2 GB for the OS + Blender.
+        budget_gb = max(ram_gb - model_gb - 2.0, 2.0)
+    else:
+        return 32768  # Hardware unknown — safe mid-range default.
+    tokens = int(budget_gb * 4096)
+    tokens = max(4096, min(tokens, 131072))
+    # Snap down to the nearest standard preset size.
+    chosen = ctx_preset_sizes[0]
+    for size in ctx_preset_sizes:
+        if size <= tokens:
+            chosen = size
+        else:
+            break
+    return chosen
+
+
+def hardware_context_hint(model_gb: float = 0.0, backend: str = "auto") -> str:
+    """One-line hint for the preferences UI: recommended size for this machine."""
+    ram, vram = _detect_hardware_cached()
+    recommended = recommend_context_size(model_gb, backend, ram, vram)
+    parts: list[str] = []
+    if ram:
+        parts.append("{:.0f} GB RAM".format(ram))
+    if vram:
+        parts.append("{:.0f} GB VRAM".format(vram))
+    hw = " · ".join(parts) if parts else "unknown hardware"
+    return (
+        "Recommended for your hardware ({:s}): {:s} \u2014 larger sizes need much "
+        "more memory and can crash startup.".format(hw, ctx_preset_label(recommended))
+    )
 
 
 def cancel_download() -> None:

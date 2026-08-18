@@ -38,7 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Generative Plugin Foundation** — Tier 5 foundation: image gen plugins with auto-discovery, controller, and plugin base classes. Supports audio, image, text, and video plugin types, usability still WIP (not usable).
 - **Version-Aware Skills System** — New searchable domain skills system with version-aware Blender API skills (`blender_50_51.md`, `blender_52.md`, `blender_53.md`). User custom skills support.
 - **Copy Content Button** — New button in chat UI that copies the full conversation history to clipboard.
-- **Stepped Benchmark Tests** — Replaced single-prompt benchmarks with 6 multi-step test suites (Scene Build, Animation, Modifiers, Assets+Mat, Baseline, Error Handling). Steps are clicked in order, each building on the last. Progress tracked per-suite with Reset support.
+- **Stepped Benchmark Tests** — Replaced single-prompt benchmarks with 8 multi-step test suites (Scene Build, Animation, Modifiers, Assets+Mat, Baseline, Error Handling, Vision: Camera, Vision: Place). Steps are clicked in order, each building on the last. Progress tracked per-suite with Reset support.
+- **Vision Test Suites** — Two new multi-step suites for vision-capable models: `vision_camera` (build a stage, then place/reframe/verify a camera by looking at `get_screenshot_of_area_as_image` viewport screenshots) and `vision_relative` (place a cup on a table, stack a marble on it, center a cone on a pedestal, and butt a cube flush — each verified visually via screenshots with iterative adjustment).
 - **Tool Testing** — Added `tests/tool_smoke_test.py` for automated tool smoke testing.
 
 ### Changed

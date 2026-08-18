@@ -277,6 +277,106 @@ def _mmproj_mismatch_hint(model_path: Path | str | None) -> str:
 
 
 # ---------------------------------------------------------------------------
+# GPU out-of-memory detection
+#
+# When --n-gpu-layers 99 puts the weights AND the KV cache into VRAM, a GPU
+# without enough free memory dies with a Vulkan/CUDA OOM. The failure often
+# surfaces as an access-violation crash (exit code 0xC0000005) instead of a
+# clean error message, so we match the log and decode the exit code.
+
+_GPU_OOM_MARKERS = (
+    "ggml_vulkan",
+    "erroroutofdevicememory",
+    "erroroutofhostmemory",
+    "vk::device::allocatememory",
+    "failed to allocate vulkan0 buffer",
+    "failed to allocate buffer for kv cache",
+    "cuda error: out of memory",
+    "cudamalloc",
+    "out of device memory",
+    "failed to allocate gpu buffer",
+)
+
+
+def _log_looks_like_gpu_oom(tail: str) -> bool:
+    """True when the llama-server log tail shows a GPU out-of-memory failure."""
+    lowered = tail.lower()
+    return any(marker in lowered for marker in _GPU_OOM_MARKERS)
+
+
+def _gpu_oom_hint() -> str:
+    """Actionable hint when llama-server dies because the GPU ran out of memory."""
+    ctx = _config.local_ctx_size
+    backend = _config.llama_backend or "auto"
+    model_size = ""
+    if _last_launched_model_path:
+        try:
+            size_gb = Path(_last_launched_model_path).stat().st_size / (1024 ** 3)
+            model_size = " (model file is {:.1f} GB)".format(size_gb)
+        except OSError:
+            pass
+    ctx_part = ""
+    if ctx and ctx >= 65536:
+        ctx_part = (
+            " You are using a {:d}-token context window — at that size the KV cache "
+            "alone is several GB of VRAM on a 27B-class model, so it usually does "
+            "not fit alongside the weights.".format(ctx)
+        )
+    elif ctx and ctx > 32768:
+        ctx_part = (
+            " You are using a {:d}-token context window, which makes the KV cache "
+            "very large.".format(ctx)
+        )
+    backend_part = ""
+    if backend == "vulkan":
+        backend_part = (
+            " This log is from the Vulkan backend (ggml_vulkan). If you have an "
+            "NVIDIA GPU, switch the backend to CUDA and use the addon's "
+            "'Download llama-server' button so it fetches the CUDA build — Vulkan "
+            "is often less memory-efficient, and on laptops it may pick the "
+            "integrated GPU. Check the 'ggml_vulkan: Found N devices' line in "
+            "llama-server.log for which device was selected."
+        )
+    return (
+        "The GPU ran out of memory while loading the model{:s}. With --n-gpu-layers "
+        "99 both the weights and the KV cache are placed in VRAM.{:s}{:s}\n"
+        "Fixes to try:\n"
+        "  1. Reduce the context size (e.g. 32768 instead of {:d}) — the KV cache "
+        "is the biggest VRAM consumer.\n"
+        "  2. Lower --n-gpu-layers so part of the model stays in system RAM "
+        "(llama_backend / GPU layers in preferences).\n"
+        "  3. Close other GPU-heavy apps, or run the model on CPU if the GPU is "
+        "too small for this model.".format(
+            model_size, ctx_part, backend_part, ctx or 65536,
+        )
+    )
+
+
+# Windows NTSTATUS crash codes: llama-server segfaulting shows up as a large
+# negative-looking exit code (e.g. 3221225477 = 0xC0000005 = access violation).
+_WIN_CRASH_CODES: dict[int, str] = {
+    0xC0000005: "ACCESS_VIOLATION — crashed, often a GPU driver / OOM issue",
+    0xC000001D: "ILLEGAL_INSTRUCTION — the CPU lacks an instruction this build needs (try another llama-server build)",
+    0xC0000374: "HEAP_CORRUPTION — crashed, possible driver bug",
+    0xC0000409: "STACK_BUFFER_OVERRUN — crashed, possible driver bug",
+    0xC00000FD: "STACK_OVERFLOW",
+    0xC0000135: "DLL_NOT_FOUND — a required DLL is missing (use the bundled build)",
+    0xC0000142: "DLL_INIT_FAILED",
+    0xC0000094: "INTEGER_DIVIDE_BY_ZERO",
+    0xC000000D: "INVALID_PARAMETER",
+    0xC000013A: "CTRL_C_EXIT",
+}
+
+
+def _describe_exit_code(rc: int) -> str:
+    """Return a readable description for a Windows crash exit code."""
+    unsigned = rc & 0xFFFFFFFF
+    name = _WIN_CRASH_CODES.get(unsigned, "")
+    suffix = (" — " + name) if name else ""
+    return " (0x{:08X}{:s})".format(unsigned, suffix)
+
+
+# ---------------------------------------------------------------------------
 # Data types
 
 @dataclass
@@ -2091,8 +2191,12 @@ def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = No
             return True
         if proc is not None and proc.poll() is not None:
             tail = get_llama_server_log_tail()
-            msg = "llama-server exited during startup (exit code {:d}) — check the model file, mmproj, and port".format(
-                proc.returncode)
+            msg = "llama-server exited during startup (exit code {:d}{:s}) — check the model file, mmproj, GPU memory, and port".format(
+                proc.returncode, _describe_exit_code(proc.returncode))
+            # The GPU OOM hint doesn't need the model path, so it runs first and
+            # is not gated on _last_launched_model_path.
+            if tail and _log_looks_like_gpu_oom(tail):
+                msg += "\n\n{:s}".format(_gpu_oom_hint())
             # A truncated/corrupt GGUF is the most common local-model cause:
             # llama-server dies with "missing tensor" after a few dozen layers.
             # Surface an actionable "re-download" hint when we can confirm it.

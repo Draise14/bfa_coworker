@@ -34,6 +34,21 @@ In edit mode use the bmesh API, not the regular mesh data API.
 Always call `bmesh.update_edit_mesh(mesh)` or `bm.to_mesh(mesh)` after edits —
 forgetting this silently loses all changes.
 
+`bpy.context` has NO `selected_edges` / `selected_faces` / `selected_verts` attributes —
+edit-mode selections live on the mesh data, not on context. Read them with bmesh:
+
+```python
+import bmesh
+bm = bmesh.from_edit_mesh(bpy.context.active_object.data)
+sel_edges = [e for e in bm.edges if e.select]
+sel_faces = [f for f in bm.faces if f.select]
+sel_verts = [v for v in bm.verts if v.select]
+```
+
+To write selections, set `e.select` / `f.select` / `v.select` then call
+`bm.select_flush_mode()`, or use `bmesh.ops.select_*`. `bpy.context.selected_objects`
+IS valid — but only in object mode, for objects.
+
 ## Return Values
 
 Return structured data (dicts, lists) from executed code — not print() output.
@@ -98,18 +113,37 @@ For multiple independent objects, either:
 Different primitive operators use DIFFERENT size keywords — using the wrong
 one raises ``TypeError: keyword "..." unrecognized``:
 
-| Operator | Size keyword |
+| Operator | Keywords (there is no `ring_segments` — that does NOT exist) |
 |---|---|
 | `primitive_cube_add` | `size=` |
 | `primitive_monkey_add` | `size=` |
 | `primitive_plane_add` | `size=` |
-| `primitive_grid_add` | `size=` |
-| `primitive_uv_sphere_add` | `radius=` |
-| `primitive_circle_add` | `radius=` |
-| `primitive_cylinder_add` | `radius=` + `depth=` |
-| `primitive_cone_add` | `radius1=` + `radius2=` + `depth=` |
-| `primitive_ico_sphere_add` | `radius=` |
-| `primitive_torus_add` | `major_radius=` + `minor_radius=` |
+| `primitive_grid_add` | `size=` + `x_subdivisions=` + `y_subdivisions=` |
+| `primitive_uv_sphere_add` | `radius=` + `segments=` + `ring_count=` |
+| `primitive_circle_add` | `radius=` + `vertices=` |
+| `primitive_cylinder_add` | `radius=` + `depth=` + `vertices=` |
+| `primitive_cone_add` | `radius1=` + `radius2=` + `depth=` + `vertices=` |
+| `primitive_ico_sphere_add` | `radius=` + `subdivisions=` |
+| `primitive_torus_add` | `major_radius=` + `minor_radius=` + `major_segments=` + `minor_segments=` |
 
 When in doubt, call the operator with NO keyword arguments first to use
-defaults, then read ``bpy.context.active_object`` to inspect/set dimensions.
+defaults, then read ``bpy.context.active_object`` to inspect/set dimensions,
+or print the operator docstring: ``print(bpy.ops.mesh.primitive_uv_sphere_add.__doc__)``
+to see its real parameters.
+
+## Stale References ("StructRNA has been removed")
+
+Never reuse a reference to an object/material/mesh captured in an **earlier tool
+call**. Between calls the system may auto-undo a failed attempt — which
+**deletes** the objects it created — so old handles point at removed datablocks
+and raise ``ReferenceError: StructRNA of type ... has been removed``.
+
+Always re-fetch references fresh right before each use:
+
+```python
+obj = bpy.data.objects.get("Bouncing Ball")  # or bpy.context.active_object
+if obj is None:
+    obj = bpy.ops.mesh.primitive_uv_sphere_add()  # recreate if missing
+```
+
+Guard lookups with ``try/except ReferenceError`` and re-acquire on failure.

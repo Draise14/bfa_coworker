@@ -59,9 +59,18 @@ Troubleshooting
      is unambiguous, and runs vision models text-only instead of crashing
      when no matching projector is found.  Fix stray files by deleting them
      and re-downloading via the **Download & Start** button.
-   * **Context size too large** — 64K context on a 27B model needs many GB
-     of KV-cache memory.  If startup fails, lower **Context Size** in
-     preferences (16K-32K is plenty for agent work).
+   * **GPU out of memory** — with ``--n-gpu-layers 99`` the weights *and*
+     the KV cache go into VRAM, so a GPU without enough free memory dies
+     mid-load (often as a crash with exit code ``0xC0000005`` = access
+     violation).  The log shows ``ggml_vulkan ... ErrorOutOfDeviceMemory``
+     or ``CUDA error: out of memory`` and the add-on now explains it and
+     suggests fixes: lower **Context Size** (64K context on a 27B model
+     needs many GB of KV-cache memory; 16K-32K is plenty for agent work),
+     lower ``--n-gpu-layers`` so part of the model stays in RAM, or switch
+     the backend to CUDA (with the bundled **Download llama-server**
+     button) if you have an NVIDIA GPU — the WinGet/PATH build is Vulkan,
+     which is often less memory-efficient and may pick an integrated GPU
+     on laptops.
 
 
 Components

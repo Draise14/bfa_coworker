@@ -412,6 +412,46 @@ def _execute_code(
                     "To read existing F-Curves, use the read-only helper from the animation.md skill. "
                     "Never access `action.fcurves` directly."
                 )
+            if "'Context' object has no attribute 'selected_" in tb_str:
+                tb_str += (
+                    "\n\nHINT: `bpy.context` has NO `selected_edges` / `selected_faces` / "
+                    "`selected_verts` attribute — edit-mode selections live on the mesh data, "
+                    "not on context. Read them with bmesh:\n"
+                    "    import bmesh\n"
+                    "    bm = bmesh.from_edit_mesh(bpy.context.active_object.data)\n"
+                    "    sel_edges = [e for e in bm.edges if e.select]\n"
+                    "    sel_faces = [f for f in bm.faces if f.select]\n"
+                    "    sel_verts = [v for v in bm.verts if v.select]\n"
+                    "To write selections, set `e.select` / `f.select` / `v.select` and call "
+                    "`bm.select_flush_mode()`, or use `bmesh.ops.select_*`. "
+                    "`bpy.context.selected_objects` IS valid — but only in OBJECT mode "
+                    "for objects."
+                )
+            if "Converting py args to operator properties" in tb_str and "unrecognized" in tb_str:
+                tb_str += (
+                    "\n\nHINT: You passed a keyword argument that this operator does not accept "
+                    "(e.g. `ring_segments` — the UV sphere uses `segments` and `ring_count`). "
+                    "Discover the real parameters from the operator docstring:\n"
+                    "    print(bpy.ops.mesh.primitive_uv_sphere_add.__doc__)\n"
+                    "Common primitive keywords: cube/plane/monkey/grid: `size=`; "
+                    "uv_sphere: `segments=` + `ring_count=`; ico_sphere: `subdivisions=`; "
+                    "circle: `vertices=`; cylinder/cone: `vertices=` + `radius=`/`radius1=` "
+                    "+ `depth=`; torus: `major_radius=` + `minor_radius=` + "
+                    "`major_segments=` + `minor_segments=`."
+                )
+            if "StructRNA of type " in tb_str and "has been removed" in tb_str:
+                tb_str += (
+                    "\n\nHINT: You are using a STALE reference to a datablock that no longer "
+                    "exists. This usually happens because a previous failed attempt was "
+                    "automatically undone (deleting the objects it created) while you kept "
+                    "the old reference, or because you deleted/replaced an object. "
+                    "Re-fetch references fresh right before each use:\n"
+                    "    obj = bpy.data.objects.get('Name')  # or bpy.context.active_object\n"
+                    "    if obj is None:\n"
+                    "        ...create or find it again...\n"
+                    "Never reuse an object/material reference captured in an earlier tool call, "
+                    "and guard lookups with try/except ReferenceError."
+                )
             response: dict[str, object] = {"status": "error", "message": tb_str}
             if captured.stdout:
                 response["stdout"] = captured.stdout

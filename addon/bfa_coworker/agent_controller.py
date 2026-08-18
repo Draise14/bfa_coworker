@@ -1939,10 +1939,24 @@ def _extract_error_signature(result_text: str) -> str:
     if '"status": "error"' not in result_text:
         return ""
     import re
-    m = re.search(r'"message":\s*"([^"]*(?:\\.[^"]*)*)"', result_text, re.DOTALL)
+    m = re.search(r'"message":\s*"', result_text)
     if not m:
         return ""
-    raw = m.group(1).replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+    # The closing quote is always the LAST '"' in the result text — true for
+    # escaped JSON and for the unescaped re-serialization produced by
+    # _trim_tool_result alike, so messages with embedded quotes (e.g.
+    # `File "<string>"` tracebacks) are captured in full.
+    end = result_text.rfind('"', m.end())
+    if end == -1:
+        return ""
+    raw = result_text[m.end():end]
+    # Unescape JSON escapes; a no-op when the text is already raw.
+    raw = raw.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+    # Drop any appended "HINT: ..." guidance block — the signature must be the
+    # actual error line, not the tail of the hint text.
+    hint_idx = raw.find("\n\nHINT:")
+    if hint_idx != -1:
+        raw = raw[:hint_idx]
     lines = raw.strip().splitlines()
     for line in reversed(lines):
         stripped = line.strip()
@@ -1972,6 +1986,17 @@ def _spiral_corrective_message(error_sig: str) -> str:
             "[System: You keep getting a 'Context missing' error. "
             "Check that the required context (active object, selected objects, etc.) "
             "exists before calling this operator.]"
+        )
+    if "no attribute 'selected_" in sig_lower:
+        return (
+            "[System: You keep calling a non-existent `bpy.context.selected_*` attribute "
+            "(e.g. selected_edges, selected_faces, selected_verts). Blender does not expose "
+            "edit-mode selections on context. Read them with bmesh:\n"
+            "    import bmesh\n"
+            "    bm = bmesh.from_edit_mesh(bpy.context.active_object.data)\n"
+            "    sel = [e for e in bm.edges if e.select]\n"
+            "Use `bpy.context.selected_objects` only for object-mode object selection. "
+            "Fix the code \u2014 do not retry it verbatim.]"
         )
     return (
         "[System: You've hit the same error multiple times in a row. "

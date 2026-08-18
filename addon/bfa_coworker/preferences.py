@@ -42,6 +42,21 @@ from .shared import (
 )
 
 
+def _download_status_icon(msg: str) -> str:
+    """Return a green checkmark icon once a download has completed.
+
+    Completion messages are the only ones that start with these prefixes;
+    everything else stays the blue info icon.
+    """
+    if (
+        msg.startswith("Download complete")
+        or msg.startswith("Model already downloaded")
+        or msg.startswith("llama-server installed")
+    ):
+        return "CHECKMARK"
+    return "INFO"
+
+
 class _State:
     """
     Module-level runtime state that is not persisted across sessions.
@@ -693,6 +708,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             ("assets_materials", "Assets+Mat", 'TEXTURE',             5),
             ("baseline",      "Baseline",      'CONSOLE',             6),
             ("error_handling","Errors",        'ERROR',               3),
+            ("vision_camera", "Vision: Camera", 'CAMERA_DATA',         4),
+            ("vision_relative", "Vision: Place", 'SNAP_ON',            5),
         ]
 
         from . import operators_agent as _oa_suite
@@ -853,14 +870,18 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         # Unified progress block for llama-server download.
         if llm_state.download_kind == "llama_server":
             if llm_state.download_progress:
-                box.label(text=llm_state.download_progress, icon='INFO')
+                box.label(
+                    text=llm_state.download_progress,
+                    icon=_download_status_icon(llm_state.download_progress),
+                )
             pct = llm_state.download_progress_pct
             if pct > 0:
                 row = box.row(align=True)
                 row.progress(factor=pct / 100.0, type='BAR')
             if llm_state.download_active:
                 row = box.row(align=True)
-                row.operator("bfacw.cancel_download", icon='CANCEL', text="Cancel")
+                # Icon-only (text="") — the operator's bl_label shows as tooltip.
+                row.operator("bfacw.cancel_download", icon='CANCEL', text="")
 
         # ── Recommended Models (presets) ─────────────────────────
         box.label(text="Pick a Model", icon='VIEWZOOM')
@@ -944,7 +965,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         if llm_state.download_active and llm_state.download_kind == "model" \
                 and llm_state.download_progress_pct <= 0:
             cancel_row = box.row(align=True)
-            cancel_row.operator("bfacw.cancel_download", icon='CANCEL', text="Cancel Download")
+            # Icon-only (text="") — the operator's bl_label shows as tooltip.
+            cancel_row.operator("bfacw.cancel_download", icon='CANCEL', text="")
 
         # Always show progress/error areas (model downloads only).
         if llm_state.download_kind == "model":
@@ -956,13 +978,17 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 prog_text = llm_state.download_progress
                 if llm_state.download_progress_eta:
                     prog_text = "{:s}  |  {:s}".format(prog_text, llm_state.download_progress_eta)
-                box.label(text=prog_text, icon='INFO')
+                box.label(
+                    text=prog_text,
+                    icon=_download_status_icon(llm_state.download_progress),
+                )
                 pct = llm_state.download_progress_pct
                 if pct > 0:
                     row = box.row(align=True)
                     row.progress(factor=pct / 100.0, type='BAR')
                     if llm_state.download_active:
-                        row.operator("bfacw.cancel_download", icon='CANCEL', text="Cancel")
+                        # Icon-only (text="") — the operator's bl_label shows as tooltip.
+                        row.operator("bfacw.cancel_download", icon='CANCEL', text="")
 
         # ── Scan for existing models ────────────────────────────
         box.label(text="Or use an existing model:", icon='FILE_FOLDER')

@@ -524,7 +524,7 @@ graph TB
 - 🔧 **{len(tools)}** MCP tools available
 - 🧠 **16** Curated model presets (Flagship, Mid-Range, Lightweight)
 - ☁️ **10** Remote provider presets (OpenRouter)
-- 🧪 **6** Built-in test suites
+- 🧪 **8** Built-in test suites
 - 🎨 **4** Generative plugin types (Image, Video, Audio, Text)
 """
 
@@ -2434,7 +2434,7 @@ Located in `tests/integration/`:
 - `test_blender_mcp_with_llm.py` — End-to-end tests with a real LLM
 
 ### Built-in Test Suites
-The add-on includes 6 multi-step test suites accessible from the Diagnostics panel:
+The add-on includes 8 multi-step test suites accessible from the Diagnostics panel:
 
 | Suite | Steps | Description |
 |-------|-------|-------------|
@@ -2444,6 +2444,8 @@ The add-on includes 6 multi-step test suites accessible from the Diagnostics pan
 | Assets + Materials | 5 | HDRI, textures, glass material, three-point lighting |
 | Baseline | 6 | General capability baseline test |
 | Error Handling | 3 | Tests error recovery and graceful failure |
+| Vision: Camera | 4 | Vision models: camera placement + reframing verified via viewport screenshots |
+| Vision: Place | 5 | Vision models: stacking and relative placement verified visually via screenshots |
 
 ---
 

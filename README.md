@@ -283,6 +283,8 @@ order, and each builds on the previous one.
 | **Assets+Mat** | 5 | Poly Haven HDRI download, shaderball creation, texture download, glass material, three-point lighting + render |
 | **Baseline** | 6 | Mini Stonehenge: stone ring → lintels → ground → stone material → dramatic lighting → camera + render |
 | **Errors** | 3 | Vague prompt ("make it nicer"), impossible request, contradiction — tests graceful failure |
+| **Vision: Camera** | 4 | For vision models: build a product stage → place a camera → reframe to a hero low-angle → verify the final composition, each step verified by **looking at viewport screenshots** |
+| **Vision: Place** | 5 | For vision models: build a table → place a cup **on top** of it → stack a marble on the cup → center a cone on a pedestal → place a cube flush beside it, each verified by **looking at screenshots** and iterating |
 
 ### How to Run
 
@@ -301,6 +303,10 @@ order, and each builds on the previous one.
 - **Error handling** — Does it fail gracefully on bad prompts?
 - **Model comparison** — Run the same suite on different models (e.g.
   Mistral 24B vs. Gemma 4 26B) and compare results.
+- **Vision** — The two vision suites (Camera, Place) are for vision-capable
+  models: they must interpret `get_screenshot_of_area_as_image` screenshots
+  to verify framing and object placement. Text-only models will skip the
+  visual check and likely fail the iteration steps.
 
 ### Logging
 

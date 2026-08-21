@@ -107,21 +107,15 @@ def get_gen_controller():
 # Only the "custom" entry and a simple flat list — the UI categorizes them visually.
 MODEL_PRESET_ITEMS: list[tuple[str, str, str]] = [
     ("_custom", "Custom (manual entry)", "Manually specify repo ID and filename"),
-    ("mistral_small_24b_q4", "Mistral Small 3.1 24B (Q4_K_M)", "[Mid] 12-16 GB RAM, ~14 GB disk"),
-    ("gemma4_26b_q4", "Gemma 4 26B A4B (UD-Q4_K_M)", "[Mid] 16-20 GB RAM, ~17 GB disk"),
-    ("gemma3_27b_q4", "Gemma 3 27B (Q4_K_M)", "[Mid] 16-20 GB RAM, ~16 GB disk"),
-    ("qwen36_35b_q4", "Qwen3.6 35B A3B (UD-Q4_K_M)", "[Mid] 12-16 GB RAM, ~22 GB disk"),
-    ("gpt_oss_20b_q4", "GPT-OSS 20B (Q4_K_M)", "[Mid] 8-12 GB RAM, ~12 GB disk"),
-    ("phi4_14b_q4", "Phi-4 14B (Q4_K_M)", "[Mid] 8-12 GB RAM, ~8 GB disk"),
-    ("gemma4_26b_q8", "Gemma 4 26B A4B (Q8_0)", "[Flagship] 24-28 GB RAM, ~27 GB disk"),
-    ("deepseek_r1_32b_q4", "DeepSeek R1 Distill 32B (Q4_K_M)", "[Flagship] 20-24 GB RAM, ~19 GB disk"),
-    ("qwen25_coder_32b_q4", "Qwen 2.5 Coder 32B (Q4_K_M)", "[Flagship] 20-24 GB RAM, ~19 GB disk"),
-    ("llama31_8b_q4", "Llama 3.1 8B (Q4_K_M)", "[Light] 4-6 GB RAM, ~5 GB disk"),
-    ("gemma3_12b_vision_q4", "Gemma 3 12B Vision (Q4_K_M)", "[Light] 6-8 GB RAM, ~7 GB disk \U0001f441\U0000fe0f"),
-    ("qwen35_9b_heretic_q4", "Qwen3.5 9B Claude 4.6 Heretic (Q4_K_M)", "[Light] 6-8 GB RAM, ~6 GB disk"),
-    ("qwen3_8b_q4", "Qwen3 8B (Q4_K_M)", "[Light] 4-6 GB RAM, ~5 GB disk"),
-    ("qwen3_8b_q8", "Qwen3 8B (Q8_0)", "[Light] 6-8 GB RAM, ~9 GB disk"),
-    ("phi4_14b_q3", "Phi-4 14B (Q3_K_M)", "[Light] 6-8 GB RAM, ~6 GB disk"),
+    ("gpt_oss_20b_q4", "GPT-OSS 20B (Q4_K_M)", "[Mid] 8-12 GB RAM, ~12 GB disk — OpenAI reasoning, DEFAULT"),
+    ("qwen38_27b_q4", "Qwen3.8-27B (Q4_K_M)", "[Mid] 16-20 GB RAM, ~17 GB disk — vision, 262K ctx"),
+    ("fable_fusion_27b_iq4", "Fable Fusion 27B (IQ4_XS)", "[Mid] 12-16 GB RAM, ~17 GB disk — vision, top fine-tune"),
+    ("qwen38_27b_q8", "Qwen3.8-27B (Q8_0)", "[Flagship] 24-28 GB RAM, ~29 GB disk — vision, best quality"),
+    ("fable_fusion_27b_q6", "Fable Fusion 27B (Q6_K)", "[Flagship] 20-24 GB RAM, ~24 GB disk — vision, ARC-711"),
+    ("nail_35b_q4", "Nail 35B A3B (UD-Q4_K_XL)", "[Flagship] 16-20 GB RAM, ~22 GB disk — MoE, vision, fast"),
+    ("gemma4_e4b_q4", "Gemma 4 E4B (Q4_K_M)", "[Light] 4-6 GB RAM, ~5 GB disk — vision, function calling"),
+    ("qwen35_9b_dsv4_q4", "Qwen3.5-9B DeepSeek-V4-Flash (Q4_K_M)", "[Light] 4-6 GB RAM, ~6 GB disk — vision, distilled reasoning"),
+    ("qwen35_9b_q8", "Qwen3.5-9B (Q8_0)", "[Light] 6-8 GB RAM, ~10 GB disk — vision, highest quality light"),
 ]
 
 # Static preset items for the remote_provider EnumProperty.

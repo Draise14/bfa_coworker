@@ -66,6 +66,26 @@ initial_instructions: |
   into one `execute_blender_code` call, or use different operators for each
   (e.g. `primitive_cube_add` for a cube, `primitive_uv_sphere_add` for a sphere).
 
+  ⚠️ **CRITICAL — operator keywords:** There is NO `ring_segments` keyword. The UV sphere
+  uses `segments=` and `ring_count=` (plus `radius=`). See `best_practices.md` for the full
+  primitive keyword table, or print the operator docstring
+  (`print(bpy.ops.mesh.primitive_uv_sphere_add.__doc__)`) to discover real parameters.
+
+  ⚠️ **CRITICAL — stale references:** Never reuse an object/material reference from an
+  earlier tool call. Failed attempts are auto-undone, which DELETES the created objects —
+  old handles then raise `ReferenceError: StructRNA of type ... has been removed`.
+  Re-fetch with `bpy.data.objects.get(...)` / `bpy.context.active_object` right before use.
+
+  ⚠️ **CRITICAL — edit-mode selection:** `bpy.context` has NO `selected_edges` /
+  `selected_faces` / `selected_verts` attributes. Edit-mode selections live on the mesh
+  data, not on context. Read them with bmesh:
+  ```python
+  import bmesh
+  bm = bmesh.from_edit_mesh(bpy.context.active_object.data)
+  sel_edges = [e for e in bm.edges if e.select]
+  ```
+  `bpy.context.selected_objects` IS valid — but only in object mode, for objects.
+
   ⚠️ **CRITICAL — Geometry Nodes modifier socket access (5.2+):**
   Never use `"Socket_3" in modifier` or `identifier in modifier` — it raises
   `TypeError: bpy_prop_collection.__contains__` on Blender 5.2+. The old ID property

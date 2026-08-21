@@ -32,6 +32,7 @@ from .operators_llm import (
     _BFACW_OT_select_preset,
     _BFACW_OT_select_existing_model,
     _BFACW_OT_open_models_dir,
+    _BFACW_OT_set_ctx_preset,
 )
 from .operators_agent import (
     _BFACW_OT_test_remote_api,
@@ -75,6 +76,7 @@ _classes = (
     _BFACW_OT_select_existing_model,
     _BFACW_OT_select_preset,
     _BFACW_OT_open_models_dir,
+    _BFACW_OT_set_ctx_preset,
     _BFACW_OT_test_remote_api,
     _BFACW_OT_refresh_remote_models,
     _BFACW_OT_open_model_browser,

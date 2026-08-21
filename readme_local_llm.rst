@@ -32,6 +32,67 @@ That's it. No manual ``llama.cpp`` install, no PATH setup, no separate
 chat client.
 
 
+Context size presets
+====================
+
+You don't need to think about the context window — the add-on picks a
+safe size for you:
+
+- **Preset buttons** — the context window is set with one-click buttons
+  (``4K`` / ``8K`` / ``16K`` / ``32K`` / ``64K`` / ``128K``) instead of a
+  free-form slider, so it's hard to misconfigure.
+- **Hardware-aware recommendation** — when you pick a model preset, the
+  add-on detects your system RAM (and VRAM via ``nvidia-smi`` when a GPU
+  backend is used) and selects the largest preset that fits: model weights
+  *and* the KV cache must fit in memory. The recommendation is shown in
+  the preferences panel (``Recommended for your hardware ...``).
+- **Custom override** — the ``Custom`` button reveals a manual slider for
+  advanced users. Only use sizes larger than the recommendation if you
+  know your memory can take it — a context that is too large is the most
+  common cause of llama-server crashing at startup (GPU out of memory).
+
+
+Troubleshooting
+===============
+
+``llama-server`` crashes or never becomes ready
+   The add-on writes llama-server's full output to
+   ``~/.cache/bfa_coworker_llama/llama-server.log`` and automatically
+   surfaces the last lines when startup fails — check that file (or the
+   chat status bar) for the real error.  Common causes:
+
+   * **Truncated/corrupt model file** — the most common cause with local
+     files: a GGUF cut off mid-download or mid-copy makes llama-server die
+     with ``missing tensor ...`` after loading a few dozen layers.  The
+     add-on compares your file's size against HuggingFace and suggests
+     re-downloading when it detects this.  Delete the file and re-download.
+   * **Outdated llama-server build** — the curated presets (Qwen3.8,
+     Qwen3.6 fine-tunes, ...) need a recent llama.cpp.  Prefer the bundled
+     **Download llama-server** button over an older PATH/WinGet install;
+     the add-on logs the detected build version at launch.
+   * **Mismatched mmproj** — several vision presets share the generic
+     ``mmproj-F16.gguf`` filename, so when multiple models live in one
+     folder a single projector can end up attached to the wrong model and
+     llama-server exits with ``mismatch between text model ... and mmproj``.
+     The add-on now saves each model's projector under its own name
+     (``mmproj-F16-Qwen3.5-9B.gguf``), only uses a generic projector when it
+     is unambiguous, and runs vision models text-only instead of crashing
+     when no matching projector is found.  Fix stray files by deleting them
+     and re-downloading via the **Download & Start** button.
+   * **GPU out of memory** — with ``--n-gpu-layers 99`` the weights *and*
+     the KV cache go into VRAM, so a GPU without enough free memory dies
+     mid-load (often as a crash with exit code ``0xC0000005`` = access
+     violation).  The log shows ``ggml_vulkan ... ErrorOutOfDeviceMemory``
+     or ``CUDA error: out of memory`` and the add-on now explains it and
+     suggests fixes: lower **Context Size** (64K context on a 27B model
+     needs many GB of KV-cache memory; 16K-32K is plenty for agent work),
+     lower ``--n-gpu-layers`` so part of the model stays in RAM, or switch
+     the backend to CUDA (with the bundled **Download llama-server**
+     button) if you have an NVIDIA GPU — the WinGet/PATH build is Vulkan,
+     which is often less memory-efficient and may pick an integrated GPU
+     on laptops.
+
+
 Components
 ==========
 

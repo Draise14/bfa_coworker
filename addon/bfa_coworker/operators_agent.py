@@ -257,24 +257,19 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
          "roughly head-sized. Stretch it a bit taller than wide and "
          "slightly narrower on the sides to suggest a skull shape. "),
         (2, "Subdivide",
-         "Smooth it out, enough levels to look smooth but "
-         "not too dense yet. add in a bit of a squarish shape. Keep it symmetrical."),
-        (3, "Mirror",
-         "Chop it in half and mirror it so we only need to "
-         "sculpt one side. Make sure clipping is on so the center "
-         "seam stays clean. Apply a remesh. I want this procedural and in half. "),
+         "bevel and smooth it out, enough levels to look smooth but "
+         "not too dense yet. Make it a squarish shape. Keep it symmetrical."),
         (4, "Apply & Cut",
-         "Apply the Mirror modifier. Then cut it in half along the center line — "
+         "Cut it in half along the center line — "
          "delete the left half. "
-         "Mirror again — this way the center "
-         "line is perfectly flat and ready for sculpting."),
+         "Mirror modifier it — this way the center "
+         "line is perfectly flat and ready for sculpting dynamically."),
         (5, "Jaw & Chin",
-         "Now shape the jawline. In Edit Mode, pull the bottom-front "
+         "Now shape the jawline. In Edit Mode, select and pull the bottom-front "
          "vertices forward a bit to suggest a chin. Widen the lower "
-         "sides slightly for the jaw. Keep it symmetrical through "
-         "the Mirror modifier."),
+         "sides slightly for the jaw."),
         (6, "Finalize",
-         "Apply all remaining modifiers. Then add a remesh "
+         "Duplicate it, then apply all remaining modifiers. Then add a remesh "
          "modifier with a nice resolutions so it's ready for "
          "sculpting. Name it \"Sculpt_Ready_Head\"."),
     ],
@@ -336,6 +331,93 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
          "Render a 16K IMAX movie with 10 million polygons."),
         (3, "Contradiction",
          "Delete everything but keep all objects."),
+    ],
+    # ── Vision: Camera Placement ────────────────────────────────────
+    # For vision-capable models. Tests whether the model can SEE the
+    # viewport via get_screenshot_of_area_as_image and use what it sees
+    # to place, reframe, and verify a camera.
+    "vision_camera": [
+        (1, "Stage",
+         "I'm testing camera framing, so build me a small product stage: "
+         "a round ground disc with a light gray material, and three distinct "
+         "objects on it — a red cube, a blue cylinder, and a green sphere. "
+         "Place them asymmetrically (not in a line, not all at the center) "
+         "at different distances from the center so the composition is "
+         "interesting. Name them \"Cube_A\", \"Cylinder_B\", \"Sphere_C\". "
+         "Do NOT add a camera yet."),
+        (2, "Frame It",
+         "Add a camera for a classic product shot: a 3/4 view from the "
+         "front-left, slightly elevated, aiming at the middle of the three "
+         "objects, with all three fully in frame and a little margin around "
+         "them. Now take a screenshot of the 3D viewport with the "
+         "get_screenshot_of_area_as_image tool and LOOK at the image. "
+         "Check the framing: if any object is clipped, too small, or off- "
+         "center, move or re-aim the camera and re-screenshot until the "
+         "shot frames all three objects nicely. Tell me what you saw in "
+         "the screenshot and the final camera placement."),
+        (3, "Hero Angle",
+         "Reframe the same camera as a dramatic low-angle hero shot: "
+         "camera near the ground, looking up at the objects from the front, "
+         "like a product advertisement. Take a screenshot of the viewport "
+         "with get_screenshot_of_area_as_image and LOOK at it. Adjust the "
+         "camera position, angle, and target until the composition looks "
+         "intentional — all three objects visible and balanced, the ground "
+         "disc framing the bottom of the shot. Iterate with more screenshots "
+         "until it looks good, then report the camera location, rotation, "
+         "and what the final screenshot showed."),
+        (4, "Final Check",
+         "Now switch the 3D viewport to camera view so a screenshot shows "
+         "exactly what the camera sees, and take a final screenshot with "
+         "get_screenshot_of_area_as_image. Verify the composition from the "
+         "camera's perspective: all three objects fully in frame, the shot "
+         "balanced, and a pleasant low-angle composition. If anything is "
+         "clipped or off, adjust the camera and re-check. Report the final "
+         "camera location, rotation, and focal length, and what the final "
+         "screenshot looks like."),
+    ],
+    # ── Vision: Relative Placement ──────────────────────────────────
+    # For vision-capable models. Tests whether the model can SEE one
+    # object in relation to another and position new objects correctly
+    # (on top, centered, touching) — verified via screenshots.
+    "vision_relative": [
+        (1, "Table",
+         "I'm testing how well you can judge object placement visually. "
+         "Create a simple pedestal table: a rectangular top (about 2m x "
+         "1.2m, 0.1m thick) at 0.9m height with four thin legs. Give it a "
+         "warm brown wood material and name it \"Table\". Take a screenshot "
+         "of the 3D viewport with get_screenshot_of_area_as_image and confirm "
+         "it reads as a table before moving on."),
+        (2, "Cup on Table",
+         "Create a bright red cup (a cylinder, about 0.25m tall) and place "
+         "it so it rests exactly ON TOP of the table: the cup's bottom must "
+         "touch the table's top face, and the cup should be centered on the "
+         "table. Name it \"Cup\". Now take a screenshot of the viewport with "
+         "get_screenshot_of_area_as_image and LOOK at it: if the cup floats "
+         "above the table or sinks into it, fix the position and re-screenshot. "
+         "Keep adjusting until the screenshot clearly shows the cup resting "
+         "on the table surface."),
+        (3, "Stack",
+         "Place a small green sphere (a marble, 0.08m radius) on top of the "
+         "cup's rim, balanced on the opening. Take a screenshot with "
+         "get_screenshot_of_area_as_image and LOOK at it: the marble must sit "
+         "centered on the cup's opening — not floating above it, not half- "
+         "buried inside. Adjust the marble's position and re-screenshot until "
+         "the screenshot shows it balanced on top. Name it \"Marble\"."),
+        (4, "Centered Cone",
+         "Create a cylinder pedestal (0.6m radius, 0.4m tall) sitting on the "
+         "table next to the cup, and a cone (0.3m radius, 0.5m tall). Place "
+         "the cone exactly centered on the cylinder's top face. Take a "
+         "screenshot with get_screenshot_of_area_as_image, look at it, and "
+         "adjust the cone's X/Y position until it is visually dead-center on "
+         "the cylinder — neither leaning nor off to the side. Name them "
+         "\"Pedestal\" and \"Cone\"."),
+        (5, "Touch",
+         "Create one more cube (0.4m) and place it NEXT TO the pedestal: "
+         "the new cube's side must touch the pedestal's side exactly, both "
+         "sitting on the table top — no gap and no overlap. Take a screenshot "
+         "with get_screenshot_of_area_as_image, look at it, and adjust the "
+         "cube's position until the two objects are flush. Name it "
+         "\"Neighbor\" and report how you verified the contact."),
     ],
 }
 

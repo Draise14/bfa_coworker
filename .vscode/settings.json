@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^python -m py_compile addon/bfa_coworker/llm_manager\\.py ; python -m py_compile addon/bfa_coworker/shared\\.py ; python -m py_compile addon/bfa_coworker/preferences\\.py ; python -m py_compile addon/bfa_coworker/operators_llm\\.py ; python -m py_compile addon/bfa_coworker/agent_controller\\.py ; Write-Host \"OK\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

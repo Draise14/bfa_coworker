@@ -42,6 +42,21 @@ from .shared import (
 )
 
 
+def _download_status_icon(msg: str) -> str:
+    """Return a green checkmark icon once a download has completed.
+
+    Completion messages are the only ones that start with these prefixes;
+    everything else stays the blue info icon.
+    """
+    if (
+        msg.startswith("Download complete")
+        or msg.startswith("Model already downloaded")
+        or msg.startswith("llama-server installed")
+    ):
+        return "CHECKMARK"
+    return "INFO"
+
+
 class _State:
     """
     Module-level runtime state that is not persisted across sessions.
@@ -198,6 +213,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         cfg.remote_api_key = self.remote_api_key
         cfg.remote_model = self.remote_model
         cfg.llama_path = self.llama_path
+        cfg.llama_backend = self.llama_backend
         cfg.model_repo_id = self.model_repo_id
         cfg.model_filename = self.model_filename
         cfg.downloaded_models_dir = self.downloaded_models_dir
@@ -247,16 +263,51 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         name="llama-server Path",
         default="",
         subtype='FILE_PATH',
+        description=(
+            "Path to a custom llama-server.exe. Leave empty to use the bundled version.\n"
+            "To add a custom llama.cpp installation to PATH:\n"
+            "  Windows: System Properties → Environment Variables → Path → add the folder\n"
+            "  macOS/Linux: export PATH=\"/path/to/llama.cpp/build/bin:$PATH\"\n"
+            "The addon bundles its own copy — only set this if you need a specific build."
+        ),
+    )
+
+    def _update_llama_backend(self, _context: bpy.types.Context) -> None:
+        """Sync llama_backend to llm_manager config."""
+        llm = get_llm_manager()
+        cfg = llm.get_config()
+        cfg.llama_backend = self.llama_backend
+        llm.set_config(cfg)
+        # Invalidate the find_llama_server cache so the new backend binary is found.
+        llm.invalidate_llama_server_cache()
+
+    llama_backend: EnumProperty(  # type: ignore[valid-type]
+        name="GPU Backend",
+        description=(
+            "Select the GPU backend for llama-server.\n"
+            "  Auto — detect NVIDIA (CUDA), AMD/Intel (Vulkan), or CPU\n"
+            "  CUDA — NVIDIA GPUs (RTX 20xx+; 3090/4090/5090 recommended)\n"
+            "  Vulkan — AMD Radeon, Intel Arc, or NVIDIA fallback\n"
+            "  CPU — no GPU acceleration"
+        ),
+        items=[
+            ("auto", "Auto (Detect)", "Auto-detect the best backend for your GPU"),
+            ("cuda", "CUDA 12.4", "NVIDIA GPUs — RTX 20xx+ (3090/4090/5090 recommended)"),
+            ("vulkan", "Vulkan", "AMD Radeon, Intel Arc, or NVIDIA fallback"),
+            ("cpu", "CPU", "No GPU acceleration — runs on CPU only"),
+        ],
+        default="auto",
+        update=_update_llama_backend,
     )
 
     model_repo_id: StringProperty(  # type: ignore[valid-type]
         name="Model Repo ID",
-        default="unsloth/Mistral-Small-3.1-24B-Instruct-2503-GGUF",
+        default="unsloth/gpt-oss-20b-GGUF",
     )
 
     model_filename: StringProperty(  # type: ignore[valid-type]
         name="Model Filename",
-        default="Mistral-Small-3.1-24B-Instruct-2503-Q4_K_M.gguf",
+        default="gpt-oss-20b-Q4_K_M.gguf",
     )
 
     downloaded_models_dir: StringProperty(  # type: ignore[valid-type]
@@ -274,19 +325,25 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         if preset is not None:
             self.model_repo_id = preset.repo_id
             self.model_filename = preset.filename
-            # Auto-set context window from preset (capped at 65536 for consumer GPU safety).
-            self.local_ctx_size = min(preset.context_window, 65536)
+            # Auto-set context window: hardware-aware recommendation, capped by
+            # the model's own context window. See _apply_recommended_ctx().
+            self._apply_recommended_ctx(preset)
             # Auto-set max output tokens from preset.
             self.local_max_tokens = preset.max_tokens
             # Clear existing model path — using preset now.
             self.existing_model_path = ""
             # Build info string for display.
             self.model_preset_info = (
-                "Capability: {cap}  |  RAM: {ram}  |  Disk: {disk}\n{desc}"
+                "Capability: {cap}  |  RAM: {ram}  |  Disk: {disk}\n"
+                "Hardware: {hw}\n"
+                "Why: {why}\n"
+                "{desc}"
             ).format(
                 cap=preset.capability,
                 ram=preset.ram_gb,
                 disk=preset.disk_gb,
+                hw=preset.hardware_note,
+                why=preset.why,
                 desc=preset.description,
             )
             # Sync to llm_manager config immediately.
@@ -297,16 +354,58 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             cfg.local_ctx_size = self.local_ctx_size
             cfg.local_max_tokens = self.local_max_tokens
             cfg.hf_token = self.hf_token
+            cfg.llama_backend = self.llama_backend
             llm.set_config(cfg)
         else:
             self.model_preset_info = ""
+
+    def _current_model_gb(self, preset: "ModelPreset | None" = None) -> float:
+        """Estimate the model file size in GB (real file size when present)."""
+        if self.existing_model_path and os.path.isfile(self.existing_model_path):
+            try:
+                return os.path.getsize(self.existing_model_path) / (1024 ** 3)
+            except OSError:
+                pass
+        if preset is not None:
+            # "16-20 GB" -> use the low end of the range as the estimate.
+            try:
+                first = float(preset.disk_gb.split("-")[0].strip().split()[0])
+                return first
+            except (ValueError, IndexError, AttributeError):
+                pass
+        if self.model_filename:
+            models_dir = Path(self.downloaded_models_dir) if self.downloaded_models_dir else (
+                Path.home() / "bfa_coworker_models")
+            candidate = models_dir / self.model_filename
+            if candidate.is_file():
+                try:
+                    return candidate.stat().st_size / (1024 ** 3)
+                except OSError:
+                    pass
+        return 0.0
+
+    def _apply_recommended_ctx(self, preset: "ModelPreset | None" = None) -> None:
+        """Set the context window to a hardware-aware safe recommendation."""
+        llm = get_llm_manager()
+        model_gb = self._current_model_gb(preset)
+        recommended = llm.recommend_context_size(
+            model_gb=model_gb,
+            backend=self.llama_backend,
+        )
+        cap = preset.context_window if preset is not None else 131072
+        recommended = min(recommended, cap)
+        # Snap down again in case the model cap landed off a standard size.
+        fitting = [s for s in llm.ctx_preset_sizes if s <= recommended]
+        recommended = fitting[-1] if fitting else llm.ctx_preset_sizes[0]
+        self.local_ctx_size = recommended
+        self.local_ctx_preset = str(recommended)
 
     model_preset: EnumProperty(  # type: ignore[valid-type]
         name="Recommended Model",
         description="Select a curated model preset. Picking one auto-fills the repo and filename below",
         items=MODEL_PRESET_ITEMS,
         update=_update_model_preset,
-        default="mistral_small_24b_q4",
+        default="gpt_oss_20b_q4",
     )
 
     model_preset_info: StringProperty(  # type: ignore[valid-type]
@@ -434,8 +533,9 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         name="Context Window Size",
         description=(
             "Context window size (in tokens) passed to llama-server via --ctx-size.\n"
-            "Larger values allow longer conversations but use more RAM.\n"
-            "Decrease if you get Jinja errors (context overflow) or out-of-memory.\n"
+            "Larger values allow longer conversations but use much more RAM/VRAM.\n"
+            "Prefer the preset buttons above the Custom slider — a context that is "
+            "too large for your memory is the most common startup crash.\n"
             "Default 32768 works for most models. Gemma 4 supports up to 262144."
         ),
         default=32768,
@@ -443,6 +543,34 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         max=262144,
         step=1024,
         subtype='UNSIGNED',
+    )
+
+    def _update_ctx_preset(self, _context: bpy.types.Context) -> None:
+        """Sync the context preset button to the numeric context size."""
+        if self.local_ctx_preset != "custom":
+            try:
+                self.local_ctx_size = int(self.local_ctx_preset)
+            except ValueError:
+                pass
+
+    local_ctx_preset: EnumProperty(  # type: ignore[valid-type]
+        name="Context Window Preset",
+        description=(
+            "One-click context window sizes. The recommended size for your "
+            "hardware is suggested automatically when you pick a model. "
+            "Custom reveals a manual slider for fine control."
+        ),
+        items=[
+            ("4096", "4K", "4096 tokens — minimal, fastest to load"),
+            ("8192", "8K", "8192 tokens — short conversations"),
+            ("16384", "16K", "16384 tokens — good default for most agent work"),
+            ("32768", "32K", "32768 tokens — recommended default"),
+            ("65536", "64K", "65536 tokens — long conversations, needs lots of memory"),
+            ("131072", "128K", "131072 tokens — only on high-end hardware"),
+            ("custom", "Custom", "Manually set the context size with a slider"),
+        ],
+        default="32768",
+        update=_update_ctx_preset,
     )
 
     local_max_tokens: IntProperty(  # type: ignore[valid-type]
@@ -651,6 +779,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             ("assets_materials", "Assets+Mat", 'TEXTURE',             5),
             ("baseline",      "Baseline",      'CONSOLE',             6),
             ("error_handling","Errors",        'ERROR',               3),
+            ("vision_camera", "Vision: Camera", 'CAMERA_DATA',         4),
+            ("vision_relative", "Vision: Place", 'SNAP_ON',            5),
         ]
 
         from . import operators_agent as _oa_suite
@@ -806,20 +936,31 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 icon="IMPORT",
                 text="Download llama-server",
             )
-        if llm_state.download_progress and "llama-server" in llm_state.download_progress:
-            box.label(text=llm_state.download_progress, icon='INFO')
+        # GPU backend selector.
+        box.prop(self, "llama_backend")
+        # Unified progress block for llama-server download.
+        if llm_state.download_kind == "llama_server":
+            if llm_state.download_progress:
+                box.label(
+                    text=llm_state.download_progress,
+                    icon=_download_status_icon(llm_state.download_progress),
+                )
             pct = llm_state.download_progress_pct
             if pct > 0:
                 row = box.row(align=True)
                 row.progress(factor=pct / 100.0, type='BAR')
+            if llm_state.download_active:
+                row = box.row(align=True)
+                # Icon-only (text="") — the operator's bl_label shows as tooltip.
+                row.operator("bfacw.cancel_download", icon='CANCEL', text="")
 
         # ── Recommended Models (presets) ─────────────────────────
         box.label(text="Pick a Model", icon='VIEWZOOM')
 
         _CATEGORIES = [
-            ("flagship", "Flagship (24 GB+ VRAM)", 'SORT_ASC'),
-            ("mid_range", "Mid-Range (12-20 GB VRAM — 4090 Sweet Spot)", 'VIEWZOOM'),
-            ("lightweight", "Lightweight (\u2264 8 GB VRAM)", 'LIGHT_SUN'),
+            ("flagship", "Flagship (24 GB+ VRAM) — Best quality, needs high-end GPU", 'SORT_ASC'),
+            ("mid_range", "Mid-Range (16-20 GB VRAM) — Best balance, RTX 3090/4090 sweet spot", 'VIEWZOOM'),
+            ("lightweight", "Lightweight (\u2264 8 GB VRAM) — Runs on any GPU or integrated", 'LIGHT_SUN'),
         ]
 
         all_presets = llm.get_presets()
@@ -832,16 +973,23 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             cat_box.label(text=cat_label, icon=cat_icon)
             for preset in cat_presets:
                 row = cat_box.row(align=True)
+                # Single icon per model: IMAGE_DATA for vision, VIEWZOOM otherwise.
+                icon = 'IMAGE_DATA' if preset.vision else 'VIEWZOOM'
                 op = row.operator(
                     "bfacw.select_preset",
                     text=preset.name,
-                    icon='CHECKBOX_HLT'
-                    if self.model_preset == preset.identifier
-                    else 'CHECKBOX_DEHLT',
+                    icon=icon,
+                    depress=self.model_preset == preset.identifier,
                 )
                 op.preset_id = preset.identifier
-                row.label(
-                    text="[{:s}] {:s}".format(preset.ram_gb, preset.capability),
+                # Multiline label: hardware_note + why on subsequent lines.
+                col = row.column(align=True)
+                col.scale_y = 0.8
+                col.label(
+                    text="\u2502 {:s}".format(preset.hardware_note),
+                )
+                col.label(
+                    text="\u2514 {:s}".format(preset.why),
                 )
 
         # Custom model entry.
@@ -851,6 +999,41 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             info_box.label(text="Model Information", icon='INFO')
             for line in self.model_preset_info.split("\n"):
                 info_box.label(text=line)
+
+        # ── Context Window (preset buttons + custom override) ────
+        # One-click sizes instead of a free slider — the most common
+        # startup crash is a context too large for the available memory.
+        ctx_box = box.box()
+        ctx_box.label(
+            text="Context Window (how much the model remembers per reply)",
+            icon='MEMORY',
+        )
+        row = ctx_box.row(align=True)
+        active_ctx = self.local_ctx_size
+        llm = get_llm_manager()
+        is_custom = (self.local_ctx_preset == "custom") or (
+            active_ctx not in llm.ctx_preset_sizes)
+        for value in llm.ctx_preset_sizes:
+            op = row.operator(
+                "bfacw.set_ctx_preset",
+                text=llm.ctx_preset_label(value),
+                depress=(active_ctx == value),
+            )
+            op.value = value
+        op = row.operator(
+            "bfacw.set_ctx_preset",
+            text="Custom",
+            depress=is_custom,
+        )
+        op.value = 0
+        if is_custom:
+            ctx_box.prop(self, "local_ctx_size")
+        # Hardware-aware recommendation hint.
+        model_gb = self._current_model_gb(llm.get_preset_by_id(self.model_preset))
+        ctx_box.label(
+            text=llm.hardware_context_hint(model_gb, self.llama_backend),
+            icon='INFO',
+        )
 
         # ── Download or use existing ─────────────────────────────
         llm_state = llm.get_state()
@@ -881,22 +1064,37 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         row.operator("bfacw.download_model", icon=btn_icon, text=btn_text)
         if not btn_enabled:
             row.enabled = False
-        # Show a cancel button while a download is active.
-        if llm_state.download_active:
-            row.operator("bfacw.cancel_download", icon='CANCEL', text="Cancel")
+        # The cancel button must NOT live in the same row as the (disabled)
+        # download button — row.enabled above greys out the entire row,
+        # including Cancel.  It lives with the progress bar instead, with a
+        # fallback row for the pre-progress phase (download just started).
+        if llm_state.download_active and llm_state.download_kind == "model" \
+                and llm_state.download_progress_pct <= 0:
+            cancel_row = box.row(align=True)
+            # Icon-only (text="") — the operator's bl_label shows as tooltip.
+            cancel_row.operator("bfacw.cancel_download", icon='CANCEL', text="")
 
-        # Always show progress/error areas.
-        if llm_state.error:
-            box.label(text=llm_state.error, icon="ERROR")
-        if llm_state.download_progress:
-            prog_text = llm_state.download_progress
-            if llm_state.download_progress_eta:
-                prog_text = "{:s}  |  {:s}".format(prog_text, llm_state.download_progress_eta)
-            box.label(text=prog_text, icon='INFO')
-            pct = llm_state.download_progress_pct
-            if pct > 0:
-                row = box.row(align=True)
-                row.progress(factor=pct / 100.0, type='BAR')
+        # Always show progress/error areas (model downloads only).
+        if llm_state.download_kind == "model":
+            if llm_state.error:
+                err_lines = llm_state.error.split("\n")
+                for i, line in enumerate(err_lines):
+                    box.label(text=line, icon="ERROR" if i == 0 else 'NONE')
+            if llm_state.download_progress:
+                prog_text = llm_state.download_progress
+                if llm_state.download_progress_eta:
+                    prog_text = "{:s}  |  {:s}".format(prog_text, llm_state.download_progress_eta)
+                box.label(
+                    text=prog_text,
+                    icon=_download_status_icon(llm_state.download_progress),
+                )
+                pct = llm_state.download_progress_pct
+                if pct > 0:
+                    row = box.row(align=True)
+                    row.progress(factor=pct / 100.0, type='BAR')
+                    if llm_state.download_active:
+                        # Icon-only (text="") — the operator's bl_label shows as tooltip.
+                        row.operator("bfacw.cancel_download", icon='CANCEL', text="")
 
         # ── Scan for existing models ────────────────────────────
         box.label(text="Or use an existing model:", icon='FILE_FOLDER')
@@ -910,6 +1108,12 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 icon='CHECKMARK',
             )
 
+        # ── Startup / runtime errors (not download-related) ──────
+        if llm_state.error and llm_state.download_kind != "model":
+            err_lines = llm_state.error.split("\n")
+            for i, line in enumerate(err_lines):
+                box.label(text=line, icon="ERROR" if i == 0 else 'NONE')
+
         # ── Current model status ─────────────────────────────────
         if llm_state.is_running:
             box.label(
@@ -921,7 +1125,6 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         box.label(text="Advanced", icon='SETTINGS')
         box.prop(self, "model_repo_id")
         box.prop(self, "model_filename")
-        box.prop(self, "local_ctx_size")
         box.prop(self, "local_max_tokens")
         box.prop(self, "hf_token")
 

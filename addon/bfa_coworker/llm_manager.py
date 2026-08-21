@@ -25,10 +25,13 @@ __all__ = (
     "fetch_remote_models",
     "scan_existing_models",
     "find_llama_server",
+    "invalidate_llama_server_cache",
     "download_model",
     "download_llama_server",
     "start_local_llama",
     "stop_local_llama",
+    "get_llama_process",
+    "get_llama_server_log_tail",
     "health_check",
     "check_remote_api",
     "get_state",
@@ -36,6 +39,13 @@ __all__ = (
     "get_config",
     "_get_models_dir",
     "_set_download_progress",
+    "detect_system_ram_gb",
+    "detect_vram_gb",
+    "recommend_context_size",
+    "hardware_context_hint",
+    "resolve_gpu_backend",
+    "ctx_preset_label",
+    "ctx_preset_sizes",
 )
 
 import io
@@ -88,6 +98,292 @@ def _get_bundled_llama_dir() -> Path:
 
 
 # ---------------------------------------------------------------------------
+# llama-server log capture
+#
+# llama-server is launched with stdio redirected to this log file so that
+# startup failures (bad model path, mismatched mmproj, OOM, outdated binary,
+# ...) are visible to the addon instead of vanishing into a devnull/console
+# void.  On failure the tail is surfaced automatically (see
+# :func:`wait_until_ready` / :func:`get_llama_server_log_tail`).
+
+_LLAMA_SERVER_LOG_NAME = "llama-server.log"
+
+
+def _llama_server_log_path() -> Path:
+    """Return the path of the llama-server log file (recreated each launch)."""
+    return _get_bundled_llama_dir() / _LLAMA_SERVER_LOG_NAME
+
+
+def get_llama_server_log_tail(n_lines: int = 40, max_chars: int = 4000) -> str:
+    """Return the tail of the most recent llama-server log.
+
+    Used to surface the real startup error when llama-server exits early
+    or fails to become ready.  Returns an empty string if no log exists yet.
+    """
+    log_path = _llama_server_log_path()
+    if not log_path.is_file():
+        return ""
+    try:
+        with open(str(log_path), "r", encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return ""
+    tail = "".join(lines[-n_lines:]).strip()
+    if len(tail) > max_chars:
+        tail = tail[-max_chars:]
+        newline = tail.find("\n")
+        if newline != -1:
+            tail = tail[newline + 1:]
+    return tail
+
+
+_llama_server_version_cache: str = ""
+
+
+def _llama_server_version(server_exe: str) -> str:
+    """Return the llama-server build version string (cached per session).
+
+    The version is logged at launch — an outdated llama.cpp build is a common
+    reason a brand-new preset fails to load (unknown model architecture).
+    """
+    global _llama_server_version_cache
+    if _llama_server_version_cache:
+        return _llama_server_version_cache
+    try:
+        result = subprocess.run(
+            [server_exe, "--version"],
+            capture_output=True, text=True, timeout=10,
+        )
+        output = (result.stdout or result.stderr or "").strip()
+        _llama_server_version_cache = output.splitlines()[0] if output else "unknown"
+    except Exception:  # pylint: disable=broad-exception-caught
+        _llama_server_version_cache = "unknown"
+    return _llama_server_version_cache
+
+
+# ---------------------------------------------------------------------------
+# Truncated / corrupt model detection
+#
+# The most common "llama-server crashes at startup" cause with local files is
+# a GGUF that was cut off mid-download or mid-copy — llama-server fails with
+# ``missing tensor ...`` after loading a few dozen layers.  We compare the
+# local file size against the size on HuggingFace (for curated presets) and
+# surface an actionable hint.
+
+_hf_size_cache: dict[tuple[str, str], int | None] = {}
+
+
+def _hf_repo_file_size(repo_id: str, filename: str) -> int | None:
+    """Return the expected size (bytes) of a preset file on HuggingFace.
+
+    Uses a HEAD request to the HF ``resolve`` URL.  Cached per session.
+    Returns ``None`` when the size can't be determined (offline, gated repo,
+    network error) so callers can silently skip the check.
+    """
+    key = (repo_id, filename)
+    if key in _hf_size_cache:
+        return _hf_size_cache[key]
+    url = "https://huggingface.co/{:s}/resolve/main/{:s}".format(repo_id, filename)
+    req = urllib.request.Request(url, method="HEAD")
+    size: int | None = None
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            try:
+                size = int(resp.headers.get("Content-Length") or 0) or None
+            except (TypeError, ValueError):
+                size = None
+    except Exception:  # pylint: disable=broad-exception-caught
+        size = None
+    _hf_size_cache[key] = size
+    return size
+
+
+def check_model_file_integrity(model_path: Path | str | None) -> str:
+    """Return an actionable warning if a local model file looks truncated.
+
+    Only checks curated presets (the repo ID + filename are known).  Compares
+    the local file size against the size on HuggingFace; returns an empty
+    string when the file is fine or the check can't run.
+    """
+    if not model_path:
+        return ""
+    if isinstance(model_path, str):
+        model_path = Path(model_path)
+    if not model_path.is_file():
+        return ""
+    name = model_path.name.lower()
+    for preset in PRESET_MODELS:
+        if preset.filename.lower() != name:
+            continue
+        try:
+            local = model_path.stat().st_size
+        except OSError:
+            return ""
+        expected = _hf_repo_file_size(preset.repo_id, preset.filename)
+        if expected and local < expected * 0.995:
+            return (
+                "{:s} is likely truncated: it is {:.1f} GB on disk, but the file on "
+                "HuggingFace is {:.1f} GB. Delete it and re-download / re-copy the model "
+                "(a partial copy fails with \"missing tensor\")."
+            ).format(model_path.name, local / (1024 ** 3), expected / (1024 ** 3))
+        break
+    return ""
+
+
+_MODEL_LOAD_FAILURE_MARKERS = (
+    "missing tensor",
+    "error loading model",
+    "failed to load model",
+    "model file is too small",
+)
+
+
+def _log_looks_like_model_load_failure(tail: str) -> bool:
+    """True when the llama-server log tail shows a model-load failure."""
+    lowered = tail.lower()
+    return any(marker in lowered for marker in _MODEL_LOAD_FAILURE_MARKERS)
+
+
+_MMPROJ_MISMATCH_MARKERS = (
+    "you may be using wrong mmproj",
+    "mismatch between text model",
+    "failed to load multimodal model",
+    "failed to load vision model",
+)
+
+
+def _log_looks_like_mmproj_mismatch(tail: str) -> bool:
+    """True when the llama-server log tail shows a wrong-projector failure."""
+    lowered = tail.lower()
+    return any(marker in lowered for marker in _MMPROJ_MISMATCH_MARKERS)
+
+
+def _mmproj_mismatch_hint(model_path: Path | str | None) -> str:
+    """Actionable hint when llama-server dies because of a wrong projector."""
+    if isinstance(model_path, str):
+        model_path = Path(model_path)
+    model_name = model_path.name if model_path else ""
+    local_name = ""
+    for preset in PRESET_MODELS:
+        if preset.mmproj_filename and model_name and model_name.lower() == preset.filename.lower():
+            local_name = _local_mmproj_name(preset)
+            break
+    rename_hint = (
+        "rename it to {:s}".format(local_name)
+        if local_name else "use the addon's Download button"
+    )
+    return (
+        "The vision projector (mmproj) does not match this model — the generic "
+        "mmproj-F16.gguf / mmproj.gguf in the model folder belongs to a different "
+        "model, and several presets share the same generic projector filename, so "
+        "they overwrite each other. Fix: delete the stray projector and use the "
+        "addon's Download button (it saves each model's projector under its own "
+        "name), or {:s}. The model also runs fine without a projector (text-only, "
+        "no image input).".format(rename_hint)
+    )
+
+
+# ---------------------------------------------------------------------------
+# GPU out-of-memory detection
+#
+# When --n-gpu-layers 99 puts the weights AND the KV cache into VRAM, a GPU
+# without enough free memory dies with a Vulkan/CUDA OOM. The failure often
+# surfaces as an access-violation crash (exit code 0xC0000005) instead of a
+# clean error message, so we match the log and decode the exit code.
+
+_GPU_OOM_MARKERS = (
+    "ggml_vulkan",
+    "erroroutofdevicememory",
+    "erroroutofhostmemory",
+    "vk::device::allocatememory",
+    "failed to allocate vulkan0 buffer",
+    "failed to allocate buffer for kv cache",
+    "cuda error: out of memory",
+    "cudamalloc",
+    "out of device memory",
+    "failed to allocate gpu buffer",
+)
+
+
+def _log_looks_like_gpu_oom(tail: str) -> bool:
+    """True when the llama-server log tail shows a GPU out-of-memory failure."""
+    lowered = tail.lower()
+    return any(marker in lowered for marker in _GPU_OOM_MARKERS)
+
+
+def _gpu_oom_hint() -> str:
+    """Actionable hint when llama-server dies because the GPU ran out of memory."""
+    ctx = _config.local_ctx_size
+    backend = _config.llama_backend or "auto"
+    model_size = ""
+    if _last_launched_model_path:
+        try:
+            size_gb = Path(_last_launched_model_path).stat().st_size / (1024 ** 3)
+            model_size = " (model file is {:.1f} GB)".format(size_gb)
+        except OSError:
+            pass
+    ctx_part = ""
+    if ctx and ctx >= 65536:
+        ctx_part = (
+            " You are using a {:d}-token context window — at that size the KV cache "
+            "alone is several GB of VRAM on a 27B-class model, so it usually does "
+            "not fit alongside the weights.".format(ctx)
+        )
+    elif ctx and ctx > 32768:
+        ctx_part = (
+            " You are using a {:d}-token context window, which makes the KV cache "
+            "very large.".format(ctx)
+        )
+    backend_part = ""
+    if backend == "vulkan":
+        backend_part = (
+            " This log is from the Vulkan backend (ggml_vulkan). If you have an "
+            "NVIDIA GPU, switch the backend to CUDA and use the addon's "
+            "'Download llama-server' button so it fetches the CUDA build — Vulkan "
+            "is often less memory-efficient, and on laptops it may pick the "
+            "integrated GPU. Check the 'ggml_vulkan: Found N devices' line in "
+            "llama-server.log for which device was selected."
+        )
+    return (
+        "The GPU ran out of memory while loading the model{:s}. With --n-gpu-layers "
+        "99 both the weights and the KV cache are placed in VRAM.{:s}{:s}\n"
+        "Fixes to try:\n"
+        "  1. Reduce the context size (e.g. 32768 instead of {:d}) — the KV cache "
+        "is the biggest VRAM consumer.\n"
+        "  2. Lower --n-gpu-layers so part of the model stays in system RAM "
+        "(llama_backend / GPU layers in preferences).\n"
+        "  3. Close other GPU-heavy apps, or run the model on CPU if the GPU is "
+        "too small for this model.".format(
+            model_size, ctx_part, backend_part, ctx or 65536,
+        )
+    )
+
+
+# Windows NTSTATUS crash codes: llama-server segfaulting shows up as a large
+# negative-looking exit code (e.g. 3221225477 = 0xC0000005 = access violation).
+_WIN_CRASH_CODES: dict[int, str] = {
+    0xC0000005: "ACCESS_VIOLATION — crashed, often a GPU driver / OOM issue",
+    0xC000001D: "ILLEGAL_INSTRUCTION — the CPU lacks an instruction this build needs (try another llama-server build)",
+    0xC0000374: "HEAP_CORRUPTION — crashed, possible driver bug",
+    0xC0000409: "STACK_BUFFER_OVERRUN — crashed, possible driver bug",
+    0xC00000FD: "STACK_OVERFLOW",
+    0xC0000135: "DLL_NOT_FOUND — a required DLL is missing (use the bundled build)",
+    0xC0000142: "DLL_INIT_FAILED",
+    0xC0000094: "INTEGER_DIVIDE_BY_ZERO",
+    0xC000000D: "INVALID_PARAMETER",
+    0xC000013A: "CTRL_C_EXIT",
+}
+
+
+def _describe_exit_code(rc: int) -> str:
+    """Return a readable description for a Windows crash exit code."""
+    unsigned = rc & 0xFFFFFFFF
+    name = _WIN_CRASH_CODES.get(unsigned, "")
+    suffix = (" — " + name) if name else ""
+    return " (0x{:08X}{:s})".format(unsigned, suffix)
+
+
+# ---------------------------------------------------------------------------
 # Data types
 
 @dataclass
@@ -104,6 +400,7 @@ class LLMConfig:
     local_ctx_size: int = 8192
     local_max_tokens: int = 16384  # Max output tokens per API call
     hf_token: str = ""  # HuggingFace token for gated models
+    llama_backend: str = "auto"  # "auto" | "cpu" | "cuda" | "vulkan"
     # Remote mode
     remote_api_url: str = ""
     remote_api_key: str = ""
@@ -122,6 +419,7 @@ class LLMState:
     download_progress_eta: str = ""  # ETA estimate, e.g. "3m 24s remaining"
     download_progress_pct: float = 0.0  # 0.0 to 100.0
     download_active: bool = False  # True while a model download is in progress
+    download_kind: str = ""  # "model" | "llama_server" | ""
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +440,10 @@ class ModelPreset:
     description: str  # Longer tooltip text
     context_window: int = 131072  # Context window size in tokens
     max_tokens: int = 16384  # Max output tokens per API call
+    vision: bool = False  # Whether the model supports image input
+    mmproj_filename: str = ""  # Projector filename for vision (e.g. "mmproj-F16.gguf")
+    hardware_note: str = ""  # Hardware recommendation (RAM + GPU gen, e.g. "RTX 3090/4090/5090")
+    why: str = ""  # One-line "why pick this" per sub-tier
 
 
 # ---------------------------------------------------------------------------
@@ -171,124 +473,71 @@ class RemoteModelPreset:
 
 
 PRESET_MODELS: list[ModelPreset] = [
-    # ── Flagship (Excellent, 24 GB+ VRAM) ───────────────────────────
+    # ── Flagship (24 GB+ VRAM) ──────────────────────────────────────
     ModelPreset(
-        identifier="gemma4_26b_q8",
-        name="Gemma 4 26B A4B (Q8_0)",
-        repo_id="unsloth/gemma-4-26B-A4B-it-GGUF",
-        filename="gemma-4-26B-A4B-it-Q8_0.gguf",
+        identifier="qwen38_27b_q8",
+        name="Qwen3.8-27B (Q8_0)",
+        repo_id="unsloth/Qwen3.8-27B-GGUF",
+        filename="Qwen3.8-27B-Q8_0.gguf",
         ram_gb="24-28 GB",
-        disk_gb="~27 GB",
+        disk_gb="~29 GB",
         capability="Excellent",
         category="flagship",
         context_window=262144,
         max_tokens=16384,
+        vision=True,
+        mmproj_filename="mmproj-F16.gguf",
+        hardware_note="RTX 3090/4090/5090 — 24 GB+ VRAM",
+        why="Latest Qwen3.8 — best coding + vision + agentic reasoning at high precision",
         description=(
-            "Higher quality variant of Gemma 4. Vision-capable for viewport renders.\n"
-            "Needs more RAM but delivers better precision.\n"
-            "Native function calling with 6 dedicated control tokens."
+            "Qwen3.8-27B at Q8_0 — the latest Qwen generation. Native vision-language,\n"
+            "thinking mode, and agentic tool calling. 262K context. Apache 2.0.\n"
+            "Best quality flagship for complex multi-step Blender tasks."
         ),
     ),
     ModelPreset(
-        identifier="deepseek_r1_32b_q4",
-        name="DeepSeek R1 Distill 32B (Q4_K_M)",
-        repo_id="unsloth/DeepSeek-R1-Distill-Qwen-32B-GGUF",
-        filename="DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf",
+        identifier="fable_fusion_27b_q6",
+        name="Fable Fusion 27B (Q6_K)",
+        repo_id="DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF",
+        filename="Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-Q6_K.gguf",
         ram_gb="20-24 GB",
-        disk_gb="~19 GB",
+        disk_gb="~24 GB",
         capability="Excellent",
         category="flagship",
-        context_window=131072,
-        max_tokens=16384,
-        description=(
-            "DeepSeek R1 reasoning distilled into Qwen 32B. Excellent for complex\n"
-            "multi-step tool orchestration. Fits 24 GB VRAM at Q4. MIT license."
-        ),
-    ),
-    ModelPreset(
-        identifier="qwen25_coder_32b_q4",
-        name="Qwen 2.5 Coder 32B (Q4_K_M)",
-        repo_id="unsloth/Qwen2.5-Coder-32B-Instruct-GGUF",
-        filename="Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf",
-        ram_gb="20-24 GB",
-        disk_gb="~19 GB",
-        capability="Excellent",
-        category="flagship",
-        context_window=131072,
-        max_tokens=16384,
-        description=(
-            "Top-tier code generation model. Excellent for Blender Python scripting.\n"
-            "Q4_K_M fits 24 GB VRAM. Apache 2.0."
-        ),
-    ),
-    # ── Mid-Range (Strong, 12-20 GB VRAM — RTX 4090 sweet spot) ────
-    ModelPreset(
-        identifier="mistral_small_24b_q4",
-        name="Mistral Small 3.1 24B (Q4_K_M)",
-        repo_id="unsloth/Mistral-Small-3.1-24B-Instruct-2503-GGUF",
-        filename="Mistral-Small-3.1-24B-Instruct-2503-Q4_K_M.gguf",
-        ram_gb="12-16 GB",
-        disk_gb="~14 GB",
-        capability="Strong",
-        category="mid_range",
-        context_window=131072,
-        max_tokens=8192,
-        description=(
-            "Mistral's compact 24B model. Native function calling, 128K context.\n"
-            "Excellent tool-use capabilities. Fits RTX 4090 at Q4. Apache 2.0."
-        ),
-    ),
-    ModelPreset(
-        identifier="gemma4_26b_q4",
-        name="Gemma 4 26B A4B (UD-Q4_K_M)",
-        repo_id="unsloth/gemma-4-26B-A4B-it-GGUF",
-        filename="gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
-        ram_gb="16-20 GB",
-        disk_gb="~17 GB",
-        capability="Excellent",
-        category="mid_range",
         context_window=262144,
         max_tokens=16384,
+        vision=True,
+        mmproj_filename="mmproj-F16.gguf",
+        hardware_note="RTX 3090/4090/5090 — 24 GB+ VRAM",
+        why="Top-ranked fine-tune — ARC-711 benchmark, uncensored, vision-capable",
         description=(
-            "Google's latest — vision-capable, native function calling with\n"
-            "6 dedicated control tokens. Tool calling accuracy 86.4%.\n"
-            "256K context. Apache 2.0. Best overall choice for local MCP agent work.\n"
-            "Sees your Blender viewport renders!"
+            "Multi-stage fine-tune of Qwen3.6-27B. Exceeds base model in 6/7 benchmarks.\n"
+            "Vision-capable, 256K context, uncensored. Apache 2.0.\n"
+            "The strongest open 27B fine-tune for agentic work."
         ),
     ),
     ModelPreset(
-        identifier="gemma3_27b_q4",
-        name="Gemma 3 27B (Q4_K_M)",
-        repo_id="unsloth/gemma-3-27b-it-GGUF",
-        filename="gemma-3-27b-it-Q4_K_M.gguf",
+        identifier="nail_35b_q4",
+        name="Nail 35B A3B (UD-Q4_K_XL)",
+        repo_id="peculiar-ragdoll/Nail-Qwen3.6-35B-A3B-GGUF",
+        filename="Nail-Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
         ram_gb="16-20 GB",
-        disk_gb="~16 GB",
-        capability="Strong",
-        category="mid_range",
-        context_window=131072,
-        max_tokens=8192,
-        description=(
-            "Google's Gemma 3 at 27B params. Vision-capable for viewport renders.\n"
-            "Strong multilingual support. Great for text-based tool calling. Apache 2.0."
-        ),
-    ),
-    ModelPreset(
-        identifier="qwen36_35b_q4",
-        name="Qwen3.6 35B A3B (UD-Q4_K_M)",
-        repo_id="unsloth/Qwen3.6-35B-A3B-GGUF",
-        filename="Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
-        ram_gb="12-16 GB",
         disk_gb="~22 GB",
         capability="Excellent",
-        category="mid_range",
-        context_window=131072,
+        category="flagship",
+        context_window=262144,
         max_tokens=16384,
+        vision=True,
+        mmproj_filename="mmproj-F16.gguf",
+        hardware_note="RTX 3090/4090/5090 — 24 GB+ VRAM (MoE, ~3.4B active)",
+        why="MoE efficiency — 3.4B active params, fast inference, sharpened template",
         description=(
-            "Qwen's latest MoE — only ~3B active parameters per token.\n"
-            "Excellent efficiency. Native multimodal agents with built-in MCP support.\n"
-            "Great balance of performance and resource usage."
+            "Qwen3.6-35B-A3B with improved chat template and force-applied terseness prompt.\n"
+            "~3.4B active params — runs fast on 24 GB cards. Vision-capable.\n"
+            "Apache 2.0. Best throughput-to-quality ratio in flagship tier."
         ),
     ),
+    # ── Mid-Range (16-20 GB VRAM) ───────────────────────────────────
     ModelPreset(
         identifier="gpt_oss_20b_q4",
         name="GPT-OSS 20B (Q4_K_M)",
@@ -299,112 +548,121 @@ PRESET_MODELS: list[ModelPreset] = [
         capability="Strong",
         category="mid_range",
         context_window=131072,
-        max_tokens=8192,
+        max_tokens=16384,
+        vision=False,
+        mmproj_filename="",
+        hardware_note="RTX 3090/4090 — 12 GB+ VRAM (MoE, 3.6B active)",
+        why="OpenAI's open-weight reasoning model — best Blender benchmarked default",
         description=(
             "OpenAI's open-weight reasoning model. 21B params / 3.6B active.\n"
             "Native function calling, structured outputs, and agentic capabilities.\n"
-            "Runs within 16 GB RAM. Apache 2.0."
+            "Runs within 16 GB RAM. Apache 2.0. Best-tested default for Blender."
         ),
     ),
     ModelPreset(
-        identifier="phi4_14b_q4",
-        name="Phi-4 14B (Q4_K_M)",
-        repo_id="unsloth/Phi-4-GGUF",
-        filename="Phi-4-Q4_K_M.gguf",
-        ram_gb="8-12 GB",
-        disk_gb="~8 GB",
-        capability="Strong",
+        identifier="qwen38_27b_q4",
+        name="Qwen3.8-27B (Q4_K_M)",
+        repo_id="unsloth/Qwen3.8-27B-GGUF",
+        filename="Qwen3.8-27B-Q4_K_M.gguf",
+        ram_gb="16-20 GB",
+        disk_gb="~17 GB",
+        capability="Excellent",
         category="mid_range",
-        context_window=131072,
-        max_tokens=8192,
-        description=(
-            "Microsoft's Phi-4 — punches well above its weight class.\n"
-            "Excellent reasoning for its size. Very low VRAM footprint.\n"
-            "MIT license."
-        ),
-    ),
-    # ── Lightweight (Moderate, ≤ 8 GB VRAM) ────────────────────────
-    ModelPreset(
-        identifier="qwen35_9b_heretic_q4",
-        name="Qwen3.5 9B Claude 4.6 Heretic (Q4_K_M)",
-        repo_id="mradermacher/Qwen3.5-9B-Claude-4.6-HighIQ-THINKING-HERETIC-UNCENSORED-GGUF",
-        filename="Qwen3.5-9B-Claude-4.6-HighIQ-THINKING-HERETIC-UNCENSORED.Q4_K_M.gguf",
-        ram_gb="6-8 GB",
-        disk_gb="~6 GB",
-        capability="Strong",
-        category="lightweight",
         context_window=262144,
-        max_tokens=8192,
+        max_tokens=16384,
+        vision=True,
+        mmproj_filename="mmproj-F16.gguf",
+        hardware_note="RTX 3090/4090 — 16 GB+ VRAM",
+        why="Latest Qwen3.8 at Q4 — vision + agentic, fits 16 GB cards",
         description=(
-            "Qwen3.5 9B fine-tuned with Claude 4.6 reasoning distillation.\n"
-            "Uncensored/heretic — no refusals. 256K context, vision capable.\n"
-            "Punches well above its weight for tool calling. Apache 2.0."
+            "Qwen3.8-27B at Q4_K_M — the latest Qwen generation. Native vision-language,\n"
+            "thinking mode, and agentic tool calling. 262K context. Apache 2.0.\n"
+            "Fits 16 GB VRAM while keeping excellent quality."
         ),
     ),
     ModelPreset(
-        identifier="gemma3_12b_vision_q4",
-        name="Gemma 3 12B Vision (Q4_K_M)",
-        repo_id="unsloth/gemma-3-12b-it-GGUF",
-        filename="gemma-3-12b-it-Q4_K_M.gguf",
-        ram_gb="6-8 GB",
-        disk_gb="~7 GB",
-        capability="Strong",
-        category="lightweight",
-        context_window=131072,
-        max_tokens=4096,
+        identifier="fable_fusion_27b_iq4",
+        name="Fable Fusion 27B (IQ4_XS)",
+        repo_id="DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF",
+        filename="Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-IQ4_XS.gguf",
+        ram_gb="12-16 GB",
+        disk_gb="~17 GB",
+        capability="Excellent",
+        category="mid_range",
+        context_window=262144,
+        max_tokens=16384,
+        vision=True,
+        mmproj_filename="mmproj-F16.gguf",
+        hardware_note="RTX 3090/4090 — 16 GB+ VRAM",
+        why="Fable Fusion at IQ4 — fits 16 GB, still top-tier reasoning",
         description=(
-            "Google's Gemma 3 12B — vision-capable, sees your viewport!\n"
-            "Strong multimodal understanding. 128K context. Apache 2.0.\n"
-            "Best lightweight choice with vision support."
+            "Fable Fusion 27B at IQ4_XS — smaller quant that still outperforms base Qwen3.6.\n"
+            "Vision-capable, 256K context. Apache 2.0.\n"
+            "Best mid-range choice for users with 16 GB cards."
         ),
     ),
+    # ── Lightweight (≤8 GB VRAM) ────────────────────────────────────
     ModelPreset(
-        identifier="qwen3_8b_q4",
-        name="Qwen3 8B (Q4_K_M)",
-        repo_id="Qwen/Qwen3-8B-GGUF",
-        filename="Qwen3-8B-Q4_K_M.gguf",
+        identifier="gemma4_e4b_q4",
+        name="Gemma 4 E4B (Q4_K_M)",
+        repo_id="unsloth/gemma-4-E4B-it-GGUF",
+        filename="gemma-4-E4B-it-Q4_K_M.gguf",
         ram_gb="4-6 GB",
         disk_gb="~5 GB",
         capability="Strong",
         category="lightweight",
         context_window=131072,
-        max_tokens=4096,
+        max_tokens=8192,
+        vision=True,
+        mmproj_filename="mmproj-F16.gguf",
+        hardware_note="Any GPU or integrated — 4 GB+ VRAM",
+        why="Google's small agentic model — vision + function calling, runs anywhere",
         description=(
-            "Latest Qwen3 dense model. Supports thinking mode for complex\n"
-            "tool chains. Lightweight — runs on almost any hardware.\n"
-            "Best entry point for limited RAM."
+            "Google's Gemma 4 E4B — 4.5B effective params with native function calling,\n"
+            "thinking mode, and vision. 128K context. Apache 2.0.\n"
+            "Best all-round light pick — runs on almost any hardware."
         ),
     ),
     ModelPreset(
-        identifier="qwen3_8b_q8",
-        name="Qwen3 8B (Q8_0)",
-        repo_id="Qwen/Qwen3-8B-GGUF",
-        filename="Qwen3-8B-Q8_0.gguf",
-        ram_gb="6-8 GB",
-        disk_gb="~9 GB",
+        identifier="qwen35_9b_dsv4_q4",
+        name="Qwen3.5-9B DeepSeek-V4-Flash (Q4_K_M)",
+        repo_id="Jackrong/Qwen3.5-9B-DeepSeek-V4-Flash-GGUF",
+        filename="Qwen3.5-9B-DeepSeek-V4-Flash-Q4_K_M.gguf",
+        ram_gb="4-6 GB",
+        disk_gb="~6 GB",
         capability="Strong",
         category="lightweight",
-        context_window=131072,
-        max_tokens=4096,
+        context_window=262144,
+        max_tokens=8192,
+        vision=True,
+        mmproj_filename="mmproj.gguf",
+        hardware_note="Any GPU — 4 GB+ VRAM",
+        why="DeepSeek-V4 distilled reasoning — best reasoning-per-GB in light tier",
         description=(
-            "Higher precision Qwen3 8B. Better quality while still running\n"
-            "on modest hardware. Supports thinking mode for complex tool chains."
+            "Qwen3.5-9B fine-tuned with DeepSeek-V4 reasoning distillation.\n"
+            "Vision-capable, 262K context. Apache 2.0.\n"
+            "Punches well above its weight for tool calling and reasoning."
         ),
     ),
     ModelPreset(
-        identifier="phi4_14b_q3",
-        name="Phi-4 14B (Q3_K_M — ultra light)",
-        repo_id="unsloth/Phi-4-GGUF",
-        filename="Phi-4-Q3_K_M.gguf",
+        identifier="qwen35_9b_q8",
+        name="Qwen3.5-9B (Q8_0)",
+        repo_id="unsloth/Qwen3.5-9B-GGUF",
+        filename="Qwen3.5-9B-Q8_0.gguf",
         ram_gb="6-8 GB",
-        disk_gb="~6 GB",
-        capability="Moderate",
+        disk_gb="~10 GB",
+        capability="Strong",
         category="lightweight",
-        context_window=131072,
-        max_tokens=4096,
+        context_window=262144,
+        max_tokens=8192,
+        vision=True,
+        mmproj_filename="mmproj-F16.gguf",
+        hardware_note="Any GPU — 8 GB+ VRAM",
+        why="Highest quality light quant — Q8_0 precision, vision, 262K context",
         description=(
-            "Phi-4 at Q3_K_M — fits in 8 GB VRAM while keeping most of its\n"
-            "reasoning capability. Great for tight memory budgets."
+            "Qwen3.5-9B at Q8_0 — highest quality quantization for the light tier.\n"
+            "Vision-capable, 262K context, thinking mode. Apache 2.0.\n"
+            "Best quality-to-size ratio for users with 8 GB+ VRAM."
         ),
     ),
 ]
@@ -674,6 +932,7 @@ _lock = threading.Lock()
 _config: LLMConfig = LLMConfig()
 _state: LLMState = LLMState()
 _llama_process: "subprocess.Popen | None" = None
+_last_launched_model_path: Path | None = None
 # Set to request cancellation of an in-progress model download.
 _download_cancel_event = threading.Event()
 
@@ -690,6 +949,7 @@ def get_state() -> LLMState:
             download_progress_eta=_state.download_progress_eta,
             download_progress_pct=_state.download_progress_pct,
             download_active=_state.download_active,
+            download_kind=_state.download_kind,
         )
 
 
@@ -705,6 +965,7 @@ def set_config(cfg: LLMConfig) -> None:
         _config.local_ctx_size = cfg.local_ctx_size
         _config.local_max_tokens = cfg.local_max_tokens
         _config.hf_token = cfg.hf_token
+        _config.llama_backend = cfg.llama_backend
         _config.remote_api_url = cfg.remote_api_url
         _config.remote_api_key = cfg.remote_api_key
         _config.remote_model = cfg.remote_model
@@ -723,6 +984,7 @@ def get_config() -> LLMConfig:
             local_ctx_size=_config.local_ctx_size,
             local_max_tokens=_config.local_max_tokens,
             hf_token=_config.hf_token,
+            llama_backend=_config.llama_backend,
             remote_api_url=_config.remote_api_url,
             remote_api_key=_config.remote_api_key,
             remote_model=_config.remote_model,
@@ -737,14 +999,35 @@ _find_llama_server_checked: bool = False
 
 
 def find_llama_server() -> str | None:
-    """Search PATH and common install locations for ``llama-server``."""
+    """Search PATH and common install locations for ``llama-server``.
+
+    Prefers the active backend's bundled binary (e.g. ``llama-server-cuda.exe``)
+    over the generic ``llama-server.exe``.
+    """
     global _find_llama_server_cache, _find_llama_server_checked
     if _find_llama_server_checked:
         return _find_llama_server_cache
     _find_llama_server_checked = True
 
-    print("[🛠️Coworker] find_llama_server: searching for llama-server...")
-    # Search PATH first.
+    # Determine the active backend for bundled binary preference.
+    with _lock:
+        active_backend = _config.llama_backend
+    if active_backend == "auto":
+        active_backend = _detect_gpu_backend()
+
+    print("[🛠️Coworker] find_llama_server: searching for llama-server (backend={:s})...".format(active_backend))
+
+    # 1. Check the bundled directory for a backend-specific binary first.
+    bundled_dir = _get_bundled_llama_dir()
+    if active_backend and active_backend != "cpu":
+        backend_binary = bundled_dir / "llama-server-{backend}.exe".format(backend=active_backend)
+        print("[🛠️Coworker] find_llama_server:   checking bundled {:s}".format(str(backend_binary)))
+        if backend_binary.is_file():
+            print("[🛠️Coworker] find_llama_server: found bundled backend binary at {:s}".format(str(backend_binary)))
+            _find_llama_server_cache = str(backend_binary)
+            return str(backend_binary)
+
+    # 2. Search PATH first.
     exe = shutil.which("llama-server")
     if exe:
         print("[🛠️Coworker] find_llama_server: found via 'llama-server' -> {:s}".format(exe))
@@ -764,8 +1047,8 @@ def find_llama_server() -> str | None:
             print("[🛠️Coworker] find_llama_server: found at {:s}".format(path))
             _find_llama_server_cache = path
             return path
-    # Check the bundled directory (auto-downloaded by download_llama_server).
-    bundled = _get_bundled_llama_dir() / "llama-server.exe"
+    # Check the generic bundled binary as last resort.
+    bundled = bundled_dir / "llama-server.exe"
     print("[🛠️Coworker] find_llama_server:   checking bundled {:s}".format(str(bundled)))
     if bundled.is_file():
         print("[🛠️Coworker] find_llama_server: found bundled at {:s}".format(str(bundled)))
@@ -843,6 +1126,214 @@ def _clear_download_state() -> None:
         _state.download_progress_pct = 0.0
         _state.error = ""
         _state.download_active = False
+        _state.download_kind = ""
+
+
+def _set_download_kind(kind: str) -> None:
+    """Set the download kind ("model" | "llama_server" | "")."""
+    with _lock:
+        _state.download_kind = kind
+
+
+def _detect_gpu_backend() -> str:
+    """Detect the best GPU backend for llama-server on this machine.
+
+    Returns one of "cuda", "vulkan", or "cpu".
+    """
+    if sys.platform != "win32":
+        # Non-Windows: default to cpu (or vulkan on Linux if available).
+        # We don't auto-detect on macOS/Linux — user can override manually.
+        return "cpu"
+
+    # Windows detection.
+    # 1. Check for NVIDIA GPU via nvidia-smi.
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            print("[🛠️Coworker] _detect_gpu_backend: NVIDIA GPU detected -> cuda")
+            return "cuda"
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        pass
+
+    # 2. Check for AMD / Intel Arc GPU via wmic.
+    try:
+        result = subprocess.run(
+            ["wmic", "path", "win32_VideoController", "get", "name"],
+            capture_output=True, text=True, timeout=5,
+        )
+        output = result.stdout.lower()
+        if "amd" in output or "radeon" in output or "intel" in output:
+            print("[🛠️Coworker] _detect_gpu_backend: AMD/Intel GPU detected -> vulkan")
+            return "vulkan"
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        pass
+
+    # 3. Fallback to CPU.
+    print("[🛠️Coworker] _detect_gpu_backend: no compatible GPU detected -> cpu")
+    return "cpu"
+
+
+def resolve_gpu_backend(backend: str) -> str:
+    """Resolve a "auto" backend selector to a concrete backend name.
+
+    Returns ``cuda``, ``vulkan``, or ``cpu`` — the backend llama-server will
+    actually use (relevant for memory planning).
+    """
+    if backend != "auto":
+        return backend
+    return _detect_gpu_backend()
+
+
+# ---------------------------------------------------------------------------
+# Hardware-aware context-size recommendation
+#
+# A 64K+ context window on a 27B-class model puts many GB of KV cache into
+# VRAM/RAM and is the #1 cause of GPU out-of-memory crashes at startup.  We
+# detect the machine's memory and recommend a context size that fits, so new
+# users get something that "just works" instead of a slider to misconfigure.
+
+# Standard context sizes exposed as one-click preset buttons.
+ctx_preset_sizes: tuple[int, ...] = (4096, 8192, 16384, 32768, 65536, 131072)
+
+
+def ctx_preset_label(tokens: int) -> str:
+    """Return a short label like ``32K`` for a token count."""
+    return "{:d}K".format(max(1, tokens // 1024))
+
+
+def detect_system_ram_gb() -> float | None:
+    """Return total physical RAM in GB, or ``None`` if undetectable."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            class _MEMORYSTATUSEX(ctypes.Structure):  # type: ignore[misc]
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            stat = _MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                return stat.ullTotalPhys / (1024 ** 3)
+        elif sys.platform.startswith("linux"):
+            with open("/proc/meminfo", "r", encoding="utf-8") as fh:
+                for line in fh:
+                    if line.startswith("MemTotal:"):
+                        return int(line.split()[1]) / (1024 ** 2)
+        elif sys.platform == "darwin":
+            result = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip().isdigit():
+                return int(result.stdout.strip()) / (1024 ** 3)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return None
+
+
+def detect_vram_gb() -> float | None:
+    """Return the VRAM (GB) of the first NVIDIA GPU, or ``None``."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            first = result.stdout.strip().splitlines()[0].strip()
+            return float(first) / 1024.0
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired, ValueError):
+        pass
+    return None
+
+
+_hardware_detect_cache: dict[str, object] = {}
+_HARDWARE_CACHE_TTL = 30.0
+
+
+def _detect_hardware_cached() -> tuple[float | None, float | None]:
+    """Return (ram_gb, vram_gb), cached briefly so UI redraws don't spawn nvidia-smi."""
+    import time as _time
+    now = _time.monotonic()
+    if _hardware_detect_cache and now - float(_hardware_detect_cache.get("t", 0.0)) < _HARDWARE_CACHE_TTL:
+        return float(_hardware_detect_cache.get("ram") or 0.0) or None, \
+            float(_hardware_detect_cache.get("vram") or 0.0) or None
+    ram = detect_system_ram_gb()
+    vram = detect_vram_gb()
+    _hardware_detect_cache.clear()
+    _hardware_detect_cache["t"] = now
+    _hardware_detect_cache["ram"] = ram or 0.0
+    _hardware_detect_cache["vram"] = vram or 0.0
+    return ram, vram
+
+
+def recommend_context_size(
+    model_gb: float = 0.0,
+    backend: str = "auto",
+    ram_gb: float | None = None,
+    vram_gb: float | None = None,
+) -> int:
+    """Recommend a context size (tokens) that fits the detected hardware.
+
+    Heuristic: assume ~256 KB of KV-cache memory per token of context (an
+    upper bound for 27B-class GQA models — smaller models need far less),
+    i.e. ~4096 tokens per GB of budget.  The KV cache must fit in VRAM when
+    a GPU backend is used, otherwise in system RAM.  Returns one of
+    :data:`ctx_preset_sizes`.
+    """
+    if ram_gb is None or vram_gb is None:
+        _ram, _vram = _detect_hardware_cached()
+        if ram_gb is None:
+            ram_gb = _ram
+        if vram_gb is None:
+            vram_gb = _vram
+    resolved = resolve_gpu_backend(backend)
+    if resolved in ("cuda", "vulkan") and vram_gb:
+        # Weights + KV cache both live in VRAM; leave 1.5 GB headroom.
+        budget_gb = max(vram_gb - model_gb - 1.5, 1.5)
+    elif ram_gb:
+        # Weights in RAM; leave 2 GB for the OS + Blender.
+        budget_gb = max(ram_gb - model_gb - 2.0, 2.0)
+    else:
+        return 32768  # Hardware unknown — safe mid-range default.
+    tokens = int(budget_gb * 4096)
+    tokens = max(4096, min(tokens, 131072))
+    # Snap down to the nearest standard preset size.
+    chosen = ctx_preset_sizes[0]
+    for size in ctx_preset_sizes:
+        if size <= tokens:
+            chosen = size
+        else:
+            break
+    return chosen
+
+
+def hardware_context_hint(model_gb: float = 0.0, backend: str = "auto") -> str:
+    """One-line hint for the preferences UI: recommended size for this machine."""
+    ram, vram = _detect_hardware_cached()
+    recommended = recommend_context_size(model_gb, backend, ram, vram)
+    parts: list[str] = []
+    if ram:
+        parts.append("{:.0f} GB RAM".format(ram))
+    if vram:
+        parts.append("{:.0f} GB VRAM".format(vram))
+    hw = " · ".join(parts) if parts else "unknown hardware"
+    return (
+        "Recommended for your hardware ({:s}): {:s} \u2014 larger sizes need much "
+        "more memory and can crash startup.".format(hw, ctx_preset_label(recommended))
+    )
 
 
 def cancel_download() -> None:
@@ -1141,6 +1632,7 @@ def download_model(
 
     # Clear stale state before starting.
     _clear_download_state()
+    _set_download_kind("model")
     _download_cancel_event.clear()
 
     # Check if already downloaded.
@@ -1171,6 +1663,8 @@ def download_model(
                 _set_download_progress("Download complete: {:s}".format(f))
                 if progress_callback:
                     progress_callback("Model downloaded to {:s}".format(str(dest)))
+                # Also download the mmproj file if the preset has one.
+                _download_mmproj_if_needed(r, f, models_dir, progress_callback)
                 return
 
             # Cancelled — don't fall through to the fallback path.
@@ -1219,7 +1713,10 @@ def download_model(
                     return
                 # Check if the process died.
                 if proc.poll() is not None:
+                    tail = get_llama_server_log_tail()
                     error = "llama-server process exited unexpectedly during download"
+                    if tail:
+                        error += "\n\n--- llama-server.log (tail) ---\n{:s}".format(tail)
                     print("[🛠️Coworker] download_model: {:s}".format(error))
                     _set_error(error)
                     return
@@ -1301,6 +1798,7 @@ def _find_model_in_hf_cache(repo_id: str, filename: str) -> str | None:
 
 def download_llama_server(
     progress_callback: Callable[[str], None] | None = None,
+    backend: str | None = None,
 ) -> str | None:
     """
     Download and extract the ``llama-server`` binary from GitHub releases.
@@ -1310,11 +1808,20 @@ def download_llama_server(
     (or the platform-equivalent binary) into the bundled directory
     (``~/.cache/bfa_coworker_llama/``).
 
+    *backend* — one of ``"auto"``, ``"cpu"``, ``"cuda"``, ``"vulkan"``.
+      If ``None`` or ``"auto"``, auto-detects via :func:`_detect_gpu_backend`.
+      On Windows, CUDA 12.4 also downloads ``cudart`` DLLs.
+
     Returns the absolute path to the extracted binary, or ``None`` on
     failure.  Progress is reported via ``_state.download_progress`` and
     the optional *progress_callback*.
     """
     _clear_download_state()
+    _set_download_kind("llama_server")
+
+    # Resolve backend.
+    if backend is None or backend == "auto":
+        backend = _detect_gpu_backend()
 
     # Determine platform and architecture.
     # Asset naming convention (as of b10154):
@@ -1325,8 +1832,14 @@ def download_llama_server(
         platform = "win"
         arch = "x64"
         binary_name = "llama-server.exe"
-        variant = "cpu"  # CPU variant works everywhere, no CUDA DLLs needed.
         archive_ext = ".zip"
+        # Map backend to variant string.
+        if backend == "cuda":
+            variant = "cuda-12.4"
+        elif backend == "vulkan":
+            variant = "vulkan"
+        else:
+            variant = "cpu"
     elif sys.platform == "darwin":
         platform = "macos"
         arch = "arm64" if os.uname().machine == "arm64" else "x64"
@@ -1337,7 +1850,7 @@ def download_llama_server(
         platform = "ubuntu"
         arch = "x64"
         binary_name = "llama-server"
-        variant = "cpu"
+        variant = "vulkan" if backend == "vulkan" else "cpu"
         archive_ext = ".tar.gz"
 
     tag = _LLAMA_SERVER_VERSION
@@ -1353,8 +1866,21 @@ def download_llama_server(
             "llama-{tag}-bin-{platform}-{arch}{ext}"
         ).format(tag=tag, platform=platform, arch=arch, ext=archive_ext)
 
+    # CUDA cudart DLLs URL (Windows only).
+    cudart_url: str | None = None
+    if sys.platform == "win32" and backend == "cuda":
+        cudart_url = (
+            "https://github.com/ggml-org/llama.cpp/releases/download/{tag}/"
+            "cudart-llama-bin-win-cuda-12.4-x64.zip"
+        ).format(tag=tag)
+
     dest_dir = _get_bundled_llama_dir()
-    dest_binary = dest_dir / binary_name
+    # Use a backend-specific binary name so multiple backends can coexist.
+    backend_suffix = backend if backend != "cpu" else ""
+    if backend_suffix:
+        dest_binary = dest_dir / "llama-server-{backend}.exe".format(backend=backend_suffix)
+    else:
+        dest_binary = dest_dir / binary_name
 
     # Check if already downloaded.
     if dest_binary.is_file():
@@ -1365,7 +1891,7 @@ def download_llama_server(
             progress_callback(msg)
         return str(dest_binary)
 
-    _set_download_progress("Downloading llama-server from {:s} ...".format(url))
+    _set_download_progress("Downloading llama-server ({:s}) from {:s} ...".format(backend, url))
     if progress_callback:
         progress_callback("Downloading llama-server ({:s}) ...".format(tag))
 
@@ -1446,6 +1972,22 @@ def download_llama_server(
         # Cleanup temp dir.
         shutil.rmtree(str(temp_dir), ignore_errors=True)
 
+        # Download and extract cudart DLLs for CUDA backend.
+        if cudart_url:
+            _set_download_progress("Downloading CUDA runtime DLLs ...")
+            if progress_callback:
+                progress_callback("Downloading CUDA runtime DLLs ...")
+            try:
+                cudart_req = urllib.request.Request(cudart_url, method="GET")
+                with urllib.request.urlopen(cudart_req, timeout=120) as cudart_resp:
+                    cudart_data = io.BytesIO(cudart_resp.read())
+                with zipfile.ZipFile(cudart_data) as cudart_zf:
+                    cudart_zf.extractall(str(dest_dir))
+                print("[🛠️Coworker] download_llama_server: cudart DLLs extracted to {:s}".format(str(dest_dir)))
+            except (urllib.error.URLError, OSError, zipfile.BadZipFile) as ex:
+                print("[🛠️Coworker] download_llama_server: cudart download failed — {:s}".format(str(ex)))
+                # Non-fatal — the server may still work if CUDA is installed system-wide.
+
         # Make executable on non-Windows.
         if sys.platform != "win32":
             dest_binary.chmod(dest_binary.stat().st_mode | 0o111)
@@ -1483,6 +2025,11 @@ def download_llama_server(
 # Local LLM lifecycle
 
 
+def get_llama_process() -> "subprocess.Popen | None":
+    """Return the Popen handle of the currently running llama-server (or None)."""
+    return _llama_process
+
+
 def start_local_llama(
     model_path: Path | str | None = None,
     port: int | None = None,
@@ -1497,6 +2044,7 @@ def start_local_llama(
     Returns the ``Popen`` handle, or ``None`` on failure.
     """
     global _llama_process
+    global _last_launched_model_path
 
     print("[🛠️Coworker] start_local_llama: called")
     print("[🛠️Coworker] start_local_llama:   model_path={:s}".format(str(model_path)))
@@ -1523,6 +2071,7 @@ def start_local_llama(
         return None
 
     print("[🛠️Coworker] start_local_llama: server_exe = {:s}".format(server_exe))
+    print("[🛠️Coworker] start_local_llama: llama-server version = {:s}".format(_llama_server_version(server_exe)))
 
     # Resolve model source.  We prefer a local .gguf file, but fall back
     # to ``--hf-repo``/``--hf-file`` so llama-server can auto-download.
@@ -1540,15 +2089,21 @@ def start_local_llama(
 
     if model_path and os.path.isfile(str(model_path)):
         print("[🛠️Coworker] start_local_llama: local model file exists at {:s}".format(str(model_path)))
+        _last_launched_model_path = Path(model_path)
+        integrity_warning = check_model_file_integrity(model_path)
+        if integrity_warning:
+            print("[🛠️Coworker] start_local_llama: WARNING — {:s}".format(integrity_warning))
     else:
         # No local .gguf — try the HuggingFace cache first.
         print("[🛠️Coworker] start_local_llama: local model NOT found, checking HF cache...")
+        _last_launched_model_path = None
         with _lock:
             repo = _config.model_repo_id
             fname = _config.model_filename
         hf_cached = _find_model_in_hf_cache(repo, fname)
         if hf_cached:
             model_path = Path(hf_cached)
+            _last_launched_model_path = Path(hf_cached)
             print("[🛠️Coworker] start_local_llama: using HF cached model at {:s}".format(hf_cached))
         else:
             # Not in cache either — try --hf-repo/--hf-file as last resort.
@@ -1571,10 +2126,33 @@ def start_local_llama(
         print("[🛠️Coworker] start_local_llama: auto-upgraded ctx_size from 8192 to 32768")
     print("[🛠️Coworker] start_local_llama: using ctx_size {:d}".format(ctx_size))
 
+    # Large context windows on big models need a LOT of KV-cache memory.
+    # Warn loudly so an OOM-ish startup failure is self-explanatory.
+    try:
+        model_bytes = (
+            os.path.getsize(str(model_path))
+            if model_path and os.path.isfile(str(model_path)) else 0
+        )
+    except OSError:
+        model_bytes = 0
+    if ctx_size > 32768 and model_bytes >= 12 * 1024 * 1024 * 1024:
+        print(
+            "[🛠️Coworker] start_local_llama: WARNING — {:d} context on a {:.1f} GB model "
+            "needs a very large KV cache; if llama-server fails to start, lower "
+            "Context Size in preferences (16K-32K is plenty for agent work)".format(
+                ctx_size, model_bytes / (1024 ** 3)))
+
     print("[🛠️Coworker] start_local_llama: platform = {:s}".format(sys.platform))
 
     try:
         # Build args and environment (shared across platforms).
+        # Determine GPU offload layers based on backend.
+        with _lock:
+            backend = _config.llama_backend
+        if backend == "auto":
+            backend = _detect_gpu_backend()
+        ngpu_layers = 99 if backend in ("cuda", "vulkan") else 0
+
         args = [
             server_exe,
             '--jinja',
@@ -1582,11 +2160,17 @@ def start_local_llama(
             '--host', '127.0.0.1',
             '--port', str(port),
             '--ctx-size', str(ctx_size),
+            '--n-gpu-layers', str(ngpu_layers),
         ]
         if use_hf:
             args.extend(['--hf-repo', hf_repo, '--hf-file', hf_file])
         else:
             args.extend(['--model', str(model_path)])
+            # Add --mmproj if a projector file exists next to the model.
+            mmproj_path = _resolve_mmproj_path(model_path)
+            if mmproj_path:
+                args.extend(['--mmproj', str(mmproj_path)])
+                print("[🛠️Coworker] start_local_llama: using mmproj at {:s}".format(str(mmproj_path)))
 
         # Redirect HF cache into models dir so all downloads are
         # consolidated in the user's configured models directory.
@@ -1601,9 +2185,21 @@ def start_local_llama(
         if cfg_token:
             env["HF_TOKEN"] = cfg_token
 
+        # Capture llama-server output to a log file — the child's stdio is
+        # otherwise invisible (devnull + a separate console on Windows), which
+        # turns every startup crash into a mystery.  The log tail is surfaced
+        # automatically on failure (see wait_until_ready).
+        try:
+            log_handle = open(str(_llama_server_log_path()), "w", encoding="utf-8", errors="replace")
+        except OSError as ex:
+            log_handle = None
+            print("[🛠️Coworker] start_local_llama: could not open log file — {:s}".format(str(ex)))
+        stdio_target = log_handle if log_handle is not None else subprocess.DEVNULL
+
         if sys.platform == "win32":
             # Launch llama-server in a NEW console window so the user can
-            # see server output and close the window to stop it.
+            # close the window to stop it.  Output goes to the log file
+            # (handles are passed explicitly; the console stays visible).
             # subprocess.CREATE_NEW_CONSOLE (0x00000010) gives us a proper
             # Popen handle that terminates the actual server, not a wrapper.
             # This avoids the broken PowerShell Start-Process path which
@@ -1611,32 +2207,31 @@ def start_local_llama(
             print("[🛠️Coworker] start_local_llama: WIN32 path (CREATE_NEW_CONSOLE)")
             print("[🛠️Coworker] start_local_llama:   args = {:s}".format(str(args)))
             print("[🛠️Coworker] start_local_llama:   HF_HOME = {:s}".format(str(hf_cache_dir)))
+            print("[🛠️Coworker] start_local_llama:   log = {:s}".format(str(_llama_server_log_path())))
             creationflags = subprocess.CREATE_NEW_CONSOLE  # type: ignore[attr-defined]
-            with open(os.devnull, 'w') as devnull:
-                proc = subprocess.Popen(
-                    args,
-                    stdin=devnull,
-                    stdout=devnull,
-                    stderr=devnull,
-                    creationflags=creationflags,
-                    env=env,
-                )
+            proc = subprocess.Popen(
+                args,
+                stdin=subprocess.DEVNULL,
+                stdout=stdio_target,
+                stderr=stdio_target,
+                creationflags=creationflags,
+                env=env,
+            )
             print("[🛠️Coworker] start_local_llama:   Popen returned pid={:d}".format(proc.pid))
         else:
             # Linux / macOS: detach from the parent process group so the
-            # server survives Blender exiting.  We redirect stdio to
-            # /dev/null so it doesn't hijack the Blender console.
+            # server survives Blender exiting.  We redirect stdio to the
+            # log file so it doesn't hijack the Blender console.
             print("[🛠️Coworker] start_local_llama: POSIX path (start_new_session=True)")
             print("[🛠️Coworker] start_local_llama:   args = {:s}".format(str(args)))
-            with open(os.devnull, 'w') as devnull:
-                proc = subprocess.Popen(
-                    args,
-                    stdin=devnull,
-                    stdout=devnull,
-                    stderr=devnull,
-                    start_new_session=True,
-                )
-                print("[🛠️Coworker] start_local_llama:   Popen returned pid={:d}".format(proc.pid))
+            proc = subprocess.Popen(
+                args,
+                stdin=subprocess.DEVNULL,
+                stdout=stdio_target,
+                stderr=stdio_target,
+                start_new_session=True,
+            )
+            print("[🛠️Coworker] start_local_llama:   Popen returned pid={:d}".format(proc.pid))
 
     except FileNotFoundError:
         print("[🛠️Coworker] start_local_llama: FileNotFoundError — binary not found")
@@ -1749,6 +2344,9 @@ def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = No
     Polls :func:`health_check` until it succeeds or *timeout* seconds elapse.
     If *proc* is given and the process exits early, returns ``False``
     immediately with an error set. Returns ``True`` when the server is ready.
+
+    On failure, the llama-server log tail is included in the error so the
+    real startup problem is visible instead of a generic message.
     """
     import time as _time
     deadline = _time.monotonic() + timeout
@@ -1759,12 +2357,38 @@ def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = No
             print("[🛠️Coworker] wait_until_ready: server is ready")
             return True
         if proc is not None and proc.poll() is not None:
-            _set_error("llama-server exited during startup (check model path and port)")
-            print("[🛠️Coworker] wait_until_ready: process exited early")
+            tail = get_llama_server_log_tail()
+            msg = "llama-server exited during startup (exit code {:d}{:s}) — check the model file, mmproj, GPU memory, and port".format(
+                proc.returncode, _describe_exit_code(proc.returncode))
+            # The GPU OOM hint doesn't need the model path, so it runs first and
+            # is not gated on _last_launched_model_path.
+            if tail and _log_looks_like_gpu_oom(tail):
+                msg += "\n\n{:s}".format(_gpu_oom_hint())
+            # A truncated/corrupt GGUF is the most common local-model cause:
+            # llama-server dies with "missing tensor" after a few dozen layers.
+            # Surface an actionable "re-download" hint when we can confirm it.
+            if tail and _last_launched_model_path is not None:
+                # Truncated/corrupt GGUF -> suggest re-downloading.
+                if _log_looks_like_model_load_failure(tail):
+                    integrity_warning = check_model_file_integrity(_last_launched_model_path)
+                    if integrity_warning:
+                        msg += "\n\n{:s}".format(integrity_warning)
+                # Wrong mmproj -> explain the generic-name collision + fix.
+                if _log_looks_like_mmproj_mismatch(tail):
+                    msg += "\n\n{:s}".format(_mmproj_mismatch_hint(_last_launched_model_path))
+            if tail:
+                msg += "\n\n--- llama-server.log (tail) ---\n{:s}".format(tail)
+            _set_error(msg)
+            print("[🛠️Coworker] wait_until_ready: process exited early (rc={:d}){:s}".format(
+                proc.returncode, ":\n{:s}".format(tail) if tail else ""))
             return False
         _time.sleep(poll)
         poll = min(poll * 1.5, 3.0)
-    _set_error("llama-server did not become ready within {:.0f}s".format(timeout))
+    tail = get_llama_server_log_tail()
+    msg = "llama-server did not become ready within {:.0f}s".format(timeout)
+    if tail:
+        msg += "\n\n--- llama-server.log (tail) ---\n{:s}".format(tail)
+    _set_error(msg)
     print("[🛠️Coworker] wait_until_ready: timed out")
     return False
 
@@ -1803,6 +2427,190 @@ def check_remote_api(base_url: str, api_key: str) -> bool:
 
 # ---------------------------------------------------------------------------
 # Internal helpers
+
+_MIN_MMPROJ_BYTES = 1 * 1024 * 1024  # 1 MB — real projectors are 100s of MB
+
+
+def _is_valid_mmproj(candidate: Path, model_name: str) -> bool:
+    """Basic sanity checks on a candidate mmproj file."""
+    del model_name  # Reserved for future checks (e.g. architecture match).
+    if not candidate.is_file():
+        return False
+    try:
+        size = candidate.stat().st_size
+    except OSError:
+        return False
+    if size < _MIN_MMPROJ_BYTES:
+        print(
+            "[🛠️Coworker] _resolve_mmproj_path: skipping {:s} — only {:.0f} KB "
+            "(truncated/broken download?)".format(str(candidate), size / 1024.0)
+        )
+        return False
+    return True
+
+
+def _local_mmproj_name(preset: "ModelPreset") -> str:
+    """Unique local filename for a preset's vision projector.
+
+    Several presets share the same generic HF filename (``mmproj-F16.gguf``),
+    so saving them all under that name makes them clobber each other when
+    multiple models live in one folder.  Each projector is kept under a
+    model-specific name derived from the repo, e.g. ``mmproj-F16-Qwen3.5-9B.gguf``.
+    """
+    repo_stem = preset.repo_id.rstrip("/").split("/")[-1]
+    if repo_stem.lower().endswith("-gguf"):
+        repo_stem = repo_stem[:-5]
+    base = os.path.splitext(preset.mmproj_filename)[0]
+    ext = os.path.splitext(preset.mmproj_filename)[1] or ".gguf"
+    return "{:s}-{:s}{:s}".format(base, repo_stem, ext)
+
+
+def _count_vision_models_in_dir(model_dir: Path | None) -> int:
+    """Count curated vision-preset model files present in *model_dir*."""
+    if not model_dir or not model_dir.is_dir():
+        return 0
+    files = {
+        entry.lower()
+        for entry in os.listdir(str(model_dir))
+        if os.path.isfile(os.path.join(str(model_dir), entry))
+    }
+    return sum(
+        1 for p in PRESET_MODELS
+        if p.mmproj_filename and p.filename.lower() in files
+    )
+
+
+def _resolve_mmproj_path(model_path: Path | str | None) -> Path | None:
+    """Resolve the mmproj (vision projector) file for a local model.
+
+    A mismatched projector makes llama-server exit at startup, so we only
+    attach one when we are confident it belongs to the model:
+
+    * If the model filename matches a curated preset that declares an
+      ``mmproj_filename`` (vision-capable model), prefer the per-model
+      projector file (``mmproj-F16-Qwen3.5-9B.gguf``).  Fall back to the
+      generic name (``mmproj-F16.gguf``) only when this folder holds exactly
+      one vision-preset model — otherwise the generic file could be another
+      model's projector.
+    * Otherwise, pick up a generic ``mmproj-*.gguf`` next to the model only
+      when the model name itself looks vision-capable (contains "vl" or
+      "vision").
+
+    Also rejects trivially small files (truncated downloads).
+    Returns ``None`` when no suitable projector is found.
+    """
+    if isinstance(model_path, str):
+        model_path = Path(model_path)
+    model_dir = model_path.parent if model_path else None
+    if not model_dir or not model_dir.is_dir():
+        return None
+    model_name = (model_path.name or "").lower()
+
+    # 1. Curated preset match.
+    for preset in PRESET_MODELS:
+        if not preset.mmproj_filename:
+            continue
+        if model_name != preset.filename.lower():
+            continue
+
+        # Preferred: the per-model projector file (unique per preset).
+        candidates = [model_dir / _local_mmproj_name(preset)]
+        # Fallback: the generic name — but only when this folder holds exactly
+        # one vision-preset model, so the generic file can't be a different
+        # model's projector.
+        if _count_vision_models_in_dir(model_dir) == 1:
+            candidates.append(model_dir / preset.mmproj_filename)
+
+        for candidate in candidates:
+            if _is_valid_mmproj(candidate, model_name):
+                print(
+                    "[🛠️Coworker] _resolve_mmproj_path: using {:s} (preset {:s})".format(
+                        str(candidate), preset.identifier)
+                )
+                return candidate
+
+        # Explain why vision is unavailable so it isn't a mystery.
+        generic = model_dir / preset.mmproj_filename
+        if generic.is_file() and _count_vision_models_in_dir(model_dir) > 1:
+            print(
+                "[🛠️Coworker] _resolve_mmproj_path: {:s} is present but the folder contains several "
+                "vision models — one shared projector can't match them all, so it is not attached. "
+                "Use the addon's Download button (saves each projector under its own name) or rename "
+                "it to {:s}".format(generic.name, _local_mmproj_name(preset))
+            )
+        else:
+            print(
+                "[🛠️Coworker] _resolve_mmproj_path: preset {:s} needs {:s} but it is missing — "
+                "vision input will be unavailable".format(preset.identifier, _local_mmproj_name(preset))
+            )
+        return None
+
+    # 2. Non-preset model that looks vision-capable — generic projector names.
+    if "vl" in model_name or "vision" in model_name:
+        for candidate_name in ("mmproj-F16.gguf", "mmproj.gguf", "mmproj-BF16.gguf"):
+            candidate = model_dir / candidate_name
+            if _is_valid_mmproj(candidate, model_name):
+                print(
+                    "[🛠️Coworker] _resolve_mmproj_path: using {:s} for vision model {:s}".format(
+                        str(candidate), model_name)
+                )
+                return candidate
+
+    return None
+
+
+def _download_mmproj_if_needed(
+    repo_id: str,
+    model_filename: str,
+    models_dir: Path,
+    progress_callback: Callable[[str], None] | None = None,
+) -> None:
+    """Download the mmproj file for a vision-capable model if not already present.
+
+    Looks up the preset by model filename to find the correct projector filename.
+    Skips if the projector already exists or the model doesn't have one.
+
+    The projector is saved under a per-model name (see :func:`_local_mmproj_name`)
+    because several presets share the generic HF filename ``mmproj-F16.gguf`` —
+    saving them all under that name would clobber each other when multiple
+    vision models share one models folder.
+    """
+    # Find the preset that matches this model filename.
+    preset = None
+    for p in PRESET_MODELS:
+        if p.filename == model_filename and p.mmproj_filename:
+            preset = p
+            break
+    if not preset:
+        return  # No projector needed for this model.
+
+    mmproj_fname = preset.mmproj_filename
+    local_name = _local_mmproj_name(preset)
+    mmproj_dest = models_dir / local_name
+    if mmproj_dest.exists():
+        print("[🛠️Coworker] _download_mmproj_if_needed: {:s} already exists".format(str(mmproj_dest)))
+        return
+
+    print(
+        "[🛠️Coworker] _download_mmproj_if_needed: downloading {:s} as {:s} from {:s}".format(
+            mmproj_fname, local_name, repo_id)
+    )
+    _set_download_progress("Downloading vision projector {:s} ...".format(local_name))
+    if progress_callback:
+        progress_callback("Downloading vision projector {:s} ...".format(local_name))
+
+    # Reuse the direct download function for the projector file (source name
+    # is the HF filename, destination is the per-model local name).
+    success = _download_gguf_direct(repo_id, mmproj_fname, mmproj_dest, progress_callback)
+    if success:
+        print(
+            "[🛠️Coworker] _download_mmproj_if_needed: {:s} downloaded to {:s}".format(
+                mmproj_fname, str(mmproj_dest))
+        )
+    else:
+        print("[🛠️Coworker] _download_mmproj_if_needed: failed to download {:s}".format(mmproj_fname))
+        # Non-fatal — the model can still run without vision.
+
 
 def _set_error(msg: str) -> None:
     with _lock:

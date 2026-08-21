@@ -21,6 +21,7 @@ __all__ = (
     "run_conversation_turn",
     "cleanup",
     "ping_agent",
+    "warmup_agent",
     "check_ports_available",
     "migrate_vendor_deps",
     "generate_mcp_client_config",
@@ -506,6 +507,25 @@ def _parse_sse_text_response(raw: str) -> str:
     return "Error: no text content in tool result"
 
 
+def _extract_image_from_tool_result(result: dict) -> str | None:
+    """
+    Extract a base64-encoded image from a tool result's content blocks.
+
+    Returns the data URI string (e.g. ``"data:image/png;base64,..."``)
+    if an image block is found, or ``None`` if there's no image.
+    """
+    content = result.get("result", {}).get("content", [])
+    for block in content:
+        if isinstance(block, dict):
+            block_type = block.get("type", "")
+            if block_type in ("image", "image/png", "image/jpeg", "image/webp"):
+                data = block.get("data", "") or block.get("source", {}).get("data", "")
+                if data:
+                    mime = block_type if block_type.startswith("image/") else "image/png"
+                    return "data:{:s};base64,{:s}".format(mime, data)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Data types
 
@@ -534,6 +554,9 @@ class AgentState:
 
     # ── Re-entrancy guard ──────────────────────────────────────────
     turn_active: bool = False  # True while a conversation turn is in progress.
+
+    # ── Vision pipeline ────────────────────────────────────────────
+    _pending_image: str | None = None  # Base64 data URI of last screenshot
 
 
 _agent_state = AgentState()
@@ -865,12 +888,17 @@ def _wait_for_port(
     port: int,
     timeout: float = 15.0,
     interval: float = 1.0,
+    proc: "subprocess.Popen | None" = None,
 ) -> bool:
     """Wait for *port* to start accepting TCP connections.
 
     Polls ``socket.create_connection`` every *interval* seconds, up to
     *timeout* total.  Returns ``True`` as soon as the port accepts,
     ``False`` if the timeout expires.
+
+    If *proc* is given, the wait aborts early (returns ``False``) the moment
+    the process exits — so a crashed llama-server surfaces immediately
+    instead of hanging for the full timeout.
     """
     import time
     deadline = time.monotonic() + timeout
@@ -885,6 +913,12 @@ def _wait_for_port(
                 return True
         except (OSError, socket.error):
             pass
+        if proc is not None:
+            rc = proc.poll()
+            if rc is not None:
+                print("[🛠️Coworker] _wait_for_port: {:s}:{:d} — process exited early (rc={:d}), aborting wait".format(
+                    host, port, rc))
+                return False
         if attempt % 2 == 0:
             print("[🛠️Coworker] _wait_for_port: still waiting for {:s}:{:d} ({:.0f}s remaining)".format(
                 host, port, deadline - time.monotonic()))
@@ -1523,9 +1557,20 @@ def _openai_chat_completions(
 
     # Retry loop for transient failures (e.g. server just became ready
     # but the HTTP worker hasn't started yet).
+    # Also handles 503 Service Unavailable — llama-server returns this
+    # while the model is still loading (can take 30-120s for large models).
+    # We retry 503 with exponential backoff up to 120s total.
+    # Also handles chat template crashes: custom GGUF templates (DavidAU
+    # fine-tunes, etc.) may 500 on the ``tools`` parameter.  We inject
+    # tool descriptions into the system prompt as text and retry without
+    # the ``tools`` JSON parameter, then parse text-based tool calls from
+    # the response.
     import time as _time
     max_retries = 3
-    for attempt in range(max_retries):
+    max_503_retries = 60  # Up to ~120s with exponential backoff for model loading.
+    tools_tried = bool(tools)
+    _503_attempts = 0
+    for attempt in range(max_retries + max_503_retries):
         try:
             with urllib.request.urlopen(req, timeout=_STREAM_TIMEOUT) as resp:
                 raw = resp.read().decode()
@@ -1554,15 +1599,77 @@ def _openai_chat_completions(
                         len(reasoning)))
                     print(reasoning)
                     print("[🛠️Coworker] _openai_chat_completions: --- end reasoning ---")
+                # If we fell back to text-based tool calling, parse text calls.
+                if not tools_tried and not tool_calls:
+                    text_calls = _parse_text_tool_calls(content)
+                    if text_calls:
+                        print("[🛠️Coworker] _openai_chat_completions: parsed {:d} text-based tool calls".format(
+                            len(text_calls)))
+                        msg["tool_calls"] = text_calls
+                        choice["finish_reason"] = "tool_calls"
+                        result["_text_tool_fallback"] = True
                 return result
-        except (urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
+        except (urllib.error.HTTPError, urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
+            # ── Chat template crash fallback: inject tools as text ────
+            # Some custom GGUF chat templates (e.g. Fable Fusion, DavidAU
+            # fine-tunes) 500 on the ``tools`` parameter.  We inject tool
+            # descriptions into the system prompt and retry without the
+            # ``tools`` JSON parameter, preserving full agent functionality.
+            if tools_tried and isinstance(ex, urllib.error.HTTPError) and ex.code == 500:
+                print("[🛠️Coworker] _openai_chat_completions: 500 error with tools — "
+                      "injecting tools as text and retrying")
+                tools_tried = False
+                # Build a text description of available tools.
+                tool_text = (
+                    "\n\nYou have access to the following tools. "
+                    "To call a tool, output a JSON block with the format:\n"
+                    '{"tool": "tool_name", "arguments": {"arg1": "value1"}}\n'
+                    "Available tools:\n"
+                )
+                for t in tools:
+                    fn = t.get("function", {})
+                    name = fn.get("name", "?")
+                    desc = fn.get("description", "")
+                    params = fn.get("parameters", {})
+                    props = params.get("properties", {})
+                    param_str = ", ".join(
+                        "{:s}: {:s}".format(k, v.get("description", "?"))
+                        for k, v in props.items()
+                    )[:200]
+                    tool_text += "- {:s}: {:s} ({:s})\n".format(name, desc, param_str)
+                # Inject into the last system message, or add a new one.
+                injected = False
+                for i in range(len(messages) - 1, -1, -1):
+                    if messages[i].get("role") == "system":
+                        messages[i]["content"] += tool_text
+                        injected = True
+                        break
+                if not injected:
+                    messages.insert(0, {"role": "system", "content": tool_text})
+                # Rebuild request without tools.
+                body.pop("tools", None)
+                body["messages"] = messages
+                data_bytes = json.dumps(body).encode()
+                req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
+                continue
+            # ── 503 Service Unavailable: model still loading ──────────
+            # llama-server returns 503 while the model is loading into
+            # memory (can take 30-120s for large models).  Retry with
+            # exponential backoff up to 120s total.
+            if isinstance(ex, urllib.error.HTTPError) and ex.code == 503:
+                _503_attempts += 1
+                backoff = min(2.0 * _503_attempts, 10.0)  # 2s, 4s, 6s, ... 10s max
+                if _503_attempts % 5 == 0:
+                    print("[🛠️Coworker] _openai_chat_completions: 503 attempt {:d} — "
+                          "model still loading, retrying in {:.0f}s...".format(_503_attempts, backoff))
+                _time.sleep(backoff)
+                continue
             if attempt < max_retries - 1:
                 print("[🛠️Coworker] _openai_chat_completions: attempt {:d}/{:d} FAILED — {:s}, retrying in 2s...".format(
                     attempt + 1, max_retries, str(ex)))
                 _time.sleep(2)
                 continue
-            print("[🛠️Coworker] _openai_chat_completions: all {:d} attempts FAILED — {:s}".format(
-                max_retries, str(ex)))
+            print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — {:s}".format(str(ex)))
             _agent_state.error = "LLM request failed: {:s}".format(str(ex))
             return None
     return None
@@ -1581,6 +1688,39 @@ def _mcp_tools_to_openai(mcp_tools: list[dict[str, Any]]) -> list[dict[str, Any]
             },
         })
     return result
+
+
+def _parse_text_tool_calls(content: str) -> list[dict[str, Any]]:
+    """Parse text-based tool calls from an LLM response.
+
+    Looks for JSON blocks matching the format::
+
+        {"tool": "tool_name", "arguments": {"arg1": "value1"}}
+
+    Returns a list of OpenAI-format tool call dicts, or an empty list
+    if no tool calls are found.
+    """
+    import re
+    tool_calls: list[dict[str, Any]] = []
+    # Match JSON blocks: {"tool": "...", "arguments": {...}}
+    pattern = r'\{"tool":\s*"([^"]+)"\s*,\s*"arguments":\s*(\{.*?\})\s*\}'
+    for match in re.finditer(pattern, content, re.DOTALL):
+        name = match.group(1)
+        args_str = match.group(2)
+        try:
+            args = json.loads(args_str)
+        except (json.JSONDecodeError, TypeError):
+            args = {}
+        tool_id = "text_tool_{:d}".format(len(tool_calls))
+        tool_calls.append({
+            "id": tool_id,
+            "type": "function",
+            "function": {
+                "name": name,
+                "arguments": json.dumps(args),
+            },
+        })
+    return tool_calls
 
 
 def _call_mcp_tool_sync(
@@ -1799,10 +1939,24 @@ def _extract_error_signature(result_text: str) -> str:
     if '"status": "error"' not in result_text:
         return ""
     import re
-    m = re.search(r'"message":\s*"([^"]*(?:\\.[^"]*)*)"', result_text, re.DOTALL)
+    m = re.search(r'"message":\s*"', result_text)
     if not m:
         return ""
-    raw = m.group(1).replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+    # The closing quote is always the LAST '"' in the result text — true for
+    # escaped JSON and for the unescaped re-serialization produced by
+    # _trim_tool_result alike, so messages with embedded quotes (e.g.
+    # `File "<string>"` tracebacks) are captured in full.
+    end = result_text.rfind('"', m.end())
+    if end == -1:
+        return ""
+    raw = result_text[m.end():end]
+    # Unescape JSON escapes; a no-op when the text is already raw.
+    raw = raw.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+    # Drop any appended "HINT: ..." guidance block — the signature must be the
+    # actual error line, not the tail of the hint text.
+    hint_idx = raw.find("\n\nHINT:")
+    if hint_idx != -1:
+        raw = raw[:hint_idx]
     lines = raw.strip().splitlines()
     for line in reversed(lines):
         stripped = line.strip()
@@ -1832,6 +1986,17 @@ def _spiral_corrective_message(error_sig: str) -> str:
             "[System: You keep getting a 'Context missing' error. "
             "Check that the required context (active object, selected objects, etc.) "
             "exists before calling this operator.]"
+        )
+    if "no attribute 'selected_" in sig_lower:
+        return (
+            "[System: You keep calling a non-existent `bpy.context.selected_*` attribute "
+            "(e.g. selected_edges, selected_faces, selected_verts). Blender does not expose "
+            "edit-mode selections on context. Read them with bmesh:\n"
+            "    import bmesh\n"
+            "    bm = bmesh.from_edit_mesh(bpy.context.active_object.data)\n"
+            "    sel = [e for e in bm.edges if e.select]\n"
+            "Use `bpy.context.selected_objects` only for object-mode object selection. "
+            "Fix the code \u2014 do not retry it verbatim.]"
         )
     return (
         "[System: You've hit the same error multiple times in a row. "
@@ -2263,6 +2428,10 @@ def _run_conversation_turn_inner(
 
     history.append({"role": "user", "content": user_message})
 
+    # Clear any pending screenshot image from a previous turn — the user
+    # is starting fresh, so the old screenshot is stale.
+    _agent_state._pending_image = None
+
     # ── Pre-flight empty-scene check ──────────────────────────────────
     # Small local models often call mode-dependent operators (mode_set, etc.)
     # on an empty scene, which fails with "Context missing active object".
@@ -2345,9 +2514,19 @@ def _run_conversation_turn_inner(
     # would fail with "connection refused".
     if llm_port_local is not None:
         print("[🛠️Coworker] run_conversation_turn: waiting for LLM on 127.0.0.1:{:d}...".format(llm_port_local))
-        if not _wait_for_port("127.0.0.1", llm_port_local, timeout=120.0):
+        from . import llm_manager as _llm_mgr
+        if not _wait_for_port(
+            "127.0.0.1", llm_port_local, timeout=120.0, proc=_llm_mgr.get_llama_process()
+        ):
             _agent_state.is_thinking = False
-            _agent_state.error = "LLM server did not become ready after 120s"
+            _log_tail = _llm_mgr.get_llama_server_log_tail()
+            if _log_tail:
+                _agent_state.error = (
+                    "LLM server did not become ready — llama-server exited or is stuck.\n\n"
+                    "--- llama-server.log (tail) ---\n{:s}".format(_log_tail)
+                )
+            else:
+                _agent_state.error = "LLM server did not become ready after 120s"
             if on_status:
                 on_status("Error: LLM server not ready")
             return history
@@ -2426,6 +2605,23 @@ def _run_conversation_turn_inner(
         # role that wastes context window tokens without providing
         # useful signal to the model.
         history_to_send = _strip_reasoning_from_history(history_to_send)
+
+        # ── Inject screenshot images into the next user message ───────
+        # If the last tool result contained an image (screenshot), inject
+        # it as an image_url content block in the next user message so
+        # vision-capable models can "see" the viewport.
+        _pending_image: str | None = getattr(_agent_state, "_pending_image", None)
+        if _pending_image and history_to_send and history_to_send[-1].get("role") == "user":
+            # Prepend the image to the existing user message content.
+            existing = history_to_send[-1]["content"]
+            if isinstance(existing, str):
+                history_to_send[-1]["content"] = [
+                    {"type": "image_url", "image_url": {"url": _pending_image}},
+                    {"type": "text", "text": existing},
+                ]
+            elif isinstance(existing, list):
+                existing.insert(0, {"type": "image_url", "image_url": {"url": _pending_image}})
+            _agent_state._pending_image = None  # Clear after use
 
         response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model, max_tokens)
         if response is None:
@@ -2738,6 +2934,20 @@ def _run_conversation_turn_inner(
                     "summary": result_summary,
                 })
 
+                # ── Extract screenshot image for vision-capable models ─
+                # If the tool result contains an image (screenshot), store
+                # it on the agent state so it can be injected into the next
+                # user message as an image_url content block.
+                if tool_name in ("get_screenshot_of_area_as_image", "get_screenshot_of_window_as_image"):
+                    try:
+                        result_obj = json.loads(result_text)
+                        img_data = _extract_image_from_tool_result(result_obj)
+                        if img_data:
+                            _agent_state._pending_image = img_data
+                            print("[🛠️Coworker] run_conversation_turn: screenshot image captured for vision model")
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
                 # ── Spiral detection: break repeated error loops ──────
                 if tool_name == "execute_blender_code":
                     error_sig = _extract_error_signature(truncated)
@@ -2891,6 +3101,66 @@ def ping_agent(
         v.startswith("OK") for k, v in result.items() if k != "all_ok"
     )
     return result
+
+
+def warmup_agent(
+    on_status: Callable[[str], None] | None = None,
+    on_text: Callable[[str], None] | None = None,
+    mcp_port: int = _MCP_SERVER_DEFAULT_PORT,
+) -> None:
+    """
+    Warm up the agent: load MCP tools and post a welcome message.
+
+    This does a lightweight tool-list fetch (so ``tool_count`` is populated
+    and the UI shows the agent is ready) and posts a friendly welcome
+    message into the conversation history. It does NOT invoke the LLM —
+    that's deferred until the user's first real message.
+
+    Call this after the LLM backend is confirmed running but before the
+    user sends their first message.
+    """
+    # 1. Warm up tools (populate tool_count for UI).
+    if on_status:
+        on_status("Warming up tools...")
+    try:
+        tools = _list_tools_sync(mcp_port)
+        if tools:
+            _agent_state.tool_count = len(tools)
+            print("[🛠️Coworker] warmup_agent: {:d} tools loaded".format(len(tools)))
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[🛠️Coworker] warmup_agent: tool warmup failed — {:s}".format(str(ex)))
+
+    # 1.5 In local mode, only post the welcome once the LLM backend is
+    #     actually healthy.  Posting it unconditionally right after Popen
+    #     is a lie — a mid-range model takes 30-120s to load, and a crashed
+    #     llama-server would otherwise still get a "we're ready!" message
+    #     (the "welcome message happens, then closes" symptom).
+    try:
+        from . import llm_manager as _llm_mgr
+        if _llm_mgr.get_config().mode == "local" and not _llm_mgr.health_check():
+            _tail = _llm_mgr.get_llama_server_log_tail()
+            _detail = "\n\n--- llama-server.log (tail) ---\n{:s}".format(_tail) if _tail else ""
+            _msg = (
+                "LLM backend is not ready yet — wait for the model to load, "
+                "or check the llama-server log (last lines above).{:s}".format(_detail)
+            )
+            _agent_state.error = _msg
+            if on_status:
+                on_status("Error: LLM backend not ready")
+            print("[🛠️Coworker] warmup_agent: LLM backend not ready — welcome suppressed")
+            return
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[🛠️Coworker] warmup_agent: health pre-check failed — {:s}".format(str(ex)))
+
+    # 2. Post welcome message into history.
+    welcome = "Ok, now we are ready! How can I help?"
+    _agent_state.conversation_history.append({"role": "assistant", "content": welcome})
+    if on_text:
+        on_text(welcome)
+    if on_status:
+        on_status("Ready")
+
+    print("[🛠️Coworker] warmup_agent: welcome message posted")
 
 
 # ---------------------------------------------------------------------------

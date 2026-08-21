@@ -475,7 +475,7 @@ def generate_home(manifest: dict, operators: list, tools: list) -> str:
 | 📦 **Self-Contained** | Everything bundled — no external tools or Python setup needed |
 | 🧠 **Local LLM** | Download and run models locally via llama.cpp (16 curated presets) |
 | ☁️ **Remote API** | Connect to OpenAI, OpenRouter, or any OpenAI-compatible API |
-| 🔧 **MCP Tools** | 24+ dedicated tools for scene inspection, navigation, rendering, and more |
+| 🔧 **MCP Tools** | {len(tools)} dedicated tools for scene inspection, navigation, rendering, and more |
 | 💬 **Chat UI** | In-Blender chat panel with streaming responses, reasoning display, @mentions |
 | 🎨 **Generative AI** | Experimental image/video/audio generation via plugins |
 | 🌐 **Poly Haven** | Download CC0 assets (HDRIs, textures) directly from the agent |
@@ -497,12 +497,21 @@ graph TB
 
     subgraph "MCP Server Process"
         G[MCP Server<br/>blmcp/ FastMCP]
-        G --> H[24+ Tools<br/>Scene, Render, Docs...]
+        G --> H[{len(tools)} Tools<br/>Scene, Render, Docs...]
+    end
+
+    subgraph "External Clients"
+        I[Claude Desktop]
+        J[VS Code]
+        K[Custom Client]
     end
 
     C <-->|TCP :9876| G
     B -->|HTTP :9191| G
-    F -->|HTTPS| I[Cloud API]
+    F -->|HTTPS| L[Cloud API]
+    G -->|HTTP/SSE| I
+    G -->|HTTP/SSE| J
+    G -->|HTTP/SSE| K
 ```
 
 ---
@@ -511,21 +520,23 @@ graph TB
 
 | Section | Pages |
 |---------|-------|
-| 🚀 [[Quick-Start|Quick Start]] | Install → Configure → Chat in 3 steps |
-| 👤 [[User-Documentation/Installation|User Documentation]] | Installation, Configuration, Chat Interface, Local LLM, Remote API, Generative AI, Troubleshooting |
-| 🛠️ [[Developer-Documentation/Architecture|Developer Documentation]] | Architecture, Addon Structure, MCP Server, MCP Tools, Plugin System, Skills, Building, Contributing |
-| 📋 [[API-Glossary/Operators-Reference|API & Glossary]] | Operators Reference, Preferences Reference, MCP Tools Reference, Glossary |
+| 🚀 **[Quick Start](Quick-Start)** | Install → Configure → Chat in 3 steps |
+| 👤 **[User Documentation](Installation)** | Installation, Configuration, Chat Interface, Local LLM, Remote API, Generative AI, Troubleshooting |
+| 🛠️ **[Developer Documentation](Architecture)** | Architecture, Addon Structure, MCP Server, MCP Tools, Plugin System, Skills, Building, Contributing |
+| 📋 **[API & Glossary](Operators-Reference)** | Operators Reference, Preferences Reference, MCP Tools Reference, Glossary |
 
 ---
 
 ## Quick Stats
 
-- 🎯 **{len(operators)}** Operator classes registered
-- 🔧 **{len(tools)}** MCP tools available
-- 🧠 **16** Curated model presets (Flagship, Mid-Range, Lightweight)
-- ☁️ **10** Remote provider presets (OpenRouter)
-- 🧪 **8** Built-in test suites
-- 🎨 **4** Generative plugin types (Image, Video, Audio, Text)
+| Metric | Count |
+|--------|-------|
+| 🎯 Operator classes registered | **{len(operators)}** |
+| 🔧 MCP tools available | **{len(tools)}** |
+| 🧠 Curated model presets | **16** (Flagship, Mid-Range, Lightweight) |
+| ☁️ Remote provider presets | **10** (OpenRouter) |
+| 🧪 Built-in test suites | **8** |
+| 🎨 Generative plugin types | **4** (Image, Video, Audio, Text) |
 """
 
 
@@ -534,30 +545,30 @@ graph TB
 def generate_sidebar() -> str:
     """Generate the _Sidebar.md navigation."""
     return _header("Sidebar") + """
-- 🏠 [[Home|Home]]
-- 🚀 [[Quick-Start|Quick Start]]
+- 🏠 [Home](https://github.com/Draise14/bfa_coworker/wiki/Home)
+- 🚀 [Quick Start](https://github.com/Draise14/bfa_coworker/wiki/Quick-Start)
 - 👤 **User Documentation**
-  - 📥 [[User-Documentation/Installation|Installation]]
-  - ⚙️ [[User-Documentation/Configuration|Configuration]]
-  - 💬 [[User-Documentation/Chat-Interface|Chat Interface]]
-  - 🖥️ [[User-Documentation/Local-LLM-Setup|Local LLM Setup]]
-  - ☁️ [[User-Documentation/Remote-API-Setup|Remote API Setup]]
-  - 🎨 [[User-Documentation/Generative-AI|Generative AI]]
-  - 🔧 [[User-Documentation/Troubleshooting|Troubleshooting]]
+  - 📥 [Installation](https://github.com/Draise14/bfa_coworker/wiki/Installation)
+  - ⚙️ [Configuration](https://github.com/Draise14/bfa_coworker/wiki/Configuration)
+  - 💬 [Chat Interface](https://github.com/Draise14/bfa_coworker/wiki/Chat-Interface)
+  - 🖥️ [Local LLM Setup](https://github.com/Draise14/bfa_coworker/wiki/Local-LLM-Setup)
+  - ☁️ [Remote API Setup](https://github.com/Draise14/bfa_coworker/wiki/Remote-API-Setup)
+  - 🎨 [Generative AI](https://github.com/Draise14/bfa_coworker/wiki/Generative-AI)
+  - 🔧 [Troubleshooting](https://github.com/Draise14/bfa_coworker/wiki/Troubleshooting)
 - 🛠️ **Developer Documentation**
-  - 🏗️ [[Developer-Documentation/Architecture|Architecture]]
-  - 📁 [[Developer-Documentation/Addon-Structure|Addon Structure]]
-  - 🔌 [[Developer-Documentation/MCP-Server|MCP Server]]
-  - 🔧 [[Developer-Documentation/MCP-Tools|MCP Tools]]
-  - 🧩 [[Developer-Documentation/Plugin-System|Plugin System]]
-  - 📚 [[Developer-Documentation/Skills-System|Skills System]]
-  - 🧪 [[Developer-Documentation/Building-and-Testing|Building & Testing]]
-  - 🤝 [[Developer-Documentation/Contributing|Contributing]]
+  - 🏗️ [Architecture](https://github.com/Draise14/bfa_coworker/wiki/Architecture)
+  - 📁 [Addon Structure](https://github.com/Draise14/bfa_coworker/wiki/Addon-Structure)
+  - 🔌 [MCP Server](https://github.com/Draise14/bfa_coworker/wiki/MCP-Server)
+  - 🔧 [MCP Tools](https://github.com/Draise14/bfa_coworker/wiki/MCP-Tools)
+  - 🧩 [Plugin System](https://github.com/Draise14/bfa_coworker/wiki/Plugin-System)
+  - 📚 [Skills System](https://github.com/Draise14/bfa_coworker/wiki/Skills-System)
+  - 🧪 [Building & Testing](https://github.com/Draise14/bfa_coworker/wiki/Building-and-Testing)
+  - 🤝 [Contributing](https://github.com/Draise14/bfa_coworker/wiki/Contributing)
 - 📋 **API & Glossary**
-  - 🎯 [[API-Glossary/Operators-Reference|Operators Reference]]
-  - 📊 [[API-Glossary/Preferences-Reference|Preferences Reference]]
-  - 🔧 [[API-Glossary/MCP-Tools-Reference|MCP Tools Reference]]
-  - 📖 [[API-Glossary/Glossary|Glossary]]
+  - 🎯 [Operators Reference](https://github.com/Draise14/bfa_coworker/wiki/Operators-Reference)
+  - 📊 [Preferences Reference](https://github.com/Draise14/bfa_coworker/wiki/Preferences-Reference)
+  - 🔧 [MCP Tools Reference](https://github.com/Draise14/bfa_coworker/wiki/MCP-Tools-Reference)
+  - 📖 [Glossary](https://github.com/Draise14/bfa_coworker/wiki/Glossary)
 """
 
 
@@ -976,12 +987,12 @@ def generate_chat_interface() -> str:
 
 The Coworker chat panel provides an in-Blender interface for interacting with the AI agent. It's available in the **3D Viewport sidebar** and the **Text Editor sidebar**.
 
-{_screenshot(
+""" + _screenshot(
     "Full chat panel in the 3D View sidebar showing a conversation",
     "3D Viewport → Sidebar (N key) → Coworker tab",
     "Blender with a 3D scene, chat panel showing multi-turn conversation with tool results",
     "1. Conversation history, 2. Agent response with reasoning, 3. Tool result boxes, 4. Input area"
-)}
+) + """
 
 ---
 
@@ -1008,12 +1019,12 @@ The Coworker chat panel provides an in-Blender interface for interacting with th
 - **Stop** button to interrupt generation
 - **New Thread** button to clear conversation
 
-{_screenshot(
+""" + _screenshot(
     "Chat panel input area showing the @mention popup with object search",
     "3D Viewport → Sidebar → Coworker tab → Input area",
     "Chat panel input area, @mention popup open showing a list of scene objects",
     "1. @mention button, 2. Object search popup, 3. Input field, 4. Send/Stop buttons"
-)}
+) + """
 
 ---
 
@@ -1070,12 +1081,12 @@ Rules are useful for:
 
 The Coworker panel is also available in the **Text Editor** sidebar, providing the same chat interface for users who prefer working with text editors.
 
-{_screenshot(
+""" + _screenshot(
     "Text Editor sidebar showing the Coworker chat panel",
     "Text Editor → Sidebar → Coworker tab",
     "Text Editor open with a Python script, Coworker chat panel visible in sidebar",
     "1. Text Editor area, 2. Coworker chat panel in sidebar"
-)}
+) + """
 """
 
 
@@ -1114,12 +1125,12 @@ The add-on can download `llama-server` automatically:
 2. If `llama-server` is not installed, a **Download llama-server** button appears.
 3. Click it — the binary downloads from GitHub releases and extracts to `~/.cache/bfa_coworker_llama/`.
 
-{_screenshot(
+""" + _screenshot(
     "Local LLM tab showing llama-server not installed with Download button",
     "Edit → Preferences → Add-ons → Coworker → Local LLM tab",
     "Local LLM tab, 'llama-server: Not installed' message with Download button visible",
     "1. llama-server status, 2. Download llama-server button"
-)}
+) + """
 
 Alternatively, install manually:
 - Download from [llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases)
@@ -1150,12 +1161,12 @@ To select a preset:
 2. The repo ID, filename, context size, and max tokens auto-fill.
 3. Click **Download Model**.
 
-{_screenshot(
+""" + _screenshot(
     "Local LLM tab showing model presets organized by category with selection",
     "Edit → Preferences → Add-ons → Coworker → Local LLM tab → Model Presets",
     "Three categories of model presets visible, one preset selected (highlighted), Download button active",
     "1. Flagship category, 2. Mid-Range category, 3. Lightweight category, 4. Selected preset, 5. Download button"
-)}
+) + """
 
 ### 📂 Option B: Use an Existing Model
 
@@ -1186,12 +1197,12 @@ For advanced users:
 3. After download completes, `llama-server` starts automatically.
 4. The status changes to **"Model downloaded and llama-server is running"**.
 
-{_screenshot(
+""" + _screenshot(
     "Download in progress showing the progress bar with percentage, speed, and ETA",
     "Edit → Preferences → Add-ons → Coworker → Local LLM tab",
     "Download progress bar active, showing percentage, speed, and ETA, Cancel button visible",
     "1. Progress bar, 2. Percentage text, 3. Speed/ETA info, 4. Cancel button"
-)}
+) + """
 
 ---
 
@@ -1281,12 +1292,12 @@ The Coworker add-on supports any OpenAI-compatible API, including:
 
 Click **Test Connection** to verify everything works. A success message confirms connectivity.
 
-{_screenshot(
+""" + _screenshot(
     "Remote API tab with provider selected, API key entered, and successful test connection",
     "Edit → Preferences → Add-ons → Coworker → Remote API tab",
     "Remote API tab, OpenRouter selected, API key filled, 'Connection successful' message shown",
     "1. Provider dropdown, 2. API URL, 3. API Key field, 4. Model name, 5. Test Connection result"
-)}
+) + """
 
 ---
 
@@ -1319,12 +1330,12 @@ This is useful for:
 - Testing different models
 - Team environments with shared configurations
 
-{_screenshot(
+""" + _screenshot(
     "Saved provider profiles section showing multiple saved configurations",
     "Edit → Preferences → Add-ons → Coworker → Remote API tab → Saved Provider Profiles",
     "Multiple saved profiles listed with Load and Delete buttons",
     "1. Saved profile entries, 2. Load button, 3. Delete button, 4. Save Current as Profile button"
-)}
+) + """
 
 ---
 
@@ -1383,12 +1394,12 @@ The Coworker add-on includes an experimental generative AI system for creating i
 | **ComfyUI** | Connect to a local ComfyUI server | Experimental |
 | **Remote API** | Use a remote OpenAI-compatible generation API | Experimental |
 
-{_screenshot(
+""" + _screenshot(
     "Generative tab showing backend selector and configuration options",
     "Edit → Preferences → Add-ons → Coworker → Generative tab",
     "Generative tab selected, Local backend chosen, model and output directories visible",
     "1. Backend dropdown, 2. Model directory, 3. Output directory, 4. Auto-download toggle"
-)}
+) + """
 
 ---
 
@@ -1419,12 +1430,12 @@ Test buttons are available in the Generative tab:
 - **Download Test HDRI** — Downloads a sunset HDRI
 - **Download Test Texture** — Downloads a brick wall texture
 
-{_screenshot(
+""" + _screenshot(
     "Poly Haven test buttons in the Generative tab",
     "Edit → Preferences → Add-ons → Coworker → Generative tab → Poly Haven section",
     "Poly Haven section with Download Test HDRI and Download Test Texture buttons",
     "1. Download Test HDRI button, 2. Download Test Texture button"
-)}
+) + """
 
 ---
 
@@ -1478,12 +1489,12 @@ The add-on uses three ports by default:
 3. **Individual Overrides** — Set specific ports in Advanced tab.
 4. **Kill Stale Processes** — The add-on attempts to kill orphaned processes automatically.
 
-{_screenshot(
+""" + _screenshot(
     "Diagnostics panel showing port check results with all ports available",
     "Edit → Preferences → Add-ons → Coworker → Diagnostics section",
     "Diagnostics panel, Check Ports results showing Bridge/MCP/LLM all green (Available)",
     "1. Check Ports button, 2. Port status indicators, 3. Green checkmarks"
-)}
+) + """
 
 ---
 
@@ -1605,9 +1616,9 @@ Enable **Log** in Advanced settings to print every tool request/response to the 
 
 # ── Developer Documentation ──────────────────────────────────────────────
 
-def generate_architecture() -> str:
+def generate_architecture(tools: list) -> str:
     """Generate Architecture.md."""
-    return _header("Architecture", "How the Coworker system works") + """
+    return _header("Architecture", "How the Coworker system works") + f"""
 
 ---
 
@@ -1627,7 +1638,7 @@ graph TB
 
     subgraph "MCP Server Process"
         G[MCP Server<br/>blmcp/ FastMCP]
-        G --> H[24+ Tools<br/>Scene, Render, Docs...]
+        G --> H[{len(tools)} Tools<br/>Scene, Render, Docs...]
     end
 
     subgraph "External Clients"
@@ -1662,7 +1673,7 @@ Runs inside Blender / Bforartists' Python environment. Provides:
 
 A separate Python process using the **FastMCP** framework. Provides:
 
-- **24+ Tools** — Scene inspection, navigation, rendering, documentation search
+- **{len(tools)} Tools** — Scene inspection, navigation, rendering, documentation search
 - **Tool Auto-Discovery** — Tools are automatically loaded from the `tools/` directory
 - **Dual Transport** — Supports both STDIO and HTTP transports
 - **Bundled Documentation** — Full Blender Python API and User Manual as RST resources
@@ -1865,9 +1876,9 @@ bpy.app.timers.register(my_callback, first_interval=0.25, persistent=True)
 """
 
 
-def generate_mcp_server() -> str:
+def generate_mcp_server(tools: list) -> str:
     """Generate MCP-Server.md."""
-    return _header("MCP Server", "The Model Context Protocol server for Blender") + """
+    return _header("MCP Server", "The Model Context Protocol server for Blender") + f"""
 
 ---
 
@@ -1879,7 +1890,7 @@ The MCP (Model Context Protocol) server is a separate Python process that expose
 MCP Server (blmcp/)
     │
     ├── FastMCP Framework
-    ├── 24+ Tools (auto-discovered)
+    ├── {len(tools)} Tools (auto-discovered)
     ├── Bundled Blender API Docs (RST)
     ├── Bundled Blender Manual (RST)
     └── System Prompts (prompts.yml)
@@ -1941,7 +1952,7 @@ def register(mcp: FastMCP) -> None:
     def my_tool(param: str) -> dict:
         \"\"\"Description of what this tool does.\"\"\"
         # Implementation
-        return {"result": "success"}
+        return {{"result": "success"}}
 ```
 
 ---
@@ -2007,7 +2018,17 @@ For tools that need Blender / Bforartists' UI (screenshots, navigation), the bri
 
 def generate_mcp_tools(tools: list[dict]) -> str:
     """Generate MCP-Tools.md."""
-    return _header("MCP Tools", "Available tools for the AI agent") + """
+    # Categorize tools
+    scene_tools = [t for t in tools if any(kw in t['name'] for kw in ['summary', 'objects', 'detail', 'history'])]
+    doc_tools = [t for t in tools if any(kw in t['name'] for kw in ['search', 'docs', 'api'])]
+    nav_tools = [t for t in tools if any(kw in t['name'] for kw in ['jump', 'tab'])]
+    visual_tools = [t for t in tools if any(kw in t['name'] for kw in ['screenshot', 'render', 'thumbnail'])]
+    code_tools = [t for t in tools if any(kw in t['name'] for kw in ['execute'])]
+    polyhaven_tools = [t for t in tools if any(kw in t['name'] for kw in ['polyhaven'])]
+    material_tools = [t for t in tools if any(kw in t['name'] for kw in ['pbr', 'material', 'lighting', 'three_point'])]
+    anim_tools = [t for t in tools if any(kw in t['name'] for kw in ['keyframe', 'batch'])]
+
+    return _header("MCP Tools", "Available tools for the AI agent") + f"""
 
 ---
 
@@ -2019,66 +2040,88 @@ The MCP server provides **{len(tools)} tools** that the AI agent can use to inte
 
 ## Scene Exploration
 
-Use these tools first to understand the current scene state.
+Use these tools first to understand the current scene state. They provide structured summaries of objects, collections, data-blocks, file paths, and linked libraries.
 
 """ + "\n".join(
     f"### `{t['name']}`\n\n{t['description']}\n"
-    for t in tools if any(kw in t['name'] for kw in ['summary', 'objects', 'detail', 'history'])
+    for t in scene_tools
 ) + """
 
 ---
 
 ## Documentation
 
-Search and retrieve Blender's Python API and User Manual documentation.
+Search and retrieve Blender's Python API and User Manual documentation. The MCP server bundles the complete Blender docs as RST resources.
 
 """ + "\n".join(
     f"### `{t['name']}`\n\n{t['description']}\n"
-    for t in tools if any(kw in t['name'] for kw in ['search', 'docs', 'api'])
+    for t in doc_tools
 ) + """
 
 ---
 
 ## Navigation
 
-Jump to different areas, tabs, and objects in Blender.
+Jump to different areas, tabs, and objects in Blender. These tools help the agent move around the UI without relying on raw `bpy` code.
 
 """ + "\n".join(
     f"### `{t['name']}`\n\n{t['description']}\n"
-    for t in tools if any(kw in t['name'] for kw in ['jump', 'tab'])
+    for t in nav_tools
 ) + """
 
 ---
 
 ## Visual Feedback
 
-Capture screenshots and render viewports.
+Capture screenshots and render viewports. These tools provide visual context to the LLM, enabling vision-capable models to "see" the scene.
 
 """ + "\n".join(
     f"### `{t['name']}`\n\n{t['description']}\n"
-    for t in tools if any(kw in t['name'] for kw in ['screenshot', 'render', 'thumbnail'])
+    for t in visual_tools
 ) + """
 
 ---
 
 ## Code Execution
 
-Execute arbitrary Python code in Blender.
+Execute arbitrary Python code in Blender. This is the most flexible tool — use it when no dedicated tool exists for the operation you need.
 
 """ + "\n".join(
     f"### `{t['name']}`\n\n{t['description']}\n"
-    for t in tools if any(kw in t['name'] for kw in ['execute'])
+    for t in code_tools
+) + """
+
+---
+
+## Materials & Lighting
+
+Create physically-based materials and lighting setups. These tools automate common artist workflows.
+
+""" + "\n".join(
+    f"### `{t['name']}`\n\n{t['description']}\n"
+    for t in material_tools
+) + """
+
+---
+
+## Animation
+
+Insert keyframes and animate objects across multiple frames.
+
+""" + "\n".join(
+    f"### `{t['name']}`\n\n{t['description']}\n"
+    for t in anim_tools
 ) + """
 
 ---
 
 ## Poly Haven
 
-Download CC0 assets from Poly Haven.
+Download CC0 assets from Poly Haven. These tools let the agent search for, download, and import free HDRIs, textures, and models.
 
 """ + "\n".join(
     f"### `{t['name']}`\n\n{t['description']}\n"
-    for t in tools if any(kw in t['name'] for kw in ['polyhaven'])
+    for t in polyhaven_tools
 ) + """
 
 ---
@@ -2091,17 +2134,27 @@ Prefer dedicated MCP tools over `execute_blender_code` whenever possible:
 - Dedicated tools are pre-tested and version-safe
 - They provide structured, predictable output
 - They handle edge cases and error states
+- They work correctly across different Blender versions
 
 ### When to Fall Back to Raw Code
 
 Only use `execute_blender_code` for:
 - Modifier stack operations not covered by dedicated tools
-- Complex multi-step operations
+- Complex multi-step operations that span multiple tools
 - Custom operators not available through any tool
+- Operations that need conditional logic or loops
 
 ### Operation History
 
-Use `get_operation_history()` to check recent tool calls before attempting destructive changes. This helps avoid repeating failed operations.
+Use `get_operation_history()` to check recent tool calls before attempting destructive changes. This helps avoid repeating failed operations and gives context about what has already been done.
+
+### Best Practices
+
+1. **Start with scene exploration** — Use `get_objects_summary()` or `get_blendfile_summary_datablocks()` first to understand the scene
+2. **Use the right tool** — Check if a dedicated tool exists before falling back to `execute_blender_code`
+3. **Check history** — Call `get_operation_history()` before making destructive changes
+4. **Prefer structured output** — Dedicated tools return structured JSON, making it easier for the LLM to parse results
+5. **Combine tools** — Use scene exploration + navigation + visual feedback together for maximum context
 
 See the full [[API-Glossary/MCP-Tools-Reference|MCP Tools Reference]] for complete signatures and parameters.
 """
@@ -2352,6 +2405,7 @@ def generate_building_and_testing() -> str:
 - Python 3.10+
 - Blender / Bforartists 5.1+
 - Git
+- `pip install build` (for dependency bundling)
 
 ### Build Command
 
@@ -2359,24 +2413,53 @@ def generate_building_and_testing() -> str:
 # Build the addon .zip
 python build_addon.py
 
-# Build and install
+# Build and install into Blender
 python build_addon.py --install
 
-# Build, install, and enable
+# Build, install, and enable in Blender
 python build_addon.py --install --enable
 
-# Specify Blender executable
+# Specify Blender executable path
 python build_addon.py --blender /path/to/blender.exe
 
-# Specify output directory
+# Specify output directory for the .zip
 python build_addon.py --output-dir ./my-releases
 ```
 
-The build script:
-1. Bundles MCP dependencies into `vendor/deps/`
-2. Copies `blmcp` source into `vendor/blmcp/`
-3. Creates the `.zip` extension package
-4. Optionally installs and enables in Blender
+### What the Build Script Does
+
+The `build_addon.py` script performs these steps:
+
+1. **Vendor MCP Dependencies** — Installs the MCP server's Python dependencies into `vendor/deps/` using pip
+2. **Bundle blmcp** — Copies the `mcp/blmcp/` source tree into `vendor/blmcp/`
+3. **Package Extension** — Creates a `.zip` file compatible with Blender's extension system
+4. **Install (optional)** — If `--install` is passed, copies the `.zip` to Blender's extension directory
+5. **Enable (optional)** — If `--enable` is passed, writes the extension manifest to Blender's config
+
+The output `.zip` is placed in the `dist/` directory by default.
+
+### Build Options
+
+| Flag | Description |
+|------|-------------|
+| `--install` | Install the built `.zip` into Blender's extension directory |
+| `--enable` | Enable the add-on in Blender's preferences (implies `--install`) |
+| `--blender PATH` | Path to the Blender executable (used for install/enable) |
+| `--output-dir DIR` | Custom output directory (default: `dist/`) |
+| `--no-vendor` | Skip vendoring dependencies (for development) |
+
+### Build Output Structure
+
+```
+dist/
+└── bfa_coworker-X.Y.Z.zip
+    └── bfa_coworker/
+        ├── __init__.py
+        ├── ... (all addon files)
+        └── vendor/
+            ├── deps/       # Bundled Python packages
+            └── blmcp/      # MCP server source
+```
 
 ---
 
@@ -2453,8 +2536,11 @@ The add-on includes 8 multi-step test suites accessible from the Diagnostics pan
 
 ### Unit Tests
 ```bash
+# Run a single test file
 python tests/test_tool_listing.py
-python tests/test_rst_parse.py
+
+# Run all unit tests
+python -m unittest discover tests -v
 ```
 
 ### Integration Tests
@@ -2498,6 +2584,19 @@ make check_all  # Runs ruff, mypy, vulture, license, ascii, namespace
 - `__all__` defined in every module
 - Type annotations on all functions
 - Pylint disable comments for Blender-specific imports
+
+---
+
+## Troubleshooting Builds
+
+| Problem | Solution |
+|---------|----------|
+| **`ModuleNotFoundError: build`** | Run `pip install build` |
+| **Vendor deps fail to install** | Check internet connection; try `--no-vendor` for a quick dev build |
+| **Blender not found** | Use `--blender /path/to/blender.exe` to specify the location |
+| **Permission denied on install** | Run the build script with appropriate permissions, or install the `.zip` manually |
+| **Extension not appearing in Blender** | Check Blender's extension directory; verify the manifest version matches Blender's requirements |
+| **Wiki generation fails** | Ensure you're running from the repo root; check that `_misc/generate_wiki.py` exists |
 """
 
 
@@ -2785,6 +2884,17 @@ The MCP server provides **{len(tools)} tools** for interacting with Blender.
 | Tool | Purpose |
 |------|---------|
 | `execute_blender_code` | Execute arbitrary Python code in Blender |
+
+### Materials & Lighting
+| Tool | Purpose |
+|------|---------|
+| `setup_pbr_material` | Create a physically-based material with optional Polyhaven textures |
+| `three_point_lighting_rig` | Create a three-point lighting rig (key, fill, rim) targeting an object |
+
+### Animation
+| Tool | Purpose |
+|------|---------|
+| `batch_keyframe_insert` | Insert keyframes on multiple objects across multiple frames |
 
 ### Poly Haven
 | Tool | Purpose |
@@ -3086,9 +3196,9 @@ def main() -> int:
         ("User-Documentation/Generative-AI.md", generate_generative_ai()),
         ("User-Documentation/Troubleshooting.md", generate_troubleshooting()),
         # Developer Documentation
-        ("Developer-Documentation/Architecture.md", generate_architecture()),
+        ("Developer-Documentation/Architecture.md", generate_architecture(tools)),
         ("Developer-Documentation/Addon-Structure.md", generate_addon_structure(modules)),
-        ("Developer-Documentation/MCP-Server.md", generate_mcp_server()),
+        ("Developer-Documentation/MCP-Server.md", generate_mcp_server(tools)),
         ("Developer-Documentation/MCP-Tools.md", generate_mcp_tools(tools)),
         ("Developer-Documentation/Plugin-System.md", generate_plugin_system()),
         ("Developer-Documentation/Skills-System.md", generate_skills_system(skills)),

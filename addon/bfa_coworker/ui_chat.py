@@ -32,6 +32,7 @@ from pathlib import Path
 
 import bpy  # pylint: disable=import-error
 from bpy.props import (  # pylint: disable=import-error
+    BoolProperty,
     StringProperty,
     EnumProperty,
 )
@@ -238,6 +239,12 @@ class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
         description="Agent mode: LLM can execute tools. Ask mode: read-only Q&A",
         items=CHAT_MODE_ITEMS,
         default="AGENT",
+    )
+
+    chat_newest_first: BoolProperty(  # type: ignore[valid-type]
+        name="Newest First",
+        description="Show the most recent messages at the top of the chat history",
+        default=True,
     )
 
 
@@ -1040,18 +1047,22 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
 
         layout.separator()
 
-        # Conversation history — latest message first.
+        # Conversation history.
         history = state.conversation_history
         if history:
-            box = layout.box()
-            # Show a streaming preview if we're thinking and streaming text exists.
-            if state.is_thinking and state.streaming_text:
-                preview_row = box.row()
-                preview_row.label(text="Agent (live):", icon='CONSOLE')
-                _draw_multiline(box, state.streaming_text[:300] + "...")
-                box.separator()
+            # Display order toggle.
+            hist_box = layout.box()
+            toggle_row = hist_box.row(align=True)
+            toggle_row.prop(
+                props, "chat_newest_first",
+                icon='SORTTIME', text="Newest First",
+            )
+            toggle_row.label(
+                text="({:d} messages)".format(len(history)),
+                icon='NONE',
+            )
 
-            # Group messages into turns (user → assistant + tools).
+            # Group messages into turns (each user message starts a new turn).
             turns: list[list[dict]] = []
             current_turn: list[dict] = []
             for msg in history:
@@ -1065,91 +1076,157 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             if current_turn:
                 turns.append(current_turn)
 
-            # Draw turns in reverse order (newest first, top to bottom).
-            # Limit to last 3 turns so the user always sees the latest
-            # activity without excessive scrolling.
-            for turn in reversed(turns[-3:]):
-                # Separate messages by role for proper ordering.
+            # Determine display order and turn limit.
+            visible_turns = turns[-3:]
+            turn_iter = (
+                reversed(visible_turns) if props.chat_newest_first
+                else visible_turns
+            )
+
+            for turn_idx, turn in enumerate(turn_iter):
+                # Separate messages by role, preserving chronological order
+                # for interleaved reasoning+tool display.
                 user_msg = None
-                assistant_msg = None
-                tool_msgs = []
-                reasoning_msgs = []
+                process_msgs: list[dict] = []  # reasoning + tool, in order
+                conclusion_msg = None
                 for msg in turn:
                     role = msg.get("role", "")
                     if role == "user":
                         user_msg = msg
+                    elif role in ("reasoning", "tool"):
+                        process_msgs.append(msg)
                     elif role == "assistant":
-                        assistant_msg = msg
-                    elif role == "tool":
-                        tool_msgs.append(msg)
-                    elif role == "reasoning":
-                        reasoning_msgs.append(msg)
+                        if msg.get("tool_calls"):
+                            pass  # Intermediate "running tools" — skip
+                        else:
+                            conclusion_msg = msg
 
-                # Draw user message.
-                if user_msg:
-                    msg_box = box.box()
-                    row = msg_box.row()
-                    row.label(text="You:", icon='USER')
-                    op = row.operator("bfacw.copy_message", text="", icon='COPYDOWN')
+                if not user_msg:
+                    continue
+
+                # ── Outer turn box ──────────────────────────────
+                turn_box = hist_box.box()
+
+                # ── Collapsible: user prompt + process steps ────
+                has_process = bool(process_msgs)
+                turn_label = user_msg.get("content", "")[:60]
+                if len(user_msg.get("content", "")) > 60:
+                    turn_label += "..."
+
+                if has_process:
+                    proc_header, proc_body = turn_box.panel(
+                        "turn_process_{:d}".format(turn_idx),
+                        default_closed=True,
+                    )
+                    proc_row = proc_header.row()
+                    proc_row.label(
+                        text="You: {:s}".format(turn_label),
+                        icon='USER',
+                    )
+                    op = proc_row.operator(
+                        "bfacw.copy_message", text="", icon='COPYDOWN',
+                    )
                     op.message_index = history.index(user_msg)
-                    _draw_multiline(msg_box, user_msg.get("content", ""))
 
-                # Draw reasoning (before assistant, since it precedes it).
-                for r_msg in reasoning_msgs:
-                    _draw_reasoning(
-                        box,
-                        r_msg.get("content", ""),
-                        r_msg.get("label", "Thinking"),
-                        is_thinking=state.is_thinking,
-                        thinking_dots=state.thinking_dots,
-                        message_index=history.index(r_msg),
+                    if proc_body:
+                        # Full user message text.
+                        _draw_multiline(proc_body, user_msg.get("content", ""))
+                        proc_body.separator()
+
+                        # Interleaved reasoning + tool steps.
+                        for p_msg in process_msgs:
+                            p_role = p_msg.get("role", "")
+                            if p_role == "reasoning":
+                                _draw_reasoning(
+                                    proc_body,
+                                    p_msg.get("content", ""),
+                                    p_msg.get("label", "Thinking"),
+                                    is_thinking=state.is_thinking,
+                                    thinking_dots=state.thinking_dots,
+                                    message_index=history.index(p_msg),
+                                )
+                            elif p_role == "tool":
+                                t_content = p_msg.get("content", "")
+                                t_summary = p_msg.get("summary", "")
+                                t_name = p_msg.get("name", "")
+                                is_error = (
+                                    '"status": "error"' in (t_content or "") or
+                                    (t_content or "").startswith("Error")
+                                )
+                                display = (
+                                    t_summary if t_summary
+                                    else (t_content or "")
+                                )
+                                if not t_summary and len(display) > 200:
+                                    display = display[:200] + "..."
+                                _draw_tool_inline(
+                                    proc_body, t_name, display,
+                                    is_error,
+                                    message_index=history.index(p_msg),
+                                )
+
+                        # Live streaming preview (inside collapsible).
+                        if (
+                            state.is_thinking
+                            and state.streaming_text
+                            and turn_idx == 0
+                        ):
+                            proc_body.separator()
+                            proc_body.label(
+                                text="Agent (live):", icon='CONSOLE',
+                            )
+                            _draw_multiline(
+                                proc_body,
+                                state.streaming_text[:300] + "...",
+                            )
+                else:
+                    # No process steps — show compact user header.
+                    row = turn_box.row()
+                    row.label(
+                        text="You: {:s}".format(turn_label),
+                        icon='USER',
+                    )
+                    op = row.operator(
+                        "bfacw.copy_message", text="", icon='COPYDOWN',
+                    )
+                    op.message_index = history.index(user_msg)
+
+                # ── Agent conclusion (always visible) ───────────
+                if conclusion_msg:
+                    turn_box.separator()
+                    c_row = turn_box.row()
+                    c_row.label(text="Agent:", icon='CONSOLE')
+                    op = c_row.operator(
+                        "bfacw.copy_message", text="", icon='COPYDOWN',
+                    )
+                    op.message_index = history.index(conclusion_msg)
+                    _draw_multiline(
+                        turn_box,
+                        conclusion_msg.get("content", ""),
                     )
 
-                # Draw assistant message with tool sub-boxes inside.
-                if assistant_msg:
-                    has_tool_calls = bool(assistant_msg.get("tool_calls"))
-                    a_box = box.box()
-                    row = a_box.row()
-                    if has_tool_calls:
-                        row.label(text="Agent (running tools...):", icon='CONSOLE')
-                    else:
-                        row.label(text="Agent:", icon='CONSOLE')
-                    op = row.operator("bfacw.copy_message", text="", icon='COPYDOWN')
-                    op.message_index = history.index(assistant_msg)
-                    content = assistant_msg.get("content", "")
-                    if content:
-                        _draw_multiline(a_box, content)
-                    # Draw tool results as sub-boxes inside the assistant box.
-                    for t_msg in tool_msgs:
-                        t_content = t_msg.get("content", "")
-                        t_summary = t_msg.get("summary", "")
-                        t_name = t_msg.get("name", "")
-                        is_error = (
-                            '"status": "error"' in (t_content or "") or
-                            (t_content or "").startswith("Error")
-                        )
-                        display = t_summary if t_summary else (t_content or "")
-                        if not t_summary and len(display) > 200:
-                            display = display[:200] + "..."
-                        _draw_tool_inline(a_box, t_name, display, is_error, message_index=history.index(t_msg))
-                elif tool_msgs:
-                    # Orphaned tool messages (no assistant) — draw directly.
-                    for t_msg in tool_msgs:
-                        t_content = t_msg.get("content", "")
-                        t_summary = t_msg.get("summary", "")
-                        t_name = t_msg.get("name", "")
-                        is_error = (
-                            '"status": "error"' in (t_content or "") or
-                            (t_content or "").startswith("Error")
-                        )
-                        display = t_summary if t_summary else (t_content or "")
-                        if not t_summary and len(display) > 200:
-                            display = display[:200] + "..."
-                        _draw_tool_inline(box, t_name, display, is_error, message_index=history.index(t_msg))
+                # Streaming preview for in-progress turn (no conclusion yet).
+                if (
+                    not conclusion_msg
+                    and state.is_thinking
+                    and state.streaming_text
+                    and turn_idx == 0
+                    and not has_process
+                ):
+                    turn_box.separator()
+                    turn_box.label(
+                        text="Agent (live):", icon='CONSOLE',
+                    )
+                    _draw_multiline(
+                        turn_box,
+                        state.streaming_text[:300] + "...",
+                    )
 
-                box.separator()
         else:
-            layout.label(text="No messages yet. Start the agent and type below.", icon='INFO')
+            layout.label(
+                text="No messages yet. Start the agent and type below.",
+                icon='INFO',
+            )
 
 
 class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]

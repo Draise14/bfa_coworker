@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Multi-Instance Port Conflict Detection** — Bridge server now detects when another Blender session already owns the default port (9876) and raises a clear error pointing to `port_offset` in Preferences. Uses `SO_EXCLUSIVEADDRUSE` on Windows to prevent silent port sharing that previously caused code-execution requests from a second session to be non-deterministically routed to the first session.
+
 - **Curated 9-Model Preset List** — Replaced 14-model list with 9 curated presets (3 flagship / 3 mid / 3 light) tuned for Blender agentic work. New entries: Qwen3.8-27B, Fable Fusion 27B, Nail 35B A3B, Gemma 4 E4B, Qwen3.5-9B DeepSeek-V4-Flash. Each preset carries native context window, vision flag, mmproj filename, hardware recommendation, and "why pick this" rationale. Removed Gemma 3 12B Vision (#23) and Phi-4 14B Q3 (#32). GPT-OSS 20B is the new default (best Blender benchmarked model).
 - **GPU Backend Selector** — New `llama_backend` dropdown in preferences (Auto / CUDA 12.4 / Vulkan / CPU). Auto-detect checks nvidia-smi for NVIDIA, wmic for AMD/Intel, and falls back to CPU. `download_llama_server()` selects the correct asset per backend and extracts cudart DLLs for CUDA. `find_llama_server()` prefers the active backend's bundled binary. `start_local_llama()` passes `--n-gpu-layers` (99 for GPU, 0 for CPU).
 - **Unified Download Progress Bars** — Added `download_kind` field to LLMState. Replaced fragile string-matching progress logic with a single progress block driven by `download_kind` + `download_progress_pct` + ETA. Cancel button now works for llama-server downloads too.
@@ -45,6 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **"Agent" → "Coworker" Branding** — All user-facing display strings now say "Coworker" (buttons, labels, mode toggle, error messages) for branding consistency. Tooltips/descriptions retain "AI agent" for discoverability. Internal identifiers unchanged.
+- **Removed Redundant Operating Mode Panel** — Removed the duplicate Operating Mode selector from the Advanced preferences tab; the top-level selector and tab buttons already handle mode switching.
 - **New Addon Interface** — Redesigned preferences panel with 4 tabs (General, LLM, Remote, Diagnostics). Debugging panel moved out of tabs into its own section.
 - **Unified Operating Mode Selector** — Combined local/remote mode into a single dropdown selector. Improved reasoning content display with better verbosity.
 - **Skills Improvements** — Multiple skill file enhancements: animation curve understanding, material creation smarts, operator mode switching, Blender 5.3 API nuances, sequencer versioning API.

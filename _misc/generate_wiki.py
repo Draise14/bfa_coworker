@@ -473,7 +473,7 @@ def generate_home(manifest: dict, operators: list, tools: list) -> str:
 | Feature | Description |
 |---------|-------------|
 | 📦 **Self-Contained** | Everything bundled — no external tools or Python setup needed |
-| 🧠 **Local LLM** | Download and run models locally via llama.cpp (16 curated presets) |
+| 🧠 **Local LLM** | Download and run models locally via llama.cpp (9 curated presets) |
 | ☁️ **Remote API** | Connect to OpenAI, OpenRouter, or any OpenAI-compatible API |
 | 🔧 **MCP Tools** | {len(tools)} dedicated tools for scene inspection, navigation, rendering, and more |
 | 💬 **Chat UI** | In-Blender chat panel with streaming responses, reasoning display, @mentions |
@@ -531,10 +531,9 @@ graph TB
 
 | Metric | Count |
 |--------|-------|
-| 🎯 Operator classes registered | **{len(operators)}** |
 | 🔧 MCP tools available | **{len(tools)}** |
-| 🧠 Curated model presets | **16** (Flagship, Mid-Range, Lightweight) |
-| ☁️ Remote provider presets | **10** (OpenRouter) |
+| 🧠 Curated model presets | **9** (Light, Mid, Flagship) |
+| ☁️ Remote API providers | **2** (OpenRouter, Custom) |
 | 🧪 Built-in test suites | **8** |
 | 🎨 Generative plugin types | **4** (Image, Video, Audio, Text) |
 """

@@ -441,7 +441,7 @@ class _BFACW_OT_test_step(bpy.types.Operator):  # type: ignore[misc]
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         if not get_agent_controller()._agent_state.mcp_server_running:
-            self.report({"ERROR"}, "Agent is not running. Start it from Preferences.")
+            self.report({"ERROR"}, "Coworker is not running. Start it from Preferences.")
             return {"CANCELLED"}
 
         suite = _TEST_SUITES.get(self.suite)
@@ -735,14 +735,14 @@ class BFACW_OT_test_polyhaven_hdri(bpy.types.Operator):  # type: ignore[misc]
     def execute(self, context: bpy.types.Context) -> set[str]:
         # Use the MCP tool via agent controller if running, else direct download.
         if get_agent_controller()._agent_state.mcp_server_running:
-            self.report({"INFO"}, "Sending Poly Haven HDRI download request to agent...")
+            self.report({"INFO"}, "Sending Poly Haven HDRI download request to Coworker...")
             _run_test_step(context, "polyhaven", 1, "HDRI",
                            "Download a sunset HDRI from Poly Haven and set it as "
                            "the world environment. Asset: belfast_sunset, type: hdris.")
             return {"FINISHED"}
 
         # Direct download fallback.
-        self.report({"INFO"}, "Agent not running. Starting direct download...")
+        self.report({"INFO"}, "Coworker not running. Starting direct download...")
         import threading
         def _do_download():
             try:
@@ -767,14 +767,14 @@ class BFACW_OT_test_polyhaven_texture(bpy.types.Operator):  # type: ignore[misc]
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         if get_agent_controller()._agent_state.mcp_server_running:
-            self.report({"INFO"}, "Sending Poly Haven texture download request to agent...")
+            self.report({"INFO"}, "Sending Poly Haven texture download request to Coworker...")
             _run_test_step(context, "polyhaven", 2, "Texture",
                            "Download a brick wall texture from Poly Haven and apply "
                            "it as a material on the active object. "
                            "Asset: brick_wall_001, type: textures.")
             return {"FINISHED"}
 
-        self.report({"INFO"}, "Agent not running. Starting direct download...")
+        self.report({"INFO"}, "Coworker not running. Starting direct download...")
         import threading
         def _do_download():
             try:

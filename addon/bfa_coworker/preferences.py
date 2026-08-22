@@ -253,7 +253,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
     operating_mode: EnumProperty(  # type: ignore[valid-type]
         name="Operating Mode",
-        description="Select how the agent connects to an LLM",
+        description="Select how the Coworker agent connects to an LLM",
         items=OPERATING_MODE_ITEMS,
         default="LOCAL_LLM",
         update=_update_operating_mode,
@@ -481,7 +481,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
     )
 
     agent_autostart: BoolProperty(  # type: ignore[valid-type]
-        name="Auto-Start Agent",
+        name="Auto-Start Coworker",
         default=False,
     )
 
@@ -667,8 +667,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
     # ── Agent Mode ───────────────────────────────────────────────────────
 
     agent_mode: EnumProperty(  # type: ignore[valid-type]
-        name="Agent Mode",
-        description="How the agent operates",
+        name="Coworker Mode",
+        description="How the Coworker agent operates",
         items=AGENT_MODE_ITEMS,
         default="SELF_CONTAINED",
     )
@@ -1287,11 +1287,6 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         del context
         layout = self.layout
 
-        # ── Operating Mode ─────────────────────────────────────────────
-        box = layout.box()
-        box.label(text="Operating Mode", icon='WORKSPACE')
-        box.prop(self, "operating_mode", expand=True)
-
         # ── Bridge Server ──────────────────────────────────────────────
         bridge_box = layout.box()
         bridge_box.label(text="Bridge Server", icon='NETWORK_DRIVE')
@@ -1350,7 +1345,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
         # ── Agent Control ─────────────────────────────────────────────
         box = layout.box()
-        box.label(text="Agent Control", icon='WORKSPACE')
+        box.label(text="Coworker Control", icon='WORKSPACE')
         box.prop(self, "agent_autostart")
         row = box.row()
         row.operator("bfacw.ping_agent", icon="FILE_REFRESH", text="Check Status")

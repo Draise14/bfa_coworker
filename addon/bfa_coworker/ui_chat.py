@@ -225,7 +225,7 @@ class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
 
     chat_input: StringProperty(  # type: ignore[valid-type]
         name="Input",
-        description="Type your message for the MCP agent",
+        description="Type your message for the Coworker (AI agent)",
         default="",
     )
 
@@ -236,7 +236,7 @@ class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
 
     chat_mode: EnumProperty(  # type: ignore[valid-type]
         name="Mode",
-        description="Agent mode: LLM can execute tools. Ask mode: read-only Q&A",
+        description="Coworker mode: the agent can execute tools. Ask mode: read-only Q&A",
         items=CHAT_MODE_ITEMS,
         default="AGENT",
     )
@@ -280,10 +280,10 @@ def _save_chat_history() -> None:
 # Operators
 
 class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
-    """Send the current input to the MCP agent."""
+    """Send the current input to the Coworker agent."""
     bl_idname = "bfacw.chat_send"
     bl_label = "Send"
-    bl_description = "Send your message to the MCP agent"
+    bl_description = "Send your message to the Coworker agent"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         wm = context.window_manager
@@ -293,7 +293,7 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             return {"CANCELLED"}
 
         if not agent_controller._agent_state.mcp_server_running:
-            self.report({"ERROR"}, "Agent is not running. Start it from Preferences or the Chat panel.")
+            self.report({"ERROR"}, "Coworker is not running. Start it from Preferences or the Chat panel.")
             return {"CANCELLED"}
 
         # Double-click guard: don't start a new turn while one is running.
@@ -559,7 +559,7 @@ class BFACW_OT_edit_rules(Operator):  # type: ignore[misc]
             try:
                 rules_path.write_text(
                     "# Project Rules for {:s}\n"
-                    "# Write instructions for the AI agent below.\n"
+                    "# Write instructions for the agent below.\n"
                     "# Each line starting with # is a comment.\n"
                     "\n"
                     "- Be concise and specific.\n"
@@ -594,7 +594,7 @@ class BFACW_OT_reload_rules(Operator):  # type: ignore[misc]
     """Reload project rules into the agent's system prompt."""
     bl_idname = "bfacw.reload_rules"
     bl_label = "Reload Rules"
-    bl_description = "Reload project rules into the agent's system prompt"
+    bl_description = "Reload project rules into the Coworker's system prompt"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         # Clear cached system prompt so it's rebuilt on next turn.
@@ -604,10 +604,10 @@ class BFACW_OT_reload_rules(Operator):  # type: ignore[misc]
 
 
 class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
-    """Start the agent: MCP bridge, MCP server, and LLM backend."""
+    """Start the Coworker agent: MCP bridge, MCP server, and LLM backend."""
     bl_idname = "bfacw.agent_start"
-    bl_label = "Start Agent"
-    bl_description = "Start the MCP bridge, MCP server, and LLM backend"
+    bl_label = "Start Coworker"
+    bl_description = "Start the Coworker agent: MCP bridge, MCP server, and LLM backend"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         prefs = context.preferences.addons[__package__].preferences
@@ -807,10 +807,10 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
 
 
 class BFACW_OT_agent_stop(Operator):  # type: ignore[misc]
-    """Stop the agent and all subprocesses."""
+    """Stop the Coworker agent and all subprocesses."""
     bl_idname = "bfacw.agent_stop"
-    bl_label = "Stop Agent"
-    bl_description = "Stop the MCP server and LLM backend"
+    bl_label = "Stop Coworker"
+    bl_description = "Stop the Coworker agent and all subprocesses"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         wm = context.window_manager
@@ -896,9 +896,9 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 row.operator("bfacw.agent_start", icon="PLAY", text="Start Bridge")
         else:
             if state.mcp_server_running:
-                row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop Agent")
+                row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop Coworker")
             else:
-                row.operator("bfacw.agent_start", icon="PLAY", text="Start Agent")
+                row.operator("bfacw.agent_start", icon="PLAY", text="Start Coworker")
 
         # Status.
         if is_harness:
@@ -1050,16 +1050,16 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         # Conversation history.
         history = state.conversation_history
         if history:
-            # Display order toggle.
+            # Display order toggle + message count.
             hist_box = layout.box()
             toggle_row = hist_box.row(align=True)
             toggle_row.prop(
                 props, "chat_newest_first",
                 icon='SORTTIME', text="Newest First",
             )
-            toggle_row.label(
-                text="({:d} messages)".format(len(history)),
-                icon='NONE',
+            _draw_multiline(
+                hist_box,
+                "({:d} messages)".format(len(history)),
             )
 
             # Group messages into turns (each user message starts a new turn).
@@ -1109,21 +1109,20 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
 
                 # ── Collapsible: user prompt + process steps ────
                 has_process = bool(process_msgs)
-                turn_label = user_msg.get("content", "")[:60]
-                if len(user_msg.get("content", "")) > 60:
-                    turn_label += "..."
 
                 if has_process:
                     proc_header, proc_body = turn_box.panel(
                         "turn_process_{:d}".format(turn_idx),
                         default_closed=True,
                     )
-                    proc_row = proc_header.row()
-                    proc_row.label(
-                        text="You: {:s}".format(turn_label),
-                        icon='USER',
+                    # Full user message in header (multiline, wraps).
+                    _draw_multiline(
+                        proc_header,
+                        "You: {:s}".format(user_msg.get("content", "")),
                     )
-                    op = proc_row.operator(
+                    op_row = proc_header.row()
+                    op_row.label(text="", icon='USER')
+                    op = op_row.operator(
                         "bfacw.copy_message", text="", icon='COPYDOWN',
                     )
                     op.message_index = history.index(user_msg)
@@ -1173,7 +1172,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         ):
                             proc_body.separator()
                             proc_body.label(
-                                text="Agent (live):", icon='CONSOLE',
+                                text="Coworker (live):", icon='CONSOLE',
                             )
                             _draw_multiline(
                                 proc_body,
@@ -1181,12 +1180,13 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                             )
                 else:
                     # No process steps — show compact user header.
-                    row = turn_box.row()
-                    row.label(
-                        text="You: {:s}".format(turn_label),
-                        icon='USER',
+                    _draw_multiline(
+                        turn_box,
+                        "You: {:s}".format(user_msg.get("content", "")),
                     )
-                    op = row.operator(
+                    op_row = turn_box.row()
+                    op_row.label(text="", icon='USER')
+                    op = op_row.operator(
                         "bfacw.copy_message", text="", icon='COPYDOWN',
                     )
                     op.message_index = history.index(user_msg)
@@ -1195,7 +1195,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 if conclusion_msg:
                     turn_box.separator()
                     c_row = turn_box.row()
-                    c_row.label(text="Agent:", icon='CONSOLE')
+                    c_row.label(text="Coworker:", icon='CONSOLE')
                     op = c_row.operator(
                         "bfacw.copy_message", text="", icon='COPYDOWN',
                     )
@@ -1215,7 +1215,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 ):
                     turn_box.separator()
                     turn_box.label(
-                        text="Agent (live):", icon='CONSOLE',
+                        text="Coworker (live):", icon='CONSOLE',
                     )
                     _draw_multiline(
                         turn_box,
@@ -1224,7 +1224,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
 
         else:
             layout.label(
-                text="No messages yet. Start the agent and type below.",
+                text="No messages yet. Start the Coworker and type below.",
                 icon='INFO',
             )
 

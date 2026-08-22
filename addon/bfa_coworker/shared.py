@@ -229,6 +229,6 @@ MCP_SERVER_MODE_ITEMS: list[tuple[str, str, str]] = [
 # ── Chat Mode EnumProperty Items (Tier 1: Agent/Ask Toggle) ──────────────
 
 CHAT_MODE_ITEMS: list[tuple[str, str, str]] = [
-    ("AGENT", "Agent", "LLM can execute tools and modify the scene"),
+    ("AGENT", "Coworker", "The agent can execute tools and modify the scene"),
     ("ASK", "Ask", "LLM answers questions without modifying anything"),
 ]

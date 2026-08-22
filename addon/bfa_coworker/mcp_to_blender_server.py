@@ -803,9 +803,36 @@ def start(host: str, port: int) -> None:
     if is_running():
         raise RuntimeError("Server is already running")
 
+    # Pre-bind conflict detection: try connecting to the target port first.
+    # If it succeeds, another Blender instance (or another process) already
+    # owns this port.  We check *before* binding so we can give a clear
+    # error message instead of silently sharing the port (which happens
+    # with SO_REUSEADDR on Windows).
+    _probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        _probe.settimeout(0.5)
+        _probe.connect((host, port))
+        _probe.close()
+        raise OSError(
+            "Port {:d} is already in use by another Blender session. "
+            "Increase port_offset in Preferences (Advanced tab) to use a "
+            "different set of ports.".format(port)
+        )
+    except (ConnectionRefusedError, TimeoutError, OSError):
+        # Expected — port is free (connection refused or timed out).
+        _probe.close()
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if sys.platform == "win32":
+            # SO_EXCLUSIVEADDRUSE prevents a second process from binding
+            # the same port, even with SO_REUSEADDR.  Without this, a
+            # second Blender instance would silently share port 9876 and
+            # the OS would non-deterministically route code-execution
+            # requests to the wrong instance.
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.setblocking(False)
         sock.bind((host, port))
         sock.listen(_LISTEN_BACKLOG)

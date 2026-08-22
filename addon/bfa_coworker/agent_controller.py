@@ -25,6 +25,7 @@ __all__ = (
     "check_ports_available",
     "migrate_vendor_deps",
     "generate_mcp_client_config",
+    "_get_blender_python_for_config",
 )
 
 import asyncio
@@ -1338,54 +1339,89 @@ def start_mcp_server_network(
 # ---------------------------------------------------------------------------
 # MCP client config generation (External Harness)
 
+def _get_blender_python_for_config() -> tuple[str, str]:
+    """Return (python_path, pythonpath) for use in harness configs.
+
+    Uses Blender's bundled Python with vendor deps on PYTHONPATH so
+    ``python -m blmcp`` works out of the box without any pip install.
+
+    Falls back to ``("python", "")`` if Blender's Python can't be found.
+    """
+    blender_py = _find_blender_python()
+    if blender_py:
+        pythonpath = _find_vendor_pythonpath()
+        return (blender_py, pythonpath)
+    return ("python", "")
+
+
 def generate_mcp_client_config(
     client_type: str = "claude",
     blender_host: str = "localhost",
     blender_port: int = 9876,
+    use_blender_python: bool = True,
 ) -> str:
     """Generate MCP client configuration JSON for external tools.
 
-    *client_type*: ``"claude"`` (Claude Desktop), ``"vscode"`` (VS Code / Cursor),
-    or ``"generic"`` (generic JSON-RPC config).
+    *client_type*: one of the harness preset identifiers (e.g. ``"claude_desktop"``,
+    ``"codex"``, ``"cursor"``, ``"generic"``).
+
+    When *use_blender_python* is True (default), the config emits the full
+    path to Blender's bundled Python with ``PYTHONPATH`` set to the vendor
+    directories — no pip install needed.
 
     Returns a JSON string suitable for the client's config file.
     """
-    if client_type == "claude":
+    # Resolve the python command and PYTHONPATH.
+    if use_blender_python:
+        py_cmd, py_path = _get_blender_python_for_config()
+    else:
+        py_cmd, py_path = "python", ""
+
+    # Build the env block.
+    env: dict[str, str] = {
+        "BFACW_HOST": blender_host,
+        "BFACW_PORT": str(blender_port),
+    }
+    if py_path:
+        env["PYTHONPATH"] = py_path
+
+    # Base command block shared by all presets.
+    base_cmd = {
+        "command": py_cmd,
+        "args": ["-m", "blmcp", "--transport", "stdio"],
+        "env": env,
+    }
+
+    if client_type in ("claude_desktop", "claude_code"):
         config = {
             "mcpServers": {
-                "bfa-coworker": {
-                    "command": "python",
-                    "args": ["-m", "blmcp", "--transport", "stdio"],
-                    "env": {
-                        "BFACW_HOST": blender_host,
-                        "BFACW_PORT": str(blender_port),
-                    },
-                }
+                "bfa-coworker": dict(base_cmd),
             }
         }
-    elif client_type == "vscode":
+    elif client_type in ("cursor", "windsurf", "cline"):
         config = {
             "servers": {
                 "bfa-coworker": {
                     "type": "stdio",
-                    "command": "python",
-                    "args": ["-m", "blmcp", "--transport", "stdio"],
-                    "env": {
-                        "BFACW_HOST": blender_host,
-                        "BFACW_PORT": str(blender_port),
-                    },
+                    **dict(base_cmd),
                 }
             }
         }
-    else:
+    elif client_type == "codex":
         config = {
-            "command": "python",
-            "args": ["-m", "blmcp", "--transport", "stdio"],
-            "env": {
-                "BFACW_HOST": blender_host,
-                "BFACW_PORT": str(blender_port),
-            },
+            "mcpServers": {
+                "bfa-coworker": dict(base_cmd),
+            }
         }
+    elif client_type == "opencode":
+        config = {
+            "mcpServers": {
+                "bfa-coworker": dict(base_cmd),
+            }
+        }
+    else:
+        # Generic / fallback — raw command block.
+        config = dict(base_cmd)
 
     return json.dumps(config, indent=2)
 
@@ -1470,8 +1506,16 @@ async def list_mcp_tools(port: int = _MCP_SERVER_DEFAULT_PORT) -> list[dict[str,
     return []
 
 
-def _list_tools_sync(port: int = _MCP_SERVER_DEFAULT_PORT) -> list[dict[str, Any]]:
-    """Synchronous wrapper for listing MCP tools, with retry on 0 tools."""
+def _list_tools_sync(port: int = _MCP_SERVER_DEFAULT_PORT, operating_mode: str = "") -> list[dict[str, Any]]:
+    """Synchronous wrapper for listing MCP tools, with retry on 0 tools.
+
+    When *operating_mode* is ``"EXTERNAL_HARNESS"``, returns ``[]``
+    immediately — the MCP server is managed externally.
+    """
+    if operating_mode == "EXTERNAL_HARNESS":
+        print("[🛠️Coworker] _list_tools_sync: harness mode — skipping")
+        return []
+
     import time
     max_retries = 5
     for attempt in range(1, max_retries + 1):
@@ -3027,20 +3071,26 @@ def ping_agent(
     mcp_port: int = _MCP_SERVER_DEFAULT_PORT,
     llm_port: int = 8081,
     bridge_port: int = 9876,
+    operating_mode: str = "",
 ) -> dict[str, Any]:
     """
     Quick connectivity check for all three back-ends.
+
+    When *operating_mode* is ``"EXTERNAL_HARNESS"``, only the bridge
+    server is checked — MCP and LLM probes are skipped because those
+    services are managed externally.
 
     Returns a dict with test results suitable for display in the UI::
 
         {
             "bridge_server":   "OK" | "FAIL: <reason>",
-            "mcp_server":      "OK (N tools)" | "FAIL: <reason>",
-            "llm_health":      "OK" | "FAIL: <reason>",
-            "llm_chat":        "OK" | "FAIL: <reason>",
+            "mcp_server":      "OK (N tools)" | "FAIL: <reason>" | "N/A (harness mode)",
+            "llm_health":      "OK" | "FAIL: <reason>" | "N/A (harness mode)",
+            "llm_chat":        "OK" | "FAIL: <reason>" | "N/A (harness mode)",
             "all_ok":          True | False,
         }
     """
+    is_harness = (operating_mode == "EXTERNAL_HARNESS")
     result: dict[str, Any] = {}
 
     # 1 — Bridge server (raw TCP inside Blender)
@@ -3053,6 +3103,14 @@ def ping_agent(
         result["bridge_server"] = "OK"
     except Exception as ex:
         result["bridge_server"] = "FAIL: {:s}".format(str(ex))
+
+    # In harness mode, skip MCP and LLM probes — they're external.
+    if is_harness:
+        result["mcp_server"] = "N/A (harness mode)"
+        result["llm_health"] = "N/A (harness mode)"
+        result["llm_chat"] = "N/A (harness mode)"
+        result["all_ok"] = result.get("bridge_server", "").startswith("OK")
+        return result
 
     # 2 — LLM health
     try:
@@ -3089,7 +3147,7 @@ def ping_agent(
     # 4 — MCP server (verify with a real tools/list RPC;
     # FastMCP streamable-HTTP does NOT expose /health.)
     try:
-        tools = _list_tools_sync(mcp_port)
+        tools = _list_tools_sync(mcp_port, operating_mode)
         if tools:
             result["mcp_server"] = "OK ({:d} tools)".format(len(tools))
         else:

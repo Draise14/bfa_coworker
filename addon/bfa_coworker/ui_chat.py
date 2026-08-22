@@ -981,20 +981,25 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         # ── External Harness: Config & Instructions ──
         if is_harness and mcp_to_blender_server.is_running():
             box = layout.box()
-            box.label(text="Connect an External MCP Client", icon='WORLD')
+            box.label(text="External MCP Client", icon='WORLD')
 
-            # Copy config buttons.
+            # Primary action: open preferences for full step-by-step setup.
             row = box.row(align=True)
-            op = row.operator("bfacw.copy_mcp_config", text="Claude Desktop Config", icon='COPYDOWN')
-            op.client_type = "claude"
-            op = row.operator("bfacw.copy_mcp_config", text="VS Code Config", icon='COPYDOWN')
-            op.client_type = "vscode"
+            row.scale_y = 1.5
+            row.operator("bfacw.open_harness_prefs", icon="PREFERENCES", text="Configure Harness")
 
-            # Instructions.
-            box.label(text="1. Copy the config above to your clipboard", icon='DOT')
-            box.label(text="2. Paste into your MCP client's config file", icon='DOT')
-            box.label(text="3. Restart your MCP client", icon='DOT')
-            box.label(text="4. The client will connect to Blender's bridge", icon='DOT')
+            # Quick-copy for power users who already know their setup.
+            row = box.row(align=True)
+            row.prop(prefs, "harness_preset", text="")
+            op = row.operator("bfacw.copy_mcp_config", icon="COPYDOWN", text="Copy Config")
+            op.client_type = prefs.harness_preset
+
+            # Status line.
+            _bridge_port, _, _ = effective_ports(prefs)
+            box.label(
+                text="Bridge running on port {:d}".format(_bridge_port),
+                icon='CHECKMARK',
+            )
 
             # MCP server mode selector.
             box.separator()

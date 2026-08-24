@@ -22,13 +22,16 @@ __all__ = (
     "BFACW_OT_load_provider",
     "BFACW_OT_test_polyhaven_hdri",
     "BFACW_OT_test_polyhaven_texture",
+    "BFACW_OT_open_harness_prefs",
+    "BFACW_OT_open_config_folder",
+    "BFACW_OT_open_url",
 )
 
 import bpy  # pylint: disable=import-error
 
 import threading
 
-from .shared import effective_ports, get_llm_manager, get_agent_controller
+from .shared import effective_ports, get_llm_manager, get_agent_controller, HARNESS_PRESET_ITEMS
 from . import agent_controller as _ac_mod
 
 
@@ -152,6 +155,7 @@ class _BFACW_OT_ping_agent(bpy.types.Operator):  # type: ignore[misc]
         def _do_ping():
             _BFACW_OT_ping_agent._result = _ac.ping_agent(
                 mcp_port=_mcp_port, llm_port=_llm_port, bridge_port=_bridge_port,
+                operating_mode=prefs.operating_mode,
             )
 
         thread = threading.Thread(target=_do_ping, daemon=True)
@@ -562,23 +566,113 @@ class BFACW_OT_copy_mcp_config(bpy.types.Operator):  # type: ignore[misc]
 
     client_type: bpy.props.EnumProperty(  # type: ignore[valid-type]
         name="Client",
-        items=[
-            ("claude", "Claude Desktop", "Claude Desktop config format"),
-            ("vscode", "VS Code / Cursor", "VS Code / Cursor config format"),
-        ],
-        default="claude",
+        items=HARNESS_PRESET_ITEMS,
+        default="claude_desktop",
     )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         prefs = context.preferences.addons[__package__].preferences
         _bridge_port, _, _ = effective_ports(prefs)
+        use_blender_py = getattr(prefs, "use_blender_python_for_harness", True)
         config = _ac_mod.generate_mcp_client_config(
             client_type=self.client_type,
             blender_host=prefs.host,
             blender_port=_bridge_port,
+            use_blender_python=use_blender_py,
         )
         context.window_manager.clipboard = config
         self.report({"INFO"}, "MCP config copied to clipboard")
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# Open Harness Preferences (from Chat Panel)
+
+class BFACW_OT_open_harness_prefs(bpy.types.Operator):  # type: ignore[misc]
+    """Open Blender preferences to the bfa_coworker addon Advanced tab for harness setup."""
+    bl_idname = "bfacw.open_harness_prefs"
+    bl_label = "Configure Harness"
+    bl_description = "Open preferences to configure external MCP client harness"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        bpy.ops.screen.userpref_show('INVOKE_DEFAULT')
+        context.preferences.active_section = 'ADDONS'
+        # Set the addon's pref_tab to ADVANCED so the harness section is visible.
+        try:
+            prefs = context.preferences.addons[__package__].preferences
+            prefs.pref_tab = "ADVANCED"
+        except Exception:
+            pass
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# Open Config Folder (reveals harness config file in OS file manager)
+
+class BFACW_OT_open_config_folder(bpy.types.Operator):  # type: ignore[misc]
+    """Open the harness config file location in the OS file manager."""
+    bl_idname = "bfacw.open_config_folder"
+    bl_label = "Open Config Folder"
+    bl_description = "Open the folder containing the MCP client config file"
+
+    preset_id: bpy.props.StringProperty(  # type: ignore[valid-type]
+        name="Preset ID",
+        default="claude_desktop",
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        from .shared import get_harness_preset_by_id
+        preset = get_harness_preset_by_id(self.preset_id)
+        if preset is None:
+            self.report({"ERROR"}, "Unknown preset: {:s}".format(self.preset_id))
+            return {"CANCELLED"}
+
+        # Parse the first path from config_path_help.
+        path_text = preset.config_path_help
+        if not path_text:
+            self.report({"ERROR"}, "No config path known for {:s}".format(preset.name))
+            return {"CANCELLED"}
+
+        # Extract the first path line (before any newline or parenthetical).
+        first_line = path_text.split("\n")[0].strip()
+        # Remove label prefix like "Windows: " or "macOS: ".
+        if ": " in first_line:
+            _label, _, path_str = first_line.partition(": ")
+        else:
+            path_str = first_line
+
+        import os as _os
+        folder = _os.path.dirname(_os.path.expandvars(path_str))
+        if not _os.path.isdir(folder):
+            # Try creating the parent.
+            try:
+                _os.makedirs(folder, exist_ok=True)
+            except OSError:
+                self.report({"ERROR"}, "Cannot access: {:s}".format(folder))
+                return {"CANCELLED"}
+
+        bpy.ops.wm.path_open(filepath=folder)
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# Open URL in default browser
+
+class BFACW_OT_open_url(bpy.types.Operator):  # type: ignore[misc]
+    """Open a URL in the default web browser."""
+    bl_idname = "bfacw.open_url"
+    bl_label = "Open URL"
+    bl_description = "Open documentation link in your web browser"
+
+    url: bpy.props.StringProperty(  # type: ignore[valid-type]
+        name="URL",
+        default="",
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        import webbrowser
+        if self.url:
+            webbrowser.open(self.url)
         return {"FINISHED"}
 
 

@@ -27,6 +27,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **External Harness Preset System** — 8 curated MCP client presets (Claude Desktop, Claude Code, Codex CLI, Cursor, Windsurf, Cline, OpenCode, Generic STDIO) with inline setup steps, config file locations, and documentation links. Select your harness from a dropdown in Advanced preferences and get a ready-to-paste config.
+- **Blender's Python in Harness Configs** — Harness configs now emit the full path to Blender's bundled Python with PYTHONPATH set to vendor dependencies. No pip install needed. A "Use System Python" toggle is available for power users.
+- **"Configure Harness" Button** — In harness mode, the chat panel now has a "Configure Harness" button that opens preferences directly to the step-by-step harness setup wizard. A quick-copy dropdown is also available for power users.
+- **Developer Documentation** — `_misc/harness_testing_guide.md` covers manual STDIO testing, bridge verification, and how to add new presets.
+- **User Troubleshooting Guide** — `_misc/harness_troubleshooting.md` covers per-harness common issues, config file locations, and a quick checklist.
+
+### Fixed
+
+- **Harness Mode Ping** — `ping_agent()` now accepts an `operating_mode` parameter. In harness mode, MCP and LLM probes are skipped (returning "N/A (harness mode)") instead of failing with confusing "connection refused" errors. Fixes the misleading diagnostics in issue #48.
+- **_list_tools_sync Harness Guard** — `_list_tools_sync()` now returns `[]` immediately when called in harness mode, preventing the 5-retry log spam seen in issue #48.
+- **Diagnostics Display** — The diagnostics panel and Agent Control section in preferences now show N/A values with INFO icons instead of ERROR icons in harness mode.
+
 - **Multi-Instance Port Conflict Detection** — Bridge server now detects when another Blender session already owns the default port (9876) and raises a clear error pointing to `port_offset` in Preferences. Uses `SO_EXCLUSIVEADDRUSE` on Windows to prevent silent port sharing that previously caused code-execution requests from a second session to be non-deterministically routed to the first session.
 
 - **Curated 9-Model Preset List** — Replaced 14-model list with 9 curated presets (3 flagship / 3 mid / 3 light) tuned for Blender agentic work. New entries: Qwen3.8-27B, Fable Fusion 27B, Nail 35B A3B, Gemma 4 E4B, Qwen3.5-9B DeepSeek-V4-Flash. Each preset carries native context window, vision flag, mmproj filename, hardware recommendation, and "why pick this" rationale. Removed Gemma 3 12B Vision (#23) and Phi-4 14B Q3 (#32). GPT-OSS 20B is the new default (best Blender benchmarked model).

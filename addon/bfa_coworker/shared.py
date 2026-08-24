@@ -18,6 +18,8 @@ __all__ = (
     "MCP_SERVER_MODE_ITEMS",
     "OPERATING_MODE_ITEMS",
     "CHAT_MODE_ITEMS",
+    "HARNESS_PRESET_ITEMS",
+    "HarnessPreset",
     "DEFAULT_BRIDGE_PORT",
     "DEFAULT_MCP_PORT",
     "DEFAULT_LLM_PORT",
@@ -232,3 +234,219 @@ CHAT_MODE_ITEMS: list[tuple[str, str, str]] = [
     ("AGENT", "Coworker", "The agent can execute tools and modify the scene"),
     ("ASK", "Ask", "LLM answers questions without modifying anything"),
 ]
+
+# ── Harness Preset Dataclass ─────────────────────────────────────────────
+
+
+class HarnessPreset:
+    """Metadata for an external MCP client harness preset.
+
+    Each preset describes one supported harness with its config format,
+    file location, setup steps, and documentation links.
+    """
+
+    __slots__ = (
+        "identifier",
+        "name",
+        "description",
+        "icon",
+        "is_open_source",
+        "config_path_help",
+        "setup_steps",
+        "docs_url",
+        "notes",
+    )
+
+    def __init__(
+        self,
+        identifier: str,
+        name: str,
+        description: str,
+        icon: str = "URL",
+        is_open_source: bool = False,
+        config_path_help: str = "",
+        setup_steps: list[str] | None = None,
+        docs_url: str = "",
+        notes: str = "",
+    ) -> None:
+        self.identifier = identifier
+        self.name = name
+        self.description = description
+        self.icon = icon
+        self.is_open_source = is_open_source
+        self.config_path_help = config_path_help
+        self.setup_steps = setup_steps or []
+        self.docs_url = docs_url
+        self.notes = notes
+
+
+# ── Harness Presets ──────────────────────────────────────────────────────
+# All presets are MCP-compatible and appear in ≥2 of the 3 major "top 10"
+# harness rankings (The Tool Nerd, explainx.ai, CellCog) as of Aug 2026.
+
+_HARNESS_PRESETS: list[HarnessPreset] = [
+    HarnessPreset(
+        identifier="claude_desktop",
+        name="Claude Desktop",
+        description="Anthropic's desktop app — the original MCP client. Free desktop app for Windows, macOS, Linux.",
+        icon="URL",
+        is_open_source=False,
+        config_path_help=(
+            "Windows: %APPDATA%\\Claude\\claude_desktop_config.json\n"
+            "macOS: ~/Library/Application Support/Claude/claude_desktop_config.json\n"
+            "Linux: ~/.config/Claude/claude_desktop_config.json"
+        ),
+        setup_steps=[
+            "Open Claude Desktop → Settings → Developer → Edit Config",
+            "Paste the config into the JSON editor and save",
+            "Restart Claude Desktop completely (File → Exit, then re-open)",
+            "You should see a hammer icon in the chat input — tools are ready",
+        ],
+        docs_url="https://modelcontextprotocol.io/quickstart/user",
+        notes="Claude Desktop must be fully restarted after config changes. A window close is not enough on some OS versions.",
+    ),
+    HarnessPreset(
+        identifier="claude_code",
+        name="Claude Code",
+        description="Anthropic's terminal harness — #1 in every 2026 ranking. Richest hook/delegation surface.",
+        icon="CONSOLE",
+        is_open_source=False,
+        config_path_help=(
+            "CLAUDE.md project file or ~/.claude/claude_desktop_config.json"
+        ),
+        setup_steps=[
+            "Install Claude Code: npm install -g @anthropic/claude-code",
+            "Create or edit ~/.claude/claude_desktop_config.json",
+            "Paste the config into the mcpServers section",
+            "Run claude in your terminal — tools will auto-discover",
+        ],
+        docs_url="https://docs.anthropic.com/en/docs/claude-code/overview",
+        notes="Claude Code reads MCP config from the same claude_desktop_config.json as Claude Desktop.",
+    ),
+    HarnessPreset(
+        identifier="codex",
+        name="Codex CLI",
+        description="OpenAI's open-source coding agent (Apache 2.0, 92K+ stars). Terminal-first with desktop app.",
+        icon="CONSOLE",
+        is_open_source=True,
+        config_path_help=(
+            "~/.codex/config.json  (or project-level codex.json)"
+        ),
+        setup_steps=[
+            "Install Codex CLI: pip install codex-cli  (or npm install -g @openai/codex)",
+            "Create ~/.codex/config.json with the config below",
+            "Run codex in your terminal",
+            "Verify tools: ask Codex to list available MCP tools",
+        ],
+        docs_url="https://github.com/openai/codex",
+        notes="Codex uses the OpenAI Agents SDK. The python command must have blmcp and its deps available.",
+    ),
+    HarnessPreset(
+        identifier="cursor",
+        name="Cursor",
+        description="Most popular IDE harness. VS Code fork with native agent mode and MCP support.",
+        icon="FILE_TEXT",
+        is_open_source=False,
+        config_path_help=(
+            "~/.cursor/mcp.json  (or .cursor/mcp.json in project root)"
+        ),
+        setup_steps=[
+            "Open Cursor → Settings → Features → MCP Servers",
+            "Click 'Add New MCP Server' and paste the config",
+            "Or manually edit ~/.cursor/mcp.json",
+            "Restart Cursor — the agent will auto-discover Blender tools",
+        ],
+        docs_url="https://docs.cursor.com/advanced/mcp",
+        notes="Cursor's MCP config format uses 'servers' key (not 'mcpServers'). The config below uses the correct format.",
+    ),
+    HarnessPreset(
+        identifier="windsurf",
+        name="Windsurf",
+        description="IDE-native harness with Cascade agent flow. MCP support for external tools.",
+        icon="FILE_TEXT",
+        is_open_source=False,
+        config_path_help=(
+            "~/.codeium/windsurf/mcp_config.json"
+        ),
+        setup_steps=[
+            "Create ~/.codeium/windsurf/mcp_config.json",
+            "Paste the config below into the file",
+            "Restart Windsurf completely",
+            "The Cascade agent will have access to Blender tools",
+        ],
+        docs_url="https://docs.windsurf.com/mcp",
+        notes="Windsurf uses the same MCP config format as VS Code. Config file is auto-created on first launch.",
+    ),
+    HarnessPreset(
+        identifier="cline",
+        name="Cline",
+        description="Open-source VS Code extension (Apache 2.0, 63K+ stars). Deep MCP integration, 8M+ developers.",
+        icon="EXTENSION",
+        is_open_source=True,
+        config_path_help=(
+            "~/.vscode/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json"
+        ),
+        setup_steps=[
+            "Install Cline from VS Code Marketplace",
+            "Open Cline settings → MCP Servers → Add Server",
+            "Paste the config into the JSON editor",
+            "Restart VS Code — Cline will connect to Blender's bridge",
+        ],
+        docs_url="https://github.com/cline/cline",
+        notes="Cline has a permission-gated tool model — you approve each Blender operation by default.",
+    ),
+    HarnessPreset(
+        identifier="opencode",
+        name="OpenCode",
+        description="#1 open-source harness (MIT, 176K+ stars). Terminal TUI, desktop app, or IDE-embedded.",
+        icon="CONSOLE",
+        is_open_source=True,
+        config_path_help=(
+            "~/.config/opencode/mcp.json  (or project-level opencode.json)"
+        ),
+        setup_steps=[
+            "Install OpenCode: pip install opencode  (or npm install -g opencode)",
+            "Create ~/.config/opencode/mcp.json with the config below",
+            "Run opencode in your terminal",
+            "OpenCode auto-discovers MCP tools on startup",
+        ],
+        docs_url="https://github.com/sst/opencode",
+        notes="OpenCode supports 75+ LLM providers. Point it at any OpenAI-compatible endpoint.",
+    ),
+    HarnessPreset(
+        identifier="generic",
+        name="Generic STDIO",
+        description="Fallback config for any MCP-compatible client not listed above.",
+        icon="SETTINGS",
+        is_open_source=False,
+        config_path_help=(
+            "Varies by client — check your harness documentation for MCP stdio config format."
+        ),
+        setup_steps=[
+            "Find where your MCP client stores its config file",
+            "Paste the generic config below into the mcpServers section",
+            "Restart your MCP client",
+            "If tools don't appear, check the troubleshooting guide",
+        ],
+        docs_url="",
+        notes="The generic config uses the Claude Desktop format (mcpServers key). Adjust the key name if your client uses a different schema.",
+    ),
+]
+
+# EnumProperty items for the harness_preset selector.
+HARNESS_PRESET_ITEMS: list[tuple[str, str, str]] = [
+    (p.identifier, p.name, p.description) for p in _HARNESS_PRESETS
+]
+
+
+def get_harness_preset_by_id(identifier: str) -> HarnessPreset | None:
+    """Look up a harness preset by its identifier string."""
+    for p in _HARNESS_PRESETS:
+        if p.identifier == identifier:
+            return p
+    return None
+
+
+def get_harness_presets() -> list[HarnessPreset]:
+    """Return all harness presets."""
+    return list(_HARNESS_PRESETS)

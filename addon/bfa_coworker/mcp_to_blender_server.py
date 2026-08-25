@@ -24,6 +24,7 @@ __all__ = (
     "timer_idle_reset",
     "timer_internal_vars_calc",
     "use_log",
+    "log_level",
     "get_actual_port",
 )
 
@@ -163,6 +164,8 @@ def timer_idle_interval() -> float:
 
 # When True, print every request and response status to STDERR.
 use_log: bool = False
+# Granular log level: "OFF", "ERRORS_ONLY", or "ALL".
+log_level: str = "OFF"
 
 _MAX_REQUEST_BYTES = 10 * 1024 * 1024  # 10 MiB.
 # Maximum number of queued incoming connections.
@@ -179,6 +182,24 @@ _DEFERRED_UNSUPPORTED_MESSAGE = (
 )
 
 timer_internal_vars_calc()
+
+
+def _should_log_request() -> bool:
+    """Return True when the current log settings want request logging."""
+    return use_log or log_level == "ALL"
+
+
+def _should_log_response(is_error: bool = False) -> bool:
+    """Return True when the current log settings want response logging.
+
+    If ``is_error`` is True, both ``ALL`` and ``ERRORS_ONLY`` log levels
+    will produce output.
+    """
+    if use_log or log_level == "ALL":
+        return True
+    if is_error and log_level == "ERRORS_ONLY":
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -592,10 +613,15 @@ def _execute_code_from_request(
             False,
         )
 
-    if use_log:
+    if _should_log_request():
         print("request:\n{:s}".format(code), file=sys.stderr)
     exec_result = _execute_code(code, strict_json=strict_json)
-    if use_log:
+    _is_error = (
+        exec_result.response.get("status") == "error"
+        if not exec_result.check_fn
+        else False
+    )
+    if _should_log_response(is_error=_is_error):
         if exec_result.check_fn is not None:
             print("response: deferred", file=sys.stderr)
         else:

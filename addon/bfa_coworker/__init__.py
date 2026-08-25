@@ -54,6 +54,7 @@ from .operators_agent import (
     BFACW_OT_open_harness_prefs,
     BFACW_OT_open_config_folder,
     BFACW_OT_open_url,
+    BFACW_OT_open_log,
 )
 from .shared import (
     effective_ports,
@@ -99,6 +100,7 @@ _classes = (
     BFACW_OT_open_harness_prefs,
     BFACW_OT_open_config_folder,
     BFACW_OT_open_url,
+    BFACW_OT_open_log,
 )
 
 

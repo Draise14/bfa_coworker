@@ -36,7 +36,7 @@ from .shared import (
     MCP_SERVER_MODE_ITEMS,
     OPERATING_MODE_ITEMS,
     CHAT_MODE_ITEMS,
-    BFACW_DEBUG,
+    is_debug_mode,
     effective_ports,
     get_llm_manager,
 )
@@ -141,8 +141,45 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         subtype="TIME_ABSOLUTE",
     )
 
+    # ── Debug Mode ──────────────────────────────────────────────────
+
+    debug_mode: BoolProperty(  # type: ignore[valid-type]
+        name="Debug / Diagnostics",
+        description=(
+            "Show the Diagnostics panel in Preferences with port checking, "
+            "benchmark suites, and other developer tools"
+        ),
+        default=False,
+    )
+
+    # ── Log Level ───────────────────────────────────────────────────
+
+    def _update_log_level(self, _context: bpy.types.Context) -> None:
+        mcp_to_blender_server.log_level = self.log_level
+
+    log_level: EnumProperty(  # type: ignore[valid-type]
+        name="Log Level",
+        description=(
+            "Tool-call logging granularity:\n"
+            "  Off — no logging\n"
+            "  Errors Only — log only failed tool calls\n"
+            "  All — log every tool request and response"
+        ),
+        items=[
+            ("OFF", "Off", "No tool-call logging"),
+            ("ERRORS_ONLY", "Errors Only", "Log only tool calls that returned errors"),
+            ("ALL", "All", "Log every tool request and response"),
+        ],
+        default="OFF",
+        update=_update_log_level,
+    )
+
     def _update_use_log(self, _context: bpy.types.Context) -> None:
-        mcp_to_blender_server.use_log = self.use_log
+        # Legacy bool kept for backward compat; syncs to log_level.
+        if self.use_log:
+            self.log_level = "ALL"
+        else:
+            self.log_level = "OFF"
 
     use_log: BoolProperty(  # type: ignore[valid-type]
         name="Log",
@@ -795,14 +832,20 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
     # ── Diagnostics (debug only, behind flag) ───────────────────────────
 
     def _draw_diagnostics(self, layout) -> None:
-        """Draw the diagnostics panel below all tabs when BFACW_DEBUG is enabled."""
-        if not BFACW_DEBUG:
+        """Draw the diagnostics panel below all tabs when debug mode is enabled."""
+        if not is_debug_mode():
             return
         diag_box = layout.box()
         diag_box.label(text="\U0001f6e0\ufe0f Diagnostics", icon='INFO')
         diag_box.label(
-            text="Temporary debug tools \u2014 hidden when BFACW_DEBUG=False",
+            text="Temporary debug tools \u2014 hidden when Debug mode is off",
             icon='BLANK1',
+        )
+        # ── Open Log button ─────────────────────────────────────────
+        diag_box.operator(
+            "bfacw.open_log",
+            icon='CONSOLE',
+            text="Open Log",
         )
         row = diag_box.row()
         row.operator("bfacw.check_ports", icon="FILE_REFRESH", text="Check Ports")
@@ -1520,7 +1563,10 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                  "or workflow rules. Markdown format supported.",
             icon='INFO',
         )
-        custom_box.prop(self, "custom_skills_text")
+        # Multiline textbox for comfortable editing (same pattern as chat input).
+        custom_row = custom_box.row()
+        custom_row.scale_y = 3.0
+        custom_row.prop(self, "custom_skills_text", text="", icon='GREASEPENCIL')
 
         # ── Text Editor Memory Bank ───────────────────────────────────
         mem_box = layout.box()

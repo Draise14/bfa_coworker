@@ -25,6 +25,7 @@ __all__ = (
     "BFACW_OT_open_harness_prefs",
     "BFACW_OT_open_config_folder",
     "BFACW_OT_open_url",
+    "BFACW_OT_open_log",
 )
 
 import bpy  # pylint: disable=import-error
@@ -904,4 +905,77 @@ class BFACW_OT_reload_skills(bpy.types.Operator):  # type: ignore[misc]
         from . import agent_controller as _ac
         _ac._clear_system_prompt_cache()
         self.report({"INFO"}, "Skills and system prompt cache cleared")
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# Open Log
+
+class BFACW_OT_open_log(bpy.types.Operator):  # type: ignore[misc]
+    """Open the Blender console/log in the system default text editor."""
+    bl_idname = "bfacw.open_log"
+    bl_label = "Open Log"
+    bl_description = "Open the Blender system console or log file for debugging"
+    bl_options = {'INTERNAL'}
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        import subprocess
+        import sys
+        import os
+
+        # Try to find the Blender console/log location.
+        log_path = None
+
+        # On Windows, Blender console is often the terminal itself.
+        if sys.platform == "win32":
+            # Try opening the Blender log file if it exists.
+            # Blender writes to stdout/stderr which can be redirected.
+            # For now, just bring the console window to front.
+            try:
+                import ctypes
+                kernel32 = ctypes.windll.kernel32
+                kernel32.SetConsoleTitleW("BFA Coworker Log")
+                # Try to get the console window handle.
+                console_window = kernel32.GetConsoleWindow()
+                if console_window:
+                    import ctypes.wintypes
+                    user32 = ctypes.windll.user32
+                    user32.SetForegroundWindow(console_window)
+                    self.report({"INFO"}, "Console window brought to front")
+                    return {"FINISHED"}
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+            self.report({"INFO"}, "Check the Blender console window for logs")
+            return {"FINISHED"}
+
+        # On macOS/Linux, try to find and open the Blender log.
+        # Blender console logs go to stderr/stdout.
+        # Try to use 'tail -f' on the log or open system console.
+        blender_app = bpy.app.binary_path
+        log_dir = os.path.expanduser("~/Library/Logs/Blender") if sys.platform == "darwin" else \
+                  os.path.expanduser("~/.config/blender")
+
+        if os.path.isdir(log_dir):
+            # Find the most recent log file.
+            log_files = []
+            for root, _dirs, files in os.walk(log_dir):
+                for f in files:
+                    if f.endswith(".log"):
+                        log_files.append(os.path.join(root, f))
+            if log_files:
+                log_files.sort(key=os.path.getmtime, reverse=True)
+                log_path = log_files[0]
+
+        if log_path and os.path.isfile(log_path):
+            try:
+                if sys.platform == "darwin":
+                    subprocess.Popen(["open", log_path])
+                else:
+                    subprocess.Popen(["xdg-open", log_path])
+                self.report({"INFO"}, "Opened log: {:s}".format(log_path))
+                return {"FINISHED"}
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+
+        self.report({"INFO"}, "Check the Blender console for log output")
         return {"FINISHED"}

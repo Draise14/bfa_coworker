@@ -174,6 +174,30 @@ Blender's `StringProperty` in a panel layout doesn't fire per-keystroke callback
 4. **Stop-during-thinking guard** — When user clicks Stop while `is_thinking`, immediately call `request_stop()` (sets stop event), show "Stopping after current thought..." status, then proceed with full shutdown once the turn exits.
 5. **Start-while-stopping guard** — Add `_shutting_down` flag to `AgentState`. Start button checks this and shows "Please wait, shutting down..." if True.
 
+### 5e: Conditional Advanced Settings (per-mode)
+*Currently the Advanced tab shows ALL settings — harness config, ports, skills, etc. — regardless of mode. This is noisy. Make sections conditionally visible based on `operating_mode`.*
+
+**Rule table:**
+
+| Section | Local LLM | Remote API | External Harness |
+|---|---|---|---|
+| Bridge Server | ✅ | ✅ | ✅ |
+| MCP Server (Harness) | ❌ | ❌ | ✅ |
+| Agent Control / Diagnostics | ✅ | ✅ | ✅ (N/A-aware) |
+| Port Settings | ✅ | ✅ | ❌ (not user-configurable in harness mode) |
+| Skills | ✅ | ✅ | ❌ (no LLM to inject skills into) |
+| Custom Skills | ✅ | ✅ | ❌ |
+| Text Editor Memory Bank | ✅ | ✅ | ❌ (no code execution in harness) |
+
+**Implementation:**
+1. **Gate each section** — In `_draw_tab_advanced()`, wrap each `layout.box()` section in an `if` check based on `self.operating_mode`. Use the rule table above.
+2. **Collapse hidden sections** — Don't just hide with `return`; use `if operating_mode != "EXTERNAL_HARNESS":` to skip drawing the section entirely. This keeps the UI clean.
+3. **Harness-specific sections** — The MCP Server (Harness) section should only draw when `operating_mode == "EXTERNAL_HARNESS"`. The Bridge Server and Port Settings are always visible (harness needs bridge port info too).
+4. **Add mode hint** — At the top of the Advanced tab, add a label showing which mode is active, e.g., `"Currently in: Local LLM mode — some settings are hidden"` with `icon='INFO'`. This prevents confusion when settings disappear after switching modes.
+
+**Relevant files**
+- `addon/bfa_coworker/preferences.py` — `_draw_tab_advanced()` (add per-section mode gating, add mode hint label)
+
 ### 5d: Thinking Indicator Polish
 1. **Spinner widget** — Replace text dots with a Unicode spinner character that cycles: `◐ ◓ ◑ ◒`. More visible than dots.
 2. **Progress bar for model loading** — During `start_local_llama()`, report loading progress via `_state.llm_progress` (0.0-1.0). Draw a thin progress bar in the chat panel status area.
@@ -184,6 +208,7 @@ Blender's `StringProperty` in a panel layout doesn't fire per-keystroke callback
 - `addon/bfa_coworker/ui_chat.py` — Queue UI panel, mention search popup, health dots, restart button, spinner, progress bar, new operators
 - `addon/bfa_coworker/llm_manager.py` — `stop_local_llama()` graceful shutdown, loading progress reporting
 - `addon/bfa_coworker/shared.py` — new state fields
+- `addon/bfa_coworker/preferences.py` — `_draw_tab_advanced()` (mode-gated sections, mode hint label)
 
 **Verification**
 1. Send message while thinking → queued, appears in queue panel, auto-starts when turn completes
@@ -196,6 +221,9 @@ Blender's `StringProperty` in a panel layout doesn't fire per-keystroke callback
 8. Click Start while stopping → "Please wait, shutting down..."
 9. Spinner visible during thinking, progress bar during model load
 10. Timer only fires when needed (check console for reduced tick frequency when idle)
+11. **Switch to Local LLM mode → Advanced tab shows: Bridge, Agent Control, Ports, Skills, Custom Skills, Memory Bank. No Harness section.**
+12. **Switch to Remote API mode → Advanced tab shows: same as Local LLM. No Harness section.**
+13. **Switch to External Harness mode → Advanced tab shows: Bridge, Harness section (with full 4-step wizard), Agent Control, Ports. No Skills, Custom Skills, or Memory Bank.**
 
 ---
 

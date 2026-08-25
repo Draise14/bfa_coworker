@@ -223,6 +223,20 @@ def _drop_orphaned_tool_messages(messages: list[dict[str, Any]]) -> list[dict[st
     return cleaned
 
 
+def _strip_think_tags(text: str) -> str:
+    """Strip ``<think>`` / ``</think>`` wrapper tags from Qwen-style reasoning.
+
+    Some local models (Qwen 2.5/3.x, Fable Fusion, etc.) wrap their
+    chain-of-thought in ``<think>...</think>`` blocks inside the
+    ``reasoning_content`` field.  These tags are not part of the
+    reasoning itself and should be removed before display or storage.
+    """
+    import re as _re
+    text = _re.sub(r"\s*<think>\s*", "", text)
+    text = _re.sub(r"\s*</think>\s*", "", text)
+    return text.strip()
+
+
 def _strip_reasoning_from_history(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Remove ``reasoning``-role messages from history before sending to the LLM.
@@ -1800,7 +1814,7 @@ def _openai_chat_completions(
                 if reasoning:
                     print("[🛠️Coworker] _openai_chat_completions: reasoning ({:d} chars):".format(
                         len(reasoning)))
-                    print(reasoning)
+                    print(_strip_think_tags(reasoning))
                     print("[🛠️Coworker] _openai_chat_completions: --- end reasoning ---")
                 # If we fell back to text-based tool calling, parse text calls.
                 if not tools_tried and not tool_calls:
@@ -3245,6 +3259,8 @@ def _run_conversation_turn_inner(
         #   - Local llama-server / DeepSeek: "reasoning_content"
         #   - OpenRouter: "reasoning"
         reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
+        # Strip <think> wrapper tags for display/storage.
+        reasoning = _strip_think_tags(reasoning)
         if reasoning:
             print("[🛠️Coworker] run_conversation_turn: reasoning ({:d} chars) — storing in history".format(
                 len(reasoning)))
@@ -3527,9 +3543,20 @@ def _run_conversation_turn_inner(
                     else:
                         _consecutive_errors.clear()
 
-            # After processing tool calls, ask the LLM for a final text response.
-            # We send ONE more request without looping. If the model decides to
-            # call tools again, we process them and STOP — no infinite loops.
+            # After processing tool calls, inject a user prompt so the LLM
+            # generates a text response instead of another tool call loop.
+            # Many local models (Qwen, Fable Fusion, etc.) emit tool calls
+            # inside <think> blocks with empty content.  Without a user message
+            # after tool results, llama-server's Jinja template may fail with
+            # "No user query found in messages."
+            if not content or not content.strip():
+                history.append({
+                    "role": "user",
+                    "content": (
+                        "The tool results are above. "
+                        "Please provide a helpful response to the user based on these results."
+                    ),
+                })
             continue
 
         # No more tool calls — add the final assistant message and we're done.

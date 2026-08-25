@@ -22,6 +22,7 @@ __all__ = (
     "BFACW_OT_copy_session_log",
     "BFACW_OT_agent_start",
     "BFACW_OT_agent_stop",
+    "BFACW_OT_agent_restart",
     "chat_timer_update",
     "register",
     "unregister",
@@ -912,6 +913,54 @@ class BFACW_OT_agent_stop(Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
+class BFACW_OT_agent_restart(Operator):  # type: ignore[misc]
+    """Restart the Coworker agent (stop then start)."""
+    bl_idname = "bfacw.agent_restart"
+    bl_label = "Restart Coworker"
+    bl_description = "Stop all components and restart the Coworker agent"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        wm = context.window_manager
+        props = wm.bfacw_chat_props  # type: ignore[attr-defined]
+
+        # Stop first.
+        props.chat_status = "Stopping..."
+        _redraw_areas(context)
+
+        llm_manager.stop_local_llama()
+        agent_controller.stop_mcp_server()
+        if mcp_to_blender_server.is_running():
+            from . import execute_interactive
+            mcp_to_blender_server.stop()
+            if bpy.app.timers.is_registered(execute_interactive.run):
+                bpy.app.timers.unregister(execute_interactive.run)
+
+        agent_controller._agent_state.mcp_server_running = False
+
+        # Start again after a brief delay.
+        def _deferred_start():
+            props.chat_status = "Starting..."
+            _redraw_areas_safe()
+            # Re-register the bridge timer.
+            if not mcp_to_blender_server.is_running():
+                from . import execute_interactive
+                prefs = context.preferences.addons[__package__].preferences
+                _bridge_port, _, _ = effective_ports(prefs)
+                mcp_to_blender_server.start(prefs.host, _bridge_port)
+                bpy.app.timers.register(
+                    execute_interactive.run,
+                    first_interval=mcp_to_blender_server.TIMER_INTERVAL_ACTIVE,
+                    persistent=True)
+            # Start MCP server.
+            agent_controller.start_mcp_server()
+            props.chat_status = "Connected"
+            _redraw_areas_safe()
+            return None  # Don't repeat timer.
+
+        bpy.app.timers.register(_deferred_start, first_interval=0.5)
+        return {"FINISHED"}
+
+
 # ---------------------------------------------------------------------------
 # Timer for UI updates
 
@@ -1032,6 +1081,18 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 text="LLM: {:s}".format("\u25cf" if state.llm_live else "\u25cb"),
                 icon='CONSOLE',
             )
+
+        # Restart button.
+        if state.mcp_server_running or (is_harness and mcp_to_blender_server.is_running()):
+            restart_row = layout.row()
+            restart_row.scale_y = 0.8
+            restart_row.operator("bfacw.agent_restart", icon="LOOP_BACK", text="Restart Coworker")
+
+        # Stop-during-thinking guard.
+        if state.is_thinking and not is_harness:
+            guard_row = layout.row()
+            guard_row.scale_y = 0.6
+            guard_row.label(text="Click Stop to abort after current thought...", icon='INFO')
 
         # Mode indicator.
         if not is_harness:
@@ -1481,6 +1542,7 @@ _classes = (
     BFACW_OT_reload_rules,
     BFACW_OT_agent_start,
     BFACW_OT_agent_stop,
+    BFACW_OT_agent_restart,
     BFACW_OT_copy_message,
 
     BFACW_PT_chat_panel,

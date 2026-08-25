@@ -2276,6 +2276,8 @@ def stop_local_llama() -> None:
     global _llama_process
 
     print("[🛠️Coworker] stop_local_llama: called")
+    _state._shutting_down = True
+    _state.error = "Stopping LLM..."
 
     with _lock:
         proc = _llama_process
@@ -2287,11 +2289,12 @@ def stop_local_llama() -> None:
         try:
             print("[🛠️Coworker] stop_local_llama:   calling proc.terminate()")
             proc.terminate()
-            print("[🛠️Coworker] stop_local_llama:   waiting up to 3s for exit...")
-            proc.wait(timeout=3)
+            print("[🛠️Coworker] stop_local_llama:   waiting up to 10s for exit...")
+            proc.wait(timeout=10)
             print("[🛠️Coworker] stop_local_llama:   process exited")
         except subprocess.TimeoutExpired:
-            print("[🛠️Coworker] stop_local_llama:   timeout — killing")
+            print("[🛠️Coworker] stop_local_llama:   timeout — force killing")
+            _state.error = "Force killing LLM..."
             proc.kill()
             proc.wait(timeout=3)
         except Exception as ex:  # pylint: disable=broad-exception-caught
@@ -2327,6 +2330,8 @@ def stop_local_llama() -> None:
     with _lock:
         _state.is_running = False
         _state.current_mode = "off"
+    _state._shutting_down = False
+    _state.error = ""
 
     print("[🛠️Coworker] stop_local_llama: done")
 

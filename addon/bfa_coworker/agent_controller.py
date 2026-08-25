@@ -571,6 +571,9 @@ class AgentState:
     mcp_port_actual: int = 0
     llm_port_actual: int = 0
 
+    # ── Shutdown tracking ──────────────────────────────────────────
+    _shutting_down: bool = False  # True during graceful shutdown.
+
 
 _agent_state = AgentState()
 

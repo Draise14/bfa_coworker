@@ -177,3 +177,18 @@ if col:
 - `COLOR_06` (Purple) — Cameras/Effects
 - `COLOR_07` (Pink) — Audio
 - `COLOR_08` (Brown) — Reference/Temp
+
+## World Orientation
+
+Blender uses a **Z-up, right-handed** coordinate system:
+
+- **Up**: +Z (vertical)
+- **Forward**: -Y (into the screen in front view)
+- **Right**: +X
+
+Common mistakes:
+- Don't confuse Blender's Z-up with game engines that use Y-up.
+- `location=(0, 0, 1)` places 1 unit **above** the origin, not forward.
+- `rotation_euler=(0, 0, pi)` rotates around the **Z axis** (yaw), not X.
+- `primitive_plane_add()` creates on the XY plane (facing up).
+- `primitive_cube_add()` centers on the origin — half extends ±Z.

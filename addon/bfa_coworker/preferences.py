@@ -872,7 +872,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             ("geometry_nodes", "Geo Nodes",    'GEOMETRY_NODES',      4),
             ("sequencer",     "Sequencer",     'SEQUENCE',            4),
             ("image_editor",  "Image Editor",  'IMAGE_DATA',          3),
-            ("compositor",    "Compositor",    'COMPOSITING',         4),
+            ("compositor",    "Compositor",    'NODE_COMPOSITING',         4),
             ("multi_editor_cross", "Multi-Editor", 'WINDOW',           4),
         ]
 

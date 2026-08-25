@@ -201,7 +201,7 @@ def _draw_tool_inline(
     row = tool_box.row()
     row.label(
         text="\u2699 {:s}".format(tool_name),
-        icon='CANCEL' if is_error else 'TOOL_SETTINGS',
+        icon='WARNING' if is_error else 'TOOL_SETTINGS',
     )
     if message_index >= 0:
         op = row.operator("bfacw.copy_message", text="", icon='COPYDOWN')
@@ -325,7 +325,7 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             return {"CANCELLED"}
 
         if not agent_controller._agent_state.mcp_server_running:
-            self.report({"ERROR"}, "Coworker is not running. Start it from Preferences or the Chat panel.")
+            self.report({"WARNING"}, "Coworker is not running. Start it from Preferences or the Chat panel.")
             return {"CANCELLED"}
 
         # Sync preferences to config, then read LLM config.
@@ -1321,7 +1321,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         status_icon = (
             'CHECKMARK' if is_ok and not state.is_thinking else
             'SORTTIME' if state.is_thinking else
-            'CANCEL' if state.error else 'X'
+            'WARNING' if state.error else 'X'
         )
         status_row = layout.row()
         status_row.label(text=status, icon=status_icon)
@@ -1706,7 +1706,7 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
             else:
                 layout.label(
                     text="Tools: none loaded",
-                    icon='ERROR',
+                    icon='WARNING',
                 )
 
         # ── LLM info ──

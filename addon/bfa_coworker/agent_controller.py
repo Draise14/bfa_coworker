@@ -2568,10 +2568,10 @@ def _entity_diff_to_context_message(diff: _EntityDiff) -> str:
     if diff.is_empty():
         return ""
     return (
-        "[System: So far this turn you have created:\n"
+        "[System: WARNING — You already created these entities this turn:\n"
         "{:s}\n"
-        "If you need to modify these, reference them by name. "
-        "If you need something different, create new entities with distinct names.]"
+        "DO NOT create them again. Modify the existing ones by name. "
+        "Create something DIFFERENT with distinct names only.]"
     ).format(summary)
 
 
@@ -3367,13 +3367,12 @@ def _run_conversation_turn_inner(
                             reason = "previous call errored"
                     elif _codes_overlap(_prev_code, args.get("code", "")):
                         # Overlap detected on a successful previous call.
-                        # Inject context instead of auto-undoing.
+                        # Auto-undo to prevent duplicates — lighter models
+                        # ignore passive context messages, so we undo the
+                        # previous call's side effects proactively.
                         if not _turn_entities.is_empty():
-                            ctx = _entity_diff_to_context_message(_turn_entities)
-                            if ctx:
-                                print("[🛠️Coworker] run_conversation_turn: overlap detected — injecting entity context")
-                                history.append({"role": "user", "content": ctx})
-                                _entity_context_injected = True
+                            should_undo = True
+                            reason = "overlap detected — preventing duplicates"
                     if should_undo:
                         print("[🛠️Coworker] run_conversation_turn: smart undo triggered — {:s}".format(reason))
                         # Undo to the state before the previous execute_blender_code.

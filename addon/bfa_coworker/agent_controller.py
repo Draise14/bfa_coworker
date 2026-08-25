@@ -577,6 +577,95 @@ class AgentState:
 
 _agent_state = AgentState()
 
+
+@dataclass
+class MessageQueue:
+    """Queue for pending user messages to be processed sequentially."""
+
+    _queue: list[dict[str, Any]] = field(default_factory=list)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def enqueue(
+        self,
+        message: str,
+        chat_mode: str = "AGENT",
+        llm_url: str | None = None,
+        api_key: str | None = None,
+        model: str | None = None,
+        mcp_port: int = 0,
+    ) -> int:
+        """Add a message to the queue. Returns the queue position (1-indexed)."""
+        with self._lock:
+            item = {
+                "message": message,
+                "chat_mode": chat_mode,
+                "llm_url": llm_url,
+                "api_key": api_key,
+                "model": model,
+                "mcp_port": mcp_port,
+                "queued_at": time.time(),
+            }
+            self._queue.append(item)
+            return len(self._queue)
+
+    def dequeue(self) -> dict[str, Any] | None:
+        """Remove and return the next message from the queue, or None if empty."""
+        with self._lock:
+            if self._queue:
+                return self._queue.pop(0)
+            return None
+
+    def peek(self) -> dict[str, Any] | None:
+        """Return the next message without removing it."""
+        with self._lock:
+            if self._queue:
+                return self._queue[0]
+            return None
+
+    def clear(self) -> None:
+        """Remove all messages from the queue."""
+        with self._lock:
+            self._queue.clear()
+
+    @property
+    def pending_count(self) -> int:
+        """Number of messages waiting in the queue."""
+        with self._lock:
+            return len(self._queue)
+
+    @property
+    def is_empty(self) -> bool:
+        """True if no messages are queued."""
+        return self.pending_count == 0
+
+    def get_all(self) -> list[dict[str, Any]]:
+        """Return a copy of all queued messages."""
+        with self._lock:
+            return list(self._queue)
+
+
+_message_queue = MessageQueue()
+
+
+def enqueue_message(
+    message: str,
+    chat_mode: str = "AGENT",
+    llm_url: str | None = None,
+    api_key: str | None = None,
+    model: str | None = None,
+    mcp_port: int = 0,
+) -> int:
+    """Enqueue a user message for processing. Returns queue position."""
+    return _message_queue.enqueue(
+        message, chat_mode, llm_url, api_key, model, mcp_port,
+    )
+
+
+def dequeue_message() -> dict[str, Any] | None:
+    """Dequeue the next message for processing."""
+    return _message_queue.dequeue()
+
+
 # Set to request the in-flight conversation turn to abort. The conversation
 # loop checks this between iterations and inside the LLM request path.
 _stop_event = threading.Event()

@@ -309,7 +309,7 @@ def _prune_old_sessions(base_dir) -> None:
 # Operators
 
 class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
-    """Send the current input to the Coworker agent."""
+    """Send the current input to the Coworker agent (or queue if busy)."""
     bl_idname = "bfacw.chat_send"
     bl_label = "Send"
     bl_description = "Send your message to the Coworker agent"
@@ -325,15 +325,6 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             self.report({"ERROR"}, "Coworker is not running. Start it from Preferences or the Chat panel.")
             return {"CANCELLED"}
 
-        # Double-click guard: don't start a new turn while one is running.
-        if agent_controller._agent_state.turn_active:
-            self.report({"WARNING"}, "Already processing a message.")
-            return {"CANCELLED"}
-
-        # Clear input.
-        props.chat_input = ""
-        props.chat_status = "Thinking..."
-
         # Sync preferences to config, then read LLM config.
         prefs = context.preferences.addons[__package__].preferences
         _sync_prefs_to_config(prefs)
@@ -346,14 +337,29 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             api_key = llm_cfg.remote_api_key
             model = llm_cfg.remote_model or None
 
-        # Run the conversation turn in a background thread.
-        import threading
-
         # Get effective ports from preferences.
         _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
-        # Use actual port if auto-shuffle kicked in.
         actual_mcp = agent_controller._agent_state.mcp_port_actual
         send_mcp_port = actual_mcp if actual_mcp else _mcp_port
+
+        # If a turn is already active, queue the message.
+        if agent_controller._agent_state.turn_active:
+            pos = agent_controller.enqueue_message(
+                message=message,
+                chat_mode=props.chat_mode,
+                llm_url=llm_url or None,
+                api_key=api_key or None,
+                model=model,
+                mcp_port=send_mcp_port,
+            )
+            props.chat_input = ""
+            self.report({"INFO"}, "Message queued (position {:d})".format(pos))
+            _redraw_areas(context)
+            return {"FINISHED"}
+
+        # Clear input and start processing.
+        props.chat_input = ""
+        props.chat_status = "Thinking..."
 
         def _do_turn():
             try:
@@ -372,6 +378,40 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
                 agent_controller._agent_state.error = str(ex)
             finally:
                 _save_chat_history()
+                # Auto-dequeue next message if queue is not empty.
+                _try_dequeue_next()
+                _update_status("Idle")
+                _redraw_areas_safe()
+
+        def _try_dequeue_next():
+            """Try to process the next queued message."""
+            next_msg = agent_controller.dequeue_message()
+            if next_msg:
+                props.chat_status = "Processing queued message..."
+                _redraw_areas_safe()
+                # Start processing the next message in a new thread.
+                import threading as _threading
+                _threading.Thread(target=_do_turn_from_queue, args=(next_msg,), daemon=True).start()
+
+        def _do_turn_from_queue(item: dict):
+            """Process a message from the queue."""
+            try:
+                agent_controller.run_conversation_turn(
+                    user_message=item["message"],
+                    on_text=None,
+                    on_reasoning=lambda r: _update_streaming(r),
+                    on_status=lambda s: _update_status(s),
+                    llm_url=item.get("llm_url"),
+                    api_key=item.get("api_key"),
+                    model=item.get("model"),
+                    mcp_port=item.get("mcp_port", 0),
+                    chat_mode=item.get("chat_mode", "AGENT"),
+                )
+            except Exception as ex:  # pylint: disable=broad-exception-caught
+                agent_controller._agent_state.error = str(ex)
+            finally:
+                _save_chat_history()
+                _try_dequeue_next()
                 _update_status("Idle")
                 _redraw_areas_safe()
 
@@ -383,6 +423,7 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             """Called when reasoning or streaming text arrives — refresh UI."""
             _redraw_areas_safe()
 
+        import threading
         thread = threading.Thread(target=_do_turn, daemon=True)
         thread.start()
 
@@ -406,6 +447,52 @@ class BFACW_OT_chat_clear(Operator):  # type: ignore[misc]
         agent_controller._clear_system_prompt_cache()
         _save_chat_history()
         _redraw_areas(context)
+        return {"FINISHED"}
+
+
+class BFACW_OT_queue_clear(Operator):  # type: ignore[misc]
+    """Clear all queued messages."""
+    bl_idname = "bfacw.queue_clear"
+    bl_label = "Clear Queue"
+    bl_description = "Remove all queued messages from the message queue"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        agent_controller._message_queue.clear()
+        self.report({"INFO"}, "Message queue cleared")
+        _redraw_areas(context)
+        return {"FINISHED"}
+
+
+class BFACW_OT_queue_show(Operator):  # type: ignore[misc]
+    """Show queued messages in a popup."""
+    bl_idname = "bfacw.queue_show"
+    bl_label = "Show Queue"
+    bl_description = "Display all queued messages in a popup menu"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        queue_items = agent_controller._message_queue.get_all()
+        if not queue_items:
+            self.report({"INFO"}, "Queue is empty")
+            return {"CANCELLED"}
+
+        def _draw_menu(menu, _context):
+            layout = menu.layout
+            layout.label(
+                text="Queued Messages ({:d})".format(len(queue_items)),
+                icon='QUEUE',
+            )
+            for idx, item in enumerate(queue_items):
+                msg = item.get("message", "")
+                mode = item.get("chat_mode", "AGENT")
+                preview = msg[:60] + ("..." if len(msg) > 60 else "")
+                row = layout.row()
+                row.label(text="[{:d}] [{:s}] {:s}".format(idx + 1, mode, preview))
+
+        context.window_manager.popup_menu(
+            _draw_menu,
+            title="Message Queue",
+            icon='QUEUE',
+        )
         return {"FINISHED"}
 
 
@@ -1098,6 +1185,16 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             guard_row.scale_y = 0.6
             guard_row.label(text="Click Stop to abort...", icon='INFO')
 
+        # ── Message queue display ──
+        queue_count = agent_controller._message_queue.pending_count
+        if queue_count > 0:
+            queue_box = layout.box()
+            queue_box.label(text="Queue: {:d} message(s)".format(queue_count), icon='QUEUE')
+            row = queue_box.row(align=True)
+            row.scale_y = 0.8
+            row.operator("bfacw.queue_show", icon='INFO', text="Show")
+            row.operator("bfacw.queue_clear", icon='X', text="Clear")
+
         layout.separator()
 
         # ── Conversation history ──
@@ -1544,6 +1641,8 @@ _classes = (
     BFACW_OT_chat_stop,
     BFACW_OT_export_session_log,
     BFACW_OT_copy_session_log,
+    BFACW_OT_queue_clear,
+    BFACW_OT_queue_show,
     BFACW_OT_mention_search,
     BFACW_OT_mention_insert,
     BFACW_OT_edit_rules,

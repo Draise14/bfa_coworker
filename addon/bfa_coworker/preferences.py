@@ -862,11 +862,18 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             ("scene_build",   "Scene Build",   'MESH_CUBE',           6),
             ("animation",     "Animation",     'ANIM',                5),
             ("modifiers",     "Modifiers",     'MODIFIER',            6),
-            ("assets_materials", "Assets+Mat", 'TEXTURE',             5),
+            ("assets_browser", "Asset Browser", 'ASSET_MANAGER',       6),
+            ("polyhaven",     "Poly Haven",    'WORLD',               5),
             ("baseline",      "Baseline",      'CONSOLE',             6),
             ("error_handling","Errors",        'ERROR',               3),
             ("vision_camera", "Vision: Camera", 'CAMERA_DATA',         4),
             ("vision_relative", "Vision: Place", 'SNAP_ON',            5),
+            ("shader_nodes",  "Shader Nodes",  'MATERIAL',            4),
+            ("geometry_nodes", "Geo Nodes",    'GEOMETRY_NODES',      4),
+            ("sequencer",     "Sequencer",     'SEQUENCE',            4),
+            ("image_editor",  "Image Editor",  'IMAGE_DATA',          3),
+            ("compositor",    "Compositor",    'COMPOSITING',         4),
+            ("multi_editor_cross", "Multi-Editor", 'WINDOW',           4),
         ]
 
         from . import operators_agent as _oa_suite
@@ -904,6 +911,10 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     icon=step_icon,
                 )
                 op.suite = suite_key
+                # Show elapsed time for completed steps.
+                elapsed = _oa_suite._test_suite_timings.get((suite_key, s_num))
+                if elapsed is not None:
+                    step_row.label(text="{:.1f}s".format(elapsed))
 
             # Reset button at the bottom of each suite.
             reset_row = suite_box.row(align=True)
@@ -913,6 +924,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 text="Reset",
             )
             reset_op.suite = suite_key
+
+        # Compare button for benchmark results.
+        diag_box.separator()
+        diag_box.operator("bfacw.compare_benchmarks", icon='FILE_REFRESH', text="Compare Results")
+
         # Show check_ports results inline.
         from . import operators_agent as _oa_check
         check_result = getattr(_oa_check._BFACW_OT_check_ports, "_result", None)

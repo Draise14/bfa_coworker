@@ -2444,6 +2444,29 @@ def _clear_coworker_text_blocks() -> None:
         pass  # Best-effort.
 
 
+def _save_code_to_text_editor_deferred(code: str, seq: str) -> None:
+    """Schedule saving code to a text editor datablock on the main thread.
+
+    Must be called from a background thread.  Uses ``bpy.app.timers`` to
+    defer the ``bpy.data.texts`` operations to the main thread since
+    Blender's Python API is not thread-safe.
+    """
+    def _do_save() -> None:
+        try:
+            import bpy as _bpy  # pylint: disable=import-error
+            prefs = _bpy.context.preferences.addons[__package__].preferences
+            if getattr(prefs, "save_code_to_text_editor", True):
+                name = "Coworker_{:s}".format(seq)
+                text_block = _bpy.data.texts.new(name)
+                text_block.write(code)
+                print("[🛠️Coworker] saved code to text editor '{:s}'".format(name))
+        except Exception as _ex:
+            print("[🛠️Coworker] FAILED to save code to text editor: {:s}".format(str(_ex)))
+
+    import bpy as _bpy  # pylint: disable=import-error
+    _bpy.app.timers.register(_do_save, first_interval=0.0)
+
+
 def run_conversation_turn(
     user_message: str,
     on_text: Callable[[str], None] | None = None,
@@ -3010,17 +3033,8 @@ def _run_conversation_turn_inner(
 
                     # ── Save to text editor memory bank ────────────────
                     if not _prev_code_errored:
-                        try:
-                            import bpy as _bpy  # pylint: disable=import-error
-                            prefs = _bpy.context.preferences.addons[__package__].preferences
-                            if getattr(prefs, "save_code_to_text_editor", True):
-                                seq = _next_code_sequence()
-                                name = "Coworker_{:s}".format(seq)
-                                text_block = _bpy.data.texts.new(name)
-                                text_block.write(_prev_code)
-                                print("[🛠️Coworker] run_conversation_turn: saved code to text editor '{:s}'".format(name))
-                        except Exception:
-                            pass  # Best-effort; don't break the agent loop.
+                        seq = _next_code_sequence()
+                        _save_code_to_text_editor_deferred(_prev_code, seq)
 
                 # Build a human-readable summary for the UI.
                 result_summary = _tool_result_summary(result_text)

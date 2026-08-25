@@ -249,6 +249,8 @@ _SURFACE_TOOLS = frozenset({
     "get_blendfile_summary_datablocks",
     "get_object_detail_summary",
     "get_objects_summary",
+    "search_polyhaven_assets",
+    "download_polyhaven_asset",
 })
 
 _TOOL_DOMAINS: dict[str, frozenset[str]] = {
@@ -1109,6 +1111,20 @@ def start_mcp_server(
     import time
     time.sleep(0.5)  # Let OS release the port.
 
+    # Auto-shuffle: if the port is still in use after killing, find the next
+    # available port so the subprocess doesn't fail to bind.
+    shuffled_port = _find_available_port(port)
+    if shuffled_port == 0:
+        _agent_state.error = (
+            "MCP port {:d} is in use and no subsequent port is available. "
+            "Increase port_offset in Preferences (Advanced tab).".format(port)
+        )
+        return None
+    if shuffled_port != port:
+        print("[🛠️Coworker] start_mcp_server: port {:d} in use, shuffled to {:d}".format(port, shuffled_port))
+        port = shuffled_port
+    _agent_state.mcp_port_actual = port
+
     env = _build_mcp_env(blender_host=blender_host, blender_port=blender_port)
 
     # --- Resolution order ---
@@ -1310,6 +1326,19 @@ def start_mcp_server_network(
     _kill_process_on_port(port)
     import time
     time.sleep(0.5)
+
+    # Auto-shuffle: if the port is still in use, find the next available one.
+    shuffled_port = _find_available_port(port)
+    if shuffled_port == 0:
+        _agent_state.error = (
+            "MCP network port {:d} is in use and no subsequent port is available. "
+            "Increase port_offset in Preferences (Advanced tab).".format(port)
+        )
+        return None
+    if shuffled_port != port:
+        print("[🛠️Coworker] start_mcp_server_network: port {:d} in use, shuffled to {:d}".format(port, shuffled_port))
+        port = shuffled_port
+    _agent_state.mcp_port_actual = port
 
     env = _build_mcp_env(blender_host=blender_host, blender_port=blender_port)
 

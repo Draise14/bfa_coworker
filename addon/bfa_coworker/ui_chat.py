@@ -1632,7 +1632,7 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
         if not is_harness:
             layout.separator()
             row = layout.row(align=True)
-            row.scale_y = 0.8
+            row.scale_y = 1.2
             row.operator("bfacw.export_session_log", icon="EXPORT", text="Export Log")
             row.operator("bfacw.copy_session_log", icon="COPYDOWN", text="Copy Log")
 

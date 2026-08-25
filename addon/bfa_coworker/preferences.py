@@ -1424,13 +1424,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         else:
             bridge_box.label(text="Status: Stopped", icon='X')
 
-        # ── MCP Server ──────────────────────────────────────────────
-        mcp_box = layout.box()
+        # ── MCP Server (External Harness mode only) ────────────────
         if self.operating_mode == "EXTERNAL_HARNESS":
+            mcp_box = layout.box()
             mcp_box.label(text="MCP Server (External Harness)", icon='SETTINGS')
-        else:
-            mcp_box.label(text="MCP Server", icon='SETTINGS')
-        mcp_box.prop(self, "mcp_server_mode", expand=True)
+            mcp_box.prop(self, "mcp_server_mode", expand=True)
 
         if self.mcp_server_mode == "STDIO":
             # ── Step 1: Pick your harness ─────────────────────────────
@@ -1612,6 +1610,15 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 icon='INFO',
             )
             mem_box.prop(self, "save_code_to_text_editor")
+
+        # ── Debug Mode ─────────────────────────────────────────────────
+        debug_box = layout.box()
+        debug_box.label(text="Debug Mode", icon='MODIFIER')
+        debug_box.prop(self, "debug_mode")
+        debug_box.label(
+            text="Enable benchmarks and advanced diagnostics.",
+            icon='INFO',
+        )
 
 
 # ---------------------------------------------------------------------------

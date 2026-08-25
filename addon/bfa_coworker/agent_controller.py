@@ -542,6 +542,7 @@ class AgentState:
     mcp_server_running: bool = False
     llm_connected: bool = False
     is_thinking: bool = False
+    thinking_start_time: float = 0.0  # Timestamp when thinking started (for elapsed timer)
     status_text: str = "Idle"
     error: str = ""
     tool_count: int = 0  # Number of MCP tools available (0 = not loaded yet)
@@ -676,6 +677,7 @@ def request_stop() -> None:
     print("[🛠️Coworker] request_stop: stop requested")
     _stop_event.set()
     _agent_state.is_thinking = False
+    _agent_state.thinking_start_time = 0.0
 
 
 def clear_stop() -> None:
@@ -2993,6 +2995,7 @@ def _run_conversation_turn_inner(
     if on_status:
         on_status("Thinking...")
     _agent_state.is_thinking = True
+    _agent_state.thinking_start_time = time.time()
     _agent_state.streaming_text = ""
     _agent_state.reasoning_text = ""
     _agent_state.thinking_dots = 0
@@ -3033,6 +3036,7 @@ def _run_conversation_turn_inner(
             "127.0.0.1", llm_port_local, timeout=120.0, proc=_llm_mgr.get_llama_process()
         ):
             _agent_state.is_thinking = False
+            _agent_state.thinking_start_time = 0.0
             _log_tail = _llm_mgr.get_llama_server_log_tail()
             if _log_tail:
                 _agent_state.error = (
@@ -3100,6 +3104,7 @@ def _run_conversation_turn_inner(
         if _stop_event.is_set():
             print("[🛠️Coworker] run_conversation_turn: aborted by user")
             _agent_state.is_thinking = False
+            _agent_state.thinking_start_time = 0.0
             if on_status:
                 on_status("Stopped")
             return history
@@ -3152,11 +3157,13 @@ def _run_conversation_turn_inner(
         # corrupting the new conversation.
         if _stop_event.is_set():
             print("[🛠️Coworker] run_conversation_turn: aborted — discarding stale response")
-            _agent_state.is_thinking = False
-            return history
+    _agent_state.is_thinking = False
+    _agent_state.thinking_start_time = 0.0
+    return history
 
         if response is None:
             _agent_state.is_thinking = False
+            _agent_state.thinking_start_time = 0.0
             _agent_state.error = "No response from LLM"
             if on_status:
                 on_status("Error: No response from LLM")
@@ -3271,11 +3278,12 @@ def _run_conversation_turn_inner(
             # Process each tool call.
             for tc in raw_tool_calls:
                 if _stop_event.is_set():
-                    print("[🛠️Coworker] run_conversation_turn: aborted during tool calls")
-                    _agent_state.is_thinking = False
+                    print("[🛠️Coworker] run_conversation_turn: aborted during tool calls")                    _agent_state.is_thinking = False
+                    _agent_state.thinking_start_time = 0.0
                     if on_status:
                         on_status("Stopped")
                     return history
+
                 fn = tc.get("function", {})
                 try:
                     args = json.loads(fn.get("arguments", "{}"))
@@ -3547,6 +3555,7 @@ def _run_conversation_turn_inner(
                 history.append({"role": "assistant", "content": final_content})
 
     _agent_state.is_thinking = False
+    _agent_state.thinking_start_time = 0.0
     if on_status:
         on_status("Idle")
     return history
@@ -3563,6 +3572,7 @@ def cleanup() -> None:
     _agent_state.reasoning_text = ""
     _agent_state.thinking_dots = 0
     _agent_state.is_thinking = False
+    _agent_state.thinking_start_time = 0.0
 
 
 # ---------------------------------------------------------------------------

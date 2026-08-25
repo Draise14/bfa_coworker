@@ -31,6 +31,7 @@ __all__ = (
 
 import json
 import os
+import time
 import threading
 from pathlib import Path
 
@@ -1264,7 +1265,8 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             status = props.chat_status
             if state.is_thinking:
                 spinners = ["\u25d0", "\u25d3", "\u25d1", "\u25d2"]
-                status = "Thinking {:s}".format(spinners[state.thinking_dots % 4])
+                elapsed = time.time() - state.thinking_start_time if state.thinking_start_time else 0.0
+                status = "Thinking {:s} ({:.0f}s)".format(spinners[state.thinking_dots % 4], elapsed)
             elif not state.mcp_server_running:
                 status = "Offline"
             elif state.error:

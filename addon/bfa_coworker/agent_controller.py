@@ -2536,8 +2536,6 @@ def _run_conversation_turn_inner(
         print("[🛠️Coworker] run_conversation_turn: inserted system prompt ({:d} chars)".format(
             len(system_text)))
 
-    history.append({"role": "user", "content": user_message})
-
     # Clear any pending screenshot image from a previous turn — the user
     # is starting fresh, so the old screenshot is stale.
     _agent_state._pending_image = None
@@ -2546,18 +2544,31 @@ def _run_conversation_turn_inner(
     # Small local models often call mode-dependent operators (mode_set, etc.)
     # on an empty scene, which fails with "Context missing active object".
     # Warn the LLM upfront so it creates objects first.
+    # NOTE: We append to the existing system prompt (position 0) rather than
+    # creating a new message — Qwen's Jinja template requires ALL system
+    # messages at the beginning and rejects any mid-conversation system role.
+    _preflight_note = ""
     try:
         import bpy as _bpy  # pylint: disable=import-error
         if len(_bpy.data.objects) == 0:
-            _empty_note = (
-                "[Note: The Blender scene is currently empty \u2014 no objects exist. "
+            _preflight_note = (
+                "\n\n[Note: The Blender scene is currently empty \u2014 no objects exist. "
                 "You must create objects before using mode-dependent operators "
                 "like bpy.ops.object.mode_set().]"
             )
-            history.insert(1, {"role": "system", "content": _empty_note})
             print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: empty scene detected, injected pre-flight note")
     except Exception:
         pass  # Best-effort; don't break the agent loop.
+
+    # Inject the preflight note into the system prompt (not a separate message)
+    # so the message sequence stays: [system, user, ...].
+    # Guard: only inject once — don't duplicate on subsequent turns.
+    _preflight_marker = "[Note: The Blender scene is currently empty"
+    if _preflight_note and _preflight_marker not in history[0]["content"]:
+        history[0]["content"] += _preflight_note
+
+    # Append the user message.
+    history.append({"role": "user", "content": user_message})
 
     # ── Smart undo tracking (per-turn) ────────────────────────────────
     # Tracks the last execute_blender_code call to detect iteration and
@@ -2673,9 +2684,16 @@ def _run_conversation_turn_inner(
                 from . import skills as _skills_mod  # pylint: disable=import-error
                 _domain_skills_text = _skills_mod.get_domain_skills(_detected_domains)
                 if _domain_skills_text:
-                    history.insert(1, {"role": "system", "content": _domain_skills_text})
-                    print("[🛠️Coworker] run_conversation_turn: domain skills injected for {:s}".format(
-                        ",".join(sorted(_detected_domains))))
+                    # Append domain skills to the system prompt (position 0)
+                    # rather than creating a new message — Qwen's Jinja template
+                    # requires all system messages at the beginning.
+                    # Guard: check if this domain's skills are already injected
+                    # to avoid duplicating on subsequent turns.
+                    _skills_marker = _domain_skills_text[:40]  # First 40 chars as marker
+                    if _skills_marker not in history[0]["content"]:
+                        history[0]["content"] += "\n\n" + _domain_skills_text
+                        print("[🛠️Coworker] run_conversation_turn: domain skills injected for {:s}".format(
+                            ",".join(sorted(_detected_domains))))
             except Exception:
                 pass  # Best-effort; don't break the agent loop.
     else:

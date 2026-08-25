@@ -511,6 +511,9 @@ def _run_test_step(
 
     prefs = context.preferences.addons[__package__].preferences
     _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+    # Use actual port if auto-shuffle kicked in.
+    actual_mcp = _ac._agent_state.mcp_port_actual
+    test_mcp_port = actual_mcp if actual_mcp else _mcp_port
 
     # Resolve LLM config (same as chat_send).
     llm = get_llm_manager()
@@ -540,7 +543,7 @@ def _run_test_step(
                 llm_url=llm_url or None,
                 api_key=api_key or None,
                 model=model,
-                mcp_port=_mcp_port,
+                mcp_port=test_mcp_port,
             )
             print("[🛠️Coworker] test suite '{:s}': step {:d}/{:s} completed".format(
                 suite_key, step_num, step_label))
@@ -702,7 +705,9 @@ class BFACW_OT_mcp_server_start(bpy.types.Operator):  # type: ignore[misc]
             self.report({"ERROR"}, _ac_mod._agent_state.error)
             return {"CANCELLED"}
 
-        self.report({"INFO"}, "MCP server started on {:s}:{:d}".format(mcp_host, mcp_port))
+        actual = _ac_mod._agent_state.mcp_port_actual
+        display_port = actual if actual else mcp_port
+        self.report({"INFO"}, "MCP server started on {:s}:{:d}".format(mcp_host, display_port))
         return {"FINISHED"}
 
 

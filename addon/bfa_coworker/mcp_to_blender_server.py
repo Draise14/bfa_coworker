@@ -24,6 +24,7 @@ __all__ = (
     "timer_idle_reset",
     "timer_internal_vars_calc",
     "use_log",
+    "get_actual_port",
 )
 
 import json
@@ -78,6 +79,42 @@ class _TimerState:
 
 
 _timer = _TimerState()
+
+
+# Actual port the bridge server bound to (may differ from DEFAULT_PORT
+# if auto-shuffle kicked in).  0 = not started yet.
+_actual_port: int = 0
+
+
+def get_actual_port() -> int:
+    """Return the port the bridge server is actually listening on, or 0."""
+    return _actual_port
+
+
+def _find_available_port(preferred: int, max_offset: int = 100) -> int:
+    """Return the first available port starting at *preferred*.
+
+    Tries ``preferred``, ``preferred + 1``, … up to ``preferred + max_offset``.
+    Returns the first port that can be bound, or 0 if none are available.
+    """
+    for offset in range(max_offset + 1):
+        candidate = preferred + offset
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            if sys.platform == "win32":
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            s.bind(("127.0.0.1", candidate))
+            s.close()
+            if offset > 0:
+                print("[🛠️Coworker] _find_available_port: port {:d} in use, shuffled to {:d}".format(
+                    preferred, candidate))
+            return candidate
+        except (OSError, socket.error):
+            s.close()
+            continue
+    print("[🛠️Coworker] _find_available_port: no port available in range {:d}–{:d}".format(
+        preferred, preferred + max_offset))
+    return 0
 
 
 def timer_internal_vars_calc(
@@ -794,12 +831,21 @@ def start(host: str, port: int) -> None:
     called periodically (see ``execute_interactive`` and
     ``execute_blocking``).
 
+    If *port* is in use, the function automatically tries the next
+    available port (``port + 1``, ``port + 2``, … up to +100) and
+    stores the actual port in ``_actual_port``.
+
     Callers should catch ``Exception`` broadly rather than specific types,
     since failures may be:
     - ``RuntimeError``, e.g. server already running.
     - ``OSError``, e.g. address already in use.
     ...other exceptions that are difficult to predict exhaustively.
     """
+
+    # Track the actual port we end up binding.
+    global _actual_port
+    _actual_port = port
+
     if is_running():
         raise RuntimeError("Server is already running")
 
@@ -813,11 +859,17 @@ def start(host: str, port: int) -> None:
         _probe.settimeout(0.5)
         _probe.connect((host, port))
         _probe.close()
-        raise OSError(
-            "Port {:d} is already in use by another Blender session. "
-            "Increase port_offset in Preferences (Advanced tab) to use a "
-            "different set of ports.".format(port)
-        )
+        # Port is in use — auto-shuffle to the next available port.
+        new_port = _find_available_port(port)
+        if new_port == 0:
+            raise OSError(
+                "Port {:d} is in use and no subsequent port is available. "
+                "Increase port_offset in Preferences (Advanced tab) to use a "
+                "different set of ports.".format(port)
+            )
+        print("[🛠️Coworker] start: port {:d} in use — shuffled to {:d}".format(port, new_port))
+        port = new_port
+        _actual_port = port
     except (ConnectionRefusedError, TimeoutError, OSError):
         # Expected — port is free (connection refused or timed out).
         _probe.close()

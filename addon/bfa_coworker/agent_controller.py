@@ -249,8 +249,6 @@ _SURFACE_TOOLS = frozenset({
     "get_blendfile_summary_datablocks",
     "get_object_detail_summary",
     "get_objects_summary",
-    "search_polyhaven_assets",
-    "download_polyhaven_asset",
 })
 
 _TOOL_DOMAINS: dict[str, frozenset[str]] = {

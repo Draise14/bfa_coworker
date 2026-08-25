@@ -1416,9 +1416,15 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 conclusion_msg = None
                 for msg in turn:
                     role = msg.get("role", "")
-                    if role == "user":
+                    content = msg.get("content", "")
+                    is_system_user = (
+                        role == "user"
+                        and isinstance(content, str)
+                        and content.startswith("[System:")
+                    )
+                    if role == "user" and not is_system_user:
                         user_msg = msg
-                    elif role in ("reasoning", "tool"):
+                    elif role in ("reasoning", "tool") or is_system_user:
                         process_msgs.append(msg)
                     elif role == "assistant":
                         if msg.get("tool_calls"):
@@ -1489,10 +1495,21 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         # Interleaved reasoning + tool steps.
                         for p_msg in process_msgs:
                             p_role = p_msg.get("role", "")
-                            if p_role == "reasoning":
+                            p_content = p_msg.get("content", "")
+                            is_system_msg = (
+                                p_role == "user"
+                                and isinstance(p_content, str)
+                                and p_content.startswith("[System:")
+                            )
+                            if is_system_msg:
+                                # Entity context notification — show as internal info.
+                                sys_box = proc_body.box()
+                                sys_box.label(text="System Context", icon='INFO')
+                                _draw_multiline(sys_box, p_content)
+                            elif p_role == "reasoning":
                                 _draw_reasoning(
                                     proc_body,
-                                    p_msg.get("content", ""),
+                                    p_content,
                                     p_msg.get("label", "Thinking"),
                                     is_thinking=state.is_thinking,
                                     thinking_dots=state.thinking_dots,

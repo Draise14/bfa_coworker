@@ -1819,6 +1819,8 @@ _TOOL_FRIENDLY_NAMES: dict[str, str] = {
     "execute_blender_code": "Running code in Blender",
     "get_blendfile_summary_datablocks_toolcode": "Reading scene data",
     "download_polyhaven_asset": "Downloading asset",
+    "search_polyhaven_assets": "Searching Poly Haven",
+    "setup_pbr_material": "Setting up PBR material",
     "get_object_info": "Inspecting object",
     "create_object": "Creating object",
     "modify_object": "Modifying object",
@@ -2903,6 +2905,18 @@ def _run_conversation_turn_inner(
                         pass
                     if _turn_snapshot is None:
                         print("[🛠️Coworker] run_conversation_turn: initial entity snapshot FAILED (continuing without)")
+
+                # ── Inject resolution from preferences ─────────────
+                if tool_name in ("download_polyhaven_asset", "setup_pbr_material"):
+                    try:
+                        _prefs = bpy.context.preferences.addons[__package__].preferences
+                        if "resolution" not in args or not args.get("resolution"):
+                            args["resolution"] = _prefs.polyhaven_resolution
+                        # Also inject polyhaven_resolution for setup_pbr_material.
+                        if tool_name == "setup_pbr_material" and "polyhaven_resolution" not in args:
+                            args["polyhaven_resolution"] = _prefs.polyhaven_resolution
+                    except Exception:
+                        pass  # Best-effort; don't break the tool call.
 
                 # Call the MCP tool.
                 result_text = _call_mcp_tool_sync(tool_name, args, mcp_port)

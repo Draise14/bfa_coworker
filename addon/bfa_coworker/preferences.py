@@ -651,6 +651,24 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         description="API key for the remote generation service",
     )
 
+    # ── Poly Haven Resolution ───────────────────────────────────────────
+
+    polyhaven_resolution: EnumProperty(  # type: ignore[valid-type]
+        name="Poly Haven Resolution",
+        description=(
+            "Default download resolution for Poly Haven textures and HDRIs. "
+            "Lower resolutions are faster to download and use less memory."
+        ),
+        items=lambda self, _context: [
+            ("512", "512 - Preview", "Tiny textures for prototyping"),
+            ("1k", "1k - Lightweight", "Good for background objects"),
+            ("2k", "2k - Balanced (Recommended)", "Best balance of quality and performance"),
+            ("4k", "4k - Production", "High quality for close-up shots"),
+            ("8k", "8k - Maximum", "Largest files, highest detail"),
+        ],
+        default=2,
+    )
+
     # ── Preferences Tab ──────────────────────────────────────────────────
 
     pref_tab: EnumProperty(  # type: ignore[valid-type]
@@ -715,7 +733,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         name="Harness Preset",
         description="Select an external MCP client to configure",
         items=lambda self, _context: self._get_harness_preset_items(),
-        default="claude_desktop",
+        default=0,
     )
 
     def _get_harness_preset_items(self) -> list[tuple[str, str, str]]:
@@ -1298,13 +1316,17 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             gen_box.prop(self, "gen_remote_url")
             gen_box.prop(self, "gen_remote_key")
 
-        # ── Poly Haven Asset Test (Tier 1) ─────────────────────────────
+        # ── Poly Haven Asset Download (Tier 1) ────────────────────────
         ph_box = layout.box()
-        ph_box.label(text="Poly Haven Asset Download (Test)", icon='WORLD')
+        ph_box.label(text="Poly Haven Asset Download", icon='WORLD')
         ph_box.label(
-            text="Download a free CC0 HDRI or texture to test the Poly Haven integration.",
+            text="Download free CC0 HDRIs, textures, and models from Poly Haven.",
             icon='INFO',
         )
+        # Resolution selector.
+        ph_row = ph_box.row(align=True)
+        ph_row.prop(self, "polyhaven_resolution", text="Resolution")
+        # Test buttons.
         row = ph_box.row(align=True)
         row.operator("bfacw.test_polyhaven_hdri", icon='WORLD', text="Download Test HDRI")
         row.operator("bfacw.test_polyhaven_texture", icon='TEXTURE', text="Download Test Texture")

@@ -1062,9 +1062,11 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 props, "chat_newest_first",
                 icon='SORTTIME', text="Newest First",
             )
+            # Count displayable messages (exclude system/internal).
+            displayable = sum(1 for m in history if m.get("role") != "system")
             _draw_multiline(
                 hist_box,
-                "({:d} messages)".format(len(history)),
+                "({:d} messages)".format(displayable),
             )
 
             # Group messages into turns (each user message starts a new turn).
@@ -1106,7 +1108,20 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         else:
                             conclusion_msg = msg
 
+                # Handle assistant-only turns (e.g. the welcome message).
                 if not user_msg:
+                    if conclusion_msg:
+                        turn_box = hist_box.box()
+                        c_row = turn_box.row()
+                        c_row.label(text="Coworker:", icon='CONSOLE')
+                        op = c_row.operator(
+                            "bfacw.copy_message", text="", icon='COPYDOWN',
+                        )
+                        op.message_index = history.index(conclusion_msg)
+                        _draw_multiline(
+                            turn_box,
+                            conclusion_msg.get("content", ""),
+                        )
                     continue
 
                 # ── Outer turn box ──────────────────────────────

@@ -2531,7 +2531,7 @@ def _run_conversation_turn_inner(
                 "You must create objects before using mode-dependent operators "
                 "like bpy.ops.object.mode_set().]"
             )
-            history.append({"role": "system", "content": _empty_note})
+            history.insert(1, {"role": "system", "content": _empty_note})
             print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: empty scene detected, injected pre-flight note")
     except Exception:
         pass  # Best-effort; don't break the agent loop.
@@ -2650,7 +2650,7 @@ def _run_conversation_turn_inner(
                 from . import skills as _skills_mod  # pylint: disable=import-error
                 _domain_skills_text = _skills_mod.get_domain_skills(_detected_domains)
                 if _domain_skills_text:
-                    history.append({"role": "system", "content": _domain_skills_text})
+                    history.insert(1, {"role": "system", "content": _domain_skills_text})
                     print("[🛠️Coworker] run_conversation_turn: domain skills injected for {:s}".format(
                         ",".join(sorted(_detected_domains))))
             except Exception:
@@ -2913,7 +2913,7 @@ def _run_conversation_turn_inner(
                             ctx = _entity_diff_to_context_message(_turn_entities)
                             if ctx:
                                 print("[🛠️Coworker] run_conversation_turn: overlap detected — injecting entity context")
-                                history.append({"role": "system", "content": ctx})
+                                history.append({"role": "user", "content": ctx})
                                 _entity_context_injected = True
                     if should_undo:
                         print("[🛠️Coworker] run_conversation_turn: smart undo triggered — {:s}".format(reason))
@@ -3003,7 +3003,7 @@ def _run_conversation_turn_inner(
                                         if ctx and not _entity_context_injected:
                                             print("[🛠️Coworker] run_conversation_turn: entity context injected — {:s}".format(
                                                 _turn_entities.summary()))
-                                            history.append({"role": "system", "content": ctx})
+                                            history.append({"role": "user", "content": ctx})
                                             _entity_context_injected = True
                         except (json.JSONDecodeError, TypeError):
                             pass

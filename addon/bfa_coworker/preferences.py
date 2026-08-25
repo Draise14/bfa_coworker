@@ -881,12 +881,14 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         # Grid layout: 3 columns.
         grid = diag_box.grid_flow(row_major=True, columns=3, even_columns=True, even_rows=True)
 
-        for suite_key, suite_label, suite_icon, total_steps in _SUITE_META:
+        for suite_key, suite_label, suite_icon, _total_steps in _SUITE_META:
             suite_box = grid.box()
             suite_header = suite_box.row()
             suite_header.label(text=suite_label, icon=suite_icon)
 
-            # Show progress.
+            # Show progress using actual suite length.
+            suite = _oa_suite._TEST_SUITES.get(suite_key, [])
+            total_steps = len(suite)
             step_idx = _oa_suite._test_suite_progress.get(suite_key, 0)
             suite_header.label(
                 text="Step {:d}/{:d}".format(step_idx, total_steps),
@@ -894,11 +896,10 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             )
 
             # Step buttons in a column.
-            suite = _oa_suite._TEST_SUITES.get(suite_key, [])
-            for s_num, s_label, _ in suite:
+            for step_i, (s_num, s_label, _) in enumerate(suite):
                 step_row = suite_box.row(align=True)
-                is_done = step_idx > s_num
-                is_current = step_idx == s_num
+                is_done = step_i < step_idx
+                is_current = step_i == step_idx
                 if is_done:
                     step_icon = 'CHECKBOX_HLT'
                 elif is_current:
@@ -1423,10 +1424,12 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         else:
             bridge_box.label(text="Status: Stopped", icon='X')
 
-        # ── MCP Server (External Harness mode only) ────────────────────
+        # ── MCP Server ──────────────────────────────────────────────
+        mcp_box = layout.box()
         if self.operating_mode == "EXTERNAL_HARNESS":
-            mcp_box = layout.box()
             mcp_box.label(text="MCP Server (External Harness)", icon='SETTINGS')
+        else:
+            mcp_box.label(text="MCP Server", icon='SETTINGS')
         mcp_box.prop(self, "mcp_server_mode", expand=True)
 
         if self.mcp_server_mode == "STDIO":

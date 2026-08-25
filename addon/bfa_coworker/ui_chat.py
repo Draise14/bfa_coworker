@@ -14,11 +14,13 @@ Also registers a Text Editor side panel for prompt-based interaction.
 __all__ = (
     "ChatHistoryProperties",
     "BFACW_PT_chat_panel",
+    "BFACW_PT_chat_queue",
     "BFACW_PT_chat_status",
     "BFACW_PT_chat_text_editor",
     "BFACW_OT_chat_send",
     "BFACW_OT_chat_clear",
     "BFACW_OT_chat_stop",
+    "BFACW_OT_chat_queue_send",
     "BFACW_OT_export_session_log",
     "BFACW_OT_copy_session_log",
     "BFACW_OT_agent_start",
@@ -535,6 +537,49 @@ class BFACW_OT_chat_stop(Operator):  # type: ignore[misc]
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
         props.chat_status = "Stopped"
+        _redraw_areas(context)
+        return {"FINISHED"}
+
+
+class BFACW_OT_chat_queue_send(Operator):  # type: ignore[misc]
+    """Queue the current input message for later processing."""
+    bl_idname = "bfacw.chat_queue_send"
+    bl_label = "Queue Message"
+    bl_description = "Add the current message to the queue for processing after the current turn"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        wm = context.window_manager
+        props = wm.bfacw_chat_props  # type: ignore[attr-defined]
+        message = props.chat_input.strip()
+        if not message:
+            self.report({"WARNING"}, "Nothing to queue")
+            return {"CANCELLED"}
+
+        prefs = context.preferences.addons[__package__].preferences
+        _sync_prefs_to_config(prefs)
+        llm_cfg = llm_manager.get_config()
+        llm_url = None
+        api_key = None
+        model = None
+        if llm_cfg.mode == "remote":
+            llm_url = llm_cfg.remote_api_url
+            api_key = llm_cfg.remote_api_key
+            model = llm_cfg.remote_model or None
+
+        _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+        actual_mcp = agent_controller._agent_state.mcp_port_actual
+        send_mcp_port = actual_mcp if actual_mcp else _mcp_port
+
+        pos = agent_controller.enqueue_message(
+            message=message,
+            chat_mode=props.chat_mode,
+            llm_url=llm_url or None,
+            api_key=api_key or None,
+            model=model,
+            mcp_port=send_mcp_port,
+        )
+        props.chat_input = ""
+        self.report({"INFO"}, "Queued (position {:d})".format(pos))
         _redraw_areas(context)
         return {"FINISHED"}
 
@@ -1310,29 +1355,18 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         row.operator("bfacw.mention_search", icon="OUTLINER_OB_MESH", text="@ Mention")
 
         # ── Action buttons ──
-        row = layout.row(align=True)
-        row.scale_y = 1.5
         if state.is_thinking:
-            row.operator("bfacw.chat_stop", icon="PAUSE", text="Stop")
+            # During thinking: Stop + Queue side by side.
+            btn_row = layout.row(align=True)
+            btn_row.scale_y = 1.5
+            btn_row.operator("bfacw.chat_stop", icon="PAUSE", text="Stop")
+            btn_row.operator("bfacw.chat_queue_send", icon="ADD", text="Queue")
         else:
-            row.operator("bfacw.chat_send", icon="PLAY", text="Send")
-        row.operator("bfacw.chat_clear", icon="X", text="New Thread")
-
-        # Stop-during-thinking guard.
-        if state.is_thinking:
-            guard_row = layout.row()
-            guard_row.scale_y = 0.6
-            guard_row.label(text="Click Stop to abort...", icon='INFO')
-
-        # ── Message queue display ──
-        queue_count = agent_controller._message_queue.pending_count
-        if queue_count > 0:
-            queue_box = layout.box()
-            queue_box.label(text="Queue: {:d} message(s)".format(queue_count), icon='QUEUE')
-            row = queue_box.row(align=True)
-            row.scale_y = 0.8
-            row.operator("bfacw.queue_show", icon='INFO', text="Show")
-            row.operator("bfacw.queue_clear", icon='X', text="Clear")
+            # Idle: Send + New Thread.
+            btn_row = layout.row(align=True)
+            btn_row.scale_y = 1.5
+            btn_row.operator("bfacw.chat_send", icon="PLAY", text="Send")
+            btn_row.operator("bfacw.chat_clear", icon="X", text="New Thread")
 
         layout.separator()
 
@@ -1544,9 +1578,51 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
 
         else:
             layout.label(
-                text="No messages yet. Start the Coworker and type below.",
+                text="Getting ready...",
                 icon='INFO',
             )
+
+
+class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
+    """Queue sub-panel — shows pending queued messages."""
+    bl_label = "Message Queue"
+    bl_idname = "BFACW_PT_chat_queue"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Coworker"
+    bl_parent_id = "BFACW_PT_chat_panel"
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return not bpy.app.background
+
+    def draw(self, context: bpy.types.Context) -> None:
+        layout = self.layout
+        state = agent_controller._agent_state
+        queue_items = agent_controller._message_queue.get_all()
+
+        if not queue_items:
+            layout.label(text="Queue empty", icon='CHECKMARK')
+            return
+
+        layout.label(
+            text="{:d} message(s) queued".format(len(queue_items)),
+            icon='QUEUE',
+        )
+
+        for idx, item in enumerate(queue_items):
+            msg = item.get("message", "")
+            mode = item.get("chat_mode", "AGENT")
+            preview = msg[:60] + ("..." if len(msg) > 60 else "")
+            box = layout.box()
+            hdr = box.row()
+            hdr.label(text="[{:d}] {:s}".format(idx + 1, mode), icon='SORTTIME')
+            _draw_multiline(box, preview)
+
+        # Clear button.
+        row = layout.row(align=True)
+        row.scale_y = 1.0
+        row.operator("bfacw.queue_clear", icon="TRASH", text="Clear Queue")
 
 
 class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
@@ -1728,10 +1804,11 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
 
         # Conversation summary — latest message first.
         history = state.conversation_history
-        if history:
+        display_history = [m for m in history if m.get("role") != "system"]
+        if display_history:
             box = layout.box()
-            box.label(text="History ({:d} messages)".format(len(history)), icon='TEXT')
-            for msg in reversed(history[-10:]):
+            box.label(text="History ({:d} messages)".format(len(display_history)), icon='TEXT')
+            for msg in reversed(display_history[-10:]):
                 role = msg.get("role", "")
                 content = msg.get("content", "")
                 summary = msg.get("summary", "")
@@ -1778,6 +1855,7 @@ _classes = (
     BFACW_OT_chat_send,
     BFACW_OT_chat_clear,
     BFACW_OT_chat_stop,
+    BFACW_OT_chat_queue_send,
     BFACW_OT_export_session_log,
     BFACW_OT_copy_session_log,
     BFACW_OT_queue_clear,
@@ -1792,6 +1870,7 @@ _classes = (
     BFACW_OT_copy_message,
 
     BFACW_PT_chat_panel,
+    BFACW_PT_chat_queue,
     BFACW_PT_chat_status,
     BFACW_PT_chat_text_editor,
 )

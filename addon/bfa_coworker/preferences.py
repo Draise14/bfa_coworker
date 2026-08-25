@@ -1430,96 +1430,96 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             mcp_box.label(text="MCP Server (External Harness)", icon='SETTINGS')
             mcp_box.prop(self, "mcp_server_mode", expand=True)
 
-        if self.mcp_server_mode == "STDIO":
-            # ── Step 1: Pick your harness ─────────────────────────────
-            step1 = mcp_box.box()
-            step1.label(text="Step 1: Pick your MCP client", icon='FORWARD')
-            step1.prop(self, "harness_preset", text="")
+            if self.mcp_server_mode == "STDIO":
+                # ── Step 1: Pick your harness ───────────────────────────
+                step1 = mcp_box.box()
+                step1.label(text="Step 1: Pick your MCP client", icon='FORWARD')
+                step1.prop(self, "harness_preset", text="")
 
-            # Show a short info line about the selected preset.
-            from .shared import get_harness_preset_by_id
-            preset = get_harness_preset_by_id(self.harness_preset)
-            if preset is not None:
-                row = step1.row(align=True)
-                row.label(text=preset.description, icon='INFO')
-                if preset.docs_url:
-                    row.operator("bfacw.open_url", icon='URL', text="Docs").url = preset.docs_url
+                # Show a short info line about the selected preset.
+                from .shared import get_harness_preset_by_id
+                preset = get_harness_preset_by_id(self.harness_preset)
+                if preset is not None:
+                    row = step1.row(align=True)
+                    row.label(text=preset.description, icon='INFO')
+                    if preset.docs_url:
+                        row.operator("bfacw.open_url", icon='URL', text="Docs").url = preset.docs_url
 
-            # ── Step 2: Copy the config ───────────────────────────────
-            step2 = mcp_box.box()
-            step2.label(text="Step 2: Copy the config", icon='COPYDOWN')
-            row = step2.row(align=True)
-            op = row.operator("bfacw.copy_mcp_config", icon="COPYDOWN", text="Copy to Clipboard")
-            op.client_type = self.harness_preset
-            step2.label(
-                text="This copies the connection settings for your selected client.",
-                icon='BLANK1',
-            )
-
-            # ── Step 3: Paste into your client ────────────────────────
-            step3 = mcp_box.box()
-            step3.label(text="Step 3: Paste into your client's config file", icon='FILE_TEXT')
-            if preset is not None and preset.config_path_help:
-                for line in preset.config_path_help.split("\n"):
-                    step3.label(text=line, icon='FILE_FOLDER')
-            row = step3.row(align=True)
-            op2 = row.operator("bfacw.open_config_folder", icon="FILE_FOLDER", text="Open Config Folder")
-            op2.preset_id = self.harness_preset
-            step3.label(
-                text="Tip: The config file is a JSON file. Paste the copied text inside the top-level { } braces.",
-                icon='INFO',
-            )
-
-            # ── Step 4: Restart ───────────────────────────────────────
-            step4 = mcp_box.box()
-            step4.label(text="Step 4: Restart your MCP client", icon='LOOP_BACK')
-            step4.label(
-                text="Close and re-open your MCP client completely. "
-                     "A window close is not enough on some apps.",
-                icon='BLANK1',
-            )
-            if preset is not None and preset.notes:
-                step4.label(text="\u2139\ufe0f {:s}".format(preset.notes), icon='INFO')
-
-            # ── Advanced options (collapsible) ─────────────────────────
-            adv_box = mcp_box.box()
-            adv_box.label(text="Advanced Options", icon='SETTINGS')
-            adv_box.prop(self, "use_blender_python_for_harness")
-            if preset is not None and preset.setup_steps:
-                adv_box.label(text="Detailed setup for this client:", icon='PLAY')
-                for i, step in enumerate(preset.setup_steps, 1):
-                    adv_box.label(
-                        text="{:d}. {:s}".format(i, step),
-                        icon='DOT',
-                    )
-
-            # Config preview (collapsible).
-            adv_box.label(text="Config Preview:", icon='COPYDOWN')
-            from . import agent_controller as _ac
-            _bridge_port, _, _ = effective_ports(self)
-            preview = _ac.generate_mcp_client_config(
-                client_type=self.harness_preset,
-                blender_host=self.host,
-                blender_port=_bridge_port,
-                use_blender_python=self.use_blender_python_for_harness,
-            )
-            for line in preview.split("\n"):
-                adv_box.label(text=line, icon='BLANK1')
-
-        elif self.mcp_server_mode == "NETWORK":
-            mcp_box.prop(self, "mcp_server_host")
-            mcp_box.prop(self, "mcp_server_port_override")
-            if self.mcp_server_host not in ("127.0.0.1", "localhost", "::1"):
-                mcp_box.label(
-                    text="\u26a0 Binding to non-localhost exposes the MCP server to your network!",
-                    icon='ERROR',
+                # ── Step 2: Copy the config ─────────────────────────────
+                step2 = mcp_box.box()
+                step2.label(text="Step 2: Copy the config", icon='COPYDOWN')
+                row = step2.row(align=True)
+                op = row.operator("bfacw.copy_mcp_config", icon="COPYDOWN", text="Copy to Clipboard")
+                op.client_type = self.harness_preset
+                step2.label(
+                    text="This copies the connection settings for your selected client.",
+                    icon='BLANK1',
                 )
-            row = mcp_box.row(align=True)
-            from . import agent_controller as _ac
-            if _ac._agent_state.mcp_server_running:
-                row.operator("bfacw.mcp_server_stop", icon="CANCEL", text="Stop MCP Server")
-            else:
-                row.operator("bfacw.mcp_server_start", icon="PLAY", text="Start MCP Server")
+
+                # ── Step 3: Paste into your client ──────────────────────
+                step3 = mcp_box.box()
+                step3.label(text="Step 3: Paste into your client's config file", icon='FILE_TEXT')
+                if preset is not None and preset.config_path_help:
+                    for line in preset.config_path_help.split("\n"):
+                        step3.label(text=line, icon='FILE_FOLDER')
+                row = step3.row(align=True)
+                op2 = row.operator("bfacw.open_config_folder", icon="FILE_FOLDER", text="Open Config Folder")
+                op2.preset_id = self.harness_preset
+                step3.label(
+                    text="Tip: The config file is a JSON file. Paste the copied text inside the top-level { } braces.",
+                    icon='INFO',
+                )
+
+                # ── Step 4: Restart ─────────────────────────────────────
+                step4 = mcp_box.box()
+                step4.label(text="Step 4: Restart your MCP client", icon='LOOP_BACK')
+                step4.label(
+                    text="Close and re-open your MCP client completely. "
+                         "A window close is not enough on some apps.",
+                    icon='BLANK1',
+                )
+                if preset is not None and preset.notes:
+                    step4.label(text="\u2139\ufe0f {:s}".format(preset.notes), icon='INFO')
+
+                # ── Advanced options ────────────────────────────────────
+                adv_box = mcp_box.box()
+                adv_box.label(text="Advanced Options", icon='SETTINGS')
+                adv_box.prop(self, "use_blender_python_for_harness")
+                if preset is not None and preset.setup_steps:
+                    adv_box.label(text="Detailed setup for this client:", icon='PLAY')
+                    for i, step in enumerate(preset.setup_steps, 1):
+                        adv_box.label(
+                            text="{:d}. {:s}".format(i, step),
+                            icon='DOT',
+                        )
+
+                # Config preview.
+                adv_box.label(text="Config Preview:", icon='COPYDOWN')
+                from . import agent_controller as _ac
+                _bridge_port, _, _ = effective_ports(self)
+                preview = _ac.generate_mcp_client_config(
+                    client_type=self.harness_preset,
+                    blender_host=self.host,
+                    blender_port=_bridge_port,
+                    use_blender_python=self.use_blender_python_for_harness,
+                )
+                for line in preview.split("\n"):
+                    adv_box.label(text=line, icon='BLANK1')
+
+            elif self.mcp_server_mode == "NETWORK":
+                mcp_box.prop(self, "mcp_server_host")
+                mcp_box.prop(self, "mcp_server_port_override")
+                if self.mcp_server_host not in ("127.0.0.1", "localhost", "::1"):
+                    mcp_box.label(
+                        text="\u26a0 Binding to non-localhost exposes the MCP server to your network!",
+                        icon='ERROR',
+                    )
+                row = mcp_box.row(align=True)
+                from . import agent_controller as _ac
+                if _ac._agent_state.mcp_server_running:
+                    row.operator("bfacw.mcp_server_stop", icon="CANCEL", text="Stop MCP Server")
+                else:
+                    row.operator("bfacw.mcp_server_start", icon="PLAY", text="Start MCP Server")
 
         # ── Agent Control ─────────────────────────────────────────────
         box = layout.box()

@@ -18,6 +18,8 @@ __all__ = (
     "BFACW_OT_chat_send",
     "BFACW_OT_chat_clear",
     "BFACW_OT_chat_stop",
+    "BFACW_OT_export_session_log",
+    "BFACW_OT_copy_session_log",
     "BFACW_OT_agent_start",
     "BFACW_OT_agent_stop",
     "chat_timer_update",
@@ -266,12 +268,37 @@ _history_save_lock = threading.Lock()
 
 
 def _save_chat_history() -> None:
-    """Save conversation history to disk (thread-safe)."""
-    path = _chat_history_path()
+    """Save conversation history to disk (thread-safe) with versioned copies."""
+    import time as _time
+    base_dir = _chat_history_path().parent
     with _history_save_lock:
         try:
-            with open(str(path), "w", encoding="utf-8") as fh:
+            # Save timestamped copy.
+            ts = _time.strftime("%Y-%m-%d_%H-%M-%S", _time.localtime())
+            versioned_path = base_dir / "default_{:s}.json".format(ts)
+            with open(str(versioned_path), "w", encoding="utf-8") as fh:
                 json.dump(agent_controller._agent_state.conversation_history, fh, indent=2)
+            # Also save to default.json (latest).
+            with open(str(_chat_history_path()), "w", encoding="utf-8") as fh:
+                json.dump(agent_controller._agent_state.conversation_history, fh, indent=2)
+            # Prune old versions: keep last 10.
+            _prune_old_sessions(base_dir)
+        except OSError:
+            pass
+
+
+def _prune_old_sessions(base_dir) -> None:
+    """Keep at most 10 versioned session files, remove oldest."""
+    import re as _re
+    pattern = _re.compile(r"^default_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.json$")
+    files = []
+    for f in base_dir.iterdir():
+        if f.is_file() and pattern.match(f.name):
+            files.append(f)
+    files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+    for old_file in files[10:]:
+        try:
+            old_file.unlink()
         except OSError:
             pass
 
@@ -377,6 +404,32 @@ class BFACW_OT_chat_clear(Operator):  # type: ignore[misc]
         agent_controller._clear_system_prompt_cache()
         _save_chat_history()
         _redraw_areas(context)
+        return {"FINISHED"}
+
+
+class BFACW_OT_export_session_log(Operator):  # type: ignore[misc]
+    """Export the current session to a Blender text datablock."""
+    bl_idname = "bfacw.export_session_log"
+    bl_label = "Export Session Log"
+    bl_description = "Export full session history, system prompt, and version info to a text block"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        agent_controller.export_session_log()
+        self.report({"INFO"}, "Session log exported to text block")
+        _redraw_areas(context)
+        return {"FINISHED"}
+
+
+class BFACW_OT_copy_session_log(Operator):  # type: ignore[misc]
+    """Copy the session log to the clipboard."""
+    bl_idname = "bfacw.copy_session_log"
+    bl_label = "Copy Session Log"
+    bl_description = "Copy full session history to clipboard"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        log_text = agent_controller.export_session_log_to_clipboard()
+        context.window_manager.clipboard = log_text
+        self.report({"INFO"}, "Session log copied to clipboard")
         return {"FINISHED"}
 
 
@@ -1084,6 +1137,8 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             else:
                 row.operator("bfacw.chat_send", icon="PLAY", text="Send")
             row.operator("bfacw.chat_clear", icon="X", text="New Thread")
+            row.operator("bfacw.export_session_log", icon="EXPORT", text="Export Log")
+            row.operator("bfacw.copy_session_log", icon="COPYDOWN", text="Copy Log")
 
         layout.separator()
 
@@ -1418,6 +1473,8 @@ _classes = (
     BFACW_OT_chat_send,
     BFACW_OT_chat_clear,
     BFACW_OT_chat_stop,
+    BFACW_OT_export_session_log,
+    BFACW_OT_copy_session_log,
     BFACW_OT_mention_search,
     BFACW_OT_mention_insert,
     BFACW_OT_edit_rules,

@@ -2632,6 +2632,137 @@ def _save_code_to_text_editor_deferred(code: str, seq: str) -> None:
     _bpy.app.timers.register(_do_save, first_interval=0.0)
 
 
+def export_session_log(auto_saved: bool = False) -> None:
+    """Export the current session to a Blender text datablock.
+
+    Gathers system prompt, conversation history, error signatures,
+    llama-server log tail, and version info into a timestamped text block.
+
+    Args:
+        auto_saved: If True, appends a note that this was auto-saved due to error spiral.
+    """
+    import time as _time
+    import platform
+    import bpy as _bpy  # pylint: disable=import-error
+
+    timestamp = _time.strftime("%Y-%m-%d_%H-%M-%S", _time.localtime())
+    block_name = "Coworker_Session_{:s}".format(timestamp)
+
+    lines = []
+    lines.append("=" * 72)
+    lines.append("BFA Coworker Session Log")
+    lines.append("Timestamp: {:s}".format(_time.strftime("%Y-%m-%d %H:%M:%S")))
+    lines.append("Auto-saved: {:s}".format(str(auto_saved)))
+    lines.append("=" * 72)
+    lines.append("")
+
+    # Version info.
+    lines.append("--- Version Info ---")
+    try:
+        manifest_path = _bpy.utils.resource_path('LOCAL')
+        lines.append("Blender: {:s}".format(str(_bpy.app.version_string)))
+    except Exception:
+        lines.append("Blender: unknown")
+    lines.append("Python: {:s}".format(platform.python_version()))
+    lines.append("OS: {:s} {:s}".format(platform.system(), platform.release()))
+    lines.append("")
+
+    # System prompt.
+    lines.append("--- System Prompt ---")
+    try:
+        sys_prompt = _get_system_prompt_with_rules()
+        lines.append(sys_prompt)
+    except Exception as ex:
+        lines.append("[Error loading system prompt: {:s}]".format(str(ex)))
+    lines.append("")
+
+    # Conversation history.
+    lines.append("--- Conversation History ---")
+    history = list(_state.conversation_history)
+    for i, msg in enumerate(history):
+        role = msg.get("role", "unknown")
+        lines.append("\n[Message {:d}] role={:s}".format(i + 1, role))
+        if role == "assistant":
+            content = msg.get("content", "")
+            if content:
+                lines.append("Content: {:s}".format(str(content)[:2000]))
+            tool_calls = msg.get("tool_calls", [])
+            if tool_calls:
+                for tc in tool_calls:
+                    fn = tc.get("function", {})
+                    lines.append("  Tool: {:s}".format(fn.get("name", "unknown")))
+                    args_str = fn.get("arguments", "")
+                    lines.append("  Args: {:s}".format(str(args_str)[:500]))
+        elif role == "user":
+            content = msg.get("content", "")
+            lines.append("Content: {:s}".format(str(content)[:2000]))
+        elif role == "tool":
+            content = msg.get("content", "")
+            lines.append("Result: {:s}".format(str(content)[:1000]))
+    lines.append("")
+
+    # Error signatures.
+    lines.append("--- Error Info ---")
+    if _state.error:
+        lines.append("Current error: {:s}".format(str(_state.error)))
+    lines.append("")
+
+    # LLM server log tail.
+    lines.append("--- LLM Server Log (last 50 lines) ---")
+    llm_stderr = getattr(_state, 'llm_stderr', None)
+    if llm_stderr:
+        try:
+            stderr_text = llm_stderr if isinstance(llm_stderr, str) else str(llm_stderr)
+            log_lines = stderr_text.strip().splitlines()
+            for line in log_lines[-50:]:
+                lines.append(line)
+        except Exception:
+            lines.append("[Could not read LLM stderr]")
+    else:
+        lines.append("[No LLM server log available]")
+    lines.append("")
+    lines.append("=" * 72)
+    lines.append("End of session log")
+
+    # Write to text block on main thread.
+    def _do_export() -> None:
+        try:
+            text_block = _bpy.data.texts.new(block_name)
+            text_block.write("\n".join(lines))
+            print("[🛠️Coworker] Session log exported to text block '{:s}'".format(block_name))
+        except Exception as ex:
+            print("[🛠️Coworker] Failed to export session log: {:s}".format(str(ex)))
+
+    _bpy.app.timers.register(_do_export, first_interval=0.0)
+
+
+def export_session_log_to_clipboard() -> str:
+    """Return the session log as a string (for copy-to-clipboard)."""
+    import time as _time
+    import platform
+
+    lines = []
+    lines.append("=" * 72)
+    lines.append("BFA Coworker Session Log")
+    lines.append("Timestamp: {:s}".format(_time.strftime("%Y-%m-%d %H:%M:%S")))
+    lines.append("=" * 72)
+    lines.append("")
+    lines.append("--- System Prompt ---")
+    try:
+        lines.append(_get_system_prompt_with_rules())
+    except Exception as ex:
+        lines.append("[Error: {:s}]".format(str(ex)))
+    lines.append("")
+    lines.append("--- Conversation History ---")
+    history = list(_state.conversation_history)
+    for i, msg in enumerate(history):
+        role = msg.get("role", "unknown")
+        lines.append("\n[Message {:d}] role={:s}".format(i + 1, role))
+        content = msg.get("content", "")
+        lines.append("Content: {:s}".format(str(content)[:2000]))
+    return "\n".join(lines)
+
+
 def run_conversation_turn(
     user_message: str,
     on_text: Callable[[str], None] | None = None,
@@ -3215,8 +3346,14 @@ def _run_conversation_turn_inner(
                             pass
 
                     # ── Save to text editor memory bank ────────────────
-                    if not _prev_code_errored:
-                        seq = _next_code_sequence()
+                    seq = _next_code_sequence()
+                    if _prev_code_errored:
+                        # Save error-producing code with error prefix.
+                        _save_code_to_text_editor_deferred(
+                            "# ERROR: Tool call returned an error\n# Original code:\n" + _prev_code,
+                            seq,
+                        )
+                    else:
                         _save_code_to_text_editor_deferred(_prev_code, seq)
 
                 # Build a human-readable summary for the UI.
@@ -3264,6 +3401,11 @@ def _run_conversation_turn_inner(
                         if len(_consecutive_errors) >= 3:
                             print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: spiral detected \u2014 "
                                   "same error 3\u00d7 in a row: {:s}".format(error_sig))
+                            # Auto-save session log on spiral detection.
+                            try:
+                                export_session_log(auto_saved=True)
+                            except Exception:  # pylint: disable=broad-exception-caught
+                                pass
                             # Truncate: remove the last 3 assistant+tool message pairs.
                             removed = 0
                             for i in range(len(history) - 1, -1, -1):

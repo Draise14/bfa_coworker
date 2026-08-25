@@ -1396,7 +1396,19 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         del context
         layout = self.layout
 
-        # ── Bridge Server ──────────────────────────────────────────────
+        # ── Mode hint ──────────────────────────────────────────────────
+        mode_labels = {
+            "LOCAL_LLM": "Local LLM mode — some settings are hidden",
+            "REMOTE_API": "Remote API mode — some settings are hidden",
+            "EXTERNAL_HARNESS": "External Harness mode — some settings are hidden",
+        }
+        hint = mode_labels.get(self.operating_mode, "")
+        if hint:
+            hint_row = layout.row()
+            hint_row.label(text=hint, icon='INFO')
+            hint_row.scale_y = 0.6
+
+        # ── Bridge Server (always visible) ────────────────────────────
         bridge_box = layout.box()
         bridge_box.label(text="Bridge Server", icon='NETWORK_DRIVE')
         bridge_box.prop(self, "host")
@@ -1411,9 +1423,10 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         else:
             bridge_box.label(text="Status: Stopped", icon='X')
 
-        # ── MCP Server (External Harness) ──────────────────────────────
-        mcp_box = layout.box()
-        mcp_box.label(text="MCP Server (External Harness)", icon='SETTINGS')
+        # ── MCP Server (External Harness mode only) ────────────────────
+        if self.operating_mode == "EXTERNAL_HARNESS":
+            mcp_box = layout.box()
+            mcp_box.label(text="MCP Server (External Harness)", icon='SETTINGS')
         mcp_box.prop(self, "mcp_server_mode", expand=True)
 
         if self.mcp_server_mode == "STDIO":
@@ -1542,57 +1555,60 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         row.prop(self, "mcp_port")
         row.prop(self, "llm_port")
 
-        # ── Skills ─────────────────────────────────────────────────────
-        skills_box = layout.box()
-        skills_box.label(text="Skills", icon='TEXT')
-        try:
-            import bpy  # pylint: disable=import-error
-            version_str = ".".join(str(v) for v in bpy.app.version[:3])
-            skills_box.label(
-                text="Blender {:s}".format(version_str),
-                icon='BLENDER',
+        # ── Skills (not in External Harness mode) ───────────────────────
+        if self.operating_mode != "EXTERNAL_HARNESS":
+            skills_box = layout.box()
+            skills_box.label(text="Skills", icon='TEXT')
+            try:
+                import bpy as _bpy_skills  # pylint: disable=import-error
+                version_str = ".".join(str(v) for v in _bpy_skills.app.version[:3])
+                skills_box.label(
+                    text="Blender {:s}".format(version_str),
+                    icon='BLENDER',
+                )
+            except Exception:
+                pass
+            # Show loaded skill files.
+            try:
+                from . import skills as _skills_mod  # pylint: disable=import-error
+                loaded = _skills_mod.list_loaded_skills()
+                if loaded:
+                    col = skills_box.column(align=True)
+                    col.label(text="Loaded Skills:", icon='CHECKMARK')
+                    for name in loaded:
+                        col.label(text="  \u2022 {:s}".format(name))
+                else:
+                    skills_box.label(text="No skills loaded", icon='INFO')
+            except Exception:
+                skills_box.label(text="Skills module not available", icon='ERROR')
+            row = skills_box.row()
+            row.operator("bfacw.reload_skills", icon="FILE_REFRESH", text="Reload Skills")
+
+        # ── Custom Skills (not in External Harness mode) ────────────────
+        if self.operating_mode != "EXTERNAL_HARNESS":
+            custom_box = layout.box()
+            custom_box.label(text="Custom Skills", icon='GREASEPENCIL')
+            custom_box.label(
+                text="Extra instructions injected into every conversation. "
+                     "Use for project-specific conventions, tool preferences, "
+                     "or workflow rules. Markdown format supported.",
+                icon='INFO',
             )
-        except Exception:
-            pass
-        # Show loaded skill files.
-        try:
-            from . import skills as _skills_mod  # pylint: disable=import-error
-            loaded = _skills_mod.list_loaded_skills()
-            if loaded:
-                col = skills_box.column(align=True)
-                col.label(text="Loaded Skills:", icon='CHECKMARK')
-                for name in loaded:
-                    col.label(text="  \u2022 {:s}".format(name))
-            else:
-                skills_box.label(text="No skills loaded", icon='INFO')
-        except Exception:
-            skills_box.label(text="Skills module not available", icon='ERROR')
-        row = skills_box.row()
-        row.operator("bfacw.reload_skills", icon="FILE_REFRESH", text="Reload Skills")
+            # Multiline textbox for comfortable editing (same pattern as chat input).
+            custom_row = custom_box.row()
+            custom_row.scale_y = 3.0
+            custom_row.prop(self, "custom_skills_text", text="", icon='GREASEPENCIL')
 
-        # ── Custom Skills ──────────────────────────────────────────────
-        custom_box = layout.box()
-        custom_box.label(text="Custom Skills", icon='GREASEPENCIL')
-        custom_box.label(
-            text="Extra instructions injected into every conversation. "
-                 "Use for project-specific conventions, tool preferences, "
-                 "or workflow rules. Markdown format supported.",
-            icon='INFO',
-        )
-        # Multiline textbox for comfortable editing (same pattern as chat input).
-        custom_row = custom_box.row()
-        custom_row.scale_y = 3.0
-        custom_row.prop(self, "custom_skills_text", text="", icon='GREASEPENCIL')
-
-        # ── Text Editor Memory Bank ───────────────────────────────────
-        mem_box = layout.box()
-        mem_box.label(text="Text Editor Memory Bank", icon='TEXT')
-        mem_box.label(
-            text="Save executed code to timestamped text datablocks\n"
-                 "(Coworker_HH-MM-SS) for review and reuse.",
-            icon='INFO',
-        )
-        mem_box.prop(self, "save_code_to_text_editor")
+        # ── Text Editor Memory Bank (not in External Harness mode) ──────
+        if self.operating_mode != "EXTERNAL_HARNESS":
+            mem_box = layout.box()
+            mem_box.label(text="Text Editor Memory Bank", icon='TEXT')
+            mem_box.label(
+                text="Save executed code to timestamped text datablocks\n"
+                     "(Coworker_HH-MM-SS) for review and reuse.",
+                icon='INFO',
+            )
+            mem_box.prop(self, "save_code_to_text_editor")
 
 
 # ---------------------------------------------------------------------------

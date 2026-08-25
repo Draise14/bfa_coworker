@@ -422,6 +422,11 @@ def _detect_domain_from_scene() -> set[str]:
             if "geometry_nodes" in domains:
                 break
 
+        # Asset Browser: any configured asset libraries.
+        if hasattr(_bpy.context, "preferences") and hasattr(_bpy.context.preferences, "filepaths"):
+            if _bpy.context.preferences.filepaths.asset_libraries:
+                domains.add("asset_browser")
+
     except Exception:
         pass  # Best-effort; not running inside Blender.
 

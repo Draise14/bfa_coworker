@@ -60,7 +60,8 @@ def is_debug_mode() -> bool:
     Reads from the add-on preferences at call time.  Falls back to True
     (show diagnostics) when preferences are not yet available (e.g. during
     early registration).
-    """try:
+    """
+    try:
         import bpy  # pylint: disable=import-error
         prefs = bpy.context.preferences.addons.get(__package__)
         if prefs is not None and hasattr(prefs.preferences, "debug_mode"):

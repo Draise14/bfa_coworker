@@ -1,5 +1,24 @@
 # Materials & Shading
 
+## Asset-First Workflow
+
+Check existing assets before generating anything new:
+
+1. **Local asset browser first** — use `execute_blender_code` to check for
+   existing materials/worlds: `[m for m in bpy.data.materials if m.asset_data]`.
+   If a matching local asset exists, append/link it. No download needed.
+2. **Poly Haven** — use `search_polyhaven_assets` (type "textures") then
+   `download_polyhaven_asset` for the full PBR set (diffuse, normal, roughness,
+   AO, displacement) which builds a complete Principled BSDF material automatically.
+3. **Create from scratch** — only if no suitable local or online asset exists.
+
+For HDRIs: check local worlds first, then use `search_polyhaven_assets`
+(type "hdris") then `download_polyhaven_asset`.
+
+**EXCEPTION:** If the user explicitly asks to create something from scratch
+(e.g. "make a procedural material", "create a brick mesh"), follow their
+instruction — do not substitute an asset.
+
 ## PBR Workflow
 
 Blender uses the Principled BSDF shader for physically-based rendering:

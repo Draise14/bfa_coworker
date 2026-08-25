@@ -322,6 +322,9 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
 
         # Get effective ports from preferences.
         _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+        # Use actual port if auto-shuffle kicked in.
+        actual_mcp = agent_controller._agent_state.mcp_port_actual
+        send_mcp_port = actual_mcp if actual_mcp else _mcp_port
 
         def _do_turn():
             try:
@@ -333,7 +336,7 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
                     llm_url=llm_url or None,
                     api_key=api_key or None,
                     model=model,
-                    mcp_port=_mcp_port,
+                    mcp_port=send_mcp_port,
                     chat_mode=props.chat_mode,
                 )
             except Exception as ex:  # pylint: disable=broad-exception-caught
@@ -625,9 +628,11 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
 
         if mcp_to_blender_server.is_running():
             self.report({"INFO"}, "Bridge server already running")
-            _bridge_port, _, _ = effective_ports(
-                context.preferences.addons[__package__].preferences)
-            props.chat_status = "External Harness — Bridge on port {:d}".format(_bridge_port)
+            actual = mcp_to_blender_server.get_actual_port()
+            if actual:
+                props.chat_status = "External Harness — Bridge on port {:d}".format(actual)
+            else:
+                props.chat_status = "External Harness — Bridge running"
             return {"FINISHED"}
 
         if bpy.app.background:
@@ -649,8 +654,13 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
             persistent=True,
         )
 
-        props.chat_status = "External Harness — Bridge on port {:d}".format(_bridge_port)
-        self.report({"INFO"}, "Bridge server started on port {:d}".format(_bridge_port))
+        actual = mcp_to_blender_server.get_actual_port()
+        if actual:
+            props.chat_status = "External Harness — Bridge on port {:d}".format(actual)
+            self.report({"INFO"}, "Bridge server started on port {:d}".format(actual))
+        else:
+            props.chat_status = "External Harness — Bridge running"
+            self.report({"INFO"}, "Bridge server started")
         _redraw_areas(context)
         return {"FINISHED"}
 
@@ -677,7 +687,11 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
                 first_interval=mcp_to_blender_server.TIMER_INTERVAL_ACTIVE,
                 persistent=True,
             )
-            self.report({"INFO"}, "Bridge server started")
+            actual_bridge = mcp_to_blender_server.get_actual_port()
+            if actual_bridge:
+                self.report({"INFO"}, "Bridge server started on port {:d}".format(actual_bridge))
+            else:
+                self.report({"INFO"}, "Bridge server started")
 
         # Step 2: Start the MCP HTTP server.
         if not agent_controller._agent_state.mcp_server_running:
@@ -687,7 +701,11 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
             if proc is None:
                 self.report({"ERROR"}, agent_controller._agent_state.error)
                 return {"CANCELLED"}
-            self.report({"INFO"}, "MCP server started on port {:d}".format(_mcp_port))
+            actual_mcp = agent_controller._agent_state.mcp_port_actual
+            if actual_mcp:
+                self.report({"INFO"}, "MCP server started on port {:d}".format(actual_mcp))
+            else:
+                self.report({"INFO"}, "MCP server started on port {:d}".format(_mcp_port))
 
         # Step 3: Start the LLM backend (only in local mode).
         # This can be slow (model download or server startup), so it runs
@@ -735,12 +753,14 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
                         return
                     # Warm up tools + post welcome message (background thread).
                     _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+                    actual_mcp = agent_controller._agent_state.mcp_port_actual
+                    warmup_mcp = actual_mcp if actual_mcp else _mcp_port
                     agent_controller.warmup_agent(
                         on_status=lambda s: bpy.app.timers.register(
                             lambda s=s: setattr(props, "chat_status", s) or _redraw_areas_safe(),
                             first_interval=0.0,
                         ),
-                        mcp_port=_mcp_port,
+                        mcp_port=warmup_mcp,
                     )
                     # Mark connected on the main thread after warmup completes.
                     _set_chat_status("Connected")
@@ -763,12 +783,14 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
                             _set_chat_status("Error: " + _err)
                             return
                     _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+                    actual_mcp = agent_controller._agent_state.mcp_port_actual
+                    warmup_mcp = actual_mcp if actual_mcp else _mcp_port
                     agent_controller.warmup_agent(
                         on_status=lambda s: bpy.app.timers.register(
                             lambda s=s: setattr(props, "chat_status", s) or _redraw_areas_safe(),
                             first_interval=0.0,
                         ),
-                        mcp_port=_mcp_port,
+                        mcp_port=warmup_mcp,
                     )
                     _set_chat_status("Connected")
                 threading.Thread(target=_warmup_existing, daemon=True).start()
@@ -777,12 +799,14 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
             # In remote mode, no LLM backend is started.
             def _warmup_remote():
                 _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+                actual_mcp = agent_controller._agent_state.mcp_port_actual
+                warmup_mcp = actual_mcp if actual_mcp else _mcp_port
                 agent_controller.warmup_agent(
                     on_status=lambda s: bpy.app.timers.register(
                         lambda s=s: setattr(props, "chat_status", s) or _redraw_areas_safe(),
                         first_interval=0.0,
                     ),
-                    mcp_port=_mcp_port,
+                    mcp_port=warmup_mcp,
                 )
                 bpy.app.timers.register(
                     lambda: setattr(props, "chat_status", "Connected") or _redraw_areas_safe(),
@@ -891,12 +915,18 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         row.scale_y = 2.0
         if is_harness:
             if mcp_to_blender_server.is_running():
-                row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop Bridge")
+                op = row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop Bridge")
+                actual = mcp_to_blender_server.get_actual_port()
+                if actual:
+                    op.description = "Bridge running on port {:d}".format(actual)
             else:
                 row.operator("bfacw.agent_start", icon="PLAY", text="Start Bridge")
         else:
             if state.mcp_server_running:
-                row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop Coworker")
+                op = row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop Coworker")
+                actual_mcp = state.mcp_port_actual
+                if actual_mcp:
+                    op.description = "MCP server on port {:d}".format(actual_mcp)
             else:
                 row.operator("bfacw.agent_start", icon="PLAY", text="Start Coworker")
 
@@ -904,8 +934,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         if is_harness:
             bridge_running = mcp_to_blender_server.is_running()
             if bridge_running:
-                _bridge_port, _, _ = effective_ports(prefs)
-                status = "External Harness — Bridge on port {:d}".format(_bridge_port)
+                status = "Bridge Running"
             else:
                 status = "Bridge Offline"
         else:
@@ -996,10 +1025,16 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
 
             # Status line.
             _bridge_port, _, _ = effective_ports(prefs)
+            actual_bridge = mcp_to_blender_server.get_actual_port()
+            port_display = actual_bridge if actual_bridge else _bridge_port
             box.label(
-                text="Bridge running on port {:d}".format(_bridge_port),
+                text="Bridge Running",
                 icon='CHECKMARK',
             )
+            # Show actual port in a subtle row below.
+            if port_display:
+                row = box.row(align=True)
+                row.label(text="Port: {:d}".format(port_display))
 
             # MCP server mode selector.
             box.separator()

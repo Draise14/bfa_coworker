@@ -108,6 +108,11 @@ class _TeeStream:
             line = line.strip()
             if line:
                 write(line)
+        # Also flush any remaining partial line immediately so that
+        # crash logs capture everything written so far.
+        if self._buf.strip():
+            write(self._buf.strip())
+            self._buf = ""
         return len(data)
 
     def flush(self) -> None:

@@ -1323,7 +1323,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             text=status,
             icon='CHECKMARK' if is_ok and not state.is_thinking else
                  'SORTTIME' if state.is_thinking else
-                 'ERROR' if state.error else 'X',
+                 'CANCEL' if state.error else 'X',
         )
 
         # ── External Harness mode ──
@@ -1464,7 +1464,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         for p in process_msgs
                     )
                     if has_tool_error:
-                        turn_icon = 'ERROR'
+                        turn_icon = 'CANCEL'
                     elif conclusion_msg:
                         turn_icon = 'CHECKMARK'
                     else:

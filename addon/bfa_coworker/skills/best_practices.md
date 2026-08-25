@@ -147,3 +147,33 @@ if obj is None:
 ```
 
 Guard lookups with ``try/except ReferenceError`` and re-acquire on failure.
+
+## Collection Color Tags
+
+Use the `set_collection_color_tag` tool to organize collections visually in the Outliner.
+
+**Valid color values:** `NONE`, `COLOR_01` through `COLOR_08`
+
+**Example:**
+```python
+# Set collection color via MCP tool
+set_collection_color_tag(collection_name="Props", color="COLOR_01")
+```
+
+**Reading color tags:**
+```python
+import bpy
+col = bpy.data.collections.get("Props")
+if col:
+    print(col.color_tag)  # e.g., "COLOR_01"
+```
+
+**Convention suggestions:**
+- `COLOR_01` (Red) — Active/Important objects
+- `COLOR_02` (Orange) — Props/Decorations
+- `COLOR_03` (Yellow) — Lighting
+- `COLOR_04` (Green) — Environment/Terrain
+- `COLOR_05` (Blue) — Characters/Animation
+- `COLOR_06` (Purple) — Cameras/Effects
+- `COLOR_07` (Pink) — Audio
+- `COLOR_08` (Brown) — Reference/Temp

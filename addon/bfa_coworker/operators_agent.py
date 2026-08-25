@@ -792,17 +792,42 @@ class BFACW_OT_open_config_folder(bpy.types.Operator):  # type: ignore[misc]
             path_str = first_line
 
         import os as _os
-        folder = _os.path.dirname(_os.path.expandvars(path_str))
-        if not _os.path.isdir(folder):
-            # Try creating the parent.
-            try:
-                _os.makedirs(folder, exist_ok=True)
-            except OSError:
-                self.report({"ERROR"}, "Cannot access: {:s}".format(folder))
-                return {"CANCELLED"}
+        expanded = _os.path.expandvars(path_str)
+        folder = _os.path.dirname(expanded)
+        file_path = expanded
 
-        bpy.ops.wm.path_open(filepath=folder)
-        return {"FINISHED"}
+        if _os.path.isdir(folder):
+            # Folder exists — open it in the OS file manager.
+            bpy.ops.wm.path_open(filepath=folder)
+            return {'FINISHED'}
+
+        # Folder does not exist — don't silently create it.  Instead, show a
+        # popup explaining what to do and offer to copy the config.
+        def _draw(self_inner, context_inner):  # type: ignore[no-untyped-def]
+            box = self_inner.layout.box()
+            box.label(text="Config folder not found", icon='ERROR')
+            box.separator()
+            box.label(text="Folder: {:s}".format(folder), icon='FILE_FOLDER')
+            box.separator()
+            box.label(text="Setup steps for {:s}:".format(preset.name), icon='INFO')
+            if preset.setup_steps:
+                for i, step in enumerate(preset.setup_steps, 1):
+                    box.label(text="{:d}. {:s}".format(i, step))
+            box.separator()
+            row = box.row(align=True)
+            row.scale_y = 1.4
+            op = row.operator("bfacw.copy_mcp_config", icon='COPYDOWN', text="Copy Config")
+            op.client_type = self_inner.preset_id
+            if preset.docs_url:
+                op2 = row.operator("bfacw.open_url", icon='URL', text="Docs")
+                op2.url = preset.docs_url
+
+        context.window_manager.popup_menu(
+            _draw,
+            title="{:s} — Setup Guide".format(preset.name),
+            icon='INFO',
+        )
+        return {'CANCELLED'}
 
 
 # ---------------------------------------------------------------------------

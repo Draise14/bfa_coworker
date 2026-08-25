@@ -46,6 +46,28 @@ Asset libraries use directory structures for organization:
 - `Worlds/` — World/environment assets
 - `Collections/` — Collection assets
 
+### `get_asset_tags`
+Get detailed tags and metadata for an asset, including node group editor type.
+
+**Parameters:**
+- `library_name` (required): Name of the asset library.
+- `asset_name` (required): Name of the asset to inspect.
+- `asset_type` (optional): Type hint. Auto-detected if omitted.
+
+**Returns:**
+- `tags`: List of user-defined tags.
+- `editor_type`: For NODETREE assets, returns `GeometryNodeTree`, `ShaderNodeTree`, or `CompositorNodeTree`.
+- `color_tag`: Asset color tag (NONE, RED, ORANGE, YELLOW, etc.).
+- `description`: Asset description text.
+- `metadata`: Additional info (node_count, input_count, output_count, editor_name).
+
+**Node Group Editor Types:**
+| Editor Type | Human Name | Use Case |
+|-------------|------------|----------|
+| `GeometryNodeTree` | Geometry Nodes | Procedural modeling, modifiers |
+| `ShaderNodeTree` | Shader Editor | Materials, textures |
+| `CompositorNodeTree` | Compositor | Post-processing, effects |
+
 ## Usage Examples
 
 ```python
@@ -54,6 +76,14 @@ get_asset_libraries()
 
 # Search for wood materials
 search_assets(query="wood", asset_type="MATERIAL")
+
+# Check what editor a node group is for
+get_asset_tags(
+    library_name="My Assets",
+    asset_name="MyNodeGroup",
+    asset_type="NODETREE"
+)
+# Returns: editor_type="GeometryNodeTree", editor_name="Geometry Nodes"
 
 # Load a material onto the active object
 load_asset_in_context(

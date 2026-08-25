@@ -1610,7 +1610,7 @@ def _openai_chat_completions(
     # the ``tools`` JSON parameter, then parse text-based tool calls from
     # the response.
     import time as _time
-    max_retries = 3
+    max_retries = 5
     max_503_retries = 60  # Up to ~120s with exponential backoff for model loading.
     tools_tried = bool(tools)
     _503_attempts = 0

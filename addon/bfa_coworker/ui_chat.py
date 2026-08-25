@@ -1131,11 +1131,28 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 has_process = bool(process_msgs)
 
                 if has_process:
+                    # Determine turn status icon.
+                    has_tool_error = any(
+                        p.get("role") == "tool" and (
+                            '"status": "error"' in (p.get("content") or "")
+                            or (p.get("content") or "").startswith("Error")
+                        )
+                        for p in process_msgs
+                    )
+                    if has_tool_error:
+                        turn_icon = 'ERROR'
+                    elif conclusion_msg:
+                        turn_icon = 'CHECKMARK'
+                    else:
+                        turn_icon = 'SORTTIME'
+
                     proc_header, proc_body = turn_box.panel(
                         "turn_process_{:d}".format(turn_idx),
                         default_closed=True,
                     )
-                    # Full user message in header (multiline, wraps).
+                    # Header: status icon + user message preview + copy button.
+                    hdr_row = proc_header.row()
+                    hdr_row.label(text="", icon=turn_icon)
                     _draw_multiline(
                         proc_header,
                         "You: {:s}".format(user_msg.get("content", "")),
@@ -1148,8 +1165,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     op.message_index = history.index(user_msg)
 
                     if proc_body:
-                        # Full user message text.
-                        _draw_multiline(proc_body, user_msg.get("content", ""))
+                        # Interleaved reasoning + tool steps (no duplicate user message).
                         proc_body.separator()
 
                         # Interleaved reasoning + tool steps.

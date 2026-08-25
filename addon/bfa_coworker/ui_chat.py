@@ -656,6 +656,7 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
 
         actual = mcp_to_blender_server.get_actual_port()
         if actual:
+            agent_controller._agent_state.bridge_port_actual = actual
             props.chat_status = "External Harness — Bridge on port {:d}".format(actual)
             self.report({"INFO"}, "Bridge server started on port {:d}".format(actual))
         else:
@@ -689,6 +690,7 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
             )
             actual_bridge = mcp_to_blender_server.get_actual_port()
             if actual_bridge:
+                agent_controller._agent_state.bridge_port_actual = actual_bridge
                 self.report({"INFO"}, "Bridge server started on port {:d}".format(actual_bridge))
             else:
                 self.report({"INFO"}, "Bridge server started")

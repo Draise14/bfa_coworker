@@ -151,10 +151,17 @@ class _BFACW_OT_ping_agent(bpy.types.Operator):  # type: ignore[misc]
         _ac = get_agent_controller()
         prefs = context.preferences.addons[__package__].preferences
         _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+        # Use actual ports if auto-shuffle kicked in.
+        actual_mcp = _ac._agent_state.mcp_port_actual
+        ping_mcp = actual_mcp if actual_mcp else _mcp_port
+        # LLM port may have been shuffled by start_local_llama — read from config.
+        llm_mgr = get_llm_manager()
+        ping_llm = llm_mgr.get_config().local_port if llm_mgr.get_config().local_port else _llm_port
+        ping_bridge = _ac._agent_state.bridge_port_actual if _ac._agent_state.bridge_port_actual else _bridge_port
 
         def _do_ping():
             _BFACW_OT_ping_agent._result = _ac.ping_agent(
-                mcp_port=_mcp_port, llm_port=_llm_port, bridge_port=_bridge_port,
+                mcp_port=ping_mcp, llm_port=ping_llm, bridge_port=ping_bridge,
                 operating_mode=prefs.operating_mode,
             )
 

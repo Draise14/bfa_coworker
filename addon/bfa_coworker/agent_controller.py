@@ -2777,7 +2777,7 @@ def export_session_log(auto_saved: bool = False) -> None:
 
     # Conversation history.
     lines.append("--- Conversation History ---")
-    history = list(_state.conversation_history)
+    history = list(_agent_state.conversation_history)
     for i, msg in enumerate(history):
         role = msg.get("role", "unknown")
         lines.append("\n[Message {:d}] role={:s}".format(i + 1, role))
@@ -2802,13 +2802,13 @@ def export_session_log(auto_saved: bool = False) -> None:
 
     # Error signatures.
     lines.append("--- Error Info ---")
-    if _state.error:
-        lines.append("Current error: {:s}".format(str(_state.error)))
+    if _agent_state.error:
+        lines.append("Current error: {:s}".format(str(_agent_state.error)))
     lines.append("")
 
     # LLM server log tail.
     lines.append("--- LLM Server Log (last 50 lines) ---")
-    llm_stderr = getattr(_state, 'llm_stderr', None)
+    llm_stderr = getattr(_agent_state, 'llm_stderr', None)
     if llm_stderr:
         try:
             stderr_text = llm_stderr if isinstance(llm_stderr, str) else str(llm_stderr)
@@ -2853,7 +2853,7 @@ def export_session_log_to_clipboard() -> str:
         lines.append("[Error: {:s}]".format(str(ex)))
     lines.append("")
     lines.append("--- Conversation History ---")
-    history = list(_state.conversation_history)
+    history = list(_agent_state.conversation_history)
     for i, msg in enumerate(history):
         role = msg.get("role", "unknown")
         lines.append("\n[Message {:d}] role={:s}".format(i + 1, role))
@@ -3157,9 +3157,9 @@ def _run_conversation_turn_inner(
         # corrupting the new conversation.
         if _stop_event.is_set():
             print("[🛠️Coworker] run_conversation_turn: aborted — discarding stale response")
-    _agent_state.is_thinking = False
-    _agent_state.thinking_start_time = 0.0
-    return history
+            _agent_state.is_thinking = False
+            _agent_state.thinking_start_time = 0.0
+            return history
 
         if response is None:
             _agent_state.is_thinking = False
@@ -3278,7 +3278,8 @@ def _run_conversation_turn_inner(
             # Process each tool call.
             for tc in raw_tool_calls:
                 if _stop_event.is_set():
-                    print("[🛠️Coworker] run_conversation_turn: aborted during tool calls")                    _agent_state.is_thinking = False
+                    print("[🛠️Coworker] run_conversation_turn: aborted during tool calls")
+                    _agent_state.is_thinking = False
                     _agent_state.thinking_start_time = 0.0
                     if on_status:
                         on_status("Stopped")

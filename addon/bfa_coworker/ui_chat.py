@@ -127,10 +127,10 @@ def _draw_reasoning(
     preview_lines = lines[:3]
     remaining_lines = lines[3:]
 
-    # Animate the label with dots while thinking.
+    # Animate the label with Unicode spinner while thinking.
     if is_thinking:
-        dots = [".", "..", "...", "...."]
-        display_label = "{:s}{:s}".format(label, dots[thinking_dots % 4])
+        spinners = ["\u25d0", "\u25d3", "\u25d1", "\u25d2"]  # \u25d0 \u25d3 \u25d1 \u25d2
+        display_label = "{:s} {:s}".format(label, spinners[thinking_dots % 4])
         icon = 'CONSOLE'
     else:
         display_label = label
@@ -1042,9 +1042,9 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         else:
             status = props.chat_status
             if state.is_thinking:
-                # Animated thinking dots (cycled by timer).
-                dots = [".", "..", "...", "...."]
-                status = "Thinking{:s}".format(dots[state.thinking_dots % 4])
+                # Animated thinking spinner (cycled by timer).
+                spinners = ["\u25d0", "\u25d3", "\u25d1", "\u25d2"]  # \u25d0 \u25d3 \u25d1 \u25d2
+                status = "Thinking {:s}".format(spinners[state.thinking_dots % 4])
             elif not state.mcp_server_running:
                 status = "Offline"
             elif state.error:
@@ -1117,6 +1117,15 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             llm_state = llm_manager.get_state()
             if llm_state.is_running:
                 layout.label(text="Model: {:s}".format(llm_state.model_name or "Local LLM"), icon='CONSOLE')
+            elif llm_state.download_active and llm_state.download_kind == "model":
+                # Show progress bar during model loading.
+                prog_row = layout.row()
+                prog_row.scale_y = 0.6
+                pct = llm_state.download_progress_pct
+                if pct > 0:
+                    prog_row.progress(factor=pct / 100.0, type='BAR')
+                else:
+                    prog_row.label(text="Loading model...", icon='SORTTIME')
             llm_cfg = llm_manager.get_config()
             if llm_cfg.mode == "remote" and llm_cfg.remote_model:
                 layout.label(text="Model: {:s}".format(llm_cfg.remote_model), icon='WORLD')

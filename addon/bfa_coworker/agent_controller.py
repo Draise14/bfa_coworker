@@ -2470,8 +2470,15 @@ def run_conversation_turn(
     """
     # ── Re-entrancy guard ──────────────────────────────────────────────
     if _agent_state.turn_active:
-        print("[🛠️Coworker] run_conversation_turn: re-entrancy blocked — turn already active")
-        return _agent_state.conversation_history
+        if _stop_event.is_set():
+            # Previous turn was aborted by the user — the blocking HTTP
+            # request is still in-flight but we clear the flag so the new
+            # message can proceed.  The old turn's response will be discarded.
+            _agent_state.turn_active = False
+            print("[🛠️Coworker] run_conversation_turn: previous turn aborted, clearing guard")
+        else:
+            print("[🛠️Coworker] run_conversation_turn: re-entrancy blocked — turn already active")
+            return _agent_state.conversation_history
     _agent_state.turn_active = True
     try:
         return _run_conversation_turn_inner(
@@ -2524,7 +2531,7 @@ def _run_conversation_turn_inner(
                 "You must create objects before using mode-dependent operators "
                 "like bpy.ops.object.mode_set().]"
             )
-            history.append({"role": "user", "content": _empty_note})
+            history.append({"role": "system", "content": _empty_note})
             print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: empty scene detected, injected pre-flight note")
     except Exception:
         pass  # Best-effort; don't break the agent loop.
@@ -2643,7 +2650,7 @@ def _run_conversation_turn_inner(
                 from . import skills as _skills_mod  # pylint: disable=import-error
                 _domain_skills_text = _skills_mod.get_domain_skills(_detected_domains)
                 if _domain_skills_text:
-                    history.append({"role": "user", "content": _domain_skills_text})
+                    history.append({"role": "system", "content": _domain_skills_text})
                     print("[🛠️Coworker] run_conversation_turn: domain skills injected for {:s}".format(
                         ",".join(sorted(_detected_domains))))
             except Exception:
@@ -2704,6 +2711,16 @@ def _run_conversation_turn_inner(
             _agent_state._pending_image = None  # Clear after use
 
         response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model, max_tokens)
+
+        # ── Abort check ───────────────────────────────────────────────
+        # If the user stopped the previous turn and started a new one, the
+        # old turn's response may arrive late.  Discard it to avoid
+        # corrupting the new conversation.
+        if _stop_event.is_set():
+            print("[🛠️Coworker] run_conversation_turn: aborted — discarding stale response")
+            _agent_state.is_thinking = False
+            return history
+
         if response is None:
             _agent_state.is_thinking = False
             _agent_state.error = "No response from LLM"
@@ -2896,7 +2913,7 @@ def _run_conversation_turn_inner(
                             ctx = _entity_diff_to_context_message(_turn_entities)
                             if ctx:
                                 print("[🛠️Coworker] run_conversation_turn: overlap detected — injecting entity context")
-                                history.append({"role": "user", "content": ctx})
+                                history.append({"role": "system", "content": ctx})
                                 _entity_context_injected = True
                     if should_undo:
                         print("[🛠️Coworker] run_conversation_turn: smart undo triggered — {:s}".format(reason))
@@ -2986,7 +3003,7 @@ def _run_conversation_turn_inner(
                                         if ctx and not _entity_context_injected:
                                             print("[🛠️Coworker] run_conversation_turn: entity context injected — {:s}".format(
                                                 _turn_entities.summary()))
-                                            history.append({"role": "user", "content": ctx})
+                                            history.append({"role": "system", "content": ctx})
                                             _entity_context_injected = True
                         except (json.JSONDecodeError, TypeError):
                             pass

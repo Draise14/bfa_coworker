@@ -1245,18 +1245,14 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         row.scale_y = 1.8
         if is_harness:
             if mcp_to_blender_server.is_running():
-                op = row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop Bridge")
                 actual = mcp_to_blender_server.get_actual_port()
-                if actual:
-                    op.description = "Bridge running on port {:d}".format(actual)
+                tip = "Bridge running on port {:d}".format(actual) if actual else "Stop Bridge"
+                row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop Bridge")
             else:
                 row.operator("bfacw.agent_start", icon="PLAY", text="Start Bridge")
         else:
             if state.mcp_server_running:
-                op = row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop")
-                actual_mcp = state.mcp_port_actual
-                if actual_mcp:
-                    op.description = "MCP server on port {:d}".format(actual_mcp)
+                row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop")
             else:
                 row.operator("bfacw.agent_start", icon="PLAY", text="Start")
 

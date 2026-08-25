@@ -153,7 +153,10 @@ def register() -> None:
 
     for cls in _classes:
         bpy.utils.register_class(cls)
-    _cli_commands.append(bpy.utils.register_cli_command("bfa_coworker", _cli_execute_handler))
+    try:
+        _cli_commands.append(bpy.utils.register_cli_command("bfa_coworker", _cli_execute_handler))
+    except (AttributeError, Exception) as ex:
+        print("[Coworker] register_cli_command not available: {:s}".format(str(ex)))
 
     # Migrate operating_mode from legacy agent_mode + llm_mode.
     _migrate_operating_mode()

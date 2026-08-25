@@ -559,6 +559,13 @@ class AgentState:
     # ── Vision pipeline ────────────────────────────────────────────
     _pending_image: str | None = None  # Base64 data URI of last screenshot
 
+    # ── Auto port-shuffle tracking ─────────────────────────────────
+    # When a port is in use, the start functions try subsequent ports
+    # and store the actual port used here.  0 = use configured port.
+    bridge_port_actual: int = 0
+    mcp_port_actual: int = 0
+    llm_port_actual: int = 0
+
 
 _agent_state = AgentState()
 
@@ -953,6 +960,32 @@ def check_ports_available(
             print("[🛠️Coworker] check_ports_available: {:s} port {:d} is in use — {:s}".format(
                 label, p, str(ex)))
     return result
+
+
+def _find_available_port(preferred: int, max_offset: int = 100) -> int:
+    """Return the first available port starting at *preferred*.
+
+    Tries ``preferred``, ``preferred + 1``, … up to ``preferred + max_offset``.
+    Returns the first port that can be bound, or 0 if none are available.
+    """
+    for offset in range(max_offset + 1):
+        candidate = preferred + offset
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            if sys.platform == "win32":
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            s.bind(("127.0.0.1", candidate))
+            s.close()
+            if offset > 0:
+                print("[🛠️Coworker] _find_available_port: port {:d} in use, shuffled to {:d}".format(
+                    preferred, candidate))
+            return candidate
+        except (OSError, socket.error):
+            s.close()
+            continue
+    print("[🛠️Coworker] _find_available_port: no port available in range {:d}–{:d}".format(
+        preferred, preferred + max_offset))
+    return 0
 
 
 def _resolve_mcp_python() -> tuple[str | None, bool]:
@@ -1652,6 +1685,29 @@ def _openai_chat_completions(
                         msg["tool_calls"] = text_calls
                         choice["finish_reason"] = "tool_calls"
                         result["_text_tool_fallback"] = True
+
+                # ── XML tool call fallback ────────────────────────────────
+                # Light reasoning models (Qwen3.5-9B DeepSeek-V4-Flash,
+                # Gemma 4 E4B) often emit tool calls as XML inside
+                # ``reasoning_content`` or ``content`` instead of the proper
+                # OpenAI ``tool_calls`` array.  Parse both fields.
+                if not msg.get("tool_calls"):
+                    xml_sources: list[tuple[str, str]] = []
+                    if reasoning:
+                        xml_sources.append(("reasoning_content", reasoning))
+                    if content:
+                        xml_sources.append(("content", content))
+                    for source_name, source_text in xml_sources:
+                        xml_calls = _parse_xml_tool_calls(source_text)
+                        if xml_calls:
+                            print("[🛠️Coworker] _openai_chat_completions: "
+                                  "parsed {:d} XML tool calls from {:s}".format(
+                                      len(xml_calls), source_name))
+                            msg["tool_calls"] = xml_calls
+                            choice["finish_reason"] = "tool_calls"
+                            result["_xml_tool_fallback"] = True
+                            break
+
                 return result
         except (urllib.error.HTTPError, urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
             # ── Chat template crash fallback: inject tools as text ────
@@ -1798,6 +1854,88 @@ def _parse_text_tool_calls(content: str) -> list[dict[str, Any]]:
                 "arguments": json.dumps(args),
             },
         })
+    return tool_calls
+
+
+def _parse_xml_tool_calls(text: str) -> list[dict[str, Any]]:
+    """Parse XML-style tool calls from an LLM response.
+
+    Handles two formats common with light reasoning models:
+
+    **Format A** (Qwen3.5-9B DeepSeek-V4-Flash, Gemma 4 E4B)::
+
+        <tool_call>
+        <function=download_polyhaven_asset>
+        <parameter=asset_id>
+        sunset_in_the_chalk_quarry
+        </parameter>
+        <parameter=asset_type>
+        hdris
+        </parameter>
+        </function>
+        </tool_call>
+
+    **Format B** (JSON inside XML tags)::
+
+        <tool_call>
+        {"name": "tool_name", "arguments": {"arg1": "value1"}}
+        </tool_call>
+
+    Returns a list of OpenAI-format tool call dicts, or an empty list
+    if no tool calls are found.
+    """
+    import re
+    tool_calls: list[dict[str, Any]] = []
+
+    # ── Format A: <function=name><parameter=key>value</parameter></function> ──
+    # Find all <function=...> blocks, optionally wrapped in <tool_call>.
+    func_pattern = r'(?:<tool_call>\s*)?<function=([^>]+)>(.*?)</function>(?:\s*</tool_call>)?'
+    for match in re.finditer(func_pattern, text, re.DOTALL):
+        name = match.group(1).strip()
+        params_block = match.group(2)
+        args: dict[str, Any] = {}
+        # Extract <parameter=key>value</parameter> pairs.
+        param_pattern = r'<parameter=([^>]+)>\s*(.*?)\s*</parameter>'
+        for p_match in re.finditer(param_pattern, params_block, re.DOTALL):
+            key = p_match.group(1).strip()
+            value = p_match.group(2).strip()
+            # Try to parse as JSON (number, bool, null), else keep as string.
+            try:
+                args[key] = json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                args[key] = value
+        if name:
+            tool_id = "xml_tool_{:d}".format(len(tool_calls))
+            tool_calls.append({
+                "id": tool_id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": json.dumps(args),
+                },
+            })
+
+    # ── Format B: <tool_call>{JSON}</tool_call> ──
+    if not tool_calls:
+        json_pattern = r'<tool_call>\s*(\{.*?\})\s*</tool_call>'
+        for match in re.finditer(json_pattern, text, re.DOTALL):
+            try:
+                parsed = json.loads(match.group(1))
+                name = parsed.get("name", "")
+                args = parsed.get("arguments", {})
+                if name:
+                    tool_id = "xml_tool_{:d}".format(len(tool_calls))
+                    tool_calls.append({
+                        "id": tool_id,
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": json.dumps(args),
+                        },
+                    })
+            except (json.JSONDecodeError, TypeError):
+                continue
+
     return tool_calls
 
 

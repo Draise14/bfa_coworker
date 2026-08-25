@@ -1318,13 +1318,16 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 status = "Error: {:s}".format(state.error)
             is_ok = state.mcp_server_running
 
-        status_row = layout.row()
-        status_row.label(
-            text=status,
-            icon='CHECKMARK' if is_ok and not state.is_thinking else
-                 'SORTTIME' if state.is_thinking else
-                 'CANCEL' if state.error else 'X',
+        status_icon = (
+            'CHECKMARK' if is_ok and not state.is_thinking else
+            'SORTTIME' if state.is_thinking else
+            'CANCEL' if state.error else 'X'
         )
+        status_row = layout.row()
+        status_row.label(text=status, icon=status_icon)
+        # Long error messages (traceback, server logs) — show multiline.
+        if state.error and len(status) > 60:
+            _draw_multiline(layout, state.error)
 
         # ── External Harness mode ──
         if is_harness:
@@ -1710,7 +1713,7 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
         if not is_harness:
             llm_state = llm_manager.get_state()
             if llm_state.is_running:
-                layout.label(text="Model: {:s}".format(llm_state.model_name or "Local LLM"), icon='CONSOLE')
+                _draw_multiline(layout, "Model: {:s}".format(llm_state.model_name or "Local LLM"))
             elif llm_state.download_active and llm_state.download_kind == "model":
                 prog_row = layout.row()
                 prog_row.scale_y = 0.6
@@ -1721,7 +1724,7 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
                     prog_row.label(text="Loading model...", icon='SORTTIME')
             llm_cfg = llm_manager.get_config()
             if llm_cfg.mode == "remote" and llm_cfg.remote_model:
-                layout.label(text="Model: {:s}".format(llm_cfg.remote_model), icon='WORLD')
+                _draw_multiline(layout, "Model: {:s}".format(llm_cfg.remote_model))
 
         # ── Export/Copy Log (advanced) ──
         if not is_harness:
@@ -1836,7 +1839,7 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
                     preview = display[:80] + "..." if display and len(display) > 80 else (display or "")
                 else:
                     preview = content[:80] + "..." if content and len(content) > 80 else (content or "")
-                box.label(text="[{:s}] {:s}".format(role, preview))
+                _draw_multiline(box, "[{:s}] {:s}".format(role, preview))
         else:
             layout.label(text="No conversation yet.", icon='INFO')
 

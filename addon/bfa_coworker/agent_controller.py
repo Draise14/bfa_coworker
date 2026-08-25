@@ -1660,8 +1660,18 @@ def _openai_chat_completions(
             # descriptions into the system prompt and retry without the
             # ``tools`` JSON parameter, preserving full agent functionality.
             if tools_tried and isinstance(ex, urllib.error.HTTPError) and ex.code == 500:
+                # Read the error body from the server — this is critical for
+                # debugging chat template crashes, OOMs, and other server-side
+                # failures that are invisible without it.
+                _error_body = ""
+                try:
+                    _error_body = ex.read().decode("utf-8", errors="replace")
+                except Exception:
+                    pass
                 print("[🛠️Coworker] _openai_chat_completions: 500 error with tools — "
                       "injecting tools as text and retrying")
+                if _error_body:
+                    print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_error_body[:500]))
                 tools_tried = False
                 # Build a text description of available tools.
                 tool_text = (
@@ -1709,12 +1719,36 @@ def _openai_chat_completions(
                 _time.sleep(backoff)
                 continue
             if attempt < max_retries - 1:
-                print("[🛠️Coworker] _openai_chat_completions: attempt {:d}/{:d} FAILED — {:s}, retrying in 2s...".format(
-                    attempt + 1, max_retries, str(ex)))
+                # Read the error body for 500 errors to surface the real cause.
+                _error_body = ""
+                if isinstance(ex, urllib.error.HTTPError) and ex.code == 500:
+                    try:
+                        _error_body = ex.read().decode("utf-8", errors="replace")
+                    except Exception:
+                        pass
+                if _error_body:
+                    print("[🛠️Coworker] _openai_chat_completions: attempt {:d}/{:d} FAILED — {:s}".format(
+                        attempt + 1, max_retries, str(ex)))
+                    print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_error_body[:500]))
+                else:
+                    print("[🛠️Coworker] _openai_chat_completions: attempt {:d}/{:d} FAILED — {:s}, retrying in 2s...".format(
+                        attempt + 1, max_retries, str(ex)))
                 _time.sleep(2)
                 continue
-            print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — {:s}".format(str(ex)))
-            _agent_state.error = "LLM request failed: {:s}".format(str(ex))
+            # Read the error body for the final failure message.
+            _error_body = ""
+            if isinstance(ex, urllib.error.HTTPError):
+                try:
+                    _error_body = ex.read().decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+            if _error_body:
+                print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — {:s}".format(str(ex)))
+                print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_error_body[:500]))
+                _agent_state.error = "LLM request failed: {:s}".format(_error_body[:500])
+            else:
+                print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — {:s}".format(str(ex)))
+                _agent_state.error = "LLM request failed: {:s}".format(str(ex))
             return None
     return None
 
@@ -2490,7 +2524,7 @@ def _run_conversation_turn_inner(
                 "You must create objects before using mode-dependent operators "
                 "like bpy.ops.object.mode_set().]"
             )
-            history.append({"role": "system", "content": _empty_note})
+            history.append({"role": "user", "content": _empty_note})
             print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: empty scene detected, injected pre-flight note")
     except Exception:
         pass  # Best-effort; don't break the agent loop.
@@ -2609,7 +2643,7 @@ def _run_conversation_turn_inner(
                 from . import skills as _skills_mod  # pylint: disable=import-error
                 _domain_skills_text = _skills_mod.get_domain_skills(_detected_domains)
                 if _domain_skills_text:
-                    history.append({"role": "system", "content": _domain_skills_text})
+                    history.append({"role": "user", "content": _domain_skills_text})
                     print("[🛠️Coworker] run_conversation_turn: domain skills injected for {:s}".format(
                         ",".join(sorted(_detected_domains))))
             except Exception:
@@ -2862,7 +2896,7 @@ def _run_conversation_turn_inner(
                             ctx = _entity_diff_to_context_message(_turn_entities)
                             if ctx:
                                 print("[🛠️Coworker] run_conversation_turn: overlap detected — injecting entity context")
-                                history.append({"role": "system", "content": ctx})
+                                history.append({"role": "user", "content": ctx})
                                 _entity_context_injected = True
                     if should_undo:
                         print("[🛠️Coworker] run_conversation_turn: smart undo triggered — {:s}".format(reason))
@@ -2952,7 +2986,7 @@ def _run_conversation_turn_inner(
                                         if ctx and not _entity_context_injected:
                                             print("[🛠️Coworker] run_conversation_turn: entity context injected — {:s}".format(
                                                 _turn_entities.summary()))
-                                            history.append({"role": "system", "content": ctx})
+                                            history.append({"role": "user", "content": ctx})
                                             _entity_context_injected = True
                         except (json.JSONDecodeError, TypeError):
                             pass

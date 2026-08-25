@@ -585,62 +585,203 @@ class BFACW_OT_copy_message(Operator):  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
-# @Mention Autocomplete (Tier 2)
+# @Mention System (Tier 2+)
+
+# Mention categories with their data sources and icons.
+_MENTION_CATEGORIES = {
+    "object": {
+        "label": "Objects",
+        "icon": 'OUTLINER_OB_MESH',
+        "data": lambda: [
+            {"name": obj.name, "type": obj.type, "category": "object"}
+            for obj in bpy.data.objects
+        ],
+    },
+    "material": {
+        "label": "Materials",
+        "icon": 'MATERIAL',
+        "data": lambda: [
+            {"name": mat.name, "type": "MAT", "category": "material"}
+            for mat in bpy.data.materials
+        ],
+    },
+    "collection": {
+        "label": "Collections",
+        "icon": 'OUTLINER_COLLECTION',
+        "data": lambda: [
+            {"name": col.name, "type": "COL", "category": "collection"}
+            for col in bpy.data.collections
+        ],
+    },
+    "nodegroup": {
+        "label": "Node Groups",
+        "icon": 'NODETREE',
+        "data": lambda: [
+            {"name": ng.name, "type": ng.type or "NODE", "category": "nodegroup"}
+            for ng in bpy.data.node_groups
+        ],
+    },
+    "world": {
+        "label": "Worlds",
+        "icon": 'WORLD',
+        "data": lambda: [
+            {"name": w.name, "type": "WORLD", "category": "world"}
+            for w in bpy.data.worlds
+        ],
+    },
+    "action": {
+        "label": "Actions",
+        "icon": 'ACTION',
+        "data": lambda: [
+            {"name": a.name, "type": "ACT", "category": "action"}
+            for a in bpy.data.actions
+        ],
+    },
+}
+
+
+def _collect_all_mentionables() -> list[dict]:
+    """Collect all mentionable items from all categories."""
+    items = []
+    for cat_key, cat_info in _MENTION_CATEGORIES.items():
+        try:
+            items.extend(cat_info["data"]())
+        except Exception:
+            pass
+    return items
+
+
+def _filter_mentionables(
+    items: list[dict],
+    filter_text: str = "",
+    category: str = "",
+) -> list[dict]:
+    """Filter mentionable items by text and category."""
+    filtered = items
+    if category and category in _MENTION_CATEGORIES:
+        filtered = [i for i in filtered if i.get("category") == category]
+    if filter_text:
+        filter_lower = filter_text.lower()
+        filtered = [i for i in filtered if filter_lower in i["name"].lower()]
+    return filtered
+
 
 class BFACW_OT_mention_search(Operator):  # type: ignore[misc]
-    """Search for scene objects by name and insert @mention into chat."""
+    """Search for scene items by name and insert @mention into chat."""
     bl_idname = "bfacw.mention_search"
-    bl_label = "@ Mention Object"
-    bl_description = "Search scene objects and insert an @mention into the chat input"
+    bl_label = "@ Mention"
+    bl_description = "Search objects, materials, collections, and more to insert @mention"
 
-    def execute(self, context: bpy.types.Context) -> set[str]:
-        wm = context.window_manager
-
-        # Collect all scene objects.
-        objects = []
-        for obj in bpy.data.objects:
-            objects.append({
-                "name": obj.name,
-                "type": obj.type,
-            })
-
-        if not objects:
-            self.report({"INFO"}, "No objects in the scene.")
-            return {"CANCELLED"}
-
-        # Sort by name.
-        objects.sort(key=lambda o: o["name"].lower())
-
-        def _draw_menu(menu, _context):
-            layout = menu.layout
-            layout.label(text="Select an object to @mention:", icon='OUTLINER_OB_MESH')
-            for obj in objects[:50]:  # Limit to 50 to avoid huge menus.
-                op = layout.operator(
-                    "bfacw.mention_insert",
-                    text="[{:s}] {:s}".format(obj["type"], obj["name"]),
-                    icon='OBJECT_DATA',
-                )
-                op.object_name = obj["name"]
-
-        wm.popup_menu(_draw_menu, title="@ Mention Object", icon='OUTLINER_OB_MESH')
-        return {"FINISHED"}
-
-
-class BFACW_OT_mention_insert(Operator):  # type: ignore[misc]
-    """Insert an @mentioned object name into the chat input."""
-    bl_idname = "bfacw.mention_insert"
-    bl_label = "Insert @mention"
-    bl_description = "Insert the selected object name as an @mention in the chat input"
-
-    object_name: StringProperty(  # type: ignore[valid-type]
-        name="Object Name",
+    filter_text: StringProperty(  # type: ignore[valid-type]
+        name="Filter",
+        default="",
+    )
+    category: StringProperty(  # type: ignore[valid-type]
+        name="Category",
         default="",
     )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
-        current = props.chat_input
+
+        # Auto-detect filter from input: if user typed @word, use word as filter.
+        current_input = props.chat_input or ""
+        if not self.filter_text and "@" in current_input:
+            # Find the last @ and extract text after it.
+            last_at = current_input.rfind("@")
+            after_at = current_input[last_at + 1:]
+            # If there's text after @ without a space, use it as filter.
+            if after_at and not after_at.startswith(" "):
+                self.filter_text = after_at.split()[-1] if after_at.split() else ""
+
+        # Collect and filter items.
+        all_items = _collect_all_mentionables()
+        filtered = _filter_mentionables(all_items, self.filter_text, self.category)
+
+        if not filtered:
+            self.report({"INFO"}, "No matches found.")
+            return {"CANCELLED"}
+
+        def _draw_menu(menu, _context):
+            layout = menu.layout
+
+            # Category filter buttons.
+            row = layout.row(align=True)
+            row.label(text="Filter:", icon='VIEWZOOM')
+            op = row.operator("bfacw.mention_search", text="All", icon='NONE')
+            op.category = ""
+            op.filter_text = self.filter_text
+            for cat_key, cat_info in _MENTION_CATEGORIES.items():
+                op = row.operator(
+                    "bfacw.mention_search",
+                    text=cat_info["label"],
+                    icon=cat_info["icon"],
+                )
+                op.category = cat_key
+                op.filter_text = self.filter_text
+
+            layout.separator()
+
+            # Filtered results.
+            display_items = filtered[:50]  # Limit to 50.
+            if self.filter_text:
+                layout.label(
+                    text="{:d} matches for '{:s}'".format(len(display_items), self.filter_text),
+                    icon='SORTBYEXT',
+                )
+            else:
+                layout.label(
+                    text="{:d} items".format(len(display_items)),
+                    icon='INFO',
+                )
+
+            for item in display_items:
+                cat = item.get("category", "object")
+                cat_info = _MENTION_CATEGORIES.get(cat, _MENTION_CATEGORIES["object"])
+                op = layout.operator(
+                    "bfacw.mention_insert",
+                    text="[{:s}] {:s}".format(item["type"], item["name"]),
+                    icon=cat_info["icon"],
+                )
+                op.object_name = item["name"]
+                op.category = cat
+
+        wm.popup_menu(_draw_menu, title="@ Mention", icon='OUTLINER_OB_MESH')
+        return {"FINISHED"}
+
+
+class BFACW_OT_mention_insert(Operator):  # type: ignore[misc]
+    """Insert an @mentioned item name into the chat input."""
+    bl_idname = "bfacw.mention_insert"
+    bl_label = "Insert @mention"
+    bl_description = "Insert the selected item name as an @mention in the chat input"
+
+    object_name: StringProperty(  # type: ignore[valid-type]
+        name="Item Name",
+        default="",
+    )
+    category: StringProperty(  # type: ignore[valid-type]
+        name="Category",
+        default="object",
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        wm = context.window_manager
+        props = wm.bfacw_chat_props  # type: ignore[attr-defined]
+        current = props.chat_input or ""
+
+        # Remove any partial @mention that was being typed.
+        # Find the last @ and remove everything after it.
+        if "@" in current:
+            last_at = current.rfind("@")
+            before_at = current[:last_at]
+            after_at = current[last_at + 1:]
+            # If there's text after @ without a space, it's a partial mention.
+            if after_at and not after_at.startswith(" "):
+                current = before_at
+
+        # Insert the mention.
         mention = "@{:s}".format(self.object_name)
         if current and not current.endswith(" "):
             mention = " " + mention

@@ -2235,6 +2235,12 @@ def start_local_llama(
                 env=env,
             )
             print("[🛠️Coworker] start_local_llama:   Popen returned pid={:d}".format(proc.pid))
+            # Set a meaningful window title so the user knows what this console is.
+            try:
+                import ctypes
+                ctypes.windll.kernel32.SetConsoleTitleW("BFA Coworker — llama-server")  # type: ignore[attr-defined]
+            except Exception:
+                pass
         else:
             # Linux / macOS: detach from the parent process group so the
             # server survives Blender exiting.  We redirect stdio to the

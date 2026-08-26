@@ -3381,12 +3381,13 @@ def _run_conversation_turn_inner(
                             reason = "previous call errored"
                     elif _codes_overlap(_prev_code, args.get("code", "")):
                         # Overlap detected on a successful previous call.
-                        # Auto-undo to prevent duplicates — lighter models
-                        # ignore passive context messages, so we undo the
-                        # previous call's side effects proactively.
+                        # Inject context so the LLM knows what exists.
                         if not _turn_entities.is_empty():
-                            should_undo = True
-                            reason = "overlap detected — preventing duplicates"
+                            ctx = _entity_diff_to_context_message(_turn_entities)
+                            if ctx:
+                                print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: overlap detected \u2014 injecting entity context")
+                                history.append({"role": "user", "content": ctx})
+                                _entity_context_injected = True
                     if should_undo:
                         print("[🛠️Coworker] run_conversation_turn: smart undo triggered — {:s}".format(reason))
                         # Undo to the state before the previous execute_blender_code.

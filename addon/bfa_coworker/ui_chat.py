@@ -1293,12 +1293,12 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             if mcp_to_blender_server.is_running():
                 actual = mcp_to_blender_server.get_actual_port()
                 tip = "Bridge running on port {:d}".format(actual) if actual else "Stop Bridge"
-                row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop Bridge")
+                row.operator("bfacw.agent_stop", icon="X", text="Stop Bridge")
             else:
                 row.operator("bfacw.agent_start", icon="PLAY", text="Start Bridge")
         else:
             if state.mcp_server_running:
-                row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop")
+                row.operator("bfacw.agent_stop", icon="X", text="Stop")
             else:
                 row.operator("bfacw.agent_start", icon="PLAY", text="Start")
 
@@ -1362,8 +1362,8 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             # During thinking: Stop + Queue side by side.
             btn_row = layout.row(align=True)
             btn_row.scale_y = 1.5
-            btn_row.operator("bfacw.chat_stop", icon="PAUSE", text="Stop")
             btn_row.operator("bfacw.chat_queue_send", icon="ADD", text="Queue")
+            btn_row.operator("bfacw.chat_stop", icon="PAUSE", text="Stop")
         else:
             # Idle: Send + New Thread.
             btn_row = layout.row(align=True)
@@ -1440,7 +1440,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 turn_box = hist_box.box()
                 if has_proc:
                     has_err = any(p.get("role")=="tool" and ('"status": "error"' in (p.get("content") or "") or (p.get("content") or "").startswith("Error")) for p in process_msgs)
-                    tic = "X" if has_err else ("CHECKMARK" if conclusion_msg else "SORTTIME")
+                    tic = "WARNING" if has_err else ("CHECKMARK" if conclusion_msg else "SORTTIME")
                     th, tb2 = turn_box.panel("turn_{:d}".format(turn_idx), default_closed=not (turn_idx==0 and state.is_thinking))
                     hr = th.row(align=True)
                     hr.label(text="", icon=tic)
@@ -1680,14 +1680,14 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
         row = layout.row(align=True)
         if is_harness:
             if mcp_to_blender_server.is_running():
-                row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop Bridge")
+                row.operator("bfacw.agent_stop", icon="X", text="Stop Bridge")
                 row.label(text="Bridge Running", icon='CHECKMARK')
             else:
                 row.operator("bfacw.agent_start", icon="PLAY", text="Start Bridge")
                 row.label(text="Bridge Stopped", icon='X')
         else:
             if state.mcp_server_running:
-                row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop")
+                row.operator("bfacw.agent_stop", icon="X", text="Stop")
                 row.label(text="Running", icon='CHECKMARK')
             else:
                 row.operator("bfacw.agent_start", icon="PLAY", text="Start")

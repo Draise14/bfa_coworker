@@ -3380,14 +3380,7 @@ def _run_conversation_turn_inner(
                             should_undo = True
                             reason = "previous call errored"
                     elif _codes_overlap(_prev_code, args.get("code", "")):
-                        # Overlap detected on a successful previous call.
-                        # Inject context so the LLM knows what exists.
-                        if not _turn_entities.is_empty():
-                            ctx = _entity_diff_to_context_message(_turn_entities)
-                            if ctx:
-                                print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: overlap detected \u2014 injecting entity context")
-                                history.append({"role": "user", "content": ctx})
-                                _entity_context_injected = True
+                        pass  # Context injected after tool result.
                     if should_undo:
                         print("[🛠️Coworker] run_conversation_turn: smart undo triggered — {:s}".format(reason))
                         # Undo to the state before the previous execute_blender_code.
@@ -3471,13 +3464,7 @@ def _run_conversation_turn_inner(
                                     if not step_diff.is_empty():
                                         _turn_entities.merge(step_diff)
                                         _turn_snapshot = current_snap
-                                        # Inject context message once per turn.
-                                        ctx = _entity_diff_to_context_message(_turn_entities)
-                                        if ctx and not _entity_context_injected:
-                                            print("[🛠️Coworker] run_conversation_turn: entity context injected — {:s}".format(
-                                                _turn_entities.summary()))
-                                            history.append({"role": "user", "content": ctx})
-                                            _entity_context_injected = True
+                                        # Entity context is now injected AFTER the tool result.
                         except (json.JSONDecodeError, TypeError):
                             pass
 
@@ -3512,6 +3499,16 @@ def _run_conversation_turn_inner(
                     "content": truncated,
                     "summary": result_summary,
                 })
+
+                # Inject entity context AFTER tool result so the model
+                # sees the successful result first, then gets context.
+                if tool_name == "execute_blender_code" and not _entity_context_injected:
+                    ctx = _entity_diff_to_context_message(_turn_entities)
+                    if ctx:
+                        print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: entity context injected \u2014 {:s}".format(
+                            _turn_entities.summary()))
+                        history.append({"role": "user", "content": ctx})
+                        _entity_context_injected = True
 
                 # ── Extract screenshot image for vision-capable models ─
                 # If the tool result contains an image (screenshot), store

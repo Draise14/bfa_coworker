@@ -1,6 +1,7 @@
 # Asset Browser Tools
 
-These tools provide lightweight access to Blender's asset browser system.
+These tools provide access to Blender's asset browser system for browsing,
+searching, and loading materials, node groups, objects, worlds, and actions.
 
 ## Tools
 
@@ -8,6 +9,15 @@ These tools provide lightweight access to Blender's asset browser system.
 Lists all configured asset libraries with their names, paths, and blend file counts.
 
 **Returns:** List of libraries with `name`, `path`, and `blend_file_count`.
+
+### `list_asset_catalogs`
+Shows the directory structure of asset libraries, with counts of each asset type
+per folder. Use this to understand how assets are organized before searching.
+
+**Parameters:**
+- `library_name` (optional): Limit to a specific library.
+
+**Returns:** Catalogs with paths, blend file counts, and asset type counts per directory.
 
 ### `search_assets`
 Search across asset libraries by name, tag, or type.
@@ -37,14 +47,14 @@ Load an asset from the asset browser into the current context.
 | `WORLD` | Sets as scene world |
 | `ACTION` | Assigns to active object's animation data |
 
-## Catalog Path Conventions
+### `assign_material_to_objects`
+Assign an existing material to one or more objects by name. Use after loading
+a material with `load_asset_in_context` or creating one with `setup_pbr_material`.
 
-Asset libraries use directory structures for organization:
-- `Materials/` — Material assets
-- `NodeGroups/` — Geometry/shader node groups
-- `Objects/` — Mesh and object assets
-- `Worlds/` — World/environment assets
-- `Collections/` — Collection assets
+**Parameters:**
+- `material_name` (required): Name of the material datablock in the scene.
+- `object_names` (optional): List of object names. Empty = active object.
+- `slot_index` (optional): Material slot index (default 0).
 
 ### `get_asset_tags`
 Get detailed tags and metadata for an asset, including node group editor type.
@@ -54,48 +64,46 @@ Get detailed tags and metadata for an asset, including node group editor type.
 - `asset_name` (required): Name of the asset to inspect.
 - `asset_type` (optional): Type hint. Auto-detected if omitted.
 
-**Returns:**
-- `tags`: List of user-defined tags.
-- `editor_type`: For NODETREE assets, returns `GeometryNodeTree`, `ShaderNodeTree`, or `CompositorNodeTree`.
-- `color_tag`: Asset color tag (NONE, RED, ORANGE, YELLOW, etc.).
-- `description`: Asset description text.
-- `metadata`: Additional info (node_count, input_count, output_count, editor_name).
+**Returns:** Tags, editor type, color tag, description, and metadata.
 
-**Node Group Editor Types:**
-| Editor Type | Human Name | Use Case |
-|-------------|------------|----------|
-| `GeometryNodeTree` | Geometry Nodes | Procedural modeling, modifiers |
-| `ShaderNodeTree` | Shader Editor | Materials, textures |
-| `CompositorNodeTree` | Compositor | Post-processing, effects |
-
-## Usage Examples
+## Workflow: Assigning Materials from Asset Libraries
 
 ```python
-# List available libraries
-get_asset_libraries()
+# 1. Browse library structure
+list_asset_catalogs(library_name="My Assets")
 
-# Search for wood materials
-search_assets(query="wood", asset_type="MATERIAL")
+# 2. Search for materials
+search_assets(query="wood", asset_type="MATERIAL", library_name="My Assets")
 
-# Check what editor a node group is for
-get_asset_tags(
-    library_name="My Assets",
-    asset_name="MyNodeGroup",
-    asset_type="NODETREE"
-)
-# Returns: editor_type="GeometryNodeTree", editor_name="Geometry Nodes"
-
-# Load a material onto the active object
+# 3. Load material onto active object
 load_asset_in_context(
     library_name="My Assets",
     asset_name="Wood_Floor",
     asset_type="MATERIAL"
 )
 
-# Load a world as scene environment
-load_asset_in_context(
-    library_name="My Assets",
-    asset_name="Sunset_HDRI",
-    asset_type="WORLD"
+# 4. Or assign to specific objects
+assign_material_to_objects(
+    material_name="Wood_Floor",
+    object_names=["SM_Floor", "SM_Wall"]
 )
+
+# 5. Check node group editor type before using
+get_asset_tags(
+    library_name="My Assets",
+    asset_name="MyNodeGroup",
+    asset_type="NODETREE"
+)
+# Returns: editor_type="GeometryNodeTree" or "ShaderNodeTree"
 ```
+
+## Catalog Path Conventions
+
+Asset libraries use directory structures for organization:
+- `Materials/` — Material assets
+- `NodeGroups/` — Geometry/shader node groups
+- `Objects/` — Mesh and object assets
+- `Worlds/` — World/environment assets
+- `Collections/` — Collection assets
+
+Use `list_asset_catalogs` to see the actual structure of each library.

@@ -1449,7 +1449,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 else visible_turns
             )
 
-            for turn_num, turn in enumerate(turn_iter, 1):
+            for _display_idx, turn in enumerate(turn_iter):
                 user_msg = None
                 process_msgs = []
                 conclusion_msg = None
@@ -1465,6 +1465,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     elif role == "assistant":
                         if not msg.get("tool_calls"):
                             conclusion_msg = msg
+                turn_num = turns.index(turn) + 1
                 if not user_msg:
                     if conclusion_msg:
                         tb = hist_box.box()
@@ -1482,7 +1483,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     th, tb2 = turn_box.panel("turn_{:d}".format(turn_num), default_closed=not (turn_num==1 and state.is_thinking))
                     hr = th.row(align=True)
                     hr.label(text="", icon=tic)
-                    hr.label(text="Turn {:d}".format(turn_num))
+                    hr.label(text="T{:d}:".format(turn_num))
                     pv = user_msg.get("content", "")
                     if len(pv)>80: pv = pv[:80]+"..."
                     hr.label(text=pv)
@@ -1527,6 +1528,14 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                                 sb = pb.box()
                                 sb.label(text="Coworker (live):", icon="CONSOLE")
                                 _draw_multiline(sb, state.streaming_text[:300]+"...")
+                    # Conclusion inside the panel body
+                    if conclusion_msg:
+                        tb2.separator()
+                        cr = tb2.row()
+                        cr.label(text="Coworker:", icon="CONSOLE")
+                        op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
+                        op.message_index = history.index(conclusion_msg)
+                        _draw_multiline(tb2, conclusion_msg.get("content", ""))
                 else:
                     hr = turn_box.row(align=True)
                     hr.label(text="", icon="CHECKMARK")
@@ -1534,13 +1543,6 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     op = hr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                     op.message_index = history.index(user_msg)
                     _draw_multiline(turn_box, user_msg.get("content", ""))
-                if conclusion_msg:
-                    turn_box.separator()
-                    cr = turn_box.row()
-                    cr.label(text="Coworker:", icon="CONSOLE")
-                    op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
-                    op.message_index = history.index(conclusion_msg)
-                    _draw_multiline(turn_box, conclusion_msg.get("content", ""))
                 if not conclusion_msg and state.is_thinking and state.streaming_text and turn_num==1 and not has_proc:
                     turn_box.separator()
                     turn_box.label(text="Coworker (live):", icon="CONSOLE")

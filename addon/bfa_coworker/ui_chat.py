@@ -118,52 +118,35 @@ def _draw_reasoning(
 ) -> None:
     """Draw reasoning (chain-of-thought) content in a collapsible panel.
 
-    Shows a box with a thinking label and preview of the first 3 lines.
-    While *is_thinking* is True, the label animates with dots.
-    Inside the box, a collapsible panel reveals the full reasoning.
-    The *label* is stored when the reasoning was first captured so it
-    doesn't flicker on every redraw.
+    The entire reasoning section is collapsible.  While *is_thinking* is
+    True the label animates with dots.  The *label* is stored when the
+    reasoning was first captured so it doesn't flicker on every redraw.
     """
     if not text:
         return
 
-    lines = text.strip().split("\n")
-    preview_lines = lines[:3]
-    remaining_lines = lines[3:]
+    reasoning_lines = text.strip().split("\n")
 
     # Animate the label with Unicode spinner while thinking.
     if is_thinking:
-        spinners = ["\u25d0", "\u25d3", "\u25d1", "\u25d2"]  # \u25d0 \u25d3 \u25d1 \u25d2
+        spinners = ["\u25d0", "\u25d3", "\u25d1", "\u25d2"]
         display_label = "{:s} {:s}".format(label, spinners[thinking_dots % 4])
         icon = 'CONSOLE'
     else:
         display_label = label
         icon = 'CHECKMARK'
 
-    # Outer box for the reasoning section.
-    outer = layout.box()
-
-    # Row with thinking label and copy button.
-    row = outer.row()
-    row.label(text="{:s}:".format(display_label), icon=icon)
+    # Collapsible panel for the entire reasoning section.
+    header, body = layout.panel("reasoning_{:d}".format(message_index), default_closed=True)
+    header.label(text="{:s} ({:d} lines)".format(display_label, len(reasoning_lines)), icon=icon)
     if message_index >= 0:
-        op = row.operator("bfacw.copy_message", text="", icon='COPYDOWN')
+        op = header.operator("bfacw.copy_message", text="", icon='COPYDOWN')
         op.message_index = message_index
 
-    # Preview of first 3 lines.
-    for line in preview_lines:
-        _draw_multiline(outer, line)
-
-    # Collapsible panel for full reasoning (closed by default).
-    # Only shows lines beyond the preview to avoid duplication.
-    if remaining_lines:
-        header, body = outer.panel("reasoning_full", default_closed=True)
-        header.label(text="Show full reasoning ({:d} more lines)".format(len(remaining_lines)))
-
-        if body:
-            body.separator()
-            for line in remaining_lines:
-                _draw_multiline(body, line)
+    if body:
+        body.separator()
+        for line in reasoning_lines:
+            _draw_multiline(body, line)
 
 
 def _draw_tool_summary(layout: bpy.types.UILayout, content: str, summary: str) -> None:

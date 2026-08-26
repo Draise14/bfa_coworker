@@ -1094,7 +1094,6 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
                     # Mark connected on the main thread after warmup completes.
                     _set_chat_status("Connected")
 
-                import threading
                 thread = threading.Thread(target=_start_llm_backend, daemon=True)
                 thread.start()
                 props.chat_status = "Starting LLM backend..."

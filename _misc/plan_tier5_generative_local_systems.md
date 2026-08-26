@@ -218,7 +218,107 @@ Agent loop:
 
 ---
 
-## Total Estimated: ~2,800 LOC across 12+ new files + modifications to 5 existing files
+## Phase 5f: Competitor UX Features — Power User (Est. 800 LOC) ❌ NOT STARTED
+
+*Derived from the Tier 4b competitor analysis. These are features that competitors have and users expect, but that weren't critical enough for Tier 4b. They fit naturally in Tier 5 because they require infrastructure (queue, macro engine, auto-detection) that's already being built for the generative systems.*
+
+### 5f.1 Popup / Quick Chat (Pattern B, BlendAI) 🟡
+
+**Source**: BlendAI (Ctrl+Shift+A popup), Blender Buddy (hotkey sidebar toggle)
+
+**What**: A floating popup window that opens with a hotkey (Ctrl+Shift+A), allowing quick questions without opening the N-panel. The popup follows the cursor during generation and can be dismissed with Esc.
+
+**Why Tier 5**: Requires modal operator architecture, cursor tracking, and redraw management. The N-panel is sufficient for Tier 4b. Tier 5 is where we add power-user accelerators.
+
+**Implementation** (~200 LOC):
+- New `BFACW_OT_quick_chat` modal operator with `invoke_props_dialog`
+- Hotkey: `Ctrl+Shift+A` (matches BlendAI muscle memory)
+- Minimal UI: prompt textbox + Send/Stop buttons + last response preview
+- Esc dismisses, Enter sends
+- Falls back to opening the N-panel Coworker tab if the popup would be too small
+
+**Files**: `ui_chat.py` (new operator), `__init__.py` (keymap registration)
+
+---
+
+### 5f.2 Macros / Reusable Tool Sequences (Pattern S, BlendAI + BlenderMCP Pro) 🟡
+
+**Source**: BlendAI (script presets — searchable, filterable, context-menu), BlenderMCP Pro (macros — save action sequence as retargetable named tool)
+
+**What**: Users can save a sequence of agent actions as a reusable macro. The macro appears as a named tool in the chat panel and can be invoked with a target object as parameter. Think: "Run my LOD pipeline on this new prop."
+
+**Why Tier 5**: Requires a persistence layer (macro storage), macro editor UI, and the ability to replay tool calls with parameter substitution. BlenderMCP Pro's implementation is the reference — it's a power-user feature that compounds in value over time.
+
+**Implementation** (~300 LOC):
+- `MacroStorage` — JSON-based persistence in `bfa_coworker_macros/` directory
+- `BFACW_OT_record_macro` — start/stop recording agent tool calls
+- `BFACW_OT_run_macro` — replay a macro, substituting `{target}` and `{selection}` placeholders
+- `BFACW_PT_macros` — sidebar panel listing saved macros with Run/Edit/Delete
+- Macro editor: rename, edit description, reorder steps, delete steps
+- Parameter extraction: `{target}` → active object, `{selection}` → selected objects, `{file}` → current blend file path
+
+**Files**: `macros.py` (new), `ui_chat.py` (macro panel), `agent_controller.py` (recording hooks)
+
+---
+
+### 5f.3 Background Task Queue (Pattern Q, BlenderMCP Pro) 🟡
+
+**Source**: BlenderMCP Pro (queue long jobs, keep working, live status, per-job cancel, cost readout)
+
+**What**: Extend the existing message queue into a full background task queue. Long-running operations (generation, batch processing, macro execution) are queued and run in background. The user keeps working. Live status with cancel. Results with timing/cost readout.
+
+**Why Tier 5**: We already have a message queue. Extending to task-level tracking with live status, cancel, and results display is a natural evolution. The generative systems in Tier 5 need this — image/video generation takes minutes, not seconds.
+
+**Implementation** (~200 LOC):
+- `BackgroundTask` dataclass: id, type, status, progress, started_at, completed_at, result, error
+- `TaskQueue` class: enqueue, dequeue, cancel, get_status, get_history
+- `BFACW_PT_task_queue` panel: live task list with progress bars, cancel buttons, result summaries
+- Integration with gen_controller: `generate_async()` already returns job IDs — wire those into the task queue
+- Timer-based UI updates: 0.5s interval for progress polling
+
+**Files**: `task_queue.py` (new), `ui_chat.py` (task queue panel), `gen_controller.py` (wire into job queue)
+
+---
+
+### 5f.4 Provider Auto-Fallback (Pattern Z, BlenderMCP Pro) 🟡
+
+**Source**: BlenderMCP Pro (silent switch on rate limit, session never breaks)
+
+**What**: If the primary LLM provider hits a rate limit or returns an error, silently switch to the next configured provider. The user never sees a "rate limit exceeded" error — the session just continues.
+
+**Why Tier 5**: Most users stick to one provider. Power users with multiple API keys benefit significantly. Requires provider health checking and fallback logic that's best built after the core agent loop is stable.
+
+**Implementation** (~100 LOC):
+- `ProviderFallback` config: ordered list of (url, key, model) tuples
+- Health check: ping each provider's `/v1/models` endpoint before use
+- Fallback logic in `run_conversation_turn()`: on 429/503, mark provider as degraded, retry with next
+- Degraded providers auto-recover after 60s
+- Status indicator in chat panel: "🟢 Claude  |  🟡 Gemini (fallback)  |  🔴 Groq (down)"
+
+**Files**: `agent_controller.py` (fallback logic), `preferences.py` (provider list UI), `ui_chat.py` (status indicator)
+
+---
+
+### 5f.5 GPU Auto-Detection + One-Click Setup (Pattern Y, Blender Buddy) 🟡
+
+**Source**: Blender Buddy (auto-detects CUDA/Metal/Vulkan/ROCm, offers tiered model options, shows download progress with cancel)
+
+**What**: On first run, auto-detect the user's GPU and recommend the best local model tier. Show a guided setup flow: "We detected an NVIDIA RTX 3060 with 12GB VRAM. We recommend the Medium model (~14.7 GB download)." Download progress with cancel, SHA-256 verification, resume support.
+
+**Why Tier 5**: We already have model download. Blender Buddy's GPU detection and tiered recommendations are the gold standard. Tier 5 is where we polish the onboarding experience for local users.
+
+**Implementation** (~150 LOC):
+- GPU detection: `nvidia-smi` for CUDA, `sysctl` for Metal, `/dev/kfd` for ROCm, fallback to Vulkan
+- VRAM estimation: parse `nvidia-smi` output, estimate Metal unified memory
+- Tier recommendation: based on available VRAM → Low (<8GB), Medium (8-16GB), High (>16GB)
+- Guided setup flow: `BFACW_OT_setup_wizard` — multi-step modal with progress
+- One-click "Get Started" button in preferences that runs the wizard
+
+**Files**: `llm_manager.py` (GPU detection), `preferences.py` (setup wizard UI), `operators_llm.py` (wizard operator)
+
+---
+
+## Total Estimated: ~3,600 LOC across 16+ new files + modifications to 7 existing files
 
 | Phase | LOC | New Files | Status |
 |---|---|---|---|
@@ -227,6 +327,7 @@ Agent loop:
 | 5c: MCP Tools + Agent | ~400 | 4 | ❌ Not started |
 | 5d: Video + Audio | ~500 | 4 | ❌ Not started |
 | 5e: Advanced + Bridge | ~500 | 0 | ❌ Not started |
+| 5f: Competitor UX — Power User | ~800 | 2 | ❌ Not started |
 
 ---
 

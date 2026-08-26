@@ -336,7 +336,150 @@ mcp/blmcp/tools/get_screenshot_of_window_as_json_toolcode.py  # VSE + node edito
 
 ---
 
-## Total Estimated: ~2,600 LOC across 52 new files + modifications to 2 existing files
+## Phase 6f: Competitor UX Features — Advanced Intelligence (Est. 1,100 LOC) ❌ NOT STARTED
+
+*Derived from the Tier 4b competitor analysis. These are the most ambitious features — the ones that separate a "chat assistant" from an "intelligent coworker." They require infrastructure (vision models, multi-agent orchestration, background polling) that's being built across Tiers 5-6.*
+
+### 6f.1 Agent Teams with Planner (Pattern P, BlenderMCP Pro) 🔴
+
+**Source**: BlenderMCP Pro 2.0 — Planner agent → specialist agents (Layout, Modeling, Materials, Lighting, Rigging, Geometry Nodes, Rendering) → Validator agent. Dependency-ordered task list, parallel execution, live task list, single undo checkpoint.
+
+**What**: The user describes a large goal ("Build a campfire scene — ground plane, three logs, stone circle, warm light, dark rocky material"). A planner agent decomposes it into dependency-ordered tasks. Specialist agents execute tasks in parallel where possible. A validator agent checks the result against the goal and auto-fixes issues.
+
+**Why Tier 6**: This is the most architecturally complex feature in the competitive landscape. It requires: multi-agent orchestration, dependency resolution, parallel execution with tool access scoping, validator heuristics, and undo checkpoint management. BlenderMCP Pro's implementation is the only reference — and it's a paid product. Getting this right in a free, open-source tool is a major differentiator.
+
+**Implementation** (~500 LOC):
+- `PlannerAgent` — takes a goal string, returns a `TaskPlan` (ordered list of `Task` objects with dependencies)
+- `TaskPlan` dataclass: tasks with id, description, domain, dependencies, status, assigned_agent
+- `SpecialistAgent` — scoped tool access (e.g., Materials agent only sees material/shader tools)
+- `ValidatorAgent` — compares final scene state against goal, returns `ValidationReport` (pass/fail/warn items)
+- `AgentOrchestrator` — executes tasks in dependency order, runs independent tasks in parallel threads
+- `BFACW_PT_mission_panel` — live task list with status icons, progress, cancel button
+- Single undo checkpoint: push before mission starts, one Ctrl+Z rolls back everything
+- Auto-fix: validator runs one repair pass before reporting done
+
+**Files**: `agent_teams.py` (new — Planner, Specialist, Validator, Orchestrator), `ui_chat.py` (mission panel), `agent_controller.py` (orchestrator integration)
+
+**Reference**: BlenderMCP Pro's Agent Teams 2.0 documentation at quadify3d.com
+
+---
+
+### 6f.2 Scene Co-Pilot — Passive Issue Detection (Pattern T, BlenderMCP Pro) 🔴
+
+**Source**: BlenderMCP Pro — passive background scanner that flags common issues (unapplied scale, missing UVs, non-manifold geo) with one-click fixes where safe.
+
+**What**: A background scanner that runs periodically (every 5s when idle) and checks the scene for common issues. Issues appear in a non-intrusive status bar in the chat panel. Each issue has a "Fix" button that applies a safe, pre-authored correction. Think: a spell-checker for your 3D scene.
+
+**Why Tier 6**: Requires background polling infrastructure, a library of issue detection heuristics, and safe auto-fix logic for each issue type. The detection heuristics need to be fast (sub-100ms for large scenes) and the fixes need to be non-destructive. This is complex but high-value — it catches problems before they cause downstream failures.
+
+**Implementation** (~300 LOC):
+- `SceneScanner` class with registered `IssueDetector` plugins
+- Issue types (initial set):
+  - `unapplied_scale` — objects with non-uniform scale and modifiers → "Apply Scale" fix
+  - `missing_uvs` — mesh objects with materials but no UV maps → "Smart UV Project" fix
+  - `non_manifold` — mesh objects with non-manifold edges → "Select non-manifold" (no auto-fix, just highlight)
+  - `zero_area_faces` — faces with zero area → "Merge by Distance" fix
+  - `missing_material` — mesh objects with no material → "Assign Default Material" fix
+  - `ngons_over_N` — faces with >4 vertices → "Triangulate" fix
+- `BFACW_PT_scene_health` panel: issue list with severity icons, Fix/Ignore buttons
+- Timer-based polling: `bpy.app.timers.register(scanner_tick, first_interval=5.0)`
+- Only scan when agent is idle (not during active turns)
+
+**Files**: `scene_co_pilot.py` (new — Scanner, detectors, fixers), `ui_chat.py` (health panel)
+
+**Reference**: BlenderMCP Pro's Scene Co-Pilot documentation
+
+---
+
+### 6f.3 Render Critic with Iterative Refinement (Pattern U, BlenderMCP Pro + BlendAI) 🔴
+
+**Source**: BlenderMCP Pro (structured critique with quality score /10, 5 focus modes, "Fix with AI" button, iterative refinement loop). BlendAI (render suggestions).
+
+**What**: Render the current frame, send it to a vision-capable LLM for critique, get back a structured report with quality score and prioritized fixes. The user can click "Fix with AI" to apply the top fix, or enable iterative mode where the agent renders → critiques → fixes → re-renders until a target score is reached.
+
+**Why Tier 6**: Requires vision model support (already planned for Tier 4b Phase 6), render pipeline integration, structured critique parsing, and an iterative refinement loop. The iterative mode is particularly complex — it needs a termination condition (target score or max iterations) and must avoid infinite loops.
+
+**Implementation** (~300 LOC):
+- `BFACW_OT_render_critic` operator: renders current frame, encodes as base64, sends to vision LLM
+- Structured critique prompt: returns JSON with `score` (0-10), `issues` array (each with `category`, `severity`, `description`, `suggested_fix`)
+- 5 focus modes: Full, Lighting, Composition, Materials, Technical
+- `BFACW_OT_critic_fix` — sends the top issue to the agent for fixing
+- Iterative mode: `BFACW_OT_critic_iterative` — loop until score ≥ target or max 5 iterations
+- Critique history: save past critiques with before/after renders for comparison
+- Integration with Tier 5 generative systems: critique generated images/video frames
+
+**Files**: `render_critic.py` (new), `ui_chat.py` (critic panel), `agent_controller.py` (vision message support)
+
+**Reference**: BlenderMCP Pro's Render Critic documentation at quadify3d.com
+
+---
+
+### 6f.4 Voice Input (BlenderMCP Pro) 🟡
+
+**Source**: BlenderMCP Pro — local Whisper integration, no API key needed, no internet after setup.
+
+**What**: Click a microphone icon in the chat input to dictate a message. Audio is transcribed locally using Whisper (no data leaves the machine). The transcribed text populates the chat input field. The user can edit before sending.
+
+**Why Tier 6**: Requires Whisper model download (~1.5 GB for `tiny.en`), audio capture from Blender (non-trivial — may need a small external helper), and real-time transcription. Valuable for accessibility and hands-free workflows, but not critical for core agent functionality.
+
+**Implementation** (~150 LOC):
+- `VoiceInputManager` — manages Whisper model download, loading, and inference
+- `BFACW_OT_voice_input` — modal operator: click to start recording, click again to stop
+- Audio capture: use `pyaudio` or `sounddevice` for microphone access
+- Transcription: `faster-whisper` with `tiny.en` model (~1.5 GB, ~2s latency)
+- Populate `chat_input` with transcribed text
+- Visual feedback: microphone icon pulses during recording
+
+**Files**: `voice_input.py` (new), `ui_chat.py` (microphone button), `llm_manager.py` (Whisper model download)
+
+**Reference**: BlenderMCP Pro's Voice Input documentation
+
+---
+
+### 6f.5 Text-to-Speech Output (Chat Companion) 🟡
+
+**Source**: Chat Companion — reads answers aloud. Unique among current competitors.
+
+**What**: A "Read Aloud" button on each assistant message that speaks the response using a local TTS engine. Useful for accessibility and for users who want to listen while working in the viewport.
+
+**Why Tier 6**: Requires TTS model download, audio playback from Blender, and queue management (don't speak over yourself). Chat Companion is the only addon with this feature — it's a differentiator. But it's quality-of-life, not core functionality.
+
+**Implementation** (~100 LOC):
+- `TTSManager` — manages TTS model download and inference
+- `BFACW_OT_read_aloud` — operator on each assistant message
+- TTS engine: `piper-tts` (lightweight, ~50MB per voice, local)
+- Audio playback: `bpy.ops.sound.play()` or `playsound` library
+- Queue: if a message is already playing, stop it before starting new one
+- Speed control: normal (1.0x) / fast (1.5x) toggle
+
+**Files**: `tts_manager.py` (new), `ui_chat.py` (Read Aloud button)
+
+**Reference**: Chat Companion's TTS feature
+
+---
+
+### 6f.6 External Client Config (BlenderMCP Pro) 🟡
+
+**Source**: BlenderMCP Pro — one-click config writing for Claude Desktop, Cursor, Windsurf, Claude.ai Web (via Cloudflare tunnel).
+
+**What**: A dropdown in the Coworker preferences to select an external MCP client (Claude Desktop, Cursor, Windsurf). Clicking "Write Config" auto-generates the correct JSON config file and writes it to the client's config directory. For Claude.ai Web, start a Cloudflare tunnel and display the public URL.
+
+**Why Tier 6**: We already have an MCP server and external harness mode. One-click config writing removes the friction of manually editing JSON config files. BlenderMCP Pro does this well — it's a polish feature that makes the MCP server actually usable by non-technical users.
+
+**Implementation** (~100 LOC):
+- `BFACW_OT_write_mcp_config` operator with client type dropdown
+- Auto-detect config paths: `%APPDATA%/Claude/claude_desktop_config.json`, `~/.cursor/mcp.json`, `~/.codeium/windsurf/mcp_config.json`
+- Write `mcpServers` entry pointing at `http://127.0.0.1:{port}/mcp`
+- Cloudflare tunnel for Claude.ai Web: detect `cloudflared` on PATH, start tunnel, display URL
+- "Copy MCP URL" button for manual clients
+
+**Files**: `ui_chat.py` (config operator), `preferences.py` (client dropdown), `mcp_to_blender_server.py` (tunnel support)
+
+**Reference**: BlenderMCP Pro's Connecting Clients documentation at quadify3d.com
+
+---
+
+## Total Estimated: ~3,700 LOC across 58+ new files + modifications to 4 existing files
 
 | Phase | LOC | New Files | Status |
 |---|---|---|---|
@@ -345,6 +488,7 @@ mcp/blmcp/tools/get_screenshot_of_window_as_json_toolcode.py  # VSE + node edito
 | 6c: Asset Browser | ~800 | 18 | ❌ Not started |
 | 6d: Shader / Node Editor | ~650 | 14 | ❌ Not started |
 | 6e: System Prompt & Integration | ~200 | 0 | ❌ Not started |
+| 6f: Competitor UX — Advanced Intelligence | ~1,100 | 6 | ❌ Not started |
 
 ---
 

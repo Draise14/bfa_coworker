@@ -754,14 +754,14 @@ class BFACW_OT_mention_search(Operator):  # type: ignore[misc]
 
             # Category filter buttons.
             row = layout.row(align=True)
-            row.label(text="Filter:", icon='VIEWZOOM')
+            row.label(text="", icon='VIEWZOOM')
             op = row.operator("bfacw.mention_search", text="All", icon='NONE')
             op.category = ""
             op.filter_text = self.filter_text
             for cat_key, cat_info in _MENTION_CATEGORIES.items():
                 op = row.operator(
                     "bfacw.mention_search",
-                    text=cat_info["label"],
+                    text="",
                     icon=cat_info["icon"],
                 )
                 op.category = cat_key
@@ -1239,18 +1239,48 @@ class BFACW_OT_agent_restart(Operator):  # type: ignore[misc]
 # ---------------------------------------------------------------------------
 # Timer for UI updates
 
+# Track whether we already opened the mention popup for the current @
+_mention_popup_open = False
+
+
 def chat_timer_update() -> float | None:
     """
-    Timer callback that periodically redraws chat areas and animates
-    the "Thinking..." indicator.
+    Timer callback that periodically redraws chat areas, animates
+    the "Thinking..." indicator, and auto-opens the mention popup
+    when the user types @ in the input field.
 
     Registered when the add-on starts, runs while Blender is alive.
     """
+    global _mention_popup_open
     from . import agent_controller as _ac
 
     # Animate thinking dots.
     if _ac._agent_state.is_thinking:
         _ac._agent_state.thinking_dots += 1
+
+    # Auto-open @mention popup when user types @ in input.
+    try:
+        for wm in bpy.data.window_managers:
+            props = getattr(wm, "bfacw_chat_props", None)
+            if props is None:
+                continue
+            text = props.chat_input or ""
+            if "@" in text and not _ac._agent_state.is_thinking:
+                last_at = text.rfind("@")
+                after = text[last_at + 1:]
+                # Only trigger if @ is at end or followed by text (not space).
+                if not after or (not after.startswith(" ") and len(after) <= 30):
+                    if not _mention_popup_open:
+                        _mention_popup_open = True
+                        # Defer popup to avoid timer re-entrancy.
+                        bpy.app.timers.register(
+                            lambda: _open_mention_for_at(text),
+                            first_interval=0.0,
+                        )
+            else:
+                _mention_popup_open = False
+    except Exception:
+        pass
 
     # Redraw all chat panels.
     for wm in bpy.data.window_managers:
@@ -1261,6 +1291,22 @@ def chat_timer_update() -> float | None:
                 if area.type == 'TEXT_EDITOR':
                     area.tag_redraw()
     return 0.5  # Check every 0.5 seconds.
+
+
+def _open_mention_for_at(text: str) -> float | None:
+    """Open the mention popup filtered by the text after @."""
+    global _mention_popup_open
+    try:
+        last_at = text.rfind("@")
+        after = text[last_at + 1:] if last_at >= 0 else ""
+        # Don't open if user already inserted a mention (space after @).
+        if after.startswith(" "):
+            _mention_popup_open = False
+            return None
+        bpy.ops.bfacw.mention_search(filter_text=after)
+    except Exception:
+        pass
+    return None
 
 
 # ---------------------------------------------------------------------------

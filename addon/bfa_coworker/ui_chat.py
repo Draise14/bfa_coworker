@@ -1497,7 +1497,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     op.message_index = history.index(user_msg)
                     if tb2:
                         tb2.separator()
-                        _draw_multiline(tb2, "You: {:s}".format(user_msg.get("content", "")))
+                        _draw_multiline(tb2, user_msg.get("content", ""))
                         if process_msgs:
                             tb2.separator()
                             pb = tb2.box()
@@ -1529,7 +1529,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     hr.label(text="Turn {:d}".format(turn_num))
                     op = hr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                     op.message_index = history.index(user_msg)
-                    _draw_multiline(turn_box, "You: {:s}".format(user_msg.get("content", "")))
+                    _draw_multiline(turn_box, user_msg.get("content", ""))
                 if conclusion_msg:
                     turn_box.separator()
                     cr = turn_box.row()

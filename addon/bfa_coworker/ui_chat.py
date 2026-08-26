@@ -1426,7 +1426,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     elif role == "assistant":
                         if not msg.get("tool_calls"):
                             conclusion_msg = msg
-                turn_num = sum(len(t) for t in turns[:turns.index(turn)]) + 1
+                turn_num = turns.index(turn) + 1  # Per user-message turn number
                 if not user_msg:
                     if conclusion_msg:
                         tb = hist_box.box()

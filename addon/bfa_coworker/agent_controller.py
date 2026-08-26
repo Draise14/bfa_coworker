@@ -3580,7 +3580,7 @@ def _run_conversation_turn_inner(
         print("[🛠️Coworker] run_conversation_turn: hit max iterations, forcing summary")
         history.append({
             "role": "user",
-            "content": "All tool calls are complete. Please summarize what was done in 1-2 sentences.",
+            "content": "[System: All tool calls are complete. Please summarize what was done in 1-2 sentences.]",
         })
         final_response = _openai_chat_completions(llm_url, history, openai_tools, api_key, model, max_tokens)
         if final_response:

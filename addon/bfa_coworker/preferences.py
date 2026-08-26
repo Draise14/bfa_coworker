@@ -146,10 +146,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
     chat_max_visible_turns: IntProperty(  # type: ignore[valid-type]
         name="Max Visible Turns",
         description=(
-            "Maximum number of conversation turns shown in the chat panel.
-"
-            "0 = show all turns (no limit). Higher values may slow the UI
-"
+            "Maximum number of conversation turns shown in the chat panel. "
+            "0 = show all turns (no limit). Higher values may slow the UI "
             "with very long conversations."
         ),
         default=0,

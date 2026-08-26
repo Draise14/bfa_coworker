@@ -482,7 +482,7 @@ class BFACW_OT_queue_show(Operator):  # type: ignore[misc]
             layout = menu.layout
             layout.label(
                 text="Queued Messages ({:d})".format(len(queue_items)),
-                icon='QUEUE',
+                icon='FORWARD',
             )
             for idx, item in enumerate(queue_items):
                 msg = item.get("message", "")
@@ -494,7 +494,7 @@ class BFACW_OT_queue_show(Operator):  # type: ignore[misc]
         context.window_manager.popup_menu(
             _draw_menu,
             title="Message Queue",
-            icon='QUEUE',
+            icon='FORWARD',
         )
         return {"FINISHED"}
 
@@ -1321,7 +1321,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         status_icon = (
             'CHECKMARK' if is_ok and not state.is_thinking else
             'SORTTIME' if state.is_thinking else
-            'X' if state.error else 'CHECKMARK'
+            'WARNING' if state.error else 'CHECKMARK'
         )
         status_row = layout.row()
         status_row.label(text=status, icon=status_icon)
@@ -1412,189 +1412,90 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             )
 
             for turn_idx, turn in enumerate(turn_iter):
-                # Separate messages by role, preserving chronological order
-                # for interleaved reasoning+tool display.
                 user_msg = None
-                process_msgs: list[dict] = []  # reasoning + tool, in order
+                process_msgs = []
                 conclusion_msg = None
                 for msg in turn:
                     role = msg.get("role", "")
-                    content = msg.get("content", "")
-                    is_system_user = (
-                        role == "user"
-                        and isinstance(content, str)
-                        and content.startswith("[System:")
-                    )
-                    if role == "user" and not is_system_user:
+                    c2 = msg.get("content", "")
+                    is_sys = (role == "user" and isinstance(c2, str) and c2.startswith("[System:"))
+                    if role == "user" and not is_sys:
                         user_msg = msg
-                    elif role in ("reasoning", "tool") or is_system_user:
+                    elif role in ("reasoning", "tool") or is_sys:
                         process_msgs.append(msg)
                     elif role == "assistant":
-                        if msg.get("tool_calls"):
-                            pass  # Intermediate "running tools" — skip
-                        else:
+                        if not msg.get("tool_calls"):
                             conclusion_msg = msg
-
-                # Handle assistant-only turns (e.g. the welcome message).
+                turn_num = sum(len(t) for t in turns[:turns.index(turn)]) + 1
                 if not user_msg:
                     if conclusion_msg:
-                        turn_box = hist_box.box()
-                        c_row = turn_box.row()
-                        c_row.label(text="Coworker:", icon='CONSOLE')
-                        op = c_row.operator(
-                            "bfacw.copy_message", text="", icon='COPYDOWN',
-                        )
+                        tb = hist_box.box()
+                        cr = tb.row()
+                        cr.label(text="Coworker:", icon="CONSOLE")
+                        op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                         op.message_index = history.index(conclusion_msg)
-                        _draw_multiline(
-                            turn_box,
-                            conclusion_msg.get("content", ""),
-                        )
+                        _draw_multiline(tb, conclusion_msg.get("content", ""))
                     continue
-
-                # ── Outer turn box ──────────────────────────────
+                has_proc = bool(process_msgs)
                 turn_box = hist_box.box()
-
-                # ── Collapsible: user prompt + process steps ────
-                has_process = bool(process_msgs)
-
-                if has_process:
-                    # Determine turn status icon.
-                    has_tool_error = any(
-                        p.get("role") == "tool" and (
-                            '"status": "error"' in (p.get("content") or "")
-                            or (p.get("content") or "").startswith("Error")
-                        )
-                        for p in process_msgs
-                    )
-                    if has_tool_error:
-                        turn_icon = 'X'
-                    elif conclusion_msg:
-                        turn_icon = 'CHECKMARK'
-                    else:
-                        turn_icon = 'SORTTIME'
-
-                    proc_header, proc_body = turn_box.panel(
-                        "turn_process_{:d}".format(turn_idx),
-                        default_closed=True,
-                    )
-                    # Header: status icon + user message preview + copy button.
-                    hdr_row = proc_header.row()
-                    hdr_row.label(text="", icon=turn_icon)
-                    _draw_multiline(
-                        proc_header,
-                        "You: {:s}".format(user_msg.get("content", "")),
-                    )
-                    op_row = proc_header.row()
-                    op_row.label(text="", icon='USER')
-                    op = op_row.operator(
-                        "bfacw.copy_message", text="", icon='COPYDOWN',
-                    )
+                if has_proc:
+                    has_err = any(p.get("role")=="tool" and ('"status": "error"' in (p.get("content") or "") or (p.get("content") or "").startswith("Error")) for p in process_msgs)
+                    tic = "X" if has_err else ("CHECKMARK" if conclusion_msg else "SORTTIME")
+                    th, tb2 = turn_box.panel("turn_{:d}".format(turn_idx), default_closed=not (turn_idx==0 and state.is_thinking))
+                    hr = th.row(align=True)
+                    hr.label(text="", icon=tic)
+                    hr.label(text="Turn {:d}".format(turn_num))
+                    pv = user_msg.get("content", "")
+                    if len(pv)>80: pv = pv[:80]+"..."
+                    hr.label(text=pv)
+                    op = hr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                     op.message_index = history.index(user_msg)
-
-                    if proc_body:
-                        # Interleaved reasoning + tool steps (no duplicate user message).
-                        proc_body.separator()
-
-                        # Interleaved reasoning + tool steps.
-                        for p_msg in process_msgs:
-                            p_role = p_msg.get("role", "")
-                            p_content = p_msg.get("content", "")
-                            is_system_msg = (
-                                p_role == "user"
-                                and isinstance(p_content, str)
-                                and p_content.startswith("[System:")
-                            )
-                            if is_system_msg:
-                                # Entity context notification — show as internal info.
-                                sys_box = proc_body.box()
-                                sys_box.label(text="System Context", icon='INFO')
-                                _draw_multiline(sys_box, p_content)
-                            elif p_role == "reasoning":
-                                _draw_reasoning(
-                                    proc_body,
-                                    p_content,
-                                    p_msg.get("label", "Thinking"),
-                                    is_thinking=state.is_thinking,
-                                    thinking_dots=state.thinking_dots,
-                                    message_index=history.index(p_msg),
-                                )
-                            elif p_role == "tool":
-                                t_content = p_msg.get("content", "")
-                                t_summary = p_msg.get("summary", "")
-                                t_name = p_msg.get("name", "")
-                                is_error = (
-                                    '"status": "error"' in (t_content or "") or
-                                    (t_content or "").startswith("Error")
-                                )
-                                display = (
-                                    t_summary if t_summary
-                                    else (t_content or "")
-                                )
-                                if not t_summary and len(display) > 200:
-                                    display = display[:200] + "..."
-                                _draw_tool_inline(
-                                    proc_body, t_name, display,
-                                    is_error,
-                                    message_index=history.index(p_msg),
-                                )
-
-                        # Live streaming preview (inside collapsible).
-                        if (
-                            state.is_thinking
-                            and state.streaming_text
-                            and turn_idx == 0
-                        ):
-                            proc_body.separator()
-                            proc_body.label(
-                                text="Coworker (live):", icon='CONSOLE',
-                            )
-                            _draw_multiline(
-                                proc_body,
-                                state.streaming_text[:300] + "...",
-                            )
+                    if tb2:
+                        tb2.separator()
+                        _draw_multiline(tb2, "You: {:s}".format(user_msg.get("content", "")))
+                        if process_msgs:
+                            tb2.separator()
+                            pb = tb2.box()
+                            pb.label(text="Process ({:d} steps)".format(len(process_msgs)), icon="SORTTIME")
+                            for pm in process_msgs:
+                                pr = pm.get("role", "")
+                                pc = pm.get("content", "")
+                                is_sm = (pr=="user" and isinstance(pc,str) and pc.startswith("[System:"))
+                                if is_sm:
+                                    sb = pb.box()
+                                    sb.label(text="System Context", icon="INFO")
+                                    _draw_multiline(sb, pc)
+                                elif pr=="reasoning":
+                                    _draw_reasoning(pb, pc, pm.get("label","Thinking"), is_thinking=state.is_thinking, thinking_dots=state.thinking_dots, message_index=history.index(pm))
+                                elif pr=="tool":
+                                    tn = pm.get("name","")
+                                    ts = pm.get("summary","")
+                                    ie = ('"status": "error"' in (pc or "") or (pc or "").startswith("Error"))
+                                    d = ts if ts else (pc or "")
+                                    if not ts and len(d)>200: d = d[:200]+"..."
+                                    _draw_tool_inline(pb, tn, d, ie, message_index=history.index(pm))
+                            if state.is_thinking and state.streaming_text and turn_idx==0:
+                                pb.separator()
+                                pb.label(text="Coworker (live):", icon="CONSOLE")
+                                _draw_multiline(pb, state.streaming_text[:300]+"...")
                 else:
-                    # No process steps — show compact user header.
-                    _draw_multiline(
-                        turn_box,
-                        "You: {:s}".format(user_msg.get("content", "")),
-                    )
-                    op_row = turn_box.row()
-                    op_row.label(text="", icon='USER')
-                    op = op_row.operator(
-                        "bfacw.copy_message", text="", icon='COPYDOWN',
-                    )
+                    hr = turn_box.row(align=True)
+                    hr.label(text="", icon="CHECKMARK")
+                    hr.label(text="Turn {:d}".format(turn_num))
+                    op = hr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                     op.message_index = history.index(user_msg)
-
-                # ── Agent conclusion (always visible) ───────────
+                    _draw_multiline(turn_box, "You: {:s}".format(user_msg.get("content", "")))
                 if conclusion_msg:
                     turn_box.separator()
-                    c_row = turn_box.row()
-                    c_row.label(text="Coworker:", icon='CONSOLE')
-                    op = c_row.operator(
-                        "bfacw.copy_message", text="", icon='COPYDOWN',
-                    )
+                    cr = turn_box.row()
+                    cr.label(text="Coworker:", icon="CONSOLE")
+                    op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                     op.message_index = history.index(conclusion_msg)
-                    _draw_multiline(
-                        turn_box,
-                        conclusion_msg.get("content", ""),
-                    )
-
-                # Streaming preview for in-progress turn (no conclusion yet).
-                if (
-                    not conclusion_msg
-                    and state.is_thinking
-                    and state.streaming_text
-                    and turn_idx == 0
-                    and not has_process
-                ):
+                    _draw_multiline(turn_box, conclusion_msg.get("content", ""))
+                if not conclusion_msg and state.is_thinking and state.streaming_text and turn_idx==0 and not has_proc:
                     turn_box.separator()
-                    turn_box.label(
-                        text="Coworker (live):", icon='CONSOLE',
-                    )
-                    _draw_multiline(
-                        turn_box,
-                        state.streaming_text[:300] + "...",
-                    )
+                    turn_box.label(text="Coworker (live):", icon="CONSOLE")
+                    _draw_multiline(turn_box, state.streaming_text[:300]+"...")
 
         else:
             layout.label(
@@ -1604,13 +1505,12 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
 
 
 class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
-    """Queue sub-panel — shows pending queued messages."""
-    bl_label = "Message Queue"
+    """Top-level queue panel — shows pending queued messages."""
+    bl_label = "Queue"
     bl_idname = "BFACW_PT_chat_queue"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = "Coworker"
-    bl_parent_id = "BFACW_PT_chat_panel"
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -1627,7 +1527,7 @@ class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
 
         layout.label(
             text="{:d} message(s) queued".format(len(queue_items)),
-            icon='QUEUE',
+            icon='FORWARD',
         )
 
         for idx, item in enumerate(queue_items):
@@ -1652,7 +1552,6 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = "Coworker"
-    bl_parent_id = "BFACW_PT_chat_panel"
     bl_options = {'DEFAULT_CLOSED'}
 
     @classmethod
@@ -1889,8 +1788,8 @@ _classes = (
     BFACW_OT_agent_restart,
     BFACW_OT_copy_message,
 
-    BFACW_PT_chat_panel,
     BFACW_PT_chat_queue,
+    BFACW_PT_chat_panel,
     BFACW_PT_chat_status,
     BFACW_PT_chat_text_editor,
 )

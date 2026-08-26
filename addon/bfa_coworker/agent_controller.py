@@ -2789,32 +2789,46 @@ def export_session_log(auto_saved: bool = False) -> None:
         lines.append("[Error loading system prompt: {:s}]".format(str(ex)))
     lines.append("")
 
-    # Conversation history.
+        # Conversation history -- grouped by turn.
     lines.append("--- Conversation History ---")
-    history = list(_agent_state.conversation_history)
-    for i, msg in enumerate(history):
-        role = msg.get("role", "unknown")
-        lines.append("\n[Message {:d}] role={:s}".format(i + 1, role))
-        if role == "assistant":
-            content = msg.get("content", "")
-            if content:
-                lines.append("Content: {:s}".format(str(content)[:2000]))
-            tool_calls = msg.get("tool_calls", [])
-            if tool_calls:
-                for tc in tool_calls:
+    hist = list(_agent_state.conversation_history)
+    turn_list = []
+    cur = []
+    for m in hist:
+        r = m.get("role", "")
+        c = m.get("content", "")
+        if r == "user" and not c.startswith("[System:"):
+            if cur:
+                turn_list.append(cur)
+            cur = [m]
+        elif r in ("assistant", "tool", "reasoning") or (r == "user" and c.startswith("[System:")):
+            cur.append(m)
+    if cur:
+        turn_list.append(cur)
+
+    for ti, tr in enumerate(turn_list):
+        lines.append("\n=== Turn {:d} ===".format(ti + 1))
+        for m in tr:
+            r = m.get("role", "unknown")
+            lines.append("[{:s}]".format(r.upper()))
+            c = m.get("content", "")
+            if r == "assistant":
+                if c:
+                    lines.append("Content: {:s}".format(str(c)[:2000]))
+                for tc in m.get("tool_calls", []):
                     fn = tc.get("function", {})
                     lines.append("  Tool: {:s}".format(fn.get("name", "unknown")))
-                    args_str = fn.get("arguments", "")
-                    lines.append("  Args: {:s}".format(str(args_str)[:500]))
-        elif role == "user":
-            content = msg.get("content", "")
-            lines.append("Content: {:s}".format(str(content)[:2000]))
-        elif role == "tool":
-            content = msg.get("content", "")
-            lines.append("Result: {:s}".format(str(content)[:1000]))
-    lines.append("")
+                    lines.append("  Args: {:s}".format(str(fn.get("arguments", ""))[:500]))
+            elif r == "user":
+                lines.append("Content: {:s}".format(str(c)[:2000]))
+            elif r == "tool":
+                lines.append("Result: {:s}".format(str(c)[:1000]))
+            elif r == "reasoning":
+                lines.append("Thinking: {:s}".format(str(c)[:500]))
+        lines.append("")
 
-    # Error signatures.
+    lines.append("")
+# Error signatures.
     lines.append("--- Error Info ---")
     if _agent_state.error:
         lines.append("Current error: {:s}".format(str(_agent_state.error)))

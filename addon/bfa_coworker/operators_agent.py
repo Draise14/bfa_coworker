@@ -25,6 +25,8 @@ __all__ = (
     "BFACW_OT_open_harness_prefs",
     "BFACW_OT_open_config_folder",
     "BFACW_OT_open_url",
+    "BFACW_OT_open_log",
+    "BFACW_OT_compare_benchmarks",
 )
 
 import bpy  # pylint: disable=import-error
@@ -277,26 +279,108 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
          "modifier with a nice resolutions so it's ready for "
          "sculpting. Name it \"Sculpt_Ready_Head\"."),
     ],
-    # ── Asset & Material Workflow ───────────────────────────────────
-    # Tests Poly Haven integration, material assignment, world setup
-    "assets_materials": [
-        (1, "World",
-         "Download a sunset HDRI and set it as "
-         "the world environment."),
-        (2, "Objects",
-         "Create a shaderball at the origin. "
-         "Add a plane below it as a display surface."),
-        (3, "Texture",
-         "Download a brick wall texture from Poly Haven and apply "
-         "it as a material on the plane."),
-        (4, "Material",
-         "Create a glass material for the shaderball: high "
-         "transmission, low roughness, and a realistic IOR "
-         "for glass. Name it \"Glass\"."),
+    # ── Asset Browser Workflow ─────────────────────────────────────
+    # Tests asset browser search, material assignment, node groups
+    "assets_browser": [
+        (1, "Search",
+         "Search the asset browser for any available materials. "
+         "List what you find."),
+        (2, "Assign",
+         "Create a cube and assign a material asset from the asset browser to it."),
+        (3, "Node Group",
+         "Load a node group asset from the asset browser into the active material."),
+        (4, "Collection",
+         "Load a collection asset from the asset browser into the scene."),
+        (5, "Mesh",
+         "Load a mesh asset from the asset browser into the scene."),
+        (6, "World",
+         "Load a world asset from the asset browser and set it as the scene world."),
+    ],
+    # ── Poly Haven Workflow ───────────────────────────────────────
+    # Tests Poly Haven integration, PBR materials, model import
+    "polyhaven": [
+        (1, "Texture",
+         "Search Poly Haven for a brick texture, download and create a PBR material."),
+        (2, "Model",
+         "Search Poly Haven for a chair model, download and import it into the scene."),
+        (3, "HDRI",
+         "Search Poly Haven for a sunset HDRI, download and set it as the world environment."),
+        (4, "Apply",
+         "Create a cube and apply the brick PBR material to it."),
         (5, "Render",
-         "Add three-point lighting for EEVEE: a key light from the right, "
-         "fill from the left, rim light from behind. Set the camera "
-         "to frame the shaderball nicely. Frame and render at square res."),
+         "Add camera and lighting, render the scene with the imported assets."),
+    ],
+    # ── Shader Nodes Workflow ─────────────────────────────────────
+    # Tests material creation, node tree building
+    "shader_nodes": [
+        (1, "Material",
+         "Create a new material named \"Procedural_Grass\"."),
+        (2, "Node Tree",
+         "Build a node tree: Noise Texture → ColorRamp → Principled BSDF. "
+         "Use green colors for the grass look."),
+        (3, "Assign",
+         "Create a plane and assign the Procedural_Grass material to it."),
+        (4, "Preview",
+         "Take a screenshot of the 3D viewport to preview the shader."),
+    ],
+    # ── Geometry Nodes Workflow ───────────────────────────────────
+    # Tests GN modifier, node tree building
+    "geometry_nodes": [
+        (1, "GN Modifier",
+         "Create a Geometry Nodes modifier on a new grid object."),
+        (2, "Node Tree",
+         "Build a GN node tree: Distribute Points on Faces → Instance on Points "
+         "(using an Ico Sphere) → Set Shade Smooth."),
+        (3, "Random Scale",
+         "Add a Random Value node to vary the instance scale between 0.5 and 2.0."),
+        (4, "Verify",
+         "Take a screenshot of the 3D viewport to verify the geometry nodes result."),
+    ],
+    # ── Sequencer Workflow ────────────────────────────────────────
+    # Tests video sequence editor operations
+    "sequencer": [
+        (1, "Color Strip",
+         "Create a color strip in the Video Sequence Editor with a blue background."),
+        (2, "Transform",
+         "Add a transform effect strip on top of the color strip."),
+        (3, "Text",
+         "Add a text overlay strip with the text \"BFA Coworker Test\"."),
+        (4, "Range",
+         "Set the render frame range from 1 to 100 for the sequencer output."),
+    ],
+    # ── Image Editor Workflow ─────────────────────────────────────
+    # Tests image creation, pixel manipulation
+    "image_editor": [
+        (1, "New Image",
+         "Create a new 512x512 image named \"Test_Pattern\" in the Image Editor."),
+        (2, "Draw",
+         "Draw a colored rectangle on the image — fill the center half with red."),
+        (3, "Save",
+         "Save the image to disk as test_pattern.png."),
+    ],
+    # ── Compositor Workflow ───────────────────────────────────────
+    # Tests compositor node setup
+    "compositor": [
+        (1, "Enable",
+         "Enable the compositor and set it to use nodes."),
+        (2, "Node Tree",
+         "Add Render Layers → Blur → Viewer node chain in the compositor."),
+        (3, "Settings",
+         "Set the blur to use Gaussian with 10px size."),
+        (4, "Render",
+         "Render a frame and verify the compositor output."),
+    ],
+    # ── Multi-Editor Cross-Context ────────────────────────────────
+    # Tests agent ability to work across multiple editors
+    "multi_editor_cross": [
+        (1, "Mesh",
+         "Create a monkey head mesh object (Suzanne)."),
+        (2, "GN Modifier",
+         "Add a Geometry Nodes modifier to the monkey and build a simple node tree."),
+        (3, "Material",
+         "Create a material for the monkey with a Principled BSDF."),
+        (4, "Render",
+         "Render a frame of the monkey with the GN modifier and material applied."),
     ],
     # ── Baseline Latency (quick sanity — fun scene) ─────────────────
     "baseline": [
@@ -430,6 +514,11 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
 _test_suite_progress: dict[str, int] = {}
 # Busy guard: True while a step thread is running for a given suite.
 _test_suite_running: dict[str, bool] = {}
+# Timing data: keyed by (suite_name, step_number) -> elapsed seconds.
+_test_suite_timings: dict[tuple[str, int], float] = {}
+# Path to persist benchmark results.
+import os as _os
+_BENCHMARK_RESULTS_PATH = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "benchmark_results.json")
 
 
 class _BFACW_OT_test_step(bpy.types.Operator):  # type: ignore[misc]
@@ -473,7 +562,11 @@ class _BFACW_OT_test_step(bpy.types.Operator):  # type: ignore[misc]
         total = len(suite)
         remaining = total - (step_idx + 1)
         if remaining == 0:
-            self.report({"INFO"}, "Step {:d}/{:d} '{:s}' done — all finished!".format(
+            # Auto-reset on completion.
+            _test_suite_progress[self.suite] = 0
+            # Persist results.
+            _save_benchmark_results()
+            self.report({"INFO"}, "Step {:d}/{:d} '{:s}' done — suite complete, auto-reset!".format(
                 step_num, total, step_label))
         else:
             self.report({"INFO"}, "Step {:d}/{:d} '{:s}' done — {:d} more to go".format(
@@ -499,6 +592,54 @@ class _BFACW_OT_test_step_reset(bpy.types.Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
+def _save_benchmark_results() -> None:
+    """Save benchmark timings to a JSON file."""
+    import json as _json
+    import time as _time
+
+    if not _test_suite_timings:
+        return
+
+    results = {
+        "timestamp": _time.time(),
+        "timings": {
+            "{:s}:{:d}".format(k[0], k[1]): v
+            for k, v in _test_suite_timings.items()
+        },
+    }
+
+    try:
+        # Load existing results if present.
+        existing = []
+        if _os.path.isfile(_BENCHMARK_RESULTS_PATH):
+            with open(_BENCHMARK_RESULTS_PATH, "r") as f:
+                existing = _json.load(f)
+                if not isinstance(existing, list):
+                    existing = [existing]
+        existing.append(results)
+        # Keep last 20 runs.
+        existing = existing[-20:]
+        with open(_BENCHMARK_RESULTS_PATH, "w") as f:
+            _json.dump(existing, f, indent=2)
+        print("[🛠️Coworker] Benchmark results saved to {:s}".format(_BENCHMARK_RESULTS_PATH))
+    except Exception as ex:
+        print("[🛠️Coworker] Failed to save benchmark results: {:s}".format(str(ex)))
+
+
+def _load_previous_benchmark() -> dict | None:
+    """Load the second-to-last benchmark run for comparison, or None."""
+    import json as _json
+    try:
+        if _os.path.isfile(_BENCHMARK_RESULTS_PATH):
+            with open(_BENCHMARK_RESULTS_PATH, "r") as f:
+                data = _json.load(f)
+                if isinstance(data, list) and len(data) >= 2:
+                    return data[-2]
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return None
+
+
 def _run_test_step(
     context: bpy.types.Context,
     suite_key: str,
@@ -511,6 +652,9 @@ def _run_test_step(
 
     prefs = context.preferences.addons[__package__].preferences
     _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+    # Use actual port if auto-shuffle kicked in.
+    actual_mcp = _ac._agent_state.mcp_port_actual
+    test_mcp_port = actual_mcp if actual_mcp else _mcp_port
 
     # Resolve LLM config (same as chat_send).
     llm = get_llm_manager()
@@ -530,7 +674,9 @@ def _run_test_step(
     print("[🛠️Coworker] test suite '{:s}': prompt = {:s}".format(suite_key, prompt))
 
     def _do_step():
+        import time as _time
         _test_suite_running[suite_key] = True
+        t_start = _time.monotonic()
         try:
             _ac.run_conversation_turn(
                 user_message=prompt,
@@ -540,13 +686,17 @@ def _run_test_step(
                 llm_url=llm_url or None,
                 api_key=api_key or None,
                 model=model,
-                mcp_port=_mcp_port,
+                mcp_port=test_mcp_port,
             )
-            print("[🛠️Coworker] test suite '{:s}': step {:d}/{:s} completed".format(
-                suite_key, step_num, step_label))
+            elapsed = _time.monotonic() - t_start
+            _test_suite_timings[(suite_key, step_num)] = elapsed
+            print("[🛠️Coworker] test suite '{:s}': step {:d}/{:s} completed in {:.1f}s".format(
+                suite_key, step_num, step_label, elapsed))
         except Exception as ex:
-            print("[🛠️Coworker] test suite '{:s}': step {:d}/{:s} FAILED — {:s}".format(
-                suite_key, step_num, step_label, str(ex)))
+            elapsed = _time.monotonic() - t_start
+            _test_suite_timings[(suite_key, step_num)] = elapsed
+            print("[🛠️Coworker] test suite '{:s}': step {:d}/{:s} FAILED in {:.1f}s — {:s}".format(
+                suite_key, step_num, step_label, elapsed, str(ex)))
             _ac._agent_state.error = str(ex)
         finally:
             _test_suite_running[suite_key] = False
@@ -642,17 +792,42 @@ class BFACW_OT_open_config_folder(bpy.types.Operator):  # type: ignore[misc]
             path_str = first_line
 
         import os as _os
-        folder = _os.path.dirname(_os.path.expandvars(path_str))
-        if not _os.path.isdir(folder):
-            # Try creating the parent.
-            try:
-                _os.makedirs(folder, exist_ok=True)
-            except OSError:
-                self.report({"ERROR"}, "Cannot access: {:s}".format(folder))
-                return {"CANCELLED"}
+        expanded = _os.path.expandvars(path_str)
+        folder = _os.path.dirname(expanded)
+        file_path = expanded
 
-        bpy.ops.wm.path_open(filepath=folder)
-        return {"FINISHED"}
+        if _os.path.isdir(folder):
+            # Folder exists — open it in the OS file manager.
+            bpy.ops.wm.path_open(filepath=folder)
+            return {'FINISHED'}
+
+        # Folder does not exist — don't silently create it.  Instead, show a
+        # popup explaining what to do and offer to copy the config.
+        def _draw(self_inner, context_inner):  # type: ignore[no-untyped-def]
+            box = self_inner.layout.box()
+            box.label(text="Config folder not found", icon='ERROR')
+            box.separator()
+            box.label(text="Folder: {:s}".format(folder), icon='FILE_FOLDER')
+            box.separator()
+            box.label(text="Setup steps for {:s}:".format(preset.name), icon='INFO')
+            if preset.setup_steps:
+                for i, step in enumerate(preset.setup_steps, 1):
+                    box.label(text="{:d}. {:s}".format(i, step))
+            box.separator()
+            row = box.row(align=True)
+            row.scale_y = 1.4
+            op = row.operator("bfacw.copy_mcp_config", icon='COPYDOWN', text="Copy Config")
+            op.client_type = self_inner.preset_id
+            if preset.docs_url:
+                op2 = row.operator("bfacw.open_url", icon='URL', text="Docs")
+                op2.url = preset.docs_url
+
+        context.window_manager.popup_menu(
+            _draw,
+            title="{:s} — Setup Guide".format(preset.name),
+            icon='INFO',
+        )
+        return {'CANCELLED'}
 
 
 # ---------------------------------------------------------------------------
@@ -702,7 +877,9 @@ class BFACW_OT_mcp_server_start(bpy.types.Operator):  # type: ignore[misc]
             self.report({"ERROR"}, _ac_mod._agent_state.error)
             return {"CANCELLED"}
 
-        self.report({"INFO"}, "MCP server started on {:s}:{:d}".format(mcp_host, mcp_port))
+        actual = _ac_mod._agent_state.mcp_port_actual
+        display_port = actual if actual else mcp_port
+        self.report({"INFO"}, "MCP server started on {:s}:{:d}".format(mcp_host, display_port))
         return {"FINISHED"}
 
 
@@ -899,4 +1076,132 @@ class BFACW_OT_reload_skills(bpy.types.Operator):  # type: ignore[misc]
         from . import agent_controller as _ac
         _ac._clear_system_prompt_cache()
         self.report({"INFO"}, "Skills and system prompt cache cleared")
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# Open Log
+
+class BFACW_OT_open_log(bpy.types.Operator):  # type: ignore[misc]
+    """Open the Blender console/log in the system default text editor."""
+    bl_idname = "bfacw.open_log"
+    bl_label = "Open Log"
+    bl_description = "Open the Blender system console or log file for debugging"
+    bl_options = {'INTERNAL'}
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        import subprocess
+        import sys
+        import os
+
+        # Try to find the Blender console/log location.
+        log_path = None
+
+        # On Windows, Blender console is often the terminal itself.
+        if sys.platform == "win32":
+            # Try opening the Blender log file if it exists.
+            # Blender writes to stdout/stderr which can be redirected.
+            # For now, just bring the console window to front.
+            try:
+                import ctypes
+                kernel32 = ctypes.windll.kernel32
+                kernel32.SetConsoleTitleW("BFA Coworker Log")
+                # Try to get the console window handle.
+                console_window = kernel32.GetConsoleWindow()
+                if console_window:
+                    import ctypes.wintypes
+                    user32 = ctypes.windll.user32
+                    user32.SetForegroundWindow(console_window)
+                    self.report({"INFO"}, "Console window brought to front")
+                    return {"FINISHED"}
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+            self.report({"INFO"}, "Check the Blender console window for logs")
+            return {"FINISHED"}
+
+        # On macOS/Linux, try to find and open the Blender log.
+        # Blender console logs go to stderr/stdout.
+        # Try to use 'tail -f' on the log or open system console.
+        blender_app = bpy.app.binary_path
+        log_dir = os.path.expanduser("~/Library/Logs/Blender") if sys.platform == "darwin" else \
+                  os.path.expanduser("~/.config/blender")
+
+        if os.path.isdir(log_dir):
+            # Find the most recent log file.
+            log_files = []
+            for root, _dirs, files in os.walk(log_dir):
+                for f in files:
+                    if f.endswith(".log"):
+                        log_files.append(os.path.join(root, f))
+            if log_files:
+                log_files.sort(key=os.path.getmtime, reverse=True)
+                log_path = log_files[0]
+
+        if log_path and os.path.isfile(log_path):
+            try:
+                if sys.platform == "darwin":
+                    subprocess.Popen(["open", log_path])
+                else:
+                    subprocess.Popen(["xdg-open", log_path])
+                self.report({"INFO"}, "Opened log: {:s}".format(log_path))
+                return {"FINISHED"}
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+
+        self.report({"INFO"}, "Check the Blender console for log output")
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# Compare Benchmarks
+
+class BFACW_OT_compare_benchmarks(bpy.types.Operator):  # type: ignore[misc]
+    """Compare current benchmark timings with the previous run."""
+    bl_idname = "bfacw.compare_benchmarks"
+    bl_label = "Compare Benchmarks"
+    bl_description = "Show timing delta from the previous benchmark run"
+    bl_options = {'INTERNAL'}
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        import json as _json
+        import time as _time
+
+        current = _test_suite_timings
+        prev_data = _load_previous_benchmark()
+
+        if not current:
+            self.report({"INFO"}, "No current timings to compare.")
+            return {"FINISHED"}
+
+        if prev_data is None:
+            self.report({"INFO"}, "No previous benchmark run found. Run a suite first.")
+            return {"FINISHED"}
+
+        prev_timings = prev_data.get("timings", {})
+        prev_ts = prev_data.get("timestamp", 0)
+
+        print("\n[🛠️Coworker] Benchmark Comparison")
+        print("  Previous run: {:s}".format(
+            _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(prev_ts))))
+        print("  Current run: {:s}".format(
+            _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(_time.time()))))
+        print("  {:<25s} {:>8s} {:>8s} {:>8s}".format(
+            "Step", "Prev", "Now", "Delta"))
+        print("  " + "-" * 53)
+
+        for (suite, step), elapsed in sorted(current.items()):
+            key = "{:s}:{:d}".format(suite, step)
+            prev_elapsed = prev_timings.get(key)
+            if prev_elapsed is not None:
+                delta = elapsed - prev_elapsed
+                delta_str = "+{:.1f}s".format(delta) if delta > 0 else "{:.1f}s".format(delta)
+                print("  {:<25s} {:>7.1f}s {:>7.1f}s {:>8s}".format(
+                    "{:s}:{:d}".format(suite, step),
+                    prev_elapsed, elapsed, delta_str))
+            else:
+                print("  {:<25s} {:>8s} {:>7.1f}s {:>8s}".format(
+                    "{:s}:{:d}".format(suite, step),
+                    "—", elapsed, "NEW"))
+
+        self.report({"INFO"}, "Benchmark comparison printed to console.")
         return {"FINISHED"}

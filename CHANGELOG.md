@@ -27,6 +27,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Debug Mode & Diagnostics** — New user-facing `debug_mode` toggle and `log_level` enum (DEBUG/INFO/WARNING/ERROR) in preferences. Open Log button for quick access to log file. Multiline custom skills text editor for easier editing.
+- **Benchmark Expansion** — Timing measurements for all benchmark suites. 6 new editor benchmark suites. Split assets_materials into separate tests. Auto-reset on completion. Results persistence to JSON files with comparison support.
+- **Session Logging & Memory Bank** — Export session log to text block or clipboard. Auto-save on spiral detection. Error code bank for pattern tracking. Versioned session history (last 10).
+- **Asset Browser Tools** — 3 new MCP tools: `get_asset_libraries`, `search_assets`, `load_asset_in_context`. Type-aware loading for materials, node groups, collections, objects, worlds, actions. `get_asset_tags` for reading node group editor type (Geometry Nodes, Shader, Compositor). Asset browser domain registration with skills documentation.
+- **Start/Stop UX Hardening** — Graceful shutdown with timeout. Health dots (Bridge/MCP/LLM liveness indicators). Restart button. Stop-during-thinking guard with user feedback.
+- **Thinking Indicator Polish** — Unicode spinner animation for thinking state. Model loading progress bar with percentage. Timer optimization for UI updates.
+- **Conditional Advanced Settings** — Per-mode section gating in Advanced tab. Mode hint label showing current operating mode context.
+- **Collection Color Tag Tool** — `set_collection_color_tag` MCP tool. Color tag in scene summary. Skills documentation. Readonly detection.
+- **Message Queue** — Full message queue system with `MessageQueue` dataclass. Auto-queue when turn is active. Auto-dequeue after turn completes. Queue UI with Show/Clear buttons. Popup display of queued messages.
+- **Mention System Overhaul** — Multi-category support (objects, materials, collections, node groups, worlds, actions). Category filter buttons in popup. Auto-detect filter from @typing in input. Smart partial mention replacement.
+- **Chat Panel Modularization** — Split monolithic panel into main panel (input + messages) and status sub-panel (health, diagnostics). Status panel defaults to closed as advanced sub-panel.
 - **External Harness Preset System** — 8 curated MCP client presets (Claude Desktop, Claude Code, Codex CLI, Cursor, Windsurf, Cline, OpenCode, Generic STDIO) with inline setup steps, config file locations, and documentation links. Select your harness from a dropdown in Advanced preferences and get a ready-to-paste config.
 - **Blender's Python in Harness Configs** — Harness configs now emit the full path to Blender's bundled Python with PYTHONPATH set to vendor dependencies. No pip install needed. A "Use System Python" toggle is available for power users.
 - **"Configure Harness" Button** — In harness mode, the chat panel now has a "Configure Harness" button that opens preferences directly to the step-by-step harness setup wizard. A quick-copy dropdown is also available for power users.

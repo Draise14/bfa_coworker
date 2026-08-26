@@ -149,6 +149,34 @@ initial_instructions: |
     * Don't dump entire scenes - inspect progressively for large scenes.
     * Check object types, parenting, modifiers, and materials before making changes.
 
+  # Asset-First Workflow
+
+  When the user asks for textures, materials, HDRIs, or 3D models,
+  check existing assets before generating anything new:
+
+  1. LOCAL ASSET BROWSER — Check Blender's own asset libraries first.
+     Use execute_blender_code to look for matching materials, worlds, or
+     node groups that already have asset_data attached. If one matches,
+     append or link it directly — no download needed.
+  2. POLY HAVEN — If nothing local fits, use search_polyhaven_assets
+     and download_polyhaven_asset to fetch PBR textures, HDRIs, or models
+     from Poly Haven's free library.
+  3. CREATE FROM SCRATCH — Only generate procedural materials or model
+     geometry when neither local nor online assets are suitable.
+
+  EXCEPTION: If the user explicitly asks you to build something from
+  scratch (e.g. "make a procedural wood material", "create a brick
+  wall mesh"), follow their instruction — do not substitute an asset.
+
+  # Stability Warnings
+
+  **CRITICAL — Do NOT call these operators** (they crash Bforartists):
+  - bpy.ops.object.auto_sync_object_data_name() — triggers asset shelf race condition
+    during screen refresh, causing EXCEPTION_ACCESS_VIOLATION.
+
+  Avoid switching to edit mode or sculpt mode mid-script unless absolutely necessary.
+  Mode-dependent operators fail silently or crash when the wrong mode is active.
+
   # Object Types & Creation
 
   Object types: Mesh, Curve, Surface, Metaball, Text (Font), Armature, Lattice,

@@ -14,12 +14,18 @@ Also registers a Text Editor side panel for prompt-based interaction.
 __all__ = (
     "ChatHistoryProperties",
     "BFACW_PT_chat_panel",
+    "BFACW_PT_chat_queue",
+    "BFACW_PT_chat_status",
     "BFACW_PT_chat_text_editor",
     "BFACW_OT_chat_send",
     "BFACW_OT_chat_clear",
     "BFACW_OT_chat_stop",
+    "BFACW_OT_chat_queue_send",
+    "BFACW_OT_export_session_log",
+    "BFACW_OT_copy_session_log",
     "BFACW_OT_agent_start",
     "BFACW_OT_agent_stop",
+    "BFACW_OT_agent_restart",
     "chat_timer_update",
     "register",
     "unregister",
@@ -27,6 +33,7 @@ __all__ = (
 
 import json
 import os
+import time
 import threading
 from pathlib import Path
 
@@ -124,10 +131,10 @@ def _draw_reasoning(
     preview_lines = lines[:3]
     remaining_lines = lines[3:]
 
-    # Animate the label with dots while thinking.
+    # Animate the label with Unicode spinner while thinking.
     if is_thinking:
-        dots = [".", "..", "...", "...."]
-        display_label = "{:s}{:s}".format(label, dots[thinking_dots % 4])
+        spinners = ["\u25d0", "\u25d3", "\u25d1", "\u25d2"]  # \u25d0 \u25d3 \u25d1 \u25d2
+        display_label = "{:s} {:s}".format(label, spinners[thinking_dots % 4])
         icon = 'CONSOLE'
     else:
         display_label = label
@@ -194,7 +201,7 @@ def _draw_tool_inline(
     row = tool_box.row()
     row.label(
         text="\u2699 {:s}".format(tool_name),
-        icon='CANCEL' if is_error else 'TOOL_SETTINGS',
+        icon='WARNING' if is_error else 'TOOL_SETTINGS',
     )
     if message_index >= 0:
         op = row.operator("bfacw.copy_message", text="", icon='COPYDOWN')
@@ -266,12 +273,37 @@ _history_save_lock = threading.Lock()
 
 
 def _save_chat_history() -> None:
-    """Save conversation history to disk (thread-safe)."""
-    path = _chat_history_path()
+    """Save conversation history to disk (thread-safe) with versioned copies."""
+    import time as _time
+    base_dir = _chat_history_path().parent
     with _history_save_lock:
         try:
-            with open(str(path), "w", encoding="utf-8") as fh:
+            # Save timestamped copy.
+            ts = _time.strftime("%Y-%m-%d_%H-%M-%S", _time.localtime())
+            versioned_path = base_dir / "default_{:s}.json".format(ts)
+            with open(str(versioned_path), "w", encoding="utf-8") as fh:
                 json.dump(agent_controller._agent_state.conversation_history, fh, indent=2)
+            # Also save to default.json (latest).
+            with open(str(_chat_history_path()), "w", encoding="utf-8") as fh:
+                json.dump(agent_controller._agent_state.conversation_history, fh, indent=2)
+            # Prune old versions: keep last 10.
+            _prune_old_sessions(base_dir)
+        except OSError:
+            pass
+
+
+def _prune_old_sessions(base_dir) -> None:
+    """Keep at most 10 versioned session files, remove oldest."""
+    import re as _re
+    pattern = _re.compile(r"^default_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.json$")
+    files = []
+    for f in base_dir.iterdir():
+        if f.is_file() and pattern.match(f.name):
+            files.append(f)
+    files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+    for old_file in files[10:]:
+        try:
+            old_file.unlink()
         except OSError:
             pass
 
@@ -280,7 +312,7 @@ def _save_chat_history() -> None:
 # Operators
 
 class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
-    """Send the current input to the Coworker agent."""
+    """Send the current input to the Coworker agent (or queue if busy)."""
     bl_idname = "bfacw.chat_send"
     bl_label = "Send"
     bl_description = "Send your message to the Coworker agent"
@@ -293,17 +325,8 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             return {"CANCELLED"}
 
         if not agent_controller._agent_state.mcp_server_running:
-            self.report({"ERROR"}, "Coworker is not running. Start it from Preferences or the Chat panel.")
+            self.report({"WARNING"}, "Coworker is not running. Start it from Preferences or the Chat panel.")
             return {"CANCELLED"}
-
-        # Double-click guard: don't start a new turn while one is running.
-        if agent_controller._agent_state.turn_active:
-            self.report({"WARNING"}, "Already processing a message.")
-            return {"CANCELLED"}
-
-        # Clear input.
-        props.chat_input = ""
-        props.chat_status = "Thinking..."
 
         # Sync preferences to config, then read LLM config.
         prefs = context.preferences.addons[__package__].preferences
@@ -317,11 +340,29 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             api_key = llm_cfg.remote_api_key
             model = llm_cfg.remote_model or None
 
-        # Run the conversation turn in a background thread.
-        import threading
-
         # Get effective ports from preferences.
         _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+        actual_mcp = agent_controller._agent_state.mcp_port_actual
+        send_mcp_port = actual_mcp if actual_mcp else _mcp_port
+
+        # If a turn is already active, queue the message.
+        if agent_controller._agent_state.turn_active:
+            pos = agent_controller.enqueue_message(
+                message=message,
+                chat_mode=props.chat_mode,
+                llm_url=llm_url or None,
+                api_key=api_key or None,
+                model=model,
+                mcp_port=send_mcp_port,
+            )
+            props.chat_input = ""
+            self.report({"INFO"}, "Message queued (position {:d})".format(pos))
+            _redraw_areas(context)
+            return {"FINISHED"}
+
+        # Clear input and start processing.
+        props.chat_input = ""
+        props.chat_status = "Thinking..."
 
         def _do_turn():
             try:
@@ -333,13 +374,47 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
                     llm_url=llm_url or None,
                     api_key=api_key or None,
                     model=model,
-                    mcp_port=_mcp_port,
+                    mcp_port=send_mcp_port,
                     chat_mode=props.chat_mode,
                 )
             except Exception as ex:  # pylint: disable=broad-exception-caught
                 agent_controller._agent_state.error = str(ex)
             finally:
                 _save_chat_history()
+                # Auto-dequeue next message if queue is not empty.
+                _try_dequeue_next()
+                _update_status("Idle")
+                _redraw_areas_safe()
+
+        def _try_dequeue_next():
+            """Try to process the next queued message."""
+            next_msg = agent_controller.dequeue_message()
+            if next_msg:
+                props.chat_status = "Processing queued message..."
+                _redraw_areas_safe()
+                # Start processing the next message in a new thread.
+                import threading as _threading
+                _threading.Thread(target=_do_turn_from_queue, args=(next_msg,), daemon=True).start()
+
+        def _do_turn_from_queue(item: dict):
+            """Process a message from the queue."""
+            try:
+                agent_controller.run_conversation_turn(
+                    user_message=item["message"],
+                    on_text=None,
+                    on_reasoning=lambda r: _update_streaming(r),
+                    on_status=lambda s: _update_status(s),
+                    llm_url=item.get("llm_url"),
+                    api_key=item.get("api_key"),
+                    model=item.get("model"),
+                    mcp_port=item.get("mcp_port", 0),
+                    chat_mode=item.get("chat_mode", "AGENT"),
+                )
+            except Exception as ex:  # pylint: disable=broad-exception-caught
+                agent_controller._agent_state.error = str(ex)
+            finally:
+                _save_chat_history()
+                _try_dequeue_next()
                 _update_status("Idle")
                 _redraw_areas_safe()
 
@@ -351,6 +426,7 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             """Called when reasoning or streaming text arrives — refresh UI."""
             _redraw_areas_safe()
 
+        import threading
         thread = threading.Thread(target=_do_turn, daemon=True)
         thread.start()
 
@@ -377,6 +453,78 @@ class BFACW_OT_chat_clear(Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
+class BFACW_OT_queue_clear(Operator):  # type: ignore[misc]
+    """Clear all queued messages."""
+    bl_idname = "bfacw.queue_clear"
+    bl_label = "Clear Queue"
+    bl_description = "Remove all queued messages from the message queue"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        agent_controller._message_queue.clear()
+        self.report({"INFO"}, "Message queue cleared")
+        _redraw_areas(context)
+        return {"FINISHED"}
+
+
+class BFACW_OT_queue_show(Operator):  # type: ignore[misc]
+    """Show queued messages in a popup."""
+    bl_idname = "bfacw.queue_show"
+    bl_label = "Show Queue"
+    bl_description = "Display all queued messages in a popup menu"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        queue_items = agent_controller._message_queue.get_all()
+        if not queue_items:
+            self.report({"INFO"}, "Queue is empty")
+            return {"CANCELLED"}
+
+        def _draw_menu(menu, _context):
+            layout = menu.layout
+            layout.label(
+                text="Queued Messages ({:d})".format(len(queue_items)),
+                icon='FORWARD',
+            )
+            for idx, item in enumerate(queue_items):
+                msg = item.get("message", "")
+                mode = item.get("chat_mode", "AGENT")
+                preview = msg[:60] + ("..." if len(msg) > 60 else "")
+                row = layout.row()
+                row.label(text="[{:d}] [{:s}] {:s}".format(idx + 1, mode, preview))
+
+        context.window_manager.popup_menu(
+            _draw_menu,
+            title="Message Queue",
+            icon='FORWARD',
+        )
+        return {"FINISHED"}
+
+
+class BFACW_OT_export_session_log(Operator):  # type: ignore[misc]
+    """Export the current session to a Blender text datablock."""
+    bl_idname = "bfacw.export_session_log"
+    bl_label = "Export Session Log"
+    bl_description = "Export full session history, system prompt, and version info to a text block"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        agent_controller.export_session_log()
+        self.report({"INFO"}, "Session log exported to text block")
+        _redraw_areas(context)
+        return {"FINISHED"}
+
+
+class BFACW_OT_copy_session_log(Operator):  # type: ignore[misc]
+    """Copy the session log to the clipboard."""
+    bl_idname = "bfacw.copy_session_log"
+    bl_label = "Copy Session Log"
+    bl_description = "Copy full session history to clipboard"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        log_text = agent_controller.export_session_log_to_clipboard()
+        context.window_manager.clipboard = log_text
+        self.report({"INFO"}, "Session log copied to clipboard")
+        return {"FINISHED"}
+
+
 class BFACW_OT_chat_stop(Operator):  # type: ignore[misc]
     """Stop the current generation."""
     bl_idname = "bfacw.chat_stop"
@@ -389,6 +537,49 @@ class BFACW_OT_chat_stop(Operator):  # type: ignore[misc]
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
         props.chat_status = "Stopped"
+        _redraw_areas(context)
+        return {"FINISHED"}
+
+
+class BFACW_OT_chat_queue_send(Operator):  # type: ignore[misc]
+    """Queue the current input message for later processing."""
+    bl_idname = "bfacw.chat_queue_send"
+    bl_label = "Queue Message"
+    bl_description = "Add the current message to the queue for processing after the current turn"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        wm = context.window_manager
+        props = wm.bfacw_chat_props  # type: ignore[attr-defined]
+        message = props.chat_input.strip()
+        if not message:
+            self.report({"WARNING"}, "Nothing to queue")
+            return {"CANCELLED"}
+
+        prefs = context.preferences.addons[__package__].preferences
+        _sync_prefs_to_config(prefs)
+        llm_cfg = llm_manager.get_config()
+        llm_url = None
+        api_key = None
+        model = None
+        if llm_cfg.mode == "remote":
+            llm_url = llm_cfg.remote_api_url
+            api_key = llm_cfg.remote_api_key
+            model = llm_cfg.remote_model or None
+
+        _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+        actual_mcp = agent_controller._agent_state.mcp_port_actual
+        send_mcp_port = actual_mcp if actual_mcp else _mcp_port
+
+        pos = agent_controller.enqueue_message(
+            message=message,
+            chat_mode=props.chat_mode,
+            llm_url=llm_url or None,
+            api_key=api_key or None,
+            model=model,
+            mcp_port=send_mcp_port,
+        )
+        props.chat_input = ""
+        self.report({"INFO"}, "Queued (position {:d})".format(pos))
         _redraw_areas(context)
         return {"FINISHED"}
 
@@ -440,62 +631,203 @@ class BFACW_OT_copy_message(Operator):  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
-# @Mention Autocomplete (Tier 2)
+# @Mention System (Tier 2+)
+
+# Mention categories with their data sources and icons.
+_MENTION_CATEGORIES = {
+    "object": {
+        "label": "Objects",
+        "icon": 'OUTLINER_OB_MESH',
+        "data": lambda: [
+            {"name": obj.name, "type": obj.type, "category": "object"}
+            for obj in bpy.data.objects
+        ],
+    },
+    "material": {
+        "label": "Materials",
+        "icon": 'MATERIAL',
+        "data": lambda: [
+            {"name": mat.name, "type": "MAT", "category": "material"}
+            for mat in bpy.data.materials
+        ],
+    },
+    "collection": {
+        "label": "Collections",
+        "icon": 'OUTLINER_COLLECTION',
+        "data": lambda: [
+            {"name": col.name, "type": "COL", "category": "collection"}
+            for col in bpy.data.collections
+        ],
+    },
+    "nodegroup": {
+        "label": "Node Groups",
+        "icon": 'NODETREE',
+        "data": lambda: [
+            {"name": ng.name, "type": ng.type or "NODE", "category": "nodegroup"}
+            for ng in bpy.data.node_groups
+        ],
+    },
+    "world": {
+        "label": "Worlds",
+        "icon": 'WORLD',
+        "data": lambda: [
+            {"name": w.name, "type": "WORLD", "category": "world"}
+            for w in bpy.data.worlds
+        ],
+    },
+    "action": {
+        "label": "Actions",
+        "icon": 'ACTION',
+        "data": lambda: [
+            {"name": a.name, "type": "ACT", "category": "action"}
+            for a in bpy.data.actions
+        ],
+    },
+}
+
+
+def _collect_all_mentionables() -> list[dict]:
+    """Collect all mentionable items from all categories."""
+    items = []
+    for cat_key, cat_info in _MENTION_CATEGORIES.items():
+        try:
+            items.extend(cat_info["data"]())
+        except Exception:
+            pass
+    return items
+
+
+def _filter_mentionables(
+    items: list[dict],
+    filter_text: str = "",
+    category: str = "",
+) -> list[dict]:
+    """Filter mentionable items by text and category."""
+    filtered = items
+    if category and category in _MENTION_CATEGORIES:
+        filtered = [i for i in filtered if i.get("category") == category]
+    if filter_text:
+        filter_lower = filter_text.lower()
+        filtered = [i for i in filtered if filter_lower in i["name"].lower()]
+    return filtered
+
 
 class BFACW_OT_mention_search(Operator):  # type: ignore[misc]
-    """Search for scene objects by name and insert @mention into chat."""
+    """Search for scene items by name and insert @mention into chat."""
     bl_idname = "bfacw.mention_search"
-    bl_label = "@ Mention Object"
-    bl_description = "Search scene objects and insert an @mention into the chat input"
+    bl_label = "@ Mention"
+    bl_description = "Search objects, materials, collections, and more to insert @mention"
 
-    def execute(self, context: bpy.types.Context) -> set[str]:
-        wm = context.window_manager
-
-        # Collect all scene objects.
-        objects = []
-        for obj in bpy.data.objects:
-            objects.append({
-                "name": obj.name,
-                "type": obj.type,
-            })
-
-        if not objects:
-            self.report({"INFO"}, "No objects in the scene.")
-            return {"CANCELLED"}
-
-        # Sort by name.
-        objects.sort(key=lambda o: o["name"].lower())
-
-        def _draw_menu(menu, _context):
-            layout = menu.layout
-            layout.label(text="Select an object to @mention:", icon='OUTLINER_OB_MESH')
-            for obj in objects[:50]:  # Limit to 50 to avoid huge menus.
-                op = layout.operator(
-                    "bfacw.mention_insert",
-                    text="[{:s}] {:s}".format(obj["type"], obj["name"]),
-                    icon='OBJECT_DATA',
-                )
-                op.object_name = obj["name"]
-
-        wm.popup_menu(_draw_menu, title="@ Mention Object", icon='OUTLINER_OB_MESH')
-        return {"FINISHED"}
-
-
-class BFACW_OT_mention_insert(Operator):  # type: ignore[misc]
-    """Insert an @mentioned object name into the chat input."""
-    bl_idname = "bfacw.mention_insert"
-    bl_label = "Insert @mention"
-    bl_description = "Insert the selected object name as an @mention in the chat input"
-
-    object_name: StringProperty(  # type: ignore[valid-type]
-        name="Object Name",
+    filter_text: StringProperty(  # type: ignore[valid-type]
+        name="Filter",
+        default="",
+    )
+    category: StringProperty(  # type: ignore[valid-type]
+        name="Category",
         default="",
     )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
-        current = props.chat_input
+
+        # Auto-detect filter from input: if user typed @word, use word as filter.
+        current_input = props.chat_input or ""
+        if not self.filter_text and "@" in current_input:
+            # Find the last @ and extract text after it.
+            last_at = current_input.rfind("@")
+            after_at = current_input[last_at + 1:]
+            # If there's text after @ without a space, use it as filter.
+            if after_at and not after_at.startswith(" "):
+                self.filter_text = after_at.split()[-1] if after_at.split() else ""
+
+        # Collect and filter items.
+        all_items = _collect_all_mentionables()
+        filtered = _filter_mentionables(all_items, self.filter_text, self.category)
+
+        if not filtered:
+            self.report({"INFO"}, "No matches found.")
+            return {"CANCELLED"}
+
+        def _draw_menu(menu, _context):
+            layout = menu.layout
+
+            # Category filter buttons.
+            row = layout.row(align=True)
+            row.label(text="", icon='VIEWZOOM')
+            op = row.operator("bfacw.mention_search", text="All", icon='NONE')
+            op.category = ""
+            op.filter_text = self.filter_text
+            for cat_key, cat_info in _MENTION_CATEGORIES.items():
+                op = row.operator(
+                    "bfacw.mention_search",
+                    text="",
+                    icon=cat_info["icon"],
+                )
+                op.category = cat_key
+                op.filter_text = self.filter_text
+
+            layout.separator()
+
+            # Filtered results.
+            display_items = filtered[:50]  # Limit to 50.
+            if self.filter_text:
+                layout.label(
+                    text="{:d} matches for '{:s}'".format(len(display_items), self.filter_text),
+                    icon='SORTBYEXT',
+                )
+            else:
+                layout.label(
+                    text="{:d} items".format(len(display_items)),
+                    icon='INFO',
+                )
+
+            for item in display_items:
+                cat = item.get("category", "object")
+                cat_info = _MENTION_CATEGORIES.get(cat, _MENTION_CATEGORIES["object"])
+                op = layout.operator(
+                    "bfacw.mention_insert",
+                    text="[{:s}] {:s}".format(item["type"], item["name"]),
+                    icon=cat_info["icon"],
+                )
+                op.object_name = item["name"]
+                op.category = cat
+
+        wm.popup_menu(_draw_menu, title="@ Mention", icon='OUTLINER_OB_MESH')
+        return {"FINISHED"}
+
+
+class BFACW_OT_mention_insert(Operator):  # type: ignore[misc]
+    """Insert an @mentioned item name into the chat input."""
+    bl_idname = "bfacw.mention_insert"
+    bl_label = "Insert @mention"
+    bl_description = "Insert the selected item name as an @mention in the chat input"
+
+    object_name: StringProperty(  # type: ignore[valid-type]
+        name="Item Name",
+        default="",
+    )
+    category: StringProperty(  # type: ignore[valid-type]
+        name="Category",
+        default="object",
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        wm = context.window_manager
+        props = wm.bfacw_chat_props  # type: ignore[attr-defined]
+        current = props.chat_input or ""
+
+        # Remove any partial @mention that was being typed.
+        # Find the last @ and remove everything after it.
+        if "@" in current:
+            last_at = current.rfind("@")
+            before_at = current[:last_at]
+            after_at = current[last_at + 1:]
+            # If there's text after @ without a space, it's a partial mention.
+            if after_at and not after_at.startswith(" "):
+                current = before_at
+
+        # Insert the mention.
         mention = "@{:s}".format(self.object_name)
         if current and not current.endswith(" "):
             mention = " " + mention
@@ -625,9 +957,11 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
 
         if mcp_to_blender_server.is_running():
             self.report({"INFO"}, "Bridge server already running")
-            _bridge_port, _, _ = effective_ports(
-                context.preferences.addons[__package__].preferences)
-            props.chat_status = "External Harness — Bridge on port {:d}".format(_bridge_port)
+            actual = mcp_to_blender_server.get_actual_port()
+            if actual:
+                props.chat_status = "External Harness — Bridge on port {:d}".format(actual)
+            else:
+                props.chat_status = "External Harness — Bridge running"
             return {"FINISHED"}
 
         if bpy.app.background:
@@ -649,8 +983,13 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
             persistent=True,
         )
 
-        props.chat_status = "External Harness — Bridge on port {:d}".format(_bridge_port)
-        self.report({"INFO"}, "Bridge server started on port {:d}".format(_bridge_port))
+        actual = mcp_to_blender_server.get_actual_port()
+        if actual:
+            props.chat_status = "External Harness — Bridge on port {:d}".format(actual)
+            self.report({"INFO"}, "Bridge server started on port {:d}".format(actual))
+        else:
+            props.chat_status = "External Harness — Bridge running"
+            self.report({"INFO"}, "Bridge server started")
         _redraw_areas(context)
         return {"FINISHED"}
 
@@ -677,7 +1016,11 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
                 first_interval=mcp_to_blender_server.TIMER_INTERVAL_ACTIVE,
                 persistent=True,
             )
-            self.report({"INFO"}, "Bridge server started")
+            actual_bridge = mcp_to_blender_server.get_actual_port()
+            if actual_bridge:
+                self.report({"INFO"}, "Bridge server started on port {:d}".format(actual_bridge))
+            else:
+                self.report({"INFO"}, "Bridge server started")
 
         # Step 2: Start the MCP HTTP server.
         if not agent_controller._agent_state.mcp_server_running:
@@ -687,7 +1030,11 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
             if proc is None:
                 self.report({"ERROR"}, agent_controller._agent_state.error)
                 return {"CANCELLED"}
-            self.report({"INFO"}, "MCP server started on port {:d}".format(_mcp_port))
+            actual_mcp = agent_controller._agent_state.mcp_port_actual
+            if actual_mcp:
+                self.report({"INFO"}, "MCP server started on port {:d}".format(actual_mcp))
+            else:
+                self.report({"INFO"}, "MCP server started on port {:d}".format(_mcp_port))
 
         # Step 3: Start the LLM backend (only in local mode).
         # This can be slow (model download or server startup), so it runs
@@ -735,17 +1082,18 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
                         return
                     # Warm up tools + post welcome message (background thread).
                     _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+                    actual_mcp = agent_controller._agent_state.mcp_port_actual
+                    warmup_mcp = actual_mcp if actual_mcp else _mcp_port
                     agent_controller.warmup_agent(
                         on_status=lambda s: bpy.app.timers.register(
                             lambda s=s: setattr(props, "chat_status", s) or _redraw_areas_safe(),
                             first_interval=0.0,
                         ),
-                        mcp_port=_mcp_port,
+                        mcp_port=warmup_mcp,
                     )
                     # Mark connected on the main thread after warmup completes.
                     _set_chat_status("Connected")
 
-                import threading
                 thread = threading.Thread(target=_start_llm_backend, daemon=True)
                 thread.start()
                 props.chat_status = "Starting LLM backend..."
@@ -763,12 +1111,14 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
                             _set_chat_status("Error: " + _err)
                             return
                     _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+                    actual_mcp = agent_controller._agent_state.mcp_port_actual
+                    warmup_mcp = actual_mcp if actual_mcp else _mcp_port
                     agent_controller.warmup_agent(
                         on_status=lambda s: bpy.app.timers.register(
                             lambda s=s: setattr(props, "chat_status", s) or _redraw_areas_safe(),
                             first_interval=0.0,
                         ),
-                        mcp_port=_mcp_port,
+                        mcp_port=warmup_mcp,
                     )
                     _set_chat_status("Connected")
                 threading.Thread(target=_warmup_existing, daemon=True).start()
@@ -777,12 +1127,14 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
             # In remote mode, no LLM backend is started.
             def _warmup_remote():
                 _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
+                actual_mcp = agent_controller._agent_state.mcp_port_actual
+                warmup_mcp = actual_mcp if actual_mcp else _mcp_port
                 agent_controller.warmup_agent(
                     on_status=lambda s: bpy.app.timers.register(
                         lambda s=s: setattr(props, "chat_status", s) or _redraw_areas_safe(),
                         first_interval=0.0,
                     ),
-                    mcp_port=_mcp_port,
+                    mcp_port=warmup_mcp,
                 )
                 bpy.app.timers.register(
                     lambda: setattr(props, "chat_status", "Connected") or _redraw_areas_safe(),
@@ -835,21 +1187,99 @@ class BFACW_OT_agent_stop(Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
+class BFACW_OT_agent_restart(Operator):  # type: ignore[misc]
+    """Restart the Coworker agent (stop then start)."""
+    bl_idname = "bfacw.agent_restart"
+    bl_label = "Restart Coworker"
+    bl_description = "Stop all components and restart the Coworker agent"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        wm = context.window_manager
+        props = wm.bfacw_chat_props  # type: ignore[attr-defined]
+
+        # Stop first.
+        props.chat_status = "Stopping..."
+        _redraw_areas(context)
+
+        llm_manager.stop_local_llama()
+        agent_controller.stop_mcp_server()
+        if mcp_to_blender_server.is_running():
+            from . import execute_interactive
+            mcp_to_blender_server.stop()
+            if bpy.app.timers.is_registered(execute_interactive.run):
+                bpy.app.timers.unregister(execute_interactive.run)
+
+        agent_controller._agent_state.mcp_server_running = False
+
+        # Start again after a brief delay.
+        def _deferred_start():
+            props.chat_status = "Starting..."
+            _redraw_areas_safe()
+            # Re-register the bridge timer.
+            if not mcp_to_blender_server.is_running():
+                from . import execute_interactive
+                prefs = context.preferences.addons[__package__].preferences
+                _bridge_port, _, _ = effective_ports(prefs)
+                mcp_to_blender_server.start(prefs.host, _bridge_port)
+                bpy.app.timers.register(
+                    execute_interactive.run,
+                    first_interval=mcp_to_blender_server.TIMER_INTERVAL_ACTIVE,
+                    persistent=True)
+            # Start MCP server.
+            agent_controller.start_mcp_server()
+            props.chat_status = "Connected"
+            _redraw_areas_safe()
+            return None  # Don't repeat timer.
+
+        bpy.app.timers.register(_deferred_start, first_interval=0.5)
+        return {"FINISHED"}
+
+
 # ---------------------------------------------------------------------------
 # Timer for UI updates
 
+# Track whether we already opened the mention popup for the current @
+_mention_popup_open = False
+
+
 def chat_timer_update() -> float | None:
     """
-    Timer callback that periodically redraws chat areas and animates
-    the "Thinking..." indicator.
+    Timer callback that periodically redraws chat areas, animates
+    the "Thinking..." indicator, and auto-opens the mention popup
+    when the user types @ in the input field.
 
     Registered when the add-on starts, runs while Blender is alive.
     """
+    global _mention_popup_open
     from . import agent_controller as _ac
 
     # Animate thinking dots.
     if _ac._agent_state.is_thinking:
         _ac._agent_state.thinking_dots += 1
+
+    # Auto-open @mention popup when user types @ in input.
+    try:
+        for wm in bpy.data.window_managers:
+            props = getattr(wm, "bfacw_chat_props", None)
+            if props is None:
+                continue
+            text = props.chat_input or ""
+            if "@" in text and not _ac._agent_state.is_thinking:
+                last_at = text.rfind("@")
+                after = text[last_at + 1:]
+                # Only trigger if @ is at end or followed by text (not space).
+                if not after or (not after.startswith(" ") and len(after) <= 30):
+                    if not _mention_popup_open:
+                        _mention_popup_open = True
+                        # Defer popup to avoid timer re-entrancy.
+                        bpy.app.timers.register(
+                            lambda: _open_mention_for_at(text),
+                            first_interval=0.0,
+                        )
+            else:
+                _mention_popup_open = False
+    except Exception:
+        pass
 
     # Redraw all chat panels.
     for wm in bpy.data.window_managers:
@@ -862,17 +1292,32 @@ def chat_timer_update() -> float | None:
     return 0.5  # Check every 0.5 seconds.
 
 
+def _open_mention_for_at(text: str) -> float | None:
+    """Open the mention popup filtered by the text after @."""
+    global _mention_popup_open
+    try:
+        last_at = text.rfind("@")
+        after = text[last_at + 1:] if last_at >= 0 else ""
+        # Don't open if user already inserted a mention (space after @).
+        if after.startswith(" "):
+            _mention_popup_open = False
+            return None
+        bpy.ops.bfacw.mention_search(filter_text=after)
+    except Exception:
+        pass
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Panels
 
 class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
-    """Chat panel in the 3D Viewport sidebar."""
-    bl_label = "Coworker Chat"
+    """Main chat panel in the 3D Viewport sidebar — input and messages."""
+    bl_label = "Coworker"
     bl_idname = "BFACW_PT_chat_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = "Coworker"
-    bl_options = {'DEFAULT_CLOSED'}
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -886,173 +1331,94 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         prefs = context.preferences.addons[__package__].preferences
         is_harness = (prefs.operating_mode == "EXTERNAL_HARNESS")
 
-        # Agent control buttons.
+        # ── Agent control buttons (compact) ──
         row = layout.row(align=True)
-        row.scale_y = 2.0
+        row.scale_y = 1.8
         if is_harness:
             if mcp_to_blender_server.is_running():
-                row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop Bridge")
+                actual = mcp_to_blender_server.get_actual_port()
+                tip = "Bridge running on port {:d}".format(actual) if actual else "Stop Bridge"
+                row.operator("bfacw.agent_stop", icon="X", text="Stop Bridge")
             else:
                 row.operator("bfacw.agent_start", icon="PLAY", text="Start Bridge")
         else:
             if state.mcp_server_running:
-                row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop Coworker")
+                row.operator("bfacw.agent_stop", icon="X", text="Stop")
             else:
-                row.operator("bfacw.agent_start", icon="PLAY", text="Start Coworker")
+                row.operator("bfacw.agent_start", icon="PLAY", text="Start")
 
-        # Status.
+        # ── Compact status line ──
         if is_harness:
-            bridge_running = mcp_to_blender_server.is_running()
-            if bridge_running:
-                _bridge_port, _, _ = effective_ports(prefs)
-                status = "External Harness — Bridge on port {:d}".format(_bridge_port)
-            else:
-                status = "Bridge Offline"
+            status = "Bridge Running" if mcp_to_blender_server.is_running() else "Bridge Offline"
+            is_ok = mcp_to_blender_server.is_running()
         else:
             status = props.chat_status
             if state.is_thinking:
-                # Animated thinking dots (cycled by timer).
-                dots = [".", "..", "...", "...."]
-                status = "Thinking{:s}".format(dots[state.thinking_dots % 4])
+                spinners = ["\u25d0", "\u25d3", "\u25d1", "\u25d2"]
+                elapsed = time.time() - state.thinking_start_time if state.thinking_start_time else 0.0
+                status = "Thinking {:s} ({:.0f}s)".format(spinners[state.thinking_dots % 4], elapsed)
             elif not state.mcp_server_running:
                 status = "Offline"
             elif state.error:
                 status = "Error: {:s}".format(state.error)
+            is_ok = state.mcp_server_running
 
-        row = layout.row()
-        is_ok = (mcp_to_blender_server.is_running() if is_harness else state.mcp_server_running)
-        row.label(text="Status:", icon=(
+        status_icon = (
             'CHECKMARK' if is_ok and not state.is_thinking else
             'SORTTIME' if state.is_thinking else
-            'ERROR' if state.error else
-            'X'
-        ))
-        if len(status) > 40 or "\n" in status:
-            # Long status (e.g. startup errors with the llama-server log tail)
-            # — wrap across multiple lines instead of clipping to one.
-            _draw_multiline(layout, status, width=_WRAP_WIDTH)
-        else:
-            row.label(text=status)
+            'WARNING' if state.error else 'ERROR'
+        )
+        status_row = layout.row()
+        status_row.label(text=status, icon=status_icon)
+        # Long error messages (traceback, server logs) — show multiline.
+        if state.error and len(status) > 60:
+            _draw_multiline(layout, state.error)
 
-        # Liveness dots (Tier 1).
-        if not is_harness and state.mcp_server_running:
-            agent_controller._check_liveness()
-            liveness_row = layout.row(align=True)
-            liveness_row.label(
-                text="Bridge: {:s}".format("\u25cf" if state.bridge_live else "\u25cb"),
-                icon='NETWORK_DRIVE',
-            )
-            liveness_row.label(
-                text="MCP: {:s}".format("\u25cf" if state.mcp_live else "\u25cb"),
-                icon='SETTINGS',
-            )
-            liveness_row.label(
-                text="LLM: {:s}".format("\u25cf" if state.llm_live else "\u25cb"),
-                icon='CONSOLE',
-            )
-
-        # Mode indicator.
-        if not is_harness:
-            mode_row = layout.row(align=True)
-            if prefs.operating_mode == "REMOTE_API":
-                mode_row.label(text="Mode: Remote API", icon='URL')
-            else:
-                mode_row.label(text="Mode: Local LLM", icon='CONSOLE')
-
-        # Tool count.
-        if not is_harness and state.mcp_server_running:
-            if state.tool_count > 0:
-                layout.label(text="Tools: {:d} loaded".format(state.tool_count), icon='MODIFIER')
-            else:
-                layout.label(
-                    text="Tools: none loaded — MCP may still be starting",
-                    icon='ERROR',
-                )
-
-        # LLM info.
-        if not is_harness:
-            llm_state = llm_manager.get_state()
-            if llm_state.is_running:
-                layout.label(text="Model: {:s}".format(llm_state.model_name or "Local LLM"), icon='CONSOLE')
-            llm_cfg = llm_manager.get_config()
-            if llm_cfg.mode == "remote" and llm_cfg.remote_model:
-                layout.label(text="Model: {:s}".format(llm_cfg.remote_model), icon='WORLD')
-
-        # ── External Harness: Config & Instructions ──
-        if is_harness and mcp_to_blender_server.is_running():
-            box = layout.box()
-            box.label(text="External MCP Client", icon='WORLD')
-
-            # Primary action: open preferences for full step-by-step setup.
-            row = box.row(align=True)
-            row.scale_y = 1.5
-            row.operator("bfacw.open_harness_prefs", icon="PREFERENCES", text="Configure Harness")
-
-            # Quick-copy for power users who already know their setup.
-            row = box.row(align=True)
-            row.prop(prefs, "harness_preset", text="")
-            op = row.operator("bfacw.copy_mcp_config", icon="COPYDOWN", text="Copy Config")
-            op.client_type = prefs.harness_preset
-
-            # Status line.
-            _bridge_port, _, _ = effective_ports(prefs)
-            box.label(
-                text="Bridge running on port {:d}".format(_bridge_port),
-                icon='CHECKMARK',
-            )
-
-            # MCP server mode selector.
-            box.separator()
-            box.label(text="MCP Server Mode:", icon='SETTINGS')
-            box.prop(prefs, "mcp_server_mode", expand=True)
-
-            if prefs.mcp_server_mode == "NETWORK":
-                box.prop(prefs, "mcp_server_host")
-                row = box.row(align=True)
-                row.prop(prefs, "mcp_server_port_override")
-                if prefs.mcp_server_host not in ("127.0.0.1", "localhost", "::1"):
-                    box.label(
-                        text="\u26a0 Binding to non-localhost exposes the MCP server to your network!",
-                        icon='ERROR',
-                    )
-                row = box.row(align=True)
-                if agent_controller._agent_state.mcp_server_running:
-                    row.operator("bfacw.mcp_server_stop", icon="CANCEL", text="Stop MCP Server")
-                else:
-                    row.operator("bfacw.mcp_server_start", icon="PLAY", text="Start MCP Server")
-
-            layout.separator()
-
-        # ── In harness mode, disable chat input ──
+        # ── External Harness mode ──
         if is_harness:
-            layout.label(text="Chat is handled by your external MCP client.", icon='INFO')
-            layout.label(text="Messages below are read-only monitoring.", icon='INFO')
-        else:
-            # Agent/Ask mode toggle (Tier 1).
-            row = layout.row(align=True)
-            row.prop(props, "chat_mode", expand=True)
+            if mcp_to_blender_server.is_running():
+                box = layout.box()
+                box.label(text="External MCP Client", icon='WORLD')
+                row = box.row(align=True)
+                row.scale_y = 1.2
+                row.operator("bfacw.open_harness_prefs", icon="PREFERENCES", text="Configure")
+                row = box.row(align=True)
+                row.prop(prefs, "harness_preset", text="")
+                op = row.operator("bfacw.copy_mcp_config", icon="COPYDOWN", text="Copy")
+                op.client_type = prefs.harness_preset
+            layout.label(text="Chat handled by external client.", icon='INFO')
+            return
 
-            layout.separator()
-
-            # Input area (multi-line textbox).
-            layout.textbox(props, "chat_input")
-
-            # @mention button (Tier 2).
-            row = layout.row(align=True)
-            row.operator("bfacw.mention_search", icon="OUTLINER_OB_MESH", text="@ Mention Object")
-
-            # Action buttons.
-            row = layout.row(align=True)
-            row.scale_y = 1.5
-            if state.is_thinking:
-                row.operator("bfacw.chat_stop", icon="PAUSE", text="Stop")
-            else:
-                row.operator("bfacw.chat_send", icon="PLAY", text="Send")
-            row.operator("bfacw.chat_clear", icon="X", text="New Thread")
+        # ── Mode toggle ──
+        row = layout.row(align=True)
+        row.prop(props, "chat_mode", expand=True)
 
         layout.separator()
 
-        # Conversation history.
+        # ── Input area ──
+        layout.textbox(props, "chat_input")
+
+        # @mention button.
+        row = layout.row(align=True)
+        row.operator("bfacw.mention_search", icon="OUTLINER_OB_MESH", text="@ Mention")
+
+        # ── Action buttons ──
+        if state.is_thinking:
+            # During thinking: Stop + Queue side by side.
+            btn_row = layout.row(align=True)
+            btn_row.scale_y = 1.5
+            btn_row.operator("bfacw.chat_queue_send", icon="ADD", text="Queue")
+            btn_row.operator("bfacw.chat_stop", icon="PAUSE", text="Stop")
+        else:
+            # Idle: Send + New Thread.
+            btn_row = layout.row(align=True)
+            btn_row.scale_y = 1.5
+            btn_row.operator("bfacw.chat_send", icon="PLAY", text="Send")
+            btn_row.operator("bfacw.chat_clear", icon="X", text="New Thread")
+
+        layout.separator()
+
+        # ── Conversation history ──
         history = state.conversation_history
         if history:
             # Display order toggle + message count.
@@ -1062,9 +1428,11 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 props, "chat_newest_first",
                 icon='SORTTIME', text="Newest First",
             )
+            # Count displayable messages (exclude system/internal).
+            displayable = sum(1 for m in history if m.get("role") != "system")
             _draw_multiline(
                 hist_box,
-                "({:d} messages)".format(len(history)),
+                "({:d} messages)".format(displayable),
             )
 
             # Group messages into turns (each user message starts a new turn).
@@ -1089,149 +1457,247 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             )
 
             for turn_idx, turn in enumerate(turn_iter):
-                # Separate messages by role, preserving chronological order
-                # for interleaved reasoning+tool display.
                 user_msg = None
-                process_msgs: list[dict] = []  # reasoning + tool, in order
+                process_msgs = []
                 conclusion_msg = None
                 for msg in turn:
                     role = msg.get("role", "")
-                    if role == "user":
+                    c2 = msg.get("content", "")
+                    is_sys = (role == "user" and isinstance(c2, str) and c2.startswith("[System:"))
+                    if role == "user" and not is_sys:
                         user_msg = msg
-                    elif role in ("reasoning", "tool"):
+                    elif role in ("reasoning", "tool") or is_sys:
                         process_msgs.append(msg)
                     elif role == "assistant":
-                        if msg.get("tool_calls"):
-                            pass  # Intermediate "running tools" — skip
-                        else:
+                        if not msg.get("tool_calls"):
                             conclusion_msg = msg
-
+                turn_num = turns.index(turn) + 1  # Per user-message turn number
                 if not user_msg:
+                    if conclusion_msg:
+                        tb = hist_box.box()
+                        cr = tb.row()
+                        cr.label(text="Coworker:", icon="CONSOLE")
+                        op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
+                        op.message_index = history.index(conclusion_msg)
+                        _draw_multiline(tb, conclusion_msg.get("content", ""))
                     continue
-
-                # ── Outer turn box ──────────────────────────────
+                has_proc = bool(process_msgs)
                 turn_box = hist_box.box()
-
-                # ── Collapsible: user prompt + process steps ────
-                has_process = bool(process_msgs)
-
-                if has_process:
-                    proc_header, proc_body = turn_box.panel(
-                        "turn_process_{:d}".format(turn_idx),
-                        default_closed=True,
-                    )
-                    # Full user message in header (multiline, wraps).
-                    _draw_multiline(
-                        proc_header,
-                        "You: {:s}".format(user_msg.get("content", "")),
-                    )
-                    op_row = proc_header.row()
-                    op_row.label(text="", icon='USER')
-                    op = op_row.operator(
-                        "bfacw.copy_message", text="", icon='COPYDOWN',
-                    )
+                if has_proc:
+                    has_err = any(p.get("role")=="tool" and ('"status": "error"' in (p.get("content") or "") or (p.get("content") or "").startswith("Error")) for p in process_msgs)
+                    tic = "WARNING" if has_err else ("CHECKMARK" if conclusion_msg else "SORTTIME")
+                    th, tb2 = turn_box.panel("turn_{:d}".format(turn_idx), default_closed=not (turn_idx==0 and state.is_thinking))
+                    hr = th.row(align=True)
+                    hr.label(text="", icon=tic)
+                    hr.label(text="Turn {:d}".format(turn_num))
+                    pv = user_msg.get("content", "")
+                    if len(pv)>80: pv = pv[:80]+"..."
+                    hr.label(text=pv)
+                    op = hr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                     op.message_index = history.index(user_msg)
-
-                    if proc_body:
-                        # Full user message text.
-                        _draw_multiline(proc_body, user_msg.get("content", ""))
-                        proc_body.separator()
-
-                        # Interleaved reasoning + tool steps.
-                        for p_msg in process_msgs:
-                            p_role = p_msg.get("role", "")
-                            if p_role == "reasoning":
-                                _draw_reasoning(
-                                    proc_body,
-                                    p_msg.get("content", ""),
-                                    p_msg.get("label", "Thinking"),
-                                    is_thinking=state.is_thinking,
-                                    thinking_dots=state.thinking_dots,
-                                    message_index=history.index(p_msg),
-                                )
-                            elif p_role == "tool":
-                                t_content = p_msg.get("content", "")
-                                t_summary = p_msg.get("summary", "")
-                                t_name = p_msg.get("name", "")
-                                is_error = (
-                                    '"status": "error"' in (t_content or "") or
-                                    (t_content or "").startswith("Error")
-                                )
-                                display = (
-                                    t_summary if t_summary
-                                    else (t_content or "")
-                                )
-                                if not t_summary and len(display) > 200:
-                                    display = display[:200] + "..."
-                                _draw_tool_inline(
-                                    proc_body, t_name, display,
-                                    is_error,
-                                    message_index=history.index(p_msg),
-                                )
-
-                        # Live streaming preview (inside collapsible).
-                        if (
-                            state.is_thinking
-                            and state.streaming_text
-                            and turn_idx == 0
-                        ):
-                            proc_body.separator()
-                            proc_body.label(
-                                text="Coworker (live):", icon='CONSOLE',
-                            )
-                            _draw_multiline(
-                                proc_body,
-                                state.streaming_text[:300] + "...",
-                            )
+                    if tb2:
+                        tb2.separator()
+                        _draw_multiline(tb2, "You: {:s}".format(user_msg.get("content", "")))
+                        if process_msgs:
+                            tb2.separator()
+                            pb = tb2.box()
+                            pb.label(text="Process ({:d} steps)".format(len(process_msgs)), icon="SORTTIME")
+                            for pm in process_msgs:
+                                pr = pm.get("role", "")
+                                pc = pm.get("content", "")
+                                is_sm = (pr=="user" and isinstance(pc,str) and pc.startswith("[System:"))
+                                if is_sm:
+                                    sb = pb.box()
+                                    sb.label(text="System Context", icon="INFO")
+                                    _draw_multiline(sb, pc)
+                                elif pr=="reasoning":
+                                    _draw_reasoning(pb, pc, pm.get("label","Thinking"), is_thinking=state.is_thinking, thinking_dots=state.thinking_dots, message_index=history.index(pm))
+                                elif pr=="tool":
+                                    tn = pm.get("name","")
+                                    ts = pm.get("summary","")
+                                    ie = ('"status": "error"' in (pc or "") or (pc or "").startswith("Error"))
+                                    d = ts if ts else (pc or "")
+                                    if not ts and len(d)>200: d = d[:200]+"..."
+                                    _draw_tool_inline(pb, tn, d, ie, message_index=history.index(pm))
+                            if state.is_thinking and state.streaming_text and turn_idx==0:
+                                pb.separator()
+                                pb.label(text="Coworker (live):", icon="CONSOLE")
+                                _draw_multiline(pb, state.streaming_text[:300]+"...")
                 else:
-                    # No process steps — show compact user header.
-                    _draw_multiline(
-                        turn_box,
-                        "You: {:s}".format(user_msg.get("content", "")),
-                    )
-                    op_row = turn_box.row()
-                    op_row.label(text="", icon='USER')
-                    op = op_row.operator(
-                        "bfacw.copy_message", text="", icon='COPYDOWN',
-                    )
+                    hr = turn_box.row(align=True)
+                    hr.label(text="", icon="CHECKMARK")
+                    hr.label(text="Turn {:d}".format(turn_num))
+                    op = hr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                     op.message_index = history.index(user_msg)
-
-                # ── Agent conclusion (always visible) ───────────
+                    _draw_multiline(turn_box, "You: {:s}".format(user_msg.get("content", "")))
                 if conclusion_msg:
                     turn_box.separator()
-                    c_row = turn_box.row()
-                    c_row.label(text="Coworker:", icon='CONSOLE')
-                    op = c_row.operator(
-                        "bfacw.copy_message", text="", icon='COPYDOWN',
-                    )
+                    cr = turn_box.row()
+                    cr.label(text="Coworker:", icon="CONSOLE")
+                    op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                     op.message_index = history.index(conclusion_msg)
-                    _draw_multiline(
-                        turn_box,
-                        conclusion_msg.get("content", ""),
-                    )
-
-                # Streaming preview for in-progress turn (no conclusion yet).
-                if (
-                    not conclusion_msg
-                    and state.is_thinking
-                    and state.streaming_text
-                    and turn_idx == 0
-                    and not has_process
-                ):
+                    _draw_multiline(turn_box, conclusion_msg.get("content", ""))
+                if not conclusion_msg and state.is_thinking and state.streaming_text and turn_idx==0 and not has_proc:
                     turn_box.separator()
-                    turn_box.label(
-                        text="Coworker (live):", icon='CONSOLE',
-                    )
-                    _draw_multiline(
-                        turn_box,
-                        state.streaming_text[:300] + "...",
-                    )
+                    turn_box.label(text="Coworker (live):", icon="CONSOLE")
+                    _draw_multiline(turn_box, state.streaming_text[:300]+"...")
 
         else:
             layout.label(
-                text="No messages yet. Start the Coworker and type below.",
+                text="Start a conversation by typing a message and clicking Send.",
                 icon='INFO',
             )
+
+
+class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
+    """Top-level queue panel — shows pending queued messages."""
+    bl_label = "Queue"
+    bl_idname = "BFACW_PT_chat_queue"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Coworker"
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return not bpy.app.background
+
+    def draw(self, context: bpy.types.Context) -> None:
+        layout = self.layout
+        state = agent_controller._agent_state
+        queue_items = agent_controller._message_queue.get_all()
+
+        if not queue_items:
+            layout.label(text="Queue empty", icon='CHECKMARK')
+            return
+
+        layout.label(
+            text="{:d} message(s) queued".format(len(queue_items)),
+            icon='FORWARD',
+        )
+
+        for idx, item in enumerate(queue_items):
+            msg = item.get("message", "")
+            mode = item.get("chat_mode", "AGENT")
+            preview = msg[:60] + ("..." if len(msg) > 60 else "")
+            box = layout.box()
+            hdr = box.row()
+            hdr.label(text="[{:d}] {:s}".format(idx + 1, mode), icon='SORTTIME')
+            _draw_multiline(box, preview)
+
+        # Clear button.
+        row = layout.row(align=True)
+        row.scale_y = 1.0
+        row.operator("bfacw.queue_clear", icon="TRASH", text="Clear Queue")
+
+
+class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
+    """Status sub-panel — health dots, model info, tools, advanced diagnostics."""
+    bl_label = "Status & Diagnostics"
+    bl_idname = "BFACW_PT_chat_status"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Coworker"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return not bpy.app.background
+
+    def draw(self, context: bpy.types.Context) -> None:
+        layout = self.layout
+        wm = context.window_manager
+        props = wm.bfacw_chat_props  # type: ignore[attr-defined]
+        state = agent_controller._agent_state
+        prefs = context.preferences.addons[__package__].preferences
+        is_harness = (prefs.operating_mode == "EXTERNAL_HARNESS")
+
+        # ── Liveness dots ──
+        if not is_harness and state.mcp_server_running:
+            agent_controller._check_liveness()
+            liveness_row = layout.row(align=True)
+            liveness_row.label(
+                text="Bridge: {:s}".format("\u25cf" if state.bridge_live else "\u25cb"),
+                icon='NETWORK_DRIVE',
+            )
+            liveness_row.label(
+                text="MCP: {:s}".format("\u25cf" if state.mcp_live else "\u25cb"),
+                icon='SETTINGS',
+            )
+            liveness_row.label(
+                text="LLM: {:s}".format("\u25cf" if state.llm_live else "\u25cb"),
+                icon='CONSOLE',
+            )
+            layout.separator()
+
+        # ── Restart button ──
+        if state.mcp_server_running or (is_harness and mcp_to_blender_server.is_running()):
+            restart_row = layout.row()
+            restart_row.scale_y = 0.8
+            restart_row.operator("bfacw.agent_restart", icon="LOOP_BACK", text="Restart Coworker")
+
+        # ── Mode indicator ──
+        if not is_harness:
+            mode_row = layout.row(align=True)
+            if prefs.operating_mode == "REMOTE_API":
+                mode_row.label(text="Mode: Remote API", icon='URL')
+            else:
+                mode_row.label(text="Mode: Local LLM", icon='CONSOLE')
+
+        # ── Tool count ──
+        if not is_harness and state.mcp_server_running:
+            if state.tool_count > 0:
+                layout.label(text="Tools: {:d} loaded".format(state.tool_count), icon='MODIFIER')
+            else:
+                layout.label(
+                    text="Tools: none loaded",
+                    icon='WARNING',
+                )
+
+        # ── LLM info ──
+        if not is_harness:
+            llm_state = llm_manager.get_state()
+            if llm_state.is_running:
+                _draw_multiline(layout, "Model: {:s}".format(llm_state.model_name or "Local LLM"))
+            elif llm_state.download_active and llm_state.download_kind == "model":
+                prog_row = layout.row()
+                prog_row.scale_y = 0.6
+                pct = llm_state.download_progress_pct
+                if pct > 0:
+                    prog_row.progress(factor=pct / 100.0, type='BAR')
+                else:
+                    prog_row.label(text="Loading model...", icon='SORTTIME')
+            llm_cfg = llm_manager.get_config()
+            if llm_cfg.mode == "remote" and llm_cfg.remote_model:
+                _draw_multiline(layout, "Model: {:s}".format(llm_cfg.remote_model))
+
+        # ── Export/Copy Log (advanced) ──
+        if not is_harness:
+            layout.separator()
+            row = layout.row(align=True)
+            row.scale_y = 1.2
+            row.operator("bfacw.export_session_log", icon="EXPORT", text="Export Log")
+            row.operator("bfacw.copy_session_log", icon="COPYDOWN", text="Copy Log")
+
+        # ── External Harness MCP server controls ──
+        if is_harness and mcp_to_blender_server.is_running():
+            box = layout.box()
+            box.label(text="MCP Server Mode:", icon='SETTINGS')
+            box.prop(prefs, "mcp_server_mode", expand=True)
+
+            if prefs.mcp_server_mode == "NETWORK":
+                box.prop(prefs, "mcp_server_host")
+                row = box.row(align=True)
+                row.prop(prefs, "mcp_server_port_override")
+                if prefs.mcp_server_host not in ("127.0.0.1", "localhost", "::1"):
+                    box.label(
+                        text="\u26a0 Non-localhost exposes MCP to network!",
+                        icon='ERROR',
+                    )
+                row = box.row(align=True)
+                if agent_controller._agent_state.mcp_server_running:
+                    row.operator("bfacw.mcp_server_stop", icon="CANCEL", text="Stop MCP Server")
+                else:
+                    row.operator("bfacw.mcp_server_start", icon="PLAY", text="Start MCP Server")
 
 
 class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
@@ -1259,14 +1725,14 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
         row = layout.row(align=True)
         if is_harness:
             if mcp_to_blender_server.is_running():
-                row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop Bridge")
+                row.operator("bfacw.agent_stop", icon="X", text="Stop Bridge")
                 row.label(text="Bridge Running", icon='CHECKMARK')
             else:
                 row.operator("bfacw.agent_start", icon="PLAY", text="Start Bridge")
                 row.label(text="Bridge Stopped", icon='X')
         else:
             if state.mcp_server_running:
-                row.operator("bfacw.agent_stop", icon="CANCEL", text="Stop")
+                row.operator("bfacw.agent_stop", icon="X", text="Stop")
                 row.label(text="Running", icon='CHECKMARK')
             else:
                 row.operator("bfacw.agent_start", icon="PLAY", text="Start")
@@ -1302,10 +1768,11 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
 
         # Conversation summary — latest message first.
         history = state.conversation_history
-        if history:
+        display_history = [m for m in history if m.get("role") != "system"]
+        if display_history:
             box = layout.box()
-            box.label(text="History ({:d} messages)".format(len(history)), icon='TEXT')
-            for msg in reversed(history[-10:]):
+            box.label(text="History ({:d} messages)".format(len(display_history)), icon='TEXT')
+            for msg in reversed(display_history[-10:]):
                 role = msg.get("role", "")
                 content = msg.get("content", "")
                 summary = msg.get("summary", "")
@@ -1316,7 +1783,7 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
                     preview = display[:80] + "..." if display and len(display) > 80 else (display or "")
                 else:
                     preview = content[:80] + "..." if content and len(content) > 80 else (content or "")
-                box.label(text="[{:s}] {:s}".format(role, preview))
+                _draw_multiline(box, "[{:s}] {:s}".format(role, preview))
         else:
             layout.label(text="No conversation yet.", icon='INFO')
 
@@ -1352,15 +1819,23 @@ _classes = (
     BFACW_OT_chat_send,
     BFACW_OT_chat_clear,
     BFACW_OT_chat_stop,
+    BFACW_OT_chat_queue_send,
+    BFACW_OT_export_session_log,
+    BFACW_OT_copy_session_log,
+    BFACW_OT_queue_clear,
+    BFACW_OT_queue_show,
     BFACW_OT_mention_search,
     BFACW_OT_mention_insert,
     BFACW_OT_edit_rules,
     BFACW_OT_reload_rules,
     BFACW_OT_agent_start,
     BFACW_OT_agent_stop,
+    BFACW_OT_agent_restart,
     BFACW_OT_copy_message,
 
+    BFACW_PT_chat_queue,
     BFACW_PT_chat_panel,
+    BFACW_PT_chat_status,
     BFACW_PT_chat_text_editor,
 )
 

@@ -223,6 +223,20 @@ def _drop_orphaned_tool_messages(messages: list[dict[str, Any]]) -> list[dict[st
     return cleaned
 
 
+def _strip_think_tags(text: str) -> str:
+    """Strip ``<think>`` / ``</think>`` wrapper tags from Qwen-style reasoning.
+
+    Some local models (Qwen 2.5/3.x, Fable Fusion, etc.) wrap their
+    chain-of-thought in ``<think>...</think>`` blocks inside the
+    ``reasoning_content`` field.  These tags are not part of the
+    reasoning itself and should be removed before display or storage.
+    """
+    import re as _re
+    text = _re.sub(r"\s*<think>\s*", "", text)
+    text = _re.sub(r"\s*</think>\s*", "", text)
+    return text.strip()
+
+
 def _strip_reasoning_from_history(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Remove ``reasoning``-role messages from history before sending to the LLM.
@@ -422,6 +436,11 @@ def _detect_domain_from_scene() -> set[str]:
             if "geometry_nodes" in domains:
                 break
 
+        # Asset Browser: any configured asset libraries.
+        if hasattr(_bpy.context, "preferences") and hasattr(_bpy.context.preferences, "filepaths"):
+            if _bpy.context.preferences.filepaths.asset_libraries:
+                domains.add("asset_browser")
+
     except Exception:
         pass  # Best-effort; not running inside Blender.
 
@@ -537,6 +556,7 @@ class AgentState:
     mcp_server_running: bool = False
     llm_connected: bool = False
     is_thinking: bool = False
+    thinking_start_time: float = 0.0  # Timestamp when thinking started (for elapsed timer)
     status_text: str = "Idle"
     error: str = ""
     tool_count: int = 0  # Number of MCP tools available (0 = not loaded yet)
@@ -559,8 +579,107 @@ class AgentState:
     # ── Vision pipeline ────────────────────────────────────────────
     _pending_image: str | None = None  # Base64 data URI of last screenshot
 
+    # ── Auto port-shuffle tracking ─────────────────────────────────
+    # When a port is in use, the start functions try subsequent ports
+    # and store the actual port used here.  0 = use configured port.
+    bridge_port_actual: int = 0
+    mcp_port_actual: int = 0
+    llm_port_actual: int = 0
+
+    # ── Shutdown tracking ──────────────────────────────────────────
+    _shutting_down: bool = False  # True during graceful shutdown.
+
 
 _agent_state = AgentState()
+
+
+@dataclass
+class MessageQueue:
+    """Queue for pending user messages to be processed sequentially."""
+
+    _queue: list[dict[str, Any]] = field(default_factory=list)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def enqueue(
+        self,
+        message: str,
+        chat_mode: str = "AGENT",
+        llm_url: str | None = None,
+        api_key: str | None = None,
+        model: str | None = None,
+        mcp_port: int = 0,
+    ) -> int:
+        """Add a message to the queue. Returns the queue position (1-indexed)."""
+        with self._lock:
+            item = {
+                "message": message,
+                "chat_mode": chat_mode,
+                "llm_url": llm_url,
+                "api_key": api_key,
+                "model": model,
+                "mcp_port": mcp_port,
+                "queued_at": time.time(),
+            }
+            self._queue.append(item)
+            return len(self._queue)
+
+    def dequeue(self) -> dict[str, Any] | None:
+        """Remove and return the next message from the queue, or None if empty."""
+        with self._lock:
+            if self._queue:
+                return self._queue.pop(0)
+            return None
+
+    def peek(self) -> dict[str, Any] | None:
+        """Return the next message without removing it."""
+        with self._lock:
+            if self._queue:
+                return self._queue[0]
+            return None
+
+    def clear(self) -> None:
+        """Remove all messages from the queue."""
+        with self._lock:
+            self._queue.clear()
+
+    @property
+    def pending_count(self) -> int:
+        """Number of messages waiting in the queue."""
+        with self._lock:
+            return len(self._queue)
+
+    @property
+    def is_empty(self) -> bool:
+        """True if no messages are queued."""
+        return self.pending_count == 0
+
+    def get_all(self) -> list[dict[str, Any]]:
+        """Return a copy of all queued messages."""
+        with self._lock:
+            return list(self._queue)
+
+
+_message_queue = MessageQueue()
+
+
+def enqueue_message(
+    message: str,
+    chat_mode: str = "AGENT",
+    llm_url: str | None = None,
+    api_key: str | None = None,
+    model: str | None = None,
+    mcp_port: int = 0,
+) -> int:
+    """Enqueue a user message for processing. Returns queue position."""
+    return _message_queue.enqueue(
+        message, chat_mode, llm_url, api_key, model, mcp_port,
+    )
+
+
+def dequeue_message() -> dict[str, Any] | None:
+    """Dequeue the next message for processing."""
+    return _message_queue.dequeue()
+
 
 # Set to request the in-flight conversation turn to abort. The conversation
 # loop checks this between iterations and inside the LLM request path.
@@ -572,6 +691,7 @@ def request_stop() -> None:
     print("[🛠️Coworker] request_stop: stop requested")
     _stop_event.set()
     _agent_state.is_thinking = False
+    _agent_state.thinking_start_time = 0.0
 
 
 def clear_stop() -> None:
@@ -955,6 +1075,32 @@ def check_ports_available(
     return result
 
 
+def _find_available_port(preferred: int, max_offset: int = 100) -> int:
+    """Return the first available port starting at *preferred*.
+
+    Tries ``preferred``, ``preferred + 1``, … up to ``preferred + max_offset``.
+    Returns the first port that can be bound, or 0 if none are available.
+    """
+    for offset in range(max_offset + 1):
+        candidate = preferred + offset
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            if sys.platform == "win32":
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            s.bind(("127.0.0.1", candidate))
+            s.close()
+            if offset > 0:
+                print("[🛠️Coworker] _find_available_port: port {:d} in use, shuffled to {:d}".format(
+                    preferred, candidate))
+            return candidate
+        except (OSError, socket.error):
+            s.close()
+            continue
+    print("[🛠️Coworker] _find_available_port: no port available in range {:d}–{:d}".format(
+        preferred, preferred + max_offset))
+    return 0
+
+
 def _resolve_mcp_python() -> tuple[str | None, bool]:
     """Resolve the Python executable and whether to use ``-m blmcp``.
 
@@ -1075,6 +1221,20 @@ def start_mcp_server(
     _kill_process_on_port(port)
     import time
     time.sleep(0.5)  # Let OS release the port.
+
+    # Auto-shuffle: if the port is still in use after killing, find the next
+    # available port so the subprocess doesn't fail to bind.
+    shuffled_port = _find_available_port(port)
+    if shuffled_port == 0:
+        _agent_state.error = (
+            "MCP port {:d} is in use and no subsequent port is available. "
+            "Increase port_offset in Preferences (Advanced tab).".format(port)
+        )
+        return None
+    if shuffled_port != port:
+        print("[🛠️Coworker] start_mcp_server: port {:d} in use, shuffled to {:d}".format(port, shuffled_port))
+        port = shuffled_port
+    _agent_state.mcp_port_actual = port
 
     env = _build_mcp_env(blender_host=blender_host, blender_port=blender_port)
 
@@ -1277,6 +1437,19 @@ def start_mcp_server_network(
     _kill_process_on_port(port)
     import time
     time.sleep(0.5)
+
+    # Auto-shuffle: if the port is still in use, find the next available one.
+    shuffled_port = _find_available_port(port)
+    if shuffled_port == 0:
+        _agent_state.error = (
+            "MCP network port {:d} is in use and no subsequent port is available. "
+            "Increase port_offset in Preferences (Advanced tab).".format(port)
+        )
+        return None
+    if shuffled_port != port:
+        print("[🛠️Coworker] start_mcp_server_network: port {:d} in use, shuffled to {:d}".format(port, shuffled_port))
+        port = shuffled_port
+    _agent_state.mcp_port_actual = port
 
     env = _build_mcp_env(blender_host=blender_host, blender_port=blender_port)
 
@@ -1610,7 +1783,7 @@ def _openai_chat_completions(
     # the ``tools`` JSON parameter, then parse text-based tool calls from
     # the response.
     import time as _time
-    max_retries = 3
+    max_retries = 5
     max_503_retries = 60  # Up to ~120s with exponential backoff for model loading.
     tools_tried = bool(tools)
     _503_attempts = 0
@@ -1641,7 +1814,7 @@ def _openai_chat_completions(
                 if reasoning:
                     print("[🛠️Coworker] _openai_chat_completions: reasoning ({:d} chars):".format(
                         len(reasoning)))
-                    print(reasoning)
+                    print(_strip_think_tags(reasoning))
                     print("[🛠️Coworker] _openai_chat_completions: --- end reasoning ---")
                 # If we fell back to text-based tool calling, parse text calls.
                 if not tools_tried and not tool_calls:
@@ -1652,6 +1825,29 @@ def _openai_chat_completions(
                         msg["tool_calls"] = text_calls
                         choice["finish_reason"] = "tool_calls"
                         result["_text_tool_fallback"] = True
+
+                # ── XML tool call fallback ────────────────────────────────
+                # Light reasoning models (Qwen3.5-9B DeepSeek-V4-Flash,
+                # Gemma 4 E4B) often emit tool calls as XML inside
+                # ``reasoning_content`` or ``content`` instead of the proper
+                # OpenAI ``tool_calls`` array.  Parse both fields.
+                if not msg.get("tool_calls"):
+                    xml_sources: list[tuple[str, str]] = []
+                    if reasoning:
+                        xml_sources.append(("reasoning_content", reasoning))
+                    if content:
+                        xml_sources.append(("content", content))
+                    for source_name, source_text in xml_sources:
+                        xml_calls = _parse_xml_tool_calls(source_text)
+                        if xml_calls:
+                            print("[🛠️Coworker] _openai_chat_completions: "
+                                  "parsed {:d} XML tool calls from {:s}".format(
+                                      len(xml_calls), source_name))
+                            msg["tool_calls"] = xml_calls
+                            choice["finish_reason"] = "tool_calls"
+                            result["_xml_tool_fallback"] = True
+                            break
+
                 return result
         except (urllib.error.HTTPError, urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
             # ── Chat template crash fallback: inject tools as text ────
@@ -1660,8 +1856,18 @@ def _openai_chat_completions(
             # descriptions into the system prompt and retry without the
             # ``tools`` JSON parameter, preserving full agent functionality.
             if tools_tried and isinstance(ex, urllib.error.HTTPError) and ex.code == 500:
+                # Read the error body from the server — this is critical for
+                # debugging chat template crashes, OOMs, and other server-side
+                # failures that are invisible without it.
+                _error_body = ""
+                try:
+                    _error_body = ex.read().decode("utf-8", errors="replace")
+                except Exception:
+                    pass
                 print("[🛠️Coworker] _openai_chat_completions: 500 error with tools — "
                       "injecting tools as text and retrying")
+                if _error_body:
+                    print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_error_body[:500]))
                 tools_tried = False
                 # Build a text description of available tools.
                 tool_text = (
@@ -1709,12 +1915,36 @@ def _openai_chat_completions(
                 _time.sleep(backoff)
                 continue
             if attempt < max_retries - 1:
-                print("[🛠️Coworker] _openai_chat_completions: attempt {:d}/{:d} FAILED — {:s}, retrying in 2s...".format(
-                    attempt + 1, max_retries, str(ex)))
+                # Read the error body for 500 errors to surface the real cause.
+                _error_body = ""
+                if isinstance(ex, urllib.error.HTTPError) and ex.code == 500:
+                    try:
+                        _error_body = ex.read().decode("utf-8", errors="replace")
+                    except Exception:
+                        pass
+                if _error_body:
+                    print("[🛠️Coworker] _openai_chat_completions: attempt {:d}/{:d} FAILED — {:s}".format(
+                        attempt + 1, max_retries, str(ex)))
+                    print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_error_body[:500]))
+                else:
+                    print("[🛠️Coworker] _openai_chat_completions: attempt {:d}/{:d} FAILED — {:s}, retrying in 2s...".format(
+                        attempt + 1, max_retries, str(ex)))
                 _time.sleep(2)
                 continue
-            print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — {:s}".format(str(ex)))
-            _agent_state.error = "LLM request failed: {:s}".format(str(ex))
+            # Read the error body for the final failure message.
+            _error_body = ""
+            if isinstance(ex, urllib.error.HTTPError):
+                try:
+                    _error_body = ex.read().decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+            if _error_body:
+                print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — {:s}".format(str(ex)))
+                print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_error_body[:500]))
+                _agent_state.error = "LLM request failed: {:s}".format(_error_body[:500])
+            else:
+                print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — {:s}".format(str(ex)))
+                _agent_state.error = "LLM request failed: {:s}".format(str(ex))
             return None
     return None
 
@@ -1764,6 +1994,88 @@ def _parse_text_tool_calls(content: str) -> list[dict[str, Any]]:
                 "arguments": json.dumps(args),
             },
         })
+    return tool_calls
+
+
+def _parse_xml_tool_calls(text: str) -> list[dict[str, Any]]:
+    """Parse XML-style tool calls from an LLM response.
+
+    Handles two formats common with light reasoning models:
+
+    **Format A** (Qwen3.5-9B DeepSeek-V4-Flash, Gemma 4 E4B)::
+
+        <tool_call>
+        <function=download_polyhaven_asset>
+        <parameter=asset_id>
+        sunset_in_the_chalk_quarry
+        </parameter>
+        <parameter=asset_type>
+        hdris
+        </parameter>
+        </function>
+        </tool_call>
+
+    **Format B** (JSON inside XML tags)::
+
+        <tool_call>
+        {"name": "tool_name", "arguments": {"arg1": "value1"}}
+        </tool_call>
+
+    Returns a list of OpenAI-format tool call dicts, or an empty list
+    if no tool calls are found.
+    """
+    import re
+    tool_calls: list[dict[str, Any]] = []
+
+    # ── Format A: <function=name><parameter=key>value</parameter></function> ──
+    # Find all <function=...> blocks, optionally wrapped in <tool_call>.
+    func_pattern = r'(?:<tool_call>\s*)?<function=([^>]+)>(.*?)</function>(?:\s*</tool_call>)?'
+    for match in re.finditer(func_pattern, text, re.DOTALL):
+        name = match.group(1).strip()
+        params_block = match.group(2)
+        args: dict[str, Any] = {}
+        # Extract <parameter=key>value</parameter> pairs.
+        param_pattern = r'<parameter=([^>]+)>\s*(.*?)\s*</parameter>'
+        for p_match in re.finditer(param_pattern, params_block, re.DOTALL):
+            key = p_match.group(1).strip()
+            value = p_match.group(2).strip()
+            # Try to parse as JSON (number, bool, null), else keep as string.
+            try:
+                args[key] = json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                args[key] = value
+        if name:
+            tool_id = "xml_tool_{:d}".format(len(tool_calls))
+            tool_calls.append({
+                "id": tool_id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": json.dumps(args),
+                },
+            })
+
+    # ── Format B: <tool_call>{JSON}</tool_call> ──
+    if not tool_calls:
+        json_pattern = r'<tool_call>\s*(\{.*?\})\s*</tool_call>'
+        for match in re.finditer(json_pattern, text, re.DOTALL):
+            try:
+                parsed = json.loads(match.group(1))
+                name = parsed.get("name", "")
+                args = parsed.get("arguments", {})
+                if name:
+                    tool_id = "xml_tool_{:d}".format(len(tool_calls))
+                    tool_calls.append({
+                        "id": tool_id,
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": json.dumps(args),
+                        },
+                    })
+            except (json.JSONDecodeError, TypeError):
+                continue
+
     return tool_calls
 
 
@@ -1819,6 +2131,8 @@ _TOOL_FRIENDLY_NAMES: dict[str, str] = {
     "execute_blender_code": "Running code in Blender",
     "get_blendfile_summary_datablocks_toolcode": "Reading scene data",
     "download_polyhaven_asset": "Downloading asset",
+    "search_polyhaven_assets": "Searching Poly Haven",
+    "setup_pbr_material": "Setting up PBR material",
     "get_object_info": "Inspecting object",
     "create_object": "Creating object",
     "modify_object": "Modifying object",
@@ -2254,10 +2568,10 @@ def _entity_diff_to_context_message(diff: _EntityDiff) -> str:
     if diff.is_empty():
         return ""
     return (
-        "[System: So far this turn you have created:\n"
+        "[System: WARNING — You already created these entities this turn:\n"
         "{:s}\n"
-        "If you need to modify these, reference them by name. "
-        "If you need something different, create new entities with distinct names.]"
+        "DO NOT create them again. Modify the existing ones by name. "
+        "Create something DIFFERENT with distinct names only.]"
     ).format(summary)
 
 
@@ -2408,6 +2722,174 @@ def _clear_coworker_text_blocks() -> None:
         pass  # Best-effort.
 
 
+def _save_code_to_text_editor_deferred(code: str, seq: str) -> None:
+    """Schedule saving code to a text editor datablock on the main thread.
+
+    Must be called from a background thread.  Uses ``bpy.app.timers`` to
+    defer the ``bpy.data.texts`` operations to the main thread since
+    Blender's Python API is not thread-safe.
+    """
+    def _do_save() -> None:
+        try:
+            import bpy as _bpy  # pylint: disable=import-error
+            prefs = _bpy.context.preferences.addons[__package__].preferences
+            if getattr(prefs, "save_code_to_text_editor", True):
+                name = "Coworker_{:s}".format(seq)
+                text_block = _bpy.data.texts.new(name)
+                text_block.write(code)
+                print("[🛠️Coworker] saved code to text editor '{:s}'".format(name))
+        except Exception as _ex:
+            print("[🛠️Coworker] FAILED to save code to text editor: {:s}".format(str(_ex)))
+
+    import bpy as _bpy  # pylint: disable=import-error
+    _bpy.app.timers.register(_do_save, first_interval=0.0)
+
+
+def export_session_log(auto_saved: bool = False) -> None:
+    """Export the current session to a Blender text datablock.
+
+    Gathers system prompt, conversation history, error signatures,
+    llama-server log tail, and version info into a timestamped text block.
+
+    Args:
+        auto_saved: If True, appends a note that this was auto-saved due to error spiral.
+    """
+    import time as _time
+    import platform
+    import bpy as _bpy  # pylint: disable=import-error
+
+    timestamp = _time.strftime("%Y-%m-%d_%H-%M-%S", _time.localtime())
+    block_name = "Coworker_Session_{:s}".format(timestamp)
+
+    lines = []
+    lines.append("=" * 72)
+    lines.append("BFA Coworker Session Log")
+    lines.append("Timestamp: {:s}".format(_time.strftime("%Y-%m-%d %H:%M:%S")))
+    lines.append("Auto-saved: {:s}".format(str(auto_saved)))
+    lines.append("=" * 72)
+    lines.append("")
+
+    # Version info.
+    lines.append("--- Version Info ---")
+    try:
+        manifest_path = _bpy.utils.resource_path('LOCAL')
+        lines.append("Blender: {:s}".format(str(_bpy.app.version_string)))
+    except Exception:
+        lines.append("Blender: unknown")
+    lines.append("Python: {:s}".format(platform.python_version()))
+    lines.append("OS: {:s} {:s}".format(platform.system(), platform.release()))
+    lines.append("")
+
+    # System prompt.
+    lines.append("--- System Prompt ---")
+    try:
+        sys_prompt = _get_system_prompt_with_rules()
+        lines.append(sys_prompt)
+    except Exception as ex:
+        lines.append("[Error loading system prompt: {:s}]".format(str(ex)))
+    lines.append("")
+
+        # Conversation history -- grouped by turn.
+    lines.append("--- Conversation History ---")
+    hist = list(_agent_state.conversation_history)
+    turn_list = []
+    cur = []
+    for m in hist:
+        r = m.get("role", "")
+        c = m.get("content", "")
+        if r == "user" and not c.startswith("[System:"):
+            if cur:
+                turn_list.append(cur)
+            cur = [m]
+        elif r in ("assistant", "tool", "reasoning") or (r == "user" and c.startswith("[System:")):
+            cur.append(m)
+    if cur:
+        turn_list.append(cur)
+
+    for ti, tr in enumerate(turn_list):
+        lines.append("\n=== Turn {:d} ===".format(ti + 1))
+        for m in tr:
+            r = m.get("role", "unknown")
+            lines.append("[{:s}]".format(r.upper()))
+            c = m.get("content", "")
+            if r == "assistant":
+                if c:
+                    lines.append("Content: {:s}".format(str(c)[:2000]))
+                for tc in m.get("tool_calls", []):
+                    fn = tc.get("function", {})
+                    lines.append("  Tool: {:s}".format(fn.get("name", "unknown")))
+                    lines.append("  Args: {:s}".format(str(fn.get("arguments", ""))[:500]))
+            elif r == "user":
+                lines.append("Content: {:s}".format(str(c)[:2000]))
+            elif r == "tool":
+                lines.append("Result: {:s}".format(str(c)[:1000]))
+            elif r == "reasoning":
+                lines.append("Thinking: {:s}".format(str(c)))
+        lines.append("")
+
+    lines.append("")
+# Error signatures.
+    lines.append("--- Error Info ---")
+    if _agent_state.error:
+        lines.append("Current error: {:s}".format(str(_agent_state.error)))
+    lines.append("")
+
+    # LLM server log tail.
+    lines.append("--- LLM Server Log (last 50 lines) ---")
+    llm_stderr = getattr(_agent_state, 'llm_stderr', None)
+    if llm_stderr:
+        try:
+            stderr_text = llm_stderr if isinstance(llm_stderr, str) else str(llm_stderr)
+            log_lines = stderr_text.strip().splitlines()
+            for line in log_lines[-50:]:
+                lines.append(line)
+        except Exception:
+            lines.append("[Could not read LLM stderr]")
+    else:
+        lines.append("[No LLM server log available]")
+    lines.append("")
+    lines.append("=" * 72)
+    lines.append("End of session log")
+
+    # Write to text block on main thread.
+    def _do_export() -> None:
+        try:
+            text_block = _bpy.data.texts.new(block_name)
+            text_block.write("\n".join(lines))
+            print("[🛠️Coworker] Session log exported to text block '{:s}'".format(block_name))
+        except Exception as ex:
+            print("[🛠️Coworker] Failed to export session log: {:s}".format(str(ex)))
+
+    _bpy.app.timers.register(_do_export, first_interval=0.0)
+
+
+def export_session_log_to_clipboard() -> str:
+    """Return the session log as a string (for copy-to-clipboard)."""
+    import time as _time
+    import platform
+
+    lines = []
+    lines.append("=" * 72)
+    lines.append("BFA Coworker Session Log")
+    lines.append("Timestamp: {:s}".format(_time.strftime("%Y-%m-%d %H:%M:%S")))
+    lines.append("=" * 72)
+    lines.append("")
+    lines.append("--- System Prompt ---")
+    try:
+        lines.append(_get_system_prompt_with_rules())
+    except Exception as ex:
+        lines.append("[Error: {:s}]".format(str(ex)))
+    lines.append("")
+    lines.append("--- Conversation History ---")
+    history = list(_agent_state.conversation_history)
+    for i, msg in enumerate(history):
+        role = msg.get("role", "unknown")
+        lines.append("\n[Message {:d}] role={:s}".format(i + 1, role))
+        content = msg.get("content", "")
+        lines.append("Content: {:s}".format(str(content)[:2000]))
+    return "\n".join(lines)
+
+
 def run_conversation_turn(
     user_message: str,
     on_text: Callable[[str], None] | None = None,
@@ -2434,8 +2916,15 @@ def run_conversation_turn(
     """
     # ── Re-entrancy guard ──────────────────────────────────────────────
     if _agent_state.turn_active:
-        print("[🛠️Coworker] run_conversation_turn: re-entrancy blocked — turn already active")
-        return _agent_state.conversation_history
+        if _stop_event.is_set():
+            # Previous turn was aborted by the user — the blocking HTTP
+            # request is still in-flight but we clear the flag so the new
+            # message can proceed.  The old turn's response will be discarded.
+            _agent_state.turn_active = False
+            print("[🛠️Coworker] run_conversation_turn: previous turn aborted, clearing guard")
+        else:
+            print("[🛠️Coworker] run_conversation_turn: re-entrancy blocked — turn already active")
+            return _agent_state.conversation_history
     _agent_state.turn_active = True
     try:
         return _run_conversation_turn_inner(
@@ -2470,8 +2959,6 @@ def _run_conversation_turn_inner(
         print("[🛠️Coworker] run_conversation_turn: inserted system prompt ({:d} chars)".format(
             len(system_text)))
 
-    history.append({"role": "user", "content": user_message})
-
     # Clear any pending screenshot image from a previous turn — the user
     # is starting fresh, so the old screenshot is stale.
     _agent_state._pending_image = None
@@ -2480,18 +2967,31 @@ def _run_conversation_turn_inner(
     # Small local models often call mode-dependent operators (mode_set, etc.)
     # on an empty scene, which fails with "Context missing active object".
     # Warn the LLM upfront so it creates objects first.
+    # NOTE: We append to the existing system prompt (position 0) rather than
+    # creating a new message — Qwen's Jinja template requires ALL system
+    # messages at the beginning and rejects any mid-conversation system role.
+    _preflight_note = ""
     try:
         import bpy as _bpy  # pylint: disable=import-error
         if len(_bpy.data.objects) == 0:
-            _empty_note = (
-                "[Note: The Blender scene is currently empty \u2014 no objects exist. "
+            _preflight_note = (
+                "\n\n[Note: The Blender scene is currently empty \u2014 no objects exist. "
                 "You must create objects before using mode-dependent operators "
                 "like bpy.ops.object.mode_set().]"
             )
-            history.append({"role": "system", "content": _empty_note})
             print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: empty scene detected, injected pre-flight note")
     except Exception:
         pass  # Best-effort; don't break the agent loop.
+
+    # Inject the preflight note into the system prompt (not a separate message)
+    # so the message sequence stays: [system, user, ...].
+    # Guard: only inject once — don't duplicate on subsequent turns.
+    _preflight_marker = "[Note: The Blender scene is currently empty"
+    if _preflight_note and _preflight_marker not in history[0]["content"]:
+        history[0]["content"] += _preflight_note
+
+    # Append the user message.
+    history.append({"role": "user", "content": user_message})
 
     # ── Smart undo tracking (per-turn) ────────────────────────────────
     # Tracks the last execute_blender_code call to detect iteration and
@@ -2523,6 +3023,7 @@ def _run_conversation_turn_inner(
     if on_status:
         on_status("Thinking...")
     _agent_state.is_thinking = True
+    _agent_state.thinking_start_time = time.time()
     _agent_state.streaming_text = ""
     _agent_state.reasoning_text = ""
     _agent_state.thinking_dots = 0
@@ -2563,6 +3064,7 @@ def _run_conversation_turn_inner(
             "127.0.0.1", llm_port_local, timeout=120.0, proc=_llm_mgr.get_llama_process()
         ):
             _agent_state.is_thinking = False
+            _agent_state.thinking_start_time = 0.0
             _log_tail = _llm_mgr.get_llama_server_log_tail()
             if _log_tail:
                 _agent_state.error = (
@@ -2607,9 +3109,16 @@ def _run_conversation_turn_inner(
                 from . import skills as _skills_mod  # pylint: disable=import-error
                 _domain_skills_text = _skills_mod.get_domain_skills(_detected_domains)
                 if _domain_skills_text:
-                    history.append({"role": "system", "content": _domain_skills_text})
-                    print("[🛠️Coworker] run_conversation_turn: domain skills injected for {:s}".format(
-                        ",".join(sorted(_detected_domains))))
+                    # Append domain skills to the system prompt (position 0)
+                    # rather than creating a new message — Qwen's Jinja template
+                    # requires all system messages at the beginning.
+                    # Guard: check if this domain's skills are already injected
+                    # to avoid duplicating on subsequent turns.
+                    _skills_marker = _domain_skills_text[:40]  # First 40 chars as marker
+                    if _skills_marker not in history[0]["content"]:
+                        history[0]["content"] += "\n\n" + _domain_skills_text
+                        print("[🛠️Coworker] run_conversation_turn: domain skills injected for {:s}".format(
+                            ",".join(sorted(_detected_domains))))
             except Exception:
                 pass  # Best-effort; don't break the agent loop.
     else:
@@ -2623,6 +3132,7 @@ def _run_conversation_turn_inner(
         if _stop_event.is_set():
             print("[🛠️Coworker] run_conversation_turn: aborted by user")
             _agent_state.is_thinking = False
+            _agent_state.thinking_start_time = 0.0
             if on_status:
                 on_status("Stopped")
             return history
@@ -2668,8 +3178,20 @@ def _run_conversation_turn_inner(
             _agent_state._pending_image = None  # Clear after use
 
         response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model, max_tokens)
+
+        # ── Abort check ───────────────────────────────────────────────
+        # If the user stopped the previous turn and started a new one, the
+        # old turn's response may arrive late.  Discard it to avoid
+        # corrupting the new conversation.
+        if _stop_event.is_set():
+            print("[🛠️Coworker] run_conversation_turn: aborted — discarding stale response")
+            _agent_state.is_thinking = False
+            _agent_state.thinking_start_time = 0.0
+            return history
+
         if response is None:
             _agent_state.is_thinking = False
+            _agent_state.thinking_start_time = 0.0
             _agent_state.error = "No response from LLM"
             if on_status:
                 on_status("Error: No response from LLM")
@@ -2751,6 +3273,8 @@ def _run_conversation_turn_inner(
         #   - Local llama-server / DeepSeek: "reasoning_content"
         #   - OpenRouter: "reasoning"
         reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
+        # Strip <think> wrapper tags for display/storage.
+        reasoning = _strip_think_tags(reasoning)
         if reasoning:
             print("[🛠️Coworker] run_conversation_turn: reasoning ({:d} chars) — storing in history".format(
                 len(reasoning)))
@@ -2786,9 +3310,11 @@ def _run_conversation_turn_inner(
                 if _stop_event.is_set():
                     print("[🛠️Coworker] run_conversation_turn: aborted during tool calls")
                     _agent_state.is_thinking = False
+                    _agent_state.thinking_start_time = 0.0
                     if on_status:
                         on_status("Stopped")
                     return history
+
                 fn = tc.get("function", {})
                 try:
                     args = json.loads(fn.get("arguments", "{}"))
@@ -2854,14 +3380,7 @@ def _run_conversation_turn_inner(
                             should_undo = True
                             reason = "previous call errored"
                     elif _codes_overlap(_prev_code, args.get("code", "")):
-                        # Overlap detected on a successful previous call.
-                        # Inject context instead of auto-undoing.
-                        if not _turn_entities.is_empty():
-                            ctx = _entity_diff_to_context_message(_turn_entities)
-                            if ctx:
-                                print("[🛠️Coworker] run_conversation_turn: overlap detected — injecting entity context")
-                                history.append({"role": "system", "content": ctx})
-                                _entity_context_injected = True
+                        pass  # Context injected after tool result.
                     if should_undo:
                         print("[🛠️Coworker] run_conversation_turn: smart undo triggered — {:s}".format(reason))
                         # Undo to the state before the previous execute_blender_code.
@@ -2904,6 +3423,18 @@ def _run_conversation_turn_inner(
                     if _turn_snapshot is None:
                         print("[🛠️Coworker] run_conversation_turn: initial entity snapshot FAILED (continuing without)")
 
+                # ── Inject resolution from preferences ─────────────
+                if tool_name in ("download_polyhaven_asset", "setup_pbr_material"):
+                    try:
+                        _prefs = bpy.context.preferences.addons[__package__].preferences
+                        if "resolution" not in args or not args.get("resolution"):
+                            args["resolution"] = _prefs.polyhaven_resolution
+                        # Also inject polyhaven_resolution for setup_pbr_material.
+                        if tool_name == "setup_pbr_material" and "polyhaven_resolution" not in args:
+                            args["polyhaven_resolution"] = _prefs.polyhaven_resolution
+                    except Exception:
+                        pass  # Best-effort; don't break the tool call.
+
                 # Call the MCP tool.
                 result_text = _call_mcp_tool_sync(tool_name, args, mcp_port)
 
@@ -2933,29 +3464,20 @@ def _run_conversation_turn_inner(
                                     if not step_diff.is_empty():
                                         _turn_entities.merge(step_diff)
                                         _turn_snapshot = current_snap
-                                        # Inject context message once per turn.
-                                        ctx = _entity_diff_to_context_message(_turn_entities)
-                                        if ctx and not _entity_context_injected:
-                                            print("[🛠️Coworker] run_conversation_turn: entity context injected — {:s}".format(
-                                                _turn_entities.summary()))
-                                            history.append({"role": "system", "content": ctx})
-                                            _entity_context_injected = True
+                                        # Entity context is now injected AFTER the tool result.
                         except (json.JSONDecodeError, TypeError):
                             pass
 
                     # ── Save to text editor memory bank ────────────────
-                    if not _prev_code_errored:
-                        try:
-                            import bpy as _bpy  # pylint: disable=import-error
-                            prefs = _bpy.context.preferences.addons[__package__].preferences
-                            if getattr(prefs, "save_code_to_text_editor", True):
-                                seq = _next_code_sequence()
-                                name = "Coworker_{:s}".format(seq)
-                                text_block = _bpy.data.texts.new(name)
-                                text_block.write(_prev_code)
-                                print("[🛠️Coworker] run_conversation_turn: saved code to text editor '{:s}'".format(name))
-                        except Exception:
-                            pass  # Best-effort; don't break the agent loop.
+                    seq = _next_code_sequence()
+                    if _prev_code_errored:
+                        # Save error-producing code with error prefix.
+                        _save_code_to_text_editor_deferred(
+                            "# ERROR: Tool call returned an error\n# Original code:\n" + _prev_code,
+                            seq,
+                        )
+                    else:
+                        _save_code_to_text_editor_deferred(_prev_code, seq)
 
                 # Build a human-readable summary for the UI.
                 result_summary = _tool_result_summary(result_text)
@@ -2977,6 +3499,16 @@ def _run_conversation_turn_inner(
                     "content": truncated,
                     "summary": result_summary,
                 })
+
+                # Inject entity context AFTER tool result so the model
+                # sees the successful result first, then gets context.
+                if tool_name == "execute_blender_code" and not _entity_context_injected:
+                    ctx = _entity_diff_to_context_message(_turn_entities)
+                    if ctx:
+                        print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: entity context injected \u2014 {:s}".format(
+                            _turn_entities.summary()))
+                        history.append({"role": "user", "content": ctx})
+                        _entity_context_injected = True
 
                 # ── Extract screenshot image for vision-capable models ─
                 # If the tool result contains an image (screenshot), store
@@ -3002,6 +3534,11 @@ def _run_conversation_turn_inner(
                         if len(_consecutive_errors) >= 3:
                             print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: spiral detected \u2014 "
                                   "same error 3\u00d7 in a row: {:s}".format(error_sig))
+                            # Auto-save session log on spiral detection.
+                            try:
+                                export_session_log(auto_saved=True)
+                            except Exception:  # pylint: disable=broad-exception-caught
+                                pass
                             # Truncate: remove the last 3 assistant+tool message pairs.
                             removed = 0
                             for i in range(len(history) - 1, -1, -1):
@@ -3017,9 +3554,20 @@ def _run_conversation_turn_inner(
                     else:
                         _consecutive_errors.clear()
 
-            # After processing tool calls, ask the LLM for a final text response.
-            # We send ONE more request without looping. If the model decides to
-            # call tools again, we process them and STOP — no infinite loops.
+            # After processing tool calls, inject a user prompt so the LLM
+            # generates a text response instead of another tool call loop.
+            # Many local models (Qwen, Fable Fusion, etc.) emit tool calls
+            # inside <think> blocks with empty content.  Without a user message
+            # after tool results, llama-server's Jinja template may fail with
+            # "No user query found in messages."
+            if not content or not content.strip():
+                history.append({
+                    "role": "user",
+                    "content": (
+                        "The tool results are above. "
+                        "Please provide a helpful response to the user based on these results."
+                    ),
+                })
             continue
 
         # No more tool calls — add the final assistant message and we're done.
@@ -3032,7 +3580,7 @@ def _run_conversation_turn_inner(
         print("[🛠️Coworker] run_conversation_turn: hit max iterations, forcing summary")
         history.append({
             "role": "user",
-            "content": "All tool calls are complete. Please summarize what was done in 1-2 sentences.",
+            "content": "[System: All tool calls are complete. Please summarize what was done in 1-2 sentences.]",
         })
         final_response = _openai_chat_completions(llm_url, history, openai_tools, api_key, model, max_tokens)
         if final_response:
@@ -3046,6 +3594,7 @@ def _run_conversation_turn_inner(
                 history.append({"role": "assistant", "content": final_content})
 
     _agent_state.is_thinking = False
+    _agent_state.thinking_start_time = 0.0
     if on_status:
         on_status("Idle")
     return history
@@ -3062,6 +3611,7 @@ def cleanup() -> None:
     _agent_state.reasoning_text = ""
     _agent_state.thinking_dots = 0
     _agent_state.is_thinking = False
+    _agent_state.thinking_start_time = 0.0
 
 
 # ---------------------------------------------------------------------------

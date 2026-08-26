@@ -23,7 +23,7 @@ __all__ = (
     "DEFAULT_BRIDGE_PORT",
     "DEFAULT_MCP_PORT",
     "DEFAULT_LLM_PORT",
-    "BFACW_DEBUG",
+    "is_debug_mode",
     "effective_ports",
     "get_llm_manager",
     "get_agent_controller",
@@ -52,9 +52,23 @@ DEFAULT_BRIDGE_PORT = 9876
 DEFAULT_MCP_PORT = 9191
 DEFAULT_LLM_PORT = 8081
 
-# Debug flag: when False, hides temporary diagnostics UI from Preferences.
-# Set to False for release builds, True during active development.
-BFACW_DEBUG = True
+# Debug mode: controlled by user-facing preference toggle.
+# Previously a hardcoded constant; now reads from preferences at runtime.
+def is_debug_mode() -> bool:
+    """Return True when the user has enabled debug/diagnostics mode.
+
+    Reads from the add-on preferences at call time.  Falls back to True
+    (show diagnostics) when preferences are not yet available (e.g. during
+    early registration).
+    """
+    try:
+        import bpy  # pylint: disable=import-error
+        prefs = bpy.context.preferences.addons.get(__package__)
+        if prefs is not None and hasattr(prefs.preferences, "debug_mode"):
+            return prefs.preferences.debug_mode
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return True  # safe default — show diagnostics until preferences load
 
 
 def effective_ports(prefs) -> tuple[int, int, int]:

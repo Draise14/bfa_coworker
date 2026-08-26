@@ -51,6 +51,7 @@ def _layer_collection_tree(lc: _LayerCollection) -> dict[str, Any]:
         "name": col.name,
         "exclude": lc.exclude,
         "hide_viewport": col.hide_viewport,
+        "color_tag": getattr(col, "color_tag", "NONE"),
         "objects": sorted(
             [_object_info(obj) for obj in col.objects],
             key=lambda o: o["name"],

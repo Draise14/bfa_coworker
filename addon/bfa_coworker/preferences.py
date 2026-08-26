@@ -36,7 +36,7 @@ from .shared import (
     MCP_SERVER_MODE_ITEMS,
     OPERATING_MODE_ITEMS,
     CHAT_MODE_ITEMS,
-    BFACW_DEBUG,
+    is_debug_mode,
     effective_ports,
     get_llm_manager,
 )
@@ -141,8 +141,45 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         subtype="TIME_ABSOLUTE",
     )
 
+    # ── Debug Mode ──────────────────────────────────────────────────
+
+    debug_mode: BoolProperty(  # type: ignore[valid-type]
+        name="Debug / Diagnostics",
+        description=(
+            "Show the Diagnostics panel in Preferences with port checking, "
+            "benchmark suites, and other developer tools"
+        ),
+        default=False,
+    )
+
+    # ── Log Level ───────────────────────────────────────────────────
+
+    def _update_log_level(self, _context: bpy.types.Context) -> None:
+        mcp_to_blender_server.log_level = self.log_level
+
+    log_level: EnumProperty(  # type: ignore[valid-type]
+        name="Log Level",
+        description=(
+            "Tool-call logging granularity:\n"
+            "  Off — no logging\n"
+            "  Errors Only — log only failed tool calls\n"
+            "  All — log every tool request and response"
+        ),
+        items=[
+            ("OFF", "Off", "No tool-call logging"),
+            ("ERRORS_ONLY", "Errors Only", "Log only tool calls that returned errors"),
+            ("ALL", "All", "Log every tool request and response"),
+        ],
+        default="OFF",
+        update=_update_log_level,
+    )
+
     def _update_use_log(self, _context: bpy.types.Context) -> None:
-        mcp_to_blender_server.use_log = self.use_log
+        # Legacy bool kept for backward compat; syncs to log_level.
+        if self.use_log:
+            self.log_level = "ALL"
+        else:
+            self.log_level = "OFF"
 
     use_log: BoolProperty(  # type: ignore[valid-type]
         name="Log",
@@ -651,6 +688,24 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         description="API key for the remote generation service",
     )
 
+    # ── Poly Haven Resolution ───────────────────────────────────────────
+
+    polyhaven_resolution: EnumProperty(  # type: ignore[valid-type]
+        name="Poly Haven Resolution",
+        description=(
+            "Default download resolution for Poly Haven textures and HDRIs. "
+            "Lower resolutions are faster to download and use less memory."
+        ),
+        items=lambda self, _context: [
+            ("512", "512 - Preview", "Tiny textures for prototyping"),
+            ("1k", "1k - Lightweight", "Good for background objects"),
+            ("2k", "2k - Balanced (Recommended)", "Best balance of quality and performance"),
+            ("4k", "4k - Production", "High quality for close-up shots"),
+            ("8k", "8k - Maximum", "Largest files, highest detail"),
+        ],
+        default=2,
+    )
+
     # ── Preferences Tab ──────────────────────────────────────────────────
 
     pref_tab: EnumProperty(  # type: ignore[valid-type]
@@ -715,7 +770,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         name="Harness Preset",
         description="Select an external MCP client to configure",
         items=lambda self, _context: self._get_harness_preset_items(),
-        default="claude_desktop",
+        default=0,
     )
 
     def _get_harness_preset_items(self) -> list[tuple[str, str, str]]:
@@ -777,14 +832,20 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
     # ── Diagnostics (debug only, behind flag) ───────────────────────────
 
     def _draw_diagnostics(self, layout) -> None:
-        """Draw the diagnostics panel below all tabs when BFACW_DEBUG is enabled."""
-        if not BFACW_DEBUG:
+        """Draw the diagnostics panel below all tabs when debug mode is enabled."""
+        if not is_debug_mode():
             return
         diag_box = layout.box()
         diag_box.label(text="\U0001f6e0\ufe0f Diagnostics", icon='INFO')
         diag_box.label(
-            text="Temporary debug tools \u2014 hidden when BFACW_DEBUG=False",
+            text="Temporary debug tools \u2014 hidden when Debug mode is off",
             icon='BLANK1',
+        )
+        # ── Open Log button ─────────────────────────────────────────
+        diag_box.operator(
+            "bfacw.open_log",
+            icon='CONSOLE',
+            text="Open Log",
         )
         row = diag_box.row()
         row.operator("bfacw.check_ports", icon="FILE_REFRESH", text="Check Ports")
@@ -801,11 +862,18 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             ("scene_build",   "Scene Build",   'MESH_CUBE',           6),
             ("animation",     "Animation",     'ANIM',                5),
             ("modifiers",     "Modifiers",     'MODIFIER',            6),
-            ("assets_materials", "Assets+Mat", 'TEXTURE',             5),
+            ("assets_browser", "Asset Browser", 'ASSET_MANAGER',       6),
+            ("polyhaven",     "Poly Haven",    'WORLD',               5),
             ("baseline",      "Baseline",      'CONSOLE',             6),
             ("error_handling","Errors",        'ERROR',               3),
             ("vision_camera", "Vision: Camera", 'CAMERA_DATA',         4),
             ("vision_relative", "Vision: Place", 'SNAP_ON',            5),
+            ("shader_nodes",  "Shader Nodes",  'MATERIAL',            4),
+            ("geometry_nodes", "Geo Nodes",    'GEOMETRY_NODES',      4),
+            ("sequencer",     "Sequencer",     'SEQUENCE',            4),
+            ("image_editor",  "Image Editor",  'IMAGE_DATA',          3),
+            ("compositor",    "Compositor",    'NODE_COMPOSITING',         4),
+            ("multi_editor_cross", "Multi-Editor", 'WINDOW',           4),
         ]
 
         from . import operators_agent as _oa_suite
@@ -813,12 +881,14 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         # Grid layout: 3 columns.
         grid = diag_box.grid_flow(row_major=True, columns=3, even_columns=True, even_rows=True)
 
-        for suite_key, suite_label, suite_icon, total_steps in _SUITE_META:
+        for suite_key, suite_label, suite_icon, _total_steps in _SUITE_META:
             suite_box = grid.box()
             suite_header = suite_box.row()
             suite_header.label(text=suite_label, icon=suite_icon)
 
-            # Show progress.
+            # Show progress using actual suite length.
+            suite = _oa_suite._TEST_SUITES.get(suite_key, [])
+            total_steps = len(suite)
             step_idx = _oa_suite._test_suite_progress.get(suite_key, 0)
             suite_header.label(
                 text="Step {:d}/{:d}".format(step_idx, total_steps),
@@ -826,11 +896,10 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             )
 
             # Step buttons in a column.
-            suite = _oa_suite._TEST_SUITES.get(suite_key, [])
-            for s_num, s_label, _ in suite:
+            for step_i, (s_num, s_label, _) in enumerate(suite):
                 step_row = suite_box.row(align=True)
-                is_done = step_idx > s_num
-                is_current = step_idx == s_num
+                is_done = step_i < step_idx
+                is_current = step_i == step_idx
                 if is_done:
                     step_icon = 'CHECKBOX_HLT'
                 elif is_current:
@@ -843,6 +912,10 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     icon=step_icon,
                 )
                 op.suite = suite_key
+                # Show elapsed time for completed steps.
+                elapsed = _oa_suite._test_suite_timings.get((suite_key, s_num))
+                if elapsed is not None:
+                    step_row.label(text="{:.1f}s".format(elapsed))
 
             # Reset button at the bottom of each suite.
             reset_row = suite_box.row(align=True)
@@ -852,6 +925,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 text="Reset",
             )
             reset_op.suite = suite_key
+
+        # Compare button for benchmark results.
+        diag_box.separator()
+        diag_box.operator("bfacw.compare_benchmarks", icon='FILE_REFRESH', text="Compare Results")
+
         # Show check_ports results inline.
         from . import operators_agent as _oa_check
         check_result = getattr(_oa_check._BFACW_OT_check_ports, "_result", None)
@@ -1298,13 +1376,17 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             gen_box.prop(self, "gen_remote_url")
             gen_box.prop(self, "gen_remote_key")
 
-        # ── Poly Haven Asset Test (Tier 1) ─────────────────────────────
+        # ── Poly Haven Asset Download (Tier 1) ────────────────────────
         ph_box = layout.box()
-        ph_box.label(text="Poly Haven Asset Download (Test)", icon='WORLD')
+        ph_box.label(text="Poly Haven Asset Download", icon='WORLD')
         ph_box.label(
-            text="Download a free CC0 HDRI or texture to test the Poly Haven integration.",
+            text="Download free CC0 HDRIs, textures, and models from Poly Haven.",
             icon='INFO',
         )
+        # Resolution selector.
+        ph_row = ph_box.row(align=True)
+        ph_row.prop(self, "polyhaven_resolution", text="Resolution")
+        # Test buttons.
         row = ph_box.row(align=True)
         row.operator("bfacw.test_polyhaven_hdri", icon='WORLD', text="Download Test HDRI")
         row.operator("bfacw.test_polyhaven_texture", icon='TEXTURE', text="Download Test Texture")
@@ -1315,7 +1397,19 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         del context
         layout = self.layout
 
-        # ── Bridge Server ──────────────────────────────────────────────
+        # ── Mode hint ──────────────────────────────────────────────────
+        mode_labels = {
+            "LOCAL_LLM": "Local LLM mode — some settings are hidden",
+            "REMOTE_API": "Remote API mode — some settings are hidden",
+            "EXTERNAL_HARNESS": "External Harness mode — some settings are hidden",
+        }
+        hint = mode_labels.get(self.operating_mode, "")
+        if hint:
+            hint_row = layout.row()
+            hint_row.label(text=hint, icon='INFO')
+            hint_row.scale_y = 0.6
+
+        # ── Bridge Server (always visible) ────────────────────────────
         bridge_box = layout.box()
         bridge_box.label(text="Bridge Server", icon='NETWORK_DRIVE')
         bridge_box.prop(self, "host")
@@ -1330,101 +1424,102 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         else:
             bridge_box.label(text="Status: Stopped", icon='X')
 
-        # ── MCP Server (External Harness) ──────────────────────────────
-        mcp_box = layout.box()
-        mcp_box.label(text="MCP Server (External Harness)", icon='SETTINGS')
-        mcp_box.prop(self, "mcp_server_mode", expand=True)
+        # ── MCP Server (External Harness mode only) ────────────────
+        if self.operating_mode == "EXTERNAL_HARNESS":
+            mcp_box = layout.box()
+            mcp_box.label(text="MCP Server (External Harness)", icon='SETTINGS')
+            mcp_box.prop(self, "mcp_server_mode", expand=True)
 
-        if self.mcp_server_mode == "STDIO":
-            # ── Step 1: Pick your harness ─────────────────────────────
-            step1 = mcp_box.box()
-            step1.label(text="Step 1: Pick your MCP client", icon='FORWARD')
-            step1.prop(self, "harness_preset", text="")
+            if self.mcp_server_mode == "STDIO":
+                # ── Step 1: Pick your harness ───────────────────────────
+                step1 = mcp_box.box()
+                step1.label(text="Step 1: Pick your MCP client", icon='FORWARD')
+                step1.prop(self, "harness_preset", text="")
 
-            # Show a short info line about the selected preset.
-            from .shared import get_harness_preset_by_id
-            preset = get_harness_preset_by_id(self.harness_preset)
-            if preset is not None:
-                row = step1.row(align=True)
-                row.label(text=preset.description, icon='INFO')
-                if preset.docs_url:
-                    row.operator("bfacw.open_url", icon='URL', text="Docs").url = preset.docs_url
+                # Show a short info line about the selected preset.
+                from .shared import get_harness_preset_by_id
+                preset = get_harness_preset_by_id(self.harness_preset)
+                if preset is not None:
+                    row = step1.row(align=True)
+                    row.label(text=preset.description, icon='INFO')
+                    if preset.docs_url:
+                        row.operator("bfacw.open_url", icon='URL', text="Docs").url = preset.docs_url
 
-            # ── Step 2: Copy the config ───────────────────────────────
-            step2 = mcp_box.box()
-            step2.label(text="Step 2: Copy the config", icon='COPYDOWN')
-            row = step2.row(align=True)
-            op = row.operator("bfacw.copy_mcp_config", icon="COPYDOWN", text="Copy to Clipboard")
-            op.client_type = self.harness_preset
-            step2.label(
-                text="This copies the connection settings for your selected client.",
-                icon='BLANK1',
-            )
-
-            # ── Step 3: Paste into your client ────────────────────────
-            step3 = mcp_box.box()
-            step3.label(text="Step 3: Paste into your client's config file", icon='FILE_TEXT')
-            if preset is not None and preset.config_path_help:
-                for line in preset.config_path_help.split("\n"):
-                    step3.label(text=line, icon='FILE_FOLDER')
-            row = step3.row(align=True)
-            op2 = row.operator("bfacw.open_config_folder", icon="FILE_FOLDER", text="Open Config Folder")
-            op2.preset_id = self.harness_preset
-            step3.label(
-                text="Tip: The config file is a JSON file. Paste the copied text inside the top-level { } braces.",
-                icon='INFO',
-            )
-
-            # ── Step 4: Restart ───────────────────────────────────────
-            step4 = mcp_box.box()
-            step4.label(text="Step 4: Restart your MCP client", icon='LOOP_BACK')
-            step4.label(
-                text="Close and re-open your MCP client completely. "
-                     "A window close is not enough on some apps.",
-                icon='BLANK1',
-            )
-            if preset is not None and preset.notes:
-                step4.label(text="\u2139\ufe0f {:s}".format(preset.notes), icon='INFO')
-
-            # ── Advanced options (collapsible) ─────────────────────────
-            adv_box = mcp_box.box()
-            adv_box.label(text="Advanced Options", icon='SETTINGS')
-            adv_box.prop(self, "use_blender_python_for_harness")
-            if preset is not None and preset.setup_steps:
-                adv_box.label(text="Detailed setup for this client:", icon='PLAY')
-                for i, step in enumerate(preset.setup_steps, 1):
-                    adv_box.label(
-                        text="{:d}. {:s}".format(i, step),
-                        icon='DOT',
-                    )
-
-            # Config preview (collapsible).
-            adv_box.label(text="Config Preview:", icon='COPYDOWN')
-            from . import agent_controller as _ac
-            _bridge_port, _, _ = effective_ports(self)
-            preview = _ac.generate_mcp_client_config(
-                client_type=self.harness_preset,
-                blender_host=self.host,
-                blender_port=_bridge_port,
-                use_blender_python=self.use_blender_python_for_harness,
-            )
-            for line in preview.split("\n"):
-                adv_box.label(text=line, icon='BLANK1')
-
-        elif self.mcp_server_mode == "NETWORK":
-            mcp_box.prop(self, "mcp_server_host")
-            mcp_box.prop(self, "mcp_server_port_override")
-            if self.mcp_server_host not in ("127.0.0.1", "localhost", "::1"):
-                mcp_box.label(
-                    text="\u26a0 Binding to non-localhost exposes the MCP server to your network!",
-                    icon='ERROR',
+                # ── Step 2: Copy the config ─────────────────────────────
+                step2 = mcp_box.box()
+                step2.label(text="Step 2: Copy the config", icon='COPYDOWN')
+                row = step2.row(align=True)
+                op = row.operator("bfacw.copy_mcp_config", icon="COPYDOWN", text="Copy to Clipboard")
+                op.client_type = self.harness_preset
+                step2.label(
+                    text="This copies the connection settings for your selected client.",
+                    icon='BLANK1',
                 )
-            row = mcp_box.row(align=True)
-            from . import agent_controller as _ac
-            if _ac._agent_state.mcp_server_running:
-                row.operator("bfacw.mcp_server_stop", icon="CANCEL", text="Stop MCP Server")
-            else:
-                row.operator("bfacw.mcp_server_start", icon="PLAY", text="Start MCP Server")
+
+                # ── Step 3: Paste into your client ──────────────────────
+                step3 = mcp_box.box()
+                step3.label(text="Step 3: Paste into your client's config file", icon='FILE_TEXT')
+                if preset is not None and preset.config_path_help:
+                    for line in preset.config_path_help.split("\n"):
+                        step3.label(text=line, icon='FILE_FOLDER')
+                row = step3.row(align=True)
+                op2 = row.operator("bfacw.open_config_folder", icon="FILE_FOLDER", text="Open Config Folder")
+                op2.preset_id = self.harness_preset
+                step3.label(
+                    text="Tip: The config file is a JSON file. Paste the copied text inside the top-level { } braces.",
+                    icon='INFO',
+                )
+
+                # ── Step 4: Restart ─────────────────────────────────────
+                step4 = mcp_box.box()
+                step4.label(text="Step 4: Restart your MCP client", icon='LOOP_BACK')
+                step4.label(
+                    text="Close and re-open your MCP client completely. "
+                         "A window close is not enough on some apps.",
+                    icon='BLANK1',
+                )
+                if preset is not None and preset.notes:
+                    step4.label(text="\u2139\ufe0f {:s}".format(preset.notes), icon='INFO')
+
+                # ── Advanced options ────────────────────────────────────
+                adv_box = mcp_box.box()
+                adv_box.label(text="Advanced Options", icon='SETTINGS')
+                adv_box.prop(self, "use_blender_python_for_harness")
+                if preset is not None and preset.setup_steps:
+                    adv_box.label(text="Detailed setup for this client:", icon='PLAY')
+                    for i, step in enumerate(preset.setup_steps, 1):
+                        adv_box.label(
+                            text="{:d}. {:s}".format(i, step),
+                            icon='DOT',
+                        )
+
+                # Config preview.
+                adv_box.label(text="Config Preview:", icon='COPYDOWN')
+                from . import agent_controller as _ac
+                _bridge_port, _, _ = effective_ports(self)
+                preview = _ac.generate_mcp_client_config(
+                    client_type=self.harness_preset,
+                    blender_host=self.host,
+                    blender_port=_bridge_port,
+                    use_blender_python=self.use_blender_python_for_harness,
+                )
+                for line in preview.split("\n"):
+                    adv_box.label(text=line, icon='BLANK1')
+
+            elif self.mcp_server_mode == "NETWORK":
+                mcp_box.prop(self, "mcp_server_host")
+                mcp_box.prop(self, "mcp_server_port_override")
+                if self.mcp_server_host not in ("127.0.0.1", "localhost", "::1"):
+                    mcp_box.label(
+                        text="\u26a0 Binding to non-localhost exposes the MCP server to your network!",
+                        icon='ERROR',
+                    )
+                row = mcp_box.row(align=True)
+                from . import agent_controller as _ac
+                if _ac._agent_state.mcp_server_running:
+                    row.operator("bfacw.mcp_server_stop", icon="CANCEL", text="Stop MCP Server")
+                else:
+                    row.operator("bfacw.mcp_server_start", icon="PLAY", text="Start MCP Server")
 
         # ── Agent Control ─────────────────────────────────────────────
         box = layout.box()
@@ -1461,54 +1556,69 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         row.prop(self, "mcp_port")
         row.prop(self, "llm_port")
 
-        # ── Skills ─────────────────────────────────────────────────────
-        skills_box = layout.box()
-        skills_box.label(text="Skills", icon='TEXT')
-        try:
-            import bpy  # pylint: disable=import-error
-            version_str = ".".join(str(v) for v in bpy.app.version[:3])
-            skills_box.label(
-                text="Blender {:s}".format(version_str),
-                icon='BLENDER',
+        # ── Skills (not in External Harness mode) ───────────────────────
+        if self.operating_mode != "EXTERNAL_HARNESS":
+            skills_box = layout.box()
+            skills_box.label(text="Skills", icon='TEXT')
+            try:
+                import bpy as _bpy_skills  # pylint: disable=import-error
+                version_str = ".".join(str(v) for v in _bpy_skills.app.version[:3])
+                skills_box.label(
+                    text="Blender {:s}".format(version_str),
+                    icon='BLENDER',
+                )
+            except Exception:
+                pass
+            # Show loaded skill files.
+            try:
+                from . import skills as _skills_mod  # pylint: disable=import-error
+                loaded = _skills_mod.list_loaded_skills()
+                if loaded:
+                    col = skills_box.column(align=True)
+                    col.label(text="Loaded Skills:", icon='CHECKMARK')
+                    for name in loaded:
+                        col.label(text="  \u2022 {:s}".format(name))
+                else:
+                    skills_box.label(text="No skills loaded", icon='INFO')
+            except Exception:
+                skills_box.label(text="Skills module not available", icon='ERROR')
+            row = skills_box.row()
+            row.operator("bfacw.reload_skills", icon="FILE_REFRESH", text="Reload Skills")
+
+        # ── Custom Skills (not in External Harness mode) ────────────────
+        if self.operating_mode != "EXTERNAL_HARNESS":
+            custom_box = layout.box()
+            custom_box.label(text="Custom Skills", icon='GREASEPENCIL')
+            custom_box.label(
+                text="Extra instructions injected into every conversation. "
+                     "Use for project-specific conventions, tool preferences, "
+                     "or workflow rules. Markdown format supported.",
+                icon='INFO',
             )
-        except Exception:
-            pass
-        # Show loaded skill files.
-        try:
-            from . import skills as _skills_mod  # pylint: disable=import-error
-            loaded = _skills_mod.list_loaded_skills()
-            if loaded:
-                col = skills_box.column(align=True)
-                col.label(text="Loaded Skills:", icon='CHECKMARK')
-                for name in loaded:
-                    col.label(text="  \u2022 {:s}".format(name))
-            else:
-                skills_box.label(text="No skills loaded", icon='INFO')
-        except Exception:
-            skills_box.label(text="Skills module not available", icon='ERROR')
-        row = skills_box.row()
-        row.operator("bfacw.reload_skills", icon="FILE_REFRESH", text="Reload Skills")
+            # Multiline textbox for comfortable editing (same pattern as chat input).
+            custom_row = custom_box.row()
+            custom_row.scale_y = 3.0
+            custom_row.prop(self, "custom_skills_text", text="", icon='GREASEPENCIL')
 
-        # ── Custom Skills ──────────────────────────────────────────────
-        custom_box = layout.box()
-        custom_box.label(text="Custom Skills", icon='GREASEPENCIL')
-        custom_box.label(
-            text="Extra instructions injected into every conversation. "
-                 "Use for project-specific conventions, tool preferences, "
-                 "or workflow rules. Markdown format supported.",
+        # ── Text Editor Memory Bank (not in External Harness mode) ──────
+        if self.operating_mode != "EXTERNAL_HARNESS":
+            mem_box = layout.box()
+            mem_box.label(text="Text Editor Memory Bank", icon='TEXT')
+            mem_box.label(
+                text="Save executed code to timestamped text datablocks\n"
+                     "(Coworker_HH-MM-SS) for review and reuse.",
+                icon='INFO',
+            )
+            mem_box.prop(self, "save_code_to_text_editor")
+
+        # ── Debug Mode ─────────────────────────────────────────────────
+        debug_box = layout.box()
+        debug_box.label(text="Debug Mode", icon='MODIFIER')
+        debug_box.prop(self, "debug_mode")
+        debug_box.label(
+            text="Enable benchmarks and advanced diagnostics.",
             icon='INFO',
         )
-        custom_box.prop(self, "custom_skills_text")
-
-        # ── Text Editor Memory Bank ───────────────────────────────────
-        mem_box = layout.box()
-        mem_box.label(text="Text Editor Memory Bank", icon='TEXT')
-        mem_box.label(
-            text="Save executed code to timestamped text datablocks\n"
-                 "(Coworker_HH-MM-SS) for review and reuse.",
-            icon='INFO',
-        )
-        mem_box.prop(self, "save_code_to_text_editor")
 
 
 # ---------------------------------------------------------------------------

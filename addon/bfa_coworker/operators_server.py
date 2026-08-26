@@ -46,6 +46,7 @@ class _BFACW_OT_server_start(bpy.types.Operator):  # type: ignore[misc]
             idle_delay=prefs.timer_interval_idle_delay,
         )
         mcp_to_blender_server.use_log = prefs.use_log
+        mcp_to_blender_server.log_level = prefs.log_level
         try:
             mcp_to_blender_server.start(prefs.host, _bridge_port)
         except Exception as ex:  # pylint: disable=broad-exception-caught
@@ -95,6 +96,7 @@ def _autostart_timer() -> None:
         idle_delay=prefs.timer_interval_idle_delay,
     )
     mcp_to_blender_server.use_log = prefs.use_log
+    mcp_to_blender_server.log_level = prefs.log_level
 
     # This isn't expected:
     # - Maybe the operator is explicitly called as part of an automated action.

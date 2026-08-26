@@ -50,10 +50,16 @@ def register(mcp: FastMCP) -> None:
         return (
             "Poly Haven API is accessible.\n"
             "  - HDRIs: {:d}+ available\n"
-            "  - Textures: thousands available\n"
-            "  - Models: thousands available\n"
+            "  - Textures: thousands available (full PBR maps)\n"
+            "  - Models: thousands available (glTF, blend, FBX)\n"
             "  - License: All CC0 (public domain, no attribution required)\n"
             "  - No API key required.\n\n"
+            "PBR Texture Downloads:\n"
+            "  When you download a texture, ALL maps are fetched automatically:\n"
+            "  Diffuse (Base Color), Normal (OpenGL), Roughness, AO, Displacement.\n"
+            "  If Roughness is unavailable, the ARM packed texture is used instead.\n\n"
+            "Available Resolutions: 512, 1k, 2k (default), 4k, 8k\n"
+            "  Resolution is set in Blender addon preferences and injected automatically.\n\n"
             "Use `search_polyhaven_assets` to find assets, "
             "and `download_polyhaven_asset` to download and import them."
         ).format(hdri_count)

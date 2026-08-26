@@ -54,6 +54,8 @@ from .operators_agent import (
     BFACW_OT_open_harness_prefs,
     BFACW_OT_open_config_folder,
     BFACW_OT_open_url,
+    BFACW_OT_open_log,
+    BFACW_OT_compare_benchmarks,
 )
 from .shared import (
     effective_ports,
@@ -99,6 +101,8 @@ _classes = (
     BFACW_OT_open_harness_prefs,
     BFACW_OT_open_config_folder,
     BFACW_OT_open_url,
+    BFACW_OT_open_log,
+    BFACW_OT_compare_benchmarks,
 )
 
 
@@ -149,7 +153,10 @@ def register() -> None:
 
     for cls in _classes:
         bpy.utils.register_class(cls)
-    _cli_commands.append(bpy.utils.register_cli_command("bfa_coworker", _cli_execute_handler))
+    try:
+        _cli_commands.append(bpy.utils.register_cli_command("bfa_coworker", _cli_execute_handler))
+    except (AttributeError, Exception) as ex:
+        print("[Coworker] register_cli_command not available: {:s}".format(str(ex)))
 
     # Migrate operating_mode from legacy agent_mode + llm_mode.
     _migrate_operating_mode()

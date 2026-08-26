@@ -6,104 +6,100 @@
 """
 MCP tool for downloading Poly Haven assets and importing them into Blender.
 
-Supports HDRIs (world environment), textures (PBR material), and models (glTF/FBX/OBJ).
+Supports:
+- HDRIs — world environment shader with proper node tree.
+- Textures — full PBR material (Diffuse, Normal, Roughness, AO, Displacement).
+- Models — glTF/FBX/OBJ import with textures, or .blend append.
 """
 
 __all__ = (
     "register",
 )
 
-import json
-import urllib.parse
-import urllib.request
-import urllib.error
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP  # pylint: disable=import-error,no-name-in-module
 from mcp.types import ToolAnnotations  # pylint: disable=import-error,no-name-in-module
 from blmcp.tools_helpers.connection import send_code  # pylint: disable=import-error
+from blmcp.tools_helpers.polyhaven_pbr import (  # pylint: disable=import-error
+    CACHE_DIR,
+    download_texture_set,
+    resolve_polyhaven_files,
+    build_pbr_material_code,
+    build_blend_import_code,
+)
 
 
-_POLYHAVEN_API = "https://api.polyhaven.com"
-_POLYHAVEN_DL = "https://dl.polyhaven.org/file/ph-assets"
-_CACHE_DIR = Path.home() / ".cache" / "bfa_coworker" / "polyhaven"
+_VALID_RESOLUTIONS = ("512", "1k", "2k", "4k", "8k")
 
 
-def _download_file(url: str, dest: Path) -> str | None:
-    """Download *url* to *dest*, returning error string or None on success."""
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "bfa-coworker/1.0"})
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            with open(str(dest), "wb") as fh:
-                fh.write(resp.read())
-        return None
-    except (urllib.error.URLError, OSError) as ex:
-        return str(ex)
+def _import_hdri_code(filepath: str) -> str:
+    """Return Blender Python code to set up an HDRI world environment."""
+    safe_path = filepath.replace("\\", "\\\\")
+    name = Path(filepath).stem
+    return (
+        "import bpy\n"
+        "\n"
+        "# Ensure world exists.\n"
+        "if not bpy.data.worlds:\n"
+        '    world = bpy.data.worlds.new("World")\n'
+        "    bpy.context.scene.world = world\n"
+        "else:\n"
+        "    world = bpy.context.scene.world\n"
+        '    if world is None:\n'
+        '        world = bpy.data.worlds["World"]\n'
+        "\n"
+        "# Clear existing nodes.\n"
+        "world.use_nodes = True\n"
+        "nodes = world.node_tree.nodes\n"
+        "links = world.node_tree.links\n"
+        "nodes.clear()\n"
+        "\n"
+        "# Create nodes.\n"
+        'tex_coord = nodes.new("ShaderNodeTexCoord")\n'
+        'mapping = nodes.new("ShaderNodeMapping")\n'
+        'env_tex = nodes.new("ShaderNodeTexEnvironment")\n'
+        'bg = nodes.new("ShaderNodeBackground")\n'
+        'output = nodes.new("ShaderNodeOutputWorld")\n'
+        "\n"
+        "# Set filepath.\n"
+        f"env_tex.image = bpy.data.images.load('{safe_path}')\n"
+        "\n"
+        "# Connect nodes.\n"
+        'links.new(tex_coord.outputs["Generated"], mapping.inputs["Vector"])\n'
+        'links.new(mapping.outputs["Vector"], env_tex.inputs["Vector"])\n'
+        'links.new(env_tex.outputs["Color"], bg.inputs["Color"])\n'
+        'links.new(bg.outputs["Background"], output.inputs["Surface"])\n'
+        "\n"
+        "result = {'status': 'ok', 'message': 'HDRI applied to world'}\n"
+    )
 
 
-def _resolve_polyhaven_file_url(asset_id: str, asset_type: str, resolution: str) -> tuple[str, str] | tuple[None, None]:
-    """Resolve a Poly Haven asset download URL via the public API."""
-    url = f"{_POLYHAVEN_API}/files/{asset_id}"
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "bfa-coworker/1.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode())
-    except (urllib.error.URLError, json.JSONDecodeError):
-        return None, None
-
-    def _pick_url(entry: dict[str, object], preferred_ext: tuple[str, ...]) -> str | None:
-        if not isinstance(entry, dict):
-            return None
-        desired = entry.get(resolution)
-        if not isinstance(desired, dict):
-            return None
-        for ext in preferred_ext:
-            candidate = desired.get(ext)
-            if isinstance(candidate, dict) and "url" in candidate:
-                return candidate["url"]
-        for candidate in desired.values():
-            if isinstance(candidate, dict) and "url" in candidate:
-                return candidate["url"]
-        return None
-
-    asset_url: str | None = None
-    if asset_type == "hdris":
-        entry = data.get("hdri", {})
-        asset_url = _pick_url(entry, ("hdr", "exr"))
-    elif asset_type == "textures":
-        texture_entry = None
-        for color_key in ("Diffuse", "BaseColor", "Color", "Albedo"):
-            if color_key in data and isinstance(data[color_key], dict):
-                texture_entry = data[color_key]
-                break
-        if texture_entry is None:
-            for value in data.values():
-                if isinstance(value, dict) and resolution in value:
-                    texture_entry = value
-                    break
-        if texture_entry is not None:
-            asset_url = _pick_url(texture_entry, ("jpg", "png", "exr"))
+def _import_model_code(filepath: str) -> str:
+    """Return Blender Python code to import a 3D model."""
+    ext = Path(filepath).suffix.lower()
+    safe_path = filepath.replace("\\", "\\\\")
+    name = Path(filepath).stem
+    if ext in (".gltf", ".glb"):
+        import_line = 'bpy.ops.import_scene.gltf(filepath="' + safe_path + '")'
+    elif ext == ".fbx":
+        import_line = 'bpy.ops.import_scene.fbx(filepath="' + safe_path + '")'
+    elif ext == ".obj":
+        import_line = 'bpy.ops.import_scene.obj(filepath="' + safe_path + '")'
     else:
-        for model_key in ("gltf", "glb", "fbx", "obj", "usd"):
-            candidate = data.get(model_key)
-            if candidate is not None:
-                if isinstance(candidate, dict) and "url" in candidate:
-                    asset_url = candidate["url"]
-                elif isinstance(candidate, dict):
-                    for value in candidate.values():
-                        if isinstance(value, dict) and "url" in value:
-                            asset_url = value["url"]
-                            break
-                elif isinstance(candidate, str):
-                    asset_url = candidate
-                break
+        return (
+            "import bpy\n"
+            'result = {"status": "error", "message": "Unsupported format: ' + ext + '"}\n'
+        )
 
-    if not asset_url:
-        return None, None
-
-    filename = Path(urllib.parse.urlparse(asset_url).path).name
-    return asset_url, filename
+    return (
+        "import bpy\n"
+        "\n"
+        "# Import the model.\n"
+        + import_line + "\n"
+        "\n"
+        "result = {'status': 'ok', 'message': 'Imported model'}\n"
+    )
 
 
 def register(mcp: FastMCP) -> None:
@@ -121,154 +117,179 @@ def register(mcp: FastMCP) -> None:
         """
         Download a Poly Haven asset and import it into the current Blender scene.
 
-        For HDRIs: creates a world environment shader.
-        For textures: creates a PBR material node tree.
-        For models: imports the 3D model.
+        For **HDRIs**: creates a world environment shader with the HDRI mapped
+        to a background node.
+
+        For **textures**: downloads all PBR maps (Diffuse, Normal, Roughness,
+        AO, Displacement) and builds a complete Principled BSDF material with
+        all maps properly connected.  Uses the ``arm`` packed texture as a
+        fallback for missing Roughness/Metallic maps.
+
+        For **models**: imports the 3D model (glTF/FBX/OBJ) with textures.
+        If a ``.blend`` file is available, appends objects/collections instead.
+
+        The resolution is typically set by the user in Blender addon
+        preferences and injected automatically.  You can override it here
+        if needed.
 
         Args:
-            asset_id: The asset ID from ``search_polyhaven_assets`` (e.g. ``"sunset_meadow"``).
+            asset_id: The asset ID from ``search_polyhaven_assets``
+                (e.g. ``"concrete_floor_01"``).
             asset_type: ``"hdris"``, ``"textures"``, or ``"models"``.
-            resolution: Download resolution — ``"1k"``, ``"2k"``, ``"4k"``, ``"8k"`` (HDRIs/textures).
+            resolution: Download resolution — ``"512"``, ``"1k"``, ``"2k"``,
+                ``"4k"``, or ``"8k"`` (HDRIs/textures).  Models always use
+                the resolution that best matches.
 
         Returns:
-            A summary of what was downloaded and imported.
+            A summary of what was downloaded and imported, including which
+            PBR maps were used.
         """
         if asset_type not in ("hdris", "textures", "models"):
-            return "Invalid asset_type '{:s}'. Choose 'hdris', 'textures', or 'models'.".format(asset_type)
+            return (
+                f"Invalid asset_type '{asset_type}'. "
+                "Choose 'hdris', 'textures', or 'models'."
+            )
 
-        if resolution not in ("1k", "2k", "4k", "8k"):
-            return "Invalid resolution '{:s}'. Choose '1k', '2k', '4k', or '8k'.".format(resolution)
+        if resolution not in _VALID_RESOLUTIONS:
+            return (
+                f"Invalid resolution '{resolution}'. "
+                f"Choose from: {', '.join(_VALID_RESOLUTIONS)}."
+            )
 
-        # Resolve the current download URL for this asset via the Poly Haven API.
-        file_url, filename = _resolve_polyhaven_file_url(asset_id, asset_type, resolution)
-        if not file_url:
-            return "Download failed: could not resolve Poly Haven download URL for asset '{:s}'".format(asset_id)
+        # ── Resolve all file URLs via the Polyhaven API ──
+        resolved = resolve_polyhaven_files(asset_id, asset_type, resolution)
+        if not resolved:
+            return (
+                f"Could not resolve Poly Haven download URLs for asset "
+                f"'{asset_id}'. Check the asset ID and try again."
+            )
 
-        dest = _CACHE_DIR / asset_type / filename
-
-        # Download if not cached.
-        if not dest.exists():
-            error = _download_file(file_url, dest)
-            if error:
-                return "Download failed: {:s}".format(error)
-
-        # Import into Blender via the bridge.
+        # ── HDRIs ──
         if asset_type == "hdris":
+            hdri_info = resolved.get("hdri")
+            if not hdri_info:
+                return f"No HDRI files found for asset '{asset_id}' at {resolution}."
+
+            url, filename = hdri_info
+            dest = CACHE_DIR / "hdris" / asset_id / resolution / filename
+            if not dest.exists():
+                err = _download_with_progress(url, dest)
+                if err:
+                    return f"Download failed: {err}"
+
             code = _import_hdri_code(str(dest))
-        elif asset_type == "textures":
-            code = _import_texture_code(str(dest), asset_id)
-        else:
-            code = _import_model_code(str(dest))
-
-        result = send_code(code, strict_json=True)
-        status = result.get("status", "error")
-        if status == "ok":
-            return "Downloaded and imported '{:s}' ({:s}, {:s}) successfully.".format(
-                asset_id, asset_type, resolution
-            )
-        else:
-            return "Downloaded '{:s}' but import failed: {:s}".format(
-                asset_id, result.get("message", str(result))
+            result = send_code(code, strict_json=True)
+            status = result.get("status", "error")
+            if status == "ok":
+                return (
+                    f"Downloaded and applied HDRI '{asset_id}' ({resolution}) "
+                    f"as world environment."
+                )
+            return (
+                f"Downloaded '{asset_id}' but import failed: "
+                f"{result.get('message', str(result))}"
             )
 
+        # ── Textures (full PBR) ──
+        if asset_type == "textures":
+            downloaded = download_texture_set(
+                asset_id, asset_type, resolution, CACHE_DIR
+            )
+            if not downloaded:
+                return (
+                    f"Failed to download texture maps for '{asset_id}'. "
+                    "Check your network connection and try again."
+                )
 
-def _import_hdri_code(filepath: str) -> str:
-    """Return Blender Python code to set up an HDRI world environment."""
-    safe_path = filepath.replace("\\", "\\\\")
-    name = Path(filepath).stem
-    return (
-        'import bpy\n'
-        '\n'
-        '# Ensure world exists.\n'
-        'if not bpy.data.worlds:\n'
-        '    world = bpy.data.worlds.new("World")\n'
-        '    bpy.context.scene.world = world\n'
-        'else:\n'
-        '    world = bpy.context.scene.world\n'
-        '    if world is None:\n'
-        '        world = bpy.data.worlds["World"]\n'
-        '\n'
-        '# Clear existing nodes.\n'
-        'world.use_nodes = True\n'
-        'nodes = world.node_tree.nodes\n'
-        'links = world.node_tree.links\n'
-        'nodes.clear()\n'
-        '\n'
-        '# Create nodes.\n'
-        'tex_coord = nodes.new("ShaderNodeTexCoord")\n'
-        'mapping = nodes.new("ShaderNodeMapping")\n'
-        'env_tex = nodes.new("ShaderNodeTexEnvironment")\n'
-        'bg = nodes.new("ShaderNodeBackground")\n'
-        'output = nodes.new("ShaderNodeOutputWorld")\n'
-        '\n'
-        '# Set filepath.\n'
-        'env_tex.image = bpy.data.images.load("' + safe_path + '")\n'
-        '\n'
-        '# Connect nodes.\n'
-        'links.new(tex_coord.outputs["Generated"], mapping.inputs["Vector"])\n'
-        'links.new(mapping.outputs["Vector"], env_tex.inputs["Vector"])\n'
-        'links.new(env_tex.outputs["Color"], bg.inputs["Color"])\n'
-        'links.new(bg.outputs["Background"], output.inputs["Surface"])\n'
-        '\n'
-        'result = {"status": "ok", "message": "HDRI \'' + name + '\' applied to world"}\n'
-    )
+            # Build the PBR material code.
+            # Map download keys to the paths expected by build_pbr_material_code.
+            tex_paths = {}
+            for key in ("diffuse", "normal", "roughness", "arm", "ao", "displacement"):
+                if key in downloaded:
+                    tex_paths[key] = downloaded[key]
+
+            material_name = f"PH_{asset_id}"
+            code = build_pbr_material_code(material_name, tex_paths)
+            result = send_code(code, strict_json=True)
+            status = result.get("status", "error")
+
+            maps_used = [k for k in tex_paths if not k.startswith("tex_")]
+            if status == "ok":
+                return (
+                    f"Created PBR material '{material_name}' from '{asset_id}' "
+                    f"({resolution}).\n"
+                    f"Maps: {', '.join(maps_used)}.\n"
+                    f"Assigned to active object."
+                )
+            return (
+                f"Downloaded {len(maps_used)} texture maps for '{asset_id}' "
+                f"but material creation failed: "
+                f"{result.get('message', str(result))}"
+            )
+
+        # ── Models ──
+        # Check for .blend file first (highest quality — pre-made materials).
+        blend_info = resolved.get("blend")
+        if blend_info:
+            url, filename = blend_info
+            dest = CACHE_DIR / "models" / asset_id / resolution / filename
+            if not dest.exists():
+                err = _download_with_progress(url, dest)
+                if err:
+                    # Fall through to glTF/FBX import.
+                    blend_info = None
+                else:
+                    # Download included textures into relative subdirectory.
+                    tex_data = resolved.get("textures")
+                    if tex_data and isinstance(tex_data, dict):
+                        tex_dir = dest.parent / "textures"
+                        tex_dir.mkdir(parents=True, exist_ok=True)
+                        for _key, (tex_url, tex_fname) in tex_data.items():
+                            tex_dest = tex_dir / tex_fname
+                            if not tex_dest.exists():
+                                _download_with_progress(tex_url, tex_dest)
+
+                    code = build_blend_import_code(str(dest), asset_id)
+                    result = send_code(code, strict_json=True)
+                    status = result.get("status", "error")
+                    if status == "ok":
+                        return (
+                            f"Appended model '{asset_id}' from .blend file "
+                            f"({resolution})."
+                        )
+                    # .blend import failed — fall through to glTF.
+                    print(
+                        f"[Coworker] .blend import failed for {asset_id}: "
+                        f"{result.get('message', '')} — trying glTF"
+                    )
+
+        # Fall back to glTF/FBX/OBJ import.
+        for fmt_key in ("gltf", "glb", "fbx", "obj"):
+            fmt_info = resolved.get(fmt_key)
+            if fmt_info:
+                url, filename = fmt_info
+                dest = CACHE_DIR / "models" / asset_id / resolution / filename
+                if not dest.exists():
+                    err = _download_with_progress(url, dest)
+                    if err:
+                        return f"Download failed for {fmt_key}: {err}"
+
+                code = _import_model_code(str(dest))
+                result = send_code(code, strict_json=True)
+                status = result.get("status", "error")
+                if status == "ok":
+                    return (
+                        f"Imported model '{asset_id}' ({fmt_key}, {resolution})."
+                    )
+                return (
+                    f"Downloaded '{asset_id}' but import failed: "
+                    f"{result.get('message', str(result))}"
+                )
+
+        return f"No importable files found for model '{asset_id}'."
 
 
-def _import_texture_code(filepath: str, asset_id: str) -> str:
-    """Return Blender Python code to create a PBR material from a texture."""
-    safe_path = filepath.replace("\\", "\\\\")
-    return (
-        'import bpy\n'
-        '\n'
-        '# Create a new material.\n'
-        'mat = bpy.data.materials.new("PH_' + asset_id + '")\n'
-        'mat.use_nodes = True\n'
-        'nodes = mat.node_tree.nodes\n'
-        'links = mat.node_tree.links\n'
-        'nodes.clear()\n'
-        '\n'
-        '# Create nodes.\n'
-        'tex_node = nodes.new("ShaderNodeTexImage")\n'
-        'tex_node.image = bpy.data.images.load("' + safe_path + '")\n'
-        'bsdf = nodes.new("ShaderNodeBsdfPrincipled")\n'
-        'output = nodes.new("ShaderNodeOutputMaterial")\n'
-        '\n'
-        '# Connect.\n'
-        'links.new(tex_node.outputs["Color"], bsdf.inputs["Base Color"])\n'
-        'links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])\n'
-        '\n'
-        '# Assign to active object if one is selected.\n'
-        'obj = bpy.context.active_object\n'
-        'if obj and obj.type == \'MESH\':\n'
-        '    if obj.data.materials:\n'
-        '        obj.data.materials[0] = mat\n'
-        '    else:\n'
-        '        obj.data.materials.append(mat)\n'
-        '\n'
-        'result = {"status": "ok", "message": "Texture \'' + asset_id + '\' applied as material"}\n'
-    )
-
-
-def _import_model_code(filepath: str) -> str:
-    """Return Blender Python code to import a 3D model."""
-    ext = Path(filepath).suffix.lower()
-    safe_path = filepath.replace("\\", "\\\\")
-    name = Path(filepath).stem
-    # Build the import operator line based on extension.
-    if ext in (".gltf", ".glb"):
-        import_line = 'bpy.ops.import_scene.gltf(filepath="' + safe_path + '")'
-    elif ext == ".fbx":
-        import_line = 'bpy.ops.import_scene.fbx(filepath="' + safe_path + '")'
-    elif ext == ".obj":
-        import_line = 'bpy.ops.import_scene.obj(filepath="' + safe_path + '")'
-    else:
-        import_line = 'result = {"status": "error", "message": "Unsupported format: ' + ext + '"}\n    raise SystemExit(0)'
-
-    return (
-        'import bpy\n'
-        '\n'
-        '# Import the model.\n'
-        + import_line + '\n'
-        '\n'
-        'result = {"status": "ok", "message": "Imported model from \'' + name + '\'"}\n'
-    )
+def _download_with_progress(url: str, dest: Path) -> str | None:
+    """Download *url* to *dest*, returning error string or None on success."""
+    from blmcp.tools_helpers.polyhaven_pbr import _download_file  # pylint: disable=import-error
+    return _download_file(url, dest)

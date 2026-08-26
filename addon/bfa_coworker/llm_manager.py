@@ -52,6 +52,7 @@ import io
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tarfile
@@ -612,7 +613,7 @@ PRESET_MODELS: list[ModelPreset] = [
         capability="Strong",
         category="lightweight",
         context_window=131072,
-        max_tokens=8192,
+        max_tokens=12288,
         vision=True,
         mmproj_filename="mmproj-F16.gguf",
         hardware_note="Any GPU or integrated — 4 GB+ VRAM",
@@ -633,7 +634,7 @@ PRESET_MODELS: list[ModelPreset] = [
         capability="Strong",
         category="lightweight",
         context_window=262144,
-        max_tokens=8192,
+        max_tokens=12288,
         vision=True,
         mmproj_filename="mmproj.gguf",
         hardware_note="Any GPU — 4 GB+ VRAM",
@@ -654,7 +655,7 @@ PRESET_MODELS: list[ModelPreset] = [
         capability="Strong",
         category="lightweight",
         context_window=262144,
-        max_tokens=8192,
+        max_tokens=12288,
         vision=True,
         mmproj_filename="mmproj-F16.gguf",
         hardware_note="Any GPU — 8 GB+ VRAM",
@@ -1065,10 +1066,11 @@ def invalidate_llama_server_cache() -> None:
     Call this after the user installs llama-server externally or changes
     the configured path, so the addon detects it without a Blender restart.
     """
-    global _find_llama_server_cache, _find_llama_server_checked
+    global _find_llama_server_cache, _find_llama_server_checked, _gpu_backend_cache
     print("[🛠️Coworker] invalidate_llama_server_cache: cache cleared")
     _find_llama_server_checked = False
     _find_llama_server_cache = None
+    _gpu_backend_cache = None
 
 
 # ---------------------------------------------------------------------------
@@ -1135,15 +1137,27 @@ def _set_download_kind(kind: str) -> None:
         _state.download_kind = kind
 
 
+# Cache for GPU backend detection — nvidia-smi/wmic are expensive and
+# called from multiple places (find_llama_server, start_local_llama,
+# download_llama_server).  Cache the result so we only spawn once.
+_gpu_backend_cache: str | None = None
+
+
 def _detect_gpu_backend() -> str:
     """Detect the best GPU backend for llama-server on this machine.
 
-    Returns one of "cuda", "vulkan", or "cpu".
+    Returns one of ``"cuda"``, ``"vulkan"``, or ``"cpu"``.
+    Result is cached after the first call.
     """
+    global _gpu_backend_cache
+    if _gpu_backend_cache is not None:
+        return _gpu_backend_cache
+
     if sys.platform != "win32":
         # Non-Windows: default to cpu (or vulkan on Linux if available).
         # We don't auto-detect on macOS/Linux — user can override manually.
-        return "cpu"
+        _gpu_backend_cache = "cpu"
+        return _gpu_backend_cache
 
     # Windows detection.
     # 1. Check for NVIDIA GPU via nvidia-smi.
@@ -1154,7 +1168,8 @@ def _detect_gpu_backend() -> str:
         )
         if result.returncode == 0 and result.stdout.strip():
             print("[🛠️Coworker] _detect_gpu_backend: NVIDIA GPU detected -> cuda")
-            return "cuda"
+            _gpu_backend_cache = "cuda"
+            return _gpu_backend_cache
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         pass
 
@@ -1167,13 +1182,15 @@ def _detect_gpu_backend() -> str:
         output = result.stdout.lower()
         if "amd" in output or "radeon" in output or "intel" in output:
             print("[🛠️Coworker] _detect_gpu_backend: AMD/Intel GPU detected -> vulkan")
-            return "vulkan"
+            _gpu_backend_cache = "vulkan"
+            return _gpu_backend_cache
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         pass
 
     # 3. Fallback to CPU.
     print("[🛠️Coworker] _detect_gpu_backend: no compatible GPU detected -> cpu")
-    return "cpu"
+    _gpu_backend_cache = "cpu"
+    return _gpu_backend_cache
 
 
 def resolve_gpu_backend(backend: str) -> str:
@@ -2218,6 +2235,12 @@ def start_local_llama(
                 env=env,
             )
             print("[🛠️Coworker] start_local_llama:   Popen returned pid={:d}".format(proc.pid))
+            # Set a meaningful window title so the user knows what this console is.
+            try:
+                import ctypes
+                ctypes.windll.kernel32.SetConsoleTitleW("BFA Coworker — llama-server")  # type: ignore[attr-defined]
+            except Exception:
+                pass
         else:
             # Linux / macOS: detach from the parent process group so the
             # server survives Blender exiting.  We redirect stdio to the
@@ -2259,6 +2282,8 @@ def stop_local_llama() -> None:
     global _llama_process
 
     print("[🛠️Coworker] stop_local_llama: called")
+    _state._shutting_down = True
+    _state.error = "Stopping LLM..."
 
     with _lock:
         proc = _llama_process
@@ -2270,11 +2295,12 @@ def stop_local_llama() -> None:
         try:
             print("[🛠️Coworker] stop_local_llama:   calling proc.terminate()")
             proc.terminate()
-            print("[🛠️Coworker] stop_local_llama:   waiting up to 3s for exit...")
-            proc.wait(timeout=3)
+            print("[🛠️Coworker] stop_local_llama:   waiting up to 10s for exit...")
+            proc.wait(timeout=10)
             print("[🛠️Coworker] stop_local_llama:   process exited")
         except subprocess.TimeoutExpired:
-            print("[🛠️Coworker] stop_local_llama:   timeout — killing")
+            print("[🛠️Coworker] stop_local_llama:   timeout — force killing")
+            _state.error = "Force killing LLM..."
             proc.kill()
             proc.wait(timeout=3)
         except Exception as ex:  # pylint: disable=broad-exception-caught
@@ -2310,6 +2336,8 @@ def stop_local_llama() -> None:
     with _lock:
         _state.is_running = False
         _state.current_mode = "off"
+    _state._shutting_down = False
+    _state.error = ""
 
     print("[🛠️Coworker] stop_local_llama: done")
 

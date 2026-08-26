@@ -192,3 +192,50 @@ Common mistakes:
 - `rotation_euler=(0, 0, pi)` rotates around the **Z axis** (yaw), not X.
 - `primitive_plane_add()` creates on the XY plane (facing up).
 - `primitive_cube_add()` centers on the origin — half extends ±Z.
+
+## Collection Operations (Move vs Link)
+
+Blender collections support **multiple parents** — an object can exist in
+multiple collections simultaneously. This means:
+
+- `collection.objects.link(obj)` adds the object to a collection but does
+  NOT remove it from its original collection.
+- To **move** an object, you must BOTH link to the new collection AND
+  unlink from the original.
+
+```python
+# WRONG — object ends up in both collections:
+new_col.objects.link(obj)
+
+# CORRECT — move (link + unlink):
+new_col.objects.link(obj)
+old_col.objects.unlink(obj)
+```
+
+**Moving an object to a new collection:**
+```python
+obj = bpy.data.objects.get("MyObject")
+new_col = bpy.data.collections.get("TargetCollection")
+
+# Find and unlink from all current collections.
+for col in obj.users_collection:
+    col.objects.unlink(obj)
+
+# Link to the new collection.
+new_col.objects.link(obj)
+```
+
+**Moving a collection (reparent):**
+```python
+child_col = bpy.data.collections.get("Child")
+parent_col = bpy.data.collections.get("Parent")
+
+# Unlink from current parent.
+scene_col = bpy.context.scene.collection
+for parent in child_col.children.values():
+    parent.children.unlink(child_col)
+
+# Link under new parent.
+parent_col.children.link(child_col)
+```
+

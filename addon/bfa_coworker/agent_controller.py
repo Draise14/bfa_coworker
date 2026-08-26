@@ -250,6 +250,24 @@ def _strip_reasoning_from_history(messages: list[dict[str, Any]]) -> list[dict[s
     return [m for m in messages if m.get("role") != "reasoning"]
 
 
+_STANDARD_ROLES = frozenset({"system", "user", "assistant", "tool"})
+
+
+def _sanitize_message_roles(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Map any non-standard message roles to ``"user"`` before sending to the LLM.
+
+    Some models (Qwen, etc.) have strict Jinja chat templates that raise
+    ``Unexpected message role`` when they encounter a role they don't
+    recognise.  This safety net maps unknown roles to ``"user"`` so the
+    content is preserved without crashing the template.
+    """
+    return [
+        m if m.get("role") in _STANDARD_ROLES else {**m, "role": "user"}
+        for m in messages
+    ]
+
+
 # ── Tool domain system (hybrid: pre-detect + on-demand) ────────────
 # Surface tools are always loaded — they cover code execution and basic
 # scene inspection.  Domain tools are loaded based on the user's prompt
@@ -1902,6 +1920,25 @@ def _openai_chat_completions(
                 data_bytes = json.dumps(body).encode()
                 req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
                 continue
+
+            # ── Chat template role error fallback ──────────────────────
+            # Some models (Qwen, etc.) have strict Jinja templates that
+            # reject non-standard message roles.  Sanitize roles and retry.
+            if isinstance(ex, urllib.error.HTTPError) and ex.code == 500:
+                _error_body = ""
+                try:
+                    _error_body = ex.read().decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+                if "Unexpected message role" in _error_body:
+                    print("[🛠️Coworker] _openai_chat_completions: 500 error — "
+                          "unexpected message role, sanitizing and retrying")
+                    messages = _sanitize_message_roles(messages)
+                    body["messages"] = messages
+                    data_bytes = json.dumps(body).encode()
+                    req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
+                    continue
+
             # ── 503 Service Unavailable: model still loading ──────────
             # llama-server returns 503 while the model is loading into
             # memory (can take 30-120s for large models).  Retry with
@@ -3146,19 +3183,26 @@ def _run_conversation_turn_inner(
             # Keep system message + last N messages.
             if history[0].get("role") == "system":
                 history_to_send = [history[0]] + history[-(keep - 1):]
-                # Walk forward from the system message and remove any
-                # orphaned "tool" messages that lost their assistant pair.
-                history_to_send = _drop_orphaned_tool_messages(history_to_send)
             else:
-                history_to_send = _drop_orphaned_tool_messages(history[-keep:])
+                history_to_send = history[-keep:]
         else:
             history_to_send = history
+
+        # Remove orphaned "tool" messages that lost their assistant pair.
+        # This must run for ALL history sizes — Qwen's Jinja template
+        # crashes with "Unexpected message role" on orphaned tool messages.
+        history_to_send = _drop_orphaned_tool_messages(history_to_send)
 
         # Strip reasoning messages before sending to the LLM.
         # Reasoning (chain-of-thought) uses a non-standard "reasoning"
         # role that wastes context window tokens without providing
         # useful signal to the model.
         history_to_send = _strip_reasoning_from_history(history_to_send)
+
+        # Sanitize any remaining non-standard roles to "user".
+        # Some models (Qwen, etc.) have strict Jinja templates that
+        # raise "Unexpected message role" on unknown roles.
+        history_to_send = _sanitize_message_roles(history_to_send)
 
         # ── Inject screenshot images into the next user message ───────
         # If the last tool result contained an image (screenshot), inject

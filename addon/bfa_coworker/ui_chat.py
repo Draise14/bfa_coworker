@@ -1479,7 +1479,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 turn_box = hist_box.box()
                 if has_proc:
                     has_err = any(p.get("role")=="tool" and ('"status": "error"' in (p.get("content") or "") or (p.get("content") or "").startswith("Error")) for p in process_msgs)
-                    tic = "WARNING" if has_err else ("CHECKMARK" if conclusion_msg else "SORTTIME")
+                    tic = "CHECKMARK" if conclusion_msg else "SORTTIME"
                     th, tb2 = turn_box.panel("turn_{:d}".format(turn_num), default_closed=not (turn_num==1 and state.is_thinking))
                     hr = th.row(align=True)
                     hr.label(text="", icon=tic)
@@ -1495,7 +1495,8 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         if process_msgs:
                             tb2.separator()
                             pb = tb2.box()
-                            pb.label(text="Process ({:d} steps)".format(len(process_msgs)), icon="SORTTIME")
+                            pb_icon = "WARNING" if has_err else "SORTTIME"
+                            pb.label(text="Process ({:d} steps)".format(len(process_msgs)), icon=pb_icon)
                             for pm in process_msgs:
                                 pr = pm.get("role", "")
                                 pc = pm.get("content", "")

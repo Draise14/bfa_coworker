@@ -1366,7 +1366,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         status_icon = (
             'CHECKMARK' if is_ok and not state.is_thinking else
             'SORTTIME' if state.is_thinking else
-            'WARNING' if state.error else 'CHECKMARK'
+            'WARNING' if state.error else 'ERROR'
         )
         status_row = layout.row()
         status_row.label(text=status, icon=status_icon)
@@ -1544,7 +1544,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
 
         else:
             layout.label(
-                text="Getting ready...",
+                text="Start a conversation by typing a message and clicking Send.",
                 icon='INFO',
             )
 

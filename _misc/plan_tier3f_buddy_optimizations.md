@@ -138,7 +138,7 @@ Blender Buddy solves this by having a single "Download" button per model tier, w
 
 ## 3. Blender Buddy's Approach — What to Adopt
 
-### 3.1 Model Selection: One Family, Three Quants
+### 3.1 Model Selection: One Family, Three Quants, Vision Built-In
 
 Blender Buddy's model selection is dead simple:
 
@@ -160,6 +160,20 @@ Blender Buddy's model selection is dead simple:
 - **"Recommended" badge** — based on detected hardware, not marketing
 - **Vision model is separate** — only downloaded when needed
 - **System specs shown** — helps users understand *why* a tier is recommended
+
+**BFA Coworker's adaptation — Qwen3.8-27B as the primary family:**
+
+We use **Qwen3.8-27B** instead of Buddy's Qwen3-30B-A3B because:
+- Qwen3.8 is the **latest Qwen generation** (August 2026) — better tool calling, vision, and agentic reasoning
+- **Native vision-language** — no separate vision model needed. The same GGUF handles text + images when paired with its mmproj.
+- **Apache 2.0 license** — same permissive license as Buddy's model
+- Available in multiple quants from `unsloth/Qwen3.8-27B-GGUF`
+
+**Vision is built-in, not opt-in.** The primary model family is vision-capable out of the box. The mmproj file is downloaded alongside the model. This means:
+- Screenshot/vision input works immediately after model download
+- No separate "Vision Model" download needed
+- No mode switching (text ↔ vision) — the same server handles both
+- Server lifecycle is simpler (Phase 6 is reduced)
 
 ### 3.2 Download UX: One Button Per Tier
 
@@ -214,80 +228,164 @@ This eliminates the #1 cause of "llama-server crashed at startup" — wrong `--n
 
 ## 4. Implementation Plan
 
-### Phase 1: Simplify Model Presets (~150 LOC, 2 files)
+### Phase 1: Model Preset Restructure (~200 LOC, 2 files)
 
-**What**: Reduce from 9 presets across 3 categories to a **single recommended model family** with quantization tiers, plus a few alternative models for specific needs.
+**What**: Restructure the 9 presets into a **primary model family** (Qwen3.8-27B with 3 quantization tiers, vision built-in) displayed prominently at the top, with the remaining curated presets in a collapsible "More Models" sub-panel. Smart local file detection auto-discovers already-downloaded models.
 
-**Reference**: Blender Buddy's `TEXT_MODEL_VARIANTS` dictionary — one model, three quants.
+**Reference**: Blender Buddy's `TEXT_MODEL_VARIANTS` — one model, three quants, vision built-in.
+
+**Why Qwen3.8-27B as the primary family:**
+- **Latest Qwen generation** (August 2026) — best tool calling, vision, and agentic reasoning
+- **Native vision-language** — same GGUF handles text + images when paired with its mmproj. No separate vision model download. Vision just works out of the box.
+- **Apache 2.0 license** — permissive, same as Blender Buddy's model
+- Available in multiple quants from `unsloth/Qwen3.8-27B-GGUF`
+- The mmproj file (`mmproj-F16.gguf`) is downloaded alongside the model — no mode switching needed
+
+**About the DFlash2 variant:**
+The Qwen3.8-27B-DFlash2 model on HuggingFace is a **draft model for speculative decoding**, not a standalone LLM. It's only 1.1-3.8 GB because it's a lightweight token predictor that runs alongside the full Qwen3.8-27B. It cannot be used independently. We use the full Qwen3.8-27B GGUF instead.
+
+**Future: ⚡ Turbo Mode (Tier 5a)** — DFlash2 speculative decoding will be added as an optional accelerator in Tier 5a, once llama.cpp PR #27342 is merged into main and included in a tagged release. When enabled, it provides 2-3x faster local inference with zero quality loss. See `plan_tier5a_turbo_mode_speculative_decoding.md` for the full plan.
 
 **Implementation:**
 
 **Step 1.1 — New preset structure**
 
 ```python
-# One primary model family with quantization tiers.
-# Users pick based on their RAM, not model architecture.
-PRIMARY_MODEL = {
-    "repo_id": "unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF",
-    "family": "Qwen3-30B-A3B (MoE, 3.3B active)",
+# ── Primary Model Family (Qwen3.8-27B) ─────────────────────
+# The recommended model. Vision-capable out of the box.
+# Three quantization tiers — pick based on your RAM.
+PRIMARY_FAMILY = {
+    "repo_id": "unsloth/Qwen3.8-27B-GGUF",
+    "family": "Qwen3.8-27B (latest, vision + agentic)",
+    "mmproj_filename": "mmproj-F16.gguf",  # Vision built-in
     "variants": {
-        "low": {
-            "label": "Low",
-            "filename": "Qwen3-30B-A3B-Instruct-2507-UD-IQ1_M.gguf",
-            "size_gb": 9.7,
+        "light": {
+            "label": "Light",
+            "filename": "Qwen3.8-27B-IQ3_M.gguf",
+            "size_gb": 13.5,
             "ram_gb": 16,
-            "quant": "UD-IQ1_M",
-            "sha256": "d527a854db2a1582a3ce746a17b1f42d860334ece18d385ede9e2e395058b39e",
+            "quant": "IQ3_M",
+            "why": "Fits 16 GB — best for laptops and mid-range GPUs",
         },
-        "medium": {
-            "label": "Medium",
-            "filename": "Qwen3-30B-A3B-Instruct-2507-Q3_K_M.gguf",
-            "size_gb": 14.7,
+        "balanced": {
+            "label": "Balanced",
+            "filename": "Qwen3.8-27B-Q4_K_M.gguf",
+            "size_gb": 17.0,
             "ram_gb": 24,
-            "quant": "Q3_K_M",
-            "sha256": "e145c9d2f5d11c9583eb099aa75100b7ab943e77d5240c9a2cd936f81c89ef43",
+            "quant": "Q4_K_M",
+            "why": "Best quality-for-size — recommended for most users",
         },
-        "high": {
-            "label": "High",
-            "filename": "Qwen3-30B-A3B-Instruct-2507-Q5_K_M.gguf",
-            "size_gb": 21.7,
+        "max": {
+            "label": "Max",
+            "filename": "Qwen3.8-27B-Q6_K.gguf",
+            "size_gb": 22.0,
             "ram_gb": 32,
-            "quant": "Q5_K_M",
-            "sha256": "74cf6e525344a184e59f8dbd1d18e59587f1a03eaff66f6b1fbd0ee3a53a3d68",
+            "quant": "Q6_K",
+            "why": "Highest precision — best for 32 GB+ systems",
         },
     },
 }
 
-# Alternative models for specific needs (kept but de-emphasized).
-# These are "power user" options, not primary choices.
-ALTERNATIVE_MODELS = [
+# ── Curated Presets (sub-panel) ─────────────────────────────
+# Alternative models for specific needs. All vision-capable
+# where noted. These are power-user options.
+CURATED_PRESETS = [
     {
         "identifier": "gpt_oss_20b_q4",
-        "name": "GPT-OSS 20B",
-        "why": "Native function calling — best for complex tool use",
+        "name": "GPT-OSS 20B (Q4_K_M)",
         "repo_id": "unsloth/gpt-oss-20b-GGUF",
         "filename": "gpt-oss-20b-Q4_K_M.gguf",
         "size_gb": 12,
         "ram_gb": 16,
+        "vision": False,
+        "why": "OpenAI's open-weight — native function calling, structured outputs",
+        "category": "mid_range",
+    },
+    {
+        "identifier": "qwen38_27b_q8",
+        "name": "Qwen3.8-27B (Q8_0)",
+        "repo_id": "unsloth/Qwen3.8-27B-GGUF",
+        "filename": "Qwen3.8-27B-Q8_0.gguf",
+        "size_gb": 29,
+        "ram_gb": 32,
+        "vision": True,
+        "mmproj_filename": "mmproj-F16.gguf",
+        "why": "Highest quality Qwen3.8 quant — vision + agentic, 262K context",
+        "category": "flagship",
+    },
+    {
+        "identifier": "fable_fusion_27b_q6",
+        "name": "Fable Fusion 27B (Q6_K)",
+        "repo_id": "DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF",
+        "filename": "Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-Q6_K.gguf",
+        "size_gb": 24,
+        "ram_gb": 24,
+        "vision": True,
+        "mmproj_filename": "mmproj-F16.gguf",
+        "why": "Top-ranked fine-tune — ARC-711 benchmark, uncensored, vision-capable",
+        "category": "flagship",
+    },
+    {
+        "identifier": "nail_35b_q4",
+        "name": "Nail 35B A3B (UD-Q4_K_XL)",
+        "repo_id": "peculiar-ragdoll/Nail-Qwen3.6-35B-A3B-GGUF",
+        "filename": "Nail-Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+        "size_gb": 22,
+        "ram_gb": 24,
+        "vision": True,
+        "mmproj_filename": "mmproj-F16.gguf",
+        "why": "MoE efficiency — 3.4B active params, fast inference on 24 GB cards",
+        "category": "flagship",
+    },
+    {
+        "identifier": "fable_fusion_27b_iq4",
+        "name": "Fable Fusion 27B (IQ4_XS)",
+        "repo_id": "DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF",
+        "filename": "Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-IQ4_XS.gguf",
+        "size_gb": 17,
+        "ram_gb": 16,
+        "vision": True,
+        "mmproj_filename": "mmproj-F16.gguf",
+        "why": "Fable Fusion at IQ4 — fits 16 GB, still top-tier reasoning",
+        "category": "mid_range",
     },
     {
         "identifier": "gemma4_e4b_q4",
-        "name": "Gemma 4 E4B",
-        "why": "Runs on 4 GB — best for low-end hardware",
+        "name": "Gemma 4 E4B (Q4_K_M)",
         "repo_id": "unsloth/gemma-4-E4B-it-GGUF",
         "filename": "gemma-4-E4B-it-Q4_K_M.gguf",
         "size_gb": 5,
         "ram_gb": 6,
+        "vision": True,
+        "mmproj_filename": "mmproj-F16.gguf",
+        "why": "Google's small agentic — vision + function calling, runs anywhere",
+        "category": "lightweight",
+    },
+    {
+        "identifier": "qwen35_9b_dsv4_q4",
+        "name": "Qwen3.5-9B DeepSeek-V4 (Q4_K_M)",
+        "repo_id": "Jackrong/Qwen3.5-9B-DeepSeek-V4-Flash-GGUF",
+        "filename": "Qwen3.5-9B-DeepSeek-V4-Flash-Q4_K_M.gguf",
+        "size_gb": 6,
+        "ram_gb": 6,
+        "vision": True,
+        "mmproj_filename": "mmproj.gguf",
+        "why": "DeepSeek-V4 reasoning distilled — best reasoning-per-GB in light tier",
+        "category": "lightweight",
+    },
+    {
+        "identifier": "qwen35_9b_q8",
+        "name": "Qwen3.5-9B (Q8_0)",
+        "repo_id": "unsloth/Qwen3.5-9B-GGUF",
+        "filename": "Qwen3.5-9B-Q8_0.gguf",
+        "size_gb": 10,
+        "ram_gb": 8,
+        "vision": True,
+        "mmproj_filename": "mmproj-F16.gguf",
+        "why": "Highest quality light quant — Q8_0 precision, vision, 262K context",
+        "category": "lightweight",
     },
 ]
-
-VISION_MODEL = {
-    "repo_id": "unsloth/Qwen3-VL-8B-Instruct-GGUF",
-    "filename": "Qwen3-VL-8B-Instruct-Q4_K_M.gguf",
-    "mmproj_filename": "mmproj-F16.gguf",
-    "size_gb": 5.8,
-    "label": "Vision Model (screenshots)",
-}
 ```
 
 **Step 1.2 — New preferences UI**
@@ -296,55 +394,105 @@ VISION_MODEL = {
 ┌─ Model ─────────────────────────────────────────────────────┐
 │ Your system: 32 GB RAM · NVIDIA RTX 4090: 23.9 GB            │
 │                                                               │
-│ ★ Recommended: Qwen3-30B-A3B (MoE, 3.3B active)              │
+│ ★ Recommended — Qwen3.8-27B (vision + agentic)               │
 │                                                               │
-│   Low     ~9.7 GB · 16 GB RAM    [Select] [Download]         │
-│   Medium  ~14.7 GB · 24 GB RAM   [Active] [✓]               │
-│   High    ~21.7 GB · 32 GB RAM   [Select] [Download]  ★     │
+│   Light     ~13.5 GB · 16 GB RAM    [Select] [Download]      │
+│   Balanced  ~17.0 GB · 24 GB RAM    [Active] [✓]  ★         │
+│   Max       ~22.0 GB · 32 GB RAM    [Select] [Download]      │
 │                                                               │
-│ ── Vision (optional) ─────────────────────────────────────── │
-│   Vision Model  ~5.8 GB          [Download]                  │
+│   🎯 Vision: built-in — works out of the box                 │
 │                                                               │
-│ ── Alternative Models ────────────────────────────────────── │
-│   GPT-OSS 20B  ~12 GB            [Select] [Download]         │
-│   Native function calling — best for complex tool use         │
+│ ── Or use a local file ───────────────────────────────────── │
+│   [Scan Folder]  [Open Folder]                               │
+│   Models dir: [/home/user/bfa_coworker_models]               │
+│   ✓ Found: Qwen3.8-27B-Q4_K_M.gguf (auto-detected)          │
+│   ✓ Found: gpt-oss-20b-Q4_K_M.gguf                           │
 │                                                               │
-│   Gemma 4 E4B  ~5 GB             [Select] [Download]         │
-│   Runs on 4 GB — best for low-end hardware                    │
+│ ── More Models (curated presets) ▶ ───────────────────────── │
+│   [Collapsed by default — expand for alternatives]           │
 │                                                               │
-│ ── Custom Model ──────────────────────────────────────────── │
+│ ── Custom Model URL ──────────────────────────────────────── │
 │   HuggingFace URL or GGUF path: [________________________]   │
 │   [Download & Verify]                                         │
-│                                                               │
-│   Or use a local file:                                        │
-│   [Browse...]  /path/to/model.gguf                            │
 └───────────────────────────────────────────────────────────────┘
 ```
 
-**Step 1.3 — Hardware detection for recommendation**
+**Step 1.3 — Smart local file detection**
+
+When the preferences panel draws, scan the models directory and auto-detect which presets are already downloaded. This means:
+- If a user already has `Qwen3.8-27B-Q4_K_M.gguf` in their models folder, the "Balanced" tier shows `[✓]` instead of `[Download]`
+- The "Or use a local file" section lists all `.gguf` files found
+- Switching between presets that share the same mmproj doesn't re-download
+
+```python
+def _scan_local_models(models_dir: Path) -> dict[str, Path]:
+    """Scan the models directory for downloaded GGUF files.
+    Returns {filename: full_path} for all .gguf files found."""
+    found = {}
+    if not models_dir.is_dir():
+        return found
+    for f in models_dir.iterdir():
+        if f.suffix == ".gguf" and f.is_file():
+            found[f.name] = f
+    return found
+
+def _preset_is_downloaded(preset: dict, local_models: dict) -> bool:
+    """Check if a preset's model file exists locally."""
+    return preset.get("filename", "") in local_models
+
+def _mmproj_is_downloaded(preset: dict, local_models: dict) -> bool:
+    """Check if a preset's mmproj file exists locally."""
+    mmproj = preset.get("mmproj_filename", "")
+    if not mmproj:
+        return True  # No mmproj needed
+    return mmproj in local_models
+```
+
+**Step 1.4 — Hardware detection for recommendation**
 
 ```python
 def _recommend_variant() -> str:
     """Recommend the best quantization variant based on detected hardware."""
-    ram_mb, gpu_label, gpu_mb = _hardware_info()
+    _, _, gpu_mb = _hardware_info()
+    ram_mb, _, _ = _hardware_info()
     usable_mb = gpu_mb or (ram_mb or 0)
     if usable_mb >= 28 * 1024:
-        return "high"
+        return "max"
     if usable_mb >= 16 * 1024:
-        return "medium"
-    return "low"
+        return "balanced"
+    return "light"
+```
+
+**Step 1.5 — Auto-select if already downloaded**
+
+When the preferences panel loads, if a variant is already downloaded locally, auto-select it as the active model:
+
+```python
+def _auto_select_downloaded_variant(prefs, local_models: dict) -> None:
+    """If a primary family variant is already downloaded, select it."""
+    for variant_key, variant in PRIMARY_FAMILY["variants"].items():
+        if variant["filename"] in local_models:
+            prefs.model_filename = variant["filename"]
+            prefs.model_repo_id = PRIMARY_FAMILY["repo_id"]
+            prefs.existing_model_path = str(
+                local_models[variant["filename"]]
+            )
+            return
 ```
 
 **Files modified:**
-- `addon/bfa_coworker/llm_manager.py` — new preset structure, hardware detection
-- `addon/bfa_coworker/preferences.py` — new UI layout
+- `addon/bfa_coworker/llm_manager.py` — new preset structure, hardware detection, local scan
+- `addon/bfa_coworker/preferences.py` — new UI layout, auto-detection logic
 
 **Verification:**
-1. Launch on 32 GB system → "High ★ Recommended" badge
-2. Launch on 16 GB system → "Medium ★ Recommended" badge
-3. Launch on 8 GB system → "Low ★ Recommended" badge
-4. Alternative models are collapsed by default, expandable
-5. Custom model URL field accepts HuggingFace URLs and local paths
+1. Launch on 32 GB system → "Max ★ Recommended" badge
+2. Launch on 16 GB system → "Balanced ★ Recommended" badge
+3. Launch on 8 GB system → "Light ★ Recommended" badge
+4. Model already in models folder → shows `[✓]` instead of `[Download]`, auto-selected
+5. "More Models" sub-panel is collapsed by default, shows all 8 curated presets when expanded
+6. "Or use a local file" section lists all `.gguf` files found in the models directory
+7. Custom model URL field accepts HuggingFace URLs and local paths
+8. Switching between vision-capable presets that share the same mmproj doesn't re-download
 
 ---
 
@@ -876,13 +1024,13 @@ def start_local_llama(model_path=None, mode="text"):
 
 | Phase | Feature | Files Changed | LOC | Priority |
 |---|---|---|---|---|
-| 1 | Simplify model presets (1 family + 3 quants) | 2 | ~150 | 🔴 CRITICAL |
+| 1 | Model preset restructure (Qwen3.8-27B family + curated sub-panel + local scan) | 2 | ~200 | 🔴 CRITICAL |
 | 2 | Download safety guards (SHA-256, resume, preflight) | 1 | ~200 | 🔴 CRITICAL |
 | 3 | GPU auto-detection (VRAM + layer calculation) | 1 | ~120 | 🔴 CRITICAL |
 | 4 | Inference sampling overhaul (top_k, temp auto-switch) | 2 | ~80 | 🔴 CRITICAL |
 | 5 | Custom model URL flow | 2 | ~100 | 🟡 HIGH |
-| 6 | Server lifecycle hardening (pin, port fallback, diagnostics) | 1 | ~80 | 🟡 HIGH |
-| **Total** | | **3** | **~730** | |
+| 6 | Server lifecycle hardening (pin, port fallback, diagnostics) | 1 | ~60 | 🟡 HIGH |
+| **Total** | | **3** | **~760** | |
 
 ### Files Modified
 
@@ -896,13 +1044,17 @@ def start_local_llama(model_path=None, mode="text"):
 
 | Decision | Rationale |
 |---|---|
-| **One primary model family, three quants** | Blender Buddy's approach. Users pick based on their RAM, not model specs. Same tool-calling behavior across all tiers. |
-| **Keep alternative models but de-emphasize** | GPT-OSS and Gemma 4 serve real needs (native function calling, low-end hardware). Keep them as "power user" options behind a collapsed section. |
+| **Qwen3.8-27B as primary family** | Latest Qwen generation (August 2026). Native vision-language — no separate vision model. Best tool calling + agentic reasoning. Apache 2.0. |
+| **Vision built-in, not opt-in** | The primary model handles text + images with its mmproj. No separate download. No mode switching. Vision just works out of the box. |
+| **Three quantization tiers** | Blender Buddy's approach. Users pick based on their RAM: Light (16 GB), Balanced (24 GB), Max (32 GB). Same model architecture across all tiers = same tool-calling behavior. |
+| **Curated presets in sub-panel** | Keep all 8 curated presets (GPT-OSS, Fable Fusion, Nail, Gemma 4, Qwen3.5-9B variants) in a collapsed "More Models" section. Power users can access them; new users aren't overwhelmed. |
+| **Smart local file detection** | Auto-scan the models directory on panel draw. Already-downloaded models show `[✓]` instead of `[Download]`. Auto-select if a variant is already on disk. No re-downloading. |
 | **SHA-256 on every download** | Non-negotiable. A single corrupted byte in a 15 GB GGUF causes "missing tensor" errors that waste hours. |
 | **Auto-detect GPU layers** | Eliminates the #1 cause of "llama-server crashed at startup." |
 | **Custom URL field instead of raw repo_id/filename** | Users paste a URL, we parse it. No need to know HuggingFace's repo structure. |
 | **Temperature auto-switching** | Code gen needs 0.2, prose needs 0.35. One flat value is wrong for both. |
 | **Pin llama.cpp release** | Daily releases break things. Pin to a tested tag, bump deliberately. |
+| **Simplified server lifecycle** | Vision is built into the primary model — no text↔vision mode switching needed. Phase 6 is reduced from ~80 to ~60 LOC. |
 
 ### What Changes for Users
 
@@ -915,11 +1067,14 @@ def start_local_llama(model_path=None, mode="text"):
 - Manual `--n-gpu-layers`
 - Flat temperature 0.3 for everything
 - 8K context window
+- Vision requires separate model download + mode switching
 
 **After (Tier 3f):**
-- 1 primary model (Qwen3-30B-A3B) at 3 quantization tiers
-- "Low / Medium / High ★ Recommended" — pick based on your RAM
-- 2 alternative models (GPT-OSS, Gemma 4) in collapsed section
+- **Qwen3.8-27B** as the primary model family at 3 quantization tiers
+- "Light / Balanced / Max ★ Recommended" — pick based on your RAM
+- **Vision built-in** — works out of the box with the primary model. No separate download.
+- **8 curated presets** in a collapsed "More Models" sub-panel (GPT-OSS, Fable Fusion, Nail, Gemma 4, Qwen3.5-9B variants)
+- **Smart local detection** — already-downloaded models auto-detected, no re-downloading
 - "Custom Model URL" field — paste any HuggingFace link
 - SHA-256 verified downloads with resume
 - Auto-detected GPU layers
@@ -929,6 +1084,7 @@ def start_local_llama(model_path=None, mode="text"):
 - Pinned llama.cpp release for reproducibility
 - Port fallback — no more "port in use" errors
 - Better crash diagnostics with log tail surfacing
+- **No mode switching** — same server handles text + vision
 
 ### Testing Guide
 
@@ -936,11 +1092,14 @@ def start_local_llama(model_path=None, mode="text"):
 
 | Step | Expected Result |
 |---|---|
-| Open Preferences → Model section | Shows system specs, primary model with 3 tiers, "★ Recommended" badge |
+| Open Preferences → Model section | Shows system specs, Qwen3.8-27B with 3 tiers, "★ Recommended" badge |
+| Model already in models folder | Shows `[✓]` instead of `[Download]`, auto-selected as active |
 | Click "Download" on a tier | Download starts with progress bar + cancel |
 | Click "Select" on a downloaded tier | Becomes active model |
-| Expand "Alternative Models" | Shows GPT-OSS and Gemma 4 with descriptions |
-| Collapse "Alternative Models" | Hidden from view |
+| Expand "More Models" | Shows all 8 curated presets with descriptions and categories |
+| Collapse "More Models" | Hidden from view |
+| "Or use a local file" section | Lists all `.gguf` files found in models directory |
+| Vision indicator | Shows "🎯 Vision: built-in — works out of the box" for primary model |
 
 #### Phase 2: Download Safety
 
@@ -984,4 +1143,4 @@ def start_local_llama(model_path=None, mode="text"):
 |---|---|
 | Port 8081 in use | Auto-selects 8082 |
 | llama-server crashes | Log tail in error message |
-| Switch text → vision mode | Auto-restarts server |
+| Vision works out of the box | No mode switching needed — same server handles text + images |

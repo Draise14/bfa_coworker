@@ -2824,7 +2824,7 @@ def export_session_log(auto_saved: bool = False) -> None:
             elif r == "tool":
                 lines.append("Result: {:s}".format(str(c)[:1000]))
             elif r == "reasoning":
-                lines.append("Thinking: {:s}".format(str(c)[:500]))
+                lines.append("Thinking: {:s}".format(str(c)))
         lines.append("")
 
     lines.append("")

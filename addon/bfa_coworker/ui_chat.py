@@ -261,7 +261,12 @@ def _load_chat_history() -> list[dict]:
     if path.exists():
         try:
             with open(str(path), "r", encoding="utf-8") as fh:
-                return json.load(fh)
+                history = json.load(fh)
+            # Strip turn_start flags from loaded history — turns reset
+            # on Blender restart since the agent's context resets.
+            for msg in history:
+                msg.pop("turn_start", None)
+            return history
         except (json.JSONDecodeError, OSError):
             pass
     return []
@@ -1435,43 +1440,48 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 "({:d} messages)".format(displayable),
             )
 
-            # Group messages into turns (each user message starts a new turn).
+            # Group messages into turns (user-orientated: one user send = one turn).
             turns: list[list[dict]] = []
             current_turn: list[dict] = []
             for msg in history:
                 role = msg.get("role", "")
-                if role == "user":
+                is_turn_start = msg.get("turn_start", False)
+                # Backward compat: old sessions won't have turn_start flag.
+                # Treat any role="user" as a turn start ONLY if it has
+                # turn_start=True OR if it's from an old session (no key at all).
+                if role == "user" and (is_turn_start or "turn_start" not in msg):
                     if current_turn:
                         turns.append(current_turn)
                     current_turn = [msg]
-                elif role in ("assistant", "tool", "reasoning"):
+                elif role in ("assistant", "tool", "reasoning", "user"):
                     current_turn.append(msg)
             if current_turn:
                 turns.append(current_turn)
 
             # Determine display order and turn limit.
-            visible_turns = turns[-3:]
+            max_turns = prefs.chat_max_visible_turns
+            visible_turns = turns[-max_turns:] if max_turns > 0 else turns
             turn_iter = (
                 reversed(visible_turns) if props.chat_newest_first
                 else visible_turns
             )
 
-            for turn_idx, turn in enumerate(turn_iter):
+            for turn_idx, (turn_num, turn) in enumerate(turn_iter, 1):
                 user_msg = None
                 process_msgs = []
                 conclusion_msg = None
                 for msg in turn:
                     role = msg.get("role", "")
                     c2 = msg.get("content", "")
+                    is_turn_start = msg.get("turn_start", False) or "turn_start" not in msg
                     is_sys = (role == "user" and isinstance(c2, str) and c2.startswith("[System:"))
-                    if role == "user" and not is_sys:
+                    if role == "user" and not is_sys and is_turn_start:
                         user_msg = msg
-                    elif role in ("reasoning", "tool") or is_sys:
+                    elif role in ("reasoning", "tool", "user") or is_sys:
                         process_msgs.append(msg)
                     elif role == "assistant":
                         if not msg.get("tool_calls"):
                             conclusion_msg = msg
-                turn_num = turns.index(turn) + 1  # Per user-message turn number
                 if not user_msg:
                     if conclusion_msg:
                         tb = hist_box.box()
@@ -1519,10 +1529,21 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                                     d = ts if ts else (pc or "")
                                     if not ts and len(d)>200: d = d[:200]+"..."
                                     _draw_tool_inline(pb, tn, d, ie, message_index=history.index(pm))
+                                elif pr == "user":
+                                    # Agent-injected user messages (entity context, spiral correction)
+                                    sb = pb.box()
+                                    sb.label(text="Agent Context", icon="INFO")
+                                    _draw_multiline(sb, pc)
+                                elif pr == "assistant":
+                                    # Intermediate assistant messages (e.g. from auto-continue)
+                                    sb = pb.box()
+                                    sb.label(text="Agent Note", icon="CONSOLE")
+                                    _draw_multiline(sb, pc)
                             if state.is_thinking and state.streaming_text and turn_idx==0:
                                 pb.separator()
-                                pb.label(text="Coworker (live):", icon="CONSOLE")
-                                _draw_multiline(pb, state.streaming_text[:300]+"...")
+                                sb = pb.box()
+                                sb.label(text="Coworker (live):", icon="CONSOLE")
+                                _draw_multiline(sb, state.streaming_text[:300]+"...")
                 else:
                     hr = turn_box.row(align=True)
                     hr.label(text="", icon="CHECKMARK")

@@ -3028,7 +3028,7 @@ def _run_conversation_turn_inner(
         history[0]["content"] += _preflight_note
 
     # Append the user message.
-    history.append({"role": "user", "content": user_message})
+    history.append({"role": "user", "content": user_message, "turn_start": True})
 
     # ── Smart undo tracking (per-turn) ────────────────────────────────
     # Tracks the last execute_blender_code call to detect iteration and

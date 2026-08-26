@@ -1466,7 +1466,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 else visible_turns
             )
 
-            for turn_idx, (turn_num, turn) in enumerate(turn_iter, 1):
+            for turn_num, turn in enumerate(turn_iter, 1):
                 user_msg = None
                 process_msgs = []
                 conclusion_msg = None
@@ -1496,7 +1496,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 if has_proc:
                     has_err = any(p.get("role")=="tool" and ('"status": "error"' in (p.get("content") or "") or (p.get("content") or "").startswith("Error")) for p in process_msgs)
                     tic = "WARNING" if has_err else ("CHECKMARK" if conclusion_msg else "SORTTIME")
-                    th, tb2 = turn_box.panel("turn_{:d}".format(turn_idx), default_closed=not (turn_idx==0 and state.is_thinking))
+                    th, tb2 = turn_box.panel("turn_{:d}".format(turn_num), default_closed=not (turn_num==1 and state.is_thinking))
                     hr = th.row(align=True)
                     hr.label(text="", icon=tic)
                     hr.label(text="Turn {:d}".format(turn_num))
@@ -1539,7 +1539,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                                     sb = pb.box()
                                     sb.label(text="Agent Note", icon="CONSOLE")
                                     _draw_multiline(sb, pc)
-                            if state.is_thinking and state.streaming_text and turn_idx==0:
+                            if state.is_thinking and state.streaming_text and turn_num==1:
                                 pb.separator()
                                 sb = pb.box()
                                 sb.label(text="Coworker (live):", icon="CONSOLE")
@@ -1558,7 +1558,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                     op.message_index = history.index(conclusion_msg)
                     _draw_multiline(turn_box, conclusion_msg.get("content", ""))
-                if not conclusion_msg and state.is_thinking and state.streaming_text and turn_idx==0 and not has_proc:
+                if not conclusion_msg and state.is_thinking and state.streaming_text and turn_num==1 and not has_proc:
                     turn_box.separator()
                     turn_box.label(text="Coworker (live):", icon="CONSOLE")
                     _draw_multiline(turn_box, state.streaming_text[:300]+"...")

@@ -20,6 +20,7 @@ The environment will persist, or use this command with the path to the Blender e
 """
 
 import argparse
+import datetime
 import os
 import shutil
 import subprocess
@@ -211,6 +212,9 @@ def main() -> int:
     parser.add_argument("--blender", default=find_blender(), help="Blender executable path")
     parser.add_argument("--output-dir", default=DIST_DIR, help="Output directory for the .zip")
     args = parser.parse_args()
+
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print("Build started at: {:s}".format(now))
 
     os.makedirs(args.output_dir, exist_ok=True)
 

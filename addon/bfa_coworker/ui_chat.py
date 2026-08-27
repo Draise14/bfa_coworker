@@ -245,10 +245,9 @@ def _load_chat_history() -> list[dict]:
         try:
             with open(str(path), "r", encoding="utf-8") as fh:
                 history = json.load(fh)
-            # Strip turn_start flags from loaded history — turns reset
-            # on Blender restart since the agent's context resets.
-            for msg in history:
-                msg.pop("turn_start", None)
+            # Detect old sessions (no turn_start flags anywhere) for backward compat.
+            # New sessions keep their turn_start flags so only real user messages
+            # create turns — agent-injected messages won't inflate turn count.
             return history
         except (json.JSONDecodeError, OSError):
             pass
@@ -1423,16 +1422,19 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 "({:d} messages)".format(displayable),
             )
 
+            # Detect old sessions (no turn_start flags) for backward compat.
+            _has_any_turn_start = any(m.get("turn_start") for m in history)
+
             # Group messages into turns (user-orientated: one user send = one turn).
             turns: list[list[dict]] = []
             current_turn: list[dict] = []
             for msg in history:
                 role = msg.get("role", "")
                 is_turn_start = msg.get("turn_start", False)
-                # Backward compat: old sessions won't have turn_start flag.
-                # Treat any role="user" as a turn start ONLY if it has
-                # turn_start=True OR if it's from an old session (no key at all).
-                if role == "user" and (is_turn_start or "turn_start" not in msg):
+                # New sessions: only turn_start=True starts a turn.
+                # Old sessions (no flags anywhere): treat role="user" as turn start.
+                _is_old_user_turn = (not _has_any_turn_start and role == "user")
+                if role == "user" and (is_turn_start or _is_old_user_turn):
                     if current_turn:
                         turns.append(current_turn)
                     current_turn = [msg]
@@ -1456,7 +1458,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 for msg in turn:
                     role = msg.get("role", "")
                     c2 = msg.get("content", "")
-                    is_turn_start = msg.get("turn_start", False) or "turn_start" not in msg
+                    is_turn_start = msg.get("turn_start", False)
                     is_sys = (role == "user" and isinstance(c2, str) and c2.startswith("[System:"))
                     if role == "user" and not is_sys and is_turn_start:
                         user_msg = msg
@@ -1496,7 +1498,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                             tb2.separator()
                             pb = tb2.box()
                             pb_icon = "WARNING" if has_err else "SORTTIME"
-                            pb.label(text="Process ({:d} steps)".format(len(process_msgs)), icon=pb_icon)
+                            pb.label(text="Running Tools", icon=pb_icon)
                             for pm in process_msgs:
                                 pr = pm.get("role", "")
                                 pc = pm.get("content", "")
@@ -1516,14 +1518,10 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                                     _draw_tool_inline(pb, tn, d, ie, message_index=history.index(pm))
                                 elif pr == "user":
                                     # Agent-injected user messages (entity context, spiral correction)
-                                    sb = pb.box()
-                                    sb.label(text="Agent Context", icon="INFO")
-                                    _draw_multiline(sb, pc)
+                                    _draw_multiline(pb, pc)
                                 elif pr == "assistant":
                                     # Intermediate assistant messages (e.g. from auto-continue)
-                                    sb = pb.box()
-                                    sb.label(text="Agent Note", icon="CONSOLE")
-                                    _draw_multiline(sb, pc)
+                                    _draw_multiline(pb, pc)
                             if state.is_thinking and state.streaming_text and turn_num==1:
                                 pb.separator()
                                 sb = pb.box()

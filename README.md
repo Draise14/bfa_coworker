@@ -2,21 +2,25 @@
 
 **AI-powered 3D creation, built right into Blender.**
 
-Coworker is a self-contained Blender add-on that puts a local AI assistant
+Coworker is a self-contained Bforartists / Blender add-on that puts a local AI assistant
 directly in your 3D viewport. No external tools, no server setup, no Python
 environment wrangling -- install the add-on, pick a model, start chatting.
 
-The AI can inspect your scene, write and execute Blender Python code, place
+The coworker can inspect your scene, write and execute Blender Python code, place
 objects, set up materials, configure lighting, animate, render, and more -- all
 through natural conversation.
 
+> **🚧 WORK IN PROGRESS** — This is an active fork under heavy development.
+> See '_misc' for planned features and known gaps.
+
+**⚠️ Windows tested only for now**
 ---
 
 ## Why Coworker?
 
 - **Zero setup** -- Download llama-server with one click, pick a model preset, start talking. No terminal, no Docker, no API keys required for local use.
 - **Runs locally** -- Your scenes never leave your machine. Models run on your own GPU via llama.cpp. No cloud dependency.
-- **Actually useful** -- 30+ tools let the AI inspect scenes, execute code, render viewport screenshots, browse assets, and modify your project in real time.
+- **Actually useful** -- 30+ tools let the coworker inspect scenes, execute code, render viewport screenshots, browse assets, and modify your project in real time.
 - **Works with what you have** -- Already downloaded a GGUF model? Coworker finds it automatically. Has a HuggingFace token? Paste any model URL to download.
 - **Remote API too** -- Prefer a cloud model? OpenRouter, OpenAI, and Anthropic are one dropdown away with automatic URL configuration.
 
@@ -79,20 +83,21 @@ bug reports, feature ideas, model testing, documentation, or code.
 ## How It Works
 
 ```
-You type in the Chat UI
+You type in the Chat UI in the interface
         |
-   Agent Controller talks to Local LLM or Remote API
+   Agent Controller talks to Local LLM (AI) or Remote API or External Harness
         |
    MCP Server receives tool calls
         |
    Blender executes the code
         |
-   You see the result in your viewport
+   You see the result in your blend file, viewport or editors
 ```
 
-Everything runs inside Blender -- no external processes to manage, no ports to configure.
+Everything runs inside Bforartists / Blender -- no external processes to manage, no ports to configure.
 
 ---
+
 
 ## License
 

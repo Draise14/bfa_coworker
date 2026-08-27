@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Download Safety Guards** — SHA-256 verification for model downloads. HTTP Range resume via .part files (interrupted downloads resume where they left off). Atomic rename (.part → final) prevents corrupt partial files. Cancel preserves .part for resume. Network errors preserve .part instead of deleting. HTTP 416 handling for already-complete downloads.
 - **Debug Mode & Diagnostics** — New user-facing `debug_mode` toggle and `log_level` enum (DEBUG/INFO/WARNING/ERROR) in preferences. Open Log button for quick access to log file. Multiline custom skills text editor for easier editing.
 - **Benchmark Expansion** — Timing measurements for all benchmark suites. 6 new editor benchmark suites. Split assets_materials into separate tests. Auto-reset on completion. Results persistence to JSON files with comparison support.
 - **Session Logging & Memory Bank** — Export session log to text block or clipboard. Auto-save on spiral detection. Error code bank for pattern tracking. Versioned session history (last 10).

@@ -82,6 +82,13 @@ def _sync_prefs_to_config(prefs: bpy.types.AddonPreferences) -> None:
 _WRAP_WIDTH = 60
 
 
+# -- Brand detection: Bforartists has a View menu in the 3D viewport header,
+#    vanilla Blender does not.  Cache the result once at import time.
+_is_bfa: bool = hasattr(bpy.types, "VIEW3D_MT_view")
+_AGENT_ICON: str = "WIZARD" if _is_bfa else "GHOST_ENABLED"
+
+
+
 def _wrap_text(text: str, width: int = _WRAP_WIDTH) -> str:
     """Wrap text to a given width for display in Blender labels."""
     if not text:
@@ -131,7 +138,7 @@ def _draw_reasoning(
     if is_thinking:
         spinners = ["\u25d0", "\u25d3", "\u25d1", "\u25d2"]
         display_label = "{:s} {:s}".format(label, spinners[thinking_dots % 4])
-        icon = 'CONSOLE'
+        icon = _AGENT_ICON
     else:
         display_label = label
         icon = 'CHECKMARK'
@@ -1472,7 +1479,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     if conclusion_msg:
                         tb = hist_box.box()
                         cr = tb.row()
-                        cr.label(text="✨ Turn {:d} — Coworker:".format(turn_num), icon="CONSOLE")
+                        cr.label(text="Turn {:d} — ✨ Coworker:".format(turn_num), icon=_AGENT_ICON)
                         op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                         op.message_index = history.index(conclusion_msg)
                         _draw_multiline(tb, conclusion_msg.get("content", ""))
@@ -1553,14 +1560,14 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         if state.is_thinking and state.streaming_text and _display_idx == 0:
                             pb.separator()
                             sb = pb.box()
-                            sb.label(text="Coworker (live):", icon="CONSOLE")
+                            sb.label(text="✨ Coworker (live):", icon=_AGENT_ICON)
                             _draw_multiline(sb, state.streaming_text[:300] + "...")
 
                 # --- Conclusion (always visible) ---
                 if conclusion_msg:
                     turn_box.separator()
                     cr = turn_box.row()
-                    cr.label(text="✨ Coworker:", icon="CONSOLE")
+                    cr.label(text="✨ Coworker:", icon=_AGENT_ICON)
                     op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                     op.message_index = history.index(conclusion_msg)
                     _draw_multiline(turn_box, conclusion_msg.get("content", ""))
@@ -1571,7 +1578,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     and not has_proc
                 ):
                     turn_box.separator()
-                    turn_box.label(text="✨ Coworker (live):", icon="CONSOLE")
+                    turn_box.label(text="✨ Coworker (live):", icon=_AGENT_ICON)
                     _draw_multiline(turn_box, state.streaming_text[:300] + "...")
 
         else:

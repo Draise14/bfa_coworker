@@ -1298,6 +1298,80 @@ def _detect_hardware_cached() -> tuple[float | None, float | None]:
     return ram, vram
 
 
+
+
+# ---- GPU auto-detection for --n-gpu-layers ----
+
+_RUNTIME_OVERHEAD_MB = 700
+_KV_MB_PER_1K_CTX = 70
+_TYPICAL_LAYERS = 33
+_FULL_OFFLOAD = 99
+
+def _hardware_info() -> tuple[int | None, str | None, int | None]:
+    """Return (ram_mb, gpu_label, gpu_mb). Cached for the session."""
+    ram_gb = detect_system_ram_gb()
+    ram_mb = int(ram_gb * 1024) if ram_gb else None
+    gpu_label = None
+    gpu_mb = None
+
+    if shutil.which("nvidia-smi"):
+        try:
+            name = subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                text=True, timeout=5,
+            ).strip().splitlines()[0]
+            total = int(subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=memory.total",
+                 "--format=csv,noheader,nounits"],
+                text=True, timeout=5,
+            ).strip().splitlines()[0])
+            gpu_label = name
+            gpu_mb = total
+            print("[Coworker] _hardware_info: GPU = {:s} ({:d} MB)".format(name, total))
+        except Exception:
+            pass
+    elif sys.platform == "darwin":
+        try:
+            out = subprocess.check_output(
+                ["sysctl", "-n", "hw.memsize"], text=True, timeout=5,
+            )
+            total_mb = int(out.strip()) // (1024 * 1024)
+            gpu_label = "Apple unified memory"
+            gpu_mb = int(total_mb * 0.6)  # ~60% usable for model
+            print("[Coworker] _hardware_info: Apple unified = {:d} MB".format(gpu_mb))
+        except Exception:
+            pass
+
+    return ram_mb, gpu_label, gpu_mb
+
+def autodetect_gpu_layers(model_path: Path, context_size: int) -> int:
+    """Calculate optimal --n-gpu-layers for the given model and hardware."""
+    backend = _detect_gpu_backend()
+    if backend == "cpu":
+        return 0
+
+    _, _, gpu_mb = _hardware_info()
+    if gpu_mb is None:
+        return _FULL_OFFLOAD  # Cannot detect -- try full offload
+
+    try:
+        model_mb = model_path.stat().st_size // (1024 * 1024)
+    except OSError:
+        return _FULL_OFFLOAD
+
+    kv_mb = int((context_size / 1024) * _KV_MB_PER_1K_CTX)
+    usable_mb = gpu_mb - _RUNTIME_OVERHEAD_MB - kv_mb
+
+    if usable_mb <= 0:
+        return 0  # Not enough VRAM for GPU offload
+    if usable_mb >= model_mb * 1.05:
+        return _FULL_OFFLOAD  # Full GPU offload
+
+    per_layer = model_mb / _TYPICAL_LAYERS
+    ngl = max(0, min(_TYPICAL_LAYERS, int(usable_mb / per_layer)))
+    print("[Coworker] autodetect_gpu_layers: ngl={:d} (gpu={:d}MB, model={:d}MB, kv={:d}MB, usable={:d}MB)".format(
+        ngl, gpu_mb, model_mb, kv_mb, usable_mb))
+    return ngl
 def recommend_context_size(
     model_gb: float = 0.0,
     backend: str = "auto",
@@ -2203,10 +2277,11 @@ def start_local_llama(
             backend = _config.llama_backend
         if backend == "auto":
             backend = _detect_gpu_backend()
-        ngpu_layers = 99 if backend in ("cuda", "vulkan") else 0
-
+        if backend in ("cuda", "vulkan") and model_path and os.path.isfile(str(model_path)):
+            ngpu_layers = autodetect_gpu_layers(Path(str(model_path)), ctx_size)
+        else:
+            ngpu_layers = 99 if backend in ("cuda", "vulkan") else 0
         args = [
-            server_exe,
             '--jinja',
             '--verbose',
             '--host', '127.0.0.1',

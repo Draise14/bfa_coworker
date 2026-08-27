@@ -1472,7 +1472,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     if conclusion_msg:
                         tb = hist_box.box()
                         cr = tb.row()
-                        cr.label(text="Coworker:", icon="CONSOLE")
+                        cr.label(text="Turn {:d} — Coworker:".format(turn_num), icon="CONSOLE")
                         op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                         op.message_index = history.index(conclusion_msg)
                         _draw_multiline(tb, conclusion_msg.get("content", ""))
@@ -1485,7 +1485,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     th, tb2 = turn_box.panel("turn_{:d}".format(turn_num), default_closed=not (turn_num==1 and state.is_thinking))
                     hr = th.row(align=True)
                     hr.label(text="", icon=tic)
-                    hr.label(text="Turn", scale_x=0.5)
+                    hr.label(text="Turn {:d}".format(turn_num), scale_x=0.3)
                     pv = user_msg.get("content", "")
                     if len(pv)>80: pv = pv[:80]+"..."
                     hr.label(text=pv)
@@ -1524,7 +1524,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                                     # Intermediate assistant messages (e.g. from auto-continue)
                                     pb.label(text="Self Prompt", icon='CONSOLE')
                                     _draw_multiline(pb, pc)
-                            if state.is_thinking and state.streaming_text and turn_num==1:
+                            if state.is_thinking and state.streaming_text and _display_idx == 0:
                                 pb.separator()
                                 sb = pb.box()
                                 sb.label(text="Coworker (live):", icon="CONSOLE")
@@ -1544,7 +1544,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     op = hr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                     op.message_index = history.index(user_msg)
                     _draw_multiline(turn_box, user_msg.get("content", ""))
-                if not conclusion_msg and state.is_thinking and state.streaming_text and turn_num==1 and not has_proc:
+                if not conclusion_msg and state.is_thinking and state.streaming_text and _display_idx == 0 and not has_proc:
                     turn_box.separator()
                     turn_box.label(text="Coworker (live):", icon="CONSOLE")
                     _draw_multiline(turn_box, state.streaming_text[:300]+"...")

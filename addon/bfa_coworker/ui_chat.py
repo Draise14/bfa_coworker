@@ -1479,7 +1479,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     if conclusion_msg:
                         tb = hist_box.box()
                         cr = tb.row()
-                        cr.label(text="Turn {:d} — ✨ Coworker:".format(turn_num), icon=_AGENT_ICON)
+                        cr.label(text="Turn {:d} — Coworker:".format(turn_num), icon=_AGENT_ICON)
                         op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                         op.message_index = history.index(conclusion_msg)
                         _draw_multiline(tb, conclusion_msg.get("content", ""))
@@ -1498,12 +1498,8 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 hr = turn_box.row(align=True)
                 hr.label(text="", icon=tic)
                 sub = hr.row(align=True)
-                sub.scale_x = 0.3
+                sub.scale_x = 0.5
                 sub.label(text="Turn {:d}".format(turn_num))
-                pv = user_msg.get("content", "")
-                if len(pv) > 80:
-                    pv = pv[:80] + "..."
-                hr.label(text=pv)
                 op = hr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                 op.message_index = history.index(user_msg)
 
@@ -1520,6 +1516,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     if pb:
                         pb_icon = "WARNING" if has_err else "SORTTIME"
                         pb.label(text="Working", icon=pb_icon)
+                        work_box = pb.box()
                         for pm in process_msgs:
                             pr = pm.get("role", "")
                             pc = pm.get("content", "")
@@ -1529,12 +1526,12 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                                 and pc.startswith("[System:")
                             )
                             if is_sm:
-                                sb = pb.box()
+                                sb = work_box.box()
                                 sb.label(text="System Context", icon="INFO")
                                 _draw_multiline(sb, pc)
                             elif pr == "reasoning":
                                 _draw_reasoning(
-                                    pb, pc, pm.get("label", "Thinking"),
+                                    work_box, pc, pm.get("label", "Thinking"),
                                     is_thinking=state.is_thinking,
                                     thinking_dots=state.thinking_dots,
                                     message_index=history.index(pm),
@@ -1550,26 +1547,26 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                                 if not ts and len(d) > 200:
                                     d = d[:200] + "..."
                                 _draw_tool_inline(
-                                    pb, tn, d, ie,
+                                    work_box, tn, d, ie,
                                     message_index=history.index(pm),
                                 )
                             elif pr == "user":
-                                pb.label(text="Agent Context", icon="INFO")
-                                _draw_multiline(pb, pc)
+                                work_box.label(text="Agent Context", icon="INFO")
+                                _draw_multiline(work_box, pc)
                             elif pr == "assistant":
-                                pb.label(text="Self Prompt", icon="CONSOLE")
-                                _draw_multiline(pb, pc)
+                                work_box.label(text="Self Prompt", icon="CONSOLE")
+                                _draw_multiline(work_box, pc)
                         if state.is_thinking and state.streaming_text and _display_idx == 0:
-                            pb.separator()
-                            sb = pb.box()
-                            sb.label(text="✨ Coworker (live):", icon=_AGENT_ICON)
+                            work_box.separator()
+                            sb = work_box.box()
+                            sb.label(text="Coworker (live):", icon=_AGENT_ICON)
                             _draw_multiline(sb, state.streaming_text[:300] + "...")
 
                 # --- Conclusion (always visible) ---
                 if conclusion_msg:
                     turn_box.separator()
                     cr = turn_box.row()
-                    cr.label(text="✨ Coworker:", icon=_AGENT_ICON)
+                    cr.label(text="Coworker:", icon=_AGENT_ICON)
                     op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                     op.message_index = history.index(conclusion_msg)
                     _draw_multiline(turn_box, conclusion_msg.get("content", ""))
@@ -1580,7 +1577,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     and not has_proc
                 ):
                     turn_box.separator()
-                    turn_box.label(text="✨ Coworker (live):", icon=_AGENT_ICON)
+                    turn_box.label(text="Coworker (live):", icon=_AGENT_ICON)
                     _draw_multiline(turn_box, state.streaming_text[:300] + "...")
 
         else:

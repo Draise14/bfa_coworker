@@ -1,349 +1,99 @@
-# Bforartists Coworker (Blender MCP Fork)
+# Bforartists Coworker
 
-> **⚠️ WORK IN PROGRESS** — This is an active fork under heavy development.
-> See [TODO](#todo) below for planned features and known gaps.
+**AI-powered 3D creation, built right into Blender.**
 
+Coworker is a self-contained Blender add-on that puts a local AI assistant
+directly in your 3D viewport. No external tools, no server setup, no Python
+environment wrangling -- install the add-on, pick a model, start chatting.
 
-A self-contained Blender add-on that bundles an LLM agent, MCP server, and
-in-Blender chat UI — no external tools, no manual server setup, no Python
-environment wrangling. Install the add-on, pick a model, start chatting.
+The AI can inspect your scene, write and execute Blender Python code, place
+objects, set up materials, configure lighting, animate, render, and more -- all
+through natural conversation.
 
-**⚠️ Windows tested only for now**
+---
+
+## Why Coworker?
+
+- **Zero setup** -- Download llama-server with one click, pick a model preset, start talking. No terminal, no Docker, no API keys required for local use.
+- **Runs locally** -- Your scenes never leave your machine. Models run on your own GPU via llama.cpp. No cloud dependency.
+- **Actually useful** -- 30+ tools let the AI inspect scenes, execute code, render viewport screenshots, browse assets, and modify your project in real time.
+- **Works with what you have** -- Already downloaded a GGUF model? Coworker finds it automatically. Has a HuggingFace token? Paste any model URL to download.
+- **Remote API too** -- Prefer a cloud model? OpenRouter, OpenAI, and Anthropic are one dropdown away with automatic URL configuration.
 
 ---
 
 ## Quick Start
 
-### 1. Install the Add-on
-
-- Open Blender → **Edit → Preferences → Add-ons**
-- Click **Install from Disk...** and select the built `.zip` (or point to the
-  `addon/bfa_coworker/` directory for development)
-- Search for **"Coworker"** and enable the add-on
-
-### 2. Install llama-server (one click)
-
-If you don't have `llama-server` installed, the add-on preferences show a
-**"Download llama-server"** button. Select your GPU backend (Auto / CUDA 12.4 /
-Vulkan / CPU) and click it — the add-on downloads the correct build from GitHub
-and unpacks it automatically to `~/.cache/bfa_coworker_llama/`. No manual
-download, no PATH setup. CUDA builds include bundled `cudart` DLLs.
-
-### 3. Pick a Model
-
-In the add-on preferences you'll see the **LLM Configuration** section with
-models organized into three categories:
-
-| Category | VRAM | Models |
-|---|---|---|
-| **Flagship** (24 GB+) | RTX 3090/4090/5090 | Qwen3.8-27B Q8, Fable Fusion 27B Q6, Nail 35B A3B |
-| **Mid-Range** (16-20 GB) | RTX 3090/4090 | **GPT-OSS 20B (default)**, Qwen3.8-27B Q4, Fable Fusion 27B IQ4 |
-| **Lightweight** (≤ 8 GB) | Any GPU / integrated | Gemma 4 E4B, Qwen3.5-9B DeepSeek-V4-Flash, Qwen3.5-9B Q8 |
-
-Click a preset name to select it. Each preset shows its hardware recommendation,
-vision capability, and "why pick this" rationale. The **Mid-Range** section is
-the default selection optimized for an **RTX 4090**.
-
-- **Custom Model** — Use the dropdown below the presets to manually enter a
-  repo ID and filename.
-- **Scan for Existing Models** — Click the **Scan** button to search your
-  configured models directory and HuggingFace cache for `.gguf` files you
-  already have. Found models appear in a popup for one-click selection.
-- **Advanced Settings** — Manually enter a HuggingFace repo ID and filename to download automatically.
-
-### 4. Download & Start
-
-Click **Download & Start**. The add-on downloads the GGUF model directly
-from HuggingFace in 64 KB chunks with a real-time progress bar showing
-percentage, speed, and ETA. Once the download completes, `llama-server`
-starts automatically and loads the model. The server stays running in the
-background.
-
-> **Tip:** If the model requires authentication, set your **HuggingFace
-> Token** in the Advanced section. The add-on also checks the `HF_TOKEN`
-> and `HUGGINGFACE_TOKEN` environment variables.
-
-### 5. Start the Agent
-
-In the **Agent Control** section, click **Start Agent**. This launches the
-MCP bridge server and connects it to the local LLM. The status indicators
-should all show green.
-
-### 5. Chat!
-
-Open the **3D Viewport sidebar** (press `N` if hidden) and find the
-**Coworker** tab. Type your message in the input box and press **Send**. The
-agent will think, call Blender tools as needed, and respond.
-
-That's it. No command line, no Docker, no separate Python installs.
+1. **Install** -- Edit > Preferences > Add-ons > Install from Disk > select the .zip
+2. **Download llama-server** -- Click the one-click download button in preferences (auto-detects CUDA/Vulkan/CPU)
+3. **Pick a model** -- Choose from curated presets organized by your hardware:
+   - **Flagship** (24 GB+ VRAM): Qwen3.8-27B, Fable Fusion 27B, Nail 35B
+   - **Mid-Range** (16 GB): GPT-OSS 20B *(default)*, Qwen3.8-27B Q4
+   - **Lightweight** (<=8 GB): Gemma 4 E4B, Qwen3.5-9B variants
+4. **Download & Start** -- One click downloads the model and launches the server
+5. **Chat** -- Open the N-panel in the 3D Viewport, find the Coworker tab, and start creating
 
 ---
 
-## How It's Self-Contained
+## What Can It Do?
 
-This fork wraps the original [Blender MCP](https://www.blender.org/lab/mcp-server/)
-into a single add-on experience:
-| What you'd normally need to set up manually | What this add-on does for you |
+| Area | Examples |
+|------|----------|
+| **Modeling** | "Create a stonehenge with 8 pillars in a circle" |
+| **Materials** | "Apply a weathered stone material to all pillars" |
+| **Lighting** | "Set up dramatic three-point lighting" |
+| **Animation** | "Make the ball bounce with squash and stretch" |
+| **Rendering** | "Render a thumbnail from the active camera" |
+| **Scene Management** | "Organize everything into named collections" |
+| **Asset Downloads** | "Download a forest HDRI from Polyhaven" |
+| **Vision** | "Look at the viewport and reframe the camera for a hero shot" (vision models) |
+
+The AI writes and executes Blender Python code in real time -- you see changes happen live.
+
+---
+
+## Download
+
+| | |
 |---|---|
-| Install & configure `llama.cpp` separately | **Auto-downloads** `llama-server` from GitHub with one click, or detects it on PATH |
-| Download GGUF models manually | Direct HTTP download with real-time progress bar, or scan for models you already have |
-| Run an MCP bridge server | Auto-started when you click **Start Agent** |
-| Run a separate chat client | Chat UI lives in Blender's 3D Viewport sidebar |
-| Wire up API keys (optional) | Remote API mode with provider presets, URL auto-fill, and browseable model IDs |
+| **Latest Release** | [Download v1.1.37](https://github.com/bforartists/bfa_coworker/releases/latest) |
+| **All Releases** | [GitHub Releases](https://github.com/bforartists/bfa_coworker/releases) |
+| **Source Code** | [Clone this repo](https://github.com/bforartists/bfa_coworker) |
 
-Alternatively, you can use a remote API (OpenRouter, OpenAI, Anthropic, etc.)
-by selecting the **Remote API** mode in preferences. Choose OpenRouter from
-the provider dropdown (auto-fills the API URL), paste your API key, enter a
-model ID (e.g. `openai/gpt-4o`), and click **Browse Models** to find models
-on openrouter.ai — no local LLM required.
-
-Original upstream documentation: [blender.org/lab/mcp-server](https://www.blender.org/lab/mcp-server/)
+Requirements: Blender 5.1+ (or Bforartists equivalent), ~4-28 GB RAM depending on model.
 
 ---
 
-## Architecture
+## Get Involved
 
-The project is deliberately small, maintainable, and does no more than
-necessary. It has two components that communicate over a TCP socket:
+Coworker is open source under GPL-3.0. Contributions are welcome -- whether it is
+bug reports, feature ideas, model testing, documentation, or code.
 
-- A **Blender add-on** that runs inside Blender and executes requests.
-- An **MCP server** that runs as a separate process.
+- **Report issues** -- [GitHub Issues](https://github.com/bforartists/bfa_coworker/issues)
+- **Discuss ideas** -- [GitHub Discussions](https://github.com/bforartists/bfa_coworker/discussions)
+- **Read the docs** -- [Wiki](https://github.com/bforartists/bfa_coworker/wiki)
+- **See what changed** -- [CHANGELOG](CHANGELOG.md)
 
-The data flow is:
+---
+
+## How It Works
 
 ```
-MCP Client  ⇐ MCP/stdio ⇒  bfa-coworker-mcp  ⇐ TCP socket ⇒  Blender Add-on
+You type in the Chat UI
+        |
+   Agent Controller talks to Local LLM or Remote API
+        |
+   MCP Server receives tool calls
+        |
+   Blender executes the code
+        |
+   You see the result in your viewport
 ```
 
-In this fork the "MCP Client" is the built-in agent controller, which
-talks to the local LLM or remote API, then relays tool calls to the
-MCP server over HTTP:
-
-```
-Chat UI → Agent Controller → [Local LLM / Remote API]
-                ↓
-        MCP Server (bfa-coworker-mcp)
-                ↓
-        Bridge Server (inside Blender)
-                ↓
-        Blender executes the code
-```
-
----
-
-## MCP Tools
-
-The MCP server provides 30+ tools that the LLM can call. For local models
-with limited context windows, tools are loaded in a **hybrid cascaded system**:
-
-| Tier | When Loaded | Tools |
-|---|---|---|
-| **Surface** | Always | `execute_blender_code`, `get_blendfile_summary_datablocks`, `get_object_detail_summary`, `get_objects_summary` |
-| **Domain** | Pre-detected from prompt keywords, or on-demand via `load_tools` | animation, material, modeling, lighting, rendering, VSE, geometry nodes |
-| **Full** | Remote API mode | All 30+ tools |
-
-The LLM can call `load_tools(domain="animation")` mid-turn to load
-additional domain-specific tools. Remote mode always gets the full tool set.
-
-### Surface Tools (always available)
-
-- **execute_blender_code** — Execute Python code in the connected Blender instance
-- **get_blendfile_summary_datablocks** — Summary of the blend file: data-block counts, active workspace, and render engine
-- **get_object_detail_summary** — Structured summary of an object by name
-- **get_objects_summary** — Scene collection hierarchy and their objects
-
-### Domain Tools (loaded on-demand)
-
-- **animation**: `jump_to_view3d_object_by_name`, `jump_to_view3d_object_data_by_name`, `render_viewport_to_path`
-- **material**: `download_polyhaven_asset`, `search_polyhaven_assets`, `get_screenshot_of_area_as_image`, `render_viewport_to_path`
-- **modeling**: `jump_to_view3d_object_by_name`, `jump_to_view3d_object_data_by_name`, `jump_to_tab_by_name`, `jump_to_tab_by_space_type`, `get_screenshot_of_area_as_image`
-- **lighting**: `download_polyhaven_asset`, `search_polyhaven_assets`, `render_viewport_to_path`, `get_screenshot_of_area_as_image`
-- **rendering**: `render_viewport_to_path`, `get_screenshot_of_area_as_image`, `get_screenshot_of_window_as_image`
-- **vse**: `jump_to_tab_by_name`, `jump_to_tab_by_space_type`
-- **geometry_nodes**: `jump_to_view3d_object_by_name`, `jump_to_view3d_object_data_by_name`, `get_screenshot_of_area_as_image`
-
-### Full Tool List (remote mode)
-
-- **get_blendfile_summary_missing_files** — Report missing external file references
-- **get_blendfile_summary_of_linked_libraries** — Tree of linked library files
-- **get_blendfile_summary_path_info** — Blend file's path, save status, age, backups
-- **get_blendfile_summary_usage_guess** — Guess primary use-cases (scored 0–100)
-- **get_python_api_docs** — Blender Python API docs for a given identifier
-- **get_screenshot_of_window_as_json** — JSON description of window layout and selection
-- **render_thumbnail_to_path** — Render a small low-quality thumbnail
-- **search_api_docs** — Search the Blender Python API reference
-- **search_manual_docs** — Search the Blender user manual
-
-CLI variants (suffixed `_for_cli`) are also available for background Blender mode.
-
----
-
-## MCP Server
-
-Located in ``mcp/blmcp/``, installed as a Python package with the
-entry point ``bfa-coworker-mcp``. The server connects to the add-on's TCP
-socket to relay requests to Blender.
-
-``mcp/blmcp/data/``
-   - ``prompts.yml`` — instructions sent to the LLM at connection time
-   - ``api/`` — Blender Python API reference in RST format
-   - ``manual/`` — Blender user manual excerpts in RST format
-
-``mcp/blmcp/tools/`` — Each tool is a single module, auto-discovered at startup.
-Modules ending in ``_toolcode`` contain code that runs inside Blender and are
-skipped during discovery.
-
-``mcp/blmcp/tools_helpers/`` — Shared utilities used by tools. Tools do not
-import from each other; shared logic lives here.
-
----
-
-## Features
-
-- **No external dependencies** — `llama-server` is the only requirement
-- **One-click llama-server download** — auto-downloads from GitHub releases
-- **Direct GGUF download** — streams from HuggingFace in 64 KB chunks with real-time
-  progress bar (percentage, speed, ETA)
-- **Cancel downloads** — abort in-progress downloads; partial files are cleaned up
-- **Disk space pre-check** — verifies sufficient space before multi-GB downloads
-- **HF_TOKEN support** — access gated models via token field or environment variable
-- **Fallback download** — if direct download fails, falls back to `llama-server --hf-repo`
-- **Curated model presets** — 14 tested GGUF models with RAM/disk/capability info,
-  organized into Flagship / Mid-Range / Lightweight categories
-- **Existing model scanner** — finds `.gguf` files in HF cache and custom directories
-- **Adjustable context window** — tune `--ctx-size` per model (4096–262144), auto-set from preset
-- **Max output tokens** — per-preset defaults (16384 flagship, 8192 mid-range, 4096 lightweight),
-  with auto-continue on truncation
-- **Remote API support** — OpenRouter, OpenAI, Anthropic with provider presets and model browser
-- **In-Blender chat UI** — 3D Viewport sidebar + Text Editor panel, no separate client needed
-- **Port configuration** — individual port overrides plus global offset
-- **Timer interval tuning** — configurable polling intervals for active/idle states
-- **Tool logging toggle** — log every tool request/response to console
-- **Diagnostics section** — port checks, ping, and four benchmark tests (Objects, Scene,
-  Animation, Collections)
-- **Reasoning content logging** — full chain-of-thought from reasoning models logged to console
-- **Portable vendor deps** — pure-Python deps installed to `vendor/deps/` (no hardcoded paths)
-
----
-
-## Requirements
-
-- **Blender 5.1+** (or Bforartists equivalent)
-- **llama-server** — from [llama.cpp](https://github.com/ggml-org/llama.cpp)
-  releases. Must be on your PATH or set in preferences.
-- **~4–28 GB RAM** depending on model (see preset tooltips)
-- **~5–37 GB disk** for model storage
-
----
-
-## Configuration
-
-All settings are in **Edit → Preferences → Add-ons → Coworker**.
-
-| Section | Setting | Description |
-|---------|---------|-------------|
-| LLM Config | Mode | Local (llama.cpp) or Remote API |
-| | Provider | Remote API provider preset (auto-fills URL) |
-| | API URL / Key / Model | Remote API connection settings |
-| | Refresh Models | Fetch live model count from the API |
-| | Browse Models | Open openrouter.ai/models in browser |
-| | Recommended Model | Curated local model preset (Flagship/Mid/Light) |
-| | Scan | Find existing `.gguf` files on your machine |
-| | Models Directory | Where downloaded models are stored |
-| | Advanced | Repo ID, filename, context window, max tokens, HF token |
-| Agent Control | Auto-Start Agent | Launch agent when Blender starts |
-| | Start/Stop | Manual agent control |
-| | Ping | Check all connections (bridge, MCP, LLM) |
-| Ports | Port Offset | Global offset added to all default ports |
-| | Bridge / MCP / LLM | Individual port overrides (0 = default + offset) |
-| Diagnostics | Check Ports | Verify ports are available |
-| | Diagnose | Full connectivity test (ping all endpoints) |
-| | Benchmarks | Run Objects/Scene/Animation/Collections benchmarks |
-| Timer | Active Interval | Polling rate while processing (0.05–5.0s) |
-| | Idle Interval | Polling rate while idle (0.1–10.0s) |
-| | Idle Delay | Seconds before switching to idle interval |
-| Misc | Log | Toggle tool request/response logging |
-
----
-
-## Test Suites (QA / Benchmarking)
-
-The add-on includes built-in multi-step test suites accessible from the
-**Diagnostics** panel in preferences (visible when `BFACW_DEBUG=True`).
-Each suite simulates a real artist workflow — steps must be clicked in
-order, and each builds on the previous one.
-
-### Available Suites
-
-| Suite | Steps | What It Tests |
-|---|---|---|
-| **Scene Build** | 6 | Ground plane → scatter props → colored collections → materials (metallic/rough/glass) → lighting → camera + render |
-| **Animation** | 5 | Bouncing ball → floor → keyframed bounce → squash & stretch → orbiting camera |
-| **Modifiers** | 6 | Sculpt-ready head: UV sphere → Subdiv → Mirror → cut & re-mirror → shape jaw/chin → Multires |
-| **Assets+Mat** | 5 | Poly Haven HDRI download, shaderball creation, texture download, glass material, three-point lighting + render |
-| **Baseline** | 6 | Mini Stonehenge: stone ring → lintels → ground → stone material → dramatic lighting → camera + render |
-| **Errors** | 3 | Vague prompt ("make it nicer"), impossible request, contradiction — tests graceful failure |
-| **Vision: Camera** | 4 | For vision models: build a product stage → place a camera → reframe to a hero low-angle → verify the final composition, each step verified by **looking at viewport screenshots** |
-| **Vision: Place** | 5 | For vision models: build a table → place a cup **on top** of it → stack a marble on the cup → center a cone on a pedestal → place a cube flush beside it, each verified by **looking at screenshots** and iterating |
-
-### How to Run
-
-1. Enable **BFACW_DEBUG** in `shared.py` (or set the env var).
-2. Open **Edit → Preferences → Add-ons → Coworker**.
-3. Scroll to the **Diagnostics** section at the bottom.
-4. Pick a suite and click **Step 1** — the agent processes it.
-5. Once it completes, **Step 2** becomes clickable, and so on.
-6. Use **Reset** to restart a suite from step 1.
-
-### What to Look For
-
-- **Correctness** — Does the result match what you asked for?
-- **Latency** — How long does each step take from click to completion?
-- **Chaining** — Does the agent remember context from previous steps?
-- **Error handling** — Does it fail gracefully on bad prompts?
-- **Model comparison** — Run the same suite on different models (e.g.
-  Mistral 24B vs. Gemma 4 26B) and compare results.
-- **Vision** — The two vision suites (Camera, Place) are for vision-capable
-  models: they must interpret `get_screenshot_of_area_as_image` screenshots
-  to verify framing and object placement. Text-only models will skip the
-  visual check and likely fail the iteration steps.
-
-### Logging
-
-All test steps are logged to the Blender console with the prefix
-`[🛠️Coworker] test suite '<name>':`. Check the console for timing,
-status updates, and any errors.
-
----
-
-## TODO
-
-The following items are tracked in [CHANGELOG.md](CHANGELOG.md):
-
-### High Priority
-- [x] **Addon Branding Rename** — Rename blender_mcp_addon branding references to "bfa_coworker"
-- [x] **Interface Modularization** — Split `__init__.py` into separate modules
-- [x] **Download Progress Bar** — Visual progress bar in preferences panel
-- [x] **Cancel Downloads** — Abort in-progress downloads with cleanup
-- [x] **HF_TOKEN Support** — Access gated models via token field
-- [x] **Portable Vendor Deps** — Replaced non-portable bundled .venv with pip --target
-- [ ] **Get going on Linux and Mac** — Currently Windows only
-
-### Medium Priority
-- [ ] **Chat History Export** — Save conversation log to a text file
-- [ ] Add better chat drawing in sidebar based on: https://projects.blender.org/blender/blender/pulls/154351
-- [ ] **SKILL.md Update** — Rewrite agent skill file for current branding
-- [ ] **User Documentation** — Full install/usage/troubleshooting guide
-- [ ] **GGUF Header Parsing** — Auto-detect model params for non-presets
-
-### Low Priority
-- [ ] **System RAM Detection** — Filter presets that exceed available RAM
-- [ ] **Local Model Generator** — Integrate Ultrashape / Hunyuan / Trellis2
-- [ ] **CC0 Resource Downloader** — Polyhaven, AmbientCG, Sketchfab
-- [ ] **Integrated pre-prompted tools for UX operators** to allow repetitive work with contextual application that an MCP can do in a smart way. this requires some design and integration into different editors and interface.
+Everything runs inside Blender -- no external processes to manage, no ports to configure.
 
 ---
 
 ## License
 
-GPL-3.0-or-later — see [LICENSE](LICENSE).
+GPL-3.0-or-later -- see [LICENSE](LICENSE).

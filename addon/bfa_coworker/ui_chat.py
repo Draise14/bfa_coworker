@@ -1502,7 +1502,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 turn_box.separator()
                 _draw_multiline(turn_box, user_msg.get("content", ""))
 
-                # --- Running Tools (collapsible --- only the internals collapse) ---
+                # --- Working (collapsible --- only the internals collapse) ---
                 if has_proc:
                     ph, pb = turn_box.panel(
                         "turn_proc_{:d}".format(turn_num),
@@ -1510,7 +1510,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     )
                     if pb:
                         pb_icon = "WARNING" if has_err else "SORTTIME"
-                        pb.label(text="Running Tools", icon=pb_icon)
+                        pb.label(text="Working", icon=pb_icon)
                         for pm in process_msgs:
                             pr = pm.get("role", "")
                             pc = pm.get("content", "")

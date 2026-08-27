@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Markdown Rendering in Chat** -- Assistant messages now render with code blocks (with syntax-highlighted headers and Copy buttons), tables, headings (H1-H4), bold/italic, unordered/ordered lists, blockquotes, and inline code. Ported from Blender Buddy reference implementation.
 - **Download Safety Guards** — SHA-256 verification for model downloads. HTTP Range resume via .part files (interrupted downloads resume where they left off). Atomic rename (.part → final) prevents corrupt partial files. Cancel preserves .part for resume. Network errors preserve .part instead of deleting. HTTP 416 handling for already-complete downloads.
 - **GPU Auto-Detection** — Automatic `--n-gpu-layers` calculation based on GPU VRAM, model size, KV cache requirements, and runtime overhead. Eliminates OOM crashes from hardcoded values. Falls back gracefully when GPU detection fails.
 - **Inference Sampling Overhaul** — Temperature auto-switches (0.2 for Agent/code, 0.35 for Ask/prose). Tuned sampling: top_k=20, top_p=0.8, repeat_penalty=1.1. Default max_tokens lowered to 1024 for more efficient tool rounds. Default context raised to 16384.

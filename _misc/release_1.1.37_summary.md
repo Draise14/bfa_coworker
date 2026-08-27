@@ -15,6 +15,7 @@ This release brings **major UX improvements**, **power-user tools**, and **perfo
 - Temperature auto-switches between Agent (0.2) and Ask (0.35) modes
 - Custom model URL: paste any HuggingFace link to download
 - Server port auto-selects when configured port is busy
+- Markdown rendering in chat: code blocks with copy buttons, tables, headings, lists, bold/italic
 
 
 ### 🎯 **Message Queue System**
@@ -28,6 +29,14 @@ Mention anything in your scene! Objects, materials, collections, node groups, wo
 - 📈 6 new editor benchmark suites  
 - 💾 Results persistence with comparison support
 - 🔧 Debug mode with configurable log levels
+
+### 📝 **Markdown Rendering in Chat**
+- Code blocks with syntax header bar and Copy button
+- Tables with proper column alignment
+- Headings (H1-H4), bold, italic, inline code
+- Ordered and unordered lists
+- Blockquotes
+- Ported from Blender Buddy reference implementation
 
 ### 🎨 **Asset Browser Integration**
 - 📚 Browse asset libraries from the agent

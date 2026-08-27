@@ -29,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Download Safety Guards** — SHA-256 verification for model downloads. HTTP Range resume via .part files (interrupted downloads resume where they left off). Atomic rename (.part → final) prevents corrupt partial files. Cancel preserves .part for resume. Network errors preserve .part instead of deleting. HTTP 416 handling for already-complete downloads.
 - **GPU Auto-Detection** — Automatic `--n-gpu-layers` calculation based on GPU VRAM, model size, KV cache requirements, and runtime overhead. Eliminates OOM crashes from hardcoded values. Falls back gracefully when GPU detection fails.
+- **Inference Sampling Overhaul** — Temperature auto-switches (0.2 for Agent/code, 0.35 for Ask/prose). Tuned sampling: top_k=20, top_p=0.8, repeat_penalty=1.1. Default max_tokens lowered to 1024 for more efficient tool rounds. Default context raised to 16384.
+- **Custom Model URL Flow** — Paste any HuggingFace URL or direct .gguf link to download. URL auto-parsed for repo/filename. Reuses existing download infrastructure with SHA-256 verification.
+- **Server Port Fallback** — Automatic port selection when configured port is busy. Scans upward from configured port, clear error when all ports exhausted.
 - **Debug Mode & Diagnostics** — New user-facing `debug_mode` toggle and `log_level` enum (DEBUG/INFO/WARNING/ERROR) in preferences. Open Log button for quick access to log file. Multiline custom skills text editor for easier editing.
 - **Benchmark Expansion** — Timing measurements for all benchmark suites. 6 new editor benchmark suites. Split assets_materials into separate tests. Auto-reset on completion. Results persistence to JSON files with comparison support.
 - **Session Logging & Memory Bank** — Export session log to text block or clipboard. Auto-save on spiral detection. Error code bank for pattern tracking. Versioned session history (last 10).

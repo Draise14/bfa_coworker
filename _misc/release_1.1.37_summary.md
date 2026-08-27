@@ -7,6 +7,15 @@ This release brings **major UX improvements**, **power-user tools**, and **perfo
 ---
 
 ## ✨ Highlight Features
+### 🔒 **Download Safety** (Tier 3f)
+- SHA-256 verification for every model download
+- HTTP Range resume via .part files — interrupted downloads resume where they left off
+- Atomic rename prevents corrupt partial files
+- GPU auto-detection eliminates OOM crashes from wrong --n-gpu-layers
+- Temperature auto-switches between Agent (0.2) and Ask (0.35) modes
+- Custom model URL: paste any HuggingFace link to download
+- Server port auto-selects when configured port is busy
+
 
 ### 🎯 **Message Queue System**
 Never lose a message again! If the Coworker is busy processing, your message is automatically queued and processed when ready. See queue status with the new Queue UI.

@@ -2336,6 +2336,7 @@ def start_local_llama(
         else:
             ngpu_layers = 99 if backend in ("cuda", "vulkan") else 0
         args = [
+            server_exe,
             '--jinja',
             '--verbose',
             '--host', '127.0.0.1',

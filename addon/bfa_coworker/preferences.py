@@ -464,7 +464,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default="",
     )
 
-    _show_more_models: BoolProperty(  # type: ignore[valid-type]
+    show_more_models: BoolProperty(  # type: ignore[valid-type]
         name="Show More Models",
         default=False,
     )
@@ -1201,12 +1201,12 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         more_box = box.box()
         more_box.prop(
             self,
-            "_show_more_models",
+            "show_more_models",
             text="More Models (curated presets)",
-            icon='TRIA_DOWN' if getattr(self, "_show_more_models", False) else 'TRIA_RIGHT',
+            icon='TRIA_DOWN' if self.show_more_models else 'TRIA_RIGHT',
             emboss=True,
         )
-        if getattr(self, "_show_more_models", False):
+        if self.show_more_models:
             more_presets = [p for p in all_presets if p.identifier not in primary_ids]
             _MORE_CATEGORIES = [
                 ("flagship", "Flagship (24 GB+ VRAM)", 'SORT_ASC'),

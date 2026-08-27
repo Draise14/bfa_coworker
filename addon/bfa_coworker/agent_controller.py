@@ -56,6 +56,24 @@ _MCP_SERVER_HEALTH_URL = "http://127.0.0.1:{:d}/health"
 _MCP_TOOLS_URL = "http://127.0.0.1:{:d}/tools/list"
 _LLM_CHAT_URL = "http://127.0.0.1:{:d}/v1/chat/completions"
 _MAX_TOOL_ITERATIONS = 8
+
+# Sampling parameters tuned for MoE local models.
+_CHAT_SAMPLING = {
+    "repeat_penalty": 1.1,
+    "top_p": 0.8,
+    "top_k": 20,
+    "min_p": 0.0,
+}
+
+# Temperature auto-switches based on mode:
+#   Agent mode (code gen) -> 0.2: sharp, deterministic
+#   Ask mode (prose/UI)  -> 0.35: natural writing
+_DEFAULT_TEMPERATURE_CODE = 0.2
+_DEFAULT_TEMPERATURE_PROSE = 0.35
+
+_DEFAULT_MAX_TOKENS = 1024
+_DEEP_MAX_TOKENS = 4096
+
 _STREAM_TIMEOUT = 600.0
 
 # Maximum conversation history messages to send per turn.
@@ -1747,6 +1765,7 @@ def _openai_chat_completions(
     api_key: str | None = None,
     model: str | None = None,
     max_tokens: int | None = None,
+    chat_mode: str = "AGENT",
 ) -> dict[str, Any] | None:
     """POST to a chat completions endpoint and return the parsed JSON response.
 
@@ -1755,19 +1774,13 @@ def _openai_chat_completions(
     which auto-detects the model.
     *max_tokens* — max output tokens per call. ``None`` uses 16384 default.
     """
+    temperature = _DEFAULT_TEMPERATURE_CODE if chat_mode == "AGENT" else _DEFAULT_TEMPERATURE_PROSE
     body: dict[str, Any] = {
         "messages": messages,
         "stream": False,
-        # Cap output so the model doesn't generate endlessly.
-        "max_tokens": max_tokens if max_tokens is not None else 16384,
-        # Parameters tuned for small local models (Gemma 4 26B etc.):
-        # - temperature: 0.3 gives focused, non-erratic output
-        # - top_p: 0.9 limits random tail tokens
-        # - stop: prevent the model from generating tool-call syntax
-        #   that it can't actually execute.
-        "temperature": 0.3,
-        "top_p": 0.9,
-        "repeat_penalty": 1.05,
+        "max_tokens": max_tokens if max_tokens is not None else _DEFAULT_MAX_TOKENS,
+        "temperature": temperature,
+        **_CHAT_SAMPLING,
     }
     if model:
         body["model"] = model

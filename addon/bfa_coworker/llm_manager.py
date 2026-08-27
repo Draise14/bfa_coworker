@@ -399,7 +399,7 @@ class LLMConfig:
     model_filename: str = "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
     downloaded_models_dir: str = ""
     local_port: int = _LOCAL_LLM_DEFAULT_PORT
-    local_ctx_size: int = 8192
+    local_ctx_size: int = 16384
     local_max_tokens: int = 16384  # Max output tokens per API call
     hf_token: str = ""  # HuggingFace token for gated models
     llama_backend: str = "auto"  # "auto" | "cpu" | "cuda" | "vulkan"
@@ -2244,7 +2244,7 @@ def start_local_llama(
         print("[🛠️Coworker] start_local_llama: using configured port {:d}".format(port))
 
     with _lock:
-        ctx_size = _config.local_ctx_size or 8192
+        ctx_size = _config.local_ctx_size or 16384
     # Auto-upgrade from the old 8192 default to 32768 for existing users.
     # 8192 is too small for system prompt + tools + conversation.
     if ctx_size <= 8192:

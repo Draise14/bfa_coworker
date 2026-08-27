@@ -479,7 +479,26 @@ mcp/blmcp/tools/get_screenshot_of_window_as_json_toolcode.py  # VSE + node edito
 
 ---
 
-## Total Estimated: ~3,700 LOC across 58+ new files + modifications to 4 existing files
+### 6f.7 Document Loading with Vector Search (Pattern AC, BuddyCode GPT) 🟢
+
+**Source**: BuddyCode GPT (load documents, query with FAISS vector search for context-aware generation)
+
+**What**: Let users load project documents (markdown, text, Python files) and have the agent retrieve the *relevant* chunks when answering — instead of injecting everything into context. This is RAG-style retrieval over project docs.
+
+**Why Tier 6**: We already inject project rules (markdown) wholesale. The gap is *retrieval* — today everything goes in; BuddyCode retrieves only the relevant chunk. For typical Blender scripts this is overkill, but valuable once docs grow large. Requires a vector-store dependency — evaluate a lightweight chunk + scoring approach before adopting FAISS.
+
+**Implementation** (~250 LOC):
+- `BFACW_OT_index_documents` — scan a folder for `.md`, `.txt`, `.py` files, chunk into ~500-token segments
+- Lightweight retrieval: TF-IDF / keyword scoring over chunks (no FAISS dependency initially)
+- `@doc <query>` mention or toggle in the input row to enable retrieval mode
+- Retrieved chunks injected into the agent context as "Project Docs (retrieved)" section
+- Optional: swap in FAISS later if chunk counts grow large
+
+**Files**: `agent_controller.py` (retrieval), `ui_chat.py` (doc toggle + results display), `preferences.py` (doc folder setting)
+
+---
+
+## Total Estimated: ~3,950 LOC across 58+ new files + modifications to 4 existing files
 
 | Phase | LOC | New Files | Status |
 |---|---|---|---|
@@ -488,7 +507,7 @@ mcp/blmcp/tools/get_screenshot_of_window_as_json_toolcode.py  # VSE + node edito
 | 6c: Asset Browser | ~800 | 18 | ❌ Not started |
 | 6d: Shader / Node Editor | ~650 | 14 | ❌ Not started |
 | 6e: System Prompt & Integration | ~200 | 0 | ❌ Not started |
-| 6f: Competitor UX — Advanced Intelligence | ~1,100 | 6 | ❌ Not started |
+| 6f: Competitor UX — Advanced Intelligence | ~1,350 | 6 | ❌ Not started |
 
 ---
 

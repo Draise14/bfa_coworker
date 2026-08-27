@@ -1,4 +1,4 @@
-# BFA Coworker — Tier 4b: Competitor UX Analysis & Implementation Plan
+﻿# BFA Coworker — Tier 4b: Competitor UX Analysis & Implementation Plan
 
 **Date**: 2026-08-26
 **Status**: Planning — Not Started
@@ -363,131 +363,192 @@
 
 ---
 
+### 1.7 BuddyCode GPT (EasyLight)
+
+**Market position**: The Text Editor specialist. 2+ years old, $10. Focused exclusively on code generation and completion inside Blender's Text Editor.
+
+**Pricing**: Free tier (LM Studio only) + $10 Full (LM Studio + Ollama)
+
+**Blender support**: 3.4 – 4.1
+
+**UX Architecture**:
+
+**Text Editor Integration**:
+- **Built-in file browser**: Navigate and manage files within the Text Editor sidebar — no need to leave Blender
+- **Sidebar tab**: "BuddyCode Browser" for file management, "BudyGPT" for AI interaction
+- **Code completion**: Real-time, context-aware suggestions as you type
+- **Code generation**: Generate code snippets from natural language prompts
+- **Text completion**: Complete sentences or paragraphs based on context
+
+**Multi-Pair Execution**:
+- Define multiple pairs of (input text, system prompt, temperature)
+- "Run All Pairs with Context" — processes pairs with document context
+- "Run All Pairs No Context" — processes pairs without context
+- Concurrent execution of multiple tasks
+
+**AI Features**:
+- **Multi-provider**: LM Studio, Ollama, Google Gemini
+- **Vision support**: Toggle image vision processing, set image path for visual context
+- **CSV analysis**: Load CSV files for data analysis
+- **Document loading**: Load documents for context-aware generation using FAISS vector search
+- **Chat history**: Keep track of conversations with the AI
+- **Module installation**: Install Python modules directly from within Blender (pip install from the addon)
+
+**Preferences**:
+- Server type (LM Studio, Ollama, Gemini)
+- Model type selection
+- Endpoint URL configuration
+- API keys for Gemini
+- Enable vision toggle
+- Image path and CSV path
+- Temperature control
+
+**Strengths**:
+- Best Text Editor file browser of any AI addon — built-in file management
+- Multi-pair execution is unique — batch process multiple prompts
+- Document loading with FAISS vector search for context-aware generation
+- Vision support for image-guided code generation
+- CSV analysis capability
+- Module installation from within Blender
+- MIT license
+
+**Weaknesses**:
+- No tool-calling / agentic capabilities (pure chat + code gen)
+- No N-panel chat panel — Text Editor only
+- No session history management
+- No screenshot/vision for the 3D viewport (only image files)
+- Blender 4.1 max (may not work on 5.1+)
+- No local model management (requires external LM Studio/Ollama)
+- Requires langchain, FAISS, pyperclip — external Python dependencies
+- 2+ years old, minimal updates
+
+---
+
 ## 2. Feature Comparison Matrix
 
-| Feature | Chat Companion | Suzanne AI | BlendAI | Blender Buddy | BlenderMCP Pro | **BFA Coworker** |
-|---|---|---|---|---|---|---|
-| **Chat Interface** | | | | | | |
-| N-panel sidebar | ✅ | ✅ | ✅ | ✅ (10 spaces) | ✅ | ✅ |
-| Popup/quick chat | ❌ | ❌ | ✅ (Ctrl+Shift+A) | ✅ (hotkey toggle) | ❌ | ❌ |
-| Multi-line input | ? | ? | ✅ | ❌ (single line) | ✅ | ✅ |
-| File attachments | ✅ | ❌ | ✅ (8 types) | ✅ (screenshot) | ✅ (screenshot) | ❌ |
-| Voice input | ❌ | ❌ | ❌ | ❌ | ✅ (Whisper) | ❌ |
-| TTS (read aloud) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| | | | | | | |
-| **Message Display** | | | | | | |
-| Markdown rendering | ✅ (basic) | ❌ | ❌ | ✅ (full) | ❌ (plain) | ❌ (plain) |
-| Code blocks + Run | ✅ | ✅ (basic) | ✅ | ✅ (+ safety scan) | ✅ (sandbox) | ❌ |
-| Collapse long msgs | ❌ | ❌ | ❌ | ✅ (15+ lines) | ❌ | ❌ |
-| Per-message copy | ✅ | ❌ | ✅ | ✅ | ? | ✅ |
-| URL link buttons | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
-| Error→fix loop | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| | | | | | | |
-| **Conversation Mgmt** | | | | | | |
-| Session history | ❌ | ❌ | ✅ (search/load) | ❌ | ✅ (full CRUD) | ✅ (basic) |
-| Auto-title sessions | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ |
-| Multi-session | ❌ | ❌ | ✅ | ❌ | ✅ | ❌ |
-| New/clear thread | ? | ❌ | ✅ | ✅ (Clear/Revert) | ✅ | ✅ |
-| Token counter | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
-| Persist across restart | ❌ | ✅ (txt file) | ❌ | ❌ | ✅ | ✅ |
-| | | | | | | |
-| **Agentic/Tool System** | | | | | | |
-| Tool calling | ❌ | ❌ | ❌ | ✅ (search/fetch) | ✅ (75 tools) | ✅ (MCP tools) |
-| Agent teams/planning | ❌ | ❌ | ❌ | ❌ | ✅ (Planner+Specialists) | ❌ |
-| Background tasks | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ (queue) |
-| Project memory/rules | ❌ | ❌ | ❌ | ❌ | ✅ (.blend) | ✅ (markdown) |
-| Macros/reusable tools | ❌ | ❌ | ✅ (script presets) | ❌ | ✅ | ❌ |
-| Scene co-pilot | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ |
-| Render critic | ❌ | ❌ | ✅ (suggestions) | ❌ | ✅ (iterative) | ❌ |
-| | | | | | | |
-| **Blender Integration** | | | | | | |
-| Right-click explain | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
-| Context-aware (space) | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
-| @Mention system | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
-| Text Editor integration | ✅ (completion) | ❌ | ❌ | ❌ | ❌ | ✅ (sidebar) |
-| | | | | | | |
-| **Provider/Model** | | | | | | |
-| Local models | ✅ (LM Studio/Ollama) | ❌ | ❌ | ✅ (built-in) | ✅ (Ollama) | ✅ (built-in) |
-| Remote APIs | ✅ (3 providers) | ✅ (OpenAI) | ✅ (OpenAI) | ❌ | ✅ (4 providers) | ✅ |
-| Auto-fallback | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ |
-| Cost display | ❌ | ❌ | ✅ (credits) | ❌ | ✅ (live $) | ❌ |
-| | | | | | | |
-| **Setup Experience** | | | | | | |
-| One-click install | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ |
-| Auto-download models | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ |
-| GPU auto-detect | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
-| Download progress | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ |
-| | | | | | | |
-| **MCP/External** | | | | | | |
-| MCP server | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ |
-| External client config | ❌ | ❌ | ❌ | ❌ | ✅ (one-click) | ❌ |
-| Cross-DCC bridge | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ |
+| Feature | Chat Companion | Suzanne AI | BlendAI | Blender Buddy | BlenderMCP Pro | BuddyCode GPT | **BFA Coworker** |
+|---|---|---|---|---|---|---|---|
+| **Chat Interface** | | | | | | | |
+| N-panel sidebar | ✅ | ✅ | ✅ | ✅ (10 spaces) | ✅ | ❌ (Text Ed only) | ✅ |
+| Popup/quick chat | ❌ | ❌ | ✅ (Ctrl+Shift+A) | ✅ (hotkey toggle) | ❌ | ❌ | ❌ |
+| Multi-line input | ? | ? | ✅ | ❌ (single line) | ✅ | ✅ | ✅ |
+| File attachments | ✅ | ❌ | ✅ (8 types) | ✅ (screenshot) | ✅ (screenshot) | ❌ | ❌ |
+| Voice input | ❌ | ❌ | ❌ | ❌ | ✅ (Whisper) | ❌ | ❌ |
+| TTS (read aloud) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| | | | | | | | |
+| **Message Display** | | | | | | | |
+| Markdown rendering | ✅ (basic) | ❌ | ❌ | ✅ (full) | ❌ (plain) | ❌ (plain) | ❌ (plain) |
+| Code blocks + Run | ✅ | ✅ (basic) | ✅ | ✅ (+ safety scan) | ✅ (sandbox) | ✅ (multi-pair) | ❌ |
+| Collapse long msgs | ❌ | ❌ | ❌ | ✅ (15+ lines) | ❌ | ❌ | ❌ |
+| Per-message copy | ✅ | ❌ | ✅ | ✅ | ? | ✅ | ✅ |
+| URL link buttons | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Error→fix loop | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| | | | | | | | |
+| **Conversation Mgmt** | | | | | | | |
+| Session history | ❌ | ❌ | ✅ (search/load) | ❌ | ✅ (full CRUD) | ✅ (chat history) | ✅ (basic) |
+| Auto-title sessions | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| Multi-session | ❌ | ❌ | ✅ | ❌ | ✅ | ❌ | ❌ |
+| New/clear thread | ? | ❌ | ✅ | ✅ (Clear/Revert) | ✅ | ✅ | ✅ |
+| Token counter | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Persist across restart | ❌ | ✅ (txt file) | ❌ | ❌ | ✅ | ✅ | ✅ |
+| | | | | | | | |
+| **Agentic/Tool System** | | | | | | | |
+| Tool calling | ❌ | ❌ | ❌ | ✅ (search/fetch) | ✅ (75 tools) | ❌ | ✅ (MCP tools) |
+| Agent teams/planning | ❌ | ❌ | ❌ | ❌ | ✅ (Planner+Specialists) | ❌ | ❌ |
+| Background tasks | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ (queue) |
+| Project memory/rules | ❌ | ❌ | ❌ | ❌ | ✅ (.blend) | ❌ | ✅ (markdown) |
+| Macros/reusable tools | ❌ | ❌ | ✅ (script presets) | ❌ | ✅ | ❌ | ❌ |
+| Scene co-pilot | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| Render critic | ❌ | ❌ | ✅ (suggestions) | ❌ | ✅ (iterative) | ❌ | ❌ |
+| | | | | | | | |
+| **Blender Integration** | | | | | | | |
+| Right-click explain | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Context-aware (space) | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| @Mention system | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
+| Text Editor integration | ✅ (completion) | ❌ | ❌ | ❌ | ❌ | ✅ (file browser + completion) | ✅ (sidebar) |
+| | | | | | | | |
+| **Provider/Model** | | | | | | | |
+| Local models | ✅ (LM Studio/Ollama) | ❌ | ❌ | ✅ (built-in) | ✅ (Ollama) | ✅ (LM Studio/Ollama) | ✅ (built-in) |
+| Remote APIs | ✅ (3 providers) | ✅ (OpenAI) | ✅ (OpenAI) | ❌ | ✅ (4 providers) | ✅ (Gemini) | ✅ |
+| Auto-fallback | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| Cost display | ❌ | ❌ | ✅ (credits) | ❌ | ✅ (live $) | ❌ | ❌ |
+| | | | | | | | |
+| **Setup Experience** | | | | | | | |
+| One-click install | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ |
+| Auto-download models | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ✅ |
+| GPU auto-detect | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Download progress | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ✅ |
+| | | | | | | | |
+| **MCP/External** | | | | | | | |
+| MCP server | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ |
+| External client config | ❌ | ❌ | ❌ | ❌ | ✅ (one-click) | ❌ | ❌ |
+| Cross-DCC bridge | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
 
 ### 2.1 BFA Coworker Proposal — After Tier 4b
 
 This table shows what BFA Coworker will look like **after** implementing all Tier 4b phases. The `✅` column is the target state — what we ship.
 
-| Feature | Chat Companion | Suzanne AI | BlendAI | Blender Buddy | BlenderMCP Pro | **BFA Coworker (Now)** | **BFA Coworker (After 4b)** |
-|---|---|---|---|---|---|---|---|
-| **Chat Interface** | | | | | | | |
-| N-panel sidebar | ✅ | ✅ | ✅ | ✅ (10 spaces) | ✅ | ✅ | ✅ |
-| Popup/quick chat | ❌ | ❌ | ✅ | ✅ (hotkey) | ❌ | ❌ | ❌ → T5 |
-| Multi-line input | ? | ? | ✅ | ❌ | ✅ | ✅ | ✅ |
-| File attachments | ✅ | ❌ | ✅ (8 types) | ✅ (screenshot) | ✅ (screenshot) | ❌ | ✅ (screenshot) |
-| Voice input | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ → T6 |
-| TTS (read aloud) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ → T6 |
-| | | | | | | | |
-| **Message Display** | | | | | | | |
-| Markdown rendering | ✅ (basic) | ❌ | ❌ | ✅ (full) | ❌ (plain) | ❌ | ✅ P1 |
-| Code blocks + Run | ✅ | ✅ (basic) | ✅ | ✅ (+ safety) | ✅ (sandbox) | ❌ | ✅ P2 |
-| Collapse long msgs | ❌ | ❌ | ❌ | ✅ (15+ lines) | ❌ | ❌ | ❌ → post |
-| Per-message copy | ✅ | ❌ | ✅ | ✅ | ? | ✅ | ✅ |
-| URL link buttons | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ✅ (via md) |
-| Error→fix loop | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ P3 |
-| | | | | | | | |
-| **Conversation Mgmt** | | | | | | | |
-| Session history | ❌ | ❌ | ✅ (search/load) | ❌ | ✅ (full CRUD) | ✅ (basic) | ✅ P4 |
-| Auto-title sessions | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ P4 |
-| Multi-session | ❌ | ❌ | ✅ | ❌ | ✅ | ❌ | ✅ P4 |
-| New/clear thread | ? | ❌ | ✅ | ✅ (Clear/Revert) | ✅ | ✅ | ✅ |
-| Token counter | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ → post |
-| Persist across restart | ❌ | ✅ (txt file) | ❌ | ❌ | ✅ | ✅ | ✅ |
-| | | | | | | | |
-| **Agentic/Tool System** | | | | | | | |
-| Tool calling | ❌ | ❌ | ❌ | ✅ (search) | ✅ (75 tools) | ✅ (MCP) | ✅ |
-| Agent teams/planning | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ → T5/6 |
-| Background tasks | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ (queue) | ✅ |
-| Project memory/rules | ❌ | ❌ | ❌ | ❌ | ✅ (.blend) | ✅ (md) | ✅ |
-| Macros/reusable tools | ❌ | ❌ | ✅ (presets) | ❌ | ✅ | ❌ | ❌ → T5 |
-| Scene co-pilot | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ → T6 |
-| Render critic | ❌ | ❌ | ✅ (suggestions) | ❌ | ✅ (iterative) | ❌ | ❌ → T6 |
-| | | | | | | | |
-| **Blender Integration** | | | | | | | |
-| Right-click explain | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ | ✅ P5 |
-| Context-aware (space) | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ → post |
-| @Mention system | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ |
-| Text Editor integration | ✅ (completion) | ❌ | ❌ | ❌ | ❌ | ✅ (sidebar) | ✅ (Tier 4c) |
-| | | | | | | | |
-| **Provider/Model** | | | | | | | |
-| Local models | ✅ (LM Studio) | ❌ | ❌ | ✅ (built-in) | ✅ (Ollama) | ✅ (built-in) | ✅ |
-| Remote APIs | ✅ (3) | ✅ (OpenAI) | ✅ (OpenAI) | ❌ | ✅ (4) | ✅ | ✅ |
-| Auto-fallback | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ → T5 |
-| Cost display | ❌ | ❌ | ✅ (credits) | ❌ | ✅ (live $) | ❌ | ❌ → T5 |
-| | | | | | | | |
-| **Setup Experience** | | | | | | | |
-| One-click install | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ → T5 |
-| Auto-download models | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ | ✅ |
-| GPU auto-detect | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ → T5 |
-| Download progress | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ | ✅ |
-| | | | | | | | |
-| **MCP/External** | | | | | | | |
-| MCP server | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ |
-| External client config | ❌ | ❌ | ❌ | ❌ | ✅ (one-click) | ❌ | ❌ → T5 |
-| Cross-DCC bridge | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | Out of scope |
+| Feature | Chat Companion | Suzanne AI | BlendAI | Blender Buddy | BlenderMCP Pro | BuddyCode GPT | **BFA Coworker (Now)** | **BFA Coworker (After 4b)** |
+|---|---|---|---|---|---|---|---|---|
+| **Chat Interface** | | | | | | | | |
+| N-panel sidebar | ✅ | ✅ | ✅ | ✅ (10 spaces) | ✅ | ❌ (Text Ed only) | ✅ | ✅ |
+| Popup/quick chat | ❌ | ❌ | ✅ | ✅ (hotkey) | ❌ | ❌ | ❌ | ❌ → T5 |
+| Multi-line input | ? | ? | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| File attachments | ✅ | ❌ | ✅ (8 types) | ✅ (screenshot) | ✅ (screenshot) | ❌ | ❌ | ✅ (screenshot) |
+| Voice input | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ → T6 |
+| TTS (read aloud) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ → T6 |
+| | | | | | | | | |
+| **Message Display** | | | | | | | | |
+| Markdown rendering | ✅ (basic) | ❌ | ❌ | ✅ (full) | ❌ (plain) | ❌ (plain) | ❌ | ✅ P1 |
+| Code blocks + Run | ✅ | ✅ (basic) | ✅ | ✅ (+ safety) | ✅ (sandbox) | ✅ (multi-pair) | ❌ | ✅ P2 |
+| Collapse long msgs | ❌ | ❌ | ❌ | ✅ (15+ lines) | ❌ | ❌ | ❌ | ❌ → post |
+| Per-message copy | ✅ | ❌ | ✅ | ✅ | ? | ✅ | ✅ | ✅ |
+| URL link buttons | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ✅ (via md) |
+| Error→fix loop | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ P3 |
+| | | | | | | | | |
+| **Conversation Mgmt** | | | | | | | | |
+| Session history | ❌ | ❌ | ✅ (search/load) | ❌ | ✅ (full CRUD) | ✅ (chat history) | ✅ (basic) | ✅ P4 |
+| Auto-title sessions | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ✅ P4 |
+| Multi-session | ❌ | ❌ | ✅ | ❌ | ✅ | ❌ | ❌ | ✅ P4 |
+| New/clear thread | ? | ❌ | ✅ | ✅ (Clear/Revert) | ✅ | ✅ | ✅ | ✅ |
+| Token counter | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ → post |
+| Persist across restart | ❌ | ✅ (txt file) | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| | | | | | | | | |
+| **Agentic/Tool System** | | | | | | | | |
+| Tool calling | ❌ | ❌ | ❌ | ✅ (search) | ✅ (75 tools) | ❌ | ✅ (MCP) | ✅ |
+| Agent teams/planning | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ → T5/6 |
+| Background tasks | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ (queue) | ✅ |
+| Project memory/rules | ❌ | ❌ | ❌ | ❌ | ✅ (.blend) | ❌ | ✅ (md) | ✅ |
+| Macros/reusable tools | ❌ | ❌ | ✅ (presets) | ❌ | ✅ | ❌ | ❌ | ❌ → T5 |
+| Scene co-pilot | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ → T6 |
+| Render critic | ❌ | ❌ | ✅ (suggestions) | ❌ | ✅ (iterative) | ❌ | ❌ | ❌ → T6 |
+| | | | | | | | | |
+| **Blender Integration** | | | | | | | | |
+| Right-click explain | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ P5 |
+| Context-aware (space) | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ → post |
+| @Mention system | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ |
+| Text Editor integration | ✅ (completion) | ❌ | ❌ | ❌ | ❌ | ✅ (file browser + completion) | ✅ (sidebar) | ✅ (Tier 4c) |
+| | | | | | | | | |
+| **Provider/Model** | | | | | | | | |
+| Local models | ✅ (LM Studio) | ❌ | ❌ | ✅ (built-in) | ✅ (Ollama) | ✅ (LM Studio/Ollama) | ✅ (built-in) | ✅ |
+| Remote APIs | ✅ (3) | ✅ (OpenAI) | ✅ (OpenAI) | ❌ | ✅ (4) | ✅ (Gemini) | ✅ | ✅ |
+| Auto-fallback | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ → T5 |
+| Cost display | ❌ | ❌ | ✅ (credits) | ❌ | ✅ (live $) | ❌ | ❌ | ❌ → T5 |
+| | | | | | | | | |
+| **Setup Experience** | | | | | | | | |
+| One-click install | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ → T5 |
+| Auto-download models | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ✅ | ✅ |
+| GPU auto-detect | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ → T5 |
+| Download progress | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ✅ | ✅ |
+| | | | | | | | | |
+| **MCP/External** | | | | | | | | |
+| MCP server | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ | ✅ |
+| External client config | ❌ | ❌ | ❌ | ❌ | ✅ (one-click) | ❌ | ❌ | ❌ → T5 |
+| Cross-DCC bridge | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | Out of scope |
 
 **Key**: `P1`–`P7` = Tier 4b Phase number. `T5`/`T6` = deferred to that Tier. `post` = post-Tier 4b polish. `→` = not in Tier 4b scope.
 
-**Summary**: After Tier 4b, BFA Coworker closes **all 5 critical gaps** and **4 of 7 important gaps**. The only remaining gaps vs. BlenderMCP Pro are Agent Teams (T5/6), Macros (T5), Scene Co-Pilot (T6), and Render Critic (T6) — all advanced features that most users won't miss in a free tool.
+**Summary**: After Tier 4b, BFA Coworker closes **all 5 critical gaps** and **4 of 7 important gaps**. The only remaining gaps vs. BlenderMCP Pro are Agent Teams (T5/6), Macros (T5), Scene Co-Pilot (T6), and Render Critic (T6) — all advanced features that most users won't miss in a free tool. BuddyCode GPT's unique features (Text Editor file browser, multi-pair execution, doc vector search) are all deferred to Tier 4c/5/6 — none are chat-panel blockers.
 
 ---
 
@@ -820,6 +881,66 @@ Type @ to search and insert scene item names (objects, materials, collections, e
 
 ---
 
+### 3.5b BuddyCode GPT Patterns (Text Editor Specialist)
+
+BuddyCode GPT is a Text Editor-centric tool, so its patterns are most relevant to **Tier 4c** (Text Editor / IDE Agent) rather than Tier 4b. None are critical for the chat panel itself.
+
+#### AA. Text Editor File Browser (BuddyCode GPT) 🟢
+
+A built-in file browser rendered inside the Text Editor sidebar. Navigate the filesystem, open/close scripts, and manage files without leaving Blender.
+
+**Source**: BuddyCode GPT
+
+**Why medium**: Only BuddyCode GPT has this. Chat Companion has Text Editor completion but no browser. Direct fit for Tier 4c's Text Editor integration — the sidebar we already have can gain a file list. Deferred to Tier 4c; a file browser is out of scope for chat-panel polish.
+
+**BFA applicability**: In Tier 4c, add a "Files" sub-panel to the Text Editor sidebar listing project scripts with open/close actions.
+
+**Implementation phase**: Tier 4c (Phase 3 or later)
+
+---
+
+#### AB. Multi-Pair Execution (BuddyCode GPT) 🟢
+
+Define multiple (input, system prompt, temperature) pairs and run them all in one click, with or without document context. Batch-processes several prompts concurrently.
+
+**Source**: BuddyCode GPT
+
+**Why medium**: Unique among all competitors — genuinely novel. Useful for batch code generation (e.g., "generate 5 variations of this operator"). Not critical for Tier 4b, but a strong differentiator for power users. Best fit after session history (Phase 4) exists, so batch results can be stored.
+
+**BFA applicability**: Add a "Batch" mode to the agent: a list editor for multiple prompts, run sequentially through the message queue, results appended as one session.
+
+**Implementation phase**: Tier 5 (post-4b)
+
+---
+
+#### AC. Document Loading with Vector Search (BuddyCode GPT) 🟢
+
+Load documents (markdown, text) and query them with FAISS vector search so the LLM answers with project-local context.
+
+**Source**: BuddyCode GPT
+
+**Why medium**: Nice RAG-style feature. We already support project rules (markdown files) injected into context — the gap is *retrieval*: today we inject everything; BuddyCode retrieves the relevant chunk. For typical Blender scripts this is overkill, but valuable once docs grow large. Requires a vector store dependency (FAISS) — evaluate before adopting.
+
+**BFA applicability**: Deferred. If adopted, use a lightweight approach: chunk project rules + TF-IDF/embedding-free scoring, no FAISS dependency.
+
+**Implementation phase**: Tier 5 or 6
+
+---
+
+#### AD. In-App Module Installation (BuddyCode GPT) 🟢
+
+Install Python modules via `pip` directly from the addon's preferences — no terminal required.
+
+**Source**: BuddyCode GPT
+
+**Why medium**: Solves a real problem: users paste code that imports third-party modules and can't run it. A safe "Install dependency" action on a failed import is high-value. Needs careful sandboxing (we already have `weak_sandbox.py`) and clear user confirmation, since installing into Blender's Python can break the environment.
+
+**BFA applicability**: In Phase 2 (Code Blocks + Run), when execution fails with `ModuleNotFoundError`, offer "Install module" with explicit warning dialog. Otherwise defer to Tier 5.
+
+**Implementation phase**: Phase 2 optional / Tier 5
+
+---
+
 ### 3.6 Setup & Onboarding Patterns
 
 #### Y. One-Click Setup Flow (Blender Buddy, BlenderMCP Pro) 🟢
@@ -925,26 +1046,29 @@ These are the features we're deliberately NOT implementing in Tier 4b. They're o
 | 16 | **Provider auto-fallback** | Z | BlenderMCP Pro | Medium | Silent switch on rate limit. Most users stick to one provider, but power users with multiple keys benefit. |
 | 17 | **GPU auto-detection for local models** | Y | Blender Buddy | Medium | Blender Buddy's GPU detection is the gold standard. Improves first-run experience for local users. |
 | 18 | **One-click setup flow** | Y | Blender Buddy | Medium | Bundled with GPU auto-detection. Guided setup that auto-configures everything. |
+| 19 | **Multi-pair / batch execution** | AB | BuddyCode GPT | Medium | Run multiple prompts in one click. Genuinely novel (no other competitor has it). Needs session history (Phase 4) first so batch results can be stored. |
+| 20 | **In-app module installation** | AD | BuddyCode GPT | Medium | One-click pip install on `ModuleNotFoundError` from executed code. Requires sandboxing care — we already have `weak_sandbox.py`. |
 
-**Tier 5 delivers**: Quick chat access, reusable automation, robust queue, and smoother onboarding. This is the "power user" tier.
+**Tier 5 delivers**: Quick chat access, reusable automation, robust queue, smoother onboarding, batch prompting, and in-app dependency install. This is the "power user" tier.
 
 #### Tier 6 — Advanced Intelligence (post-Tier 5, ~4-6 weeks)
 
 | # | Gap | Pattern | Source | Effort | Why Tier 6 |
 |---|---|---|---|---|---|
-| 19 | **Agent Teams with planner** | P | BlenderMCP Pro | Very High | Multi-agent orchestration, dependency resolution, parallel execution. The most complex feature. |
-| 20 | **Scene Co-Pilot (passive issue detection)** | T | BlenderMCP Pro | High | Background polling, issue detection heuristics, safe auto-fix logic. |
-| 21 | **Render Critic with iterative refinement** | U | BlenderMCP Pro | High | Requires vision model + render pipeline integration + iterative loop. |
-| 22 | **Voice input** | — | BlenderMCP Pro | Medium | Local Whisper integration. No API key needed. |
-| 23 | **Text-to-speech output** | — | Chat Companion | Medium | Reads answers aloud. Unique among current competitors. |
+| 21 | **Agent Teams with planner** | P | BlenderMCP Pro | Very High | Multi-agent orchestration, dependency resolution, parallel execution. The most complex feature. |
+| 22 | **Scene Co-Pilot (passive issue detection)** | T | BlenderMCP Pro | High | Background polling, issue detection heuristics, safe auto-fix logic. |
+| 23 | **Render Critic with iterative refinement** | U | BlenderMCP Pro | High | Requires vision model + render pipeline integration + iterative loop. |
+| 24 | **Voice input** | — | BlenderMCP Pro | Medium | Local Whisper integration. No API key needed. |
+| 25 | **Text-to-speech output** | — | Chat Companion | Medium | Reads answers aloud. Unique among current competitors. |
+| 26 | **Document loading with vector search** | AC | BuddyCode GPT | High | RAG-style retrieval over project docs. Requires vector-store dependency; evaluate a lightweight chunk + scoring approach instead of FAISS. |
 
-**Tier 6 delivers**: Multi-agent orchestration, passive scene monitoring, render feedback loops, and multimodal I/O. This is the "intelligence" tier.
+**Tier 6 delivers**: Multi-agent orchestration, passive scene monitoring, render feedback loops, multimodal I/O, and project-doc retrieval. This is the "intelligence" tier.
 
 #### Out of Scope
 
 | # | Gap | Source | Why Out of Scope |
 |---|---|---|---|
-| 24 | **Cross-DCC bridge** | BlenderMCP Pro | BFA-specific. Requires Unreal/Unity integration. Not relevant to our user base. |
+| 27 | **Cross-DCC bridge** | BlenderMCP Pro | BFA-specific. Requires Unreal/Unity integration. Not relevant to our user base. |
 
 ### 4.4 BFA Coworker's Unique Advantages
 
@@ -958,6 +1082,8 @@ These are capabilities that NO competitor has — they're our moat:
 | **Local + remote LLM** | Works offline with local models AND online with remote APIs. Blender Buddy is local-only. BlendAI is remote-only. We do both. |
 | **Message queue** | Queue messages while agent is busy. Only BlenderMCP Pro has background tasks. |
 | **Free and open-source** | No $50 license (BlenderMCP Pro). No credit system (BlendAI). No vendor lock-in. |
+
+**Note on BuddyCode GPT**: Its Text Editor file browser is the one genuinely novel pattern we don't have. It's a Tier 4c item (Text Editor / IDE Agent), not a Tier 4b chat-panel item — see Pattern AA.
 
 ### 4.5 Competitive Positioning After Tier 4b
 
@@ -1031,6 +1157,12 @@ This positions BFA Coworker as the **most complete agentic AI addon for Blender*
 **Step 2.4 — Trust session**
 - "Don't ask again this session" checkbox in confirmation dialog
 - Session-scoped flag that skips confirmation for subsequent runs
+
+**Step 2.5 — ModuleNotFoundError handling (optional, Pattern AD)**
+- When execution fails with `ModuleNotFoundError: <name>`, show an "Install module" button
+- Opens a confirmation dialog explaining the pip install into Blender's Python
+- Runs `pip install <name>` via `subprocess` with output captured
+- Deferred to Tier 5 if time doesn't allow in Phase 2 — see Pattern AD
 
 **Files modified**:
 - `addon/bfa_coworker/ui_chat.py` — code block rendering + Run operator
@@ -1262,12 +1394,16 @@ These patterns are noted but deferred to future tiers. Each has a concrete imple
 | **Background task queue** | BlenderMCP Pro | Tier 5 | 5f.3 | `plan_tier5_generative_local_systems.md` |
 | **Provider auto-fallback** | BlenderMCP Pro | Tier 5 | 5f.4 | `plan_tier5_generative_local_systems.md` |
 | **GPU auto-detection + one-click setup** | Blender Buddy | Tier 5 | 5f.5 | `plan_tier5_generative_local_systems.md` |
+| **Multi-pair / batch execution** | BuddyCode GPT | Tier 5 | 5f.6 | `plan_tier5_generative_local_systems.md` |
+| **In-app module installation** | BuddyCode GPT | Tier 5 | 5f.7 | `plan_tier5_generative_local_systems.md` |
 | **Agent Teams with planner** | BlenderMCP Pro | Tier 6 | 6f.1 | `plan_tier6_domain_tooling.md` |
 | **Scene Co-Pilot** | BlenderMCP Pro | Tier 6 | 6f.2 | `plan_tier6_domain_tooling.md` |
 | **Render Critic with iterative refinement** | BlenderMCP Pro, BlendAI | Tier 6 | 6f.3 | `plan_tier6_domain_tooling.md` |
 | **Voice input** | BlenderMCP Pro | Tier 6 | 6f.4 | `plan_tier6_domain_tooling.md` |
 | **Text-to-speech output** | Chat Companion | Tier 6 | 6f.5 | `plan_tier6_domain_tooling.md` |
 | **External client config (one-click)** | BlenderMCP Pro | Tier 6 | 6f.6 | `plan_tier6_domain_tooling.md` |
+| **Document loading with vector search** | BuddyCode GPT | Tier 6 | 6f.7 | `plan_tier6_domain_tooling.md` |
+| **Text Editor file browser** | BuddyCode GPT | Tier 4c | 4c Phase 8 | `plan_tier4c_text_editor_ide_agent.md` |
 | **Cross-DCC bridge** | BlenderMCP Pro | Out of scope | — | BFA-specific, not relevant |
 
 ### Competitive Positioning After Tier 4b

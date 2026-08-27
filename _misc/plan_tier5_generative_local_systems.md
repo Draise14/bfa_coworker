@@ -318,7 +318,46 @@ Agent loop:
 
 ---
 
-## Total Estimated: ~3,600 LOC across 16+ new files + modifications to 7 existing files
+### 5f.6 Multi-Pair / Batch Execution (Pattern AB, BuddyCode GPT) 🟢
+
+**Source**: BuddyCode GPT (define multiple input/system-prompt/temperature pairs, run all in one click, with or without document context)
+
+**What**: Add a "Batch" mode to the chat panel. Users define a list of prompts (optionally with per-prompt system prompt and temperature), then run them all in one click. Results are appended to the session as separate turns. Useful for generating variations, testing prompts, or bulk code generation.
+
+**Why Tier 5**: Genuinely novel — no other competitor has it. Needs session history (Tier 4b Phase 4) so batch results can be stored and browsed. Not a chat-panel blocker.
+
+**Implementation** (~200 LOC):
+- `BFACW_PT_batch_panel` — collapsible sub-panel with a list of prompt rows (text, system prompt, temperature)
+- Add/Remove/Duplicate row operators
+- "Run All" operator that queues each prompt through the existing message queue
+- Results appended as normal turns; batch runs tagged with a batch ID in session storage
+- Optional "with context" toggle (reuse project rules / scene snapshot)
+
+**Files**: `ui_chat.py` (batch panel), `agent_controller.py` (batch runner), `preferences.py` (batch defaults)
+
+---
+
+### 5f.7 In-App Module Installation (Pattern AD, BuddyCode GPT) 🟢
+
+**Source**: BuddyCode GPT (pip install Python modules directly from the addon — no terminal)
+
+**What**: When code execution fails with `ModuleNotFoundError`, offer a one-click "Install module" action. Runs `pip install <name>` into Blender's Python with captured output, then re-runs the code. Includes a clear warning dialog (installing into Blender's Python can affect other addons).
+
+**Why Tier 5**: Solves a real user pain — pasted code that imports third-party modules. Needs the code execution pipeline (Tier 4b Phase 2) to exist first. Safety-critical: must confirm with the user and never auto-install.
+
+**Implementation** (~120 LOC):
+- Detect `ModuleNotFoundError: <name>` in execution traceback
+- "Install module" button on the error message
+- Confirmation dialog: module name, pip command, warning about Blender Python environment
+- Run `pip install` via `subprocess` with output captured to the chat
+- On success, offer "Re-run code" button
+- Optional: `--user` flag or venv target for isolation
+
+**Files**: `ui_chat.py` (install button on error), `agent_controller.py` (pip runner), `weak_sandbox.py` (isolation check)
+
+---
+
+## Total Estimated: ~3,920 LOC across 16+ new files + modifications to 7 existing files
 
 | Phase | LOC | New Files | Status |
 |---|---|---|---|
@@ -327,7 +366,7 @@ Agent loop:
 | 5c: MCP Tools + Agent | ~400 | 4 | ❌ Not started |
 | 5d: Video + Audio | ~500 | 4 | ❌ Not started |
 | 5e: Advanced + Bridge | ~500 | 0 | ❌ Not started |
-| 5f: Competitor UX — Power User | ~800 | 2 | ❌ Not started |
+| 5f: Competitor UX — Power User | ~1,120 | 2 | ❌ Not started |
 
 ---
 

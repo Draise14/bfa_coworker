@@ -1204,6 +1204,59 @@ Queue: 2 pending
 
 ---
 
+### Phase 8: Text Editor File Browser (Pattern AA, BuddyCode GPT) 🟢
+
+**What**: Add a "Files" sub-panel to the Text Editor sidebar that lists project scripts and lets users open/close/create/rename text datablocks without leaving Blender.
+
+**Reference**: BuddyCode GPT's "BuddyCode Browser" — built-in file navigation in the Text Editor sidebar. This is the one genuinely novel pattern from BuddyCode GPT that no other competitor has.
+
+**Why Phase 8**: Optional polish after the core code-agent phases (1-7). Requires Phase 1's panel rework to exist as a base. Not a blocker for code generation — simply reduces friction for users who work with many scripts.
+
+**Implementation:**
+
+**Step 8.1 — Script list panel**
+
+```
+┌─────────────────────────────────┐
+│ Files (12)          [+ New]      │
+├─────────────────────────────────┤
+│ ▸ my_script.py       ● active   │
+│ ▸ my_addon/                      │
+│   ▸ __init__.py                  │
+│   ▸ operators.py                 │
+│ ▸ utils.py                       │
+│ [Open] [Rename] [Delete] [Save]  │
+└─────────────────────────────────┘
+```
+
+- List all text datablocks, grouped by folder (from `//`-prefixed names) or flat if namespaced
+- Active block highlighted; clicking a row sets it active in the editor
+- `bpy.data.texts` iteration + folder grouping from name prefixes
+
+**Step 8.2 — File operations**
+
+- **New** — create empty text datablock with a name prompt
+- **Open** — load a `.py` file from disk via `bpy.data.texts.load()` with a file selector
+- **Rename** — rename the datablock via a string property
+- **Delete** — remove datablock with confirm (unsaved-changes warning)
+- **Save** — write datablock contents back to disk (`text.as_string()` → file write)
+- Reuses Blender's built-in `bpy.ops.text.open()` / `text.save()` where possible
+
+**Step 8.3 — Agent integration (optional)**
+
+- Right-click a file → "Ask Coworker about this file" sends its content summary to the agent
+- Reuses Phase 4's right-click plumbing with a different target
+
+**Files modified**: `addon/bfa_coworker/ui_chat.py` (files sub-panel + operators), `addon/bfa_coworker/operators_agent.py` (file-aware prompt, optional)
+
+**Verification:**
+1. Files sub-panel lists all text datablocks with folder grouping
+2. Click a file → becomes active in the editor
+3. New/Open/Rename/Delete/Save operations work and update the list
+4. Right-click "Ask Coworker about this file" sends file content to the agent
+
+---
+
 ## 6. Summary of Changes
 
 | Phase | Pattern | Feature | Files Changed | LOC | Priority |
@@ -1215,15 +1268,17 @@ Queue: 2 pending
 | 5 | G | Keyboard shortcuts & keymap | 1 | ~50 | 🟡 HIGH |
 | 6 | H | Prompt template system | 2 | ~100 | 🟡 HIGH |
 | 7 | — | Queue & session integration | 1 | ~80 | 🟡 HIGH |
-| **Total** | | | **3** | **~930** | |
+| 8 | AA | Text Editor file browser | 1 | ~120 | 🟢 MEDIUM |
+| **Total** | | | **3** | **~1,050** | |
 
 ### Files Modified
 
 | File | Phases |
 |---|---|
-| `addon/bfa_coworker/ui_chat.py` | 1, 2, 3, 4, 5, 7 |
+| `addon/bfa_coworker/ui_chat.py` | 1, 2, 3, 4, 5, 7, 8 |
 | `addon/bfa_coworker/preferences.py` | 6 |
 | `addon/bfa_coworker/agent_controller.py` | 2 (minor: expose scene snapshot) |
+| `addon/bfa_coworker/operators_agent.py` | 8 (optional: file-aware prompt) |
 
 ### Key Design Decisions
 

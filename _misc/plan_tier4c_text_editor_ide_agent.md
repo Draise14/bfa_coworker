@@ -19,6 +19,15 @@
 5. [Implementation Plan](#5-implementation-plan)
 6. [Summary of Changes](#6-summary-of-changes)
 
+
+> **REVISION (2026-08-27)**: See plan_tier4_master_coordination.md for updated scope.
+> - Phase 8 (Text Editor File Browser) **removed** — not artist-friendly tooling
+> - Phase 5 (Keyboard Shortcuts) **removed** — no custom hotkeys in Tier 4 per policy
+> - All hotkeys (Ctrl+Space, F8, Ctrl+Enter, Ctrl+Shift+Space) **removed**
+> - Focus shifted to artist-friendly Text Editor tooling via sidebar panel and context menus only
+> - Phase 7 (CHOYA guided buttons) added
+> - Total revised: ~880 LOC (down from ~1,050)
+
 ---
 
 ## 1. Current State Analysis

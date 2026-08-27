@@ -1472,82 +1472,107 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     if conclusion_msg:
                         tb = hist_box.box()
                         cr = tb.row()
-                        cr.label(text="Turn {:d} — Coworker:".format(turn_num), icon="CONSOLE")
+                        cr.label(text="✨ Turn {:d} — Coworker:".format(turn_num), icon="CONSOLE")
                         op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                         op.message_index = history.index(conclusion_msg)
                         _draw_multiline(tb, conclusion_msg.get("content", ""))
                     continue
                 has_proc = bool(process_msgs)
                 turn_box = hist_box.box()
+
+                # --- Turn header (always visible) ---
+                has_err = has_proc and any(
+                    p.get("role") == "tool"
+                    and ('"status": "error"' in (p.get("content") or "")
+                         or (p.get("content") or "").startswith("Error"))
+                    for p in process_msgs
+                )
+                tic = "CHECKMARK" if conclusion_msg else "SORTTIME"
+                hr = turn_box.row(align=True)
+                hr.label(text="", icon=tic)
+                hr.label(text="Turn {:d}".format(turn_num), scale_x=0.3)
+                pv = user_msg.get("content", "")
+                if len(pv) > 80:
+                    pv = pv[:80] + "..."
+                hr.label(text=pv)
+                op = hr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
+                op.message_index = history.index(user_msg)
+
+                # --- User message (always visible) ---
+                turn_box.separator()
+                _draw_multiline(turn_box, user_msg.get("content", ""))
+
+                # --- Running Tools (collapsible --- only the internals collapse) ---
                 if has_proc:
-                    has_err = any(p.get("role")=="tool" and ('"status": "error"' in (p.get("content") or "") or (p.get("content") or "").startswith("Error")) for p in process_msgs)
-                    tic = "CHECKMARK" if conclusion_msg else "SORTTIME"
-                    th, tb2 = turn_box.panel("turn_{:d}".format(turn_num), default_closed=not (turn_num==1 and state.is_thinking))
-                    hr = th.row(align=True)
-                    hr.label(text="", icon=tic)
-                    hr.label(text="Turn {:d}".format(turn_num), scale_x=0.3)
-                    pv = user_msg.get("content", "")
-                    if len(pv)>80: pv = pv[:80]+"..."
-                    hr.label(text=pv)
-                    op = hr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
-                    op.message_index = history.index(user_msg)
-                    if tb2:
-                        tb2.separator()
-                        _draw_multiline(tb2, user_msg.get("content", ""))
-                        if process_msgs:
-                            tb2.separator()
-                            pb = tb2.box()
-                            pb_icon = "WARNING" if has_err else "SORTTIME"
-                            pb.label(text="Running Tools", icon=pb_icon)
-                            for pm in process_msgs:
-                                pr = pm.get("role", "")
-                                pc = pm.get("content", "")
-                                is_sm = (pr=="user" and isinstance(pc,str) and pc.startswith("[System:"))
-                                if is_sm:
-                                    sb = pb.box()
-                                    sb.label(text="System Context", icon="INFO")
-                                    _draw_multiline(sb, pc)
-                                elif pr=="reasoning":
-                                    _draw_reasoning(pb, pc, pm.get("label","Thinking"), is_thinking=state.is_thinking, thinking_dots=state.thinking_dots, message_index=history.index(pm))
-                                elif pr=="tool":
-                                    tn = pm.get("name","")
-                                    ts = pm.get("summary","")
-                                    ie = ('"status": "error"' in (pc or "") or (pc or "").startswith("Error"))
-                                    d = ts if ts else (pc or "")
-                                    if not ts and len(d)>200: d = d[:200]+"..."
-                                    _draw_tool_inline(pb, tn, d, ie, message_index=history.index(pm))
-                                elif pr == "user":
-                                    # Agent-injected user messages (entity context, spiral correction)
-                                    pb.label(text="Agent Context", icon='INFO')
-                                    _draw_multiline(pb, pc)
-                                elif pr == "assistant":
-                                    # Intermediate assistant messages (e.g. from auto-continue)
-                                    pb.label(text="Self Prompt", icon='CONSOLE')
-                                    _draw_multiline(pb, pc)
-                            if state.is_thinking and state.streaming_text and _display_idx == 0:
-                                pb.separator()
+                    ph, pb = turn_box.panel(
+                        "turn_proc_{:d}".format(turn_num),
+                        default_closed=True,
+                    )
+                    if pb:
+                        pb_icon = "WARNING" if has_err else "SORTTIME"
+                        pb.label(text="Running Tools", icon=pb_icon)
+                        for pm in process_msgs:
+                            pr = pm.get("role", "")
+                            pc = pm.get("content", "")
+                            is_sm = (
+                                pr == "user"
+                                and isinstance(pc, str)
+                                and pc.startswith("[System:")
+                            )
+                            if is_sm:
                                 sb = pb.box()
-                                sb.label(text="Coworker (live):", icon="CONSOLE")
-                                _draw_multiline(sb, state.streaming_text[:300]+"...")
-                    # Conclusion inside the panel body
-                    if conclusion_msg and tb2:
-                        tb2.separator()
-                        cr = tb2.row()
-                        cr.label(text="Coworker:", icon="CONSOLE")
-                        op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
-                        op.message_index = history.index(conclusion_msg)
-                        _draw_multiline(tb2, conclusion_msg.get("content", ""))
-                else:
-                    hr = turn_box.row(align=True)
-                    hr.label(text="", icon="CHECKMARK")
-                    hr.label(text="Turn {:d}".format(turn_num))
-                    op = hr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
-                    op.message_index = history.index(user_msg)
-                    _draw_multiline(turn_box, user_msg.get("content", ""))
-                if not conclusion_msg and state.is_thinking and state.streaming_text and _display_idx == 0 and not has_proc:
+                                sb.label(text="System Context", icon="INFO")
+                                _draw_multiline(sb, pc)
+                            elif pr == "reasoning":
+                                _draw_reasoning(
+                                    pb, pc, pm.get("label", "Thinking"),
+                                    is_thinking=state.is_thinking,
+                                    thinking_dots=state.thinking_dots,
+                                    message_index=history.index(pm),
+                                )
+                            elif pr == "tool":
+                                tn = pm.get("name", "")
+                                ts = pm.get("summary", "")
+                                ie = (
+                                    '"status": "error"' in (pc or "")
+                                    or (pc or "").startswith("Error")
+                                )
+                                d = ts if ts else (pc or "")
+                                if not ts and len(d) > 200:
+                                    d = d[:200] + "..."
+                                _draw_tool_inline(
+                                    pb, tn, d, ie,
+                                    message_index=history.index(pm),
+                                )
+                            elif pr == "user":
+                                pb.label(text="Agent Context", icon="INFO")
+                                _draw_multiline(pb, pc)
+                            elif pr == "assistant":
+                                pb.label(text="Self Prompt", icon="CONSOLE")
+                                _draw_multiline(pb, pc)
+                        if state.is_thinking and state.streaming_text and _display_idx == 0:
+                            pb.separator()
+                            sb = pb.box()
+                            sb.label(text="Coworker (live):", icon="CONSOLE")
+                            _draw_multiline(sb, state.streaming_text[:300] + "...")
+
+                # --- Conclusion (always visible) ---
+                if conclusion_msg:
                     turn_box.separator()
-                    turn_box.label(text="Coworker (live):", icon="CONSOLE")
-                    _draw_multiline(turn_box, state.streaming_text[:300]+"...")
+                    cr = turn_box.row()
+                    cr.label(text="✨ Coworker:", icon="CONSOLE")
+                    op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
+                    op.message_index = history.index(conclusion_msg)
+                    _draw_multiline(turn_box, conclusion_msg.get("content", ""))
+                elif (
+                    state.is_thinking
+                    and state.streaming_text
+                    and _display_idx == 0
+                    and not has_proc
+                ):
+                    turn_box.separator()
+                    turn_box.label(text="✨ Coworker (live):", icon="CONSOLE")
+                    _draw_multiline(turn_box, state.streaming_text[:300] + "...")
 
         else:
             layout.label(

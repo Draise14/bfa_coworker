@@ -1609,10 +1609,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                      "or workflow rules. Markdown format supported.",
                 icon='INFO',
             )
-            # Multiline textbox for comfortable editing (same pattern as chat input).
-            custom_row = custom_box.row()
-            custom_row.scale_y = 3.0
-            custom_row.prop(self, "custom_skills_text", text="", icon='GREASEPENCIL')
+            # Multiline textbox (5.3 textbox API — same as chat input).
+            custom_box.textbox(self, "custom_skills_text")
 
         # ── Text Editor Memory Bank (not in External Harness mode) ──────
         if self.operating_mode != "EXTERNAL_HARNESS":

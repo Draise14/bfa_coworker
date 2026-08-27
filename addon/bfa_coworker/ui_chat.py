@@ -1483,7 +1483,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     th, tb2 = turn_box.panel("turn_{:d}".format(turn_num), default_closed=not (turn_num==1 and state.is_thinking))
                     hr = th.row(align=True)
                     hr.label(text="", icon=tic)
-                    hr.label(text="T{:d}:".format(turn_num))
+                    hr.label(text="Turn", scale_x=0.5)
                     pv = user_msg.get("content", "")
                     if len(pv)>80: pv = pv[:80]+"..."
                     hr.label(text=pv)
@@ -1530,7 +1530,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                                 sb.label(text="Coworker (live):", icon="CONSOLE")
                                 _draw_multiline(sb, state.streaming_text[:300]+"...")
                     # Conclusion inside the panel body
-                    if conclusion_msg:
+                    if conclusion_msg and tb2:
                         tb2.separator()
                         cr = tb2.row()
                         cr.label(text="Coworker:", icon="CONSOLE")

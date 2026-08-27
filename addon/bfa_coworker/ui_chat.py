@@ -1518,9 +1518,11 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                                     _draw_tool_inline(pb, tn, d, ie, message_index=history.index(pm))
                                 elif pr == "user":
                                     # Agent-injected user messages (entity context, spiral correction)
+                                    pb.label(text="Agent Context", icon='INFO')
                                     _draw_multiline(pb, pc)
                                 elif pr == "assistant":
                                     # Intermediate assistant messages (e.g. from auto-continue)
+                                    pb.label(text="Self Prompt", icon='CONSOLE')
                                     _draw_multiline(pb, pc)
                             if state.is_thinking and state.streaming_text and turn_num==1:
                                 pb.separator()

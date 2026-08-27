@@ -1185,7 +1185,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
         if llm_state.download_kind == "model":
             if llm_state.error:
-                err_lines = llm_state.error.split("")
+                err_lines = llm_state.error.split(" ")
                 for i, line in enumerate(err_lines):
                     box.label(text=line, icon="ERROR" if i == 0 else 'NONE')
             if llm_state.download_progress:

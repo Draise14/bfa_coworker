@@ -183,6 +183,8 @@ Advanced Port Settings (offset, overrides, effective ports)
 Diagnostics (debug only)
 ```
 
+## ✅ Done
+
 **New structure** (three tabs via `layout.prop_tabs_enum()` or manual buttons):
 
 #### Tab 1: "Local LLM"

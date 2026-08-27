@@ -1,5 +1,7 @@
 # Tier 3b — Smarter llama-server download + model list refresh
 
+## ✅ Done
+
 ## Goal
 Make local llama-server hardware-aware (Vulkan/CUDA/CPU selector + auto-detect, unified progress
 bars, PATH note, better tooltips) and curate a 9-model preset list (3 flagship / 3 mid / 3 light)

@@ -1,5 +1,7 @@
 # Plan: Tier 3c — Polish, Audit & Release
 
+## ✅ Done
+
 **TL;DR** — Tie up all Tier 3 loose ends into a shippable milestone: debugging toggle, expanded benchmarks, session logging, lightweight asset browser tools, full message queue, mention system overhaul, collection color tag tool, and UX hardening. Then finalize docs, changelog, build, and smoke test for a v1.1.37 release — clearing the deck for Tier 4.
 
 ---

@@ -1104,7 +1104,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         pri_box = box.box()
         pri_box.label(
             text="★ Recommended — Qwen3.8-27B (vision + agentic)",
-            icon='STAR',
+            icon='KEYTYPE_JITTER_VEC',
         )
 
         all_presets = llm.get_presets()

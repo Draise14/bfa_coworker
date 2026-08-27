@@ -77,7 +77,7 @@ GPU-enhanced drawing.
 - `RGN_TYPE_HEADER` (top)
 - `RGN_TYPE_FOOTER` (bottom)
 - `RGN_TYPE_UI` (right sidebar — where our chat panel lives)
-- `RGN_TYPE_WINDOW` (main area — GPU takeover target)
+- `RGN_TYPE_WINDOW` (main area — C++-drawn `text_main_region_draw`)
 - **NO `RGN_TYPE_TOOLS`** — Text Editor has no native left tools region
 
 **Editors WITH a native `RGN_TYPE_TOOLS` (left bar)**:
@@ -85,54 +85,109 @@ GPU-enhanced drawing.
 
 **File Browser** has both left (`RGN_TYPE_TOOLS`) and right (`RGN_TYPE_UI`) bars, plus `RGN_TYPE_TOOL_PROPS` and `RGN_TYPE_EXECUTE`.
 
-**Implication for the Coworker Editor**: The Text Editor has no native left tools
-region. To get a Bforartists-style iconized macro toolshelf on the left of the
-Coworker editor, we must **paint it ourselves** via the GPU takeover (a second
-draw handler on the left edge of the WINDOW region), OR use a **nested area layout**
-(an area split with a narrow custom panel on the left). The GPU-painted left bar
-is the cleaner approach — it's part of the takeover canvas.
+### BREAKTHROUGH: Python Panels CAN Draw in the Center of USERPREF & PROPERTIES
 
-### CRITICAL: Python Panels Cannot Draw in the WINDOW Region
+**This is the single most important discovery for the design.**
 
-**This is the single most important technical constraint for the design.**
+The **Preferences editor** (`space_userpref.cc`) and **Properties editor**
+(`space_buttons.cc`) draw their **center (WINDOW region) with `ED_region_panels_draw`**:
 
-Python `Panel` classes (`bpy.types.Panel`) can only be registered for these
-region types:
-- `HEADER` — custom headers
-- `UI` — right sidebar (N-panel)
-- `FOOTER` — bottom bar
-- `TOOLS` — left toolshelf (only for spaces that define it)
+```c
+// space_userpref.cc — Preferences editor
+art->regionid = RGN_TYPE_WINDOW;
+art->init = userpref_main_region_init;
+art->layout = userpref_main_region_layout;   // → ED_region_panels_layout_ex
+art->draw = ED_region_panels_draw;           // ← Python panels render here!
+userpref_panels_register(*art);
 
-**Python panels CANNOT be drawn in the `WINDOW` region.** The `WINDOW` region of
-every editor is C++-drawn (e.g., `text_main_region_draw` for Text Editor). There
-is no Python API to inject a panel into the main editor canvas.
+// space_buttons.cc — Properties editor
+art->regionid = RGN_TYPE_WINDOW;
+art->draw = ED_region_panels_draw;           // ← Python panels render here!
+```
 
-**What this means for the Coworker editor center:**
-- The center chat canvas **cannot** be a native Python panel — it must be either:
-  1. **GPU-painted** (`draw_handler_add(POST_PIXEL)` + `gpu`/`blf`) — full visual control, but must manually read theme colors
-  2. **A nested area** — split the Text Editor area into two sub-areas: a narrow `UI`-region panel area + a `WINDOW` area. But `UI` regions are always on the right edge, so this doesn't give a "center canvas" look.
-  3. **Accept the sidebar-only approach** — the chat lives entirely in the `UI` region (right sidebar), and the `WINDOW` region shows a welcome message or stays empty.
+This means **Python `bpy.types.Panel` classes CAN render in the center** of these
+editors — with `bl_space_type='USERPREF'` (or `'PROPERTIES'`) and
+`bl_region_type='WINDOW'`. The `bl_space_type` enum includes `USERPREF` and
+`PROPERTIES` (verified in `rna_ui.cc`), and `bl_region_type` includes `WINDOW`
+(verified in `DNA_screen_types.h`).
 
-**Theming consistency concern (user's question):**
+**The Preferences editor layout is exactly what we want:**
+- **Left (UI region)**: `userpref_navigation_region_draw` — the nav tabs (Interface, Editing, Themes, Add-ons, etc.)
+- **Center (WINDOW region)**: `ED_region_panels_draw` — Python panels filtered by `bl_context`
+- **Bottom (EXECUTE region)**: action buttons
 
-The user wants the center to feel "built in" — using common theme settings and
-panel drawing like other editors. The honest answer:
+**This is the "clone the Preferences editor" approach the user proposed.**
 
-| Approach | Theming Consistency | Feels Built-In? |
-|----------|:-------------------:|:---------------:|
-| **GPU-painted center** | ⚠️ Must manually read `theme.ui.wcol_*` + `theme.text_editor.*` via `theme_utils.py`. Can match theme closely, but is NOT native panel drawing. | ⚠️ Close, but a trained eye can tell |
-| **Native sidebar only** (chat in `UI` region) | ✅ 100% native — `layout.box()`, `layout.panel()`, `layout.prop()` all inherit theme automatically | ✅ Feels exactly like every other panel |
-| **Nested area split** | ✅ Native panels in a sub-area | ⚠️ Layout is unusual (UI region on right edge) |
+### The "Clone the Preferences Editor" Architecture
 
-**Recommendation**: For maximum theming consistency, the **chat should live in
-native panels** (`UI` region) wherever possible. The GPU takeover is only worth
-the theming risk if we need the full-area immersive experience. If we do GPU-paint,
-`theme_utils.py` is mandatory — every color must come from the active theme, never
-hardcoded.
+Instead of GPU-painting the Text Editor center (fickle to maintain), we build the
+dedicated Coworker editor by **cloning the Preferences editor pattern**:
 
-**The "native-first" principle**: All interactive elements (input, buttons, panels)
-use native Blender widgets. GPU drawing is reserved for *decorative* elements only
-(bubble backgrounds, status dots, separators) — and even those read theme colors.
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  [Coworker]  🟢 Connected           [Start] [Stop] [Floating]   │  ← Custom Header
+├──────────┬───────────────────────────────────────────┬───────────┤
+│  Left    │  Center (Python panels, WINDOW region)    │  Right    │
+│  Nav     │  ┌─────────────────────────────────────┐  │  Sidebar  │
+│  (UI)    │  │ Chat Panel (bl_context="chat")       │  │  (UI)     │
+│          │  │  ┌───────────────────────────────┐   │  │           │
+│  [Chat]  │  │  │ ✅ Turn 1  Create a cube      │   │  │  Queue    │
+│  [Queue] │  │  │ ▶ Running Tools (collapsed)   │   │  │  Status   │
+│  [Status]│  │  │ ✨ Coworker: I've created...   │   │  │  Diag     │
+│  [Rules] │  │  └───────────────────────────────┘   │  │  Rules    │
+│  [Log]   │  │  ┌───────────────────────────────┐   │  │           │
+│  [Macros]│  │  │ > Make it spin...             │   │  │           │
+│          │  │  └───────────────────────────────┘   │  │           │
+│          │  │  [Send] [Clear] [Stop]  Mode: ●Agent │  │           │
+│          │  └─────────────────────────────────────┘  │           │
+└──────────┴───────────────────────────────────────────┴───────────┘
+```
+
+**How it works:**
+1. **Space type**: `USERPREF` (Preferences editor) — the only editor where Python
+   panels render in the center AND there's a left nav region
+2. **Left nav (UI region)**: Our own nav tabs — Chat, Queue, Status, Rules, Log, Macros
+   - These are Python panels with `bl_region_type='UI'` + `bl_context` matching
+3. **Center (WINDOW region)**: The chat panel — Python panel with
+   `bl_space_type='USERPREF'`, `bl_region_type='WINDOW'`, `bl_context='chat'`
+4. **Right sidebar**: Optional — the USERPREF space has a UI region on the right too
+   (or we use the left nav only, like the real Preferences editor)
+
+**Why this is better than GPU takeover:**
+- ✅ **100% native theming** — every widget inherits the active theme automatically
+- ✅ **Native text input** — Blender's textbox handles cursor, selection, clipboard, IME
+- ✅ **Native scrolling** — Blender's panel scrolling works out of the box
+- ✅ **Native panel drawing** — `layout.box()`, `layout.panel()`, `layout.prop()`
+- ✅ **Low maintenance** — survives Blender version updates
+- ✅ **No modal operator conflicts** — works alongside all other tools
+- ✅ **Accessibility** — screen readers can see panel content
+- ✅ **Left nav for macros** — the nav region gives us the Bforartists-style iconized shelf for free
+- ✅ **~200 LOC** — no GPU drawing, no modal operator, no theme_utils.py needed for the center
+
+**What we lose vs GPU takeover:**
+- ❌ No custom bubble styling (uses standard `layout.box()`)
+- ❌ No full-area immersive canvas (center is panel-width, not full-width)
+- ❌ The center is panel-based, not pixel-based
+
+**The tradeoff is clearly worth it** — the user's instinct is correct. This is the
+way forward.
+
+### Sidebar Placement: Left by Default, Flippable to Right (Verified from Source)
+
+The USERPREF navigation region defaults to the **left** (`RGN_ALIGN_LEFT`, verified
+at `space_userpref.cc:66`). But the **F5 key** toggles it to the right via
+`SCREEN_OT_region_flip` (`screen_ops.cc:6133`), which flips `region->alignment`
+between `RGN_ALIGN_LEFT` and `RGN_ALIGN_RIGHT`.
+
+This gives us a full "blank slate" for the Coworker editor:
+- **Left nav default** — matches the real Preferences editor, feels native
+- **F5 flip** — users can move the nav to the right if they prefer (like other sidebars)
+- Our setup operator could call `SCREEN_OT_region_flip` after area creation to
+  default the nav to the right if we ever want that (e.g., to match the N-panel
+  convention where the chat sidebar lives on the right in Mode 2)
+
+The layout is effectively: **nav region (left, flippable) + Python-panel center +
+execution region (bottom)** — a complete, native, theme-consistent canvas.
 
 ### Window Title Behavior (Verified from Source)
 
@@ -182,15 +237,16 @@ matches how Blender itself names temp windows (e.g., a floating Image Editor say
 **User requirement**: The center of the editor must feel "built in" — using common
 theme settings and panel drawing like all other editors. No visual deviation.
 
-**Technical reality** (verified from source): Python panels CANNOT draw in the
-`WINDOW` region. The center canvas of any editor is C++-drawn. So there are exactly
-three ways to build the Coworker editor center:
+**Technical reality** (verified from source): The **Preferences editor** and
+**Properties editor** draw their center (WINDOW region) with `ED_region_panels_draw`
+— meaning **Python panels CAN render in the center of those editors**. This is the
+breakthrough that makes the "clone the Preferences editor" approach viable.
 
 | Approach | Theming | Feels Built-In? | Effort |
 |----------|---------|:---------------:|:------:|
-| **A. Native sidebar only** — chat lives in `UI` region panels, center shows welcome/empty | ✅ 100% native `layout.box()`, `layout.panel()` | ✅ Exactly like every other panel | ~200 LOC |
-| **B. GPU-painted center** — `draw_handler_add(POST_PIXEL)` + `gpu`/`blf`, all colors via `theme_utils.py` | ⚠️ Close, but manual theme reading | ⚠️ Trained eye can tell | ~800 LOC |
-| **C. Nested area split** — split Text Editor into sub-areas, chat in a native panel sub-area | ✅ Native | ⚠️ Unusual layout (UI region on right edge) | ~300 LOC |
+| **A. Clone Preferences editor** — `USERPREF` space, Python panels in center (WINDOW) + left nav (UI) | ✅ 100% native `layout.box()`, `layout.panel()` | ✅ Exactly like the real Preferences editor | ~250 LOC |
+| **B. Native sidebar only** — chat in `UI` region panels, center shows welcome/empty | ✅ 100% native | ✅ Exactly like every other panel | ~200 LOC |
+| **C. GPU-painted center** — `draw_handler_add(POST_PIXEL)` + `gpu`/`blf`, colors via `theme_utils.py` | ⚠️ Close, but manual theme reading | ⚠️ Trained eye can tell | ~800 LOC |
 
 **The "native-first" principle** (adopted):
 1. **All interactive elements** (input, buttons, panels, templates) use **native Blender widgets** — `layout.box()`, `layout.panel()`, `layout.prop()`, `layout.operator()`. These inherit the active theme automatically.
@@ -198,69 +254,68 @@ three ways to build the Coworker editor center:
 3. **No hardcoded colors anywhere.** Every drawn pixel comes from `bpy.context.preferences.themes[0]`.
 4. **If a native widget can do it, use the native widget.** GPU drawing is the last resort, not the default.
 
-**Recommendation**: Start with **Approach A (native sidebar)** for the dedicated
-editor. The chat, queue, status, diagnostics, and templates all live in native
-`UI`-region panels. The center `WINDOW` region shows a themed welcome message
-(using `theme.text_editor.*` colors) or stays empty. This is 100% theme-consistent.
+**Recommendation**: **Approach A (clone the Preferences editor)** is the way
+forward. It gives us:
+- **Center (WINDOW region)**: Python panels — the chat canvas, fully native
+- **Left nav (UI region)**: Nav tabs — Chat, Queue, Status, Rules, Log, Macros
+- **Bottom (EXECUTE region)**: Action buttons
+- **100% native theming** — no GPU drawing, no `theme_utils.py` needed for the center
 
-**Approach B (GPU center) is a Phase 3+ enhancement** — only if user testing shows
-the sidebar-only layout is too cramped. When we do GPU-paint, `theme_utils.py` is
-mandatory and every color must come from the active theme.
+This directly answers the user's question: **yes, the center CAN be drawn with
+Python panels using common theme settings** — by using the `USERPREF` space type
+instead of `TEXT_EDITOR`.
 
 ---
 
-### Mode 1: Dedicated Agent Editor (Native Sidebars First, GPU Center Later)
+### Mode 1: Dedicated Agent Editor (Clone the Preferences Editor)
 
-The dedicated Coworker editor uses **native sidebar panels** (chat, queue, status,
-diagnostics, templates) with a **themed welcome center**. The GPU-painted center
-canvas is a later enhancement if needed.
+The dedicated Coworker editor uses the **`USERPREF` (Preferences) space type** —
+the only editor where Python panels render in the center (WINDOW region) with a
+left nav (UI region).
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │  [Coworker]  🟢 Connected           [Start] [Stop] [Floating]   │  ← Custom Header
-├──────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  ┌─ Coworker Chat (sidebar) ─────────────────────────────────┐  │
-│  │  ☑ Newest First                          (5 messages)     │  │
-│  │                                                             │  │
-│  │  ┌─────────────────────────────────────────────────────┐   │  │
-│  │  │ ✅ Turn 1  Create a cube with a material     📋   │   │  │
-│  │  │ Create a cube with a material                       │   │  │
-│  │  │ ▶ Running Tools                          (collapsed)│   │  │
-│  │  │ ✨ Coworker: I've created a cube...           📋   │   │  │
-│  │  └─────────────────────────────────────────────────────┘   │  │
-│  │                                                             │  │
-│  │  ┌─ Templates ─────────────────────────────────────────┐   │  │
-│  │  │ [Add Object] [Add Material] [Sculpt] [Animate] [↻] │   │  │
-│  │  └─────────────────────────────────────────────────────┘   │  │
-│  │                                                             │  │
-│  │  ┌─────────────────────────────────────────────────────┐   │  │
-│  │  │ > Make it spin...                              📎  │   │  │
-│  │  └─────────────────────────────────────────────────────┘   │  │
-│  │  [Send] [New Thread] [Stop]     Mode: ● Agent  ○ Ask       │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-│                                                                   │
-│  (Center: themed welcome message using theme.text_editor.* colors)│
-│                                                                   │
-└──────────────────────────────────────────────────────────────────┘
+├──────────┬───────────────────────────────────────────┬───────────┤
+│  Left    │  Center (Python panels, WINDOW region)    │  Right    │
+│  Nav     │  ┌─────────────────────────────────────┐  │  Sidebar  │
+│  (UI)    │  │ Chat Panel (bl_context="chat")       │  │  (UI)     │
+│          │  │  ┌───────────────────────────────┐   │  │           │
+│  [Chat]  │  │  │ ✅ Turn 1  Create a cube      │   │  │  Queue    │
+│  [Queue] │  │  │ ▶ Running Tools (collapsed)   │   │  │  Status   │
+│  [Status]│  │  │ ✨ Coworker: I've created...   │   │  │  Diag     │
+│  [Rules] │  │  └───────────────────────────────┘   │  │  Rules    │
+│  [Log]   │  │  ┌───────────────────────────────┐   │  │           │
+│  [Macros]│  │  │ > Make it spin...             │   │  │           │
+│          │  │  └───────────────────────────────┘   │  │           │
+│          │  │  [Send] [Clear] [Stop]  Mode: ●Agent │  │           │
+│          │  └─────────────────────────────────────┘  │           │
+└──────────┴───────────────────────────────────────────┴───────────┘
 ```
+
+**How it works:**
+1. **Space type**: `USERPREF` (Preferences editor) — Python panels render in the center
+2. **Left nav (UI region)**: Our own nav tabs — Chat, Queue, Status, Rules, Log, Macros
+   - Python panels with `bl_region_type='UI'` + `bl_context` matching
+3. **Center (WINDOW region)**: The chat panel — Python panel with
+   `bl_space_type='USERPREF'`, `bl_region_type='WINDOW'`, `bl_context='chat'`
+4. **Right sidebar**: Optional — the USERPREF space has a UI region on the right too
 
 **Pros:**
 - **100% native theming** — every widget inherits the active theme automatically
 - **Native text input** — Blender's textbox handles cursor, selection, clipboard, IME
 - **Native scrolling** — Blender's panel scrolling works out of the box
+- **Native panel drawing** — `layout.box()`, `layout.panel()`, `layout.prop()`
 - **Low maintenance** — survives Blender version updates
 - **No modal operator conflicts** — works alongside all other tools
 - **Accessibility** — screen readers can see panel content
-- **~200 LOC** for the editor registration
-- **Consistent with every other editor** — feels exactly like a native panel
+- **Left nav for macros** — the nav region gives us the Bforartists-style iconized shelf for free
+- **~250 LOC** — no GPU drawing, no modal operator, no `theme_utils.py` needed for the center
 
 **Cons:**
-- **Sidebar width constraints** — chat is limited to the N-panel width
 - **No custom bubble styling** — uses standard `layout.box()` appearance
-- **No tabs** — Chat, Prompts, Settings must be separate panels or collapsible sections
-- **Less "wow factor"** — looks like a panel, not a custom editor
-- **Center area is unused** (welcome message only)
+- **No full-area immersive canvas** — center is panel-width, not full-width
+- **The center is panel-based, not pixel-based** — less "wow factor" than GPU
 
 **Best for:** Users who want the chat available everywhere with minimal friction
 and maximum theme consistency. The pragmatic choice — works today, works tomorrow,
@@ -315,9 +370,8 @@ editor the user is working in.
 **Decision**: **Ship BOTH.** Mode 1 is the dedicated Coworker Editor (native
 sidebars + themed center). Mode 2 is the contextual agent sidebar in every editor.
 Both share the same `_draw_chat_interface()` core, so feature parity is guaranteed.
-The GPU-painted center (Approach B) is a **later enhancement** — only if user
-testing shows the sidebar-only layout is too cramped, and only with `theme_utils.py`
-mandatory for every color.
+Mode 1 uses the `USERPREF` space type with Python panels in the center — no GPU
+drawing needed for the main canvas.
 
 ---
 
@@ -341,51 +395,47 @@ immersive agent workspace (Mode 1) AND a **contextual sidebar** in every editor 
         ┌────────▼─────────┐             ┌─────────▼──────────┐
         │ Mode 1:           │             │ Mode 2:            │
         │ Dedicated Editor  │             │ Contextual Sidebar │
+        │ (USERPREF clone)  │             │ (all editors)      │
         │                   │             │                    │
-        │ GPU center canvas │             │ Native N-panel     │
-        │ + sidebars        │             │ in 15 editor types │
-        │ + macro toolshelf │             │ + editor templates │
+        │ Python panels in  │             │ Native N-panel     │
+        │ center (WINDOW)   │             │ in 15 editor types │
+        │ + left nav (UI)   │             │ + editor templates │
         └───────────────────┘             └────────────────────┘
 ```
 
-### Mode 1: Dedicated Editor Design (Native-First)
+### Mode 1: Dedicated Editor Design (Clone the Preferences Editor)
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │  [Coworker]  🟢 Connected           [Start] [Stop] [Floating]   │  ← Custom Header
-├──────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  ┌─ Coworker Chat (sidebar) ─────────────────────────────────┐  │
-│  │  ☑ Newest First                          (5 messages)     │  │
-│  │                                                             │  │
-│  │  ┌─────────────────────────────────────────────────────┐   │  │
-│  │  │ ✅ Turn 1  Create a cube with a material     📋   │   │  │
-│  │  │ Create a cube with a material                       │   │  │
-│  │  │ ▶ Running Tools                          (collapsed)│   │  │
-│  │  │ ✨ Coworker: I've created a cube...           📋   │   │  │
-│  │  └─────────────────────────────────────────────────────┘   │  │
-│  │                                                             │  │
-│  │  ┌─ Templates ─────────────────────────────────────────┐   │  │
-│  │  │ [Add Object] [Add Material] [Sculpt] [Animate] [↻] │   │  │
-│  │  └─────────────────────────────────────────────────────┘   │  │
-│  │                                                             │  │
-│  │  ┌─────────────────────────────────────────────────────┐   │  │
-│  │  │ > Make it spin...                              📎  │   │  │
-│  │  └─────────────────────────────────────────────────────┘   │  │
-│  │  [Send] [New Thread] [Stop]     Mode: ● Agent  ○ Ask       │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-│                                                                   │
-│  (Center: themed welcome message using theme.text_editor.* colors)│
-│                                                                   │
-└──────────────────────────────────────────────────────────────────┘
+├──────────┬───────────────────────────────────────────┬───────────┤
+│  Left    │  Center (Python panels, WINDOW region)    │  Right    │
+│  Nav     │  ┌─────────────────────────────────────┐  │  Sidebar  │
+│  (UI)    │  │ Chat Panel (bl_context="chat")       │  │  (UI)     │
+│          │  │  ┌───────────────────────────────┐   │  │           │
+│  [Chat]  │  │  │ ✅ Turn 1  Create a cube      │   │  │  Queue    │
+│  [Queue] │  │  │ ▶ Running Tools (collapsed)   │   │  │  Status   │
+│  [Status]│  │  │ ✨ Coworker: I've created...   │   │  │  Diag     │
+│  [Rules] │  │  └───────────────────────────────┘   │  │  Rules    │
+│  [Log]   │  │  ┌───────────────────────────────┐   │  │           │
+│  [Macros]│  │  │ > Make it spin...             │   │  │           │
+│          │  │  └───────────────────────────────┘   │  │           │
+│          │  │  [Send] [Clear] [Stop]  Mode: ●Agent │  │           │
+│          │  └─────────────────────────────────────┘  │           │
+└──────────┴───────────────────────────────────────────┴───────────┘
 ```
 
-**Key design decisions for Mode 1 (native-first)**:
-- **Chat lives in native `UI`-region panels** — `layout.box()`, `layout.panel()`, `layout.prop()` all inherit theme automatically
-- **Right sidebar**: Chat panel + queue + status + diagnostics + rules — all native panels
-- **Center**: Themed welcome message (using `theme.text_editor.*` colors) or empty — NOT GPU-painted initially
+**Key design decisions for Mode 1 (clone the Preferences editor)**:
+- **Space type**: `USERPREF` — the only editor where Python panels render in the center (WINDOW region) with a left nav (UI region)
+- **Center (WINDOW region)**: The chat panel — Python panel with `bl_space_type='USERPREF'`, `bl_region_type='WINDOW'`, `bl_context='chat'`
+  - Uses `layout.box()`, `layout.panel()`, `layout.prop()` — 100% native theming
+  - Native text input (textbox), native scrolling, native panel headers
+- **Left nav (UI region)**: Our own nav tabs — Chat, Queue, Status, Rules, Log, Macros
+  - Python panels with `bl_region_type='UI'` + `bl_context` matching
+  - This IS the Bforartists-style iconized toolshelf — native, not GPU-painted
+- **Right sidebar (UI region, optional)**: Extra panels if needed
 - **Custom header**: `BFACW_HT_coworker_header` — branding + status + quick actions (native Header subclass)
-- **GPU takeover is a later enhancement** — only if user testing shows the sidebar is too cramped. When implemented, `theme_utils.py` is mandatory for every color.
+- **NO GPU drawing needed for the main canvas** — the user's instinct is confirmed correct
 
 ### Mode 2: Contextual Sidebar Design
 
@@ -985,31 +1035,60 @@ The moodboard isn't just a passive reference board — it's an active agent tool
 
 ---
 
-### Phase 3: Dedicated Coworker Editor — Native-First, GPU Later (~250 LOC, 4 files)
+### Phase 3: Dedicated Coworker Editor — Clone the Preferences Editor (~250 LOC, 4 files)
 
-**Goal**: Register the Coworker Chat as a first-class editor option. Users manually add a Text Editor area to any workspace — the addon does NOT create workspaces. This is **Mode 1** (dedicated editor).
+**Goal**: Register the Coworker Chat as a first-class editor option. Users manually add a **Preferences editor** area to any workspace — the addon does NOT create workspaces. This is **Mode 1** (dedicated editor).
 
-**Step 3a: Native-First (ships first)**:
-1. **Register custom Header** `BFACW_HT_coworker_header` for `TEXT_EDITOR` space
+**The key insight**: The Preferences editor (`USERPREF` space) draws its center
+(WINDOW region) with `ED_region_panels_draw` — so **Python panels render in the
+center**. We "clone" this pattern for the Coworker editor.
+
+**The blank slate**: The `USERPREF` space starts with:
+- **Nav region (UI)** on the **left** (`RGN_ALIGN_LEFT`) — F5 flips it to the right
+- **Center (WINDOW)** — Python panels, empty until we register ours
+- **Exec region (EXECUTE)** at the bottom
+- **Header** at the bottom (we register our own custom header)
+
+So a raw `USERPREF` area is already a blank, Python-drawn canvas. We fill it with
+Coworker panels.
+
+**Steps**:
+1. **Register custom Header** `BFACW_HT_coworker_header` for `USERPREF` space
    - Shows: Coworker branding, connection status (🟢/🔴), quick actions (Start/Stop, Floating)
    - Inherits theme automatically via `bpy.types.Header` subclass
 
-2. **Right sidebar panels** (native, `bl_region_type='UI'`):
-   - `BFACW_PT_chat_text_editor` — the chat panel (elevated, no `DEFAULT_CLOSED`)
-   - `BFACW_PT_chat_queue` — queue panel
-   - `BFACW_PT_chat_status` — status & diagnostics panel
-   - All use `layout.box()`, `layout.panel()`, `layout.prop()` — 100% native theme
+2. **Center panels** (native, `bl_space_type='USERPREF'`, `bl_region_type='WINDOW'`):
+   - `BFACW_PT_chat_center` — the chat panel with `bl_context='chat'`
+   - Uses `layout.box()`, `layout.panel()`, `layout.prop()` — 100% native theme
+   - Native text input (textbox), native scrolling, native panel headers
 
-3. **Center area**: Themed welcome message using `theme.text_editor.*` colors
-   - Set via `space.text` to a welcome datablock, or leave empty
-   - No GPU drawing initially
+3. **Left nav panels** (native, `bl_region_type='UI'`):
+   - `BFACW_PT_chat_nav_chat` — Chat tab (`bl_context='chat'`)
+   - `BFACW_PT_chat_nav_queue` — Queue tab (`bl_context='queue'`)
+   - `BFACW_PT_chat_nav_status` — Status tab (`bl_context='status'`)
+   - `BFACW_PT_chat_nav_rules` — Rules tab (`bl_context='rules'`)
+   - `BFACW_PT_chat_nav_log` — Log tab (`bl_context='log'`)
+   - `BFACW_PT_chat_nav_macros` — Macros tab (`bl_context='macros'`)
+   - This IS the Bforartists-style iconized toolshelf — native, not GPU-painted
+   - Nav starts on the **left**; users can press **F5** to flip it to the right
 
-4. **Create `BFACW_OT_setup_text_editor_for_chat`** operator — one-click configures a Text Editor for chat (shows panels, sets welcome message)
+4. **Create `BFACW_OT_setup_coworker_editor`** operator — one-click configures a Preferences editor for chat (shows panels, sets active context, optionally flips nav to right)
 
 5. **Add "Add Coworker Editor" button** to the panel header
 
-**Step 3b: GPU Center Enhancement (Phase 3+, based on user testing)**:
-- Only if user testing shows the sidebar-only layout is too cramped
+**Theming**: 100% native — every widget inherits the active theme automatically.
+No GPU drawing, no `theme_utils.py` needed for the main canvas.
+
+**Files**: `ui_chat.py`, `__init__.py`, `shared.py`
+
+---
+
+### Phase 3b: GPU Center Enhancement (Optional, Deferred)
+
+**Only if user testing shows the panel-based center is too cramped** — and only
+with `theme_utils.py` mandatory for every color. This is the fallback if the
+USERPREF-clone approach doesn't feel immersive enough.
+
 - `CoworkerEditorOverlay` GPU-painted center — chat bubbles in the WINDOW region
 - Modal operator for input capture
 - **`theme_utils.py` is MANDATORY** — every color reads from the active theme:
@@ -1023,9 +1102,7 @@ The moodboard isn't just a passive reference board — it's an active agent tool
 - The GPU canvas matches the native panels' theme exactly (same source colors)
 - Sidebar panels (queue/status/diagnostics) stay native regardless
 
-**Theming**: Custom header + sidebar panels inherit theme automatically. GPU canvas (3b) reads via `theme_utils.py`.
-
-**Files**: `ui_chat.py`, `coworker_editor.py` (new — overlay + modal, 3b only), `__init__.py`, `shared.py`
+**Files**: `coworker_editor.py` (new — overlay + modal)
 
 ---
 
@@ -1039,14 +1116,14 @@ The moodboard isn't just a passive reference board — it's an active agent tool
    - Window is smaller (e.g., 400×600), positioned at cursor or screen center
    - Minimal UI (no toolbars, no headers)
 2. **Create minimal "Coworker Chat" workspace** for the floating window
-   - Single area: Text Editor with chat panel visible
+   - Single area: Preferences editor with the Coworker panels visible
    - No 3D viewport — pure chat window
 3. **Add "Floating Window" button** to the chat panel header
 4. **Track floating windows** — prevent duplicates, detect when closed
 
-**Window title note**: The floating window title will be **"Text"** (from `ED_area_name`),
-not "Coworker". This is acceptable — the custom header inside says "Coworker".
-Cannot be renamed from Python.
+**Window title note**: The floating window title will be **"Userpref"** (from
+`ED_area_name` for the `USERPREF` space), not "Coworker". This is acceptable —
+the custom header inside says "Coworker". Cannot be renamed from Python.
 
 **Files**: `operators_agent.py`, `ui_chat.py`
 
@@ -1245,22 +1322,23 @@ def get_status_color(state: str = "idle") -> tuple:
 
 | Component | Theme Source | What It Reads |
 |-----------|-------------|---------------|
-| **Sidebar panels** (`BFACW_PT_*`) | Automatic — Blender's UI system | Inherits `theme.ui.wcol_*` for all widgets. No custom code. |
+| **Mode 1 center panels** (USERPREF WINDOW region) | Automatic — Blender's UI system | Inherits `theme.ui.wcol_*` for all widgets. No custom code. |
+| **Mode 1 left nav panels** (USERPREF UI region) | Automatic — Blender's UI system | Inherits `theme.ui.wcol_*`. No custom code. |
+| **Mode 2 contextual panels** (all editors UI region) | Automatic — Blender's UI system | Inherits `theme.ui.wcol_*`. No custom code. |
 | **Custom Header** (`BFACW_HT_coworker_header`) | Automatic — `bpy.types.Header` subclass | Inherits `theme.ui.header` colors. No custom code. |
-| **Text Editor center (welcome message)** | Automatic — native `SpaceTextEditor` | Inherits `theme.text_editor.*`. No custom code. |
-| **GPU center canvas** (Phase 3b, optional) | Manual — `theme_utils.get_space_color()` + `get_ui_color()` | Reads `theme.text_editor.back` for background, `theme.ui.wcol_box.inner` for bubbles, `theme.ui.wcol_regular.text` for text. Matches native panels exactly. |
+| **GPU center canvas** (Phase 3b, deferred) | Manual — `theme_utils.get_space_color()` + `get_ui_color()` | Reads `theme.text_editor.back` for background, `theme.ui.wcol_box.inner` for bubbles, `theme.ui.wcol_regular.text` for text. Matches native panels exactly. |
 | **Viewport overlays** (Phase 8) | Manual — `theme_utils.get_space_color()` | Reads `theme.view_3d.back`, `theme.view_3d.wire`, `get_status_color()`. |
 | **Floating window** (Phase 4) | Automatic — native Blender window | Inherits all theme colors. No custom code. |
 
 ### Theming Consistency Guarantee
 
-The "native-first" principle ensures the Coworker editor is **indistinguishable**
-from other editors in the same theme:
+The "clone the Preferences editor" principle ensures the Coworker editor is
+**indistinguishable** from other editors in the same theme:
 
-1. **Panels** use `layout.box()`, `layout.panel()`, `layout.prop()` — identical to every other addon panel
-2. **Header** is a `bpy.types.Header` subclass — identical to native headers
-3. **Center** (welcome message) uses the native Text Editor rendering — identical to a normal Text Editor
-4. **GPU canvas** (if enabled) reads the SAME theme sources the native widgets use — so dark/light/custom themes all render identically
+1. **Center panels** (Mode 1) use `layout.box()`, `layout.panel()`, `layout.prop()` — identical to the real Preferences editor panels
+2. **Left nav** (Mode 1) is native UI-region panels — identical to the Preferences nav tabs
+3. **Header** is a `bpy.types.Header` subclass — identical to native headers
+4. **GPU canvas** (Phase 3b, deferred) reads the SAME theme sources the native widgets use — so dark/light/custom themes all render identically
 5. **No hardcoded colors anywhere** — verified by code review checklist
 
 ### Why This Matters
@@ -1269,7 +1347,7 @@ from other editors in the same theme:
 2. **Light theme users**: Overlays use light background colors, not hardcoded darks
 3. **Custom theme users**: Every color adapts to their palette (Bforartists, Monokai, etc.)
 4. **Future-proof**: When Blender 5.4 adds new theme properties, just add a fallback
-5. **GPU takeover ready**: `theme_utils.py` gives us all colors for a seamless native look
+5. **No GPU drawing needed for the main canvas** — the USERPREF-clone approach is fully native
 
 ---
 
@@ -1280,8 +1358,8 @@ from other editors in the same theme:
 | — | Theme utilities (`theme_utils.py`) | 0 | 1 | ~100 |
 | 1 | Core chat component refactor | 2 | 0 | ~400 |
 | 2 | Register panels in all editors (Mode 2) | 2 | 0 | ~150 |
-| 3 | Dedicated Coworker editor — native-first (Mode 1) | 3 | 0 | ~250 |
-| 3b | GPU center enhancement (optional, user-testing-gated) | 1 | 1 | ~300 |
+| 3 | Dedicated Coworker editor — clone USERPREF (Mode 1) | 3 | 0 | ~250 |
+| 3b | GPU center enhancement (optional, deferred) | 1 | 1 | ~300 |
 | 4 | Floating chat window | 2 | 0 | ~250 |
 | 5 | Per-editor context enrichment | 3 | 0 | ~200 |
 | 6 | Template/prompt system | 3 | 0 | ~300 |
@@ -1305,37 +1383,39 @@ Phase 8 (independent, parallel with 1-7)
 | Decision | Rationale |
 |----------|-----------|
 | **Ship BOTH modes** | Mode 1 (dedicated editor) for immersive workspace, Mode 2 (contextual sidebar) for everywhere context. They share the same core component. |
-| **Native-first theming is the #1 principle** | The user wants it to feel "built in." All interactive elements use native Blender widgets. GPU drawing is decorative-only and reads theme colors. |
-| **Single chat component, multiple renderers** | One `_draw_chat_interface()` drives native panels AND any GPU canvas. Feature parity guaranteed. |
-| **Native sidebar panels first, GPU center later** | Chat, queue, status, diagnostics live in native `UI`-region panels. GPU center is a Phase 3b enhancement only if user testing demands it. |
-| **GPU canvas matches native panels exactly** | If we GPU-paint, every color comes from the same `theme_utils.py` sources that native widgets use. Dark/light/custom themes all work identically. |
+| **Clone the Preferences editor for Mode 1** | The `USERPREF` space draws its center (WINDOW) with `ED_region_panels_draw` — Python panels render there. This is THE way to get Python-drawn chat in the center with native theming. |
+| **Native theming is the #1 principle** | The user wants it to feel "built in." All panels use native Blender widgets. GPU drawing is deferred/decorative-only. |
+| **Single chat component, multiple renderers** | One `_draw_chat_interface()` drives native panels. Feature parity guaranteed. |
+| **USERPREF center panels + left nav** | Center (WINDOW) = chat panel. Left (UI) = nav tabs (Chat, Queue, Status, Rules, Log, Macros). Both native Python panels. |
+| **GPU center canvas deferred (Phase 3b)** | Only if user testing demands it. Uses `theme_utils.py` colors that match native panels exactly. |
 | **Per-editor templates, not per-editor panels** | Templates are lightweight data (just prompt strings). One data source drives native buttons. |
-| **No workspace registration** | Bforartists users build their own layouts. Addon registers the editor (TEXT_EDITOR panel + header), users add it manually. |
-| **Text Editor as chat canvas** | Minimal chrome, text-friendly, already has a sidebar panel. Hide native chrome to look like a dedicated editor. |
-| **Floating window via `wm.window_new()`** | Blender's native window system, most reliable. Title will be "Text" — acceptable, header says "Coworker". |
+| **No workspace registration** | Bforartists users build their own layouts. Addon registers panels in the USERPREF space. |
+| **USERPREF as the chat canvas space** | Only editor where Python panels draw in the center. The "clone the Preferences editor" approach. |
+| **Floating window via `wm.window_new()`** | Blender's native window system, most reliable. Title will be "Userpref" — acceptable, header says "Coworker". |
 | **Viewport overlays optional** | Phase 8 GPU overlays are the ONLY exception to native-first — they're transient feedback, toggleable in preferences. |
 | **Template system file-based** | Users customize by editing text files. |
-| **Theme-aware via `theme_utils.py`** | Every GPU-drawn element (Phase 3b, Phase 8) reads from `bpy.context.preferences.themes[0]`. No hardcoded colors anywhere. |
+| **Theme-aware via `theme_utils.py`** | Only GPU-drawn elements (Phase 3b, Phase 8) read from `bpy.context.preferences.themes[0]`. No hardcoded colors anywhere. |
 | **Native UI inherits theme automatically** | Panels, headers, text editors use Blender's built-in theming. Only GPU overlays need manual theme access. |
 
 ## Risk Assessment
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| GPU overlay performance impact | Medium | Medium | Throttle redraws, simple shaders, disable when not visible |
-| Blender version incompatibility | Low | High | Version-guard all GPU code, test on 5.0-5.2 |
-| Overlay visual clutter | Medium | Low | All overlays toggleable in preferences |
-| Panel registration in 15+ editors | Low | Medium | Use mixin pattern, test each editor type |
-| Modal operator conflicts (GPU takeover) | Medium | Medium | Only active when takeover is on; Esc to exit; pass-through for middle-mouse |
+| USERPREF space conflicts with real Preferences | Medium | Medium | Panels use unique `bl_idname` prefixes (`BFACW_PT_`), filter by our custom header/poll |
+| Users confuse the Coworker USERPREF with real Preferences | Low | Medium | Custom header + branding makes it distinct |
+| GPU overlay performance impact (Phase 3b/8) | Medium | Medium | Throttle redraws, simple shaders, disable when not visible |
+| Blender version incompatibility | Low | High | Version-guard any GPU code, test on 5.0-5.2 |
+| Panel registration in 15+ editors (Mode 2) | Low | Medium | Use mixin pattern, test each editor type |
+| Modal operator conflicts (Phase 3b, deferred) | Medium | Medium | Only active when takeover is on; Esc to exit; pass-through for middle-mouse |
 
 ## Further Considerations
 
 1. **Hotkey for floating window**: Register default hotkey (Ctrl+Shift+C) like Blender Buddy?
 2. **Template scope**: Per-editor only, or also per-mode (Edit Mode vs Object Mode)?
 3. **Moodboard Editor**: Deferred to Tier 5 — not in scope for this plan.
-4. **GPU center canvas (Phase 3b) is optional** — gated on user testing. Native-first (Phase 3a) ships first. If testing shows the sidebar is too cramped, the GPU canvas uses `theme_utils.py` colors that match native panels exactly.
+4. **USERPREF space dual-use**: The real Preferences editor and the Coworker editor both use `USERPREF`. Need a way to distinguish them — the Coworker panels' `poll()` can check for a flag set by our setup operator.
 5. **Multi-monitor**: Floating window can be placed on a second monitor natively.
-6. **Left toolshelf for editors with native TOOLS region**: For VIEW_3D, NODE_EDITOR, etc., the macro buttons could integrate into the native tools region (`bl_region_type='TOOLS'`) — a native panel, fully theme-consistent. Text Editor has no TOOLS region, so its macro shelf would be GPU-painted (Phase 3b) or omitted in native-first mode.
+6. **Left toolshelf for editors with native TOOLS region**: For VIEW_3D, NODE_EDITOR, etc., the macro buttons could integrate into the native tools region (`bl_region_type='TOOLS'`) — a native panel, fully theme-consistent.
 7. **Bforartists iconized toolshelf reference**: The native implementation lives at `C:\3D_Stuff\Bforartists_sync\source\blender\editors\space_view3d\space_view3d.cc` (`view3d_tools_region_init/draw`, `UI_TOOLBAR_WIDTH_DOUBLE`). We mimic the *style* with native `layout.operator(icon=...)` buttons wherever possible, not GPU drawing.
 
 ---

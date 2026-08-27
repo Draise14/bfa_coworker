@@ -50,6 +50,7 @@ __all__ = (
 
 import io
 import hashlib
+import re
 import json
 import os
 import shutil
@@ -73,6 +74,29 @@ _LOCAL_LLM_DEFAULT_PORT = 8081
 _LOCAL_LLM_HEALTH_URL = "http://127.0.0.1:{:d}/health"
 _LOCAL_LLM_CHAT_URL = "http://127.0.0.1:{:d}/v1/chat/completions"
 _MODEL_DOWNLOAD_TIMEOUT = 300  # seconds
+
+def _port_is_taken(port: int) -> bool:
+    """Return True if *port* is already in use on localhost."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("127.0.0.1", port))
+            return False
+        except OSError:
+            return True
+
+def _find_free_port(start: int, attempts: int = 10) -> int:
+    """Find a free port starting from *start*, scanning upward."""
+    for offset in range(attempts):
+        port = start + offset
+        if not _port_is_taken(port):
+            if offset > 0:
+                print("[Coworker] port {:d} busy; using {:d} instead".format(start, port))
+            return port
+    raise RuntimeError(
+        "Ports {:d}-{:d} are all in use. Kill stray llama-server processes.".format(
+            start, start + attempts - 1)
+    )
+
 
 # llama-server release download.
 _LLAMA_SERVER_VERSION = "b10154"
@@ -855,6 +879,30 @@ def fetch_remote_models(
         print("[🛠️Coworker] fetch_remote_models: {:s}".format(msg))
         return [], msg
 
+
+
+def parse_model_url(url: str) -> tuple[str, str] | None:
+    """Parse a HuggingFace URL or direct GGUF link.
+
+    Returns (repo_id, filename) or None if unparseable.
+    """
+    url = url.strip()
+    # HuggingFace resolve URL:
+    # https://huggingface.co/org/repo/resolve/main/file.gguf
+    hf_match = re.match(
+        r"https?://huggingface\.co/([^/]+/[^/]+)/resolve/[^/]+/(.+)",
+        url,
+    )
+    if hf_match:
+        return hf_match.group(1), hf_match.group(2)
+    # Direct .gguf link (any URL ending in .gguf)
+    if url.lower().endswith(".gguf"):
+        filename = url.rsplit("/", 1)[-1]
+        return "", filename
+    # Local file path
+    if os.path.isfile(url) and url.lower().endswith(".gguf"):
+        return "", os.path.basename(url)
+    return None
 
 def scan_existing_models(
     models_dir: str | None = None,
@@ -2242,6 +2290,12 @@ def start_local_llama(
         with _lock:
             port = _config.local_port
         print("[🛠️Coworker] start_local_llama: using configured port {:d}".format(port))
+    # Auto-select a free port if the configured one is busy.
+    try:
+        port = _find_free_port(port)
+    except RuntimeError as ex:
+        _set_error(str(ex))
+        return None
 
     with _lock:
         ctx_size = _config.local_ctx_size or 16384

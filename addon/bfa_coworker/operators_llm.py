@@ -552,3 +552,40 @@ class _BFACW_OT_open_models_dir(bpy.types.Operator):  # type: ignore[misc]
         webbrowser.open(models_dir)
         self.report({"INFO"}, "Opened {:s}".format(models_dir))
         return {"FINISHED"}
+
+class _BFACW_OT_download_custom_model(bpy.types.Operator):  # type: ignore[misc]
+    """Download a model from a HuggingFace URL or direct .gguf link."""
+    bl_idname = "bfacw.download_custom_model"
+    bl_label = "Download Custom Model"
+    bl_description = "Download a model from a HuggingFace URL or direct .gguf link"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        url = prefs.custom_model_url.strip()
+        if not url:
+            self.report({"WARNING"}, "Enter a HuggingFace URL or .gguf path")
+            return {"CANCELLED"}
+
+        parsed = llm.parse_model_url(url)
+        if not parsed:
+            self.report({"ERROR"}, "Invalid URL. Paste a HuggingFace URL or direct .gguf link.")
+            return {"CANCELLED"}
+
+        repo_id, filename = parsed
+        models_dir = Path(prefs.downloaded_models_dir)
+        dest = models_dir / filename
+
+        if dest.exists():
+            prefs.existing_model_path = str(dest)
+            self.report({"INFO"}, "Model already exists: {:s}".format(filename))
+            return {"FINISHED"}
+
+        # Set as active model config and trigger download.
+        prefs.model_repo_id = repo_id
+        prefs.model_filename = filename
+        prefs.existing_model_path = ""
+
+        # Reuse the existing download operator.
+        bpy.ops.bfacw.download_model()
+        self.report({"INFO"}, "Downloading {:s}...".format(filename))
+        return {"FINISHED"}

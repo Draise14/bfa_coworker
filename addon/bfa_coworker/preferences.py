@@ -141,6 +141,20 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         subtype="TIME_ABSOLUTE",
     )
 
+    # ── Chat Display ─────────────────────────────────────────────
+
+    chat_max_visible_turns: IntProperty(  # type: ignore[valid-type]
+        name="Max Visible Turns",
+        description=(
+            "Maximum number of conversation turns shown in the chat panel. "
+            "0 = show all turns (no limit). Higher values may slow the UI "
+            "with very long conversations."
+        ),
+        default=0,
+        min=0,
+        max=100,
+    )
+
     # ── Debug Mode ──────────────────────────────────────────────────
 
     debug_mode: BoolProperty(  # type: ignore[valid-type]
@@ -1595,10 +1609,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                      "or workflow rules. Markdown format supported.",
                 icon='INFO',
             )
-            # Multiline textbox for comfortable editing (same pattern as chat input).
-            custom_row = custom_box.row()
-            custom_row.scale_y = 3.0
-            custom_row.prop(self, "custom_skills_text", text="", icon='GREASEPENCIL')
+            # Multiline textbox (5.3 textbox API — same as chat input).
+            custom_box.textbox(self, "custom_skills_text")
 
         # ── Text Editor Memory Bank (not in External Harness mode) ──────
         if self.operating_mode != "EXTERNAL_HARNESS":
@@ -1610,6 +1622,15 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 icon='INFO',
             )
             mem_box.prop(self, "save_code_to_text_editor")
+
+        # ── Chat Display ───────────────────────────────────────────────
+        chat_box = layout.box()
+        chat_box.label(text="Chat Display", icon='SORTTIME')
+        chat_box.prop(self, "chat_max_visible_turns")
+        chat_box.label(
+            text="0 = show all turns. Higher values limit history shown.",
+            icon='INFO',
+        )
 
         # ── Debug Mode ─────────────────────────────────────────────────
         debug_box = layout.box()

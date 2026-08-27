@@ -1108,8 +1108,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         # Primary family header
         pri_box = box.box()
         pri_box.label(
-            text="★ Recommended — Qwen3.8-27B (vision + agentic)",
-            icon='STAR',
+            text="Recommended — Qwen3.8-27B (vision + agentic)",
+            icon='HIDE_OFF',
         )
 
         all_presets = llm.get_presets()
@@ -1133,7 +1133,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             col.label(text="└ {:s}".format(preset.why))
 
         pri_box.label(
-            text="🎯 Vision: built-in — works out of the box",
+            text="Vision: built-in — works out of the box",
             icon='INFO',
         )
 
@@ -1174,6 +1174,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             btn_enabled = True
 
         dl_row = box.row(align=True)
+        dl_row.scale_y = 1.8
         dl_row.operator("bfacw.download_model", icon=btn_icon, text=btn_text)
         if not btn_enabled:
             dl_row.enabled = False
@@ -1243,7 +1244,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         if self.model_preset != "_custom" and self.model_preset_info:
             info_box = box.box()
             info_box.label(text="Model Information", icon='INFO')
-            for line in self.model_preset_info.split(""):
+            for line in self.model_preset_info.split(" "):
                 info_box.label(text=line)
 
         # -- Context Window ------------------------------------------------

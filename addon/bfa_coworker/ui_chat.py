@@ -1497,7 +1497,9 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 tic = "CHECKMARK" if conclusion_msg else "SORTTIME"
                 hr = turn_box.row(align=True)
                 hr.label(text="", icon=tic)
-                hr.label(text="Turn {:d}".format(turn_num), scale_x=0.3)
+                sub = hr.row(align=True)
+                sub.scale_x = 0.3
+                sub.label(text="Turn {:d}".format(turn_num))
                 pv = user_msg.get("content", "")
                 if len(pv) > 80:
                     pv = pv[:80] + "..."

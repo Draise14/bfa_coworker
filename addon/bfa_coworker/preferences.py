@@ -1173,15 +1173,13 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         if not btn_enabled:
             dl_row.enabled = False
 
-        if llm_state.download_active and llm_state.download_kind == "model" 
-                and llm_state.download_progress_pct <= 0:
+        if llm_state.download_active and llm_state.download_kind == "model" and llm_state.download_progress_pct <= 0:
             cancel_row = box.row(align=True)
             cancel_row.operator("bfacw.cancel_download", icon='CANCEL', text="")
 
         if llm_state.download_kind == "model":
             if llm_state.error:
-                err_lines = llm_state.error.split("
-")
+                err_lines = llm_state.error.split("")
                 for i, line in enumerate(err_lines):
                     box.label(text=line, icon="ERROR" if i == 0 else 'NONE')
             if llm_state.download_progress:
@@ -1240,8 +1238,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         if self.model_preset != "_custom" and self.model_preset_info:
             info_box = box.box()
             info_box.label(text="Model Information", icon='INFO')
-            for line in self.model_preset_info.split("
-"):
+            for line in self.model_preset_info.split(""):
                 info_box.label(text=line)
 
         # -- Context Window ------------------------------------------------
@@ -1277,8 +1274,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
         # -- Startup / runtime errors --------------------------------------
         if llm_state.error and llm_state.download_kind != "model":
-            err_lines = llm_state.error.split("
-")
+            err_lines = llm_state.error.split("")
             for i, line in enumerate(err_lines):
                 box.label(text=line, icon="ERROR" if i == 0 else 'NONE')
 

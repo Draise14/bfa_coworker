@@ -1779,10 +1779,8 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             'WARNING' if state.error else 'ERROR'
         )
         status_row = layout.row()
-        status_row.label(text=status, icon=status_icon)
-        # Long error messages (traceback, server logs) — show multiline.
-        if state.error and len(status) > 60:
-            _draw_multiline(layout, state.error)
+        status_row.label(text="", icon=status_icon)
+        _draw_multiline(status_row, status)
 
         # ── External Harness mode ──
         if is_harness:

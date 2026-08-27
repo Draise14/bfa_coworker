@@ -1141,6 +1141,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         local_box = box.box()
         local_box.label(text="Or use a local file", icon='FILE_FOLDER')
         row = local_box.row(align=True)
+        row.label(
+            text="This is the downloaded model, or pre-saved GGUF file. ",
+            icon='INFO',
+        )
+
         row.operator("bfacw.scan_existing_models", icon="FILE_REFRESH", text="Scan Folder")
         row.operator("bfacw.open_models_dir", icon="FILE_FOLDER", text="Open Folder")
         local_box.prop(self, "downloaded_models_dir")
@@ -1149,6 +1154,15 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 text="Using: {:s}".format(os.path.basename(self.existing_model_path)),
                 icon='CHECKMARK',
             )
+
+        # -- Custom model entry --------------------------------------------
+        local_box.prop(self, "model_preset", text="Custom Model")
+        if self.model_preset != "_custom" and self.model_preset_info:
+            info_box = local_box.box()
+            info_box.label(text="Model Information", icon='INFO')
+            for line in self.model_preset_info.split("\n"):
+                info_box.label(text=line)
+
 
         # -- Download current preset ---------------------------------------
         llm_state = llm.get_state()
@@ -1185,7 +1199,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
         if llm_state.download_kind == "model":
             if llm_state.error:
-                err_lines = llm_state.error.split(" ")
+                err_lines = llm_state.error.split("\n")
                 for i, line in enumerate(err_lines):
                     box.label(text=line, icon="ERROR" if i == 0 else 'NONE')
             if llm_state.download_progress:
@@ -1239,13 +1253,6 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     col.label(text="│ {:s}".format(preset.hardware_note))
                     col.label(text="└ {:s}".format(preset.why))
 
-        # -- Custom model entry --------------------------------------------
-        box.prop(self, "model_preset", text="Custom Model")
-        if self.model_preset != "_custom" and self.model_preset_info:
-            info_box = box.box()
-            info_box.label(text="Model Information", icon='INFO')
-            for line in self.model_preset_info.split(" "):
-                info_box.label(text=line)
 
         # -- Context Window ------------------------------------------------
         ctx_box = box.box()
@@ -1280,7 +1287,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
         # -- Startup / runtime errors --------------------------------------
         if llm_state.error and llm_state.download_kind != "model":
-            err_lines = llm_state.error.split("")
+            err_lines = llm_state.error.split("\n")
             for i, line in enumerate(err_lines):
                 box.label(text=line, icon="ERROR" if i == 0 else 'NONE')
 

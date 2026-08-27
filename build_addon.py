@@ -249,6 +249,42 @@ def main() -> int:
     zip_path = max(zips, key=os.path.getmtime)
     print("Built: {:s}".format(zip_path))
 
+    # Repack the zip so all files are inside a top-level folder named after
+    # the extension ID.  Blender's drag-and-drop installer requires this
+    # structure; the "extension build" command produces a flat zip.
+    import zipfile as _zf
+    ext_id = "bfa_coworker"
+    ext_ver = "0.0.0"
+    # Read id and version from the manifest inside the zip.
+    with _zf.ZipFile(zip_path, "r") as _z:
+        if "blender_manifest.toml" in _z.namelist():
+            _raw = _z.read("blender_manifest.toml").decode("utf-8")
+            for _line in _raw.splitlines():
+                if _line.startswith("id "):
+                    ext_id = _line.split("=", 1)[1].strip().strip('"').strip("'")
+                elif _line.startswith("version "):
+                    ext_ver = _line.split("=", 1)[1].strip().strip('"').strip("'")
+    repacked_path = zip_path + ".repacked"
+    with _zf.ZipFile(zip_path, "r") as zin:
+        with _zf.ZipFile(repacked_path, "w", compression=_zf.ZIP_DEFLATED) as zout:
+            for orig_name in zin.namelist():
+                # Skip directories and __pycache__/.pyc files.
+                if orig_name.endswith("/"):
+                    continue
+                if "__pycache__" in orig_name or orig_name.endswith(".pyc"):
+                    continue
+                try:
+                    data = zin.read(orig_name)
+                except Exception:
+                    print("  Skipping unreadable entry: {:s}".format(orig_name))
+                    continue
+                info = _zf.ZipInfo("{:s}/{:s}".format(ext_id, orig_name))
+                info.compress_type = _zf.ZIP_DEFLATED
+                zout.writestr(info, data)
+    # Replace the original zip with the repacked one.
+    os.replace(repacked_path, zip_path)
+    print("Repacked: {:s} (top-level folder: {:s}/)".format(zip_path, ext_id))
+
     # Step 2: Install (optional).
     if args.install:
         print("\n" + "=" * 60)

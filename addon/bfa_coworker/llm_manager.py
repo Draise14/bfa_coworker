@@ -49,6 +49,7 @@ __all__ = (
 )
 
 import io
+import hashlib
 import json
 import os
 import shutil
@@ -445,6 +446,7 @@ class ModelPreset:
     mmproj_filename: str = ""  # Projector filename for vision (e.g. "mmproj-F16.gguf")
     hardware_note: str = ""  # Hardware recommendation (RAM + GPU gen, e.g. "RTX 3090/4090/5090")
     why: str = ""  # One-line "why pick this" per sub-tier
+    expected_sha256: str = ""  # SHA-256 hash for download verification (empty = skip check)
 
 
 # ---------------------------------------------------------------------------
@@ -1390,6 +1392,21 @@ def _check_disk_space(dest: Path, required_bytes: int | None) -> bool:
     return True
 
 
+def _verify_sha256(path: Path, expected: str) -> None:
+    """Compute SHA-256 of *path*, raise RuntimeError on mismatch."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    got = h.hexdigest().lower()
+    want = expected.lower().strip()
+    if got != want:
+        raise RuntimeError(
+            "Checksum mismatch for {:s}: expected {:s}..., got {:s}..."
+            " - delete the file and re-download.".format(
+                path.name, want[:12], got[:12])
+        )
+
 def _format_bytes(bytes_val: float) -> str:
     """Format bytes to a human-readable string (KB/MB/GB)."""
     if bytes_val >= 1024 ** 3:
@@ -1443,32 +1460,43 @@ def _download_gguf_direct(
     filename: str,
     dest: Path,
     progress_callback: Callable[[str], None] | None = None,
+    expected_sha256: str = "",
 ) -> bool:
-    """
-    Download a GGUF model file directly from HuggingFace via HTTP.
+    """Download a GGUF model from HuggingFace via HTTP.
 
-    Streams the file in 64 KB chunks with real progress reporting (percentage,
-    ETA, speed). Handles 401/403/404 errors with clear actionable messages.
+    Streams in 64 KB chunks with progress reporting. Supports
+    resume via .part files and optional SHA-256 verification
+    before atomic rename.
 
-    Returns ``True`` on success, ``False`` on failure.
+    Returns True on success, False on failure.
     """
     url = "https://huggingface.co/{:s}/resolve/main/{:s}".format(repo_id, filename)
-    print("[🛠️Coworker] _download_gguf_direct: url = {:s}".format(url))
-    print("[🛠️Coworker] _download_gguf_direct: dest = {:s}".format(str(dest)))
+    print("[Coworker] _download_gguf_direct: url = {:s}".format(url))
+    print("[Coworker] _download_gguf_direct: dest = {:s}".format(str(dest)))
 
-    # Get file size first (informational + progress calculation).
+    part = dest.with_suffix(dest.suffix + ".part")
+
     total_bytes = _get_hf_file_size(repo_id, filename)
     if total_bytes is not None:
         size_hint = _format_bytes(total_bytes)
-        print("[🛠️Coworker] _download_gguf_direct: total size = {:s}".format(size_hint))
+        print("[Coworker] total size = {:s}".format(size_hint))
     else:
         size_hint = "unknown size"
 
-    # Pre-flight: verify enough disk space before committing to a multi-GB download.
     if not _check_disk_space(dest, total_bytes):
         if progress_callback:
             progress_callback(get_state().error or "Not enough disk space")
         return False
+
+    already = 0
+    if part.exists():
+        already = part.stat().st_size
+        if total_bytes and already >= total_bytes:
+            print("[Coworker] .part already complete")
+            already = 0
+        elif already > 0:
+            print("[Coworker] resuming from .part ({:s} already)".format(
+                _format_bytes(already)))
 
     _set_download_progress("Downloading {:s} ({:s}) ...".format(filename, size_hint))
     if progress_callback:
@@ -1476,7 +1504,6 @@ def _download_gguf_direct(
 
     try:
         req = urllib.request.Request(url, method="GET")
-        # Pass HF_TOKEN if available (from env var, or configured token).
         hf_token = ""
         with _lock:
             hf_token = _config.hf_token
@@ -1485,35 +1512,37 @@ def _download_gguf_direct(
         if hf_token:
             req.add_header("Authorization", "Bearer {:s}".format(hf_token))
 
+        if already > 0:
+            req.add_header("Range", "bytes={:d}-".format(already))
+
         with urllib.request.urlopen(req, timeout=120) as resp:
-            # Apply a per-chunk socket read timeout so a stalled connection
-            # mid-download raises instead of hanging forever. 60s between
-            # chunks is generous for any live connection.
             try:
                 raw_sock = getattr(getattr(resp, "fp", None), "raw", None)
                 sock = getattr(raw_sock, "_sock", None) if raw_sock is not None else None
                 if sock is not None:
                     sock.settimeout(60.0)
             except (AttributeError, OSError):
-                pass  # Best-effort — if we can't set it, read() uses the default.
+                pass
 
-            actual_total = int(resp.headers.get("Content-Length", "0")) or total_bytes or 0
-            downloaded = 0
-            chunk_size = 64 * 1024  # 64 KB
+            content_length = int(resp.headers.get("Content-Length", "0")) or 0
+            is_resume = (resp.status == 206)
+            if is_resume:
+                actual_total = already + content_length
+            else:
+                actual_total = content_length or total_bytes or 0
+                already = 0
+
+            downloaded = already
+            chunk_size = 64 * 1024
             start_time = _get_time()
             last_update = start_time
-
-            # Ensure parent directory exists.
             dest.parent.mkdir(parents=True, exist_ok=True)
-
-            with open(str(dest), "wb") as f_out:
+            mode = "ab" if is_resume and already > 0 else "wb"
+            with open(str(part), mode) as f_out:
                 while True:
-                    # Check for user-requested cancellation between chunks.
                     if _download_cancel_event.is_set():
-                        print("[🛠️Coworker] _download_gguf_direct: cancelled by user")
+                        print("[Coworker] download cancelled")
                         f_out.close()
-                        if dest.exists():
-                            dest.unlink()
                         _set_download_progress("Download cancelled")
                         _set_download_progress_eta("", 0.0)
                         if progress_callback:
@@ -1525,40 +1554,32 @@ def _download_gguf_direct(
                     f_out.write(chunk)
                     downloaded += len(chunk)
                     now = _get_time()
-
-                    # Update progress every 200ms to avoid flooding the UI.
                     if now - last_update < 0.2 and actual_total > 0:
                         continue
-
                     last_update = now
                     if actual_total > 0:
                         pct = downloaded / actual_total * 100.0
-                        # Calculate speed and ETA.
                         elapsed = now - start_time
                         if elapsed > 0:
-                            speed_bps = downloaded / elapsed
-                            remaining_bytes = actual_total - downloaded
-                            eta_secs = remaining_bytes / speed_bps if speed_bps > 0 else 0
+                            speed_bps = (downloaded - already) / elapsed
+                            remaining = actual_total - downloaded
+                            eta = remaining / speed_bps if speed_bps > 0 else 0
                             speed_str = "{:s}/s".format(_format_bytes(speed_bps))
-                            eta_str = _format_eta(eta_secs)
+                            eta_str = _format_eta(eta)
                             _set_download_progress_eta(
-                                "{:.0f}% of {:s} — {:s}".format(pct, _format_bytes(actual_total), eta_str),
+                                "{:s} -- {:s}".format(_format_bytes(actual_total), eta_str),
                                 pct,
                             )
-                            msg = "Downloading {:s} ... {:.0f}% ({:s} / {:s}) — {:s}".format(
-                                filename, pct,
-                                _format_bytes(downloaded),
-                                _format_bytes(actual_total),
-                                speed_str,
+                            msg = "Downloading {:s} ... {:.0f}% ({:s} / {:s}) -- {:s}".format(
+                                filename, pct, _format_bytes(downloaded),
+                                _format_bytes(actual_total), speed_str,
                             )
                         else:
                             _set_download_progress_eta(
-                                "{:.0f}% of {:s}".format(pct, _format_bytes(actual_total)),
-                                pct,
+                                "{:s}".format(_format_bytes(actual_total)), pct,
                             )
                             msg = "Downloading {:s} ... {:.0f}% ({:s} / {:s})".format(
-                                filename, pct,
-                                _format_bytes(downloaded),
+                                filename, pct, _format_bytes(downloaded),
                                 _format_bytes(actual_total),
                             )
                     else:
@@ -1567,53 +1588,67 @@ def _download_gguf_direct(
                     if progress_callback:
                         progress_callback(msg)
 
-        # Verify the file is not empty/corrupt (basic check).
-        if dest.stat().st_size == 0:
-            dest.unlink()
-            _set_error("Downloaded file is empty — the server may be blocking the request")
+        if part.stat().st_size == 0:
+            part.unlink()
+            _set_error("Downloaded file is empty")
             return False
 
-        print("[🛠️Coworker] _download_gguf_direct: download complete — {:s} ({:s})".format(
-            str(dest), _format_bytes(dest.stat().st_size)))
+        if expected_sha256:
+            _set_download_progress("Verifying checksum ...")
+            if progress_callback:
+                progress_callback("Verifying SHA-256 checksum ...")
+            try:
+                _verify_sha256(part, expected_sha256)
+            except RuntimeError as ex:
+                print("[Coworker] SHA-256 FAILED")
+                _set_error(str(ex))
+                if progress_callback:
+                    progress_callback(str(ex))
+                return False
+
+        os.replace(str(part), str(dest))
+        print("[Coworker] download complete")
         _set_download_progress("Download complete: {:s}".format(filename))
         if progress_callback:
             progress_callback("Download complete: {:s}".format(filename))
         return True
 
     except urllib.error.HTTPError as ex:
-        # Clean up partial download.
-        if dest.exists():
-            dest.unlink()
+        if ex.code == 416 and part.exists():
+            print("[Coworker] HTTP 416 - .part may be complete")
+            if expected_sha256:
+                try:
+                    _verify_sha256(part, expected_sha256)
+                except RuntimeError as ex2:
+                    part.unlink()
+                    _set_error(str(ex2))
+                    if progress_callback:
+                        progress_callback(str(ex2))
+                    return False
+            os.replace(str(part), str(dest))
+            _set_download_progress("Download complete: {:s}".format(filename))
+            if progress_callback:
+                progress_callback("Download complete: {:s}".format(filename))
+            return True
+        if part.exists():
+            part.unlink()
         if ex.code == 401:
-            msg = (
-                "HuggingFace returned 401 (Unauthorized) for {:s}.\n"
-                "This repo may require authentication.\n"
-                "Set the HF_TOKEN environment variable or use a different model."
-            ).format(repo_id)
+            msg = "HuggingFace 401 (Unauthorized) for {:s}. Set HF_TOKEN or use a different model.".format(repo_id)
         elif ex.code == 403:
-            msg = (
-                "HuggingFace returned 403 (Forbidden) for {:s}.\n"
-                "The model may be gated. Visit https://huggingface.co/{:s} to request access."
-            ).format(repo_id, repo_id)
+            msg = "HuggingFace 403 (Forbidden) for {:s}. Model may be gated.".format(repo_id)
         elif ex.code == 404:
-            msg = (
-                "HuggingFace returned 404 (Not Found) for {:s}/{:s}.\n"
-                "The file may not exist. Check the repo ID and filename."
-            ).format(repo_id, filename)
+            msg = "HuggingFace 404 (Not Found) for {:s}/{:s}.".format(repo_id, filename)
         else:
             msg = "Failed to download model (HTTP {:d}: {:s})".format(ex.code, ex.reason)
-        print("[🛠️Coworker] _download_gguf_direct: {:s}".format(msg))
+        print("[Coworker] _download_gguf_direct: {:s}".format(msg))
         _set_error(msg)
         if progress_callback:
             progress_callback(msg)
         return False
 
     except (urllib.error.URLError, OSError) as ex:
-        # Clean up partial download.
-        if dest.exists():
-            dest.unlink()
         msg = "Network error while downloading: {:s}".format(str(ex))
-        print("[🛠️Coworker] _download_gguf_direct: {:s}".format(msg))
+        print("[Coworker] _download_gguf_direct: {:s}".format(msg))
         _set_error(msg)
         if progress_callback:
             progress_callback(msg)

@@ -464,6 +464,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default="",
     )
 
+    _show_more_models: BoolProperty(  # type: ignore[valid-type]
+        name="Show More Models",
+        default=False,
+    )
+
     # ── Existing Model Selector ──────────────────────────────────────
 
     existing_model_path: StringProperty(  # type: ignore[valid-type]
@@ -1074,55 +1079,172 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 # Icon-only (text="") — the operator's bl_label shows as tooltip.
                 row.operator("bfacw.cancel_download", icon='CANCEL', text="")
 
-        # ── Recommended Models (presets) ─────────────────────────
-        box.label(text="Pick a Model", icon='VIEWZOOM')
+        # -- Model Selection (restructured) --------------------------------
+        # Primary model family: Qwen3.8-27B with quant tiers
+        box.label(text="Model", icon='VIEWZOOM')
 
-        _CATEGORIES = [
-            ("flagship", "Flagship (24 GB+ VRAM) — Best quality, needs high-end GPU", 'SORT_ASC'),
-            ("mid_range", "Mid-Range (16-20 GB VRAM) — Best balance, RTX 3090/4090 sweet spot", 'VIEWZOOM'),
-            ("lightweight", "Lightweight (\u2264 8 GB VRAM) — Runs on any GPU or integrated", 'LIGHT_SUN'),
-        ]
+        # System info
+        import platform
+        try:
+            import psutil
+            ram_gb = psutil.virtual_memory().total / (1024**3)
+        except ImportError:
+            ram_gb = 0
+        sys_info = "{:.0f} GB RAM".format(ram_gb) if ram_gb > 0 else ""
+        if self.llama_backend == "cuda":
+            sys_info += " · CUDA"
+        elif self.llama_backend == "vulkan":
+            sys_info += " · Vulkan"
+        elif self.llama_backend == "metal":
+            sys_info += " · Metal"
+        if sys_info:
+            box.label(text=sys_info, icon='INFO')
+
+        # Primary family header
+        pri_box = box.box()
+        pri_box.label(
+            text="★ Recommended — Qwen3.8-27B (vision + agentic)",
+            icon='STAR',
+        )
 
         all_presets = llm.get_presets()
+        primary_ids = ["qwen38_27b_q4", "qwen38_27b_q8"]
+        primary_presets = [p for p in all_presets if p.identifier in primary_ids]
 
-        for cat_id, cat_label, cat_icon in _CATEGORIES:
-            cat_presets = [p for p in all_presets if p.category == cat_id]
-            if not cat_presets:
-                continue
-            cat_box = box.box()
-            cat_box.label(text=cat_label, icon=cat_icon)
-            for preset in cat_presets:
-                row = cat_box.row(align=True)
-                # Single icon per model: IMAGE_DATA for vision, VIEWZOOM otherwise.
-                icon = 'IMAGE_DATA' if preset.vision else 'VIEWZOOM'
-                op = row.operator(
-                    "bfacw.select_preset",
-                    text=preset.name,
-                    icon=icon,
-                    depress=self.model_preset == preset.identifier,
-                )
-                op.preset_id = preset.identifier
-                # Multiline label: hardware_note + why on subsequent lines.
-                col = row.column(align=True)
-                col.scale_y = 0.8
-                col.label(
-                    text="\u2502 {:s}".format(preset.hardware_note),
-                )
-                col.label(
-                    text="\u2514 {:s}".format(preset.why),
-                )
+        for preset in primary_presets:
+            row = pri_box.row(align=True)
+            is_active = self.model_preset == preset.identifier
+            icon = 'IMAGE_DATA' if preset.vision else 'VIEWZOOM'
+            op = row.operator(
+                "bfacw.select_preset",
+                text=preset.name,
+                icon=icon,
+                depress=is_active,
+            )
+            op.preset_id = preset.identifier
+            col = row.column(align=True)
+            col.scale_y = 0.8
+            col.label(text="│ {:s}".format(preset.hardware_note))
+            col.label(text="└ {:s}".format(preset.why))
 
-        # Custom model entry.
+        pri_box.label(
+            text="🎯 Vision: built-in — works out of the box",
+            icon='INFO',
+        )
+
+        # -- Or use a local file -------------------------------------------
+        local_box = box.box()
+        local_box.label(text="Or use a local file", icon='FILE_FOLDER')
+        row = local_box.row(align=True)
+        row.operator("bfacw.scan_existing_models", icon="FILE_REFRESH", text="Scan Folder")
+        row.operator("bfacw.open_models_dir", icon="FILE_FOLDER", text="Open Folder")
+        local_box.prop(self, "downloaded_models_dir")
+        if self.existing_model_path:
+            local_box.label(
+                text="Using: {:s}".format(os.path.basename(self.existing_model_path)),
+                icon='CHECKMARK',
+            )
+
+        # -- Download current preset ---------------------------------------
+        llm_state = llm.get_state()
+        models_dir = Path(self.downloaded_models_dir) if self.downloaded_models_dir else (Path.home() / "bfa_coworker_models")
+        model_file = models_dir / self.model_filename if self.model_filename else None
+        model_exists = model_file and model_file.exists()
+
+        if llm_state.download_active:
+            btn_text = "Downloading …"
+            btn_icon = 'RENDERLAYERS'
+            btn_enabled = False
+        elif model_exists:
+            btn_text = "Already Downloaded"
+            btn_icon = 'CHECKMARK'
+            btn_enabled = False
+        elif llm_state.is_running:
+            btn_text = "Model Running"
+            btn_icon = 'CONSOLE'
+            btn_enabled = False
+        else:
+            btn_text = "Download Model"
+            btn_icon = "IMPORT"
+            btn_enabled = True
+
+        dl_row = box.row(align=True)
+        dl_row.operator("bfacw.download_model", icon=btn_icon, text=btn_text)
+        if not btn_enabled:
+            dl_row.enabled = False
+
+        if llm_state.download_active and llm_state.download_kind == "model" 
+                and llm_state.download_progress_pct <= 0:
+            cancel_row = box.row(align=True)
+            cancel_row.operator("bfacw.cancel_download", icon='CANCEL', text="")
+
+        if llm_state.download_kind == "model":
+            if llm_state.error:
+                err_lines = llm_state.error.split("
+")
+                for i, line in enumerate(err_lines):
+                    box.label(text=line, icon="ERROR" if i == 0 else 'NONE')
+            if llm_state.download_progress:
+                prog_text = llm_state.download_progress
+                if llm_state.download_progress_eta:
+                    prog_text = "{:s}  |  {:s}".format(prog_text, llm_state.download_progress_eta)
+                box.label(
+                    text=prog_text,
+                    icon=_download_status_icon(llm_state.download_progress),
+                )
+                pct = llm_state.download_progress_pct
+                if pct > 0:
+                    row = box.row(align=True)
+                    row.progress(factor=pct / 100.0, type='BAR')
+                    if llm_state.download_active:
+                        row.operator("bfacw.cancel_download", icon='CANCEL', text="")
+
+        # -- More Models (collapsible) -------------------------------------
+        more_box = box.box()
+        more_box.prop(
+            self,
+            "_show_more_models",
+            text="More Models (curated presets)",
+            icon='TRIA_DOWN' if getattr(self, "_show_more_models", False) else 'TRIA_RIGHT',
+            emboss=True,
+        )
+        if getattr(self, "_show_more_models", False):
+            more_presets = [p for p in all_presets if p.identifier not in primary_ids]
+            _MORE_CATEGORIES = [
+                ("flagship", "Flagship (24 GB+ VRAM)", 'SORT_ASC'),
+                ("mid_range", "Mid-Range (16-20 GB VRAM)", 'VIEWZOOM'),
+                ("lightweight", "Lightweight (≤ 8 GB VRAM)", 'LIGHT_SUN'),
+            ]
+            for cat_id, cat_label, cat_icon in _MORE_CATEGORIES:
+                cat_presets = [p for p in more_presets if p.category == cat_id]
+                if not cat_presets:
+                    continue
+                more_box.label(text=cat_label, icon=cat_icon)
+                for preset in cat_presets:
+                    row = more_box.row(align=True)
+                    icon = 'IMAGE_DATA' if preset.vision else 'VIEWZOOM'
+                    op = row.operator(
+                        "bfacw.select_preset",
+                        text=preset.name,
+                        icon=icon,
+                        depress=self.model_preset == preset.identifier,
+                    )
+                    op.preset_id = preset.identifier
+                    col = row.column(align=True)
+                    col.scale_y = 0.8
+                    col.label(text="│ {:s}".format(preset.hardware_note))
+                    col.label(text="└ {:s}".format(preset.why))
+
+        # -- Custom model entry --------------------------------------------
         box.prop(self, "model_preset", text="Custom Model")
         if self.model_preset != "_custom" and self.model_preset_info:
             info_box = box.box()
             info_box.label(text="Model Information", icon='INFO')
-            for line in self.model_preset_info.split("\n"):
+            for line in self.model_preset_info.split("
+"):
                 info_box.label(text=line)
 
-        # ── Context Window (preset buttons + custom override) ────
-        # One-click sizes instead of a free slider — the most common
-        # startup crash is a context too large for the available memory.
+        # -- Context Window ------------------------------------------------
         ctx_box = box.box()
         ctx_box.label(
             text="Context Window (how much the model remembers per reply)",
@@ -1130,7 +1252,6 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         )
         row = ctx_box.row(align=True)
         active_ctx = self.local_ctx_size
-        llm = get_llm_manager()
         is_custom = (self.local_ctx_preset == "custom") or (
             active_ctx not in llm.ctx_preset_sizes)
         for value in llm.ctx_preset_sizes:
@@ -1148,100 +1269,26 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         op.value = 0
         if is_custom:
             ctx_box.prop(self, "local_ctx_size")
-        # Hardware-aware recommendation hint.
         model_gb = self._current_model_gb(llm.get_preset_by_id(self.model_preset))
         ctx_box.label(
             text=llm.hardware_context_hint(model_gb, self.llama_backend),
             icon='INFO',
         )
 
-        # ── Download or use existing ─────────────────────────────
-        llm_state = llm.get_state()
-
-        # Determine download button state.
-        models_dir = Path(self.downloaded_models_dir) if self.downloaded_models_dir else (Path.home() / "bfa_coworker_models")
-        model_file = models_dir / self.model_filename if self.model_filename else None
-        model_exists = model_file and model_file.exists()
-
-        if llm_state.download_active:
-            btn_text = "Downloading \u2026"
-            btn_icon = 'RENDERLAYERS'
-            btn_enabled = False
-        elif model_exists:
-            btn_text = "Already Downloaded"
-            btn_icon = 'CHECKMARK'
-            btn_enabled = False
-        elif llm_state.is_running:
-            btn_text = "Model Running"
-            btn_icon = 'CONSOLE'
-            btn_enabled = False
-        else:
-            btn_text = "Download Model"
-            btn_icon = "IMPORT"
-            btn_enabled = True
-
-        row = box.row(align=True)
-        row.operator("bfacw.download_model", icon=btn_icon, text=btn_text)
-        if not btn_enabled:
-            row.enabled = False
-        # The cancel button must NOT live in the same row as the (disabled)
-        # download button — row.enabled above greys out the entire row,
-        # including Cancel.  It lives with the progress bar instead, with a
-        # fallback row for the pre-progress phase (download just started).
-        if llm_state.download_active and llm_state.download_kind == "model" \
-                and llm_state.download_progress_pct <= 0:
-            cancel_row = box.row(align=True)
-            # Icon-only (text="") — the operator's bl_label shows as tooltip.
-            cancel_row.operator("bfacw.cancel_download", icon='CANCEL', text="")
-
-        # Always show progress/error areas (model downloads only).
-        if llm_state.download_kind == "model":
-            if llm_state.error:
-                err_lines = llm_state.error.split("\n")
-                for i, line in enumerate(err_lines):
-                    box.label(text=line, icon="ERROR" if i == 0 else 'NONE')
-            if llm_state.download_progress:
-                prog_text = llm_state.download_progress
-                if llm_state.download_progress_eta:
-                    prog_text = "{:s}  |  {:s}".format(prog_text, llm_state.download_progress_eta)
-                box.label(
-                    text=prog_text,
-                    icon=_download_status_icon(llm_state.download_progress),
-                )
-                pct = llm_state.download_progress_pct
-                if pct > 0:
-                    row = box.row(align=True)
-                    row.progress(factor=pct / 100.0, type='BAR')
-                    if llm_state.download_active:
-                        # Icon-only (text="") — the operator's bl_label shows as tooltip.
-                        row.operator("bfacw.cancel_download", icon='CANCEL', text="")
-
-        # ── Scan for existing models ────────────────────────────
-        box.label(text="Or use an existing model:", icon='FILE_FOLDER')
-        row = box.row(align=True)
-        row.operator("bfacw.scan_existing_models", icon="FILE_REFRESH", text="Scan")
-        row.operator("bfacw.open_models_dir", icon="FILE_FOLDER", text="Open Folder")
-        box.prop(self, "downloaded_models_dir")
-        if self.existing_model_path:
-            box.label(
-                text="Using: {:s}".format(os.path.basename(self.existing_model_path)),
-                icon='CHECKMARK',
-            )
-
-        # ── Startup / runtime errors (not download-related) ──────
+        # -- Startup / runtime errors --------------------------------------
         if llm_state.error and llm_state.download_kind != "model":
-            err_lines = llm_state.error.split("\n")
+            err_lines = llm_state.error.split("
+")
             for i, line in enumerate(err_lines):
                 box.label(text=line, icon="ERROR" if i == 0 else 'NONE')
 
-        # ── Current model status ─────────────────────────────────
+        # -- Current model status ------------------------------------------
         if llm_state.is_running:
             box.label(
                 text="Active model: {:s}".format(llm_state.model_name or "Unknown"),
                 icon='CONSOLE',
             )
 
-        # ── Advanced ─────────────────────────────────────────────
         box.label(text="Advanced", icon='SETTINGS')
         box.prop(self, "model_repo_id")
         box.prop(self, "model_filename")

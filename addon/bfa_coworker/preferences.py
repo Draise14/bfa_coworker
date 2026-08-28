@@ -1058,7 +1058,22 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         llama_found = llm.find_llama_server()
         row = box.row(align=True)
         if llama_found:
-            row.label(text="llama-server: Installed", icon='CHECKMARK')
+            # Check version - warn if too old for Qwen3 SSM models.
+            _ver = llm._llama_server_version(llama_found)
+            _build = llm._parse_llama_build_number(_ver)
+            _outdated = _build and _build < llm._MIN_SUPPORTED_BUILD
+            if _outdated:
+                row.label(
+                    text="llama-server: OUTDATED (build {:d})".format(_build),
+                    icon='ERROR',
+                )
+                row.operator(
+                    "bfacw.download_llama_server",
+                    icon="FILE_REFRESH",
+                    text="Update llama-server",
+                )
+            else:
+                row.label(text="llama-server: Installed", icon='CHECKMARK')
         else:
             row.label(text="llama-server: Not installed", icon='ERROR')
             row.operator(

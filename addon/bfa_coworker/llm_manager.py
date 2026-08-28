@@ -101,6 +101,20 @@ def _find_free_port(start: int, attempts: int = 10) -> int:
 # llama-server release download.
 _LLAMA_SERVER_VERSION = "b10154"
 
+# Minimum build number required for Qwen3 hybrid (SSM/Mamba) architecture.
+# Builds before this lack blk.*.ssm_conv1d.weight support.
+_MIN_SUPPORTED_BUILD = 9500
+
+def _parse_llama_build_number(version_line: str) -> int:
+    """Extract the numeric build number from a llama-server --version line.
+
+    Example input: 'version: 8966 (7b8443ac7)'
+    Returns 0 if parsing fails.
+    """
+    import re
+    m = re.search(r'version:\s*(\d+)', version_line)
+    return int(m.group(1)) if m else 0
+
 # Common install locations for llama-server on Windows.
 _LLAMA_SEARCH_PATHS_WIN = [
     # PATH is searched automatically via shutil.which().
@@ -1050,62 +1064,72 @@ _find_llama_server_checked: bool = False
 
 
 def find_llama_server() -> str | None:
-    """Search PATH and common install locations for ``llama-server``.
+    """Search for ``llama-server`` binary.
 
-    Prefers the active backend's bundled binary (e.g. ``llama-server-cuda.exe``)
-    over the generic ``llama-server.exe``.
+    Prefers the Coworker-managed bundled binary (latest version) over
+    PATH and known install locations.  Logs a warning when the found
+    binary is older than _MIN_SUPPORTED_BUILD (too old for Qwen3 SSM).
     """
     global _find_llama_server_cache, _find_llama_server_checked
     if _find_llama_server_checked:
         return _find_llama_server_cache
     _find_llama_server_checked = True
 
-    # Determine the active backend for bundled binary preference.
     with _lock:
         active_backend = _config.llama_backend
     if active_backend == "auto":
         active_backend = _detect_gpu_backend()
 
-    print("[🛠️Coworker] find_llama_server: searching for llama-server (backend={:s})...".format(active_backend))
-
-    # 1. Check the bundled directory for a backend-specific binary first.
     bundled_dir = _get_bundled_llama_dir()
-    if active_backend and active_backend != "cpu":
-        backend_binary = bundled_dir / "llama-server-{backend}.exe".format(backend=active_backend)
-        print("[🛠️Coworker] find_llama_server:   checking bundled {:s}".format(str(backend_binary)))
-        if backend_binary.is_file():
-            print("[🛠️Coworker] find_llama_server: found bundled backend binary at {:s}".format(str(backend_binary)))
-            _find_llama_server_cache = str(backend_binary)
-            return str(backend_binary)
+    _log = "[🛠️Coworker] find_llama_server"
 
-    # 2. Search PATH first.
-    exe = shutil.which("llama-server")
-    if exe:
-        print("[🛠️Coworker] find_llama_server: found via 'llama-server' -> {:s}".format(exe))
-        _find_llama_server_cache = exe
-        return exe
-    print("[🛠️Coworker] find_llama_server: 'llama-server' not on PATH, trying 'llama-server.exe'")
-    exe = shutil.which("llama-server.exe")
-    if exe:
-        print("[🛠️Coworker] find_llama_server: found via 'llama-server.exe' -> {:s}".format(exe))
-        _find_llama_server_cache = exe
-        return exe
-    # Fall back to known install paths.
-    print("[🛠️Coworker] find_llama_server: not on PATH, checking known install dirs...")
+    # 1. Bundled directory FIRST — this is the Coworker-managed version
+    #    (downloaded via the "Download llama-server" button, always recent).
+    # Check generic bundled binary first, then backend-specific variant.
+    for bname in ("llama-server.exe", "llama-server-{b}.exe".format(b=active_backend or "cpu")):
+        bpath = bundled_dir / bname
+        if bpath.is_file():
+            print("{:s}: found bundled {:s} -> {:s}".format(_log, bname, str(bpath)))
+            _find_llama_server_cache = str(bpath)
+            _check_llama_version(str(bpath))
+            return str(bpath)
+
+    # 2. Search PATH (may include WinGet, pip, or system installs).
+    for name in ("llama-server", "llama-server.exe"):
+        exe = shutil.which(name)
+        if exe:
+            print("{:s}: found via PATH -> {:s}".format(_log, exe))
+            _find_llama_server_cache = exe
+            _check_llama_version(exe)
+            return exe
+
+    # 3. Known install directories (WinGet package path, etc.).
+    print("{:s}: not on PATH, checking known install dirs...".format(_log))
     for path in _LLAMA_SEARCH_PATHS_WIN:
-        print("[🛠️Coworker] find_llama_server:   checking {:s}".format(path))
         if os.path.isfile(path):
-            print("[🛠️Coworker] find_llama_server: found at {:s}".format(path))
+            print("{:s}: found at {:s}".format(_log, path))
             _find_llama_server_cache = path
+            _check_llama_version(path)
             return path
-    # Check the generic bundled binary as last resort.
-    bundled = bundled_dir / "llama-server.exe"
-    print("[🛠️Coworker] find_llama_server:   checking bundled {:s}".format(str(bundled)))
-    if bundled.is_file():
-        print("[🛠️Coworker] find_llama_server: found bundled at {:s}".format(str(bundled)))
-        _find_llama_server_cache = str(bundled)
-        return str(bundled)
-    print("[🛠️Coworker] find_llama_server: NOT FOUND")
+
+    print("{:s}: NOT FOUND".format(_log))
+    _find_llama_server_cache = None
+    return None
+
+
+def _check_llama_version(exe_path: str) -> None:
+    """Log a warning if the llama-server binary is too old for Qwen3 models."""
+    ver = _llama_server_version(exe_path)
+    build = _parse_llama_build_number(ver)
+    if build and build < _MIN_SUPPORTED_BUILD:
+        print(
+            "[⚠️Coworker] WARNING: llama-server build {:d} is outdated "
+            "(minimum {:d} for Qwen3 SSM models). "
+            "Use 'Download llama-server' in preferences to get the latest version."
+            .format(build, _MIN_SUPPORTED_BUILD)
+        )
+
+
     _find_llama_server_cache = None
     return None
 

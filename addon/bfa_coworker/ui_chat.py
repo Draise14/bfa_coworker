@@ -1898,6 +1898,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         op.message_index = history.index(conclusion_msg)
                         _draw_multiline(tb, conclusion_msg.get("content", ""))
                         _render_markdown(tb, conclusion_msg.get("content", ""))
+                    continue
                 has_proc = bool(process_msgs)
                 turn_box = hist_box.box()
 

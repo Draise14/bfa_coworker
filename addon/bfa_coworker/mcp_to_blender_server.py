@@ -526,6 +526,14 @@ def _execute_code(
                     "Other common inputs: 'Metallic', 'Roughness', 'Alpha', 'Emission Color'.\n"
                     "Run `print([i.name for i in principled.inputs])` to list all available inputs."
                 )
+            if 'Subdivision' in tb_str and 'has no attribute' in tb_str:
+                tb_str += (
+                    "\n\nHINT: Blender 5.3 changed subdivision modifier attributes. "
+                    "Use print(dir(modifier)) to see available attributes. "
+                    "Common names: levels (viewport), render_levels (render), "
+                    "subdivision_type (CATMULL_CLARK or SIMPLE). "
+                    "The old subdivisions attribute was renamed."
+                )
             response: dict[str, object] = {"status": "error", "message": tb_str}
             if captured.stdout:
                 response["stdout"] = captured.stdout

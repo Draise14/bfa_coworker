@@ -13,6 +13,26 @@ The bundled doc tools are always available and return accurate results:
 
 This avoids retry loops from guessing wrong attribute names.
 
+## Blender 5.3 API Changes
+
+These APIs changed in Blender 5.x — guessing will cause AttributeError loops:
+
+**Subdivision Surface Modifier** — attributes renamed:
+    mod = obj.modifiers.new("Subsurf", 'SUBSURF')
+    mod.levels = 3           # viewport levels (was 'subdivisions')
+    mod.render_levels = 3    # render levels
+    mod.subdivision_type = 'CATMULL_CLARK'
+
+**Material Nodes** — Principled BSDF has NO  attribute:
+    principled.inputs['Base Color'].default_value = (R, G, B, 1.0)
+
+**Sequencer** —  renamed to  in Blender 5.x
+
+**Auto Smooth** —  removed, use 
+
+When in doubt, use  or  to check the
+actual API before writing code.
+
 ## Object References
 
 Names auto-append `.001`, `.002` on collision. **Always capture references immediately**

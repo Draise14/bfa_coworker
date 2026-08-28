@@ -2449,11 +2449,26 @@ def _spiral_corrective_message(error_sig: str) -> str:
             "Or call get_python_api_docs('bpy.types.ShaderNodeBsdfPrincipled') "
             "to see the full API reference. Fix the code \u2014 do not retry it verbatim.]"
         )
+    if "no output from execute_blender_code" in sig_lower:
+        return (
+            "[System: Your code executed but produced no output. This usually means "
+            "the code ran but print() was not called, or the result was empty. "
+            "Add print() statements to verify each step, or assign a dict to "
+            "a variable named result to return data. "
+            "Use get_python_api_docs() to look up the correct API before retrying.]"
+        )
+    if "subdivision" in sig_lower and "has no attribute" in sig_lower:
+        return (
+            "[System: Blender 5.3 subdivision modifiers changed their API. "
+            "Use print(dir(mod)) to see available attributes. "
+            "Use get_python_api_docs('bpy.types.SubdivisionSurfaceModifier') "
+            "for the exact API. Fix the code \u2014 do not retry it verbatim.]"
+        )
     return (
         "[System: You've hit the same error multiple times in a row. "
         "Stop and reconsider your approach. Read the error message carefully "
         "and try a different strategy. "
-        "Use `get_python_api_docs` to look up the correct API before retrying "
+        "Use get_python_api_docs to look up the correct API before retrying "
         "(e.g. get_python_api_docs('bpy.types.ShaderNodeBsdfPrincipled') "
         "to see available attributes and inputs).]"
     )
@@ -3630,11 +3645,16 @@ def _run_conversation_turn_inner(
                 # ── Spiral detection: break repeated error loops ──────
                 if tool_name == "execute_blender_code":
                     error_sig = _extract_error_signature(truncated)
+                    # Also detect 'no output' - the agent called code but got
+                    # nothing back (empty result or only whitespace).
+                    _result_stripped = truncated.strip().strip('{').strip('}').strip().strip('"')
+                    if not error_sig and not _result_stripped:
+                        error_sig = '(no output from execute_blender_code)'
                     if error_sig:
                         if _consecutive_errors and error_sig != _consecutive_errors[-1]:
                             _consecutive_errors.clear()
                         _consecutive_errors.append(error_sig)
-                        if len(_consecutive_errors) >= 3:
+                        if len(_consecutive_errors) >= 2:
                             print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: spiral detected \u2014 "
                                   "same error 3\u00d7 in a row: {:s}".format(error_sig))
                             # Auto-save session log on spiral detection.
@@ -3642,10 +3662,10 @@ def _run_conversation_turn_inner(
                                 export_session_log(auto_saved=True)
                             except Exception:  # pylint: disable=broad-exception-caught
                                 pass
-                            # Truncate: remove the last 3 assistant+tool message pairs.
+                            # Truncate: remove the last N assistant+tool message pairs.
                             removed = 0
                             for i in range(len(history) - 1, -1, -1):
-                                if removed >= 3:
+                                if removed >= len(_consecutive_errors):
                                     break
                                 if history[i].get("role") == "assistant" and history[i].get("tool_calls"):
                                     del history[i:]

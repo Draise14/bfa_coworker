@@ -391,7 +391,20 @@ class _BFACW_OT_remove_llama_server(bpy.types.Operator):  # type: ignore[misc]
         if removed:
             self.report({"INFO"}, "llama-server binaries removed")
         else:
-            self.report({"INFO"}, "No bundled llama-server files to remove")
+            # The bundled dir was empty — check whether a binary is still
+            # available from another source (PATH / system install).
+            llm.invalidate_llama_server_cache()
+            still_found = llm.find_llama_server()
+            if still_found:
+                self.report(
+                    {"INFO"},
+                    "llama-server found outside the addon directory ({:s}). "
+                    "Switch the Source above to 'Custom' to use it, or uninstall "
+                    "via winget / remove it from PATH, then Download the bundled "
+                    "version.".format(still_found),
+                )
+            else:
+                self.report({"INFO"}, "No bundled llama-server files to remove")
         # Redraw preferences so the status updates.
         for wm in bpy.data.window_managers:
             for win in wm.windows:

@@ -236,6 +236,7 @@ def _autostart_agent_timer() -> None:
         _llm = get_llm_manager()
         _llm_cfg = _llm.get_config()
         _llm_cfg.mode = "local"
+        _llm_cfg.llama_source = getattr(prefs, "llama_source", "BUNDLED").lower()
         _llm_cfg.llama_path = prefs.llama_path
         _llm_cfg.model_repo_id = prefs.model_repo_id
         _llm_cfg.model_filename = prefs.model_filename

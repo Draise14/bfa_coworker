@@ -263,6 +263,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         cfg.remote_api_url = self.remote_api_url
         cfg.remote_api_key = self.remote_api_key
         cfg.remote_model = self.remote_model
+        cfg.llama_source = self.llama_source.lower()
         cfg.llama_path = self.llama_path
         cfg.llama_backend = self.llama_backend
         cfg.model_repo_id = self.model_repo_id
@@ -310,6 +311,15 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         update=_update_operating_mode,
     )
 
+    def _update_llama_path(self, _context: bpy.types.Context) -> None:
+        """Sync llama_path to llm_manager config and re-search for the binary."""
+        llm = get_llm_manager()
+        cfg = llm.get_config()
+        cfg.llama_path = self.llama_path
+        llm.set_config(cfg)
+        # Re-run detection so the UI reflects the new path immediately.
+        llm.invalidate_llama_server_cache()
+
     llama_path: StringProperty(  # type: ignore[valid-type]
         name="llama-server Path",
         default="",
@@ -321,6 +331,33 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             "  macOS/Linux: export PATH=\"/path/to/llama.cpp/build/bin:$PATH\"\n"
             "The addon bundles its own copy — only set this if you need a specific build."
         ),
+        update=_update_llama_path,
+    )
+
+    def _update_llama_source(self, _context: bpy.types.Context) -> None:
+        """Sync llama_source to llm_manager config and re-search for the binary."""
+        llm = get_llm_manager()
+        cfg = llm.get_config()
+        cfg.llama_source = self.llama_source.lower()
+        llm.set_config(cfg)
+        # Re-run detection so the UI reflects the new source immediately.
+        llm.invalidate_llama_server_cache()
+
+    llama_source: EnumProperty(  # type: ignore[valid-type]
+        name="llama-server Source",
+        description=(
+            "Where llama-server comes from.\n"
+            "  Bundled — the addon downloads and manages its own copy\n"
+            "            (Download / Update / Remove buttons are shown).\n"
+            "  Custom — you provide your own llama.cpp build via a path.\n"
+            "            The addon never modifies or updates it."
+        ),
+        items=[
+            ("BUNDLED", "Bundled (auto-managed)", "The addon downloads and manages llama-server automatically"),
+            ("CUSTOM", "Custom (user-provided)", "Use your own llama.cpp build — the addon never modifies it"),
+        ],
+        default="BUNDLED",
+        update=_update_llama_source,
     )
 
     def _update_llama_backend(self, _context: bpy.types.Context) -> None:
@@ -1052,81 +1089,129 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         box = layout.box()
         box.label(text="1. Configure Local LLM Backend", icon='CONSOLE')
 
-        # ── llama-server binary ──────────────────────────────────
+        # ── llama-server source toggle ────────────────────────────
+        #   Bundled — the addon downloads & manages its own copy.
+        #   Custom  — you provide your own llama.cpp build; the addon
+        #             never modifies or updates it.
+        box.prop(self, "llama_source", expand=True)
+
         llm = get_llm_manager()
         llm_state = llm.get_state()
-        llama_found = llm.find_llama_server()
-        row = box.row(align=True)
-        if llama_found:
-            # Check version - warn if too old for Qwen3 SSM models.
-            _ver = llm._llama_server_version(llama_found)
-            _build = llm._parse_llama_build_number(_ver)
-            _outdated = _build and _build < llm._MIN_SUPPORTED_BUILD
-            # Detect source: bundled vs PATH/System.
-            _bundled_dir = str(llm._get_bundled_llama_dir())
-            _is_bundled = llama_found.startswith(_bundled_dir)
-            _source = "bundled" if _is_bundled else "system"
-            if _outdated:
-                row = box.row(align=True)
-                row.label(
-                    text="OUTDATED — build {:d} (min {:d}) [{:s}]".format(
-                        _build, llm._MIN_SUPPORTED_BUILD, _source),
-                    icon='ERROR',
-                )
-                row.operator(
-                    "bfacw.download_llama_server",
-                    icon="FILE_REFRESH",
-                    text="Update",
-                ).force = True
-                row.operator(
-                    "bfacw.remove_llama_server",
-                    icon="TRASH",
-                    text="Remove",
-                )
-            else:
-                row = box.row(align=True)
+
+        if self.llama_source == "CUSTOM":
+            # ── Custom (user-provided) binary ──────────────────────
+            box.prop(self, "llama_path", text="Path")
+            llama_found = llm.find_llama_server()
+            row = box.row(align=True)
+            if llama_found:
+                _ver = llm._llama_server_version(llama_found)
+                _build = llm._parse_llama_build_number(_ver)
                 _build_str = "build {:d}".format(_build) if _build else "unknown build"
                 row.label(
-                    text="llama-server: Installed ({:s}, {:s})".format(_build_str, _source),
+                    text="llama-server: Found ({:s})".format(_build_str),
                     icon='CHECKMARK',
                 )
-                row.operator(
-                    "bfacw.remove_llama_server",
-                    icon="TRASH",
-                    text="Remove",
+            else:
+                row.label(
+                    text="llama-server: Not found — check the path above",
+                    icon='ERROR',
                 )
-                if not _is_bundled:
-                    # PATH binary: offer to override with bundled version.
+            box.label(
+                text="Your custom binary — the addon will not modify or update it.",
+                icon='INFO',
+            )
+        else:
+            # ── Bundled (addon-managed) binary ─────────────────────
+            llama_found = llm.find_llama_server()
+            row = box.row(align=True)
+            if llama_found:
+                # Check version - warn if too old for Qwen3 SSM models.
+                _ver = llm._llama_server_version(llama_found)
+                _build = llm._parse_llama_build_number(_ver)
+                _outdated = _build and _build < llm._MIN_SUPPORTED_BUILD
+                # Detect source: bundled vs PATH/System.
+                _bundled_dir = str(llm._get_bundled_llama_dir())
+                _is_bundled = llama_found.startswith(_bundled_dir)
+                _source = "bundled" if _is_bundled else "system"
+                if _outdated:
+                    row = box.row(align=True)
+                    row.label(
+                        text="OUTDATED — build {:d} (min {:d}) [{:s}]".format(
+                            _build, llm._MIN_SUPPORTED_BUILD, _source),
+                        icon='ERROR',
+                    )
                     row.operator(
                         "bfacw.download_llama_server",
-                        icon="IMPORT",
-                        text="Override",
+                        icon="FILE_REFRESH",
+                        text="Update",
                     ).force = True
-        else:
-            row = box.row(align=True)
-            row.label(text="llama-server: Not installed", icon='ERROR')
-            row.operator(
-                "bfacw.download_llama_server",
-                icon="IMPORT",
-                text="Download",
-            )
-        # GPU backend selector.
-        box.prop(self, "llama_backend")
-        # Unified progress block for llama-server download.
-        if llm_state.download_kind == "llama_server":
-            if llm_state.download_progress:
-                box.label(
-                    text=llm_state.download_progress,
-                    icon=_download_status_icon(llm_state.download_progress),
+                    row.operator(
+                        "bfacw.remove_llama_server",
+                        icon="TRASH",
+                        text="Remove",
+                    )
+                elif not _build:
+                    # Unknown build — the version string could not be
+                    # parsed. Offer Update so the user can force a fresh
+                    # download instead of being stuck with no way forward.
+                    row = box.row(align=True)
+                    row.label(
+                        text="llama-server: Installed (unknown build, {:s})".format(_source),
+                        icon='WARNING',
+                    )
+                    row.operator(
+                        "bfacw.download_llama_server",
+                        icon="FILE_REFRESH",
+                        text="Update",
+                    ).force = True
+                    row.operator(
+                        "bfacw.remove_llama_server",
+                        icon="TRASH",
+                        text="Remove",
+                    )
+                else:
+                    row = box.row(align=True)
+                    row.label(
+                        text="llama-server: Installed (build {:d}, {:s})".format(_build, _source),
+                        icon='CHECKMARK',
+                    )
+                    row.operator(
+                        "bfacw.remove_llama_server",
+                        icon="TRASH",
+                        text="Remove",
+                    )
+                    if not _is_bundled:
+                        # PATH binary: offer to override with bundled version.
+                        row.operator(
+                            "bfacw.download_llama_server",
+                            icon="IMPORT",
+                            text="Override",
+                        ).force = True
+            else:
+                row = box.row(align=True)
+                row.label(text="llama-server: Not installed", icon='ERROR')
+                row.operator(
+                    "bfacw.download_llama_server",
+                    icon="IMPORT",
+                    text="Download",
                 )
-            pct = llm_state.download_progress_pct
-            if pct > 0:
-                row = box.row(align=True)
-                row.progress(factor=pct / 100.0, type='BAR')
-            if llm_state.download_active:
-                row = box.row(align=True)
-                # Icon-only (text="") — the operator's bl_label shows as tooltip.
-                row.operator("bfacw.cancel_download", icon='CANCEL', text="")
+            # GPU backend selector.
+            box.prop(self, "llama_backend")
+            # Unified progress block for llama-server download.
+            if llm_state.download_kind == "llama_server":
+                if llm_state.download_progress:
+                    box.label(
+                        text=llm_state.download_progress,
+                        icon=_download_status_icon(llm_state.download_progress),
+                    )
+                pct = llm_state.download_progress_pct
+                if pct > 0:
+                    row = box.row(align=True)
+                    row.progress(factor=pct / 100.0, type='BAR')
+                if llm_state.download_active:
+                    row = box.row(align=True)
+                    # Icon-only (text="") — the operator's bl_label shows as tooltip.
+                    row.operator("bfacw.cancel_download", icon='CANCEL', text="")
 
         # -- Model Selection (restructured) --------------------------------
         # Primary model family: Qwen3.8-27B with quant tiers

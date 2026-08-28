@@ -433,6 +433,7 @@ class LLMConfig:
 
     mode: str = "local"  # "local" | "remote"
     # Local mode
+    llama_source: str = "bundled"  # "bundled" (addon-managed) | "custom" (user-provided)
     llama_path: str = ""
     model_repo_id: str = "unsloth/gemma-4-26B-A4B-it-GGUF"
     model_filename: str = "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
@@ -1023,6 +1024,7 @@ def set_config(cfg: LLMConfig) -> None:
     """Atomically update the configuration."""
     with _lock:
         _config.mode = cfg.mode
+        _config.llama_source = cfg.llama_source
         _config.llama_path = cfg.llama_path
         _config.model_repo_id = cfg.model_repo_id
         _config.model_filename = cfg.model_filename
@@ -1042,6 +1044,7 @@ def get_config() -> LLMConfig:
     with _lock:
         return LLMConfig(
             mode=_config.mode,
+            llama_source=_config.llama_source,
             llama_path=_config.llama_path,
             model_repo_id=_config.model_repo_id,
             model_filename=_config.model_filename,
@@ -1078,11 +1081,26 @@ def find_llama_server() -> str | None:
 
     with _lock:
         active_backend = _config.llama_backend
+        llama_source = _config.llama_source
+        llama_path = _config.llama_path
     if active_backend == "auto":
         active_backend = _detect_gpu_backend()
 
     bundled_dir = _get_bundled_llama_dir()
     _log = "[🛠️Coworker] find_llama_server"
+
+    # 0. Custom source — the user explicitly provided their own binary.
+    #    Only that path is used; we never fall through to PATH/bundled so
+    #    the addon never tampers with a user-managed setup.
+    if llama_source == "custom":
+        if llama_path and os.path.isfile(llama_path):
+            print("{:s}: custom path -> {:s}".format(_log, llama_path))
+            _find_llama_server_cache = llama_path
+            _check_llama_version(llama_path)
+            return llama_path
+        print("{:s}: custom source set but path missing/invalid — {:s}".format(_log, llama_path or "(empty)"))
+        _find_llama_server_cache = None
+        return None
 
     # 1. Bundled directory FIRST — this is the Coworker-managed version
     #    (downloaded via the "Download llama-server" button, always recent).
@@ -2197,9 +2215,10 @@ def download_llama_server(
         if progress_callback:
             progress_callback(msg)
         # Invalidate the cache so find_llama_server picks up the new binary.
-        global _find_llama_server_checked, _find_llama_server_cache
+        global _find_llama_server_checked, _find_llama_server_cache, _llama_server_version_cache
         _find_llama_server_checked = False
         _find_llama_server_cache = None
+        _llama_server_version_cache = ""
         return str(dest_binary)
 
     except urllib.error.HTTPError as ex:

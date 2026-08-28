@@ -1143,6 +1143,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             # ── Custom (user-provided) binary ──────────────────────
             box.prop(self, "llama_path", text="Path")
             llama_found = llm.find_llama_server()
+            # Validate that the cached result still exists on disk;
+            # an external uninstall or file move would leave stale cache.
+            if llama_found and not os.path.isfile(llama_found):
+                llm.invalidate_llama_server_cache()
+                llama_found = llm.find_llama_server()
             row = box.row(align=True)
             if llama_found:
                 _ver = llm._llama_server_version(llama_found)
@@ -1175,6 +1180,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         else:
             # ── Bundled (addon-managed) binary ─────────────────────
             llama_found = llm.find_llama_server()
+            # Validate that the cached result still exists on disk;
+            # an external uninstall or file move would leave stale cache.
+            if llama_found and not os.path.isfile(llama_found):
+                llm.invalidate_llama_server_cache()
+                llama_found = llm.find_llama_server()
             row = box.row(align=True)
             if llama_found:
                 # Check version - warn if too old for Qwen3 SSM models.

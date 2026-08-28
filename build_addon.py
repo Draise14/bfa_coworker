@@ -15,7 +15,7 @@ Step2 - Usage:
     python build_addon.py --install --enable  # Build, install, and enable
 
 The environment will persist, or use this command with the path to the Blender executable, example:
-    python build_addon.py --blender "D:\Software\Blender\stable\blender-5.2.0-lts.fbe6228777e7\blender.exe"
+    python build_addon.py --blender "C:\3D_Stuff\Devbuild\bforartists.exe"
 
 """
 

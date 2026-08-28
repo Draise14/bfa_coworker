@@ -1893,11 +1893,11 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     if conclusion_msg:
                         tb = hist_box.box()
                         cr = tb.row()
-                        cr.label(text="Turn {:d} — ✨ Coworker:".format(turn_num), icon=_AGENT_ICON)
+                        cr.label(text="Turn {:d} — Coworker:".format(turn_num), icon=_AGENT_ICON)
                         op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                         op.message_index = history.index(conclusion_msg)
                         _draw_multiline(tb, conclusion_msg.get("content", ""))
-                        _render_markdown(tb, conclusion_msg.get("content", ""))
+                        #_render_markdown(tb, conclusion_msg.get("content", ""))
                     continue
                 has_proc = bool(process_msgs)
                 turn_box = hist_box.box()
@@ -1909,7 +1909,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                          or (p.get("content") or "").startswith("Error"))
                     for p in process_msgs
                 )
-                tic = "CHECKMARK" if conclusion_msg else "SORTTIME"
+                tic = "CHECKMARK" if conclusion_msg else "USER"
                 hr = turn_box.row(align=True)
                 hr.label(text="", icon=tic)
                 sub = hr.row(align=True)
@@ -1919,7 +1919,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 op.message_index = history.index(user_msg)
 
                 # --- User message (always visible) ---
-                turn_box.separator()
+                #turn_box.separator()
                 _draw_multiline(turn_box, user_msg.get("content", ""))
 
                 # --- Working (collapsible --- only the internals collapse) ---
@@ -1928,9 +1928,9 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         "turn_proc_{:d}".format(turn_num),
                         default_closed=True,
                     )
+                    pb_icon = "WARNING" if has_err else "PACKAGE"
+                    ph.label(text="Workshop", icon=pb_icon)
                     if pb:
-                        pb_icon = "WARNING" if has_err else "SORTTIME"
-                        pb.label(text="Working", icon=pb_icon)
                         work_box = pb.box()
                         for pm in process_msgs:
                             pr = pm.get("role", "")

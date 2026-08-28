@@ -1050,13 +1050,15 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
         # ── LLM Configuration (Local mode only) ────────────────────────
         box = layout.box()
-        box.label(text="Local LLM Configuration", icon='CONSOLE')
+        box.label(text="1. Configure Local LLM Backend", icon='CONSOLE')
 
         # ── llama-server binary ──────────────────────────────────
         llm = get_llm_manager()
         llm_state = llm.get_state()
         llama_found = llm.find_llama_server()
+        row = box.row(align=True)
         if llama_found:
+            # Check version - warn if too old for Qwen3 SSM models.
             _ver = llm._llama_server_version(llama_found)
             _build = llm._parse_llama_build_number(_ver)
             _outdated = _build and _build < llm._MIN_SUPPORTED_BUILD
@@ -1117,7 +1119,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
         # -- Model Selection (restructured) --------------------------------
         # Primary model family: Qwen3.8-27B with quant tiers
-        box.label(text="Model", icon='VIEWZOOM')
+        box.label(text="2. Pick a Large Language Model", icon='VIEWZOOM')
 
         # System info
         import platform
@@ -1164,92 +1166,12 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             col.label(text="└ {:s}".format(preset.why))
 
         pri_box.label(
-            text="Vision: built-in — works out of the box",
+            text="Vision is built-in with these models and downloaded additionally",
             icon='INFO',
         )
-
-        # -- Or use a local file -------------------------------------------
-        local_box = box.box()
-        local_box.label(text="Or use a local file", icon='FILE_FOLDER')
-        row = local_box.row(align=True)
-        row.label(
-            text="This is the downloaded model, or pre-saved GGUF file. ",
-            icon='INFO',
-        )
-
-        row.operator("bfacw.scan_existing_models", icon="FILE_REFRESH", text="Scan Folder")
-        row.operator("bfacw.open_models_dir", icon="FILE_FOLDER", text="Open Folder")
-        local_box.prop(self, "downloaded_models_dir")
-        if self.existing_model_path:
-            local_box.label(
-                text="Using: {:s}".format(os.path.basename(self.existing_model_path)),
-                icon='CHECKMARK',
-            )
-
-        # -- Custom model entry --------------------------------------------
-        local_box.prop(self, "model_preset", text="Custom Model")
-        if self.model_preset != "_custom" and self.model_preset_info:
-            info_box = local_box.box()
-            info_box.label(text="Model Information", icon='INFO')
-            for line in self.model_preset_info.split("\n"):
-                info_box.label(text=line)
-
-
-        # -- Download current preset ---------------------------------------
-        llm_state = llm.get_state()
-        models_dir = Path(self.downloaded_models_dir) if self.downloaded_models_dir else (Path.home() / "bfa_coworker_models")
-        model_file = models_dir / self.model_filename if self.model_filename else None
-        model_exists = model_file and model_file.exists()
-
-        if llm_state.download_active:
-            btn_text = "Downloading …"
-            btn_icon = 'RENDERLAYERS'
-            btn_enabled = False
-        elif model_exists:
-            btn_text = "Already Downloaded"
-            btn_icon = 'CHECKMARK'
-            btn_enabled = False
-        elif llm_state.is_running:
-            btn_text = "Model Running"
-            btn_icon = 'CONSOLE'
-            btn_enabled = False
-        else:
-            btn_text = "Download Model"
-            btn_icon = "IMPORT"
-            btn_enabled = True
-
-        dl_row = box.row(align=True)
-        dl_row.scale_y = 1.8
-        dl_row.operator("bfacw.download_model", icon=btn_icon, text=btn_text)
-        if not btn_enabled:
-            dl_row.enabled = False
-
-        if llm_state.download_active and llm_state.download_kind == "model" and llm_state.download_progress_pct <= 0:
-            cancel_row = box.row(align=True)
-            cancel_row.operator("bfacw.cancel_download", icon='CANCEL', text="")
-
-        if llm_state.download_kind == "model":
-            if llm_state.error:
-                err_lines = llm_state.error.split("\n")
-                for i, line in enumerate(err_lines):
-                    box.label(text=line, icon="ERROR" if i == 0 else 'NONE')
-            if llm_state.download_progress:
-                prog_text = llm_state.download_progress
-                if llm_state.download_progress_eta:
-                    prog_text = "{:s}  |  {:s}".format(prog_text, llm_state.download_progress_eta)
-                box.label(
-                    text=prog_text,
-                    icon=_download_status_icon(llm_state.download_progress),
-                )
-                pct = llm_state.download_progress_pct
-                if pct > 0:
-                    row = box.row(align=True)
-                    row.progress(factor=pct / 100.0, type='BAR')
-                    if llm_state.download_active:
-                        row.operator("bfacw.cancel_download", icon='CANCEL', text="")
 
         # -- More Models (collapsible) -------------------------------------
-        more_box = box.box()
+        more_box = pri_box.box()
         more_box.prop(
             self,
             "show_more_models",
@@ -1284,7 +1206,97 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     col.label(text="│ {:s}".format(preset.hardware_note))
                     col.label(text="└ {:s}".format(preset.why))
 
+        # -- Or use a local file -------------------------------------------
+        local_box = box.box()
+        local_box.label(text="3. Set the downloaded location", icon='FILE_FOLDER')
+        row = local_box.row(align=True)
+        row.label(
+            text="This is where you will store the downloaded or select an existing GGUF file. ",
+            icon='INFO',
+        )
+        row.seperator()
+        row.operator("bfacw.scan_existing_models", icon="FILE_REFRESH", text="Scan Folder")
+        row.operator("bfacw.open_models_dir", icon="FILE_FOLDER", text="Open Folder")
+        local_box.prop(self, "downloaded_models_dir")
+        if self.existing_model_path:
+            local_box.label(
+                text="Selected: {:s}".format(os.path.basename(self.existing_model_path)),
+                icon='CHECKMARK',
+            )
 
+        # -- Custom model entry --------------------------------------------
+        local_box.prop(self, "model_preset", text="Your Selected Model Preset")
+        local_box.label(text="This defines what will download, either a prest, or custom Hugging Face model", icon='INFO')
+        if self.model_preset != "_custom" and self.model_preset_info:
+            info_box = local_box.box()
+            info_box.label(text="Model Preset Information", icon='INFO')
+            for line in self.model_preset_info.split("\n"):
+                info_box.label(text=line)
+        else:
+            info_box = local_box.box()
+            info_box.label(text="Custom Hugging Face model to download", icon='INFO')
+            row = info_box.row(align=True)
+            row.label(text="Model Repository ID and filename:")
+            row.prop(self, "model_repo_id")
+            row.prop(self, "model_filename")
+
+
+        # -- Download current preset ---------------------------------------
+        llm_state = llm.get_state()
+        models_dir = Path(self.downloaded_models_dir) if self.downloaded_models_dir else (Path.home() / "bfa_coworker_models")
+        model_file = models_dir / self.model_filename if self.model_filename else None
+        model_exists = model_file and model_file.exists()
+
+        if llm_state.download_active:
+            btn_text = "Downloading …"
+            btn_icon = 'FILE_REFRESH'
+            btn_enabled = False
+        elif model_exists:
+            btn_text = "Already Downloaded"
+            btn_icon = 'CHECKMARK'
+            btn_enabled = False
+        elif llm_state.is_running:
+            btn_text = "Model Running"
+            btn_icon = 'CONSOLE'
+            btn_enabled = False
+        else:
+            btn_text = "4. Download Model"
+            btn_icon = "IMPORT"
+            btn_enabled = True
+
+        dl_row = box.row(align=True)
+        dl_row.scale_y = 1.8
+        dl_row.operator("bfacw.download_model", icon=btn_icon, text=btn_text)
+        if not btn_enabled:
+            dl_row.enabled = False
+
+        if llm_state.download_active and llm_state.download_kind == "model" and llm_state.download_progress_pct <= 0:
+            cancel_row = box.row(align=True)
+            cancel_row.operator("bfacw.cancel_download", icon='CANCEL', text="")
+
+        if llm_state.download_kind == "model":
+            if llm_state.error:
+                err_lines = llm_state.error.split("\n")
+                for i, line in enumerate(err_lines):
+                    box.label(text=line, icon="ERROR" if i == 0 else 'NONE')
+            if llm_state.download_progress:
+                prog_text = llm_state.download_progress
+                if llm_state.download_progress_eta:
+                    prog_text = "{:s}  |  {:s}".format(prog_text, llm_state.download_progress_eta)
+                box.label(
+                    text=prog_text,
+                    icon=_download_status_icon(llm_state.download_progress),
+                )
+                pct = llm_state.download_progress_pct
+                if pct > 0:
+                    row = box.row(align=True)
+                    row.progress(factor=pct / 100.0, type='BAR')
+                    if llm_state.download_active:
+                        row.operator("bfacw.cancel_download", icon='CANCEL', text="")
+
+
+        # -- Advanced Settings ------------------------------------------------
+        box.label(text="Advanced", icon='SETTINGS')
         # -- Context Window ------------------------------------------------
         ctx_box = box.box()
         ctx_box.label(
@@ -1329,9 +1341,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 icon='CONSOLE',
             )
 
-        box.label(text="Advanced", icon='SETTINGS')
-        box.prop(self, "model_repo_id")
-        box.prop(self, "model_filename")
+
+        box.seperator()
         box.prop(self, "local_max_tokens")
         box.prop(self, "hf_token")
 

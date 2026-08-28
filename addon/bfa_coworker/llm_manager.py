@@ -56,6 +56,7 @@ import json
 import os
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tarfile
@@ -1270,19 +1271,42 @@ def _detect_gpu_backend() -> str:
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         pass
 
-    # 2. Check for AMD / Intel Arc GPU via wmic.
+    # 2. Check for AMD / Intel GPU via PowerShell (wmic is deprecated on Win10+).
+    #    Use Get-CimInstance which works on Windows 10 1903+ and all Win11.
+    gpu_found = False
     try:
         result = subprocess.run(
-            ["wmic", "path", "win32_VideoController", "get", "name"],
+            ["powershell", "-NoProfile", "-Command",
+             "(Get-CimInstance Win32_VideoController).Name"],
             capture_output=True, text=True, timeout=5,
         )
         output = result.stdout.lower()
-        if "amd" in output or "radeon" in output or "intel" in output:
-            print("[🛠️Coworker] _detect_gpu_backend: AMD/Intel GPU detected -> vulkan")
-            _gpu_backend_cache = "vulkan"
-            return _gpu_backend_cache
+        if "amd" in output or "radeon" in output:
+            gpu_found = True
+        elif "intel" in output and any(k in output for k in ("arc", "a380", "a750", "a770")):
+            gpu_found = True  # Intel Arc discrete GPUs.
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         pass
+
+    # Fallback: try wmic if PowerShell failed (older Windows).
+    if not gpu_found:
+        try:
+            result = subprocess.run(
+                ["wmic", "path", "win32_VideoController", "get", "name"],
+                capture_output=True, text=True, timeout=5,
+            )
+            output = result.stdout.lower()
+            if "amd" in output or "radeon" in output:
+                gpu_found = True
+            elif "intel" in output and any(k in output for k in ("arc", "a380", "a750", "a770")):
+                gpu_found = True
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            pass
+
+    if gpu_found:
+        print("[🛠️Coworker] _detect_gpu_backend: AMD/Intel GPU detected -> vulkan")
+        _gpu_backend_cache = "vulkan"
+        return _gpu_backend_cache
 
     # 3. Fallback to CPU.
     print("[🛠️Coworker] _detect_gpu_backend: no compatible GPU detected -> cpu")
@@ -1439,6 +1463,96 @@ def _hardware_info() -> tuple[int | None, str | None, int | None]:
 
     return ram_mb, gpu_label, gpu_mb
 
+def _gguf_layer_count(model_path: Path) -> int | None:
+    """Read the number of transformer blocks from a GGUF file header.
+
+    Returns the layer count if found, or ``None`` if the file can't be
+    read or doesn't contain the expected metadata key.
+    The GGUF format stores ``<arch>.block_count`` in its metadata.
+    """
+    # GGUF type IDs (from llama.cpp gguf.h).
+    _GGUF_UINT8 = 0
+    _GGUF_INT8 = 1
+    _GGUF_UINT16 = 2
+    _GGUF_INT16 = 3
+    _GGUF_UINT32 = 4
+    _GGUF_UINT64 = 5
+    _GGUF_FLOAT32 = 6
+    _GGUF_FLOAT64 = 7
+    _GGUF_BOOL = 8
+    _GGUF_STRING = 9
+    _GGUF_ARRAY = 10
+    # Fixed-size byte widths for scalar types.
+    _FIXED_SIZES = {
+        _GGUF_UINT8: 1, _GGUF_INT8: 1,
+        _GGUF_UINT16: 2, _GGUF_INT16: 2,
+        _GGUF_UINT32: 4, _GGUF_FLOAT32: 4,
+        _GGUF_UINT64: 8, _GGUF_FLOAT64: 8,
+        _GGUF_BOOL: 1,
+    }
+
+    def _skip_value_bytes(fobj: "io.BufferedRandom | io.BufferedReader", vtype: int) -> None:
+        """Advance *fobj* past the value bytes for type *vtype*.
+
+        The type ID has already been read; this only skips the payload.
+        """
+        if vtype in _FIXED_SIZES:
+            fobj.read(_FIXED_SIZES[vtype])
+        elif vtype == _GGUF_STRING:
+            slen = int.from_bytes(fobj.read(8), "little")
+            fobj.read(slen)
+        elif vtype == _GGUF_ARRAY:
+            atype = int.from_bytes(fobj.read(4), "little")
+            alen = int.from_bytes(fobj.read(8), "little")
+            for _ in range(alen):
+                if atype in _FIXED_SIZES:
+                    fobj.read(_FIXED_SIZES[atype])
+                elif atype == _GGUF_STRING:
+                    elen = int.from_bytes(fobj.read(8), "little")
+                    fobj.read(elen)
+                else:
+                    break  # Unknown element type — bail.
+
+    try:
+        with open(str(model_path), "rb") as f:
+            magic = f.read(4)
+            if magic != b"GGUF":
+                return None
+            version = int.from_bytes(f.read(4), "little")
+            if version < 2:
+                return None  # V1 format — no standard metadata layout.
+            n_tensors = int.from_bytes(f.read(4), "little")
+            n_kv = int.from_bytes(f.read(4), "little")
+            # Read key-value metadata entries looking for block_count.
+            for _ in range(n_kv):
+                # Key: uint64 length-prefixed string.
+                key_len = int.from_bytes(f.read(8), "little")
+                key = f.read(key_len).decode("utf-8", errors="replace")
+                # Value type: uint32.
+                val_type = int.from_bytes(f.read(4), "little")
+
+                if val_type == _GGUF_UINT32 and "block_count" in key:
+                    lc = int.from_bytes(f.read(4), "little")
+                    if lc > 0:
+                        print("[Coworker] _gguf_layer_count: {:s} has {:d} layers".format(
+                            model_path.name, lc))
+                        return lc
+                    # Zero layer count — skip.
+                    continue
+                if val_type == _GGUF_UINT64 and "block_count" in key:
+                    lc = int.from_bytes(f.read(8), "little")
+                    if lc > 0:
+                        print("[Coworker] _gguf_layer_count: {:s} has {:d} layers".format(
+                            model_path.name, lc))
+                        return lc
+                    continue
+                # Not block_count (or wrong type) — skip the value.
+                _skip_value_bytes(f, val_type)
+            return None
+    except (OSError, struct.error, ValueError):
+        return None
+
+
 def autodetect_gpu_layers(model_path: Path, context_size: int) -> int:
     """Calculate optimal --n-gpu-layers for the given model and hardware."""
     backend = _detect_gpu_backend()
@@ -1462,10 +1576,13 @@ def autodetect_gpu_layers(model_path: Path, context_size: int) -> int:
     if usable_mb >= model_mb * 1.05:
         return _FULL_OFFLOAD  # Full GPU offload
 
-    per_layer = model_mb / _TYPICAL_LAYERS
-    ngl = max(0, min(_TYPICAL_LAYERS, int(usable_mb / per_layer)))
-    print("[Coworker] autodetect_gpu_layers: ngl={:d} (gpu={:d}MB, model={:d}MB, kv={:d}MB, usable={:d}MB)".format(
-        ngl, gpu_mb, model_mb, kv_mb, usable_mb))
+    # Try to read the actual layer count from the GGUF header so the
+    # per-layer estimate is accurate even for models with != 33 layers.
+    actual_layers = _gguf_layer_count(model_path) or _TYPICAL_LAYERS
+    per_layer = model_mb / actual_layers
+    ngl = max(0, min(actual_layers, int(usable_mb / per_layer)))
+    print("[Coworker] autodetect_gpu_layers: ngl={:d}/{:d} (gpu={:d}MB, model={:d}MB, kv={:d}MB, usable={:d}MB)".format(
+        ngl, actual_layers, gpu_mb, model_mb, kv_mb, usable_mb))
     return ngl
 def recommend_context_size(
     model_gb: float = 0.0,
@@ -2154,9 +2271,25 @@ def download_llama_server(
         if progress_callback:
             progress_callback("Extracting llama-server ...")
 
+        # Companion DLL extensions — extract these alongside the binary
+        # so CUDA/Vulkan runtime libraries are co-located.
+        # On Linux, versioned shared libs like ``libcublas.so.12`` don't end
+        # in ``.so`` so we also match ``.so.`` followed by digits.
+        def _is_companion_file(name: str) -> bool:
+            low = name.lower()
+            if low.endswith(".dll") or low.endswith(".dylib"):
+                return True
+            if low.endswith(".so"):
+                return True
+            # Versioned .so: libcudart.so.12, libcublas.so.12.4, etc.
+            if ".so." in low and low.split(".so.")[-1].isdigit():
+                return True
+            return False
+
         data.seek(0)
         if archive_ext == ".zip":
             with zipfile.ZipFile(data) as zf:
+                # Find the server binary inside the archive.
                 binary_members = [
                     m for m in zf.namelist()
                     if m.endswith(binary_name) or m.endswith("/" + binary_name)
@@ -2166,10 +2299,24 @@ def download_llama_server(
                         "Could not find {:s} in the downloaded archive".format(binary_name)
                     )
                     return None
-                temp_dir = dest_dir / ".tmp_extract"
-                temp_dir.mkdir(parents=True, exist_ok=True)
-                zf.extract(binary_members[0], str(temp_dir))
-                extracted = temp_dir / binary_members[0]
+                # Extract the binary + ALL companion DLLs/SOs.
+                # The CUDA release zip bundles cudart, cublas, cublasLt etc.
+                # alongside the exe — we need them all.
+                members_to_extract = list(binary_members)
+                for m in zf.namelist():
+                    if m in members_to_extract:
+                        continue
+                    if _is_companion_file(m):
+                        members_to_extract.append(m)
+                print("[🛠️Coworker] download_llama_server: extracting {:d} files from archive".format(
+                    len(members_to_extract)))
+                for m in members_to_extract:
+                    zf.extract(m, str(dest_dir))
+                # The extracted binary may be in a subdirectory — move to dest.
+                extracted_bin = dest_dir / binary_members[0]
+                if not extracted_bin.is_file():
+                    # Zip entry had a directory prefix (e.g. bin/llama-server.exe).
+                    extracted_bin = dest_dir / os.path.basename(binary_members[0])
         else:
             with tarfile.open(fileobj=data, mode="r:gz") as tf:
                 binary_members = [
@@ -2181,21 +2328,28 @@ def download_llama_server(
                         "Could not find {:s} in the downloaded archive".format(binary_name)
                     )
                     return None
-                temp_dir = dest_dir / ".tmp_extract"
-                temp_dir.mkdir(parents=True, exist_ok=True)
-                tf.extract(binary_members[0], str(temp_dir))
-                extracted = temp_dir / binary_members[0].name
+                # Extract all companions for tar archives too.
+                members_to_extract = list(binary_members)
+                for m in tf.getmembers():
+                    if m in members_to_extract:
+                        continue
+                    if _is_companion_file(m.name):
+                        members_to_extract.append(m)
+                print("[🛠️Coworker] download_llama_server: extracting {:d} files from archive".format(
+                    len(members_to_extract)))
+                tf.extractall(str(dest_dir), members=members_to_extract)
+                extracted_bin = dest_dir / os.path.basename(binary_members[0].name)
 
-        # Move to final location.
+        # Move binary to final location with backend suffix.
         if dest_binary.exists():
             dest_binary.unlink()
-        shutil.move(str(extracted), str(dest_binary))
-        # Cleanup temp dir.
-        shutil.rmtree(str(temp_dir), ignore_errors=True)
+        shutil.move(str(extracted_bin), str(dest_binary))
 
-        # Download and extract cudart DLLs for CUDA backend.
+        # For CUDA builds, also download the separate cudart zip as a safety
+        # net — the main zip should already have the DLLs (extracted above),
+        # but the cudart zip provides the canonical set.
         if cudart_url:
-            _set_download_progress("Downloading CUDA runtime DLLs ...")
+            _set_download_progress("Downloading CUDA runtime DLLs (backup) ...")
             if progress_callback:
                 progress_callback("Downloading CUDA runtime DLLs ...")
             try:
@@ -2204,10 +2358,22 @@ def download_llama_server(
                     cudart_data = io.BytesIO(cudart_resp.read())
                 with zipfile.ZipFile(cudart_data) as cudart_zf:
                     cudart_zf.extractall(str(dest_dir))
-                print("[🛠️Coworker] download_llama_server: cudart DLLs extracted to {:s}".format(str(dest_dir)))
+                print("[🛠️Coworker] download_llama_server: cudart DLLs (backup) extracted to {:s}".format(str(dest_dir)))
             except (urllib.error.URLError, OSError, zipfile.BadZipFile) as ex:
-                print("[🛠️Coworker] download_llama_server: cudart download failed — {:s}".format(str(ex)))
-                # Non-fatal — the server may still work if CUDA is installed system-wide.
+                print("[🛠️Coworker] download_llama_server: cudart backup download failed — {:s}".format(str(ex)))
+                # Non-fatal — the main zip should have already provided them.
+
+        # Post-extraction: verify critical DLLs are present for CUDA backend.
+        if backend == "cuda" and sys.platform == "win32":
+            expected_dlls = ["cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll"]
+            missing = [d for d in expected_dlls if not (dest_dir / d).is_file()]
+            if missing:
+                print(
+                    "[⚠️Coworker] download_llama_server: WARNING — missing DLLs after extraction: {:s}"
+                    .format(", ".join(missing))
+                )
+            else:
+                print("[🛠️Coworker] download_llama_server: all CUDA DLLs verified in {:s}".format(str(dest_dir)))
 
         # Make executable on non-Windows.
         if sys.platform != "win32":
@@ -2429,6 +2595,20 @@ def start_local_llama(
             backend = _config.llama_backend
         if backend == "auto":
             backend = _detect_gpu_backend()
+
+        # Pre-flight: verify the Vulkan runtime is installed when selected.
+        if backend == "vulkan" and sys.platform == "win32":
+            vulkan_dll = shutil.which("vulkan-1.dll")
+            if vulkan_dll is None:
+                # Also check System32 directly — shutil.which may miss it.
+                sys32 = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "vulkan-1.dll")
+                if not os.path.isfile(sys32):
+                    print("[⚠️Coworker] start_local_llama: vulkan-1.dll not found — Vulkan backend may fail")
+                else:
+                    print("[🛠️Coworker] start_local_llama: vulkan-1.dll found at {:s}".format(sys32))
+            else:
+                print("[🛠️Coworker] start_local_llama: vulkan-1.dll found at {:s}".format(vulkan_dll))
+
         if backend in ("cuda", "vulkan") and model_path and os.path.isfile(str(model_path)):
             ngpu_layers = autodetect_gpu_layers(Path(str(model_path)), ctx_size)
         else:
@@ -2472,6 +2652,17 @@ def start_local_llama(
         existing_path = env.get("PATH", "")
         if bundled_dir not in existing_path:
             env["PATH"] = bundled_dir + os.pathsep + existing_path
+
+        # On Windows, also register the bundled dir as a DLL search directory.
+        # PATH-based DLL discovery is unreliable with CREATE_NEW_CONSOLE;
+        # os.add_dll_directory() (Python 3.8+) is the robust alternative.
+        _bundled_dll_handle = None
+        if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
+            try:
+                _bundled_dll_handle = os.add_dll_directory(bundled_dir)
+                print("[🛠️Coworker] start_local_llama: registered DLL dir {:s}".format(bundled_dir))
+            except OSError as ex:
+                print("[🛠️Coworker] start_local_llama: os.add_dll_directory failed — {:s}".format(str(ex)))
 
         # Capture llama-server output to a log file — the child's stdio is
         # otherwise invisible (devnull + a separate console on Windows), which
@@ -2659,6 +2850,24 @@ def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = No
             tail = get_llama_server_log_tail()
             msg = "llama-server exited during startup (exit code {:d}{:s}) — check the model file, mmproj, GPU memory, and port".format(
                 proc.returncode, _describe_exit_code(proc.returncode))
+            # DLL_NOT_FOUND on Windows — the CUDA/Vulkan runtime DLLs are
+            # missing from the bundled directory.
+            if sys.platform == "win32" and (proc.returncode & 0xFFFFFFFF) == 0xC0000135:
+                bundled = _get_bundled_llama_dir()
+                cuda_dlls = ["cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll"]
+                missing = [d for d in cuda_dlls if not (bundled / d).is_file()]
+                if missing:
+                    msg += (
+                        "\n\nDLL_NOT_FOUND: The following CUDA runtime DLLs are missing from "
+                        "{:s}: {:s}. Re-download the llama-server CUDA binary from Preferences "
+                        "to restore them.".format(str(bundled), ", ".join(missing))
+                    )
+                else:
+                    msg += (
+                        "\n\nDLL_NOT_FOUND: The CUDA DLLs are present in {:s} but Windows "
+                        "cannot find them. Try adding the bundled directory to your system PATH "
+                        "or re-downloading the CUDA binary.".format(str(bundled))
+                    )
             # The GPU OOM hint doesn't need the model path, so it runs first and
             # is not gated on _last_launched_model_path.
             if tail and _log_looks_like_gpu_oom(tail):

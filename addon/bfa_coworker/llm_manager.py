@@ -1229,6 +1229,20 @@ def _clear_download_state() -> None:
         _state.download_kind = ""
 
 
+def _clear_download_progress() -> None:
+    """Clear download progress bar fields but preserve the error message.
+
+    Used after a download finishes so the progress bar disappears while
+    any error message remains visible to the user.
+    """
+    with _lock:
+        _state.download_progress = ""
+        _state.download_progress_eta = ""
+        _state.download_progress_pct = 0.0
+        _state.download_active = False
+        _state.download_kind = ""
+
+
 def _set_download_kind(kind: str) -> None:
     """Set the download kind ("model" | "llama_server" | "")."""
     with _lock:
@@ -2227,6 +2241,7 @@ def download_llama_server(
         _set_download_progress(msg)
         if progress_callback:
             progress_callback(msg)
+        _clear_download_progress()
         return str(dest_binary)
 
     _set_download_progress("Downloading llama-server ({:s}) from {:s} ...".format(backend, url))
@@ -2389,6 +2404,8 @@ def download_llama_server(
         _find_llama_server_checked = False
         _find_llama_server_cache = None
         _llama_server_version_cache = ""
+        # Clear download progress so the bar disappears from preferences.
+        _clear_download_progress()
         return str(dest_binary)
 
     except urllib.error.HTTPError as ex:
@@ -2399,6 +2416,7 @@ def download_llama_server(
         _set_error(err)
         if progress_callback:
             progress_callback(err)
+        _clear_download_progress()
         return None
     except (urllib.error.URLError, OSError, zipfile.BadZipFile) as ex:
         err = "Failed to download/extract llama-server: {:s}".format(str(ex))
@@ -2406,6 +2424,7 @@ def download_llama_server(
         _set_error(err)
         if progress_callback:
             progress_callback(err)
+        _clear_download_progress()
         return None
 
 

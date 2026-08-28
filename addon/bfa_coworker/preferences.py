@@ -1062,11 +1062,15 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             _ver = llm._llama_server_version(llama_found)
             _build = llm._parse_llama_build_number(_ver)
             _outdated = _build and _build < llm._MIN_SUPPORTED_BUILD
+            # Detect source: bundled vs PATH/System.
+            _bundled_dir = str(llm._get_bundled_llama_dir())
+            _is_bundled = llama_found.startswith(_bundled_dir)
+            _source = "bundled" if _is_bundled else "system"
             if _outdated:
                 row = box.row(align=True)
                 row.label(
-                    text="OUTDATED — build {:d} (min {:d})".format(
-                        _build, llm._MIN_SUPPORTED_BUILD),
+                    text="OUTDATED — build {:d} (min {:d}) [{:s}]".format(
+                        _build, llm._MIN_SUPPORTED_BUILD, _source),
                     icon='ERROR',
                 )
                 row.operator(
@@ -1083,7 +1087,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 row = box.row(align=True)
                 _build_str = "build {:d}".format(_build) if _build else "unknown build"
                 row.label(
-                    text="llama-server: Installed ({:s})".format(_build_str),
+                    text="llama-server: Installed ({:s}, {:s})".format(_build_str, _source),
                     icon='CHECKMARK',
                 )
                 row.operator(
@@ -1091,6 +1095,13 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     icon="TRASH",
                     text="Remove",
                 )
+                if not _is_bundled:
+                    # PATH binary: offer to override with bundled version.
+                    row.operator(
+                        "bfacw.download_llama_server",
+                        icon="IMPORT",
+                        text="Override",
+                    ).force = True
         else:
             row = box.row(align=True)
             row.label(text="llama-server: Not installed", icon='ERROR')

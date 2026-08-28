@@ -290,6 +290,18 @@ def main() -> int:
         print("\n" + "=" * 60)
         print("Installing extension...")
         print("=" * 60)
+        # Clean stale installed extension to prevent import errors
+        # from mismatched __init__.py versions.
+        # Search all Bforartists extension dirs for the ext_id.
+        appdata = os.environ.get("APPDATA", "")
+        if appdata:
+            bf_root = os.path.join(appdata, "Bforartists", "Bforartists")
+            if os.path.isdir(bf_root):
+                for ver_dir in os.listdir(bf_root):
+                    ext_dir = os.path.join(bf_root, ver_dir, "extensions", "user_default", ext_id)
+                    if os.path.isdir(ext_dir):
+                        print("  Removing stale installed extension: {:s}".format(ext_dir))
+                        shutil.rmtree(ext_dir, ignore_errors=True)
         install_cmd = [
             args.blender,
             "--background", "--factory-startup", "--online-mode",

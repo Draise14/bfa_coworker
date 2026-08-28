@@ -148,6 +148,31 @@ if obj is None:
 
 Guard lookups with ``try/except ReferenceError`` and re-acquire on failure.
 
+## Material Nodes — Principled BSDF
+
+ShaderNodeBsdfPrincipled has **NO** `base_color`, `base_color_input`, or
+`color` attribute. Access all properties through the node's `inputs`
+dictionary using the socket name:
+
+```python
+# CORRECT — use inputs dictionary:
+mat = bpy.data.materials.new("MyMat")
+mat.use_nodes = True
+nodes = mat.node_tree.nodes
+principled = nodes.new('ShaderNodeBsdfPrincipled')
+principled.inputs['Base Color'].default_value = (0.8, 0.2, 0.2, 1.0)
+principled.inputs['Metallic'].default_value = 0.0
+principled.inputs['Roughness'].default_value = 0.5
+
+# List all available inputs:
+print([i.name for i in principled.inputs])
+```
+
+Common input names: `'Base Color'`, `'Metallic'`, `'Roughness'`, `'Alpha'`,
+`'Emission Color'`, `'Emission Strength'`, `'Subsurface Weight'`.
+
+Prefer the `setup_pbr_material` MCP tool over raw node code when available.
+
 ## Collection Color Tags
 
 Use the `set_collection_color_tag` tool to organize collections visually in the Outliner.

@@ -528,6 +528,15 @@ def _execute_code(
                     "Never reuse an object/material reference captured in an earlier tool call, "
                     "and guard lookups with try/except ReferenceError."
                 )
+            if "ShaderNodeBsdfPrincipled" in tb_str and "has no attribute" in tb_str and ("base_color" in tb_str or "Base Color" in tb_str):
+                tb_str += (
+                    "\n\nHINT: ShaderNodeBsdfPrincipled has NO `base_color` or `base_color_input" \
+                    "` attribute. Access colors through the node's inputs dictionary:\n"
+                    "    principled = nodes.new('ShaderNodeBsdfPrincipled')\n"
+                    "    principled.inputs['Base Color'].default_value = (0.8, 0.2, 0.2, 1.0)\n"
+                    "Other common inputs: 'Metallic', 'Roughness', 'Alpha', 'Emission Color'.\n"
+                    "Run `print([i.name for i in principled.inputs])` to list all available inputs."
+                )
             response: dict[str, object] = {"status": "error", "message": tb_str}
             if captured.stdout:
                 response["stdout"] = captured.stdout

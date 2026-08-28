@@ -2406,6 +2406,16 @@ def _spiral_corrective_message(error_sig: str) -> str:
             "Use `bpy.context.selected_objects` only for object-mode object selection. "
             "Fix the code \u2014 do not retry it verbatim.]"
         )
+    if "shadernodebsdfprincipled" in sig_lower and "has no attribute" in sig_lower:
+        return (
+            "[System: ShaderNodeBsdfPrincipled has NO `base_color` attribute. "
+            "Use the node's inputs dictionary instead:\n"
+            "    principled = nodes.new('ShaderNodeBsdfPrincipled')\n"
+            "    principled.inputs['Base Color'].default_value = (R, G, B, 1.0)\n"
+            "Other inputs: 'Metallic', 'Roughness', 'Alpha', 'Emission Color'. "
+            "Run `print([i.name for i in principled.inputs])` to list all inputs. "
+            "Fix the code \u2014 do not retry it verbatim.]"
+        )
     return (
         "[System: You've hit the same error multiple times in a row. "
         "Stop and reconsider your approach. Read the error message carefully "

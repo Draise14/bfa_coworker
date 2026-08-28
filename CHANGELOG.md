@@ -85,6 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Preferences Button Now Filters to Coworker** — The ⚙️ preferences button in the chat header now opens Blender preferences filtered directly to the Coworker addon (search box pre-filled with "Coworker", addon expanded, preferences visible). Previously it only opened the Add-ons tab unfiltered because `bpy.ops.preferences.addon_show` silently fails for extension add-ons (which get a `bl_ext.` module prefix) and races the preferences window build. The harness "Configure" button now also filters to the addon and selects the Advanced tab.
 - **Depsgraph Crashes in Blender 5.3** — Replaced crash-prone `view_layer.update()` calls with `_safe_depsgraph_sync()` that uses `update_tag()` on each object (lightweight, no full rebuild). Added `_code_touches_collections()` and `_code_is_undo_or_push()` heuristics to skip full depsgraph sync after collection-manipulation and undo/push operations. Removed before-exec depsgraph sync entirely — tagging objects before smart undo caused stale-object crashes in `pyrna_struct_CreatePyObject`.
 - **Defensive Entity Snapshots** — `_SNAPSHOT_EXTRA` now wraps each datablock iteration in try/except via `_sn()` helper, so a single corrupted datablock doesn't crash the entire snapshot.
 - **Remote API Mode** — Fixed remote API mode not working correctly. Unified Operating Mode selector resolves mode conflicts.

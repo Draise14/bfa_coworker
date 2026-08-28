@@ -739,6 +739,64 @@ class BFACW_OT_copy_mcp_config(bpy.types.Operator):  # type: ignore[misc]
 # ---------------------------------------------------------------------------
 # Open Harness Preferences (from Chat Panel)
 
+def _open_addon_prefs_filtered(context: bpy.types.Context, pref_tab: str | None = None) -> None:
+    """Open Blender preferences filtered to the Coworker addon page.
+
+    ``bpy.ops.preferences.addon_show`` is unreliable here: it only works for
+    legacy add-ons whose module is registered in ``addon_utils.addons_fake_modules``
+    (extension add-ons get a ``bl_ext.`` module prefix and are skipped), and it
+    fails silently when called before the preferences window has finished
+    building.  Instead we set the same state that operator would set — the
+    addon search filter — directly, deferred until the preferences area exists.
+    """
+    bpy.ops.screen.userpref_show('INVOKE_DEFAULT')
+    context.preferences.active_section = 'ADDONS'
+
+    # Select the addon's internal tab (e.g. ADVANCED for harness setup).
+    if pref_tab is not None:
+        try:
+            prefs = context.preferences.addons[__package__].preferences
+            prefs.pref_tab = pref_tab
+        except Exception:
+            pass
+
+    # Defer the search filter until the preferences window is fully drawn —
+    # calling it synchronously races the addon list population and is dropped.
+    def _apply_filter() -> float | None:
+        try:
+            wm = bpy.context.window_manager
+            # Match the addon by its display name (what the search box filters
+            # against), not the module name.
+            wm.addon_search = "Coworker"
+            wm.addon_filter = 'All'
+            bpy.context.preferences.view.show_addons_enabled_only = False
+            # Expand the addon so its preferences are immediately visible.
+            # Set `show_expanded` directly instead of `preferences.addon_expand`
+            # (which *toggles* and would collapse it on a second click).
+            import addon_utils
+            # Ensure the fake-module cache is populated (same as
+            # ``PREFERENCES_OT_addon_show`` does) before searching it.
+            addon_utils.modules(refresh=False)
+            # The addon may be registered as an extension (module name gets a
+            # ``bl_ext.<repo>.`` prefix), so match by suffix.
+            mod = addon_utils.addons_fake_modules.get(__package__)
+            if mod is None:
+                for _mod_name, _mod in addon_utils.addons_fake_modules.items():
+                    if _mod_name.endswith("." + __package__):
+                        mod = _mod
+                        break
+            if mod is not None:
+                addon_utils.module_bl_info(mod)["show_expanded"] = True
+            for area in bpy.context.screen.areas:
+                if area.type == 'PREFERENCES':
+                    area.tag_redraw()
+        except Exception:
+            pass
+        return None
+
+    bpy.app.timers.register(_apply_filter, first_interval=0.1)
+
+
 class BFACW_OT_open_harness_prefs(bpy.types.Operator):  # type: ignore[misc]
     """Open Blender preferences to the bfa_coworker addon Advanced tab for harness setup."""
     bl_idname = "bfacw.open_harness_prefs"
@@ -746,14 +804,7 @@ class BFACW_OT_open_harness_prefs(bpy.types.Operator):  # type: ignore[misc]
     bl_description = "Open preferences to configure external MCP client harness"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        bpy.ops.screen.userpref_show('INVOKE_DEFAULT')
-        context.preferences.active_section = 'ADDONS'
-        # Set the addon's pref_tab to ADVANCED so the harness section is visible.
-        try:
-            prefs = context.preferences.addons[__package__].preferences
-            prefs.pref_tab = "ADVANCED"
-        except Exception:
-            pass
+        _open_addon_prefs_filtered(context, pref_tab="ADVANCED")
         return {"FINISHED"}
 
 
@@ -767,13 +818,7 @@ class BFACW_OT_open_addon_prefs(bpy.types.Operator):  # type: ignore[misc]
     bl_description = "Open preferences to configure Coworker"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        bpy.ops.screen.userpref_show('INVOKE_DEFAULT')
-        context.preferences.active_section = 'ADDONS'
-        # Try to focus the bfa_coworker addon in the list.
-        try:
-            bpy.ops.preferences.addon_show(module='bfa_coworker')
-        except Exception:
-            pass
+        _open_addon_prefs_filtered(context)
         return {"FINISHED"}
 
 

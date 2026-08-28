@@ -28,6 +28,7 @@ from .operators_llm import (
     _BFACW_OT_start_llm,
     _BFACW_OT_stop_llm,
     _BFACW_OT_download_llama_server,
+    _BFACW_OT_remove_llama_server,
     _BFACW_OT_scan_existing_models,
     _BFACW_OT_select_preset,
     _BFACW_OT_select_existing_model,
@@ -105,6 +106,7 @@ _classes = (
     BFACW_OT_open_url,
     BFACW_OT_open_log,
     BFACW_OT_compare_benchmarks,
+    _BFACW_OT_remove_llama_server,
 )
 
 

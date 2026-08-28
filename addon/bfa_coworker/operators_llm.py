@@ -12,6 +12,7 @@ __all__ = (
     "_BFACW_OT_start_llm",
     "_BFACW_OT_stop_llm",
     "_BFACW_OT_download_llama_server",
+    "_BFACW_OT_remove_llama_server",
     "_BFACW_OT_scan_existing_models",
     "_BFACW_OT_select_preset",
     "_BFACW_OT_select_existing_model",
@@ -270,6 +271,12 @@ class _BFACW_OT_download_llama_server(bpy.types.Operator):  # type: ignore[misc]
         "  macOS/Linux: export PATH=\"/path/to/llama.cpp/build/bin:$PATH\""
     )
 
+    force: bpy.props.BoolProperty(
+        name="Force update",
+        description="Re-download even if llama-server is already installed",
+        default=False,
+    )
+
     _timer: float | None = None
     _thread: threading.Thread | None = None
     _done: bool = False
@@ -320,11 +327,16 @@ class _BFACW_OT_download_llama_server(bpy.types.Operator):  # type: ignore[misc]
         llm = get_llm_manager()
         prefs = context.preferences.addons[__package__].preferences
 
-        # Check if already installed.
-        existing = llm.find_llama_server()
-        if existing:
-            self.report({"INFO"}, "llama-server already available at: {:s}".format(existing))
-            return {"FINISHED"}
+        # Check if already installed (skip if force update).
+        if not self.force:
+            existing = llm.find_llama_server()
+            if existing:
+                self.report({"INFO"}, "llama-server already available at: {:s}".format(existing))
+                return {"FINISHED"}
+
+        # For force update, remove existing binaries first.
+        if self.force:
+            llm.remove_llama_server()
 
         self._done = False
         self._error = ""
@@ -363,6 +375,30 @@ def _make_llama_download_poll(op):
                         area.tag_redraw()
         return 0.5
     return _poll
+
+
+# ---------------------------------------------------------------------------
+# Remove llama-server
+
+class _BFACW_OT_remove_llama_server(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "bfacw.remove_llama_server"
+    bl_label = "Remove llama-server"
+    bl_description = "Remove the bundled llama-server binaries and CUDA runtime DLLs"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        llm = get_llm_manager()
+        removed = llm.remove_llama_server()
+        if removed:
+            self.report({"INFO"}, "llama-server binaries removed")
+        else:
+            self.report({"INFO"}, "No bundled llama-server files to remove")
+        # Redraw preferences so the status updates.
+        for wm in bpy.data.window_managers:
+            for win in wm.windows:
+                for area in win.screen.areas:
+                    if area.type == "PREFERENCES":
+                        area.tag_redraw()
+        return {"FINISHED"}
 
 
 # ---------------------------------------------------------------------------

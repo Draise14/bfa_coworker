@@ -28,6 +28,7 @@ __all__ = (
     "invalidate_llama_server_cache",
     "download_model",
     "download_llama_server",
+    "remove_llama_server",
     "start_local_llama",
     "stop_local_llama",
     "get_llama_process",
@@ -2217,6 +2218,53 @@ def download_llama_server(
         if progress_callback:
             progress_callback(err)
         return None
+
+
+
+def remove_llama_server() -> bool:
+    """Remove all bundled llama-server binaries from the addon cache.
+
+    Deletes the bundled directory contents (llama-server binaries,
+    CUDA runtime DLLs, etc.) and invalidates the search cache.
+
+    Returns True if any files were removed, False otherwise.
+    """
+    bundled_dir = _get_bundled_llama_dir()
+    _log = "[⚠️Coworker] remove_llama_server"
+
+    if not bundled_dir.is_dir():
+        print("{:s}: bundled dir does not exist — {:s}".format(_log, str(bundled_dir)))
+        return False
+
+    removed = False
+    for item in list(bundled_dir.iterdir()):
+        # Skip __pycache__ and hidden dirs.
+        if item.name.startswith(".") or item.name == "__pycache__":
+            continue
+        try:
+            if item.is_file():
+                item.unlink()
+                print("{:s}: removed {:s}".format(_log, item.name))
+                removed = True
+            elif item.is_dir():
+                import shutil as _shutil
+                _shutil.rmtree(str(item))
+                print("{:s}: removed dir {:s}".format(_log, item.name))
+                removed = True
+        except OSError as ex:
+            print("{:s}: failed to remove {:s} — {:s}".format(_log, item.name, str(ex)))
+
+    # Invalidate cache so find_llama_server re-searches.
+    global _find_llama_server_checked, _find_llama_server_cache, _llama_server_version_cache
+    _find_llama_server_checked = False
+    _find_llama_server_cache = None
+    _llama_server_version_cache = ""
+
+    if removed:
+        print("{:s}: bundled llama-server removed".format(_log))
+    else:
+        print("{:s}: nothing to remove".format(_log))
+    return removed
 
 
 # ---------------------------------------------------------------------------

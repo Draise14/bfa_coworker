@@ -1056,30 +1056,46 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         llm = get_llm_manager()
         llm_state = llm.get_state()
         llama_found = llm.find_llama_server()
-        row = box.row(align=True)
         if llama_found:
-            # Check version - warn if too old for Qwen3 SSM models.
             _ver = llm._llama_server_version(llama_found)
             _build = llm._parse_llama_build_number(_ver)
             _outdated = _build and _build < llm._MIN_SUPPORTED_BUILD
             if _outdated:
+                row = box.row(align=True)
                 row.label(
-                    text="llama-server: OUTDATED (build {:d})".format(_build),
+                    text="OUTDATED — build {:d} (min {:d})".format(
+                        _build, llm._MIN_SUPPORTED_BUILD),
                     icon='ERROR',
                 )
                 row.operator(
                     "bfacw.download_llama_server",
                     icon="FILE_REFRESH",
-                    text="Update llama-server",
+                    text="Update",
+                ).force = True
+                row.operator(
+                    "bfacw.remove_llama_server",
+                    icon="TRASH",
+                    text="Remove",
                 )
             else:
-                row.label(text="llama-server: Installed", icon='CHECKMARK')
+                row = box.row(align=True)
+                _build_str = "build {:d}".format(_build) if _build else "unknown build"
+                row.label(
+                    text="llama-server: Installed ({:s})".format(_build_str),
+                    icon='CHECKMARK',
+                )
+                row.operator(
+                    "bfacw.remove_llama_server",
+                    icon="TRASH",
+                    text="Remove",
+                )
         else:
+            row = box.row(align=True)
             row.label(text="llama-server: Not installed", icon='ERROR')
             row.operator(
                 "bfacw.download_llama_server",
                 icon="IMPORT",
-                text="Download llama-server",
+                text="Download",
             )
         # GPU backend selector.
         box.prop(self, "llama_backend")

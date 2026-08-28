@@ -1104,8 +1104,12 @@ def find_llama_server() -> str | None:
 
     # 1. Bundled directory FIRST — this is the Coworker-managed version
     #    (downloaded via the "Download llama-server" button, always recent).
-    # Check generic bundled binary first, then backend-specific variant.
-    for bname in ("llama-server.exe", "llama-server-{b}.exe".format(b=active_backend or "cpu")):
+    # Check backend-specific binary first (e.g. llama-server-cuda.exe),
+    # then the generic fallback (llama-server.exe).  This ensures the
+    # correct GPU backend binary is used and its companion DLLs (cudart,
+    # etc.) are found in the same directory.
+    backend_bname = "llama-server-{b}.exe".format(b=active_backend or "cpu")
+    for bname in (backend_bname, "llama-server.exe"):
         bpath = bundled_dir / bname
         if bpath.is_file():
             print("{:s}: found bundled {:s} -> {:s}".format(_log, bname, str(bpath)))
@@ -2460,6 +2464,14 @@ def start_local_llama(
             cfg_token = _config.hf_token
         if cfg_token:
             env["HF_TOKEN"] = cfg_token
+
+        # Ensure the bundled directory is on PATH so companion DLLs
+        # (cudart64_12.dll, etc.) are found when llama-server launches in
+        # its own console window on Windows.
+        bundled_dir = str(_get_bundled_llama_dir())
+        existing_path = env.get("PATH", "")
+        if bundled_dir not in existing_path:
+            env["PATH"] = bundled_dir + os.pathsep + existing_path
 
         # Capture llama-server output to a log file — the child's stdio is
         # otherwise invisible (devnull + a separate console on Windows), which

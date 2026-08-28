@@ -1331,10 +1331,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         else:
             info_box = local_box.box()
             info_box.label(text="Custom Hugging Face model to download", icon='INFO')
-            row = info_box.row(align=True)
-            row.label(text="Model Repository ID and filename:")
-            row.prop(self, "model_repo_id")
-            row.prop(self, "model_filename")
+            info_box.prop(self, "model_repo_id")
+            info_box.prop(self, "model_filename")
 
 
         # -- Download current preset ---------------------------------------

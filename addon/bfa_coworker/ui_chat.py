@@ -1976,7 +1976,12 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         default_closed=True,
                     )
                     pb_icon = "WARNING" if has_err else "PACKAGE"
-                    ph.label(text="Workshop", icon=pb_icon)
+                    if state.is_thinking:
+                        spinners = ["\u25d0", "\u25d3", "\u25d1", "\u25d2"]
+                        ws_label = "Workshop {:s}".format(spinners[state.thinking_dots % 4])
+                    else:
+                        ws_label = "Workshop"
+                    ph.label(text=ws_label, icon=pb_icon)
                     if pb:
                         work_box = pb.box()
                         for pm in process_msgs:

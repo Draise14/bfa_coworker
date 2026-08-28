@@ -1976,7 +1976,14 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         default_closed=True,
                     )
                     pb_icon = "WARNING" if has_err else "PACKAGE"
-                    if state.is_thinking:
+                    # Only the active (newest) turn animates while thinking —
+                    # past turns keep a static label.
+                    is_active_turn = state.is_thinking and (
+                        (props.chat_newest_first and _display_idx == 0)
+                        or (not props.chat_newest_first
+                            and _display_idx == len(visible_turns) - 1)
+                    )
+                    if is_active_turn:
                         spinners = ["\u25d0", "\u25d3", "\u25d1", "\u25d2"]
                         ws_label = "Workshop {:s}".format(spinners[state.thinking_dots % 4])
                     else:

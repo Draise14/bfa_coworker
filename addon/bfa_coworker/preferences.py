@@ -1165,7 +1165,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 )
                 _path_row.operator(
                     "bfacw.open_llama_server_folder",
-                    icon='VIEWZOOM',
+                    icon='FILE_FOLDER',
                     text="Open Folder",
                 )
             else:
@@ -1257,7 +1257,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 )
                 _path_row.operator(
                     "bfacw.open_llama_server_folder",
-                    icon='VIEWZOOM',
+                    icon='FILE_FOLDER',
                     text="Open Folder",
                 )
             else:
@@ -1394,7 +1394,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             text="This is where you will store the downloaded or select an existing GGUF file. ",
             icon='INFO',
         )
-        row.separator()
+        row = local_box.row(align=True)
         row.operator("bfacw.scan_existing_models", icon="FILE_REFRESH", text="Scan Folder")
         row.operator("bfacw.open_models_dir", icon="FILE_FOLDER", text="Open Folder")
         local_box.prop(self, "downloaded_models_dir")

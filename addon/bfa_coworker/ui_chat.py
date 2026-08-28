@@ -452,12 +452,34 @@ def _render_markdown(layout, md, width=40, max_lines=200):
             _break_para()
             level = len(m.group(1))
             text = _strip_inline(m.group(2))
-            hrow = layout.row()
-            hrow.scale_y = 1.4 if level == 1 else (1.2 if level == 2 else 1.05)
             icon = {1: 'BOOKMARKS', 2: 'DISCLOSURE_TRI_DOWN',
-                    3: 'DOT'}.get(level, 'NONE')
-            hrow.label(text=text.upper() if level == 1 else text, icon=icon)
-            rendered[0] += 1
+                    3: 'DOT', 4: 'SORTTIME'}.get(level, 'NONE')
+            if level == 1:
+                # H1: separator + large scaled row + uppercase
+                layout.separator()
+                hrow = layout.row()
+                hrow.scale_y = 1.6
+                hrow.label(text=text.upper(), icon=icon)
+                rendered[0] += 1
+            elif level == 2:
+                # H2: slightly larger row, strong icon
+                layout.separator(factor=0.5)
+                hrow = layout.row()
+                hrow.scale_y = 1.35
+                hrow.label(text=text, icon=icon)
+                rendered[0] += 1
+            elif level == 3:
+                # H3: modest boost, distinct icon
+                hrow = layout.row()
+                hrow.scale_y = 1.2
+                hrow.label(text=text, icon=icon)
+                rendered[0] += 1
+            else:
+                # H4-H6: subtle differentiation
+                hrow = layout.row()
+                hrow.scale_y = 1.1
+                hrow.label(text=text, icon=icon)
+                rendered[0] += 1
             i += 1
             _break_para()
             continue

@@ -1214,7 +1214,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             text="This is where you will store the downloaded or select an existing GGUF file. ",
             icon='INFO',
         )
-        row.seperator()
+        row.separator()
         row.operator("bfacw.scan_existing_models", icon="FILE_REFRESH", text="Scan Folder")
         row.operator("bfacw.open_models_dir", icon="FILE_FOLDER", text="Open Folder")
         local_box.prop(self, "downloaded_models_dir")
@@ -1342,7 +1342,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             )
 
 
-        box.seperator()
+        box.separator()
         box.prop(self, "local_max_tokens")
         box.prop(self, "hf_token")
 

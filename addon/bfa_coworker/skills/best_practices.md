@@ -2,6 +2,17 @@
 
 These patterns save tokens by avoiding the most common `execute_blender_code` failures.
 
+## Look Up APIs Before Using Them
+
+Before writing code that uses Blender APIs you're unsure about, **look them up first**.
+The bundled doc tools are always available and return accurate results:
+
+- `get_python_api_docs('bpy.types.ShaderNodeBsdfPrincipled')` — exact API reference
+- `search_api_docs('base color material')` — keyword search across all API docs
+- `search_manual_docs('principled bsdf')` — search the user manual
+
+This avoids retry loops from guessing wrong attribute names.
+
 ## Object References
 
 Names auto-append `.001`, `.002` on collision. **Always capture references immediately**

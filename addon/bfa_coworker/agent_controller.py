@@ -299,6 +299,11 @@ _SURFACE_TOOLS = frozenset({
     "get_blendfile_summary_datablocks",
     "get_object_detail_summary",
     "get_objects_summary",
+    # Bundled Blender API + manual docs — read-only, no network needed.
+    # Always available so the agent can look up correct APIs on error.
+    "get_python_api_docs",
+    "search_api_docs",
+    "search_manual_docs",
 })
 
 _TOOL_DOMAINS: dict[str, frozenset[str]] = {
@@ -2414,12 +2419,16 @@ def _spiral_corrective_message(error_sig: str) -> str:
             "    principled.inputs['Base Color'].default_value = (R, G, B, 1.0)\n"
             "Other inputs: 'Metallic', 'Roughness', 'Alpha', 'Emission Color'. "
             "Run `print([i.name for i in principled.inputs])` to list all inputs. "
-            "Fix the code \u2014 do not retry it verbatim.]"
+            "Or call get_python_api_docs('bpy.types.ShaderNodeBsdfPrincipled') "
+            "to see the full API reference. Fix the code \u2014 do not retry it verbatim.]"
         )
     return (
         "[System: You've hit the same error multiple times in a row. "
         "Stop and reconsider your approach. Read the error message carefully "
-        "and try a different strategy.]"
+        "and try a different strategy. "
+        "Use `get_python_api_docs` to look up the correct API before retrying "
+        "(e.g. get_python_api_docs('bpy.types.ShaderNodeBsdfPrincipled') "
+        "to see available attributes and inputs).]"
     )
 
 

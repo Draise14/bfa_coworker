@@ -446,6 +446,29 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
             "Add print() to see output, or assign to a 'result' dict.",
         ))
 
+
+    # 10. Wrong lamp/light API (lamps -> lights since Blender 4.0).
+    if re.search(r"bpy\.data\.lamps", code):
+        issues.append((
+            "wrong_lamps_api",
+            "bpy.data.lamps was renamed to bpy.data.lights in Blender 4.0.",
+        ))
+
+    # 11. Wrong render engine name (EEVEE -> BLENDER_EEVEE since Blender 4.0).
+    if re.search(r'["\']EEVEE["\']', code) and "render.engine" in code:
+        issues.append((
+            "wrong_eevee_name",
+            "render.engine = 'EEVEE' was renamed to 'BLENDER_EEVEE' in Blender 4.0.",
+        ))
+
+    # 12. Accessing scene.render.eevee (moved in Blender 4.0).
+    if re.search(r"render\.eevee\.", code):
+        issues.append((
+            "wrong_eevee_access",
+            "scene.render.eevee was removed. EEVEE settings are now on "
+            "scene.eevee (e.g. scene.eevee.use_ssr).",
+        ))
+
     return issues
 
 def _execute_code(
@@ -636,6 +659,23 @@ def _execute_code(
                     "Common names: levels (viewport), render_levels (render), "
                     "subdivision_type (CATMULL_CLARK or SIMPLE). "
                     "The old subdivisions attribute was renamed."
+                )
+            if "lamps" in tb_str and "has no attribute" in tb_str:
+                tb_str += (
+                    "\n\nHINT: 'BlendData' has no attribute 'lamps'. "
+                    "It was renamed to 'lights' in Blender 4.0. "
+                    "Use bpy.data.lights instead of bpy.data.lamps."
+                )
+            if '"EEVEE"' in tb_str and "not found in" in tb_str:
+                tb_str += (
+                    "\n\nHINT: The render engine name 'EEVEE' was renamed "
+                    "to 'BLENDER_EEVEE' in Blender 4.0. "
+                    "Use: scene.render.engine = 'BLENDER_EEVEE'"
+                )
+            if "RenderSettings" in tb_str and "'eevee'" in tb_str and "has no attribute" in tb_str:
+                tb_str += (
+                    "\n\nHINT: scene.render.eevee was moved to scene.eevee "
+                    "in Blender 4.0. Use scene.eevee.use_ssr etc."
                 )
             response: dict[str, object] = {"status": "error", "message": tb_str}
             if captured.stdout:

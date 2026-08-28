@@ -15,22 +15,33 @@ This avoids retry loops from guessing wrong attribute names.
 
 ## Blender 5.3 API Changes
 
-These APIs changed in Blender 5.x — guessing will cause AttributeError loops:
+These APIs changed in Blender 5.x -- guessing will cause AttributeError loops:
 
-**Subdivision Surface Modifier** — attributes renamed:
+**Subdivision Surface Modifier** -- attributes renamed:
     mod = obj.modifiers.new("Subsurf", 'SUBSURF')
     mod.levels = 3           # viewport levels (was 'subdivisions')
     mod.render_levels = 3    # render levels
     mod.subdivision_type = 'CATMULL_CLARK'
 
-**Material Nodes** — Principled BSDF has NO  attribute:
+**Material Nodes** -- Principled BSDF has NO base_color attribute:
     principled.inputs['Base Color'].default_value = (R, G, B, 1.0)
 
-**Sequencer** —  renamed to  in Blender 5.x
+**Lamps -> Lights** -- bpy.data.lamps renamed to bpy.data.lights (since 4.0):
+    light = bpy.data.lights.new("Sun", 'SUN')
 
-**Auto Smooth** —  removed, use 
+**Render Engine** -- 'EEVEE' renamed to 'BLENDER_EEVEE' (since 4.0):
+    scene.render.engine = 'BLENDER_EEVEE'
 
-When in doubt, use  or  to check the
+**EEVEE Settings** -- scene.render.eevee moved to scene.eevee (since 4.0):
+    scene.eevee.use_ssr = True
+
+**Sequencer** -- sequences renamed to strips in Blender 5.x:
+    for strip in editor.strips:  # NOT editor.sequences
+
+**Auto Smooth** -- mesh.use_auto_smooth removed, use mesh.auto_smooth_angle:
+    mesh.auto_smooth_angle = radians(30)
+
+When in doubt, use print(dir(obj)) or get_python_api_docs() to check the
 actual API before writing code.
 
 ## Object References

@@ -207,5 +207,56 @@ for i in range(100):
         self.assertNotIn("no_output", names)
 
 
+    def test_wrong_lamps_api(self):
+        """bpy.data.lamps is caught."""
+        code = """
+import bpy
+lamp = bpy.data.lamps.new("Sun", 'SUN')
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("wrong_lamps_api", names)
+
+    def test_correct_lights_not_flagged(self):
+        """bpy.data.lights is NOT flagged (it's correct)."""
+        code = """
+import bpy
+light = bpy.data.lights.new("Sun", 'SUN')
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("wrong_lamps_api", names)
+
+    def test_wrong_eevee_name(self):
+        """render.engine = 'EEVEE' is caught."""
+        code = """
+import bpy
+bpy.context.scene.render.engine = "EEVEE"
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("wrong_eevee_name", names)
+
+    def test_correct_eevee_name_not_flagged(self):
+        """render.engine = 'BLENDER_EEVEE' is NOT flagged."""
+        code = """
+import bpy
+bpy.context.scene.render.engine = "BLENDER_EEVEE"
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("wrong_eevee_name", names)
+
+    def test_wrong_eevee_access(self):
+        """scene.render.eevee is caught."""
+        code = """
+import bpy
+bpy.context.scene.render.eevee.use_ssr = True
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("wrong_eevee_access", names)
+
+
 if __name__ == "__main__":
     unittest.main()

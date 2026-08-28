@@ -13,6 +13,7 @@ __all__ = (
     "_BFACW_OT_stop_llm",
     "_BFACW_OT_download_llama_server",
     "_BFACW_OT_remove_llama_server",
+    "_BFACW_OT_open_llama_server_folder",
     "_BFACW_OT_scan_existing_models",
     "_BFACW_OT_select_preset",
     "_BFACW_OT_select_existing_model",
@@ -411,6 +412,30 @@ class _BFACW_OT_remove_llama_server(bpy.types.Operator):  # type: ignore[misc]
                 for area in win.screen.areas:
                     if area.type == "PREFERENCES":
                         area.tag_redraw()
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# Open llama-server Folder
+
+class _BFACW_OT_open_llama_server_folder(bpy.types.Operator):  # type: ignore[misc]
+    """Open the folder containing the llama-server binary in the OS file manager."""
+    bl_idname = "bfacw.open_llama_server_folder"
+    bl_label = "Open llama-server Folder"
+    bl_description = "Reveal the detected llama-server binary location in your file manager"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        llm = get_llm_manager()
+        llama_found = llm.find_llama_server()
+        if not llama_found:
+            self.report({"WARNING"}, "No llama-server binary found")
+            return {"CANCELLED"}
+        folder = os.path.dirname(os.path.abspath(llama_found))
+        if not os.path.isdir(folder):
+            self.report({"ERROR"}, "Folder not found: {:s}".format(folder))
+            return {"CANCELLED"}
+        bpy.ops.wm.path_open(filepath=folder)
+        self.report({"INFO"}, "Opened {:s}".format(folder))
         return {"FINISHED"}
 
 

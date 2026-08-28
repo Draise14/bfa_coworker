@@ -1152,6 +1152,17 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     text="llama-server: Found ({:s})".format(_build_str),
                     icon='CHECKMARK',
                 )
+                # Show path and open-folder button for custom binary.
+                _path_row = box.row(align=True)
+                _path_row.label(
+                    text="Location: {:s}".format(llama_found),
+                    icon='FILE_FOLDER',
+                )
+                _path_row.operator(
+                    "bfacw.open_llama_server_folder",
+                    icon='VIEWZOOM',
+                    text="Open Folder",
+                )
             else:
                 row.label(
                     text="llama-server: Not found — check the path above",
@@ -1228,6 +1239,17 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                             icon="IMPORT",
                             text="Override",
                         ).force = True
+                # Show the detected path and a button to open the folder.
+                _path_row = box.row(align=True)
+                _path_row.label(
+                    text="Location: {:s}".format(llama_found),
+                    icon='FILE_FOLDER',
+                )
+                _path_row.operator(
+                    "bfacw.open_llama_server_folder",
+                    icon='VIEWZOOM',
+                    text="Open Folder",
+                )
             else:
                 row = box.row(align=True)
                 row.label(text="llama-server: Not installed", icon='ERROR')
@@ -1235,6 +1257,12 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     "bfacw.download_llama_server",
                     icon="IMPORT",
                     text="Download",
+                )
+                # Show the bundled directory so the user knows where it
+                # will be installed.
+                box.label(
+                    text="Install to: {:s}".format(str(llm._get_bundled_llama_dir())),
+                    icon='FILE_FOLDER',
                 )
             # GPU backend selector — disabled while agent is running
             # (changing backend requires restarting llama-server).

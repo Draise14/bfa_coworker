@@ -452,8 +452,12 @@ def _render_markdown(layout, md, width=40, max_lines=200):
             _break_para()
             level = len(m.group(1))
             text = _strip_inline(m.group(2))
-            icon = {1: 'BOOKMARKS', 2: 'DISCLOSURE_TRI_DOWN',
-                    3: 'DOT', 4: 'SORTTIME'}.get(level, 'NONE')
+            # Keyframe dots: size scales with heading level.
+            # EXTREME=big, MOVING_HOLD=mid, JITTER/BREAKDOWN/GENERATED=small
+            icon = {1: 'KEYTYPE_EXTREME_VEC',
+                    2: 'KEYTYPE_MOVING_HOLD_VEC',
+                    3: 'KEYTYPE_JITTER_VEC',
+                    4: 'KEYTYPE_BREAKDOWN_VEC'}.get(level, 'KEYTYPE_GENERATED_VEC')
             if level == 1:
                 # H1: separator + large scaled row + uppercase
                 layout.separator()

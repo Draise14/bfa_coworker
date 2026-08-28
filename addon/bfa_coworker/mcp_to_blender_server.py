@@ -411,6 +411,24 @@ def _execute_code(
                     and not _code_is_undo_or_push(code)
                 )
             )
+            # Deferred layer-collection sync: the outliner references the
+            # layer collection tree which gets stale after rapid object
+            # creation.  A full view_layer.update() here can crash in
+            # Blender 5.3 after collection ops, so we defer it to the
+            # next timer tick where the event loop has settled.
+            if not _code_touches_collections(code) and not _code_is_undo_or_push(code):
+                def _deferred_lc_sync():
+                    try:
+                        import bpy as _bpy
+                        _bpy.context.view_layer.update()
+                    except Exception:
+                        pass
+                    return None  # One-shot timer.
+                try:
+                    import bpy as _bpy
+                    _bpy.app.timers.register(_deferred_lc_sync, first_interval=0.1)
+                except Exception:
+                    pass
         except Exception:  # pylint: disable=broad-exception-caught
             # Truncate traceback to last 3 frames + exception message.
             # Full tracebacks are verbose and eat context window space.

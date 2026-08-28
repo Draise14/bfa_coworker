@@ -295,11 +295,18 @@ def _sanitize_message_roles(messages: list[dict[str, Any]]) -> list[dict[str, An
 # giving the LLM access to all tools when needed.
 
 _SURFACE_TOOLS = frozenset({
+    # ── Code execution ──────────────────────────────────────────────
     "execute_blender_code",
+    # ── Scene inspection ─────────────────────────────────────────────
     "get_blendfile_summary_datablocks",
     "get_object_detail_summary",
     "get_objects_summary",
-    # Bundled Blender API + manual docs — read-only, no network needed.
+    "get_operation_history",      # Avoid repeating failed operations.
+    # ── Visual feedback (always useful for any domain) ────────────────
+    "get_screenshot_of_window_as_image",
+    "get_screenshot_of_window_as_json",
+    "render_thumbnail_to_path",
+    # ── Bundled Blender API + manual docs — read-only, no network ────
     # Always available so the agent can look up correct APIs on error.
     "get_python_api_docs",
     "search_api_docs",
@@ -319,6 +326,8 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "get_screenshot_of_area_as_image",
         "render_viewport_to_path",
         "setup_pbr_material",
+        "assign_material_to_objects",
+        "load_asset_in_context",
     }),
     "modeling": frozenset({
         "jump_to_view3d_object_by_name",
@@ -326,6 +335,7 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "jump_to_tab_by_name",
         "jump_to_tab_by_space_type",
         "get_screenshot_of_area_as_image",
+        "set_collection_color_tag",
     }),
     "lighting": frozenset({
         "download_polyhaven_asset",
@@ -337,7 +347,6 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
     "rendering": frozenset({
         "render_viewport_to_path",
         "get_screenshot_of_area_as_image",
-        "get_screenshot_of_window_as_image",
         "three_point_lighting_rig",
     }),
     "vse": frozenset({
@@ -348,6 +357,15 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "jump_to_view3d_object_by_name",
         "jump_to_view3d_object_data_by_name",
         "get_screenshot_of_area_as_image",
+    }),
+    "assets": frozenset({
+        "search_assets",
+        "get_asset_libraries",
+        "get_asset_tags",
+        "list_asset_catalogs",
+        "load_asset_in_context",
+        "download_polyhaven_asset",
+        "search_polyhaven_assets",
     }),
 }
 
@@ -363,6 +381,7 @@ _DOMAIN_KEYWORDS: dict[str, list[str]] = {
     "modeling": [
         "mesh", "edit", "extrude", "bevel", "loop cut", "knife",
         "sculpt", "boolean", "subdivide", "merge", "bridge",
+        "scatter", "duplicate", "array",
     ],
     "lighting": [
         "light", "lamp", "sun", "point", "area", "hdri",
@@ -380,6 +399,10 @@ _DOMAIN_KEYWORDS: dict[str, list[str]] = {
         "geometry node", "node group", "modifier", "simulation",
         "geonode", "procedural",
     ],
+    "assets": [
+        "asset", "library", "catalog", "browse", "import asset",
+        "append", "link asset", "asset browser",
+    ],
 }
 
 # Synthetic tool schema for on-demand domain loading.
@@ -390,10 +413,14 @@ _LOAD_TOOLS_SCHEMA: dict[str, Any] = {
         "name": "load_tools",
         "description": (
             "Load additional domain-specific Blender tools. "
-            "Call this when you need tools for a specific domain: "
+            "Domains: "
             + ", ".join(sorted(_TOOL_DOMAINS.keys()))
-            + ". Surface tools (code execution, scene inspection) "
-            "are always available."
+            + ". Surface tools (code execution, scene inspection, "
+            "screenshots, API docs) are always available. "
+            "Call load_tools when: (a) you need specialized tools "
+            "for a domain, (b) you hit an error and need to look up "
+            "the correct API, or (c) the user asks about assets, "
+            "materials, animation, etc."
         ),
         "parameters": {
             "type": "object",

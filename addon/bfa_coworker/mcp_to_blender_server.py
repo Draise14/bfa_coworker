@@ -355,6 +355,99 @@ def _code_is_undo_or_push(code: str) -> bool:
     return "bpy.ops.ed.undo()" in code or "bpy.ops.ed.undo_push(" in code
 
 
+
+# ---------------------------------------------------------------------------
+# Preflight code validation — catches common LLM mistakes before exec().
+# Returns a list of (pattern_name, guidance) tuples.  Empty = no issues.
+# ---------------------------------------------------------------------------
+
+def _preflight_check(code: str) -> list[tuple[str, str]]:
+    """Validate *code* for common LLM-generated mistakes before execution.
+
+    Returns a list of ``(pattern_name, guidance)`` tuples.  An empty list
+    means the code passed all checks.  Each check is a lightweight regex —
+    total cost is <1ms.
+    """
+    issues: list[tuple[str, str]] = []
+
+    # 1. Missing bpy import — most common first-time failure.
+    uses_bpy = re.search(r"\bbpy\.", code) or "bpy.ops." in code
+    has_import = "import bpy" in code
+    if uses_bpy and not has_import:
+        issues.append((
+            "missing_bpy",
+            "Missing 'import bpy'. Add 'import bpy' at the top of your code.",
+        ))
+
+    # 2. Wrong subdivision modifier attribute.
+    if re.search(r"\.subdivisions\s*=", code) and "SUBSURF" in code.upper():
+        issues.append((
+            "wrong_subdiv_attr",
+            "Blender 5.3: mod.subdivisions was renamed. Use mod.levels instead.",
+        ))
+
+    # 3. Wrong Principled BSDF attribute access.
+    if re.search(r"\.(base_color|base_color_input)\s*=", code):
+        issues.append((
+            "wrong_principled_attr",
+            "Principled BSDF has no base_color attribute. "
+            "Use principled.inputs['Base Color'].default_value = (R, G, B, 1.0)",
+        ))
+
+    # 4. Wrong torus primitive keywords.
+    if "primitive_torus_add" in code and re.search(r"ring_count\s*=", code):
+        issues.append((
+            "wrong_torus_kw",
+            "primitive_torus_add has no ring_count parameter. "
+            "Use major_radius, minor_radius, major_segments, minor_segments.",
+        ))
+
+    # 5. Wrong sequencer API (sequences vs strips).
+    if re.search(r"\.sequences\b", code) and "sequence_editor" in code:
+        issues.append((
+            "wrong_sequencer_api",
+            "Blender 5.x: editor.sequences was renamed to editor.strips.",
+        ))
+
+    # 6. Wrong auto smooth API.
+    if "use_auto_smooth" in code:
+        issues.append((
+            "wrong_auto_smooth",
+            "mesh.use_auto_smooth was removed in Blender 5.3. "
+            "Use mesh.auto_smooth_angle instead.",
+        ))
+
+    # 7. Accessing action.fcurves (removed in Blender 5.0+).
+    if re.search(r"action\.fcurves", code):
+        issues.append((
+            "wrong_fcurves",
+            "action.fcurves was removed in Blender 5.0+. "
+            "Use keyframe_insert() for keyframe creation.",
+        ))
+
+    # 8. Using bpy.ops in a loop without context override.
+    ops_in_loop = re.search(
+        r"(for|while)\s+.+:\s*\n\s+bpy\.ops\.", code
+    )
+    if ops_in_loop:
+        issues.append((
+            "ops_in_loop",
+            "Calling bpy.ops inside a loop is slow and may lose context. "
+            "Batch operations with bpy.data or bpy.context instead.",
+        ))
+
+    # 9. No output — code runs but returns nothing visible.
+    has_result = "result" in code and ("=" in code or "{" in code)
+    has_print = "print(" in code
+    if not has_result and not has_print and len(code.strip()) > 50:
+        issues.append((
+            "no_output",
+            "Your code has no print() or result assignment. "
+            "Add print() to see output, or assign to a 'result' dict.",
+        ))
+
+    return issues
+
 def _execute_code(
         code: str,
         strict_json: bool,
@@ -395,6 +488,16 @@ def _execute_code(
             #
             # A Python-level exception from stale layer-collection data
             # is always preferable to an unrecoverable C-level segfault.
+
+            # Preflight: validate code before execution.
+            preflight_issues = _preflight_check(code)
+            if preflight_issues:
+                hint_lines = ["[Preflight] Found {:d} issue(s):".format(len(preflight_issues))]
+                for _name, guidance in preflight_issues:
+                    hint_lines.append("  - {:s}".format(guidance))
+                hint_lines.append("")
+                hint_lines.append("Fix these issues and retry. Do NOT retry the same code.")
+                return _ExecResult({"status": "error", "message": "\n".join(hint_lines)})
 
             exec(code, namespace)
 

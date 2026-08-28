@@ -23,6 +23,7 @@ __all__ = (
     "BFACW_OT_test_polyhaven_hdri",
     "BFACW_OT_test_polyhaven_texture",
     "BFACW_OT_open_harness_prefs",
+    "BFACW_OT_open_addon_prefs",
     "BFACW_OT_open_config_folder",
     "BFACW_OT_open_url",
     "BFACW_OT_open_log",
@@ -751,6 +752,26 @@ class BFACW_OT_open_harness_prefs(bpy.types.Operator):  # type: ignore[misc]
         try:
             prefs = context.preferences.addons[__package__].preferences
             prefs.pref_tab = "ADVANCED"
+        except Exception:
+            pass
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# Open Addon Preferences (filters to bfa_coworker)
+
+class BFACW_OT_open_addon_prefs(bpy.types.Operator):  # type: ignore[misc]
+    """Open Blender preferences filtered to the Coworker addon page."""
+    bl_idname = "bfacw.open_addon_prefs"
+    bl_label = "Open Settings"
+    bl_description = "Open preferences to configure Coworker"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        bpy.ops.screen.userpref_show('INVOKE_DEFAULT')
+        context.preferences.active_section = 'ADDONS'
+        # Try to focus the bfa_coworker addon in the list.
+        try:
+            bpy.ops.preferences.addon_show(module='bfa_coworker')
         except Exception:
             pass
         return {"FINISHED"}

@@ -1767,6 +1767,27 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         prefs = context.preferences.addons[__package__].preferences
         is_harness = (prefs.operating_mode == "EXTERNAL_HARNESS")
 
+        # ── Mode info + Settings button ──
+        mode_row = layout.row(align=True)
+        mode_row.scale_y = 0.9
+        if is_harness:
+            mode_row.label(text="External MCP", icon='WORLD')
+        elif prefs.operating_mode == "LOCAL_LLM":
+            mode_row.label(text="Local LLM", icon='CONSOLE')
+        else:
+            mode_row.label(text="Remote API", icon='URL')
+        # Show model name if available.
+        model_name = prefs.model_filename or prefs.model_preset or ""
+        if model_name and not is_harness:
+            # Strip extension for display.
+            short = model_name.rsplit(".", 1)[0] if "." in model_name else model_name
+            # Truncate long names.
+            if len(short) > 24:
+                short = short[:22] + "…"
+            mode_row.label(text=short)
+        mode_row.separator(factor=0.3)
+        mode_row.operator("bfacw.open_addon_prefs", icon="PREFERENCES", text="")
+
         # ── Agent control buttons (compact) ──
         row = layout.row(align=True)
         row.scale_y = 1.8

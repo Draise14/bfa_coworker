@@ -289,7 +289,26 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
     # ── Unified Operating Mode ──────────────────────────────────────────
 
     def _update_operating_mode(self, _context: bpy.types.Context) -> None:
-        """Sync operating_mode to agent_mode and llm_mode, and switch to the relevant tab."""
+        """Sync operating_mode to agent_mode and llm_mode, and switch to the relevant tab.
+
+        Rejects the change when the agent is already running — switching modes
+        mid-flight can kill the MCP server and leave the agent in a broken state.
+        The user must stop the agent first.
+        """
+        from . import agent_controller as _ac
+        if _ac._agent_state.mcp_server_running:
+            # Revert to the previous mode.
+            _prev = _ac._agent_state.current_mode or "off"
+            print("[Coworker] operating_mode change rejected — agent is running. Stop the agent first.")
+            # Force revert by resetting to the current active mode.
+            if _prev == "local":
+                self["operating_mode"] = "LOCAL_LLM"
+            elif _prev == "remote":
+                self["operating_mode"] = "REMOTE_API"
+            else:
+                self["operating_mode"] = "LOCAL_LLM"  # safe default
+            return
+
         if self.operating_mode == "LOCAL_LLM":
             self.agent_mode = "SELF_CONTAINED"
             self.llm_mode = "local"
@@ -305,7 +324,15 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
     operating_mode: EnumProperty(  # type: ignore[valid-type]
         name="Operating Mode",
-        description="Select how the Coworker agent connects to an LLM",
+        description=(
+            "Select how the Coworker agent connects to an LLM.\n"
+            "  Local — run a local LLM via llama-server (requires download)\n"
+            "  Remote — use a remote API like OpenAI or OpenRouter\n"
+            "  External Harness — MCP tools only, no built-in LLM\n"
+            "\n"
+            "⚠ Cannot be changed while the agent is running.\n"
+            "Stop the agent first, then switch modes."
+        ),
         items=OPERATING_MODE_ITEMS,
         default="LOCAL_LLM",
         update=_update_operating_mode,
@@ -376,7 +403,10 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             "  Auto — detect NVIDIA (CUDA), AMD/Intel (Vulkan), or CPU\n"
             "  CUDA — NVIDIA GPUs (RTX 20xx+; 3090/4090/5090 recommended)\n"
             "  Vulkan — AMD Radeon, Intel Arc, or NVIDIA fallback\n"
-            "  CPU — no GPU acceleration"
+            "  CPU — no GPU acceleration\n"
+            "\n"
+            "⚠ Cannot be changed while the agent is running.\n"
+            "Stop the agent first, then change the backend."
         ),
         items=[
             ("auto", "Auto (Detect)", "Auto-detect the best backend for your GPU"),
@@ -1028,9 +1058,20 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         layout = self.layout
 
         # ── Operating Mode selector (top-level, always visible) ─────────
+        # Disable while the agent is running to prevent premature stops.
+        from . import agent_controller as _ac
+        agent_running = _ac._agent_state.mcp_server_running
+
         box = layout.box()
         box.label(text="Operating Mode", icon='TOOL_SETTINGS')
-        box.row().prop(self, "operating_mode", expand=True)
+        mode_row = box.row(align=True)
+        mode_row.prop(self, "operating_mode", expand=True)
+        if agent_running:
+            mode_row.enabled = False
+            box.label(
+                text="Stop the agent before switching modes",
+                icon='ERROR',
+            )
         layout.separator()
 
         # ── Tab selector row ────────────────────────────────────────────
@@ -1195,8 +1236,13 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     icon="IMPORT",
                     text="Download",
                 )
-            # GPU backend selector.
-            box.prop(self, "llama_backend")
+            # GPU backend selector — disabled while agent is running
+            # (changing backend requires restarting llama-server).
+            from . import agent_controller as _ac_backend
+            _backend_row = box.row()
+            _backend_row.prop(self, "llama_backend")
+            if _ac_backend._agent_state.mcp_server_running:
+                _backend_row.enabled = False
             # Unified progress block for llama-server download.
             if llm_state.download_kind == "llama_server":
                 if llm_state.download_progress:

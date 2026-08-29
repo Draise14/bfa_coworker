@@ -7,18 +7,6 @@
 
 ---
 
-## Table of Contents
-
-1. [Tier 3f Audit — What We Built](#1-tier-3f-audit--what-we-built)
-2. [The Core Problem](#2-the-core-problem)
-3. [Architecture: MCP as Intent Interpreter](#3-architecture-mcp-as-intent-interpreter)
-4. [Editor-Aware Tool Scoping](#4-editor-aware-tool-scoping)
-5. [Comparison Tables](#5-comparison-tables)
-6. [Implementation Plan](#6-implementation-plan)
-7. [Success Criteria](#7-success-criteria)
-
----
-
 ## 1. Tier 3f Audit — What We Built
 
 ### 1.1 Commit Summary (30 commits on branch)
@@ -184,7 +172,288 @@ elif editor == "SEQUENCE_EDITOR":
 ```
 ---
 
-## 5. Comparison Tables
+## 5. Per-Editor Template Registry
+
+### 5.1 3D Viewport (Object Mode)
+
+| Template | What It Does | Params |
+|----------|-------------|--------|
+| create_cube | Add cube primitive | name, size, location |
+| create_uv_sphere | Add UV sphere | name, segments, ring_count |
+| create_cylinder | Add cylinder | name, vertices, radius, depth |
+| create_cone | Add cone | name, vertices, radius1, radius2, depth |
+| create_torus | Add torus | name, major_radius, minor_radius |
+| create_plane | Add plane | name, size, location |
+| create_monkey | Add Suzanne | name, size, location |
+| create_camera | Add camera | name, location, rotation, lens |
+| create_light | Add light | name, type, location, energy, color |
+| create_empty | Add empty | name, type, display_size |
+| duplicate_objects | Duplicate selection | count, offset |
+| join_objects | Join selected | (uses selection) |
+| set_origin | Set origin | origin_type |
+| apply_transform | Apply transforms | location, rotation, scale |
+| arrange_in_line | Line up objects | axis, spacing |
+| arrange_in_grid | Grid layout | columns, spacing |
+| arrange_in_circle | Circle layout | radius, axis |
+| add_collection | New collection | name, color_tag |
+| randomize_transform | Random offset | location_range, rotation_range |
+
+### 5.2 3D Viewport (Edit Mode)
+
+| Template | What It Does | Params |
+|----------|-------------|--------|
+| extrude_region | Extrude selection | thickness |
+| inset_faces | Inset faces | thickness |
+| bevel_edges | Bevel edges | width, segments |
+| loop_cut | Add loop cut | number_cuts |
+| merge_vertices | Merge vertices | type |
+| remove_doubles | Remove doubles | distance |
+| recalculate_normals | Recalc normals | inside |
+| fill_holes | Fill holes | sides |
+| triangulate_mesh | Triangulate | quad_method |
+| subdivide_mesh | Subdivide | cuts, smoothness |
+| smooth_vertices | Smooth vertices | factor, iterations |
+| bridge_edge_loops | Bridge loops | (uses selection) |
+| spin_tool | Spin extrude | steps, angle |
+
+### 5.3 Shader Editor
+
+| Template | What It Does | Params |
+|----------|-------------|--------|
+| principled_basic | Basic principled | base_color, roughness, metallic |
+| glass_material | Glass/transmission | color, ior, roughness |
+| emission_material | Emissive shader | color, strength |
+| metallic_material | Metal material | color, roughness |
+| noise_texture | Procedural noise | scale, detail, roughness |
+| voronoi_texture | Procedural voronoi | scale, randomness |
+| image_texture | Image texture | image_path, projection |
+| color_ramp | Color ramp | colors, interpolation |
+| mapping_node | Mapping transform | location, rotation, scale |
+| texture_coordinate | UV/Object coords | mapping_type |
+| frame_nodes | Frame selected nodes | label, color |
+| mix_materials | Mix two materials | factor |
+
+### 5.4 Geometry Nodes
+
+| Template | What It Does | Params |
+|----------|-------------|--------|
+| scatter_on_faces | Scatter points | density, instance_object |
+| instance_on_points | Instance objects | instance, scale |
+| boolean_operation | Boolean geometry | operation |
+| array_geometry | GN array | count, offset |
+| curve_to_mesh | Profile along curve | profile_curve |
+| set_material | Assign material | material_name |
+| transform_geometry | Transform | translation, rotation, scale |
+| delete_geometry | Delete by selection | mode |
+| capture_attribute | Capture attribute | data_type, domain |
+
+### 5.5 Compositor
+
+| Template | What It Does | Params |
+|----------|-------------|--------|
+| glare_node | Glare/bloom | quality, threshold, size |
+| color_balance | Color grading | lift, gamma, gain |
+| lens_distortion | Lens distortion | dispersion |
+| blur_node | Gaussian blur | size_x, size_y |
+| filter_sharpen | Sharpen | factor |
+| mix_rgb | Mix images | blend_type, factor |
+| color_correction | Color correction | shadows, midtones |
+| viewer_node | Preview output | (connects to viewer) |
+| render_layers | Input render layers | layer, pass |
+| composite_output | Final output | (connects to composite) |
+
+### 5.6 Video Sequencer
+
+| Template | What It Does | Params |
+|----------|-------------|--------|
+| add_movie_strip | Add movie clip | filepath, channel |
+| add_sound_strip | Add sound | filepath, channel |
+| add_image_strip | Add image sequence | filepath, channel |
+| add_effect_strip | Add effect | type (BLUR, GLOW, TRANSFORM) |
+| split_strip | Split at frame | frame, channel |
+| trim_strip | Trim start/end | start, end |
+| add_transition | Add transition | type (CROSS, WIPE) |
+| set_strip_speed | Speed control | factor |
+
+### 5.7 Animation
+
+| Template | What It Does | Params |
+|----------|-------------|--------|
+| keyframe_location | Keyframe position | x, y, z, frame |
+| keyframe_rotation | Keyframe rotation | rx, ry, rz, frame |
+| keyframe_scale | Keyframe scale | sx, sy, sz, frame |
+| keyframe_material | Keyframe material | input_name, value, frame |
+| add_fcurve_modifier | Add FCurve modifier | type (NOISE, ENVELOPE) |
+| set_interpolation | Set keyframe interp | type (LINEAR, BEZIER) |
+| add_driver | Add driver | property, expression |
+| nla_track | Add NLA track | action_name, start_frame |
+
+### 5.8 Outliner
+
+| Template | What It Does | Params |
+|----------|-------------|--------|
+| rename_by_type | Rename by type | prefix, use_numbering |
+| sort_by_name | Alphabetical sort | reverse |
+| sort_by_type | Group by type | (mesh, light, camera) |
+| sort_by_material | Group by material | |
+| sort_by_location | Group by position | axis, threshold |
+| add_color_tag | Color tag collection | color |
+| group_selected | Group into collection | name |
+| delete_unused_data | Purge orphan data | data_type |
+
+### 5.9 Text Editor (Code Writing)
+
+| Template | What It Does | Params |
+|----------|-------------|--------|
+| blender_addon_skeleton | New addon template | name, bl_idname |
+| operator_template | Custom operator | class_name |
+| panel_template | UI Panel | class_name, bl_space_type |
+| modal_operator | Modal operator | class_name |
+| property_group | Property group | class_name |
+| bmesh_operation | BMesh edit | description |
+| node_tree_setup | Programmatic nodes | tree_type |
+| import_export_script | IO script template | format |
+
+
+---
+
+## 6. Documentation Area Mapping
+
+Blender documentation covers ~15 major sections with ~80 subsections.
+Each maps to template categories and operator potential:
+
+| Doc Section | Template Coverage | Operator Potential |
+|------------|-------------------|-------------------|
+| User Interface | Low (informational) | Medium (keymap lookup) |
+| Editors | High (per-editor templates) | High (editor operators) |
+| Scenes and Objects | High (organize, rename) | Very High (outliner ops) |
+| Modeling | Very High (20+ templates) | Very High (edit mode ops) |
+| Animation and Rigging | High (10+ templates) | High (animation ops) |
+| Rendering | High (setup templates) | High (render ops) |
+| Compositing | High (node templates) | High (compositor ops) |
+| Video Editing | Medium (strip templates) | High (VSE ops) |
+| Advanced (Scripting) | High (text editor templates) | High (code gen) |
+
+**Total**: ~67 base templates + ~44 composition chains = ~111 templates
+**Operator potential**: ~50 contextual operators across all editors
+
+---
+
+## 7. Operator-Based UI Design
+
+### 7.1 The Problem with Chat
+
+Chat is great for exploration. But for repetitive tasks, an artist
+should not have to type the same request every time. They need a button.
+
+### 7.2 Contextual Operators
+
+Register operators in Blender native menus:
+
+
+
+### 7.3 Menu Integration
+
+| Menu | Operators |
+|------|-----------|
+| Object > Coworker | Organize, Rename, Group, Clean |
+| Mesh > Coworker | Clean Mesh, Optimize, Prepare for Print |
+| Add > Coworker | Template primitives, Scene setups |
+| Render > Coworker | Quick render setup, Camera framing |
+| Node > Coworker | Frame nodes, Organize tree |
+| Sidebar > Coworker | All quick actions, Chat, Assets |
+
+### 7.4 Operator Pattern
+
+Each operator detects context, gathers parameters, sends to orchestrator:
+
+
+
+---
+
+## 8. Creative Workflows
+
+### 8.1 Camera Framing
+
+The model understands spatial relationships:
+
+- Frame from above: Camera at (0, 0, 15), looking down, 35mm lens
+- Close-up face: Find face object, 2 units away, 85mm portrait lens
+- Dutch angle: Camera tilted 15-30 degrees on Z, slight low angle
+- Follow action: Camera tracks target with Track To constraint
+
+### 8.2 Lighting from Reference
+
+The model interprets lighting descriptions:
+
+- Rembrandt painting: Key light warm (2700K), 45 degrees, cool fill at 1/4
+- Studio product: Three-point with soft boxes, rim light, grey background
+- Moonlit night: Single cool blue area light, low energy, no fill
+- Match reference image: Analyze light direction/color, replicate in 3D
+
+### 8.3 Asset-Aware Workflows
+
+The MCP knows what assets are available:
+
+- Add wood material: Search asset library, find Oak_Veneer, apply with UV
+- Scatter rocks: Find rock assets, use geometry nodes, randomize scale
+- Use brick texture: Check library, apply with displacement if available
+
+### 8.4 Scene Composition
+
+- Cinematic: Rule of thirds, shallow DOF, teal/orange grading, lens distortion
+- Turntable render: Camera on empty, 360 rotation, three-point lighting
+- Mood board: Arrange reference images in 3D, camera sees all
+
+---
+
+## 9. Scalability and Maintenance
+
+### 9.1 Adding New Templates
+
+1. Write template function in blender_templates.py
+2. Register with register_template()
+3. Add test in tests/test_templates.py
+4. Template is automatically available to orchestrator
+
+No other files need to change. The system discovers templates at runtime.
+
+### 9.2 Adding New Operators
+
+1. Create operators/coworker_<name>.py
+2. Define operator class
+3. Register in __init__.py
+4. Add to appropriate menu
+
+### 9.3 Documentation Coverage
+
+| Area | Doc Section | Templates | Coverage |
+|------|------------|-----------|----------|
+| Mesh Primitives | Modeling/Meshes | 9/9 | 100% |
+| Modifiers | Modeling/Modifiers | 12/20 | 60% |
+| Materials | Rendering/Materials | 6/15 | 40% |
+| Animation | Animation/Keyframes | 10/25 | 40% |
+| Compositing | Compositing/Nodes | 12/30 | 40% |
+| Sequencer | Video Editing | 9/15 | 60% |
+| Outliner | Scenes/Objects | 6/12 | 50% |
+| Text Editor | Advanced/Scripting | 8/12 | 67% |
+
+Target: 80% coverage across all documentation areas.
+
+### 9.4 The Vision
+
+An artist opens Blender. The Coworker sidebar shows contextual
+buttons based on what they are doing. They click Organize Outliner
+and their scene is instantly tidy. They type make it look cinematic
+and the lighting, camera, and post-processing are set up.
+
+The model does not write Python. The model understands intent.
+The server understands Blender. Together, they make the artists
+dream come true.
+
+---
+
+## 10. Comparison Tables
 
 ### 5.1 Current vs Target Architecture
 
@@ -222,7 +491,7 @@ elif editor == "SEQUENCE_EDITOR":
 
 ---
 
-## 6. Implementation Plan
+## 11. Implementation Plan
 
 ### Phase 1: Wire Auto-fix + Templates (1-2 hours)
 
@@ -279,7 +548,7 @@ Priority templates to add:
 
 ---
 
-## 7. Success Criteria
+## 12. Success Criteria
 
 ### 7.1 Benchmark Tests
 
@@ -314,14 +583,29 @@ The model provides **intent**. The server provides **execution**. The user provi
 
 ---
 
-## Appendix: Files to Modify
+## Appendix: File Structure
 
-| File | Change | Phase |
-|------|--------|-------|
-|  | Wire auto-fix, editor detection, resource injection | 1-3 |
-|  | Expand template library | 5 |
-|  | Already complete | - |
-|  | Update surface tools, reduce tool count | 2 |
-|  | Add intent-based execution tool | 4 |
-|  | Update with intent-based workflow | 2 |
-|  | Add auto-fix and template tests | 1 |
+addon/bfa_coworker/
+  blender_templates.py      # Template registry (111+ templates)
+  autofix.py                # Auto-correction rules (12+ rules)
+  orchestrator.py           # Intent -> plan -> execution pipeline
+  editor_context.py         # Editor detection + context gathering
+  operators/
+    coworker_organize.py    # Outliner organization operators
+    coworker_mesh.py        # Mesh cleanup operators
+    coworker_material.py    # Material assignment operators
+    coworker_lighting.py    # Lighting setup operators
+    coworker_camera.py      # Camera framing operators
+    coworker_scene.py       # Scene setup operators
+    coworker_nodes.py       # Node tree operators
+    coworker_animation.py   # Animation operators
+  ui/
+    sidebar_panel.py        # N-panel with contextual buttons
+    context_menu.py         # Right-click menu extensions
+mcp/blmcp/tools/
+  execute_blender_code.py   # Updated with intent execution
+  execute_blender_plan.py   # Plan -> template chain execution
+tests/
+  test_preflight.py         # Preflight + auto-fix tests
+  test_templates.py         # Template rendering tests
+  test_orchestrator.py      # Orchestrator pipeline tests

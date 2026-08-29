@@ -297,6 +297,8 @@ def _sanitize_message_roles(messages: list[dict[str, Any]]) -> list[dict[str, An
 _SURFACE_TOOLS = frozenset({
     # ── Code execution ──────────────────────────────────────────────
     "execute_blender_code",
+    "execute_blender_plan",  # Two-phase: plan -> tested code
+    "list_blender_templates",  # Discover available templates
     # ── Scene inspection ─────────────────────────────────────────────
     "get_blendfile_summary_datablocks",
     "get_object_detail_summary",
@@ -2211,6 +2213,8 @@ def _call_mcp_tool_sync(
 
 _TOOL_FRIENDLY_NAMES: dict[str, str] = {
     "execute_blender_code": "Running code in Blender",
+    "execute_blender_plan": "Running tested code templates",
+    "list_blender_templates": "Showing available templates",
     "get_blendfile_summary_datablocks_toolcode": "Reading scene data",
     "download_polyhaven_asset": "Downloading asset",
     "search_polyhaven_assets": "Searching Poly Haven",

@@ -54,3 +54,66 @@ def register(mcp: FastMCP) -> None:
             value = run_blender_cli(synced_path, code)
             assert isinstance(value, dict), "Expected dict from `run_blender_cli`, got {!r}".format(type(value))
             return value
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Execute Blender Plan",
+            destructiveHint=True,
+        )
+    )
+    def execute_blender_plan(steps: list) -> dict[str, object]:
+        """
+        Execute a structured plan of Blender operations.
+
+        Each step is a dict with either:
+        - {"template": "name", "params": {...}} -- use a tested template
+        - {"code": "..."} -- custom Python code
+
+        Available templates: create_torus, create_cube, create_uv_sphere,
+        create_cylinder, create_plane, add_material, three_point_lighting,
+        add_subsurf, add_array, add_bevel, add_solidify, add_smooth,
+        add_remesh, smooth_shade, auto_smooth, set_render_engine,
+        setup_camera, keyframe_location, keyframe_rotation.
+
+        Templates are pre-tested for Blender 5.3 and auto-correct common
+        mistakes.  Use this instead of execute_blender_code when possible.
+        """
+        # Import the plan-to-code converter from the addon server.
+        # It lives in the addon's mcp_to_blender_server module.
+        import importlib
+        try:
+            from bfa_coworker.mcp_to_blender_server import _plan_to_code, _render_template, _TEMPLATES
+        except ImportError:
+            # Fallback: generate code directly from the template registry.
+            return send_code(
+                _generate_plan_code(steps),
+                strict_json=False,
+            )
+        code = _plan_to_code(steps)
+        return send_code(code, strict_json=False)
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="List Blender Templates",
+            destructiveHint=False,
+        )
+    )
+    def list_blender_templates() -> dict[str, object]:
+        """
+        List all available Blender code templates with their default parameters.
+
+        Use execute_blender_plan() with template names from this list.
+        Each template is pre-tested for Blender 5.3 and handles common
+        API pitfalls automatically.
+        """
+        try:
+            from bfa_coworker.mcp_to_blender_server import _TEMPLATES, _TEMPLATE_DEFAULTS
+        except ImportError:
+            return {"status": "error", "message": "Template registry not available"}
+        templates = {}
+        for name, tmpl in _TEMPLATES.items():
+            # Extract parameter names from the template string.
+            import re
+            params = list(set(re.findall(r"\{(\w+)\}", tmpl)))
+            defaults = {k: _TEMPLATE_DEFAULTS.get(k, "?") for k in params}
+            templates[name] = {"params": params, "defaults": defaults}
+        return {"status": "ok", "templates": templates, "count": len(templates)}

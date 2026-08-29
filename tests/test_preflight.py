@@ -386,5 +386,57 @@ env = nodes.new(type="ShaderNodeTexEnvironment")
         self.assertNotIn("wrong_node_type", names)
 
 
+    def test_mcp_tool_as_function(self):
+        """Calling setup_pbr_material() inside code is caught."""
+        code = """
+import bpy
+setup_pbr_material("TestMat", "0.8, 0.2, 0.2, 1.0")
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("mcp_tool_as_function", names)
+
+    def test_wrong_world_property(self):
+        """world["Use Nodes"] is caught."""
+        code = """
+import bpy
+world = bpy.data.worlds.new("Test")
+world["Use Nodes"] = True
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("wrong_world_property", names)
+
+    def test_prim_transform_kwarg(self):
+        """rotation_euler on primitive add is caught."""
+        code = """
+import bpy
+bpy.ops.mesh.primitive_cube_add(rotation_euler=(1, 0, 0))
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("prim_transform_kwarg", names)
+
+    def test_prim_location_kwarg(self):
+        """location on primitive add is caught."""
+        code = """
+import bpy
+bpy.ops.mesh.primitive_uv_sphere_add(location=(1, 2, 3))
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("prim_transform_kwarg", names)
+
+    def test_prim_no_transform_ok(self):
+        """Primitive add without transform kwargs is NOT flagged."""
+        code = """
+import bpy
+bpy.ops.mesh.primitive_cube_add(size=2.0)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("prim_transform_kwarg", names)
+
+
 if __name__ == "__main__":
     unittest.main()

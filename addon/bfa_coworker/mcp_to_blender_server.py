@@ -574,6 +574,51 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
             ))
             break
 
+
+    # 21. Calling MCP tool as a Python function inside execute_blender_code.
+    _MCP_TOOLS = ["setup_pbr_material", "search_polyhaven_assets",
+                  "download_polyhaven_asset", "get_python_api_docs",
+                  "search_api_docs", "search_manual_docs"]
+    for tool_name in _MCP_TOOLS:
+        if tool_name + "(" in code and "def " + tool_name not in code:
+            issues.append((
+                "mcp_tool_as_function",
+                "'" + tool_name + "' is an MCP tool, not a Python function. "
+                "Call it as a separate tool call, not inside execute_blender_code. "
+                "Use bpy API directly instead.",
+            ))
+            break
+
+    # 22. Wrong world property access (world["Use Nodes"] -> world.use_nodes).
+    if re.search(r'\["Use Nodes"\]', code) or re.search(r"\['Use Nodes'\]", code):
+        issues.append((
+            "wrong_world_property",
+            'world["Use Nodes"] does not exist. '
+            "Use world.use_nodes = True instead (it's a boolean attribute).",
+        ))
+
+    # 23. Passing location/rotation/scale to primitive add operators.
+    #     These operators don't accept transform kwargs — set after creation.
+    _PRIM_OPS = ["primitive_cube_add", "primitive_uv_sphere_add",
+                 "primitive_ico_sphere_add", "primitive_cylinder_add",
+                 "primitive_cone_add", "primitive_torus_add",
+                 "primitive_plane_add", "primitive_circle_add",
+                 "primitive_monkey_add", "primitive_grid_add"]
+    _TRANSFORM_KWARGS = ["location", "rotation", "rotation_euler",
+                         "scale", "rotation_mode"]
+    for prim in _PRIM_OPS:
+        if prim + "(" in code:
+            for kwarg in _TRANSFORM_KWARGS:
+                if kwarg + "=" in code:
+                    issues.append((
+                        "prim_transform_kwarg",
+                        prim + "() does not accept '" + kwarg + "' as a keyword. "
+                        "Set it after creation: obj." + kwarg + " = (...)",
+                    ))
+                    break
+            break  # One hint per call is enough.
+
+    return issues
     return issues
 
 def _execute_code(

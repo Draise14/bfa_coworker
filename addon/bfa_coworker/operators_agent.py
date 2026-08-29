@@ -255,31 +255,38 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
          "so the viewer sees the bounce but follow it. "
          "Make sure the framing covers the full arc."),
     ],
-    # ── Modifier Chain Workflow ─────────────────────────────────────
-    # Tests modifier stacking, applying, and mesh operations
-    # Goal: build a sculpt-ready head base mesh
+    # -- Modifier Chain Workflow -----------------------------------------
+    # Tests modifier stacking, applying, and remeshing on a torus.
+    # Goal: build a detailed mechanical part from a torus base.
     "modifiers": [
-        (1, "Rough Head",
-         "I want to make a head for sculpting. Start with a subdivided cube — "
-         "roughly head-sized. Stretch it a bit taller than wide and "
-         "slightly narrower on the sides to suggest a skull shape. "),
-        (2, "Subdivide",
-         "bevel and smooth it out, enough levels to look smooth but "
-         "not too dense yet. Make it a squarish shape. Keep it symmetrical."),
-        (4, "Apply & Cut",
-         "Cut it in half along the center line — "
-         "delete the left half. "
-         "Mirror modifier it — this way the center "
-         "line is perfectly flat and ready for sculpting dynamically."),
-        (5, "Jaw & Chin",
-         "Now shape the jawline. In Edit Mode, select and pull the bottom-front "
-         "vertices forward a bit to suggest a chin. Widen the lower "
-         "sides slightly for the jaw."),
-        (6, "Finalize",
-         "Duplicate it, then apply all remaining modifiers. Then add a remesh "
-         "modifier with a nice resolutions so it's ready for "
-         "sculpting. Name it \"Sculpt_Ready_Head\"."),
+        (1, "Torus Base",
+         "Create a torus mesh named 'Gear_Base'. "
+         "Major radius 1.0, minor radius 0.3, "
+         "major segments 48, minor segments 16. "
+         "Position it at the origin, centered."),
+        (2, "Array & Bevel",
+         "Add an Array modifier (count 3, offset on X axis by 2.5) "
+         "to create a row of three rings. "
+         "Then add a Bevel modifier (width 0.05, segments 2) to round all edges. "
+         "Do NOT apply yet."),
+        (3, "Apply Array",
+         "Apply the Array modifier so the three rings become real geometry. "
+         "Then check how many vertices the object has and report the count."),
+        (4, "Remesh",
+         "Add a Remesh modifier (mode: Voxel, voxel size 0.1) to unify "
+         "the merged geometry into a single clean mesh. "
+         "Apply the Remesh modifier."),
+        (5, "Solidify & Smooth",
+         "Add a Solidify modifier (thickness 0.02) to give the mesh wall thickness. "
+         "Then add a Smooth modifier (factor 0.5, iterations 3) to soften edges. "
+         "Apply both modifiers."),
+        (6, "Subdivide & Final",
+         "Add a Subdivision Surface modifier (viewport levels 2) for a polished look. "
+         "Do NOT apply it yet. "
+         "Then rename the object to 'Mechanical_Part' and "
+         "report the final vertex count and modifier stack."),
     ],
+
     # ── Asset Browser Workflow ─────────────────────────────────────
     # Tests asset browser search, material assignment, node groups
     "assets_browser": [

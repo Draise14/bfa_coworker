@@ -258,5 +258,42 @@ bpy.context.scene.render.eevee.use_ssr = True
         self.assertIn("wrong_eevee_access", names)
 
 
+    def test_wrong_bsdf_input_name(self):
+        """Wrong Principled BSDF input name is caught."""
+        code = """
+import bpy
+mat = bpy.data.materials.new("Test")
+mat.use_nodes = True
+bsdf = mat.node_tree.nodes.new('ShaderNodeBsdfPrincipled')
+bsdf.inputs['Subsurface Color'].default_value = (0.8, 0.2, 0.2, 1.0)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("wrong_bsdf_input", names)
+
+    def test_correct_bsdf_input_not_flagged(self):
+        """Correct Principled BSDF input name is NOT flagged."""
+        code = """
+import bpy
+mat = bpy.data.materials.new("Test")
+mat.use_nodes = True
+bsdf = mat.node_tree.nodes.new('ShaderNodeBsdfPrincipled')
+bsdf.inputs['Base Color'].default_value = (0.8, 0.2, 0.2, 1.0)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("wrong_bsdf_input", names)
+
+    def test_wrong_collection_active(self):
+        """bpy.data.lights.active is caught."""
+        code = """
+import bpy
+light = bpy.data.lights.active
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("wrong_collection_active", names)
+
+
 if __name__ == "__main__":
     unittest.main()

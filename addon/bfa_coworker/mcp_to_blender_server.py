@@ -469,6 +469,42 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
             "scene.eevee (e.g. scene.eevee.use_ssr).",
         ))
 
+
+    # 13. Wrong Principled BSDF input name (common wrong guesses).
+    _WRONG_BSDF_INPUTS = {
+        "Subsurface Color", "Subsurface", "Specular", "Clearcoat",
+        "Sheen", "Transmission", "Emission Strength",
+    }
+    for wrong_name in _WRONG_BSDF_INPUTS:
+        if "['" + wrong_name + "']" in code:
+            issues.append((
+                "wrong_bsdf_input",
+                "Principled BSDF has no input '" + wrong_name + "'. "
+                "Use print([i.name for i in principled.inputs]) to list available inputs.",
+            ))
+            break  # One hint is enough.
+
+    # 14. bpy.data.*.active doesn't exist -- use context.active_object.
+    if re.search(r"\.(lights|cameras|meshes|materials|textures)\.active", code):
+        issues.append((
+            "wrong_collection_active",
+            "bpy.data.* collections have no .active attribute. "
+            "Use context.active_object or context.selected_objects instead.",
+        ))
+
+    # 15. Creating objects in a loop without checking what exists first.
+    # 15. Creating objects in a loop without checking what exists first.
+    creates_in_loop = ("for " in code or "while " in code) and "primitive_" in code
+    if creates_in_loop and "bpy.data.objects.get" not in code:
+        issues.append((
+            "no_existence_check",
+            "Creating objects in a loop without checking what exists. "
+            "Use bpy.data.objects.get('Name') to check first, or "
+            "the system will undo failed attempts and duplicates may persist.",
+        ))
+
+    return issues
+    return issues
     return issues
 
 def _execute_code(

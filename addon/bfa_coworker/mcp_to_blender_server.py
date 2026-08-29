@@ -538,6 +538,26 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
                 "Valid modes: " + ", ".join(sorted(_VALID_MODES)) + ".",
             ))
 
+
+    # 19. Wrong material object hierarchy.
+    #     mesh.material_slots -> obj.material_slots (Object, not Mesh)
+    #     obj.materials -> obj.data.materials (Mesh data, not Object)
+    #     material_slot.material -> slot.material (correct)
+    if re.search(r"\.data\.material_slots", code):
+        issues.append((
+            "wrong_material_hierarchy",
+            "mesh.data.material_slots does not exist. "
+            "Use obj.material_slots (on Object) instead of obj.data.material_slots.",
+        ))
+    if re.search(r"\.materials", code) and "obj.data.materials" not in code and "mesh.materials" not in code:
+        # Check if it's on an Object (wrong) vs Mesh data (correct)
+        if re.search(r"\w+\.materials\[", code) and "data.materials" not in code:
+            issues.append((
+                "wrong_material_access",
+                "obj.materials does not exist on Object. "
+                "Use obj.data.materials (on Mesh data) or obj.material_slots instead.",
+            ))
+
     return issues
 
 def _execute_code(

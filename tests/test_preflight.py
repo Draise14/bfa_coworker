@@ -336,5 +336,28 @@ bpy.ops.object.mode_set(mode='EDIT')
         self.assertNotIn("wrong_mode_enum", names)
 
 
+    def test_wrong_material_slots_on_mesh(self):
+        """mesh.data.material_slots is caught (should be obj.material_slots)."""
+        code = """
+import bpy
+mesh = bpy.context.active_object.data
+slots = mesh.data.material_slots
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("wrong_material_hierarchy", names)
+
+    def test_correct_material_slots_not_flagged(self):
+        """obj.material_slots is NOT flagged (it's correct)."""
+        code = """
+import bpy
+obj = bpy.context.active_object
+slots = obj.material_slots
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("wrong_material_hierarchy", names)
+
+
 if __name__ == "__main__":
     unittest.main()

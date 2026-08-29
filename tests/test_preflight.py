@@ -359,5 +359,32 @@ slots = obj.material_slots
         self.assertNotIn("wrong_material_hierarchy", names)
 
 
+    def test_wrong_node_type_environment(self):
+        """ShaderNodeEnvironment is caught."""
+        code = """
+import bpy
+world = bpy.data.worlds.new("TestWorld")
+world.use_nodes = True
+nodes = world.node_tree.nodes
+env = nodes.new(type="ShaderNodeEnvironment")
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("wrong_node_type", names)
+
+    def test_correct_node_type_not_flagged(self):
+        """ShaderNodeTexEnvironment is NOT flagged."""
+        code = """
+import bpy
+world = bpy.data.worlds.new("TestWorld")
+world.use_nodes = True
+nodes = world.node_tree.nodes
+env = nodes.new(type="ShaderNodeTexEnvironment")
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("wrong_node_type", names)
+
+
 if __name__ == "__main__":
     unittest.main()

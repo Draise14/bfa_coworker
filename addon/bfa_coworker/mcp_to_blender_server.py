@@ -558,6 +558,22 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
                 "Use obj.data.materials (on Mesh data) or obj.material_slots instead.",
             ))
 
+
+    # 20. Wrong world/environment node type names.
+    _WRONG_NODE_TYPES = {
+        "ShaderNodeEnvironment": "ShaderNodeTexEnvironment",
+        "ShaderNodeWorldOutput": "ShaderNodeOutputWorld",
+        "ShaderNodeBackground": "ShaderNodeBackground",
+    }
+    for wrong, correct in _WRONG_NODE_TYPES.items():
+        if wrong in code and correct not in code:
+            issues.append((
+                "wrong_node_type",
+                "Node type '" + wrong + "' does not exist. "
+                "Use '" + correct + "' instead.",
+            ))
+            break
+
     return issues
 
 def _execute_code(

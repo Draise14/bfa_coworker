@@ -2004,8 +2004,8 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                             elif pr == "reasoning":
                                 _draw_reasoning(
                                     work_box, pc, pm.get("label", "Thinking"),
-                                    is_thinking=state.is_thinking,
-                                    thinking_dots=state.thinking_dots,
+                                    is_thinking=False,
+                                    thinking_dots=0,
                                     message_index=history.index(pm),
                                 )
                             elif pr == "tool":

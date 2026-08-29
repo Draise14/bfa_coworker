@@ -295,5 +295,46 @@ light = bpy.data.lights.active
         self.assertIn("wrong_collection_active", names)
 
 
+    def test_wrong_mode_set_pose(self):
+        """mode_set(mode='POSE') without armature context is flagged."""
+        code = """
+import bpy
+bpy.ops.object.mode_set(mode='POSE')
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("wrong_mode_set", names)
+
+    def test_hallucinated_module(self):
+        """Importing mcp_toolkit is caught."""
+        code = """
+import bpy
+import mcp_toolkit
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("hallucinated_module", names)
+
+    def test_wrong_mode_enum(self):
+        """mode_set(mode='INVALID') is caught."""
+        code = """
+import bpy
+bpy.ops.object.mode_set(mode='INVALID')
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("wrong_mode_enum", names)
+
+    def test_valid_mode_enum_not_flagged(self):
+        """mode_set(mode='EDIT') is NOT flagged."""
+        code = """
+import bpy
+bpy.ops.object.mode_set(mode='EDIT')
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("wrong_mode_enum", names)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -35,6 +35,7 @@ import re
 import select
 import socket
 import sys
+import threading
 import time
 import traceback
 from collections.abc import Callable
@@ -503,8 +504,40 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
             "the system will undo failed attempts and duplicates may persist.",
         ))
 
-    return issues
-    return issues
+
+    # 16. Wrong mode_set enum (POSE mode needs armature context).
+    if "mode_set(" in code and "POSE" in code:
+        issues.append((
+            "wrong_mode_set",
+            "POSE mode via mode_set() requires an armature to be active and "
+            "selected. Use bpy.ops.object.mode_set(mode='POSE') only after "
+            "selecting an armature. Or use bpy.context.object.mode = 'POSE'.",
+        ))
+
+    # 17. Hallucinated module imports.
+    _HALLUCINATED_MODULES = ["mcp_toolkit", "blender_mcp", "bpy_tools", "ai_tools"]
+    for mod_name in _HALLUCINATED_MODULES:
+        if ("import " + mod_name) in code or ("from " + mod_name) in code:
+            issues.append((
+                "hallucinated_module",
+                "Module '" + mod_name + "' does not exist. This is an LLM hallucination. "
+                "Use standard bpy/bpy.ops/bpy.data instead.",
+            ))
+            break
+
+    # 18. Wrong mode_set enum values (valid: OBJECT, EDIT, SCULPT, etc).
+    _VALID_MODES = {"OBJECT", "EDIT", "SCULPT", "VERTEX_PAINT", "WEIGHT_PAINT",
+                    "TEXTURE_PAINT", "POSE", "PARTICLE_EDIT"}
+    mode_match = re.search(r"mode_set\(.*mode.*=.([A-Z_]+)", code)
+    if mode_match:
+        mode_val = mode_match.group(1)
+        if mode_val not in _VALID_MODES:
+            issues.append((
+                "wrong_mode_enum",
+                "mode_set(mode='" + mode_val + "') is not a valid mode. "
+                "Valid modes: " + ", ".join(sorted(_VALID_MODES)) + ".",
+            ))
+
     return issues
 
 def _execute_code(
@@ -558,7 +591,24 @@ def _execute_code(
                 hint_lines.append("Fix these issues and retry. Do NOT retry the same code.")
                 return _ExecResult({"status": "error", "message": "\n".join(hint_lines)})
 
-            exec(code, namespace)
+            # Run exec() in a thread with a timeout to prevent hangs.
+            _exec_error = [None]
+            def _run_code():
+                try:
+                    exec(code, namespace)
+                except Exception as _e:
+                    _exec_error[0] = _e
+            _exec_thread = threading.Thread(target=_run_code, daemon=True)
+            _exec_thread.start()
+            _exec_thread.join(timeout=30)
+            if _exec_thread.is_alive():
+                return _ExecResult({
+                    "status": "error",
+                    "message": "[Preflight] Code execution timed out after 30 seconds. "
+                    "This usually means an infinite loop or a blocking operator call.",
+                })
+            if _exec_error[0] is not None:
+                raise _exec_error[0]
 
             # Force a depsgraph update after successful code execution.
             # Without this, creating many objects in a single call can leave

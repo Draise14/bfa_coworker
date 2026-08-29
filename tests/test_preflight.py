@@ -438,5 +438,87 @@ bpy.ops.mesh.primitive_cube_add(size=2.0)
         self.assertNotIn("prim_transform_kwarg", names)
 
 
+    # ── Tests for checks 24-27: bmesh, vector, update_edit_mesh ──────────
+
+    def test_missing_bmesh_import(self):
+        """Code using bmesh without import is caught."""
+        code = """
+import bpy
+obj = bpy.context.active_object
+bm = bmesh.from_edit_mesh(obj.data)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("missing_bmesh_import", names)
+
+    def test_bmesh_imported_ok(self):
+        """Code with bmesh import is NOT flagged."""
+        code = """
+import bpy
+import bmesh
+obj = bpy.context.active_object
+bm = bmesh.from_edit_mesh(obj.data)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("missing_bmesh_import", names)
+
+    def test_bmesh_editmode_mismatch(self):
+        """from_edit_mesh without mode_set is caught."""
+        code = """
+import bpy
+import bmesh
+obj = bpy.context.active_object
+bm = bmesh.from_edit_mesh(obj.data)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("bmesh_editmode_mismatch", names)
+
+    def test_bmesh_editmode_ok(self):
+        """from_edit_mesh with mode_set is NOT flagged."""
+        code = """
+import bpy
+import bmesh
+bpy.ops.object.mode_set(mode='EDIT')
+obj = bpy.context.active_object
+bm = bmesh.from_edit_mesh(obj.data)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("bmesh_editmode_mismatch", names)
+
+    def test_vector_arithmetic(self):
+        """vert.co += offset + float is caught."""
+        code = """
+import bmesh
+for vert in bm.verts:
+    vert.co += offset + random.uniform(-0.1, 0.1)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("vector_arithmetic", names)
+
+    def test_update_edit_mesh_extra_args(self):
+        """update_edit_mesh with 2+ args is caught."""
+        code = """
+import bmesh
+bm.update_edit_mesh(mesh, True, True)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("update_edit_mesh_args", names)
+
+    def test_update_edit_mesh_one_arg_ok(self):
+        """update_edit_mesh with 1 arg is NOT flagged."""
+        code = """
+import bmesh
+bm.update_edit_mesh(mesh)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("update_edit_mesh_args", names)
+
+
 if __name__ == "__main__":
     unittest.main()

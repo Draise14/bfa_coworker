@@ -618,7 +618,43 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
                     break
             break  # One hint per call is enough.
 
-    return issues
+    # 24. Missing bmesh import — code uses bmesh without importing it.
+    if re.search(r'\bbmesh\.', code) and 'import bmesh' not in code:
+        issues.append((
+            "missing_bmesh_import",
+            "Code uses bmesh but does not 'import bmesh'. "
+            "Add 'import bmesh' at the top of your script.",
+        ))
+
+    # 25. bmesh edit mode mismatch — using from_edit_mesh without entering edit mode,
+    #     or using from_mesh (object mode) when edit mode was intended.
+    if 'bmesh.from_edit_mesh' in code and 'mode_set' not in code and 'EDIT' not in code:
+        issues.append((
+            "bmesh_editmode_mismatch",
+            "bmesh.from_edit_mesh() requires the object to be in EDIT mode. "
+            "Switch to edit mode first: bpy.ops.object.mode_set(mode='EDIT')",
+        ))
+
+    # 26. Vector arithmetic type errors — adding float/tuple to Vector.
+    #     Common pattern: vert.co += offset + random.uniform(-0.1, 0.1)
+    #     Fix: use mathutils.Vector for offsets, or add component-wise.
+    if re.search(r'vert\.co\s*\+=.*\+\s*[a-z]', code):
+        issues.append((
+            "vector_arithmetic",
+            "Can't add a scalar to a Vector. "
+            "Use: vert.co += mathutils.Vector((dx, dy, dz)) "
+            "or set components: vert.co.x += dx",
+        ))
+
+    # 27. update_edit_mesh with wrong number of args.
+    #     In Blender 5.x, update_edit_mesh() takes 0 or 1 args.
+    if re.search(r'update_edit_mesh\([^)]+,\s*[^)]+\)', code):
+        issues.append((
+            "update_edit_mesh_args",
+            "bmesh.update_edit_mesh() takes at most 1 argument in Blender 5.x. "
+            "Use: bm.update_edit_mesh(mesh) — no extra args.",
+        ))
+
     return issues
 
 def _execute_code(

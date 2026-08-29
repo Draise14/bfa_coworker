@@ -542,19 +542,17 @@ def _render_markdown(layout, md, width=40, max_lines=200):
             icon='INFO',
         )
 def _draw_multiline(layout: bpy.types.UILayout, text: str, width: int = _WRAP_WIDTH) -> None:
-    """Draw multi-line text in a layout, using ``label_multiline`` if available.
+    """Draw multi-line text in a layout, wrapping to the given width.
 
-    In Blender 5.3+, ``UILayout.label_multiline(text=...)`` natively wraps
-    long text across multiple lines.  For older versions we fall back to
-    one ``label()`` call per wrapped line.
+    Uses _wrap_text to enforce character-based wrapping regardless of
+    layout width.  label_multiline was removed because it wraps to the
+    full layout width in Blender 5.3, making assistant responses span
+    the entire panel instead of wrapping at a readable width.
     """
     if not text:
         return
-    if hasattr(layout, "label_multiline"):
-        layout.label_multiline(text=text)
-    else:
-        for line in _wrap_text(text, width=width).split("\n"):
-            layout.label(text=line)
+    for line in _wrap_text(text, width=width).split("\n"):
+        layout.label(text=line)
 
 
 def _draw_reasoning(

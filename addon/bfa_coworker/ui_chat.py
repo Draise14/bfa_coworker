@@ -303,7 +303,7 @@ class BFACW_OT_copy_code_block(Operator):
         self.report({"INFO"}, "Code copied to clipboard")
         return {"FINISHED"}
 
-def _render_markdown(layout, md, width=40, max_lines=200):
+def _render_markdown(layout, md, width=40):
     """Walk a markdown string and render into the given layout.
 
     Paragraph text is emitted into a rolling compact column (align=True +
@@ -319,7 +319,6 @@ def _render_markdown(layout, md, width=40, max_lines=200):
     md = _close_trailing_fence(md)
     lines = md.splitlines()
     n = len(lines)
-    rendered = [0]  # box so helpers can mutate
 
     # Rolling paragraph column — lazily created so each block break gets
     # its own column (which keeps tight spacing within but separates
@@ -337,19 +336,18 @@ def _render_markdown(layout, md, width=40, max_lines=200):
         return para_col[0]
 
     def _emit_para(text, indent=""):
-        if rendered[0] >= max_lines:
-            return
         if not text.strip():
             return
         col = _para_col()
-        for chunk in _wrap_for_label(indent + text, width=width):
-            if rendered[0] >= max_lines:
-                return
-            col.label(text=chunk if chunk else " ")
-            rendered[0] += 1
+        full = indent + text
+        if hasattr(col, "label_multiline"):
+            col.label_multiline(text=full)
+        else:
+            for chunk in _wrap_for_label(full, width=width):
+                col.label(text=chunk if chunk else " ")
 
     i = 0
-    while i < n and rendered[0] < max_lines:
+    while i < n:
         raw = lines[i]
         stripped = raw.strip()
 
@@ -386,13 +384,8 @@ def _render_markdown(layout, md, width=40, max_lines=200):
             col = box.column(align=True)
             col.scale_y = _CODE_SCALE_Y
             for code_line in code_body_lines:
-                if rendered[0] >= max_lines:
-                    break
                 for chunk in _wrap_for_label(code_line, width=max(10, width - 2)):
-                    if rendered[0] >= max_lines:
-                        break
                     col.label(text=chunk if chunk else " ")
-                    rendered[0] += 1
             _break_para()
             continue
 
@@ -414,7 +407,6 @@ def _render_markdown(layout, md, width=40, max_lines=200):
                 for cell in header_cells:
                     c = hrow.column(align=True)
                     c.label(text=_strip_inline(cell), icon='DOT')
-                rendered[0] += 1
                 for row in body_rows:
                     while len(row) < len(header_cells):
                         row.append("")
@@ -428,7 +420,6 @@ def _render_markdown(layout, md, width=40, max_lines=200):
                         )
                         for t in wrapped[:3]:
                             c.label(text=t if t else " ")
-                    rendered[0] += 1
             except Exception as e:
                 # Table data was malformed enough to break the renderer
                 # (ragged rows, empty header, mismatched separator row).
@@ -439,10 +430,7 @@ def _render_markdown(layout, md, width=40, max_lines=200):
                 fallback.scale_y = _PARA_SCALE_Y
                 for ln in lines[table_start:i]:
                     for chunk in _wrap_for_label(ln, width=width):
-                        if rendered[0] >= max_lines:
-                            break
                         fallback.label(text=chunk if chunk else " ")
-                        rendered[0] += 1
             _break_para()
             continue
 
@@ -464,26 +452,22 @@ def _render_markdown(layout, md, width=40, max_lines=200):
                 hrow = layout.row()
                 hrow.scale_y = 1.6
                 hrow.label(text=text.upper(), icon=icon)
-                rendered[0] += 1
             elif level == 2:
                 # H2: slightly larger row, strong icon
                 layout.separator(factor=0.5)
                 hrow = layout.row()
                 hrow.scale_y = 1.35
                 hrow.label(text=text, icon=icon)
-                rendered[0] += 1
             elif level == 3:
                 # H3: modest boost, distinct icon
                 hrow = layout.row()
                 hrow.scale_y = 1.2
                 hrow.label(text=text, icon=icon)
-                rendered[0] += 1
             else:
                 # H4-H6: subtle differentiation
                 hrow = layout.row()
                 hrow.scale_y = 1.1
                 hrow.label(text=text, icon=icon)
-                rendered[0] += 1
             i += 1
             _break_para()
             continue
@@ -492,7 +476,6 @@ def _render_markdown(layout, md, width=40, max_lines=200):
         if _HR_RE.match(raw):
             _break_para()
             layout.separator()
-            rendered[0] += 1
             i += 1
             continue
 
@@ -505,10 +488,7 @@ def _render_markdown(layout, md, width=40, max_lines=200):
             qcol.scale_y = _PARA_SCALE_Y
             qtext = _strip_inline(mq.group(1) or "")
             for chunk in _wrap_for_label("▎ " + qtext, width=width):
-                if rendered[0] >= max_lines:
-                    break
                 qcol.label(text=chunk)
-                rendered[0] += 1
             i += 1
             _break_para()
             continue
@@ -536,11 +516,6 @@ def _render_markdown(layout, md, width=40, max_lines=200):
         _emit_para(_strip_inline(stripped))
         i += 1
 
-    if rendered[0] >= max_lines:
-        layout.label(
-            text=f"… (truncated to {max_lines} lines — open in Text Editor)",
-            icon='INFO',
-        )
 def _draw_multiline(layout: bpy.types.UILayout, text: str, width: int = _WRAP_WIDTH) -> None:
     """Draw multi-line text in a layout, wrapping to the given width.
 

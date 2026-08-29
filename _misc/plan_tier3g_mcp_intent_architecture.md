@@ -181,7 +181,7 @@ elif editor == "NODE_EDITOR":
     tools = SURFACE_TOOLS + MATERIAL_TOOLS + NODE_TOOLS
 elif editor == "SEQUENCE_EDITOR":
     too
-
+```
 ---
 
 ## 5. Comparison Tables

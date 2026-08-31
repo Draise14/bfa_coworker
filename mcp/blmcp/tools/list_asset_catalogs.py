@@ -15,6 +15,7 @@ from blmcp.tools_helpers import (
     toolcode_wrap_with_calling_convention,
 )
 from blmcp.tools_helpers.connection import send_code
+from blmcp.tools.list_asset_catalogs_toolcode import Params
 from mcp.server.fastmcp import FastMCP  # pylint: disable=import-error,no-name-in-module
 from mcp.types import ToolAnnotations  # pylint: disable=import-error,no-name-in-module
 
@@ -44,8 +45,7 @@ def register(mcp: FastMCP) -> None:
         Returns:
             Catalogs with paths and asset counts per directory.
         """
-        return toolcode_format_call(
-            _TOOL_CALL,
-            send_code,
-            library_name=library_name,
+        return send_code(
+            toolcode_format_call(_TOOL_CALL, Params(library_name=library_name)),
+            strict_json=True,
         )

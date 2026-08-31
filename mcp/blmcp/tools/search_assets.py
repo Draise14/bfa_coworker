@@ -15,6 +15,7 @@ from blmcp.tools_helpers import (
     toolcode_wrap_with_calling_convention,
 )
 from blmcp.tools_helpers.connection import send_code
+from blmcp.tools.search_assets_toolcode import Params
 from mcp.server.fastmcp import FastMCP  # pylint: disable=import-error,no-name-in-module
 from mcp.types import ToolAnnotations  # pylint: disable=import-error,no-name-in-module
 
@@ -43,9 +44,10 @@ def register(mcp: FastMCP) -> None:
 
         Returns top 20 matches with name, type, and source library.
         """
-        params = {"query": query}
-        if library_name:
-            params["library_name"] = library_name
-        if asset_type:
-            params["asset_type"] = asset_type
-        return send_code(toolcode_format_call(_TOOL_CALL, params), strict_json=True)
+        return send_code(
+            toolcode_format_call(
+                _TOOL_CALL,
+                Params(query=query, library_name=library_name, asset_type=asset_type),
+            ),
+            strict_json=True,
+        )

@@ -9,6 +9,7 @@ Tool-code for assigning a material to one or more objects.
 
 __all__ = (
     "Result",
+    "Params",
     "main",
 )
 
@@ -22,17 +23,23 @@ class Result(NamedTuple):
     assigned_to: list[str]
 
 
-def main(
-    material_name: str,
-    object_names: list[str] = None,
-    slot_index: int = 0,
-) -> Result:
+class Params(NamedTuple):
+    material_name: str
+    object_names: tuple[str, ...] = ()
+    slot_index: int = 0
+
+
+def main(params: Params) -> Result:
     """Assign an existing material to one or more objects.
 
     If object_names is empty, assigns to the active object.
     The material must already exist in the scene (load it first with
     load_asset_in_context or create it with setup_pbr_material).
     """
+    material_name = params.material_name
+    object_names = list(params.object_names)
+    slot_index = params.slot_index
+
     import bpy  # pylint: disable=import-error
 
     if object_names is None:

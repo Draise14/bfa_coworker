@@ -9,6 +9,7 @@ Tool-code for searching across asset libraries.
 
 __all__ = (
     "Result",
+    "Params",
     "main",
 )
 
@@ -22,7 +23,14 @@ class Result(NamedTuple):
     total_found: int
 
 
-def main(query: str, library_name: str = "", asset_type: str = "") -> Result:
+class Params(NamedTuple):
+    query: str
+    library_name: str = ""
+    asset_type: str = ""
+
+
+def main(params: Params) -> Result:
+    query, library_name, asset_type = params.query, params.library_name, params.asset_type
     """Search across asset libraries by name, tag, and description.
 
     Matches are returned when the query appears in the asset name,

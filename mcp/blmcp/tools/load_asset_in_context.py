@@ -15,6 +15,7 @@ from blmcp.tools_helpers import (
     toolcode_wrap_with_calling_convention,
 )
 from blmcp.tools_helpers.connection import send_code
+from blmcp.tools.load_asset_in_context_toolcode import Params
 from mcp.server.fastmcp import FastMCP  # pylint: disable=import-error,no-name-in-module
 from mcp.types import ToolAnnotations  # pylint: disable=import-error,no-name-in-module
 
@@ -60,13 +61,16 @@ def register(mcp: FastMCP) -> None:
             link_mode: "APPEND" (default, full copy) or "LINK" (shared reference).
             location: Optional [x, y, z] world position for COLLECTION and OBJECT assets.
         """
-        params = {
-            "library_name": library_name,
-            "asset_name": asset_name,
-            "link_mode": link_mode,
-        }
-        if asset_type:
-            params["asset_type"] = asset_type
-        if location is not None:
-            params["location"] = tuple(location)
-        return send_code(toolcode_format_call(_TOOL_CALL, params), strict_json=True)
+        return send_code(
+            toolcode_format_call(
+                _TOOL_CALL,
+                Params(
+                    library_name=library_name,
+                    asset_name=asset_name,
+                    asset_type=asset_type,
+                    link_mode=link_mode,
+                    location=tuple(location) if location is not None else None,
+                ),
+            ),
+            strict_json=True,
+        )

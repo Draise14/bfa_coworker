@@ -9,6 +9,7 @@ Tool-code for getting detailed asset tags and metadata.
 
 __all__ = (
     "Result",
+    "Params",
     "main",
 )
 
@@ -26,7 +27,16 @@ class Result(NamedTuple):
     metadata: dict[str, Any]
 
 
-def main(library_name: str, asset_name: str, asset_type: str = "") -> Result:
+class Params(NamedTuple):
+    library_name: str
+    asset_name: str
+    asset_type: str = ""
+
+
+def main(params: Params) -> Result:
+    library_name, asset_name, asset_type = (
+        params.library_name, params.asset_name, params.asset_type,
+    )
     """Get detailed tags and metadata for an asset."""
     import bpy  # pylint: disable=import-error
     import os

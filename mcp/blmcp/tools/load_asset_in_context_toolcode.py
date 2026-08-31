@@ -9,6 +9,7 @@ Tool-code for loading an asset from the asset browser into the current context.
 
 __all__ = (
     "Result",
+    "Params",
     "main",
 )
 
@@ -23,13 +24,19 @@ class Result(NamedTuple):
     loaded_into: str
 
 
-def main(
-    library_name: str,
-    asset_name: str,
-    asset_type: str = "",
-    link_mode: str = "APPEND",
-    location: Optional[tuple[float, float, float]] = None,
-) -> Result:
+class Params(NamedTuple):
+    library_name: str
+    asset_name: str
+    asset_type: str = ""
+    link_mode: str = "APPEND"
+    location: Optional[tuple[float, float, float]] = None
+
+
+def main(params: Params) -> Result:
+    library_name, asset_name, asset_type, link_mode, location = (
+        params.library_name, params.asset_name, params.asset_type,
+        params.link_mode, params.location,
+    )
     """Load an asset from the asset browser into the current context.
 
     *link_mode* — ``"APPEND"`` (default, full independent copy) or

@@ -9,6 +9,7 @@ Tool-code for listing asset library catalog/directory structure.
 
 __all__ = (
     "Result",
+    "Params",
     "main",
 )
 
@@ -22,7 +23,12 @@ class Result(NamedTuple):
     asset_counts: dict[str, int]
 
 
-def main(library_name: str = "") -> Result:
+class Params(NamedTuple):
+    library_name: str = ""
+
+
+def main(params: Params) -> Result:
+    library_name = params.library_name
     """List the catalog/directory structure of asset libraries.
 
     Each catalog includes up to 10 sample asset names so the agent

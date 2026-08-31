@@ -263,6 +263,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         cfg.remote_api_url = self.remote_api_url
         cfg.remote_api_key = self.remote_api_key
         cfg.remote_model = self.remote_model
+        cfg.llama_source = self.llama_source.lower()
         cfg.llama_path = self.llama_path
         cfg.llama_backend = self.llama_backend
         cfg.model_repo_id = self.model_repo_id
@@ -288,7 +289,26 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
     # ── Unified Operating Mode ──────────────────────────────────────────
 
     def _update_operating_mode(self, _context: bpy.types.Context) -> None:
-        """Sync operating_mode to agent_mode and llm_mode, and switch to the relevant tab."""
+        """Sync operating_mode to agent_mode and llm_mode, and switch to the relevant tab.
+
+        Rejects the change when the agent is already running — switching modes
+        mid-flight can kill the MCP server and leave the agent in a broken state.
+        The user must stop the agent first.
+        """
+        from . import agent_controller as _ac
+        if _ac._agent_state.mcp_server_running:
+            # Revert to the previous mode.
+            _prev = _ac._agent_state.current_mode or "off"
+            print("[Coworker] operating_mode change rejected — agent is running. Stop the agent first.")
+            # Force revert by resetting to the current active mode.
+            if _prev == "local":
+                self["operating_mode"] = "LOCAL_LLM"
+            elif _prev == "remote":
+                self["operating_mode"] = "REMOTE_API"
+            else:
+                self["operating_mode"] = "LOCAL_LLM"  # safe default
+            return
+
         if self.operating_mode == "LOCAL_LLM":
             self.agent_mode = "SELF_CONTAINED"
             self.llm_mode = "local"
@@ -304,11 +324,28 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
     operating_mode: EnumProperty(  # type: ignore[valid-type]
         name="Operating Mode",
-        description="Select how the Coworker agent connects to an LLM",
+        description=(
+            "Select how the Coworker agent connects to an LLM.\n"
+            "  Local — run a local LLM via llama-server (requires download)\n"
+            "  Remote — use a remote API like OpenAI or OpenRouter\n"
+            "  External Harness — MCP tools only, no built-in LLM\n"
+            "\n"
+            "⚠ Cannot be changed while the agent is running.\n"
+            "Stop the agent first, then switch modes."
+        ),
         items=OPERATING_MODE_ITEMS,
         default="LOCAL_LLM",
         update=_update_operating_mode,
     )
+
+    def _update_llama_path(self, _context: bpy.types.Context) -> None:
+        """Sync llama_path to llm_manager config and re-search for the binary."""
+        llm = get_llm_manager()
+        cfg = llm.get_config()
+        cfg.llama_path = self.llama_path
+        llm.set_config(cfg)
+        # Re-run detection so the UI reflects the new path immediately.
+        llm.invalidate_llama_server_cache()
 
     llama_path: StringProperty(  # type: ignore[valid-type]
         name="llama-server Path",
@@ -321,6 +358,33 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             "  macOS/Linux: export PATH=\"/path/to/llama.cpp/build/bin:$PATH\"\n"
             "The addon bundles its own copy — only set this if you need a specific build."
         ),
+        update=_update_llama_path,
+    )
+
+    def _update_llama_source(self, _context: bpy.types.Context) -> None:
+        """Sync llama_source to llm_manager config and re-search for the binary."""
+        llm = get_llm_manager()
+        cfg = llm.get_config()
+        cfg.llama_source = self.llama_source.lower()
+        llm.set_config(cfg)
+        # Re-run detection so the UI reflects the new source immediately.
+        llm.invalidate_llama_server_cache()
+
+    llama_source: EnumProperty(  # type: ignore[valid-type]
+        name="llama-server Source",
+        description=(
+            "Where llama-server comes from.\n"
+            "  Bundled — the addon downloads and manages its own copy\n"
+            "            (Download / Update / Remove buttons are shown).\n"
+            "  Custom — you provide your own llama.cpp build via a path.\n"
+            "            The addon never modifies or updates it."
+        ),
+        items=[
+            ("BUNDLED", "Bundled (auto-managed)", "The addon downloads and manages llama-server automatically"),
+            ("CUSTOM", "Custom (user-provided)", "Use your own llama.cpp build — the addon never modifies it"),
+        ],
+        default="BUNDLED",
+        update=_update_llama_source,
     )
 
     def _update_llama_backend(self, _context: bpy.types.Context) -> None:
@@ -339,7 +403,10 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             "  Auto — detect NVIDIA (CUDA), AMD/Intel (Vulkan), or CPU\n"
             "  CUDA — NVIDIA GPUs (RTX 20xx+; 3090/4090/5090 recommended)\n"
             "  Vulkan — AMD Radeon, Intel Arc, or NVIDIA fallback\n"
-            "  CPU — no GPU acceleration"
+            "  CPU — no GPU acceleration\n"
+            "\n"
+            "⚠ Cannot be changed while the agent is running.\n"
+            "Stop the agent first, then change the backend."
         ),
         items=[
             ("auto", "Auto (Detect)", "Auto-detect the best backend for your GPU"),
@@ -464,6 +531,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default="",
     )
 
+    show_more_models: BoolProperty(  # type: ignore[valid-type]
+        name="Show More Models",
+        default=False,
+    )
+
     # ── Existing Model Selector ──────────────────────────────────────
 
     existing_model_path: StringProperty(  # type: ignore[valid-type]
@@ -474,6 +546,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         ),
         default="",
         subtype='FILE_PATH',
+    )
+    custom_model_url: StringProperty(  # type: ignore[valid-type]
+        name="Custom Model URL",
+        description="HuggingFace URL or direct .gguf link to download",
+        default="",
     )
 
     remote_api_url: StringProperty(  # type: ignore[valid-type]
@@ -981,9 +1058,20 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         layout = self.layout
 
         # ── Operating Mode selector (top-level, always visible) ─────────
+        # Disable while the agent is running to prevent premature stops.
+        from . import agent_controller as _ac
+        agent_running = _ac._agent_state.mcp_server_running
+
         box = layout.box()
         box.label(text="Operating Mode", icon='TOOL_SETTINGS')
-        box.row().prop(self, "operating_mode", expand=True)
+        mode_row = box.row(align=True)
+        mode_row.prop(self, "operating_mode", expand=True)
+        if agent_running:
+            mode_row.enabled = False
+            box.label(
+                text="Stop the agent before switching modes",
+                icon='ERROR',
+            )
         layout.separator()
 
         # ── Tab selector row ────────────────────────────────────────────
@@ -1040,132 +1128,306 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
         # ── LLM Configuration (Local mode only) ────────────────────────
         box = layout.box()
-        box.label(text="Local LLM Configuration", icon='CONSOLE')
+        box.label(text="1. Configure Local LLM Backend", icon='CONSOLE')
 
-        # ── llama-server binary ──────────────────────────────────
+        # ── llama-server source toggle ────────────────────────────
+        #   Bundled — the addon downloads & manages its own copy.
+        #   Custom  — you provide your own llama.cpp build; the addon
+        #             never modifies or updates it.
+        box.prop(self, "llama_source", expand=True)
+
         llm = get_llm_manager()
         llm_state = llm.get_state()
-        llama_found = llm.find_llama_server()
-        row = box.row(align=True)
-        if llama_found:
-            row.label(text="llama-server: Installed", icon='CHECKMARK')
-        else:
-            row.label(text="llama-server: Not installed", icon='ERROR')
-            row.operator(
-                "bfacw.download_llama_server",
-                icon="IMPORT",
-                text="Download llama-server",
-            )
-        # GPU backend selector.
-        box.prop(self, "llama_backend")
-        # Unified progress block for llama-server download.
-        if llm_state.download_kind == "llama_server":
-            if llm_state.download_progress:
-                box.label(
-                    text=llm_state.download_progress,
-                    icon=_download_status_icon(llm_state.download_progress),
+
+        if self.llama_source == "CUSTOM":
+            # ── Custom (user-provided) binary ──────────────────────
+            box.prop(self, "llama_path", text="Path")
+            llama_found = llm.find_llama_server()
+            # Validate that the cached result still exists on disk;
+            # an external uninstall or file move would leave stale cache.
+            if llama_found and not os.path.isfile(llama_found):
+                llm.invalidate_llama_server_cache()
+                llama_found = llm.find_llama_server()
+            row = box.row(align=True)
+            if llama_found:
+                _ver = llm._llama_server_version(llama_found)
+                _build = llm._parse_llama_build_number(_ver)
+                _build_str = "build {:d}".format(_build) if _build else "unknown build"
+                row.label(
+                    text="llama-server: Found ({:s})".format(_build_str),
+                    icon='CHECKMARK',
                 )
-            pct = llm_state.download_progress_pct
-            if pct > 0:
+                # Show path and open-folder button for custom binary.
+                _path_row = box.row(align=True)
+                _path_row.label(
+                    text="Location: {:s}".format(llama_found),
+                    icon='FILE_FOLDER',
+                )
+                _path_row.operator(
+                    "bfacw.open_llama_server_folder",
+                    icon='FILE_FOLDER',
+                    text="Open Folder",
+                )
+            else:
+                row.label(
+                    text="llama-server: Not found — check the path above",
+                    icon='ERROR',
+                )
+            box.label(
+                text="Your custom binary — the addon will not modify or update it.",
+                icon='INFO',
+            )
+        else:
+            # ── Bundled (addon-managed) binary ─────────────────────
+            llama_found = llm.find_llama_server()
+            # Validate that the cached result still exists on disk;
+            # an external uninstall or file move would leave stale cache.
+            if llama_found and not os.path.isfile(llama_found):
+                llm.invalidate_llama_server_cache()
+                llama_found = llm.find_llama_server()
+            row = box.row(align=True)
+            if llama_found:
+                # Check version - warn if too old for Qwen3 SSM models.
+                _ver = llm._llama_server_version(llama_found)
+                _build = llm._parse_llama_build_number(_ver)
+                _outdated = _build and _build < llm._MIN_SUPPORTED_BUILD
+                # Detect source: bundled vs PATH/System.
+                _bundled_dir = str(llm._get_bundled_llama_dir())
+                _is_bundled = llama_found.startswith(_bundled_dir)
+                _source = "bundled" if _is_bundled else "system"
+                if _outdated:
+                    row = box.row(align=True)
+                    row.label(
+                        text="OUTDATED — build {:d} (min {:d}) [{:s}]".format(
+                            _build, llm._MIN_SUPPORTED_BUILD, _source),
+                        icon='ERROR',
+                    )
+                    row.operator(
+                        "bfacw.download_llama_server",
+                        icon="FILE_REFRESH",
+                        text="Update",
+                    ).force = True
+                    row.operator(
+                        "bfacw.remove_llama_server",
+                        icon="TRASH",
+                        text="Remove",
+                    )
+                elif not _build:
+                    # Unknown build — the version string could not be
+                    # parsed. Offer Update so the user can force a fresh
+                    # download instead of being stuck with no way forward.
+                    row = box.row(align=True)
+                    row.label(
+                        text="llama-server: Installed (unknown build, {:s})".format(_source),
+                        icon='WARNING',
+                    )
+                    row.operator(
+                        "bfacw.download_llama_server",
+                        icon="FILE_REFRESH",
+                        text="Update",
+                    ).force = True
+                    row.operator(
+                        "bfacw.remove_llama_server",
+                        icon="TRASH",
+                        text="Remove",
+                    )
+                else:
+                    row = box.row(align=True)
+                    row.label(
+                        text="llama-server: Installed (build {:d}, {:s})".format(_build, _source),
+                        icon='CHECKMARK',
+                    )
+                    row.operator(
+                        "bfacw.remove_llama_server",
+                        icon="TRASH",
+                        text="Remove",
+                    )
+                    if not _is_bundled:
+                        # PATH binary: offer to override with bundled version.
+                        row.operator(
+                            "bfacw.download_llama_server",
+                            icon="IMPORT",
+                            text="Override",
+                        ).force = True
+                # Show the detected path and a button to open the folder.
+                _path_row = box.row(align=True)
+                _path_row.label(
+                    text="Location: {:s}".format(llama_found),
+                    icon='FILE_FOLDER',
+                )
+                _path_row.operator(
+                    "bfacw.open_llama_server_folder",
+                    icon='FILE_FOLDER',
+                    text="Open Folder",
+                )
+            else:
                 row = box.row(align=True)
-                row.progress(factor=pct / 100.0, type='BAR')
-            if llm_state.download_active:
-                row = box.row(align=True)
-                # Icon-only (text="") — the operator's bl_label shows as tooltip.
-                row.operator("bfacw.cancel_download", icon='CANCEL', text="")
+                row.label(text="llama-server: Not installed", icon='ERROR')
+                row.operator(
+                    "bfacw.download_llama_server",
+                    icon="IMPORT",
+                    text="Download",
+                )
+                # Show the bundled directory so the user knows where it
+                # will be installed.
+                box.label(
+                    text="Install to: {:s}".format(str(llm._get_bundled_llama_dir())),
+                    icon='FILE_FOLDER',
+                )
+            # GPU backend selector — disabled while agent is running
+            # (changing backend requires restarting llama-server).
+            from . import agent_controller as _ac_backend
+            _backend_row = box.row()
+            _backend_row.prop(self, "llama_backend")
+            if _ac_backend._agent_state.mcp_server_running:
+                _backend_row.enabled = False
+            # Unified progress block for llama-server download.
+            if llm_state.download_kind == "llama_server":
+                if llm_state.download_progress:
+                    box.label(
+                        text=llm_state.download_progress,
+                        icon=_download_status_icon(llm_state.download_progress),
+                    )
+                pct = llm_state.download_progress_pct
+                if pct > 0:
+                    row = box.row(align=True)
+                    row.progress(factor=pct / 100.0, type='BAR')
+                if llm_state.download_active:
+                    row = box.row(align=True)
+                    # Icon-only (text="") — the operator's bl_label shows as tooltip.
+                    row.operator("bfacw.cancel_download", icon='CANCEL', text="")
 
-        # ── Recommended Models (presets) ─────────────────────────
-        box.label(text="Pick a Model", icon='VIEWZOOM')
+        # -- Model Selection (restructured) --------------------------------
+        # Primary model family: Qwen3.8-27B with quant tiers
+        box.label(text="2. Pick a Large Language Model", icon='VIEWZOOM')
 
-        _CATEGORIES = [
-            ("flagship", "Flagship (24 GB+ VRAM) — Best quality, needs high-end GPU", 'SORT_ASC'),
-            ("mid_range", "Mid-Range (16-20 GB VRAM) — Best balance, RTX 3090/4090 sweet spot", 'VIEWZOOM'),
-            ("lightweight", "Lightweight (\u2264 8 GB VRAM) — Runs on any GPU or integrated", 'LIGHT_SUN'),
-        ]
+        # System info
+        import platform
+        try:
+            import psutil
+            ram_gb = psutil.virtual_memory().total / (1024**3)
+        except ImportError:
+            ram_gb = 0
+        sys_info = "{:.0f} GB RAM".format(ram_gb) if ram_gb > 0 else ""
+        if self.llama_backend == "cuda":
+            sys_info += " · CUDA"
+        elif self.llama_backend == "vulkan":
+            sys_info += " · Vulkan"
+        elif self.llama_backend == "metal":
+            sys_info += " · Metal"
+        if sys_info:
+            box.label(text=sys_info, icon='INFO')
+
+        # Primary family header
+        pri_box = box.box()
+        pri_box.label(
+            text="Recommended — Qwen3.8-27B (vision + agentic)",
+            icon='HIDE_OFF',
+        )
 
         all_presets = llm.get_presets()
+        primary_ids = ["qwen38_27b_q4", "qwen38_27b_q8"]
+        primary_presets = [p for p in all_presets if p.identifier in primary_ids]
 
-        for cat_id, cat_label, cat_icon in _CATEGORIES:
-            cat_presets = [p for p in all_presets if p.category == cat_id]
-            if not cat_presets:
-                continue
-            cat_box = box.box()
-            cat_box.label(text=cat_label, icon=cat_icon)
-            for preset in cat_presets:
-                row = cat_box.row(align=True)
-                # Single icon per model: IMAGE_DATA for vision, VIEWZOOM otherwise.
-                icon = 'IMAGE_DATA' if preset.vision else 'VIEWZOOM'
-                op = row.operator(
-                    "bfacw.select_preset",
-                    text=preset.name,
-                    icon=icon,
-                    depress=self.model_preset == preset.identifier,
-                )
-                op.preset_id = preset.identifier
-                # Multiline label: hardware_note + why on subsequent lines.
-                col = row.column(align=True)
-                col.scale_y = 0.8
-                col.label(
-                    text="\u2502 {:s}".format(preset.hardware_note),
-                )
-                col.label(
-                    text="\u2514 {:s}".format(preset.why),
-                )
-
-        # Custom model entry.
-        box.prop(self, "model_preset", text="Custom Model")
-        if self.model_preset != "_custom" and self.model_preset_info:
-            info_box = box.box()
-            info_box.label(text="Model Information", icon='INFO')
-            for line in self.model_preset_info.split("\n"):
-                info_box.label(text=line)
-
-        # ── Context Window (preset buttons + custom override) ────
-        # One-click sizes instead of a free slider — the most common
-        # startup crash is a context too large for the available memory.
-        ctx_box = box.box()
-        ctx_box.label(
-            text="Context Window (how much the model remembers per reply)",
-            icon='MEMORY',
-        )
-        row = ctx_box.row(align=True)
-        active_ctx = self.local_ctx_size
-        llm = get_llm_manager()
-        is_custom = (self.local_ctx_preset == "custom") or (
-            active_ctx not in llm.ctx_preset_sizes)
-        for value in llm.ctx_preset_sizes:
+        for preset in primary_presets:
+            row = pri_box.row(align=True)
+            is_active = self.model_preset == preset.identifier
+            icon = 'IMAGE_DATA' if preset.vision else 'VIEWZOOM'
             op = row.operator(
-                "bfacw.set_ctx_preset",
-                text=llm.ctx_preset_label(value),
-                depress=(active_ctx == value),
+                "bfacw.select_preset",
+                text=preset.name,
+                icon=icon,
+                depress=is_active,
             )
-            op.value = value
-        op = row.operator(
-            "bfacw.set_ctx_preset",
-            text="Custom",
-            depress=is_custom,
-        )
-        op.value = 0
-        if is_custom:
-            ctx_box.prop(self, "local_ctx_size")
-        # Hardware-aware recommendation hint.
-        model_gb = self._current_model_gb(llm.get_preset_by_id(self.model_preset))
-        ctx_box.label(
-            text=llm.hardware_context_hint(model_gb, self.llama_backend),
+            op.preset_id = preset.identifier
+            col = row.column(align=True)
+            col.scale_y = 0.8
+            col.label(text="│ {:s}".format(preset.hardware_note))
+            col.label(text="└ {:s}".format(preset.why))
+
+        pri_box.label(
+            text="Vision is built-in with these models and downloaded additionally",
             icon='INFO',
         )
 
-        # ── Download or use existing ─────────────────────────────
-        llm_state = llm.get_state()
+        # -- More Models (collapsible) -------------------------------------
+        more_box = pri_box.box()
+        more_box.prop(
+            self,
+            "show_more_models",
+            text="More Models (curated presets)",
+            icon='TRIA_DOWN' if self.show_more_models else 'TRIA_RIGHT',
+            emboss=True,
+        )
+        if self.show_more_models:
+            more_presets = [p for p in all_presets if p.identifier not in primary_ids]
+            _MORE_CATEGORIES = [
+                ("flagship", "Flagship (24 GB+ VRAM)", 'SORT_ASC'),
+                ("mid_range", "Mid-Range (16-20 GB VRAM)", 'VIEWZOOM'),
+                ("lightweight", "Lightweight (≤ 8 GB VRAM)", 'LIGHT_SUN'),
+            ]
+            for cat_id, cat_label, cat_icon in _MORE_CATEGORIES:
+                cat_presets = [p for p in more_presets if p.category == cat_id]
+                if not cat_presets:
+                    continue
+                more_box.label(text=cat_label, icon=cat_icon)
+                for preset in cat_presets:
+                    row = more_box.row(align=True)
+                    icon = 'IMAGE_DATA' if preset.vision else 'VIEWZOOM'
+                    op = row.operator(
+                        "bfacw.select_preset",
+                        text=preset.name,
+                        icon=icon,
+                        depress=self.model_preset == preset.identifier,
+                    )
+                    op.preset_id = preset.identifier
+                    col = row.column(align=True)
+                    col.scale_y = 0.8
+                    col.label(text="│ {:s}".format(preset.hardware_note))
+                    col.label(text="└ {:s}".format(preset.why))
 
-        # Determine download button state.
+        # -- Or use a local file -------------------------------------------
+        local_box = box.box()
+        local_box.label(text="3. Set the downloaded location", icon='FILE_FOLDER')
+        row = local_box.row(align=True)
+        row.label(
+            text="This is where you will store the downloaded or select an existing GGUF file. ",
+            icon='INFO',
+        )
+        row = local_box.row(align=True)
+        row.operator("bfacw.scan_existing_models", icon="FILE_REFRESH", text="Scan Folder")
+        row.operator("bfacw.open_models_dir", icon="FILE_FOLDER", text="Open Folder")
+        local_box.prop(self, "downloaded_models_dir")
+        if self.existing_model_path:
+            local_box.label(
+                text="Selected: {:s}".format(os.path.basename(self.existing_model_path)),
+                icon='CHECKMARK',
+            )
+
+        # -- Custom model entry --------------------------------------------
+        local_box.prop(self, "model_preset", text="Your Selected Model Preset")
+        local_box.label(text="This defines what will download, either a prest, or custom Hugging Face model", icon='INFO')
+        if self.model_preset != "_custom" and self.model_preset_info:
+            info_box = local_box.box()
+            info_box.label(text="Model Preset Information", icon='INFO')
+            for line in self.model_preset_info.split("\n"):
+                info_box.label(text=line)
+        else:
+            info_box = local_box.box()
+            info_box.label(text="Custom Hugging Face model to download", icon='INFO')
+            info_box.prop(self, "model_repo_id")
+            info_box.prop(self, "model_filename")
+
+
+        # -- Download current preset ---------------------------------------
+        llm_state = llm.get_state()
         models_dir = Path(self.downloaded_models_dir) if self.downloaded_models_dir else (Path.home() / "bfa_coworker_models")
         model_file = models_dir / self.model_filename if self.model_filename else None
         model_exists = model_file and model_file.exists()
 
         if llm_state.download_active:
-            btn_text = "Downloading \u2026"
-            btn_icon = 'RENDERLAYERS'
+            btn_text = "Downloading …"
+            btn_icon = 'FILE_REFRESH'
             btn_enabled = False
         elif model_exists:
             btn_text = "Already Downloaded"
@@ -1176,25 +1438,20 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             btn_icon = 'CONSOLE'
             btn_enabled = False
         else:
-            btn_text = "Download Model"
+            btn_text = "4. Download Model"
             btn_icon = "IMPORT"
             btn_enabled = True
 
-        row = box.row(align=True)
-        row.operator("bfacw.download_model", icon=btn_icon, text=btn_text)
+        dl_row = box.row(align=True)
+        dl_row.scale_y = 1.8
+        dl_row.operator("bfacw.download_model", icon=btn_icon, text=btn_text)
         if not btn_enabled:
-            row.enabled = False
-        # The cancel button must NOT live in the same row as the (disabled)
-        # download button — row.enabled above greys out the entire row,
-        # including Cancel.  It lives with the progress bar instead, with a
-        # fallback row for the pre-progress phase (download just started).
-        if llm_state.download_active and llm_state.download_kind == "model" \
-                and llm_state.download_progress_pct <= 0:
+            dl_row.enabled = False
+
+        if llm_state.download_active and llm_state.download_kind == "model" and llm_state.download_progress_pct <= 0:
             cancel_row = box.row(align=True)
-            # Icon-only (text="") — the operator's bl_label shows as tooltip.
             cancel_row.operator("bfacw.cancel_download", icon='CANCEL', text="")
 
-        # Always show progress/error areas (model downloads only).
         if llm_state.download_kind == "model":
             if llm_state.error:
                 err_lines = llm_state.error.split("\n")
@@ -1213,38 +1470,57 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     row = box.row(align=True)
                     row.progress(factor=pct / 100.0, type='BAR')
                     if llm_state.download_active:
-                        # Icon-only (text="") — the operator's bl_label shows as tooltip.
                         row.operator("bfacw.cancel_download", icon='CANCEL', text="")
 
-        # ── Scan for existing models ────────────────────────────
-        box.label(text="Or use an existing model:", icon='FILE_FOLDER')
-        row = box.row(align=True)
-        row.operator("bfacw.scan_existing_models", icon="FILE_REFRESH", text="Scan")
-        row.operator("bfacw.open_models_dir", icon="FILE_FOLDER", text="Open Folder")
-        box.prop(self, "downloaded_models_dir")
-        if self.existing_model_path:
-            box.label(
-                text="Using: {:s}".format(os.path.basename(self.existing_model_path)),
-                icon='CHECKMARK',
-            )
 
-        # ── Startup / runtime errors (not download-related) ──────
+        # -- Advanced Settings ------------------------------------------------
+        box.label(text="Advanced", icon='SETTINGS')
+        # -- Context Window ------------------------------------------------
+        ctx_box = box.box()
+        ctx_box.label(
+            text="Context Window (how much the model remembers per reply)",
+            icon='MEMORY',
+        )
+        row = ctx_box.row(align=True)
+        active_ctx = self.local_ctx_size
+        is_custom = (self.local_ctx_preset == "custom") or (
+            active_ctx not in llm.ctx_preset_sizes)
+        for value in llm.ctx_preset_sizes:
+            op = row.operator(
+                "bfacw.set_ctx_preset",
+                text=llm.ctx_preset_label(value),
+                depress=(active_ctx == value),
+            )
+            op.value = value
+        op = row.operator(
+            "bfacw.set_ctx_preset",
+            text="Custom",
+            depress=is_custom,
+        )
+        op.value = 0
+        if is_custom:
+            ctx_box.prop(self, "local_ctx_size")
+        model_gb = self._current_model_gb(llm.get_preset_by_id(self.model_preset))
+        ctx_box.label(
+            text=llm.hardware_context_hint(model_gb, self.llama_backend),
+            icon='INFO',
+        )
+
+        # -- Startup / runtime errors --------------------------------------
         if llm_state.error and llm_state.download_kind != "model":
             err_lines = llm_state.error.split("\n")
             for i, line in enumerate(err_lines):
                 box.label(text=line, icon="ERROR" if i == 0 else 'NONE')
 
-        # ── Current model status ─────────────────────────────────
+        # -- Current model status ------------------------------------------
         if llm_state.is_running:
             box.label(
                 text="Active model: {:s}".format(llm_state.model_name or "Unknown"),
                 icon='CONSOLE',
             )
 
-        # ── Advanced ─────────────────────────────────────────────
-        box.label(text="Advanced", icon='SETTINGS')
-        box.prop(self, "model_repo_id")
-        box.prop(self, "model_filename")
+
+        box.separator()
         box.prop(self, "local_max_tokens")
         box.prop(self, "hf_token")
 

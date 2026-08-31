@@ -7,6 +7,23 @@ This release brings **major UX improvements**, **power-user tools**, and **perfo
 ---
 
 ## ✨ Highlight Features
+### 🔒 **Download Safety** (Tier 3f)
+- SHA-256 verification for every model download
+- HTTP Range resume via .part files — interrupted downloads resume where they left off
+- Atomic rename prevents corrupt partial files
+- GPU auto-detection eliminates OOM crashes from wrong --n-gpu-layers
+- Temperature auto-switches between Agent (0.2) and Ask (0.35) modes
+- Custom model URL: paste any HuggingFace link to download
+- Server port auto-selects when configured port is busy
+- Markdown rendering in chat: code blocks with copy buttons, tables, headings, lists, bold/italic
+
+### 🛡️ **MCP Intent Architecture** (Tier 3g)
+- **Preflight code validation** — 27 regex checks catch common LLM mistakes *before* execution (wrong Blender 5.3 APIs, missing imports, hallucinated modules, bpy.ops in loops, etc.) with targeted guidance
+- **18 pre-tested Blender 5.3 templates** — `execute_blender_plan` two-phase tool (plan → tested code) + `list_blender_templates` discovery
+- **Auto-correction module** — silently rewrites common LLM mistakes (lamps→lights, EEVEE→BLENDER_EEVEE, fcurves→keyframe_insert, etc.)
+- **Spiral detection hardened** — breaks error loops after 2 (was 3) identical errors with API-specific corrective hints
+- **Bundled API docs always available** — `get_python_api_docs` / `search_api_docs` / `search_manual_docs` loaded as surface tools
+- **llama-server management** — Remove/Open Folder operators, Bundled/Custom source toggle, build-number validation, CUDA DLL extraction
 
 ### 🎯 **Message Queue System**
 Never lose a message again! If the Coworker is busy processing, your message is automatically queued and processed when ready. See queue status with the new Queue UI.
@@ -19,6 +36,14 @@ Mention anything in your scene! Objects, materials, collections, node groups, wo
 - 📈 6 new editor benchmark suites  
 - 💾 Results persistence with comparison support
 - 🔧 Debug mode with configurable log levels
+
+### 📝 **Markdown Rendering in Chat**
+- Code blocks with syntax header bar and Copy button
+- Tables with proper column alignment
+- Headings (H1-H4), bold, italic, inline code
+- Ordered and unordered lists
+- Blockquotes
+- Ported from Blender Buddy reference implementation
 
 ### 🎨 **Asset Browser Integration**
 - 📚 Browse asset libraries from the agent

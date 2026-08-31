@@ -28,10 +28,13 @@ from .operators_llm import (
     _BFACW_OT_start_llm,
     _BFACW_OT_stop_llm,
     _BFACW_OT_download_llama_server,
+    _BFACW_OT_remove_llama_server,
+    _BFACW_OT_open_llama_server_folder,
     _BFACW_OT_scan_existing_models,
     _BFACW_OT_select_preset,
     _BFACW_OT_select_existing_model,
     _BFACW_OT_open_models_dir,
+    _BFACW_OT_download_custom_model,
     _BFACW_OT_set_ctx_preset,
 )
 from .operators_agent import (
@@ -52,6 +55,7 @@ from .operators_agent import (
     BFACW_OT_test_polyhaven_texture,
     BFACW_OT_reload_skills,
     BFACW_OT_open_harness_prefs,
+    BFACW_OT_open_addon_prefs,
     BFACW_OT_open_config_folder,
     BFACW_OT_open_url,
     BFACW_OT_open_log,
@@ -82,6 +86,7 @@ _classes = (
     _BFACW_OT_select_preset,
     _BFACW_OT_open_models_dir,
     _BFACW_OT_set_ctx_preset,
+    _BFACW_OT_download_custom_model,
     _BFACW_OT_test_remote_api,
     _BFACW_OT_refresh_remote_models,
     _BFACW_OT_open_model_browser,
@@ -99,10 +104,13 @@ _classes = (
     BFACW_OT_test_polyhaven_texture,
     BFACW_OT_reload_skills,
     BFACW_OT_open_harness_prefs,
+    BFACW_OT_open_addon_prefs,
     BFACW_OT_open_config_folder,
     BFACW_OT_open_url,
     BFACW_OT_open_log,
     BFACW_OT_compare_benchmarks,
+    _BFACW_OT_remove_llama_server,
+    _BFACW_OT_open_llama_server_folder,
 )
 
 
@@ -230,6 +238,7 @@ def _autostart_agent_timer() -> None:
         _llm = get_llm_manager()
         _llm_cfg = _llm.get_config()
         _llm_cfg.mode = "local"
+        _llm_cfg.llama_source = getattr(prefs, "llama_source", "BUNDLED").lower()
         _llm_cfg.llama_path = prefs.llama_path
         _llm_cfg.model_repo_id = prefs.model_repo_id
         _llm_cfg.model_filename = prefs.model_filename

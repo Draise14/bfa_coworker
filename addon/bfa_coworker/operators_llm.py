@@ -12,6 +12,8 @@ __all__ = (
     "_BFACW_OT_start_llm",
     "_BFACW_OT_stop_llm",
     "_BFACW_OT_download_llama_server",
+    "_BFACW_OT_remove_llama_server",
+    "_BFACW_OT_open_llama_server_folder",
     "_BFACW_OT_scan_existing_models",
     "_BFACW_OT_select_preset",
     "_BFACW_OT_select_existing_model",
@@ -270,6 +272,12 @@ class _BFACW_OT_download_llama_server(bpy.types.Operator):  # type: ignore[misc]
         "  macOS/Linux: export PATH=\"/path/to/llama.cpp/build/bin:$PATH\""
     )
 
+    force: bpy.props.BoolProperty(
+        name="Force update",
+        description="Re-download even if llama-server is already installed",
+        default=False,
+    )
+
     _timer: float | None = None
     _thread: threading.Thread | None = None
     _done: bool = False
@@ -320,11 +328,16 @@ class _BFACW_OT_download_llama_server(bpy.types.Operator):  # type: ignore[misc]
         llm = get_llm_manager()
         prefs = context.preferences.addons[__package__].preferences
 
-        # Check if already installed.
-        existing = llm.find_llama_server()
-        if existing:
-            self.report({"INFO"}, "llama-server already available at: {:s}".format(existing))
-            return {"FINISHED"}
+        # Check if already installed (skip if force update).
+        if not self.force:
+            existing = llm.find_llama_server()
+            if existing:
+                self.report({"INFO"}, "llama-server already available at: {:s}".format(existing))
+                return {"FINISHED"}
+
+        # For force update, remove existing binaries first.
+        if self.force:
+            llm.remove_llama_server()
 
         self._done = False
         self._error = ""
@@ -363,6 +376,67 @@ def _make_llama_download_poll(op):
                         area.tag_redraw()
         return 0.5
     return _poll
+
+
+# ---------------------------------------------------------------------------
+# Remove llama-server
+
+class _BFACW_OT_remove_llama_server(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "bfacw.remove_llama_server"
+    bl_label = "Remove llama-server"
+    bl_description = "Remove the bundled llama-server binaries and CUDA runtime DLLs"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        llm = get_llm_manager()
+        removed = llm.remove_llama_server()
+        if removed:
+            self.report({"INFO"}, "llama-server binaries removed")
+        else:
+            # The bundled dir was empty — check whether a binary is still
+            # available from another source (PATH / system install).
+            llm.invalidate_llama_server_cache()
+            still_found = llm.find_llama_server()
+            if still_found:
+                self.report(
+                    {"INFO"},
+                    "llama-server found outside the addon directory ({:s}). "
+                    "Switch the Source above to 'Custom' to use it, or uninstall "
+                    "via winget / remove it from PATH, then Download the bundled "
+                    "version.".format(still_found),
+                )
+            else:
+                self.report({"INFO"}, "No bundled llama-server files to remove")
+        # Redraw preferences so the status updates.
+        for wm in bpy.data.window_managers:
+            for win in wm.windows:
+                for area in win.screen.areas:
+                    if area.type == "PREFERENCES":
+                        area.tag_redraw()
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# Open llama-server Folder
+
+class _BFACW_OT_open_llama_server_folder(bpy.types.Operator):  # type: ignore[misc]
+    """Open the folder containing the llama-server binary in the OS file manager."""
+    bl_idname = "bfacw.open_llama_server_folder"
+    bl_label = "Open llama-server Folder"
+    bl_description = "Reveal the detected llama-server binary location in your file manager"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        llm = get_llm_manager()
+        llama_found = llm.find_llama_server()
+        if not llama_found:
+            self.report({"WARNING"}, "No llama-server binary found")
+            return {"CANCELLED"}
+        folder = os.path.dirname(os.path.abspath(llama_found))
+        if not os.path.isdir(folder):
+            self.report({"ERROR"}, "Folder not found: {:s}".format(folder))
+            return {"CANCELLED"}
+        bpy.ops.wm.path_open(filepath=folder)
+        self.report({"INFO"}, "Opened {:s}".format(folder))
+        return {"FINISHED"}
 
 
 # ---------------------------------------------------------------------------
@@ -551,4 +625,41 @@ class _BFACW_OT_open_models_dir(bpy.types.Operator):  # type: ignore[misc]
         import webbrowser
         webbrowser.open(models_dir)
         self.report({"INFO"}, "Opened {:s}".format(models_dir))
+        return {"FINISHED"}
+
+class _BFACW_OT_download_custom_model(bpy.types.Operator):  # type: ignore[misc]
+    """Download a model from a HuggingFace URL or direct .gguf link."""
+    bl_idname = "bfacw.download_custom_model"
+    bl_label = "Download Custom Model"
+    bl_description = "Download a model from a HuggingFace URL or direct .gguf link"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        url = prefs.custom_model_url.strip()
+        if not url:
+            self.report({"WARNING"}, "Enter a HuggingFace URL or .gguf path")
+            return {"CANCELLED"}
+
+        parsed = llm.parse_model_url(url)
+        if not parsed:
+            self.report({"ERROR"}, "Invalid URL. Paste a HuggingFace URL or direct .gguf link.")
+            return {"CANCELLED"}
+
+        repo_id, filename = parsed
+        models_dir = Path(prefs.downloaded_models_dir)
+        dest = models_dir / filename
+
+        if dest.exists():
+            prefs.existing_model_path = str(dest)
+            self.report({"INFO"}, "Model already exists: {:s}".format(filename))
+            return {"FINISHED"}
+
+        # Set as active model config and trigger download.
+        prefs.model_repo_id = repo_id
+        prefs.model_filename = filename
+        prefs.existing_model_path = ""
+
+        # Reuse the existing download operator.
+        bpy.ops.bfacw.download_model()
+        self.report({"INFO"}, "Downloading {:s}...".format(filename))
         return {"FINISHED"}

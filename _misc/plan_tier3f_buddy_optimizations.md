@@ -2,7 +2,7 @@
 
 **Date**: 2026-08-26
 **Status**: Planning — Not Started
-**Depends on**: Existing `llm_manager.py`, `preferences.py`, `agent_controller.py`
+**Depends on**: Existing `llm_manager.py`, `preferences.py`, `agent_controller.py`, `ui_chat.py`
 **Reference Issue**: [#29 — Improve downloading UX from Hugging Face](https://github.com/Draise14/bfa_coworker/issues/29)
 **Reference Implementation**: [Blender Buddy v9.13.1](https://github.com/CGMatter/blender_buddy) — `__init__.py` lines 1-7800
 
@@ -15,6 +15,7 @@
 3. [Blender Buddy's Approach — What to Adopt](#3-blender-buddys-approach--what-to-adopt)
 4. [Implementation Plan](#4-implementation-plan)
 5. [Summary of Changes](#5-summary-of-changes)
+6. [Phase 7: Markdown Rendering in Chat UI](#phase-7-markdown-rendering-in-chat-ui)
 
 ---
 
@@ -1030,7 +1031,8 @@ def start_local_llama(model_path=None, mode="text"):
 | 4 | Inference sampling overhaul (top_k, temp auto-switch) | 2 | ~80 | 🔴 CRITICAL |
 | 5 | Custom model URL flow | 2 | ~100 | 🟡 HIGH |
 | 6 | Server lifecycle hardening (pin, port fallback, diagnostics) | 1 | ~60 | 🟡 HIGH |
-| **Total** | | **3** | **~760** | |
+| 7 🆕 | **Markdown rendering in chat UI** (Blender Buddy's `_render_markdown()` port) | **1** | **~300** | 🔴 CRITICAL |
+| **Total** | | **4** | **~1060** | |
 
 ### Files Modified
 
@@ -1039,6 +1041,7 @@ def start_local_llama(model_path=None, mode="text"):
 | `addon/bfa_coworker/llm_manager.py` | 1, 2, 3, 5, 6 |
 | `addon/bfa_coworker/preferences.py` | 1, 5 |
 | `addon/bfa_coworker/agent_controller.py` | 4 |
+| `addon/bfa_coworker/ui_chat.py` | 7 🆕 |
 
 ### Key Design Decisions
 
@@ -1055,6 +1058,10 @@ def start_local_llama(model_path=None, mode="text"):
 | **Temperature auto-switching** | Code gen needs 0.2, prose needs 0.35. One flat value is wrong for both. |
 | **Pin llama.cpp release** | Daily releases break things. Pin to a tested tag, bump deliberately. |
 | **Simplified server lifecycle** | Vision is built into the primary model — no text↔vision mode switching needed. Phase 6 is reduced from ~80 to ~60 LOC. |
+| **Pure-UILayout markdown renderer** | No blf/gpu/custom drawing. Works within Blender's UI constraints. Strips inline styling (no font variants available), simulates structure with layouts. |
+| **`[Copy]` only for code blocks (no `[Run]`)** | Running arbitrary LLM-generated Python in Blender is a security risk. Defer to later phase with sandboxing. |
+| **Clickable links via `wm.url_open`** | Blender's built-in URL operator — no external browser API needed. Capped at 6 to avoid UI clutter. |
+| **LaTeX math → Unicode** | Blender labels can't render math. Convert to readable Unicode/ASCII equivalents. |
 
 ### What Changes for Users
 
@@ -1085,6 +1092,7 @@ def start_local_llama(model_path=None, mode="text"):
 - Port fallback — no more "port in use" errors
 - Better crash diagnostics with log tail surfacing
 - **No mode switching** — same server handles text + vision
+- **Markdown rendering** — code in boxes with `[Copy]`, tables aligned, headings scaled, lists bulleted/numbered, quotes indented with `▎`, links clickable, LaTeX math converted to Unicode
 
 ### Testing Guide
 
@@ -1144,3 +1152,155 @@ def start_local_llama(model_path=None, mode="text"):
 | Port 8081 in use | Auto-selects 8082 |
 | llama-server crashes | Log tail in error message |
 | Vision works out of the box | No mode switching needed — same server handles text + images |
+
+#### Phase 7: Markdown Rendering
+
+| Step | Expected Result |
+|---|---|
+| Send "Write a Python script to create a cube" | Code in a box with `[Copy]` button, not raw ` ```python ` text |
+| Send "Compare A and B in a table" | Pipe table rendered with aligned columns in a box |
+| Send with `# Heading` and `## Subheading` | Scaled text with icons |
+| Send with `> quoted text` | Box with `▎` prefix |
+| Send with `- item 1` / `- item 2` | Bulleted list with `•` markers |
+| Send with `1. first` / `2. second` | Numbered list |
+| Send with `**bold**` and `*italic*` | Inline markup stripped, content preserved |
+| Send with `[link](https://example.com)` | Clickable URL button below message |
+| Model cut off mid-code-block | Auto-closed fence + truncation note |
+| User message with markdown | Still rendered as plain text (no change) |
+| Message exceeds 200 lines | Truncated with clear note |
+| Panel width changes | Text re-wraps correctly |
+| LaTeX `$$E=mc^2$$` | Rendered as "E=mc²" (Unicode superscript) |
+| Horizontal rule `---` | Rendered as `layout.separator()` |
+
+
+### Phase 7: Markdown Rendering in Chat UI (~300 LOC, 1 file) 🆕
+
+**What**: Port Blender Buddy's custom Markdown-to-UILayout renderer into `ui_chat.py`. Currently BFA Coworker renders ALL LLM responses as raw plain text via `_draw_multiline()` → `layout.label(text=line)`. After this phase, assistant messages render with structured layouts: code blocks in boxes with copy buttons, formatted tables, scaled headings, blockquotes with visual indicators, bullet/numbered lists, clickable links, LaTeX math converted to Unicode, and proper paragraph grouping.
+
+**Why this matters**: LLMs (especially Qwen3.8, GPT-OSS, and other modern models) output heavily-formatted Markdown — code blocks, tables, headings, lists. Showing raw `**bold**` and ` ```python ` to users is unprofessional and hard to read. Blender Buddy already solved this with a pure-UILayout renderer that works within Blender's UI constraints (no bold/italic/monospace fonts available). This is the single biggest UX gap identified in the Tier 4b competitor analysis — every competitor except BlenderMCP Pro has some form of rich text rendering.
+
+**Reference**: Blender Buddy's `_render_markdown()` at `blender_buddy/__init__.py` lines 4260–4660.
+
+**Implementation:**
+
+**Step 7.1 — Regex patterns and inline stripping**
+
+Port the regex patterns and `_strip_inline()` helper from Blender Buddy. Since Blender's `UILayout.label()` cannot render bold, italic, or monospace fonts, all inline formatting is flattened to plain text while preserving the content:
+
+```python
+_INLINE_BOLD_RE  = re.compile(r"\*\*([^*]+?)\*\*")
+_INLINE_BOLD2_RE = re.compile(r"__([^_]+?)__")
+_INLINE_ITAL_RE  = re.compile(r"(?<!\*)\*([^*\s][^*]*?)\*(?!\*)")
+_INLINE_ITAL2_RE = re.compile(r"(?<!_)_([^_\s][^_]*?)_(?!_)")
+_INLINE_CODE_RE  = re.compile(r"`([^`]+?)`")
+_INLINE_LINK_RE  = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+
+def _strip_inline(text):
+    """Flatten inline markdown that labels can't style."""
+    text = _INLINE_BOLD_RE.sub(r"\1", text)
+    text = _INLINE_BOLD2_RE.sub(r"\1", text)
+    text = _INLINE_ITAL_RE.sub(r"\1", text)
+    text = _INLINE_ITAL2_RE.sub(r"\1", text)
+    text = _INLINE_CODE_RE.sub(r"\1", text)
+    text = _INLINE_LINK_RE.sub(r"\1", text)
+    return text
+```
+
+**Step 7.2 — LaTeX math conversion**
+
+Port `_convert_latex()` and `_convert_latex_expr()` to convert `$$...$$` block math and `$...$` inline math to readable Unicode/ASCII equivalents. This handles:
+- `\frac{a}{b}` → `(a)/(b)`
+- `\sqrt{x}` → `√(x)`
+- Greek letters: `\alpha` → `α`, `\beta` → `β`, etc.
+- `\cdot` → `·`, `\times` → `×`, `\to` → `→`, `\infty` → `∞`
+- `\mathbf`, `\text`, `\vec`, `\hat` wrapper commands stripped to inner content
+- Superscript powers: `x^2` → `x²`, `10^{-3}` → `10⁻³`
+
+Code fences and inline `` `code` `` are passed through untouched so `$`-syntax in shell snippets doesn't get mangled.
+
+**Step 7.3 — Trailing fence auto-close**
+
+Port `_close_trailing_fence()` to detect when the model hit `max_tokens` mid-code-block (odd number of ` ``` ` fences). Appends a closing fence plus a truncation note so the renderer doesn't treat everything that follows as code:
+
+```python
+def _close_trailing_fence(text):
+    """If the markdown text contains an odd number of triple-backtick
+    fences, it ends with an open code block — typically because the
+    model hit max_tokens mid-snippet. Append a closing fence plus a
+    one-line truncation note so the renderer doesn't treat everything
+    that follows as code."""
+    if text.count("```") % 2 == 0:
+        return text
+    sep = "" if text.endswith("\n") else "\n"
+    return text + sep + "```\n_(response was cut off)_\n"
+```
+
+**Step 7.4 — `_render_markdown()` state machine**
+
+Port the main renderer (~200 lines). This is a line-by-line state machine that walks the markdown text and dispatches to block handlers:
+
+| Block Type | Rendering | Implementation |
+|---|---|---|
+| **Fenced code blocks** (` ```python `) | `layout.box()` with language label, `[Copy]` button, tight `scale_y=0.72` column for code lines | Harvest code body between fences, render in a box with header row (language left, Copy button right). The Copy operator stores the raw code body. |
+| **Pipe tables** (`\|...\|`) | `layout.box()` with aligned columns, header row with `DOT` icons, fallback to plain text on malformed data | Parse header row + separator row + body rows. Render each row as a `row(align=True)` with `column(align=True)` per cell. Wrap on malformed input. |
+| **Headings** (`#` → `######`) | `layout.row()` with scaled height (1.4/1.2/1.05), icons (`BOOKMARKS`/`DISCLOSURE_TRI_DOWN`/`DOT`), H1 uppercased | Match `_HEADING_RE`, scale row height by level, set icon by level. |
+| **Horizontal rules** (`---`, `***`, `___`) | `layout.separator()` | Match `_HR_RE`, emit separator. |
+| **Blockquotes** (`> text`) | `layout.box()` with `▎` prefix character | Match `_QUOTE_RE`, render in a box with `▎` prefix. |
+| **Unordered lists** (`-`, `*`, `+`) | Indented `•` bullet marker, rendered into the rolling paragraph column | Match `_LIST_RE`, prefix with `• `, emit into para column. |
+| **Ordered lists** (`1.`, `2.`) | Indented numbered marker, rendered into the rolling paragraph column | Match `_LIST_RE`, prefix with `1. `, `2. ` etc., emit into para column. |
+| **Paragraphs** | Rolling `layout.column(align=True)` with `scale_y=0.78` for tight spacing | Consecutive text lines go into one compact column; block elements break the column. |
+| **Clickable links** | `wm.url_open` operator buttons below each assistant message (capped at 6) | Extract URLs from markdown links and raw URLs via `_extract_urls()`, render as clickable buttons. |
+| **Truncation** | Content capped at `max_lines` (default 200); shows truncation note | Counter incremented per rendered line. At limit, emit `"… (truncated to N lines)"` label. |
+
+**Step 7.5 — Wire into chat panel drawing**
+
+Replace the plain-text rendering path for assistant messages with `_render_markdown()`:
+
+- **Assistant messages**: Currently call `_draw_multiline(turn_box, content)`. Change to `_render_markdown(turn_box, content, width=panel_width)`.
+- **User messages**: Remain plain text via `_draw_multiline()` — users don't write markdown.
+- **Streaming text**: During live generation, continue using `_draw_multiline()` for the streaming buffer (markdown rendering on incomplete text looks broken). Switch to `_render_markdown()` once the response is complete.
+- **Reasoning/thinking panels**: Remain plain text (collapsible panel, no markdown needed).
+- **Tool results**: Remain plain text in sub-boxes (tool output is not markdown).
+
+**Step 7.6 — Panel width estimation**
+
+Port `_panel_char_width()` from Blender Buddy to estimate the available character width from the panel's pixel width:
+
+```python
+def _panel_char_width(context) -> int:
+    """Estimate the number of characters that fit in the panel width."""
+    region = context.region
+    if not region:
+        return 40
+    return max(20, int(region.width / 8.8))
+```
+
+This ensures text re-wraps correctly when the user resizes the Blender window or moves the panel.
+
+**Files modified**: `addon/bfa_coworker/ui_chat.py`
+
+**What's NOT ported** (out of scope for Phase 7):
+- `[Run]` button for Python code blocks (requires Blender text execution + safety scanner — security consideration, defer to Tier 4b Phase 2)
+- Error→Fix loop (defer to Tier 4b Phase 3)
+- Collapse/expand for long responses (defer to post-Tier 4b polish)
+
+**Key design constraint**: Everything uses standard `UILayout` primitives (`label()`, `box()`, `row()`, `column()`, `separator()`). No `blf`, no `gpu`, no custom drawing. This means **inline bold/italic/monospace are stripped** (Blender labels can't render font variants) but **structural elements** (code blocks, tables, headings, lists, quotes) are fully simulated with layout composition.
+
+**Verification:**
+
+| Step | Expected Result |
+|---|---|
+| Send "Write a Python script to create a cube" | Code in a box with `[Copy]` button, not raw ` ```python ` text |
+| Send "Compare A and B in a table" | Pipe table rendered with aligned columns in a box |
+| Send with `# Heading` and `## Subheading` | Scaled text with icons |
+| Send with `> quoted text` | Box with `▎` prefix |
+| Send with `- item 1` / `- item 2` | Bulleted list with `•` markers |
+| Send with `1. first` / `2. second` | Numbered list |
+| Send with `**bold**` and `*italic*` | Inline markup stripped, content preserved |
+| Send with `[link](https://example.com)` | Clickable URL button below message |
+| Model cut off mid-code-block | Auto-closed fence + truncation note |
+| User message with markdown | Still rendered as plain text (no change) |
+| Message exceeds 200 lines | Truncated with clear note |
+| Panel width changes | Text re-wraps correctly |
+| LaTeX `$$E=mc^2$$` | Rendered as "E=mc²" (Unicode superscript) |
+| Horizontal rule `---` | Rendered as `layout.separator()` |

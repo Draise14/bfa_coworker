@@ -56,6 +56,24 @@ _MCP_SERVER_HEALTH_URL = "http://127.0.0.1:{:d}/health"
 _MCP_TOOLS_URL = "http://127.0.0.1:{:d}/tools/list"
 _LLM_CHAT_URL = "http://127.0.0.1:{:d}/v1/chat/completions"
 _MAX_TOOL_ITERATIONS = 8
+
+# Sampling parameters tuned for MoE local models.
+_CHAT_SAMPLING = {
+    "repeat_penalty": 1.1,
+    "top_p": 0.8,
+    "top_k": 20,
+    "min_p": 0.0,
+}
+
+# Temperature auto-switches based on mode:
+#   Agent mode (code gen) -> 0.2: sharp, deterministic
+#   Ask mode (prose/UI)  -> 0.35: natural writing
+_DEFAULT_TEMPERATURE_CODE = 0.2
+_DEFAULT_TEMPERATURE_PROSE = 0.35
+
+_DEFAULT_MAX_TOKENS = 1024
+_DEEP_MAX_TOKENS = 4096
+
 _STREAM_TIMEOUT = 600.0
 
 # Maximum conversation history messages to send per turn.
@@ -277,10 +295,24 @@ def _sanitize_message_roles(messages: list[dict[str, Any]]) -> list[dict[str, An
 # giving the LLM access to all tools when needed.
 
 _SURFACE_TOOLS = frozenset({
+    # ── Code execution ──────────────────────────────────────────────
     "execute_blender_code",
+    "execute_blender_plan",  # Two-phase: plan -> tested code
+    "list_blender_templates",  # Discover available templates
+    # ── Scene inspection ─────────────────────────────────────────────
     "get_blendfile_summary_datablocks",
     "get_object_detail_summary",
     "get_objects_summary",
+    "get_operation_history",      # Avoid repeating failed operations.
+    # ── Visual feedback (always useful for any domain) ────────────────
+    "get_screenshot_of_window_as_image",
+    "get_screenshot_of_window_as_json",
+    "render_thumbnail_to_path",
+    # ── Bundled Blender API + manual docs — read-only, no network ────
+    # Always available so the agent can look up correct APIs on error.
+    "get_python_api_docs",
+    "search_api_docs",
+    "search_manual_docs",
 })
 
 _TOOL_DOMAINS: dict[str, frozenset[str]] = {
@@ -296,6 +328,8 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "get_screenshot_of_area_as_image",
         "render_viewport_to_path",
         "setup_pbr_material",
+        "assign_material_to_objects",
+        "load_asset_in_context",
     }),
     "modeling": frozenset({
         "jump_to_view3d_object_by_name",
@@ -303,6 +337,7 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "jump_to_tab_by_name",
         "jump_to_tab_by_space_type",
         "get_screenshot_of_area_as_image",
+        "set_collection_color_tag",
     }),
     "lighting": frozenset({
         "download_polyhaven_asset",
@@ -314,7 +349,6 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
     "rendering": frozenset({
         "render_viewport_to_path",
         "get_screenshot_of_area_as_image",
-        "get_screenshot_of_window_as_image",
         "three_point_lighting_rig",
     }),
     "vse": frozenset({
@@ -325,6 +359,15 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "jump_to_view3d_object_by_name",
         "jump_to_view3d_object_data_by_name",
         "get_screenshot_of_area_as_image",
+    }),
+    "assets": frozenset({
+        "search_assets",
+        "get_asset_libraries",
+        "get_asset_tags",
+        "list_asset_catalogs",
+        "load_asset_in_context",
+        "download_polyhaven_asset",
+        "search_polyhaven_assets",
     }),
 }
 
@@ -340,6 +383,7 @@ _DOMAIN_KEYWORDS: dict[str, list[str]] = {
     "modeling": [
         "mesh", "edit", "extrude", "bevel", "loop cut", "knife",
         "sculpt", "boolean", "subdivide", "merge", "bridge",
+        "scatter", "duplicate", "array",
     ],
     "lighting": [
         "light", "lamp", "sun", "point", "area", "hdri",
@@ -357,6 +401,10 @@ _DOMAIN_KEYWORDS: dict[str, list[str]] = {
         "geometry node", "node group", "modifier", "simulation",
         "geonode", "procedural",
     ],
+    "assets": [
+        "asset", "library", "catalog", "browse", "import asset",
+        "append", "link asset", "asset browser",
+    ],
 }
 
 # Synthetic tool schema for on-demand domain loading.
@@ -367,10 +415,14 @@ _LOAD_TOOLS_SCHEMA: dict[str, Any] = {
         "name": "load_tools",
         "description": (
             "Load additional domain-specific Blender tools. "
-            "Call this when you need tools for a specific domain: "
+            "Domains: "
             + ", ".join(sorted(_TOOL_DOMAINS.keys()))
-            + ". Surface tools (code execution, scene inspection) "
-            "are always available."
+            + ". Surface tools (code execution, scene inspection, "
+            "screenshots, API docs) are always available. "
+            "Call load_tools when: (a) you need specialized tools "
+            "for a domain, (b) you hit an error and need to look up "
+            "the correct API, or (c) the user asks about assets, "
+            "materials, animation, etc."
         ),
         "parameters": {
             "type": "object",
@@ -1747,6 +1799,7 @@ def _openai_chat_completions(
     api_key: str | None = None,
     model: str | None = None,
     max_tokens: int | None = None,
+    chat_mode: str = "AGENT",
 ) -> dict[str, Any] | None:
     """POST to a chat completions endpoint and return the parsed JSON response.
 
@@ -1755,19 +1808,13 @@ def _openai_chat_completions(
     which auto-detects the model.
     *max_tokens* — max output tokens per call. ``None`` uses 16384 default.
     """
+    temperature = _DEFAULT_TEMPERATURE_CODE if chat_mode == "AGENT" else _DEFAULT_TEMPERATURE_PROSE
     body: dict[str, Any] = {
         "messages": messages,
         "stream": False,
-        # Cap output so the model doesn't generate endlessly.
-        "max_tokens": max_tokens if max_tokens is not None else 16384,
-        # Parameters tuned for small local models (Gemma 4 26B etc.):
-        # - temperature: 0.3 gives focused, non-erratic output
-        # - top_p: 0.9 limits random tail tokens
-        # - stop: prevent the model from generating tool-call syntax
-        #   that it can't actually execute.
-        "temperature": 0.3,
-        "top_p": 0.9,
-        "repeat_penalty": 1.05,
+        "max_tokens": max_tokens if max_tokens is not None else _DEFAULT_MAX_TOKENS,
+        "temperature": temperature,
+        **_CHAT_SAMPLING,
     }
     if model:
         body["model"] = model
@@ -2166,6 +2213,8 @@ def _call_mcp_tool_sync(
 
 _TOOL_FRIENDLY_NAMES: dict[str, str] = {
     "execute_blender_code": "Running code in Blender",
+    "execute_blender_plan": "Running tested code templates",
+    "list_blender_templates": "Showing available templates",
     "get_blendfile_summary_datablocks_toolcode": "Reading scene data",
     "download_polyhaven_asset": "Downloading asset",
     "search_polyhaven_assets": "Searching Poly Haven",
@@ -2393,10 +2442,39 @@ def _spiral_corrective_message(error_sig: str) -> str:
             "Use `bpy.context.selected_objects` only for object-mode object selection. "
             "Fix the code \u2014 do not retry it verbatim.]"
         )
+    if "shadernodebsdfprincipled" in sig_lower and "has no attribute" in sig_lower:
+        return (
+            "[System: ShaderNodeBsdfPrincipled has NO `base_color` attribute. "
+            "Use the node's inputs dictionary instead:\n"
+            "    principled = nodes.new('ShaderNodeBsdfPrincipled')\n"
+            "    principled.inputs['Base Color'].default_value = (R, G, B, 1.0)\n"
+            "Other inputs: 'Metallic', 'Roughness', 'Alpha', 'Emission Color'. "
+            "Run `print([i.name for i in principled.inputs])` to list all inputs. "
+            "Or call get_python_api_docs('bpy.types.ShaderNodeBsdfPrincipled') "
+            "to see the full API reference. Fix the code \u2014 do not retry it verbatim.]"
+        )
+    if "no output from execute_blender_code" in sig_lower:
+        return (
+            "[System: Your code executed but produced no output. This usually means "
+            "the code ran but print() was not called, or the result was empty. "
+            "Add print() statements to verify each step, or assign a dict to "
+            "a variable named result to return data. "
+            "Use get_python_api_docs() to look up the correct API before retrying.]"
+        )
+    if "subdivision" in sig_lower and "has no attribute" in sig_lower:
+        return (
+            "[System: Blender 5.3 subdivision modifiers changed their API. "
+            "Use print(dir(mod)) to see available attributes. "
+            "Use get_python_api_docs('bpy.types.SubdivisionSurfaceModifier') "
+            "for the exact API. Fix the code \u2014 do not retry it verbatim.]"
+        )
     return (
         "[System: You've hit the same error multiple times in a row. "
         "Stop and reconsider your approach. Read the error message carefully "
-        "and try a different strategy.]"
+        "and try a different strategy. "
+        "Use get_python_api_docs to look up the correct API before retrying "
+        "(e.g. get_python_api_docs('bpy.types.ShaderNodeBsdfPrincipled') "
+        "to see available attributes and inputs).]"
     )
 
 
@@ -3571,11 +3649,16 @@ def _run_conversation_turn_inner(
                 # ── Spiral detection: break repeated error loops ──────
                 if tool_name == "execute_blender_code":
                     error_sig = _extract_error_signature(truncated)
+                    # Also detect 'no output' - the agent called code but got
+                    # nothing back (empty result or only whitespace).
+                    _result_stripped = truncated.strip().strip('{').strip('}').strip().strip('"')
+                    if not error_sig and not _result_stripped:
+                        error_sig = '(no output from execute_blender_code)'
                     if error_sig:
                         if _consecutive_errors and error_sig != _consecutive_errors[-1]:
                             _consecutive_errors.clear()
                         _consecutive_errors.append(error_sig)
-                        if len(_consecutive_errors) >= 3:
+                        if len(_consecutive_errors) >= 2:
                             print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: spiral detected \u2014 "
                                   "same error 3\u00d7 in a row: {:s}".format(error_sig))
                             # Auto-save session log on spiral detection.
@@ -3583,10 +3666,10 @@ def _run_conversation_turn_inner(
                                 export_session_log(auto_saved=True)
                             except Exception:  # pylint: disable=broad-exception-caught
                                 pass
-                            # Truncate: remove the last 3 assistant+tool message pairs.
+                            # Truncate: remove the last N assistant+tool message pairs.
                             removed = 0
                             for i in range(len(history) - 1, -1, -1):
-                                if removed >= 3:
+                                if removed >= len(_consecutive_errors):
                                     break
                                 if history[i].get("role") == "assistant" and history[i].get("tool_calls"):
                                     del history[i:]

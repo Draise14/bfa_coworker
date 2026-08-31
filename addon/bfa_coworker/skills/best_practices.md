@@ -2,6 +2,48 @@
 
 These patterns save tokens by avoiding the most common `execute_blender_code` failures.
 
+## Look Up APIs Before Using Them
+
+Before writing code that uses Blender APIs you're unsure about, **look them up first**.
+The bundled doc tools are always available and return accurate results:
+
+- `get_python_api_docs('bpy.types.ShaderNodeBsdfPrincipled')` — exact API reference
+- `search_api_docs('base color material')` — keyword search across all API docs
+- `search_manual_docs('principled bsdf')` — search the user manual
+
+This avoids retry loops from guessing wrong attribute names.
+
+## Blender 5.3 API Changes
+
+These APIs changed in Blender 5.x -- guessing will cause AttributeError loops:
+
+**Subdivision Surface Modifier** -- attributes renamed:
+    mod = obj.modifiers.new("Subsurf", 'SUBSURF')
+    mod.levels = 3           # viewport levels (was 'subdivisions')
+    mod.render_levels = 3    # render levels
+    mod.subdivision_type = 'CATMULL_CLARK'
+
+**Material Nodes** -- Principled BSDF has NO base_color attribute:
+    principled.inputs['Base Color'].default_value = (R, G, B, 1.0)
+
+**Lamps -> Lights** -- bpy.data.lamps renamed to bpy.data.lights (since 4.0):
+    light = bpy.data.lights.new("Sun", 'SUN')
+
+**Render Engine** -- 'EEVEE' renamed to 'BLENDER_EEVEE' (since 4.0):
+    scene.render.engine = 'BLENDER_EEVEE'
+
+**EEVEE Settings** -- scene.render.eevee moved to scene.eevee (since 4.0):
+    scene.eevee.use_ssr = True
+
+**Sequencer** -- sequences renamed to strips in Blender 5.x:
+    for strip in editor.strips:  # NOT editor.sequences
+
+**Auto Smooth** -- mesh.use_auto_smooth removed, use mesh.auto_smooth_angle:
+    mesh.auto_smooth_angle = radians(30)
+
+When in doubt, use print(dir(obj)) or get_python_api_docs() to check the
+actual API before writing code.
+
 ## Object References
 
 Names auto-append `.001`, `.002` on collision. **Always capture references immediately**
@@ -147,6 +189,31 @@ if obj is None:
 ```
 
 Guard lookups with ``try/except ReferenceError`` and re-acquire on failure.
+
+## Material Nodes — Principled BSDF
+
+ShaderNodeBsdfPrincipled has **NO** `base_color`, `base_color_input`, or
+`color` attribute. Access all properties through the node's `inputs`
+dictionary using the socket name:
+
+```python
+# CORRECT — use inputs dictionary:
+mat = bpy.data.materials.new("MyMat")
+mat.use_nodes = True
+nodes = mat.node_tree.nodes
+principled = nodes.new('ShaderNodeBsdfPrincipled')
+principled.inputs['Base Color'].default_value = (0.8, 0.2, 0.2, 1.0)
+principled.inputs['Metallic'].default_value = 0.0
+principled.inputs['Roughness'].default_value = 0.5
+
+# List all available inputs:
+print([i.name for i in principled.inputs])
+```
+
+Common input names: `'Base Color'`, `'Metallic'`, `'Roughness'`, `'Alpha'`,
+`'Emission Color'`, `'Emission Strength'`, `'Subsurface Weight'`.
+
+Prefer the `setup_pbr_material` MCP tool over raw node code when available.
 
 ## Collection Color Tags
 

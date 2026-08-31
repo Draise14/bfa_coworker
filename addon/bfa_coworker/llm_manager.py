@@ -28,6 +28,7 @@ __all__ = (
     "invalidate_llama_server_cache",
     "download_model",
     "download_llama_server",
+    "remove_llama_server",
     "start_local_llama",
     "stop_local_llama",
     "get_llama_process",
@@ -49,10 +50,13 @@ __all__ = (
 )
 
 import io
+import hashlib
+import re
 import json
 import os
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tarfile
@@ -73,8 +77,45 @@ _LOCAL_LLM_HEALTH_URL = "http://127.0.0.1:{:d}/health"
 _LOCAL_LLM_CHAT_URL = "http://127.0.0.1:{:d}/v1/chat/completions"
 _MODEL_DOWNLOAD_TIMEOUT = 300  # seconds
 
+def _port_is_taken(port: int) -> bool:
+    """Return True if *port* is already in use on localhost."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("127.0.0.1", port))
+            return False
+        except OSError:
+            return True
+
+def _find_free_port(start: int, attempts: int = 10) -> int:
+    """Find a free port starting from *start*, scanning upward."""
+    for offset in range(attempts):
+        port = start + offset
+        if not _port_is_taken(port):
+            if offset > 0:
+                print("[Coworker] port {:d} busy; using {:d} instead".format(start, port))
+            return port
+    raise RuntimeError(
+        "Ports {:d}-{:d} are all in use. Kill stray llama-server processes.".format(
+            start, start + attempts - 1)
+    )
+
+
 # llama-server release download.
 _LLAMA_SERVER_VERSION = "b10154"
+
+# Minimum build number required for Qwen3 hybrid (SSM/Mamba) architecture.
+# Builds before this lack blk.*.ssm_conv1d.weight support.
+_MIN_SUPPORTED_BUILD = 9500
+
+def _parse_llama_build_number(version_line: str) -> int:
+    """Extract the numeric build number from a llama-server --version line.
+
+    Example input: 'version: 8966 (7b8443ac7)'
+    Returns 0 if parsing fails.
+    """
+    import re
+    m = re.search(r'version:\s*(\d+)', version_line)
+    return int(m.group(1)) if m else 0
 
 # Common install locations for llama-server on Windows.
 _LLAMA_SEARCH_PATHS_WIN = [
@@ -393,12 +434,13 @@ class LLMConfig:
 
     mode: str = "local"  # "local" | "remote"
     # Local mode
+    llama_source: str = "bundled"  # "bundled" (addon-managed) | "custom" (user-provided)
     llama_path: str = ""
     model_repo_id: str = "unsloth/gemma-4-26B-A4B-it-GGUF"
     model_filename: str = "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
     downloaded_models_dir: str = ""
     local_port: int = _LOCAL_LLM_DEFAULT_PORT
-    local_ctx_size: int = 8192
+    local_ctx_size: int = 16384
     local_max_tokens: int = 16384  # Max output tokens per API call
     hf_token: str = ""  # HuggingFace token for gated models
     llama_backend: str = "auto"  # "auto" | "cpu" | "cuda" | "vulkan"
@@ -445,6 +487,7 @@ class ModelPreset:
     mmproj_filename: str = ""  # Projector filename for vision (e.g. "mmproj-F16.gguf")
     hardware_note: str = ""  # Hardware recommendation (RAM + GPU gen, e.g. "RTX 3090/4090/5090")
     why: str = ""  # One-line "why pick this" per sub-tier
+    expected_sha256: str = ""  # SHA-256 hash for download verification (empty = skip check)
 
 
 # ---------------------------------------------------------------------------
@@ -500,7 +543,7 @@ PRESET_MODELS: list[ModelPreset] = [
         identifier="fable_fusion_27b_q6",
         name="Fable Fusion 27B (Q6_K)",
         repo_id="DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF",
-        filename="Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-Q6_K.gguf",
+        filename="Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-MTP-Q6_K.gguf",
         ram_gb="20-24 GB",
         disk_gb="~24 GB",
         capability="Excellent",
@@ -564,7 +607,7 @@ PRESET_MODELS: list[ModelPreset] = [
         identifier="qwen38_27b_q4",
         name="Qwen3.8-27B (Q4_K_M)",
         repo_id="unsloth/Qwen3.8-27B-GGUF",
-        filename="Qwen3.8-27B-Q4_K_M.gguf",
+        filename="Qwen3.8-27B-UD-Q4_K_M.gguf",
         ram_gb="16-20 GB",
         disk_gb="~17 GB",
         capability="Excellent",
@@ -585,7 +628,7 @@ PRESET_MODELS: list[ModelPreset] = [
         identifier="fable_fusion_27b_iq4",
         name="Fable Fusion 27B (IQ4_XS)",
         repo_id="DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF",
-        filename="Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-IQ4_XS.gguf",
+        filename="Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-AMD-MTP-IQ4_XS.gguf",
         ram_gb="12-16 GB",
         disk_gb="~17 GB",
         capability="Excellent",
@@ -854,6 +897,30 @@ def fetch_remote_models(
         return [], msg
 
 
+
+def parse_model_url(url: str) -> tuple[str, str] | None:
+    """Parse a HuggingFace URL or direct GGUF link.
+
+    Returns (repo_id, filename) or None if unparseable.
+    """
+    url = url.strip()
+    # HuggingFace resolve URL:
+    # https://huggingface.co/org/repo/resolve/main/file.gguf
+    hf_match = re.match(
+        r"https?://huggingface\.co/([^/]+/[^/]+)/resolve/[^/]+/(.+)",
+        url,
+    )
+    if hf_match:
+        return hf_match.group(1), hf_match.group(2)
+    # Direct .gguf link (any URL ending in .gguf)
+    if url.lower().endswith(".gguf"):
+        filename = url.rsplit("/", 1)[-1]
+        return "", filename
+    # Local file path
+    if os.path.isfile(url) and url.lower().endswith(".gguf"):
+        return "", os.path.basename(url)
+    return None
+
 def scan_existing_models(
     models_dir: str | None = None,
 ) -> list[dict]:
@@ -958,6 +1025,7 @@ def set_config(cfg: LLMConfig) -> None:
     """Atomically update the configuration."""
     with _lock:
         _config.mode = cfg.mode
+        _config.llama_source = cfg.llama_source
         _config.llama_path = cfg.llama_path
         _config.model_repo_id = cfg.model_repo_id
         _config.model_filename = cfg.model_filename
@@ -977,6 +1045,7 @@ def get_config() -> LLMConfig:
     with _lock:
         return LLMConfig(
             mode=_config.mode,
+            llama_source=_config.llama_source,
             llama_path=_config.llama_path,
             model_repo_id=_config.model_repo_id,
             model_filename=_config.model_filename,
@@ -1000,62 +1069,91 @@ _find_llama_server_checked: bool = False
 
 
 def find_llama_server() -> str | None:
-    """Search PATH and common install locations for ``llama-server``.
+    """Search for ``llama-server`` binary.
 
-    Prefers the active backend's bundled binary (e.g. ``llama-server-cuda.exe``)
-    over the generic ``llama-server.exe``.
+    Prefers the Coworker-managed bundled binary (latest version) over
+    PATH and known install locations.  Logs a warning when the found
+    binary is older than _MIN_SUPPORTED_BUILD (too old for Qwen3 SSM).
     """
     global _find_llama_server_cache, _find_llama_server_checked
     if _find_llama_server_checked:
         return _find_llama_server_cache
     _find_llama_server_checked = True
 
-    # Determine the active backend for bundled binary preference.
     with _lock:
         active_backend = _config.llama_backend
+        llama_source = _config.llama_source
+        llama_path = _config.llama_path
     if active_backend == "auto":
         active_backend = _detect_gpu_backend()
 
-    print("[🛠️Coworker] find_llama_server: searching for llama-server (backend={:s})...".format(active_backend))
-
-    # 1. Check the bundled directory for a backend-specific binary first.
     bundled_dir = _get_bundled_llama_dir()
-    if active_backend and active_backend != "cpu":
-        backend_binary = bundled_dir / "llama-server-{backend}.exe".format(backend=active_backend)
-        print("[🛠️Coworker] find_llama_server:   checking bundled {:s}".format(str(backend_binary)))
-        if backend_binary.is_file():
-            print("[🛠️Coworker] find_llama_server: found bundled backend binary at {:s}".format(str(backend_binary)))
-            _find_llama_server_cache = str(backend_binary)
-            return str(backend_binary)
+    _log = "[🛠️Coworker] find_llama_server"
 
-    # 2. Search PATH first.
-    exe = shutil.which("llama-server")
-    if exe:
-        print("[🛠️Coworker] find_llama_server: found via 'llama-server' -> {:s}".format(exe))
-        _find_llama_server_cache = exe
-        return exe
-    print("[🛠️Coworker] find_llama_server: 'llama-server' not on PATH, trying 'llama-server.exe'")
-    exe = shutil.which("llama-server.exe")
-    if exe:
-        print("[🛠️Coworker] find_llama_server: found via 'llama-server.exe' -> {:s}".format(exe))
-        _find_llama_server_cache = exe
-        return exe
-    # Fall back to known install paths.
-    print("[🛠️Coworker] find_llama_server: not on PATH, checking known install dirs...")
+    # 0. Custom source — the user explicitly provided their own binary.
+    #    Only that path is used; we never fall through to PATH/bundled so
+    #    the addon never tampers with a user-managed setup.
+    if llama_source == "custom":
+        if llama_path and os.path.isfile(llama_path):
+            print("{:s}: custom path -> {:s}".format(_log, llama_path))
+            _find_llama_server_cache = llama_path
+            _check_llama_version(llama_path)
+            return llama_path
+        print("{:s}: custom source set but path missing/invalid — {:s}".format(_log, llama_path or "(empty)"))
+        _find_llama_server_cache = None
+        return None
+
+    # 1. Bundled directory FIRST — this is the Coworker-managed version
+    #    (downloaded via the "Download llama-server" button, always recent).
+    # Check backend-specific binary first (e.g. llama-server-cuda.exe),
+    # then the generic fallback (llama-server.exe).  This ensures the
+    # correct GPU backend binary is used and its companion DLLs (cudart,
+    # etc.) are found in the same directory.
+    backend_bname = "llama-server-{b}.exe".format(b=active_backend or "cpu")
+    for bname in (backend_bname, "llama-server.exe"):
+        bpath = bundled_dir / bname
+        if bpath.is_file():
+            print("{:s}: found bundled {:s} -> {:s}".format(_log, bname, str(bpath)))
+            _find_llama_server_cache = str(bpath)
+            _check_llama_version(str(bpath))
+            return str(bpath)
+
+    # 2. Search PATH (may include WinGet, pip, or system installs).
+    for name in ("llama-server", "llama-server.exe"):
+        exe = shutil.which(name)
+        if exe:
+            print("{:s}: found via PATH -> {:s}".format(_log, exe))
+            _find_llama_server_cache = exe
+            _check_llama_version(exe)
+            return exe
+
+    # 3. Known install directories (WinGet package path, etc.).
+    print("{:s}: not on PATH, checking known install dirs...".format(_log))
     for path in _LLAMA_SEARCH_PATHS_WIN:
-        print("[🛠️Coworker] find_llama_server:   checking {:s}".format(path))
         if os.path.isfile(path):
-            print("[🛠️Coworker] find_llama_server: found at {:s}".format(path))
+            print("{:s}: found at {:s}".format(_log, path))
             _find_llama_server_cache = path
+            _check_llama_version(path)
             return path
-    # Check the generic bundled binary as last resort.
-    bundled = bundled_dir / "llama-server.exe"
-    print("[🛠️Coworker] find_llama_server:   checking bundled {:s}".format(str(bundled)))
-    if bundled.is_file():
-        print("[🛠️Coworker] find_llama_server: found bundled at {:s}".format(str(bundled)))
-        _find_llama_server_cache = str(bundled)
-        return str(bundled)
-    print("[🛠️Coworker] find_llama_server: NOT FOUND")
+
+    print("{:s}: NOT FOUND".format(_log))
+    _find_llama_server_cache = None
+    return None
+
+
+def _check_llama_version(exe_path: str) -> None:
+    """Log a warning if the llama-server binary is too old for Qwen3 models."""
+    ver = _llama_server_version(exe_path)
+    build = _parse_llama_build_number(ver)
+    if build and build < _MIN_SUPPORTED_BUILD:
+        print(
+            "[⚠️Coworker] WARNING: llama-server build {:d} is outdated "
+            "(minimum {:d} for Qwen3 SSM models). "
+            "Use 'Download llama-server' in preferences to get the latest version."
+            .format(build, _MIN_SUPPORTED_BUILD)
+        )
+
+
     _find_llama_server_cache = None
     return None
 
@@ -1131,6 +1229,20 @@ def _clear_download_state() -> None:
         _state.download_kind = ""
 
 
+def _clear_download_progress() -> None:
+    """Clear download progress bar fields but preserve the error message.
+
+    Used after a download finishes so the progress bar disappears while
+    any error message remains visible to the user.
+    """
+    with _lock:
+        _state.download_progress = ""
+        _state.download_progress_eta = ""
+        _state.download_progress_pct = 0.0
+        _state.download_active = False
+        _state.download_kind = ""
+
+
 def _set_download_kind(kind: str) -> None:
     """Set the download kind ("model" | "llama_server" | "")."""
     with _lock:
@@ -1173,19 +1285,42 @@ def _detect_gpu_backend() -> str:
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         pass
 
-    # 2. Check for AMD / Intel Arc GPU via wmic.
+    # 2. Check for AMD / Intel GPU via PowerShell (wmic is deprecated on Win10+).
+    #    Use Get-CimInstance which works on Windows 10 1903+ and all Win11.
+    gpu_found = False
     try:
         result = subprocess.run(
-            ["wmic", "path", "win32_VideoController", "get", "name"],
+            ["powershell", "-NoProfile", "-Command",
+             "(Get-CimInstance Win32_VideoController).Name"],
             capture_output=True, text=True, timeout=5,
         )
         output = result.stdout.lower()
-        if "amd" in output or "radeon" in output or "intel" in output:
-            print("[🛠️Coworker] _detect_gpu_backend: AMD/Intel GPU detected -> vulkan")
-            _gpu_backend_cache = "vulkan"
-            return _gpu_backend_cache
+        if "amd" in output or "radeon" in output:
+            gpu_found = True
+        elif "intel" in output and any(k in output for k in ("arc", "a380", "a750", "a770")):
+            gpu_found = True  # Intel Arc discrete GPUs.
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         pass
+
+    # Fallback: try wmic if PowerShell failed (older Windows).
+    if not gpu_found:
+        try:
+            result = subprocess.run(
+                ["wmic", "path", "win32_VideoController", "get", "name"],
+                capture_output=True, text=True, timeout=5,
+            )
+            output = result.stdout.lower()
+            if "amd" in output or "radeon" in output:
+                gpu_found = True
+            elif "intel" in output and any(k in output for k in ("arc", "a380", "a750", "a770")):
+                gpu_found = True
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            pass
+
+    if gpu_found:
+        print("[🛠️Coworker] _detect_gpu_backend: AMD/Intel GPU detected -> vulkan")
+        _gpu_backend_cache = "vulkan"
+        return _gpu_backend_cache
 
     # 3. Fallback to CPU.
     print("[🛠️Coworker] _detect_gpu_backend: no compatible GPU detected -> cpu")
@@ -1296,6 +1431,173 @@ def _detect_hardware_cached() -> tuple[float | None, float | None]:
     return ram, vram
 
 
+
+
+# ---- GPU auto-detection for --n-gpu-layers ----
+
+_RUNTIME_OVERHEAD_MB = 700
+_KV_MB_PER_1K_CTX = 70
+_TYPICAL_LAYERS = 33
+_FULL_OFFLOAD = 99
+
+def _hardware_info() -> tuple[int | None, str | None, int | None]:
+    """Return (ram_mb, gpu_label, gpu_mb). Cached for the session."""
+    ram_gb = detect_system_ram_gb()
+    ram_mb = int(ram_gb * 1024) if ram_gb else None
+    gpu_label = None
+    gpu_mb = None
+
+    if shutil.which("nvidia-smi"):
+        try:
+            name = subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                text=True, timeout=5,
+            ).strip().splitlines()[0]
+            total = int(subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=memory.total",
+                 "--format=csv,noheader,nounits"],
+                text=True, timeout=5,
+            ).strip().splitlines()[0])
+            gpu_label = name
+            gpu_mb = total
+            print("[Coworker] _hardware_info: GPU = {:s} ({:d} MB)".format(name, total))
+        except Exception:
+            pass
+    elif sys.platform == "darwin":
+        try:
+            out = subprocess.check_output(
+                ["sysctl", "-n", "hw.memsize"], text=True, timeout=5,
+            )
+            total_mb = int(out.strip()) // (1024 * 1024)
+            gpu_label = "Apple unified memory"
+            gpu_mb = int(total_mb * 0.6)  # ~60% usable for model
+            print("[Coworker] _hardware_info: Apple unified = {:d} MB".format(gpu_mb))
+        except Exception:
+            pass
+
+    return ram_mb, gpu_label, gpu_mb
+
+def _gguf_layer_count(model_path: Path) -> int | None:
+    """Read the number of transformer blocks from a GGUF file header.
+
+    Returns the layer count if found, or ``None`` if the file can't be
+    read or doesn't contain the expected metadata key.
+    The GGUF format stores ``<arch>.block_count`` in its metadata.
+    """
+    # GGUF type IDs (from llama.cpp gguf.h).
+    _GGUF_UINT8 = 0
+    _GGUF_INT8 = 1
+    _GGUF_UINT16 = 2
+    _GGUF_INT16 = 3
+    _GGUF_UINT32 = 4
+    _GGUF_UINT64 = 5
+    _GGUF_FLOAT32 = 6
+    _GGUF_FLOAT64 = 7
+    _GGUF_BOOL = 8
+    _GGUF_STRING = 9
+    _GGUF_ARRAY = 10
+    # Fixed-size byte widths for scalar types.
+    _FIXED_SIZES = {
+        _GGUF_UINT8: 1, _GGUF_INT8: 1,
+        _GGUF_UINT16: 2, _GGUF_INT16: 2,
+        _GGUF_UINT32: 4, _GGUF_FLOAT32: 4,
+        _GGUF_UINT64: 8, _GGUF_FLOAT64: 8,
+        _GGUF_BOOL: 1,
+    }
+
+    def _skip_value_bytes(fobj: "io.BufferedRandom | io.BufferedReader", vtype: int) -> None:
+        """Advance *fobj* past the value bytes for type *vtype*.
+
+        The type ID has already been read; this only skips the payload.
+        """
+        if vtype in _FIXED_SIZES:
+            fobj.read(_FIXED_SIZES[vtype])
+        elif vtype == _GGUF_STRING:
+            slen = int.from_bytes(fobj.read(8), "little")
+            fobj.read(slen)
+        elif vtype == _GGUF_ARRAY:
+            atype = int.from_bytes(fobj.read(4), "little")
+            alen = int.from_bytes(fobj.read(8), "little")
+            for _ in range(alen):
+                if atype in _FIXED_SIZES:
+                    fobj.read(_FIXED_SIZES[atype])
+                elif atype == _GGUF_STRING:
+                    elen = int.from_bytes(fobj.read(8), "little")
+                    fobj.read(elen)
+                else:
+                    break  # Unknown element type — bail.
+
+    try:
+        with open(str(model_path), "rb") as f:
+            magic = f.read(4)
+            if magic != b"GGUF":
+                return None
+            version = int.from_bytes(f.read(4), "little")
+            if version < 2:
+                return None  # V1 format — no standard metadata layout.
+            n_tensors = int.from_bytes(f.read(4), "little")
+            n_kv = int.from_bytes(f.read(4), "little")
+            # Read key-value metadata entries looking for block_count.
+            for _ in range(n_kv):
+                # Key: uint64 length-prefixed string.
+                key_len = int.from_bytes(f.read(8), "little")
+                key = f.read(key_len).decode("utf-8", errors="replace")
+                # Value type: uint32.
+                val_type = int.from_bytes(f.read(4), "little")
+
+                if val_type == _GGUF_UINT32 and "block_count" in key:
+                    lc = int.from_bytes(f.read(4), "little")
+                    if lc > 0:
+                        print("[Coworker] _gguf_layer_count: {:s} has {:d} layers".format(
+                            model_path.name, lc))
+                        return lc
+                    # Zero layer count — skip.
+                    continue
+                if val_type == _GGUF_UINT64 and "block_count" in key:
+                    lc = int.from_bytes(f.read(8), "little")
+                    if lc > 0:
+                        print("[Coworker] _gguf_layer_count: {:s} has {:d} layers".format(
+                            model_path.name, lc))
+                        return lc
+                    continue
+                # Not block_count (or wrong type) — skip the value.
+                _skip_value_bytes(f, val_type)
+            return None
+    except (OSError, struct.error, ValueError):
+        return None
+
+
+def autodetect_gpu_layers(model_path: Path, context_size: int) -> int:
+    """Calculate optimal --n-gpu-layers for the given model and hardware."""
+    backend = _detect_gpu_backend()
+    if backend == "cpu":
+        return 0
+
+    _, _, gpu_mb = _hardware_info()
+    if gpu_mb is None:
+        return _FULL_OFFLOAD  # Cannot detect -- try full offload
+
+    try:
+        model_mb = model_path.stat().st_size // (1024 * 1024)
+    except OSError:
+        return _FULL_OFFLOAD
+
+    kv_mb = int((context_size / 1024) * _KV_MB_PER_1K_CTX)
+    usable_mb = gpu_mb - _RUNTIME_OVERHEAD_MB - kv_mb
+
+    if usable_mb <= 0:
+        return 0  # Not enough VRAM for GPU offload
+    if usable_mb >= model_mb * 1.05:
+        return _FULL_OFFLOAD  # Full GPU offload
+
+    # Try to read the actual layer count from the GGUF header so the
+    # per-layer estimate is accurate even for models with != 33 layers.
+    actual_layers = _gguf_layer_count(model_path) or _TYPICAL_LAYERS
+    per_layer = model_mb / actual_layers
+    ngl = max(0, min(actual_layers, int(usable_mb / per_layer)))
+    print("[Coworker] autodetect_gpu_layers: ngl={:d}/{:d} (gpu={:d}MB, model={:d}MB, kv={:d}MB, usable={:d}MB)".format(
+        ngl, actual_layers, gpu_mb, model_mb, kv_mb, usable_mb))
+    return ngl
 def recommend_context_size(
     model_gb: float = 0.0,
     backend: str = "auto",
@@ -1390,6 +1692,21 @@ def _check_disk_space(dest: Path, required_bytes: int | None) -> bool:
     return True
 
 
+def _verify_sha256(path: Path, expected: str) -> None:
+    """Compute SHA-256 of *path*, raise RuntimeError on mismatch."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    got = h.hexdigest().lower()
+    want = expected.lower().strip()
+    if got != want:
+        raise RuntimeError(
+            "Checksum mismatch for {:s}: expected {:s}..., got {:s}..."
+            " - delete the file and re-download.".format(
+                path.name, want[:12], got[:12])
+        )
+
 def _format_bytes(bytes_val: float) -> str:
     """Format bytes to a human-readable string (KB/MB/GB)."""
     if bytes_val >= 1024 ** 3:
@@ -1443,32 +1760,43 @@ def _download_gguf_direct(
     filename: str,
     dest: Path,
     progress_callback: Callable[[str], None] | None = None,
+    expected_sha256: str = "",
 ) -> bool:
-    """
-    Download a GGUF model file directly from HuggingFace via HTTP.
+    """Download a GGUF model from HuggingFace via HTTP.
 
-    Streams the file in 64 KB chunks with real progress reporting (percentage,
-    ETA, speed). Handles 401/403/404 errors with clear actionable messages.
+    Streams in 64 KB chunks with progress reporting. Supports
+    resume via .part files and optional SHA-256 verification
+    before atomic rename.
 
-    Returns ``True`` on success, ``False`` on failure.
+    Returns True on success, False on failure.
     """
     url = "https://huggingface.co/{:s}/resolve/main/{:s}".format(repo_id, filename)
-    print("[🛠️Coworker] _download_gguf_direct: url = {:s}".format(url))
-    print("[🛠️Coworker] _download_gguf_direct: dest = {:s}".format(str(dest)))
+    print("[Coworker] _download_gguf_direct: url = {:s}".format(url))
+    print("[Coworker] _download_gguf_direct: dest = {:s}".format(str(dest)))
 
-    # Get file size first (informational + progress calculation).
+    part = dest.with_suffix(dest.suffix + ".part")
+
     total_bytes = _get_hf_file_size(repo_id, filename)
     if total_bytes is not None:
         size_hint = _format_bytes(total_bytes)
-        print("[🛠️Coworker] _download_gguf_direct: total size = {:s}".format(size_hint))
+        print("[Coworker] total size = {:s}".format(size_hint))
     else:
         size_hint = "unknown size"
 
-    # Pre-flight: verify enough disk space before committing to a multi-GB download.
     if not _check_disk_space(dest, total_bytes):
         if progress_callback:
             progress_callback(get_state().error or "Not enough disk space")
         return False
+
+    already = 0
+    if part.exists():
+        already = part.stat().st_size
+        if total_bytes and already >= total_bytes:
+            print("[Coworker] .part already complete")
+            already = 0
+        elif already > 0:
+            print("[Coworker] resuming from .part ({:s} already)".format(
+                _format_bytes(already)))
 
     _set_download_progress("Downloading {:s} ({:s}) ...".format(filename, size_hint))
     if progress_callback:
@@ -1476,7 +1804,6 @@ def _download_gguf_direct(
 
     try:
         req = urllib.request.Request(url, method="GET")
-        # Pass HF_TOKEN if available (from env var, or configured token).
         hf_token = ""
         with _lock:
             hf_token = _config.hf_token
@@ -1485,35 +1812,37 @@ def _download_gguf_direct(
         if hf_token:
             req.add_header("Authorization", "Bearer {:s}".format(hf_token))
 
+        if already > 0:
+            req.add_header("Range", "bytes={:d}-".format(already))
+
         with urllib.request.urlopen(req, timeout=120) as resp:
-            # Apply a per-chunk socket read timeout so a stalled connection
-            # mid-download raises instead of hanging forever. 60s between
-            # chunks is generous for any live connection.
             try:
                 raw_sock = getattr(getattr(resp, "fp", None), "raw", None)
                 sock = getattr(raw_sock, "_sock", None) if raw_sock is not None else None
                 if sock is not None:
                     sock.settimeout(60.0)
             except (AttributeError, OSError):
-                pass  # Best-effort — if we can't set it, read() uses the default.
+                pass
 
-            actual_total = int(resp.headers.get("Content-Length", "0")) or total_bytes or 0
-            downloaded = 0
-            chunk_size = 64 * 1024  # 64 KB
+            content_length = int(resp.headers.get("Content-Length", "0")) or 0
+            is_resume = (resp.status == 206)
+            if is_resume:
+                actual_total = already + content_length
+            else:
+                actual_total = content_length or total_bytes or 0
+                already = 0
+
+            downloaded = already
+            chunk_size = 64 * 1024
             start_time = _get_time()
             last_update = start_time
-
-            # Ensure parent directory exists.
             dest.parent.mkdir(parents=True, exist_ok=True)
-
-            with open(str(dest), "wb") as f_out:
+            mode = "ab" if is_resume and already > 0 else "wb"
+            with open(str(part), mode) as f_out:
                 while True:
-                    # Check for user-requested cancellation between chunks.
                     if _download_cancel_event.is_set():
-                        print("[🛠️Coworker] _download_gguf_direct: cancelled by user")
+                        print("[Coworker] download cancelled")
                         f_out.close()
-                        if dest.exists():
-                            dest.unlink()
                         _set_download_progress("Download cancelled")
                         _set_download_progress_eta("", 0.0)
                         if progress_callback:
@@ -1525,40 +1854,32 @@ def _download_gguf_direct(
                     f_out.write(chunk)
                     downloaded += len(chunk)
                     now = _get_time()
-
-                    # Update progress every 200ms to avoid flooding the UI.
                     if now - last_update < 0.2 and actual_total > 0:
                         continue
-
                     last_update = now
                     if actual_total > 0:
                         pct = downloaded / actual_total * 100.0
-                        # Calculate speed and ETA.
                         elapsed = now - start_time
                         if elapsed > 0:
-                            speed_bps = downloaded / elapsed
-                            remaining_bytes = actual_total - downloaded
-                            eta_secs = remaining_bytes / speed_bps if speed_bps > 0 else 0
+                            speed_bps = (downloaded - already) / elapsed
+                            remaining = actual_total - downloaded
+                            eta = remaining / speed_bps if speed_bps > 0 else 0
                             speed_str = "{:s}/s".format(_format_bytes(speed_bps))
-                            eta_str = _format_eta(eta_secs)
+                            eta_str = _format_eta(eta)
                             _set_download_progress_eta(
-                                "{:.0f}% of {:s} — {:s}".format(pct, _format_bytes(actual_total), eta_str),
+                                "{:s} -- {:s}".format(_format_bytes(actual_total), eta_str),
                                 pct,
                             )
-                            msg = "Downloading {:s} ... {:.0f}% ({:s} / {:s}) — {:s}".format(
-                                filename, pct,
-                                _format_bytes(downloaded),
-                                _format_bytes(actual_total),
-                                speed_str,
+                            msg = "Downloading {:s} ... {:.0f}% ({:s} / {:s}) -- {:s}".format(
+                                filename, pct, _format_bytes(downloaded),
+                                _format_bytes(actual_total), speed_str,
                             )
                         else:
                             _set_download_progress_eta(
-                                "{:.0f}% of {:s}".format(pct, _format_bytes(actual_total)),
-                                pct,
+                                "{:s}".format(_format_bytes(actual_total)), pct,
                             )
                             msg = "Downloading {:s} ... {:.0f}% ({:s} / {:s})".format(
-                                filename, pct,
-                                _format_bytes(downloaded),
+                                filename, pct, _format_bytes(downloaded),
                                 _format_bytes(actual_total),
                             )
                     else:
@@ -1567,53 +1888,67 @@ def _download_gguf_direct(
                     if progress_callback:
                         progress_callback(msg)
 
-        # Verify the file is not empty/corrupt (basic check).
-        if dest.stat().st_size == 0:
-            dest.unlink()
-            _set_error("Downloaded file is empty — the server may be blocking the request")
+        if part.stat().st_size == 0:
+            part.unlink()
+            _set_error("Downloaded file is empty")
             return False
 
-        print("[🛠️Coworker] _download_gguf_direct: download complete — {:s} ({:s})".format(
-            str(dest), _format_bytes(dest.stat().st_size)))
+        if expected_sha256:
+            _set_download_progress("Verifying checksum ...")
+            if progress_callback:
+                progress_callback("Verifying SHA-256 checksum ...")
+            try:
+                _verify_sha256(part, expected_sha256)
+            except RuntimeError as ex:
+                print("[Coworker] SHA-256 FAILED")
+                _set_error(str(ex))
+                if progress_callback:
+                    progress_callback(str(ex))
+                return False
+
+        os.replace(str(part), str(dest))
+        print("[Coworker] download complete")
         _set_download_progress("Download complete: {:s}".format(filename))
         if progress_callback:
             progress_callback("Download complete: {:s}".format(filename))
         return True
 
     except urllib.error.HTTPError as ex:
-        # Clean up partial download.
-        if dest.exists():
-            dest.unlink()
+        if ex.code == 416 and part.exists():
+            print("[Coworker] HTTP 416 - .part may be complete")
+            if expected_sha256:
+                try:
+                    _verify_sha256(part, expected_sha256)
+                except RuntimeError as ex2:
+                    part.unlink()
+                    _set_error(str(ex2))
+                    if progress_callback:
+                        progress_callback(str(ex2))
+                    return False
+            os.replace(str(part), str(dest))
+            _set_download_progress("Download complete: {:s}".format(filename))
+            if progress_callback:
+                progress_callback("Download complete: {:s}".format(filename))
+            return True
+        if part.exists():
+            part.unlink()
         if ex.code == 401:
-            msg = (
-                "HuggingFace returned 401 (Unauthorized) for {:s}.\n"
-                "This repo may require authentication.\n"
-                "Set the HF_TOKEN environment variable or use a different model."
-            ).format(repo_id)
+            msg = "HuggingFace 401 (Unauthorized) for {:s}. Set HF_TOKEN or use a different model.".format(repo_id)
         elif ex.code == 403:
-            msg = (
-                "HuggingFace returned 403 (Forbidden) for {:s}.\n"
-                "The model may be gated. Visit https://huggingface.co/{:s} to request access."
-            ).format(repo_id, repo_id)
+            msg = "HuggingFace 403 (Forbidden) for {:s}. Model may be gated.".format(repo_id)
         elif ex.code == 404:
-            msg = (
-                "HuggingFace returned 404 (Not Found) for {:s}/{:s}.\n"
-                "The file may not exist. Check the repo ID and filename."
-            ).format(repo_id, filename)
+            msg = "HuggingFace 404 (Not Found) for {:s}/{:s}.".format(repo_id, filename)
         else:
             msg = "Failed to download model (HTTP {:d}: {:s})".format(ex.code, ex.reason)
-        print("[🛠️Coworker] _download_gguf_direct: {:s}".format(msg))
+        print("[Coworker] _download_gguf_direct: {:s}".format(msg))
         _set_error(msg)
         if progress_callback:
             progress_callback(msg)
         return False
 
     except (urllib.error.URLError, OSError) as ex:
-        # Clean up partial download.
-        if dest.exists():
-            dest.unlink()
         msg = "Network error while downloading: {:s}".format(str(ex))
-        print("[🛠️Coworker] _download_gguf_direct: {:s}".format(msg))
+        print("[Coworker] _download_gguf_direct: {:s}".format(msg))
         _set_error(msg)
         if progress_callback:
             progress_callback(msg)
@@ -1906,6 +2241,7 @@ def download_llama_server(
         _set_download_progress(msg)
         if progress_callback:
             progress_callback(msg)
+        _clear_download_progress()
         return str(dest_binary)
 
     _set_download_progress("Downloading llama-server ({:s}) from {:s} ...".format(backend, url))
@@ -1950,9 +2286,25 @@ def download_llama_server(
         if progress_callback:
             progress_callback("Extracting llama-server ...")
 
+        # Companion DLL extensions — extract these alongside the binary
+        # so CUDA/Vulkan runtime libraries are co-located.
+        # On Linux, versioned shared libs like ``libcublas.so.12`` don't end
+        # in ``.so`` so we also match ``.so.`` followed by digits.
+        def _is_companion_file(name: str) -> bool:
+            low = name.lower()
+            if low.endswith(".dll") or low.endswith(".dylib"):
+                return True
+            if low.endswith(".so"):
+                return True
+            # Versioned .so: libcudart.so.12, libcublas.so.12.4, etc.
+            if ".so." in low and low.split(".so.")[-1].isdigit():
+                return True
+            return False
+
         data.seek(0)
         if archive_ext == ".zip":
             with zipfile.ZipFile(data) as zf:
+                # Find the server binary inside the archive.
                 binary_members = [
                     m for m in zf.namelist()
                     if m.endswith(binary_name) or m.endswith("/" + binary_name)
@@ -1962,10 +2314,24 @@ def download_llama_server(
                         "Could not find {:s} in the downloaded archive".format(binary_name)
                     )
                     return None
-                temp_dir = dest_dir / ".tmp_extract"
-                temp_dir.mkdir(parents=True, exist_ok=True)
-                zf.extract(binary_members[0], str(temp_dir))
-                extracted = temp_dir / binary_members[0]
+                # Extract the binary + ALL companion DLLs/SOs.
+                # The CUDA release zip bundles cudart, cublas, cublasLt etc.
+                # alongside the exe — we need them all.
+                members_to_extract = list(binary_members)
+                for m in zf.namelist():
+                    if m in members_to_extract:
+                        continue
+                    if _is_companion_file(m):
+                        members_to_extract.append(m)
+                print("[🛠️Coworker] download_llama_server: extracting {:d} files from archive".format(
+                    len(members_to_extract)))
+                for m in members_to_extract:
+                    zf.extract(m, str(dest_dir))
+                # The extracted binary may be in a subdirectory — move to dest.
+                extracted_bin = dest_dir / binary_members[0]
+                if not extracted_bin.is_file():
+                    # Zip entry had a directory prefix (e.g. bin/llama-server.exe).
+                    extracted_bin = dest_dir / os.path.basename(binary_members[0])
         else:
             with tarfile.open(fileobj=data, mode="r:gz") as tf:
                 binary_members = [
@@ -1977,21 +2343,28 @@ def download_llama_server(
                         "Could not find {:s} in the downloaded archive".format(binary_name)
                     )
                     return None
-                temp_dir = dest_dir / ".tmp_extract"
-                temp_dir.mkdir(parents=True, exist_ok=True)
-                tf.extract(binary_members[0], str(temp_dir))
-                extracted = temp_dir / binary_members[0].name
+                # Extract all companions for tar archives too.
+                members_to_extract = list(binary_members)
+                for m in tf.getmembers():
+                    if m in members_to_extract:
+                        continue
+                    if _is_companion_file(m.name):
+                        members_to_extract.append(m)
+                print("[🛠️Coworker] download_llama_server: extracting {:d} files from archive".format(
+                    len(members_to_extract)))
+                tf.extractall(str(dest_dir), members=members_to_extract)
+                extracted_bin = dest_dir / os.path.basename(binary_members[0].name)
 
-        # Move to final location.
+        # Move binary to final location with backend suffix.
         if dest_binary.exists():
             dest_binary.unlink()
-        shutil.move(str(extracted), str(dest_binary))
-        # Cleanup temp dir.
-        shutil.rmtree(str(temp_dir), ignore_errors=True)
+        shutil.move(str(extracted_bin), str(dest_binary))
 
-        # Download and extract cudart DLLs for CUDA backend.
+        # For CUDA builds, also download the separate cudart zip as a safety
+        # net — the main zip should already have the DLLs (extracted above),
+        # but the cudart zip provides the canonical set.
         if cudart_url:
-            _set_download_progress("Downloading CUDA runtime DLLs ...")
+            _set_download_progress("Downloading CUDA runtime DLLs (backup) ...")
             if progress_callback:
                 progress_callback("Downloading CUDA runtime DLLs ...")
             try:
@@ -2000,10 +2373,22 @@ def download_llama_server(
                     cudart_data = io.BytesIO(cudart_resp.read())
                 with zipfile.ZipFile(cudart_data) as cudart_zf:
                     cudart_zf.extractall(str(dest_dir))
-                print("[🛠️Coworker] download_llama_server: cudart DLLs extracted to {:s}".format(str(dest_dir)))
+                print("[🛠️Coworker] download_llama_server: cudart DLLs (backup) extracted to {:s}".format(str(dest_dir)))
             except (urllib.error.URLError, OSError, zipfile.BadZipFile) as ex:
-                print("[🛠️Coworker] download_llama_server: cudart download failed — {:s}".format(str(ex)))
-                # Non-fatal — the server may still work if CUDA is installed system-wide.
+                print("[🛠️Coworker] download_llama_server: cudart backup download failed — {:s}".format(str(ex)))
+                # Non-fatal — the main zip should have already provided them.
+
+        # Post-extraction: verify critical DLLs are present for CUDA backend.
+        if backend == "cuda" and sys.platform == "win32":
+            expected_dlls = ["cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll"]
+            missing = [d for d in expected_dlls if not (dest_dir / d).is_file()]
+            if missing:
+                print(
+                    "[⚠️Coworker] download_llama_server: WARNING — missing DLLs after extraction: {:s}"
+                    .format(", ".join(missing))
+                )
+            else:
+                print("[🛠️Coworker] download_llama_server: all CUDA DLLs verified in {:s}".format(str(dest_dir)))
 
         # Make executable on non-Windows.
         if sys.platform != "win32":
@@ -2015,9 +2400,12 @@ def download_llama_server(
         if progress_callback:
             progress_callback(msg)
         # Invalidate the cache so find_llama_server picks up the new binary.
-        global _find_llama_server_checked, _find_llama_server_cache
+        global _find_llama_server_checked, _find_llama_server_cache, _llama_server_version_cache
         _find_llama_server_checked = False
         _find_llama_server_cache = None
+        _llama_server_version_cache = ""
+        # Clear download progress so the bar disappears from preferences.
+        _clear_download_progress()
         return str(dest_binary)
 
     except urllib.error.HTTPError as ex:
@@ -2028,6 +2416,7 @@ def download_llama_server(
         _set_error(err)
         if progress_callback:
             progress_callback(err)
+        _clear_download_progress()
         return None
     except (urllib.error.URLError, OSError, zipfile.BadZipFile) as ex:
         err = "Failed to download/extract llama-server: {:s}".format(str(ex))
@@ -2035,7 +2424,58 @@ def download_llama_server(
         _set_error(err)
         if progress_callback:
             progress_callback(err)
+        _clear_download_progress()
         return None
+
+
+
+def remove_llama_server() -> bool:
+    """Remove bundled llama-server binaries and invalidate the search cache.
+
+    Deletes the bundled directory contents (llama-server binaries,
+    CUDA runtime DLLs, etc.) and always invalidates the search cache
+    so the next find_llama_server() re-searches from scratch.
+
+    If the binary was found via PATH (e.g. WinGet), the cache is
+    still invalidated — the bundled copy is preferred on next search.
+
+    Returns True if any action was taken (files removed or cache cleared).
+    """
+    bundled_dir = _get_bundled_llama_dir()
+    _log = "[⚠️Coworker] remove_llama_server"
+
+    removed = False
+    if bundled_dir.is_dir():
+        for item in list(bundled_dir.iterdir()):
+            # Skip __pycache__ and hidden dirs.
+            if item.name.startswith(".") or item.name == "__pycache__":
+                continue
+            try:
+                if item.is_file():
+                    item.unlink()
+                    print("{:s}: removed {:s}".format(_log, item.name))
+                    removed = True
+                elif item.is_dir():
+                    import shutil as _shutil
+                    _shutil.rmtree(str(item))
+                    print("{:s}: removed dir {:s}".format(_log, item.name))
+                    removed = True
+            except OSError as ex:
+                print("{:s}: failed to remove {:s} — {:s}".format(_log, item.name, str(ex)))
+    else:
+        print("{:s}: bundled dir does not exist — {:s}".format(_log, str(bundled_dir)))
+
+    # Always invalidate cache so find_llama_server re-searches.
+    global _find_llama_server_checked, _find_llama_server_cache, _llama_server_version_cache
+    _find_llama_server_checked = False
+    _find_llama_server_cache = None
+    _llama_server_version_cache = ""
+
+    if removed:
+        print("{:s}: bundled llama-server removed".format(_log))
+    else:
+        print("{:s}: cache invalidated (PATH binary may remain on system)".format(_log))
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -2133,9 +2573,15 @@ def start_local_llama(
         with _lock:
             port = _config.local_port
         print("[🛠️Coworker] start_local_llama: using configured port {:d}".format(port))
+    # Auto-select a free port if the configured one is busy.
+    try:
+        port = _find_free_port(port)
+    except RuntimeError as ex:
+        _set_error(str(ex))
+        return None
 
     with _lock:
-        ctx_size = _config.local_ctx_size or 8192
+        ctx_size = _config.local_ctx_size or 16384
     # Auto-upgrade from the old 8192 default to 32768 for existing users.
     # 8192 is too small for system prompt + tools + conversation.
     if ctx_size <= 8192:
@@ -2168,8 +2614,24 @@ def start_local_llama(
             backend = _config.llama_backend
         if backend == "auto":
             backend = _detect_gpu_backend()
-        ngpu_layers = 99 if backend in ("cuda", "vulkan") else 0
 
+        # Pre-flight: verify the Vulkan runtime is installed when selected.
+        if backend == "vulkan" and sys.platform == "win32":
+            vulkan_dll = shutil.which("vulkan-1.dll")
+            if vulkan_dll is None:
+                # Also check System32 directly — shutil.which may miss it.
+                sys32 = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "vulkan-1.dll")
+                if not os.path.isfile(sys32):
+                    print("[⚠️Coworker] start_local_llama: vulkan-1.dll not found — Vulkan backend may fail")
+                else:
+                    print("[🛠️Coworker] start_local_llama: vulkan-1.dll found at {:s}".format(sys32))
+            else:
+                print("[🛠️Coworker] start_local_llama: vulkan-1.dll found at {:s}".format(vulkan_dll))
+
+        if backend in ("cuda", "vulkan") and model_path and os.path.isfile(str(model_path)):
+            ngpu_layers = autodetect_gpu_layers(Path(str(model_path)), ctx_size)
+        else:
+            ngpu_layers = 99 if backend in ("cuda", "vulkan") else 0
         args = [
             server_exe,
             '--jinja',
@@ -2201,6 +2663,25 @@ def start_local_llama(
             cfg_token = _config.hf_token
         if cfg_token:
             env["HF_TOKEN"] = cfg_token
+
+        # Ensure the bundled directory is on PATH so companion DLLs
+        # (cudart64_12.dll, etc.) are found when llama-server launches in
+        # its own console window on Windows.
+        bundled_dir = str(_get_bundled_llama_dir())
+        existing_path = env.get("PATH", "")
+        if bundled_dir not in existing_path:
+            env["PATH"] = bundled_dir + os.pathsep + existing_path
+
+        # On Windows, also register the bundled dir as a DLL search directory.
+        # PATH-based DLL discovery is unreliable with CREATE_NEW_CONSOLE;
+        # os.add_dll_directory() (Python 3.8+) is the robust alternative.
+        _bundled_dll_handle = None
+        if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
+            try:
+                _bundled_dll_handle = os.add_dll_directory(bundled_dir)
+                print("[🛠️Coworker] start_local_llama: registered DLL dir {:s}".format(bundled_dir))
+            except OSError as ex:
+                print("[🛠️Coworker] start_local_llama: os.add_dll_directory failed — {:s}".format(str(ex)))
 
         # Capture llama-server output to a log file — the child's stdio is
         # otherwise invisible (devnull + a separate console on Windows), which
@@ -2388,6 +2869,24 @@ def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = No
             tail = get_llama_server_log_tail()
             msg = "llama-server exited during startup (exit code {:d}{:s}) — check the model file, mmproj, GPU memory, and port".format(
                 proc.returncode, _describe_exit_code(proc.returncode))
+            # DLL_NOT_FOUND on Windows — the CUDA/Vulkan runtime DLLs are
+            # missing from the bundled directory.
+            if sys.platform == "win32" and (proc.returncode & 0xFFFFFFFF) == 0xC0000135:
+                bundled = _get_bundled_llama_dir()
+                cuda_dlls = ["cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll"]
+                missing = [d for d in cuda_dlls if not (bundled / d).is_file()]
+                if missing:
+                    msg += (
+                        "\n\nDLL_NOT_FOUND: The following CUDA runtime DLLs are missing from "
+                        "{:s}: {:s}. Re-download the llama-server CUDA binary from Preferences "
+                        "to restore them.".format(str(bundled), ", ".join(missing))
+                    )
+                else:
+                    msg += (
+                        "\n\nDLL_NOT_FOUND: The CUDA DLLs are present in {:s} but Windows "
+                        "cannot find them. Try adding the bundled directory to your system PATH "
+                        "or re-downloading the CUDA binary.".format(str(bundled))
+                    )
             # The GPU OOM hint doesn't need the model path, so it runs first and
             # is not gated on _last_launched_model_path.
             if tail and _log_looks_like_gpu_oom(tail):

@@ -35,6 +35,7 @@ import re
 import select
 import socket
 import sys
+import threading
 import time
 import traceback
 from collections.abc import Callable
@@ -355,6 +356,307 @@ def _code_is_undo_or_push(code: str) -> bool:
     return "bpy.ops.ed.undo()" in code or "bpy.ops.ed.undo_push(" in code
 
 
+
+# ---------------------------------------------------------------------------
+# Preflight code validation — catches common LLM mistakes before exec().
+# Returns a list of (pattern_name, guidance) tuples.  Empty = no issues.
+# ---------------------------------------------------------------------------
+
+def _preflight_check(code: str) -> list[tuple[str, str]]:
+    """Validate *code* for common LLM-generated mistakes before execution.
+
+    Returns a list of ``(pattern_name, guidance)`` tuples.  An empty list
+    means the code passed all checks.  Each check is a lightweight regex —
+    total cost is <1ms.
+    """
+    issues: list[tuple[str, str]] = []
+
+    # 1. Missing bpy import — most common first-time failure.
+    uses_bpy = re.search(r"\bbpy\.", code) or "bpy.ops." in code
+    has_import = "import bpy" in code
+    if uses_bpy and not has_import:
+        issues.append((
+            "missing_bpy",
+            "Missing 'import bpy'. Add 'import bpy' at the top of your code.",
+        ))
+
+    # 2. Wrong subdivision modifier attribute.
+    if re.search(r"\.subdivisions\s*=", code) and "SUBSURF" in code.upper():
+        issues.append((
+            "wrong_subdiv_attr",
+            "Blender 5.3: mod.subdivisions was renamed. Use mod.levels instead.",
+        ))
+
+    # 3. Wrong Principled BSDF attribute access.
+    if re.search(r"\.(base_color|base_color_input)\s*=", code):
+        issues.append((
+            "wrong_principled_attr",
+            "Principled BSDF has no base_color attribute. "
+            "Use principled.inputs['Base Color'].default_value = (R, G, B, 1.0)",
+        ))
+
+    # 4. Wrong torus primitive keywords.
+    if "primitive_torus_add" in code and re.search(r"ring_count\s*=", code):
+        issues.append((
+            "wrong_torus_kw",
+            "primitive_torus_add has no ring_count parameter. "
+            "Use major_radius, minor_radius, major_segments, minor_segments.",
+        ))
+
+    # 5. Wrong sequencer API (sequences vs strips).
+    if re.search(r"\.sequences\b", code) and "sequence_editor" in code:
+        issues.append((
+            "wrong_sequencer_api",
+            "Blender 5.x: editor.sequences was renamed to editor.strips.",
+        ))
+
+    # 6. Wrong auto smooth API.
+    if "use_auto_smooth" in code:
+        issues.append((
+            "wrong_auto_smooth",
+            "mesh.use_auto_smooth was removed in Blender 5.3. "
+            "Use mesh.auto_smooth_angle instead.",
+        ))
+
+    # 7. Accessing action.fcurves (removed in Blender 5.0+).
+    if re.search(r"action\.fcurves", code):
+        issues.append((
+            "wrong_fcurves",
+            "action.fcurves was removed in Blender 5.0+. "
+            "Use keyframe_insert() for keyframe creation.",
+        ))
+
+    # 8. Using bpy.ops in a loop without context override.
+    ops_in_loop = re.search(
+        r"(for|while)\s+.+:\s*\n\s+bpy\.ops\.", code
+    )
+    if ops_in_loop:
+        issues.append((
+            "ops_in_loop",
+            "Calling bpy.ops inside a loop is slow and may lose context. "
+            "Batch operations with bpy.data or bpy.context instead.",
+        ))
+
+    # 9. No output — code runs but returns nothing visible.
+    has_result = "result" in code and ("=" in code or "{" in code)
+    has_print = "print(" in code
+    if not has_result and not has_print and len(code.strip()) > 50:
+        issues.append((
+            "no_output",
+            "Your code has no print() or result assignment. "
+            "Add print() to see output, or assign to a 'result' dict.",
+        ))
+
+
+    # 10. Wrong lamp/light API (lamps -> lights since Blender 4.0).
+    if re.search(r"bpy\.data\.lamps", code):
+        issues.append((
+            "wrong_lamps_api",
+            "bpy.data.lamps was renamed to bpy.data.lights in Blender 4.0.",
+        ))
+
+    # 11. Wrong render engine name (EEVEE -> BLENDER_EEVEE since Blender 4.0).
+    if re.search(r'["\']EEVEE["\']', code) and "render.engine" in code:
+        issues.append((
+            "wrong_eevee_name",
+            "render.engine = 'EEVEE' was renamed to 'BLENDER_EEVEE' in Blender 4.0.",
+        ))
+
+    # 12. Accessing scene.render.eevee (moved in Blender 4.0).
+    if re.search(r"render\.eevee\.", code):
+        issues.append((
+            "wrong_eevee_access",
+            "scene.render.eevee was removed. EEVEE settings are now on "
+            "scene.eevee (e.g. scene.eevee.use_ssr).",
+        ))
+
+
+    # 13. Wrong Principled BSDF input name (common wrong guesses).
+    _WRONG_BSDF_INPUTS = {
+        "Subsurface Color", "Subsurface", "Specular", "Clearcoat",
+        "Sheen", "Transmission", "Emission Strength",
+    }
+    for wrong_name in _WRONG_BSDF_INPUTS:
+        if "['" + wrong_name + "']" in code:
+            issues.append((
+                "wrong_bsdf_input",
+                "Principled BSDF has no input '" + wrong_name + "'. "
+                "Use print([i.name for i in principled.inputs]) to list available inputs.",
+            ))
+            break  # One hint is enough.
+
+    # 14. bpy.data.*.active doesn't exist -- use context.active_object.
+    if re.search(r"\.(lights|cameras|meshes|materials|textures)\.active", code):
+        issues.append((
+            "wrong_collection_active",
+            "bpy.data.* collections have no .active attribute. "
+            "Use context.active_object or context.selected_objects instead.",
+        ))
+
+    # 15. Creating objects in a loop without checking what exists first.
+    # 15. Creating objects in a loop without checking what exists first.
+    creates_in_loop = ("for " in code or "while " in code) and "primitive_" in code
+    if creates_in_loop and "bpy.data.objects.get" not in code:
+        issues.append((
+            "no_existence_check",
+            "Creating objects in a loop without checking what exists. "
+            "Use bpy.data.objects.get('Name') to check first, or "
+            "the system will undo failed attempts and duplicates may persist.",
+        ))
+
+
+    # 16. Wrong mode_set enum (POSE mode needs armature context).
+    if "mode_set(" in code and "POSE" in code:
+        issues.append((
+            "wrong_mode_set",
+            "POSE mode via mode_set() requires an armature to be active and "
+            "selected. Use bpy.ops.object.mode_set(mode='POSE') only after "
+            "selecting an armature. Or use bpy.context.object.mode = 'POSE'.",
+        ))
+
+    # 17. Hallucinated module imports.
+    _HALLUCINATED_MODULES = ["mcp_toolkit", "blender_mcp", "bpy_tools", "ai_tools"]
+    for mod_name in _HALLUCINATED_MODULES:
+        if ("import " + mod_name) in code or ("from " + mod_name) in code:
+            issues.append((
+                "hallucinated_module",
+                "Module '" + mod_name + "' does not exist. This is an LLM hallucination. "
+                "Use standard bpy/bpy.ops/bpy.data instead.",
+            ))
+            break
+
+    # 18. Wrong mode_set enum values (valid: OBJECT, EDIT, SCULPT, etc).
+    _VALID_MODES = {"OBJECT", "EDIT", "SCULPT", "VERTEX_PAINT", "WEIGHT_PAINT",
+                    "TEXTURE_PAINT", "POSE", "PARTICLE_EDIT"}
+    mode_match = re.search(r"mode_set\(.*mode.*=.([A-Z_]+)", code)
+    if mode_match:
+        mode_val = mode_match.group(1)
+        if mode_val not in _VALID_MODES:
+            issues.append((
+                "wrong_mode_enum",
+                "mode_set(mode='" + mode_val + "') is not a valid mode. "
+                "Valid modes: " + ", ".join(sorted(_VALID_MODES)) + ".",
+            ))
+
+
+    # 19. Wrong material object hierarchy.
+    #     mesh.material_slots -> obj.material_slots (Object, not Mesh)
+    #     obj.materials -> obj.data.materials (Mesh data, not Object)
+    #     material_slot.material -> slot.material (correct)
+    if re.search(r"\.data\.material_slots", code):
+        issues.append((
+            "wrong_material_hierarchy",
+            "mesh.data.material_slots does not exist. "
+            "Use obj.material_slots (on Object) instead of obj.data.material_slots.",
+        ))
+    if re.search(r"\.materials", code) and "obj.data.materials" not in code and "mesh.materials" not in code:
+        # Check if it's on an Object (wrong) vs Mesh data (correct)
+        if re.search(r"\w+\.materials\[", code) and "data.materials" not in code:
+            issues.append((
+                "wrong_material_access",
+                "obj.materials does not exist on Object. "
+                "Use obj.data.materials (on Mesh data) or obj.material_slots instead.",
+            ))
+
+
+    # 20. Wrong world/environment node type names.
+    _WRONG_NODE_TYPES = {
+        "ShaderNodeEnvironment": "ShaderNodeTexEnvironment",
+        "ShaderNodeWorldOutput": "ShaderNodeOutputWorld",
+        "ShaderNodeBackground": "ShaderNodeBackground",
+    }
+    for wrong, correct in _WRONG_NODE_TYPES.items():
+        if wrong in code and correct not in code:
+            issues.append((
+                "wrong_node_type",
+                "Node type '" + wrong + "' does not exist. "
+                "Use '" + correct + "' instead.",
+            ))
+            break
+
+
+    # 21. Calling MCP tool as a Python function inside execute_blender_code.
+    _MCP_TOOLS = ["setup_pbr_material", "search_polyhaven_assets",
+                  "download_polyhaven_asset", "get_python_api_docs",
+                  "search_api_docs", "search_manual_docs"]
+    for tool_name in _MCP_TOOLS:
+        if tool_name + "(" in code and "def " + tool_name not in code:
+            issues.append((
+                "mcp_tool_as_function",
+                "'" + tool_name + "' is an MCP tool, not a Python function. "
+                "Call it as a separate tool call, not inside execute_blender_code. "
+                "Use bpy API directly instead.",
+            ))
+            break
+
+    # 22. Wrong world property access (world["Use Nodes"] -> world.use_nodes).
+    if re.search(r'\["Use Nodes"\]', code) or re.search(r"\['Use Nodes'\]", code):
+        issues.append((
+            "wrong_world_property",
+            'world["Use Nodes"] does not exist. '
+            "Use world.use_nodes = True instead (it's a boolean attribute).",
+        ))
+
+    # 23. Passing location/rotation/scale to primitive add operators.
+    #     These operators don't accept transform kwargs — set after creation.
+    _PRIM_OPS = ["primitive_cube_add", "primitive_uv_sphere_add",
+                 "primitive_ico_sphere_add", "primitive_cylinder_add",
+                 "primitive_cone_add", "primitive_torus_add",
+                 "primitive_plane_add", "primitive_circle_add",
+                 "primitive_monkey_add", "primitive_grid_add"]
+    _TRANSFORM_KWARGS = ["location", "rotation", "rotation_euler",
+                         "scale", "rotation_mode"]
+    for prim in _PRIM_OPS:
+        if prim + "(" in code:
+            for kwarg in _TRANSFORM_KWARGS:
+                if kwarg + "=" in code:
+                    issues.append((
+                        "prim_transform_kwarg",
+                        prim + "() does not accept '" + kwarg + "' as a keyword. "
+                        "Set it after creation: obj." + kwarg + " = (...)",
+                    ))
+                    break
+            break  # One hint per call is enough.
+
+    # 24. Missing bmesh import — code uses bmesh without importing it.
+    if re.search(r'\bbmesh\.', code) and 'import bmesh' not in code:
+        issues.append((
+            "missing_bmesh_import",
+            "Code uses bmesh but does not 'import bmesh'. "
+            "Add 'import bmesh' at the top of your script.",
+        ))
+
+    # 25. bmesh edit mode mismatch — using from_edit_mesh without entering edit mode,
+    #     or using from_mesh (object mode) when edit mode was intended.
+    if 'bmesh.from_edit_mesh' in code and 'mode_set' not in code and 'EDIT' not in code:
+        issues.append((
+            "bmesh_editmode_mismatch",
+            "bmesh.from_edit_mesh() requires the object to be in EDIT mode. "
+            "Switch to edit mode first: bpy.ops.object.mode_set(mode='EDIT')",
+        ))
+
+    # 26. Vector arithmetic type errors — adding float/tuple to Vector.
+    #     Common pattern: vert.co += offset + random.uniform(-0.1, 0.1)
+    #     Fix: use mathutils.Vector for offsets, or add component-wise.
+    if re.search(r'vert\.co\s*\+=.*\+\s*[a-z]', code):
+        issues.append((
+            "vector_arithmetic",
+            "Can't add a scalar to a Vector. "
+            "Use: vert.co += mathutils.Vector((dx, dy, dz)) "
+            "or set components: vert.co.x += dx",
+        ))
+
+    # 27. update_edit_mesh with wrong number of args.
+    #     In Blender 5.x, update_edit_mesh() takes 0 or 1 args.
+    if re.search(r'update_edit_mesh\([^)]+,\s*[^)]+\)', code):
+        issues.append((
+            "update_edit_mesh_args",
+            "bmesh.update_edit_mesh() takes at most 1 argument in Blender 5.x. "
+            "Use: bm.update_edit_mesh(mesh) — no extra args.",
+        ))
+
+    return issues
+
 def _execute_code(
         code: str,
         strict_json: bool,
@@ -396,7 +698,34 @@ def _execute_code(
             # A Python-level exception from stale layer-collection data
             # is always preferable to an unrecoverable C-level segfault.
 
-            exec(code, namespace)
+            # Preflight: validate code before execution.
+            preflight_issues = _preflight_check(code)
+            if preflight_issues:
+                hint_lines = ["[Preflight] Found {:d} issue(s):".format(len(preflight_issues))]
+                for _name, guidance in preflight_issues:
+                    hint_lines.append("  - {:s}".format(guidance))
+                hint_lines.append("")
+                hint_lines.append("Fix these issues and retry. Do NOT retry the same code.")
+                return _ExecResult({"status": "error", "message": "\n".join(hint_lines)})
+
+            # Run exec() in a thread with a timeout to prevent hangs.
+            _exec_error = [None]
+            def _run_code():
+                try:
+                    exec(code, namespace)
+                except Exception as _e:
+                    _exec_error[0] = _e
+            _exec_thread = threading.Thread(target=_run_code, daemon=True)
+            _exec_thread.start()
+            _exec_thread.join(timeout=30)
+            if _exec_thread.is_alive():
+                return _ExecResult({
+                    "status": "error",
+                    "message": "[Preflight] Code execution timed out after 30 seconds. "
+                    "This usually means an infinite loop or a blocking operator call.",
+                })
+            if _exec_error[0] is not None:
+                raise _exec_error[0]
 
             # Force a depsgraph update after successful code execution.
             # Without this, creating many objects in a single call can leave
@@ -411,6 +740,13 @@ def _execute_code(
                     and not _code_is_undo_or_push(code)
                 )
             )
+            # NOTE: Deferred layer-collection sync via timers was removed.
+            # Calling view_layer.update() from a timer triggers a full
+            # depsgraph rebuild in a deferred context, which crashes in
+            # Blender 5.3 with EXCEPTION_ACCESS_VIOLATION in build_materials
+            # when materials are in an inconsistent state (e.g. rapid object
+            # creation with scatter operations).  The update_tag() strategy
+            # in _safe_depsgraph_sync already handles this safely.
         except Exception:  # pylint: disable=broad-exception-caught
             # Truncate traceback to last 3 frames + exception message.
             # Full tracebacks are verbose and eat context window space.
@@ -509,6 +845,40 @@ def _execute_code(
                     "        ...create or find it again...\n"
                     "Never reuse an object/material reference captured in an earlier tool call, "
                     "and guard lookups with try/except ReferenceError."
+                )
+            if "ShaderNodeBsdfPrincipled" in tb_str and "has no attribute" in tb_str and ("base_color" in tb_str or "Base Color" in tb_str):
+                tb_str += (
+                    "\n\nHINT: ShaderNodeBsdfPrincipled has NO `base_color` or `base_color_input" \
+                    "` attribute. Access colors through the node's inputs dictionary:\n"
+                    "    principled = nodes.new('ShaderNodeBsdfPrincipled')\n"
+                    "    principled.inputs['Base Color'].default_value = (0.8, 0.2, 0.2, 1.0)\n"
+                    "Other common inputs: 'Metallic', 'Roughness', 'Alpha', 'Emission Color'.\n"
+                    "Run `print([i.name for i in principled.inputs])` to list all available inputs."
+                )
+            if 'Subdivision' in tb_str and 'has no attribute' in tb_str:
+                tb_str += (
+                    "\n\nHINT: Blender 5.3 changed subdivision modifier attributes. "
+                    "Use print(dir(modifier)) to see available attributes. "
+                    "Common names: levels (viewport), render_levels (render), "
+                    "subdivision_type (CATMULL_CLARK or SIMPLE). "
+                    "The old subdivisions attribute was renamed."
+                )
+            if "lamps" in tb_str and "has no attribute" in tb_str:
+                tb_str += (
+                    "\n\nHINT: 'BlendData' has no attribute 'lamps'. "
+                    "It was renamed to 'lights' in Blender 4.0. "
+                    "Use bpy.data.lights instead of bpy.data.lamps."
+                )
+            if '"EEVEE"' in tb_str and "not found in" in tb_str:
+                tb_str += (
+                    "\n\nHINT: The render engine name 'EEVEE' was renamed "
+                    "to 'BLENDER_EEVEE' in Blender 4.0. "
+                    "Use: scene.render.engine = 'BLENDER_EEVEE'"
+                )
+            if "RenderSettings" in tb_str and "'eevee'" in tb_str and "has no attribute" in tb_str:
+                tb_str += (
+                    "\n\nHINT: scene.render.eevee was moved to scene.eevee "
+                    "in Blender 4.0. Use scene.eevee.use_ssr etc."
                 )
             response: dict[str, object] = {"status": "error", "message": tb_str}
             if captured.stdout:

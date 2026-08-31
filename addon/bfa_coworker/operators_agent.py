@@ -23,6 +23,7 @@ __all__ = (
     "BFACW_OT_test_polyhaven_hdri",
     "BFACW_OT_test_polyhaven_texture",
     "BFACW_OT_open_harness_prefs",
+    "BFACW_OT_open_addon_prefs",
     "BFACW_OT_open_config_folder",
     "BFACW_OT_open_url",
     "BFACW_OT_open_log",
@@ -254,31 +255,38 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
          "so the viewer sees the bounce but follow it. "
          "Make sure the framing covers the full arc."),
     ],
-    # ── Modifier Chain Workflow ─────────────────────────────────────
-    # Tests modifier stacking, applying, and mesh operations
-    # Goal: build a sculpt-ready head base mesh
+    # -- Modifier Chain Workflow -----------------------------------------
+    # Tests modifier stacking, applying, and remeshing on a torus.
+    # Goal: build a detailed mechanical part from a torus base.
     "modifiers": [
-        (1, "Rough Head",
-         "I want to make a head for sculpting. Start with a subdivided cube — "
-         "roughly head-sized. Stretch it a bit taller than wide and "
-         "slightly narrower on the sides to suggest a skull shape. "),
-        (2, "Subdivide",
-         "bevel and smooth it out, enough levels to look smooth but "
-         "not too dense yet. Make it a squarish shape. Keep it symmetrical."),
-        (4, "Apply & Cut",
-         "Cut it in half along the center line — "
-         "delete the left half. "
-         "Mirror modifier it — this way the center "
-         "line is perfectly flat and ready for sculpting dynamically."),
-        (5, "Jaw & Chin",
-         "Now shape the jawline. In Edit Mode, select and pull the bottom-front "
-         "vertices forward a bit to suggest a chin. Widen the lower "
-         "sides slightly for the jaw."),
-        (6, "Finalize",
-         "Duplicate it, then apply all remaining modifiers. Then add a remesh "
-         "modifier with a nice resolutions so it's ready for "
-         "sculpting. Name it \"Sculpt_Ready_Head\"."),
+        (1, "Torus Base",
+         "Create a torus mesh named 'Gear_Base'. "
+         "Major radius 1.0, minor radius 0.3, "
+         "major segments 48, minor segments 16. "
+         "Position it at the origin, centered."),
+        (2, "Array & Bevel",
+         "Add an Array modifier (count 3, offset on X axis by 2.5) "
+         "to create a row of three rings. "
+         "Then add a Bevel modifier (width 0.05, segments 2) to round all edges. "
+         "Do NOT apply yet."),
+        (3, "Apply Array",
+         "Apply the Array modifier so the three rings become real geometry. "
+         "Then check how many vertices the object has and report the count."),
+        (4, "Remesh",
+         "Add a Remesh modifier (mode: Voxel, voxel size 0.1) to unify "
+         "the merged geometry into a single clean mesh. "
+         "Apply the Remesh modifier."),
+        (5, "Solidify & Smooth",
+         "Add a Solidify modifier (thickness 0.02) to give the mesh wall thickness. "
+         "Then add a Smooth modifier (factor 0.5, iterations 3) to soften edges. "
+         "Apply both modifiers."),
+        (6, "Subdivide & Final",
+         "Add a Subdivision Surface modifier (viewport levels 2) for a polished look. "
+         "Do NOT apply it yet. "
+         "Then rename the object to 'Mechanical_Part' and "
+         "report the final vertex count and modifier stack."),
     ],
+
     # ── Asset Browser Workflow ─────────────────────────────────────
     # Tests asset browser search, material assignment, node groups
     "assets_browser": [
@@ -738,6 +746,64 @@ class BFACW_OT_copy_mcp_config(bpy.types.Operator):  # type: ignore[misc]
 # ---------------------------------------------------------------------------
 # Open Harness Preferences (from Chat Panel)
 
+def _open_addon_prefs_filtered(context: bpy.types.Context, pref_tab: str | None = None) -> None:
+    """Open Blender preferences filtered to the Coworker addon page.
+
+    ``bpy.ops.preferences.addon_show`` is unreliable here: it only works for
+    legacy add-ons whose module is registered in ``addon_utils.addons_fake_modules``
+    (extension add-ons get a ``bl_ext.`` module prefix and are skipped), and it
+    fails silently when called before the preferences window has finished
+    building.  Instead we set the same state that operator would set — the
+    addon search filter — directly, deferred until the preferences area exists.
+    """
+    bpy.ops.screen.userpref_show('INVOKE_DEFAULT')
+    context.preferences.active_section = 'ADDONS'
+
+    # Select the addon's internal tab (e.g. ADVANCED for harness setup).
+    if pref_tab is not None:
+        try:
+            prefs = context.preferences.addons[__package__].preferences
+            prefs.pref_tab = pref_tab
+        except Exception:
+            pass
+
+    # Defer the search filter until the preferences window is fully drawn —
+    # calling it synchronously races the addon list population and is dropped.
+    def _apply_filter() -> float | None:
+        try:
+            wm = bpy.context.window_manager
+            # Match the addon by its display name (what the search box filters
+            # against), not the module name.
+            wm.addon_search = "Coworker"
+            wm.addon_filter = 'All'
+            bpy.context.preferences.view.show_addons_enabled_only = False
+            # Expand the addon so its preferences are immediately visible.
+            # Set `show_expanded` directly instead of `preferences.addon_expand`
+            # (which *toggles* and would collapse it on a second click).
+            import addon_utils
+            # Ensure the fake-module cache is populated (same as
+            # ``PREFERENCES_OT_addon_show`` does) before searching it.
+            addon_utils.modules(refresh=False)
+            # The addon may be registered as an extension (module name gets a
+            # ``bl_ext.<repo>.`` prefix), so match by suffix.
+            mod = addon_utils.addons_fake_modules.get(__package__)
+            if mod is None:
+                for _mod_name, _mod in addon_utils.addons_fake_modules.items():
+                    if _mod_name.endswith("." + __package__):
+                        mod = _mod
+                        break
+            if mod is not None:
+                addon_utils.module_bl_info(mod)["show_expanded"] = True
+            for area in bpy.context.screen.areas:
+                if area.type == 'PREFERENCES':
+                    area.tag_redraw()
+        except Exception:
+            pass
+        return None
+
+    bpy.app.timers.register(_apply_filter, first_interval=0.1)
+
+
 class BFACW_OT_open_harness_prefs(bpy.types.Operator):  # type: ignore[misc]
     """Open Blender preferences to the bfa_coworker addon Advanced tab for harness setup."""
     bl_idname = "bfacw.open_harness_prefs"
@@ -745,14 +811,21 @@ class BFACW_OT_open_harness_prefs(bpy.types.Operator):  # type: ignore[misc]
     bl_description = "Open preferences to configure external MCP client harness"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        bpy.ops.screen.userpref_show('INVOKE_DEFAULT')
-        context.preferences.active_section = 'ADDONS'
-        # Set the addon's pref_tab to ADVANCED so the harness section is visible.
-        try:
-            prefs = context.preferences.addons[__package__].preferences
-            prefs.pref_tab = "ADVANCED"
-        except Exception:
-            pass
+        _open_addon_prefs_filtered(context, pref_tab="ADVANCED")
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# Open Addon Preferences (filters to bfa_coworker)
+
+class BFACW_OT_open_addon_prefs(bpy.types.Operator):  # type: ignore[misc]
+    """Open Blender preferences filtered to the Coworker addon page."""
+    bl_idname = "bfacw.open_addon_prefs"
+    bl_label = "Open Settings"
+    bl_description = "Open preferences to configure Coworker"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        _open_addon_prefs_filtered(context)
         return {"FINISHED"}
 
 

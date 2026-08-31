@@ -32,6 +32,7 @@ __all__ = (
 )
 
 import json
+import re
 import os
 import time
 import threading
@@ -99,20 +100,434 @@ def _wrap_text(text: str, width: int = _WRAP_WIDTH) -> str:
     )
 
 
-def _draw_multiline(layout: bpy.types.UILayout, text: str, width: int = _WRAP_WIDTH) -> None:
-    """Draw multi-line text in a layout, using ``label_multiline`` if available.
+#
+# Blender UI primitives can't render bold or italic, don't have a monospace
+# label, and have no table widget — but we can simulate most of it with
+# row/column layouts, scale_y tricks for headings, boxes for code/quotes,
+# and splitting pipe tables into aligned columns.
+# ---------------------------------------------------------------------------
 
-    In Blender 5.3+, ``UILayout.label_multiline(text=...)`` natively wraps
-    long text across multiple lines.  For older versions we fall back to
-    one ``label()`` call per wrapped line.
+_INLINE_BOLD_RE  = re.compile(r"\*\*([^*]+?)\*\*")
+_INLINE_BOLD2_RE = re.compile(r"__([^_]+?)__")
+_INLINE_ITAL_RE  = re.compile(r"(?<!\*)\*([^*\s][^*]*?)\*(?!\*)")
+_INLINE_ITAL2_RE = re.compile(r"(?<!_)_([^_\s][^_]*?)_(?!_)")
+_INLINE_CODE_RE  = re.compile(r"`([^`]+?)`")
+_INLINE_LINK_RE  = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+_HEADING_RE      = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
+_LIST_RE         = re.compile(r"^(\s*)([-*+]|\d+\.)\s+(.+)$")
+_HR_RE           = re.compile(r"^\s*(\*{3,}|-{3,}|_{3,})\s*$")
+_QUOTE_RE        = re.compile(r"^\s*>\s?(.*)$")
+_TABLE_SEP_RE    = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$")
+
+
+def _strip_inline(text):
+    """Flatten inline markdown that labels can't style."""
+    text = _INLINE_BOLD_RE.sub(r"\1", text)
+    text = _INLINE_BOLD2_RE.sub(r"\1", text)
+    text = _INLINE_ITAL_RE.sub(r"\1", text)
+    text = _INLINE_ITAL2_RE.sub(r"\1", text)
+    text = _INLINE_CODE_RE.sub(r"\1", text)
+    text = _INLINE_LINK_RE.sub(r"\1", text)
+    return text
+
+
+_PARA_SCALE_Y = 0.78  # tight vertical spacing for paragraph text
+_CODE_SCALE_Y = 0.72
+def _wrap_for_label(text, width=40):
+    """Wrap text for UILabel -- returns a list of lines."""
+    if not text:
+        return [""]
+    return textwrap.wrap(text, width=width) or [""]
+
+  # tighter again for monospace-style code blocks
+
+
+# --- LaTeX → plain text -----------------------------------------------------
+# The model occasionally emits $$…$$ blocks or \frac{a}{b}-style markup even
+# though the system prompt says not to. Blender's UI labels can't render math,
+# so we preprocess to readable ASCII / Unicode equivalents — matches how a
+# human would write the same equation in a chat message.
+
+_LATEX_BLOCK_RE  = re.compile(r"\$\$\s*(.+?)\s*\$\$", re.DOTALL)
+_LATEX_INLINE_RE = re.compile(r"(?<![\$\w])\$([^\$\n]+?)\$(?!\w)")
+_LATEX_FRAC_RE   = re.compile(r"\\frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}")
+_LATEX_SQRT_RE   = re.compile(r"\\sqrt\s*\{([^{}]+)\}")
+_LATEX_CMD_TAIL_RE = re.compile(r"\\([a-zA-Z]+)")
+
+# Single-arg styling / wrapper commands. Strip them to just their content so
+# nested cases like \frac{\mathbf{v}}{\|\mathbf{v}\|} can be parsed by the
+# (deliberately non-recursive) frac/sqrt regexes after a few passes.
+_LATEX_STRIP_CMD_RE = re.compile(
+    r"\\(?:mathbf|mathrm|mathit|mathsf|mathtt|mathbb|mathfrak|mathcal|"
+    r"text|textbf|textit|textrm|textsf|texttt|"
+    r"boldsymbol|bm|vec|hat|tilde|bar|dot|ddot|underline|overline|"
+    r"operatorname)\s*\{([^{}]*)\}"
+)
+
+_LATEX_SYMBOLS = {
+    r"\cdot":   "·",
+    r"\times":  "×",
+    r"\div":    "÷",
+    r"\pm":     "±",
+    r"\mp":     "∓",
+    r"\approx": "≈",
+    r"\neq":    "≠",
+    r"\leq":    "≤",
+    r"\geq":    "≥",
+    r"\to":     "→",
+    r"\infty":  "∞",
+    r"\sum":    "Σ",
+    r"\prod":   "Π",
+    r"\int":    "∫",
+    r"\partial": "∂",
+    r"\nabla":  "∇",
+    r"\langle": "⟨", r"\rangle": "⟩",
+    r"\lceil":  "⌈", r"\rceil":  "⌉",
+    r"\lfloor": "⌊", r"\rfloor": "⌋",
+    r"\|":      "‖",  # double-bar (norm)
+    r"\alpha":  "α", r"\beta":  "β", r"\gamma":   "γ", r"\delta":  "δ",
+    r"\epsilon":"ε", r"\zeta":  "ζ", r"\eta":     "η", r"\theta":  "θ",
+    r"\iota":   "ι", r"\kappa": "κ", r"\lambda":  "λ", r"\mu":     "μ",
+    r"\nu":     "ν", r"\xi":    "ξ", r"\pi":      "π", r"\rho":    "ρ",
+    r"\sigma":  "σ", r"\tau":   "τ", r"\phi":     "φ", r"\chi":    "χ",
+    r"\psi":    "ψ", r"\omega": "ω",
+    r"\Gamma":  "Γ", r"\Delta": "Δ", r"\Theta":   "Θ", r"\Lambda": "Λ",
+    r"\Xi":     "Ξ", r"\Pi":    "Π", r"\Sigma":   "Σ", r"\Phi":    "Φ",
+    r"\Psi":    "Ψ", r"\Omega": "Ω",
+    r"\left":   "",  r"\right": "",
+    r"\,":      " ", r"\;":     " ", r"\!":       "",
+    r"\\":      "\n",  # LaTeX line break inside an equation
+}
+
+
+def _convert_latex_expr(expr):
+    """Convert a single LaTeX expression body to plain text."""
+    # 1) Strip styling/wrapper commands first — this collapses
+    #    \mathbf{v}, \text{normalized}, \vec{x} etc. to their inner content,
+    #    so frac/sqrt's flat-brace regex can see through them. Iterate to
+    #    handle nesting like \mathbf{\hat{n}}.
+    for _ in range(6):
+        new = _LATEX_STRIP_CMD_RE.sub(r"\1", expr)
+        if new == expr:
+            break
+        expr = new
+    # 2) frac/sqrt — also iterate because substitutions can expose new matches.
+    for _ in range(6):
+        new = _LATEX_FRAC_RE.sub(r"(\1)/(\2)", expr)
+        new = _LATEX_SQRT_RE.sub(r"√(\1)", new)
+        if new == expr:
+            break
+        expr = new
+    # 3) Symbols.
+    for k, v in _LATEX_SYMBOLS.items():
+        expr = expr.replace(k, v)
+    # 4) Strip remaining \command tokens — keep the name as a fallback so
+    #    users can still see what was meant (e.g., \mathbb → mathbb).
+    expr = _LATEX_CMD_TAIL_RE.sub(r"\1", expr)
+    # 5) Collapse braces left over from stripped commands.
+    expr = expr.replace("{", "").replace("}", "")
+    return expr.strip()
+
+
+_FENCE_PROTECT_RE       = re.compile(r"(```.*?```)", re.DOTALL)
+_INLINE_CODE_PROTECT_RE = re.compile(r"(`[^`\n]+`)")
+
+# x^2 → x², 10^{-3} → 10⁻³. Only digits + sign chars are converted, so
+# `2^k`, `^L` (control chars in docs), and code paths like `path^foo`
+# are left alone.
+_SUPERSCRIPT_TR = str.maketrans('0123456789-+', '⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺')
+_SUPERSCRIPT_RE = re.compile(r'\^(\{[\d\-+]+\}|[\d\-+]+)')
+
+
+def _superscript_powers(text):
+    """Convert ^N and ^{NN} to Unicode superscripts."""
+    def repl(m):
+        s = m.group(1)
+        if s.startswith('{') and s.endswith('}'):
+            s = s[1:-1]
+        return s.translate(_SUPERSCRIPT_TR)
+    return _SUPERSCRIPT_RE.sub(repl, text)
+
+
+def _convert_latex(text):
+    """Replace $$…$$ blocks and inline $…$ with readable plain text.
+    Code fences and inline `code` are passed through untouched so $-syntax
+    in shell snippets / variables doesn't get mangled."""
+    def _block(m):
+        return "\n" + _convert_latex_expr(m.group(1)) + "\n"
+
+    def _convert_segment(seg):
+        seg = _LATEX_BLOCK_RE.sub(_block, seg)
+        seg = _LATEX_INLINE_RE.sub(
+            lambda m: _convert_latex_expr(m.group(1)), seg,
+        )
+        # Catches both LaTeX-converted output (^2 left over from \frac/\sqrt
+        # bodies) and plain-typed `mc^2`-style powers in normal prose.
+        seg = _superscript_powers(seg)
+        return seg
+
+    out = []
+    # Split on fenced code blocks (odd-index parts are fence content, kept verbatim)
+    for i, part in enumerate(_FENCE_PROTECT_RE.split(text)):
+        if i % 2 == 1:
+            out.append(part)
+            continue
+        # Within non-fence text, also protect inline `code`
+        sub_out = []
+        for j, sub in enumerate(_INLINE_CODE_PROTECT_RE.split(part)):
+            sub_out.append(sub if j % 2 == 1 else _convert_segment(sub))
+        out.append("".join(sub_out))
+    return "".join(out)
+
+
+def _close_trailing_fence(text):
+    """If the markdown text contains an odd number of triple-backtick
+    fences, it ends with an open code block — typically because the
+    model hit max_tokens mid-snippet. Append a closing fence plus a
+    one-line truncation note so the renderer doesn't treat everything
+    that follows as code."""
+    if text.count("```") % 2 == 0:
+        return text
+    sep = "" if text.endswith("\n") else "\n"
+    return text + sep + "```\n_(response was cut off)_\n"
+
+
+
+class BFACW_OT_copy_code_block(Operator):
+    """Copy a code block from markdown to the clipboard."""
+    bl_idname = "bfacw.copy_code_block"
+    bl_label = "Copy Code"
+    code_text: bpy.props.StringProperty(name="Code", default="")
+    def execute(self, context):
+        context.window_manager.clipboard = self.code_text
+        self.report({"INFO"}, "Code copied to clipboard")
+        return {"FINISHED"}
+
+def _render_markdown(layout, md, width=40):
+    """Walk a markdown string and render into the given layout.
+
+    Paragraph text is emitted into a rolling compact column (align=True +
+    reduced scale_y) so consecutive wrapped lines don't look double-spaced.
+    Special blocks (code, table, heading, rule, quote) break that column
+    and render in their own layouts so they aren't squished.
+    """
+    md = _convert_latex(md)
+    # Auto-close an unterminated fenced block — common when the model
+    # hits max_tokens mid-code and the last ``` got truncated. Without
+    # this, the markdown renderer treats everything after the opening
+    # fence as one giant code block and the conversation layout breaks.
+    md = _close_trailing_fence(md)
+    lines = md.splitlines()
+    n = len(lines)
+
+    # Rolling paragraph column — lazily created so each block break gets
+    # its own column (which keeps tight spacing within but separates
+    # visually from whatever comes next).
+    para_col = [None]
+
+    def _break_para():
+        para_col[0] = None
+
+    def _para_col():
+        if para_col[0] is None:
+            col = layout.column(align=True)
+            col.scale_y = _PARA_SCALE_Y
+            para_col[0] = col
+        return para_col[0]
+
+    def _emit_para(text, indent=""):
+        if not text.strip():
+            return
+        col = _para_col()
+        full = indent + text
+        if hasattr(col, "label_multiline"):
+            col.label_multiline(text=full)
+        else:
+            for chunk in _wrap_for_label(full, width=width):
+                col.label(text=chunk if chunk else " ")
+
+    i = 0
+    while i < n:
+        raw = lines[i]
+        stripped = raw.strip()
+
+        # ```fenced code block
+        if stripped.startswith("```"):
+            _break_para()
+            lang = stripped[3:].strip() or "code"
+
+            # Harvest the code body first so the copy button can receive it.
+            i += 1
+            code_body_lines = []
+            while i < n and not lines[i].lstrip().startswith("```"):
+                code_body_lines.append(lines[i])
+                i += 1
+            if i < n and lines[i].lstrip().startswith("```"):
+                i += 1  # skip closing fence
+            code_body = "\n".join(code_body_lines)
+
+            box = layout.box()
+            # Header row: language label on the left, [Copy][Run] on the
+            # right. Run is Python-only — executing a shell/JSON/etc fence
+            # doesn't make sense and would just error.
+            hrow = box.row(align=False)
+            left = hrow.row()
+            left.label(text=lang, icon='SCRIPT')
+            right = hrow.row(align=True)
+            right.alignment = 'RIGHT'
+            cop = right.operator(
+                "bfacw.copy_code_block", text="", icon='COPYDOWN',
+            )
+            cop.code_text = code_body
+
+
+            col = box.column(align=True)
+            col.scale_y = _CODE_SCALE_Y
+            for code_line in code_body_lines:
+                for chunk in _wrap_for_label(code_line, width=max(10, width - 2)):
+                    col.label(text=chunk if chunk else " ")
+            _break_para()
+            continue
+
+        # Pipe table (header + separator)
+        if "|" in raw and i + 1 < n and _TABLE_SEP_RE.match(lines[i + 1]):
+            _break_para()
+            header_cells = [c.strip() for c in raw.strip().strip("|").split("|")]
+            table_start = i
+            i += 2
+            body_rows = []
+            while i < n and "|" in lines[i] and lines[i].strip():
+                cells = [c.strip() for c in lines[i].strip().strip("|").split("|")]
+                body_rows.append(cells)
+                i += 1
+
+            try:
+                tbox = layout.box()
+                hrow = tbox.row(align=True)
+                for cell in header_cells:
+                    c = hrow.column(align=True)
+                    c.label(text=_strip_inline(cell), icon='DOT')
+                for row in body_rows:
+                    while len(row) < len(header_cells):
+                        row.append("")
+                    brow = tbox.row(align=True)
+                    for cell in row[: len(header_cells)]:
+                        c = brow.column(align=True)
+                        c.scale_y = _PARA_SCALE_Y
+                        wrapped = _wrap_for_label(
+                            _strip_inline(cell),
+                            width=max(8, width // max(1, len(header_cells))),
+                        )
+                        for t in wrapped[:3]:
+                            c.label(text=t if t else " ")
+            except Exception as e:
+                # Table data was malformed enough to break the renderer
+                # (ragged rows, empty header, mismatched separator row).
+                # Fall back to rendering the raw table block as plain
+                # text so the content isn't lost.
+                print(f"[Blender Buddy] table render fallback: {e}")
+                fallback = layout.column(align=True)
+                fallback.scale_y = _PARA_SCALE_Y
+                for ln in lines[table_start:i]:
+                    for chunk in _wrap_for_label(ln, width=width):
+                        fallback.label(text=chunk if chunk else " ")
+            _break_para()
+            continue
+
+        # Heading
+        m = _HEADING_RE.match(stripped)
+        if m:
+            _break_para()
+            level = len(m.group(1))
+            text = _strip_inline(m.group(2))
+            # Keyframe dots: size scales with heading level.
+            # EXTREME=big, MOVING_HOLD=mid, JITTER/BREAKDOWN/GENERATED=small
+            icon = {1: 'KEYTYPE_EXTREME_VEC',
+                    2: 'KEYTYPE_MOVING_HOLD_VEC',
+                    3: 'KEYTYPE_JITTER_VEC',
+                    4: 'KEYTYPE_BREAKDOWN_VEC'}.get(level, 'KEYTYPE_GENERATED_VEC')
+            if level == 1:
+                # H1: separator + large scaled row + uppercase
+                layout.separator()
+                hrow = layout.row()
+                hrow.scale_y = 1.6
+                hrow.label(text=text.upper(), icon=icon)
+            elif level == 2:
+                # H2: slightly larger row, strong icon
+                layout.separator(factor=0.5)
+                hrow = layout.row()
+                hrow.scale_y = 1.35
+                hrow.label(text=text, icon=icon)
+            elif level == 3:
+                # H3: modest boost, distinct icon
+                hrow = layout.row()
+                hrow.scale_y = 1.2
+                hrow.label(text=text, icon=icon)
+            else:
+                # H4-H6: subtle differentiation
+                hrow = layout.row()
+                hrow.scale_y = 1.1
+                hrow.label(text=text, icon=icon)
+            i += 1
+            _break_para()
+            continue
+
+        # Horizontal rule
+        if _HR_RE.match(raw):
+            _break_para()
+            layout.separator()
+            i += 1
+            continue
+
+        # Blockquote
+        mq = _QUOTE_RE.match(raw)
+        if mq:
+            _break_para()
+            qbox = layout.box()
+            qcol = qbox.column(align=True)
+            qcol.scale_y = _PARA_SCALE_Y
+            qtext = _strip_inline(mq.group(1) or "")
+            for chunk in _wrap_for_label("▎ " + qtext, width=width):
+                qcol.label(text=chunk)
+            i += 1
+            _break_para()
+            continue
+
+        # List item — rendered into the rolling para column so successive
+        # items share spacing.
+        ml = _LIST_RE.match(raw)
+        if ml:
+            indent = len(ml.group(1))
+            bullet = ml.group(2)
+            text = _strip_inline(ml.group(3))
+            prefix = "  " * (indent // 2)
+            marker = "• " if bullet in ("-", "*", "+") else f"{bullet} "
+            _emit_para(text, indent=prefix + marker)
+            i += 1
+            continue
+
+        # Blank line — break paragraph, no separator (keeps spacing tight).
+        if not stripped:
+            _break_para()
+            i += 1
+            continue
+
+        # Regular paragraph line
+        _emit_para(_strip_inline(stripped))
+        i += 1
+
+def _draw_multiline(layout: bpy.types.UILayout, text: str, width: int = _WRAP_WIDTH) -> None:
+    """Draw multi-line text in a layout, wrapping to the given width.
+
+    Uses _wrap_text to enforce character-based wrapping regardless of
+    layout width.  label_multiline was removed because it wraps to the
+    full layout width in Blender 5.3, making assistant responses span
+    the entire panel instead of wrapping at a readable width.
     """
     if not text:
         return
-    if hasattr(layout, "label_multiline"):
-        layout.label_multiline(text=text)
-    else:
-        for line in _wrap_text(text, width=width).split("\n"):
-            layout.label(text=line)
+    for line in _wrap_text(text, width=width).split("\n"):
+        layout.label(text=line)
 
 
 def _draw_reasoning(
@@ -1325,6 +1740,27 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         prefs = context.preferences.addons[__package__].preferences
         is_harness = (prefs.operating_mode == "EXTERNAL_HARNESS")
 
+        # ── Mode info + Settings button ──
+        mode_row = layout.row(align=True)
+        mode_row.scale_y = 0.9
+        if is_harness:
+            mode_row.label(text="External MCP", icon='WORLD')
+        elif prefs.operating_mode == "LOCAL_LLM":
+            mode_row.label(text="Local LLM", icon='CONSOLE')
+        else:
+            mode_row.label(text="Remote API", icon='URL')
+        # Show model name if available.
+        model_name = prefs.model_filename or prefs.model_preset or ""
+        if model_name and not is_harness:
+            # Strip extension for display.
+            short = model_name.rsplit(".", 1)[0] if "." in model_name else model_name
+            # Truncate long names.
+            if len(short) > 24:
+                short = short[:22] + "…"
+            mode_row.label(text=short)
+        mode_row.separator(factor=0.3)
+        mode_row.operator("bfacw.open_addon_prefs", icon="PREFERENCES", text="")
+
         # ── Agent control buttons (compact) ──
         row = layout.row(align=True)
         row.scale_y = 1.8
@@ -1363,10 +1799,8 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             'WARNING' if state.error else 'ERROR'
         )
         status_row = layout.row()
-        status_row.label(text=status, icon=status_icon)
-        # Long error messages (traceback, server logs) — show multiline.
-        if state.error and len(status) > 60:
-            _draw_multiline(layout, state.error)
+        status_row.label(text="", icon=status_icon)
+        _draw_multiline(status_row, status)
 
         # ── External Harness mode ──
         if is_harness:
@@ -1479,10 +1913,11 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     if conclusion_msg:
                         tb = hist_box.box()
                         cr = tb.row()
-                        cr.label(text="Turn {:d} — ✨ Coworker:".format(turn_num), icon=_AGENT_ICON)
+                        cr.label(text="Turn {:d} — Coworker:".format(turn_num), icon=_AGENT_ICON)
                         op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                         op.message_index = history.index(conclusion_msg)
                         _draw_multiline(tb, conclusion_msg.get("content", ""))
+                        #_render_markdown(tb, conclusion_msg.get("content", ""))
                     continue
                 has_proc = bool(process_msgs)
                 turn_box = hist_box.box()
@@ -1494,19 +1929,17 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                          or (p.get("content") or "").startswith("Error"))
                     for p in process_msgs
                 )
-                tic = "CHECKMARK" if conclusion_msg else "SORTTIME"
+                tic = "CHECKMARK" if conclusion_msg else "USER"
                 hr = turn_box.row(align=True)
                 hr.label(text="", icon=tic)
-                hr.label(text="Turn {:d}".format(turn_num), scale_x=0.3)
-                pv = user_msg.get("content", "")
-                if len(pv) > 80:
-                    pv = pv[:80] + "..."
-                hr.label(text=pv)
+                sub = hr.row(align=True)
+                sub.scale_x = 0.5
+                sub.label(text="Turn {:d}".format(turn_num))
                 op = hr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                 op.message_index = history.index(user_msg)
 
                 # --- User message (always visible) ---
-                turn_box.separator()
+                #turn_box.separator()
                 _draw_multiline(turn_box, user_msg.get("content", ""))
 
                 # --- Working (collapsible --- only the internals collapse) ---
@@ -1515,9 +1948,22 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         "turn_proc_{:d}".format(turn_num),
                         default_closed=True,
                     )
+                    pb_icon = "WARNING" if has_err else "PACKAGE"
+                    # Only the active (newest) turn animates while thinking —
+                    # past turns keep a static label.
+                    is_active_turn = state.is_thinking and (
+                        (props.chat_newest_first and _display_idx == 0)
+                        or (not props.chat_newest_first
+                            and _display_idx == len(visible_turns) - 1)
+                    )
+                    if is_active_turn:
+                        spinners = ["\u25d0", "\u25d3", "\u25d1", "\u25d2"]
+                        ws_label = "Workshop {:s}".format(spinners[state.thinking_dots % 4])
+                    else:
+                        ws_label = "Workshop"
+                    ph.label(text=ws_label, icon=pb_icon)
                     if pb:
-                        pb_icon = "WARNING" if has_err else "SORTTIME"
-                        pb.label(text="Working", icon=pb_icon)
+                        work_box = pb.box()
                         for pm in process_msgs:
                             pr = pm.get("role", "")
                             pc = pm.get("content", "")
@@ -1527,14 +1973,14 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                                 and pc.startswith("[System:")
                             )
                             if is_sm:
-                                sb = pb.box()
+                                sb = work_box.box()
                                 sb.label(text="System Context", icon="INFO")
                                 _draw_multiline(sb, pc)
                             elif pr == "reasoning":
                                 _draw_reasoning(
-                                    pb, pc, pm.get("label", "Thinking"),
-                                    is_thinking=state.is_thinking,
-                                    thinking_dots=state.thinking_dots,
+                                    work_box, pc, pm.get("label", "Thinking"),
+                                    is_thinking=False,
+                                    thinking_dots=0,
                                     message_index=history.index(pm),
                                 )
                             elif pr == "tool":
@@ -1548,18 +1994,18 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                                 if not ts and len(d) > 200:
                                     d = d[:200] + "..."
                                 _draw_tool_inline(
-                                    pb, tn, d, ie,
+                                    work_box, tn, d, ie,
                                     message_index=history.index(pm),
                                 )
                             elif pr == "user":
-                                pb.label(text="Agent Context", icon="INFO")
-                                _draw_multiline(pb, pc)
+                                work_box.label(text="Agent Context", icon="INFO")
+                                _draw_multiline(work_box, pc)
                             elif pr == "assistant":
-                                pb.label(text="Self Prompt", icon="CONSOLE")
-                                _draw_multiline(pb, pc)
+                                work_box.label(text="Self Prompt", icon="CONSOLE")
+                                _draw_multiline(work_box, pc)
                         if state.is_thinking and state.streaming_text and _display_idx == 0:
-                            pb.separator()
-                            sb = pb.box()
+                            work_box.separator()
+                            sb = work_box.box()
                             sb.label(text="✨ Coworker (live):", icon=_AGENT_ICON)
                             _draw_multiline(sb, state.streaming_text[:300] + "...")
 
@@ -1570,7 +2016,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     cr.label(text="✨ Coworker:", icon=_AGENT_ICON)
                     op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                     op.message_index = history.index(conclusion_msg)
-                    _draw_multiline(turn_box, conclusion_msg.get("content", ""))
+                    _render_markdown(turn_box, conclusion_msg.get("content", ""))
                 elif (
                     state.is_thinking
                     and state.streaming_text
@@ -1871,6 +2317,7 @@ _classes = (
     BFACW_OT_agent_stop,
     BFACW_OT_agent_restart,
     BFACW_OT_copy_message,
+    BFACW_OT_copy_code_block,
 
     BFACW_PT_chat_queue,
     BFACW_PT_chat_panel,

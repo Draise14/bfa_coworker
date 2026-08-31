@@ -64,6 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **llama-server Console Output Routed to New Window** (#57) — On Windows, llama-server output now appears in its dedicated console window instead of being silently redirected to a log file. The new console shows model loading progress, health checks, and errors in real time. On Linux/macOS, output still goes to the log file as before. The Blender console is now clean of  diagnostic noise when Debug mode is OFF; toggle Debug mode in Preferences to restore full verbosity.
+
 - **llama-server Actually Launches** — `start_local_llama()` now prepends `server_exe` to the subprocess args so llama-server is invoked correctly instead of silently failing to launch.
 - **llama-server Download Progress Bar Cleared** — The download progress bar is now cleared after llama-server download finishes (previously it lingered).
 - **llama-server Installed-State Validation** — Preferences now validate that the llama-server binary still exists before showing "Installed"; remove/update operators handle PATH-installed binaries correctly.

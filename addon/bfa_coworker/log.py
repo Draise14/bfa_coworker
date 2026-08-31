@@ -25,6 +25,7 @@ __all__ = (
     "get_log_path",
     "read_tail",
     "install_print_tee",
+    "set_suppress_console",
 )
 
 import os
@@ -35,6 +36,8 @@ from pathlib import Path
 _lock = threading.Lock()
 _LOG_MAX_BYTES = 1_000_000  # ~1 MB before rotation.
 _tee_installed = False
+_suppress_console = True  # When True, [Coworker] lines are log-only (not Blender console).
+_SUPPRESS_PREFIXES = ("[🛠️Coworker]", "[Coworker]")
 
 
 def get_log_path() -> Path:
@@ -96,23 +99,37 @@ class _TeeStream:
         self._buf = ""
 
     def write(self, data: str) -> int:
-        # Pass through to the real console first.
-        try:
-            self._original.write(data)
-        except Exception:  # pylint: disable=broad-exception-caught
-            pass
         # Buffer and flush complete lines to the log.
         self._buf += data
-        while "\n" in self._buf:
-            line, self._buf = self._buf.split("\n", 1)
-            line = line.strip()
-            if line:
-                write(line)
+        while "
+" in self._buf:
+            line, self._buf = self._buf.split("
+", 1)
+            stripped = line.strip()
+            if stripped:
+                write(stripped)
         # Also flush any remaining partial line immediately so that
         # crash logs capture everything written so far.
         if self._buf.strip():
             write(self._buf.strip())
             self._buf = ""
+        # Pass through to the real console, but skip [Coworker] lines
+        # when console suppression is active (debug mode OFF).
+        if _suppress_console:
+            for prefix in _SUPPRESS_PREFIXES:
+                if data.startswith(prefix):
+                    break
+            else:
+                # Not a suppressed prefix -- pass through to console.
+                try:
+                    self._original.write(data)
+                except Exception:  # pylint: disable=broad-exception-caught
+                    pass
+        else:
+            try:
+                self._original.write(data)
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
         return len(data)
 
     def flush(self) -> None:
@@ -143,6 +160,18 @@ def install_print_tee() -> None:
     if sys.stderr is not None and not isinstance(sys.stderr, _TeeStream):
         sys.stderr = _TeeStream(sys.stderr)  # type: ignore[assignment]
     write("=== Coworker log session started ===")
+
+
+def set_suppress_console(enabled: bool) -> None:
+    """Toggle console suppression for [Coworker] diagnostic lines.
+
+    When *enabled* is True (the default), lines starting with
+    [🛠️Coworker] or [Coworker] are written to the log
+    file only and do not appear in Blender's console.  Other output
+    (user scripts, errors, tracebacks) is always shown.
+    """
+    global _suppress_console
+    _suppress_console = enabled
 
 
 # ---------------------------------------------------------------------------

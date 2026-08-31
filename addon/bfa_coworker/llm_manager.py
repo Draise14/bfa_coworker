@@ -2683,35 +2683,23 @@ def start_local_llama(
             except OSError as ex:
                 print("[🛠️Coworker] start_local_llama: os.add_dll_directory failed — {:s}".format(str(ex)))
 
-        # Capture llama-server output to a log file — the child's stdio is
-        # otherwise invisible (devnull + a separate console on Windows), which
-        # turns every startup crash into a mystery.  The log tail is surfaced
-        # automatically on failure (see wait_until_ready).
-        try:
-            log_handle = open(str(_llama_server_log_path()), "w", encoding="utf-8", errors="replace")
-        except OSError as ex:
-            log_handle = None
-            print("[🛠️Coworker] start_local_llama: could not open log file — {:s}".format(str(ex)))
-        stdio_target = log_handle if log_handle is not None else subprocess.DEVNULL
+        # On Windows the output goes to the new console window.
+        # On Linux/macOS it goes to a log file to avoid hijacking the Blender console.
 
         if sys.platform == "win32":
             # Launch llama-server in a NEW console window so the user can
-            # close the window to stop it.  Output goes to the log file
-            # (handles are passed explicitly; the console stays visible).
+            # see its output and close the window to stop it.
             # subprocess.CREATE_NEW_CONSOLE (0x00000010) gives us a proper
             # Popen handle that terminates the actual server, not a wrapper.
-            # This avoids the broken PowerShell Start-Process path which
-            # silently fails to capture the PID and never starts the server.
+            # stdout/stderr are NOT redirected -- the output goes to the new
+            # console window so the user can see model loading, health
+            # checks, and errors in real time.
             print("[🛠️Coworker] start_local_llama: WIN32 path (CREATE_NEW_CONSOLE)")
             print("[🛠️Coworker] start_local_llama:   args = {:s}".format(str(args)))
-            print("[🛠️Coworker] start_local_llama:   HF_HOME = {:s}".format(str(hf_cache_dir)))
-            print("[🛠️Coworker] start_local_llama:   log = {:s}".format(str(_llama_server_log_path())))
             creationflags = subprocess.CREATE_NEW_CONSOLE  # type: ignore[attr-defined]
             proc = subprocess.Popen(
                 args,
                 stdin=subprocess.DEVNULL,
-                stdout=stdio_target,
-                stderr=stdio_target,
                 creationflags=creationflags,
                 env=env,
             )
@@ -2724,10 +2712,17 @@ def start_local_llama(
                 pass
         else:
             # Linux / macOS: detach from the parent process group so the
-            # server survives Blender exiting.  We redirect stdio to the
-            # log file so it doesn't hijack the Blender console.
+            # server survives Blender exiting.  Redirect stdio to the log
+            # file so it does not hijack the Blender console.
+            try:
+                log_handle = open(str(_llama_server_log_path()), "w", encoding="utf-8", errors="replace")
+            except OSError as ex:
+                log_handle = None
+                print("[🛠️Coworker] start_local_llama: could not open log file — {:s}".format(str(ex)))
+            stdio_target = log_handle if log_handle is not None else subprocess.DEVNULL
             print("[🛠️Coworker] start_local_llama: POSIX path (start_new_session=True)")
             print("[🛠️Coworker] start_local_llama:   args = {:s}".format(str(args)))
+            print("[🛠️Coworker] start_local_llama:   log = {:s}".format(str(_llama_server_log_path())))
             proc = subprocess.Popen(
                 args,
                 stdin=subprocess.DEVNULL,

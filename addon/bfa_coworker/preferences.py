@@ -25,6 +25,7 @@ import os
 from pathlib import Path
 
 from . import mcp_to_blender_server
+from . import log as _log_module
 from .shared import (
     PORT_MIN,
     PORT_MAX,
@@ -157,6 +158,9 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
     # ── Debug Mode ──────────────────────────────────────────────────
 
+    def _update_debug_mode(self, _context: bpy.types.Context) -> None:
+        _log_module.set_suppress_console(not self.debug_mode)
+
     debug_mode: BoolProperty(  # type: ignore[valid-type]
         name="Debug / Diagnostics",
         description=(
@@ -164,6 +168,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             "benchmark suites, and other developer tools"
         ),
         default=False,
+        update=_update_debug_mode,
     )
 
     # ── Log Level ───────────────────────────────────────────────────

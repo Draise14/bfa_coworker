@@ -139,6 +139,14 @@ def register() -> None:
     # Coalesce Blender 5.3+ "Policy Violation" warnings from vendored deps
     # into a single summary line instead of a console flood.
     log.install_policy_warning_filter()
+    # Apply the initial console-suppression state from the saved preference.
+    # Default is True (suppress) which matches debug_mode=False (the default).
+    try:
+        prefs = bpy.context.preferences.addons.get(__package__)
+        if prefs is not None:
+            log.set_suppress_console(not prefs.preferences.debug_mode)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass  # Preferences not yet available; default (suppress ON) is fine.
 
     # Migrate vendor/deps/ out of the addon tree BEFORE Blender's sandbox
     # scans it.  Physical presence of top-level package dirs (rich/, click/,

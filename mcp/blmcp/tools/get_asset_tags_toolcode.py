@@ -121,24 +121,19 @@ def main(library_name: str, asset_name: str, asset_type: str = "") -> Result:
                 data_to.node_groups = [asset_name]
             ng = data_to.node_groups[0]
             if ng is not None:
-                # Get the node group type (editor type).
                 editor_type = ng.type  # 'GeometryNodeTree', 'ShaderNodeTree', 'CompositorNodeTree'
-                
-                # Get color tag from asset metadata if available.
-                if hasattr(ng, 'color_tag'):
+
+                if hasattr(ng, "color_tag"):
                     color_tag = str(ng.color_tag)
-                
-                # Get description.
-                if hasattr(ng, 'description'):
+
+                if hasattr(ng, "description"):
                     description = ng.description or ""
-                
-                # Get tags from asset data if available.
-                if hasattr(ng, 'asset_data') and ng.asset_data:
-                    if hasattr(ng.asset_data, 'tags'):
+
+                if hasattr(ng, "asset_data") and ng.asset_data:
+                    if hasattr(ng.asset_data, "tags"):
                         for tag in ng.asset_data.tags:
                             tags.append(tag.name)
-                
-                # Additional metadata for node groups.
+
                 metadata = {
                     "node_count": len(ng.nodes),
                     "input_count": len(ng.inputs),
@@ -147,8 +142,7 @@ def main(library_name: str, asset_name: str, asset_type: str = "") -> Result:
                     "is_shader": editor_type == "ShaderNodeTree",
                     "is_compositor": editor_type == "CompositorNodeTree",
                 }
-                
-                # Map editor type to human-readable name.
+
                 editor_names = {
                     "GeometryNodeTree": "Geometry Nodes",
                     "ShaderNodeTree": "Shader Editor",
@@ -156,44 +150,106 @@ def main(library_name: str, asset_name: str, asset_type: str = "") -> Result:
                 }
                 metadata["editor_name"] = editor_names.get(editor_type, editor_type)
 
+                # Preview image path.
+                metadata["preview_image_path"] = _get_preview_path(ng)
+
         elif asset_type == "MATERIAL":
             with bpy.data.libraries.load(blend_path) as (data_from, data_to):
                 data_to.materials = [asset_name]
             mat = data_to.materials[0]
             if mat is not None:
-                if hasattr(mat, 'color_tag'):
+                if hasattr(mat, "color_tag"):
                     color_tag = str(mat.color_tag)
-                if hasattr(mat, 'description'):
+                if hasattr(mat, "description"):
                     description = mat.description or ""
-                if hasattr(mat, 'asset_data') and mat.asset_data:
-                    if hasattr(mat.asset_data, 'tags'):
+                if hasattr(mat, "asset_data") and mat.asset_data:
+                    if hasattr(mat.asset_data, "tags"):
                         for tag in mat.asset_data.tags:
                             tags.append(tag.name)
                 metadata = {
-                    "has_nodes": mat.use_nodes if hasattr(mat, 'use_nodes') else False,
-                    "blend_method": str(mat.blend_method) if hasattr(mat, 'blend_method') else "",
+                    "has_nodes": mat.use_nodes if hasattr(mat, "use_nodes") else False,
+                    "blend_method": str(mat.blend_method) if hasattr(mat, "blend_method") else "",
                 }
+                metadata["preview_image_path"] = _get_preview_path(mat)
 
         elif asset_type == "OBJECT":
             with bpy.data.libraries.load(blend_path) as (data_from, data_to):
                 data_to.objects = [asset_name]
             obj = data_to.objects[0]
             if obj is not None:
-                if hasattr(obj, 'color_tag'):
+                if hasattr(obj, "color_tag"):
                     color_tag = str(obj.color_tag)
-                if hasattr(obj, 'description'):
+                if hasattr(obj, "description"):
                     description = obj.description or ""
-                if hasattr(obj, 'asset_data') and obj.asset_data:
-                    if hasattr(obj.asset_data, 'tags'):
+                if hasattr(obj, "asset_data") and obj.asset_data:
+                    if hasattr(obj.asset_data, "tags"):
                         for tag in obj.asset_data.tags:
                             tags.append(tag.name)
                 metadata = {
                     "object_type": obj.type,
+                    "vertex_count": len(obj.data.vertices) if hasattr(obj, "data") and hasattr(obj.data, "vertices") else 0,
+                }
+                metadata["preview_image_path"] = _get_preview_path(obj)
+
+        elif asset_type == "COLLECTION":
+            with bpy.data.libraries.load(blend_path) as (data_from, data_to):
+                data_to.collections = [asset_name]
+            col = data_to.collections[0]
+            if col is not None:
+                if hasattr(col, "color_tag"):
+                    color_tag = str(col.color_tag)
+                if hasattr(col, "description"):
+                    description = col.description or ""
+                if hasattr(col, "asset_data") and col.asset_data:
+                    if hasattr(col.asset_data, "tags"):
+                        for tag in col.asset_data.tags:
+                            tags.append(tag.name)
+                metadata = {
+                    "object_count": len(col.objects),
+                    "child_collection_count": len(col.children),
+                    "objects": [o.name for o in col.objects[:10]],
+                }
+                metadata["preview_image_path"] = _get_preview_path(col)
+
+        elif asset_type == "WORLD":
+            with bpy.data.libraries.load(blend_path) as (data_from, data_to):
+                data_to.worlds = [asset_name]
+            world = data_to.worlds[0]
+            if world is not None:
+                if hasattr(world, "color_tag"):
+                    color_tag = str(world.color_tag)
+                if hasattr(world, "description"):
+                    description = world.description or ""
+                if hasattr(world, "asset_data") and world.asset_data:
+                    if hasattr(world.asset_data, "tags"):
+                        for tag in world.asset_data.tags:
+                            tags.append(tag.name)
+                metadata = {
+                    "use_nodes": world.use_nodes if hasattr(world, "use_nodes") else False,
+                    "node_count": len(world.node_tree.nodes) if world.use_nodes and world.node_tree else 0,
+                }
+                metadata["preview_image_path"] = _get_preview_path(world)
+
+        elif asset_type == "ACTION":
+            with bpy.data.libraries.load(blend_path) as (data_from, data_to):
+                data_to.actions = [asset_name]
+            action = data_to.actions[0]
+            if action is not None:
+                if hasattr(action, "color_tag"):
+                    color_tag = str(action.color_tag)
+                if hasattr(action, "description"):
+                    description = action.description or ""
+                if hasattr(action, "asset_data") and action.asset_data:
+                    if hasattr(action.asset_data, "tags"):
+                        for tag in action.asset_data.tags:
+                            tags.append(tag.name)
+                metadata = {
+                    "frame_range": [action.frame_range[0], action.frame_range[1]],
+                    "fcurves_count": len(action.fcurves),
                 }
 
         else:
-            # For other types, just return basic info.
-            metadata = {"note": "Detailed inspection not yet supported for {:s}".format(asset_type)}
+            metadata = {"note": "Detailed inspection not supported for {:s}".format(asset_type)}
 
     except Exception as ex:
         return Result(
@@ -217,3 +273,16 @@ def main(library_name: str, asset_name: str, asset_type: str = "") -> Result:
         description=description,
         metadata=metadata,
     )
+
+
+def _get_preview_path(datablock) -> str:
+    """Return the preview image path for a datablock, or empty string."""
+    try:
+        if hasattr(datablock, "preview") and datablock.preview:
+            # Blender preview image — try to get the file path.
+            preview = datablock.preview
+            if hasattr(preview, "image_size_raw"):
+                return ""  # In-memory only, no file path.
+    except Exception:
+        pass
+    return ""

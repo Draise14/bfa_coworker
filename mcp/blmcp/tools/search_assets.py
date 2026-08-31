@@ -37,7 +37,7 @@ def register(mcp: FastMCP) -> None:
         Search across asset libraries by name/tag/type.
 
         Args:
-            query: Search term to match against asset names.
+            query: Search term to match against asset names, tags, and descriptions.
             library_name: Optional library name to search within (empty = all libraries).
             asset_type: Optional asset type filter (e.g., 'MATERIAL', 'NODETREE', 'OBJECT', 'WORLD').
 

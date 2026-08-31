@@ -23,7 +23,11 @@ class Result(NamedTuple):
 
 
 def main(library_name: str = "") -> Result:
-    """List the catalog/directory structure of asset libraries."""
+    """List the catalog/directory structure of asset libraries.
+
+    Each catalog includes up to 10 sample asset names so the agent
+    can see what is in each folder without a separate search call.
+    """
     import bpy  # pylint: disable=import-error
     import os
 
@@ -47,24 +51,42 @@ def main(library_name: str = "") -> Result:
                 # Count blend files in this directory.
                 blend_files = [f for f in files if f.endswith(".blend")]
 
-                # Scan blend files for asset types.
+                # Scan blend files for asset types and collect sample names.
                 dir_counts = {"MATERIAL": 0, "NODETREE": 0, "OBJECT": 0, "WORLD": 0, "ACTION": 0, "COLLECTION": 0}
+                asset_names: dict[str, list[str]] = {
+                    "MATERIAL": [], "NODETREE": [], "OBJECT": [],
+                    "WORLD": [], "ACTION": [], "COLLECTION": [],
+                }
                 for bf in blend_files:
                     bp = os.path.join(root, bf)
                     try:
                         with bpy.data.libraries.load(bp) as (data_from, _data_to):
-                            dir_counts["MATERIAL"] += len(data_from.materials)
-                            dir_counts["NODETREE"] += len(data_from.node_groups)
-                            dir_counts["OBJECT"] += len(data_from.objects)
-                            dir_counts["WORLD"] += len(data_from.worlds)
-                            dir_counts["ACTION"] += len(data_from.actions)
-                            dir_counts["COLLECTION"] += len(data_from.collections)
+                            for k, names_list in [
+                                ("MATERIAL", data_from.materials),
+                                ("NODETREE", data_from.node_groups),
+                                ("OBJECT", data_from.objects),
+                                ("WORLD", data_from.worlds),
+                                ("ACTION", data_from.actions),
+                                ("COLLECTION", data_from.collections),
+                            ]:
+                                count = len(names_list)
+                                dir_counts[k] += count
+                                # Collect first 10 asset names per type.
+                                remaining = 10 - len(asset_names[k])
+                                if remaining > 0:
+                                    asset_names[k].extend(list(names_list)[:remaining])
                     except Exception:
                         pass
 
                 # Only include directories with assets or subdirectories.
                 has_assets = any(v > 0 for v in dir_counts.values())
                 if has_assets or dirs:
+                    # Build asset_names list: combine all types into one flat list.
+                    sample_assets = []
+                    for k in ("MATERIAL", "NODETREE", "OBJECT", "WORLD", "COLLECTION", "ACTION"):
+                        for name in asset_names[k]:
+                            sample_assets.append({"name": name, "type": k})
+
                     catalog = {
                         "path": rel or "(root)",
                         "library": lib.name,
@@ -75,6 +97,7 @@ def main(library_name: str = "") -> Result:
                         "worlds": dir_counts["WORLD"],
                         "actions": dir_counts["ACTION"],
                         "collections": dir_counts["COLLECTION"],
+                        "asset_names": sample_assets[:10],
                     }
                     all_catalogs.append(catalog)
                     for k, v in dir_counts.items():

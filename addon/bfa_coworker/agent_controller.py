@@ -369,6 +369,8 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "download_polyhaven_asset",
         "search_polyhaven_assets",
         "assign_material_to_objects",
+        "place_asset_in_scene",
+        "jump_to_asset_browser",
     }),
 }
 
@@ -2220,6 +2222,8 @@ _TOOL_FRIENDLY_NAMES: dict[str, str] = {
     "get_blendfile_summary_datablocks_toolcode": "Reading scene data",
     "download_polyhaven_asset": "Downloading asset",
     "search_polyhaven_assets": "Searching Poly Haven",
+    "place_asset_in_scene": "Placing asset in scene",
+    "jump_to_asset_browser": "Opening Asset Browser",
     "setup_pbr_material": "Setting up PBR material",
     "get_object_info": "Inspecting object",
     "create_object": "Creating object",

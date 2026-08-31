@@ -66,6 +66,33 @@ Get detailed tags and metadata for an asset, including node group editor type.
 
 **Returns:** Tags, editor type, color tag, description, and metadata.
 
+### `place_asset_in_scene`
+Place a `COLLECTION` or `OBJECT` asset at an explicit world transform. Use this
+when the user wants an asset at a specific position/rotation/scale ("add the
+brick wall at x=10, facing the camera"). For materials, node groups, worlds,
+or actions use `load_asset_in_context` instead.
+
+**Parameters:**
+- `library_name` (required): Name of the asset library.
+- `asset_name` (required): Name of the object or collection asset.
+- `asset_type` (optional): `OBJECT` or `COLLECTION`. Auto-detected if omitted.
+- `link_mode` (optional): `APPEND` (default, full copy, positioned directly) or `LINK` (linked; collections become an empty + collection instance).
+- `location` (optional): [x, y, z] world position.
+- `rotation` (optional): [x, y, z] Euler rotation in **degrees**.
+- `scale` (optional): [x, y, z] scale.
+
+Appended collections are positioned so their **centroid** lands at `location`, with rotation/scale applied around that centroid.
+
+### `jump_to_asset_browser`
+Switch to (or create) the Asset Browser editor. Reuses an open Asset Browser;
+otherwise creates a new "Asset Browser" workspace (duplicating the current one,
+so the user's layout is preserved). Optionally preselects a library and catalog.
+
+**Parameters:**
+- `library_name` (optional): Asset library to select (best-effort).
+- `catalog_path` (optional): Catalog path or UUID to select (best-effort).
+- `allow_edits` (optional): Allow creating a workspace/area (default `True`).
+
 ## Workflow: Assigning Materials from Asset Libraries
 
 ```python
@@ -95,6 +122,32 @@ get_asset_tags(
     asset_type="NODETREE"
 )
 # Returns: editor_type="GeometryNodeTree" or "ShaderNodeTree"
+```
+
+## Workflow: Placing Assets at a Position
+
+```python
+# 1. Find the collection asset
+search_assets(query="brick wall", asset_type="COLLECTION", library_name="My Assets")
+
+# 2. Place it (appended copy, centroid at the target)
+place_asset_in_scene(
+    library_name="My Assets",
+    asset_name="Brick_Wall",
+    asset_type="COLLECTION",
+    location=[10, 0, 5],
+    rotation=[0, 0, 90],  # degrees
+    scale=[2, 2, 2],
+)
+
+# 3. Keep a large props library linked (instance, editable source)
+place_asset_in_scene(
+    library_name="Props Library",
+    asset_name="Street_Lamp",
+    asset_type="COLLECTION",
+    link_mode="LINK",
+    location=[-4, 2, 0],
+)
 ```
 
 ## Catalog Path Conventions

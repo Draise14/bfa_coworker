@@ -22,21 +22,22 @@ Make the agent asset-first: use pre-built or available assets on hand before try
 
 ## Method
 
-1. Wire the 6 existing asset tools into the agent's domain system so they auto-load
-2. Enhance existing tools to be smarter (tag search, GN/compositor loading, positioning)
-3. Add missing tools (place assets at positions, navigate to asset browser)
-4. Update the system prompt to bias the agent toward asset-first workflows
-5. Add tests
+1. Wire the 6 existing asset tools into the agent's domain system so they auto-load  [Done]
+2. Enhance existing tools to be smarter (tag search, GN/compositor loading, positioning)  [Done]
+3. Add missing tools (place assets at positions, navigate to asset browser)  [Done]
+4. Make node-group assets usable: inspect node trees and wire node groups contextually (Phase 2B)
+5. Update the system prompt to bias the agent toward asset-first workflows
+6. Add tests
 
 ---
 
-## Phase 1: Wire Existing Tools into the Domain System (~30 LOC, 3 files)
+## Phase 1: Wire Existing Tools into the Domain System (~30 LOC, 3 files) - Done (commit `bec647f`)
 
 The asset tools exist but the agent can't auto-load them. This is the critical first step — without it, the agent literally cannot see asset tools unless the LLM guesses to call `load_tools("asset_browser")`, which would fail anyway.
 
 ### Steps
 
-1. **Add `asset_browser` to `_TOOL_DOMAINS`** in `agent_controller.py` — map to the 6 existing tools:
+1. **Add `assets` to `_TOOL_DOMAINS`** in `agent_controller.py` — map to the 6 existing tools:
    - `get_asset_libraries`
    - `list_asset_catalogs`
    - `search_assets`
@@ -44,29 +45,29 @@ The asset tools exist but the agent can't auto-load them. This is the critical f
    - `get_asset_tags`
    - `assign_material_to_objects`
 
-2. **Add `asset_browser` to `_DOMAIN_KEYWORDS`** in `agent_controller.py` — keywords:
+2. **Add `assets` to `_DOMAIN_KEYWORDS`** in `agent_controller.py` — keywords:
    - `"asset"`, `"library"`, `"catalog"`, `"browse"`, `"preview"`
    - `"preset"`, `"template"`, `"stock"`, `"material library"`
 
-3. **Add `asset_browser` to `_DOMAIN_SKILL_MAP`** in `skills/__init__.py` — map to `["asset_browser.md"]` so the skill doc is auto-injected when the domain activates
+3. **Add `assets` to `_DOMAIN_SKILL_MAP`** in `skills/__init__.py` — map to `["asset_browser.md"]` so the skill doc is auto-injected when the domain activates
 
 ### Files Modified
 
 | File | Change |
 |------|--------|
-| `addon/bfa_coworker/agent_controller.py` | Add `asset_browser` entry to `_TOOL_DOMAINS` dict |
-| `addon/bfa_coworker/agent_controller.py` | Add `asset_browser` entry to `_DOMAIN_KEYWORDS` dict |
-| `addon/bfa_coworker/skills/__init__.py` | Add `asset_browser` entry to `_DOMAIN_SKILL_MAP` dict |
+| `addon/bfa_coworker/agent_controller.py` | Add `assets` entry to `_TOOL_DOMAINS` dict |
+| `addon/bfa_coworker/agent_controller.py` | Add `assets` entry to `_DOMAIN_KEYWORDS` dict |
+| `addon/bfa_coworker/skills/__init__.py` | Add `assets` entry to `_DOMAIN_SKILL_MAP` dict |
 
 ### Verification
 
-1. Start the agent with asset libraries configured → verify `asset_browser` domain is detected in logs
+1. Start the agent with asset libraries configured → verify the `assets` domain is detected in logs
 2. Type "find me a brick material" → verify asset tools appear in the tool set
 3. Check that `asset_browser.md` skill content appears in the system prompt when domain is active
 
 ---
 
-## Phase 2: Enhance Existing Tools (~300 LOC, 4 files)
+## Phase 2: Enhance Existing Tools (~300 LOC, 4 files) - Done (commit `60f3994`)
 
 The existing tools work but have gaps that prevent the "smart" behavior described in the issue.
 
@@ -103,15 +104,56 @@ The existing tools work but have gaps that prevent the "smart" behavior describe
 
 ---
 
-## Phase 3: New Tools — Position and Navigate (~250 LOC, 4 files)
+## Phase 2B: Node-Group Intelligence - Inspection + Wiring (~450 LOC, 7 files)
+
+Node-group assets are the hardest asset type to apply. Unlike a material (assign to a slot) or an object (link to the scene), a node group is only useful when it is wired into an existing node tree - often mid-chain, *between* two nodes - and its interface (input/output sockets) must be mapped to the tree at the wire points. Dumping a group at `(0,0)` unconnected (Phase 2 behavior) is a dead end users notice immediately.
+
+### Design constraint: local models choose, tools do the how
+
+Current local models (7-32B, see `llm_manager.py`) hallucinate socket names, node types, and link topology when asked to "wire it intuitively". Tier 3d therefore splits the problem:
+
+- **Inspection tools feed ground truth** - the model reads a real, compact serialization of the tree and the group's interface; it never invents from memory.
+- **Wiring tools apply deterministically** - the model picks from enumerated options (closed lists), the tool validates socket types before linking, and pushes an undo step.
+
+### Steps
+
+1. **Pull the Tier 6 inspection tools forward** (small subset of `plan_tier6_domain_tooling.md` 6d): `get_active_node_tree(tree_type, node_tree_name)` - nodes/links/frames summary; `get_node_group_interface(group_name)` - input/output sockets with names, types, defaults, ranges, and the group's editor type.
+2. **New `wire_node_group` tool** - load a node-group asset and wire it into a target tree:
+   - Insert modes: `replace_active` (wrap the selected node), `insert_between` (splice into a selected link), `connect_to_output` (attach to an empty Material Output surface), `add_top_level` (Phase 2 behavior as fallback).
+   - Interface auto-mapping: deterministic fuzzy name match ("Scale" input hooks to the tree's Texture Coordinate / Noise chain when present; BSDF output replaces an unconnected Principled BSDF).
+   - Socket-type validation before linking; "no socket named X - did you mean Y?" errors instead of silent failure.
+   - `bpy.ops.ed.undo_push()` before mutation so a bad wire is one Ctrl+Z away.
+3. **Context fallback** - when the user gives no insertion target, keep the current editor-context behavior (GN modifier / compositor / material top-level).
+4. **Asset-author conventions** - document in the skill: name group-interface inputs `Scale`, `Seed`, `Strength`, `Color`; write a one-line usage note in the asset description. Mostly free and the single biggest LLM-success multiplier.
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `mcp/blmcp/tools/get_active_node_tree.py` + `_toolcode.py` | Serialize a node tree (nodes, sockets, links, frames) |
+| `mcp/blmcp/tools/get_node_group_interface.py` + `_toolcode.py` | Group interface: input/output sockets, types, defaults |
+| `mcp/blmcp/tools/wire_node_group.py` + `_toolcode.py` | Load + wire with insert modes, auto-map, undo |
+| `mcp/blmcp/tools/load_asset_in_context_toolcode.py` | Keep top-level fallback, expose the loaded group |
+
+### Verification
+
+1. `get_node_group_interface` on a brick-wall group -> inputs `Brick Color` / `Mortar Color` / `Scale` / `Seed`, output `BSDF`.
+2. `wire_node_group(insert_between=...)` on a selected link -> group spliced in with valid socket links.
+3. `replace_active` on a Principled BSDF -> Principled wrapped by the group, output chain intact.
+4. Bad socket name -> tool returns "did you mean" error, no link created, scene unchanged (undo).
+
+---
+
+## Phase 3: New Tools - Position and Navigate (~320 LOC, 7 files) - In progress
 
 The issue calls for "know how to add collections or objects to different positions of the world based on what the user asks." These are missing tools.
 
 ### Steps
 
-1. **New tool: `place_asset_in_scene`** — place a collection or object asset at a specific world position/rotation. Wraps `load_asset_in_context` but adds explicit transform control.
-   - Parameters: `library_name`, `asset_name`, `asset_type`, `location` (x,y,z), `rotation` (x,y,z), `scale` (x,y,z)
-   - Supports `link_mode` for collections: `"LINK"` (linked instance) or `"APPEND"` (full copy)
+1. **New tool: `place_asset_in_scene`** - place a collection or object asset at a specific world position/rotation. Self-contained toolcode (mirrors `load_asset_in_context`'s library lookup; toolcode files run standalone in Blender so it cannot call that tool).
+   - Supported types: `OBJECT`, `COLLECTION` only (others: route to `load_asset_in_context`).
+   - Parameters: `library_name`, `asset_name`, `asset_type`, `location` (x,y,z), `rotation` (x,y,z, degrees), `scale` (x,y,z).
+   - Default is `APPEND` (full copy, positioned at the requested transform); `LINK` for collections creates an empty + collection instance at the transform.
 
 2. **New tool: `jump_to_asset_browser`** — switch to the Asset Browser editor. Optionally navigate to a specific library/catalog. Uses `bpy.ops.screen.area_dupli()` or area type switching.
 
@@ -193,10 +235,11 @@ The agent needs to be *biased* toward using assets. The system prompt must make 
 |-------|------|:-------------:|:---------:|:---:|
 | 1 | Wire into domain system | 2 | 0 | ~30 |
 | 2 | Enhance existing tools | 4 | 0 | ~300 |
-| 3 | New tools (place, jump) | 0 | 4 | ~250 |
+| 2B | Node-group inspection + wiring | 1 | 6 | ~450 |
+| 3 | New tools (place, jump) | 3 | 4 | ~320 |
 | 4 | System prompt & skill | 2 | 0 | ~100 |
 | 5 | Tests | 1 | 1 | ~150 |
-| **Total** | | **9** | **5** | **~830** |
+| **Total** | | **11** | **11** | **~1250** |
 
 ---
 
@@ -209,6 +252,10 @@ The agent needs to be *biased* toward using assets. The system prompt must make 
 3. **AOV activation for compositor assets is best-effort**: The tool will note in its result which AOVs are needed, but automatic AOV setup is complex and deferred.
 
 4. **"Bias to Default Asset Library" is prompt-level, not code-level**: We don't hardcode library names in tools. Instead, the system prompt guides the agent to check the Default/Essentials library first.
+
+5. **Tool calling convention (Params named-tuple)**: All asset tools marshal parameters as a `Params` named-tuple - the toolcode declares `def main(params: Params)` and the MCP wrapper sends `Params(...)` through the bridge. Phase 3 fixed the six asset wrappers to this convention: the earlier dict / `send_code`-mangled / `None` forms generated invalid `main(...)` calls in Blender (type errors), so every asset-library tool errored instead of running.
+
+6. **Node-group smarts live in the tool, not the model**: local 7-32B models cannot reliably invent socket names or node topology. The inspection tools enumerate real interfaces and options, the agent chooses from them, and `wire_node_group` applies deterministically with validation + undo (see Phase 2B).
 
 ---
 

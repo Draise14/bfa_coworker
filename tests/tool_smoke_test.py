@@ -128,6 +128,10 @@ _TOOL_TEST_ARGS: dict[str, dict[str, Any]] = {
     "get_polyhaven_status": {},
     "search_polyhaven_assets": {"category": "hdris"},
     "download_polyhaven_asset": {"asset_id": "", "asset_type": "hdris"},
+
+    # ── Assets ──────────────────────────────────────────────────────
+    "get_asset_libraries": {},
+    "jump_to_asset_browser": {"allow_edits": False},
 }
 
 
@@ -148,6 +152,7 @@ _TOOL_EXPECTED_FAILURES: dict[str, str] = {
     "render_thumbnail_to_path": "requires a valid output path",
     "render_viewport_to_path": "requires a valid output path",
     "download_polyhaven_asset": "requires a valid asset_id",
+    "jump_to_asset_browser": "may fail if no Asset Browser is open (allow_edits=False)",
 }
 
 

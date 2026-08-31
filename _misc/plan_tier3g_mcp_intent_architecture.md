@@ -23,9 +23,14 @@
 12. [Text Editor as IDE Agent](#12-text-editor-as-ide-agent)
 13. [Documentation Coverage Strategy](#13-documentation-coverage-strategy)
 14. [Scalability & Plugin Architecture](#14-scalability--plugin-architecture)
-15. [Implementation Plan](#15-implementation-plan)
-16. [Technical Feasibility Review](#16-technical-feasibility-review)
-17. [Success Criteria](#17-success-criteria)
+15. [Template Complexity Tiers](#15-template-complexity-tiers)
+16. [Multi-Editor Pathway Planning](#16-multi-editor-pathway-planning)
+17. [The Self-Expanding System: Recorder & Macros](#17-the-self-expanding-system-recorder--macros)
+18. [Asset-First Templates: Procedural Assets as Building Blocks](#18-asset-first-templates-procedural-assets-as-building-blocks)
+19. [Benchmarks & Development Roadmap](#19-benchmarks--development-roadmap)
+20. [Implementation Plan](#20-implementation-plan)
+21. [Technical Feasibility Review](#21-technical-feasibility-review)
+22. [Success Criteria](#22-success-criteria)
 
 ---
 
@@ -1397,7 +1402,1090 @@ def discover_plugins() -> list[CoworkerPlugin]:
 
 ---
 
-## 15. Implementation Plan
+## 15. Template Complexity Tiers
+
+### 15.1 Why Tiers Matter
+
+Not all templates are equal. A "subdivide mesh" template is fundamentally different from a "make this scene cinematic" template. The orchestrator must understand complexity to:
+
+- **Price plans correctly** — A simple template costs 1 step. A high-level chain costs 5-10 steps.
+- **Set user expectations** — "This will take a moment" vs "This is instant"
+- **Manage undo granularity** — Simple ops get per-step undo. High-level chains get one undo for the whole chain.
+- **Enable composition** — Simple templates compose into moderate chains. Moderate chains compose into high-level workflows.
+- **Guide the model** — The planner model needs to know which templates are atomic and which are compound.
+
+### 15.2 The Three Tiers
+
+| Tier | Name | Operator Count | Scope | User Mental Model | Example |
+|------|------|---------------|-------|-------------------|---------|
+| **T1** | Simple / Atomic | 1-2 ops | Single object, isolated context | "I have A, take it to B" | Subdivide mesh, add bevel, create cube |
+| **T2** | Moderate / Contextual | 3-5 ops | Group of objects, relative to each other or scene | "I have A with intention B, I need C applied to A relative to B" | Arrange objects in circle + merge + organize outliner |
+| **T3** | High-Level / Scene | 6+ ops | Cross-editor, cross-datablock, from nothing to result | "I have A, take it to B, with systems like C I can tune later" | Full cinematic scene setup, product shot from scratch |
+
+### 15.3 Tier 1: Simple / Atomic Templates
+
+**Characteristics:**
+- 1-2 Blender operators chained in a single context
+- Operates on a selected object in isolated context
+- The user could do this manually with 1-2 clicks/keystrokes
+- Useful as shorthand for repetitive linear workflows
+- Low priority for standalone use, HIGH priority as building blocks for T2/T3
+
+**Examples:**
+
+| Template | Ops | What It Does | Why T1 |
+|----------|-----|-------------|--------|
+| `subdivide_mesh` | 1 | `bpy.ops.mesh.subdivide()` | Single operator, selected mesh |
+| `bevel_edges` | 1 | `bpy.ops.mesh.bevel()` | Single operator, selected edges |
+| `shade_smooth` | 1 | `bpy.ops.object.shade_smooth()` | Single toggle |
+| `remove_doubles` | 1 | `bpy.ops.mesh.remove_doubles()` | Single cleanup op |
+| `create_cube` | 1 | `bpy.ops.mesh.primitive_cube_add()` | Single primitive |
+| `add_subsurf` | 1 | `obj.modifiers.new(type="SUBSURF")` | Single modifier |
+| `set_origin` | 1 | `bpy.ops.object.origin_set()` | Single origin change |
+| `apply_transform` | 1-2 | Apply loc/rot/scale | Single apply operation |
+| `duplicate_objects` | 1-2 | Duplicate + offset | Simple duplication |
+| `keyframe_location` | 1-2 | Set location + keyframe | Single keyframe |
+
+**T1 Metadata:**
+```python
+{
+    "tier": 1,
+    "atomic": True,           # Cannot be broken down further
+    "composable": True,       # Can be used in T2/T3 chains
+    "standalone_useful": False,  # Usually used as part of something bigger
+    "undo_granularity": "per_step",
+}
+```
+
+### 15.4 Tier 2: Moderate / Contextual Templates
+
+**Characteristics:**
+- 3-5 operators chained in context
+- Operates on a group of objects with relationships to 3D space, each other, or multiple editors
+- The chain of operations is done in context relative to other objects, workflows, or editors
+- This is the **most useful tier** for the Coworker — complex enough to save real time, simple enough for local models to plan reliably
+- Bridges linear and procedural workflows
+
+**Examples:**
+
+| Template | Ops | What It Does | Cross-Editor? |
+|----------|-----|-------------|---------------|
+| `arrange_in_circle` | 3-4 | Select objects → calculate circle positions → move each → (optional) parent to empty | VIEW_3D only |
+| `clean_mesh_for_print` | 4 | Apply transforms → recalculate normals → remove doubles → add solidify | VIEW_3D only |
+| `organize_outliner` | 4-5 | Sort by type → rename with prefix → color-tag collections → purge orphan data | VIEW_3D → OUTLINER |
+| `setup_material_from_assets` | 3-4 | Search assets → load best match → assign to selected → setup UV if needed | VIEW_3D → ASSET_BROWSER |
+| `three_point_lighting` | 4-5 | Create key light → create fill light → create rim light → position all → set intensities | VIEW_3D only |
+| `frame_camera_cinematic` | 3-4 | Frame on selection → add DOF → add track-to constraint → set composition guide | VIEW_3D → PROPERTIES |
+| `scatter_assets_on_terrain` | 4-5 | Search assets → create collection → setup GN scatter → randomize scale/rot → assign materials | VIEW_3D → NODE_EDITOR → ASSET_BROWSER |
+| `setup_shot_in_sequencer` | 4-5 | Add movie strip → add sound strip → trim both → add fade in/out → add text overlay | SEQUENCE_EDITOR only |
+| `apply_material_by_name` | 3-4 | Parse object names → match to material keywords → search/create materials → assign to matching objects | VIEW_3D → OUTLINER |
+| `audit_and_optimize_material` | 3-5 | Analyze node tree → count nodes → identify bottlenecks → simplify where possible → report savings | NODE_EDITOR only |
+
+**T2 Metadata:**
+```python
+{
+    "tier": 2,
+    "atomic": False,
+    "composable": True,        # Can be used in T3 workflows
+    "standalone_useful": True, # The sweet spot for operator buttons
+    "undo_granularity": "per_chain",  # One undo for the whole chain
+    "cross_editor": False,     # Usually single-editor (or editor + properties)
+    "estimated_time": "1-3 seconds",
+}
+```
+
+### 15.5 Tier 3: High-Level / Scene Templates
+
+**Characteristics:**
+- 6+ operators spanning multiple editors, data-block types, and modes
+- Goes from nothing (or minimal starting state) to a complete usable result
+- Works at all levels: linear workflows → procedural systems → usable scene/asset results
+- The user gets procedural systems they can manually tune later
+- These are **pre-built chains** that the model selects as a single decision
+
+**Examples:**
+
+| Template | Ops | What It Does | Editors Touched |
+|----------|-----|-------------|-----------------|
+| `cinematic_look` | 8-10 | Set render engine → resolution → three-point lights → camera with DOF → compositor with glare/balance/vignette → world setup | VIEW_3D → PROPERTIES → NODE_EDITOR (compositor) → NODE_EDITOR (shader) |
+| `product_shot_setup` | 7-9 | Create backdrop plane → product lighting → frame camera at 45° → 85mm lens → DOF on product → render settings → output path | VIEW_3D → PROPERTIES |
+| `archviz_scene_setup` | 8-12 | Sun+sky lighting → wide camera → AO setup → render layers → material assignment from assets → proxy setup → view layer management | VIEW_3D → PROPERTIES → NODE_EDITOR → OUTLINER |
+| `character_turntable` | 8-10 | Create empty at origin → parent camera → three-point lights → neutral background → 360° rotation over N frames → output PNG sequence → render settings | VIEW_3D → PROPERTIES → DOPESHEET |
+| `shot_to_master_edit` | 6-8 | Render current frame → add to VSE as strip → add scene strip for full sequence → setup proxy → add metadata text → organize channels | VIEW_3D → SEQUENCE_EDITOR |
+| `version_nodetree` | 5-7 | Copy node group → append version suffix → store in blend file text block → update all users to new version → keep old as backup | NODE_EDITOR → TEXT_EDITOR → OUTLINER |
+| `scene_audit_and_optimize` | 8-15 | Count all data-blocks → identify orphan data → analyze material complexity → check texture sizes → suggest view layer optimizations → report with recommendations → optionally apply fixes | ALL |
+| `props_to_grid` | 5-7 | Select props → calculate bounding boxes → arrange in grid with spacing → randomize slight rotation → group into collection → name by type | VIEW_3D → OUTLINER |
+| `update_shot_with_assets` | 6-9 | Identify objects in shot → search asset library for replacements → swap meshes while keeping transforms → update materials → adjust lighting for new assets → report changes | VIEW_3D → ASSET_BROWSER → NODE_EDITOR |
+
+**T3 Metadata:**
+```python
+{
+    "tier": 3,
+    "atomic": False,
+    "composable": False,       # Terminal — produces a complete result
+    "standalone_useful": True, # The "one-click magic" tier
+    "undo_granularity": "single_undo",  # One undo for everything
+    "cross_editor": True,      # Always spans multiple editors
+    "estimated_time": "5-15 seconds",
+    "requires_confirmation": True,  # "This will modify your scene. Continue?"
+}
+```
+
+### 15.6 Tier-Aware Planning
+
+The orchestrator's planner model receives tier information with each template:
+
+```
+Available templates:
+  [T1] create_cube — Add a cube (1 op, single object)
+  [T1] subdivide_mesh — Subdivide selected (1 op, edit mode)
+  [T2] arrange_in_circle — Arrange objects in circle (4 ops, multi-object)
+  [T2] three_point_lighting — Classic 3-point light setup (5 ops)
+  [T3] cinematic_look — Full cinematic scene setup (10 ops, cross-editor)
+```
+
+The model learns to:
+- **Prefer T2 for most requests** — They're the sweet spot of power vs reliability
+- **Use T1 as building blocks** — When no T2/T3 matches, compose T1s into a plan
+- **Use T3 for clear intent matches** — "Make it cinematic" → one decision
+- **Avoid T3 when uncertain** — If the intent is vague, ask clarifying questions rather than guessing a T3
+
+### 15.7 Tier Composition Rules
+
+```
+T1 + T1 + T1 → can form a T2 chain (model composes them)
+T2 + T2 + T2 → can form a T3 chain (model composes them)
+T1 + T2 → valid (T2 absorbs T1 context)
+T3 + anything → invalid (T3 is terminal — it produces a complete result)
+```
+
+The orchestrator enforces these rules during plan validation. If the model proposes `cinematic_look` followed by `add_bevel`, the validator rejects it: "T3 templates are terminal and cannot be followed by other steps."
+
+---
+
+## 16. Multi-Editor Pathway Planning
+
+### 16.1 The Problem
+
+Blender is notorious for multi-editor workflows. Common examples:
+
+| Task | Editors Involved | Why It's Painful |
+|------|-----------------|------------------|
+| Model then shade | VIEW_3D → NODE_EDITOR | Must leave modeling context, open shader editor, find material |
+| Animate then render | VIEW_3D → DOPESHEET → PROPERTIES | Must set keyframes, tune curves, then configure render |
+| Sculpt then retopo then UV | VIEW_3D (sculpt) → VIEW_3D (edit) → UV_EDITOR | Three different modes, two different editors |
+| Comp then VSE | NODE_EDITOR (compositor) → SEQUENCE_EDITOR | Render → find strips → assemble |
+| Scene setup | VIEW_3D → PROPERTIES → OUTLINER → NODE_EDITOR | Properties for render settings, outliner for organization, nodes for world |
+| Asset workflow | ASSET_BROWSER → VIEW_3D → NODE_EDITOR | Find asset → place → assign materials |
+
+The orchestrator must handle these pathways seamlessly. The user shouldn't have to think about which editor they're in — they describe the goal, and the orchestrator navigates the editors.
+
+### 16.2 The Editor Graph
+
+Editors in Blender have natural affinities. The orchestrator models these as a weighted graph:
+
+```python
+EDITOR_AFFINITIES = {
+    "VIEW_3D": {
+        "PROPERTIES": 0.9,     # Constantly used together (modifiers, materials, render)
+        "OUTLINER": 0.8,       # Organization, visibility, collections
+        "NODE_EDITOR": 0.7,    # Shader setup, geometry nodes
+        "UV_EDITOR": 0.6,      # UV unwrapping after modeling
+        "IMAGE_EDITOR": 0.5,   # Texture painting, image viewing
+        "DOPESHEET_EDITOR": 0.4,  # Animation
+        "SEQUENCE_EDITOR": 0.2,   # Rarely direct
+    },
+    "NODE_EDITOR": {
+        "PROPERTIES": 0.8,     # Material/texture settings
+        "VIEW_3D": 0.7,        # Preview results
+        "OUTLINER": 0.4,       # Material assignment visibility
+        "IMAGE_EDITOR": 0.5,   # Texture reference
+    },
+    "SEQUENCE_EDITOR": {
+        "PROPERTIES": 0.7,     # Strip properties, proxy settings
+        "IMAGE_EDITOR": 0.6,   # Preview rendered frames
+        "OUTLINER": 0.5,       # Scene strips
+        "VIEW_3D": 0.3,        # Rarely direct
+    },
+    # ... etc for all editors
+}
+```
+
+### 16.3 Pathway Resolution
+
+When the orchestrator receives a multi-editor intent, it resolves the pathway:
+
+```
+User: "Set up this shot in the master edit"
+  → Intent classifier: "shot_setup" (T3)
+  → Context probe: editor=VIEW_3D, camera selected, VSE has existing strips
+  → Pathway resolver:
+      1. VIEW_3D: frame camera on selection ✓
+      2. PROPERTIES: set render resolution, output path ✓
+      3. VIEW_3D: render viewport to image ✓
+      4. SEQUENCE_EDITOR: add rendered image as strip ✓
+      5. SEQUENCE_EDITOR: position after last strip ✓
+      6. SEQUENCE_EDITOR: add text overlay with shot name ✓
+  → Plan: [camera_frame_selected, render_set_resolution, render_set_output,
+            render_viewport, vse_add_image_strip, vse_add_text_strip]
+  → Execute with editor switches between steps 3→4
+```
+
+### 16.4 Editor Switching Protocol
+
+When a plan requires switching editors, the orchestrator:
+
+1. **Completes all operations in the current editor** before switching
+2. **Switches via `bpy.context.area.type`** or by changing workspace
+3. **Preserves selection state** across switches (store object names, re-select)
+4. **Injects a "context restored" message** so the model knows where it is
+
+```python
+def _switch_editor(target_editor: str) -> bool:
+    """Switch the active area to the target editor type."""
+    import bpy
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == target_editor:
+                # Found existing editor of this type — make it active
+                area.tag_redraw()
+                return True
+    # No existing editor — change current area type
+    if bpy.context.area:
+        bpy.context.area.type = target_editor
+        return True
+    return False
+```
+
+### 16.5 Multi-Editor Plan Format
+
+Plans that span editors include editor context in each step:
+
+```json
+{
+  "intent": "setup_shot_in_master_edit",
+  "pathway": ["VIEW_3D", "PROPERTIES", "VIEW_3D", "SEQUENCE_EDITOR"],
+  "steps": [
+    {
+      "template": "camera_frame_selected",
+      "params": {"margin": 0.1},
+      "editor": "VIEW_3D",
+      "mode": "OBJECT"
+    },
+    {
+      "template": "render_set_resolution",
+      "params": {"x": 1920, "y": 1080},
+      "editor": "PROPERTIES",
+      "mode": null
+    },
+    {
+      "template": "render_viewport_to_path",
+      "params": {"filepath": "//shots/shot_001.png"},
+      "editor": "VIEW_3D",
+      "mode": "OBJECT"
+    },
+    {
+      "template": "vse_add_image_strip",
+      "params": {"filepath": "//shots/shot_001.png", "channel": 1, "frame_start": 100},
+      "editor": "SEQUENCE_EDITOR",
+      "mode": null
+    }
+  ]
+}
+```
+
+### 16.6 Common Multi-Editor Pathways
+
+| User Intent | Pathway | Templates Used |
+|-------------|---------|----------------|
+| "Model this, then shade it" | VIEW_3D(EDIT) → VIEW_3D(OBJECT) → NODE_EDITOR | edit_mesh ops → add_material → principled_basic |
+| "Animate and render this" | VIEW_3D → DOPESHEET → PROPERTIES | keyframe_location → set_interpolation → render_set_engine → render_set_output |
+| "Sculpt, retopo, and UV this" | VIEW_3D(SCULPT) → VIEW_3D(EDIT) → UV_EDITOR | remesh_voxel → subdivide_mesh → unwrap_uv → pack_islands |
+| "Comp this render and add to edit" | NODE_EDITOR → VIEW_3D → SEQUENCE_EDITOR | comp_setup_cinematic → render_viewport → vse_add_image_strip |
+| "Find assets and furnish this room" | ASSET_BROWSER → VIEW_3D → OUTLINER | search_assets → load_asset × N → outliner_group_selected |
+| "Light this scene for night" | VIEW_3D → NODE_EDITOR(world) → PROPERTIES | light_night_scene → render_setup_world → render_setup_eevee |
+| "Prepare this character for animation" | VIEW_3D → OUTLINER → DOPESHEET | apply_transform → outliner_rename_by_type → anim_setup_walk_cycle |
+| "Version this node tree and update scene" | NODE_EDITOR → TEXT_EDITOR → OUTLINER | (copy node group) → text_register_current → outliner_organize_scene |
+
+### 16.7 Pathway Learning
+
+The orchestrator records which pathways users take. Over time, it learns:
+
+- **Common pathways** — "Users who model in EDIT_MESH usually then switch to OBJECT and add materials"
+- **Pathway suggestions** — After a modeling operation, suggest: "Want me to set up materials for this?"
+- **Pathway shortcuts** — Frequently used multi-editor workflows become one-click operators
+
+This data is stored locally in the user's preferences (never leaves the machine).
+
+---
+
+## 17. The Self-Expanding System: Recorder & Macros
+
+### 17.1 The Core Problem with Static Templates
+
+No matter how many templates we write, we'll never cover every workflow. Every artist has unique needs. The system must be **self-expanding** — users must be able to create new templates without writing Python.
+
+**The vision: An artist does something once, the Coworker learns it, and from then on it's a one-click operation.**
+
+### 17.2 The Action Recorder
+
+The Coworker includes an **action recorder** that watches the Blender Python API for operator calls and property changes, then serializes them into a reusable template.
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                     ACTION RECORDER                           │
+│                                                              │
+│  User does work ──→ Recorder watches bpy API ──→ Logs ops   │
+│  (modeling,        (monkey-patches operator calls,           │
+│   shading,          property sets, mode switches,            │
+│   lighting,         selection changes, data-block creates)   │
+│   organizing)                                                │
+│                                                              │
+│  User stops ──→ Recorder analyzes log ──→ Generates template │
+│  recording       (deduplicates, finds patterns,              │
+│                  identifies parameters to expose,            │
+│                  groups into logical steps)                  │
+│                                                              │
+│  Template saved ──→ Available as operator button ──→ Usable  │
+│  to user library   in sidebar, menus, chat, chains           │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### 17.3 What the Recorder Captures
+
+| Event Type | What's Recorded | Example |
+|-----------|----------------|---------|
+| `bpy.ops.*()` calls | Operator name + parameters | `bpy.ops.mesh.primitive_cube_add(size=2)` |
+| Property sets | Object, property path, old value, new value | `obj.location = (1, 2, 3)` |
+| Mode switches | From mode → to mode | `OBJECT → EDIT_MESH` |
+| Selection changes | Object names selected/deselected | Selected: ["Cube", "Sphere"] |
+| Data-block creation | Type, name | New MATERIAL: "RedPaint" |
+| Modifier adds | Object, modifier type, parameters | Cube.SUBSURF(levels=2) |
+| Node tree changes | Node adds, links, parameter sets | Added Principled BSDF, linked to output |
+| Context switches | Editor changes | VIEW_3D → NODE_EDITOR |
+
+### 17.3a The C++ Blind Spot: What Can't Be Recorded Directly
+
+**Critical limitation**: Many Blender interface actions are executed directly in C++ and never pass through the Python API. These actions are invisible to a Python-level monkey-patcher.
+
+| Action | Why It's Invisible | Workaround |
+|--------|-------------------|------------|
+| **Reordering modifiers** (drag in UI) | C++ `MODIFIER_OT_move_up/down` doesn't fire Python hooks reliably | **Before/After diff**: snapshot modifier stack before and after, detect reordering |
+| **Outliner drag-drop** (reparenting, collection moves) | Outliner operations are C++ native, no `bpy.ops` call | **Before/After diff**: snapshot hierarchy, detect changes |
+| **Node editor drag** (repositioning nodes) | Node position changes are C++ transforms, no Python event | **Before/After diff**: snapshot node locations, detect layout changes |
+| **Viewport navigation** (pan, orbit, zoom) | Pure C++ view matrix manipulation | Not needed for macros (view state is rarely part of a workflow) |
+| **Gizmo interactions** (transform gizmo, GN gizmos) | Gizmo callbacks are C++ with optional Python hooks | **Before/After diff**: snapshot transform values before and after |
+| **Asset Browser drag-drop** | Asset placement is C++ native | **Before/After diff**: snapshot scene objects before and after |
+| **Timeline scrubbing** | Pure C++ playback | Not needed for macros |
+| **Color picker interactions** | C++ color management | **Before/After diff**: snapshot color values |
+| **Curve/spline editing in Viewport** | C++ curve manipulation | **Before/After diff**: snapshot curve data |
+| **Weight painting strokes** | C++ paint system | **Before/After diff**: snapshot vertex weights |
+
+### 17.3b The Before/After Diff Strategy
+
+To handle the C++ blind spot, the recorder uses a **dual capture strategy**:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    DUAL CAPTURE STRATEGY                         │
+│                                                                 │
+│  Python API Layer                    C++ / UI Layer              │
+│  ┌──────────────────┐               ┌──────────────────┐        │
+│  │ Monkey-patch     │               │ Before Snapshot  │        │
+│  │ bpy.ops.*()      │               │ - Object states  │        │
+│  │ Property sets    │               │ - Modifier stacks│        │
+│  │ Mode switches    │               │ - Node trees     │        │
+│  │ Data-block creates│              │ - Collections    │        │
+│  └──────┬───────────┘               │ - Transforms     │        │
+│         │                           └──────┬───────────┘        │
+│         │                                  │                    │
+│         ▼                                  ▼                    │
+│  ┌──────────────────────────────────────────────────┐           │
+│  │              MERGED EVENT LOG                     │           │
+│  │  - Python events (precise, parameter-rich)        │           │
+│  │  - Diff events (detected changes, inferred ops)   │           │
+│  └──────────────────────────────────────────────────┘           │
+│         │                                                        │
+│         ▼                                                        │
+│  ┌──────────────────────────────────────────────────┐           │
+│  │           ANALYSIS & DEDUPLICATION                │           │
+│  │  - Python events explain the diff → keep Python   │           │
+│  │  - Diff has changes Python didn't see → keep diff │           │
+│  │  - Python + diff overlap → prefer Python          │           │
+│  └──────────────────────────────────────────────────┘           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Before Snapshot** (taken when recording starts and after each Python event):
+```python
+def _snapshot_scene_state():
+    """Capture complete scene state for diff comparison."""
+    import bpy
+    return {
+        "objects": {
+            obj.name: {
+                "location": tuple(obj.location),
+                "rotation_euler": tuple(obj.rotation_euler),
+                "scale": tuple(obj.scale),
+                "parent": obj.parent.name if obj.parent else None,
+                "modifiers": [
+                    {"name": m.name, "type": m.type, "order": i}
+                    for i, m in enumerate(obj.modifiers)
+                ],
+                "material_slots": [ms.material.name if ms.material else None for ms in obj.material_slots],
+            }
+            for obj in bpy.data.objects
+        },
+        "collections": {
+            col.name: [obj.name for obj in col.objects]
+            for col in bpy.data.collections
+        },
+        "node_trees": {
+            ng.name: {
+                "nodes": {n.name: tuple(n.location) for n in ng.nodes},
+                "links": [(l.from_node.name, l.from_socket.identifier, l.to_node.name, l.to_socket.identifier) for l in ng.links],
+            }
+            for ng in bpy.data.node_groups
+        },
+        "active_object": bpy.context.active_object.name if bpy.context.active_object else None,
+        "mode": bpy.context.mode,
+        "editor": bpy.context.area.type if bpy.context.area else None,
+    }
+```
+
+**Diff Analysis** (compares two snapshots, infers what happened):
+```python
+def _diff_snapshots(before, after):
+    """Compare two scene snapshots and infer what changed."""
+    changes = []
+    
+    # Detect modifier reordering
+    for obj_name, after_state in after["objects"].items():
+        before_state = before["objects"].get(obj_name)
+        if not before_state:
+            changes.append({"type": "object_added", "name": obj_name})
+            continue
+        before_mods = [m["name"] for m in before_state["modifiers"]]
+        after_mods = [m["name"] for m in after_state["modifiers"]]
+        if before_mods != after_mods:
+            changes.append({"type": "modifier_reorder", "object": obj_name, "order": after_mods})
+    
+    # Detect reparenting
+    for obj_name, after_state in after["objects"].items():
+        before_state = before["objects"].get(obj_name)
+        if before_state and before_state["parent"] != after_state["parent"]:
+            changes.append({"type": "reparent", "object": obj_name, "from": before_state["parent"], "to": after_state["parent"]})
+    
+    # Detect node layout changes
+    for ng_name, after_ng in after["node_trees"].items():
+        before_ng = before["node_trees"].get(ng_name)
+        if before_ng:
+            for node_name, after_loc in after_ng["nodes"].items():
+                before_loc = before_ng["nodes"].get(node_name)
+                if before_loc and before_loc != after_loc:
+                    changes.append({"type": "node_moved", "node_tree": ng_name, "node": node_name, "from": before_loc, "to": after_loc})
+    
+    return changes
+```
+
+### 17.3c Reference Implementation: ActionRecorder Addon
+
+The [ActionRecorder addon by InamuraJIN](https://github.com/InamuraJIN/ActionRecorder) provides a proven pattern for Blender macro recording. Key techniques we can adopt:
+
+| Technique | What It Does | How We Adapt It |
+|-----------|-------------|-----------------|
+| `bpy.app.handlers` hooks | Intercepts operator execution via `undo_post`, `depsgraph_update_post` | Use for detecting C++-side changes after each UI action |
+| `msgbus` subscriptions | Watches specific RNA properties for changes | Subscribe to `object.location`, `modifier.order`, `node.location` for diff detection |
+| Operator override registry | Maps C++ operator names to Python equivalents | Build a lookup table: `MODIFIER_OT_move_up` → `bpy.ops.object.modifier_move_up()` |
+| Modal operator for recording | A running modal that captures events between user actions | Use for "Record" mode — modal operator polls state, takes snapshots |
+
+**Key insight from ActionRecorder**: The addon uses `bpy.app.handlers.depsgraph_update_post` to detect *any* scene change, then diffs to find what changed. This is the same Before/After strategy we need, but we extend it with LLM-assisted analysis to infer *intent* from the diff, not just replay operations.
+
+### 17.4 Recording Modes
+
+| Mode | What It Does | Use Case |
+|------|-------------|----------|
+| **Full Record** | Captures every API call | "I want to automate exactly this workflow" |
+| **Smart Record** | Captures only semantically meaningful changes, deduplicates | "I did this a few times, make it a template" |
+| **Diff Record** | Records only what changed between state A and state B | "I organized this scene, capture what I changed" |
+| **Guided Record** | User describes intent, recorder suggests what to capture | "I want to make a template for setting up product shots" |
+
+### 17.5 From Recording to Template
+
+The recorder's analysis phase converts raw API logs into a clean template:
+
+```
+RAW LOG:
+  bpy.ops.object.select_all(action='DESELECT')
+  bpy.data.objects['Cube'].select_set(True)
+  bpy.context.view_layer.objects.active = bpy.data.objects['Cube']
+  bpy.ops.object.mode_set(mode='EDIT')
+  bpy.ops.mesh.select_all(action='SELECT')
+  bpy.ops.mesh.subdivide(number_cuts=2)
+  bpy.ops.object.mode_set(mode='OBJECT')
+  bpy.ops.object.shade_smooth()
+  bpy.context.object.data.auto_smooth_angle = 0.523599  # 30°
+
+ANALYZED TEMPLATE:
+  Name: "subdivide_and_smooth"
+  Tier: 1
+  Description: "Subdivide mesh 2 times and apply smooth shading with 30° auto-smooth"
+  Params to expose: number_cuts, smooth_angle
+  Editor: VIEW_3D
+  Mode: EDIT_MESH (auto-switches from OBJECT)
+  Requires selection: True
+```
+
+### 17.6 Parameter Inference
+
+The recorder intelligently identifies which values should become parameters:
+
+| Value Type | Parameter? | Reasoning |
+|-----------|-----------|-----------|
+| Hardcoded numbers (2, 3, 1.0) | **Yes** — expose as param | User might want different values next time |
+| Object names ("Cube", "RedPaint") | **Yes** — expose as param | Different scene, different names |
+| File paths | **Yes** — expose as param | Different project, different paths |
+| Enum values ("CYCLES", "EDIT") | **Maybe** — expose if changed during recording | If user changed it, it's a parameter |
+| Booleans (True/False) | **Maybe** — expose if toggled | If user toggled it, it's a parameter |
+| Structural constants (mode='OBJECT') | **No** — keep fixed | Required for the operation to work |
+
+### 17.7 The Macro Library
+
+User-recorded templates are stored in a **Macro Library**:
+
+```
+addon/bfa_coworker/
+├── macros/                      # User macro library
+│   ├── index.json               # Macro registry (name, description, tier, tags)
+│   ├── my_product_shot.py       # User-recorded macro
+│   ├── organize_my_way.py       # User-recorded macro
+│   └── ...                      # Grows over time
+```
+
+Each macro is a standard `CoworkerPlugin` — fully compatible with the plugin system:
+
+```python
+# macros/my_product_shot.py — auto-generated from recording
+class MyProductShot(CoworkerPlugin):
+    name = "My Product Shot Setup"
+    version = "1.0.0"
+    author = "user"  # Recorded from user's actions
+    description = "Sets up a product shot with my preferred lighting and camera angle"
+    
+    templates = {
+        "my_product_shot": _tmpl_my_product_shot,
+    }
+    
+    chains = {
+        "my_product_shot": [
+            ("create_plane", {"name": "Backdrop", "size": 10, "z": -1}),
+            ("light_product", {"top_intensity": 500, "front_intensity": 200}),
+            ("camera_frame_selected", {"margin": 0.15}),
+            ("render_set_engine", {"engine": "CYCLES"}),
+            ("render_set_resolution", {"x": 1920, "y": 1920}),
+        ],
+    }
+```
+
+### 17.8 The "Teach Me" Workflow
+
+The ultimate self-expanding workflow:
+
+```
+1. Artist: "Watch what I do"
+   → Recorder starts in Smart Record mode
+
+2. Artist: models, shades, lights, sets up camera
+   → Recorder captures semantically meaningful operations
+
+3. Artist: "Make this a template called 'my product shot'"
+   → Recorder analyzes, deduplicates, infers parameters
+   → Generates template + chain
+   → Saves to macro library
+   → Registers as operator: bfacw.my_product_shot
+
+4. Artist (next project): clicks "My Product Shot" button
+   → Same setup, different objects, instant result
+
+5. Artist: "Also apply my product shot to these 5 objects"
+   → Model composes: for each object, run my_product_shot
+```
+
+### 17.9 LLM-Assisted Macro Refinement
+
+After recording, the user can ask the Coworker to improve the macro:
+
+| User Request | What Happens |
+|-------------|--------------|
+| "Make this work on any selection" | Model generalizes object references to `bpy.context.selected_objects` |
+| "Add error handling" | Model wraps operations in try/except with useful error messages |
+| "Make it faster" | Model identifies redundant operations, suggests bmesh for speed |
+| "Add a progress report" | Model adds print statements or UI progress indicators |
+| "Expose these as parameters" | Model identifies hardcoded values and creates operator properties |
+| "Make this a proper addon" | Model wraps the macro in full addon boilerplate, ready for Text Editor |
+
+### 17.10 The Macro Marketplace (Future)
+
+Long-term vision: a community marketplace where users share macros:
+
+```
+Coworker > Macro Library > Browse Community Macros
+  ├── "Architectural Visualization Setup" by @archviz_pro (4.8★, 12K downloads)
+  ├── "Character Rig Cleanup" by @rigger_daily (4.6★, 8K downloads)
+  ├── "Procedural Rock Scatter" by @environment_artist (4.9★, 15K downloads)
+  └── ... 
+```
+
+Macros are just Python files — safe to share, easy to review, no binary blobs.
+
+### 17.11 Deferred to Tier 4e: Full Recorder & Macro System
+
+**The recorder and macro system described above is deferred to Tier 4e** to keep Tier 3g in scope for a 1-2 month release. Tier 3g will ship with:
+
+- Static template library (80+ hand-authored templates)
+- Plugin system for community template contributions
+- The orchestrator pipeline (intent → plan → execute)
+
+Tier 4e will add:
+- Full action recorder with Before/After diff capture
+- Macro library with save/load/index
+- "Teach Me" workflow
+- LLM-assisted macro refinement
+- Macro marketplace
+
+**Why defer?** The recorder is a complex subsystem (3 weeks estimated) that depends on the orchestrator being stable first. Shipping the orchestrator + static templates first gives users immediate value, and the recorder can be built on top of a proven foundation.
+
+---
+
+## 18. Asset-First Templates: Procedural Assets as Building Blocks
+
+### 18.1 The Insight: Assets ARE Templates
+
+Every procedural asset in Blender — a Geometry Nodes modifier, a shader node group, a compositor node group — is already a template. It has:
+
+- **Named inputs** (parameters the user can tune)
+- **Deterministic behavior** (same inputs → same output)
+- **Reusability** (can be applied to any compatible object)
+- **Composability** (can be chained with other assets)
+
+The orchestrator should treat procedural assets as **first-class templates**. Instead of writing Python code to create a node tree from scratch, it should search the asset library for a matching node group and apply it with parameters.
+
+### 18.2 The Asset Hierarchy
+
+Procedural assets exist at three levels, mirroring our template tiers:
+
+| Asset Level | Template Tier | Example | How the Orchestrator Uses It |
+|-------------|--------------|---------|------------------------------|
+| **Low-Level** (atomic nodes) | T1 | Noise Texture, Color Ramp, Math node | Building blocks for procedural materials. The orchestrator rarely uses these directly — they're composed into node groups. |
+| **Mid-Level** (node groups) | T2 | Animation Preset node, Array System, Trigger System, Curve Customization | **The sweet spot.** Self-contained, parameterized, composable. The orchestrator chains these to build complex behaviors. |
+| **High-Level** (complete setups) | T3 | Text Presets, Transition Presets, Camera Setups, Architecture Generators | One-click solutions. The orchestrator applies these as terminal operations. |
+
+### 18.3 Bforartists Default Asset Libraries
+
+Bforartists ships with curated procedural asset libraries ([Addon-Default-Libraries](https://github.com/Draise14/Addon-Default-Libraries)) that the orchestrator can leverage:
+
+#### Geometry Nodes Assets
+
+| Category | Assets | Orchestrator Use |
+|----------|--------|-----------------|
+| **Animation Presets** | Animation Preset Node (ease types, A→B keyframe logic, trigger input, field support) | Drives any GN-based animation. The orchestrator uses this as the animation backbone for T2/T3 chains. |
+| **Array Systems** | Grid Array, Brick Array, Circular Array, Curve Array, Linear Array (with gizmos, randomization, curve deformation, instance collections) | Replaces `add_array` modifier template. More powerful — supports curves, randomization, instance biasing. |
+| **Trigger Systems** | Effector-based animation triggers (sphere, cube, cylinder, custom shapes with falloff) | Enables "animate when near" workflows. Orchestrator chains: Trigger → Animation Preset → Array. |
+| **Curve Customization** | Outline, Dropshadow Mesh, Extrusion Advanced, Chamfer/Inset | Text and curve effects. Orchestrator uses for "make this text pop" intents. |
+| **2D Primitive Shapes** | Curve-based shapes with gizmos, extrusion, chamfer | Replaces mesh primitives for 2D workflows. |
+| **Text Presets** | Full text effects (outline, shadow, extrude, inset, self-boolean, material controls, camera-fixed, typewriter, fade, transforms) | High-level: "Add a title card with typewriter effect" → one asset. |
+| **Transition Presets** | Lower-thirds, stingers, custom transitions (After Effects-style) | High-level: "Add a stinger transition between these clips" → one asset. |
+| **Arrow Presets** | Animated arrows with end types, line types, extrude, outline, shadow | "Add an arrow pointing at this" → one asset. |
+| **Data Graph** | CSV to bars, pie charts, graph charts, counters, string selectors | "Visualize this CSV data" → one asset. |
+| **Camera Setups** | Camera cull, distance switch, billboard, flatten, fix-to-camera, A→B move, handheld effects (closeup, walking, running, car, spaceship, interview), delay, overshoot, auto-focus, orbit | Replaces camera templates. More powerful — includes handheld presets, auto-focus, orbit. |
+| **Grease Pencil** | Screenspace radius, taper strokes, advanced smoothness/opacity/color, billboard textures, GP-to-mesh (stroke, volume, patch, strip) | GP workflows. |
+| **Modeling Tools** | Sorcar-style procedural modeling utilities | Edit-mode procedural alternatives. |
+| **Layout Tools** | Raycast scattering, decal system, hierarchical prefab system | Scene layout and dressing. |
+| **Generators** | Architecture (house, bridge, rail, building, street, castle, tower, factory, warehouse), Landscape (stones, rocks, boulders, pillars, cliffs, terrain, water, scattering), Vehicles (wheel/steering/rolling rigs, chassis randomizer, suspension, traffic system), Sci-Fi (weapons, ships, suits, buildings, space structures), Characters (anatomy, clothes, crowds), Flora/Fauna (biomes, 2/4/6/8-legged) | **The ultimate T3 assets.** "Generate a castle on this hill" → one asset with parameters. |
+
+#### Shader Node Groups
+
+| Category | Assets | Orchestrator Use |
+|----------|--------|-----------------|
+| **Procedural Materials** | Wood, metal, stone, fabric, glass, emission, SSS, toon | Replaces material templates. "Make it look like worn copper" → search assets → apply with parameters. |
+| **Utility Nodes** | Mapping, color correction, normal tools, UV tools | Building blocks for custom materials. |
+
+#### Compositor Node Groups
+
+| Category | Assets | Orchestrator Use |
+|----------|--------|-----------------|
+| **Color Grading** | Lift/gamma/gain, color balance, teal-orange, filmic | Replaces compositor templates. |
+| **Effects** | Glare, bloom, vignette, chromatic aberration, lens distortion, denoise | "Add bloom and vignette" → apply node groups. |
+| **Full Looks** | Cinematic, vintage, cyberpunk, noir, dream | High-level: "Give this a cyberpunk look" → one node group. |
+
+### 18.4 Asset-Aware Planning
+
+The orchestrator's planner model receives asset availability as part of the context:
+
+```
+Available in your asset library:
+  [GN] Animation Preset — Drive any animation with easing (T2)
+  [GN] Circular Array — Arrange objects in circle with layers (T2)
+  [GN] Camera Handheld — Add realistic camera shake presets (T2)
+  [GN] Text Preset: Typewriter — Animated typewriter text effect (T3)
+  [SHADER] Worn Copper — Procedural copper with patina (T2)
+  [COMP] Cinematic Look — Full cinematic color grade (T3)
+  ...
+```
+
+The model learns to:
+- **Prefer assets over code templates** when an asset exists for the intent
+- **Chain assets together** — Animation Preset + Circular Array + Camera Handheld = animated turntable with shake
+- **Fall back to code templates** when no asset matches
+- **Suggest asset creation** — "I don't have a 'worn copper' material, but I can make one. Want me to save it as an asset?"
+
+### 18.5 Asset → Template Bridge
+
+When the orchestrator uses an asset, it generates a template that:
+
+1. **Loads the asset** from the library (by name or catalog path)
+2. **Applies it** to the target object (as modifier, material, node group, etc.)
+3. **Configures parameters** based on user intent
+4. **Names everything** meaningfully
+
+```python
+def _tmpl_apply_gn_asset(params=None):
+    """Template: apply_gn_asset — Apply a Geometry Nodes asset from the library.
+    
+    This template bridges the asset library with the template system.
+    Instead of generating GN nodes from scratch, it loads a pre-built asset.
+    """
+    p = dict(_TEMPLATE_DEFAULTS)
+    if params: p.update(params)
+    return (
+        'import bpy\n'
+        'obj = bpy.context.active_object\n'
+        '# Find the asset in the library\n'
+        'asset_name = "{asset_name}"\n'
+        'mod = obj.modifiers.new(name=asset_name, type="NODES")\n'
+        '# Load the node group from the asset library\n'
+        'ng = bpy.data.node_groups.get(asset_name)\n'
+        'if ng:\n'
+        '    mod.node_group = ng\n'
+        '    # Configure exposed parameters\n'
+        '    mod["{input_1}"] = {value_1}\n'
+        '    mod["{input_2}"] = {value_2}\n'
+    ).format(**p)
+```
+
+### 18.6 Deduplication: Assets vs Code Templates
+
+**Rule: If a procedural asset exists that does the same thing as a code template, prefer the asset.**
+
+| Code Template | Equivalent Asset | Decision |
+|---------------|-----------------|----------|
+| `arrange_in_circle` | Circular Array (GN) | **Use asset** — more powerful (layers, randomization, curve deformation) |
+| `add_array` | Grid/Linear Array (GN) | **Use asset** — more powerful (gizmos, instance collections, randomization) |
+| `camera_setup_cinematic` | Camera Handheld + A→B Move (GN) | **Use assets** — more flexible, composable |
+| `light_three_point` | (No equivalent asset yet) | **Use code template** — but flag as "would benefit from an asset" |
+| `principled_basic` | Worn Copper / procedural materials (SHADER) | **Use asset if matching description**, fall back to code template |
+| `comp_setup_cinematic` | Cinematic Look (COMP) | **Use asset** — pre-built, tested, artist-curated |
+
+The orchestrator's plan validator checks for asset equivalents before falling back to code templates. This keeps the code template library lean and avoids redundant maintenance.
+
+### 18.7 The Asset + Template Synergy
+
+The most powerful workflows combine procedural assets with code templates:
+
+```
+User: "Make a product turntable with a handheld camera feel"
+  → Orchestrator:
+      1. [ASSET] Circular Array — arrange products in circle
+      2. [ASSET] Animation Preset — drive 360° rotation with easing
+      3. [ASSET] Camera Handheld — add "interview" preset shake
+      4. [TEMPLATE] light_product — setup product lighting
+      5. [TEMPLATE] render_setup_turntable — configure render output
+  → Result: 5 operations, 3 assets + 2 templates, 1 round-trip
+```
+
+**The orchestrator doesn't care whether a step is an asset or a code template.** Both are just named operations with parameters. The asset library is an extension of the template library, and the template library fills gaps the asset library doesn't cover.
+
+### 18.8 Dependency on Tier 3d
+
+This asset-first strategy depends on **Tier 3d** (asset browser visibility and tooling), which provides:
+
+- `search_assets` — find assets by name, tag, catalog
+- `get_asset_tags` — detailed metadata including editor type
+- `load_asset_in_context` — apply asset to current selection
+- `list_asset_catalogs` — browse available asset categories
+
+Without Tier 3d, the orchestrator can still use code templates but loses the asset-first advantage. **Tier 3d should be completed before or in parallel with Tier 3g Milestone B (templates).**
+
+---
+
+## 19. Benchmarks & Development Roadmap
+
+### 18.1 Why New Benchmarks
+
+The current benchmark (stonehenge) is a single T2 test. We need a comprehensive benchmark suite that tests:
+
+- **All three tiers** (T1 atomic, T2 contextual, T3 scene-level)
+- **All major editors** (VIEW_3D, NODE_EDITOR, SEQUENCE_EDITOR, DOPESHEET, etc.)
+- **Multi-editor pathways** (VIEW_3D → NODE_EDITOR, VIEW_3D → SEQUENCE_EDITOR, etc.)
+- **Local model capability boundaries** (what works reliably, what needs remote)
+- **Regression prevention** (new templates shouldn't break old ones)
+
+### 18.2 Benchmark Suite
+
+#### T1 Benchmarks (Atomic Operations)
+
+| ID | Test | Editor | Mode | Expected Result | Current | Target |
+|----|------|--------|------|----------------|---------|--------|
+| `T1-01` | Create a cube at origin | VIEW_3D | OBJECT | Cube at (0,0,0) named "Cube" | N/A | 1 attempt |
+| `T1-02` | Subdivide selected mesh 2 times | VIEW_3D | EDIT_MESH | Mesh subdivided, vertex count 4× | N/A | 1 attempt |
+| `T1-03` | Add Subsurf modifier level 2 | VIEW_3D | OBJECT | Subsurf modifier added, levels=2 | N/A | 1 attempt |
+| `T1-04` | Apply rotation and scale | VIEW_3D | OBJECT | Rotation=(0,0,0), Scale=(1,1,1) | N/A | 1 attempt |
+| `T1-05` | Set smooth shading with 30° auto-smooth | VIEW_3D | OBJECT | Smooth shading on, auto_smooth_angle=30° | N/A | 1 attempt |
+| `T1-06` | Keyframe location at frame 10 | VIEW_3D | OBJECT | Keyframe at frame 10 with current location | N/A | 1 attempt |
+| `T1-07` | Create a point light at (5,5,5) | VIEW_3D | OBJECT | POINT light at (5,5,5), energy=1000 | N/A | 1 attempt |
+| `T1-08` | Add Principled BSDF material | NODE_EDITOR | — | New material with Principled BSDF, named | N/A | 1 attempt |
+
+#### T2 Benchmarks (Contextual Operations)
+
+| ID | Test | Editors | Expected Result | Current | Target |
+|----|------|---------|----------------|---------|--------|
+| `T2-01` | Arrange 8 cubes in a circle | VIEW_3D | 8 cubes evenly spaced on circle radius 5 | N/A | 1 attempt |
+| `T2-02` | Three-point lighting on selected object | VIEW_3D | Key, fill, rim lights positioned around selection | N/A | 1 attempt |
+| `T2-03` | Clean mesh for 3D printing | VIEW_3D | Transforms applied, normals recalculated, doubles removed, solidify added | N/A | 1 attempt |
+| `T2-04` | Organize outliner by type | VIEW_3D → OUTLINER | Objects renamed with type prefix, collections color-tagged, orphan data purged | N/A | 1 attempt |
+| `T2-05` | Apply material by object name pattern | VIEW_3D | Objects with "wood" in name get wood material, "metal" get metal | N/A | 1 attempt |
+| `T2-06` | Frame camera on selection with DOF | VIEW_3D → PROPERTIES | Camera framed on selection, f-stop=2.8, focus on active | N/A | 1 attempt |
+| `T2-07` | Setup PBR material from description | NODE_EDITOR | "Glossy red plastic" → Principled BSDF with roughness=0.3, base=(0.8,0.1,0.1) | N/A | 1-2 attempts |
+| `T2-08` | Add movie strip with fade in/out | SEQUENCE_EDITOR | Movie strip added, 1s fade in, 1s fade out | N/A | 1 attempt |
+| `T2-09` | Scatter rocks on terrain | VIEW_3D → NODE_EDITOR | GN modifier added, points distributed, rock assets instanced | N/A | 1-2 attempts |
+| `T2-10` | Setup walk cycle on armature | VIEW_3D → DOPESHEET | 24-frame walk cycle with contact/down/passing/up poses | N/A | 2-3 attempts |
+
+#### T3 Benchmarks (Scene-Level Operations)
+
+| ID | Test | Editors | Expected Result | Current | Target |
+|----|------|---------|----------------|---------|--------|
+| `T3-01` | Cinematic look from scratch | VIEW_3D → PROPERTIES → NODE_EDITOR | Cycles, 1920×1080, three-point lights, camera DOF, compositor glare+balance+vignette | N/A | 1-2 attempts |
+| `T3-02` | Product shot setup | VIEW_3D → PROPERTIES | Backdrop, product lighting, 45° camera, 85mm, DOF, render settings | N/A | 1-2 attempts |
+| `T3-03` | Scene audit and optimize | ALL | Report of data-block counts, orphan data, material complexity, optimization suggestions | N/A | 1-2 attempts |
+| `T3-04` | Shot to master edit | VIEW_3D → SEQUENCE_EDITOR | Render viewport, add to VSE, position, add text overlay | N/A | 1-2 attempts |
+| `T3-05` | Character turntable setup | VIEW_3D → PROPERTIES → DOPESHEET | Empty at origin, camera parented, 360° over 120 frames, three-point lights, PNG output | N/A | 1-2 attempts |
+
+#### Multi-Editor Pathway Benchmarks
+
+| ID | Test | Pathway | Expected Result | Current | Target |
+|----|------|---------|----------------|---------|--------|
+| `ME-01` | Model → Shade | VIEW_3D(EDIT) → VIEW_3D(OBJECT) → NODE_EDITOR | Edit mesh, exit edit, create material, setup nodes | N/A | 1-2 attempts |
+| `ME-02` | Sculpt → Retopo → UV | VIEW_3D(SCULPT) → VIEW_3D(EDIT) → UV_EDITOR | Remesh, edit mode, unwrap, pack islands | N/A | 2-3 attempts |
+| `ME-03` | Animate → Render | VIEW_3D → DOPESHEET → PROPERTIES | Keyframe, tune curves, set render engine, set output | N/A | 1-2 attempts |
+| `ME-04` | Comp → VSE | NODE_EDITOR → VIEW_3D → SEQUENCE_EDITOR | Setup compositor, render, add to VSE | N/A | 1-2 attempts |
+| `ME-05` | Assets → Scene → Organize | ASSET_BROWSER → VIEW_3D → OUTLINER | Search assets, place in scene, organize outliner | N/A | 2-3 attempts |
+
+### 18.3 Per-Editor Benchmark Suites
+
+Each editor gets its own focused benchmark suite to validate template coverage:
+
+| Editor | # Benchmarks | Focus |
+|--------|-------------|-------|
+| VIEW_3D (OBJECT) | 10 | Primitives, modifiers, materials, lighting, camera, organization |
+| VIEW_3D (EDIT_MESH) | 8 | Extrude, bevel, loop cut, subdivide, merge, bridge, normals, separate |
+| VIEW_3D (SCULPT) | 4 | Remesh, dyntopo, mask, face sets |
+| NODE_EDITOR (Shader) | 8 | PBR, glass, emission, SSS, noise, voronoi, image texture, organize |
+| NODE_EDITOR (Geometry) | 6 | Scatter, instance, boolean, array, curve to mesh, capture attribute |
+| NODE_EDITOR (Compositor) | 6 | Glare, color balance, lens distortion, blur, vignette, cinematic |
+| SEQUENCE_EDITOR | 6 | Movie strip, sound strip, split, trim, transition, speed |
+| DOPESHEET_EDITOR | 5 | Keyframe, interpolation, modifier, bake, NLA |
+| UV_EDITOR | 4 | Unwrap, pack, stitch, align |
+| TEXT_EDITOR | 6 | Addon skeleton, operator, panel, modal, bmesh, IO script |
+| OUTLINER | 5 | Sort, rename, color tag, group, purge |
+
+**Total: ~68 per-editor benchmarks + 20 tier benchmarks + 5 pathway benchmarks = ~93 benchmarks**
+
+### 18.4 Development Roadmap: Branches & Milestones
+
+#### Tier 3g Scope (This Release — 1-2 Months)
+
+Tier 3g ships the orchestrator, static templates, operator UI, and benchmarks. The recorder/macro system is deferred to Tier 4e.
+
+#### Milestone A: Foundation (Tier 3g-A) — "The Wires Connect"
+
+**Branch**: `tier3g-a-foundation`
+**Duration**: 1-2 weeks
+**Goal**: Wire existing modules, context probe, editor scoping
+
+| Task | File(s) | Est. |
+|------|---------|------|
+| Wire autofix into execute_blender_code | `mcp_to_blender_server.py` | 1h |
+| Add template metadata to existing 17 templates | `blender_templates.py` | 1h |
+| Create `_probe_context()` in bridge server | `mcp_to_blender_server.py` | 2h |
+| Add context injection to system prompt | `agent_controller.py` | 1h |
+| Create editor → tool mapping registry | `editor_context.py` (new) | 3h |
+| Filter tool list by editor context | `agent_controller.py` | 2h |
+| Add `get_editor_context` MCP tool | `mcp/blmcp/tools/` | 1h |
+| Tests for all of the above | `tests/` | 3h |
+
+**Deliverable**: Model sees 5-8 tools instead of 30+. Context is injected automatically.
+
+#### Milestone B: Template Core (Tier 3g-B) — "The Library Opens"
+
+**Branch**: `tier3g-b-templates`
+**Duration**: 2-3 weeks
+**Goal**: Build out the P0 template library (~80 templates), asset-aware
+
+| Task | File(s) | Est. |
+|------|---------|------|
+| T1 templates: Edit Mode (20) | `plugins/core/edit_mesh.py` | 4h |
+| T1 templates: Primitives (9) | `plugins/core/primitives.py` | 2h |
+| T1 templates: Modifiers (12) | `plugins/core/modifiers.py` | 3h |
+| T2 templates: Shader Editor (18) | `plugins/core/materials.py` | 4h |
+| T2 templates: Outliner (12) | `plugins/core/outliner.py` | 3h |
+| T2 templates: Lighting (8) | `plugins/core/lighting.py` | 2h |
+| T2 templates: Camera (6) | `plugins/core/camera.py` | 2h |
+| T2 templates: Animation (16) | `plugins/core/animation.py` | 4h |
+| T2 templates: Rendering (10) | `plugins/core/rendering.py` | 3h |
+| T2 templates: Compositor (14) | `plugins/core/compositing.py` | 3h |
+| Asset bridge templates (apply GN/shader/comp assets) | `plugins/core/assets.py` | 3h |
+| T3 chains: cinematic, product, archviz, turntable, audit | `orchestrator.py` | 3h |
+| Template tests (all 80+) | `tests/test_templates.py` | 6h |
+
+**Deliverable**: 80+ tested templates covering P0 documentation areas. Asset-aware planning.
+
+#### Milestone C: Orchestrator (Tier 3g-C) — "The Brain"
+
+**Branch**: `tier3g-c-orchestrator`
+**Duration**: 2-3 weeks
+**Goal**: Full orchestrator pipeline with tier-aware planning
+
+| Task | File(s) | Est. |
+|------|---------|------|
+| Intent classifier with keyword + regex | `orchestrator.py` | 3h |
+| Plan builder (model-assisted template selection) | `orchestrator.py` | 4h |
+| Plan validator (params, modes, tiers, data-blocks) | `orchestrator.py` | 3h |
+| Template chain composer (TEMPLATE_CHAINS) | `orchestrator.py` | 2h |
+| Execution engine (render → autofix → preflight → exec) | `orchestrator.py` | 4h |
+| Fallback ladder implementation | `orchestrator.py` | 2h |
+| Undo management (push before destructive) | `orchestrator.py` | 1h |
+| Mode auto-switching between plan steps | `orchestrator.py` | 2h |
+| Tier composition rules enforcement | `orchestrator.py` | 2h |
+| Multi-editor pathway resolution | `orchestrator.py` | 4h |
+| Editor switching protocol | `orchestrator.py` | 2h |
+| Asset-aware planning (prefer assets over code templates) | `orchestrator.py` | 2h |
+| Orchestrator tests | `tests/test_orchestrator.py` | 4h |
+
+**Deliverable**: Full orchestrator pipeline. Model describes intent, server executes.
+
+#### Milestone D: Operator UI (Tier 3g-D) — "The Buttons"
+
+**Branch**: `tier3g-d-operators`
+**Duration**: 1-2 weeks
+**Goal**: Contextual operator buttons in menus and sidebar
+
+| Task | File(s) | Est. |
+|------|---------|------|
+| Operator base class + registration | `operators/__init__.py` | 2h |
+| Organize operators | `operators/coworker_organize.py` | 2h |
+| Mesh operators | `operators/coworker_mesh.py` | 2h |
+| Material operators | `operators/coworker_material.py` | 2h |
+| Lighting operators | `operators/coworker_lighting.py` | 2h |
+| Camera operators | `operators/coworker_camera.py` | 2h |
+| Scene operators | `operators/coworker_scene.py` | 2h |
+| Node operators | `operators/coworker_nodes.py` | 2h |
+| Animation operators | `operators/coworker_animation.py` | 2h |
+| Render operators | `operators/coworker_render.py` | 2h |
+| Text Editor operators | `operators/coworker_text_editor.py` | 2h |
+| Contextual sidebar panel | `ui_sidebar.py` (new) | 3h |
+| Context menu extensions | `ui_context_menu.py` (new) | 2h |
+| Menu integration (Object, Mesh, Add, Render, Node, etc.) | `__init__.py` | 3h |
+
+**Deliverable**: One-click buttons for 60% of common tasks. Contextual sidebar.
+
+#### Milestone E: Benchmarks & Polish (Tier 3g-E) — "The Proof"
+
+**Branch**: `tier3g-e-benchmarks`
+**Duration**: 1-2 weeks
+**Goal**: Comprehensive benchmark suite, documentation, release prep
+
+| Task | File(s) | Est. |
+|------|---------|------|
+| T1 benchmarks (8 tests) | `tests/benchmarks/` | 2h |
+| T2 benchmarks (10 tests) | `tests/benchmarks/` | 3h |
+| T3 benchmarks (5 tests) | `tests/benchmarks/` | 2h |
+| Multi-editor pathway benchmarks (5 tests) | `tests/benchmarks/` | 2h |
+| Per-editor benchmarks (68 tests) | `tests/benchmarks/` | 8h |
+| Benchmark runner + reporting | `tests/run_benchmarks.py` | 3h |
+| Plugin developer documentation | `docs/plugins.md` | 3h |
+| User guide updates | Wiki | 4h |
+| Release notes | `CHANGELOG.md` | 2h |
+
+**Deliverable**: 93 benchmarks passing. Full documentation. Release-ready.
+
+### 18.5 Milestone Dependency Graph
+
+```
+Milestone A (Foundation)
+    ↓
+Milestone B (Templates) ←── Can start in parallel with A's later tasks
+    ↓                         ↑
+Milestone C (Orchestrator)    Tier 3d (Asset Browser) — complete before B
+    ↓
+┌───────────┬───────────┐
+↓           ↓           ↓
+Milestone D  Milestone E  (parallel)
+(Operators)  (Benchmarks)
+│           │
+└───────────┘
+    ↓
+Release Tier 3g
+    ↓
+Tier 4e: Recorder & Macros (deferred)
+```
+
+Milestones D and E can run in parallel after C is complete.
+
+### 18.6 Total Estimated Effort (Tier 3g)
+
+| Milestone | Weeks | New Files | Modified Files |
+|-----------|-------|-----------|----------------|
+| A: Foundation | 1-2 | 1 | 3 |
+| B: Templates | 2-3 | 15 | 2 |
+| C: Orchestrator | 2-3 | 1 | 2 |
+| D: Operators | 1-2 | 12 | 2 |
+| E: Benchmarks | 1-2 | 20+ | 2 |
+| **Total Tier 3g** | **7-12 weeks** | **49+** | **11** |
+
+### 18.7 Deferred to Tier 4
+
+| Item | Target Tier | Rationale |
+|------|------------|-----------|
+| Full Action Recorder (Before/After diff, monkey-patching, modal recording) | **Tier 4e** | Complex subsystem, depends on stable orchestrator |
+| Macro Library (save/load/index, user macros as plugins) | **Tier 4e** | Depends on recorder |
+| "Teach Me" workflow | **Tier 4e** | Depends on recorder + macro library |
+| LLM-assisted macro refinement | **Tier 4e** | Depends on macro library |
+| Macro marketplace | **Tier 5** | Community feature, needs critical mass |
+| Plugin community marketplace | **Tier 5** | Community feature |
+| Full Grease Pencil templates | **Tier 4** | Lower priority, needs GP-specific testing |
+| Full Motion Tracking templates | **Tier 4** | Lower priority, niche use case |
+| Procedural generator assets (architecture, landscape, vehicles, characters, flora/fauna) | **Tier 4-5** | These are asset creation tasks, not template tasks. The orchestrator will *use* them once they exist. |
+
+### 18.8 Tier 3g Release Criteria
+
+To ship Tier 3g, the following must be true:
+
+1. ✅ Model sees 5-8 tools per editor (not 30+)
+2. ✅ Context is injected automatically (editor, mode, selection, scene summary)
+3. ✅ 80+ templates covering P0 documentation areas
+4. ✅ Orchestrator pipeline: intent → plan → validate → execute → report
+5. ✅ Fallback ladder: template chain → single template → raw code → doc search → clarify
+6. ✅ Tier composition rules enforced (T1+T1→T2, T2+T2→T3, T3 is terminal)
+7. ✅ Multi-editor pathways resolved automatically
+8. ✅ Asset-aware planning (prefer assets over code templates when available)
+9. ✅ Contextual operator buttons in sidebar and menus
+10. ✅ 93 benchmarks passing
+11. ✅ First-attempt success rate ≥ 80% on T1/T2 benchmarks
+12. ✅ First-attempt success rate ≥ 60% on T3 benchmarks
+
+---
+
+## 20. Implementation Plan
 
 ### Phase 1: Wire Auto-fix + Templates (1-2 hours) — Foundation
 
@@ -1508,7 +2596,7 @@ Priority templates to add (in order):
 
 ---
 
-## 16. Technical Feasibility Review
+## 21. Technical Feasibility Review
 
 ### 16.1 Can Local Models Actually Do This?
 
@@ -1568,7 +2656,7 @@ The orchestrator doesn't make the model smarter. It makes the task easier. And t
 
 ---
 
-## 17. Success Criteria
+## 22. Success Criteria
 
 ### 17.1 Benchmark Tests
 

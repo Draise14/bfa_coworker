@@ -132,6 +132,9 @@ _TOOL_TEST_ARGS: dict[str, dict[str, Any]] = {
     # ── Assets ──────────────────────────────────────────────────────
     "get_asset_libraries": {},
     "jump_to_asset_browser": {"allow_edits": False},
+
+    # ── Collections ─────────────────────────────────────────────────
+    "set_collection_color_tag": {"collection_name": "Collection", "color": "COLOR_01"},
 }
 
 
@@ -153,6 +156,7 @@ _TOOL_EXPECTED_FAILURES: dict[str, str] = {
     "render_viewport_to_path": "requires a valid output path",
     "download_polyhaven_asset": "requires a valid asset_id",
     "jump_to_asset_browser": "may fail if no Asset Browser is open (allow_edits=False)",
+    "set_collection_color_tag": "may fail if 'Collection' doesn't exist",
 }
 
 

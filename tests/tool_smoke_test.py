@@ -132,6 +132,9 @@ _TOOL_TEST_ARGS: dict[str, dict[str, Any]] = {
     # ── Assets ──────────────────────────────────────────────────────
     "get_asset_libraries": {},
     "jump_to_asset_browser": {"allow_edits": False},
+    "get_node_group_interface": {"group_name": ""},
+    "get_active_node_tree": {"tree_type": "ShaderNodeTree"},
+    "wire_node_group": {"asset_name": ""},
 
     # ── Collections ─────────────────────────────────────────────────
     "set_collection_color_tag": {"collection_name": "Collection", "color": "COLOR_01"},
@@ -157,6 +160,9 @@ _TOOL_EXPECTED_FAILURES: dict[str, str] = {
     "download_polyhaven_asset": "requires a valid asset_id",
     "jump_to_asset_browser": "may fail if no Asset Browser is open (allow_edits=False)",
     "set_collection_color_tag": "may fail if 'Collection' doesn't exist",
+    "get_node_group_interface": "requires a loaded node group",
+    "get_active_node_tree": "may fail if no active material/compositor/GN exists",
+    "wire_node_group": "requires a valid asset_name",
 }
 
 

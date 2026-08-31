@@ -359,6 +359,9 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "jump_to_view3d_object_by_name",
         "jump_to_view3d_object_data_by_name",
         "get_screenshot_of_area_as_image",
+        "get_active_node_tree",
+        "get_node_group_interface",
+        "wire_node_group",
     }),
     "assets": frozenset({
         "search_assets",
@@ -371,6 +374,9 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "assign_material_to_objects",
         "place_asset_in_scene",
         "jump_to_asset_browser",
+        "get_active_node_tree",
+        "get_node_group_interface",
+        "wire_node_group",
     }),
 }
 

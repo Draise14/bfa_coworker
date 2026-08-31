@@ -104,7 +104,15 @@ The existing tools work but have gaps that prevent the "smart" behavior describe
 
 ---
 
-## Phase 2B: Node-Group Intelligence - Inspection + Wiring (~450 LOC, 7 files)
+## Phase 2B: Node-Group Intelligence - Inspection + Wiring (~450 LOC, 7 files) - Done (commits `6988178`+`ce6d343` plan, tools landed in one commit)
+
+> **Status**: Implemented. Tools: `get_active_node_tree`, `get_node_group_interface`,
+> `wire_node_group` (insert modes `add_top_level` / `replace_active` /
+> `insert_between` / `connect_to_output`, deterministic socket auto-mapping
+> with exact → fuzzy → compatible-type order, undo push before mutation).
+> Registered in the `assets` + `geometry_nodes` domains, documented in
+> `skills/asset_browser.md` (incl. asset-author socket-naming conventions).
+> A live-Bender smoke run is still the final gate (`--filter get_node_group_interface,get_active_node_tree,wire_node_group`).
 
 Node-group assets are the hardest asset type to apply. Unlike a material (assign to a slot) or an object (link to the scene), a node group is only useful when it is wired into an existing node tree - often mid-chain, *between* two nodes - and its interface (input/output sockets) must be mapped to the tree at the wire points. Dumping a group at `(0,0)` unconnected (Phase 2 behavior) is a dead end users notice immediately.
 

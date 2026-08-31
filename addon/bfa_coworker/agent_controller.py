@@ -368,6 +368,7 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "load_asset_in_context",
         "download_polyhaven_asset",
         "search_polyhaven_assets",
+        "assign_material_to_objects",
     }),
 }
 
@@ -404,6 +405,7 @@ _DOMAIN_KEYWORDS: dict[str, list[str]] = {
     "assets": [
         "asset", "library", "catalog", "browse", "import asset",
         "append", "link asset", "asset browser",
+        "preset", "template", "stock", "material library",
     ],
 }
 

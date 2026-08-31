@@ -160,6 +160,7 @@ _DOMAIN_SKILL_MAP: dict[str, list[str]] = {
     "rendering": ["rendering.md"],
     "vse": [],
     "geometry_nodes": ["modifiers.md"],
+    "assets": ["asset_browser.md"],
 }
 
 

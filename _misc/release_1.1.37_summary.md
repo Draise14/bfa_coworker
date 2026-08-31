@@ -17,6 +17,13 @@ This release brings **major UX improvements**, **power-user tools**, and **perfo
 - Server port auto-selects when configured port is busy
 - Markdown rendering in chat: code blocks with copy buttons, tables, headings, lists, bold/italic
 
+### 🛡️ **MCP Intent Architecture** (Tier 3g)
+- **Preflight code validation** — 27 regex checks catch common LLM mistakes *before* execution (wrong Blender 5.3 APIs, missing imports, hallucinated modules, bpy.ops in loops, etc.) with targeted guidance
+- **18 pre-tested Blender 5.3 templates** — `execute_blender_plan` two-phase tool (plan → tested code) + `list_blender_templates` discovery
+- **Auto-correction module** — silently rewrites common LLM mistakes (lamps→lights, EEVEE→BLENDER_EEVEE, fcurves→keyframe_insert, etc.)
+- **Spiral detection hardened** — breaks error loops after 2 (was 3) identical errors with API-specific corrective hints
+- **Bundled API docs always available** — `get_python_api_docs` / `search_api_docs` / `search_manual_docs` loaded as surface tools
+- **llama-server management** — Remove/Open Folder operators, Bundled/Custom source toggle, build-number validation, CUDA DLL extraction
 
 ### 🎯 **Message Queue System**
 Never lose a message again! If the Coworker is busy processing, your message is automatically queued and processed when ready. See queue status with the new Queue UI.

@@ -124,6 +124,12 @@ class _TeeStream:
     def __init__(self, original) -> None:
         self._original = original
         self._buf = ""
+        # True when the previous write() was a suppressed addon line that
+        # did not end with a newline. print() emits the payload and the
+        # trailing newline as two separate write() calls, so the bare
+        # newline chunk (no prefix) belongs to that suppressed line and
+        # must be swallowed too (otherwise blank console lines appear).
+        self._pending_suppressed_newline = False
 
     def write(self, data: str) -> int:
         # Buffer and flush complete lines to the log.
@@ -138,6 +144,10 @@ class _TeeStream:
         if self._buf.strip():
             write(self._buf.strip())
             self._buf = ""
+        if self._pending_suppressed_newline and not data.strip():
+            # Trailing newline of a suppressed line: swallow it.
+            self._pending_suppressed_newline = False
+            return len(data)
         # Pass through to the real console, but skip this addon's routine
         # [Coworker] diagnostics when console suppression is active
         # (debug mode OFF). Warnings/errors always pass through, as does
@@ -147,6 +157,9 @@ class _TeeStream:
                 self._original.write(data)
             except Exception:  # pylint: disable=broad-exception-caught
                 pass
+            self._pending_suppressed_newline = False
+        else:
+            self._pending_suppressed_newline = not data.endswith("\n")
         return len(data)
 
     def flush(self) -> None:

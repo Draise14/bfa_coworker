@@ -88,6 +88,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Console Stays Clean (No More Blank Lines, No Agent Talk)** - With Debug Mode OFF, the
+  Blender console now works like the stock Bforartists console again. Root cause of the stray
+  empty lines: `print("[Coworker] ...")` writes two separate chunks - the prefixed message
+  (suppressed) and a trailing bare newline (which has no prefix, so it leaked through as a
+  blank line). The output tee now remembers the last suppressed addon line and swallows its
+  trailing newline chunk too. Also swept the last un-prefixed addon prints: the Agent auto-start
+  diagnostics in `__init__.py` now carry the `[🛠️Coworker]` prefix (log-only when debug is OFF),
+  with the MCP-server-failure line promoted to `[⚠️Coworker]` so real problems still surface
+  on screen. Warnings/errors always pass through; Blender's own messages and other addons are
+  untouched. Debug Mode ON still shows everything. New `tests/test_log_suppression.py` (11 tests)
+  covers the classifier and the newline-swallowing behavior.
+
 - **Workspace-Tab Tools Now Work Through the Harness** - `jump_to_tab_by_name` /
   `jump_to_tab_by_space_type` (and every other window/context-dependent tool: asset-browser
   jump, viewport jumps, screenshots) returned "No active window" (or crashed) whenever called

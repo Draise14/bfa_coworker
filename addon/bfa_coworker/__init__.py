@@ -231,10 +231,10 @@ def _autostart_agent_timer() -> None:
     # In External Harness mode, only the bridge server is needed.
     # The MCP server and LLM are managed externally.
     if prefs.operating_mode == "EXTERNAL_HARNESS":
-        print("Agent auto-start: External Harness mode — bridge only")
+        print("[🛠️Coworker] Agent auto-start: External Harness mode — bridge only")
         return
 
-    print("Agent auto-start: using ports bridge={:d} mcp={:d} llm={:d}".format(
+    print("[🛠️Coworker] Agent auto-start: using ports bridge={:d} mcp={:d} llm={:d}".format(
         _bridge_port, _mcp_port, _llm_port))
 
     # Start the MCP HTTP server.
@@ -242,7 +242,7 @@ def _autostart_agent_timer() -> None:
     if not _ac._agent_state.mcp_server_running:
         proc = _ac.start_mcp_server(port=_mcp_port, blender_port=_bridge_port)
         if proc is None:
-            print("Agent auto-start: MCP server failed — {:s}".format(_ac._agent_state.error))
+            print("[⚠️Coworker] Agent auto-start: MCP server failed — {:s}".format(_ac._agent_state.error))
             return
 
     # Start local LLM if configured.
@@ -278,7 +278,7 @@ def _autostart_agent_timer() -> None:
         _llm_cfg.remote_model = prefs.remote_model
         _llm.set_config(_llm_cfg)
 
-    print("Agent auto-start: full agent running on ports bridge={:d} mcp={:d} llm={:d}".format(
+    print("[🛠️Coworker] Agent auto-start: full agent running on ports bridge={:d} mcp={:d} llm={:d}".format(
         _bridge_port, _mcp_port, _llm_port))
 
 

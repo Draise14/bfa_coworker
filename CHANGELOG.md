@@ -88,6 +88,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Harness Step 3: Chat-Paste Hint** - The external-harness wizard now shows a per-client tip in
+  Step 3 (Paste into your client) telling you when you can paste the config directly into the
+  client's chat/MCP settings instead of editing a config file: Windsurf (Cascade chat), Claude
+  Code (/mcp), Cline (Paste Configuration), Cursor (MCP Servers settings), Codex/OpenCode
+  (`mcp add` commands), and a note that Claude Desktop is file-only.
+
 - **Harness CLI Tools Find Bforartists** - `execute_blender_code_for_cli` and friends
   failed with "Blender executable not found at 'blender'" because generated harness
   configs never set `BLENDER_PATH`, so the CLI fell back to a literal `blender` on

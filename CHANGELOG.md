@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Asset Tool Unit Tests (Tier 3d Phase 5)** — New `tests/test_asset_tools.py` with 43 unit tests for the asset + node-group toolcodes, run via a synthetic `bpy` stub (no Blender needed): `search_assets` name/tag/description matching and type/library filters; `load_asset_in_context` across all six asset types with append-vs-link, positioning, material-slot handling, and editor-aware node groups; `wire_node_group` all four insert modes, undo push, and deterministic socket auto-mapping (exact name → fuzzy → compatible type, incl. type validation and `auto_map=False`); `get_node_group_interface` (new + legacy API); `get_active_node_tree` resolution and serialization. Also added the missing asset-tool args to `tool_smoke_test.py` (`list_asset_catalogs`, `search_assets`, `get_asset_tags`, `load_asset_in_context`, `assign_material_to_objects`, `place_asset_in_scene`).
+
 - **Asset-First System Prompt (Tier 3d Phase 4)** — The "Asset-First Workflow" section in `prompts.yml` was rewritten to bias the agent toward using the MCP asset tools: a decision tree (search `get_asset_libraries`/`list_asset_catalogs`/`search_assets`/`get_asset_tags` before creating anything, then Poly Haven, then from-scratch), link-vs-append-vs-instance guidance, contextual node-group wiring guidance (`get_node_group_interface`/`get_active_node_tree`/`wire_node_group`), and object/collection placement via `place_asset_in_scene`/`jump_to_asset_browser`.
 
 - **Node-Group Intelligence Tools (Tier 3d Phase 2B)** — Three new MCP tools that make node-group assets actually usable:

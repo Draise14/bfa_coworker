@@ -131,6 +131,12 @@ _TOOL_TEST_ARGS: dict[str, dict[str, Any]] = {
 
     # ── Assets ──────────────────────────────────────────────────────
     "get_asset_libraries": {},
+    "list_asset_catalogs": {"library_name": ""},
+    "search_assets": {"query": "brick"},
+    "get_asset_tags": {"library_name": "", "asset_name": ""},
+    "load_asset_in_context": {"library_name": "", "asset_name": ""},
+    "assign_material_to_objects": {"material_name": ""},
+    "place_asset_in_scene": {"library_name": "", "asset_name": ""},
     "jump_to_asset_browser": {"allow_edits": False},
     "get_node_group_interface": {"group_name": ""},
     "get_active_node_tree": {"tree_type": "ShaderNodeTree"},
@@ -163,6 +169,12 @@ _TOOL_EXPECTED_FAILURES: dict[str, str] = {
     "get_node_group_interface": "requires a loaded node group",
     "get_active_node_tree": "may fail if no active material/compositor/GN exists",
     "wire_node_group": "requires a valid asset_name",
+    "list_asset_catalogs": "may fail if no asset libraries are configured",
+    "search_assets": "may fail if no asset libraries are configured",
+    "get_asset_tags": "requires a valid asset in a library",
+    "load_asset_in_context": "requires a valid asset in a library",
+    "assign_material_to_objects": "requires a loaded material",
+    "place_asset_in_scene": "requires a valid asset in a library",
 }
 
 

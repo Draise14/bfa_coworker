@@ -508,14 +508,24 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
 
 
     # 15. Creating objects in a loop without checking what exists first.
-    # 15. Creating objects in a loop without checking what exists first.
-    creates_in_loop = ("for " in code or "while " in code) and "primitive_" in code
-    if creates_in_loop and "bpy.data.objects.get" not in code:
+    #     Loops over primitive_* operators are fine -- Blender
+    #     auto-uniquifies names (Torus, Torus.001, ...), and one-shot
+    #     scene building in a loop is legitimate. The real duplicate
+    #     hazard is data-level creation (bpy.data.objects.new) with the
+    #     SAME literal name on every iteration: repeated runs silently
+    #     accumulate objects. Only flag that case, and only when the loop
+    #     neither guards with get() nor derives a unique name per
+    #     iteration.
+    creates_in_loop = ("for " in code or "while " in code) and "objects.new(" in code
+    if creates_in_loop and "bpy.data.objects.get" not in code \
+            and 'name=f"' not in code and "name=f'" not in code:
         issues.append((
             "no_existence_check",
-            "Creating objects in a loop without checking what exists. "
-            "Use bpy.data.objects.get('Name') to check first, or "
-            "the system will undo failed attempts and duplicates may persist.",
+            "Creating objects in a loop with bpy.data.objects.new(...) "
+            "without checking what exists. Give each iteration a unique "
+            "name (name=f'item_{i}') or guard with "
+            "bpy.data.objects.get('Name') first, so repeated runs don't "
+            "silently accumulate duplicates.",
         ))
 
 

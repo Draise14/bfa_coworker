@@ -435,7 +435,7 @@ _HARNESS_PRESETS: list[HarnessPreset] = [
         ],
         docs_url="https://github.com/sst/opencode",
         notes="OpenCode supports 75+ LLM providers. Point it at any OpenAI-compatible endpoint.",
-        chat_paste_hint="OpenCode: use `opencode mcp add` in a terminal - there is no chat-paste flow.",
+        chat_paste_hint="OpenCode: paste the config into the OpenCode TUI - it configures the MCP server automatically (or use `opencode mcp add` in a terminal).",
     ),
     HarnessPreset(
         identifier="generic",

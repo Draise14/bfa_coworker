@@ -670,6 +670,7 @@ class AgentState:
     thinking_start_time: float = 0.0  # Timestamp when thinking started (for elapsed timer)
     status_text: str = "Idle"
     error: str = ""
+    error_full: str = ""  # Untruncated error text (for copy-to-clipboard troubleshooting)
     tool_count: int = 0  # Number of MCP tools available (0 = not loaded yet)
     conversation_history: list[dict[str, Any]] = field(default_factory=list)
     streaming_text: str = ""
@@ -2093,9 +2094,11 @@ def _openai_chat_completions(
                 print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — {:s}".format(str(ex)))
                 print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_error_body[:500]))
                 _agent_state.error = "LLM request failed: {:s}".format(_error_body[:500])
+                _agent_state.error_full = "LLM request failed: {:s}".format(_error_body)
             else:
                 print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — {:s}".format(str(ex)))
                 _agent_state.error = "LLM request failed: {:s}".format(str(ex))
+                _agent_state.error_full = "LLM request failed: {:s}".format(str(ex))
             return None
     return None
 
@@ -3015,7 +3018,8 @@ def export_session_log(auto_saved: bool = False) -> None:
 # Error signatures.
     lines.append("--- Error Info ---")
     if _agent_state.error:
-        lines.append("Current error: {:s}".format(str(_agent_state.error)))
+        lines.append("Current error: {:s}".format(
+            _agent_state.error_full or str(_agent_state.error)))
     lines.append("")
 
     # LLM server log tail.

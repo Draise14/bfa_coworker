@@ -310,7 +310,16 @@ def main() -> int:
                 info.compress_type = _zf.ZIP_DEFLATED
                 zout.writestr(info, data)
     # Replace the original zip with the repacked one.
-    os.replace(repacked_path, zip_path)
+    # On Windows, os.replace() may fail if the zip is locked
+    # (Explorer preview, antivirus, etc.). Remove first, then rename.
+    try:
+        os.replace(repacked_path, zip_path)
+    except PermissionError:
+        import time as _time
+        _time.sleep(1.0)
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+        os.rename(repacked_path, zip_path)
     print("Repacked: {:s} (top-level folder: {:s}/)".format(zip_path, ext_id))
 
     # Step 2: Install (optional).

@@ -1806,6 +1806,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 if preset is not None and preset.config_path_help:
                     for line in preset.config_path_help.split("\n"):
                         step3.label(text=line, icon='FILE_FOLDER')
+                if preset is not None and preset.chat_paste_hint:
+                    step3.label(
+                        text="Tip: {:s}".format(preset.chat_paste_hint),
+                        icon='INFO',
+                    )
                 row = step3.row(align=True)
                 op2 = row.operator("bfacw.open_config_folder", icon="FILE_FOLDER", text="Open Config Folder")
                 op2.preset_id = self.harness_preset

@@ -274,6 +274,64 @@ _TEMPLATES = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Template metadata — prepared for Tier 4 (per-editor registries, CHOYA
+# next-step buttons, contextual panels).
+
+# Editor identifiers use the same values as bpy.types.Area.type.
+_TEMPLATE_META: dict[str, dict[str, object]] = {
+    "create_torus":        {"tier": 1, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": True, "is_destructive": False, "chainable": True},
+    "create_cube":         {"tier": 1, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": True, "is_destructive": False, "chainable": True},
+    "create_uv_sphere":    {"tier": 1, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": True, "is_destructive": False, "chainable": True},
+    "create_cylinder":     {"tier": 1, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": True, "is_destructive": False, "chainable": True},
+    "create_plane":        {"tier": 1, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": True, "is_destructive": False, "chainable": True},
+    "add_material":        {"tier": 1, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": True, "is_destructive": False, "chainable": True},
+    "smooth_shade":        {"tier": 1, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": True},
+    "auto_smooth":         {"tier": 2, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": True},
+    "add_subsurf":         {"tier": 1, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": True},
+    "add_array":           {"tier": 2, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": True},
+    "add_bevel":           {"tier": 2, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": True},
+    "add_solidify":        {"tier": 2, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": True},
+    "add_smooth":          {"tier": 2, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": True},
+    "add_remesh":          {"tier": 2, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": False},
+    "set_render_engine":   {"tier": 1, "editor": "PROPERTIES", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": False},
+    "setup_camera":        {"tier": 2, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": True, "is_destructive": False, "chainable": True},
+    "keyframe_location":   {"tier": 1, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": True},
+    "keyframe_rotation":   {"tier": 1, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": True},
+}
+
+def get_templates_for_editor(editor: str, mode: str = "OBJECT") -> list[str]:
+    """Return template names valid for an editor (and optional mode).
+
+    *editor* uses the same value as ``bpy.types.Area.type`` (e.g. "VIEW_3D",
+    "NODE_EDITOR"). Templates with no editor restriction return for every
+    query. Unknown editors return an empty list.
+    """
+    result = []
+    for name, meta in _TEMPLATE_META.items():
+        if meta.get("editor") == editor and (not mode or meta.get("mode") == mode):
+            result.append(name)
+    return sorted(result)
+
+
 def _render_template(name, params=None):
     """Render a named template with given parameters."""
     tmpl = _TEMPLATES.get(name)

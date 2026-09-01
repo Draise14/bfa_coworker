@@ -723,6 +723,16 @@ def _execute_code(
             # A Python-level exception from stale layer-collection data
             # is always preferable to an unrecoverable C-level segfault.
 
+            # Auto-fix common LLM mistakes (lamps -> lights, EEVEE ->
+            # BLENDER_EEVEE, subdivisions -> levels, ...) BEFORE preflight so
+            # corrected code passes validation instead of being rejected.
+            # Repository-controlled toolcode is skipped: it is already correct.
+            if "# blmcp-toolcode-skip-preflight" not in code:
+                from .autofix import _autofix_code
+                code, _fixes = _autofix_code(code)
+                if _fixes:
+                    print("[🛠️Coworker] autofix applied: {:s}".format(", ".join(_fixes)))
+
             # Preflight: validate code before execution. Toolcode-generated
             # payloads (marked by the MCP tools) are repository-controlled and
             # legitimately contain literal patterns the LLM-oriented checks

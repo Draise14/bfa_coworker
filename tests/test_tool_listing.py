@@ -623,7 +623,8 @@ EXPECTED_TOOLS = [
 "        Check whether the Poly Haven API is accessible.\n"
 "\n"
 "        Returns:\n"
-"            A status message indicating API availability and asset counts.\n"
+"            A dict with ``status`` and a ``message`` describing API\n"
+"            availability and asset counts (consistent with other tools).\n"
 "        ",
         "inputSchema": {
             "properties": {},

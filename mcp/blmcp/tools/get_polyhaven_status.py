@@ -29,12 +29,13 @@ def register(mcp: FastMCP) -> None:
             readOnlyHint=True,
         )
     )
-    def get_polyhaven_status() -> str:
+    def get_polyhaven_status() -> dict[str, object]:
         """
         Check whether the Poly Haven API is accessible.
 
         Returns:
-            A status message indicating API availability and asset counts.
+            A dict with ``status`` and a ``message`` describing API
+            availability and asset counts (consistent with other tools).
         """
         try:
             req = urllib.request.Request(
@@ -45,9 +46,9 @@ def register(mcp: FastMCP) -> None:
                 data = json.loads(resp.read().decode())
             hdri_count = len(data) if data else 0
         except (urllib.error.URLError, json.JSONDecodeError) as ex:
-            return "Poly Haven API is not accessible: {:s}".format(str(ex))
+            return {"status": "error", "message": "Poly Haven API is not accessible: {:s}".format(str(ex))}
 
-        return (
+        message = (
             "Poly Haven API is accessible.\n"
             "  - HDRIs: {:d}+ available\n"
             "  - Textures: thousands available (full PBR maps)\n"
@@ -63,3 +64,4 @@ def register(mcp: FastMCP) -> None:
             "Use `search_polyhaven_assets` to find assets, "
             "and `download_polyhaven_asset` to download and import them."
         ).format(hdri_count)
+        return {"status": "ok", "message": message}

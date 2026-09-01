@@ -77,17 +77,12 @@ def register(mcp: FastMCP) -> None:
         Templates are pre-tested for Blender 5.3 and auto-correct common
         mistakes.  Use this instead of execute_blender_code when possible.
         """
-        # Import the plan-to-code converter from the addon server.
-        # It lives in the addon's mcp_to_blender_server module.
-        import importlib
+        # Import the plan-to-code converter from the addon's
+        # blender_templates module.
         try:
-            from bfa_coworker.mcp_to_blender_server import _plan_to_code, _render_template, _TEMPLATES
+            from bfa_coworker.blender_templates import _plan_to_code, _render_template, _TEMPLATES
         except ImportError:
-            # Fallback: generate code directly from the template registry.
-            return send_code(
-                _generate_plan_code(steps),
-                strict_json=False,
-            )
+            return {"status": "error", "message": "Template system unavailable in the connected Blender addon."}
         code = _plan_to_code(steps)
         return send_code(code, strict_json=False)
 
@@ -106,7 +101,7 @@ def register(mcp: FastMCP) -> None:
         API pitfalls automatically.
         """
         try:
-            from bfa_coworker.mcp_to_blender_server import _TEMPLATES, _TEMPLATE_DEFAULTS
+            from bfa_coworker.blender_templates import _TEMPLATES, _TEMPLATE_DEFAULTS
         except ImportError:
             return {"status": "error", "message": "Template registry not available"}
         templates = {}

@@ -52,6 +52,21 @@ def _load_preflight():
 _preflight_check = _load_preflight()
 
 
+def _load_autofix():
+    """Load _autofix_code from autofix.py (standalone, no bpy)."""
+    import importlib.util
+    import types
+    src_path = os.path.join(_ADDON_DIR, "bfa_coworker", "autofix.py")
+    with open(src_path, "r", encoding="utf-8") as fh:
+        source = fh.read()
+    mod = types.ModuleType("autofix_under_test")
+    exec(compile(source, src_path, "exec"), mod.__dict__)
+    return mod._autofix_code
+
+
+_autofix_code = _load_autofix()
+
+
 class TestPreflightCheck(unittest.TestCase):
     """Tests for _preflight_check()."""
 
@@ -594,6 +609,49 @@ for obj in bpy.data.objects:
         issues = _preflight_check(code)
         names = [name for name, _ in issues]
         self.assertNotIn("no_existence_check", names)
+
+class TestAutofixBeforePreflight(unittest.TestCase):
+    """Auto-fix runs before preflight, so corrected code passes.
+
+    Mirrors the wiring in ``_execute_code``: ``_autofix_code`` is applied
+    first, then ``_preflight_check`` sees the corrected source.
+    """
+
+    def test_subdivisions_fixed_then_passes(self):
+        raw = """import bpy
+obj = bpy.ops.mesh.primitive_cube_add()
+mod = obj.modifiers.new("Subsurf", 'SUBSURF')
+mod.subdivisions = 3
+"""
+        fixed, fixes = _autofix_code(raw)
+        self.assertTrue(any("subdivisions -> levels" in f for f in fixes))
+        issues = _preflight_check(fixed)
+        names = [name for name, _ in issues]
+        self.assertNotIn("wrong_subdiv_attr", names)
+
+    def test_base_color_fixed_then_passes(self):
+        raw = """import bpy
+mat = bpy.data.materials.new("M")
+mat.use_nodes = True
+n = mat.node_tree.nodes["Principled BSDF"]
+n.base_color = (1, 0, 0)
+"""
+        fixed, fixes = _autofix_code(raw)
+        self.assertTrue(any("base_color" in f for f in fixes))
+        issues = _preflight_check(fixed)
+        names = [name for name, _ in issues]
+        self.assertNotIn("wrong_base_color", names)
+
+    def test_unfixable_issue_still_flagged(self):
+        """Code autofix cannot repair is still rejected by preflight."""
+        # Preflight flags missing bpy import; autofix cannot repair that.
+        raw = "bpy.ops.mesh.primitive_cube_add()"
+        fixed, fixes = _autofix_code(raw)
+        self.assertEqual(fixes, [])
+        issues = _preflight_check(fixed)
+        names = [name for name, _ in issues]
+        self.assertIn("missing_bpy", names)
+
 
 if __name__ == "__main__":
     unittest.main()

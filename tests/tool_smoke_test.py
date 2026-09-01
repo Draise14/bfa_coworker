@@ -84,6 +84,10 @@ _TOOL_TEST_ARGS: dict[str, dict[str, Any]] = {
         "blend_file": "",
         "code": "result = {'status': 'ok'}"
     },
+    "execute_blender_plan": {
+        "steps": [{"template": "create_cube", "params": {"name": "SmokeCube"}}]
+    },
+    "list_blender_templates": {},
 
     # ── Scene Inspection ────────────────────────────────────────────
     "get_objects_summary": {},
@@ -115,6 +119,12 @@ _TOOL_TEST_ARGS: dict[str, dict[str, Any]] = {
     "get_screenshot_of_window_as_image": {},
     "get_screenshot_of_window_as_json": {},
 
+    # ── Animation ──────────────────────────────────────────────────
+    "batch_keyframe_insert": {"object_names": ["Cube"], "frame": 1},
+
+    # ── Lighting ───────────────────────────────────────────────────
+    "three_point_lighting_rig": {},
+
     # ── Rendering ───────────────────────────────────────────────────
     "render_thumbnail_to_path": {"output_path": ""},
     "render_viewport_to_path": {"output_path": ""},
@@ -126,6 +136,7 @@ _TOOL_TEST_ARGS: dict[str, dict[str, Any]] = {
 
     # ── Poly Haven ──────────────────────────────────────────────────
     "get_polyhaven_status": {},
+    "setup_pbr_material": {"asset_id": ""},
     "search_polyhaven_assets": {"category": "hdris"},
     "download_polyhaven_asset": {"asset_id": "", "asset_type": "hdris"},
 

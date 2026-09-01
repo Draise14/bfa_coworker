@@ -306,7 +306,7 @@ class Macro:
 
 ---
 
-## 6. Revised Scope: Tier 4c
+## 7. Revised Scope: Tier 4c - Text Editor Artist Tooling
 
 ### 7.1 Changes from Original
 
@@ -345,7 +345,7 @@ class Macro:
 
 ---
 
-## 7. Revised Scope: Tier 4d
+## 8. Revised Scope: Tier 4d
 
 ### 8.1 Split: Image Moodboard (Tier 4d) vs. Storyboarding (Tier 5)
 
@@ -405,7 +405,7 @@ The original plan combined image moodboarding with storyboarding, shot sequences
 
 ## 10. Hotkey Policy
 
-### 8.1 Principle
+### 10.1 Principle
 
 **No custom hotkeys in Tier 4.** All features are accessible through:
 - Sidebar panels (N-panel)
@@ -413,14 +413,14 @@ The original plan combined image moodboarding with storyboarding, shot sequences
 - Header buttons
 - Chat panel buttons
 
-### 8.2 Rationale
+### 10.2 Rationale
 
 - Blender users have deeply ingrained muscle memory for default hotkeys
 - Custom hotkeys risk conflicts with other addons or user customizations
 - The sidebar panel is the primary access point - it is always visible when the user wants it
 - Right-click context menus are the natural place for context-sensitive actions
 
-### 8.3 Future Exception
+### 10.3 Future Exception
 
 If users request hotkeys for specific workflows (e.g., I use Generate 50 times a day, I need a shortcut), hotkeys can be added in Tier 5 as optional, configurable keymap entries - not hardcoded defaults.
 
@@ -428,11 +428,11 @@ If users request hotkeys for specific workflows (e.g., I use Generate 50 times a
 
 ## 11. Brand Detection Across Editors
 
-### 9.1 Current State
+### 11.1 Current State
 
-Brand detection (_is_bfa) is in ui_chat.py and checks VIEW3D_MT_view. This works for the 3D Viewport but should be shared.
+Brand detection (_is_ba) is in ui_chat.py and checks VIEW3D_MT_view. This works for the 3D Viewport but should be shared.
 
-### 9.2 Shared Constant
+### 11.2 Shared Constant
 
 Move to shared.py:
 
@@ -450,7 +450,7 @@ All editors import from shared.py:
 from .shared import _is_bfa, AGENT_ICON
 ```
 
-### 9.3 Files Modified
+### 11.3 Files Modified
 
 - addon/bfa_coworker/shared.py - add _is_bfa and AGENT_ICON
 - addon/bfa_coworker/ui_chat.py - import from shared instead of defining locally
@@ -530,11 +530,10 @@ from .shared import _is_bfa, AGENT_ICON
 
 ```
 Foundation:
+  Domain tools (6a/6b/6d lanes) -> 4b CHOYA, 4c Text Editor, 4e tools
+  Domain tools (6a/6b/6d lanes) -> VSE / Node / Text chat capability
   ui_components.py -> Markdown, CHOYA (all editors)
   shared.py -> Brand detection (all editors)
-
-Domain tools (6a/6b/6d lanes) -> 4b CHOYA, 4c Text Editor, 4e tools
-Domain tools (6a/6b/6d lanes) -> VSE / Node / Text chat capability
 
 Tier 4b Chat UX:
   Markdown -> Code Blocks -> Error-Fix

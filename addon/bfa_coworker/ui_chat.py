@@ -133,6 +133,31 @@ def _strip_inline(text):
 
 
 _PARA_SCALE_Y = 0.78  # tight vertical spacing for paragraph text
+
+_CAN_MULTILINE = None
+
+def _can_multiline() -> bool:
+    """Whether the host build exposes ``UILayout.label_multiline``.
+
+    The native multi-line label API (Blender PR #154351, merged into
+    the workshop/ios-workshop builds) wraps text to the *actual* layout
+    width with a tight 0.75 UI_UNIT_Y line height and supports an icon,
+    alignment and max-lines cap.  Older stock builds lack it, in which
+    case the addon keeps the manual character-chop renderer.  Checked
+    once via RNA so ``hasattr`` on a live layout is not required.
+    """
+    global _CAN_MULTILINE
+    if _CAN_MULTILINE is None:
+        try:
+            import bpy
+            _CAN_MULTILINE = any(
+                fn.identifier == "label_multiline"
+                for fn in bpy.types.UILayout.bl_rna.functions
+            )
+        except Exception:  # pylint: disable=broad-exception-caught
+            _CAN_MULTILINE = False
+    return _CAN_MULTILINE
+
 _CODE_SCALE_Y = 0.72
 def _wrap_for_label(text, width=40):
     """Wrap text for UILabel -- returns a list of lines."""
@@ -341,7 +366,10 @@ def _render_markdown(layout, md, width=40):
             return
         col = _para_col()
         full = indent + text
-        if hasattr(col, "label_multiline"):
+        if _can_multiline():
+            # Native multiline already has tight 0.75 UI_UNIT_Y leading;
+            # keep the column at full scale so it does not over-squish.
+            col.scale_y = 1.0
             col.label_multiline(text=full)
         else:
             for chunk in _wrap_for_label(full, width=width):
@@ -518,15 +546,23 @@ def _render_markdown(layout, md, width=40):
         i += 1
 
 def _draw_multiline(layout: bpy.types.UILayout, text: str, width: int = _WRAP_WIDTH) -> None:
-    """Draw multi-line text in a layout, wrapping to the given width.
+    """Draw multi-line text in a layout.
 
-    Uses _wrap_text to enforce character-based wrapping regardless of
-    layout width.  label_multiline was removed because it wraps to the
-    full layout width in Blender 5.3, making assistant responses span
-    the entire panel instead of wrapping at a readable width.
+    Prefers the host build's native ``label_multiline`` (Blender PR
+    #154351, workshop builds) which wraps to the real layout width with
+    a tight 0.75 UI_UNIT_Y line height - no manual chopping, no tall
+    full-height rows per wrap chunk, so chat messages condense
+    vertically. Falls back to character-based wrapping on builds that
+    lack the API.
     """
     if not text:
         return
+    if _can_multiline():
+        try:
+            layout.label_multiline(text=text)
+            return
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
     for line in _wrap_text(text, width=width).split("\n"):
         layout.label(text=line)
 

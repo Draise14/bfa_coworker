@@ -722,13 +722,10 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
     thinking_budget_tokens: IntProperty(  # type: ignore[valid-type]
         name="Thinking Budget",
-        description=(
-            "Maximum tokens for chain-of-thought reasoning per API call.
-"
-            "Limits how long the model thinks before responding.
-"
-            "Lower values = faster responses, higher values = better reasoning.
-"
+                description=(
+            "Maximum tokens for chain-of-thought reasoning per API call.\\n"
+            "Limits how long the model thinks before responding.\\n"
+            "Lower values = faster responses, higher values = better reasoning.\\n"
             "Set to 0 to disable (no limit on reasoning tokens)."
         ),
         default=1024,

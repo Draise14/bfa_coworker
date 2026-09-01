@@ -358,10 +358,6 @@ _SURFACE_TOOLS = frozenset({
     "get_screenshot_of_window_as_json",
     "render_thumbnail_to_path",
     # ── Bundled Blender API + manual docs — read-only, no network ────
-    # Always available so the agent can look up correct APIs on error.
-    "get_python_api_docs",
-    "search_api_docs",
-    "search_manual_docs",
 })
 
 _TOOL_DOMAINS: dict[str, frozenset[str]] = {

@@ -9,16 +9,18 @@
 ## Table of Contents
 
 1. Tier 4 Overview and Sub-Plan Map
-2. Gap: CHOYA Guided Prompting System
-3. Gap: Shared UI Component Library
-4. Gap: Translation Integration
-5. Gap: Macro System Design (Implementation Deferred to Tier 5)
-6. Revised Scope: Tier 4c - Text Editor Artist Tooling
-7. Revised Scope: Tier 4d - Image Moodboard MVP
-8. Hotkey Policy
-9. Brand Detection Across Editors
-10. Implementation Order
-11. Dependency Graph
+2. Priority Reorder: Tier 6 Domain Tooling First
+3. Gap: CHOYA Guided Prompting System
+4. Gap: Shared UI Component Library
+5. Gap: Translation Integration
+6. Gap: Macro System Design (Implementation Deferred to Tier 5)
+7. Revised Scope: Tier 4c - Text Editor Artist Tooling
+8. Revised Scope: Tier 4d - Image Moodboard MVP
+9. Tier 4e - Artist Workflow Tooling (Rigging, Animation, Smart Save)
+10. Hotkey Policy
+11. Brand Detection Across Editors
+12. Implementation Order
+13. Dependency Graph
 
 ---
 
@@ -26,25 +28,77 @@
 
 | Sub-Plan | Document | Scope | Est. LOC |
 |----------|----------|-------|----------|
+| **Tier 4 (domain first)** | plan_tier6_domain_tooling.md (6a/6b/6d/6e lanes) | VSE + Text Editor + Node tools + prompt enrichment — pulled forward, see Section 2 | ~1,530 |
 | **Tier 4** | plan_tier4_editor_integration.md | Coworker workspace, viewport overlays | ~1,350 |
 | **Tier 4b** | plan_tier4b_competitor_ux_analysis.md | Chat UX: markdown, code blocks, sessions, explain | ~860 |
 | **Tier 4c** | plan_tier4c_text_editor_ide_agent.md | Text Editor: code gen, fix, edit selection | ~880 (revised) |
 | **Tier 4d** | plan_tier4d_moodboard_editor.md | Image moodboard: GPU canvas, agent context | ~520 (revised MVP) |
+| **Tier 4e** 🆕 | plan_tier4e_nice_to_haves.md | Rigging, animation, smart-save tooling | ~950 (est) |
 | **This doc** | plan_tier4_master_coordination.md | CHOYA, shared components, translation, macros | ~400 |
 
-**Total Tier 4 estimate**: ~4,010 LOC across ~12 new files + modifications to ~6 existing files.
+**Total Tier 4 estimate (revised)**: ~6,490 LOC across ~20 new files + modifications to ~10 existing files.
+
+> **Ordering decision (2026-09-01):** Tier 6 domain tooling is now the **first
+> implementation lane** (Section 2). Tooling breadth is what makes local models
+> (and external harnesses) smart and reliable — UI alone cannot fix a model that
+> has to hallucinate `bpy` calls for domains it has no tools for.
 
 ---
 
-## 2. Gap: CHOYA Guided Prompting System
+## 2. Priority Reorder: Tier 6 Domain Tooling First
 
-### 2.1 What Is CHOYA?
+> **Decision (2026-09-01):** The Tier 6 domain tooling plan is pulled forward to
+> the **first implementation priority** of Tier 4. The tooling foundation
+> (domain MCP tools) is what makes the agent — especially local models —
+> efficient, smart and reliable. Interface polish without tooling breadth leaves
+> the agent guessing; tooling breadth alone improves every surface that talks to
+> it, including external harnesses.
+
+### 2.1 Why Tooling Before Interface
+
+| Ordering | Result |
+|----------|--------|
+| Interface first, tooling later | Local models still hallucinate `bpy` calls for VSE/node/text ops; chat shows prettier failures |
+| **Tooling first, interface later** | Every surface (chat, Text Editor, harness, CHOYA) instantly benefits; interface work has real tools behind it |
+
+The core insight from `plan_tier6_domain_tooling.md` still holds: each
+pre-authored toolcode bundles domain knowledge, error handling, and a structured
+return type, so the LLM only needs to understand the tool description + parameter
+schema — not the Blender Python API for that domain.
+
+### 2.2 What We Pull Forward (and What We Skip)
+
+| Tier 6 Phase | Tools | Status in Tier 3 | Pull Forward? |
+|---|---|---|---|
+| 6a — VSE / Sequencer | 5 tools (~500 LOC) | Not started | ✅ Yes — Reads + 1 write + render feedback. The Sequencer is invisible to the agent today |
+| 6b — Text Editor | 5 tools (~450 LOC) | Not started | ✅ Yes — Feeds Tier 4c; the agent learns to read/edit/run its own scripts |
+| 6c — Asset Browser | 9 tools (~800 LOC) | ✅ Done in Tier 3d (13 tools incl. index + wiring) | ❌ Skip — already delivered |
+| 6d — Shader / Node Editor | 7 tools (~650 LOC) | 🟡 Partial (`get_active_node_tree`, `get_node_group_interface`, `wire_node_group` done) | ✅ Yes — Add `get_node_detail`, `create_node`, `connect_nodes`, `set_node_input_value`, `mute_node` (~380 LOC). Highest-leverage domain for local models: node wiring is the #1 hallucination source |
+| 6e — Prompt + cross-domain | 2 files (~200 LOC) | Not started | ✅ Yes — Domain chapters + screenshot enrichment so the new tools actually get used |
+| 6f — Advanced intelligence | ~1,100 LOC | Not started | 🟡 Later in Tier 4 — Agent Teams, Scene Co-Pilot, Render Critic as the capstone; Voice Input deferred to Tier 5 |
+
+**Recommended first Tier 4 milestone: 6a + 6b + 6d-tools + 6e (~1,530 LOC, ~28 files).**
+
+### 2.3 What the Domain Tools Buy Us
+
+- **Read-then-write discipline** — the plan's "read tools first" principle gives the agent situational awareness before acting (fewer spirals, fewer wrong guesses).
+- **Local model leverage** — a 7–14B model reliably picks a tool + params; it cannot reliably write `bpy.ops.sequencer.*` or wire nodes from memory.
+- **External harness parity** — every MCP tool is available to external harnesses (Opencode, Claude Desktop) for free.
+- **Feed-forward into Tier 4c** — Text Editor tools (6b) are the prerequisite for the IDE-agent experience.
+- **CHOYA subscriber** — guided options ("Add a speed ramp to strip X") become one-click tool invocations instead of raw code.
+- **Tier 4e synergy** — rigging/animation/save tooling (see Section 9) completes the domain matrix on top of the same toolcode pattern.
+
+---
+
+## 3. Gap: CHOYA Guided Prompting System
+
+### 3.1 What Is CHOYA?
 
 CHOYA = **Contextual Helpful Options You Act on** - clickable action buttons that appear after agent responses, offering the user sensible next steps based on what the agent just did and what is in the scene.
 
 This is the guided prompting pattern from your overview: CHOYA guided buttons and prompt injection while talking.
 
-### 2.2 Why It Matters
+### 3.2 Why It Matters
 
 Without CHOYA, the agent says I have created a cube and the user has to think about what to do next and type a new message. With CHOYA, the agent offers:
 
@@ -58,7 +112,7 @@ What is next?
 
 One click sends a new message. The user does not have to know Blender API or type anything.
 
-### 2.3 Design
+### 3.3 Design
 
 **Data model** - each guided option is:
 
@@ -82,7 +136,7 @@ guided_options = _generate_guided_options(conclusion_text, scene_snapshot)
 # - What is missing (no materials -> offer Add Material)
 ```
 
-### 2.4 Option Categories
+### 3.4 Option Categories
 
 | Context | Options Offered |
 |---------|----------------|
@@ -94,7 +148,7 @@ guided_options = _generate_guided_options(conclusion_text, scene_snapshot)
 | **Code generated** | Run Code, Edit Code, Explain Code |
 | **Image analyzed** | Create 3D from Image, Generate Variations, Describe Colors |
 
-### 2.5 Where CHOYA Appears
+### 3.5 Where CHOYA Appears
 
 | Location | When | How |
 |----------|------|-----|
@@ -103,25 +157,25 @@ guided_options = _generate_guided_options(conclusion_text, scene_snapshot)
 | Text Editor | After code generation | Inline buttons below code block |
 | Moodboard | After image analysis | Context menu on image card |
 
-### 2.6 Files
+### 3.6 Files
 
 - addon/bfa_coworker/choya.py (new) - GuidedOption dataclass, option generation logic
 - addon/bfa_coworker/ui_chat.py - render button row after conclusions
 - Other editors - render in their respective panels
 
-### 2.7 Est. LOC
+### 3.7 Est. LOC
 
 ~150 (option generation) + ~50 (UI rendering) = **~200 LOC**
 
 ---
 
-## 3. Gap: Shared UI Component Library
+## 4. Gap: Shared UI Component Library
 
-### 3.1 Problem
+### 4.1 Problem
 
 All four Tier 4 sub-plans create UI independently. Markdown rendering, code blocks, agent status indicators, and guided buttons will be duplicated across the chat panel, Text Editor, and Moodboard.
 
-### 3.2 Solution: ui_components.py
+### 4.2 Solution: ui_components.py
 
 Create a shared module with reusable UI drawing functions:
 
@@ -150,26 +204,26 @@ def draw_copy_button(layout, text, message_index=-1):
     """Render a copy-to-clipboard button. Used everywhere."""
 ```
 
-### 3.3 Migration Path
+### 4.3 Migration Path
 
 1. Create ui_components.py with the shared functions
 2. Move existing functions from ui_chat.py (_draw_multiline, _draw_reasoning, _draw_tool_inline) into the new module
 3. Update ui_chat.py to import from ui_components.py
 4. New Tier 4 features (Text Editor, Moodboard) import from ui_components.py directly
 
-### 3.4 Est. LOC
+### 4.4 Est. LOC
 
 ~300 (extract + consolidate existing functions into shared module)
 
 ---
 
-## 4. Gap: Translation Integration
+## 5. Gap: Translation Integration
 
-### 4.1 What
+### 5.1 What
 
 Issue #42: Translation integration - the agent helps translate UI labels, documentation, or user-facing text within Blender.
 
-### 4.2 Design (Placeholder)
+### 5.2 Design (Placeholder)
 
 This is a lightweight feature that fits naturally into the chat panel:
 
@@ -177,20 +231,20 @@ This is a lightweight feature that fits naturally into the chat panel:
 - **Agent receives**: the label text, the current UI language, and the target language (from preferences)
 - **Agent responds**: translated text + option to apply it (via a custom translation override in preferences)
 
-### 4.3 Implementation
+### 5.3 Implementation
 
 - **Phase**: Tier 4b Phase 5 (bundled with Right-Click Explain)
 - **Additional operator**: BFACW_OT_translate - similar to BFACW_OT_explain but with translation-specific prompt
 - **Preferences**: translation_target_language EnumProperty (English, Spanish, French, German, Japanese, Chinese, Korean, etc.)
 - **Override storage**: bfa_coworker_translations.json in addon prefs dir
 
-### 4.4 Est. LOC
+### 5.4 Est. LOC
 
 ~80 (operator + prompt + preferences)
 
 ---
 
-## 5. Gap: Macro System Design
+## 6. Gap: Macro System Design
 
 ### 5.1 What
 
@@ -254,7 +308,7 @@ class Macro:
 
 ## 6. Revised Scope: Tier 4c
 
-### 6.1 Changes from Original
+### 7.1 Changes from Original
 
 | Original | Revised | Rationale |
 |----------|---------|-----------|
@@ -265,7 +319,7 @@ class Macro:
 | Phase 5: Keyboard Shortcuts and Keymap | **Removed** | No custom hotkeys per policy |
 | Focus: IDE-style code editing | **Focus: Artist-friendly Text Editor tooling** | Sidebar panel and context menus only |
 
-### 6.2 Revised Phase List
+### 7.2 Revised Phase List
 
 | Phase | Feature | LOC | Priority |
 |-------|---------|-----|----------|
@@ -279,7 +333,7 @@ class Macro:
 
 **Total revised**: ~880 LOC (down from ~1,050)
 
-### 6.3 Access Pattern (No Hotkeys)
+### 7.3 Access Pattern (No Hotkeys)
 
 | Action | How to Access |
 |--------|---------------|
@@ -293,7 +347,7 @@ class Macro:
 
 ## 7. Revised Scope: Tier 4d
 
-### 7.1 Split: Image Moodboard (Tier 4d) vs. Storyboarding (Tier 5)
+### 8.1 Split: Image Moodboard (Tier 4d) vs. Storyboarding (Tier 5)
 
 The original plan combined image moodboarding with storyboarding, shot sequences, scene tooling, and generation placeholders. This is too much for one tier.
 
@@ -317,7 +371,7 @@ The original plan combined image moodboarding with storyboarding, shot sequences
 - Generation placeholders (storybuilding)
 - Frame tools with markup integration
 
-### 7.2 What is In Scope for Tier 4d
+### 8.2 What is In Scope for Tier 4d
 
 - Load images onto a canvas
 - Arrange images (drag, scale, pan/zoom)
@@ -326,7 +380,7 @@ The original plan combined image moodboarding with storyboarding, shot sequences
 - Save/load with .blend file (Text datablocks)
 - Basic linking between images (visual lines)
 
-### 7.3 What is Deferred to Tier 5
+### 8.3 What is Deferred to Tier 5
 
 - Shot sequences and narrative chains
 - Storyboard to 3D scene conversion
@@ -338,7 +392,18 @@ The original plan combined image moodboarding with storyboarding, shot sequences
 
 ---
 
-## 8. Hotkey Policy
+## 9. Tier 4e - Artist Workflow Tooling (Rigging, Animation, Smart Save)
+
+> See `plan_tier4e_nice_to_haves.md` for the full plan. Quick-win tooling that
+> completes the domain matrix for the three most common artist-adjacent
+> workflows that today still require raw `bpy` from the LLM: rigging, animation,
+> and smart file saving. Same toolcode pattern, registered in the `rigging` /
+> `animation` / `file_management` domains, with default_closed panels and
+> CHOYA-friendly write tools.
+
+---
+
+## 10. Hotkey Policy
 
 ### 8.1 Principle
 
@@ -361,7 +426,7 @@ If users request hotkeys for specific workflows (e.g., I use Generate 50 times a
 
 ---
 
-## 9. Brand Detection Across Editors
+## 11. Brand Detection Across Editors
 
 ### 9.1 Current State
 
@@ -392,9 +457,21 @@ from .shared import _is_bfa, AGENT_ICON
 
 ---
 
-## 10. Implementation Order
+## 12. Implementation Order
 
-### Phase 1: Foundation (Week 1)
+### Phase 0: Domain Tooling (Week 1-2) — pulled forward from Tier 6
+
+> Build the tooling lanes FIRST so every interface work has real tools behind it.
+
+| Step | What | Depends On | LOC |
+|------|------|------------|-----|
+| 0.1 | Tier 6a: VSE tools (5) | Nothing | ~500 |
+| 0.2 | Tier 6b: Text Editor tools (5) | Nothing | ~450 |
+| 0.3 | Tier 6d: remaining Node tools (4) | Nothing | ~380 |
+| 0.4 | Tier 6e: prompt chapters + screenshot enrichment | 0.1-0.3 | ~200 |
+| 0.5 | Tier 4e quick win: smart-save tooling | Nothing | ~250 |
+
+### Phase 1: Foundation (Week 2-3)
 
 | Step | What | Depends On | LOC |
 |------|------|------------|-----|
@@ -402,7 +479,7 @@ from .shared import _is_bfa, AGENT_ICON
 | 1.2 | Move _is_bfa/AGENT_ICON to shared.py | Nothing | ~10 |
 | 1.3 | Migrate ui_chat.py to use ui_components.py | 1.1 | ~50 |
 
-### Phase 2: Tier 4b Chat UX (Week 2-3)
+### Phase 2: Tier 4b Chat UX (Week 3-4)
 
 | Step | What | Depends On | LOC |
 |------|------|------------|-----|
@@ -415,7 +492,7 @@ from .shared import _is_bfa, AGENT_ICON
 | 2.7 | Screenshot/vision (Phase 6 of 4b) | 2.1 | ~150 |
 | 2.8 | CHOYA buttons in chat panel | 1.1 | ~100 |
 
-### Phase 3: Tier 4c Text Editor (Week 3-4)
+### Phase 3: Tier 4c Text Editor (Week 4-5)
 
 | Step | What | Depends On | LOC |
 |------|------|------------|-----|
@@ -427,7 +504,7 @@ from .shared import _is_bfa, AGENT_ICON
 | 3.6 | Queue integration | 3.2 | ~80 |
 | 3.7 | CHOYA buttons after code gen | 2.8 | ~50 |
 
-### Phase 4: Tier 4d Moodboard (Week 4-5)
+### Phase 4: Tier 4d Moodboard (Week 5-6)
 
 | Step | What | Depends On | LOC |
 |------|------|------------|-----|
@@ -438,7 +515,7 @@ from .shared import _is_bfa, AGENT_ICON
 | 4.5 | Agent vision bridge | 4.3 | ~50 |
 | 4.6 | Annotation support | 4.2 | ~20 |
 
-### Phase 5: Tier 4 Viewport and Workspace (Week 5-6)
+### Phase 5: Tier 4 Viewport and Workspace (Week 6-7)
 
 | Step | What | Depends On | LOC |
 |------|------|------------|-----|
@@ -449,12 +526,15 @@ from .shared import _is_bfa, AGENT_ICON
 
 ---
 
-## 11. Dependency Graph
+## 13. Dependency Graph
 
 ```
 Foundation:
   ui_components.py -> Markdown, CHOYA (all editors)
   shared.py -> Brand detection (all editors)
+
+Domain tools (6a/6b/6d lanes) -> 4b CHOYA, 4c Text Editor, 4e tools
+Domain tools (6a/6b/6d lanes) -> VSE / Node / Text chat capability
 
 Tier 4b Chat UX:
   Markdown -> Code Blocks -> Error-Fix
@@ -496,5 +576,7 @@ This master plan fills four gaps identified in the audit:
 Additionally:
 - **Tier 4c** revised: no file browser, no custom hotkeys, focus on artist-friendly Text Editor tooling
 - **Tier 4d** revised: image moodboard MVP only, storyboarding pushed to Tier 5
+- **Tier 4e** added: rigging, animation, and smart-save tooling (~950 LOC, 3 new domains)
 - **Hotkey policy**: no custom hotkeys in Tier 4; all features via sidebar/context menus
 - **Brand detection**: moved to shared.py for use across all editors
+- **Priority reorder (2026-09-01)**: Tier 6 domain tooling (VSE, Text Editor, Node) is now the first implementation lane — tooling breadth is what makes local models and external harnesses smart and reliable; interface polish builds on top.

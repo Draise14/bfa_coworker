@@ -1943,6 +1943,7 @@ def _openai_chat_completions(
     api_key: str | None = None,
     model: str | None = None,
     max_tokens: int | None = None,
+    thinking_budget_tokens: int = 0,
     chat_mode: str = "AGENT",
 ) -> dict[str, Any] | None:
     """POST to a chat completions endpoint and return the parsed JSON response.
@@ -1960,6 +1961,8 @@ def _openai_chat_completions(
         "temperature": temperature,
         **_CHAT_SAMPLING,
     }
+    if thinking_budget_tokens > 0:
+        body["thinking_budget_tokens"] = thinking_budget_tokens
     if model:
         body["model"] = model
     if tools:
@@ -3415,6 +3418,9 @@ def _run_conversation_turn_inner(
     from . import llm_manager as _llm_mgr
     _llm_cfg = _llm_mgr.get_config()
     max_tokens = _llm_cfg.local_max_tokens if llm_port_local is not None else 16384
+    thinking_budget = getattr(_llm_cfg, 'thinking_budget_tokens', 0)
+    if thinking_budget > 0:
+        print("[🛠️Coworker] run_conversation_turn: thinking_budget_tokens={:d}".format(thinking_budget))
     print("[🛠️Coworker] run_conversation_turn: using max_tokens={:d}".format(max_tokens))
 
     # ── Tool domain system (hybrid: pre-detect + on-demand) ────────────
@@ -3518,7 +3524,7 @@ def _run_conversation_turn_inner(
                 existing.insert(0, {"type": "image_url", "image_url": {"url": _pending_image}})
             _agent_state._pending_image = None  # Clear after use
 
-        response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model, max_tokens)
+        response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model, max_tokens, thinking_budget_tokens=thinking_budget)
 
         # ── Abort check ───────────────────────────────────────────────
         # If the user stopped the previous turn and started a new one, the
@@ -3929,7 +3935,7 @@ def _run_conversation_turn_inner(
             "role": "user",
             "content": "[System: All tool calls are complete. Please summarize what was done in 1-2 sentences.]",
         })
-        final_response = _openai_chat_completions(llm_url, history, openai_tools, api_key, model, max_tokens)
+        final_response = _openai_chat_completions(llm_url, history, openai_tools, api_key, model, max_tokens, thinking_budget_tokens=thinking_budget)
         if final_response:
             final_choice = final_response.get("choices", [{}])[0]
             final_msg = final_choice.get("message", {})

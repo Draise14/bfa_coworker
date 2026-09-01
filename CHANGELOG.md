@@ -106,6 +106,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `three_point_lighting_rig.py` (target fallback in generated code), and
   `get_screenshot_of_window_as_json_toolcode.py` (active object metadata).
   This eliminates the preflight rejection that blocked all Poly Haven texture downloads and
+
+- **Python Version Compatibility Check** — `_get_blender_python_for_config()` and
+  `_resolve_mcp_python()` now inspect vendor deps' native extensions (.pyd/.so) and compare
+  the cpython tag against the target interpreter's version. When there is a mismatch (e.g.
+  Blender 5.3 ships Python 3.13 but vendor deps were compiled for 3.12), the addon
+  automatically falls back to a compatible system Python instead of recommending Blender's
+  bundled Python, which would fail on `import mcp`. A warning is logged when no compatible
+  Python is found.
   PBR material creation from the LLM.
 
 - **Tier 3h Quality Audit: Cleanup & Hardening** - `get_polyhaven_status` now returns a dict

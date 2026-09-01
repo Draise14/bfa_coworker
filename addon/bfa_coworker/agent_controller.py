@@ -1247,9 +1247,18 @@ def _resolve_mcp_python() -> tuple[str | None, bool]:
 
         blender_py = _find_blender_python()
         if blender_py:
-            mcp_exe = blender_py
-            use_module = True
-            print("[🛠️Coworker] _resolve_mcp_python: using Blender's Python at {:s}".format(mcp_exe))
+            if _vendor_native_compat(blender_py):
+                mcp_exe = blender_py
+                use_module = True
+                print("[🛠️Coworker] _resolve_mcp_python: using Blender's Python at {:s}".format(mcp_exe))
+            else:
+                # Blender's Python is incompatible; try system python.
+                print("[🛠️Coworker] _resolve_mcp_python: Blender's Python {!s} incompatible with vendor native extensions".format(blender_py))
+                sys_py = shutil.which("python3") or shutil.which("python")
+                if sys_py and _vendor_native_compat(sys_py):
+                    mcp_exe = sys_py
+                    use_module = True
+                    print("[🛠️Coworker] _resolve_mcp_python: using compatible system Python at {:s}".format(mcp_exe))
 
     # 3. Last resort: system python.
     if not mcp_exe:
@@ -1624,17 +1633,101 @@ def start_mcp_server_network(
 # ---------------------------------------------------------------------------
 # MCP client config generation (External Harness)
 
+
+def _vendor_native_compat(python_path: str) -> bool:
+    """Check whether vendor deps' native extensions match *python_path*.
+
+    Scans ``~/.cache/bfa_coworker/vendor_deps/`` for ``.pyd`` / ``.so``
+    files, extracts the cpython tag (e.g. ``cp312``), and compares it
+    against the target interpreter's major.minor version.
+
+    Returns ``True`` when compatible (or when there are no native
+    extensions — pure-Python deps work everywhere).
+    """
+    deps_dir = _get_vendor_deps_dir()
+    if not deps_dir.is_dir():
+        return True  # No deps yet; let the caller proceed.
+
+    native_versions: set[str] = set()
+    for pat in ("*.pyd", "*.so"):
+        for f in deps_dir.glob(pat):
+            name = f.name
+            # Extract cpython tag: something like _cffi_backend.cp313-win_amd64.pyd
+            for part in name.split("."):
+                if part.startswith("cp") and part[2:].isdigit():
+                    native_versions.add(part[:5])  # "cp313"
+                    break
+
+    if not native_versions:
+        return True  # Pure-Python; no compatibility issue.
+
+    # Determine the target Python version from the executable.
+    try:
+        import subprocess
+        result = subprocess.run(
+            [python_path, "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return True  # Can't determine; assume compatible.
+        target_ver = result.stdout.strip()  # e.g. "3.13"
+        target_tag = "cp{:s}{:s}".format(*target_ver.split(".")[:2])  # "cp313"
+    except Exception:
+        return True  # Can't determine; assume compatible.
+
+    for nv in native_versions:
+        if nv != target_tag:
+            print(
+                "[🛠️Coworker] _vendor_native_compat: MISMATCH — "
+                "vendor native exts are {!s} but target Python is {!s}".format(
+                    nv, target_tag
+                )
+            )
+            return False
+    return True
+
+
 def _get_blender_python_for_config() -> tuple[str, str]:
     """Return (python_path, pythonpath) for use in harness configs.
 
     Uses Blender's bundled Python with vendor deps on PYTHONPATH so
     ``python -m blmcp`` works out of the box without any pip install.
 
-    Falls back to ``("python", "")`` if Blender's Python can't be found.
+    When vendor deps contain native extensions compiled for a different
+    Python version than Blender's bundled Python, falls back to a
+    compatible system Python to avoid import failures.
+
+    Falls back to ``("python", "")`` if no suitable Python is found.
     """
+    import shutil as _shutil
     blender_py = _find_blender_python()
+    pythonpath = _find_vendor_pythonpath()
     if blender_py:
-        pythonpath = _find_vendor_pythonpath()
+        if _vendor_native_compat(blender_py):
+            return (blender_py, pythonpath)
+        # Blender's Python is incompatible with vendor native extensions.
+        # Try to find a system Python that matches the vendor deps.
+        print(
+            "[🛠️Coworker] _get_blender_python_for_config: "
+            "Blender Python {!s} incompatible with vendor native extensions "
+            "— searching for compatible system Python...".format(
+                blender_py
+            )
+        )
+        for candidate in ("python3", "python"):
+            py = _shutil.which(candidate)
+            if py and _vendor_native_compat(py):
+                print(
+                    "[🛠️Coworker] _get_blender_python_for_config: "
+                    "using {!s} (compatible with vendor deps)".format(py)
+                )
+                return (py, pythonpath)
+        # No compatible Python found; fall back to Blender's anyway with a warning.
+        print(
+            "[⚠️Coworker] _get_blender_python_for_config: "
+            "no compatible Python found. Using Blender Python {!s} "
+            "— vendor deps may fail to import.".format(blender_py)
+        )
         return (blender_py, pythonpath)
     return ("python", "")
 

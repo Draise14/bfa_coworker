@@ -182,7 +182,14 @@ The issue calls for "know how to add collections or objects to different positio
 
 ---
 
-## Phase 4: System Prompt & Skill Updates (~100 LOC, 2 files)
+## Phase 4: System Prompt & Skill Updates (~100 LOC, 2 files) - Done (commit `a8254c5`)
+
+> **Status**: `prompts.yml` "Asset-First Workflow" section expanded with the
+> MCP asset tools decision tree (search → inspect → load), link/append/instance
+> guidance, node-group contextual wiring guidance, and object/collection
+> placement flow. The skill half (step 2) was already delivered across Phases 2,
+> 2B, and 3 (`asset_browser.md` documents all 13 asset tools + node wiring
+> workflow + author conventions).
 
 The agent needs to be *biased* toward using assets. The system prompt must make this explicit and give the agent a clear decision tree.
 

@@ -219,7 +219,7 @@ The agent needs to be *biased* toward using assets. The system prompt must make 
 
 ---
 
-## Phase 5: Tests (~150 LOC, 2 files)
+## Phase 5: Tests (~150 LOC, 2 files) - Done (commit `a8254c5`)
 
 ### Steps
 
@@ -235,12 +235,14 @@ The agent needs to be *biased* toward using assets. The system prompt must make 
 | File | Change |
 |------|--------|
 | `tests/tool_smoke_test.py` | Add `_TOOL_TEST_ARGS` entries for all asset tools |
-| `tests/integration/test_asset_browser.py` (new) | End-to-end asset workflow test |
+| `tests/test_asset_tools.py` (new) | Unit tests for asset + node-group toolcodes via a `bpy` stub |
+| `tests/integration/test_asset_browser.py` (new) | End-to-end asset workflow test (live Blender) |
 
 ### Verification
 
-1. Run `python tests/tool_smoke_test.py --filter asset` → all asset tools pass
-2. Run the integration test with a real asset library → full workflow succeeds
+1. Run `python tests/tool_smoke_test.py --filter asset` → all asset tools pass (live Blender)
+2. Run the integration test with a real asset library → full workflow succeeds (live Blender)
+3. `python -m unittest tests.test_asset_tools` → 43 unit tests pass (no Blender needed)
 
 ---
 

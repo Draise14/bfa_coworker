@@ -1,7 +1,7 @@
 # BFA Coworker - Tier 4 Master Coordination Plan
 
 **Date**: 2026-08-27
-**Status**: Planning - Consolidated from audit of tier4, 4b, 4c, 4d
+**Status**: Planning - Consolidated from audit of tier4a, 4b, 4c, 4d
 **Purpose**: Coordinate all Tier 4 sub-plans, fill identified gaps, establish shared systems
 
 ---

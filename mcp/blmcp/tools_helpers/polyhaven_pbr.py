@@ -445,7 +445,7 @@ def build_pbr_material_code(
     # ── Assign to active object ──
     lines += [
         "# ── Assign to active object ──",
-        "_obj = bpy.context.active_object",
+        "_obj = bpy.context.view_layer.objects.active",
         "if _obj and _obj.type == 'MESH':",
         "    if _obj.data.materials:",
         "        _obj.data.materials[0] = mat",

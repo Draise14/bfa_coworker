@@ -98,6 +98,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preflight: corrected code (lamps→lights, EEVEE→BLENDER_EEVEE, subdivisions→levels, base_color→
   inputs, ...) now passes validation instead of being rejected, reducing LLM round-trips.
 
+- **`bpy.context.active_object` Sweep** — Replaced all remaining `bpy.context.active_object`
+  references in toolcode files with `bpy.context.view_layer.objects.active`, which is available
+  in the MCP bridge worker thread. Fixed in: `polyhaven_pbr.py` (generated PBR material code
+  used by both `download_polyhaven_asset` and `setup_pbr_material`),
+  `assign_material_to_objects_toolcode.py` (fallback when no object names given),
+  `three_point_lighting_rig.py` (target fallback in generated code), and
+  `get_screenshot_of_window_as_json_toolcode.py` (active object metadata).
+  This eliminates the preflight rejection that blocked all Poly Haven texture downloads and
+  PBR material creation from the LLM.
+
 - **Tier 3h Quality Audit: Cleanup & Hardening** - `get_polyhaven_status` now returns a dict
   (consistent with every other tool); the `os.add_dll_directory()` handle is kept in module state
   so the bundled DLL search directory can't be garbage-collected mid-session (Windows DLL_NOT_FOUND

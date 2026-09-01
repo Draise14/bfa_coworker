@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Asset-First System Prompt (Tier 3d Phase 4)** — The "Asset-First Workflow" section in `prompts.yml` was rewritten to bias the agent toward using the MCP asset tools: a decision tree (search `get_asset_libraries`/`list_asset_catalogs`/`search_assets`/`get_asset_tags` before creating anything, then Poly Haven, then from-scratch), link-vs-append-vs-instance guidance, contextual node-group wiring guidance (`get_node_group_interface`/`get_active_node_tree`/`wire_node_group`), and object/collection placement via `place_asset_in_scene`/`jump_to_asset_browser`.
+
 - **Node-Group Intelligence Tools (Tier 3d Phase 2B)** — Three new MCP tools that make node-group assets actually usable:
   - `get_node_group_interface` — reads a loaded node group's interface (editor type + every input/output socket with type, default, min/max, description), giving the agent the group's wiring manual.
   - `get_active_node_tree` — serializes the resolved node tree (active material / GN modifier / compositor, or an explicit `bpy.data.node_groups` name) with nodes, sockets, links, and frames.

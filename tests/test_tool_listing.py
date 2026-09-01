@@ -833,6 +833,11 @@ EXPECTED_TOOLS = [
         "name": "jump_to_tab_by_name",
         "description": "\n"
 "        Switch the active workspace tab to *name*.\n"
+"\n"
+"        Use e.g. \"Main\", \"Modeling\", \"Layout\", \"UV Editing\",\n"
+"        \"Geometry Nodes\" or other workspace names (see the\n"
+"        ``available_workspaces`` field of the response); matching is\n"
+"        case-insensitive.\n"
 "        ",
         "inputSchema": {
             "properties": {

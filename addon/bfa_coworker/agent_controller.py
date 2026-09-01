@@ -2383,7 +2383,8 @@ def _trim_tool_result(result_text: str, max_chars: int = 500) -> str:
     Unlike the old hard 500-char cut, this function:
     - Strips the outer ``{"status": ..., "result": ...}`` wrapper and
       keeps only the meaningful inner data.
-    - For error results, preserves the full error message.
+    - For error results, keeps the head and the tail (the exception
+      line at the end of a traceback), trimming the middle.
     - For success results, extracts the ``result`` sub-field if present,
       giving the LLM more structured data within the same token budget.
     - Falls back to a hard truncation for non-JSON or unparseable content.
@@ -2405,13 +2406,21 @@ def _trim_tool_result(result_text: str, max_chars: int = 500) -> str:
 
     status = data.get("status", "")
 
-    # Error results: preserve the full message — it's critical for debugging.
+    # Error results: preserve the TAIL of the message — Python tracebacks
+    # put the actual exception (type + message + the failing line of the
+    # model's own code) on the LAST lines. Head-truncating cut that off,
+    # leaving the model blind to the real error while it could still see
+    # the unhelpful stack preamble. Keep a short head for context and the
+    # informative tail within the same token budget.
     if status == "error":
         msg = data.get("message", "") or ""
         if len(msg) <= max_chars:
-            return "{{\"status\": \"error\", \"message\": \"{:s}\"}}".format(msg[:max_chars])
-        return "{{\"status\": \"error\", \"message\": \"{:s}\"}}".format(
-            msg[:max_chars] + "...")
+            return "{{\"status\": \"error\", \"message\": \"{:s}\"}}".format(msg)
+        head_len = max(max_chars // 4, 80)
+        tail_len = max_chars - head_len - 22  # room for the trim marker
+        trimmed = msg[:head_len] + "\\n...[+{:d} chars trimmed]...\\n".format(
+            len(msg) - head_len - tail_len) + msg[-tail_len:]
+        return "{{\"status\": \"error\", \"message\": \"{:s}\"}}".format(trimmed)
 
     # Success results: extract the inner result field.
     if status == "ok":
@@ -2780,6 +2789,7 @@ def _build_cleanup_code(diff: _EntityDiff) -> str:
     fails (e.g. no window/area available, or undo stack is empty).
     """
     parts: list[str] = [
+        "# blmcp-toolcode-skip-preflight",
         "import bpy",
         "result = {'status': 'ok', 'cleaned': []}",
         "",
@@ -2837,6 +2847,7 @@ def _undo_code(action: str, message: str = "", extra_result: str = "") -> str:
     else:
         body = "bpy.ops.ed.undo_push(message='{:s}')".format(message)
     return (
+        "# blmcp-toolcode-skip-preflight\n"
         "import bpy\n"
         "def _sn(seq):\n"
         "    try:\n"
@@ -3742,7 +3753,8 @@ def _run_conversation_turn_inner(
                         _consecutive_errors.append(error_sig)
                         if len(_consecutive_errors) >= 2:
                             print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: spiral detected \u2014 "
-                                  "same error 3\u00d7 in a row: {:s}".format(error_sig))
+                                  "same error {:d}\u00d7 in a row: {:s}".format(
+                                      len(_consecutive_errors), error_sig))
                             # Auto-save session log on spiral detection.
                             try:
                                 export_session_log(auto_saved=True)

@@ -542,5 +542,58 @@ bm.update_edit_mesh(mesh)
         self.assertNotIn("update_edit_mesh_args", names)
 
 
+    def test_primitive_loop_allowed(self):
+        """Creating primitives in a loop is legitimate -- NOT flagged."""
+        code = """
+bpy.ops.object.select_all(action='SELECT')
+for i in range(3):
+    bpy.ops.mesh.primitive_torus_add(major_radius=1.0, minor_radius=0.3)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("no_existence_check", names)
+
+    def test_data_new_loop_static_name_flagged(self):
+        """objects.new in a loop with a static name and no guard IS flagged."""
+        code = """
+for i in range(5):
+    bpy.data.objects.new("Cube", mesh)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("no_existence_check", names)
+
+    def test_data_new_loop_unique_name_allowed(self):
+        """Unique per-iteration names are fine -- NOT flagged."""
+        code = """
+for i in range(5):
+    bpy.data.objects.new(name=f"cube_{i}", object_data=mesh)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("no_existence_check", names)
+
+    def test_data_new_loop_with_guard_allowed(self):
+        """Existence check via get() is fine -- NOT flagged."""
+        code = """
+for i in range(5):
+    if bpy.data.objects.get("Cube_" + str(i)) is None:
+        bpy.data.objects.new("Cube_" + str(i), mesh)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("no_existence_check", names)
+
+    def test_material_loop_not_flagged(self):
+        """Material/appending loops unrelated to object creation -- NOT flagged."""
+        code = """
+for obj in bpy.data.objects:
+    mat = bpy.data.materials.new(name="M")
+    obj.data.materials.append(mat)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("no_existence_check", names)
+
 if __name__ == "__main__":
     unittest.main()

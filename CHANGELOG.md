@@ -88,6 +88,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Chat & Messages Render Natively Multi-Line (No More Chopped Rows)** - The sidebar chat
+  manually chopped every message at a fixed character width and drew each chunk as a
+  full-height `UILayout.label` row, which wasted vertical space and looked like ragged
+  line breaks. The renderers (`_draw_multiline` and the markdown paragraph emitter) now use
+  the native `UILayout.label_multiline` API from Blender PR #154351 (workshop/ios-workshop
+  builds) on hosts that expose it - text wraps to the real layout width with a tight
+  0.75 UI_UNIT_Y line height, keeps the markup icons/alignment, and the chat condenses
+  vertically. Detection is done once via RNA, and the character-chop renderer remains as a
+  fallback on stock builds that lack the API. Live-verified in a real UI session on the
+  Bforartists 5.3 dev build (`label_multiline` draws with icon + alignment).
+
 - **Agent Error Loops No Longer Blind or Stuck (Run-Loop Orchestration)** - Two defects made
   repeated-tool-call spirals much worse. (1) Tool-result errors were head-truncated at 500 chars,
   and Python tracebacks keep the actual exception on the LAST line - so the model never saw the

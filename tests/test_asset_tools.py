@@ -23,7 +23,9 @@ Run with::
 
 __all__ = ()
 
+import json
 import os
+import shutil
 import sys
 import tempfile
 import types
@@ -464,10 +466,51 @@ _TREE_TYPES: dict[str, str] = {}
 
 
 def _install_bpy(test_case):
-    """Give *test_case* a fresh stub bpy and register it as `sys.modules["bpy"]`."""
+    """Give *test_case* a fresh stub bpy and register it as `sys.modules["bpy"]`.
+
+    ``bpy.utils.cache_path`` returns a per-test temp dir so the Phase C
+    asset-index helpers can read/write a cache without touching the real
+    user profile.
+    """
     bpy = _make_bpy()
+    cache_dir = tempfile.mkdtemp(prefix="bfacw_cache_")
+    test_case._cache_dir = cache_dir
+    test_case.addCleanup(
+        lambda: shutil.rmtree(cache_dir, ignore_errors=True))
+    bpy.utils = types.SimpleNamespace(
+        cache_path=lambda user=False: cache_dir,
+    )
     sys.modules["bpy"] = bpy
     test_case.bpy = bpy
+
+
+_INCLUDE_BEGIN_PREFIX = "# @include_begin: "
+_INCLUDE_END = "# @include_end"
+
+
+def _expand_includes(toolcode_path, source):
+    """Splice ``# @include_begin`` blocks, mirroring ``tools_helpers``."""
+    toolcode_dir = os.path.dirname(toolcode_path)
+    lines = source.splitlines(True)
+    result = []
+    skip = False
+    for line in lines:
+        if line.startswith(_INCLUDE_BEGIN_PREFIX):
+            include_name = line[len(_INCLUDE_BEGIN_PREFIX):].rstrip()
+            include_path = os.path.join(toolcode_dir, include_name)
+            with open(include_path, "r", encoding="utf-8") as fh:
+                result.append(fh.read())
+            if result[-1] and not result[-1].endswith("\n"):
+                result.append("\n")
+            skip = True
+        elif skip:
+            if line.startswith(_INCLUDE_END):
+                skip = False
+        else:
+            result.append(line)
+    if skip:
+        raise ValueError("Missing {:s} in {:s}".format(_INCLUDE_END, toolcode_path))
+    return "".join(result)
 
 
 def _load_toolcode(name):
@@ -478,6 +521,7 @@ def _load_toolcode(name):
     )
     with open(path, "r", encoding="utf-8") as fh:
         source = fh.read()
+    source = _expand_includes(path, source)
     module = types.ModuleType("{:s}_toolcode".format(name))
     exec(compile(source, path, "exec"), module.__dict__)
     return module
@@ -1095,6 +1139,144 @@ class TestGetActiveNodeTree(unittest.TestCase):
         link = result["links"][0]
         self.assertEqual(link["from_node"], "Node.000")
         self.assertEqual(link["to_node"], "Node.001")
+
+
+class TestAssetIndex(unittest.TestCase):
+    """Phase C metadata index: freshness, lookups, background build."""
+
+    def setUp(self):
+        _install_bpy(self)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._mod = _load_shared("_asset_index_shared")
+        # Real stub file that the fingerprints point at.
+        self.blend = os.path.join(self._tmp.name, "assets.blend")
+        with open(self.blend, "wb") as fh:
+            fh.write(b"fixture-blend")
+
+    def _write_index(self, assets, mtime_ns=None, size=None, schema=1):
+        stat_i = os.stat(self.blend)
+        lib_path = self._tmp.name
+        index = {
+            "schema": schema,
+            "library_path": lib_path,
+            "built_at": 1.0,
+            "files": {
+                "assets.blend": {
+                    "mtime_ns": mtime_ns or stat_i.st_mtime_ns,
+                    "size": size if size is not None else stat_i.st_size,
+                },
+            },
+            "assets": assets,
+        }
+        path = self._mod._blmcp_index_path(lib_path, self.bpy)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(index, fh)
+        return path
+
+    def test_lookup_from_fresh_index(self):
+        self._write_index({
+            "Brick_Mat": {
+                "name": "Brick_Mat", "type": "MATERIAL", "file": "assets.blend",
+                "tags": ["brick"], "description": "brick wall",
+                "preferred_import_method": "LINK",
+                "use_preferred_import_method": True,
+            },
+        })
+        entry = self._mod._blmcp_index_lookup(
+            self._tmp.name, "Brick_Mat", self.bpy)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry["type"], "MATERIAL")
+        self.assertEqual(entry["preferred_import_method"], "LINK")
+
+    def test_lookup_type_filter(self):
+        self._write_index({
+            "Crate": {"name": "Crate", "type": "OBJECT", "file": "assets.blend"},
+        })
+        entry = self._mod._blmcp_index_lookup(
+            self._tmp.name, "Crate", self.bpy, asset_type="MATERIAL")
+        self.assertIsNone(entry)
+        entry = self._mod._blmcp_index_lookup(
+            self._tmp.name, "Crate", self.bpy, asset_type="OBJECT")
+        self.assertIsNotNone(entry)
+
+    def test_stale_fingerprint_returns_none(self):
+        self._write_index({"Crate": {"name": "Crate", "type": "OBJECT",
+                                      "file": "assets.blend"}})
+        # Bump the file so fingerprints no longer match.  Modify the file in a
+        # way that changes both mtime_ns and size.
+        with open(self.blend, "wb") as fh:
+            fh.write(b"fixture-blend-changed")
+        self.assertIsNone(self._mod._blmcp_index_read(self._tmp.name, self.bpy))
+        self.assertIsNone(self._mod._blmcp_index_lookup(
+            self._tmp.name, "Crate", self.bpy))
+
+    def test_schema_mismatch_returns_none(self):
+        self._write_index({"Crate": {"name": "Crate", "type": "OBJECT"}}, schema=99)
+        self.assertIsNone(self._mod._blmcp_index_read(self._tmp.name, self.bpy))
+
+    def test_background_build_triggers_and_ttl(self):
+        calls = []
+        class _FakeSubprocess:
+            DEVNULL = -3
+
+            @staticmethod
+            def Popen(cmd, **kwargs):
+                calls.append((cmd, kwargs))
+        original = getattr(self._mod, "subprocess", None)
+        self._mod.subprocess = _FakeSubprocess
+        self.addCleanup(
+            lambda: setattr(self._mod, "subprocess", original))
+        self.bpy.app = types.SimpleNamespace(binary_path=self.blend)
+        started, msg = self._mod._blmcp_trigger_index_build(self._tmp.name, self.bpy)
+        self.assertTrue(started, msg)
+        self.assertEqual(len(calls), 1)
+        cmd = calls[0][0]
+        self.assertIn("--background", cmd)
+        # Second call within TTL reports in-progress without respawning.
+        started2, msg2 = self._mod._blmcp_trigger_index_build(self._tmp.name, self.bpy)
+        self.assertFalse(started2)
+        self.assertIn("in progress", msg2)
+        self.assertEqual(len(calls), 1)
+
+    def test_no_binary_falls_back_gracefully(self):
+        self.bpy.app = types.SimpleNamespace(binary_path="")
+        started, msg = self._mod._blmcp_trigger_index_build(self._tmp.name, self.bpy)
+        self.assertFalse(started)
+        self.assertIn("no Bforartists binary", msg)
+
+    def test_ensure_missing_index_triggers_build(self):
+        calls = []
+        class _FakeSubprocess2:
+            DEVNULL = -3
+
+            @staticmethod
+            def Popen(cmd, **kwargs):
+                calls.append(cmd)
+        original = getattr(self._mod, "subprocess", None)
+        self._mod.subprocess = _FakeSubprocess2
+        self.addCleanup(
+            lambda: setattr(self._mod, "subprocess", original))
+        self.bpy.app = types.SimpleNamespace(binary_path=self.blend)
+        result = self._mod._blmcp_index_ensure(self._tmp.name, self.bpy)
+        self.assertIsNone(result)  # build is async, index not ready yet
+        self.assertEqual(len(calls), 1)
+
+    def test_indexer_script_compiles(self):
+        compile(self._mod._BLMCP_INDEXER_SCRIPT, "<indexer>", "exec")
+
+
+def _load_shared(name):
+    """Load a non-toolcode shared module (e.g. ``_asset_index_shared``)."""
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "mcp", "blmcp", "tools", "{:s}.py".format(name),
+    )
+    with open(path, "r", encoding="utf-8") as fh:
+        source = fh.read()
+    module = types.ModuleType(name)
+    exec(compile(source, path, "exec"), module.__dict__)
+    return module
 
 
 if __name__ == "__main__":

@@ -1279,5 +1279,49 @@ def _load_shared(name):
     return module
 
 
+class TestAssetSelftests(unittest.TestCase):
+    """Phase B in-session diagnostics suite (addon side)."""
+
+    def setUp(self):
+        self._ast = _load_addon_module("asset_selftests")
+
+    def test_auto_steps_cover_the_asset_tools(self):
+        keys = [key for key, _label, _fn in self._ast._AUTO_STEPS]
+        for expected in ("libraries", "search_name", "search_tag", "tags",
+                         "load_material", "place_object", "wire_add",
+                         "wire_output", "interface"):
+            self.assertIn(expected, keys)
+
+    def test_manual_steps_map_to_ui_checklist(self):
+        for _key, label, instructions in self._ast.MANUAL_STEPS:
+            self.assertTrue(label)
+            self.assertTrue(instructions)
+
+    def test_fixture_cleanup_scoped(self):
+        # Diagnostics run in the user's LIVE session: the purge must only
+        # touch distinctive fixture names, never arbitrary user content.
+        self.assertTrue(self._ast._is_fixture_name("Crate_Cube.001"))
+        self.assertTrue(self._ast._is_fixture_name("BFACW_WireTree"))
+        self.assertFalse(self._ast._is_fixture_name("My_Crate"))
+        self.assertFalse(self._ast._is_fixture_name("Hero"))
+
+    def test_results_state_seed(self):
+        self.assertEqual(self._ast.get_results(), [])
+        self.assertFalse(self._ast.is_running())
+
+
+def _load_addon_module(name):
+    """Load an addon-side module (e.g. ``asset_selftests``) standalone."""
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "addon", "bfa_coworker", "{:s}.py".format(name),
+    )
+    with open(path, "r", encoding="utf-8") as fh:
+        source = fh.read()
+    module = types.ModuleType(name)
+    exec(compile(source, path, "exec"), module.__dict__)
+    return module
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1022,6 +1022,55 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             )
             reset_op.suite = suite_key
 
+        from . import asset_selftests as _ast
+
+        # ── Asset Tool Self-Tests (deterministic, no LLM) ─────────────
+        selftest_box = diag_box.box()
+        header = selftest_box.row()
+        header.label(text="Asset Tool Self-Tests (no LLM)", icon='ASSET_MANAGER')
+        header.operator(
+            "bfacw.asset_selftest_run",
+            icon='PLAY',
+            text="Run All Auto",
+        )
+        header.operator(
+            "bfacw.asset_selftest_reset",
+            icon='LOOP_BACK',
+            text="Reset",
+        )
+        if _ast.is_running():
+            selftest_box.label(
+                text="Running... (results update as steps finish)", icon='RADIOBUT_ON')
+        elif _ast.last_error():
+            selftest_box.label(
+                text="Error: {:s}".format(_ast.last_error())[:120], icon='ERROR')
+        selftest_box.label(
+            text="Runs every asset tool against a throwaway fixture library — "
+                 "no MCP server or LLM needed.",
+            icon='BLANK1',
+        )
+        for step in _ast.get_results():
+            row = selftest_box.row(align=True)
+            icon = 'CHECKBOX_HLT' if step.get("ok") else 'CANCEL'
+            row.label(
+                text=step.get("label", "?"),
+                icon=icon,
+            )
+            row.label(
+                text="{:.1f}s".format(step.get("elapsed", 0.0)),
+                icon='TIME',
+            )
+            if step.get("detail"):
+                row2 = selftest_box.row()
+                row2.label(text=str(step.get("detail", ""))[:100], icon='BLANK1')
+
+        # Manual steps (cannot be automated headless).
+        man_box = selftest_box.box()
+        man_box.label(text="Manual Steps (need the UI)", icon='HAND')
+        for _key, m_label, m_text in _ast.MANUAL_STEPS:
+            man_box.label(text="• {:s}".format(m_label), icon='BLANK1')
+            man_box.label(text="    {:s}".format(m_text)[:140], icon='BLANK1')
+
         # Compare button for benchmark results.
         diag_box.separator()
         diag_box.operator("bfacw.compare_benchmarks", icon='FILE_REFRESH', text="Compare Results")

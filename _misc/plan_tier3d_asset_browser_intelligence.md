@@ -370,6 +370,53 @@ The agent needs to be *biased* toward using assets. The system prompt must make 
 
 ---
 
+## Phase B: In-Session Interface Debug Mode (deterministic self-tests) - Done
+
+### Steps
+
+1. **Deterministic, LLM-free self-test module** — `addon/bfa_coworker/asset_selftests.py`
+   runs the *same* `*_toolcode.py` modules the MCP layer executes — directly
+   in-session against a throwaway fixture library (`BFACW_Selftest`), no MCP
+   server, no agent, no LLM. Each step reports PASS/FAIL + wall-clock time:
+   `get_asset_libraries`, `search_assets` (by name and by tag), `get_asset_tags`
+   (editor type), `load_asset_in_context` (MATERIAL onto an explicit object),
+   `place_asset_in_scene` (position check), `wire_node_group` (add_top_level +
+   connect_to_output), `get_node_group_interface`. The fixture is an object,
+   a material, and a geometry node-group asset in a temp library; teardown
+   removes only fixture-owned datablocks (never the user's live scene).
+   Toolcodes are loaded via the same `# @include_begin` include expansion
+   (so the Phase C index helpers are present) from the vendored `vendor/blmcp`
+   or the source checkout.
+
+2. **One-click UI** — Preferences → Advanced → Diagnostics gains an
+   "Asset Tool Self-Tests (no LLM)" box next to the LLM test-suite grid: a
+   "Run All Auto" operator (modal, redraws the panel live as steps land),
+   a Reset operator, per-step PASS/FAIL with timing, and the full error/detail
+   inline.
+
+3. **Manual steps** — anything that needs a real editor/UI (opening the Asset
+   Browser, visually verifying a drag-in load, a render smoke test) is listed
+   as a manual checklist inside the same box with instructions, because it
+   cannot be automated headless.
+
+### Files Modified / Created
+
+| File | Change |
+|------|--------|
+| `addon/bfa_coworker/asset_selftests.py` (new) | Deterministic in-session self-test runner + manual steps |
+| `addon/bfa_coworker/operators_agent.py` | `_BFACW_OT_asset_selftest_run` / `_BFACW_OT_asset_selftest_reset` |
+| `addon/bfa_coworker/preferences.py` | Diagnostics UI: self-test box + manual checklist |
+| `addon/bfa_coworker/__init__.py` | Register the two new operators |
+| `tests/test_asset_tools.py` | 4 new tests for the self-test module |
+
+### Verification
+
+1. `python -m unittest tests.test_asset_tools` → 56/56 (incl. Phase B meta-tests).
+2. In-session run against the real Bforartists dev build (background): all 9
+   deterministic steps PASS, teardown leaves no fixture datablocks behind.
+
+---
+
 ## Further Considerations
 
 1. **Search speed** — `search_assets` walks the filesystem and, for tag/description

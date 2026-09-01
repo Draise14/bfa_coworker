@@ -1,9 +1,7 @@
 # BFA Coworker — Tier 3e: Chat UI Refinement
 
-## ✅ Done
-
 **Date**: 2026-08-25
-**Status**: Planning — Not Started
+**Status**: ✅ Implemented
 **Depends on**: Existing chat panel infrastructure (`ui_chat.py`, `agent_controller.py`, `preferences.py`)
 
 ---

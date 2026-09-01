@@ -50,6 +50,7 @@ __all__ = (
 )
 
 import io
+import ctypes
 import hashlib
 import re
 import json
@@ -2479,6 +2480,163 @@ def remove_llama_server() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# New-console launch (Windows only)
+#
+# subprocess.Popen(CREATE_NEW_CONSOLE) cannot set the title of the new
+# console window — subprocess.STARTUPINFO exposes no lpTitle — and calling
+# SetConsoleTitleW from the parent renames the *parent's* console instead
+# (which is why the Blender/Bforartists terminal was getting retitled).
+# CreateProcessW with STARTUPINFOW.lpTitle sets the title on the new console
+# at creation time, with no wrapper process: the returned handle still
+# refers to llama-server itself, so termination behaves exactly as before.
+
+
+class _ConsoleProcess:
+    """Minimal Popen-like handle for a process launched via CreateProcessW.
+
+    Exposes the subset of ``subprocess.Popen`` used by the rest of this
+    module: ``pid``, ``poll``, ``returncode``, ``wait``, ``terminate`` and
+    ``kill``.
+    """
+
+    _STILL_ACTIVE = 259  # STILL_ACTIVE (winnt.h)
+
+    def __init__(self, handle: int, pid: int) -> None:
+        self._handle = handle
+        self.pid = pid
+        self._returncode: int | None = None
+
+    @property
+    def returncode(self) -> int | None:
+        return self._returncode
+
+    def poll(self) -> int | None:
+        if self._returncode is None:
+            code = ctypes.c_ulong()
+            if ctypes.windll.kernel32.GetExitCodeProcess(
+                self._handle, ctypes.byref(code)
+            ) and code.value != _ConsoleProcess._STILL_ACTIVE:
+                self._returncode = int(code.value)
+        return self._returncode
+
+    def wait(self, timeout: float | None = None) -> int:
+        if self._returncode is not None:
+            return self._returncode
+        kernel32 = ctypes.windll.kernel32
+        if timeout is None:
+            kernel32.WaitForSingleObject(self._handle, 0xFFFFFFFF)
+        elif kernel32.WaitForSingleObject(
+            self._handle, int(timeout * 1000)
+        ) == 0x00000102:  # WAIT_TIMEOUT
+            raise subprocess.TimeoutExpired(self.pid, timeout)
+        self.poll()
+        return self._returncode if self._returncode is not None else 0
+
+    def terminate(self) -> None:
+        ctypes.windll.kernel32.TerminateProcess(self._handle, 1)
+
+    kill = terminate
+
+    def __del__(self) -> None:
+        try:
+            if self._handle:
+                ctypes.windll.kernel32.CloseHandle(self._handle)
+                self._handle = None
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+
+
+def _popen_new_console(
+    args: list[str],
+    env: dict[str, str],
+    title: str,
+) -> _ConsoleProcess:
+    """Launch *args* in a brand-new console window titled *title*.
+
+    Equivalent to ``subprocess.Popen(args, creationflags=CREATE_NEW_CONSOLE)``
+    but passes ``STARTUPINFOW.lpTitle`` so the new window is titled instead
+    of inheriting the executable name. Standard output/error are left
+    connected to the new console (nothing is redirected, so the parent
+    console keeps all of its own output). Windows only.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    class STARTUPINFOW(ctypes.Structure):
+        _fields_ = [
+            ("cb", wintypes.DWORD),
+            ("lpReserved", wintypes.LPWSTR),
+            ("lpDesktop", wintypes.LPWSTR),
+            ("lpTitle", wintypes.LPWSTR),
+            ("dwX", wintypes.DWORD),
+            ("dwY", wintypes.DWORD),
+            ("dwXSize", wintypes.DWORD),
+            ("dwYSize", wintypes.DWORD),
+            ("dwXCountChars", wintypes.DWORD),
+            ("dwYCountChars", wintypes.DWORD),
+            ("dwFillAttribute", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("wShowWindow", wintypes.WORD),
+            ("cbReserved2", wintypes.WORD),
+            ("lpReserved2", ctypes.POINTER(wintypes.BYTE)),
+            ("hStdInput", wintypes.HANDLE),
+            ("hStdOutput", wintypes.HANDLE),
+            ("hStdError", wintypes.HANDLE),
+        ]
+
+    class PROCESS_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("hProcess", wintypes.HANDLE),
+            ("hThread", wintypes.HANDLE),
+            ("dwProcessId", wintypes.DWORD),
+            ("dwThreadId", wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateProcessW.restype = wintypes.BOOL
+    kernel32.CreateProcessW.argtypes = [
+        wintypes.LPCWSTR,  # lpApplicationName
+        wintypes.LPWSTR,  # lpCommandLine
+        wintypes.LPVOID,  # lpProcessAttributes
+        wintypes.LPVOID,  # lpThreadAttributes
+        wintypes.BOOL,  # bInheritHandles
+        wintypes.DWORD,  # dwCreationFlags
+        wintypes.LPVOID,  # lpEnvironment
+        wintypes.LPCWSTR,  # lpCurrentDirectory
+        ctypes.POINTER(STARTUPINFOW),  # lpStartupInfo
+        ctypes.POINTER(PROCESS_INFORMATION),  # lpProcessInformation
+    ]
+
+    si = STARTUPINFOW()
+    si.cb = ctypes.sizeof(STARTUPINFOW)
+    si.lpTitle = title
+
+    # Environment block: NUL-separated UTF-16 "KEY=VALUE" pairs with a
+    # trailing double NUL; CREATE_UNICODE_ENVIRONMENT must be set.
+    env_block = "".join("{}={}\0".format(k, v) for k, v in env.items()) + "\0"
+    env_buf = ctypes.create_unicode_buffer(env_block)
+
+    pi = PROCESS_INFORMATION()
+    ok = kernel32.CreateProcessW(
+        None,  # lpApplicationName — resolved from the command line
+        ctypes.create_unicode_buffer(subprocess.list2cmdline(args)),  # lpCommandLine
+        None,  # lpProcessAttributes
+        None,  # lpThreadAttributes
+        False,  # bInheritHandles
+        0x00000010 | 0x00000400,  # CREATE_NEW_CONSOLE | CREATE_UNICODE_ENVIRONMENT
+        env_buf,  # lpEnvironment
+        None,  # lpCurrentDirectory — inherit
+        ctypes.byref(si),
+        ctypes.byref(pi),
+    )
+    if not ok:
+        raise ctypes.WinError(ctypes.get_last_error())
+
+    kernel32.CloseHandle(pi.hThread)
+    return _ConsoleProcess(int(pi.hProcess), int(pi.dwProcessId))
+
+
+# ---------------------------------------------------------------------------
 # Local LLM lifecycle
 
 
@@ -2689,27 +2847,24 @@ def start_local_llama(
         if sys.platform == "win32":
             # Launch llama-server in a NEW console window so the user can
             # see its output and close the window to stop it.
-            # subprocess.CREATE_NEW_CONSOLE (0x00000010) gives us a proper
-            # Popen handle that terminates the actual server, not a wrapper.
+            # CreateProcessW(CREATE_NEW_CONSOLE) gives us a proper handle
+            # that terminates the actual server, not a wrapper.
             # stdout/stderr are NOT redirected -- the output goes to the new
             # console window so the user can see model loading, health
-            # checks, and errors in real time.
+            # checks, and errors in real time.  Nothing about the parent
+            # (Blender/Bforartists) console is touched.
             print("[🛠️Coworker] start_local_llama: WIN32 path (CREATE_NEW_CONSOLE)")
             print("[🛠️Coworker] start_local_llama:   args = {:s}".format(str(args)))
-            creationflags = subprocess.CREATE_NEW_CONSOLE  # type: ignore[attr-defined]
-            proc = subprocess.Popen(
+            # The window title is set via STARTUPINFOW.lpTitle at creation
+            # time, so the NEW console is titled.  (SetConsoleTitleW from
+            # here would retitle the Blender/Bforartists terminal instead —
+            # the parent's own console.)
+            proc = _popen_new_console(
                 args,
-                stdin=subprocess.DEVNULL,
-                creationflags=creationflags,
                 env=env,
+                title="BFA Coworker — llama-server",
             )
             print("[🛠️Coworker] start_local_llama:   Popen returned pid={:d}".format(proc.pid))
-            # Set a meaningful window title so the user knows what this console is.
-            try:
-                import ctypes
-                ctypes.windll.kernel32.SetConsoleTitleW("BFA Coworker — llama-server")  # type: ignore[attr-defined]
-            except Exception:
-                pass
         else:
             # Linux / macOS: detach from the parent process group so the
             # server survives Blender exiting.  Redirect stdio to the log

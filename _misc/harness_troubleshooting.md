@@ -79,6 +79,21 @@ The MCP client can't find the `python` command. This happens when:
 **Fix**: Enable **"Use Blender's Python"** in preferences. This emits the
 full absolute path to Blender's bundled Python, which always works.
 
+## "Blender executable not found at 'blender'"
+
+The `execute_blender_code_for_cli` (and related CLI) tools spawn a background
+Blender to run code, using the `BLENDER_PATH` environment variable. If it is
+not set (or your Blender is installed under another name, e.g.
+`bforartists.exe`), the tool falls back to a literal `blender` and fails.
+
+**Fix**: regenerate the MCP config from the addon (it now sets `BLENDER_PATH`
+to your running Bforartists binary automatically), or set `BLENDER_PATH`
+manually in the client config env block, e.g.:
+```
+"env": { "BLENDER_PATH": "C:/3D_Stuff/Devbuild/bforartists.exe" }
+```
+full absolute path to Blender's bundled Python, which always works.
+
 ## Per-Harness Common Issues
 
 ### Claude Desktop

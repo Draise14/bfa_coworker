@@ -369,6 +369,7 @@ No single layer is impenetrable, but together they make it very unlikely that LL
 ### 9.1 What Works Well
 
 - **Markdown rendering**: Code blocks with `[Copy]`, pipe tables, headings (H1-H6), lists, blockquotes, horizontal rules, LaTeX→Unicode. Auto-close trailing fences.
+- **Native multiline support**: `_can_multiline()` detects Blender PR #154351's `label_multiline` API at runtime. On workshop builds, chat messages wrap to the actual layout width with tight 0.75 UI_UNIT_Y leading — no manual chopping, no tall rows. Falls back to character-based wrapping on stock builds.
 - **Turn grouping**: `turn_start` flag with backward compat. Workshop collapsible panel.
 - **Chat persistence**: JSON files with versioned copies (10 retained), thread-safe saves.
 - **@Mention system**: 6 categories, auto-open popup.
@@ -379,8 +380,8 @@ No single layer is impenetrable, but together they make it very unlikely that LL
 
 - **No bold/italic**: Blender UI limitation — all inline formatting stripped. Not fixable.
 - **No `[Run]` button**: Only `[Copy]`. Deferred to Tier 4b for security review.
-- **Conclusion markdown inconsistency**: When a turn has no user message, conclusion renders as plain text.
-- **`_WRAP_WIDTH = 60`** hardcoded.
+- **Conclusion markdown inconsistency**: When a turn has no user message, conclusion renders as plain text via `_draw_multiline()` instead of `_render_markdown()` (line ~1960). Minor — the content is still readable.
+- **`_WRAP_WIDTH = 60`** is the fallback for builds without `label_multiline`. On builds with the native multiline API (Blender PR #154351, workshop builds), `_can_multiline()` detects it and `label_multiline` wraps to the actual layout width with tight 0.75 UI_UNIT_Y leading — no manual chopping, no tall rows. This is the best we can do within Blender's UI constraints.
 
 ---
 
@@ -516,7 +517,7 @@ No single layer is impenetrable, but together they make it very unlikely that LL
 | Step | File | Change | LOC |
 |------|------|--------|-----|
 | D1 | `CHANGELOG.md` | Add "Fixed" entries for the 3 critical bugs | ~20 |
-| D2 | `_misc/plan_tier3g_mcp_intent_architecture.md` | Add "Known Limitations" section documenting what was built vs. planned | ~30 |
+| D2 | `_misc/release_1.1.37_summary.md` | Add "Known Limitations" section documenting what was built vs. planned — template system is minimal (18 of 135 planned), orchestration is proof-of-concept, 15 tools lack dedicated tests. Keeps users informed without cluttering the architecture plan. | ~30 |
 
 ### Phase E: Optional — Template Metadata Retrofit (~100 LOC, 1 file) — EST. 1 HOUR
 
@@ -550,7 +551,7 @@ If time permits before launch, add metadata to existing templates to prepare for
 | **Wire autofix before launch** | The 12 rules are correct and useful. Wiring them in (before preflight) silently fixes common LLM mistakes instead of rejecting the code. This reduces round-trips. |
 | **Ship minimal template system as-is** | The full orchestration layer (135 templates, chains, tiers, plugins) is a Tier 4 effort. The current 18 templates + domain system + raw code fallback is functional. |
 | **Accept security model for v1** | Local-first tool, user runs their own model. Weak sandbox + preflight is appropriate. Tier 4 adds defense-in-depth (import whitelist, file audit, operator audit). |
-| **Document known limitations** | Be honest with users about what the orchestration layer can and can't do. The CHANGELOG should note that templates are minimal and the plan system is basic. |
+| **Document known limitations** | Be honest with users about what the orchestration layer can and can't do. The release summary should note that templates are minimal and the plan system is basic. |
 | **Tier 4 needs a Phase 0** | The orchestration gap directly blocks Tier 4c (Text Editor) and partially blocks Tier 4b (CHOYA). Add ~400 LOC of template expansion + metadata retrofit to Tier 4 master coordination. |
 
 ---

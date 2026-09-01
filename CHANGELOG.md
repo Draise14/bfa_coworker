@@ -88,6 +88,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Agent Torus Loop + Template Crash (audit fix)** - Live debugging of the agent log exposed three
+  root causes that combined into a 6-turn failure spiral:
+  - **`bpy.context.active_object` unavailable in the MCP bridge** - LLM code runs in a worker thread,
+    and Blender's context is thread-local there, so `bpy.context.active_object` raises
+    `AttributeError` (verified against the dev build). All 18 `blender_templates.py` templates,
+    the preflight hints, and the skills examples used that pattern - every template now uses
+    `bpy.context.view_layer.objects.active` (which works in-thread), a new preflight check
+    (`context_active_object_thread`) teaches the replacement before execution, and the skills
+    gained a bridge-thread note.
+  - **Preflight false positive on primitive transform kwargs** - check #23 banned
+    `location`/`rotation`/`scale` on `primitive_*_add`, but the live build accepts them
+    (verified: `location`+`rotation` on all 10 mesh primitives, `scale` on 9 of 10). Only
+    `rotation_euler`/`rotation_mode` are invalid, and those are still flagged. The agent was
+    blocked from its valid fix and forced back into the crashing pattern.
+  - **llama-server 400 template/parser error killed the next turn** - the log ended with
+    `400 Unable to generate parser for this template ... Unexpected message role`. The retry
+    logic only handled 500s; a new fallback now catches 400s and retries with the conversation
+    flattened to plain system/user/assistant (tool results merged into user messages, no
+    `tools` parameter), so the agent survives templates that cannot represent tool-calling.
+  Tests updated/added in `tests/test_preflight.py` (43 total, green); all unit suites pass.
+
 - **Console Severity Filtering** — With Debug Mode off, the Blender terminal now receives only this addon's warnings (`[⚠️Coworker]`) and error-level lines (ERROR/FAILED/FATAL/TRACEBACK) instead of the full `[Coworker]` diagnostic stream; routine diagnostics are log-only (still in `coworker.log`). Everything that is not the addon's own output (Blender's C-level log, other addons, user scripts, tracebacks) is unaffected. Debug Mode on still shows every line.
 
 - **llama-server Console Window Title (#57 follow-up)** — The dedicated llama-server console window is now titled **"BFA Coworker — llama-server"** at creation. The title is passed via `STARTUPINFOW.lpTitle` on `CreateProcessW` (with `CREATE_NEW_CONSOLE`), because `subprocess.STARTUPINFO` exposes no `lpTitle` and calling `SetConsoleTitleW` from the parent was retitling the Blender/Bforartists terminal instead of the new window. The parent console is never touched: its title stays as-is and all of its output still streams through unchanged — llama-server's stdout/stderr continue to go to the new window with no redirection, and the only console lines the addon itself suppresses remain the intentional `[Coworker]`-prefixed diagnostics when Debug Mode is off.

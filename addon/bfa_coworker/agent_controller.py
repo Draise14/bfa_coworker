@@ -286,6 +286,37 @@ def _sanitize_message_roles(messages: list[dict[str, Any]]) -> list[dict[str, An
     ]
 
 
+def _flatten_for_plain_chat(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Flatten a tool-calling conversation into plain system/user/assistant.
+
+    llama-server's automatic template-parser generation can fail with HTTP
+    400 ("Unable to generate parser for this template ... Unexpected
+    message role") when the model's Jinja template cannot represent
+    'tool' role messages or assistant 'tool_calls'.  Flattening merges each
+    tool result into a user message and drops tool_calls/tool_call_id so
+    any chat template can render the conversation.  New dicts are returned
+    -- the caller's message dicts are never mutated.
+    """
+    flat: list[dict[str, Any]] = []
+    for m in messages:
+        if m.get("role") == "tool":
+            name = m.get("name", "")
+            content = str(m.get("content") or "")
+            flat.append({
+                "role": "user",
+                "content": "[Tool result from {:s}]\n{:s}".format(name, content),
+            })
+            continue
+        cleaned: dict[str, Any] = {}
+        for key, value in m.items():
+            if key in ("tool_calls", "tool_call_id", "summary", "label", "turn_start"):
+                continue
+            cleaned[key] = value
+        flat.append(cleaned)
+    return flat
+
+
+
 # ── Tool domain system (hybrid: pre-detect + on-demand) ────────────
 # Surface tools are always loaded — they cover code execution and basic
 # scene inspection.  Domain tools are loaded based on the user's prompt
@@ -1996,6 +2027,32 @@ def _openai_chat_completions(
                     req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
                     continue
 
+            # -- Chat template parser-generation failure (400) --------
+            # llama-server auto-generates a parser for the model's Jinja
+            # chat template when a request carries tool-calling structure.
+            # Some templates fail that generation with HTTP 400
+            # "Unable to generate parser for this template ... Unexpected
+            # message role."  Flatten the conversation to plain
+            # system/user/assistant messages and retry without tools; the
+            # model then answers in text (text tool calls are still parsed).
+            if isinstance(ex, urllib.error.HTTPError) and ex.code == 400:
+                _error_body = ""
+                try:
+                    _error_body = ex.read().decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+                if ("parser" in _error_body and "template" in _error_body) or "Unexpected message role" in _error_body:
+                    print("[🛠️Coworker] _openai_chat_completions: 400 template/parser error - "
+                          "flattening conversation and retrying without tools")
+                    if _error_body:
+                        print("[🛠️Coworker] _openai_chat_completions:   400 body = {:s}".format(_error_body[:300]))
+                    tools_tried = False
+                    body.pop("tools", None)
+                    body["messages"] = _flatten_for_plain_chat(messages)
+                    data_bytes = json.dumps(body).encode()
+                    req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
+                    continue
+
             # ── 503 Service Unavailable: model still loading ──────────
             # llama-server returns 503 while the model is loading into
             # memory (can take 30-120s for large models).  Retry with
@@ -2449,7 +2506,7 @@ def _spiral_corrective_message(error_sig: str) -> str:
             "(e.g. selected_edges, selected_faces, selected_verts). Blender does not expose "
             "edit-mode selections on context. Read them with bmesh:\n"
             "    import bmesh\n"
-            "    bm = bmesh.from_edit_mesh(bpy.context.active_object.data)\n"
+            "    bm = bmesh.from_edit_mesh(bpy.context.view_layer.objects.active.data)\n"
             "    sel = [e for e in bm.edges if e.select]\n"
             "Use `bpy.context.selected_objects` only for object-mode object selection. "
             "Fix the code \u2014 do not retry it verbatim.]"

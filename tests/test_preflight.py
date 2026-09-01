@@ -60,7 +60,7 @@ class TestPreflightCheck(unittest.TestCase):
         code = """
 import bpy
 bpy.ops.mesh.primitive_cube_add()
-obj = bpy.context.active_object
+obj = bpy.context.view_layer.objects.active
 print(obj.name)
 """
         issues = _preflight_check(code)
@@ -417,15 +417,15 @@ bpy.ops.mesh.primitive_cube_add(rotation_euler=(1, 0, 0))
         names = [name for name, _ in issues]
         self.assertIn("prim_transform_kwarg", names)
 
-    def test_prim_location_kwarg(self):
-        """location on primitive add is caught."""
+    def test_prim_location_kwarg_ok(self):
+        """location/rotation on primitive add is accepted in 5.3 (not flagged)."""
         code = """
 import bpy
-bpy.ops.mesh.primitive_uv_sphere_add(location=(1, 2, 3))
+bpy.ops.mesh.primitive_uv_sphere_add(location=(1, 2, 3), rotation=(0.1, 0.2, 0.3))
 """
         issues = _preflight_check(code)
         names = [name for name, _ in issues]
-        self.assertIn("prim_transform_kwarg", names)
+        self.assertNotIn("prim_transform_kwarg", names)
 
     def test_prim_no_transform_ok(self):
         """Primitive add without transform kwargs is NOT flagged."""
@@ -436,6 +436,28 @@ bpy.ops.mesh.primitive_cube_add(size=2.0)
         issues = _preflight_check(code)
         names = [name for name, _ in issues]
         self.assertNotIn("prim_transform_kwarg", names)
+
+    def test_context_active_object_caught(self):
+        """bpy.context.active_object is flagged (unavailable in bridge thread)."""
+        code = """
+import bpy
+bpy.ops.mesh.primitive_cube_add()
+obj = bpy.context.active_object
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("context_active_object_thread", names)
+
+    def test_view_layer_active_not_caught(self):
+        """bpy.context.view_layer.objects.active is NOT flagged."""
+        code = """
+import bpy
+bpy.ops.mesh.primitive_cube_add()
+obj = bpy.context.view_layer.objects.active
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("context_active_object_thread", names)
 
 
     # ── Tests for checks 24-27: bmesh, vector, update_edit_mesh ──────────

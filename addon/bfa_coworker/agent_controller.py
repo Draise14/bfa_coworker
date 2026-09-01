@@ -1669,6 +1669,15 @@ def generate_mcp_client_config(
     }
     if py_path:
         env["PYTHONPATH"] = py_path
+    # Point CLI tools (execute_blender_code_for_cli, etc.) at the running
+    # Blender/Bforartists binary.  Without this they fall back to a literal
+    # "blender" on PATH, which fails when Blender is installed under a
+    # different name (e.g. bforartists.exe).
+    try:
+        import bpy  # pylint: disable=import-error
+        env["BLENDER_PATH"] = bpy.app.binary_path
+    except Exception:
+        pass  # Outside Blender - the client must set BLENDER_PATH itself.
 
     # Base command block shared by all presets.
     base_cmd = {

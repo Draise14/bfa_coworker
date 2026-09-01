@@ -88,6 +88,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Harness CLI Tools Find Bforartists** - `execute_blender_code_for_cli` and friends
+  failed with "Blender executable not found at 'blender'" because generated harness
+  configs never set `BLENDER_PATH`, so the CLI fell back to a literal `blender` on
+  PATH (which does not exist when Blender is installed as `bforartists.exe`). The
+  config generator now emits `BLENDER_PATH` pointing at the running binary. Also
+  fixed a latent Windows crash: the CLI subprocess decoded output with the locale
+  codec (cp1252), which chokes on Bforartists' UTF-8 console output (the addon
+  prints emoji) and killed the reader thread - it now decodes UTF-8 with
+  replacement. Verified end-to-end against the Bforartists dev build.
+
 - **Copy Error Button in the Chat Sidebar** - When the agent reports an error, the sidebar status line
   now shows a **Copy Error** button that puts the full error text on the clipboard for troubleshooting.
   The sidebar itself keeps showing the compact 500-char preview (raw JSON bodies rendered inline looked

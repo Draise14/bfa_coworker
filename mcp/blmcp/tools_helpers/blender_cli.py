@@ -71,6 +71,10 @@ def run_blender_cli(
             [blender, "--background", blend_file, "--python-expr", wrapper],
             capture_output=True,
             text=True,
+            # Bforartists/Blender prints UTF-8 (the addon emits emoji);
+            # the locale codec (cp1252 on Windows) chokes on that.
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             check=False,
         )

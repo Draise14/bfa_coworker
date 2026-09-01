@@ -32,6 +32,11 @@ def register(mcp: FastMCP) -> None:
     def jump_to_tab_by_name(name: str) -> dict[str, object]:
         """
         Switch the active workspace tab to *name*.
+
+        Use e.g. "Main", "Modeling", "Layout", "UV Editing",
+        "Geometry Nodes" or other workspace names (see the
+        ``available_workspaces`` field of the response); matching is
+        case-insensitive.
         """
         p = Params(name=name)
         code = toolcode_format_call(_TOOL_CALL, p)

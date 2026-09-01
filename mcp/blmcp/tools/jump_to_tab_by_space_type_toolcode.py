@@ -28,6 +28,7 @@ class Result(NamedTuple):
     created: bool | None = None
     message: str | None = None
     available_space_types: list[str] | None = None
+    available_workspaces: list[str] | None = None
 
 
 def main(params: Params) -> Result:
@@ -54,7 +55,12 @@ def main(params: Params) -> Result:
 
     if found:
         bpy.context.window.workspace = found
-        return Result(status="ok", workspace=found.name, space_type=params.space_type)
+        return Result(
+            status="ok",
+            workspace=found.name,
+            space_type=params.space_type,
+            available_workspaces=[w.name for w in bpy.data.workspaces],
+        )
 
     if params.allow_edits:
         # Duplicate the current workspace and change its main area type.

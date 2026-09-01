@@ -37,6 +37,14 @@ def main(params: Params) -> Result:
 
     ws = bpy.data.workspaces.get(params.name)
     if ws is None:
+        # Tolerate case, trailing spaces and Bforartists/Blender naming
+        # differences (e.g. "modeling" vs "Modeling").
+        name_lower = params.name.strip().lower()
+        for w in bpy.data.workspaces:
+            if w.name.strip().lower() == name_lower:
+                ws = w
+                break
+    if ws is None:
         return Result(
             status="error",
             message="Workspace {!r} not found".format(params.name),
@@ -44,4 +52,8 @@ def main(params: Params) -> Result:
         )
 
     bpy.context.window.workspace = ws
-    return Result(status="ok", workspace=ws.name)
+    return Result(
+        status="ok",
+        workspace=ws.name,
+        available_workspaces=[w.name for w in bpy.data.workspaces],
+    )

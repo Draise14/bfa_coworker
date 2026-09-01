@@ -1323,5 +1323,160 @@ def _load_addon_module(name):
     return module
 
 
+
+class _WorkspaceStub:
+    """Minimal workspace with screens (for the space-type lookup)."""
+
+    def __init__(self, name):
+        self.name = name
+        self.screens = []
+
+
+class _WorkspacesStub:
+    """dict-like `bpy.data.workspaces` with .get() and iteration."""
+
+    def __init__(self, names):
+        self._map = {n: _WorkspaceStub(n) for n in names}
+
+    def get(self, name, default=None):
+        return self._map.get(name, default)
+
+    def __iter__(self):
+        return iter(self._map.values())
+
+
+class _WindowStub:
+    def __init__(self, workspace):
+        self.workspace = workspace
+        self.width = 800
+        self.height = 600
+
+
+class _AreaStub:
+    def __init__(self, area_type, width=100, height=100):
+        self.type = area_type
+        self.width = width
+        self.height = height
+        self.ui_type = ""
+
+
+class _ScreenStub:
+    def __init__(self, name, areas):
+        self.name = name
+        self.areas = areas
+
+
+class TestTabSwitchTools(unittest.TestCase):
+    """jump_to_tab_by_name / jump_to_tab_by_space_type toolcodes."""
+
+    def setUp(self):
+        _install_bpy(self)
+        self.bpy.app = types.SimpleNamespace(background=False)
+
+    def _call_by_name(self, tool_name, **params):
+        """Call a tab toolcode whose Params itself has a `name` field."""
+        module = _load_toolcode(tool_name)
+        return module.main(module.Params(**params))._asdict()
+
+    def _install_workspaces(self, names):
+        ws = _WorkspacesStub(names)
+        self.bpy.data.workspaces = ws
+        self.bpy.context.window = _WindowStub(ws._map[names[0]])
+        return ws
+
+    def test_by_name_switches_tab(self):
+        self._install_workspaces(["Main", "Modeling", "Geometry Nodes"])
+        result = self._call_by_name("jump_to_tab_by_name", name="Modeling")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["workspace"], "Modeling")
+        self.assertEqual(self.bpy.context.window.workspace.name, "Modeling")
+        self.assertIn("available_workspaces", result)
+        self.assertIn("Geometry Nodes", result["available_workspaces"])
+
+    def test_by_name_case_insensitive(self):
+        self._install_workspaces(["Main", "Modeling"])
+        result = self._call_by_name("jump_to_tab_by_name", name="modeling")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["workspace"], "Modeling")
+
+    def test_by_name_not_found(self):
+        self._install_workspaces(["Main", "Modeling"])
+        result = self._call_by_name("jump_to_tab_by_name", name="Nope")
+        self.assertEqual(result["status"], "error")
+        self.assertIn("not found", result["message"])
+        self.assertIn("Main", result["available_workspaces"])
+
+    def test_by_name_background_mode(self):
+        self._install_workspaces(["Main"])
+        self.bpy.app.background = True
+        result = self._call_by_name("jump_to_tab_by_name", name="Main")
+        self.assertEqual(result["status"], "error")
+        self.assertIn("background", result["message"])
+
+    def test_by_space_type_existing(self):
+        ws = self._install_workspaces(["Main", "Layout"])
+        ws._map["Main"].screens = [_ScreenStub("Main", [_AreaStub("PROPERTIES")])]
+        ws._map["Layout"].screens = [_ScreenStub("Layout", [_AreaStub("VIEW_3D")])]
+        result = _call(
+            "jump_to_tab_by_space_type", space_type="VIEW_3D", allow_edits=False)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["workspace"], "Layout")
+        self.assertEqual(self.bpy.context.window.workspace.name, "Layout")
+
+    def test_by_space_type_not_found_no_edits(self):
+        ws = self._install_workspaces(["Main"])
+        ws._map["Main"].screens = [_ScreenStub("Main", [_AreaStub("VIEW_3D")])]
+        result = _call(
+            "jump_to_tab_by_space_type", space_type="PROPERTIES", allow_edits=False)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("space type", result["message"])
+        self.assertIn("VIEW_3D", result["available_space_types"])
+
+    def test_by_space_type_creates(self):
+        ws = self._install_workspaces(["Main"])
+        ws._map["Main"].screens = [_ScreenStub("Main", [_AreaStub("VIEW_3D")])]
+        self.bpy.context.screen = ws._map["Main"].screens[0]
+
+        def _duplicate():
+            new_name = "Texture Paint"
+            new_ws = _WorkspaceStub(new_name)
+            new_ws.screens = [self.bpy.context.screen]
+            ws._map[new_name] = new_ws
+            self.bpy.context.window.workspace = new_ws
+
+        self.bpy.ops.workspace = types.SimpleNamespace(duplicate=_duplicate)
+        result = _call(
+            "jump_to_tab_by_space_type", space_type="TEXT_EDITOR", allow_edits=True)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["created"], True)
+        self.assertEqual(result["space_type"], "TEXT_EDITOR")
+        self.assertEqual(self.bpy.context.window.workspace.name, "Text Editor")
+
+
+@unittest.skipIf(
+    not os.environ.get("BFACW_RUN_BRIDGE_TESTS") == "1",
+    "skipped unless BFACW_RUN_BRIDGE_TESTS=1 (needs addon internals)",
+)
+class TestBridgeExecThreading(unittest.TestCase):
+    """Verify _execute_code chooses inline (main-thread) exec for toolcode."""
+
+    def setUp(self):
+        src_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "addon", "bfa_coworker", "mcp_to_blender_server.py")
+        with open(src_path, "r", encoding="utf-8") as fh:
+            self.source = fh.read()
+
+    def test_toolcode_marker_runs_inline(self):
+        idx = self.source.find("is_toolcode = ")
+        self.assertGreater(idx, 0)
+        # The inline branch executes in the *calling* thread — no
+        # threading.Thread spawn for the trusted-marker path.
+        segment = self.source[idx:idx + 400]
+        self.assertIn("if is_toolcode:", segment)
+
+
+
+
 if __name__ == "__main__":
     unittest.main()

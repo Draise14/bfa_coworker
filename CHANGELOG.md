@@ -88,6 +88,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Workspace-Tab Tools Now Work Through the Harness** - `jump_to_tab_by_name` /
+  `jump_to_tab_by_space_type` (and every other window/context-dependent tool: asset-browser
+  jump, viewport jumps, screenshots) returned "No active window" (or crashed) whenever called
+  from an MCP client. Root cause: the addon bridge executed *all* code - including trusted,
+  repository-controlled toolcode - in a daemon worker thread, and `bpy.context` is only populated
+  on Blender's main thread (probe-verified: window=None, screen=None, `active_object` raises
+  AttributeError in the worker thread). The bridge now runs toolcode-marked payloads inline in
+  the calling thread (the socket is serviced from `bpy.app.timers` on the main thread), while
+  LLM-generated code keeps the 30s hang-timeout worker thread. Also hardened the two tab tools:
+  workspace lookup tolerates case/whitespace differences, and the success result now includes
+  `available_workspaces` so the agent can discover tabs. Live-verified end-to-end through the
+  real bridge in a UI session (tab switched Main -> Animation, workspaces listed). New unit tests
+  for both tab toolcodes in `tests/test_asset_tools.py` (64 total).
+
 - **Harness Step 3: Chat-Paste Hint** - The external-harness wizard now shows a per-client tip in
   Step 3 (Paste into your client) telling you when you can paste the config directly into the
   client's chat/MCP settings instead of editing a config file: Windsurf (Cascade chat), Claude

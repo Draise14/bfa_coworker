@@ -730,22 +730,43 @@ def _execute_code(
                 hint_lines.append("Fix these issues and retry. Do NOT retry the same code.")
                 return _ExecResult({"status": "error", "message": "\n".join(hint_lines)})
 
-            # Run exec() in a thread with a timeout to prevent hangs.
+            # Toolcode-generated payloads carry this marker: they are
+            # repository-controlled and trusted. Execute them inline in
+            # the calling thread so that bpy.context (window / screen /
+            # active object) is populated. In interactive mode the socket
+            # is serviced from bpy.app.timers on the main thread; in
+            # background/CLI mode the request loop also runs on the main
+            # thread. A worker thread would expose an empty context
+            # (bpy.context.window is None, bpy.context.active_object
+            # raises AttributeError), which made every window-dependent
+            # tool (tab switching, viewport jumps, screenshots, asset
+            # browser) fail with "No active window" through the harness.
+            is_toolcode = "# blmcp-toolcode-skip-preflight" in code
             _exec_error = [None]
-            def _run_code():
+            if is_toolcode:
+                # Trusted repository-controlled code: no hang-timeout
+                # wrapper needed, and it must run on the main thread.
                 try:
                     exec(code, namespace)
                 except Exception as _e:
                     _exec_error[0] = _e
-            _exec_thread = threading.Thread(target=_run_code, daemon=True)
-            _exec_thread.start()
-            _exec_thread.join(timeout=30)
-            if _exec_thread.is_alive():
-                return _ExecResult({
-                    "status": "error",
-                    "message": "[Preflight] Code execution timed out after 30 seconds. "
-                    "This usually means an infinite loop or a blocking operator call.",
-                })
+            else:
+                # Run LLM-generated exec() in a thread with a timeout to
+                # prevent hangs.
+                def _run_code():
+                    try:
+                        exec(code, namespace)
+                    except Exception as _e:
+                        _exec_error[0] = _e
+                _exec_thread = threading.Thread(target=_run_code, daemon=True)
+                _exec_thread.start()
+                _exec_thread.join(timeout=30)
+                if _exec_thread.is_alive():
+                    return _ExecResult({
+                        "status": "error",
+                        "message": "[Preflight] Code execution timed out after 30 seconds. "
+                        "This usually means an infinite loop or a blocking operator call.",
+                    })
             if _exec_error[0] is not None:
                 raise _exec_error[0]
 

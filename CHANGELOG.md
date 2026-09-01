@@ -73,10 +73,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   material. Says "Be concise and decisive" instead of "Think aloud in full paragraphs."
   Saves ~3K input tokens per turn.
 
-- **API Docs Tools Moved to Domain** — `get_python_api_docs`, `search_api_docs`, and
-  `search_manual_docs` moved from surface tools to a new "docs" domain, auto-detected by
-  keywords. Saves ~750 input tokens per turn for the common case.
-
 - **Bundled Blender API Docs Always Available** — `get_python_api_docs`, `search_api_docs`, and `search_manual_docs` are now always loaded as surface tools, so the agent can look up correct APIs on error without needing to load a domain first.
 - **Mode Switch Lock** — Operating mode (Local/Remote/Harness) and GPU backend can no longer be changed while the agent is running; the selector is disabled with a "Stop the agent first" hint, preventing mid-flight MCP server kills.
 - **Chat UI Polish** — Multiline text wrapping with constrained width, enhanced markdown heading visual hierarchy (keyframe dot icons per level), loading icon shown only on the active item, consistent open-folder icons, and fixed separator rendering.

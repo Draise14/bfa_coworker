@@ -88,6 +88,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Copy Error Button in the Chat Sidebar** - When the agent reports an error, the sidebar status line
+  now shows a **Copy Error** button that puts the full error text on the clipboard for troubleshooting.
+  The sidebar itself keeps showing the compact 500-char preview (raw JSON bodies rendered inline looked
+  garbled), while the full untruncated message is preserved on the agent state and copied instead - the
+  session-log export also includes the full text now. Also fixed the inverted status icon (it showed a
+  warning icon when an error was present).
+
 - **Agent Torus Loop + Template Crash (audit fix)** - Live debugging of the agent log exposed three
   root causes that combined into a 6-turn failure spiral:
   - **`bpy.context.active_object` unavailable in the MCP bridge** - LLM code runs in a worker thread,

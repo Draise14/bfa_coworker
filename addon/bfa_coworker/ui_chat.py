@@ -23,6 +23,7 @@ __all__ = (
     "BFACW_OT_chat_queue_send",
     "BFACW_OT_export_session_log",
     "BFACW_OT_copy_session_log",
+    "BFACW_OT_copy_status_error",
     "BFACW_OT_agent_start",
     "BFACW_OT_agent_stop",
     "BFACW_OT_agent_restart",
@@ -934,6 +935,23 @@ class BFACW_OT_copy_session_log(Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
+class BFACW_OT_copy_status_error(Operator):  # type: ignore[misc]
+    """Copy the full error/status text to the clipboard for troubleshooting."""
+    bl_idname = "bfacw.copy_status_error"
+    bl_label = "Copy Error"
+    bl_description = "Copy the full error text to the clipboard for troubleshooting"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        state = agent_controller._agent_state
+        text = state.error_full or state.error or ""
+        if not text.strip():
+            self.report({"WARNING"}, "No error text to copy")
+            return {"CANCELLED"}
+        context.window_manager.clipboard = text
+        self.report({"INFO"}, "Error text copied to clipboard")
+        return {"FINISHED"}
+
+
 class BFACW_OT_chat_stop(Operator):  # type: ignore[misc]
     """Stop the current generation."""
     bl_idname = "bfacw.chat_stop"
@@ -1794,13 +1812,21 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             is_ok = state.mcp_server_running
 
         status_icon = (
-            'CHECKMARK' if is_ok and not state.is_thinking else
+            'CHECKMARK' if is_ok and not state.is_thinking and not state.error else
             'SORTTIME' if state.is_thinking else
-            'WARNING' if state.error else 'ERROR'
+            'ERROR' if state.error else 'CANCEL'
         )
         status_row = layout.row()
         status_row.label(text="", icon=status_icon)
         _draw_multiline(status_row, status)
+        if state.error:
+            err_row = layout.row(align=True)
+            err_row.scale_y = 0.8
+            err_row.operator(
+                "bfacw.copy_status_error",
+                icon="COPYDOWN",
+                text="Copy Error",
+            )
 
         # ── External Harness mode ──
         if is_harness:
@@ -2307,6 +2333,7 @@ _classes = (
     BFACW_OT_chat_queue_send,
     BFACW_OT_export_session_log,
     BFACW_OT_copy_session_log,
+    BFACW_OT_copy_status_error,
     BFACW_OT_queue_clear,
     BFACW_OT_queue_show,
     BFACW_OT_mention_search,

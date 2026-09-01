@@ -2023,7 +2023,10 @@ def _openai_chat_completions(
                 if reasoning:
                     print("[🛠️Coworker] _openai_chat_completions: reasoning ({:d} chars):".format(
                         len(reasoning)))
-                    print(_strip_think_tags(reasoning))
+                    # Collapse consecutive blank lines to reduce console clutter.
+                    _clean = re.sub(r"\n{3,}", "\n\n", _strip_think_tags(reasoning))
+                    print(_clean)
+
                     print("[🛠️Coworker] _openai_chat_completions: --- end reasoning ---")
                 # If we fell back to text-based tool calling, parse text calls.
                 if not tools_tried and not tool_calls:

@@ -29,5 +29,5 @@ reference immediately after creation — don't assume the original name:
 
 ```python
 bpy.ops.mesh.primitive_cube_add()
-obj = bpy.context.active_object  # obj.name might be "Cube.001"
+obj = bpy.context.view_layer.objects.active  # obj.name might be "Cube.001"
 ```

@@ -15,6 +15,9 @@ __all__ = (
 
 from typing import Any, NamedTuple
 
+# @include_begin: _asset_index_shared.py
+# @include_end
+
 
 class Result(NamedTuple):
     status: str
@@ -50,7 +53,39 @@ def main(params: Params) -> Result:
             if not lib_path or not os.path.isdir(lib_path):
                 continue
 
-            # Scan blend files for assets.
+            # Fast path: match against the on-disk metadata index (Tier 3d
+            # Phase C). This never appends datablocks into the session, so
+            # searching is cheap and leaves bpy.data untouched.
+            index = _blmcp_index_ensure(lib_path, bpy)
+            if isinstance(index, dict):
+                assets = index.get("assets")
+                if isinstance(assets, dict):
+                    for name_i, entry in assets.items():
+                        if not isinstance(entry, dict):
+                            continue
+                        entry_type = str(entry.get("type", ""))
+                        if asset_type and entry_type != asset_type:
+                            continue
+                        haystack = "{} {} {}".format(
+                            str(name_i).lower(),
+                            " ".join(str(t).lower() for t in entry.get("tags", [])),
+                            str(entry.get("description", "") or "").lower(),
+                        )
+                        if query_lower not in haystack:
+                            continue
+                        matches.append({
+                            "name": str(name_i),
+                            "type": entry_type,
+                            "library": lib.name,
+                            "file": str(entry.get("file", "") or "").rsplit("/", 1)[-1],
+                        })
+                        if len(matches) >= 20:
+                            break
+                if len(matches) >= 20:
+                    break
+                continue
+
+            # Fallback: scan blend files for assets.
             for root, _dirs, files in os.walk(lib_path):
                 for f in files:
                     if not f.endswith(".blend"):

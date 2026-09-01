@@ -15,6 +15,9 @@ __all__ = (
 
 from typing import Any, NamedTuple, Optional
 
+# @include_begin: _asset_index_shared.py
+# @include_end
+
 
 _TREE_TYPE_ALIASES = {
     "SHADER": "ShaderNodeTree",
@@ -140,7 +143,7 @@ def main(params: Params) -> Result:
             asset_type = "UNKNOWN"
 
     # Determine append vs link for bpy.data.libraries.load().
-    do_link, do_pack = _resolve_load_mode(params)
+    do_link, do_pack = _resolve_load_mode(params, lib_path, bpy)
 
     # Load based on type.
     try:
@@ -470,7 +473,7 @@ def _resolve_shader_tree(bpy, params: Params):
     return mat.node_tree
 
 
-def _resolve_load_mode(params: Params) -> tuple[bool, bool]:
+def _resolve_load_mode(params: Params, lib_path: str = "", bpy: Any = None) -> tuple[bool, bool]:
     """Map *import_method* / *link_mode* to ``(link, pack)`` load flags.
 
     ``auto`` honours the asset's ``preferred_import_method`` when the
@@ -480,6 +483,11 @@ def _resolve_load_mode(params: Params) -> tuple[bool, bool]:
     method = (params.import_method or "auto").lower()
     if method not in ("append", "link", "pack"):
         method = "auto"
+    if method == "auto" and lib_path and bpy is not None:
+        entry = _blmcp_index_lookup(lib_path, params.asset_name, bpy, params.asset_type)
+        preferred = entry.get("preferred_import_method", "") if isinstance(entry, dict) else ""
+        if isinstance(preferred, str) and preferred.lower() in ("append", "link", "pack"):
+            method = preferred.lower()
     if method == "auto":
         method = (params.link_mode or "APPEND").lower()
     if method == "pack":

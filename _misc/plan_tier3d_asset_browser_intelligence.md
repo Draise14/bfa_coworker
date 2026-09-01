@@ -276,10 +276,108 @@ The agent needs to be *biased* toward using assets. The system prompt must make 
 
 ---
 
+## Phase A: Headless Integration Tests + Blender 5.3 Compatibility - Done (commit `5463e6f`)
+
+### Steps
+
+1. **Headless integration harness** — `tests/integration/test_asset_browser.py` builds
+   a temp asset library (object / material / geometry-node-group fixtures marked as
+   assets), installs the addon into an isolated HOME, launches `bforartists --background
+   --command bfa_coworker --port N`, and drives every asset tool over JSON-RPC through
+   `MCPClient`. No agent, no LLM, no display. Gated on `BLENDER_BIN` so CI without
+   Blender skips it.
+
+2. **Explicit-target hardening** — `load_asset_in_context` gained `object_name` and
+   `tree_name` params so MATERIAL/NODETREE loads work headless without an active
+   object/editor context; `load_asset_in_context` and `place_asset_in_scene` gained
+   `import_method` (auto/append/link/pack), honoring `asset_data.preferred_import_method`.
+
+3. **Blender 5.3 bug fixes surfaced by the live run**:
+   - `NodeTree.inputs/outputs` removed in 5.x — `get_asset_tags` reads the socket interface.
+   - `bpy.context.active_object` removed in 5.x — falls back to view-layer active/selected.
+   - Fresh GeometryNodeTrees have no nodes and an empty interface — `connect_to_output`
+     creates the Group Output node + the `Geometry` interface socket (`in_out="OUTPUT"`
+     is tree-relative, so it surfaces on Group Output), then links end to end.
+   - `get_node_group_interface` class-name filter too strict for 5.x subclasses.
+   - `connect_to_output` replaces an occupied output link deterministically.
+   - `NodeTree.type` returns 'GEOMETRY'/'SHADER'/'COMPOSITING' — all five toolcodes
+     normalize through a shared helper; the bpy stub now uses the real enum values.
+
+4. **Test-infra fixes discovered along the way** — `tests/mcp_client` on Windows could
+   not `select()` on pipes (WinError 10038): moved to a reader thread + queue. The
+   preflight validator now skips repository-controlled toolcode (marker
+   `# blmcp-toolcode-skip-preflight`), so the tools' own generated scripts are not
+   rejected. The integration reset unlinks objects directly instead of `bpy.ops`
+   (which no-op silently in the bridge thread) and clears fake users first so
+   `asset_mark()`'d fixtures don't survive and cause append renames.
+
+### Verification
+
+1. `BLENDER_BIN=... python -m unittest tests.integration.test_asset_browser` → 13/13 pass headless.
+2. `python -m unittest tests.test_asset_tools` → 44/44 pass (no Blender needed).
+3. `python -m unittest tests.test_tool_listing` → snapshot matches the live server.
+
+---
+
+## Phase C: Asset Metadata Index (search + tags without loading) - Done
+
+### Steps
+
+1. **Shared index include** — `mcp/blmcp/tools/_asset_index_shared.py` is spliced into
+   `get_asset_tags_toolcode.py`, `search_assets_toolcode.py` and
+   `load_asset_in_context_toolcode.py` via the existing `# @include_begin` mechanism.
+
+2. **Cache-only storage** — the index lives at
+   `<cache>/bfa_coworker/asset_index/<sha1(lib-path)>.json`, never inside the library
+   folders (read-only network shares stay untouched). `BFACW_ASSET_INDEX_DIR` overrides
+   the location (used by tests).
+
+3. **Disposable headless builder** — a stale or missing index triggers a background
+   `bforartists --background --factory-startup` subprocess (one-shot script embedded in
+   the include) that appends each datablock **in its own throwaway process**, reads the
+   full Asset Details region (tags, description, author, copyright, license, catalog,
+   color tag, `preferred_import_method`) plus per-type facts (node count, socket
+   interface for node groups, blend method, vertex counts, frame range), and writes the
+   JSON. A `.building` marker with a 60 s TTL deduplicates concurrent builds.
+
+4. **Fingerprint freshness** — every `.blend` is fingerprinted by `mtime_ns` + size;
+   the index is only used when all fingerprints match, so edits to the library
+   invalidate the cache automatically and a lazy rebuild starts on next access.
+
+5. **Zero-load answers** — `get_asset_tags` returns tags/description/color tag/editor
+   type/metadata straight from the index (no append, no undo step, no `.001` renames);
+   `search_assets` matches name + tags + description from the index across the
+   libraries; `load_asset_in_context` resolves `import_method="auto"` through the
+   index's `preferred_import_method` before loading. Live-append inspection remains as
+   the fallback when no index can be built.
+
+### Files
+
+| File | Change |
+|------|--------|
+| `mcp/blmcp/tools/_asset_index_shared.py` (new) | Index helpers + embedded headless indexer script |
+| `mcp/blmcp/tools/get_asset_tags_toolcode.py` | Index fast path with append fallback |
+| `mcp/blmcp/tools/search_assets_toolcode.py` | Index matching with FS-walk fallback |
+| `mcp/blmcp/tools/load_asset_in_context_toolcode.py` | `preferred_import_method` via index |
+| `tests/test_asset_tools.py` | Include expansion in the loader + index unit tests |
+
+### Verification
+
+1. `python -m unittest tests.test_asset_tools` → 52/52 (8 new index tests).
+2. Live run against the fixture library: `get_asset_tags`/`search_assets` answer from
+   the index without appending; `import_method="auto"` honors the asset's declared
+   method.
+
+---
+
 ## Further Considerations
 
-1. **The `search_assets` tool currently walks the filesystem** — it uses `os.walk` + `bpy.data.libraries.load` which is slow for large libraries. A future optimization could cache asset indexes, but this is out of scope for this plan.
+1. **Search speed** — `search_assets` walks the filesystem and, for tag/description
+   matches, appends datablocks into the live session. **Resolved in Phase C**: the
+   metadata index answers name/tag/description queries with zero loading.
 
-2. **The `get_asset_tags` tool loads the asset to inspect it** — this is expensive (appends the datablock). A lighter-weight approach using `bpy.data.libraries.load` read-only inspection could be a follow-up, but the current approach works correctly.
+2. **`get_asset_tags` cost** — inspecting an asset appended the datablock (junk in
+   `bpy.data`, undo steps, append renames). **Resolved in Phase C**: the index captures
+   the full Asset Details region; the append path is now only a fallback.
 
 3. **`store_as_asset` deferred** — The ability to mark assets and store them to libraries will be built as a native Bforartists operator first, then wired into the MCP tool system in a follow-up tier.

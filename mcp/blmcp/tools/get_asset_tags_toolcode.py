@@ -15,6 +15,9 @@ __all__ = (
 
 from typing import Any, NamedTuple
 
+# @include_begin: _asset_index_shared.py
+# @include_end
+
 
 _TREE_TYPE_ALIASES = {
     "SHADER": "ShaderNodeTree",
@@ -75,6 +78,84 @@ def main(params: Params) -> Result:
             metadata={},
         )
 
+    # Fast path: answer from the on-disk metadata index (Tier 3d Phase C).
+    # This never appends the datablock into the live session, so repeated
+    # calls don't accumulate junk in bpy.data or trigger undo steps.
+    entry = _blmcp_index_lookup(lib_path, asset_name, bpy, asset_type)
+    if isinstance(entry, dict):
+        entry_type = str(entry.get("type", asset_type or "UNKNOWN"))
+        editor_type = ""
+        metadata: dict[str, Any] = {}
+        # Mirror the metadata fields of the inspect path below.
+        if entry_type == "NODETREE":
+            raw_type = str(entry.get("editor_type", ""))
+            editor_type = _tree_type_name(raw_type)
+            interface = entry.get("interface") or {}
+            metadata = {
+                "node_count": int(entry.get("node_count", 0)),
+                "input_count": int(entry.get("input_count", len(interface.get("inputs", [])))),
+                "output_count": int(entry.get("output_count", len(interface.get("outputs", [])))),
+                "is_modifier": editor_type == "GeometryNodeTree",
+                "is_shader": editor_type == "ShaderNodeTree",
+                "is_compositor": editor_type == "CompositorNodeTree",
+            }
+            editor_names = {
+                "GeometryNodeTree": "Geometry Nodes",
+                "ShaderNodeTree": "Shader Editor",
+                "CompositorNodeTree": "Compositor",
+            }
+            metadata["editor_name"] = editor_names.get(editor_type, editor_type)
+            metadata["preview_image_path"] = ""
+            if interface.get("inputs") or interface.get("outputs"):
+                metadata["interface"] = interface
+        elif entry_type == "MATERIAL":
+            metadata = {
+                "has_nodes": bool(entry.get("use_nodes", False)),
+                "blend_method": str(entry.get("blend_method", "")),
+            }
+            metadata["preview_image_path"] = ""
+        elif entry_type == "OBJECT":
+            metadata = {
+                "object_type": str(entry.get("object_type", "")),
+                "vertex_count": int(entry.get("vertex_count", 0)),
+            }
+            metadata["preview_image_path"] = ""
+        elif entry_type == "COLLECTION":
+            metadata = {
+                "object_count": int(entry.get("object_count", 0)),
+                "child_collection_count": int(entry.get("child_collection_count", 0)),
+                "objects": list(entry.get("objects", []))[:10],
+            }
+            metadata["preview_image_path"] = ""
+        elif entry_type == "WORLD":
+            metadata = {
+                "use_nodes": bool(entry.get("use_nodes", False)),
+                "node_count": int(entry.get("node_count", 0)),
+            }
+            metadata["preview_image_path"] = ""
+        elif entry_type == "ACTION":
+            metadata = {
+                "frame_range": list(entry.get("frame_range", [0.0, 0.0])),  # pyright: ignore
+                "fcurves_count": int(entry.get("fcurves_count", 0)),
+            }
+        else:
+            metadata = {"note": "Detailed inspection not supported for {:s}".format(entry_type)}
+        if entry.get("preferred_import_method"):
+            metadata["preferred_import_method"] = str(entry["preferred_import_method"])
+            metadata["use_preferred_import_method"] = bool(entry.get("use_preferred_import_method", False))
+
+        return Result(
+            status="ok",
+            asset_name=asset_name,
+            asset_type=entry_type,
+            tags=[str(t) for t in entry.get("tags", [])],
+            editor_type=editor_type,
+            color_tag=str(entry.get("color_tag", "NONE") or "NONE"),
+            description=str(entry.get("description", "") or ""),
+            metadata=metadata,
+        )
+
+    # Fallback: live inspection (append in the session — the pre-Phase C path).
     # Find the blend file containing this asset.
     blend_path = None
     for root, _dirs, files in os.walk(lib_path):

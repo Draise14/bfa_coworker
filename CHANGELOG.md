@@ -63,6 +63,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Custom Model URL Flow** — Paste any HuggingFace URL or direct .gguf link to download. URL auto-parsed for repo/filename. Reuses existing download infrastructure with SHA-256 verification.
 - **Server Port Fallback** — Automatic port selection when configured port is busy. Scans upward from configured port, clear error when all ports exhausted.
 - **Spiral Detection Hardening** — Error-loop detection threshold lowered from 3 to 2 consecutive identical errors. Corrective messages now include targeted API guidance (e.g. Principled BSDF `inputs` dictionary, subdivision modifier attributes, "no output" diagnosis) so the LLM fixes the code instead of retrying it verbatim.
+- **Thinking Budget for Local Models** — New "Thinking Budget" preference (default 1024) caps
+  chain-of-thought reasoning tokens per API call via llama-server's `thinking_budget_tokens`
+  parameter. Prevents reasoning from eating the entire `max_tokens` budget, which caused
+  tool calls to be truncated mid-generation. Set to 0 to disable.
+
+- **Compact System Prompt for Local Models** — Auto-detects local LLM and loads a compact
+  system prompt (2.4K chars vs 14K) that keeps essential rules but removes verbose reference
+  material. Says "Be concise and decisive" instead of "Think aloud in full paragraphs."
+  Saves ~3K input tokens per turn.
+
+- **API Docs Tools Moved to Domain** — `get_python_api_docs`, `search_api_docs`, and
+  `search_manual_docs` moved from surface tools to a new "docs" domain, auto-detected by
+  keywords. Saves ~750 input tokens per turn for the common case.
+
 - **Bundled Blender API Docs Always Available** — `get_python_api_docs`, `search_api_docs`, and `search_manual_docs` are now always loaded as surface tools, so the agent can look up correct APIs on error without needing to load a domain first.
 - **Mode Switch Lock** — Operating mode (Local/Remote/Harness) and GPU backend can no longer be changed while the agent is running; the selector is disabled with a "Stop the agent first" hint, preventing mid-flight MCP server kills.
 - **Chat UI Polish** — Multiline text wrapping with constrained width, enhanced markdown heading visual hierarchy (keyframe dot icons per level), loading icon shown only on the active item, consistent open-folder icons, and fixed separator rendering.

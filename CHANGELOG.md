@@ -88,6 +88,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Tier 3h Quality Audit: 3 Critical Bugs** - Two MCP tools advertised to the LLM always failed:
+  `execute_blender_plan` and `list_blender_templates` imported `_plan_to_code` / `_render_template` /
+  `_TEMPLATES` / `_TEMPLATE_DEFAULTS` from the wrong module (`mcp_to_blender_server` instead of
+  `blender_templates`), so the plan tool errored and the template list returned "Template registry
+  not available" on every call. Imports now point at `bfa_coworker.blender_templates`, and the dead
+  `_generate_plan_code` fallback (which would have raised NameError) was removed in favor of a clean
+  error dict. Also wired the 12 auto-fix rules from `autofix.py` into `_execute_code()` BEFORE
+  preflight: corrected code (lamps→lights, EEVEE→BLENDER_EEVEE, subdivisions→levels, base_color→
+  inputs, ...) now passes validation instead of being rejected, reducing LLM round-trips.
+
+- **Tier 3h Quality Audit: Cleanup & Hardening** - `get_polyhaven_status` now returns a dict
+  (consistent with every other tool); the `os.add_dll_directory()` handle is kept in module state
+  so the bundled DLL search directory can't be garbage-collected mid-session (Windows DLL_NOT_FOUND
+  hardening); `_call_mcp_tool_sync` gained a 120s daemon watchdog so a hung tool call is reported
+  instead of blocking the conversation loop forever; dead code removed (`_DEEP_MAX_TOKENS` in
+  `agent_controller.py`, stray `_shutting_down` assignments on `LLMState` in `llm_manager.py`).
+
 - **Chat & Messages Render Natively Multi-Line (No More Chopped Rows)** - The sidebar chat
   manually chopped every message at a fixed character width and drew each chunk as a
   full-height `UILayout.label` row, which wasted vertical space and looked like ragged

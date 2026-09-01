@@ -2836,3 +2836,41 @@ tests/
 | Operator UI | None | None | Contextual buttons + menus |
 | Plugin system | No | No | Yes (community-extensible) |
 | Offline capable | No (requires API key) | Yes (local LLM) | Yes (local LLM) |
+
+
+---
+
+## Known Limitations (Post-Tier 3h Audit)
+
+The Tier 3h quality audit (2026-09-01) compared what this plan promised against what shipped.
+The orchestration layer is a **proof-of-concept**, not the full intent-driven architecture below.
+
+### What Was Built vs. Planned
+
+| Component | Planned | Built | Status |
+|-----------|---------|-------|--------|
+| Templates | 135 across all editors | 18 (VIEW_3D basics) | Minimal |
+| Template metadata | tier/editor/mode/creates_datablocks/is_destructive/chainable | None | Missing |
+| Template chains | Curated multi-step sequences | None | Missing |
+| Intent classifier | Keyword-based routing | None (domain system approximates) | Missing |
+| Plan validator | 5 validation checks | None | Missing |
+| Complexity tiers | T1/T2/T3 | None | Missing |
+| Plugin architecture | plugins/ directory | None | Missing |
+| Editor-aware scoping | context.area.type | Domain system (keyword + scene content) | Approximation |
+| Fallback ladder | 5 levels | 2 (plan → raw code, spiral detection) | Partial |
+| Auto-fix rules | 12 rules wired in | 12 rules wired in (Tier 3h) | Fixed |
+| execute_blender_plan / list_blender_templates | Working MCP tools | Working (Tier 3h import fix) | Fixed |
+
+### What Actually Works
+
+1. **`execute_blender_code`** — raw Python through preflight (27 checks) + weak sandbox. Reliable primary path.
+2. **Domain system** — keyword + scene-content tool filtering reduces 30+ tools to 5-8 per domain. This is the
+   main "orchestration" that helps local models (fewer choices = better decisions).
+3. **Spiral detection** (threshold 2), entity tracking, and the 18 working templates cover the most common ops.
+
+### Tier 4 Phase 0 Recommendation
+
+The orchestration gap directly blocks Tier 4c (Text Editor templates) and partially blocks Tier 4b (CHOYA
+next-step buttons). A Phase 0 in the Tier 4 master coordination plan should add: template metadata retrofit
+(~100 LOC), template expansion to ~50 (~200 LOC: Text Editor + Node Editor + Outliner), and a template chain
+system (~100 LOC). See `plan_tier3h_quality_audit.md` §5.4 for details.

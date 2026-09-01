@@ -72,7 +72,7 @@ _DEFAULT_TEMPERATURE_CODE = 0.2
 _DEFAULT_TEMPERATURE_PROSE = 0.35
 
 _DEFAULT_MAX_TOKENS = 1024
-_DEEP_MAX_TOKENS = 4096
+# (removed: _DEEP_MAX_TOKENS was dead code)
 
 _STREAM_TIMEOUT = 600.0
 
@@ -2242,6 +2242,25 @@ def _parse_xml_tool_calls(text: str) -> list[dict[str, Any]]:
     return tool_calls
 
 
+# Watchdog: give up on a hung MCP tool call so the conversation loop
+# can continue instead of blocking forever on an infinite loop in
+# LLM-generated code or a deadlocked bridge.
+_TOOL_CALL_WATCHDOG_SECONDS = 120
+_TOOL_CALL_WATCHDOG_LAST: dict[str, float] = {}
+
+def _tool_call_watchdog_hit(tool_name: str) -> None:
+    """Report (once) that a tool call has exceeded the watchdog budget."""
+    import time as _time
+    now = _time.monotonic()
+    last = _TOOL_CALL_WATCHDOG_LAST.get(tool_name, 0.0)
+    if now - last < 30:
+        return  # debounce: do not spam every redraw cycle
+    _TOOL_CALL_WATCHDOG_LAST[tool_name] = now
+    print("[🛠️Coworker] _call_mcp_tool_sync: TOOL CALL TIMEOUT ({:d}s) for {:s} — "
+          "the bridge may be hung; the HTTP request will surface the error.".format(
+        _TOOL_CALL_WATCHDOG_SECONDS, tool_name))
+
+
 def _call_mcp_tool_sync(
     tool_name: str,
     arguments: dict[str, Any],
@@ -2272,17 +2291,28 @@ def _call_mcp_tool_sync(
     print("[🛠️Coworker] _call_mcp_tool_sync: {:s} args={:s}".format(
         tool_name, json.dumps(arguments)[:200]))
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            raw = resp.read().decode()
-            # FastMCP in stateless_http mode wraps the JSON-RPC
-            # response in SSE (``event: message`` / ``data: {...}``).
-            result = _parse_sse_text_response(raw)
-            print("[🛠️Coworker] _call_mcp_tool_sync: result = {:s}".format(
-                result[:300]))
-            # Update liveness and log operation.
-            _agent_state.last_mcp_activity = _time.monotonic()
-            _log_operation(tool_name, arguments, result)
-            return result
+        # Start a daemon watchdog that reports if this call exceeds the
+        # budget. The HTTP timeout (60s) still owns the actual abort; the
+        # watchdog is a belt-and-braces liveness signal for the logs.
+        _wd = threading.Timer(_TOOL_CALL_WATCHDOG_SECONDS,
+                              _tool_call_watchdog_hit,
+                              args=(tool_name,))
+        _wd.daemon = True
+        _wd.start()
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                raw = resp.read().decode()
+                # FastMCP in stateless_http mode wraps the JSON-RPC
+                # response in SSE (``event: message`` / ``data: {...}``).
+                result = _parse_sse_text_response(raw)
+                print("[🛠️Coworker] _call_mcp_tool_sync: result = {:s}".format(
+                    result[:300]))
+                # Update liveness and log operation.
+                _agent_state.last_mcp_activity = _time.monotonic()
+                _log_operation(tool_name, arguments, result)
+                return result
+        finally:
+            _wd.cancel()
     except (urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
         print("[🛠️Coworker] _call_mcp_tool_sync: FAILED — {:s}".format(str(ex)))
         return "Error calling tool '{:s}': {:s}".format(tool_name, str(ex))

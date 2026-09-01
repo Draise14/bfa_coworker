@@ -1001,6 +1001,11 @@ _lock = threading.Lock()
 _config: LLMConfig = LLMConfig()
 _state: LLMState = LLMState()
 _llama_process: "subprocess.Popen | None" = None
+# Keep the handle from os.add_dll_directory() alive for the whole
+# session: if it is garbage-collected, the bundled DLL search
+# directory is removed and llama-server can fail with DLL_NOT_FOUND
+# mid-session on Windows.
+_bundled_dll_handle = None
 _last_launched_model_path: Path | None = None
 # Set to request cancellation of an in-progress model download.
 _download_cancel_event = threading.Event()
@@ -2833,6 +2838,7 @@ def start_local_llama(
         # On Windows, also register the bundled dir as a DLL search directory.
         # PATH-based DLL discovery is unreliable with CREATE_NEW_CONSOLE;
         # os.add_dll_directory() (Python 3.8+) is the robust alternative.
+        global _bundled_dll_handle
         _bundled_dll_handle = None
         if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
             try:
@@ -2913,7 +2919,8 @@ def stop_local_llama() -> None:
     global _llama_process
 
     print("[🛠️Coworker] stop_local_llama: called")
-    _state._shutting_down = True
+    # NOTE: `_shutting_down` lives on AgentState (agent_controller),
+    # not LLMState — do not set it here.
     _state.error = "Stopping LLM..."
 
     with _lock:
@@ -2967,7 +2974,6 @@ def stop_local_llama() -> None:
     with _lock:
         _state.is_running = False
         _state.current_mode = "off"
-    _state._shutting_down = False
     _state.error = ""
 
     print("[🛠️Coworker] stop_local_llama: done")

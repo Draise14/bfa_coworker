@@ -87,7 +87,7 @@ _system_prompt: str | None = None
 
 
 def _get_system_prompt() -> str:
-    """Load the system prompt from the MCP's prompts.yml, with a local cache."""
+    """Load the system prompt, preferring compact version for local models."""
     global _system_prompt
     if _system_prompt is not None:
         return _system_prompt
@@ -96,9 +96,27 @@ def _get_system_prompt() -> str:
     # Typical layout: addon/bfa_coworker/agent_controller.py
     # and            mcp/blmcp/data/prompts.yml
     this_dir = Path(__file__).resolve().parent
-    candidates = [
-        this_dir.parent.parent / "mcp" / "blmcp" / "data" / "prompts.yml",
-    ]
+    # Auto-detect: use compact prompt for local models (saves ~3K tokens).
+    # The compact prompt keeps essential rules but removes verbose reference
+    # material. The model can look up API details with get_python_api_docs.
+    use_compact = False
+    try:
+        from . import llm_manager as _llm
+        _cfg = _llm.get_config()
+        if _cfg.local_llm_port is not None:
+            use_compact = True
+    except Exception:
+        pass
+
+    if use_compact:
+        candidates = [
+            this_dir.parent.parent / "mcp" / "blmcp" / "data" / "prompts_compact.yml",
+            this_dir.parent.parent / "mcp" / "blmcp" / "data" / "prompts.yml",
+        ]
+    else:
+        candidates = [
+            this_dir.parent.parent / "mcp" / "blmcp" / "data" / "prompts.yml",
+        ]
     for prompt_path in candidates:
         if prompt_path.is_file():
             try:

@@ -52,6 +52,21 @@ def _load_preflight():
 _preflight_check = _load_preflight()
 
 
+def _load_autofix():
+    """Load _autofix_code from autofix.py (standalone, no bpy)."""
+    import importlib.util
+    import types
+    src_path = os.path.join(_ADDON_DIR, "bfa_coworker", "autofix.py")
+    with open(src_path, "r", encoding="utf-8") as fh:
+        source = fh.read()
+    mod = types.ModuleType("autofix_under_test")
+    exec(compile(source, src_path, "exec"), mod.__dict__)
+    return mod._autofix_code
+
+
+_autofix_code = _load_autofix()
+
+
 class TestPreflightCheck(unittest.TestCase):
     """Tests for _preflight_check()."""
 
@@ -60,7 +75,7 @@ class TestPreflightCheck(unittest.TestCase):
         code = """
 import bpy
 bpy.ops.mesh.primitive_cube_add()
-obj = bpy.context.active_object
+obj = bpy.context.view_layer.objects.active
 print(obj.name)
 """
         issues = _preflight_check(code)
@@ -417,15 +432,15 @@ bpy.ops.mesh.primitive_cube_add(rotation_euler=(1, 0, 0))
         names = [name for name, _ in issues]
         self.assertIn("prim_transform_kwarg", names)
 
-    def test_prim_location_kwarg(self):
-        """location on primitive add is caught."""
+    def test_prim_location_kwarg_ok(self):
+        """location/rotation on primitive add is accepted in 5.3 (not flagged)."""
         code = """
 import bpy
-bpy.ops.mesh.primitive_uv_sphere_add(location=(1, 2, 3))
+bpy.ops.mesh.primitive_uv_sphere_add(location=(1, 2, 3), rotation=(0.1, 0.2, 0.3))
 """
         issues = _preflight_check(code)
         names = [name for name, _ in issues]
-        self.assertIn("prim_transform_kwarg", names)
+        self.assertNotIn("prim_transform_kwarg", names)
 
     def test_prim_no_transform_ok(self):
         """Primitive add without transform kwargs is NOT flagged."""
@@ -436,6 +451,28 @@ bpy.ops.mesh.primitive_cube_add(size=2.0)
         issues = _preflight_check(code)
         names = [name for name, _ in issues]
         self.assertNotIn("prim_transform_kwarg", names)
+
+    def test_context_active_object_caught(self):
+        """bpy.context.active_object is flagged (unavailable in bridge thread)."""
+        code = """
+import bpy
+bpy.ops.mesh.primitive_cube_add()
+obj = bpy.context.active_object
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("context_active_object_thread", names)
+
+    def test_view_layer_active_not_caught(self):
+        """bpy.context.view_layer.objects.active is NOT flagged."""
+        code = """
+import bpy
+bpy.ops.mesh.primitive_cube_add()
+obj = bpy.context.view_layer.objects.active
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("context_active_object_thread", names)
 
 
     # ── Tests for checks 24-27: bmesh, vector, update_edit_mesh ──────────
@@ -518,6 +555,102 @@ bm.update_edit_mesh(mesh)
         issues = _preflight_check(code)
         names = [name for name, _ in issues]
         self.assertNotIn("update_edit_mesh_args", names)
+
+
+    def test_primitive_loop_allowed(self):
+        """Creating primitives in a loop is legitimate -- NOT flagged."""
+        code = """
+bpy.ops.object.select_all(action='SELECT')
+for i in range(3):
+    bpy.ops.mesh.primitive_torus_add(major_radius=1.0, minor_radius=0.3)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("no_existence_check", names)
+
+    def test_data_new_loop_static_name_flagged(self):
+        """objects.new in a loop with a static name and no guard IS flagged."""
+        code = """
+for i in range(5):
+    bpy.data.objects.new("Cube", mesh)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("no_existence_check", names)
+
+    def test_data_new_loop_unique_name_allowed(self):
+        """Unique per-iteration names are fine -- NOT flagged."""
+        code = """
+for i in range(5):
+    bpy.data.objects.new(name=f"cube_{i}", object_data=mesh)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("no_existence_check", names)
+
+    def test_data_new_loop_with_guard_allowed(self):
+        """Existence check via get() is fine -- NOT flagged."""
+        code = """
+for i in range(5):
+    if bpy.data.objects.get("Cube_" + str(i)) is None:
+        bpy.data.objects.new("Cube_" + str(i), mesh)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("no_existence_check", names)
+
+    def test_material_loop_not_flagged(self):
+        """Material/appending loops unrelated to object creation -- NOT flagged."""
+        code = """
+for obj in bpy.data.objects:
+    mat = bpy.data.materials.new(name="M")
+    obj.data.materials.append(mat)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("no_existence_check", names)
+
+class TestAutofixBeforePreflight(unittest.TestCase):
+    """Auto-fix runs before preflight, so corrected code passes.
+
+    Mirrors the wiring in ``_execute_code``: ``_autofix_code`` is applied
+    first, then ``_preflight_check`` sees the corrected source.
+    """
+
+    def test_subdivisions_fixed_then_passes(self):
+        raw = """import bpy
+obj = bpy.ops.mesh.primitive_cube_add()
+mod = obj.modifiers.new("Subsurf", 'SUBSURF')
+mod.subdivisions = 3
+"""
+        fixed, fixes = _autofix_code(raw)
+        self.assertTrue(any("subdivisions -> levels" in f for f in fixes))
+        issues = _preflight_check(fixed)
+        names = [name for name, _ in issues]
+        self.assertNotIn("wrong_subdiv_attr", names)
+
+    def test_base_color_fixed_then_passes(self):
+        raw = """import bpy
+mat = bpy.data.materials.new("M")
+mat.use_nodes = True
+n = mat.node_tree.nodes["Principled BSDF"]
+n.base_color = (1, 0, 0)
+"""
+        fixed, fixes = _autofix_code(raw)
+        self.assertTrue(any("base_color" in f for f in fixes))
+        issues = _preflight_check(fixed)
+        names = [name for name, _ in issues]
+        self.assertNotIn("wrong_base_color", names)
+
+    def test_unfixable_issue_still_flagged(self):
+        """Code autofix cannot repair is still rejected by preflight."""
+        # Preflight flags missing bpy import; autofix cannot repair that.
+        raw = "bpy.ops.mesh.primitive_cube_add()"
+        fixed, fixes = _autofix_code(raw)
+        self.assertEqual(fixes, [])
+        issues = _preflight_check(fixed)
+        names = [name for name, _ in issues]
+        self.assertIn("missing_bpy", names)
 
 
 if __name__ == "__main__":

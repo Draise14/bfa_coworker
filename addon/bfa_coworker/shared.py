@@ -269,6 +269,7 @@ class HarnessPreset:
         "setup_steps",
         "docs_url",
         "notes",
+        "chat_paste_hint",
     )
 
     def __init__(
@@ -282,6 +283,7 @@ class HarnessPreset:
         setup_steps: list[str] | None = None,
         docs_url: str = "",
         notes: str = "",
+        chat_paste_hint: str = "",
     ) -> None:
         self.identifier = identifier
         self.name = name
@@ -292,6 +294,7 @@ class HarnessPreset:
         self.setup_steps = setup_steps or []
         self.docs_url = docs_url
         self.notes = notes
+        self.chat_paste_hint = chat_paste_hint
 
 
 # ── Harness Presets ──────────────────────────────────────────────────────
@@ -318,6 +321,7 @@ _HARNESS_PRESETS: list[HarnessPreset] = [
         ],
         docs_url="https://modelcontextprotocol.io/quickstart/user",
         notes="Claude Desktop must be fully restarted after config changes. A window close is not enough on some OS versions.",
+        chat_paste_hint="Claude Desktop has no chat-paste flow - paste into the config file (Edit Config) instead.",
     ),
     HarnessPreset(
         identifier="claude_code",
@@ -336,6 +340,7 @@ _HARNESS_PRESETS: list[HarnessPreset] = [
         ],
         docs_url="https://docs.anthropic.com/en/docs/claude-code/overview",
         notes="Claude Code reads MCP config from the same claude_desktop_config.json as Claude Desktop.",
+        chat_paste_hint="Claude Code: run /mcp in the chat to add the server interactively, or use `claude mcp add --transport stdio` in a terminal.",
     ),
     HarnessPreset(
         identifier="codex",
@@ -354,6 +359,7 @@ _HARNESS_PRESETS: list[HarnessPreset] = [
         ],
         docs_url="https://github.com/openai/codex",
         notes="Codex uses the OpenAI Agents SDK. The python command must have blmcp and its deps available.",
+        chat_paste_hint="Codex: use `codex mcp add` in a terminal - there is no chat-paste flow.",
     ),
     HarnessPreset(
         identifier="cursor",
@@ -372,6 +378,7 @@ _HARNESS_PRESETS: list[HarnessPreset] = [
         ],
         docs_url="https://docs.cursor.com/advanced/mcp",
         notes="Cursor's MCP config format uses 'servers' key (not 'mcpServers'). The config below uses the correct format.",
+        chat_paste_hint="Cursor: paste the config into Settings > Features > MCP Servers (Add New MCP Server accepts the JSON directly), or edit the file below.",
     ),
     HarnessPreset(
         identifier="windsurf",
@@ -390,6 +397,7 @@ _HARNESS_PRESETS: list[HarnessPreset] = [
         ],
         docs_url="https://docs.windsurf.com/mcp",
         notes="Windsurf uses the same MCP config format as VS Code. Config file is auto-created on first launch.",
+        chat_paste_hint="Windsurf: paste the config into the Cascade chat - it adds the MCP server automatically.",
     ),
     HarnessPreset(
         identifier="cline",
@@ -408,6 +416,7 @@ _HARNESS_PRESETS: list[HarnessPreset] = [
         ],
         docs_url="https://github.com/cline/cline",
         notes="Cline has a permission-gated tool model — you approve each Blender operation by default.",
+        chat_paste_hint="Cline: use Paste Configuration in the MCP Servers settings (VS Code extension panel).",
     ),
     HarnessPreset(
         identifier="opencode",
@@ -426,6 +435,7 @@ _HARNESS_PRESETS: list[HarnessPreset] = [
         ],
         docs_url="https://github.com/sst/opencode",
         notes="OpenCode supports 75+ LLM providers. Point it at any OpenAI-compatible endpoint.",
+        chat_paste_hint="OpenCode: paste the config into the OpenCode TUI - it configures the MCP server automatically (or use `opencode mcp add` in a terminal).",
     ),
     HarnessPreset(
         identifier="generic",

@@ -9,6 +9,7 @@ Tool-code for listing all configured asset libraries.
 
 __all__ = (
     "Result",
+    "Params",
     "main",
 )
 
@@ -20,7 +21,12 @@ class Result(NamedTuple):
     libraries: list[dict[str, Any]]
 
 
-def main() -> Result:
+class Params(NamedTuple):
+    pass
+
+
+def main(params: Params) -> Result:
+    del params  # No parameters for this tool.
     """List all configured asset libraries with their paths and asset counts."""
     import bpy  # pylint: disable=import-error
 

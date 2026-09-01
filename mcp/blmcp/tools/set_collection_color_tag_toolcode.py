@@ -8,11 +8,17 @@ Tool-code for setting the color tag of a collection.
 """
 
 __all__ = (
+    "Params",
     "Result",
     "main",
 )
 
 from typing import Any, NamedTuple
+
+
+class Params(NamedTuple):
+    collection_name: str
+    color: str
 
 
 class Result(NamedTuple):
@@ -22,10 +28,12 @@ class Result(NamedTuple):
     message: str
 
 
-def main(collection_name: str, color: str) -> Result:
+def main(params: Params) -> Result:
     """Set the color tag of a collection in the current scene."""
     import bpy  # pylint: disable=import-error
 
+    collection_name = params.collection_name
+    color = params.color
     # Validate color enum.
     valid_colors = {
         "NONE", "COLOR_01", "COLOR_02", "COLOR_03", "COLOR_04",

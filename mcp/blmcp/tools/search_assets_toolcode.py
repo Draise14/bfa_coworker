@@ -9,10 +9,14 @@ Tool-code for searching across asset libraries.
 
 __all__ = (
     "Result",
+    "Params",
     "main",
 )
 
 from typing import Any, NamedTuple
+
+# @include_begin: _asset_index_shared.py
+# @include_end
 
 
 class Result(NamedTuple):
@@ -22,8 +26,19 @@ class Result(NamedTuple):
     total_found: int
 
 
-def main(query: str, library_name: str = "", asset_type: str = "") -> Result:
-    """Search across asset libraries by name/tag/type."""
+class Params(NamedTuple):
+    query: str
+    library_name: str = ""
+    asset_type: str = ""
+
+
+def main(params: Params) -> Result:
+    query, library_name, asset_type = params.query, params.library_name, params.asset_type
+    """Search across asset libraries by name, tag, and description.
+
+    Matches are returned when the query appears in the asset name,
+    any of its tags, or its description text.
+    """
     import bpy  # pylint: disable=import-error
     import os
 
@@ -38,7 +53,39 @@ def main(query: str, library_name: str = "", asset_type: str = "") -> Result:
             if not lib_path or not os.path.isdir(lib_path):
                 continue
 
-            # Scan blend files for assets.
+            # Fast path: match against the on-disk metadata index (Tier 3d
+            # Phase C). This never appends datablocks into the session, so
+            # searching is cheap and leaves bpy.data untouched.
+            index = _blmcp_index_ensure(lib_path, bpy)
+            if isinstance(index, dict):
+                assets = index.get("assets")
+                if isinstance(assets, dict):
+                    for name_i, entry in assets.items():
+                        if not isinstance(entry, dict):
+                            continue
+                        entry_type = str(entry.get("type", ""))
+                        if asset_type and entry_type != asset_type:
+                            continue
+                        haystack = "{} {} {}".format(
+                            str(name_i).lower(),
+                            " ".join(str(t).lower() for t in entry.get("tags", [])),
+                            str(entry.get("description", "") or "").lower(),
+                        )
+                        if query_lower not in haystack:
+                            continue
+                        matches.append({
+                            "name": str(name_i),
+                            "type": entry_type,
+                            "library": lib.name,
+                            "file": str(entry.get("file", "") or "").rsplit("/", 1)[-1],
+                        })
+                        if len(matches) >= 20:
+                            break
+                if len(matches) >= 20:
+                    break
+                continue
+
+            # Fallback: scan blend files for assets.
             for root, _dirs, files in os.walk(lib_path):
                 for f in files:
                     if not f.endswith(".blend"):
@@ -50,7 +97,7 @@ def main(query: str, library_name: str = "", asset_type: str = "") -> Result:
                             # Check materials.
                             if not asset_type or asset_type == "MATERIAL":
                                 for mat_name in data_from.materials:
-                                    if query_lower in mat_name.lower():
+                                    if _matches_query(blend_path, mat_name, "MATERIAL", query_lower):
                                         matches.append({
                                             "name": mat_name,
                                             "type": "MATERIAL",
@@ -60,7 +107,7 @@ def main(query: str, library_name: str = "", asset_type: str = "") -> Result:
                             # Check node groups.
                             if not asset_type or asset_type == "NODETREE":
                                 for ng_name in data_from.node_groups:
-                                    if query_lower in ng_name.lower():
+                                    if _matches_query(blend_path, ng_name, "NODETREE", query_lower):
                                         matches.append({
                                             "name": ng_name,
                                             "type": "NODETREE",
@@ -70,7 +117,7 @@ def main(query: str, library_name: str = "", asset_type: str = "") -> Result:
                             # Check objects.
                             if not asset_type or asset_type == "OBJECT":
                                 for obj_name in data_from.objects:
-                                    if query_lower in obj_name.lower():
+                                    if _matches_query(blend_path, obj_name, "OBJECT", query_lower):
                                         matches.append({
                                             "name": obj_name,
                                             "type": "OBJECT",
@@ -80,10 +127,30 @@ def main(query: str, library_name: str = "", asset_type: str = "") -> Result:
                             # Check worlds.
                             if not asset_type or asset_type == "WORLD":
                                 for world_name in data_from.worlds:
-                                    if query_lower in world_name.lower():
+                                    if _matches_query(blend_path, world_name, "WORLD", query_lower):
                                         matches.append({
                                             "name": world_name,
                                             "type": "WORLD",
+                                            "library": lib.name,
+                                            "file": f,
+                                        })
+                            # Check collections.
+                            if not asset_type or asset_type == "COLLECTION":
+                                for col_name in data_from.collections:
+                                    if _matches_query(blend_path, col_name, "COLLECTION", query_lower):
+                                        matches.append({
+                                            "name": col_name,
+                                            "type": "COLLECTION",
+                                            "library": lib.name,
+                                            "file": f,
+                                        })
+                            # Check actions.
+                            if not asset_type or asset_type == "ACTION":
+                                for act_name in data_from.actions:
+                                    if _matches_query(blend_path, act_name, "ACTION", query_lower):
+                                        matches.append({
+                                            "name": act_name,
+                                            "type": "ACTION",
                                             "library": lib.name,
                                             "file": f,
                                         })
@@ -112,3 +179,57 @@ def main(query: str, library_name: str = "", asset_type: str = "") -> Result:
         matches=matches[:20],
         total_found=len(matches),
     )
+
+
+def _matches_query(blend_path: str, asset_name: str, asset_type: str, query_lower: str) -> bool:
+    """Check if an asset matches the query by name, tags, or description."""
+    # Fast path: name match.
+    if query_lower in asset_name.lower():
+        return True
+
+    # Slower path: inspect asset_data for tags and description.
+    try:
+        import bpy  # pylint: disable=import-error
+
+        with bpy.data.libraries.load(blend_path) as (data_from, data_to):
+            # Load the specific datablock to inspect asset_data.
+            if asset_type == "MATERIAL":
+                data_to.materials = [asset_name]
+                datablock = data_to.materials[0]
+            elif asset_type == "NODETREE":
+                data_to.node_groups = [asset_name]
+                datablock = data_to.node_groups[0]
+            elif asset_type == "OBJECT":
+                data_to.objects = [asset_name]
+                datablock = data_to.objects[0]
+            elif asset_type == "WORLD":
+                data_to.worlds = [asset_name]
+                datablock = data_to.worlds[0]
+            elif asset_type == "COLLECTION":
+                data_to.collections = [asset_name]
+                datablock = data_to.collections[0]
+            elif asset_type == "ACTION":
+                data_to.actions = [asset_name]
+                datablock = data_to.actions[0]
+            else:
+                return False
+
+        if datablock is None:
+            return False
+
+        # Check description.
+        if hasattr(datablock, "description") and datablock.description:
+            if query_lower in datablock.description.lower():
+                return True
+
+        # Check tags.
+        if hasattr(datablock, "asset_data") and datablock.asset_data:
+            if hasattr(datablock.asset_data, "tags"):
+                for tag in datablock.asset_data.tags:
+                    if query_lower in tag.name.lower():
+                        return True
+
+    except Exception:
+        pass
+
+    return False

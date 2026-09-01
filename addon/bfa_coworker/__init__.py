@@ -45,6 +45,8 @@ from .operators_agent import (
     _BFACW_OT_check_ports,
     _BFACW_OT_test_step,
     _BFACW_OT_test_step_reset,
+    _BFACW_OT_asset_selftest_run,
+    _BFACW_OT_asset_selftest_reset,
     BFACW_OT_copy_mcp_config,
     BFACW_OT_mcp_server_start,
     BFACW_OT_mcp_server_stop,
@@ -94,6 +96,8 @@ _classes = (
     _BFACW_OT_check_ports,
     _BFACW_OT_test_step,
     _BFACW_OT_test_step_reset,
+    _BFACW_OT_asset_selftest_run,
+    _BFACW_OT_asset_selftest_reset,
     BFACW_OT_copy_mcp_config,
     BFACW_OT_mcp_server_start,
     BFACW_OT_mcp_server_stop,
@@ -139,6 +143,14 @@ def register() -> None:
     # Coalesce Blender 5.3+ "Policy Violation" warnings from vendored deps
     # into a single summary line instead of a console flood.
     log.install_policy_warning_filter()
+    # Apply the initial console-suppression state from the saved preference.
+    # Default is True (suppress) which matches debug_mode=False (the default).
+    try:
+        prefs = bpy.context.preferences.addons.get(__package__)
+        if prefs is not None:
+            log.set_suppress_console(not prefs.preferences.debug_mode)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass  # Preferences not yet available; default (suppress ON) is fine.
 
     # Migrate vendor/deps/ out of the addon tree BEFORE Blender's sandbox
     # scans it.  Physical presence of top-level package dirs (rich/, click/,
@@ -219,10 +231,10 @@ def _autostart_agent_timer() -> None:
     # In External Harness mode, only the bridge server is needed.
     # The MCP server and LLM are managed externally.
     if prefs.operating_mode == "EXTERNAL_HARNESS":
-        print("Agent auto-start: External Harness mode — bridge only")
+        print("[🛠️Coworker] Agent auto-start: External Harness mode — bridge only")
         return
 
-    print("Agent auto-start: using ports bridge={:d} mcp={:d} llm={:d}".format(
+    print("[🛠️Coworker] Agent auto-start: using ports bridge={:d} mcp={:d} llm={:d}".format(
         _bridge_port, _mcp_port, _llm_port))
 
     # Start the MCP HTTP server.
@@ -230,7 +242,7 @@ def _autostart_agent_timer() -> None:
     if not _ac._agent_state.mcp_server_running:
         proc = _ac.start_mcp_server(port=_mcp_port, blender_port=_bridge_port)
         if proc is None:
-            print("Agent auto-start: MCP server failed — {:s}".format(_ac._agent_state.error))
+            print("[⚠️Coworker] Agent auto-start: MCP server failed — {:s}".format(_ac._agent_state.error))
             return
 
     # Start local LLM if configured.
@@ -266,7 +278,7 @@ def _autostart_agent_timer() -> None:
         _llm_cfg.remote_model = prefs.remote_model
         _llm.set_config(_llm_cfg)
 
-    print("Agent auto-start: full agent running on ports bridge={:d} mcp={:d} llm={:d}".format(
+    print("[🛠️Coworker] Agent auto-start: full agent running on ports bridge={:d} mcp={:d} llm={:d}".format(
         _bridge_port, _mcp_port, _llm_port))
 
 

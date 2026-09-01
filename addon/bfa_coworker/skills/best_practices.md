@@ -51,7 +51,7 @@ after creation — never look up by assumed name:
 
 ```python
 obj = bpy.ops.mesh.primitive_cube_add()
-obj = bpy.context.active_object  # Capture now, not later
+obj = bpy.context.view_layer.objects.active  # Capture now, not later
 ```
 
 ## Mode & Selection
@@ -81,7 +81,7 @@ edit-mode selections live on the mesh data, not on context. Read them with bmesh
 
 ```python
 import bmesh
-bm = bmesh.from_edit_mesh(bpy.context.active_object.data)
+bm = bmesh.from_edit_mesh(bpy.context.view_layer.objects.active.data)
 sel_edges = [e for e in bm.edges if e.select]
 sel_faces = [f for f in bm.faces if f.select]
 sel_verts = [v for v in bm.verts if v.select]
@@ -169,7 +169,7 @@ one raises ``TypeError: keyword "..." unrecognized``:
 | `primitive_torus_add` | `major_radius=` + `minor_radius=` + `major_segments=` + `minor_segments=` |
 
 When in doubt, call the operator with NO keyword arguments first to use
-defaults, then read ``bpy.context.active_object`` to inspect/set dimensions,
+defaults, then read ``bpy.context.view_layer.objects.active`` to inspect/set dimensions,
 or print the operator docstring: ``print(bpy.ops.mesh.primitive_uv_sphere_add.__doc__)``
 to see its real parameters.
 
@@ -183,7 +183,7 @@ and raise ``ReferenceError: StructRNA of type ... has been removed``.
 Always re-fetch references fresh right before each use:
 
 ```python
-obj = bpy.data.objects.get("Bouncing Ball")  # or bpy.context.active_object
+obj = bpy.data.objects.get("Bouncing Ball")  # or bpy.context.view_layer.objects.active
 if obj is None:
     obj = bpy.ops.mesh.primitive_uv_sphere_add()  # recreate if missing
 ```

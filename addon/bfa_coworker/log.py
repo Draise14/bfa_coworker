@@ -25,6 +25,7 @@ __all__ = (
     "get_log_path",
     "read_tail",
     "install_print_tee",
+    "set_suppress_console",
 )
 
 import os
@@ -35,6 +36,35 @@ from pathlib import Path
 _lock = threading.Lock()
 _LOG_MAX_BYTES = 1_000_000  # ~1 MB before rotation.
 _tee_installed = False
+_suppress_console = True  # When True, routine [Coworker] lines are log-only (not Blender console).
+
+# Prefixes identifying this addon's own diagnostic lines.
+_ADDON_PREFIXES = ("[🛠️Coworker]", "[Coworker]")
+# Addon lines that indicate warnings — always shown even when console
+# suppression is on.
+_WARN_PREFIXES = ("[⚠️Coworker]",)
+# Severity markers that mark an addon line as a key issue (errors, hard
+# failures) — always shown even when console suppression is on.
+_SEVERITY_MARKERS = ("ERROR", "FAILED", "FATAL", "TRACEBACK")
+
+
+def _should_pass_through(data: str) -> bool:
+    """Return True when *data* should reach the Blender console.
+
+    With console suppression on (Debug Mode off), only this addon's
+    warning/error lines pass through, alongside everything that is not the
+    addon's own output (Blender's messages, other addons, user scripts).
+    Routine [Coworker] diagnostics go to the log file only. With
+    suppression off (Debug Mode on), everything passes through.
+    """
+    if not _suppress_console:
+        return True
+    if data.startswith(_WARN_PREFIXES):
+        return True
+    if not data.startswith(_ADDON_PREFIXES):
+        return True
+    upper = data.upper()
+    return any(marker in upper for marker in _SEVERITY_MARKERS)
 
 
 def get_log_path() -> Path:
@@ -94,25 +124,42 @@ class _TeeStream:
     def __init__(self, original) -> None:
         self._original = original
         self._buf = ""
+        # True when the previous write() was a suppressed addon line that
+        # did not end with a newline. print() emits the payload and the
+        # trailing newline as two separate write() calls, so the bare
+        # newline chunk (no prefix) belongs to that suppressed line and
+        # must be swallowed too (otherwise blank console lines appear).
+        self._pending_suppressed_newline = False
 
     def write(self, data: str) -> int:
-        # Pass through to the real console first.
-        try:
-            self._original.write(data)
-        except Exception:  # pylint: disable=broad-exception-caught
-            pass
         # Buffer and flush complete lines to the log.
         self._buf += data
         while "\n" in self._buf:
             line, self._buf = self._buf.split("\n", 1)
-            line = line.strip()
-            if line:
-                write(line)
+            stripped = line.strip()
+            if stripped:
+                write(stripped)
         # Also flush any remaining partial line immediately so that
         # crash logs capture everything written so far.
         if self._buf.strip():
             write(self._buf.strip())
             self._buf = ""
+        if self._pending_suppressed_newline and not data.strip():
+            # Trailing newline of a suppressed line: swallow it.
+            self._pending_suppressed_newline = False
+            return len(data)
+        # Pass through to the real console, but skip this addon's routine
+        # [Coworker] diagnostics when console suppression is active
+        # (debug mode OFF). Warnings/errors always pass through, as does
+        # everything that is not this addon's own output.
+        if _should_pass_through(data):
+            try:
+                self._original.write(data)
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+            self._pending_suppressed_newline = False
+        else:
+            self._pending_suppressed_newline = not data.endswith("\n")
         return len(data)
 
     def flush(self) -> None:
@@ -143,6 +190,21 @@ def install_print_tee() -> None:
     if sys.stderr is not None and not isinstance(sys.stderr, _TeeStream):
         sys.stderr = _TeeStream(sys.stderr)  # type: ignore[assignment]
     write("=== Coworker log session started ===")
+
+
+def set_suppress_console(enabled: bool) -> None:
+    """Toggle console suppression for this addon's routine diagnostics.
+
+    When *enabled* is True (the default, Debug Mode off), this addon's
+    routine [🛠️Coworker]/[Coworker] lines are written to the log file only
+    and do not appear in Blender's console. Warnings ([⚠️Coworker]) and
+    error-level lines (ERROR/FAILED/FATAL/TRACEBACK) always pass through,
+    as does everything that is not this addon's own output (user scripts,
+    Blender's messages, tracebacks). When *enabled* is False (Debug Mode
+    on), every addon line is shown.
+    """
+    global _suppress_console
+    _suppress_console = enabled
 
 
 # ---------------------------------------------------------------------------

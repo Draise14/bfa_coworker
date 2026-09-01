@@ -490,18 +490,42 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
         issues.append((
             "wrong_collection_active",
             "bpy.data.* collections have no .active attribute. "
-            "Use context.active_object or context.selected_objects instead.",
+            "Use bpy.context.view_layer.objects.active or bpy.context.selected_objects instead.",
         ))
 
+    # 14b. bpy.context.active_object is NOT available inside the MCP bridge -
+    #      LLM code runs in a worker thread where Blender's context is
+    #      thread-local and omits active_object entirely.
+    if "bpy.context.active_object" in code:
+        issues.append((
+            "context_active_object_thread",
+            "`bpy.context.active_object` is NOT available inside the MCP "
+            "bridge (LLM code runs in a worker thread, and Blender's "
+            "thread-local context omits active_object there). "
+            "Use `bpy.context.view_layer.objects.active` instead, or "
+            "`bpy.data.objects.get('Name')`."
+        ))
+
+
     # 15. Creating objects in a loop without checking what exists first.
-    # 15. Creating objects in a loop without checking what exists first.
-    creates_in_loop = ("for " in code or "while " in code) and "primitive_" in code
-    if creates_in_loop and "bpy.data.objects.get" not in code:
+    #     Loops over primitive_* operators are fine -- Blender
+    #     auto-uniquifies names (Torus, Torus.001, ...), and one-shot
+    #     scene building in a loop is legitimate. The real duplicate
+    #     hazard is data-level creation (bpy.data.objects.new) with the
+    #     SAME literal name on every iteration: repeated runs silently
+    #     accumulate objects. Only flag that case, and only when the loop
+    #     neither guards with get() nor derives a unique name per
+    #     iteration.
+    creates_in_loop = ("for " in code or "while " in code) and "objects.new(" in code
+    if creates_in_loop and "bpy.data.objects.get" not in code \
+            and 'name=f"' not in code and "name=f'" not in code:
         issues.append((
             "no_existence_check",
-            "Creating objects in a loop without checking what exists. "
-            "Use bpy.data.objects.get('Name') to check first, or "
-            "the system will undo failed attempts and duplicates may persist.",
+            "Creating objects in a loop with bpy.data.objects.new(...) "
+            "without checking what exists. Give each iteration a unique "
+            "name (name=f'item_{i}') or guard with "
+            "bpy.data.objects.get('Name') first, so repeated runs don't "
+            "silently accumulate duplicates.",
         ))
 
 
@@ -597,15 +621,15 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
             "Use world.use_nodes = True instead (it's a boolean attribute).",
         ))
 
-    # 23. Passing location/rotation/scale to primitive add operators.
-    #     These operators don't accept transform kwargs — set after creation.
+    # 23. Passing INVALID transform kwargs to primitive add operators.
+    #     location=/rotation=/scale= ARE accepted in 5.3 (verified against
+    #     the dev build) — only rotation_euler/rotation_mode are invalid.
     _PRIM_OPS = ["primitive_cube_add", "primitive_uv_sphere_add",
                  "primitive_ico_sphere_add", "primitive_cylinder_add",
                  "primitive_cone_add", "primitive_torus_add",
                  "primitive_plane_add", "primitive_circle_add",
                  "primitive_monkey_add", "primitive_grid_add"]
-    _TRANSFORM_KWARGS = ["location", "rotation", "rotation_euler",
-                         "scale", "rotation_mode"]
+    _TRANSFORM_KWARGS = ["rotation_euler", "rotation_mode"]
     for prim in _PRIM_OPS:
         if prim + "(" in code:
             for kwarg in _TRANSFORM_KWARGS:
@@ -613,7 +637,8 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
                     issues.append((
                         "prim_transform_kwarg",
                         prim + "() does not accept '" + kwarg + "' as a keyword. "
-                        "Set it after creation: obj." + kwarg + " = (...)",
+                        "Use rotation=(...) instead, or set it after creation: "
+                        "obj.rotation_euler = (...)",
                     ))
                     break
             break  # One hint per call is enough.
@@ -698,8 +723,25 @@ def _execute_code(
             # A Python-level exception from stale layer-collection data
             # is always preferable to an unrecoverable C-level segfault.
 
-            # Preflight: validate code before execution.
-            preflight_issues = _preflight_check(code)
+            # Auto-fix common LLM mistakes (lamps -> lights, EEVEE ->
+            # BLENDER_EEVEE, subdivisions -> levels, ...) BEFORE preflight so
+            # corrected code passes validation instead of being rejected.
+            # Repository-controlled toolcode is skipped: it is already correct.
+            if "# blmcp-toolcode-skip-preflight" not in code:
+                from .autofix import _autofix_code
+                code, _fixes = _autofix_code(code)
+                if _fixes:
+                    print("[🛠️Coworker] autofix applied: {:s}".format(", ".join(_fixes)))
+
+            # Preflight: validate code before execution. Toolcode-generated
+            # payloads (marked by the MCP tools) are repository-controlled and
+            # legitimately contain literal patterns the LLM-oriented checks
+            # would flag (e.g. `action.fcurves`, `primitive_cube_add` in
+            # comments and Params reprs), so they skip the validator.
+            if "# blmcp-toolcode-skip-preflight" in code:
+                preflight_issues = []
+            else:
+                preflight_issues = _preflight_check(code)
             if preflight_issues:
                 hint_lines = ["[Preflight] Found {:d} issue(s):".format(len(preflight_issues))]
                 for _name, guidance in preflight_issues:
@@ -708,22 +750,43 @@ def _execute_code(
                 hint_lines.append("Fix these issues and retry. Do NOT retry the same code.")
                 return _ExecResult({"status": "error", "message": "\n".join(hint_lines)})
 
-            # Run exec() in a thread with a timeout to prevent hangs.
+            # Toolcode-generated payloads carry this marker: they are
+            # repository-controlled and trusted. Execute them inline in
+            # the calling thread so that bpy.context (window / screen /
+            # active object) is populated. In interactive mode the socket
+            # is serviced from bpy.app.timers on the main thread; in
+            # background/CLI mode the request loop also runs on the main
+            # thread. A worker thread would expose an empty context
+            # (bpy.context.window is None, bpy.context.active_object
+            # raises AttributeError), which made every window-dependent
+            # tool (tab switching, viewport jumps, screenshots, asset
+            # browser) fail with "No active window" through the harness.
+            is_toolcode = "# blmcp-toolcode-skip-preflight" in code
             _exec_error = [None]
-            def _run_code():
+            if is_toolcode:
+                # Trusted repository-controlled code: no hang-timeout
+                # wrapper needed, and it must run on the main thread.
                 try:
                     exec(code, namespace)
                 except Exception as _e:
                     _exec_error[0] = _e
-            _exec_thread = threading.Thread(target=_run_code, daemon=True)
-            _exec_thread.start()
-            _exec_thread.join(timeout=30)
-            if _exec_thread.is_alive():
-                return _ExecResult({
-                    "status": "error",
-                    "message": "[Preflight] Code execution timed out after 30 seconds. "
-                    "This usually means an infinite loop or a blocking operator call.",
-                })
+            else:
+                # Run LLM-generated exec() in a thread with a timeout to
+                # prevent hangs.
+                def _run_code():
+                    try:
+                        exec(code, namespace)
+                    except Exception as _e:
+                        _exec_error[0] = _e
+                _exec_thread = threading.Thread(target=_run_code, daemon=True)
+                _exec_thread.start()
+                _exec_thread.join(timeout=30)
+                if _exec_thread.is_alive():
+                    return _ExecResult({
+                        "status": "error",
+                        "message": "[Preflight] Code execution timed out after 30 seconds. "
+                        "This usually means an infinite loop or a blocking operator call.",
+                    })
             if _exec_error[0] is not None:
                 raise _exec_error[0]
 
@@ -788,7 +851,7 @@ def _execute_code(
                     "\n\nHINT: The scene has no active object. "
                     "Many operators (mode_set, transform, etc.) require an active object. "
                     "Create an object first with `bpy.ops.mesh.primitive_cube_add()` or "
-                    "check `bpy.context.active_object` before calling mode-dependent operators."
+                    "check `bpy.context.view_layer.objects.active` before calling mode-dependent operators."
                 )
             if "use_auto_smooth" in tb_str and "has no attribute" in tb_str:
                 tb_str += (
@@ -812,7 +875,7 @@ def _execute_code(
                     "`selected_verts` attribute — edit-mode selections live on the mesh data, "
                     "not on context. Read them with bmesh:\n"
                     "    import bmesh\n"
-                    "    bm = bmesh.from_edit_mesh(bpy.context.active_object.data)\n"
+                    "    bm = bmesh.from_edit_mesh(bpy.context.view_layer.objects.active.data)\n"
                     "    sel_edges = [e for e in bm.edges if e.select]\n"
                     "    sel_faces = [f for f in bm.faces if f.select]\n"
                     "    sel_verts = [v for v in bm.verts if v.select]\n"
@@ -840,7 +903,7 @@ def _execute_code(
                     "automatically undone (deleting the objects it created) while you kept "
                     "the old reference, or because you deleted/replaced an object. "
                     "Re-fetch references fresh right before each use:\n"
-                    "    obj = bpy.data.objects.get('Name')  # or bpy.context.active_object\n"
+                    "    obj = bpy.data.objects.get('Name')  # or bpy.context.view_layer.objects.active\n"
                     "    if obj is None:\n"
                     "        ...create or find it again...\n"
                     "Never reuse an object/material reference captured in an earlier tool call, "

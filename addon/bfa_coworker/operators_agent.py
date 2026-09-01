@@ -14,6 +14,8 @@ __all__ = (
     "_BFACW_OT_check_ports",
     "_BFACW_OT_test_step",
     "_BFACW_OT_test_step_reset",
+    "_BFACW_OT_asset_selftest_run",
+    "_BFACW_OT_asset_selftest_reset",
     "BFACW_OT_copy_mcp_config",
     "BFACW_OT_mcp_server_start",
     "BFACW_OT_mcp_server_stop",
@@ -597,6 +599,74 @@ class _BFACW_OT_test_step_reset(bpy.types.Operator):  # type: ignore[misc]
         del context
         _test_suite_progress.pop(self.suite, None)
         self.report({"INFO"}, "Test suite '{:s}' reset to step 1".format(self.suite))
+        return {"FINISHED"}
+
+
+class _BFACW_OT_asset_selftest_run(bpy.types.Operator):  # type: ignore[misc]
+    """Run the deterministic (LLM-free) asset-tool self-test suite."""
+    bl_idname = "bfacw.asset_selftest_run"
+    bl_label = "Run All Auto"
+    bl_description = (
+        "Run every asset tool against a throwaway fixture library in-session "
+        "(no MCP server, no LLM) with PASS/FAIL + timing per step"
+    )
+
+    _timer = None
+
+    def invoke(self, context: bpy.types.Context, _event) -> set[str]:
+        from . import asset_selftests as _ast
+
+        if _ast.is_running():
+            self.report({"WARNING"}, "Self-test is already running.")
+            return {"CANCELLED"}
+        self.report({"INFO"}, "Starting asset self-test suite...")
+
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.25, window=context.window)
+        wm.modal_handler_add(self)
+
+        def _do_run():
+            try:
+                _ast.run_auto_suite()
+            except Exception as ex:  # pylint: disable=broad-exception-caught
+                print("[🛠️Coworker] asset self-test crashed: {:s}".format(str(ex)))
+
+        threading.Thread(target=_do_run, daemon=True).start()
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context: bpy.types.Context, _event) -> set[str]:
+        from . import asset_selftests as _ast
+
+        # Redraw the preferences UI so step results appear as they land.
+        for area in context.window.screen.areas:
+            if area.type == "PREFERENCES":
+                area.tag_redraw()
+        if _ast.is_running():
+            return {"RUNNING_MODAL"}
+        wm = context.window_manager
+        if self._timer is not None:
+            wm.event_timer_remove(self._timer)
+            self._timer = None
+        return {"FINISHED"}
+
+
+class _BFACW_OT_asset_selftest_reset(bpy.types.Operator):  # type: ignore[misc]
+    """Clear asset self-test results (and any leftover fixture data)."""
+    bl_idname = "bfacw.asset_selftest_reset"
+    bl_label = "Reset"
+    bl_description = "Clear asset self-test results"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        del context
+        from . import asset_selftests as _ast
+        _ast._results.clear()
+        _ast._last_error = ""
+        try:
+            import bpy as _bpy  # pylint: disable=import-error
+            _ast._purge_datablocks(_bpy)
+        except Exception:
+            pass
+        self.report({"INFO"}, "Asset self-test results cleared.")
         return {"FINISHED"}
 
 

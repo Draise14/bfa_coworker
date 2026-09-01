@@ -23,6 +23,7 @@ __all__ = (
     "BFACW_OT_chat_queue_send",
     "BFACW_OT_export_session_log",
     "BFACW_OT_copy_session_log",
+    "BFACW_OT_copy_status_error",
     "BFACW_OT_agent_start",
     "BFACW_OT_agent_stop",
     "BFACW_OT_agent_restart",
@@ -132,6 +133,31 @@ def _strip_inline(text):
 
 
 _PARA_SCALE_Y = 0.78  # tight vertical spacing for paragraph text
+
+_CAN_MULTILINE = None
+
+def _can_multiline() -> bool:
+    """Whether the host build exposes ``UILayout.label_multiline``.
+
+    The native multi-line label API (Blender PR #154351, merged into
+    the workshop/ios-workshop builds) wraps text to the *actual* layout
+    width with a tight 0.75 UI_UNIT_Y line height and supports an icon,
+    alignment and max-lines cap.  Older stock builds lack it, in which
+    case the addon keeps the manual character-chop renderer.  Checked
+    once via RNA so ``hasattr`` on a live layout is not required.
+    """
+    global _CAN_MULTILINE
+    if _CAN_MULTILINE is None:
+        try:
+            import bpy
+            _CAN_MULTILINE = any(
+                fn.identifier == "label_multiline"
+                for fn in bpy.types.UILayout.bl_rna.functions
+            )
+        except Exception:  # pylint: disable=broad-exception-caught
+            _CAN_MULTILINE = False
+    return _CAN_MULTILINE
+
 _CODE_SCALE_Y = 0.72
 def _wrap_for_label(text, width=40):
     """Wrap text for UILabel -- returns a list of lines."""
@@ -340,7 +366,10 @@ def _render_markdown(layout, md, width=40):
             return
         col = _para_col()
         full = indent + text
-        if hasattr(col, "label_multiline"):
+        if _can_multiline():
+            # Native multiline already has tight 0.75 UI_UNIT_Y leading;
+            # keep the column at full scale so it does not over-squish.
+            col.scale_y = 1.0
             col.label_multiline(text=full)
         else:
             for chunk in _wrap_for_label(full, width=width):
@@ -517,15 +546,23 @@ def _render_markdown(layout, md, width=40):
         i += 1
 
 def _draw_multiline(layout: bpy.types.UILayout, text: str, width: int = _WRAP_WIDTH) -> None:
-    """Draw multi-line text in a layout, wrapping to the given width.
+    """Draw multi-line text in a layout.
 
-    Uses _wrap_text to enforce character-based wrapping regardless of
-    layout width.  label_multiline was removed because it wraps to the
-    full layout width in Blender 5.3, making assistant responses span
-    the entire panel instead of wrapping at a readable width.
+    Prefers the host build's native ``label_multiline`` (Blender PR
+    #154351, workshop builds) which wraps to the real layout width with
+    a tight 0.75 UI_UNIT_Y line height - no manual chopping, no tall
+    full-height rows per wrap chunk, so chat messages condense
+    vertically. Falls back to character-based wrapping on builds that
+    lack the API.
     """
     if not text:
         return
+    if _can_multiline():
+        try:
+            layout.label_multiline(text=text)
+            return
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
     for line in _wrap_text(text, width=width).split("\n"):
         layout.label(text=line)
 
@@ -931,6 +968,23 @@ class BFACW_OT_copy_session_log(Operator):  # type: ignore[misc]
         log_text = agent_controller.export_session_log_to_clipboard()
         context.window_manager.clipboard = log_text
         self.report({"INFO"}, "Session log copied to clipboard")
+        return {"FINISHED"}
+
+
+class BFACW_OT_copy_status_error(Operator):  # type: ignore[misc]
+    """Copy the full error/status text to the clipboard for troubleshooting."""
+    bl_idname = "bfacw.copy_status_error"
+    bl_label = "Copy Error"
+    bl_description = "Copy the full error text to the clipboard for troubleshooting"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        state = agent_controller._agent_state
+        text = state.error_full or state.error or ""
+        if not text.strip():
+            self.report({"WARNING"}, "No error text to copy")
+            return {"CANCELLED"}
+        context.window_manager.clipboard = text
+        self.report({"INFO"}, "Error text copied to clipboard")
         return {"FINISHED"}
 
 
@@ -1794,13 +1848,21 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             is_ok = state.mcp_server_running
 
         status_icon = (
-            'CHECKMARK' if is_ok and not state.is_thinking else
+            'CHECKMARK' if is_ok and not state.is_thinking and not state.error else
             'SORTTIME' if state.is_thinking else
-            'WARNING' if state.error else 'ERROR'
+            'ERROR' if state.error else 'CANCEL'
         )
         status_row = layout.row()
         status_row.label(text="", icon=status_icon)
         _draw_multiline(status_row, status)
+        if state.error:
+            err_row = layout.row(align=True)
+            err_row.scale_y = 0.8
+            err_row.operator(
+                "bfacw.copy_status_error",
+                icon="COPYDOWN",
+                text="Copy Error",
+            )
 
         # ── External Harness mode ──
         if is_harness:
@@ -2307,6 +2369,7 @@ _classes = (
     BFACW_OT_chat_queue_send,
     BFACW_OT_export_session_log,
     BFACW_OT_copy_session_log,
+    BFACW_OT_copy_status_error,
     BFACW_OT_queue_clear,
     BFACW_OT_queue_show,
     BFACW_OT_mention_search,

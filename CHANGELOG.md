@@ -27,6 +27,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Asset Tool Self-Tests in the Diagnostics UI (Tier 3d Phase B)** — Preferences → Advanced → Diagnostics now has an "Asset Tool Self-Tests (no LLM)" box: one click runs every asset tool deterministically in-session against a throwaway fixture library (no MCP server, no agent, no LLM) and shows per-step PASS/FAIL with timings, updating live. Covers `get_asset_libraries`, `search_assets` (name + tag), `get_asset_tags` (editor type), `load_asset_in_context` (material onto explicit object), `place_asset_in_scene` (position check), `wire_node_group` (add_top_level + connect_to_output), and `get_node_group_interface` — all via the exact same toolcode the MCP layer runs (include-expanded, vendored path). Steps that genuinely need a live editor/UI (opening the Asset Browser, visual load verification, a render smoke test) are listed as a manual checklist inside the same box; cleanup removes only fixture-owned datablocks and never touches your scene.
+
+- **Asset Metadata Index (Tier 3d Phase C)** — `search_assets`, `get_asset_tags` and `load_asset_in_context` now answer from an on-disk metadata index instead of appending datablocks into the live session. The index (stored under the user cache in `bfa_coworker/asset_index/`, never inside library folders) captures the full Asset Details region — tags, description, author, copyright, license, catalog, color tag, and the asset's self-declared `preferred_import_method` — plus per-type facts (node count, node-group socket interface, material blend method, vertex counts, action frame range). Entries are fingerprinted per `.blend` by mtime+size; a stale or missing index is rebuilt lazily by a disposable `--background --factory-startup` subprocess (deduplicated by a 60 s marker TTL), so your session is never polluted and read-only/network libraries are never written to. `get_asset_tags` returns the full metadata with zero loading, `search_assets` matches name/tag/description from the index, and `import_method="auto"` now honors the asset's declared method even when the asset has never been loaded. Live append inspection remains as the documented fallback when no index can be built.
+
+- **Blender 5.3 Compatibility (Tier 3d Phase A)** — The live headless run against the Bforartists 5.3 dev build surfaced six real bugs, all fixed: `NodeTree.inputs/outputs` were removed in 5.x (`get_asset_tags` reads the socket interface instead of crashing); `bpy.context.active_object` no longer exists in 5.x (object resolution falls back to the view layer); fresh `GeometryNodeTree`s have no nodes and an empty interface (`wire_node_group` `connect_to_output` now creates the Group Output node and the `Geometry` interface socket — `in_out="OUTPUT"`, tree-relative — then links end to end); `get_node_group_interface`'s class-name filter was too strict for 5.x `NodeTreeInterfaceSocket*` subclasses; `connect_to_output` now replaces an occupied output link deterministically instead of reporting "already in use"; and `NodeTree.type` enum normalization (see below). Also: `tests/mcp_client` on Windows cannot `select()` on pipes (WinError 10038) — responses now arrive through a reader thread + queue; and the preflight validator skips repository-controlled toolcode via a `# blmcp-toolcode-skip-preflight` marker (the tools' own generated scripts were previously rejected wholesale).
+
+- **Headless Asset Integration Tests (Tier 3d Phase A)** — New `tests/integration/test_asset_browser.py`: end-to-end asset workflow against real Bforartists in pure `--background` mode (no agent, no LLM, no display), gated on `BLENDER_BIN`. Builds/installs the addon into an isolated HOME, launches `--command bfa_coworker`, then round-trips `get_asset_libraries`, `list_asset_catalogs`, `search_assets` (name + tag), `get_asset_tags` (editor type), `load_asset_in_context` onto an explicit object, `place_asset_in_scene` with a transform check, `wire_node_group` (add_top_level + connect_to_output), `get_node_group_interface`, and the error paths (unknown asset, missing tree, background-mode jump graceful failure).
+
+- **Explicit-Target + Import-Method Params** — `load_asset_in_context` gained `object_name` (explicit MATERIAL / Geometry-Nodes / ACTION target), `tree_name` (explicit shader compositor target), and `import_method`; `place_asset_in_scene` gained `import_method` (`auto`/`append`/`link`/`pack`, default `auto` = honour the asset's `preferred_import_method` when metadata is available, else fall back to `link_mode`). All backward-compatible (defaults preserve previous behavior) and enabling context-free use in background/headless flows.
+
+- **NodeTree.type Normalization** — Real Blender reports `NodeTree.type` as `SHADER`/`COMPOSITING`/`GEOMETRY`, not the friendly `ShaderNodeTree`/`CompositorNodeTree`/`GeometryNodeTree`. All five affected toolcodes (`get_asset_tags`, `get_node_group_interface`, `get_active_node_tree`, `load_asset_in_context`, `wire_node_group`) now normalize both directions, so editor-type detection and explicit-`node_tree_name` matching work against real Blender. Regression-tested with realistic enum values in the bpy stub (a latent bug all Phase 2B tooling shared).
+
+- **Asset Tool Unit Tests (Tier 3d Phase 5)** — New `tests/test_asset_tools.py` with 43 unit tests for the asset + node-group toolcodes, run via a synthetic `bpy` stub (no Blender needed): `search_assets` name/tag/description matching and type/library filters; `load_asset_in_context` across all six asset types with append-vs-link, positioning, material-slot handling, and editor-aware node groups; `wire_node_group` all four insert modes, undo push, and deterministic socket auto-mapping (exact name → fuzzy → compatible type, incl. type validation and `auto_map=False`); `get_node_group_interface` (new + legacy API); `get_active_node_tree` resolution and serialization. Also added the missing asset-tool args to `tool_smoke_test.py` (`list_asset_catalogs`, `search_assets`, `get_asset_tags`, `load_asset_in_context`, `assign_material_to_objects`, `place_asset_in_scene`).
+
+- **Asset-First System Prompt (Tier 3d Phase 4)** — The "Asset-First Workflow" section in `prompts.yml` was rewritten to bias the agent toward using the MCP asset tools: a decision tree (search `get_asset_libraries`/`list_asset_catalogs`/`search_assets`/`get_asset_tags` before creating anything, then Poly Haven, then from-scratch), link-vs-append-vs-instance guidance, contextual node-group wiring guidance (`get_node_group_interface`/`get_active_node_tree`/`wire_node_group`), and object/collection placement via `place_asset_in_scene`/`jump_to_asset_browser`.
+
+- **Node-Group Intelligence Tools (Tier 3d Phase 2B)** — Three new MCP tools that make node-group assets actually usable:
+  - `get_node_group_interface` — reads a loaded node group's interface (editor type + every input/output socket with type, default, min/max, description), giving the agent the group's wiring manual.
+  - `get_active_node_tree` — serializes the resolved node tree (active material / GN modifier / compositor, or an explicit `bpy.data.node_groups` name) with nodes, sockets, links, and frames.
+  - `wire_node_group` — loads a node-group asset and splices it **into** a target tree with validated, undo-able links. Insert modes: `add_top_level`, `replace_active` (wrap a node), `insert_between` (splice into a link), `connect_to_output` (attach to Material Output/Composite/Group Output). Socket matching is deterministic (exact name → fuzzy → first compatible-type) and unmappable sockets are reported instead of silently failing; `bpy.ops.ed.undo_push` precedes every mutation. Registered in the `assets` and `geometry_nodes` domains, documented in the asset browser skill (with asset-author socket-naming conventions: `Scale`, `Seed`, `Strength`, `Color`).
+
 - **Markdown Rendering in Chat** -- Assistant messages now render with code blocks (with syntax-highlighted headers and Copy buttons), tables, headings (H1-H4), bold/italic, unordered/ordered lists, blockquotes, and inline code. Ported from Blender Buddy reference implementation.
 - **LaTeX → Plain Text Conversion** — The chat renderer now converts stray `$$…$$` blocks, `\frac{a}{b}`, `\sqrt{}`, and common LaTeX symbols (`\cdot`, `\times`, Greek letters, etc.) into readable ASCII/Unicode equivalents, since Blender UI labels can't render math.
 - **Preflight Code Validation** — 27 regex-based checks that catch common LLM mistakes *before* execution: missing `import bpy`, wrong subdivision attribute (`subdivisions` → `levels`), wrong Principled BSDF attribute access, wrong torus keywords, sequencer `sequences` → `strips`, removed `use_auto_smooth`, removed `action.fcurves`, `bpy.ops` in loops, no output/print, `bpy.data.lamps` → `lights`, `'EEVEE'` → `'BLENDER_EEVEE'`, `render.eevee` → `scene.eevee`, wrong BSDF input names, `.active` on data collections, object creation in loops without existence checks, `mode_set` enum validation, hallucinated module imports, wrong material hierarchy, wrong world/environment node types, MCP tools called as Python functions, `world["Use Nodes"]`, transform kwargs on primitive operators, missing `bmesh` import, bmesh edit-mode mismatch, vector arithmetic type errors, and `update_edit_mesh()` argument count. Each check returns targeted guidance so the LLM can fix the code instead of retrying blindly.
@@ -48,6 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Debug Mode & Diagnostics** — New user-facing `debug_mode` toggle and `log_level` enum (DEBUG/INFO/WARNING/ERROR) in preferences. Open Log button for quick access to log file. Multiline custom skills text editor for easier editing.
 - **Benchmark Expansion** — Timing measurements for all benchmark suites. 6 new editor benchmark suites. Split assets_materials into separate tests. Auto-reset on completion. Results persistence to JSON files with comparison support. The Modifiers suite was rewritten as a torus modifier-chain workflow (Array → Bevel → Remesh → Solidify → Smooth → Subdivision Surface building a mechanical part).
 - **Session Logging & Memory Bank** — Export session log to text block or clipboard. Auto-save on spiral detection. Error code bank for pattern tracking. Versioned session history (last 10).
+- **`place_asset_in_scene` Tool** - Place COLLECTION or OBJECT assets at an explicit world position/rotation/scale (rotation in degrees). Defaults to `APPEND` (full copy, positioned directly; collections are anchored by their centroid, with rotation/scale applied around it). `LINK` for collections creates an empty + collection instance for shared references.
+- **`jump_to_asset_browser` Tool** - Switch to (or create) the Asset Browser editor. Reuses an open Asset Browser, otherwise duplicates the current workspace (user layout preserved) and converts its main area; optionally preselects a library and catalog (best-effort).
+- **Tier 3d Plan Update** - `_misc/plan_tier3d_asset_browser_intelligence.md` gained Phase 2B (node-group intelligence: `get_active_node_tree`, `get_node_group_interface`, `wire_node_group` with insert modes, interface auto-mapping and undo) and the Phase 1 domain name was corrected to `assets` to match the implementation.
 - **Asset Browser Tools** — 3 new MCP tools: `get_asset_libraries`, `search_assets`, `load_asset_in_context`. Type-aware loading for materials, node groups, collections, objects, worlds, actions. `get_asset_tags` for reading node group editor type (Geometry Nodes, Shader, Compositor). Asset browser domain registration with skills documentation.
 - **Start/Stop UX Hardening** — Graceful shutdown with timeout. Health dots (Bridge/MCP/LLM liveness indicators). Restart button. Stop-during-thinking guard with user feedback.
 - **Thinking Indicator Polish** — Unicode spinner animation for thinking state. Model loading progress bar with percentage. Timer optimization for UI updates.
@@ -63,6 +87,132 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **User Troubleshooting Guide** — `_misc/harness_troubleshooting.md` covers per-harness common issues, config file locations, and a quick checklist.
 
 ### Fixed
+
+- **Tier 3h Quality Audit: 3 Critical Bugs** - Two MCP tools advertised to the LLM always failed:
+  `execute_blender_plan` and `list_blender_templates` imported `_plan_to_code` / `_render_template` /
+  `_TEMPLATES` / `_TEMPLATE_DEFAULTS` from the wrong module (`mcp_to_blender_server` instead of
+  `blender_templates`), so the plan tool errored and the template list returned "Template registry
+  not available" on every call. Imports now point at `bfa_coworker.blender_templates`, and the dead
+  `_generate_plan_code` fallback (which would have raised NameError) was removed in favor of a clean
+  error dict. Also wired the 12 auto-fix rules from `autofix.py` into `_execute_code()` BEFORE
+  preflight: corrected code (lamps→lights, EEVEE→BLENDER_EEVEE, subdivisions→levels, base_color→
+  inputs, ...) now passes validation instead of being rejected, reducing LLM round-trips.
+
+- **Tier 3h Quality Audit: Cleanup & Hardening** - `get_polyhaven_status` now returns a dict
+  (consistent with every other tool); the `os.add_dll_directory()` handle is kept in module state
+  so the bundled DLL search directory can't be garbage-collected mid-session (Windows DLL_NOT_FOUND
+  hardening); `_call_mcp_tool_sync` gained a 120s daemon watchdog so a hung tool call is reported
+  instead of blocking the conversation loop forever; dead code removed (`_DEEP_MAX_TOKENS` in
+  `agent_controller.py`, stray `_shutting_down` assignments on `LLMState` in `llm_manager.py`).
+
+- **Chat & Messages Render Natively Multi-Line (No More Chopped Rows)** - The sidebar chat
+  manually chopped every message at a fixed character width and drew each chunk as a
+  full-height `UILayout.label` row, which wasted vertical space and looked like ragged
+  line breaks. The renderers (`_draw_multiline` and the markdown paragraph emitter) now use
+  the native `UILayout.label_multiline` API from Blender PR #154351 (workshop/ios-workshop
+  builds) on hosts that expose it - text wraps to the real layout width with a tight
+  0.75 UI_UNIT_Y line height, keeps the markup icons/alignment, and the chat condenses
+  vertically. Detection is done once via RNA, and the character-chop renderer remains as a
+  fallback on stock builds that lack the API. Live-verified in a real UI session on the
+  Bforartists 5.3 dev build (`label_multiline` draws with icon + alignment).
+
+- **Agent Error Loops No Longer Blind or Stuck (Run-Loop Orchestration)** - Two defects made
+  repeated-tool-call spirals much worse. (1) Tool-result errors were head-truncated at 500 chars,
+  and Python tracebacks keep the actual exception on the LAST line - so the model never saw the
+  real error and kept retrying variants of the same broken code. Error results are now trimmed
+  to keep the tail (the exception line and the model's own failing source line) within the same
+  token budget. (2) The smart-undo engine's internal payloads (`_undo_code` / `_build_cleanup_code`,
+  generated by the run loop for undo, undo-push bookmarks, entity snapshots, and failure cleanup)
+  lacked the `# blmcp-toolcode-skip-preflight` marker, so they executed in the bridge's worker
+  thread where `bpy.context.window` is None - `bpy.ops.ed.undo()`, undo-push, and the snapshot
+  all reported "No window/area available", every undo was "FAILED - falling back to entity
+  cleanup", and the metadata snapshot never landed so cleanup had no data. They now carry the
+  marker and run inline on the main thread, so undo/snapshot/cleanup actually work. Also relaxed
+  preflight check #15: it no longer blocks legitimate `primitive_*_add` loops (Blender
+  auto-uniquifies names) - it only flags the real duplicate hazard, `bpy.data.objects.new(...)`
+  with a static name and no `get()`/unique-name guard - and the spiral-detection message now
+  reports the true consecutive-error count. New `tests/test_orchestration_helpers.py` (8 tests)
+  plus 5 new preflight tests.
+
+- **Console Stays Clean (No More Blank Lines, No Agent Talk)** - With Debug Mode OFF, the
+  Blender console now works like the stock Bforartists console again. Root cause of the stray
+  empty lines: `print("[Coworker] ...")` writes two separate chunks - the prefixed message
+  (suppressed) and a trailing bare newline (which has no prefix, so it leaked through as a
+  blank line). The output tee now remembers the last suppressed addon line and swallows its
+  trailing newline chunk too. Also swept the last un-prefixed addon prints: the Agent auto-start
+  diagnostics in `__init__.py` now carry the `[🛠️Coworker]` prefix (log-only when debug is OFF),
+  with the MCP-server-failure line promoted to `[⚠️Coworker]` so real problems still surface
+  on screen. Warnings/errors always pass through; Blender's own messages and other addons are
+  untouched. Debug Mode ON still shows everything. New `tests/test_log_suppression.py` (11 tests)
+  covers the classifier and the newline-swallowing behavior.
+
+- **Workspace-Tab Tools Now Work Through the Harness** - `jump_to_tab_by_name` /
+  `jump_to_tab_by_space_type` (and every other window/context-dependent tool: asset-browser
+  jump, viewport jumps, screenshots) returned "No active window" (or crashed) whenever called
+  from an MCP client. Root cause: the addon bridge executed *all* code - including trusted,
+  repository-controlled toolcode - in a daemon worker thread, and `bpy.context` is only populated
+  on Blender's main thread (probe-verified: window=None, screen=None, `active_object` raises
+  AttributeError in the worker thread). The bridge now runs toolcode-marked payloads inline in
+  the calling thread (the socket is serviced from `bpy.app.timers` on the main thread), while
+  LLM-generated code keeps the 30s hang-timeout worker thread. Also hardened the two tab tools:
+  workspace lookup tolerates case/whitespace differences, and the success result now includes
+  `available_workspaces` so the agent can discover tabs. Live-verified end-to-end through the
+  real bridge in a UI session (tab switched Main -> Animation, workspaces listed). New unit tests
+  for both tab toolcodes in `tests/test_asset_tools.py` (64 total).
+
+- **Harness Step 3: Chat-Paste Hint** - The external-harness wizard now shows a per-client tip in
+  Step 3 (Paste into your client) telling you when you can paste the config directly into the
+  client's chat/MCP settings instead of editing a config file: Windsurf (Cascade chat), Claude
+  Code (/mcp), Cline (Paste Configuration), Cursor (MCP Servers settings), OpenCode (paste
+  into the TUI), Codex (`mcp add`), and a note that Claude Desktop is file-only.
+
+- **Harness CLI Tools Find Bforartists** - `execute_blender_code_for_cli` and friends
+  failed with "Blender executable not found at 'blender'" because generated harness
+  configs never set `BLENDER_PATH`, so the CLI fell back to a literal `blender` on
+  PATH (which does not exist when Blender is installed as `bforartists.exe`). The
+  config generator now emits `BLENDER_PATH` pointing at the running binary. Also
+  fixed a latent Windows crash: the CLI subprocess decoded output with the locale
+  codec (cp1252), which chokes on Bforartists' UTF-8 console output (the addon
+  prints emoji) and killed the reader thread - it now decodes UTF-8 with
+  replacement. Verified end-to-end against the Bforartists dev build.
+
+- **Copy Error Button in the Chat Sidebar** - When the agent reports an error, the sidebar status line
+  now shows a **Copy Error** button that puts the full error text on the clipboard for troubleshooting.
+  The sidebar itself keeps showing the compact 500-char preview (raw JSON bodies rendered inline looked
+  garbled), while the full untruncated message is preserved on the agent state and copied instead - the
+  session-log export also includes the full text now. Also fixed the inverted status icon (it showed a
+  warning icon when an error was present).
+
+- **Agent Torus Loop + Template Crash (audit fix)** - Live debugging of the agent log exposed three
+  root causes that combined into a 6-turn failure spiral:
+  - **`bpy.context.active_object` unavailable in the MCP bridge** - LLM code runs in a worker thread,
+    and Blender's context is thread-local there, so `bpy.context.active_object` raises
+    `AttributeError` (verified against the dev build). All 18 `blender_templates.py` templates,
+    the preflight hints, and the skills examples used that pattern - every template now uses
+    `bpy.context.view_layer.objects.active` (which works in-thread), a new preflight check
+    (`context_active_object_thread`) teaches the replacement before execution, and the skills
+    gained a bridge-thread note.
+  - **Preflight false positive on primitive transform kwargs** - check #23 banned
+    `location`/`rotation`/`scale` on `primitive_*_add`, but the live build accepts them
+    (verified: `location`+`rotation` on all 10 mesh primitives, `scale` on 9 of 10). Only
+    `rotation_euler`/`rotation_mode` are invalid, and those are still flagged. The agent was
+    blocked from its valid fix and forced back into the crashing pattern.
+  - **llama-server 400 template/parser error killed the next turn** - the log ended with
+    `400 Unable to generate parser for this template ... Unexpected message role`. The retry
+    logic only handled 500s; a new fallback now catches 400s and retries with the conversation
+    flattened to plain system/user/assistant (tool results merged into user messages, no
+    `tools` parameter), so the agent survives templates that cannot represent tool-calling.
+  Tests updated/added in `tests/test_preflight.py` (43 total, green); all unit suites pass.
+
+- **Console Severity Filtering** — With Debug Mode off, the Blender terminal now receives only this addon's warnings (`[⚠️Coworker]`) and error-level lines (ERROR/FAILED/FATAL/TRACEBACK) instead of the full `[Coworker]` diagnostic stream; routine diagnostics are log-only (still in `coworker.log`). Everything that is not the addon's own output (Blender's C-level log, other addons, user scripts, tracebacks) is unaffected. Debug Mode on still shows every line.
+
+- **llama-server Console Window Title (#57 follow-up)** — The dedicated llama-server console window is now titled **"BFA Coworker — llama-server"** at creation. The title is passed via `STARTUPINFOW.lpTitle` on `CreateProcessW` (with `CREATE_NEW_CONSOLE`), because `subprocess.STARTUPINFO` exposes no `lpTitle` and calling `SetConsoleTitleW` from the parent was retitling the Blender/Bforartists terminal instead of the new window. The parent console is never touched: its title stays as-is and all of its output still streams through unchanged — llama-server's stdout/stderr continue to go to the new window with no redirection, and the only console lines the addon itself suppresses remain the intentional `[Coworker]`-prefixed diagnostics when Debug Mode is off.
+
+- **Collection Color Tag Tool Marshaling Fixed** - `set_collection_color_tag` built its Blender-side call from a raw dict instead of the `Params` named-tuple its toolcode's `main()` expects, so every call raised a type error in Blender. It now uses the standard `Params(collection_name=..., color=...)` convention, matching the rest of the tool suite. A full sweep of all 24 bridge-backed wrappers found no other marshaling mismatches; the composite tools (`batch_keyframe_insert`, `three_point_lighting_rig`, `setup_pbr_material`, `download_polyhaven_asset`) generate their own code with a `result` variable and are unaffected. Smoke-test args added for the tool.
+
+- **Asset Tool Parameter Marshaling Fixed** - The six asset-library tools (`get_asset_libraries`, `list_asset_catalogs`, `search_assets`, `get_asset_tags`, `load_asset_in_context`, `assign_material_to_objects`) built their Blender-side calls from dicts, the `send_code` helper, or `None` instead of the `Params` named-tuple the toolcode's `main()` expects, so every call raised a type error in Blender and the tools failed (often misreported as "library not found" / "no catalogs found"). They now use the same `Params` marshaling as the working `jump_to_*` tools. Part of Tier 3d Phase 3.
+
+- **llama-server Console Output Routed to New Window** (#57) — On Windows, llama-server output now appears in its dedicated console window instead of being silently redirected to a log file. The new console shows model loading progress, health checks, and errors in real time. On Linux/macOS, output still goes to the log file as before. The Blender console is now clean of  diagnostic noise when Debug mode is OFF; toggle Debug mode in Preferences to restore full verbosity.
 
 - **llama-server Actually Launches** — `start_local_llama()` now prepends `server_exe` to the subprocess args so llama-server is invoked correctly instead of silently failing to launch.
 - **llama-server Download Progress Bar Cleared** — The download progress bar is now cleared after llama-server download finishes (previously it lingered).

@@ -72,7 +72,7 @@ _DEFAULT_TEMPERATURE_CODE = 0.2
 _DEFAULT_TEMPERATURE_PROSE = 0.35
 
 _DEFAULT_MAX_TOKENS = 1024
-_DEEP_MAX_TOKENS = 4096
+# (removed: _DEEP_MAX_TOKENS was dead code)
 
 _STREAM_TIMEOUT = 600.0
 
@@ -286,6 +286,37 @@ def _sanitize_message_roles(messages: list[dict[str, Any]]) -> list[dict[str, An
     ]
 
 
+def _flatten_for_plain_chat(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Flatten a tool-calling conversation into plain system/user/assistant.
+
+    llama-server's automatic template-parser generation can fail with HTTP
+    400 ("Unable to generate parser for this template ... Unexpected
+    message role") when the model's Jinja template cannot represent
+    'tool' role messages or assistant 'tool_calls'.  Flattening merges each
+    tool result into a user message and drops tool_calls/tool_call_id so
+    any chat template can render the conversation.  New dicts are returned
+    -- the caller's message dicts are never mutated.
+    """
+    flat: list[dict[str, Any]] = []
+    for m in messages:
+        if m.get("role") == "tool":
+            name = m.get("name", "")
+            content = str(m.get("content") or "")
+            flat.append({
+                "role": "user",
+                "content": "[Tool result from {:s}]\n{:s}".format(name, content),
+            })
+            continue
+        cleaned: dict[str, Any] = {}
+        for key, value in m.items():
+            if key in ("tool_calls", "tool_call_id", "summary", "label", "turn_start"):
+                continue
+            cleaned[key] = value
+        flat.append(cleaned)
+    return flat
+
+
+
 # ── Tool domain system (hybrid: pre-detect + on-demand) ────────────
 # Surface tools are always loaded — they cover code execution and basic
 # scene inspection.  Domain tools are loaded based on the user's prompt
@@ -359,6 +390,9 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "jump_to_view3d_object_by_name",
         "jump_to_view3d_object_data_by_name",
         "get_screenshot_of_area_as_image",
+        "get_active_node_tree",
+        "get_node_group_interface",
+        "wire_node_group",
     }),
     "assets": frozenset({
         "search_assets",
@@ -368,6 +402,12 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "load_asset_in_context",
         "download_polyhaven_asset",
         "search_polyhaven_assets",
+        "assign_material_to_objects",
+        "place_asset_in_scene",
+        "jump_to_asset_browser",
+        "get_active_node_tree",
+        "get_node_group_interface",
+        "wire_node_group",
     }),
 }
 
@@ -404,6 +444,7 @@ _DOMAIN_KEYWORDS: dict[str, list[str]] = {
     "assets": [
         "asset", "library", "catalog", "browse", "import asset",
         "append", "link asset", "asset browser",
+        "preset", "template", "stock", "material library",
     ],
 }
 
@@ -629,6 +670,7 @@ class AgentState:
     thinking_start_time: float = 0.0  # Timestamp when thinking started (for elapsed timer)
     status_text: str = "Idle"
     error: str = ""
+    error_full: str = ""  # Untruncated error text (for copy-to-clipboard troubleshooting)
     tool_count: int = 0  # Number of MCP tools available (0 = not loaded yet)
     conversation_history: list[dict[str, Any]] = field(default_factory=list)
     streaming_text: str = ""
@@ -1627,6 +1669,15 @@ def generate_mcp_client_config(
     }
     if py_path:
         env["PYTHONPATH"] = py_path
+    # Point CLI tools (execute_blender_code_for_cli, etc.) at the running
+    # Blender/Bforartists binary.  Without this they fall back to a literal
+    # "blender" on PATH, which fails when Blender is installed under a
+    # different name (e.g. bforartists.exe).
+    try:
+        import bpy  # pylint: disable=import-error
+        env["BLENDER_PATH"] = bpy.app.binary_path
+    except Exception:
+        pass  # Outside Blender - the client must set BLENDER_PATH itself.
 
     # Base command block shared by all presets.
     base_cmd = {
@@ -1986,6 +2037,32 @@ def _openai_chat_completions(
                     req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
                     continue
 
+            # -- Chat template parser-generation failure (400) --------
+            # llama-server auto-generates a parser for the model's Jinja
+            # chat template when a request carries tool-calling structure.
+            # Some templates fail that generation with HTTP 400
+            # "Unable to generate parser for this template ... Unexpected
+            # message role."  Flatten the conversation to plain
+            # system/user/assistant messages and retry without tools; the
+            # model then answers in text (text tool calls are still parsed).
+            if isinstance(ex, urllib.error.HTTPError) and ex.code == 400:
+                _error_body = ""
+                try:
+                    _error_body = ex.read().decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+                if ("parser" in _error_body and "template" in _error_body) or "Unexpected message role" in _error_body:
+                    print("[🛠️Coworker] _openai_chat_completions: 400 template/parser error - "
+                          "flattening conversation and retrying without tools")
+                    if _error_body:
+                        print("[🛠️Coworker] _openai_chat_completions:   400 body = {:s}".format(_error_body[:300]))
+                    tools_tried = False
+                    body.pop("tools", None)
+                    body["messages"] = _flatten_for_plain_chat(messages)
+                    data_bytes = json.dumps(body).encode()
+                    req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
+                    continue
+
             # ── 503 Service Unavailable: model still loading ──────────
             # llama-server returns 503 while the model is loading into
             # memory (can take 30-120s for large models).  Retry with
@@ -2026,9 +2103,11 @@ def _openai_chat_completions(
                 print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — {:s}".format(str(ex)))
                 print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_error_body[:500]))
                 _agent_state.error = "LLM request failed: {:s}".format(_error_body[:500])
+                _agent_state.error_full = "LLM request failed: {:s}".format(_error_body)
             else:
                 print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — {:s}".format(str(ex)))
                 _agent_state.error = "LLM request failed: {:s}".format(str(ex))
+                _agent_state.error_full = "LLM request failed: {:s}".format(str(ex))
             return None
     return None
 
@@ -2163,6 +2242,25 @@ def _parse_xml_tool_calls(text: str) -> list[dict[str, Any]]:
     return tool_calls
 
 
+# Watchdog: give up on a hung MCP tool call so the conversation loop
+# can continue instead of blocking forever on an infinite loop in
+# LLM-generated code or a deadlocked bridge.
+_TOOL_CALL_WATCHDOG_SECONDS = 120
+_TOOL_CALL_WATCHDOG_LAST: dict[str, float] = {}
+
+def _tool_call_watchdog_hit(tool_name: str) -> None:
+    """Report (once) that a tool call has exceeded the watchdog budget."""
+    import time as _time
+    now = _time.monotonic()
+    last = _TOOL_CALL_WATCHDOG_LAST.get(tool_name, 0.0)
+    if now - last < 30:
+        return  # debounce: do not spam every redraw cycle
+    _TOOL_CALL_WATCHDOG_LAST[tool_name] = now
+    print("[🛠️Coworker] _call_mcp_tool_sync: TOOL CALL TIMEOUT ({:d}s) for {:s} — "
+          "the bridge may be hung; the HTTP request will surface the error.".format(
+        _TOOL_CALL_WATCHDOG_SECONDS, tool_name))
+
+
 def _call_mcp_tool_sync(
     tool_name: str,
     arguments: dict[str, Any],
@@ -2193,17 +2291,28 @@ def _call_mcp_tool_sync(
     print("[🛠️Coworker] _call_mcp_tool_sync: {:s} args={:s}".format(
         tool_name, json.dumps(arguments)[:200]))
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            raw = resp.read().decode()
-            # FastMCP in stateless_http mode wraps the JSON-RPC
-            # response in SSE (``event: message`` / ``data: {...}``).
-            result = _parse_sse_text_response(raw)
-            print("[🛠️Coworker] _call_mcp_tool_sync: result = {:s}".format(
-                result[:300]))
-            # Update liveness and log operation.
-            _agent_state.last_mcp_activity = _time.monotonic()
-            _log_operation(tool_name, arguments, result)
-            return result
+        # Start a daemon watchdog that reports if this call exceeds the
+        # budget. The HTTP timeout (60s) still owns the actual abort; the
+        # watchdog is a belt-and-braces liveness signal for the logs.
+        _wd = threading.Timer(_TOOL_CALL_WATCHDOG_SECONDS,
+                              _tool_call_watchdog_hit,
+                              args=(tool_name,))
+        _wd.daemon = True
+        _wd.start()
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                raw = resp.read().decode()
+                # FastMCP in stateless_http mode wraps the JSON-RPC
+                # response in SSE (``event: message`` / ``data: {...}``).
+                result = _parse_sse_text_response(raw)
+                print("[🛠️Coworker] _call_mcp_tool_sync: result = {:s}".format(
+                    result[:300]))
+                # Update liveness and log operation.
+                _agent_state.last_mcp_activity = _time.monotonic()
+                _log_operation(tool_name, arguments, result)
+                return result
+        finally:
+            _wd.cancel()
     except (urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
         print("[🛠️Coworker] _call_mcp_tool_sync: FAILED — {:s}".format(str(ex)))
         return "Error calling tool '{:s}': {:s}".format(tool_name, str(ex))
@@ -2218,6 +2327,8 @@ _TOOL_FRIENDLY_NAMES: dict[str, str] = {
     "get_blendfile_summary_datablocks_toolcode": "Reading scene data",
     "download_polyhaven_asset": "Downloading asset",
     "search_polyhaven_assets": "Searching Poly Haven",
+    "place_asset_in_scene": "Placing asset in scene",
+    "jump_to_asset_browser": "Opening Asset Browser",
     "setup_pbr_material": "Setting up PBR material",
     "get_object_info": "Inspecting object",
     "create_object": "Creating object",
@@ -2302,7 +2413,8 @@ def _trim_tool_result(result_text: str, max_chars: int = 500) -> str:
     Unlike the old hard 500-char cut, this function:
     - Strips the outer ``{"status": ..., "result": ...}`` wrapper and
       keeps only the meaningful inner data.
-    - For error results, preserves the full error message.
+    - For error results, keeps the head and the tail (the exception
+      line at the end of a traceback), trimming the middle.
     - For success results, extracts the ``result`` sub-field if present,
       giving the LLM more structured data within the same token budget.
     - Falls back to a hard truncation for non-JSON or unparseable content.
@@ -2324,13 +2436,21 @@ def _trim_tool_result(result_text: str, max_chars: int = 500) -> str:
 
     status = data.get("status", "")
 
-    # Error results: preserve the full message — it's critical for debugging.
+    # Error results: preserve the TAIL of the message — Python tracebacks
+    # put the actual exception (type + message + the failing line of the
+    # model's own code) on the LAST lines. Head-truncating cut that off,
+    # leaving the model blind to the real error while it could still see
+    # the unhelpful stack preamble. Keep a short head for context and the
+    # informative tail within the same token budget.
     if status == "error":
         msg = data.get("message", "") or ""
         if len(msg) <= max_chars:
-            return "{{\"status\": \"error\", \"message\": \"{:s}\"}}".format(msg[:max_chars])
-        return "{{\"status\": \"error\", \"message\": \"{:s}\"}}".format(
-            msg[:max_chars] + "...")
+            return "{{\"status\": \"error\", \"message\": \"{:s}\"}}".format(msg)
+        head_len = max(max_chars // 4, 80)
+        tail_len = max_chars - head_len - 22  # room for the trim marker
+        trimmed = msg[:head_len] + "\\n...[+{:d} chars trimmed]...\\n".format(
+            len(msg) - head_len - tail_len) + msg[-tail_len:]
+        return "{{\"status\": \"error\", \"message\": \"{:s}\"}}".format(trimmed)
 
     # Success results: extract the inner result field.
     if status == "ok":
@@ -2437,7 +2557,7 @@ def _spiral_corrective_message(error_sig: str) -> str:
             "(e.g. selected_edges, selected_faces, selected_verts). Blender does not expose "
             "edit-mode selections on context. Read them with bmesh:\n"
             "    import bmesh\n"
-            "    bm = bmesh.from_edit_mesh(bpy.context.active_object.data)\n"
+            "    bm = bmesh.from_edit_mesh(bpy.context.view_layer.objects.active.data)\n"
             "    sel = [e for e in bm.edges if e.select]\n"
             "Use `bpy.context.selected_objects` only for object-mode object selection. "
             "Fix the code \u2014 do not retry it verbatim.]"
@@ -2699,6 +2819,7 @@ def _build_cleanup_code(diff: _EntityDiff) -> str:
     fails (e.g. no window/area available, or undo stack is empty).
     """
     parts: list[str] = [
+        "# blmcp-toolcode-skip-preflight",
         "import bpy",
         "result = {'status': 'ok', 'cleaned': []}",
         "",
@@ -2756,6 +2877,7 @@ def _undo_code(action: str, message: str = "", extra_result: str = "") -> str:
     else:
         body = "bpy.ops.ed.undo_push(message='{:s}')".format(message)
     return (
+        "# blmcp-toolcode-skip-preflight\n"
         "import bpy\n"
         "def _sn(seq):\n"
         "    try:\n"
@@ -2946,7 +3068,8 @@ def export_session_log(auto_saved: bool = False) -> None:
 # Error signatures.
     lines.append("--- Error Info ---")
     if _agent_state.error:
-        lines.append("Current error: {:s}".format(str(_agent_state.error)))
+        lines.append("Current error: {:s}".format(
+            _agent_state.error_full or str(_agent_state.error)))
     lines.append("")
 
     # LLM server log tail.
@@ -3660,7 +3783,8 @@ def _run_conversation_turn_inner(
                         _consecutive_errors.append(error_sig)
                         if len(_consecutive_errors) >= 2:
                             print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: spiral detected \u2014 "
-                                  "same error 3\u00d7 in a row: {:s}".format(error_sig))
+                                  "same error {:d}\u00d7 in a row: {:s}".format(
+                                      len(_consecutive_errors), error_sig))
                             # Auto-save session log on spiral detection.
                             try:
                                 export_session_log(auto_saved=True)

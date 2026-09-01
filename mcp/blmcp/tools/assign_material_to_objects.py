@@ -15,6 +15,7 @@ from blmcp.tools_helpers import (
     toolcode_wrap_with_calling_convention,
 )
 from blmcp.tools_helpers.connection import send_code
+from blmcp.tools.assign_material_to_objects_toolcode import Params
 from mcp.server.fastmcp import FastMCP  # pylint: disable=import-error,no-name-in-module
 from mcp.types import ToolAnnotations  # pylint: disable=import-error,no-name-in-module
 
@@ -48,10 +49,14 @@ def register(mcp: FastMCP) -> None:
         Returns:
             Status, assigned object list, and any errors.
         """
-        return toolcode_format_call(
-            _TOOL_CALL,
-            send_code,
-            material_name=material_name,
-            object_names=object_names,
-            slot_index=slot_index,
+        return send_code(
+            toolcode_format_call(
+                _TOOL_CALL,
+                Params(
+                    material_name=material_name,
+                    object_names=tuple(object_names),
+                    slot_index=slot_index,
+                ),
+            ),
+            strict_json=True,
         )

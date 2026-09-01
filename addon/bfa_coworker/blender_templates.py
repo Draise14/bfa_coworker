@@ -9,7 +9,7 @@ def _tmpl_create_torus(params=None):
     return (
         'import bpy\n'
         'bpy.ops.mesh.primitive_torus_add(major_radius={major_radius}, minor_radius={minor_radius}, major_segments={major_segments}, minor_segments={minor_segments})\n'
-        'obj = bpy.context.active_object\n'
+        'obj = bpy.context.view_layer.objects.active\n'
         'obj.name = "{name}"\n'
         'obj.location = ({x}, {y}, {z})\n'
     ).format(**p)
@@ -22,7 +22,7 @@ def _tmpl_create_cube(params=None):
     return (
         'import bpy\n'
         'bpy.ops.mesh.primitive_cube_add(size={size})\n'
-        'obj = bpy.context.active_object\n'
+        'obj = bpy.context.view_layer.objects.active\n'
         'obj.name = "{name}"\n'
         'obj.location = ({x}, {y}, {z})\n'
     ).format(**p)
@@ -35,7 +35,7 @@ def _tmpl_create_uv_sphere(params=None):
     return (
         'import bpy\n'
         'bpy.ops.mesh.primitive_uv_sphere_add(segments={segments}, ring_count={ring_count})\n'
-        'obj = bpy.context.active_object\n'
+        'obj = bpy.context.view_layer.objects.active\n'
         'obj.name = "{name}"\n'
         'obj.location = ({x}, {y}, {z})\n'
     ).format(**p)
@@ -48,7 +48,7 @@ def _tmpl_create_cylinder(params=None):
     return (
         'import bpy\n'
         'bpy.ops.mesh.primitive_cylinder_add(vertices={vertices}, radius={radius}, depth={depth})\n'
-        'obj = bpy.context.active_object\n'
+        'obj = bpy.context.view_layer.objects.active\n'
         'obj.name = "{name}"\n'
         'obj.location = ({x}, {y}, {z})\n'
     ).format(**p)
@@ -61,7 +61,7 @@ def _tmpl_create_plane(params=None):
     return (
         'import bpy\n'
         'bpy.ops.mesh.primitive_plane_add(size={size})\n'
-        'obj = bpy.context.active_object\n'
+        'obj = bpy.context.view_layer.objects.active\n'
         'obj.name = "{name}"\n'
         'obj.location = ({x}, {y}, {z})\n'
     ).format(**p)
@@ -73,7 +73,7 @@ def _tmpl_add_material(params=None):
     if params: p.update(params)
     return (
         'import bpy\n'
-        'obj = bpy.context.active_object\n'
+        'obj = bpy.context.view_layer.objects.active\n'
         'mat = bpy.data.materials.new(name="{mat_name}")\n'
         'mat.use_nodes = True\n'
         'principled = mat.node_tree.nodes.get("Principled BSDF")\n'
@@ -100,7 +100,7 @@ def _tmpl_auto_smooth(params=None):
     if params: p.update(params)
     return (
         'import bpy, math\n'
-        'obj = bpy.context.active_object\n'
+        'obj = bpy.context.view_layer.objects.active\n'
         'obj.data.auto_smooth_angle = math.radians({angle_degrees})\n'
     ).format(**p)
 
@@ -111,7 +111,7 @@ def _tmpl_add_subsurf(params=None):
     if params: p.update(params)
     return (
         'import bpy\n'
-        'obj = bpy.context.active_object\n'
+        'obj = bpy.context.view_layer.objects.active\n'
         'mod = obj.modifiers.new(name="Subdivision", type="SUBSURF")\n'
         'mod.levels = {viewport_levels}\n'
         'mod.render_levels = {render_levels}\n'
@@ -124,7 +124,7 @@ def _tmpl_add_array(params=None):
     if params: p.update(params)
     return (
         'import bpy\n'
-        'obj = bpy.context.active_object\n'
+        'obj = bpy.context.view_layer.objects.active\n'
         'mod = obj.modifiers.new(name="Array", type="ARRAY")\n'
         'mod.count = {count}\n'
         'mod.relative_offset_displace[0] = {offset_x}\n'
@@ -137,7 +137,7 @@ def _tmpl_add_bevel(params=None):
     if params: p.update(params)
     return (
         'import bpy\n'
-        'obj = bpy.context.active_object\n'
+        'obj = bpy.context.view_layer.objects.active\n'
         'mod = obj.modifiers.new(name="Bevel", type="BEVEL")\n'
         'mod.width = {width}\n'
         'mod.segments = {segments_bevel}\n'
@@ -150,7 +150,7 @@ def _tmpl_add_solidify(params=None):
     if params: p.update(params)
     return (
         'import bpy\n'
-        'obj = bpy.context.active_object\n'
+        'obj = bpy.context.view_layer.objects.active\n'
         'mod = obj.modifiers.new(name="Solidify", type="SOLIDIFY")\n'
         'mod.thickness = {thickness}\n'
     ).format(**p)
@@ -162,7 +162,7 @@ def _tmpl_add_smooth(params=None):
     if params: p.update(params)
     return (
         'import bpy\n'
-        'obj = bpy.context.active_object\n'
+        'obj = bpy.context.view_layer.objects.active\n'
         'mod = obj.modifiers.new(name="Smooth", type="SMOOTH")\n'
         'mod.factor = {factor}\n'
         'mod.iterations = {iterations}\n'
@@ -175,7 +175,7 @@ def _tmpl_add_remesh(params=None):
     if params: p.update(params)
     return (
         'import bpy\n'
-        'obj = bpy.context.active_object\n'
+        'obj = bpy.context.view_layer.objects.active\n'
         'mod = obj.modifiers.new(name="Remesh", type="REMESH")\n'
         'mod.mode = "VOXEL"\n'
         'mod.voxel_size = {voxel_size}\n'
@@ -201,7 +201,7 @@ def _tmpl_setup_camera(params=None):
     return (
         'import bpy\n'
         'bpy.ops.object.camera_add(location=({x}, {y}, {z}))\n'
-        'cam = bpy.context.active_object\n'
+        'cam = bpy.context.view_layer.objects.active\n'
         'cam.name = "{name}"\n'
         'cam.rotation_euler = ({rx}, {ry}, {rz})\n'
         'bpy.context.scene.camera = cam\n'
@@ -215,7 +215,7 @@ def _tmpl_keyframe_location(params=None):
     if params: p.update(params)
     return (
         'import bpy\n'
-        'obj = bpy.context.active_object\n'
+        'obj = bpy.context.view_layer.objects.active\n'
         'obj.location = ({x}, {y}, {z})\n'
         'obj.keyframe_insert(data_path="location", frame={frame})\n'
     ).format(**p)
@@ -227,7 +227,7 @@ def _tmpl_keyframe_rotation(params=None):
     if params: p.update(params)
     return (
         'import bpy, math\n'
-        'obj = bpy.context.active_object\n'
+        'obj = bpy.context.view_layer.objects.active\n'
         'obj.rotation_euler = (math.radians({rx_deg}), math.radians({ry_deg}), math.radians({rz_deg}))\n'
         'obj.keyframe_insert(data_path="rotation_euler", frame={frame})\n'
     ).format(**p)
@@ -272,6 +272,64 @@ _TEMPLATES = {
     "keyframe_location": _tmpl_keyframe_location,
     "keyframe_rotation": _tmpl_keyframe_rotation,
 }
+
+
+# ---------------------------------------------------------------------------
+# Template metadata — prepared for Tier 4 (per-editor registries, CHOYA
+# next-step buttons, contextual panels).
+
+# Editor identifiers use the same values as bpy.types.Area.type.
+_TEMPLATE_META: dict[str, dict[str, object]] = {
+    "create_torus":        {"tier": 1, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": True, "is_destructive": False, "chainable": True},
+    "create_cube":         {"tier": 1, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": True, "is_destructive": False, "chainable": True},
+    "create_uv_sphere":    {"tier": 1, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": True, "is_destructive": False, "chainable": True},
+    "create_cylinder":     {"tier": 1, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": True, "is_destructive": False, "chainable": True},
+    "create_plane":        {"tier": 1, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": True, "is_destructive": False, "chainable": True},
+    "add_material":        {"tier": 1, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": True, "is_destructive": False, "chainable": True},
+    "smooth_shade":        {"tier": 1, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": True},
+    "auto_smooth":         {"tier": 2, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": True},
+    "add_subsurf":         {"tier": 1, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": True},
+    "add_array":           {"tier": 2, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": True},
+    "add_bevel":           {"tier": 2, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": True},
+    "add_solidify":        {"tier": 2, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": True},
+    "add_smooth":          {"tier": 2, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": True},
+    "add_remesh":          {"tier": 2, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": False},
+    "set_render_engine":   {"tier": 1, "editor": "PROPERTIES", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": False},
+    "setup_camera":        {"tier": 2, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": True, "is_destructive": False, "chainable": True},
+    "keyframe_location":   {"tier": 1, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": True},
+    "keyframe_rotation":   {"tier": 1, "editor": "VIEW_3D", "mode": "OBJECT",
+                            "creates_datablocks": False, "is_destructive": False, "chainable": True},
+}
+
+def get_templates_for_editor(editor: str, mode: str = "OBJECT") -> list[str]:
+    """Return template names valid for an editor (and optional mode).
+
+    *editor* uses the same value as ``bpy.types.Area.type`` (e.g. "VIEW_3D",
+    "NODE_EDITOR"). Templates with no editor restriction return for every
+    query. Unknown editors return an empty list.
+    """
+    result = []
+    for name, meta in _TEMPLATE_META.items():
+        if meta.get("editor") == editor and (not mode or meta.get("mode") == mode):
+            result.append(name)
+    return sorted(result)
 
 
 def _render_template(name, params=None):

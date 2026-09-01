@@ -84,6 +84,10 @@ _TOOL_TEST_ARGS: dict[str, dict[str, Any]] = {
         "blend_file": "",
         "code": "result = {'status': 'ok'}"
     },
+    "execute_blender_plan": {
+        "steps": [{"template": "create_cube", "params": {"name": "SmokeCube"}}]
+    },
+    "list_blender_templates": {},
 
     # ── Scene Inspection ────────────────────────────────────────────
     "get_objects_summary": {},
@@ -115,6 +119,12 @@ _TOOL_TEST_ARGS: dict[str, dict[str, Any]] = {
     "get_screenshot_of_window_as_image": {},
     "get_screenshot_of_window_as_json": {},
 
+    # ── Animation ──────────────────────────────────────────────────
+    "batch_keyframe_insert": {"object_names": ["Cube"], "frame": 1},
+
+    # ── Lighting ───────────────────────────────────────────────────
+    "three_point_lighting_rig": {},
+
     # ── Rendering ───────────────────────────────────────────────────
     "render_thumbnail_to_path": {"output_path": ""},
     "render_viewport_to_path": {"output_path": ""},
@@ -126,8 +136,25 @@ _TOOL_TEST_ARGS: dict[str, dict[str, Any]] = {
 
     # ── Poly Haven ──────────────────────────────────────────────────
     "get_polyhaven_status": {},
+    "setup_pbr_material": {"asset_id": ""},
     "search_polyhaven_assets": {"category": "hdris"},
     "download_polyhaven_asset": {"asset_id": "", "asset_type": "hdris"},
+
+    # ── Assets ──────────────────────────────────────────────────────
+    "get_asset_libraries": {},
+    "list_asset_catalogs": {"library_name": ""},
+    "search_assets": {"query": "brick"},
+    "get_asset_tags": {"library_name": "", "asset_name": ""},
+    "load_asset_in_context": {"library_name": "", "asset_name": ""},
+    "assign_material_to_objects": {"material_name": ""},
+    "place_asset_in_scene": {"library_name": "", "asset_name": ""},
+    "jump_to_asset_browser": {"allow_edits": False},
+    "get_node_group_interface": {"group_name": ""},
+    "get_active_node_tree": {"tree_type": "ShaderNodeTree"},
+    "wire_node_group": {"asset_name": ""},
+
+    # ── Collections ─────────────────────────────────────────────────
+    "set_collection_color_tag": {"collection_name": "Collection", "color": "COLOR_01"},
 }
 
 
@@ -148,6 +175,17 @@ _TOOL_EXPECTED_FAILURES: dict[str, str] = {
     "render_thumbnail_to_path": "requires a valid output path",
     "render_viewport_to_path": "requires a valid output path",
     "download_polyhaven_asset": "requires a valid asset_id",
+    "jump_to_asset_browser": "may fail if no Asset Browser is open (allow_edits=False)",
+    "set_collection_color_tag": "may fail if 'Collection' doesn't exist",
+    "get_node_group_interface": "requires a loaded node group",
+    "get_active_node_tree": "may fail if no active material/compositor/GN exists",
+    "wire_node_group": "requires a valid asset_name",
+    "list_asset_catalogs": "may fail if no asset libraries are configured",
+    "search_assets": "may fail if no asset libraries are configured",
+    "get_asset_tags": "requires a valid asset in a library",
+    "load_asset_in_context": "requires a valid asset in a library",
+    "assign_material_to_objects": "requires a loaded material",
+    "place_asset_in_scene": "requires a valid asset in a library",
 }
 
 

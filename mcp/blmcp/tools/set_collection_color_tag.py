@@ -15,6 +15,7 @@ from blmcp.tools_helpers import (
     toolcode_wrap_with_calling_convention,
 )
 from blmcp.tools_helpers.connection import send_code
+from blmcp.tools.set_collection_color_tag_toolcode import Params
 from mcp.server.fastmcp import FastMCP  # pylint: disable=import-error,no-name-in-module
 from mcp.types import ToolAnnotations  # pylint: disable=import-error,no-name-in-module
 
@@ -43,9 +44,9 @@ def register(mcp: FastMCP) -> None:
         Returns status and the new color tag value.
         """
         return send_code(
-            toolcode_format_call(_TOOL_CALL, {
-                "collection_name": collection_name,
-                "color": color,
-            }),
+            toolcode_format_call(
+                _TOOL_CALL,
+                Params(collection_name=collection_name, color=color),
+            ),
             strict_json=True,
         )

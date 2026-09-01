@@ -138,11 +138,17 @@ may not work the same way.
 ```python
 # Bforartists: use operator
 bpy.ops.object.modifier_add(type='NODES')
-mod = bpy.context.active_object.modifiers[-1]  # Capture last added
+mod = bpy.context.view_layer.objects.active.modifiers[-1]  # Capture last added
 
 # Then set the node group
 mod.node_group = bpy.data.node_groups.get("MyGroup")
 ```
+
+> **MCP bridge note:** code sent through `execute_blender_code` runs in a
+> worker thread where `bpy.context.active_object` does NOT exist (Blender
+> context is thread-local). Use `bpy.context.view_layer.objects.active`
+> instead — operators still set the active object on the view layer, so this
+> works right after `primitive_*_add` and similar calls.
 
 ### Sequencer Modifiers
 

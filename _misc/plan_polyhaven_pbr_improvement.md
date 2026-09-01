@@ -1,6 +1,6 @@
-# Improve Polyhaven PBR Integration (#27)
+# Tier3b - Improve Polyhaven PBR Integration (#27)
 
-**Status:** Implemented
+**Status:** ✅ Implemented
 **Date:** August 2026
 
 ## Problem Summary

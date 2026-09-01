@@ -101,10 +101,8 @@ class _TeeStream:
     def write(self, data: str) -> int:
         # Buffer and flush complete lines to the log.
         self._buf += data
-        while "
-" in self._buf:
-            line, self._buf = self._buf.split("
-", 1)
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
             stripped = line.strip()
             if stripped:
                 write(stripped)

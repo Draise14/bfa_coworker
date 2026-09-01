@@ -15,8 +15,9 @@ __all__ = (
 
 import json
 import os
-import select
+import queue
 import subprocess
+import threading
 import time
 from typing import Any, Self
 
@@ -47,6 +48,25 @@ class MCPClient:
             env=env,
         )
         self._next_id = 1
+        self._responses: queue.Queue[dict[str, Any]] = queue.Queue()
+        threading.Thread(target=self._read_loop, daemon=True).start()
+
+    def _read_loop(self) -> None:
+        """Read newline-delimited JSON responses in a background thread.
+
+        Windows cannot ``select()`` on pipes (OSError 10038), so responses
+        are delivered through a queue instead.
+        """
+        assert self._proc.stdout is not None
+        for line in self._proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                response = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            self._responses.put(response)
 
     def _send_request(self, method: str, params: dict[str, object] | None = None) -> dict[str, Any]:
         """
@@ -70,7 +90,7 @@ class MCPClient:
         self._proc.stdin.write(data.encode("utf-8"))
         self._proc.stdin.flush()
 
-        # Read lines until a response with matching id arrives.
+        # Read responses until the one with a matching id arrives.
         deadline = time.monotonic() + _REQUEST_TIMEOUT
         while True:
             remaining = deadline - time.monotonic()
@@ -78,20 +98,15 @@ class MCPClient:
                 raise RuntimeError(
                     "Timeout ({:d}s) waiting for response to {:s}".format(_REQUEST_TIMEOUT, method)
                 )
-            ready, _, _ = select.select([self._proc.stdout], [], [], remaining)
-            if not ready:
-                raise RuntimeError(
-                    "Timeout ({:d}s) waiting for response to {:s}".format(_REQUEST_TIMEOUT, method)
-                )
-            line = self._proc.stdout.readline()
-            if not line:
-                raise RuntimeError("MCP server closed stdout unexpectedly")
-            line = line.strip()
-            if not line:
-                continue
             try:
-                response = json.loads(line)
-            except json.JSONDecodeError:
+                response = self._responses.get(timeout=max(remaining, 0.01))
+            except queue.Empty:
+                # The pipe may have closed (reader thread ended).
+                rc = self._proc.poll()
+                if rc is not None:
+                    raise RuntimeError(
+                        "MCP server exited (code {:d}) before responding to {:s}".format(rc, method)
+                    )
                 continue
 
             # Skip notifications and responses for other requests.

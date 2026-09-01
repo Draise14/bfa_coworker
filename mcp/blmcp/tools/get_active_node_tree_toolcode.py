@@ -16,6 +16,21 @@ __all__ = (
 from typing import Any, NamedTuple
 
 
+_TREE_TYPE_ALIASES = {
+    "SHADER": "ShaderNodeTree",
+    "COMPOSITING": "CompositorNodeTree",
+    "GEOMETRY": "GeometryNodeTree",
+    "TEXTURE": "TextureNodeTree",
+}
+
+
+def _tree_type_name(value: Any) -> str:
+    """Map real Blender ``NodeTree.type`` values (SHADER/COMPOSITING/GEOMETRY)
+    to the friendly names used across the asset tools."""
+    name = str(value)
+    return _TREE_TYPE_ALIASES.get(name, name)
+
+
 class Params(NamedTuple):
     tree_type: str = ""
     node_tree_name: str = ""
@@ -71,7 +86,7 @@ def main(params: Params) -> Result:
 
     nodes = [_node_info(n) for n in tree.nodes]
     links = [_link_info(l) for l in tree.links]
-    tree_type = str(tree.type)
+    tree_type = _tree_type_name(tree.type)
     frames = [
         {
             "name": f.name,
@@ -107,7 +122,7 @@ def _resolve_tree(params: Params):
         tree = bpy.data.node_groups.get(params.node_tree_name)
         if tree is None:
             return None, "Node group '{:s}' not found".format(params.node_tree_name)
-        return tree, _EDITOR_NAMES.get(str(tree.type), str(tree.type))
+        return tree, _EDITOR_NAMES.get(_tree_type_name(tree.type), _tree_type_name(tree.type))
 
     tree_type = params.tree_type or ""
     if tree_type not in ("ShaderNodeTree", "CompositorNodeTree", "GeometryNodeTree"):

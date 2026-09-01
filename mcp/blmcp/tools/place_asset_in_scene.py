@@ -37,6 +37,7 @@ def register(mcp: FastMCP) -> None:
         location: list[float] | None = None,
         rotation: list[float] | None = None,
         scale: list[float] | None = None,
+        import_method: str = "auto",
     ) -> dict[str, object]:
         """
         Place a COLLECTION or OBJECT asset at an explicit world transform.
@@ -55,10 +56,16 @@ def register(mcp: FastMCP) -> None:
             library_name: Name of the asset library to load from.
             asset_name: Name of the asset to place.
             asset_type: ``"OBJECT"`` or ``"COLLECTION"`` (auto-detected if omitted).
-            link_mode: ``"APPEND"`` (default) or ``"LINK"``.
+            link_mode: ``"APPEND"`` (default) or ``"LINK"``. Used as the
+                fallback when ``import_method="auto"`` has no asset metadata
+                to consult.
             location: Optional [x, y, z] world position.
             rotation: Optional [x, y, z] Euler rotation in **degrees**.
             scale: Optional [x, y, z] scale factors.
+            import_method: ``"auto"`` (default) = honour the asset's
+                ``asset_data.preferred_import_method`` when metadata is
+                available, else fall back to ``link_mode``. Explicit
+                ``"append"``, ``"link"``, or ``"pack"`` overrides.
 
         Returns:
             Status, final transform, and how many objects were affected.
@@ -74,6 +81,7 @@ def register(mcp: FastMCP) -> None:
                     location=tuple(location) if location is not None else None,
                     rotation=tuple(rotation) if rotation is not None else None,
                     scale=tuple(scale) if scale is not None else None,
+                    import_method=import_method,
                 ),
             ),
             strict_json=True,

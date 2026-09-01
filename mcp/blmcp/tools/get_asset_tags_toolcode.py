@@ -16,6 +16,21 @@ __all__ = (
 from typing import Any, NamedTuple
 
 
+_TREE_TYPE_ALIASES = {
+    "SHADER": "ShaderNodeTree",
+    "COMPOSITING": "CompositorNodeTree",
+    "GEOMETRY": "GeometryNodeTree",
+    "TEXTURE": "TextureNodeTree",
+}
+
+
+def _tree_type_name(value: Any) -> str:
+    """Map real Blender ``NodeTree.type`` values (SHADER/COMPOSITING/GEOMETRY)
+    to the friendly names used across the asset tools."""
+    name = str(value)
+    return _TREE_TYPE_ALIASES.get(name, name)
+
+
 class Result(NamedTuple):
     status: str
     asset_name: str
@@ -131,7 +146,7 @@ def main(params: Params) -> Result:
                 data_to.node_groups = [asset_name]
             ng = data_to.node_groups[0]
             if ng is not None:
-                editor_type = ng.type  # 'GeometryNodeTree', 'ShaderNodeTree', 'CompositorNodeTree'
+                editor_type = _tree_type_name(ng.type)  # 'GeometryNodeTree' / 'ShaderNodeTree' / 'CompositorNodeTree'
 
                 if hasattr(ng, "color_tag"):
                     color_tag = str(ng.color_tag)
@@ -146,8 +161,8 @@ def main(params: Params) -> Result:
 
                 metadata = {
                     "node_count": len(ng.nodes),
-                    "input_count": len(ng.inputs),
-                    "output_count": len(ng.outputs),
+                    "input_count": _socket_count(ng, "INPUT"),
+                    "output_count": _socket_count(ng, "OUTPUT"),
                     "is_modifier": editor_type == "GeometryNodeTree",
                     "is_shader": editor_type == "ShaderNodeTree",
                     "is_compositor": editor_type == "CompositorNodeTree",
@@ -283,6 +298,27 @@ def main(params: Params) -> Result:
         description=description,
         metadata=metadata,
     )
+
+
+def _socket_count(ng, direction: str) -> int:
+    """Count interface sockets in a direction, across API generations.
+
+    Blender 5.x removed the legacy ``node_tree.inputs/outputs`` shortcut
+    collections; the interface is read from ``ng.interface.items_tree``.
+    """
+    interface = getattr(ng, "interface", None)
+    if interface is not None and hasattr(interface, "items_tree"):
+        count = 0
+        for item in interface.items_tree:
+            if type(item).__name__ != "NodeTreeInterfaceSocket":
+                continue
+            if getattr(item, "in_out", "") == direction:
+                count += 1
+        return count
+    try:
+        return len(getattr(ng, "inputs" if direction == "INPUT" else "outputs"))
+    except (AttributeError, TypeError):
+        return 0
 
 
 def _get_preview_path(datablock) -> str:

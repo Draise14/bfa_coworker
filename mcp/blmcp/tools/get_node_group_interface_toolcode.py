@@ -16,6 +16,21 @@ __all__ = (
 from typing import Any, NamedTuple
 
 
+_TREE_TYPE_ALIASES = {
+    "SHADER": "ShaderNodeTree",
+    "COMPOSITING": "CompositorNodeTree",
+    "GEOMETRY": "GeometryNodeTree",
+    "TEXTURE": "TextureNodeTree",
+}
+
+
+def _tree_type_name(value: Any) -> str:
+    """Map real Blender ``NodeTree.type`` values (SHADER/COMPOSITING/GEOMETRY)
+    to the friendly names used across the asset tools."""
+    name = str(value)
+    return _TREE_TYPE_ALIASES.get(name, name)
+
+
 class Params(NamedTuple):
     group_name: str
 
@@ -52,7 +67,7 @@ def main(params: Params) -> Result:
                 params.group_name, available or "none"),
         )
 
-    editor_type = str(ng.type)  # GeometryNodeTree / ShaderNodeTree / CompositorNodeTree
+    editor_type = _tree_type_name(ng.type)  # GeometryNodeTree / ShaderNodeTree / CompositorNodeTree
     inputs, outputs = _interface_sockets(ng)
     return Result(
         status="ok",
@@ -125,13 +140,13 @@ def _interface_sockets(ng: Any) -> tuple[list[dict[str, Any]], list[dict[str, An
     inputs: list[dict[str, Any]] = []
     outputs: list[dict[str, Any]] = []
 
-    # Blender 4.x+: interface.items_tree (NodeTreeInterfaceSocket / Panels).
+    # Blender 4.x+: interface.items_tree (NodeTreeInterfaceSocket + Panels).
+    # Socket classes are concrete subclasses (NodeTreeInterfaceSocketFloat,
+    # ...), so match by the `in_out` attribute rather than class name;
+    # panels simply have no `in_out`.
     interface = getattr(ng, "interface", None)
     if interface is not None and hasattr(interface, "items_tree"):
         for item in interface.items_tree:
-            item_type = type(item).__name__
-            if item_type != "NodeTreeInterfaceSocket":
-                continue  # Skip panels; sockets nested in panels are reported flat.
             direction = getattr(item, "in_out", "")
             if direction == "INPUT":
                 inputs.append(_socket_info(item))

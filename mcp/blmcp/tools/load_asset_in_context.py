@@ -35,6 +35,9 @@ def register(mcp: FastMCP) -> None:
         asset_type: str = "",
         link_mode: str = "APPEND",
         location: list[float] | None = None,
+        object_name: str = "",
+        tree_name: str = "",
+        import_method: str = "auto",
     ) -> dict[str, object]:
         """
         Load an asset from the asset browser into the current context.
@@ -59,7 +62,20 @@ def register(mcp: FastMCP) -> None:
             asset_type: Optional type hint (MATERIAL, NODETREE, COLLECTION, OBJECT, WORLD, ACTION).
                         Auto-detected if omitted.
             link_mode: "APPEND" (default, full copy) or "LINK" (shared reference).
+                        Used as the fallback when ``import_method="auto"`` has
+                        no asset metadata to consult.
             location: Optional [x, y, z] world position for COLLECTION and OBJECT assets.
+            object_name: Explicit target object for MATERIAL / Geometry-Nodes /
+                ACTION loads (defaults to the active object). Useful when no
+                editor context exists (e.g. background mode).
+            tree_name: Explicit target tree for node-group loads: a material
+                or scene name (defaults to the active context). For shader
+                groups this is a material name (or ShaderNodeTree name); for
+                compositor groups a scene name.
+            import_method: "auto" (default) = honour the asset's
+                ``asset_data.preferred_import_method`` when metadata is
+                available, else fall back to ``link_mode``. Explicit
+                "append", "link", or "pack" overrides everything.
         """
         return send_code(
             toolcode_format_call(
@@ -70,6 +86,9 @@ def register(mcp: FastMCP) -> None:
                     asset_type=asset_type,
                     link_mode=link_mode,
                     location=tuple(location) if location is not None else None,
+                    object_name=object_name,
+                    tree_name=tree_name,
+                    import_method=import_method,
                 ),
             ),
             strict_json=True,

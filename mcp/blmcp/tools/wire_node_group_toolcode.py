@@ -20,6 +20,21 @@ __all__ = (
 from typing import Any, NamedTuple
 
 
+_TREE_TYPE_ALIASES = {
+    "SHADER": "ShaderNodeTree",
+    "COMPOSITING": "CompositorNodeTree",
+    "GEOMETRY": "GeometryNodeTree",
+    "TEXTURE": "TextureNodeTree",
+}
+
+
+def _tree_type_name(value: Any) -> str:
+    """Map real Blender ``NodeTree.type`` values (SHADER/COMPOSITING/GEOMETRY)
+    to the friendly names used across the asset tools."""
+    name = str(value)
+    return _TREE_TYPE_ALIASES.get(name, name)
+
+
 class Params(NamedTuple):
     library_name: str = ""
     asset_name: str = ""
@@ -77,7 +92,7 @@ def main(params: Params) -> Result:
         if ng is None:
             return _error(params, "Node group '{:s}' not found".format(params.asset_name))
 
-        tree_type = params.tree_type or str(ng.type)
+        tree_type = _tree_type_name(params.tree_type or str(ng.type))
         if tree_type not in _NODE_TYPE_BY_TREE:
             return _error(
                 params,
@@ -213,7 +228,7 @@ def _resolve_tree(params: Params, tree_type: str, bpy) -> Any:
     """Return the target node tree (explicit name or editor context)."""
     if params.node_tree_name:
         tree = bpy.data.node_groups.get(params.node_tree_name)
-        if tree is not None and str(tree.type) != tree_type:
+        if tree is not None and _tree_type_name(tree.type) != tree_type:
             return None
         return tree
 
@@ -381,14 +396,34 @@ def _connect_to_output(node: Any, tree: Any, tree_type: str, bpy) -> tuple[list[
     target_sock = None
     for sname in hints[1]:
         try:
-            target_sock = out_node.inputs[sname]
+            sock = out_node.inputs[sname]
         except (KeyError, IndexError):
             continue
-        if not target_sock.links:
+        target_sock = sock
+        if not sock.links:
             break
-        target_sock = None
     if target_sock is None:
-        return [], ["output socket of '{:s}' already in use".format(out_node.label or out_node.name)]
+        # Fresh GeometryNodeTrees start with an empty interface, so the
+        # Group Output node has no sockets yet. Create the plumbing socket
+        # on the tree interface (this is the "wire it up" smarts).
+        if tree_type == "GeometryNodeTree":
+            # in_out is relative to the *tree*: an OUTPUT item surfaces as
+            # an input on the Group Output node (an INPUT item would land on
+            # the Group Input node instead), matching the asset's output.
+            try:
+                tree.interface.new_socket(
+                    name="Geometry", in_out="OUTPUT",
+                    socket_type="NodeSocketGeometry",
+                )
+                target_sock = out_node.inputs["Geometry"]
+            except Exception as exc:
+                return [], ["could not create output socket: {:s}".format(str(exc))]
+        else:
+            return [], ["output socket of '{:s}' already in use".format(out_node.label or out_node.name)]
+    # Deterministic output attach: the asset drives the output, so replace
+    # any existing link on the chosen socket (undo was already pushed).
+    for link in list(target_sock.links):
+        tree.links.remove(link)
 
     source_sock = _pick_socket(node.outputs, target_sock, set(), True, "out")
     if source_sock is None:

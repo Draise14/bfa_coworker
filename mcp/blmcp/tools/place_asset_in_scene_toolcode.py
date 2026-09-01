@@ -25,6 +25,7 @@ class Params(NamedTuple):
     location: Optional[tuple[float, float, float]] = None
     rotation: Optional[tuple[float, float, float]] = None
     scale: Optional[tuple[float, float, float]] = None
+    import_method: str = "auto"
 
 
 class Result(NamedTuple):
@@ -51,7 +52,7 @@ def main(params: Params) -> Result:
     import bpy  # pylint: disable=import-error
     import os
 
-    link = params.link_mode.upper() == "LINK"
+    link, pack = _resolve_load_mode(params)
 
     try:
         # Find the library path.
@@ -101,8 +102,8 @@ def main(params: Params) -> Result:
             )
 
         if asset_type == "OBJECT":
-            return _place_object(params, blend_path, link)
-        return _place_collection(params, blend_path, link)
+            return _place_object(params, blend_path, link, pack)
+        return _place_collection(params, blend_path, link, pack)
 
     except Exception as ex:
         return Result(
@@ -166,11 +167,11 @@ def _detect_type(blend_path: str, asset_name: str) -> str:
     return "UNKNOWN"
 
 
-def _place_object(params: Params, blend_path: str, link: bool) -> Result:
+def _place_object(params: Params, blend_path: str, link: bool, pack: bool = False) -> Result:
     import bpy  # pylint: disable=import-error
     import math
 
-    with bpy.data.libraries.load(blend_path, link=link) as (data_from, data_to):
+    with bpy.data.libraries.load(blend_path, link=link, pack=pack) as (data_from, data_to):
         data_to.objects = [params.asset_name]
     obj = data_to.objects[0]
     if obj is None:
@@ -178,7 +179,7 @@ def _place_object(params: Params, blend_path: str, link: bool) -> Result:
             status="error",
             asset_name=params.asset_name,
             asset_type="OBJECT",
-            link_mode=params.link_mode,
+            link_mode=_mode_label(link, pack),
             position=None,
             objects_affected=0,
             message="Failed to load object '{:s}'".format(params.asset_name),
@@ -207,7 +208,7 @@ def _place_object(params: Params, blend_path: str, link: bool) -> Result:
         status="ok",
         asset_name=params.asset_name,
         asset_type="OBJECT",
-        link_mode="LINK" if link else "APPEND",
+        link_mode=_mode_label(link, pack),
         position=list(params.location) if params.location is not None else None,
         objects_affected=1,
         message="Object '{:s}' {:s} to scene{:s}".format(
@@ -216,11 +217,11 @@ def _place_object(params: Params, blend_path: str, link: bool) -> Result:
     )
 
 
-def _place_collection(params: Params, blend_path: str, link: bool) -> Result:
+def _place_collection(params: Params, blend_path: str, link: bool, pack: bool = False) -> Result:
     import bpy  # pylint: disable=import-error
     import math
 
-    with bpy.data.libraries.load(blend_path, link=link) as (data_from, data_to):
+    with bpy.data.libraries.load(blend_path, link=link, pack=pack) as (data_from, data_to):
         data_to.collections = [params.asset_name]
     col = data_to.collections[0]
     if col is None:
@@ -228,13 +229,13 @@ def _place_collection(params: Params, blend_path: str, link: bool) -> Result:
             status="error",
             asset_name=params.asset_name,
             asset_type="COLLECTION",
-            link_mode=params.link_mode,
+            link_mode=_mode_label(link, pack),
             position=None,
             objects_affected=0,
             message="Failed to load collection '{:s}'".format(params.asset_name),
         )
 
-    if link:
+    if link or pack:
         # Linked collection: objects cannot be moved, so instance it via an
         # empty placed at the requested transform.
         empty = bpy.data.objects.new(params.asset_name + "_Instance", None)
@@ -250,7 +251,7 @@ def _place_collection(params: Params, blend_path: str, link: bool) -> Result:
             status="ok",
             asset_name=params.asset_name,
             asset_type="COLLECTION",
-            link_mode="LINK",
+            link_mode=_mode_label(link, pack),
             position=list(params.location) if params.location is not None else None,
             objects_affected=len(col.all_objects),
             message="Collection '{:s}' linked and instanced via '{:s}' at ({:.2f}, {:.2f}, {:.2f})".format(
@@ -271,7 +272,7 @@ def _place_collection(params: Params, blend_path: str, link: bool) -> Result:
         status="ok",
         asset_name=params.asset_name,
         asset_type="COLLECTION",
-        link_mode="APPEND",
+        link_mode=_mode_label(link, pack),
         position=list(params.location) if params.location is not None else None,
         objects_affected=affected,
         message="Collection '{:s}' appended to scene{:s} ({:d} objects)".format(
@@ -342,3 +343,29 @@ def _centroid(objs: list[Any]):
     for obj in objs:
         total += obj.location
     return total / len(objs)
+
+
+def _resolve_load_mode(params: Params) -> tuple[bool, bool]:
+    """Map *import_method* / *link_mode* to ``(link, pack)`` load flags.
+
+    ``auto`` honours the asset's ``preferred_import_method`` when the
+    metadata index knows it (wired in Tier 3d Phase C); otherwise it falls
+    back to *link_mode* (default ``APPEND``).
+    """
+    method = (params.import_method or "auto").lower()
+    if method not in ("append", "link", "pack"):
+        method = "auto"
+    if method == "auto":
+        method = (params.link_mode or "APPEND").lower()
+    if method == "pack":
+        return True, True
+    if method == "link":
+        return True, False
+    return False, False
+
+
+def _mode_label(link: bool, pack: bool) -> str:
+    """Human label for the resolved load mode."""
+    if pack:
+        return "PACK"
+    return "LINK" if link else "APPEND"

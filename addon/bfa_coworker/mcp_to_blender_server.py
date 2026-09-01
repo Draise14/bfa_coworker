@@ -698,8 +698,15 @@ def _execute_code(
             # A Python-level exception from stale layer-collection data
             # is always preferable to an unrecoverable C-level segfault.
 
-            # Preflight: validate code before execution.
-            preflight_issues = _preflight_check(code)
+            # Preflight: validate code before execution. Toolcode-generated
+            # payloads (marked by the MCP tools) are repository-controlled and
+            # legitimately contain literal patterns the LLM-oriented checks
+            # would flag (e.g. `action.fcurves`, `primitive_cube_add` in
+            # comments and Params reprs), so they skip the validator.
+            if "# blmcp-toolcode-skip-preflight" in code:
+                preflight_issues = []
+            else:
+                preflight_issues = _preflight_check(code)
             if preflight_issues:
                 hint_lines = ["[Preflight] Found {:d} issue(s):".format(len(preflight_issues))]
                 for _name, guidance in preflight_issues:

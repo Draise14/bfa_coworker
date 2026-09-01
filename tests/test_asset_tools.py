@@ -79,11 +79,20 @@ class _Node:
         self.label = ""
         self.bl_idname = bl_idname
         self.type = node_type
-        self.location = _Vec2(*location)
+        self._location = _Vec2(*location)
         self.mute = False
         self.inputs = _Sockets()
         self.outputs = _Sockets()
         self._node_tree = None
+
+    @property
+    def location(self):
+        return self._location
+
+    @location.setter
+    def location(self, value):
+        # Real Blender keeps `node.location` vector-like after assignment.
+        self._location = value if isinstance(value, _Vec2) else _Vec2(*value)
 
     @property
     def node_tree(self):
@@ -311,7 +320,8 @@ class _Libraries:
     def __init__(self, blend_path_to_data):
         self._map = blend_path_to_data
 
-    def load(self, path, link=False):
+    def load(self, path, link=False, pack=False, assets_only=False, **kwargs):
+        del pack, assets_only
         data = self._map.get(path)
         if data is None:
             raise FileNotFoundError(path)
@@ -759,6 +769,29 @@ class TestWireNodeGroup(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["links_created"], [])
         self.assertEqual(len(tree.nodes), 3)  # + group node
+
+    def test_real_blender_types_normalized(self):
+        """Blender's ``NodeTree.type`` is 'SHADER'/'COMPOSITING'/'GEOMETRY',
+        not the friendly names — the toolcode must normalize both sides."""
+        _register_asset(self.bpy, self._blend, "node_groups", "RealTypeGroup",
+                        tree_type="SHADER")
+        tree = self._material_tree()
+        tree.type = "SHADER"  # real enum value on the target tree
+
+        for given_type in ("ShaderNodeTree", ""):
+            result = _call(
+                "wire_node_group",
+                library_name="MyLib",
+                asset_name="RealTypeGroup", tree_type=given_type,
+                node_tree_name="", insert_mode="add_top_level",
+            )
+            self.assertEqual(
+                result["status"], "ok",
+                "tree_type={!r}: {:s}".format(given_type, result["message"]),
+            )
+            self.assertEqual(result["tree_type"], "ShaderNodeTree")
+        # One group node inserted per call (2 initial nodes + 2 inserts).
+        self.assertEqual(len(tree.nodes), 4)
 
     def test_replace_active_wraps_principled(self):
         ng = self._make_group(

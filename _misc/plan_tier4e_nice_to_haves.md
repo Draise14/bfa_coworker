@@ -208,12 +208,17 @@ NVIDIA's **ARDY** (released July 2026) builds on Kimodo for **real-time** motion
 ---
 ## 7. Summary
 
-| Phase | Tools | Files | LOC | Domain |
-|-------|-------|-------|-----|--------|
-| 4e.1 | Rigging (6 tools) | 12 | ~350 | `rigging` |
-| 4e.2 | Animation (5 tools) | 10 | ~350 | `animation` |
-| 4e.3 | Smart Save (5 tools) | 10 | ~250 | `file_management` |
-| **Total** | **16 tools** | **32** | **~950** | **3 new domains** |
+> **Status update (2026-09-01):** Mapping to master plan §15 pathways —
+> **4e.3 Smart Save → Tier 4 Phase 0.5** (quick win, first lane), **4e.1 Rigging
+> → Phase 5.1**, **4e.2 Animation → Phase 5.2**. All follow the toolcode pattern
+> and register in the `rigging` / `animation` / `file_management` domains.
+
+| Phase | Tools | Files | LOC | Domain | Tier 4 Pathway |
+|-------|-------|-------|-----|--------|----------------|
+| 4e.1 | Rigging (6 tools) | 12 | ~350 | `rigging` | Phase 5.1 |
+| 4e.2 | Animation (5 tools) | 10 | ~350 | `animation` | Phase 5.2 |
+| 4e.3 | Smart Save (5 tools) | 10 | ~250 | `file_management` | **Phase 0.5 (quick win)** |
+| **Total** | **16 tools** | **32** | **~950** | **3 new domains** | |
 
 ### Key Decisions
 

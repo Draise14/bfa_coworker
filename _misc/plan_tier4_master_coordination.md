@@ -24,6 +24,9 @@
 11. [Brand Detection Across Editors](#11-brand-detection-across-editors)
 12. [Implementation Order](#12-implementation-order)
 13. [Dependency Graph](#13-dependency-graph)
+14. [Streaming Budget / Readout System (from llama)](#14-streaming-budget--readout-system-from-llama)
+   - [14.6 Checkpoint / Context-Flush System (Phase 2.11)](#146-checkpoint--context-flush-system-phase-211)
+15. [Development Pathways per Phase](#15-development-pathways-per-phase)
 
 ---
 
@@ -53,7 +56,7 @@
 | 2 | **Smart-save tooling** (Tier 4e quick win) | Agent cannot save, check unsaved state, pack resources, or export — data-loss risk | `save_blend_file`, `check_unsaved_changes`, `pack_resources`, `export_selection`, `incremental_save` | 🟢 Easy (5 simple toolcodes) | **2nd** (Phase 0.5) |
 | 3 | **Shared UI component library** (`ui_components.py`) | Markdown/code-block/status rendering duplicated in every panel | One shared module; all editors import from it. **Markdown draw mechanics deferred to Tier 5** (native `label_markdown()` inbound — see §4.5); components compose on either renderer | 🟢 Easy (extract + consolidate) | **3rd** (Phase 1) |
 | 4 | **Brand detection** (`shared.py`) | `_is_bfa` / `AGENT_ICON` defined locally in `ui_chat.py` | Shared constant imported everywhere | 🟢 Easy (~10 LOC) | **3rd** (Phase 1) |
-| 5 | **Chat UX** (Tier 4b: code blocks + Run, error-fix, sessions, right-click explain, vision) | Markdown done in Tier 3; no Run button, no error-fix loop, no session history, no right-click explain | Competitor-parity chat: Run with confirmation, error→fix loop, sessions, explain, screenshot/vision. Markdown draw stays on Tier 3 impl (deferred) | 🟡 Medium (mostly UI + agent loop wiring) | **4th** (Phase 2) |
+| 5 | **Chat UX** (Tier 4b: code blocks + Run, error-fix, sessions, right-click explain, vision, **token streaming**) | Markdown done in Tier 3; no Run button, no error-fix loop, no session history, no right-click explain; text arrives all-at-once after 10–60s | Competitor-parity chat: **token streaming (SSE)**, Run with confirmation, error→fix loop, sessions, explain, screenshot/vision, **token budget readout**. Markdown draw stays on Tier 3 impl (deferred) | 🟡 Medium (mostly UI + agent loop wiring; streaming is incremental-SSE parsing) | **4th** (Phase 2) |
 | 6 | **CHOYA guided prompting** | Agent concludes, user must think of next step and type it | Contextual action buttons after every conclusion; one click sends a new message | 🟡 Medium (option generation + UI) | **5th** (Phase 2.8) |
 | 7 | **Text Editor IDE agent** (Tier 4c) | Text Editor panel is a duplicate chat; no code tools | Artist-friendly code tools: generate, execute, error-fix, edit/explain selection, prompt templates | 🟡 Medium (needs 6b text tools first) | **6th** (Phase 3) |
 | 8 | **Agent dedicated central editor** (Tier 4) | Agent feedback is chat-only; no dedicated workspace | Coworker workspace (USERPREF-pattern center panels), viewport status overlay, focus highlight, CHOYA in viewport | 🟡 Medium (GPU draw handlers + workspace setup) | **7th** (Phase 4) |
@@ -587,6 +590,12 @@ from .shared import _is_bfa, AGENT_ICON
 
 ## 12. Implementation Order
 
+> **Superseded by §15 (2026-09-01)** — §15 has the authoritative development
+> pathways with files, LOC, and done-when criteria. This section is kept as the
+> original ordering reference. Key changes vs. §12: **2.1 is now Token
+> Streaming (SSE)** (Markdown deferred to Tier 5), 2.9 Token budget/readout,
+> 2.10 Per-message actions, and 5.x/6.x lanes for 4e tooling + capstone.
+
 ### Phase 0: Domain Tooling (Week 1-2) — pulled forward from Tier 6
 
 > Build the tooling lanes FIRST so every interface work has real tools behind it.
@@ -611,7 +620,7 @@ from .shared import _is_bfa, AGENT_ICON
 
 | Step | What | Depends On | LOC |
 |------|------|------------|-----|
-| 2.1 | Markdown rendering (Phase 1 of 4b) | 1.1 | ~150 |
+| 2.1 | Token streaming (SSE) — see §14 | 1.1 | ~120 |
 | 2.2 | Code blocks + Run (Phase 2 of 4b) | 2.1 | ~120 |
 | 2.3 | Error-Fix loop (Phase 3 of 4b) | 2.2 | ~60 |
 | 2.4 | Session history (Phase 4 of 4b) | Nothing | ~200 |
@@ -619,6 +628,9 @@ from .shared import _is_bfa, AGENT_ICON
 | 2.6 | Translation integration | 2.5 | ~80 |
 | 2.7 | Screenshot/vision (Phase 6 of 4b) | 2.1 | ~150 |
 | 2.8 | CHOYA buttons in chat panel | 1.1 | ~100 |
+| 2.9 | Token budget + readout — see §14 | 2.1 | ~150 |
+| 2.10 | Per-message actions + polish (Phase 8 of 4b) | 2.2 | ~80 |
+| 2.11 | Checkpoint / context-flush — see §14.6 | 2.9 | ~180 |
 
 ### Phase 3: Tier 4c Text Editor (Week 4-5)
 
@@ -655,6 +667,15 @@ Foundation:
   ui_components.py -> Markdown, CHOYA (all editors)
   shared.py -> Brand detection (all editors)
 
+Streaming (§14):
+  Token streaming (SSE) -> Code Blocks + Run (live code preview)
+  Token streaming (SSE) -> 4c Inline Code Generation (Pattern D)
+  Token streaming (SSE) -> Token budget readout (usage from final chunk)
+  Token budget -> Budget-aware trimming -> 4b Error-Fix (fewer spirals)
+  Token budget (80%) -> Checkpoint trigger -> Context flush -> Resume (§14.6)
+  Checkpoint -> Session history (a session = a chain of checkpoints)
+  Checkpoint plan list -> Tier 5 Macros (recorded steps -> replayable)
+
 Tier 4b Chat UX:
   Markdown -> Code Blocks -> Error-Fix
   Markdown -> Screenshot
@@ -682,6 +703,344 @@ CHOYA (shared):
 
 ---
 
+## 14. Streaming Budget / Readout System (from llama)
+
+> **Decision (2026-09-01):** Implement **token streaming** (SSE from
+> llama-server) in **Phase 2.1** of Tier 4b, plus a **token budget/readout
+> system** in **Phase 2.9**. Streaming is a *perceived-performance* and
+> *interruptibility* win — it does **not** make the server tooling or domain
+> systems "smarter" (those are deterministic). The budget/readout system is the
+> part that actually helps *smarts*: it gives the agent a hard token envelope
+> per turn and shows the user where tokens go.
+
+### 14.1 What "Streaming" Is (and Isn't)
+
+**Streaming** = the LLM response arrives token-by-token over an SSE
+(Server-Sent Events) connection instead of as one big JSON blob at the end.
+
+| | Non-streaming (today) | Streaming (Phase 2.1) |
+|---|---|---|
+| HTTP | `POST /v1/chat/completions` with `"stream": false` | Same endpoint with `"stream": true` |
+| Response | One JSON body after the model finishes | `data:` lines, one per token/chunk, ending with `data: [DONE]` |
+| First token latency | Full generation time (10–60s+ for local 7–14B) | ~1–3s (prompt processing), then tokens trickle |
+| User sees | Spinner → whole answer at once | Text appears live, like ChatGPT |
+| Cancel | Only after the whole response arrives | Can stop mid-generation (early abort) |
+
+**What streaming does NOT do:**
+
+- ❌ It does **not** make the model smarter — the same tokens are generated either way.
+- ❌ It does **not** speed up tool execution — MCP tool calls still take their own time.
+- ❌ It does **not** reduce total tokens — the model still generates the same output.
+- ✅ It **does** reduce *perceived* latency (first token in ~1–3s vs. 10–60s).
+- ✅ It **does** enable early-abort (user sees the model going wrong and hits Stop).
+- ✅ It **does** enable live reasoning display (thinking tokens stream into the reasoning panel).
+
+### 14.2 Why It Helps the Agent Loop (Not the Tooling)
+
+The agent loop (`run_conversation_turn` → `_openai_chat_completions` → MCP tools)
+is dominated by **two waits**: (1) the LLM generating a response, and (2) MCP
+tool execution. Streaming attacks wait (1) only. But that wait is the *longest*
+one for local models — a 7–14B model can take 30–120s to emit a full
+tool-call + reasoning block. Streaming:
+
+1. **Shows reasoning live** — the user watches the model think, so a 60s
+   generation feels productive instead of frozen.
+2. **Early-abort** — if the model is about to call the wrong tool, the user
+   stops it at 5s instead of waiting 60s. This is a *real* wall-clock win for
+   the agent loop: bad turns get killed early.
+3. **Tool-call streaming** — llama-server streams `tool_calls` deltas in the
+   final chunks. We can show "calling `create_object`…" the moment the tool name
+   appears, instead of after the full JSON is emitted.
+
+The **server tooling and domain systems** (VSE/Node/Text tools, CHOYA, domain
+detection) are deterministic Python — streaming doesn't touch them. What *does*
+help them is the **budget system** (14.3): a hard token envelope forces the
+agent to be economical with tool calls and context, which is what actually
+improves reliability on small local models.
+
+### 14.3 Token Budget / Readout System
+
+**Budget** = a per-turn token envelope the agent must stay inside.
+
+**Readout** = live display of where tokens are going (prompt / reasoning /
+output / tool results), updated as the turn runs.
+
+| Component | What it does | Why it helps smarts |
+|---|---|---|
+| **Per-turn budget** | `max_tokens` per LLM call + a cumulative cap on tool-result context injected into history | Prevents context bloat that silently degrades small local models (7–14B) |
+| **Budget-aware trimming** | `_trim_tool_result()` already truncates to 500 chars — make it budget-aware (shrink further when the turn is long) | Keeps the prompt inside the model's context window → fewer hallucinations, fewer spirals |
+| **Token readout in UI** | Live counter in the chat panel: `prompt 2.1k · reasoning 1.4k · output 0.8k · tools 0.3k` | User sees *why* a turn is slow; can switch models or trim context |
+| **Budget warnings** | When a turn approaches the cap, the agent gets a system hint: "You are at 80% of your token budget — prefer short answers, avoid re-listing scene contents" | Directly improves answer quality on small models |
+| **Usage from llama-server** | llama-server returns `usage` (prompt_tokens, completion_tokens, total_tokens) in every response — already available today, just not surfaced | Zero extra cost; the data is already in the response |
+
+**Feasibility: HIGH.** All the pieces already exist:
+
+| Piece | Where it is today |
+|---|---|
+| SSE parsing | `_parse_sse_json()` / `_parse_sse_text_response()` in `agent_controller.py` (built for FastMCP SSE) |
+| Live text state | `AgentState.streaming_text` — already rendered live in `ui_chat.py` (lines ~2068, ~2084) |
+| Live reasoning state | `AgentState.reasoning_text` + `on_reasoning` callback — already wired |
+| Token trimming | `_trim_tool_result()` — already truncates tool results |
+| Usage data | llama-server returns `usage` in every non-streaming response today |
+| Threading | `run_conversation_turn` already runs in a daemon thread; UI redraws via `_redraw_areas_safe()` |
+
+### 14.4 Implementation Plan (Phase 2.1 + 2.9)
+
+**Phase 2.1 — Token streaming (SSE)** (~120 LOC):
+
+| Step | What | LOC |
+|------|------|-----|
+| 1 | Add `stream: bool = False` param to `_openai_chat_completions()`; when True, set `"stream": True` in body | ~10 |
+| 2 | Read the response incrementally: `resp.read(4096)` loop, split on `\n`, parse `data:` lines | ~40 |
+| 3 | Accumulate `choices[0].delta.content` into `streaming_text`; call `on_text` per chunk (throttled to ~10/s) | ~30 |
+| 4 | Accumulate `delta.reasoning_content` into `reasoning_text`; call `on_reasoning` per chunk | ~20 |
+| 5 | Handle `delta.tool_calls` — accumulate partial JSON; when complete, parse and return as normal `tool_calls` | ~20 |
+| 6 | Handle `data: [DONE]` and error chunks; fall back to non-streaming on any parse failure | ~10 |
+
+**Phase 2.9 — Token budget + readout** (~150 LOC):
+
+| Step | What | LOC |
+|------|------|-----|
+| 1 | `TokenBudget` dataclass: `max_prompt`, `max_output`, `used_prompt`, `used_output`, `used_tools` | ~20 |
+| 2 | Read `usage` from every LLM response; accumulate into the budget | ~20 |
+| 3 | Budget-aware `_trim_tool_result()` — shrink max_chars as the turn grows | ~30 |
+| 4 | Budget warning injection: when >80% used, append a system hint to the next call | ~30 |
+| 5 | UI readout: live token counter row in chat panel (from `AgentState.token_budget`) | ~40 |
+| 6 | Preferences: `token_budget_enabled`, `token_budget_max` (default 8192) | ~10 |
+
+**Total: ~270 LOC** across `agent_controller.py` + `ui_chat.py` + `preferences.py`.
+
+### 14.5 What Streaming Unlocks Later
+
+- **Tier 4c Text Editor**: streaming code generation directly into the text
+  block (Pattern D in the 4c plan — "Streaming Real-Time Updates").
+- **Tier 5a Turbo Mode**: speculative decoding (draft model + verify) is a
+  *different* mechanism, but streaming is the natural transport for it.
+- **Tier 5 generative systems**: image-gen progress, moodboard generation
+  feedback — all ride the same SSE plumbing.
+- **External harnesses**: the MCP server already streams SSE; the chat
+  completions streaming is additive, not a replacement.
+
+### 14.6 Checkpoint / Context-Flush System (Phase 2.11)
+
+> **Decision (2026-09-01):** Add a **checkpoint system** — when the token
+> budget approaches its cap (the 80% warning from 14.3), the agent doesn't just
+> warn: it **flushes the model window** (drops old turns from the prompt),
+> **saves a checkpoint** (a compact "state of the world" summary), and
+> **resumes** with that summary as the new context anchor. This is the
+> "checkpoint to reset context, save progress, then carry on" pattern used by
+> long-running chat systems.
+
+**What it is (and isn't):**
+
+| | Non-checkpoint (today) | Checkpoint (Phase 2.11) |
+|---|---|---|
+| Context growth | `_MAX_HISTORY_MESSAGES = 20` hard-slices history; old turns silently dropped | Old turns are **summarized into a checkpoint** before being dropped — nothing is lost |
+| After the slice | The model forgets what it did; user must re-explain | The model resumes with a compact "here's what we did, here's the plan" summary |
+| Long sessions | Degrade: context bloat → hallucinations, spirals | Stay sharp: the window is always the last N turns + the checkpoint anchor |
+| Progress | Only in the .blend file (objects created) | Checkpoint captures *intent + plan + state* — resumable even across restarts |
+
+**Feasibility: HIGH.** Every building block already exists in
+`agent_controller.py`:
+
+| Piece | Where it is today |
+|---|---|
+| History slicing | `_MAX_HISTORY_MESSAGES = 20` + the slice block in `_run_conversation_turn_inner` |
+| Session serialization | `export_session_log()` — already dumps system prompt + grouped turns to a text block |
+| Entity tracking | `_EntitySnapshot` / `_EntityDiff` — already tracks what the LLM created this turn |
+| Spiral corrective | `_spiral_corrective_message()` — precedent for injecting system-level context messages |
+| System-prompt injection | The preflight-note + domain-skills pattern — appends to `history[0]` without breaking Qwen's Jinja |
+| Tool-result trimming | `_trim_tool_result()` — budget-aware variant planned in 2.9 |
+
+**Design:**
+
+```python
+@dataclass
+class Checkpoint:
+    id: str                    # "cp_20260901_1432"
+    timestamp: float
+    summary: str               # LLM-generated: what was done, what's next
+    entities: str              # _EntityDiff.summary() — what exists in the scene
+    plan: list[str]            # remaining steps (from the LLM's own plan)
+    history_tail: list[dict]   # last 2-3 turns kept verbatim (recent context)
+    token_usage: dict          # prompt/completion/total at checkpoint time
+```
+
+**Flow (triggered at ~80% budget, or on user command `/checkpoint`):**
+
+```
+1. DETECT  — budget readout (2.9) crosses 80% of max_prompt
+2. ASK     — the agent is prompted to write a checkpoint:
+             "You are at 80% of your token budget. Write a checkpoint:
+              (a) what has been accomplished, (b) what entities exist in
+              the scene, (c) what remains to do, (d) the next step."
+             This is a normal LLM call — the model summarizes its own work.
+3. SAVE    — checkpoint stored in AgentState.checkpoints[] + persisted to
+             ~/.cache/bfa_coworker/checkpoints.json (survives restarts)
+4. FLUSH   — history is rebuilt as:
+             [system prompt] + [checkpoint summary as a user/system message]
+             + [last 2-3 turns verbatim]
+             Old turns are dropped from the *prompt* but remain in
+             conversation_history for the UI (they're just not sent).
+5. RESUME  — the next user message continues with the checkpoint as anchor.
+             The agent knows what was done and what's next without
+             re-reading the whole conversation.
+```
+
+**Why this beats the 80% warning alone:**
+
+| | 80% warning only (2.9) | + Checkpoint (2.11) |
+|---|---|---|
+| Model behavior | "Prefer short answers" — still has the full bloated context | Context is *replaced* by a compact summary — the model literally cannot see the old turns |
+| Long-session quality | Degrades as context grows | Stays constant — the window is always small |
+| Resumability | Lost on restart | Checkpoint persists to disk; `/resume` restores it |
+| User trust | "Why is it forgetting?" | "It remembered everything and summarized it" |
+
+**Implementation (~180 LOC):**
+
+| Step | What | LOC |
+|------|------|-----|
+| 1 | `Checkpoint` dataclass + `AgentState.checkpoints: list[Checkpoint]` | ~20 |
+| 2 | `_write_checkpoint()` — builds the summary prompt, calls the LLM, stores the result | ~50 |
+| 3 | `_flush_history(checkpoint)` — rebuilds `history_to_send` as system + checkpoint + last 2-3 turns | ~30 |
+| 4 | Trigger wiring — check budget in the loop; auto-checkpoint at 80% (once per turn) | ~20 |
+| 5 | Persistence — `checkpoints.json` in `~/.cache/bfa_coworker/`; load on startup | ~30 |
+| 6 | `/checkpoint` + `/resume` slash commands in Ask mode | ~30 |
+
+**Total: ~180 LOC** across `agent_controller.py` + `ui_chat.py`.
+
+**Relationship to the other systems:**
+
+- **2.9 budget** — the *trigger* (80% threshold) and the *readout* (shows the user a checkpoint happened).
+- **2.1 streaming** — the checkpoint summary streams into the UI live, so the user sees what's being saved.
+- **4b Phase 4 sessions** — checkpoints are the natural unit of a session; a session = a chain of checkpoints.
+- **Tier 5 macros** — a checkpoint's `plan` list is a macro in embryo (recorded steps → replayable sequence).
+- **Spiral detection** — a checkpoint is also a great recovery point: instead of truncating history on a spiral, checkpoint-then-flush.
+
+**What it does NOT do:**
+
+- ❌ It does not make the model smarter per-call — it keeps the *window* small so the model stays sharp over many calls.
+- ❌ It does not replace the .blend file — scene state lives in Blender; the checkpoint captures *intent + plan*, not geometry.
+- ❌ It is not a vector store / RAG — no embeddings, no retrieval. Just a compact summary anchor (the right tool for a 7–14B local model).
+
+---
+
+## 15. Development Pathways per Phase
+
+> **Decision (2026-09-01):** Each Tier 4 phase gets a **clear development
+> pathway** — a numbered, dependency-ordered list of steps with the exact files
+> touched, the LOC budget, and the "definition of done" for that step. This
+> replaces the loose "Phase X" tables with actionable per-step guidance. The
+> sub-plan documents (4a, 4b, 4c, 4e, 6) each carry the detailed per-step
+> breakdown; this section is the **master index** that ties them together.
+
+### Phase 0 — Domain Tooling (Week 1–2)
+
+**Goal**: Give the agent real tools for VSE, Text Editor, and Node domains
+before any interface work.
+
+| Step | What | Files | LOC | Done when |
+|------|------|-------|-----|-----------|
+| 0.1 | VSE tools (5) | `mcp/blmcp/tools/sequencer_*.py` + `*_toolcode.py` | ~500 | `test_tool_listing.py` shows 5 sequencer tools; smoke test passes |
+| 0.2 | Text Editor tools (5) | `mcp/blmcp/tools/text_editor_*.py` + `*_toolcode.py` | ~450 | Agent can read/edit/run a text block via chat |
+| 0.3 | Node tools (4 remaining) | `mcp/blmcp/tools/node_*.py` + `*_toolcode.py` | ~380 | Agent can create/connect/mute nodes via chat |
+| 0.4 | Prompt chapters + screenshot enrichment | `prompts.yml`, `agent_controller.py` | ~200 | Domain chapters injected; screenshots include domain hints |
+| 0.5 | Smart-save tooling (4e quick win) | `mcp/blmcp/tools/save_*.py` + `*_toolcode.py` | ~250 | Agent can save/check/pack/export via chat |
+
+**Pathway**: 0.1 → 0.2 → 0.3 (parallelizable) → 0.4 (needs all three) → 0.5 (independent).
+
+### Phase 1 — Foundation (Week 2–3)
+
+**Goal**: Shared infrastructure so all later UI work is cheap.
+
+| Step | What | Files | LOC | Done when |
+|------|------|-------|-----|-----------|
+| 1.1 | `ui_components.py` shared library | `addon/bfa_coworker/ui_components.py` (new) | ~300 | Chat panel imports from it; no behavior change |
+| 1.2 | `_is_bfa`/`AGENT_ICON` → `shared.py` | `addon/bfa_coworker/shared.py` | ~10 | No local definitions remain in `ui_chat.py` |
+| 1.3 | Migrate `ui_chat.py` to `ui_components.py` | `addon/bfa_coworker/ui_chat.py` | ~50 | All duplicated draw code removed |
+
+**Pathway**: 1.1 → 1.2 (independent) → 1.3 (needs 1.1).
+
+### Phase 2 — Tier 4b Chat UX (Week 3–4)
+
+**Goal**: Competitor-parity chat: streaming, code blocks + Run, error-fix,
+sessions, explain, vision, CHOYA, token readout.
+
+| Step | What | Files | LOC | Done when |
+|------|------|-------|-----|-----------|
+| 2.1 | **Token streaming (SSE)** | `agent_controller.py` | ~120 | Text appears live; Stop works mid-generation |
+| 2.2 | Code blocks + Run | `ui_chat.py`, `ui_components.py` | ~120 | Code block has Run button with confirmation |
+| 2.3 | Error→Fix loop | `ui_chat.py`, `agent_controller.py` | ~60 | Error in tool result triggers auto-fix prompt |
+| 2.4 | Session history | `ui_chat.py`, `session_store.py` (new) | ~200 | Sessions persist across restarts; CRUD UI |
+| 2.5 | Right-click Explain | `operators_agent.py`, `ui_chat.py` | ~100 | Right-click any UI element → explanation |
+| 2.6 | Translation | `operators_agent.py`, `preferences.py` | ~80 | Right-click → translate label |
+| 2.7 | Screenshot/vision | `agent_controller.py`, `ui_chat.py` | ~150 | Screenshot sent to vision model; image shown |
+| 2.8 | CHOYA buttons | `choya.py` (new), `ui_chat.py` | ~100 | Guided options appear after conclusions |
+| 2.9 | **Token budget + readout** | `agent_controller.py`, `ui_chat.py`, `preferences.py` | ~150 | Live token counter; budget warnings |
+| 2.10 | Per-message actions (Edit/Remove) + polish | `ui_chat.py` | ~80 | Edit/Remove buttons on messages |
+| 2.11 | **Checkpoint / context-flush** | `agent_controller.py`, `ui_chat.py` | ~180 | At 80% budget, agent summarizes + flushes; `/checkpoint` + `/resume` work |
+
+**Pathway**: 2.1 (streaming first — everything else feels better with it) →
+2.2 → 2.3 → 2.4 (independent) → 2.5 → 2.6 (needs 2.5) → 2.7 → 2.8 (needs 1.1)
+→ 2.9 (independent, can land anytime after 2.1) → 2.10 (polish, anytime) →
+2.11 (needs 2.9 — the budget is the checkpoint trigger).
+
+### Phase 3 — Tier 4c Text Editor (Week 4–5)
+
+**Goal**: Artist-friendly Text Editor tooling on top of the 6b tools.
+
+| Step | What | Files | LOC | Done when |
+|------|------|-------|-----|-----------|
+| 3.1 | Replace Text Editor panel | `ui_text_editor.py` (new) | ~200 | Sidebar panel with code tools |
+| 3.2 | Code generation (sidebar button) | `ui_text_editor.py`, `operators_agent.py` | ~200 | Generate button writes code to active text block |
+| 3.3 | Execute, Error, Fix | `ui_text_editor.py`, `agent_controller.py` | ~150 | Run button executes; errors trigger fix |
+| 3.4 | Right-click Edit/Explain | `operators_agent.py` | ~100 | Selection-aware edit/explain |
+| 3.5 | Prompt templates | `preferences.py`, `prompts.yml` | ~100 | Configurable templates |
+| 3.6 | Queue integration | `ui_text_editor.py` | ~80 | Generate queues when busy |
+| 3.7 | CHOYA after code gen | `ui_text_editor.py`, `choya.py` | ~50 | Guided options after generation |
+
+**Pathway**: 3.1 → 3.2 → 3.3 → 3.4 (needs 2.5 plumbing) → 3.5 (independent) →
+3.6 (needs 3.2) → 3.7 (needs 2.8).
+
+### Phase 4 — Agent Dedicated Central Editor + Viewport (Week 5–6)
+
+**Goal**: Coworker workspace + viewport overlays.
+
+| Step | What | Files | LOC | Done when |
+|------|------|-------|-----|-----------|
+| 4.1 | Coworker workspace setup | `workspace.py` (new) | ~40 | Workspace appears in editor type list |
+| 4.2 | Viewport status overlay | `viewport_overlay.py` (new) | ~60 | Status text drawn in viewport |
+| 4.3 | Agent focus highlight | `viewport_overlay.py` | ~80 | Selected object highlighted during agent work |
+| 4.4 | CHOYA in viewport | `viewport_overlay.py`, `choya.py` | ~50 | Guided buttons float in viewport |
+
+**Pathway**: 4.1 → 4.2 → 4.3 → 4.4 (needs 2.8).
+
+### Phase 5+ — Tier 4e Tooling (Week 6–7)
+
+**Goal**: Complete the domain matrix with rigging, animation, smart-save.
+
+| Step | What | Files | LOC | Done when |
+|------|------|-------|-----|-----------|
+| 5.1 | Rigging tools (6) | `mcp/blmcp/tools/rig_*.py` + `*_toolcode.py` | ~350 | Agent can rig a chain via chat |
+| 5.2 | Animation tools (5) | `mcp/blmcp/tools/anim_*.py` + `*_toolcode.py` | ~350 | Agent can keyframe/interpolate/NLA via chat |
+| 5.3 | Smart-save tools (5) | `mcp/blmcp/tools/save_*.py` + `*_toolcode.py` | ~250 | Agent can save/check/pack/export via chat |
+
+**Pathway**: 5.1 → 5.2 (parallelizable) → 5.3 (independent).
+
+### Phase 6 — Capstone: Advanced Intelligence (Week 7–8)
+
+**Goal**: Multi-agent orchestration (Agent Teams, Scene Co-Pilot, Render Critic).
+
+| Step | What | Files | LOC | Done when |
+|------|------|-------|-----|-----------|
+| 6.1 | Agent Teams with Planner | `agent_teams.py` (new) | ~400 | Planner→specialists→validator loop |
+| 6.2 | Scene Co-Pilot | `scene_copilot.py` (new) | ~350 | Passive scene issue detection |
+| 6.3 | Render Critic | `render_critic.py` (new) | ~350 | Render → critique → refine loop |
+
+**Pathway**: 6.1 → 6.2 → 6.3 (each builds on the multi-agent plumbing).
+
+---
+
 ## Summary
 
 This master plan fills four gaps identified in the audit:
@@ -700,3 +1059,6 @@ Additionally:
 - **Priority reorder (2026-09-01)**: Tier 6 domain tooling (VSE, Text Editor, Node) is now the first implementation lane — tooling breadth is what makes local models and external harnesses smart and reliable; interface polish builds on top.
 - **Markdown draw deferred to Tier 5 (2026-09-01)**: Blender PR #163254 adds native `layout.label_markdown()` (MD4C, bold/italic/code/lists/links, theme-aware). Tier 4 keeps the Tier 3 `_render_markdown()` as-is and only builds *components*; Tier 5 adopts the native API with feature-detect + fallback.
 - **"Explain this to me" added (2026-09-01)**: docs-grounded right-click explainer for any UI element / object / node + `/explain` in Ask mode — the highest-value feature for new users. Reuses the right-click plumbing, bundled doc tools, and Ask mode; grounded in `search_manual_docs`/`search_api_docs` to prevent hallucination. See §5.5.
+- **Streaming budget/readout added (2026-09-01)**: token streaming (SSE from llama-server) lands in Phase 2.1 — a *perceived-performance* + *early-abort* win, not a smarts win. The token budget/readout system (Phase 2.9) is the part that helps *smarts*: a hard per-turn token envelope + live readout + budget-aware trimming keeps small local models inside their context window. Feasibility is HIGH — SSE parsers, `streaming_text`, `on_reasoning`, `_trim_tool_result()`, and `usage` data all already exist. See §14.
+- **Checkpoint / context-flush added (2026-09-01)**: at ~80% of the token budget, the agent writes a checkpoint (what was done, what exists in the scene, what remains), **flushes the model window** (drops old turns from the prompt, keeps them in the UI history), and **resumes** with the compact summary as the new anchor. Also `/checkpoint` + `/resume` slash commands + persistence to `~/.cache/bfa_coworker/checkpoints.json`. Feasibility is HIGH — `export_session_log()`, `_EntitySnapshot`, `_MAX_HISTORY_MESSAGES`, and the system-prompt-injection pattern are all existing building blocks. See §14.6 (Phase 2.11).
+- **Development pathways added (2026-09-01)**: every phase now has a numbered, dependency-ordered pathway with exact files, LOC budgets, and "done when" criteria. The master plan is the index; each sub-plan carries the detailed per-step breakdown. See §15.

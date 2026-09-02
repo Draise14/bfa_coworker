@@ -20,13 +20,14 @@
 6. [Summary of Changes](#6-summary-of-changes)
 
 
-> **REVISION (2026-08-27)**: See plan_tier4_master_coordination.md for updated scope.
+> **REVISION (2026-08-27, updated 2026-09-01)**: See plan_tier4_master_coordination.md for updated scope.
 > - Phase 8 (Text Editor File Browser) **removed** — not artist-friendly tooling
 > - Phase 5 (Keyboard Shortcuts) **removed** — no custom hotkeys in Tier 4 per policy
 > - All hotkeys (Ctrl+Space, F8, Ctrl+Enter, Ctrl+Shift+Space) **removed**
 > - Focus shifted to artist-friendly Text Editor tooling via sidebar panel and context menus only
 > - Phase 7 (CHOYA guided buttons) added
-> - Total revised: ~880 LOC (down from ~1,050)
+> - **Streaming (Pattern D) rides 4b Phase 1 SSE** — no new streaming transport in 4c
+> - Total revised: ~930 LOC (down from ~1,050)
 
 ---
 
@@ -386,9 +387,13 @@ From the Deepseek AI addon and modern IDE agents (Cursor, Copilot, Windsurf), we
 
 **Why high**: Power users live on the keyboard. Without shortcuts, every interaction requires moving to the mouse, finding the sidebar, and clicking a button. That friction adds up over hundreds of interactions. However, shortcuts can be added after the core operators work — they're an accelerator, not a prerequisite.
 
-**BFA applicability**: Direct. Register on `keyconfigs.addon` with `space_type='TEXT_EDITOR'`. Same pattern as Deepseek AI.
+**Status (2026-09-01): DEFERRED**. Per master plan §10 hotkey policy, no custom
+hotkeys ship in Tier 4 — `Ctrl+Space` conflicts with Blender's native maximize-area
+shortcut and `F8` with reload-scripts. Tier 5 may add optional, configurable
+keymap entries. Access via sidebar buttons + right-click menus instead.
 
-**Implementation phase**: Phase 5
+**BFA applicability**: Future (Tier 5). Register on `keyconfigs.addon` with
+`space_type='TEXT_EDITOR'` if/when the policy exception is granted.
 
 ---
 
@@ -441,12 +446,12 @@ This table shows the top-down evaluation of what to implement, in what order, an
 | Step | Pattern | Phase | What Changes | Why This Order | User-Visible Result |
 |---|---|---|---|---|---|
 | **1** | J — Sidebar as Control Panel | 1 | Replace `BFACW_PT_chat_text_editor.draw()` | Foundation. Everything else needs a place to live. The current panel is a chat clone — replace it first so new operators have a home. | Text Editor sidebar shows file info, action buttons, toggles. No more redundant chat. |
-| **2** | A + B + D + I — Inline Gen + Cursor Context + Streaming + Reasoning | 2 | New `BFACW_OT_text_editor_generate` operator | Core feature. This is the "wow" moment — code streams into the editor from cursor position. Combines 4 patterns because they're inseparable: you can't stream without context, and reasoning is a toggle on the same operator. | `Ctrl+Space` streams AI-generated code into the text block at cursor. Reasoning appears as `#` comments. |
-| **3** | E — Execute → Error → Fix | 3 | New `BFACW_OT_text_editor_fix` operator | Closes the loop. Generation without verification is incomplete. This is the second half of the core IDE-agent experience. | `F8` executes code, captures errors, sends to agent, replaces with fix. |
+| **2** | A + B + D + I — Inline Gen + Cursor Context + Streaming + Reasoning | 2 | New `BFACW_OT_text_editor_generate` operator | Core feature. This is the "wow" moment — code streams into the editor from cursor position. Combines 4 patterns because they're inseparable: you can't stream without context, and reasoning is a toggle on the same operator. | Generate button streams AI-generated code into the text block at cursor. Reasoning appears as `#` comments. |
+| **3** | E — Execute → Error → Fix | 3 | New `BFACW_OT_text_editor_fix` operator | Closes the loop. Generation without verification is incomplete. This is the second half of the core IDE-agent experience. | Fix button executes code, captures errors, sends to agent, replaces with fix. |
 | **4** | C + F — Selection Editing + Right-Click Menu | 4 | New operators + `TEXT_MT_editor_menus` registration | Discovery + precision. Right-click menus make the feature discoverable. Selection editing lets users target specific code blocks. Depends on Phase 2-3 operators existing so the menu has something to invoke. | Right-click → "Edit with Coworker" / "Explain with Coworker" / "Generate from Selection". |
-| **5** | G — Keyboard Shortcuts | 5 | Keymap registration in `register()` | Accelerator. Shortcuts make power users fast. Must come after operators exist (Phase 2-4). | `Ctrl+Space`, `F8`, `Ctrl+Enter` work in Text Editor. |
-| **6** | H — Prompt Templates | 6 | New `StringProperty` fields in preferences | Customization. Power users want to tune prompts. Ships after core operators so templates have something to configure. | Preferences → Text Editor section with editable prompt templates. |
-| **7** | Queue + Session Integration | 7 | Queue tagging + session auto-naming | Polish. Queue prevents blocking when agent is busy. Session naming makes history browsable. Ships last because it's quality-of-life, not core functionality. | Queue shows pending code ops. Sessions auto-named with text block name. |
+| **5** | H — Prompt Templates | 5 | New `StringProperty` fields in preferences | Customization. Power users want to tune prompts. Ships after core operators so templates have something to configure. | Preferences → Text Editor section with editable prompt templates. |
+| **6** | Queue + Session Integration | 6 | Queue tagging + session auto-naming | Polish. Queue prevents blocking when agent is busy. Session naming makes history browsable. Ships last because it's quality-of-life, not core functionality. | Queue shows pending code ops. Sessions auto-named with text block name. |
+| **7** | CHOYA after code gen | 7 | Guided buttons below completion status | Guided next steps. Reuses 4b CHOYA (2.8). One click runs/fixes/explains the generated code. | [Run Code] [Explain Code] [Fix Errors] [Save to File] after generation. |
 
 ### 3.2 Dependency Graph
 
@@ -456,21 +461,22 @@ graph TD
     P1 --> P3[Phase 3: Execute → Fix]
     P2 --> P4[Phase 4: Selection + Menus]
     P3 --> P4
-    P4 --> P5[Phase 5: Keymaps]
-    P2 --> P6[Phase 6: Prompt Templates]
-    P3 --> P6
-    P5 --> P7[Phase 7: Queue + Sessions]
+    P2 --> P5[Phase 5: Prompt Templates]
+    P3 --> P5
+    P4 --> P6[Phase 6: Queue + Sessions]
+    P5 --> P6
+    P2 --> P7[Phase 7: CHOYA after code gen]
     P6 --> P7
 ```
 
-**Key**: Phases 2 and 3 are independent and can be built in parallel. Phase 4 depends on both. Phases 5-7 are leaf nodes that depend on the operators existing.
+**Key**: Phases 2 and 3 are independent and can be built in parallel. Phase 4 depends on both. Phases 5-7 are leaf nodes that depend on the operators existing. Phase 7 (CHOYA) additionally depends on 4b Phase 2.8 (CHOYA in chat).
 
 ### 3.3 Effort vs. Impact Matrix
 
 | | Low Effort | Medium Effort | High Effort |
 |---|---|---|---|
-| **High Impact** | J — Sidebar Panel<br>F — Right-Click Menu<br>G — Keymaps | A+B+D+I — Inline Generate<br>C — Selection Editing | E — Execute → Fix |
-| **Medium Impact** | H — Prompt Templates | Queue + Sessions | |
+| **High Impact** | J — Sidebar Panel<br>F — Right-Click Menu | A+B+D+I — Inline Generate<br>C — Selection Editing | E — Execute → Fix |
+| **Medium Impact** | H — Prompt Templates<br>CHOYA after code gen | Queue + Sessions | |
 | **Low Impact** | | | |
 
 **Takeaway**: Phase 1 (Sidebar Panel) is the highest ROI — low effort, high impact, and unlocks everything else. Phase 2 (Inline Generate) is the biggest single feature but requires careful threading work. Phase 3 (Execute → Fix) is similarly complex but essential.
@@ -486,10 +492,10 @@ graph TD
 | Inline code generation | ✅ | ✅ | ❌ | ✅ |
 | Cursor-position context | ✅ | ✅ | ❌ | ✅ |
 | Selection-aware editing | ❌ | ✅ | ❌ | ✅ |
-| Streaming real-time | ✅ | ✅ | ❌ | ✅ |
+| Streaming real-time | ✅ | ✅ | ❌ | ✅ (via 4b SSE) |
 | Execute → Error → Fix | ✅ | ✅ | ❌ | ✅ |
 | Right-click context menu | ✅ | ✅ | ❌ | ✅ |
-| Keyboard shortcuts | ✅ | ✅ | ❌ | ✅ |
+| Keyboard shortcuts | ✅ | ✅ | ❌ | ❌ (deferred to Tier 5 — hotkey policy) |
 | Prompt templates | ✅ | ❌ | ❌ | ✅ |
 | Reasoning as comments | ✅ | ❌ | ❌ | ✅ |
 | Multi-turn conversation | ❌ | ✅ | ✅ (in chat) | ✅ (in editor) |
@@ -528,6 +534,19 @@ This makes it the definitive tool for Blender Python development — from quick 
 ---
 
 ## 5. Implementation Plan
+
+> **Update (2026-09-01):** This plan is revised to match the master plan
+> (`plan_tier4_master_coordination.md` §7). Changes:
+> - **Phase 5 (Keyboard Shortcuts) REMOVED** — no custom hotkeys per policy
+>   (Ctrl+Space conflicts with Blender's maximize-area, F8 with reload-scripts).
+>   All actions via sidebar buttons + right-click menus.
+> - **Phase 8 (Text Editor File Browser) REMOVED** — not artist-friendly tooling.
+> - **Phases renumbered**: old 6→5 (Prompt Templates), old 7→6 (Queue/Sessions),
+>   new 7 (CHOYA after code gen).
+> - **Streaming** (Pattern D) now rides the **4b Phase 1 SSE streaming** — the
+>   `on_text`/`on_reasoning` callbacks already exist; the modal timer + Queue
+>   pattern consumes them. No new streaming transport needed in 4c.
+> - **Development pathway** added at the end of each phase (files, LOC, done-when).
 
 ### Phase 1: Replace Text Editor Panel with Code-Focused Interface (~200 LOC, 1 file)
 
@@ -570,8 +589,8 @@ Show the name, line count, and cursor position of the active text datablock. If 
 **Step 1.3 — Action buttons**
 
 Four primary actions, each as a distinct operator:
-- **Generate** (Ctrl+Space): Continue code from cursor position
-- **Fix** (F8): Execute code, capture errors, send to agent for fixing
+- **Generate**: Continue code from cursor position
+- **Fix**: Execute code, capture errors, send to agent for fixing
 - **Explain**: Explain the selected text or the code at cursor
 - **Edit with Coworker**: Open a dialog to describe what to do with selected text
 
@@ -601,6 +620,13 @@ Four primary actions, each as a distinct operator:
 **What**: `BFACW_OT_text_editor_generate` — generates code continuation from cursor position, streaming directly into the text block.
 
 **Reference**: `DEEPSEEK_OT_AutoComplete` — the modal timer + Queue pattern is the gold standard.
+
+> **Streaming note (2026-09-01):** The streaming transport comes from **4b
+> Phase 1** (SSE token streaming in `_openai_chat_completions`). The modal timer
+> + `Queue` pattern below consumes the existing `on_text`/`on_reasoning`
+> callbacks — no new HTTP streaming code is needed in 4c. If 4b Phase 1 hasn't
+> landed yet, this operator still works (it just receives the full text at once
+> instead of token-by-token).
 
 **Implementation:**
 
@@ -802,7 +828,7 @@ def _extract_code_blocks(self, text):
 
 **Verification:**
 1. Open a Python file in Text Editor, place cursor mid-file
-2. Press Ctrl+Space → code streams into editor from cursor position
+2. Click Generate → code streams into editor from cursor position
 3. Original code before cursor is preserved
 4. Agent reasoning appears as `# [Coworker Reasoning]:` comments (if toggle on)
 5. Generated code is clean Python (no markdown fences)
@@ -896,7 +922,7 @@ Same streaming pattern as Phase 2, but the result replaces the entire text block
 
 **Verification:**
 1. Write code with a known error in Text Editor
-2. Press F8 → code executes, error captured
+2. Click Fix → code executes, error captured
 3. Agent receives error context
 4. Fixed code replaces the text block
 5. If no error → "No errors detected" message
@@ -1009,68 +1035,7 @@ bpy.types.TEXT_MT_editor_menus.append(_text_editor_menu_draw)
 
 ---
 
-### Phase 5: Keyboard Shortcuts & Keymap (~50 LOC, 1 file)
-
-**What**: Register keyboard shortcuts for the Text Editor operators.
-
-**Reference**: Deepseek AI's Ctrl+Space and F8 keymaps.
-
-**Implementation:**
-
-```python
-_addon_keymaps = []
-
-def _register_keymap():
-    wm = bpy.context.window_manager
-    kc = wm.keyconfigs.addon
-    if not kc:
-        return
-    
-    # Text Editor keymaps.
-    km = kc.keymaps.new(name='Text', space_type='TEXT_EDITOR')
-    
-    # Ctrl+Space → Generate code from cursor.
-    kmi = km.keymap_items.new(
-        "bfacw.text_editor_generate",
-        'SPACE', 'PRESS', ctrl=True, shift=False,
-    )
-    _addon_keymaps.append((km, kmi))
-    
-    # F8 → Execute and fix errors.
-    kmi = km.keymap_items.new(
-        "bfacw.text_editor_fix",
-        'F8', 'PRESS', ctrl=False, shift=False,
-    )
-    _addon_keymaps.append((km, kmi))
-    
-    # Ctrl+Enter → Edit selected text.
-    kmi = km.keymap_items.new(
-        "bfacw.text_editor_edit_selection",
-        'RET', 'PRESS', ctrl=True, shift=False,
-    )
-    _addon_keymaps.append((km, kmi))
-```
-
-**Shortcut summary:**
-
-| Shortcut | Action | Context |
-|---|---|---|
-| `Ctrl+Space` | Generate code from cursor | Cursor anywhere in text |
-| `F8` | Execute & fix errors | Full text block |
-| `Ctrl+Enter` | Edit selected text | Text must be selected |
-| `Ctrl+Shift+Space` | Explain selected text | Text must be selected |
-
-**Files modified**: `addon/bfa_coworker/ui_chat.py`
-
-**Verification:**
-1. Ctrl+Space in Text Editor → code generation starts
-2. F8 → executes and fixes errors
-3. Ctrl+Enter with selection → opens Edit dialog
-4. Shortcuts don't fire in other editor types
-
----
-
-### Phase 6: Prompt Template System (~100 LOC, 2 files)
+### Phase 5: Prompt Template System (~100 LOC, 2 files)
 
 **What**: User-configurable prompt templates for code generation, error fixing, and editing.
 
@@ -1078,7 +1043,7 @@ def _register_keymap():
 
 **Implementation:**
 
-**Step 6.1 — Template properties in preferences**
+**Step 5.1 — Template properties in preferences**
 
 ```python
 # In preferences.py:
@@ -1127,7 +1092,7 @@ text_editor_fix_prompt: StringProperty(
 )
 ```
 
-**Step 6.2 — Template rendering**
+**Step 5.2 — Template rendering**
 
 ```python
 def _render_prompt(template: str, **kwargs) -> str:
@@ -1141,7 +1106,7 @@ def _render_prompt(template: str, **kwargs) -> str:
     return result
 ```
 
-**Step 6.3 — UI in preferences**
+**Step 5.3 — UI in preferences**
 
 Add a "Text Editor" section in the preferences panel with the two prompt template fields (multi-line text properties).
 
@@ -1151,19 +1116,19 @@ Add a "Text Editor" section in the preferences panel with the two prompt templat
 
 **Verification:**
 1. Open Preferences → see Text Editor section with prompt templates
-2. Modify generate prompt → new prompt used on next Ctrl+Space
-3. Modify fix prompt → new prompt used on next F8
+2. Modify generate prompt → new prompt used on next Generate
+3. Modify fix prompt → new prompt used on next Fix
 4. Reset to defaults works
 
 ---
 
-### Phase 7: Queue & Session Integration (~80 LOC, 1 file)
+### Phase 6: Queue & Session Integration (~80 LOC, 1 file)
 
-**What**: Integrate the Text Editor code operations with the existing message queue and session system.
+**What**: Integrate the Text Editor code operations with the existing message queue and session system (4b Phase 4).
 
 **Implementation:**
 
-**Step 7.1 — Queue code generation**
+**Step 6.1 — Queue code generation**
 
 When the agent is busy, queue the code generation request instead of blocking:
 
@@ -1183,7 +1148,7 @@ if agent_controller._agent_state.turn_active:
     return {'FINISHED'}
 ```
 
-**Step 7.2 — Session naming for code sessions**
+**Step 6.2 — Session naming for code sessions**
 
 Auto-name sessions based on the text block name + operation:
 
@@ -1192,7 +1157,7 @@ my_script.py — Generate (2026-08-26 14:32)
 my_addon.py — Fix Errors (2026-08-26 14:35)
 ```
 
-**Step 7.3 — Sidebar queue display**
+**Step 6.3 — Sidebar queue display**
 
 Show pending code operations in the Text Editor sidebar:
 
@@ -1213,56 +1178,38 @@ Queue: 2 pending
 
 ---
 
-### Phase 8: Text Editor File Browser (Pattern AA, BuddyCode GPT) 🟢
+### Phase 7: CHOYA Guided Buttons After Code Generation (~50 LOC, 2 files) — NEW
 
-**What**: Add a "Files" sub-panel to the Text Editor sidebar that lists project scripts and lets users open/close/create/rename text datablocks without leaving Blender.
-
-**Reference**: BuddyCode GPT's "BuddyCode Browser" — built-in file navigation in the Text Editor sidebar. This is the one genuinely novel pattern from BuddyCode GPT that no other competitor has.
-
-**Why Phase 8**: Optional polish after the core code-agent phases (1-7). Requires Phase 1's panel rework to exist as a base. Not a blocker for code generation — simply reduces friction for users who work with many scripts.
+**What**: After the agent generates/fixes code, offer contextual next-step buttons
+(CHOYA — master plan §3): "Run Code", "Explain Code", "Fix Errors", "Save to
+File", "Continue from Here".
 
 **Implementation:**
 
-**Step 8.1 — Script list panel**
+**Step 7.1 — Wire into code operators**
+- After `BFACW_OT_text_editor_generate` / `_fix` complete, call
+  `choya.generate_guided_options("code", {text_block.name})`
+- Result: `GuidedOption` list rendered below the completion status
 
-```
-┌─────────────────────────────────┐
-│ Files (12)          [+ New]      │
-├─────────────────────────────────┤
-│ ▸ my_script.py       ● active   │
-│ ▸ my_addon/                      │
-│   ▸ __init__.py                  │
-│   ▸ operators.py                 │
-│ ▸ utils.py                       │
-│ [Open] [Rename] [Delete] [Save]  │
-└─────────────────────────────────┘
-```
+**Step 7.2 — Render in sidebar**
+- Reuse `ui_components.draw_guided_options()` (master plan Phase 1.1)
+- Each button invokes the mapped operator (`text_editor_fix`, `text_editor_generate`, `text.save`)
 
-- List all text datablocks, grouped by folder (from `//`-prefixed names) or flat if namespaced
-- Active block highlighted; clicking a row sets it active in the editor
-- `bpy.data.texts` iteration + folder grouping from name prefixes
+**Step 7.3 — Option categories (code context)**
 
-**Step 8.2 — File operations**
+| Context | Options |
+|---------|---------|
+| **Code generated** | Run Code, Explain Code, Fix Errors, Save to File, Continue from Here |
+| **Errors fixed** | Run Code, Explain Fix, Save to File |
+| **Selection explained** | Apply Suggestion, Edit with Coworker, Ask Follow-up |
 
-- **New** — create empty text datablock with a name prompt
-- **Open** — load a `.py` file from disk via `bpy.data.texts.load()` with a file selector
-- **Rename** — rename the datablock via a string property
-- **Delete** — remove datablock with confirm (unsaved-changes warning)
-- **Save** — write datablock contents back to disk (`text.as_string()` → file write)
-- Reuses Blender's built-in `bpy.ops.text.open()` / `text.save()` where possible
-
-**Step 8.3 — Agent integration (optional)**
-
-- Right-click a file → "Ask Coworker about this file" sends its content summary to the agent
-- Reuses Phase 4's right-click plumbing with a different target
-
-**Files modified**: `addon/bfa_coworker/ui_chat.py` (files sub-panel + operators), `addon/bfa_coworker/operators_agent.py` (file-aware prompt, optional)
+**Files modified**: `addon/bfa_coworker/ui_chat.py`, `addon/bfa_coworker/choya.py` (exists from 2.8)
 
 **Verification:**
-1. Files sub-panel lists all text datablocks with folder grouping
-2. Click a file → becomes active in the editor
-3. New/Open/Rename/Delete/Save operations work and update the list
-4. Right-click "Ask Coworker about this file" sends file content to the agent
+1. Generate code → guided buttons appear below the status
+2. Click "Run Code" → executes without typing
+3. Click "Explain Code" → explanation in chat
+4. Options are context-appropriate (generated vs. fixed vs. explained)
 
 ---
 
@@ -1271,23 +1218,28 @@ Queue: 2 pending
 | Phase | Pattern | Feature | Files Changed | LOC | Priority |
 |---|---|---|---|---|---|
 | 1 | J | Replace Text Editor panel | 1 | ~200 | 🔴 CRITICAL |
-| 2 | A+B+D+I | Inline code generation (Ctrl+Space) | 2 | ~250 | 🔴 CRITICAL |
-| 3 | E | Execute → Error → Fix (F8) | 1 | ~150 | 🔴 CRITICAL |
+| 2 | A+B+D+I | Inline code generation (sidebar button) | 2 | ~250 | 🔴 CRITICAL |
+| 3 | E | Execute → Error → Fix (sidebar button) | 1 | ~150 | 🔴 CRITICAL |
 | 4 | C+F | Right-click "Edit with Coworker" | 2 | ~100 | 🔴 CRITICAL |
-| 5 | G | Keyboard shortcuts & keymap | 1 | ~50 | 🟡 HIGH |
-| 6 | H | Prompt template system | 2 | ~100 | 🟡 HIGH |
-| 7 | — | Queue & session integration | 1 | ~80 | 🟡 HIGH |
-| 8 | AA | Text Editor file browser | 1 | ~120 | 🟢 MEDIUM |
-| **Total** | | | **3** | **~1,050** | |
+| 5 | H | Prompt template system | 2 | ~100 | 🟡 HIGH |
+| 6 | — | Queue & session integration | 1 | ~80 | 🟡 HIGH |
+| 7 | — | CHOYA guided buttons after code gen | 2 | ~50 | 🟡 HIGH |
+| **Total** | | | **3** | **~930** | |
+
+> **Revised (2026-09-01):** from ~1,050 → ~930 LOC. Removed: Phase 5
+> (Keyboard Shortcuts — per hotkey policy, conflicts with native shortcuts) and
+> Phase 8 (Text Editor File Browser — not artist-friendly). `Ctrl+Space`/`F8`
+> references replaced with sidebar buttons. Streaming (Pattern D) rides 4b
+> Phase 1 SSE — see Phase 2 note.
 
 ### Files Modified
 
 | File | Phases |
 |---|---|
-| `addon/bfa_coworker/ui_chat.py` | 1, 2, 3, 4, 5, 7, 8 |
-| `addon/bfa_coworker/preferences.py` | 6 |
+| `addon/bfa_coworker/ui_chat.py` | 1, 2, 3, 4, 5, 6, 7 |
+| `addon/bfa_coworker/preferences.py` | 5 |
 | `addon/bfa_coworker/agent_controller.py` | 2 (minor: expose scene snapshot) |
-| `addon/bfa_coworker/operators_agent.py` | 8 (optional: file-aware prompt) |
+| `addon/bfa_coworker/choya.py` | 7 (exists from 4b 2.8) |
 
 ### Key Design Decisions
 
@@ -1301,6 +1253,7 @@ Queue: 2 pending
 | **Selection-aware, not just cursor-aware** | Goes beyond Deepseek AI. Selected text becomes the target of Edit/Explain operations. |
 | **Prompt templates with placeholders** | Deepseek AI's approach. Power users can customize behavior. Sensible defaults for everyone else. |
 | **Queue integration** | Leverages existing message queue. Code generation requests queue when agent is busy. |
+| **No custom hotkeys (2026-09-01)** | Per master plan §10 — Ctrl+Space conflicts with Blender's maximize-area, F8 with reload-scripts. All actions via sidebar buttons + right-click menus. |
 
 ### What Makes This Different from Deepseek AI
 
@@ -1316,6 +1269,8 @@ Queue: 2 pending
 | **Queue** | No | Yes — queue code gen requests |
 | **Sessions** | No | Yes — save/load coding sessions |
 | **@Mentions** | No | Yes — insert scene item references |
+| **Streaming** | Raw per-token HTTP | Reuses 4b SSE streaming + modal timer Queue |
+| **Hotkeys** | Ctrl+Space / F8 hardcoded | None (sidebar + right-click only, per policy) |
 
 ### User Flow Examples
 
@@ -1323,23 +1278,24 @@ Queue: 2 pending
 ```
 1. Open Text Editor, create new text block "my_pipeline.py"
 2. Type: import bpy
-3. Ctrl+Space → agent generates boilerplate
+3. Click Generate (sidebar) → agent generates boilerplate, streaming in live
 4. Type comments describing what you want: # Select all mesh objects, apply scale, export to FBX
 5. Select those comments, right-click → "Edit with Coworker"
 6. Dialog: "Write the code for these comments"
 7. Agent generates the implementation
-8. F8 → execute, catches import error
+8. Click Fix (sidebar) → execute, catches import error
 9. Agent fixes the error
-10. Repeat for each pipeline step
+10. CHOYA buttons: [Run Code] [Explain Fix] [Save to File]
+11. Repeat for each pipeline step
 ```
 
 **Flow 2: Fixing a broken script**
 ```
 1. Open existing script in Text Editor
-2. F8 → execute, error captured
+2. Click Fix (sidebar) → execute, error captured
 3. Agent receives error + code + traceback
 4. Fixed code replaces text block
-5. F8 again → runs clean
+5. Click Fix again → runs clean
 ```
 
 **Flow 3: Understanding someone else's code**

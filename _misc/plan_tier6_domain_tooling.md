@@ -44,6 +44,14 @@ A version-aware skill system was implemented alongside this plan. See `addon/bfa
 
 ## Overview
 
+> **Status update (2026-09-01):** Phases **6a (VSE), 6b (Text Editor), 6d (Node
+> remaining), and 6e (prompt/cross-domain)** are **pulled forward to Tier 4
+> Phase 0** — the first implementation lane of Tier 4. See
+> `plan_tier4_master_coordination.md` §2 (Priority Reorder) and §15 (Phase 0
+> pathway). Phase 6c (Asset Browser) is already delivered in Tier 3d. Phase 6f
+> (Advanced Intelligence) becomes Tier 4 capstone (Phase 6 in §15). Each phase
+> below gets a **development pathway** matching the master plan.
+
 Tier 6 extends BFA Coworker's MCP tool set from **22 general-purpose tools** (scene inspection, screenshots, navigation, code execution, doc search) to **48 tools** by adding **26 domain-specific tools** across four editor domains. The goal is to make the agent **smarter without distilling models** — instead of the LLM generating correct `bpy` code from scratch for every editor operation, pre-authored, tested toolcode with structured `NamedTuple` inputs/outputs lets the LLM simply pick the right tool and parameters.
 
 **Core insight**: The existing toolcode pattern (`MCP-facing .py` + `Blender-facing *_toolcode.py`) is the answer to "making the MCP smarter." Each tool bundles domain knowledge, error handling, and structured return types. The LLM only needs to understand the tool's description and parameter schema — not the Blender Python API for that domain. This is especially critical for smaller local models that struggle to generate correct `bpy` code.
@@ -83,19 +91,21 @@ Each new tool follows the **exact same pattern** as existing tools:
 
 ## Domain Coverage Matrix
 
-| Domain | Read Tools | Navigate Tools | Write Tools | Feedback Tools | Total |
-|---|---|---|---|---|---|
-| **6a: VSE / Sequencer** | 3 | 0 | 1 | 1 | **5** |
-| **6b: Text Editor** | 3 | 0 | 1 | 1 | **5** |
-| **6c: Asset Browser** | 5 | 1 | 2 | 1 | **9** |
-| **6d: Shader / Node Editor** | 3 | 0 | 3 | 1 | **7** |
-| **Total** | **14** | **1** | **7** | **4** | **26** |
+| Domain | Read Tools | Navigate Tools | Write Tools | Feedback Tools | Total | Status |
+|---|---|---|---|---|---|---|
+| **6a: VSE / Sequencer** | 3 | 0 | 1 | 1 | **5** | 🟡 Pulled to Tier 4 Phase 0.1 |
+| **6b: Text Editor** | 3 | 0 | 1 | 1 | **5** | 🟡 Pulled to Tier 4 Phase 0.2 |
+| **6c: Asset Browser** | 5 | 1 | 2 | 1 | **9** | ✅ Done in Tier 3d |
+| **6d: Shader / Node Editor** | 3 | 0 | 3 | 1 | **7** | 🟡 Partial — 3 done, 4 pulled to Tier 4 Phase 0.3 |
+| **Total** | **14** | **1** | **7** | **4** | **26** | |
 
 ---
 
-## Phase 6a: VSE / Sequencer Tools (Est. 500 LOC) ❌ NOT STARTED
+## Phase 6a: VSE / Sequencer Tools (Est. 500 LOC) 🟡 PULLED TO TIER 4 PHASE 0.1
 
 *The Sequencer has the most complete bundled API + manual docs (30+ strip types, modifiers, channels, retiming), but zero dedicated tools. These give the LLM the ability to see, navigate, and manipulate strips without generating `bpy.ops.sequencer.*` code from scratch.*
+
+**Development pathway (master plan §15 Phase 0.1)**: implement 6a.1 → 6a.2 → 6a.3 (reads, parallelizable) → 6a.4 (write) → 6a.5 (feedback). Done when `test_tool_listing.py` shows 5 sequencer tools and the smoke test passes.
 
 | Step | Description | Files | LOC |
 |---|---|---|---|
@@ -140,9 +150,11 @@ Agent loop:
 
 ---
 
-## Phase 6b: Text Editor Tools (Est. 450 LOC) ❌ NOT STARTED
+## Phase 6b: Text Editor Tools (Est. 450 LOC) 🟡 PULLED TO TIER 4 PHASE 0.2
 
 *Enables VS Code-style agent interaction: read scripts, make targeted edits, search, run code. The Text Editor has the thinnest manual docs but the API reference covers `bpy.ops.text.*` and `bpy.types.Text` well. These tools are the foundation for the agent being able to write and modify its own scripts.*
+
+**Development pathway (master plan §15 Phase 0.2)**: implement 6b.1 → 6b.2 → 6b.3 (reads) → 6b.4 (write) → 6b.5 (feedback). Done when the agent can read/edit/run a text block via chat.
 
 | Step | Description | Files | LOC |
 |---|---|---|---|
@@ -255,9 +267,13 @@ Agent loop:
 
 ---
 
-## Phase 6d: Shader / Node Editor Tools (Est. 650 LOC) ❌ NOT STARTED
+## Phase 6d: Shader / Node Editor Tools (Est. 650 LOC) 🟡 PARTIAL — 4 REMAINING PULLED TO TIER 4 PHASE 0.3
 
 *Generic across Shader Editor, Compositor, and Geometry Nodes. All tools accept a `tree_type` parameter (`"ShaderNodeTree"`, `"CompositorNodeTree"`, `"GeometryNodeTree"`) — this avoids 3× duplication. The bundled API docs cover every node type exhaustively (~200+ node RST files).*
+
+**Status (2026-09-01)**: `get_active_node_tree` (6d.1), `get_node_group_interface` (6d.3) and `wire_node_group` are done in Tier 3. The remaining 4 tools (`get_node_detail`, `create_node`, `connect_nodes`, `set_node_input_value`, `mute_node` — ~380 LOC) are pulled forward to Tier 4 Phase 0.3.
+
+**Development pathway (master plan §15 Phase 0.3)**: implement `get_node_detail` (read) → `create_node` (write) → `connect_nodes` (write) → `set_node_input_value` (write) → `mute_node` (write). Done when the agent can create/connect/mute nodes via chat.
 
 | Step | Description | Files | LOC |
 |---|---|---|---|
@@ -317,7 +333,9 @@ Agent loop:
 
 ---
 
-## Phase 6e: System Prompt & Cross-Domain Integration (Est. 200 LOC) ❌ NOT STARTED
+## Phase 6e: System Prompt & Cross-Domain Integration (Est. 200 LOC) 🟡 PULLED TO TIER 4 PHASE 0.4
+
+**Development pathway (master plan §15 Phase 0.4)**: domain chapters + screenshot enrichment. Depends on 6a/6b/6d tools existing (0.1–0.3). Done when domain chapters are injected and screenshots include domain hints.
 
 *After all tools are built, update the system prompt and screenshot enrichment to make the LLM aware of the new capabilities and provide better context.*
 
@@ -336,7 +354,9 @@ mcp/blmcp/tools/get_screenshot_of_window_as_json_toolcode.py  # VSE + node edito
 
 ---
 
-## Phase 6f: Competitor UX Features — Advanced Intelligence (Est. 1,100 LOC) ❌ NOT STARTED
+## Phase 6f: Competitor UX Features — Advanced Intelligence (Est. 1,100 LOC) 🟡 TIER 4 CAPSTONE (PHASE 6)
+
+*Becomes the Tier 4 capstone — master plan §15 Phase 6. Voice Input (6f.4) and Text-to-Speech (6f.5) deferred to Tier 5.*
 
 *Derived from the Tier 4b competitor analysis. These are the most ambitious features — the ones that separate a "chat assistant" from an "intelligent coworker." They require infrastructure (vision models, multi-agent orchestration, background polling) that's being built across Tiers 5-6.*
 
@@ -502,12 +522,12 @@ mcp/blmcp/tools/get_screenshot_of_window_as_json_toolcode.py  # VSE + node edito
 
 | Phase | LOC | New Files | Status |
 |---|---|---|---|
-| 6a: VSE / Sequencer | ~500 | 10 | ❌ Not started |
-| 6b: Text Editor | ~450 | 10 | ❌ Not started |
-| 6c: Asset Browser | ~800 | 18 | ❌ Not started |
-| 6d: Shader / Node Editor | ~650 | 14 | ❌ Not started |
-| 6e: System Prompt & Integration | ~200 | 0 | ❌ Not started |
-| 6f: Competitor UX — Advanced Intelligence | ~1,350 | 6 | ❌ Not started |
+| 6a: VSE / Sequencer | ~500 | 10 | 🟡 Pulled to Tier 4 Phase 0.1 |
+| 6b: Text Editor | ~450 | 10 | 🟡 Pulled to Tier 4 Phase 0.2 |
+| 6c: Asset Browser | ~800 | 18 | ✅ Done in Tier 3d (13 tools incl. index + wiring) |
+| 6d: Shader / Node Editor | ~650 | 14 | 🟡 Partial — 3 done, 4 remaining pulled to Tier 4 Phase 0.3 |
+| 6e: System Prompt & Integration | ~200 | 0 | 🟡 Pulled to Tier 4 Phase 0.4 |
+| 6f: Competitor UX — Advanced Intelligence | ~1,350 | 6 | 🟡 Tier 4 capstone (Phase 6) |
 
 ---
 

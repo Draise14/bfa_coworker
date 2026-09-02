@@ -1194,26 +1194,75 @@ This positions BFA Coworker as the **most complete agentic AI addon for Blender*
 
 ## 5. Implementation Plan
 
-### Phase 1: Markdown Rendering in Chat (~150 LOC, 1 file)
+> **Update (2026-09-01):** Phase 1 (Markdown) is **deferred to Tier 5** — Blender
+> PR #163254 adds native `layout.label_markdown()` (MD4C). Tier 4 keeps the
+> Tier 3 `_render_markdown()` as-is and only builds *components* in
+> `ui_components.py`. See `plan_tier4_master_coordination.md` §4.5. The phases
+> below are renumbered to match the master plan's Phase 2 pathway (§15).
 
-**What**: Parse and render markdown in LLM responses within the chat panel.
+### Phase Map (4b ↔ Master Plan Phase 2)
 
-**Reference**: Blender Buddy's `_render_markdown()` function.
+| 4b Phase | Master Plan Step | Feature |
+|----------|------------------|---------|
+| 1 | 2.1 | Token streaming (SSE) |
+| 2 | 2.2 | Code blocks + Run button |
+| 3 | 2.3 | Error→Fix loop |
+| 4 | 2.4 | Session history UI |
+| 5 | 2.5 | Right-click Explain |
+| 6 | 2.7 | Screenshot/Vision input |
+| 7 | 2.9 | Token budget + readout |
+| 8 | 2.10 | Per-message actions & polish |
+| 9 | 2.11 | Checkpoint / context-flush |
+
+> Master plan steps 2.6 (Translation) and 2.8 (CHOYA) live in the master plan
+> (§5.3, §3) — they share the right-click plumbing (2.5) and `ui_components.py`
+> (1.1) respectively.
+
+### Phase 1: Token Streaming (SSE) (~120 LOC, 1 file) — NEW
+
+**What**: Stream LLM responses token-by-token from llama-server over SSE, so
+text appears live in the chat panel instead of after a 10–60s wait.
+
+**Reference**: Master plan §14.4 (Phase 2.1). This is the *perceived-performance*
++ *early-abort* win — it does not make the model smarter, but it makes every
+other chat feature feel dramatically better.
 
 **Implementation**:
-- Add a lightweight markdown-to-Blender-UI renderer in `ui_chat.py`
-- Support: bold (`**text**`), italic (`*text*`), inline code (`` `code` ``), fenced code blocks (` ```python ``` `), unordered lists (`- item`), ordered lists (`1. item`), links (`[text](url)`)
-- Code blocks get a distinct visual style (box with monospace-like label)
-- Links become clickable (using `wm.url_open`)
-- Fall back to plain text for unsupported syntax
 
-**Files modified**: `addon/bfa_coworker/ui_chat.py`
+**Step 1.1 — Add `stream` param to `_openai_chat_completions()`**
+- Add `stream: bool = False` parameter
+- When True, set `"stream": True` in the request body
+- Keep the existing retry/fallback logic (503 backoff, text-tool fallback, XML
+  tool-call fallback) — streaming must degrade gracefully to non-streaming on
+  any parse failure
+
+**Step 1.2 — Incremental SSE reader**
+- Read the response in chunks: `resp.read(4096)` loop
+- Split on `\n`, parse `data:` lines
+- Accumulate `choices[0].delta.content` into `AgentState.streaming_text`
+- Call `on_text` per chunk, throttled to ~10/s to avoid UI flooding
+
+**Step 1.3 — Live reasoning**
+- Accumulate `delta.reasoning_content` into `AgentState.reasoning_text`
+- Call `on_reasoning` per chunk — the reasoning panel fills live
+
+**Step 1.4 — Tool-call streaming**
+- Accumulate `delta.tool_calls` partial JSON
+- When complete, parse and return as normal `tool_calls`
+- Show "calling `create_object`…" the moment the tool name appears
+
+**Step 1.5 — Termination + fallback**
+- Handle `data: [DONE]` and error chunks
+- On any parse failure, fall back to the existing non-streaming path
+
+**Files modified**: `addon/bfa_coworker/agent_controller.py`
 
 **Verification**:
-1. Send a message that produces markdown-formatted response → verify bold, italic, code, lists render correctly
-2. Code blocks appear in a distinct box
-3. Links are clickable
-4. Plain text responses are unaffected
+1. Send a message → text appears live, token by token
+2. Reasoning panel fills live for reasoning models
+3. Stop button kills generation mid-stream
+4. Tool calls still work (streamed tool_calls parsed correctly)
+5. Remote APIs (OpenRouter) also stream
 
 ---
 
@@ -1408,7 +1457,63 @@ This positions BFA Coworker as the **most complete agentic AI addon for Blender*
 
 ---
 
-### Phase 7: Per-Message Actions & Polish (~80 LOC, 1 file)
+### Phase 7: Token Budget + Readout (~150 LOC, 3 files) — NEW
+
+**What**: A per-turn token envelope the agent must stay inside, plus a live
+readout of where tokens are going (prompt / reasoning / output / tools).
+
+**Reference**: Master plan §14.3. This is the *smarts* win — keeping small local
+models (7–14B) inside their context window reduces hallucinations and spirals.
+
+**Implementation**:
+
+**Step 7.1 — `TokenBudget` dataclass**
+```python
+@dataclass
+class TokenBudget:
+    max_prompt: int = 8192      # Configurable via preferences
+    max_output: int = 2048
+    used_prompt: int = 0
+    used_output: int = 0
+    used_tools: int = 0
+    warnings_given: int = 0
+```
+
+**Step 7.2 — Read `usage` from every response**
+- llama-server returns `usage.prompt_tokens` / `completion_tokens` / `total_tokens`
+- Both streaming (final chunk) and non-streaming responses carry this
+- Accumulate into `AgentState.token_budget`
+
+**Step 7.3 — Budget-aware trimming**
+- `_trim_tool_result()` currently truncates to 500 chars — make the cap shrink
+  as the turn grows (e.g. 500 → 300 → 150)
+- Prevents context bloat from tool results accumulating across multiple calls
+
+**Step 7.4 — Budget warning injection**
+- When a turn exceeds 80% of budget, append a system hint before the next call:
+  "You are at 80% of your token budget — prefer short answers, avoid re-listing
+  scene contents, and skip redundant tool calls."
+- This directly steers the model toward economy on small contexts
+
+**Step 7.5 — UI readout**
+- Live counter row in chat panel: `prompt 2.1k · reasoning 1.4k · output 0.8k · tools 0.3k`
+- Reads from `AgentState.token_budget`, refreshed on each redraw
+
+**Step 7.6 — Preferences**
+- `token_budget_enabled` (default True), `token_budget_max` (default 8192)
+
+**Files modified**: `addon/bfa_coworker/agent_controller.py`,
+`addon/bfa_coworker/ui_chat.py`, `addon/bfa_coworker/preferences.py`
+
+**Verification**:
+1. Run a long conversation → token counter updates live
+2. Watch the counter approach 80% → budget warning appears in the agent's next response
+3. Tool results visibly shrink late in a long turn
+4. Disabling the budget in preferences removes the counter + warnings
+
+---
+
+### Phase 8: Per-Message Actions & Polish (~80 LOC, 1 file)
 
 **What**: Add Edit and Remove buttons to each user message, and improve the overall message action bar.
 
@@ -1437,37 +1542,119 @@ This positions BFA Coworker as the **most complete agentic AI addon for Blender*
 
 ---
 
+### Phase 9: Checkpoint / Context-Flush (~180 LOC, 2 files) — NEW
+
+**What**: When the token budget (Phase 7) approaches its cap, the agent writes
+a **checkpoint** — a compact summary of what was done, what exists in the
+scene, and what remains — then **flushes the model window** (drops old turns
+from the prompt, keeps them in the UI history) and **resumes** with the summary
+as the new context anchor. Also `/checkpoint` + `/resume` slash commands.
+
+**Reference**: Master plan §14.6 (Phase 2.11). This is the "checkpoint to reset
+context, save progress, then carry on" pattern from long-running chat systems.
+
+**Why it matters**: Without it, a long session degrades — context bloat makes
+small local models hallucinate and spiral. With it, the window stays small and
+sharp, and the session is resumable even across restarts.
+
+**Implementation**:
+
+**Step 9.1 — `Checkpoint` dataclass**
+```python
+@dataclass
+class Checkpoint:
+    id: str                    # "cp_20260901_1432"
+    timestamp: float
+    summary: str               # LLM-generated: what was done, what's next
+    entities: str              # _EntityDiff.summary() — what exists in the scene
+    plan: list[str]            # remaining steps (from the LLM's own plan)
+    history_tail: list[dict]   # last 2-3 turns kept verbatim (recent context)
+    token_usage: dict          # prompt/completion/total at checkpoint time
+```
+
+**Step 9.2 — `_write_checkpoint()`**
+- Builds a summary prompt: "You are at 80% of your token budget. Write a
+  checkpoint: (a) what has been accomplished, (b) what entities exist in the
+  scene, (c) what remains to do, (d) the next step."
+- Calls the LLM (a normal call — the model summarizes its own work)
+- Stores the result in `AgentState.checkpoints[]`
+
+**Step 9.3 — `_flush_history(checkpoint)`**
+- Rebuilds `history_to_send` as: `[system prompt] + [checkpoint summary] +
+  [last 2-3 turns verbatim]`
+- Old turns are dropped from the *prompt* but remain in
+  `conversation_history` for the UI (they're just not sent)
+
+**Step 9.4 — Trigger wiring**
+- Check the budget (Phase 7) in the loop; auto-checkpoint at 80% (once per turn)
+- Also a recovery point: on spiral detection, checkpoint-then-flush instead of
+  just truncating
+
+**Step 9.5 — Persistence**
+- `checkpoints.json` in `~/.cache/bfa_coworker/` — survives restarts
+- Load on startup; `/resume` restores the latest checkpoint as the anchor
+
+**Step 9.6 — Slash commands**
+- `/checkpoint` — force a checkpoint now
+- `/resume` — restore the latest checkpoint and continue
+
+**Files modified**: `addon/bfa_coworker/agent_controller.py`,
+`addon/bfa_coworker/ui_chat.py`
+
+**Verification**:
+1. Run a long conversation → at 80% budget, a checkpoint is written (visible in UI)
+2. The model window flushes — old turns no longer sent, but still visible in chat
+3. The agent resumes with the summary — it knows what was done and what's next
+4. `/checkpoint` forces one; `/resume` restores after restart
+5. `checkpoints.json` exists in `~/.cache/bfa_coworker/`
+
+---
+
 ## 6. Summary of Changes
 
 | Phase | Pattern | Feature | Files Changed | LOC | Priority |
 |---|---|---|---|---|---|
-| 1 | F | Markdown rendering | 1 | ~150 | 🔴 CRITICAL |
+| 1 | — | Token streaming (SSE) | 1 | ~120 | 🔴 CRITICAL |
 | 2 | G | Code blocks + Run button | 2 | ~120 | 🔴 CRITICAL |
 | 3 | H | Error→Fix loop | 2 | ~60 | 🔴 CRITICAL |
 | 4 | L+M | Session history UI + auto-title | 2 | ~200 | 🔴 CRITICAL |
 | 5 | V | Right-click Explain | 2 | ~100 | 🔴 CRITICAL |
 | 6 | E | Screenshot/Vision input | 2 | ~150 | 🟡 HIGH |
-| 7 | A+N+O | Toggle grid + Revert + Per-message actions | 1 | ~80 | 🟡 HIGH |
-| **Total** | | | **3-4** | **~860** | |
+| 7 | K | Token budget + readout | 3 | ~150 | 🟡 HIGH |
+| 8 | A+N+O | Toggle grid + Revert + Per-message actions | 1 | ~80 | 🟡 HIGH |
+| 9 | — | Checkpoint / context-flush | 2 | ~180 | 🟡 HIGH |
+| **Total** | | | **3-4** | **~1,160** | |
+
+> **Note (2026-09-01):** Markdown rendering (originally Phase 1) is deferred to
+> Tier 5 — native `label_markdown()` is inbound (PR #163254). The Tier 3
+> `_render_markdown()` stays as-is. Total LOC revised from ~860 → ~1,160 with
+> the three new phases (streaming + token budget + checkpoint).
 
 ### Files Modified
 
 | File | Phases |
 |---|---|
-| `addon/bfa_coworker/ui_chat.py` | 1, 2, 3, 4, 5, 6, 7 |
-| `addon/bfa_coworker/agent_controller.py` | 2, 3, 4, 6 |
+| `addon/bfa_coworker/ui_chat.py` | 1, 2, 3, 4, 5, 6, 7, 8, 9 |
+| `addon/bfa_coworker/agent_controller.py` | 1, 2, 3, 4, 6, 7, 9 |
 | `addon/bfa_coworker/operators_agent.py` (or new) | 5 |
+| `addon/bfa_coworker/preferences.py` | 7 |
 
 ### Key Design Decisions
 
 | Decision | Rationale |
 |---|---|
-| **Lightweight markdown (no external lib)** | Blender's Python environment is constrained. A simple regex-based parser covers 90% of LLM output patterns without dependencies. |
+| **Markdown deferred to Tier 5** | Blender PR #163254 adds native `label_markdown()` (MD4C). Tier 4 keeps Tier 3 `_render_markdown()` as-is; only components in `ui_components.py`. |
+| **Streaming via llama-server SSE** | `"stream": true` on the existing chat completions endpoint. SSE parsers (`_parse_sse_json`) + `streaming_text`/`on_reasoning` already exist — no new transport needed. |
+| **Token budget as the smarts lever** | Streaming improves *perceived* speed; the budget envelope (readout + budget-aware trimming + warning injection) keeps small models inside context → fewer hallucinations/spirals. |
+| **Checkpoint before flush** | The model summarizes its own work (what was done, entities, plan) *before* old turns are dropped — nothing is lost, and the agent resumes with a compact anchor instead of a blank slate. |
 | **Safety scanner before code execution** | Blender Buddy's scanner pattern is proven. Catches dangerous calls AND hallucinated bpy identifiers before they cause errors. |
 | **Session auto-title from first message** | BlenderMCP Pro's approach. Eliminates manual naming friction. |
 | **Right-click Explain on existing menus** | BlendAI's approach. Leverages Blender's built-in context menu system rather than custom UI. |
 | **Screenshot with area picker** | Blender Buddy's approach. More flexible than full-window-only capture. |
 | **Error→Fix as structured prompt** | Chat Companion's approach. Sends code + traceback as a new turn rather than requiring special API. |
+| **Budget readout from `usage` field** | llama-server returns prompt/completion/total tokens in every response — the readout is free, no extra calls. |
+| **Budget-aware `_trim_tool_result()`** | Shrinks tool-result truncation (500 → 300 → 150 chars) as a turn grows — prevents context bloat that degrades small models. |
+| **80% budget warning injection** | Append a system hint ("You are at 80% of budget — prefer short answers") before the next call — steers the model toward economy. |
 
 ### What We're NOT Doing (Yet)
 
@@ -1475,6 +1662,7 @@ These patterns are noted but deferred to future tiers. Each has a concrete imple
 
 | Pattern | Source | Target Tier | Phase | Plan Document |
 |---|---|---|---|---|
+| **Markdown rendering (native)** | Blender PR #163254 | Tier 5 | 5.x | `plan_tier5_generative_local_systems.md` — adopt `label_markdown()` with feature-detect + fallback |
 | **Popup/quick chat window** | BlendAI, Blender Buddy | Tier 5 | 5f.1 | `plan_tier5_generative_local_systems.md` |
 | **Macros / reusable tool sequences** | BlendAI, BlenderMCP Pro | Tier 5 | 5f.2 | `plan_tier5_generative_local_systems.md` |
 | **Background task queue** | BlenderMCP Pro | Tier 5 | 5f.3 | `plan_tier5_generative_local_systems.md` |
@@ -1489,12 +1677,12 @@ These patterns are noted but deferred to future tiers. Each has a concrete imple
 | **Text-to-speech output** | Chat Companion | Tier 6 | 6f.5 | `plan_tier6_domain_tooling.md` |
 | **External client config (one-click)** | BlenderMCP Pro | Tier 6 | 6f.6 | `plan_tier6_domain_tooling.md` |
 | **Document loading with vector search** | BuddyCode GPT | Tier 6 | 6f.7 | `plan_tier6_domain_tooling.md` |
-| **Text Editor file browser** | BuddyCode GPT | Tier 4c | 4c Phase 8 | `plan_tier4c_text_editor_ide_agent.md` |
+| **Text Editor file browser** | BuddyCode GPT | Out of scope | — | Removed from Tier 4c (2026-09-01) — not artist-friendly tooling |
 | **Cross-DCC bridge** | BlenderMCP Pro | Out of scope | — | BFA-specific, not relevant |
 
 ### Competitive Positioning After Tier 4b
 
-After implementing Phases 1-7, BFA Coworker will have:
+After implementing Phases 1-8, BFA Coworker will have:
 
 | Capability | Status |
 |---|---|

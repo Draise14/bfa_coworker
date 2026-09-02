@@ -8,19 +8,22 @@
 
 ## Table of Contents
 
-1. Tier 4 Overview and Sub-Plan Map
-2. Priority Reorder: Tier 6 Domain Tooling First
-3. Gap: CHOYA Guided Prompting System
-4. Gap: Shared UI Component Library
-5. Gap: Translation Integration
-6. Gap: Macro System Design (Implementation Deferred to Tier 5)
-7. Revised Scope: Tier 4c - Text Editor Artist Tooling
-8. Revised Scope: Tier 4d - Image Moodboard MVP
-9. Tier 4e - Artist Workflow Tooling (Rigging, Animation, Smart Save)
-10. Hotkey Policy
-11. Brand Detection Across Editors
-12. Implementation Order
-13. Dependency Graph
+1. [Tier 4 Overview and Sub-Plan Map](#1-tier-4-overview-and-sub-plan-map)
+   - [1.1 Before / After Matrix — What Tier 4 Changes](#11-before--after-matrix--what-tier-4-changes)
+2. [Priority Reorder: Tier 6 Domain Tooling First](#2-priority-reorder-tier-6-domain-tooling-first)
+3. [Gap: CHOYA Guided Prompting System](#3-gap-choya-guided-prompting-system)
+4. [Gap: Shared UI Component Library](#4-gap-shared-ui-component-library)
+   - [4.5 Note: Native Blender Markdown Rendering Coming (Defer Draw Work to Tier 5)](#45-note-native-blender-markdown-rendering-coming-defer-draw-work-to-tier-5)
+5. [Gap: Translation Integration](#5-gap-translation-integration)
+   - [5.5 "Explain This to Me" — Documentation-Grounded UI Explainer](#55-explain-this-to-me--documentation-grounded-ui-explainer)
+6. [Gap: Macro System Design (Implementation Deferred to Tier 5)](#6-gap-macro-system-design-implementation-deferred-to-tier-5)
+7. [Revised Scope: Tier 4c - Text Editor Artist Tooling](#7-revised-scope-tier-4c---text-editor-artist-tooling)
+8. [Moodboard Moved to Tier 5](#8-moodboard-moved-to-tier-5)
+9. [Tier 4e - Artist Workflow Tooling (Rigging, Animation, Smart Save)](#9-tier-4e---artist-workflow-tooling-rigging-animation-smart-save)
+10. [Hotkey Policy](#10-hotkey-policy)
+11. [Brand Detection Across Editors](#11-brand-detection-across-editors)
+12. [Implementation Order](#12-implementation-order)
+13. [Dependency Graph](#13-dependency-graph)
 
 ---
 
@@ -29,19 +32,49 @@
 | Sub-Plan | Document | Scope | Est. LOC |
 |----------|----------|-------|----------|
 | **Tier 4 (domain first)** | plan_tier6_domain_tooling.md (6a/6b/6d/6e lanes) | VSE + Text Editor + Node tools + prompt enrichment — pulled forward, see Section 2 | ~1,530 |
-| **Tier 4** | plan_tier4_editor_integration.md | Coworker workspace, viewport overlays | ~1,350 |
-| **Tier 4b** | plan_tier4b_competitor_ux_analysis.md | Chat UX: markdown, code blocks, sessions, explain | ~860 |
-| **Tier 4c** | plan_tier4c_text_editor_ide_agent.md | Text Editor: code gen, fix, edit selection | ~880 (revised) |
-| **Tier 4d** | plan_tier4d_moodboard_editor.md | Image moodboard: GPU canvas, agent context | ~520 (revised MVP) |
-| **Tier 4e** 🆕 | plan_tier4e_nice_to_haves.md | Rigging, animation, smart-save tooling | ~950 (est) |
-| **This doc** | plan_tier4_master_coordination.md | CHOYA, shared components, translation, macros | ~400 |
+| **Tier 4** | plan_tier4_editor_integration.md | **Agent dedicated central editor** (Coworker workspace), viewport overlays | ~1,350 |
+| **Tier 4b** | plan_tier4b_competitor_ux_analysis.md | Chat UX, "Explain this to me", sessions, right-click explain | ~860 |
+| **Tier 4c** | plan_tier4c_text_editor_ide_agent.md | **Text Editor IDE agent**: code gen, fix, edit selection — Tier 4 focus area | ~880 (revised) |
+| **Tier 4e** | plan_tier4e_nice_to_haves.md | Rigging, animation, smart-save tooling | ~950 (est) |
+| **This doc** | plan_tier4_master_coordination.md | CHOYA, shared components, translation, macros, explainer | ~400 |
+| **→ Tier 5** | plan_tier5_moodboard_storyboarding.md | **Moodboard editor + UX moved out of Tier 4 entirely** — see Section 8 | ~520 (MVP) |
 
-**Total Tier 4 estimate (revised)**: ~6,490 LOC across ~20 new files + modifications to ~10 existing files.
+**Total Tier 4 estimate (revised)**: ~5,970 LOC (Moodboard ~520 LOC removed → Tier 5).
 
-> **Ordering decision (2026-09-01):** Tier 6 domain tooling is now the **first
-> implementation lane** (Section 2). Tooling breadth is what makes local models
-> (and external harnesses) smart and reliable — UI alone cannot fix a model that
-> has to hallucinate `bpy` calls for domains it has no tools for.
+> **Ordering decisions (2026-09-01):**
+> 1. Tier 6 domain tooling is the **first implementation lane** (Section 2) — tooling breadth is what makes local models (and external harnesses) smart and reliable.
+> 2. **Moodboard editor + UX moved out of Tier 4 entirely** → Tier 5 (Section 8). Tier 4 focuses on **agent access** (chat/Ask/explainer), the **Text Editor IDE agent** (Tier 4c), and the **agent dedicated central editor** (Coworker workspace).
+
+### 1.1 Before / After Matrix — What Tier 4 Changes
+
+| # | Feature | Before (Tier 3) | After (Tier 4) | Difficulty | Order |
+|---|---------|-----------------|----------------|------------|-------|
+| 1 | **Domain tooling** (VSE, Text Editor, Node) | Agent hallucinates `bpy.ops.sequencer.*` / node wiring / text ops from memory; high spiral rate | Pre-authored toolcodes with structured params; agent picks tool + params, server does the how | 🟢 Easy–Medium (toolcode pattern already proven) | **1st** (Phase 0) |
+| 2 | **Smart-save tooling** (Tier 4e quick win) | Agent cannot save, check unsaved state, pack resources, or export — data-loss risk | `save_blend_file`, `check_unsaved_changes`, `pack_resources`, `export_selection`, `incremental_save` | 🟢 Easy (5 simple toolcodes) | **2nd** (Phase 0.5) |
+| 3 | **Shared UI component library** (`ui_components.py`) | Markdown/code-block/status rendering duplicated in every panel | One shared module; all editors import from it. **Markdown draw mechanics deferred to Tier 5** (native `label_markdown()` inbound — see §4.5); components compose on either renderer | 🟢 Easy (extract + consolidate) | **3rd** (Phase 1) |
+| 4 | **Brand detection** (`shared.py`) | `_is_bfa` / `AGENT_ICON` defined locally in `ui_chat.py` | Shared constant imported everywhere | 🟢 Easy (~10 LOC) | **3rd** (Phase 1) |
+| 5 | **Chat UX** (Tier 4b: code blocks + Run, error-fix, sessions, right-click explain, vision) | Markdown done in Tier 3; no Run button, no error-fix loop, no session history, no right-click explain | Competitor-parity chat: Run with confirmation, error→fix loop, sessions, explain, screenshot/vision. Markdown draw stays on Tier 3 impl (deferred) | 🟡 Medium (mostly UI + agent loop wiring) | **4th** (Phase 2) |
+| 6 | **CHOYA guided prompting** | Agent concludes, user must think of next step and type it | Contextual action buttons after every conclusion; one click sends a new message | 🟡 Medium (option generation + UI) | **5th** (Phase 2.8) |
+| 7 | **Text Editor IDE agent** (Tier 4c) | Text Editor panel is a duplicate chat; no code tools | Artist-friendly code tools: generate, execute, error-fix, edit/explain selection, prompt templates | 🟡 Medium (needs 6b text tools first) | **6th** (Phase 3) |
+| 8 | **Agent dedicated central editor** (Tier 4) | Agent feedback is chat-only; no dedicated workspace | Coworker workspace (USERPREF-pattern center panels), viewport status overlay, focus highlight, CHOYA in viewport | 🟡 Medium (GPU draw handlers + workspace setup) | **7th** (Phase 4) |
+| 9 | **Rigging tooling** (Tier 4e) | Agent writes `parent_set`, `constraint_add`, IK chains from scratch — high hallucination | 6 toolcodes: add armature/bone/constraint, IK setup, mirror pose, bake | 🟡 Medium (bone/constraint domain knowledge) | **8th** (Phase 5+) |
+| 10 | **Animation tooling** (Tier 4e) | Agent writes `keyframe_insert` boilerplate, F-curve modifiers, NLA from memory | 5 toolcodes: batch keyframe, interpolation, F-curve modifier, NLA track, bake | 🟡 Medium | **9th** (Phase 5+) |
+| 11 | **Translation integration** | No translation support | Right-click translate with target-language preference | 🟢 Easy (reuses right-click explain plumbing) | **10th** (Phase 2.6) |
+| 12 | **"Explain this to me"** (docs-grounded UI explainer) | New users must search the manual / watch tutorials to learn what a button or concept does | Right-click any UI element / object / node → agent explains what → how → when to use → pitfalls, grounded in bundled docs via `search_manual_docs`/`search_api_docs`. Also `/explain` in Ask mode | 🟢 Easy (reuses right-click explain + doc tools + Ask mode) | **11th** (Phase 2.5) |
+| 13 | **Macro system** (design now, impl Tier 5) | No reusable action sequences | Data model + recording/replay designed; implementation deferred | 🟢 Easy (design only) | **12th** (design) |
+| 14 | **Advanced intelligence** (Tier 6f: Agent Teams, Scene Co-Pilot, Render Critic) | Single-agent loop only | Planner→specialists→validator, passive scene issue detection, render critique loop | 🔴 Hard (multi-agent orchestration) | **13th** (capstone) |
+| — | **Moodboard editor** (→ Tier 5) | No visual reference board; agent has no image context | **Moved out of Tier 4 entirely** — GPU-canvas image board with agent vision bridge lands in Tier 5 (see §8) | 🔴 Hard (GPU takeover, custom canvas) | **Tier 5** |
+
+**Reading the order column**: 1–2 are tooling (the foundation — makes the agent
+smart), 3–4 are shared infrastructure (makes UI work cheap), 5–6 are chat UX
+(the visible polish), 7–8 are the Tier 4 focus areas (Text Editor IDE agent +
+agent dedicated central editor), 9–10 are more tooling (completes the domain
+matrix), 11–12 are the learning/accessibility pair (translate + explain — both
+ride the same right-click plumbing), 13–14 are nice-to-haves and the capstone.
+Difficulty ramps from 🟢 → 🔴 as the order progresses, so early wins build
+momentum before the hard GPU/multi-agent work. The Moodboard (🔴 hardest) is
+deliberately pushed to Tier 5 so Tier 4 stays focused on agent access + IDE +
+central editor.
 
 ---
 
@@ -215,7 +248,33 @@ def draw_copy_button(layout, text, message_index=-1):
 
 ~300 (extract + consolidate existing functions into shared module)
 
----
+### 4.5 Note: Native Blender Markdown Rendering Coming (Defer Draw Work to Tier 5)
+
+> **Update (2026-09-01):** Blender PR
+> [#163254](https://projects.blender.org/blender/blender/pulls/163254) adds a
+> native `layout.label_markdown()` API (MD4C parser, MIT-licensed `extern/md4c`).
+> It supports **bold, italic, inline code, fenced code blocks, lists, headings,
+> blockquotes, horizontal rules, and clickable links** — with theme-aware colors,
+> code-box/quote-line drawing, wrap-width layout, layout caching across redraws,
+> and even a dev-config panel to live-tweak the md_style namespace (debug value
+> 4002). The PR is gated behind `G.debug_value == 4002` for the dev-config, but
+> the core API ships regardless.
+
+**Decision:** Our own markdown drawing work is **deferred to Tier 5**, not done
+in Tier 4. Rationale:
+
+| Factor | Why defer |
+|--------|-----------|
+| **Native API inbound** | Once `label_markdown()` lands in stock Blender, our hand-rolled `_render_markdown()` layout simulation is obsolete for new features — building more of it in Tier 4 is wasted effort |
+| **Ship now, adopt later** | The current `_render_markdown()` in `ui_chat.py` (box/column/label simulation with icons, indentation, LaTeX→Unicode) is good enough for v1 and works on stock builds today |
+| **Adoption strategy** | Tier 5: keep our implementation as the fallback, but switch conclusions/chat rendering to `layout.label_markdown()` when available (feature-detect like `_can_multiline()` does for `label_multiline`) |
+| **Tier 4 stays additive** | Tier 4's shared library draws *components* (code-block boxes, guided-button rows, reasoning panels) — not the inline markdown itself. Those components compose on top of either renderer |
+
+**What this changes:**
+- `ui_components.py` (4.2) keeps `draw_code_block`, `draw_guided_options`, `draw_reasoning_panel`, `draw_tool_inline`, `draw_agent_status` — but **not** a standalone `draw_markdown`; instead it exposes a thin wrapper that prefers `label_markdown()` when present and falls back to the existing `_render_markdown()`.
+- Tier 4b (Chat UX) already has markdown in Tier 3 — no new markdown-drawing LOC in Tier 4.
+- The **`[Run]`, error-fix, sessions, right-click explain, vision** parts of Tier 4b remain in scope; only the *markdown draw mechanics* are deferred.
+- Add a Tier 5 task: "Adopt native `label_markdown()` for assistant conclusions" (feature-detect + fallback).
 
 ## 5. Gap: Translation Integration
 
@@ -242,15 +301,81 @@ This is a lightweight feature that fits naturally into the chat panel:
 
 ~80 (operator + prompt + preferences)
 
+### 5.5 "Explain This to Me" — Documentation-Grounded UI Explainer
+
+**What**: Right-click any UI element (button, panel, property, menu item, editor
+area, or even a 3D object/string/text node) → "Explain this with Coworker". The
+agent responds with: **what it is** (grounded in the official docs), **how it
+works** (the concept behind it), **when/how to use it** (practical steps), and
+**common pitfalls**. This is the single most useful feature for new users.
+
+**Why it matters**: Blender/Bforartists has a notoriously steep learning curve.
+New users don't know what a "work surface", "Dope Sheet", "principled BSDF", or
+"Collection Instancer" is, or why they'd use it. Today they'd have to search the
+manual, watch tutorials, or ask a forum. With this feature, they hover/right-click
+and get an instant, context-aware explanation from an agent that has access to
+the bundled docs.
+
+**Power source — the existing doc tools** (`get_python_api_docs`,
+`search_api_docs`, `search_manual_docs`) are already always-loaded surface tools.
+The explainer prompts the agent to search the bundled manual/API docs for the
+target, then synthesizes an answer. This grounds the explanation in the official
+documentation instead of the LLM's (possibly wrong) memory.
+
+**Where it plugs in (Tier 4b Phase 5 — Right-Click Explain)**:
+
+| Entry point | How | Target passed to agent |
+|-------------|-----|------------------------|
+| **Right-click any UI button/panel** | `BFACW_OT_explain` on the UI context menu (`WM_OT_ui_context_menu`) | `context.ui_item` — label, ident, tooltip, class, RNA path |
+| **Right-click a 3D object** | Object context menu → "Explain with Coworker" | Object type, name, parents, modifiers, materials |
+| **Right-click a Text object / string property** | String-style explain — "what does this field do" | The property name + description + current value |
+| **Right-click a node** (Shader/GN/Compositor) | Node context menu → "Explain with Coworker" | Node `bl_idname`, socket list, current values |
+| **Chat "Ask" mode slash** | Type `/explain <thing>` in Ask mode | The literal text after the slash |
+| **Hover tooltip "?"** | Optional: a `?` button next to advanced settings | The property path |
+
+**Two interaction modes:**
+
+1. **Direct answer in chat** (Ask mode / right-click) — agent searches docs, returns
+   a formatted explanation: what → how → when to use → pitfalls → "try this" steps.
+2. **Guided next steps with CHOYA** — after the explanation, CHOYA offers
+   "Apply it to my selection", "Show me the docs", "Give me an example", "Explain
+   the next option". A new user can learn *while doing*.
+
+**Implementation** (~150 LOC):
+
+| Step | What | LOC |
+|------|------|-----|
+| 1 | `BFACW_OT_explain` operator (right-click entry, collects `context.ui_item` / object / node / property target) | ~60 |
+| 2 | Explain prompt template in `prompts.yml` — instructs the agent to search docs first, then answer with the what/how/when/pitfalls structure | ~40 |
+| 3 | Wire into right-click context menus (UI menu, object menu, node menu) | ~30 |
+| 4 | `/explain` slash command handler in Ask mode | ~20 |
+
+**Grounding rule (anti-hallucination):** the explain prompt requires the agent
+to call `search_manual_docs`/`search_api_docs` for the target before answering,
+and to cite the doc section it found. If no doc hit, the agent says so instead of
+inventing API details. This reuses the exact doc-search plumbing already built.
+
+**Relationship to Translation (5.3):** the same operator plumbing serves both —
+`BFACW_OT_explain` and `BFACW_OT_translate` share the right-click dispatch; one
+asks "what is this / how do I use it", the other asks "translate this label into
+my language".
+
+**Files modified**: `operators_agent.py` (new operators), `ui_chat.py` (Ask-mode
+slash, menu entries), `prompts.yml` (explain prompt template),
+`ui_components.py` (CHOYA options after explanation).
+
+**Est. LOC**: ~150 (operator + prompt + menu wiring + slash command; CHOYA
+integration reuses 3.0).
+
 ---
 
 ## 6. Gap: Macro System Design
 
-### 5.1 What
+### 6.1 What
 
 BlenderMCP Pro has Macros - save action sequences as reusable named tools. You mentioned this should be designed for Tier 4 even if implementation is Tier 5.
 
-### 5.2 Design (Implementation Deferred to Tier 5)
+### 6.2 Design (Implementation Deferred to Tier 5)
 
 **Data model**:
 
@@ -288,19 +413,19 @@ class Macro:
 
 **Storage**: bfa_coworker_macros.json in addon prefs dir (portable, not .blend-embedded).
 
-### 5.3 Why Design Now?
+### 6.3 Why Design Now?
 
 - Tier 4 features (code blocks, error-fix, guided options) should record actions that can become macros later
 - The agent controller tool call logging should be macro-aware from the start
 - Session history (Tier 4b Phase 4) should store enough data to reconstruct macros
 
-### 5.4 Files (Tier 5)
+### 6.4 Files (Tier 5)
 
 - addon/bfa_coworker/macros.py (new) - Macro data model, storage, replay
 - addon/bfa_coworker/ui_chat.py - Macro panel, record/stop buttons
 - addon/bfa_coworker/agent_controller.py - Recording hooks in tool call pipeline
 
-### 5.5 Est. LOC (Tier 5)
+### 6.5 Est. LOC (Tier 5)
 
 ~300 (data model + storage + recording + replay + UI)
 
@@ -345,13 +470,26 @@ class Macro:
 
 ---
 
-## 8. Revised Scope: Tier 4d
+## 8. Moodboard Moved to Tier 5
 
-### 8.1 Split: Image Moodboard (Tier 4d) vs. Storyboarding (Tier 5)
+> **Decision (2026-09-01):** The Moodboard editor and its UX are **moved out of
+> Tier 4 entirely** and land in Tier 5. Tier 4 focuses on **agent access** (chat,
+> Ask mode, explainer), the **Text Editor IDE agent** (Tier 4c), and the **agent
+> dedicated central editor** (Coworker workspace).
 
-The original plan combined image moodboarding with storyboarding, shot sequences, scene tooling, and generation placeholders. This is too much for one tier.
+### 8.1 Why Move It
 
-**Tier 4d - Image Moodboard MVP** (this tier):
+| Factor | Rationale |
+|--------|-----------|
+| **Scope focus** | Tier 4's core value is *agent access* — making the agent reachable and useful everywhere (chat, Ask, explainer, Text Editor IDE, central editor). The Moodboard is a *content workspace*, not an access surface. |
+| **Difficulty** | The Moodboard is the 🔴 hardest item (GPU takeover, custom canvas, image cards, drag/scale/pan/zoom, agent vision bridge). Putting it last in Tier 4 delayed the accessible wins. |
+| **Dependency fit** | The Moodboard's real power comes from **generation** (Tier 5a gen plugins) and **storyboarding** (Tier 5 moodboard_storyboarding plan). It belongs with its dependencies, not before them. |
+| **Native markdown inbound** | Tier 5 will adopt `label_markdown()` (PR #163254) — the Moodboard's agent panels will look native without custom GPU drawing. |
+| **Tier 4 stays lean** | Removing ~520 LOC of GPU-canvas work keeps Tier 4 focused and shippable. |
+
+### 8.2 What Moves to Tier 5
+
+The full Image Moodboard MVP from `plan_tier4d_moodboard_editor.md`:
 
 | Phase | Feature | LOC |
 |-------|---------|-----|
@@ -363,32 +501,22 @@ The original plan combined image moodboarding with storyboarding, shot sequences
 | 6 | Annotation support (reuse Node Editor annotation brush) | ~20 |
 | **Total** | | **~520 LOC** |
 
-**Tier 5 - Storyboarding and Scene Tooling** (next tier):
+This becomes **Tier 5 milestone M1** in `plan_tier5_moodboard_storyboarding.md`
+(which already lists "What is Deferred from Tier 4d" — now the *entire* MVP is
+deferred, not just the storyboarding layers).
 
-- Shot sequences and narrative node system
-- Storyboard to 3D scene conversion
-- VSE animatic export
-- Generation placeholders (storybuilding)
-- Frame tools with markup integration
+### 8.3 What Tier 4 Keeps (the Focus)
 
-### 8.2 What is In Scope for Tier 4d
+| Focus area | Where | Status |
+|------------|-------|--------|
+| **Agent access** | Chat panel, Ask mode, `/explain`, right-click explain, translation | Tier 4b + §5.5 |
+| **Text Editor IDE agent** | Code gen, execute, error-fix, edit/explain selection, prompt templates | Tier 4c (Section 7) |
+| **Agent dedicated central editor** | Coworker workspace (USERPREF-pattern center panels), viewport status overlay, focus highlight, CHOYA in viewport | Tier 4 (Section 1, row 8) |
 
-- Load images onto a canvas
-- Arrange images (drag, scale, pan/zoom)
-- Select images and send to agent as vision context
-- Annotate with Blender annotation brush
-- Save/load with .blend file (Text datablocks)
-- Basic linking between images (visual lines)
+### 8.4 Files
 
-### 8.3 What is Deferred to Tier 5
-
-- Shot sequences and narrative chains
-- Storyboard to 3D scene conversion
-- VSE animatic export
-- Generation placeholders
-- Frame tools with markup
-- Multi-board management
-- Style guide extraction
+- `plan_tier4d_moodboard_editor.md` — **superseded**; content folded into Tier 5. Keep as reference, mark as moved.
+- `plan_tier5_moodboard_storyboarding.md` — add the full MVP as milestone M1 (data model → canvas → cards → import → vision bridge → annotation).
 
 ---
 
@@ -504,25 +632,17 @@ from .shared import _is_bfa, AGENT_ICON
 | 3.6 | Queue integration | 3.2 | ~80 |
 | 3.7 | CHOYA buttons after code gen | 2.8 | ~50 |
 
-### Phase 4: Tier 4d Moodboard (Week 5-6)
+### Phase 4: Tier 4 Agent Dedicated Central Editor + Viewport (Week 5-6)
+
+> Moodboard moved to Tier 5 — this phase is now the agent's dedicated central
+> editor (Coworker workspace) + viewport overlays.
 
 | Step | What | Depends On | LOC |
 |------|------|------------|-----|
-| 4.1 | Data model + persistence | Nothing | ~100 |
-| 4.2 | Node Editor canvas shell | Nothing | ~150 |
-| 4.3 | Image card rendering | 4.2 | ~120 |
-| 4.4 | Import UX | 4.3 | ~80 |
-| 4.5 | Agent vision bridge | 4.3 | ~50 |
-| 4.6 | Annotation support | 4.2 | ~20 |
-
-### Phase 5: Tier 4 Viewport and Workspace (Week 6-7)
-
-| Step | What | Depends On | LOC |
-|------|------|------------|-----|
-| 5.1 | Viewport status overlay | Nothing | ~60 |
-| 5.2 | Agent focus highlight | 5.1 | ~80 |
-| 5.3 | Coworker workspace setup | Nothing | ~40 |
-| 5.4 | CHOYA in viewport overlay | 5.1 | ~50 |
+| 4.1 | Coworker workspace setup (USERPREF-pattern center panels) | 1.1 | ~40 |
+| 4.2 | Viewport status overlay | Nothing | ~60 |
+| 4.3 | Agent focus highlight | 4.2 | ~80 |
+| 4.4 | CHOYA in viewport overlay | 4.2 | ~50 |
 
 ---
 
@@ -547,18 +667,17 @@ Tier 4c Text Editor:
   Text Editor Panel -> Prompt Templates
   Code Generation -> Queue Integration
 
-Tier 4d Moodboard:
-  Data Model -> Node Canvas -> Image Cards -> Import UX
-  Image Cards -> Agent Vision Bridge
-  Node Canvas -> Annotation
-
-Tier 4 Viewport:
+Tier 4 Central Editor + Viewport:
+  Coworker Workspace -> Center Panels (chat, queue, status)
   Viewport Status -> Focus Highlight
   Viewport Status -> CHOYA in Viewport
 
 CHOYA (shared):
   CHOYA in Chat -> CHOYA in Text Editor
   CHOYA in Chat -> CHOYA in Viewport
+
+(Tier 4d Moodboard dependency chain moved to Tier 5 — see
+ plan_tier5_moodboard_storyboarding.md)
 ```
 
 ---
@@ -574,8 +693,10 @@ This master plan fills four gaps identified in the audit:
 
 Additionally:
 - **Tier 4c** revised: no file browser, no custom hotkeys, focus on artist-friendly Text Editor tooling
-- **Tier 4d** revised: image moodboard MVP only, storyboarding pushed to Tier 5
+- **Moodboard moved to Tier 5 (2026-09-01)**: the entire Image Moodboard MVP + UX is out of Tier 4. Tier 4 focuses on agent access (chat/Ask/explainer), the Text Editor IDE agent (4c), and the agent dedicated central editor (Coworker workspace). See §8.
 - **Tier 4e** added: rigging, animation, and smart-save tooling (~950 LOC, 3 new domains)
 - **Hotkey policy**: no custom hotkeys in Tier 4; all features via sidebar/context menus
 - **Brand detection**: moved to shared.py for use across all editors
 - **Priority reorder (2026-09-01)**: Tier 6 domain tooling (VSE, Text Editor, Node) is now the first implementation lane — tooling breadth is what makes local models and external harnesses smart and reliable; interface polish builds on top.
+- **Markdown draw deferred to Tier 5 (2026-09-01)**: Blender PR #163254 adds native `layout.label_markdown()` (MD4C, bold/italic/code/lists/links, theme-aware). Tier 4 keeps the Tier 3 `_render_markdown()` as-is and only builds *components*; Tier 5 adopts the native API with feature-detect + fallback.
+- **"Explain this to me" added (2026-09-01)**: docs-grounded right-click explainer for any UI element / object / node + `/explain` in Ask mode — the highest-value feature for new users. Reuses the right-click plumbing, bundled doc tools, and Ask mode; grounded in `search_manual_docs`/`search_api_docs` to prevent hallucination. See §5.5.

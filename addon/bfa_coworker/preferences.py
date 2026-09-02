@@ -1476,7 +1476,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
         # -- Custom model entry --------------------------------------------
         local_box.prop(self, "model_preset", text="Your Selected Model Preset")
-        local_box.label(text="This defines what will download, either a prest, or custom Hugging Face model", icon='INFO')
+        local_box.label(text="This defines what will download, either a preset, or custom Hugging Face model", icon='INFO')
         if self.model_preset != "_custom" and self.model_preset_info:
             info_box = local_box.box()
             info_box.label(text="Model Preset Information", icon='INFO')

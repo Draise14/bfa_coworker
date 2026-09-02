@@ -398,3 +398,36 @@ Agent loop:
 6. **Pallaidium license**: GPL-3.0. BFA Coworker is also GPL-3.0. The bridge approach (detect-and-delegate, not copy code) avoids license entanglement while still enabling interoperability.
 
 7. **The "Pallaidium is tricky to setup" problem**: BFA Coworker's value-add is making this easier — one-click dependency install, curated presets with clear VRAM/disk requirements, and agent-guided setup.
+
+---
+
+## Native Markdown Rendering — Adopt in Tier 5 (2026-09-01)
+
+> **Update:** Blender PR
+> [#163254](https://projects.blender.org/blender/blender/pulls/163254) adds a
+> native `layout.label_markdown()` API (MD4C parser, MIT-licensed `extern/md4c`).
+> It supports **bold, italic, inline code, fenced code blocks, lists, headings,
+> blockquotes, horizontal rules, and clickable links** — theme-aware colors,
+> code-box/quote-line GPU drawing, wrap-width layout, layout caching across
+> redraws, and a dev-config panel (debug value 4002) to live-tweak the md_style
+> namespace.
+
+**Tier 5 task — "Adopt native `label_markdown()` for assistant conclusions":**
+
+| Step | What | LOC |
+|------|------|-----|
+| 1 | Feature-detect `label_markdown` on `UILayout` (same pattern as `_can_multiline()` for `label_multiline`) | ~10 |
+| 2 | Switch assistant conclusions + chat rendering to `layout.label_markdown()` when available | ~30 |
+| 3 | Keep the Tier 3 `_render_markdown()` (box/column/label simulation + LaTeX→Unicode) as the fallback for stock builds | ~0 (existing) |
+| 4 | Route `ui_components.draw_markdown` wrapper through the native API first, fallback second | ~15 |
+| 5 | Verify code-block copy buttons still work (native API draws code boxes; the `[Copy]` operator stays a component on top) | ~10 |
+
+**Why Tier 5, not Tier 4:** Tier 4's shared library only builds *components*
+(code-block boxes, guided-button rows, reasoning panels) that compose on either
+renderer. Writing more of our own markdown layout engine in Tier 4 would be
+obsolete the moment the native API ships. The Tier 3 `_render_markdown()` is
+good enough for v1 on stock builds.
+
+**Also relevant to Tier 5 UI work:** the native API's clickable links, quote
+bars, and code boxes will make the Moodboard/Sequencer agent panels (Phases 5b,
+5c) look native without custom GPU drawing.

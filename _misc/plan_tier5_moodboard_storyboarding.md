@@ -2,8 +2,8 @@
 
 **Date**: 2026-08-27
 **Status**: Planning - Not Started
-**Depends on**: Tier 4d (Image Moodboard MVP), Tier 5a (Gen Plugin Foundation)
-**Supersedes**: Deferred sections from plan_tier4d_moodboard_editor.md
+**Depends on**: ~~Tier 4d~~ → **Moodboard MVP now in Tier 5** (Phase 0 / Milestone M1, moved 2026-09-01), Tier 5a (Gen Plugin Foundation)
+**Supersedes**: plan_tier4d_moodboard_editor.md (entire MVP folded in as Phase 0)
 
 ---
 
@@ -57,7 +57,10 @@ The agent orchestrates the entire pipeline: generating reference images, arrangi
 
 ## 2. What is Deferred from Tier 4d
 
-These features were explicitly moved from Tier 4d to this plan:
+> **Update (2026-09-01):** The *entire* Tier 4d Image Moodboard MVP is now
+> deferred to Tier 5 (Phase 0 / Milestone M1 above). The table below lists what
+> was already deferred from the original Tier 4d scope — these build on top of
+> the MVP in later phases.
 
 | Feature | Why Deferred | Target Phase |
 |---------|-------------|--------------|
@@ -290,9 +293,9 @@ Frame annotations can be converted to 3D elements:
 
 
 
-### 6.4 Integration with Tier 4d Annotation Brush
+### 6.4 Integration with the Moodboard Annotation Brush
 
-The Tier 4d annotation brush is extended with shot-aware tools:
+The Moodboard MVP annotation brush (Phase 0.6) is extended with shot-aware tools:
 
 | Tool | Icon | Purpose |
 |------|------|---------|
@@ -362,6 +365,26 @@ All new data is stored in the same Text datablock system as Tier 4d:
 
 ## 9. Implementation Plan
 
+### Phase 0: Moodboard MVP (Milestone M1, ~520 LOC) — moved from Tier 4d
+
+> **Update (2026-09-01):** The entire Image Moodboard MVP was moved out of Tier 4
+> into Tier 5 (see `plan_tier4_master_coordination.md` §8). This is now the
+> **first milestone** of Tier 5 — the foundation everything else builds on.
+> `plan_tier4d_moodboard_editor.md` is superseded; its content lives here.
+
+| Step | Feature | Files | LOC |
+|------|---------|-------|-----|
+| 0.1 | Moodboard data model + blend-file persistence (Text datablocks) | moodboard.py (new) | ~100 |
+| 0.2 | Node Editor canvas shell (GPU takeover) | ui_moodboard.py (new) | ~150 |
+| 0.3 | Image card rendering (thumbnails, selection, gizmos) | ui_moodboard.py | ~120 |
+| 0.4 | Import UX (file browser drag-drop, paste) | ui_moodboard.py | ~80 |
+| 0.5 | Agent context bridge (send selected images to vision LLM) | agent_controller.py | ~50 |
+| 0.6 | Annotation support (reuse Node Editor annotation brush) | ui_moodboard.py | ~20 |
+
+**M1 exit criteria**: load images onto a canvas, arrange (drag/scale/pan/zoom),
+select and send to agent as vision context, annotate, save/load with the .blend
+file, basic linking between images. This is the visual hub for all later phases.
+
 ### Phase 1: Storyboarding Core (~350 LOC)
 
 | Step | Feature | Files | LOC |
@@ -425,18 +448,21 @@ All new data is stored in the same Text datablock system as Tier 4d:
 
 | Phase | Feature | New Files | Modified Files | LOC |
 |-------|---------|-----------|----------------|-----|
+| 0 | **Moodboard MVP (moved from Tier 4d)** | 2 | 1 | ~520 |
 | 1 | Storyboarding core (shots, sequences, multi-board) | 0 | 2 | ~350 |
 | 2 | VSE animatic export | 1 | 1 | ~300 |
 | 3 | Generative image pipeline (T2I, I2I, inpaint) | 0 | 2 | ~400 |
 | 4 | Frame tools and annotation-to-3D | 0 | 3 | ~250 |
 | 5 | Video generation integration | 0 | 2 | ~200 |
 | 6 | Agent orchestration and MCP tools | 1 | 2 | ~200 |
-| **Total** | | **2** | **~6** | **~1,700** |
+| **Total** | | **3** | **~7** | **~2,220** |
 
 ### Files Created
 
 | File | Purpose |
 |------|----------|
+| addon/bfa_coworker/moodboard.py | Moodboard data model + blend-file persistence (Phase 0) |
+| addon/bfa_coworker/ui_moodboard.py | Node Editor canvas GPU takeover, image cards, import UX (Phase 0) |
 | addon/bfa_coworker/vse_export.py | VSE animatic export, strip creation, transitions |
 | mcp/blmcp/tools/storyboard_tools.py | MCP tools: generate_storyboard, export_animatic |
 
@@ -447,7 +473,7 @@ All new data is stored in the same Text datablock system as Tier 4d:
 | addon/bfa_coworker/moodboard.py | Shot, Sequence, ImageEdit, Board extensions, FrameAnnotation |
 | addon/bfa_coworker/ui_moodboard.py | Shot creation, sequence editor, edit history, frame tools, export UI |
 | addon/bfa_coworker/gen_controller.py | route_output(), I2I, inpaint, moodboard integration |
-| addon/bfa_coworker/agent_controller.py | Story-to-3D, annotation reading, MCP tool handling |
+| addon/bfa_coworker/agent_controller.py | Vision bridge (Phase 0), story-to-3D, annotation reading, MCP tool handling |
 | addon/bfa_coworker/preferences.py | Generation preferences (model, quality, auto-route) |
 | addon/bfa_coworker/__init__.py | Register new classes, MCP tools |
 
@@ -465,6 +491,7 @@ All new data is stored in the same Text datablock system as Tier 4d:
 | **Agent-driven, not panel-driven** | Users describe intent. Agent orchestrates generation, arrangement, export. Panels are for inspection. |
 | **Incremental phases** | Storyboard first, then VSE export, then generation. Each phase is independently useful. |
 | **Leverages Tier 5a gen plugins** | FLUX.2 Klein for T2I/I2I, LTX-2.3 for video. No new model infrastructure needed. |
+| **Moodboard MVP moved to Tier 5 (2026-09-01)** | The entire Tier 4d MVP is now Phase 0 / Milestone M1 here. Tier 4 focuses on agent access, Text Editor IDE, and the central editor. The Moodboard's real power comes from generation (5a) + storyboarding — it belongs with its dependencies. |
 | **Text datablock persistence** | Same system as Tier 4d. No new file formats. Survives .blend save/load. |
 | **CHOYA at every workflow step** | After generation, after storyboard creation, after VSE export. Always offer next logical action. |
 

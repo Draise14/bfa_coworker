@@ -2031,6 +2031,7 @@ def _openai_chat_completions(
                 msg = choice.get("message", {})
                 finish = choice.get("finish_reason", "")
                 content = msg.get("content") or ""
+
                 tool_calls = msg.get("tool_calls") or []
                 print("[🛠️Coworker] _openai_chat_completions: finish_reason={:s}".format(finish))
                 print("[🛠️Coworker] _openai_chat_completions: content   = {:s}".format(
@@ -3576,6 +3577,21 @@ def _run_conversation_turn_inner(
 
         # Extract text content.
         content = msg.get("content") or ""
+        # Empty response: thinking budget cut off reasoning before output.
+        # Auto-retry with doubled budget (max 2 retries).
+        empty_retries = 0
+        while not content and not msg.get("tool_calls") and empty_retries < 2:
+            empty_retries += 1
+            doubled_budget = min(thinking_budget * 2, 8192) if thinking_budget > 0 else 0
+            print("[Coworker] empty response, retrying with thinking_budget={:d}".format(doubled_budget))
+            response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model, max_tokens, thinking_budget_tokens=doubled_budget)
+            if response is None:
+                break
+            choice = response.get("choices", [{}])[0]
+            msg = choice.get("message", {})
+            finish_reason = choice.get("finish_reason", "")
+            content = msg.get("content") or ""
+
 
         # ── Auto-continue on finish_reason=length ─────────────────────
         # Reasoning models (Qwen, DeepSeek, Gemma 4) can hit the token

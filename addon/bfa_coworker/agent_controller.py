@@ -3580,9 +3580,10 @@ def _run_conversation_turn_inner(
         # Empty response: thinking budget cut off reasoning before output.
         # Auto-retry with doubled budget (max 2 retries).
         empty_retries = 0
+        doubled_budget = thinking_budget
         while not content and not msg.get("tool_calls") and empty_retries < 2:
             empty_retries += 1
-            doubled_budget = min(thinking_budget * 2, 8192) if thinking_budget > 0 else 0
+            doubled_budget = min(doubled_budget * 2, 8192) if thinking_budget > 0 else 0
             print("[Coworker] empty response, retrying with thinking_budget={:d}".format(doubled_budget))
             response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model, max_tokens, thinking_budget_tokens=doubled_budget)
             if response is None:

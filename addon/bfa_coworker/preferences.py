@@ -276,6 +276,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         cfg.downloaded_models_dir = self.downloaded_models_dir
         cfg.local_ctx_size = self.local_ctx_size
         cfg.local_max_tokens = self.local_max_tokens
+        cfg.thinking_budget_tokens = self.thinking_budget_tokens
         llm.set_config(cfg)
         # If switching to remote, stop any running local LLM.
         if self.llm_mode == "remote":
@@ -476,6 +477,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             cfg.downloaded_models_dir = self.downloaded_models_dir
             cfg.local_ctx_size = self.local_ctx_size
             cfg.local_max_tokens = self.local_max_tokens
+            cfg.thinking_budget_tokens = self.thinking_budget_tokens
             cfg.hf_token = self.hf_token
             cfg.llama_backend = self.llama_backend
             llm.set_config(cfg)
@@ -720,12 +722,39 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         subtype='UNSIGNED',
     )
 
+    def _update_thinking_budget_preset(self, _context: bpy.types.Context) -> None:
+        """Sync the thinking-budget preset button to the numeric token count."""
+        if self.thinking_budget_preset != "custom":
+            try:
+                self.thinking_budget_tokens = int(self.thinking_budget_preset)
+            except ValueError:
+                pass
+
+    thinking_budget_preset: EnumProperty(  # type: ignore[valid-type]
+        name="Thinking Budget Preset",
+        description=(
+            "One-click thinking budget sizes. 0 disables the cap entirely "
+            "(no limit on reasoning tokens). Custom reveals a manual slider."
+        ),
+        items=[
+            ("0", "Off", "0 tokens — no thinking cap (unlimited reasoning)"),
+            ("256", "256", "256 tokens — very snappy, shallow reasoning"),
+            ("512", "512", "512 tokens — fast chat replies"),
+            ("1024", "1K", "1024 tokens — balanced default"),
+            ("2048", "2K", "2048 tokens — better reasoning for complex tasks"),
+            ("4096", "4K", "4096 tokens — deep reasoning, slower replies"),
+            ("custom", "Custom", "Manually set the thinking budget with a slider"),
+        ],
+        default="1024",
+        update=_update_thinking_budget_preset,
+    )
+
     thinking_budget_tokens: IntProperty(  # type: ignore[valid-type]
         name="Thinking Budget",
-                description=(
-            "Maximum tokens for chain-of-thought reasoning per API call.\\n"
-            "Limits how long the model thinks before responding.\\n"
-            "Lower values = faster responses, higher values = better reasoning.\\n"
+        description=(
+            "Maximum tokens for chain-of-thought reasoning per API call.\n"
+            "Limits how long the model thinks before responding.\n"
+            "Lower values = faster responses, higher values = better reasoning.\n"
             "Set to 0 to disable (no limit on reasoning tokens)."
         ),
         default=1024,
@@ -734,7 +763,6 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         step=256,
         subtype='UNSIGNED',
     )
-
 
     hf_token: StringProperty(  # type: ignore[valid-type]
         name="HuggingFace Token",
@@ -950,7 +978,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         diag_box = layout.box()
         diag_box.label(text="\U0001f6e0\ufe0f Diagnostics", icon='INFO')
         diag_box.label(
-            text="Temporary debug tools \u2014 hidden when Debug mode is off",
+            text="Temporary debug tools — hidden when Debug mode is off",
             icon='BLANK1',
         )
         # ── Open Log button ─────────────────────────────────────────
@@ -1116,7 +1144,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 ("llm_health", "LLM"),
                 ("llm_chat", "Chat"),
             ]:
-                val = ping.get(key, "\u2014")
+                val = ping.get(key, "—")
                 # In harness mode, N/A is not an error.
                 is_ok = val.startswith("OK") or (is_harness and val.startswith("N/A"))
                 diag_box.label(
@@ -1576,6 +1604,41 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             icon='INFO',
         )
 
+        # -- Thinking Budget ------------------------------------------------
+        tb_box = box.box()
+        tb_box.label(
+            text="Thinking Budget (how long the model reasons before answering)",
+            icon='SOLO_ON',
+        )
+        tb_box.label(
+            text="The biggest speed/quality lever for local models. Lower = snappier "
+                 "replies, higher = better reasoning. 0 disables the cap.",
+            icon='INFO',
+        )
+        row = tb_box.row(align=True)
+        active_budget = self.thinking_budget_tokens
+        is_custom_budget = (self.thinking_budget_preset == "custom") or (
+            active_budget not in llm.thinking_budget_presets)
+        for value in llm.thinking_budget_presets:
+            op = row.operator(
+                "bfacw.set_thinking_budget_preset",
+                text=llm.thinking_budget_preset_label(value),
+                depress=(active_budget == value),
+            )
+            op.value = value
+        op = row.operator(
+            "bfacw.set_thinking_budget_preset",
+            text="Custom",
+            depress=is_custom_budget,
+        )
+        op.value = -1
+        if is_custom_budget:
+            tb_box.prop(self, "thinking_budget_tokens")
+        tb_box.label(
+            text="Try 512 for chat, 2048+ for multi-step scene building.",
+            icon='BLANK1',
+        )
+
         # -- Startup / runtime errors --------------------------------------
         if llm_state.error and llm_state.download_kind != "model":
             err_lines = llm_state.error.split("\n")
@@ -1904,7 +1967,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 ("llm_health", "LLM"),
                 ("llm_chat", "Chat"),
             ]:
-                val = ping.get(key, "\u2014")
+                val = ping.get(key, "—")
                 is_ok = val.startswith("OK") or (is_harness and val.startswith("N/A"))
                 box.label(
                     text="{:<6s} {:s}".format(label + ":", val),

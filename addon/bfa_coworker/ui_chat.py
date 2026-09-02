@@ -75,6 +75,7 @@ def _sync_prefs_to_config(prefs: bpy.types.AddonPreferences) -> None:
     llm_cfg.downloaded_models_dir = prefs.downloaded_models_dir
     llm_cfg.local_ctx_size = prefs.local_ctx_size
     llm_cfg.local_max_tokens = prefs.local_max_tokens
+    llm_cfg.thinking_budget_tokens = prefs.thinking_budget_tokens
     llm_cfg.remote_api_url = prefs.remote_api_url
     llm_cfg.remote_api_key = prefs.remote_api_key
     llm_cfg.remote_model = prefs.remote_model

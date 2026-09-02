@@ -47,6 +47,8 @@ __all__ = (
     "resolve_gpu_backend",
     "ctx_preset_label",
     "ctx_preset_sizes",
+    "thinking_budget_preset_label",
+    "thinking_budget_presets",
 )
 
 import io
@@ -443,6 +445,7 @@ class LLMConfig:
     local_port: int = _LOCAL_LLM_DEFAULT_PORT
     local_ctx_size: int = 16384
     local_max_tokens: int = 16384  # Max output tokens per API call
+    thinking_budget_tokens: int = 1024  # Max chain-of-thought reasoning tokens per API call
     hf_token: str = ""  # HuggingFace token for gated models
     llama_backend: str = "auto"  # "auto" | "cpu" | "cuda" | "vulkan"
     # Remote mode
@@ -1039,6 +1042,7 @@ def set_config(cfg: LLMConfig) -> None:
         _config.local_port = cfg.local_port
         _config.local_ctx_size = cfg.local_ctx_size
         _config.local_max_tokens = cfg.local_max_tokens
+        _config.thinking_budget_tokens = cfg.thinking_budget_tokens
         _config.hf_token = cfg.hf_token
         _config.llama_backend = cfg.llama_backend
         _config.remote_api_url = cfg.remote_api_url
@@ -1059,6 +1063,7 @@ def get_config() -> LLMConfig:
             local_port=_config.local_port,
             local_ctx_size=_config.local_ctx_size,
             local_max_tokens=_config.local_max_tokens,
+            thinking_budget_tokens=_config.thinking_budget_tokens,
             hf_token=_config.hf_token,
             llama_backend=_config.llama_backend,
             remote_api_url=_config.remote_api_url,
@@ -1355,6 +1360,18 @@ def resolve_gpu_backend(backend: str) -> str:
 
 # Standard context sizes exposed as one-click preset buttons.
 ctx_preset_sizes: tuple[int, ...] = (4096, 8192, 16384, 32768, 65536, 131072)
+
+# Thinking budget presets exposed as one-click preset buttons.
+thinking_budget_presets: tuple[int, ...] = (0, 256, 512, 1024, 2048, 4096)
+
+
+def thinking_budget_preset_label(tokens: int) -> str:
+    """Return a short label like ``512`` or ``1K`` for a thinking budget."""
+    if tokens <= 0:
+        return "Off"
+    if tokens >= 1024 and tokens % 1024 == 0:
+        return "{:d}K".format(tokens // 1024)
+    return str(tokens)
 
 
 def ctx_preset_label(tokens: int) -> str:

@@ -3438,7 +3438,13 @@ def _run_conversation_turn_inner(
     from . import llm_manager as _llm_mgr
     _llm_cfg = _llm_mgr.get_config()
     max_tokens = _llm_cfg.local_max_tokens if llm_port_local is not None else 16384
-    thinking_budget = getattr(_llm_cfg, 'thinking_budget_tokens', 0)
+    # `thinking_budget_tokens` is a llama-server parameter; strict
+    # OpenAI-compatible endpoints reject unknown fields, so only send it
+    # on the local path (llm_port_local is None in remote mode).
+    thinking_budget = (
+        getattr(_llm_cfg, 'thinking_budget_tokens', 0)
+        if llm_port_local is not None else 0
+    )
     if thinking_budget > 0:
         print("[🛠️Coworker] run_conversation_turn: thinking_budget_tokens={:d}".format(thinking_budget))
     print("[🛠️Coworker] run_conversation_turn: using max_tokens={:d}".format(max_tokens))

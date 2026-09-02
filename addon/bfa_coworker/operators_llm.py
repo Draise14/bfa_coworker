@@ -19,7 +19,6 @@ __all__ = (
     "_BFACW_OT_select_existing_model",
     "_BFACW_OT_open_models_dir",
     "_BFACW_OT_set_ctx_preset",
-    "_BFACW_OT_set_thinking_budget_preset",
 )
 
 import bpy  # pylint: disable=import-error
@@ -566,34 +565,6 @@ class _BFACW_OT_set_ctx_preset(bpy.types.Operator):  # type: ignore[misc]
         else:
             # Custom: keep the current value, just reveal the manual slider.
             prefs.local_ctx_preset = "custom"
-        return {"FINISHED"}
-
-
-# ---------------------------------------------------------------------------
-# Set Thinking Budget Preset
-
-class _BFACW_OT_set_thinking_budget_preset(bpy.types.Operator):  # type: ignore[misc]
-    """Set the LLM thinking budget (reasoning tokens) from a preset button."""
-    bl_idname = "bfacw.set_thinking_budget_preset"
-    bl_label = "Set Thinking Budget"
-    bl_description = "Set the reasoning token budget for the local LLM"
-
-    value: IntProperty(  # type: ignore[valid-type]
-        name="Thinking Budget",
-        description="Token count for the preset (-1 = Custom, shows the manual slider)",
-        default=-1,
-        min=-1,
-        max=8192,
-    )
-
-    def execute(self, context: bpy.types.Context) -> set[str]:
-        prefs = context.preferences.addons[__package__].preferences
-        if self.value >= 0:
-            prefs.thinking_budget_tokens = self.value
-            prefs.thinking_budget_preset = str(self.value)
-        else:
-            # Custom: keep the current value, just reveal the manual slider.
-            prefs.thinking_budget_preset = "custom"
         return {"FINISHED"}
 
 

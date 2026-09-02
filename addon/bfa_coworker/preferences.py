@@ -722,31 +722,30 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         subtype='UNSIGNED',
     )
 
-    def _update_thinking_budget_preset(self, _context: bpy.types.Context) -> None:
-        """Sync the thinking-budget preset button to the numeric token count."""
-        if self.thinking_budget_preset != "custom":
+    def _update_reasoning_effort(self, _context: bpy.types.Context) -> None:
+        """Map the Reasoning Effort preset to a numeric token budget."""
+        if self.reasoning_effort != "custom":
             try:
-                self.thinking_budget_tokens = int(self.thinking_budget_preset)
+                self.thinking_budget_tokens = int(self.reasoning_effort)
             except ValueError:
                 pass
 
-    thinking_budget_preset: EnumProperty(  # type: ignore[valid-type]
-        name="Thinking Budget Preset",
+    reasoning_effort: EnumProperty(  # type: ignore[valid-type]
+        name="Reasoning Effort",
         description=(
-            "One-click thinking budget sizes. 0 disables the cap entirely "
-            "(no limit on reasoning tokens). Custom reveals a manual slider."
+            "How hard the model thinks before it answers — a friendly name "
+            "for the token budget sent to llama-server as "
+            "thinking_budget_tokens. Custom reveals the exact number."
         ),
         items=[
-            ("0", "Off", "0 tokens — no thinking cap (unlimited reasoning)"),
-            ("256", "256", "256 tokens — very snappy, shallow reasoning"),
-            ("512", "512", "512 tokens — fast chat replies"),
-            ("1024", "1K", "1024 tokens — balanced default"),
-            ("2048", "2K", "2048 tokens — better reasoning for complex tasks"),
-            ("4096", "4K", "4096 tokens — deep reasoning, slower replies"),
-            ("custom", "Custom", "Manually set the thinking budget with a slider"),
+            ("0", "Off", "No cap — the model thinks as long as it needs (slowest replies)"),
+            ("512", "Low", "Light thinking ≈ 512 tokens — snappy replies, simple tasks"),
+            ("1024", "Medium", "Balanced ≈ 1024 tokens — good default for most work"),
+            ("2048", "High", "Deep thinking ≈ 2048 tokens — complex, multi-step tasks"),
+            ("custom", "Custom", "Set the exact token budget with a slider"),
         ],
         default="1024",
-        update=_update_thinking_budget_preset,
+        update=_update_reasoning_effort,
     )
 
     thinking_budget_tokens: IntProperty(  # type: ignore[valid-type]
@@ -1604,38 +1603,26 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             icon='INFO',
         )
 
-        # -- Thinking Budget ------------------------------------------------
-        tb_box = box.box()
-        tb_box.label(
-            text="Thinking Budget (how long the model reasons before answering)",
+        # -- Reasoning Effort (next to the Context Window row) -------
+        ctx_box.separator()
+        ctx_box.label(
+            text="Reasoning Effort (how hard the model thinks per reply)",
             icon='SOLO_ON',
         )
-        tb_box.label(
-            text="The biggest speed/quality lever for local models. Lower = snappier "
-                 "replies, higher = better reasoning. 0 disables the cap.",
+        ctx_box.label(
+            text="Same setting the numeric row used to show — each level maps to a "
+                 "≈ token budget. Hover the buttons for the exact count.",
             icon='INFO',
         )
-        row = tb_box.row(align=True)
-        active_budget = self.thinking_budget_tokens
-        is_custom_budget = (self.thinking_budget_preset == "custom") or (
-            active_budget not in llm.thinking_budget_presets)
-        for value in llm.thinking_budget_presets:
-            op = row.operator(
-                "bfacw.set_thinking_budget_preset",
-                text=llm.thinking_budget_preset_label(value),
-                depress=(active_budget == value),
-            )
-            op.value = value
-        op = row.operator(
-            "bfacw.set_thinking_budget_preset",
-            text="Custom",
-            depress=is_custom_budget,
-        )
-        op.value = -1
-        if is_custom_budget:
-            tb_box.prop(self, "thinking_budget_tokens")
-        tb_box.label(
-            text="Try 512 for chat, 2048+ for multi-step scene building.",
+        row = ctx_box.row(align=True)
+        row.prop(self, "reasoning_effort", expand=True)
+        if self.reasoning_effort == "custom":
+            ctx_box.prop(self, "thinking_budget_tokens")
+        _budget = self.thinking_budget_tokens
+        ctx_box.label(
+            text="Current: {:s}".format(
+                "no cap — the model thinks freely" if _budget <= 0
+                else "{:d} tokens of thinking per reply".format(_budget)),
             icon='BLANK1',
         )
 

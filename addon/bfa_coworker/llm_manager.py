@@ -47,8 +47,6 @@ __all__ = (
     "resolve_gpu_backend",
     "ctx_preset_label",
     "ctx_preset_sizes",
-    "thinking_budget_preset_label",
-    "thinking_budget_presets",
 )
 
 import io
@@ -1361,17 +1359,7 @@ def resolve_gpu_backend(backend: str) -> str:
 # Standard context sizes exposed as one-click preset buttons.
 ctx_preset_sizes: tuple[int, ...] = (4096, 8192, 16384, 32768, 65536, 131072)
 
-# Thinking budget presets exposed as one-click preset buttons.
-thinking_budget_presets: tuple[int, ...] = (0, 256, 512, 1024, 2048, 4096)
 
-
-def thinking_budget_preset_label(tokens: int) -> str:
-    """Return a short label like ``512`` or ``1K`` for a thinking budget."""
-    if tokens <= 0:
-        return "Off"
-    if tokens >= 1024 and tokens % 1024 == 0:
-        return "{:d}K".format(tokens // 1024)
-    return str(tokens)
 
 
 def ctx_preset_label(tokens: int) -> str:

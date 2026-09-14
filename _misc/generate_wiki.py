@@ -314,6 +314,7 @@ def _classify_pref_tab(name: str, label: str, desc: str) -> str:
     # Advanced properties
     if name in ("operating_mode", "agent_mode", "agent_autostart",
                  "mcp_server_mode", "mcp_server_host", "mcp_server_port_override",
+                 "use_blender_python_for_harness", "harness_preset",
                  "port_offset", "bridge_port", "mcp_port", "llm_port",
                  "custom_skills_text", "save_code_to_text_editor",
                  "saved_providers_json", "pref_tab"):
@@ -401,6 +402,41 @@ def _scan_gen_plugins(repo_root: str) -> list[dict]:
     return plugins
 
 
+def _scan_harness_presets(repo_root: str) -> list[dict]:
+    """Scan shared.py and extract external harness preset metadata via AST.
+
+    Reads the ``HarnessPreset(...)`` calls in the ``_HARNESS_PRESETS`` list so
+    the External Harness wiki page always matches the shipped presets.
+    """
+    presets: list[dict] = []
+    path = os.path.join(repo_root, SHARED_PATH)
+    if not os.path.exists(path):
+        return presets
+    with open(path, "r", encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=path)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Name) and func.id == "HarnessPreset"):
+            continue
+        preset: dict = {"setup_steps": []}
+        for kw in node.keywords:
+            if kw.arg is None:
+                continue
+            value = kw.value
+            if isinstance(value, ast.Constant):
+                preset[kw.arg] = value.value
+            elif isinstance(value, (ast.List, ast.Tuple)):
+                preset[kw.arg] = [
+                    elt.value for elt in value.elts if isinstance(elt, ast.Constant)
+                ]
+        if preset.get("identifier"):
+            presets.append(preset)
+    return presets
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Markdown Generators
 # ═══════════════════════════════════════════════════════════════════════════
@@ -473,8 +509,9 @@ def generate_home(manifest: dict, operators: list, tools: list) -> str:
 | Feature | Description |
 |---------|-------------|
 | 📦 **Self-Contained** | Everything bundled — no external tools or Python setup needed |
-| 🧠 **Local LLM** | Download and run models locally via llama.cpp (9 curated presets) |
+| 🧠 **Local LLM** | Download and run models locally via llama.cpp (10 curated presets) |
 | ☁️ **Remote API** | Connect to OpenAI, OpenRouter, or any OpenAI-compatible API |
+| 🔌 **External Harness** | Drive Blender from Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Cline, OpenCode, or any MCP client |
 | 🔧 **MCP Tools** | {len(tools)} dedicated tools for scene inspection, navigation, rendering, and more |
 | 💬 **Chat UI** | In-Blender chat panel with streaming responses, reasoning display, @mentions |
 | 🎨 **Generative AI** | Experimental image/video/audio generation via plugins |
@@ -500,19 +537,23 @@ graph TB
         G --> H[{len(tools)} Tools<br/>Scene, Render, Docs...]
     end
 
-    subgraph "External Clients"
-        I[Claude Desktop]
-        J[VS Code]
-        K[Custom Client]
+    subgraph "External Harness Clients"
+        I[Claude Desktop / Code]
+        J[Cursor / Windsurf / Cline]
+        K[Codex / OpenCode / Generic]
     end
 
     C <-->|TCP :9876| G
     B -->|HTTP :9191| G
     F -->|HTTPS| L[Cloud API]
-    G -->|HTTP/SSE| I
-    G -->|HTTP/SSE| J
-    G -->|HTTP/SSE| K
+    I -->|stdio| G
+    J -->|stdio| G
+    K -->|stdio| G
 ```
+
+> 🔌 In **External Harness** mode the MCP server is launched by your own MCP
+> client (`python -m blmcp --transport stdio`) instead of by the add-on — see
+> the [External Harness](External-Harness) page.
 
 ---
 
@@ -521,7 +562,7 @@ graph TB
 | Section | Pages |
 |---------|-------|
 | 🚀 **[Quick Start](Quick-Start)** | Install → Configure → Chat in 3 steps |
-| 👤 **[User Documentation](Installation)** | Installation, Configuration, Chat Interface, Local LLM, Remote API, Generative AI, Troubleshooting |
+| 👤 **[User Documentation](Installation)** | Installation, Configuration, Chat Interface, Local LLM, Remote API, External Harness, Generative AI, Troubleshooting |
 | 🛠️ **[Developer Documentation](Architecture)** | Architecture, Addon Structure, MCP Server, MCP Tools, Plugin System, Skills, Building, Contributing |
 | 📋 **[API & Glossary](Operators-Reference)** | Operators Reference, Preferences Reference, MCP Tools Reference, Glossary |
 
@@ -532,9 +573,10 @@ graph TB
 | Metric | Count |
 |--------|-------|
 | 🔧 MCP tools available | **{len(tools)}** |
-| 🧠 Curated model presets | **9** (Light, Mid, Flagship) |
+| 🧠 Curated model presets | **10** (Light, Mid, Flagship + Custom) |
 | ☁️ Remote API providers | **2** (OpenRouter, Custom) |
-| 🧪 Built-in test suites | **8** |
+| 🔌 Supported external harnesses | **8** (Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Cline, OpenCode, Generic) |
+| 🧪 Built-in test suites | **15** |
 | 🎨 Generative plugin types | **4** (Image, Video, Audio, Text) |
 """
 
@@ -552,8 +594,10 @@ def generate_sidebar() -> str:
   - 💬 [Chat Interface](https://github.com/Draise14/bfa_coworker/wiki/Chat-Interface)
   - 🖥️ [Local LLM Setup](https://github.com/Draise14/bfa_coworker/wiki/Local-LLM-Setup)
   - ☁️ [Remote API Setup](https://github.com/Draise14/bfa_coworker/wiki/Remote-API-Setup)
+  - 🔌 [External Harness](https://github.com/Draise14/bfa_coworker/wiki/External-Harness)
   - 🎨 [Generative AI](https://github.com/Draise14/bfa_coworker/wiki/Generative-AI)
   - 🔧 [Troubleshooting](https://github.com/Draise14/bfa_coworker/wiki/Troubleshooting)
+  - 🩺 [Harness Troubleshooting](https://github.com/Draise14/bfa_coworker/wiki/Harness-Troubleshooting)
 - 🛠️ **Developer Documentation**
   - 🏗️ [Architecture](https://github.com/Draise14/bfa_coworker/wiki/Architecture)
   - 📁 [Addon Structure](https://github.com/Draise14/bfa_coworker/wiki/Addon-Structure)
@@ -616,7 +660,7 @@ def generate_quick_start(manifest: dict) -> str:
 
 ## ⚙️ Step 2: Choose Your Operating Mode
 
-You have two options:
+You have three options — pick the one that matches how you like to work.
 
 ### 🖥️ Option A: Local LLM (Self-Contained)
 
@@ -655,6 +699,29 @@ Best for maximum model quality without local hardware requirements.
     "1. Provider dropdown, 2. API URL field, 3. API Key field (masked), 4. Model name, 5. Test Connection button"
 )}
 
+### 🔌 Option C: External Harness
+
+Best if you already use an MCP-capable client (Claude Desktop, Claude Code, Codex,
+Cursor, Windsurf, Cline, OpenCode, …). Blender becomes a tool inside that client —
+the add-on runs no LLM of its own.
+
+1. Go to **Edit** → **Preferences** → **Add-ons** → **Coworker**.
+2. Set **Operating Mode** to **"External Harness"**.
+3. In the **Advanced** tab, pick your client in the **Harness Preset** dropdown.
+4. Click **Copy MCP Config** — a ready-to-paste JSON config is copied to your clipboard.
+5. Paste it into your client's config file and **fully restart** the client.
+6. In Blender, click **Start Bridge** (or enable Auto-Start). The status should read
+   `External Harness — Bridge on port 9876`.
+
+> 📖 Full per-client instructions live on the [[User-Documentation/External-Harness|External Harness]] page.
+
+{_screenshot(
+    "Advanced preferences showing External Harness mode, the Harness Preset dropdown, and Copy MCP Config",
+    "Edit → Preferences → Add-ons → Coworker → Advanced tab",
+    "External Harness operating mode selected, harness preset chosen, Copy MCP Config button visible",
+    "1. Operating Mode selector, 2. Harness Preset dropdown, 3. Use Blender's Python toggle, 4. Copy MCP Config button"
+)}
+
 ---
 
 ## 💬 Step 3: Start Chatting
@@ -680,7 +747,8 @@ Best for maximum model quality without local hardware requirements.
 - Explore the [[User-Documentation/Configuration|Configuration]] page for detailed settings
 - Learn about the [[User-Documentation/Chat-Interface|Chat Interface]] features
 - Set up [[User-Documentation/Local-LLM-Setup|Local LLM]] or [[User-Documentation/Remote-API-Setup|Remote API]] in depth
-- Check [[User-Documentation/Troubleshooting|Troubleshooting]] if you run into issues
+- Connect an external client via [[User-Documentation/External-Harness|External Harness]]
+- Check [[User-Documentation/Troubleshooting|Troubleshooting]] or [[User-Documentation/Harness-Troubleshooting|Harness Troubleshooting]] if you run into issues
 """
 
 
@@ -749,7 +817,7 @@ After enabling the add-on:
 
 1. The add-on may auto-start the bridge server (depending on your settings).
 2. Go to **Edit** → **Preferences** → **Add-ons** → **Coworker** to configure.
-3. Choose your [[Quick-Start|operating mode]] (Local LLM or Remote API).
+3. Choose your [[Quick-Start|operating mode]] (Local LLM, Remote API, or External Harness).
 4. Open the **3D Viewport**, press **N** to open the sidebar, and click the **Coworker** tab.
 5. Start chatting!
 
@@ -800,7 +868,7 @@ At the top of the preferences panel, you'll find the **Operating Mode** selector
 |------|-------------|
 | **Local LLM** | Run a local model via llama.cpp (self-contained, offline-capable) |
 | **Remote API** | Connect to OpenAI, OpenRouter, or any OpenAI-compatible API |
-| **External Harness** | Use an external MCP client (Claude Desktop, VS Code, etc.) |
+| **External Harness** | Bridge-only — connect an external MCP client (Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Cline, OpenCode, …) |
 
 {_screenshot(
     "Preferences panel showing the Operating Mode selector at the top",
@@ -820,13 +888,14 @@ Configure and download local models for the self-contained agent.
 - **Download llama-server** button if not found
 
 ### 📊 Model Presets
-Curated model presets organized by hardware capability:
+Curated model presets organized by hardware capability (10 entries incl. Custom):
 
-| Category | VRAM | Example Models |
-|----------|------|----------------|
-| **Flagship** | 24 GB+ | Gemma 4 26B, DeepSeek R1 Distill 32B, Qwen 2.5 Coder 32B |
-| **Mid-Range** | 12-20 GB | Mistral Small 3.1 24B, Gemma 3 27B, Phi-4 14B |
-| **Lightweight** | ≤ 8 GB | Qwen3 8B, Gemma 3 12B Vision, Phi-4 14B Q3 |
+| Category | RAM / Disk | Example Models |
+|----------|-----------|----------------|
+| **Flagship** | 16–28 GB RAM | Qwen3.8-27B (Q8_0), Fable Fusion 27B (Q6_K), Nail 35B A3B (UD-Q4_K_XL) |
+| **Mid-Range** | 8–20 GB RAM | GPT-OSS 20B (Q4_K_M, default), Qwen3.8-27B (Q4_K_M), Fable Fusion 27B (IQ4_XS) |
+| **Lightweight** | 4–8 GB RAM | Gemma 4 E4B (Q4_K_M), Qwen3.5-9B DeepSeek-V4-Flash (Q4_K_M), Qwen3.5-9B (Q8_0) |
+| **Custom** | — | Manually specify a HuggingFace repo ID and filename |
 
 ### ⬇️ Download & Start
 - Select a preset → click **Download Model**
@@ -840,9 +909,12 @@ Curated model presets organized by hardware capability:
 - Direct path selection for custom model files
 
 ### ⚙️ Advanced Settings
+- llama-server source toggle — **Bundled** (managed: Download/Update/Remove) or **Custom** (your own llama.cpp build, never modified)
+- Resolved llama-server path with an **Open Folder** button
 - Model Repo ID (HuggingFace)
 - Model Filename
 - Context Window Size (4096–262144 tokens)
+- **Reasoning Effort** — Off / Low / Medium / High / Custom (maps to a per-reply thinking budget of 0 / 512 / 1024 / 2048 tokens; local path only)
 - Max Output Tokens (512–131072)
 - HuggingFace Token (for gated models)
 
@@ -919,8 +991,17 @@ Port settings, external harness configuration, skills, and diagnostics.
 - Server status indicator (Running/Stopped)
 
 ### 🔌 MCP Server (External Harness)
-- **STDIO mode** — Claude Desktop config snippet with copy button
-- **Network mode** — Host/port settings with start/stop controls
+- **MCP Server Mode** — how the MCP server is launched:
+  - **Managed (HTTP)** — the add-on runs it as a subprocess (used by the built-in chat UI)
+  - **Stdio (External Client)** — for external MCP clients; the add-on only provides config snippets
+  - **Network (HTTP Server)** — listens on a configurable host:port for browser/remote clients
+- **Harness Preset** — pick your external client (Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Cline, OpenCode, Generic STDIO)
+- **Use Blender's Python** — when ON, generated configs use Blender's bundled Python with vendored deps (no `pip install` needed)
+- **Copy MCP Config** — copy the ready-to-paste JSON config for the selected preset
+- **Open Config Folder** — reveal the client's config file location in your OS file manager
+- **Configure Harness** — jump straight to this tab from the chat panel
+
+> 📖 See the [[User-Documentation/External-Harness|External Harness]] page for per-client setup and the [[User-Documentation/Harness-Troubleshooting|Harness Troubleshooting]] page for fixes.
 
 ### 🤖 Agent Control
 - Auto-Start Agent toggle
@@ -953,13 +1034,23 @@ When `BFACW_DEBUG=True`, a diagnostics panel appears below all tabs with:
 
 - **Check Ports** — Tests port availability
 - **Diagnose** — Pings all components (bridge, MCP, LLM)
-- **6 Test Suites** — Multi-step artist workflow benchmarks:
+- **Asset Tool Self-Tests** — Runs every asset tool deterministically in-session against a throwaway fixture library (no MCP server, no agent, no LLM) with live PASS/FAIL and timings
+- **15 Test Suites** — Multi-step artist workflow benchmarks:
   - Scene Build (6 steps)
   - Animation (5 steps)
   - Modifiers (6 steps)
-  - Assets + Materials (5 steps)
+  - Assets Browser (6 steps)
+  - Poly Haven (5 steps)
+  - Shader Nodes (4 steps)
+  - Geometry Nodes (4 steps)
+  - Sequencer (4 steps)
+  - Image Editor (3 steps)
+  - Compositor (4 steps)
+  - Multi-Editor Cross (4 steps)
   - Baseline (6 steps)
   - Error Handling (3 steps)
+  - Vision: Camera (4 steps)
+  - Vision: Relative Placement (5 steps)
 
 {_screenshot(
     "Diagnostics panel showing port check results and test suite buttons",
@@ -1142,13 +1233,14 @@ Alternatively, install manually:
 
 ### ⭐ Option A: Use a Preset (Recommended)
 
-The add-on includes **16 curated model presets** organized by hardware capability:
+The add-on includes **10 curated model presets** (9 models + Custom) organized by hardware capability:
 
-| Category | VRAM | Models |
-|----------|------|--------|
-| **Flagship** | 24 GB+ | Gemma 4 26B, DeepSeek R1 Distill 32B, Qwen 2.5 Coder 32B, Mistral Small 3.1 24B, Gemma 3 27B, Qwen3.6 35B A3B |
-| **Mid-Range** | 12-20 GB | GPT-OSS 20B, Phi-4 14B, Qwen3.5 9B Heretic, Gemma 3 12B Vision |
-| **Lightweight** | ≤ 8 GB | Qwen3 8B, Phi-4 14B Q3, and more |
+| Category | RAM | Models |
+|----------|-----|--------|
+| **Flagship** | 16–28 GB | Qwen3.8-27B (Q8_0), Fable Fusion 27B (Q6_K), Nail 35B A3B (UD-Q4_K_XL) |
+| **Mid-Range** | 8–20 GB | GPT-OSS 20B (Q4_K_M, default), Qwen3.8-27B (Q4_K_M), Fable Fusion 27B (IQ4_XS) |
+| **Lightweight** | 4–8 GB | Gemma 4 E4B (Q4_K_M), Qwen3.5-9B DeepSeek-V4-Flash (Q4_K_M), Qwen3.5-9B (Q8_0) |
+| **Custom** | — | Manually specify a HuggingFace repo ID and filename |
 
 Each preset pre-configures:
 - **Context Window** — Auto-set from preset (capped at 65536 for safety)
@@ -1260,7 +1352,7 @@ def generate_remote_api_setup() -> str:
 
 The Coworker add-on supports any OpenAI-compatible API, including:
 
-- **OpenRouter** — Access to 200+ models with a single API key
+- **OpenRouter** — Access to 300+ models with a single API key
 - **OpenAI** — GPT-4o, GPT-4.1, GPT-5 Mini
 - **Anthropic** — Claude 4.6 Sonnet (via OpenRouter)
 - **Google** — Gemini 2.5 Flash/Pro (via OpenRouter)
@@ -1369,6 +1461,396 @@ Click **Browse Models** to open [openrouter.ai/models](https://openrouter.ai/mod
 | 🔑 **Authentication error** | Regenerate your API key |
 
 See [[User-Documentation/Troubleshooting|Troubleshooting]] for more help.
+"""
+
+
+def _harness_config_format(identifier: str) -> str:
+    """Return the JSON top-level key used by a harness preset."""
+    if identifier in ("cursor", "windsurf", "cline"):
+        return '"servers"'
+    if identifier == "generic":
+        return "raw command block"
+    return '"mcpServers"'
+
+
+def generate_external_harness(harness_presets: list[dict]) -> str:
+    """Generate External-Harness.md."""
+    # Preset overview table.
+    overview_rows = [
+        [
+            f"**{p.get('name', p['identifier'])}**",
+            "✅ Yes" if p.get("is_open_source") else "❌ No",
+            f"`{_harness_config_format(p['identifier'])}`",
+            p.get("description", ""),
+        ]
+        for p in harness_presets
+    ]
+
+    # Per-preset setup sections.
+    preset_sections = []
+    for p in harness_presets:
+        name = p.get("name", p["identifier"])
+        parts = [f"### {name}\n"]
+        desc = p.get("description")
+        if desc:
+            parts.append(f"{desc}\n")
+        parts.append(f"- **Identifier:** `{p['identifier']}`")
+        parts.append(
+            f"- **Config format:** `{_harness_config_format(p['identifier'])}`"
+        )
+        parts.append(
+            "- **Open source:** "
+            + ("✅ Yes" if p.get("is_open_source") else "❌ No")
+        )
+        if p.get("docs_url"):
+            parts.append(f"- **Docs:** <{p['docs_url']}>")
+        parts.append("")
+
+        if p.get("config_path_help"):
+            parts.append("**Config file location:**\n")
+            parts.append("```")
+            parts.append(str(p["config_path_help"]))
+            parts.append("```\n")
+
+        if p.get("setup_steps"):
+            parts.append("**Setup steps:**\n")
+            for i, step in enumerate(p["setup_steps"], start=1):
+                parts.append(f"{i}. {step}")
+            parts.append("")
+
+        if p.get("chat_paste_hint"):
+            parts.append(f"> 💬 **Pasting the config:** {p['chat_paste_hint']}\n")
+
+        if p.get("notes"):
+            parts.append(f"> ⚠️ **Note:** {p['notes']}\n")
+
+        preset_sections.append("\n".join(parts))
+
+    return _header(
+        "External Harness",
+        "Run Blender as a tool for an external MCP client (Claude Desktop, Cursor, VS Code, …)",
+    ) + f"""
+
+---
+
+## What Is External Harness Mode?
+
+In **External Harness** mode the add-on does **not** run an LLM. Instead it exposes
+Blender to an *external* MCP client — the **harness** — that you already use for
+coding (Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Cline, OpenCode, …).
+You keep your favourite client and its model; Blender becomes one more tool it can drive.
+
+| | Self-Contained (Local LLM / Remote API) | External Harness |
+|---|---|---|
+| **LLM** | Managed by the add-on | Your external MCP client |
+| **MCP server** | Managed as a subprocess by the add-on | Launched by the external client (`python -m blmcp --transport stdio`) |
+| **In-Blender chat UI** | Used | Not used — chat happens in the external client |
+| **Bridge server** | Running | Running (the external client talks to it through the MCP server) |
+| **Best for** | Artists who want everything in Blender | Developers already living in an MCP-capable client |
+
+```mermaid
+graph LR
+    A[External Client<br/>Claude Desktop / Cursor /…] -->|stdio JSON-RPC| B[MCP Server<br/>python -m blmcp]
+    B -->|TCP :9876| C[Bridge Server<br/>inside Blender]
+    C --> D[Blender scene]
+```
+
+---
+
+## 🚦 Quick Start
+
+1. Open **Edit → Preferences → Add-ons → Coworker**.
+2. Set **Operating Mode** to **External Harness**.
+3. Pick your client in the **Harness Preset** dropdown (Advanced tab).
+4. Click **Copy MCP Config** to copy the ready-made JSON to your clipboard.
+5. Paste it into your client's config file (see the per-preset locations below) and
+   **fully restart** the client.
+6. In Blender, start the **Bridge** (chat panel → *Start Bridge*, or enable Auto-Start).
+   The status should read `External Harness — Bridge on port {9876}`.
+
+> 💡 The generated config embeds the full path to **Blender's bundled Python** with
+> `PYTHONPATH` pointing at the add-on's vendored dependencies, so no
+> `pip install` is required. Toggle **Use Blender's Python** off in preferences if
+> you would rather use a system Python that has `bfa-coworker-mcp` installed.
+
+{_screenshot(
+    "Advanced preferences showing the Operating Mode selector, Harness Preset dropdown, and Copy MCP Config button",
+    "Edit → Preferences → Add-ons → Coworker → Advanced tab",
+    "External Harness operating mode selected, harness preset chosen, Copy MCP Config button visible",
+    "1. Operating Mode selector, 2. Harness Preset dropdown, 3. Use Blender's Python toggle, 4. Copy MCP Config button, 5. Open Config Folder button"
+)}
+
+---
+
+## 🧩 Supported Harnesses
+
+{_table(
+    ["Harness", "Open Source", "Config Key", "Description"],
+    overview_rows,
+)}
+
+---
+
+## ⚙️ Generated Config Shape
+
+All presets emit the same core command block; only the surrounding JSON key differs:
+
+```json
+{{
+  "command": "<path to python>",
+  "args": ["-m", "blmcp", "--transport", "stdio"],
+  "env": {{
+    "BFACW_HOST": "localhost",
+    "BFACW_PORT": "9876",
+    "PYTHONPATH": "<addon vendor deps>",
+    "BLENDER_PATH": "<path to blender / bforartists binary>"
+  }}
+}}
+```
+
+| Environment variable | Purpose |
+|----------------------|---------|
+| `BFACW_HOST` | Host where the in-Blender bridge listens (default `localhost`) |
+| `BFACW_PORT` | Bridge TCP port (default `9876`, plus any port offset) |
+| `PYTHONPATH` | Vendor dependencies so `python -m blmcp` imports out of the box |
+| `BLENDER_PATH` | Binary used by CLI tools that spawn a background Blender |
+
+After generation it is wrapped as:
+
+| Harness | Wrapper |
+|---------|---------|
+| Claude Desktop, Claude Code, Codex, OpenCode | `{{ "mcpServers": {{ "bfa-coworker": … }} }}` |
+| Cursor, Windsurf, Cline | `{{ "servers": {{ "bfa-coworker": {{ "type": "stdio", … }} }} }}` |
+| Generic STDIO | the raw command block above |
+
+---
+
+## 🔧 Per-Harness Setup
+
+> 📋 The setup steps below refer to "the config" — that is the JSON you get from
+> **Copy MCP Config** in Advanced preferences (its shape is documented above and
+> matches the preset's config key).
+
+""" + "\n---\n\n".join(preset_sections) + f"""
+
+---
+
+## 🔁 Switching Between Modes
+
+You can leave the bridge running and switch **Operating Mode** at any time:
+
+- **External Harness → Local LLM / Remote API**: the add-on starts managing the
+  MCP server itself again.
+- **Local LLM / Remote API → External Harness**: the add-on stops its managed
+  MCP server; the external client is then responsible for launching
+  `python -m blmcp --transport stdio`.
+
+The **Check Status** button reports `N/A (harness mode)` for the MCP and LLM
+probes, because both are external in this mode. Only the **Bridge** must show OK.
+
+---
+
+## 🩺 Troubleshooting
+
+See the dedicated [[User-Documentation/Harness-Troubleshooting|Harness Troubleshooting]]
+page for common connection, config, and per-client issues. Highlights:
+
+- **"No tools" in the client** → the config is probably using a system Python
+  without `blmcp`; enable **Use Blender's Python**.
+- **"Connection refused" on port 9876** → the bridge is not running in Blender.
+- **Config ignored** → most clients need a *full* restart, not just a new window.
+
+---
+
+## 🧑‍💻 Adding a New Harness Preset
+
+1. Open `addon/bfa_coworker/shared.py` and add a `HarnessPreset(...)` entry to
+   `_HARNESS_PRESETS` (identifier, name, description, icon, `config_path_help`,
+   `setup_steps`, `docs_url`, `notes`, `chat_paste_hint`).
+2. If the client uses a config shape other than `mcpServers`, add a branch in
+   `generate_mcp_client_config()` in `addon/bfa_coworker/agent_controller.py`.
+3. Select it in preferences and use **Copy MCP Config** to verify the output.
+
+This wiki page is generated from those presets, so running `make wiki` after the
+change keeps this page in sync automatically.
+"""
+
+
+def generate_harness_troubleshooting() -> str:
+    """Generate Harness-Troubleshooting.md."""
+    return _header(
+        "Harness Troubleshooting",
+        "Fix common External Harness connection problems",
+    ) + """
+
+---
+
+## ✅ Quick Checklist
+
+Before digging into a specific error, confirm the basics:
+
+- [ ] Blender / Bforartists is running with the Coworker add-on enabled.
+- [ ] **Operating Mode** is set to **External Harness**.
+- [ ] The **bridge server** is running (status: `External Harness — Bridge on port 9876`).
+- [ ] You pasted the config into the **correct file** for your client.
+- [ ] You **fully restarted** the MCP client (quit and relaunch — a new window is not enough).
+
+---
+
+## 🧰 Test the Pieces in Isolation
+
+### Verify the bridge by hand
+
+```python
+import socket, json
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.settimeout(5)
+sock.connect(("localhost", 9876))
+
+request = json.dumps({
+    "type": "execute",
+    "code": "import bpy; print('Hello from Blender:', bpy.app.version_string)",
+    "strict_json": False,
+}) + "\\0"
+
+sock.sendall(request.encode("utf-8"))
+buf = bytearray()
+while True:
+    chunk = sock.recv(65536)
+    if not chunk:
+        break
+    buf.extend(chunk)
+    if b"\\0" in buf:
+        break
+print(json.loads(buf.partition(b"\\0")[0].decode("utf-8")))
+sock.close()
+```
+
+A JSON payload containing Blender's version string means the bridge is healthy.
+
+### Run the MCP server manually (stdio)
+
+```bash
+# Windows (PowerShell)
+$env:BFACW_HOST="localhost"; $env:BFACW_PORT="9876"
+"<blender>/python/bin/python.exe" -m blmcp --transport stdio
+
+# Linux / macOS
+BFACW_HOST=localhost BFACW_PORT=9876 \\
+  /path/to/blender/python/bin/python3 -m blmcp --transport stdio
+```
+
+Then send a JSON-RPC `tools/list` request (press Enter **twice** to terminate it):
+
+```json
+{"jsonrpc": "2.0", "id": "1", "method": "tools/list"}
+```
+
+You should get a `result.tools` array. If it is empty, see the failure modes below.
+
+---
+
+## 🚫 Common Failure Modes
+
+### "Bridge is running but my client says no tools"
+
+1. **Wrong Python** — the client is using system `python` without `blmcp`.
+   → Enable **Use Blender's Python** in Advanced preferences and copy the config again.
+2. **Bad paste** — invalid JSON (trailing comma, mismatched brace), a `command`
+   that does not exist, missing `-m blmcp --transport stdio`, or a missing `env` block.
+3. **Test the command** — paste the client's `command`/`args` into a terminal and
+   run it; a `ModuleNotFoundError` points at a wrong `PYTHONPATH`.
+
+### "Connection refused" on port 9876
+
+- **Bridge not started** → click **Start Bridge** in the chat panel.
+- **Wrong port** → check the *Effective Ports* display in Advanced preferences;
+  a port offset shifts the bridge port, so the client config must match.
+- **Firewall** → some firewalls block localhost TCP; add an exception for
+  Blender's Python on the bridge port.
+
+### "Command not found: python"
+
+The client cannot resolve the `python` command (not on `PATH`, or a relative path).
+→ Enable **Use Blender's Python**; the config then emits an absolute path.
+
+### "Blender executable not found at 'blender'"
+
+CLI tools such as `execute_blender_code_for_cli` spawn a background Blender using
+`BLENDER_PATH`. If it is unset — or your build is named `bforartists.exe` — they
+fall back to a literal `blender` and fail.
+→ Regenerate the config from the add-on (it sets `BLENDER_PATH` to the running
+binary), or set it manually:
+
+```json
+"env": { "BLENDER_PATH": "C:/3D_Stuff/Devbuild/bforartists.exe" }
+```
+
+---
+
+## 🖥️ Per-Harness Issues
+
+### Claude Desktop
+
+- Config: `%APPDATA%\\Claude\\claude_desktop_config.json` (Windows),
+  `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS),
+  `~/.config/Claude/claude_desktop_config.json` (Linux).
+- **Must be fully restarted** (File → Exit, then reopen).
+- A missing hammer icon usually means invalid JSON.
+
+### Claude Code
+
+- Reads MCP servers from the same `claude_desktop_config.json`.
+- Add a server interactively with `/mcp`, or
+  `claude mcp add --transport stdio`.
+- Restart the `claude` session after config changes.
+
+### Codex CLI
+
+- Config: `~/.codex/config.json` (or project-level `codex.json`).
+- Uses system Python by default — enable **Use Blender's Python**.
+- Verify by asking Codex to list available MCP tools.
+
+### Cursor
+
+- Config key is `"servers"`, not `"mcpServers"` — the preset handles this.
+- Config: `~/.cursor/mcp.json` or `.cursor/mcp.json` in the project root.
+- Restart Cursor after editing.
+
+### Windsurf
+
+- Config: `~/.codeium/windsurf/mcp_config.json` (auto-created on first launch).
+- Fully restart Windsurf after changes.
+
+### Cline
+
+- Config: `~/.vscode/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`.
+- **Permission-gated**: Cline asks before each Blender tool call by default.
+- Reload the VS Code window after changes.
+
+### OpenCode
+
+- Config: `~/.config/opencode/mcp.json` (or project-level `opencode.json`).
+- Auto-discovers MCP servers on startup; check its logs if tools do not appear.
+
+### Generic STDIO
+
+- Works with any MCP-compatible client; adjust the top-level key to match the
+  client's schema if it is not `mcpServers`.
+
+---
+
+## 🆘 Still Stuck?
+
+1. Run **Check Status** in Advanced preferences. In harness mode only **Bridge**
+   needs to be OK; the MCP and LLM probes report `N/A (harness mode)`.
+2. Drop to the **Generic STDIO** preset to rule out a client-specific format.
+3. Open an issue at <https://github.com/bforartists/bfa_coworker/issues> with:
+   - your client name and version,
+   - the config you are using (redact API keys),
+   - the exact error message,
+   - your OS and Blender version.
 """
 
 
@@ -1555,6 +2037,12 @@ The add-on uses three ports by default:
 - Check that the bridge server is running.
 - Verify ports are not in use.
 
+### 🔌 External Harness: Client Sees No Tools
+- Make sure **Operating Mode** is set to **External Harness** and the bridge is running.
+- Enable **Use Blender's Python** in Advanced preferences, then copy the config again.
+- Fully restart the MCP client — a window close is not enough on most OSes.
+- See the dedicated [[User-Documentation/Harness-Troubleshooting|Harness Troubleshooting]] page.
+
 ### 🌐 "Online Access Must Be Enabled"
 - Blender requires online access permission.
 - Enable it in Blender's System Preferences.
@@ -1640,18 +2128,18 @@ graph TB
         G --> H[{len(tools)} Tools<br/>Scene, Render, Docs...]
     end
 
-    subgraph "External Clients"
-        I[Claude Desktop]
-        J[VS Code]
-        K[Custom Client]
+    subgraph "External Harness Clients"
+        I[Claude Desktop / Code]
+        J[Cursor / Windsurf / Cline]
+        K[Codex / OpenCode / Generic]
     end
 
     C <-->|TCP :9876| G
     B -->|HTTP :9191| G
     F -->|HTTPS| L[Cloud API]
-    G -->|HTTP/SSE| I
-    G -->|HTTP/SSE| J
-    G -->|HTTP/SSE| K
+    I -->|stdio| G
+    J -->|stdio| G
+    K -->|stdio| G
 ```
 
 ---
@@ -1672,14 +2160,31 @@ Runs inside Blender / Bforartists' Python environment. Provides:
 
 A separate Python process using the **FastMCP** framework. Provides:
 
-- **{len(tools)} Tools** — Scene inspection, navigation, rendering, documentation search
+- **{len(tools)} Tools** — Scene inspection, navigation, rendering, assets, node groups, documentation search
 - **Tool Auto-Discovery** — Tools are automatically loaded from the `tools/` directory
-- **Dual Transport** — Supports both STDIO and HTTP transports
+- **Transports** — Stdio for external harness clients, Managed HTTP for the built-in UI, Network HTTP for remote clients
 - **Bundled Documentation** — Full Blender Python API and User Manual as RST resources
 
 ### 3. Chat Client (`chat_client/`)
 
 A standalone Python chat client for connecting to the MCP server without Blender. Useful for testing and automation.
+
+---
+
+## Operating Modes
+
+The add-on has three top-level **Operating Modes**, selected in preferences:
+
+| Mode | LLM | MCP server | In-Blender chat UI |
+|------|-----|-----------|--------------------|
+| **Local LLM** | llama-server (managed) | Managed subprocess | Yes |
+| **Remote API** | OpenAI-compatible HTTP API | Managed subprocess | Yes |
+| **External Harness** | External MCP client's own model | Launched by the external client (`python -m blmcp --transport stdio`) | No |
+
+In **External Harness** mode the add-on only runs the **bridge server**; the MCP
+server is started by the external client. See the
+[[User-Documentation/External-Harness|External Harness]] page for the supported
+clients and their config formats.
 
 ---
 
@@ -1724,11 +2229,12 @@ User Message → Chat Panel → Agent Controller → LLM API
 - **Purpose**: Execute Python code in Blender's context
 - **Security**: Localhost only by default
 
-### MCP Server (HTTP)
-- **Default Port**: 9191
-- **Protocol**: HTTP with JSON-RPC (MCP standard)
+### MCP Server (HTTP or Stdio)
+- **Default Port**: 9191 (HTTP transport)
+- **Protocol**: HTTP with JSON-RPC (MCP standard) — or JSON-RPC over stdio for harness clients
 - **Purpose**: Tool discovery and invocation
-- **Transport**: STDIO (default) or HTTP (network mode)
+- **Transport**: **Stdio** for external clients, **HTTP** for the managed/network modes
+- **Launched by**: the add-on (Managed mode) or the external MCP client (harness mode)
 
 ### LLM Server (HTTP)
 - **Default Port**: 8081
@@ -1804,7 +2310,7 @@ addon/bfa_coworker/
 """ + _table(
     ["Module", "Responsibility", "Key Classes/Functions"],
     [
-        ["`__init__.py`", "Registration hub", "`register()`, `unregister()`, `_classes` tuple (29 classes)"],
+        ["`__init__.py`", "Registration hub", "`register()`, `unregister()`, `_classes` tuple (41 classes)"],
         ["`shared.py`", "Constants & helpers", "`effective_ports()`, `MODEL_PRESET_ITEMS`, `BFACW_DEBUG`"],
         ["`preferences.py`", "User preferences UI", "`_BFACW_Preferences`, `BFACW_OT_pref_tab_select`"],
         ["`operators_server.py`", "Bridge server control", "`_BFACW_OT_server_start/stop`"],
@@ -1835,7 +2341,7 @@ When the add-on is enabled, `register()` in `__init__.py` runs:
 
 1. **Logging** — Install file-based logging and policy warning filter
 2. **Vendor Migration** — Move vendored deps out of addon tree
-3. **Class Registration** — Register all 29 operator classes
+3. **Class Registration** — Register all 41 operator classes
 4. **CLI Command** — Register `bfa_coworker` CLI command
 5. **Mode Migration** — Migrate legacy settings to unified operating mode
 6. **Chat UI** — Register chat panel and operators
@@ -1918,8 +2424,14 @@ python -m blmcp --transport http --port 9191
 
 | Mode | Description | Use Case |
 |------|-------------|----------|
-| **STDIO** | Communicates via stdin/stdout | Claude Desktop, VS Code |
-| **HTTP** | Communicates via HTTP with SSE | Network mode, custom clients |
+| **Stdio** | Communicates via stdin/stdout (JSON-RPC) | External clients — Claude Desktop/Code, Cursor, Windsurf, Cline, Codex, OpenCode |
+| **HTTP (Managed)** | Managed subprocess over HTTP | Built-in chat UI (Local LLM / Remote API) |
+| **HTTP (Network)** | Listens on a configurable host:port | Browser-based or remote clients |
+
+The add-on's `mcp_server_mode` preference picks between **Managed (HTTP)**,
+**Stdio (External Client)**, and **Network (HTTP Server)**. In the two external
+modes the add-on does *not* manage the server process — the client launches it.
+See the [[User-Documentation/External-Harness|External Harness]] page.
 
 ### Python Resolution
 
@@ -1927,6 +2439,11 @@ The agent controller resolves the Python interpreter in this order:
 1. `bfa-coworker-mcp` console_scripts entry point
 2. Blender's bundled Python (`sys.prefix/bin/python.exe`)
 3. System Python (last resort)
+
+For generated harness configs, `_get_blender_python_for_config()` prefers
+Blender's bundled Python with vendored deps on `PYTHONPATH`. If the vendor
+native extensions were compiled for a different Python version, it falls back
+to a compatible system Python.
 
 ---
 
@@ -1960,9 +2477,9 @@ def register(mcp: FastMCP) -> None:
 
 The agent controller uses a **hybrid tool domain system** to keep the context window small:
 
-- **Surface Tools** (always loaded): `execute_blender_code`, `get_blendfile_summary_datablocks`, `get_object_detail_summary`, `get_objects_summary`
-- **Domain Tools** (loaded on demand): Animation, Material, Modeling, Lighting, Rendering, VSE, Geometry Nodes
-- **Domain Detection**: Keywords in the user prompt trigger automatic domain loading
+- **Surface Tools** (always loaded): `execute_blender_code`, `execute_blender_plan`, `list_blender_templates`, `get_blendfile_summary_datablocks`, `get_object_detail_summary`, `get_objects_summary`, `get_operation_history`, `get_screenshot_of_window_as_image`, `get_screenshot_of_window_as_json`, `render_thumbnail_to_path`, `get_python_api_docs`, `search_api_docs`, `search_manual_docs`
+- **Domain Tools** (loaded on demand): `animation`, `material`, `modeling`, `lighting`, `rendering`, `vse`, `geometry_nodes`, `assets`
+- **Domain Detection**: Keywords in the user prompt — plus a scene-content heuristic (`_detect_domain_from_scene()`) — trigger automatic domain loading
 - **`load_tools` meta-tool**: The LLM can request additional domains explicitly
 
 ---
@@ -2017,15 +2534,43 @@ For tools that need Blender / Bforartists' UI (screenshots, navigation), the bri
 
 def generate_mcp_tools(tools: list[dict]) -> str:
     """Generate MCP-Tools.md."""
-    # Categorize tools
-    scene_tools = [t for t in tools if any(kw in t['name'] for kw in ['summary', 'objects', 'detail', 'history'])]
-    doc_tools = [t for t in tools if any(kw in t['name'] for kw in ['search', 'docs', 'api'])]
-    nav_tools = [t for t in tools if any(kw in t['name'] for kw in ['jump', 'tab'])]
-    visual_tools = [t for t in tools if any(kw in t['name'] for kw in ['screenshot', 'render', 'thumbnail'])]
-    code_tools = [t for t in tools if any(kw in t['name'] for kw in ['execute'])]
-    polyhaven_tools = [t for t in tools if any(kw in t['name'] for kw in ['polyhaven'])]
-    material_tools = [t for t in tools if any(kw in t['name'] for kw in ['pbr', 'material', 'lighting', 'three_point'])]
-    anim_tools = [t for t in tools if any(kw in t['name'] for kw in ['keyframe', 'batch'])]
+    # Categorize tools.  Matching is done on exact names / prefixes where
+    # possible so tools don't land in several categories (e.g. `search_assets`
+    # is an Asset tool, not a Documentation tool).
+    def _in(names: tuple) -> list[dict]:
+        return [t for t in tools if t["name"] in names]
+
+    def _starts(prefixes: tuple) -> list[dict]:
+        return [t for t in tools if t["name"].startswith(prefixes)]
+
+    scene_tools = _starts(("get_blendfile_summary",)) + _in(
+        ("get_objects_summary", "get_object_detail_summary", "get_operation_history")
+    )
+    doc_tools = _in(("search_api_docs", "search_manual_docs", "get_python_api_docs"))
+    nav_tools = [
+        t for t in _starts(("jump_to_",)) if t["name"] != "jump_to_asset_browser"
+    ]
+    visual_tools = _starts(("get_screenshot_", "render_viewport_", "render_thumbnail_"))
+    code_tools = _in(
+        ("execute_blender_code", "execute_blender_plan", "list_blender_templates")
+    )
+    asset_tools = _in(
+        (
+            "get_asset_libraries", "list_asset_catalogs", "search_assets",
+            "get_asset_tags", "load_asset_in_context", "place_asset_in_scene",
+            "assign_material_to_objects", "jump_to_asset_browser",
+        )
+    )
+    node_tools = _in(
+        ("get_active_node_tree", "get_node_group_interface", "wire_node_group")
+    )
+    material_tools = _in(
+        ("setup_pbr_material", "three_point_lighting_rig", "set_collection_color_tag")
+    )
+    anim_tools = _in(("batch_keyframe_insert",))
+    polyhaven_tools = _in(
+        ("search_polyhaven_assets", "download_polyhaven_asset", "get_polyhaven_status")
+    )
 
     return _header("MCP Tools", "Available tools for the AI agent") + f"""
 
@@ -2083,11 +2628,33 @@ Capture screenshots and render viewports. These tools provide visual context to 
 
 ## Code Execution
 
-Execute arbitrary Python code in Blender. This is the most flexible tool — use it when no dedicated tool exists for the operation you need.
+Execute arbitrary Python code in Blender, or use the pre-tested template system. `execute_blender_code` is the most flexible tool — use it when no dedicated tool exists for the operation you need.
 
 """ + "\n".join(
     f"### `{t['name']}`\n\n{t['description']}\n"
     for t in code_tools
+) + """
+
+---
+
+## Assets
+
+Search, inspect, and load assets from the Blender Asset Browser. Backed by an on-disk metadata index, so search and tag queries never pollute your session.
+
+""" + "\n".join(
+    f"### `{t['name']}`\n\n{t['description']}\n"
+    for t in asset_tools
+) + """
+
+---
+
+## Node Groups
+
+Read and wire geometry/shader node groups. `wire_node_group` splices a loaded node-group asset into a target tree with validated, undo-able links.
+
+""" + "\n".join(
+    f"### `{t['name']}`\n\n{t['description']}\n"
+    for t in node_tools
 ) + """
 
 ---
@@ -2516,18 +3083,25 @@ Located in `tests/integration/`:
 - `test_blender_mcp_with_llm.py` — End-to-end tests with a real LLM
 
 ### Built-in Test Suites
-The add-on includes 8 multi-step test suites accessible from the Diagnostics panel:
+The add-on includes 15 multi-step test suites accessible from the Diagnostics panel:
 
 | Suite | Steps | Description |
 |-------|-------|-------------|
 | Scene Build | 6 | Create ground, props, collections, materials, lighting, camera |
 | Animation | 5 | Bouncing ball with squash & stretch, camera move |
-| Modifiers | 6 | Build a sculpt-ready head base mesh |
-| Assets + Materials | 5 | HDRI, textures, glass material, three-point lighting |
+| Modifiers | 6 | Modifier chain on a torus (array, bevel, remesh, solidify, subdivide) |
+| Assets Browser | 6 | Search, assign, node group, collection, mesh, world assets |
+| Poly Haven | 5 | Texture, model, HDRI download + apply + render |
+| Shader Nodes | 4 | Material, node tree, assign, preview |
+| Geometry Nodes | 4 | GN modifier, node tree, random scale, verify |
+| Sequencer | 4 | Color strip, transform, text, range |
+| Image Editor | 3 | New image, draw, save |
+| Compositor | 4 | Enable, node tree, settings, render |
+| Multi-Editor Cross | 4 | Mesh → GN modifier → material → render across editors |
 | Baseline | 6 | General capability baseline test |
 | Error Handling | 3 | Tests error recovery and graceful failure |
 | Vision: Camera | 4 | Vision models: camera placement + reframing verified via viewport screenshots |
-| Vision: Place | 5 | Vision models: stacking and relative placement verified visually via screenshots |
+| Vision: Relative Placement | 5 | Vision models: stacking and relative placement verified visually |
 
 ---
 
@@ -2869,6 +3443,7 @@ The MCP server provides **{len(tools)} tools** for interacting with Blender.
 | `jump_to_tab_by_space_type` | Switch to a tab by space type |
 | `jump_to_view3d_object_by_name` | Frame the 3D viewport on an object |
 | `jump_to_view3d_object_data_by_name` | Frame the 3D viewport on object data |
+| `jump_to_asset_browser` | Switch to (or create) the Asset Browser editor |
 
 ### Visual Feedback
 | Tool | Purpose |
@@ -2879,16 +3454,41 @@ The MCP server provides **{len(tools)} tools** for interacting with Blender.
 | `render_viewport_to_path` | Render the current viewport to a file |
 | `render_thumbnail_to_path` | Render a thumbnail of the scene |
 
-### Code Execution
+### Code Execution & Templates
 | Tool | Purpose |
 |------|---------|
 | `execute_blender_code` | Execute arbitrary Python code in Blender |
+| `execute_blender_plan` | Two-phase: plan → pre-tested template code |
+| `list_blender_templates` | Discover the 18 pre-tested Blender templates and their defaults |
+
+### Assets
+| Tool | Purpose |
+|------|---------|
+| `get_asset_libraries` | List configured asset libraries |
+| `list_asset_catalogs` | List catalogs within an asset library |
+| `search_assets` | Search asset libraries by name/tag/type (index-backed) |
+| `get_asset_tags` | Read an asset's full metadata (tags, description, license, …) |
+| `load_asset_in_context` | Load an asset (material, node group, action, …) into the scene |
+| `place_asset_in_scene` | Place an asset with explicit positioning and import method |
+| `assign_material_to_objects` | Assign an existing material to one or more objects |
+
+### Node Groups
+| Tool | Purpose |
+|------|---------|
+| `get_active_node_tree` | Serialize the active material / GN / compositor node tree |
+| `get_node_group_interface` | Read a node group's interface (sockets, types, defaults) |
+| `wire_node_group` | Splice a node group into a target tree (4 insert modes) |
 
 ### Materials & Lighting
 | Tool | Purpose |
 |------|---------|
 | `setup_pbr_material` | Create a physically-based material with optional Polyhaven textures |
 | `three_point_lighting_rig` | Create a three-point lighting rig (key, fill, rim) targeting an object |
+
+### Collections
+| Tool | Purpose |
+|------|---------|
+| `set_collection_color_tag` | Set a collection's color tag |
 
 ### Animation
 | Tool | Purpose |
@@ -2965,7 +3565,10 @@ A group of related MCP tools (e.g., Animation, Material, Modeling) that are load
 ## E
 
 ### External Harness
-An operating mode where the MCP server is managed by an external client (Claude Desktop, VS Code) rather than the add-on itself.
+An operating mode where the add-on runs only the **bridge server** and an external
+MCP client (the *harness* — Claude Desktop, Claude Code, Codex, Cursor, Windsurf,
+Cline, OpenCode, …) launches the MCP server itself with
+`python -m blmcp --transport stdio`. See the [[User-Documentation/External-Harness|External Harness]] page.
 
 ---
 
@@ -2990,6 +3593,14 @@ The file format used by llama.cpp for quantized LLM models. Coworker downloads G
 ---
 
 ## H
+
+### Harness
+An external MCP client that drives Blender in **External Harness** mode — see [[User-Documentation/External-Harness|External Harness]].
+
+### Harness Preset
+A named configuration for a supported external client (identifier, config-file
+location, setup steps, and docs link). Selected via the **Harness Preset**
+preference; drives the **Copy MCP Config** operator.
 
 ### HuggingFace
 A platform hosting AI models. Coworker downloads GGUF models from HuggingFace repositories.
@@ -3024,7 +3635,10 @@ The maximum number of tokens the LLM can generate in a single response. If the r
 A protocol that allows LLM agents to interact with tools and resources. Coworker implements an MCP server for Blender.
 
 ### MCP Server
-A separate Python process that exposes Blender functionality as MCP tools. Uses FastMCP framework.
+A separate Python process that exposes Blender functionality as MCP tools. Uses the FastMCP framework. Launched by the add-on (Managed mode) or by an external harness client (Stdio/Network modes).
+
+### MCP Server Mode
+The preference controlling how the MCP server is launched: **Managed (HTTP)**, **Stdio (External Client)**, or **Network (HTTP Server)**.
 
 ### MCP Tools
 Individual capabilities exposed by the MCP server (e.g., scene inspection, rendering, documentation search).
@@ -3037,7 +3651,7 @@ Individual capabilities exposed by the MCP server (e.g., scene inspection, rende
 The top-level selector in Preferences that determines how the agent connects to an LLM: Local LLM, Remote API, or External Harness.
 
 ### OpenRouter
-A service that provides access to 200+ AI models through a single API. Coworker includes OpenRouter as a default provider.
+A service that provides access to 300+ AI models through a single API. Coworker includes OpenRouter as a default provider.
 
 ---
 
@@ -3176,6 +3790,9 @@ def main() -> int:
     plugins = _scan_gen_plugins(repo_root)
     print(f"  Gen Plugins: {len(plugins)}")
 
+    presets = _scan_harness_presets(repo_root)
+    print(f"  Harness Presets: {len(presets)}")
+
     print()
 
     # ── Generate pages ──────────────────────────────────────────────────
@@ -3192,6 +3809,8 @@ def main() -> int:
         ("User-Documentation/Chat-Interface.md", generate_chat_interface()),
         ("User-Documentation/Local-LLM-Setup.md", generate_local_llm_setup()),
         ("User-Documentation/Remote-API-Setup.md", generate_remote_api_setup()),
+        ("User-Documentation/External-Harness.md", generate_external_harness(presets)),
+        ("User-Documentation/Harness-Troubleshooting.md", generate_harness_troubleshooting()),
         ("User-Documentation/Generative-AI.md", generate_generative_ai()),
         ("User-Documentation/Troubleshooting.md", generate_troubleshooting()),
         # Developer Documentation

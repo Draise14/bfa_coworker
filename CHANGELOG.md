@@ -99,6 +99,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Compact System Prompt Never Loaded (#62)** - The local-model prompt auto-detection read
+  `LLMConfig.local_llm_port`, a field that does not exist (the real field is `local_port`). The
+  resulting `AttributeError` was swallowed by a bare `except`, so the compact prompt silently never
+  loaded and every local model got the full 3K-token prompt. Detection now keys off the LLM *mode*
+  (`mode == "local"`) — deliberately not `local_port`, which always carries a default of 8081 and
+  would therefore have selected the compact prompt even in remote mode. Also fixed the deployed
+  path: the candidate list only searched the dev-checkout layout (`mcp/blmcp/data/`), so an
+  installed addon fell through to the brief built-in prompt; it now also searches
+  `vendor/blmcp/data/` where `prompts_compact.yml` actually ships. The prompt cache is now keyed
+  per variant, so switching local <-> remote no longer reuses the other variant's text.
+
+- **Agent Choked by `400 Unexpected message role` After 1-2 Prompts (#62)** - The history slicer
+  trimmed the conversation to the last 20 messages, which can cut a tool-call exchange in half.
+  The existing guard dropped orphaned `tool` results but not the inverse case — an `assistant`
+  message carrying `tool_calls` whose `tool` replies had been sliced away. llama-server's Jinja
+  template rejects that shape, returning HTTP 400 and killing the next turn. New
+  `_repair_tool_call_pairs()` drops half-finished exchanges in *both* directions (matching only the
+  run of `tool` messages directly following a call, so a later unrelated result cannot satisfy an
+  earlier call).
+
+- **Prompt Now Bounded by the Context Window, Not a Message Count** - The old guard capped history
+  at 20 messages, a blunt instrument: a few large tool results could still overflow a small local
+  context window, and the only signal was a `>30000 bytes` warning that took no action. New
+  `_message_text_length()` / `_estimate_messages_tokens()` / `_fit_history_to_budget()` estimate
+  tokens (~3.5 chars/token, deliberately over-estimating for code so it trims slightly early),
+  reserve room for `max_tokens` plus template scaffolding, and drop the oldest exchanges until the
+  prompt fits. The system prompt is always preserved. Applied on the local path only, where
+  `local_ctx_size` is known; remote providers are untouched.
+
+- **Injected Tool Text No Longer Corrupts the System Prompt** - When a chat template rejected the
+  `tools` parameter with HTTP 500, the fallback appended the full tool listing to the last system
+  message — mutating the caller's dict in place. Because short histories are sent as-is (no copy),
+  `messages` *was* the live conversation history, so the real system prompt stayed polluted with
+  tool text for the rest of the session. The fallback now copies the list and the target message.
+
+- **Flattened Conversations Could Emit Consecutive Same-Role Messages** - The plain-chat fallback
+  maps `tool` results to `user` messages; combined with the injected "please respond" prompt this
+  produced `user, user` runs, which strict templates reject. Consecutive `user`/`assistant`
+  messages are now merged. New tests in `tests/test_orchestration_helpers.py` (25 total, green).
+
 - **Tier 3h Quality Audit: 3 Critical Bugs** - Two MCP tools advertised to the LLM always failed:
   `execute_blender_plan` and `list_blender_templates` imported `_plan_to_code` / `_render_template` /
   `_TEMPLATES` / `_TEMPLATE_DEFAULTS` from the wrong module (`mcp_to_blender_server` instead of

@@ -81,63 +81,99 @@ _STREAM_TIMEOUT = 600.0
 _MAX_HISTORY_MESSAGES = 20
 
 # ---------------------------------------------------------------------------
-# System prompt (loaded lazily)
+# System prompt (loaded lazily, cached per variant)
 
-_system_prompt: str | None = None
+# Cached prompt text keyed by variant ("compact" | "full").  The variant is
+# chosen from the LLM mode, so switching local <-> remote must not reuse the
+# other variant's cached text.
+_system_prompt_cache: dict[str, str] = {}
+
+# Approximate characters per token for budget estimation.  English prose and
+# Python code average ~4 chars/token with BPE tokenizers; 3.5 deliberately
+# over-estimates so the budget trims slightly early rather than overflowing.
+_CHARS_PER_TOKEN = 3.5
+
+# Reserved headroom (in tokens) for chat-template scaffolding the server adds
+# around the messages (BOS/EOS, role markers, tool-schema preamble).
+_TEMPLATE_OVERHEAD_TOKENS = 512
 
 
-def _get_system_prompt() -> str:
-    """Load the system prompt, preferring compact version for local models."""
-    global _system_prompt
-    if _system_prompt is not None:
-        return _system_prompt
+def _use_compact_prompt() -> bool:
+    """Return ``True`` when the compact system prompt should be used.
 
-    # Search for prompts.yml relative to this file's location.
-    # Typical layout: addon/bfa_coworker/agent_controller.py
-    # and            mcp/blmcp/data/prompts.yml
-    this_dir = Path(__file__).resolve().parent
-    # Auto-detect: use compact prompt for local models (saves ~3K tokens).
-    # The compact prompt keeps essential rules but removes verbose reference
-    # material. The model can look up API details with get_python_api_docs.
-    use_compact = False
+    Compact is used for local llama-server models only.  Remote providers
+    (OpenAI, OpenRouter, Anthropic) get the full prompt: they have large
+    context windows and the extra reference material improves answers.
+
+    NOTE: this keys off ``mode``, never ``local_port``.  ``local_port``
+    always carries a default (8081), so testing it for ``None`` would select
+    the compact prompt even in remote mode.
+    """
     try:
         from . import llm_manager as _llm
-        _cfg = _llm.get_config()
-        if _cfg.local_llm_port is not None:
-            use_compact = True
-    except Exception:
-        pass
+        return _llm.get_config().mode == "local"
+    except Exception:  # pylint: disable=broad-exception-caught
+        return False
 
-    if use_compact:
-        candidates = [
-            this_dir.parent.parent / "mcp" / "blmcp" / "data" / "prompts_compact.yml",
-            this_dir.parent.parent / "mcp" / "blmcp" / "data" / "prompts.yml",
-        ]
-    else:
-        candidates = [
-            this_dir.parent.parent / "mcp" / "blmcp" / "data" / "prompts.yml",
-        ]
-    for prompt_path in candidates:
-        if prompt_path.is_file():
-            try:
-                with open(str(prompt_path), encoding="utf-8") as fh:
-                    raw = fh.read()
-                # Parse single-key YAML with literal block scalar (|) without yaml lib.
-                # Format: "initial_instructions: |\n  indented text..."
-                marker = "initial_instructions: |"
-                if marker in raw:
-                    _, _, body = raw.partition(marker)
-                    _system_prompt = textwrap.dedent(body).strip()
-                if _system_prompt:
-                    print("[🛠️Coworker] _get_system_prompt: loaded {:d} chars from {:s}".format(
-                        len(_system_prompt), str(prompt_path)))
-                    return _system_prompt
-            except Exception as ex:  # pylint: disable=broad-exception-caught
-                print("[🛠️Coworker] _get_system_prompt: error loading {:s}: {:s}".format(
-                    str(prompt_path), str(ex)))
+
+def _prompt_candidates(use_compact: bool) -> list[Path]:
+    """Return prompt file paths to try, most-preferred first.
+
+    Two layouts are supported:
+
+    * dev checkout:   ``<repo>/mcp/blmcp/data/prompts.yml``
+    * deployed addon: ``<addon>/vendor/blmcp/data/prompts.yml``
+
+    The deployed layout matters: an installed addon has no ``mcp/`` sibling,
+    so without the vendor path the prompt silently falls back to the brief
+    built-in text.
+    """
+    this_dir = Path(__file__).resolve().parent
+    data_dirs = [
+        this_dir.parent.parent / "mcp" / "blmcp" / "data",  # dev checkout
+        this_dir / "vendor" / "blmcp" / "data",  # deployed addon
+    ]
+    names = ["prompts_compact.yml", "prompts.yml"] if use_compact else ["prompts.yml"]
+    return [data_dir / name for data_dir in data_dirs for name in names]
+
+
+def _get_system_prompt(use_compact: bool | None = None) -> str:
+    """Load the system prompt, preferring the compact version for local models.
+
+    *use_compact* overrides auto-detection (used by tests).  When ``None``
+    the variant is chosen from the LLM mode via :func:`_use_compact_prompt`.
+    """
+    if use_compact is None:
+        use_compact = _use_compact_prompt()
+    variant = "compact" if use_compact else "full"
+    cached = _system_prompt_cache.get(variant)
+    if cached is not None:
+        return cached
+
+    for prompt_path in _prompt_candidates(use_compact):
+        if not prompt_path.is_file():
+            continue
+        try:
+            with open(str(prompt_path), encoding="utf-8") as fh:
+                raw = fh.read()
+            # Parse single-key YAML with literal block scalar (|) without yaml lib.
+            # Format: "initial_instructions: |\n  indented text..."
+            marker = "initial_instructions: |"
+            if marker not in raw:
+                continue
+            _, _, body = raw.partition(marker)
+            text = textwrap.dedent(body).strip()
+            if text:
+                _system_prompt_cache[variant] = text
+                print("[🛠️Coworker] _get_system_prompt: loaded {:d} chars ({:s}) from {:s}".format(
+                    len(text), variant, str(prompt_path)))
+                return text
+        except Exception as ex:  # pylint: disable=broad-exception-caught
+            print("[🛠️Coworker] _get_system_prompt: error loading {:s}: {:s}".format(
+                str(prompt_path), str(ex)))
 
     # Fallback: a brief built-in system prompt.
-    _system_prompt = (
+    fallback = (
         "You are a Blender automation assistant. "
         "You have access to tools that can execute Python code in Blender. "
         "Think aloud in full paragraphs. Explain your reasoning step by step. "
@@ -145,7 +181,8 @@ def _get_system_prompt() -> str:
         "Execute code to complete the user's request, "
         "then respond with a brief summary of what was done."
     )
-    return _system_prompt
+    _system_prompt_cache[variant] = fallback
+    return fallback
 
 
 def _get_system_prompt_with_rules() -> str:
@@ -226,8 +263,7 @@ def _get_system_prompt_with_rules() -> str:
 
 def _clear_system_prompt_cache() -> None:
     """Clear the cached system prompt and skills so they're rebuilt on next call."""
-    global _system_prompt
-    _system_prompt = None
+    _system_prompt_cache.clear()
     try:
         from . import skills as _skills_mod  # pylint: disable=import-error
         _skills_mod.clear_cache()
@@ -235,28 +271,125 @@ def _clear_system_prompt_cache() -> None:
         pass
 
 
-def _drop_orphaned_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _repair_tool_call_pairs(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop half-finished tool-call exchanges from a message list.
+
+    Slicing a conversation history to fit a context budget can cut a
+    tool-call exchange in half.  Both halves are fatal to strict Jinja chat
+    templates (llama-server ``--jinja``), which raise
+    ``Unexpected message role`` / ``No user query found`` and return HTTP 400:
+
+    * a ``tool`` message whose ``assistant``/``tool_calls`` parent was sliced
+      away (orphaned tool result), and
+    * an ``assistant`` message carrying ``tool_calls`` whose ``tool`` replies
+      were sliced away (orphaned tool call).
+
+    This repairs both directions.  New dicts are not created -- the caller's
+    message dicts are reused, and only list membership changes.
     """
-    Remove ``tool``-role messages that have no preceding ``assistant``
-    message with ``tool_calls``.  This is a safety fix: slicing a
-    conversation history can break tool-call pairs, and llama-server
-    ``--jinja`` will throw a hard error when it encounters an orphaned
-    tool message.
-    """
-    cleaned: list[dict[str, Any]] = []
+    # Pass 1 (forward): drop ``tool`` messages with no preceding assistant
+    # message that carries ``tool_calls``.
+    paired: list[dict[str, Any]] = []
     for msg in messages:
         if msg.get("role") == "tool":
-            # Find the preceding assistant message IN THE CLEANED LIST
-            # (i.e. what we are sending to the LLM).
-            has_pair = any(
+            has_parent = any(
                 p.get("role") == "assistant" and p.get("tool_calls")
-                for p in reversed(cleaned)
+                for p in reversed(paired)
             )
-            if not has_pair:
-                # Drop this orphaned tool message.
+            if not has_parent:
                 continue
-        cleaned.append(msg)
-    return cleaned
+        paired.append(msg)
+
+    # Pass 2 (forward): drop ``assistant`` messages with ``tool_calls`` that
+    # have no immediately-following ``tool`` reply.  Only the run of ``tool``
+    # messages directly after the assistant counts -- a later, unrelated tool
+    # result must not be mistaken for this call's reply.
+    repaired: list[dict[str, Any]] = []
+    for index, msg in enumerate(paired):
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            has_reply = False
+            for following in paired[index + 1:]:
+                if following.get("role") != "tool":
+                    break
+                has_reply = True
+                break
+            if not has_reply:
+                continue
+        repaired.append(msg)
+    return repaired
+
+
+def _message_text_length(message: dict[str, Any]) -> int:
+    """Return the approximate character length of a message's payload.
+
+    Counts string content, multimodal content blocks, tool-call arguments,
+    and tool-call names -- everything that ends up in the rendered prompt.
+    """
+    total = 0
+    content = message.get("content")
+    if isinstance(content, str):
+        total += len(content)
+    elif isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict):
+                # Text blocks carry "text"; image blocks carry a base64 URL.
+                total += len(str(block.get("text", "")))
+                image_url = block.get("image_url")
+                if isinstance(image_url, dict):
+                    total += len(str(image_url.get("url", "")))
+            else:
+                total += len(str(block))
+    for call in message.get("tool_calls") or []:
+        if isinstance(call, dict):
+            function = call.get("function", {})
+            total += len(str(function.get("name", "")))
+            total += len(str(function.get("arguments", "")))
+    return total
+
+
+def _estimate_messages_tokens(messages: list[dict[str, Any]]) -> int:
+    """Estimate the total token count of a message list.
+
+    Uses :data:`_CHARS_PER_TOKEN`, which deliberately over-estimates for
+    code-heavy prompts so the budget trims slightly early rather than
+    overflowing the model's context window.
+    """
+    return sum(
+        int(_message_text_length(m) / _CHARS_PER_TOKEN) + 1
+        for m in messages
+    )
+
+
+def _fit_history_to_budget(
+    messages: list[dict[str, Any]],
+    budget_tokens: int,
+) -> list[dict[str, Any]]:
+    """Trim *messages* to fit *budget_tokens*, dropping the oldest exchanges.
+
+    The system prompt (index 0, when present) is always kept -- it carries
+    the agent's rules and the Blender version.  Everything after it is
+    dropped oldest-first in whole tool-call exchanges, so the result never
+    contains a half-finished exchange (see :func:`_repair_tool_call_pairs`).
+
+    Returns the original list unchanged when it already fits.
+    """
+    if budget_tokens <= 0 or _estimate_messages_tokens(messages) <= budget_tokens:
+        return messages
+
+    has_system = bool(messages) and messages[0].get("role") == "system"
+    head = messages[:1] if has_system else []
+    tail = messages[1:] if has_system else list(messages)
+
+    # Drop from the front, one message at a time, then repair any exchange
+    # the cut left half-finished.  Repairing (rather than trying to cut on
+    # exact boundaries) keeps this simple and always yields a valid list.
+    while tail:
+        candidate = head + tail
+        if _estimate_messages_tokens(candidate) <= budget_tokens:
+            return candidate
+        tail = tail[1:]
+
+    return head
 
 
 def _strip_think_tags(text: str) -> str:
@@ -314,6 +447,10 @@ def _flatten_for_plain_chat(messages: list[dict[str, Any]]) -> list[dict[str, An
     tool result into a user message and drops tool_calls/tool_call_id so
     any chat template can render the conversation.  New dicts are returned
     -- the caller's message dicts are never mutated.
+
+    Consecutive messages that end up with the same role are merged, because
+    mapping ``tool`` -> ``user`` can produce ``user, user`` runs and strict
+    templates reject non-alternating roles.
     """
     flat: list[dict[str, Any]] = []
     for m in messages:
@@ -331,7 +468,25 @@ def _flatten_for_plain_chat(messages: list[dict[str, Any]]) -> list[dict[str, An
                 continue
             cleaned[key] = value
         flat.append(cleaned)
-    return flat
+
+    # Merge consecutive same-role messages (never merge into "system").
+    merged: list[dict[str, Any]] = []
+    for msg in flat:
+        role = msg.get("role")
+        if (
+            merged
+            and role in ("user", "assistant")
+            and merged[-1].get("role") == role
+            and isinstance(merged[-1].get("content"), str)
+            and isinstance(msg.get("content"), str)
+        ):
+            merged[-1] = {
+                "role": role,
+                "content": "{:s}\n\n{:s}".format(merged[-1]["content"], msg["content"]),
+            }
+            continue
+        merged.append(msg)
+    return merged
 
 
 
@@ -2123,10 +2278,18 @@ def _openai_chat_completions(
                     )[:200]
                     tool_text += "- {:s}: {:s} ({:s})\n".format(name, desc, param_str)
                 # Inject into the last system message, or add a new one.
+                # Copy the list and the target dict first: when the caller's
+                # history is short enough to be sent as-is, ``messages`` IS
+                # the live conversation history, and mutating it would
+                # permanently pollute the real system prompt with tool text.
+                messages = list(messages)
                 injected = False
                 for i in range(len(messages) - 1, -1, -1):
                     if messages[i].get("role") == "system":
-                        messages[i]["content"] += tool_text
+                        messages[i] = {
+                            **messages[i],
+                            "content": str(messages[i].get("content") or "") + tool_text,
+                        }
                         injected = True
                         break
                 if not injected:
@@ -3449,6 +3612,23 @@ def _run_conversation_turn_inner(
         print("[🛠️Coworker] run_conversation_turn: thinking_budget_tokens={:d}".format(thinking_budget))
     print("[🛠️Coworker] run_conversation_turn: using max_tokens={:d}".format(max_tokens))
 
+    # ── Prompt token budget ────────────────────────────────────────────
+    # The context window must hold the prompt AND the generated reply, so
+    # reserve room for max_tokens plus template scaffolding.  Only the local
+    # path knows its context size; remote providers get 0 (no trimming).
+    prompt_budget = 0
+    if llm_port_local is not None:
+        _ctx_size = getattr(_llm_cfg, "local_ctx_size", 0) or 0
+        if _ctx_size > 0:
+            prompt_budget = _ctx_size - max_tokens - _TEMPLATE_OVERHEAD_TOKENS
+            if prompt_budget <= 0:
+                # Misconfigured (max_tokens >= ctx_size): keep a small floor
+                # so we still send something rather than an empty prompt.
+                prompt_budget = max(_ctx_size // 4, 1024)
+            print("[🛠️Coworker] run_conversation_turn: prompt budget {:d} tokens "
+                  "(ctx {:d} - max_tokens {:d} - overhead {:d})".format(
+                      prompt_budget, _ctx_size, max_tokens, _TEMPLATE_OVERHEAD_TOKENS))
+
     # ── Tool domain system (hybrid: pre-detect + on-demand) ────────────
     # Pre-detect the domain from the user's prompt AND from the current
     # scene content (0 extra round-trips).  The LLM can also call
@@ -3517,10 +3697,11 @@ def _run_conversation_turn_inner(
         else:
             history_to_send = history
 
-        # Remove orphaned "tool" messages that lost their assistant pair.
-        # This must run for ALL history sizes — Qwen's Jinja template
-        # crashes with "Unexpected message role" on orphaned tool messages.
-        history_to_send = _drop_orphaned_tool_messages(history_to_send)
+        # Repair half-finished tool-call exchanges.  This must run for ALL
+        # history sizes: the slice above can cut a pair in half, and Qwen's
+        # Jinja template crashes with "Unexpected message role" on either an
+        # orphaned tool result or an orphaned assistant tool_calls.
+        history_to_send = _repair_tool_call_pairs(history_to_send)
 
         # Strip reasoning messages before sending to the LLM.
         # Reasoning (chain-of-thought) uses a non-standard "reasoning"
@@ -3532,6 +3713,20 @@ def _run_conversation_turn_inner(
         # Some models (Qwen, etc.) have strict Jinja templates that
         # raise "Unexpected message role" on unknown roles.
         history_to_send = _sanitize_message_roles(history_to_send)
+
+        # Enforce the token budget.  The message-count cap above is a blunt
+        # instrument: a few large tool results can still overflow a small
+        # local context window.  Trim oldest-first until the prompt fits.
+        if prompt_budget > 0:
+            _before = _estimate_messages_tokens(history_to_send)
+            history_to_send = _fit_history_to_budget(history_to_send, prompt_budget)
+            # Trimming can cut a tool-call exchange in half — repair again.
+            history_to_send = _repair_tool_call_pairs(history_to_send)
+            _after = _estimate_messages_tokens(history_to_send)
+            if _after < _before:
+                print("[🛠️Coworker] run_conversation_turn: trimmed prompt "
+                      "{:d} -> {:d} tokens ({:d} messages)".format(
+                          _before, _after, len(history_to_send)))
 
         # ── Inject screenshot images into the next user message ───────
         # If the last tool result contained an image (screenshot), inject
@@ -3570,10 +3765,12 @@ def _run_conversation_turn_inner(
                 on_status("Error: No response from LLM")
             return history
 
-        # Safety: if the LLM returned HTTP 500, the context may be too large
-        # for the model.  Log the approximate body size for debugging.
+        # Safety: log the approximate body size for debugging.  When a budget
+        # is active the prompt was already trimmed to fit, so this is purely
+        # diagnostic (and only meaningful on the remote path, which has no
+        # known context size to budget against).
         body_approx = len(json.dumps(history_to_send, default=str))
-        if body_approx > 30000:
+        if prompt_budget <= 0 and body_approx > 30000:
             print("[🛠️Coworker] run_conversation_turn: WARNING — history body is {:d} bytes, "
                   "may exceed model context window".format(body_approx))
 

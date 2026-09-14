@@ -360,6 +360,14 @@ mcp/blmcp/tools/get_screenshot_of_window_as_json_toolcode.py  # VSE + node edito
 
 *Derived from the Tier 4b competitor analysis. These are the most ambitious features — the ones that separate a "chat assistant" from an "intelligent coworker." They require infrastructure (vision models, multi-agent orchestration, background polling) that's being built across Tiers 5-6.*
 
+> **Cross-reference (2026-09-14):** The multi-agent orchestration mechanics for 6f.1
+> below are specified in **Tier 4f.4** (`plan_tier4f_agent_intelligence.md`), which
+> adopts the concrete implementation patterns from the OpenCode harness — the `Task`
+> meta-tool for subagent dispatch, `subagent_depth` nesting limits, per-agent
+> model/temperature/steps, and markdown agent definitions. See also
+> `plan_tier4f_opencode_comparison.md` §3.2. Implement 6f.1 via Tier 4f.4 rather than
+> as a standalone effort.
+
 ### 6f.1 Agent Teams with Planner (Pattern P, BlenderMCP Pro) 🔴
 
 **Source**: BlenderMCP Pro 2.0 — Planner agent → specialist agents (Layout, Modeling, Materials, Lighting, Rigging, Geometry Nodes, Rendering) → Validator agent. Dependency-ordered task list, parallel execution, live task list, single undo checkpoint.

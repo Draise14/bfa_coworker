@@ -39,14 +39,25 @@
 | **Tier 4b** | plan_tier4b_competitor_ux_analysis.md | Chat UX, "Explain this to me", sessions, right-click explain | ~860 |
 | **Tier 4c** | plan_tier4c_text_editor_ide_agent.md | **Text Editor IDE agent**: code gen, fix, edit selection — Tier 4 focus area | ~880 (revised) |
 | **Tier 4e** | plan_tier4e_nice_to_haves.md | Rigging, animation, smart-save tooling | ~950 (est) |
+| **Tier 4f** | plan_tier4f_agent_intelligence.md | **Agent runtime**: GGUF/inference tuning, context management, permissions, orchestration. Comparison: plan_tier4f_opencode_comparison.md | ~2,350 |
 | **This doc** | plan_tier4_master_coordination.md | CHOYA, shared components, translation, macros, explainer | ~400 |
 | **→ Tier 5** | plan_tier5_moodboard_storyboarding.md | **Moodboard editor + UX moved out of Tier 4 entirely** — see Section 8 | ~520 (MVP) |
 
-**Total Tier 4 estimate (revised)**: ~5,970 LOC (Moodboard ~520 LOC removed → Tier 5).
+**Total Tier 4 estimate (revised)**: ~5,970 LOC (Moodboard ~520 LOC removed → Tier 5) + ~2,350 LOC for Tier 4f.
 
 > **Ordering decisions (2026-09-01):**
 > 1. Tier 6 domain tooling is the **first implementation lane** (Section 2) — tooling breadth is what makes local models (and external harnesses) smart and reliable.
 > 2. **Moodboard editor + UX moved out of Tier 4 entirely** → Tier 5 (Section 8). Tier 4 focuses on **agent access** (chat/Ask/explainer), the **Text Editor IDE agent** (Tier 4c), and the **agent dedicated central editor** (Coworker workspace).
+>
+> **Addition (2026-09-14):** **Tier 4f — Agent Intelligence** was added, derived from a
+> comparison against the OpenCode harness (`plan_tier4f_opencode_comparison.md`). It
+> covers the agent's *own runtime* — llama-server inference tuning, context
+> management/compaction, permissions, and multi-agent orchestration. It **extends**
+> §14.3 (budget readout) and §14.6 (checkpoint/context-flush) below rather than
+> duplicating them, and it supplies the concrete orchestration mechanics for Tier 6f.1
+> (Agent Teams). All four phases are local-first and independent of the editor/UX lanes,
+> so 4f.1 (inference) and 4f.3 (permissions) can proceed in parallel with any other
+> Tier 4 work.
 
 ### 1.1 Before / After Matrix — What Tier 4 Changes
 

@@ -1,8 +1,8 @@
 """
 Tests for run-loop orchestration helpers in agent_controller.py.
 
-Covers two behaviors that keep the agent from spiraling on repeated
-errors:
+These helpers keep the agent from spiraling on repeated errors and keep the
+prompt inside a small local model's context window:
 
 1. ``_trim_tool_result`` must keep the TAIL of an error message (Python
    tracebacks put the actual exception on the last lines). Head-only
@@ -17,6 +17,26 @@ errors:
    worker thread and the fallback cleanup is called with no snapshot
    data to work from.
 
+3. ``_prompt_candidates`` / ``_get_system_prompt`` must pick the compact
+   prompt for local models and find the deployed ``vendor/blmcp/data/``
+   layout (issue #62 -- the auto-detection read a non-existent
+   ``LLMConfig.local_llm_port``, so the compact prompt never loaded).
+
+4. ``_repair_tool_call_pairs`` must drop half-finished tool-call exchanges
+   in both directions; a slice that cuts one in half makes llama-server's
+   Jinja template return 400 "Unexpected message role".
+
+5. ``_fit_history_to_budget`` must trim the oldest exchanges to fit a token
+   budget while always preserving the system prompt.
+
+6. ``_flatten_for_plain_chat`` must not emit consecutive same-role messages
+   after mapping ``tool`` results to ``user``.
+
+7. ``_classify_llm_500`` must distinguish a template rejection from a
+   resource/hardware fault (issue #63). Reshaping the request is only
+   correct for the former; applying it to the latter silently downgrades
+   the session to text-based tool calling and hides the real cause.
+
 Loaded from source (the module imports bpy, which is not available in
 the unit-test environment).
 
@@ -27,8 +47,8 @@ Run with::
 
 __all__ = ()
 
-import contextlib
 import ast
+import contextlib
 import io
 import json
 import os
@@ -116,11 +136,13 @@ _flatten_for_plain_chat = _extract_func(_load_source(), "_flatten_for_plain_chat
 
 # LLM 500 fault classification.  The marker tuples and the two result
 # constants are module-level names, so the extracted function needs them in
-# its namespace.  They are mirrored here rather than parsed out of the
-# source: the tests assert the *classification behaviour*, and duplicating
-# the lists would make the tests pass even if the real lists drifted.
-FAULT_TEMPLATE = "template"
-FAULT_SERVER = "server"
+# its namespace.  They are mirrored here, using the same private names as
+# the source, rather than parsed out of it: if a marker were added to the
+# source and read from there, a behaviour test could silently pass against
+# a stale expectation.  ``TestClassifierMarkerSync`` below closes that gap
+# by comparing this mirror against the real constants and failing on drift.
+_FAULT_TEMPLATE = "template"
+_FAULT_SERVER = "server"
 
 _SERVER_FAULT_MARKERS = (
     "out of memory",
@@ -151,8 +173,8 @@ _TEMPLATE_FAULT_MARKERS = (
 _classify_llm_500 = _extract_func(
     _load_source(), "_classify_llm_500",
     {
-        "_FAULT_TEMPLATE": FAULT_TEMPLATE,
-        "_FAULT_SERVER": FAULT_SERVER,
+        "_FAULT_TEMPLATE": _FAULT_TEMPLATE,
+        "_FAULT_SERVER": _FAULT_SERVER,
         "_SERVER_FAULT_MARKERS": _SERVER_FAULT_MARKERS,
         "_TEMPLATE_FAULT_MARKERS": _TEMPLATE_FAULT_MARKERS,
     },
@@ -431,7 +453,7 @@ class TestClassifyLlm500(unittest.TestCase):
             "Jinja template error while rendering.",
         ):
             with self.subTest(body=body):
-                self.assertEqual(_classify_llm_500(body), FAULT_TEMPLATE)
+                self.assertEqual(_classify_llm_500(body), _FAULT_TEMPLATE)
 
     def test_oom_markers_classify_as_server(self):
         """Resource/hardware failures classify as server faults."""
@@ -442,18 +464,18 @@ class TestClassifyLlm500(unittest.TestCase):
             "GGML_ASSERT: cudaMalloc failed",
         ):
             with self.subTest(body=body):
-                self.assertEqual(_classify_llm_500(body), FAULT_SERVER)
+                self.assertEqual(_classify_llm_500(body), _FAULT_SERVER)
 
     def test_empty_body_classifies_as_server(self):
         """An empty body is ambiguous -> safe default is server (no reshape)."""
         for body in ("", None, "   ", "{}"):
             with self.subTest(body=body):
-                self.assertEqual(_classify_llm_500(body), FAULT_SERVER)
+                self.assertEqual(_classify_llm_500(body), _FAULT_SERVER)
 
     def test_unrecognised_body_classifies_as_server(self):
         """An unknown error must not trigger the template downgrade."""
         self.assertEqual(
-            _classify_llm_500("Internal server error occurred."), FAULT_SERVER
+            _classify_llm_500("Internal server error occurred."), _FAULT_SERVER
         )
 
     def test_server_markers_win_over_generic_template_marker(self):
@@ -464,16 +486,16 @@ class TestClassifyLlm500(unittest.TestCase):
         the specific server markers must be checked first.
         """
         body = "Failed to load template: CUDA error: out of memory"
-        self.assertEqual(_classify_llm_500(body), FAULT_SERVER)
+        self.assertEqual(_classify_llm_500(body), _FAULT_SERVER)
 
     def test_classification_is_case_insensitive(self):
         """Marker matching must not depend on casing."""
         self.assertEqual(
             _classify_llm_500("UNABLE TO GENERATE PARSER FOR THIS TEMPLATE"),
-            FAULT_TEMPLATE,
+            _FAULT_TEMPLATE,
         )
         self.assertEqual(
-            _classify_llm_500("OUT OF MEMORY"), FAULT_SERVER
+            _classify_llm_500("OUT OF MEMORY"), _FAULT_SERVER
         )
 
 
@@ -515,7 +537,7 @@ class TestClassifierMarkerSync(unittest.TestCase):
                 ):
                     found[target.id] = ast.literal_eval(node.value)
         self.assertEqual(
-            found, {"_FAULT_TEMPLATE": FAULT_TEMPLATE, "_FAULT_SERVER": FAULT_SERVER}
+            found, {"_FAULT_TEMPLATE": _FAULT_TEMPLATE, "_FAULT_SERVER": _FAULT_SERVER}
         )
 
 

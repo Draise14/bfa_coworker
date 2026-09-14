@@ -87,7 +87,7 @@ _system_prompt: str | None = None
 
 
 def _get_system_prompt() -> str:
-    """Load the system prompt from the MCP's prompts.yml, with a local cache."""
+    """Load the system prompt, preferring compact version for local models."""
     global _system_prompt
     if _system_prompt is not None:
         return _system_prompt
@@ -96,9 +96,27 @@ def _get_system_prompt() -> str:
     # Typical layout: addon/bfa_coworker/agent_controller.py
     # and            mcp/blmcp/data/prompts.yml
     this_dir = Path(__file__).resolve().parent
-    candidates = [
-        this_dir.parent.parent / "mcp" / "blmcp" / "data" / "prompts.yml",
-    ]
+    # Auto-detect: use compact prompt for local models (saves ~3K tokens).
+    # The compact prompt keeps essential rules but removes verbose reference
+    # material. The model can look up API details with get_python_api_docs.
+    use_compact = False
+    try:
+        from . import llm_manager as _llm
+        _cfg = _llm.get_config()
+        if _cfg.local_llm_port is not None:
+            use_compact = True
+    except Exception:
+        pass
+
+    if use_compact:
+        candidates = [
+            this_dir.parent.parent / "mcp" / "blmcp" / "data" / "prompts_compact.yml",
+            this_dir.parent.parent / "mcp" / "blmcp" / "data" / "prompts.yml",
+        ]
+    else:
+        candidates = [
+            this_dir.parent.parent / "mcp" / "blmcp" / "data" / "prompts.yml",
+        ]
     for prompt_path in candidates:
         if prompt_path.is_file():
             try:
@@ -340,6 +358,7 @@ _SURFACE_TOOLS = frozenset({
     "get_screenshot_of_window_as_json",
     "render_thumbnail_to_path",
     # ── Bundled Blender API + manual docs — read-only, no network ────
+    # Bundled Blender API + manual docs — read-only, no network
     # Always available so the agent can look up correct APIs on error.
     "get_python_api_docs",
     "search_api_docs",
@@ -1247,9 +1266,18 @@ def _resolve_mcp_python() -> tuple[str | None, bool]:
 
         blender_py = _find_blender_python()
         if blender_py:
-            mcp_exe = blender_py
-            use_module = True
-            print("[🛠️Coworker] _resolve_mcp_python: using Blender's Python at {:s}".format(mcp_exe))
+            if _vendor_native_compat(blender_py):
+                mcp_exe = blender_py
+                use_module = True
+                print("[🛠️Coworker] _resolve_mcp_python: using Blender's Python at {:s}".format(mcp_exe))
+            else:
+                # Blender's Python is incompatible; try system python.
+                print("[🛠️Coworker] _resolve_mcp_python: Blender's Python {!s} incompatible with vendor native extensions".format(blender_py))
+                sys_py = shutil.which("python3") or shutil.which("python")
+                if sys_py and _vendor_native_compat(sys_py):
+                    mcp_exe = sys_py
+                    use_module = True
+                    print("[🛠️Coworker] _resolve_mcp_python: using compatible system Python at {:s}".format(mcp_exe))
 
     # 3. Last resort: system python.
     if not mcp_exe:
@@ -1624,17 +1652,101 @@ def start_mcp_server_network(
 # ---------------------------------------------------------------------------
 # MCP client config generation (External Harness)
 
+
+def _vendor_native_compat(python_path: str) -> bool:
+    """Check whether vendor deps' native extensions match *python_path*.
+
+    Scans ``~/.cache/bfa_coworker/vendor_deps/`` for ``.pyd`` / ``.so``
+    files, extracts the cpython tag (e.g. ``cp312``), and compares it
+    against the target interpreter's major.minor version.
+
+    Returns ``True`` when compatible (or when there are no native
+    extensions — pure-Python deps work everywhere).
+    """
+    deps_dir = _get_vendor_deps_dir()
+    if not deps_dir.is_dir():
+        return True  # No deps yet; let the caller proceed.
+
+    native_versions: set[str] = set()
+    for pat in ("*.pyd", "*.so"):
+        for f in deps_dir.glob(pat):
+            name = f.name
+            # Extract cpython tag: something like _cffi_backend.cp313-win_amd64.pyd
+            for part in name.split("."):
+                if part.startswith("cp") and part[2:].isdigit():
+                    native_versions.add(part[:5])  # "cp313"
+                    break
+
+    if not native_versions:
+        return True  # Pure-Python; no compatibility issue.
+
+    # Determine the target Python version from the executable.
+    try:
+        import subprocess
+        result = subprocess.run(
+            [python_path, "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return True  # Can't determine; assume compatible.
+        target_ver = result.stdout.strip()  # e.g. "3.13"
+        target_tag = "cp{:s}{:s}".format(*target_ver.split(".")[:2])  # "cp313"
+    except Exception:
+        return True  # Can't determine; assume compatible.
+
+    for nv in native_versions:
+        if nv != target_tag:
+            print(
+                "[🛠️Coworker] _vendor_native_compat: MISMATCH — "
+                "vendor native exts are {!s} but target Python is {!s}".format(
+                    nv, target_tag
+                )
+            )
+            return False
+    return True
+
+
 def _get_blender_python_for_config() -> tuple[str, str]:
     """Return (python_path, pythonpath) for use in harness configs.
 
     Uses Blender's bundled Python with vendor deps on PYTHONPATH so
     ``python -m blmcp`` works out of the box without any pip install.
 
-    Falls back to ``("python", "")`` if Blender's Python can't be found.
+    When vendor deps contain native extensions compiled for a different
+    Python version than Blender's bundled Python, falls back to a
+    compatible system Python to avoid import failures.
+
+    Falls back to ``("python", "")`` if no suitable Python is found.
     """
+    import shutil as _shutil
     blender_py = _find_blender_python()
+    pythonpath = _find_vendor_pythonpath()
     if blender_py:
-        pythonpath = _find_vendor_pythonpath()
+        if _vendor_native_compat(blender_py):
+            return (blender_py, pythonpath)
+        # Blender's Python is incompatible with vendor native extensions.
+        # Try to find a system Python that matches the vendor deps.
+        print(
+            "[🛠️Coworker] _get_blender_python_for_config: "
+            "Blender Python {!s} incompatible with vendor native extensions "
+            "— searching for compatible system Python...".format(
+                blender_py
+            )
+        )
+        for candidate in ("python3", "python"):
+            py = _shutil.which(candidate)
+            if py and _vendor_native_compat(py):
+                print(
+                    "[🛠️Coworker] _get_blender_python_for_config: "
+                    "using {!s} (compatible with vendor deps)".format(py)
+                )
+                return (py, pythonpath)
+        # No compatible Python found; fall back to Blender's anyway with a warning.
+        print(
+            "[⚠️Coworker] _get_blender_python_for_config: "
+            "no compatible Python found. Using Blender Python {!s} "
+            "— vendor deps may fail to import.".format(blender_py)
+        )
         return (blender_py, pythonpath)
     return ("python", "")
 
@@ -1850,6 +1962,7 @@ def _openai_chat_completions(
     api_key: str | None = None,
     model: str | None = None,
     max_tokens: int | None = None,
+    thinking_budget_tokens: int = 0,
     chat_mode: str = "AGENT",
 ) -> dict[str, Any] | None:
     """POST to a chat completions endpoint and return the parsed JSON response.
@@ -1867,6 +1980,8 @@ def _openai_chat_completions(
         "temperature": temperature,
         **_CHAT_SAMPLING,
     }
+    if thinking_budget_tokens > 0:
+        body["thinking_budget_tokens"] = thinking_budget_tokens
     if model:
         body["model"] = model
     if tools:
@@ -1916,6 +2031,7 @@ def _openai_chat_completions(
                 msg = choice.get("message", {})
                 finish = choice.get("finish_reason", "")
                 content = msg.get("content") or ""
+
                 tool_calls = msg.get("tool_calls") or []
                 print("[🛠️Coworker] _openai_chat_completions: finish_reason={:s}".format(finish))
                 print("[🛠️Coworker] _openai_chat_completions: content   = {:s}".format(
@@ -1930,7 +2046,10 @@ def _openai_chat_completions(
                 if reasoning:
                     print("[🛠️Coworker] _openai_chat_completions: reasoning ({:d} chars):".format(
                         len(reasoning)))
-                    print(_strip_think_tags(reasoning))
+                    # Collapse consecutive blank lines to reduce console clutter.
+                    _clean = re.sub(r"\n{3,}", "\n\n", _strip_think_tags(reasoning))
+                    print(_clean)
+
                     print("[🛠️Coworker] _openai_chat_completions: --- end reasoning ---")
                 # If we fell back to text-based tool calling, parse text calls.
                 if not tools_tried and not tool_calls:
@@ -3319,6 +3438,15 @@ def _run_conversation_turn_inner(
     from . import llm_manager as _llm_mgr
     _llm_cfg = _llm_mgr.get_config()
     max_tokens = _llm_cfg.local_max_tokens if llm_port_local is not None else 16384
+    # `thinking_budget_tokens` is a llama-server parameter; strict
+    # OpenAI-compatible endpoints reject unknown fields, so only send it
+    # on the local path (llm_port_local is None in remote mode).
+    thinking_budget = (
+        getattr(_llm_cfg, 'thinking_budget_tokens', 0)
+        if llm_port_local is not None else 0
+    )
+    if thinking_budget > 0:
+        print("[🛠️Coworker] run_conversation_turn: thinking_budget_tokens={:d}".format(thinking_budget))
     print("[🛠️Coworker] run_conversation_turn: using max_tokens={:d}".format(max_tokens))
 
     # ── Tool domain system (hybrid: pre-detect + on-demand) ────────────
@@ -3422,7 +3550,7 @@ def _run_conversation_turn_inner(
                 existing.insert(0, {"type": "image_url", "image_url": {"url": _pending_image}})
             _agent_state._pending_image = None  # Clear after use
 
-        response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model, max_tokens)
+        response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model, max_tokens, thinking_budget_tokens=thinking_budget)
 
         # ── Abort check ───────────────────────────────────────────────
         # If the user stopped the previous turn and started a new one, the
@@ -3455,6 +3583,22 @@ def _run_conversation_turn_inner(
 
         # Extract text content.
         content = msg.get("content") or ""
+        # Empty response: thinking budget cut off reasoning before output.
+        # Auto-retry with doubled budget (max 2 retries).
+        empty_retries = 0
+        doubled_budget = thinking_budget
+        while not content and not msg.get("tool_calls") and empty_retries < 2:
+            empty_retries += 1
+            doubled_budget = min(doubled_budget * 2, 8192) if thinking_budget > 0 else 0
+            print("[Coworker] empty response, retrying with thinking_budget={:d}".format(doubled_budget))
+            response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model, max_tokens, thinking_budget_tokens=doubled_budget)
+            if response is None:
+                break
+            choice = response.get("choices", [{}])[0]
+            msg = choice.get("message", {})
+            finish_reason = choice.get("finish_reason", "")
+            content = msg.get("content") or ""
+
 
         # ── Auto-continue on finish_reason=length ─────────────────────
         # Reasoning models (Qwen, DeepSeek, Gemma 4) can hit the token
@@ -3833,7 +3977,7 @@ def _run_conversation_turn_inner(
             "role": "user",
             "content": "[System: All tool calls are complete. Please summarize what was done in 1-2 sentences.]",
         })
-        final_response = _openai_chat_completions(llm_url, history, openai_tools, api_key, model, max_tokens)
+        final_response = _openai_chat_completions(llm_url, history, openai_tools, api_key, model, max_tokens, thinking_budget_tokens=thinking_budget)
         if final_response:
             final_choice = final_response.get("choices", [{}])[0]
             final_msg = final_choice.get("message", {})

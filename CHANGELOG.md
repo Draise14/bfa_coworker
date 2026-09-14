@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reasoning Effort presets** — The numeric Thinking Budget row is now a friendlier Reasoning Effort toggle (Off / Low / Medium / High / Custom) sitting next to the Context Window row. Each level maps to a per-reply token budget (0 / 512 / 1024 / 2048) sent to llama-server as `thinking_budget_tokens`; per-button tooltips show the exact count, and Custom reveals the precise slider. The value stays wired through `LLMConfig` end-to-end (prefs sync, `set_config`/`get_config`) and is sent on the local path only — never to remote APIs.
 - **Asset Tool Self-Tests in the Diagnostics UI (Tier 3d Phase B)** — Preferences → Advanced → Diagnostics now has an "Asset Tool Self-Tests (no LLM)" box: one click runs every asset tool deterministically in-session against a throwaway fixture library (no MCP server, no agent, no LLM) and shows per-step PASS/FAIL with timings, updating live. Covers `get_asset_libraries`, `search_assets` (name + tag), `get_asset_tags` (editor type), `load_asset_in_context` (material onto explicit object), `place_asset_in_scene` (position check), `wire_node_group` (add_top_level + connect_to_output), and `get_node_group_interface` — all via the exact same toolcode the MCP layer runs (include-expanded, vendored path). Steps that genuinely need a live editor/UI (opening the Asset Browser, visual load verification, a render smoke test) are listed as a manual checklist inside the same box; cleanup removes only fixture-owned datablocks and never touches your scene.
 
 - **Asset Metadata Index (Tier 3d Phase C)** — `search_assets`, `get_asset_tags` and `load_asset_in_context` now answer from an on-disk metadata index instead of appending datablocks into the live session. The index (stored under the user cache in `bfa_coworker/asset_index/`, never inside library folders) captures the full Asset Details region — tags, description, author, copyright, license, catalog, color tag, and the asset's self-declared `preferred_import_method` — plus per-type facts (node count, node-group socket interface, material blend method, vertex counts, action frame range). Entries are fingerprinted per `.blend` by mtime+size; a stale or missing index is rebuilt lazily by a disposable `--background --factory-startup` subprocess (deduplicated by a 60 s marker TTL), so your session is never polluted and read-only/network libraries are never written to. `get_asset_tags` returns the full metadata with zero loading, `search_assets` matches name/tag/description from the index, and `import_method="auto"` now honors the asset's declared method even when the asset has never been loaded. Live append inspection remains as the documented fallback when no index can be built.
@@ -63,6 +64,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Custom Model URL Flow** — Paste any HuggingFace URL or direct .gguf link to download. URL auto-parsed for repo/filename. Reuses existing download infrastructure with SHA-256 verification.
 - **Server Port Fallback** — Automatic port selection when configured port is busy. Scans upward from configured port, clear error when all ports exhausted.
 - **Spiral Detection Hardening** — Error-loop detection threshold lowered from 3 to 2 consecutive identical errors. Corrective messages now include targeted API guidance (e.g. Principled BSDF `inputs` dictionary, subdivision modifier attributes, "no output" diagnosis) so the LLM fixes the code instead of retrying it verbatim.
+- **Thinking Budget for Local Models** — New "Thinking Budget" preference (default 1024) caps
+  chain-of-thought reasoning tokens per API call via llama-server's `thinking_budget_tokens`
+  parameter. Prevents reasoning from eating the entire `max_tokens` budget, which caused
+  tool calls to be truncated mid-generation. Set to 0 to disable.
+
+- **Compact System Prompt for Local Models** — Auto-detects local LLM and loads a compact
+  system prompt (2.4K chars vs 14K) that keeps essential rules but removes verbose reference
+  material. Says "Be concise and decisive" instead of "Think aloud in full paragraphs."
+  Saves ~3K input tokens per turn.
+
 - **Bundled Blender API Docs Always Available** — `get_python_api_docs`, `search_api_docs`, and `search_manual_docs` are now always loaded as surface tools, so the agent can look up correct APIs on error without needing to load a domain first.
 - **Mode Switch Lock** — Operating mode (Local/Remote/Harness) and GPU backend can no longer be changed while the agent is running; the selector is disabled with a "Stop the agent first" hint, preventing mid-flight MCP server kills.
 - **Chat UI Polish** — Multiline text wrapping with constrained width, enhanced markdown heading visual hierarchy (keyframe dot icons per level), loading icon shown only on the active item, consistent open-folder icons, and fixed separator rendering.
@@ -97,6 +108,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error dict. Also wired the 12 auto-fix rules from `autofix.py` into `_execute_code()` BEFORE
   preflight: corrected code (lamps→lights, EEVEE→BLENDER_EEVEE, subdivisions→levels, base_color→
   inputs, ...) now passes validation instead of being rejected, reducing LLM round-trips.
+
+- **`bpy.context.active_object` Sweep** — Replaced all remaining `bpy.context.active_object`
+  references in toolcode files with `bpy.context.view_layer.objects.active`, which is available
+  in the MCP bridge worker thread. Fixed in: `polyhaven_pbr.py` (generated PBR material code
+  used by both `download_polyhaven_asset` and `setup_pbr_material`),
+  `assign_material_to_objects_toolcode.py` (fallback when no object names given),
+  `three_point_lighting_rig.py` (target fallback in generated code), and
+  `get_screenshot_of_window_as_json_toolcode.py` (active object metadata).
+  This eliminates the preflight rejection that blocked all Poly Haven texture downloads and
+
+- **Python Version Compatibility Check** — `_get_blender_python_for_config()` and
+  `_resolve_mcp_python()` now inspect vendor deps' native extensions (.pyd/.so) and compare
+  the cpython tag against the target interpreter's version. When there is a mismatch (e.g.
+  Blender 5.3 ships Python 3.13 but vendor deps were compiled for 3.12), the addon
+  automatically falls back to a compatible system Python instead of recommending Blender's
+  bundled Python, which would fail on `import mcp`. A warning is logged when no compatible
+  Python is found.
+  PBR material creation from the LLM.
 
 - **Tier 3h Quality Audit: Cleanup & Hardening** - `get_polyhaven_status` now returns a dict
   (consistent with every other tool); the `os.add_dll_directory()` handle is kept in module state

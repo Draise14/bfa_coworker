@@ -518,7 +518,7 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
     #     iteration.
     creates_in_loop = ("for " in code or "while " in code) and "objects.new(" in code
     if creates_in_loop and "bpy.data.objects.get" not in code \
-            and 'name=f"' not in code and "name=f'" not in code:
+            and 'name=f"' not in code and "name=f'" not in code and "name = f\"" not in code and "name = f'" not in code:
         issues.append((
             "no_existence_check",
             "Creating objects in a loop with bpy.data.objects.new(...) "

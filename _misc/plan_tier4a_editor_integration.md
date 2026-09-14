@@ -995,6 +995,24 @@ The moodboard isn't just a passive reference board — it's an active agent tool
 
 ## Implementation Plan — 8 Phases
 
+> **Status update (2026-09-01):** Mapping to master plan §15 pathways. The
+> Moodboard (Pillar 3) is **moved to Tier 5** (master plan §8). The remaining
+> phases map to the master plan's Phase 4 (Agent Dedicated Central Editor +
+> Viewport) and Phase 1 (Foundation):
+>
+> | 4a Phase | Master Plan Pathway | Notes |
+> |----------|---------------------|-------|
+> | Theme utilities | Phase 1.1 (with `ui_components.py`) | Shared theming for all editors |
+> | 1 — Core chat component refactor | Phase 1.1/1.3 | `ui_components.py` extraction |
+> | 2 — Register panels in all editors | Phase 4.1 | Coworker workspace |
+> | 3 — Dedicated Coworker editor | Phase 4.1 | USERPREF-pattern center panels |
+> | 3b — GPU center enhancement | Deferred | Optional, not in Tier 4 scope |
+> | 4 — Floating chat window | Tier 5 | Deferred with popup/quick-chat |
+> | 5 — Per-editor context enrichment | Phase 0.4 | Rides domain tooling |
+> | 6 — Template/prompt system | Phase 3.5 | Text Editor prompt templates |
+> | 7 — Feature parity & polish | Phase 2.10 | Per-message actions |
+> | 8 — Viewport agent feedback | Phase 4.2–4.4 | Status overlay + focus + CHOYA |
+
 ### Phase 1: Core Chat Component Refactor (~400 LOC, 2 files)
 
 **Goal**: Extract the chat UI into a reusable component that can be embedded in any panel or window.
@@ -1353,19 +1371,25 @@ The "clone the Preferences editor" principle ensures the Coworker editor is
 
 ## Summary of All Changes
 
-| Phase | What | Files Changed | Files New | LOC |
-|-------|------|:-------------:|:---------:|:---:|
-| — | Theme utilities (`theme_utils.py`) | 0 | 1 | ~100 |
-| 1 | Core chat component refactor | 2 | 0 | ~400 |
-| 2 | Register panels in all editors (Mode 2) | 2 | 0 | ~150 |
-| 3 | Dedicated Coworker editor — clone USERPREF (Mode 1) | 3 | 0 | ~250 |
-| 3b | GPU center enhancement (optional, deferred) | 1 | 1 | ~300 |
-| 4 | Floating chat window | 2 | 0 | ~250 |
-| 5 | Per-editor context enrichment | 3 | 0 | ~200 |
-| 6 | Template/prompt system | 3 | 0 | ~300 |
-| 7 | Feature parity & polish | 3 | 0 | ~200 |
-| 8 | Viewport agent feedback | 1 | 1 | ~350 |
-| **Total** | | **20** | **3** | **~2,500** |
+> **Revised (2026-09-01)**: Moodboard (Pillar 3) moved to Tier 5 — see
+> `plan_tier5_moodboard_storyboarding.md` (milestone M1). Floating chat window
+> (Phase 4) deferred to Tier 5 (popup/quick-chat). Phase 3b GPU enhancement
+> remains optional/deferred. The table below reflects the Tier 4 in-scope
+> subset.
+
+| Phase | What | Files Changed | Files New | LOC | Status |
+|-------|------|:-------------:|:---------:|:---:|--------|
+| — | Theme utilities (`theme_utils.py`) | 0 | 1 | ~100 | In scope (Phase 1.1) |
+| 1 | Core chat component refactor | 2 | 0 | ~400 | In scope (Phase 1.1/1.3) |
+| 2 | Register panels in all editors (Mode 2) | 2 | 0 | ~150 | In scope (Phase 4.1) |
+| 3 | Dedicated Coworker editor — clone USERPREF (Mode 1) | 3 | 0 | ~250 | In scope (Phase 4.1) |
+| 3b | GPU center enhancement (optional, deferred) | 1 | 1 | ~300 | Deferred |
+| 4 | Floating chat window | 2 | 0 | ~250 | → Tier 5 |
+| 5 | Per-editor context enrichment | 3 | 0 | ~200 | In scope (Phase 0.4) |
+| 6 | Template/prompt system | 3 | 0 | ~300 | In scope (Phase 3.5) |
+| 7 | Feature parity & polish | 3 | 0 | ~200 | In scope (Phase 2.10) |
+| 8 | Viewport agent feedback | 1 | 1 | ~350 | In scope (Phase 4.2–4.4) |
+| ~~3–6~~ | ~~Moodboard (Pillar 3)~~ | — | — | ~~~520~~ | **→ Tier 5** (milestone M1) |
 
 ## Dependencies
 

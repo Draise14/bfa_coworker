@@ -57,7 +57,7 @@ def main(params: Params) -> Result:
 
     # If no object names specified, use active object.
     if not object_names:
-        obj = bpy.context.active_object
+        obj = bpy.context.view_layer.objects.active
         if obj is None:
             return Result(
                 status="error",

@@ -43,9 +43,37 @@ DIST_DIR = os.path.join(SCRIPT_DIR, "releases")
 
 # Find Blender executable.
 def find_blender() -> str:
-    """Find the Blender binary."""
-    blender = os.environ.get("BLENDER_BIN") or shutil.which("blender") or "blender"
-    return blender
+    """Find the Blender (or Bforartists) binary.
+
+    Resolution order:
+    1. ``BLENDER_BIN`` environment variable.
+    2. ``blender`` / ``bforartists`` on PATH.
+    3. Common install locations on Windows.
+    4. Literal ``"blender"`` as last resort (will fail with a clear error).
+    """
+    blender = os.environ.get("BLENDER_BIN")
+    if blender:
+        return blender
+
+    # Try PATH candidates — Bforartists ships as "bforartists" not "blender".
+    for name in ("blender", "bforartists", "blender.exe", "bforartists.exe"):
+        found = shutil.which(name)
+        if found:
+            return found
+
+    # Probe common Windows install locations.
+    if sys.platform == "win32":
+        import glob as _glob
+        for pattern in (
+            "C:/3D_Stuff/Devbuild/bforartists.exe",
+            "C:/Program Files/Blender Foundation/Blender/*/blender.exe",
+            "C:/Program Files/Bforartists/Bforartists/*/bforartists.exe",
+        ):
+            matches = _glob.glob(pattern)
+            if matches:
+                return max(matches)  # Highest version.
+
+    return "blender"
 
 
 def _find_python_with_pip() -> str:
@@ -282,7 +310,16 @@ def main() -> int:
                 info.compress_type = _zf.ZIP_DEFLATED
                 zout.writestr(info, data)
     # Replace the original zip with the repacked one.
-    os.replace(repacked_path, zip_path)
+    # On Windows, os.replace() may fail if the zip is locked
+    # (Explorer preview, antivirus, etc.). Remove first, then rename.
+    try:
+        os.replace(repacked_path, zip_path)
+    except PermissionError:
+        import time as _time
+        _time.sleep(1.0)
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+        os.rename(repacked_path, zip_path)
     print("Repacked: {:s} (top-level folder: {:s}/)".format(zip_path, ext_id))
 
     # Step 2: Install (optional).

@@ -108,7 +108,7 @@ def main(params: None) -> Result:
         area_info["regions"] = regions
         areas.append(area_info)
 
-    active = context.active_object
+    active = context.view_layer.objects.active
     active_info = None
     if active:
         active_info = {

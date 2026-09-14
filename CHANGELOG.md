@@ -99,6 +99,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Compact System Prompt Never Loaded (#62)** - The local-model prompt auto-detection read
+  `LLMConfig.local_llm_port`, a field that does not exist (the real field is `local_port`). The
+  resulting `AttributeError` was swallowed by a bare `except`, so the compact prompt silently never
+  loaded and every local model got the full 3K-token prompt. Detection now keys off the LLM *mode*
+  (`mode == "local"`) — deliberately not `local_port`, which always carries a default of 8081 and
+  would therefore have selected the compact prompt even in remote mode. Also fixed the deployed
+  path: the candidate list only searched the dev-checkout layout (`mcp/blmcp/data/`), so an
+  installed addon fell through to the brief built-in prompt; it now also searches
+  `vendor/blmcp/data/` where `prompts_compact.yml` actually ships. The prompt cache is now keyed
+  per variant, so switching local <-> remote no longer reuses the other variant's text.
+
+- **Agent Choked by `400 Unexpected message role` After 1-2 Prompts (#62)** - The history slicer
+  trimmed the conversation to the last 20 messages, which can cut a tool-call exchange in half.
+  The existing guard dropped orphaned `tool` results but not the inverse case — an `assistant`
+  message carrying `tool_calls` whose `tool` replies had been sliced away. llama-server's Jinja
+  template rejects that shape, returning HTTP 400 and killing the next turn. New
+  `_repair_tool_call_pairs()` drops half-finished exchanges in *both* directions (matching only the
+  run of `tool` messages directly following a call, so a later unrelated result cannot satisfy an
+  earlier call).
+
+- **Prompt Now Bounded by the Context Window, Not a Message Count** - The old guard capped history
+  at 20 messages, a blunt instrument: a few large tool results could still overflow a small local
+  context window, and the only signal was a `>30000 bytes` warning that took no action. New
+  `_message_text_length()` / `_estimate_messages_tokens()` / `_fit_history_to_budget()` estimate
+  tokens (~3.5 chars/token, deliberately over-estimating for code so it trims slightly early),
+  reserve room for `max_tokens` plus template scaffolding, and drop the oldest exchanges until the
+  prompt fits. The system prompt is always preserved. Applied on the local path only, where
+  `local_ctx_size` is known; remote providers are untouched.
+
+- **Injected Tool Text No Longer Corrupts the System Prompt** - When a chat template rejected the
+  `tools` parameter with HTTP 500, the fallback appended the full tool listing to the last system
+  message — mutating the caller's dict in place. Because short histories are sent as-is (no copy),
+  `messages` *was* the live conversation history, so the real system prompt stayed polluted with
+  tool text for the rest of the session. The fallback now copies the list and the target message.
+
+- **Flattened Conversations Could Emit Consecutive Same-Role Messages** - The plain-chat fallback
+  maps `tool` results to `user` messages; combined with the injected "please respond" prompt this
+  produced `user, user` runs, which strict templates reject. Consecutive `user`/`assistant`
+  messages are now merged. New tests in `tests/test_orchestration_helpers.py` (25 total, green).
+
+- **HTTP 500 No Longer Misread as a Template Problem (#63)** - llama-server returns a bare HTTP 500
+  for two very different failures, and the old handler treated every one of them as "the chat
+  template rejected `tools`": it re-sent the conversation with the tool listing inlined as text.
+  That is correct for a template fault, but it silently downgraded the whole session to
+  text-based tool calling (far less reliable on small models) whenever the real cause was a
+  resource/hardware fault such as a GPU OOM — and it masked the cause, since the log pointed at
+  the template. The 500 path now classifies the response first via `_classify_llm_500()`: server
+  markers (OOM, `CUDA error`, `cudaMalloc`, `ggml_assert`, allocation failures) are checked
+  *before* the generic template markers, so an OOM message that happens to mention "template" is
+  still a server fault. A server fault keeps native tool calling and retries with backoff; if it
+  persists, `_server_fault_message()` surfaces the response body, the llama-server log tail, and
+  the existing GPU-OOM hint with its context-window advice — instead of a generic
+  "LLM request failed". An empty or unrecognised body is treated as a server fault, so an error we
+  don't understand can never trigger the downgrade. The downgrade itself is now visible: a
+  `warning` on `AgentState` (shown in the chat sidebar and cleared each turn) tells the user that
+  text-based tool calling is in use and why. Also fixed a latent bug: the body was read with
+  `ex.read()` in up to four separate branches, but `HTTPError` bodies are single-use, so every
+  read after the first silently returned empty and the diagnostics for the real cause were lost.
+  New tests in `tests/test_orchestration_helpers.py` (34 total, green), including a marker-sync
+  guard that parses the real constants out of the source so the test's mirrored lists cannot
+  drift.
+
 - **Tier 3h Quality Audit: 3 Critical Bugs** - Two MCP tools advertised to the LLM always failed:
   `execute_blender_plan` and `list_blender_templates` imported `_plan_to_code` / `_render_template` /
   `_TEMPLATES` / `_TEMPLATE_DEFAULTS` from the wrong module (`mcp_to_blender_server` instead of

@@ -1864,6 +1864,13 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 icon="COPYDOWN",
                 text="Copy Error",
             )
+        elif state.warning:
+            # Non-fatal notice (e.g. tool-calling downgrade).  Shown when
+            # there is no error, so it never masks a real failure.
+            warn_row = layout.row()
+            warn_row.scale_y = 0.9
+            warn_row.label(text="", icon='INFO')
+            _draw_multiline(warn_row, state.warning)
 
         # ── External Harness mode ──
         if is_harness:

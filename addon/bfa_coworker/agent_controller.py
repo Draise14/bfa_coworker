@@ -489,6 +489,125 @@ def _flatten_for_plain_chat(messages: list[dict[str, Any]]) -> list[dict[str, An
     return merged
 
 
+# ── LLM HTTP 500 fault classification ──────────────────────────────
+# An HTTP 500 from llama-server means one of two very different things, and
+# only one of them is safe to "fix" by reshaping the request:
+#
+#   * TEMPLATE fault - the model's Jinja chat template cannot represent the
+#     request (no branch for the ``tool`` role, no tool-call parser).  This
+#     is recoverable by resending the conversation in a shape the template
+#     can render (tool results as plain user text, no ``tools`` parameter).
+#
+#   * SERVER fault - a genuine resource or hardware failure (GPU OOM, CUDA
+#     error, allocation failure).  NOT recoverable by reshaping the request;
+#     retrying is the only option, and the real cause must be surfaced
+#     rather than masked.
+#
+# Treating the second as the first silently downgrades the session to
+# text-based tool calling and hides the real cause, so classify first.
+
+_FAULT_TEMPLATE = "template"
+_FAULT_SERVER = "server"
+
+# Markers of a chat-template rejection.  These appear in the JSON body
+# llama-server returns when it cannot render or parse the conversation.
+_TEMPLATE_FAULT_MARKERS = (
+    "unable to generate parser",
+    "unexpected message role",
+    "no user query found",
+    "jinja",
+    "chat template",
+    "template",
+)
+
+# Markers of a resource or hardware failure.  Checked BEFORE the template
+# markers because several template markers ("template") are generic enough
+# to appear inside unrelated server messages.
+#
+# Kept in sync with ``llm_manager._GPU_OOM_MARKERS``; the extra entries here
+# cover non-GPU allocation failures and ggml asserts.
+_SERVER_FAULT_MARKERS = (
+    "out of memory",
+    "outofmemory",
+    "out of device memory",
+    "outofdevicememory",
+    "outofhostmemory",
+    "cuda error",
+    "cudamalloc",
+    "ggml_assert",
+    "ggml_vulkan",
+    "allocatememory",
+    "failed to allocate",
+    "failed to allocate vulkan0 buffer",
+    "failed to allocate buffer for kv cache",
+    "failed to allocate gpu buffer",
+)
+
+
+def _classify_llm_500(error_body: str) -> str:
+    """Classify an HTTP 500 body as a template fault or a server fault.
+
+    Returns :data:`_FAULT_TEMPLATE` when the body shows the chat template
+    rejected the request, or :data:`_FAULT_SERVER` for a resource or hardware
+    failure.
+
+    An empty or unrecognised body is classified as a **server** fault: the
+    safe default is to keep native tool calling and retry, never to silently
+    downgrade the protocol on an error we do not understand.
+    """
+    lowered = (error_body or "").lower()
+    if any(marker in lowered for marker in _SERVER_FAULT_MARKERS):
+        return _FAULT_SERVER
+    if any(marker in lowered for marker in _TEMPLATE_FAULT_MARKERS):
+        return _FAULT_TEMPLATE
+    return _FAULT_SERVER
+
+
+def _server_log_shows_fault() -> bool:
+    """True when the llama-server log tail shows a resource/hardware fault.
+
+    Cross-checks an ambiguous HTTP 500.  llama-server names the real cause
+    (OOM, CUDA error, ggml assert) in its own log far more clearly than in
+    the short JSON body it returns to the client, so the log is the better
+    signal when the body is bare or misleading.
+    """
+    try:
+        from . import llm_manager as _llm
+        tail = _llm.get_llama_server_log_tail() or ""
+    except Exception:  # pylint: disable=broad-exception-caught
+        return False
+    if not tail:
+        return False
+    try:
+        if _llm._log_looks_like_gpu_oom(tail):  # pylint: disable=protected-access
+            return True
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return any(marker in tail.lower() for marker in _SERVER_FAULT_MARKERS)
+
+
+def _server_fault_message(error_body: str) -> str:
+    """Build an actionable error message for an LLM server fault.
+
+    Includes the server's response body and the llama-server log tail, and
+    appends the GPU out-of-memory hint when the log shows an OOM - the most
+    common cause of a 500 on a model that otherwise works.
+    """
+    parts = ["The local LLM server returned an internal error (HTTP 500)."]
+    if error_body:
+        parts.append("--- server response ---\n{:s}".format(error_body[:800]))
+    try:
+        from . import llm_manager as _llm
+        tail = _llm.get_llama_server_log_tail()
+        if tail:
+            parts.append("--- llama-server.log (tail) ---\n{:s}".format(tail))
+            if _llm._log_looks_like_gpu_oom(tail):  # pylint: disable=protected-access
+                parts.append(_llm._gpu_oom_hint())  # pylint: disable=protected-access
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return "\n\n".join(parts)
+
+
 
 # ── Tool domain system (hybrid: pre-detect + on-demand) ────────────
 # Surface tools are always loaded — they cover code execution and basic
@@ -845,6 +964,7 @@ class AgentState:
     status_text: str = "Idle"
     error: str = ""
     error_full: str = ""  # Untruncated error text (for copy-to-clipboard troubleshooting)
+    warning: str = ""  # Non-fatal notice (e.g. tool-calling downgrade)
     tool_count: int = 0  # Number of MCP tools available (0 = not loaded yet)
     conversation_history: list[dict[str, Any]] = field(default_factory=list)
     streaming_text: str = ""
@@ -2240,25 +2360,67 @@ def _openai_chat_completions(
 
                 return result
         except (urllib.error.HTTPError, urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
+            # ── HTTP 500: distinguish template fault from server fault ──
+            # Both arrive as a bare 500, and the recovery differs completely:
+            #   * template fault -> reshape the request (tools as text)
+            #   * server fault   -> keep the request, retry with backoff
+            # Reshaping on a server fault silently downgrades the session to
+            # text-based tool calling and masks the real cause (usually an
+            # OOM).  Classify first, then choose.
+            #
+            # The body is read ONCE here and reused by every branch below --
+            # ``ex.read()`` returns empty on a second call.
+            _500_body = ""
+            _is_500 = False
+            if isinstance(ex, urllib.error.HTTPError) and ex.code == 500:
+                _is_500 = True
+                try:
+                    _500_body = ex.read().decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+            _fault = _classify_llm_500(_500_body) if _is_500 else ""
+
+            # A bare or generic 500 body is ambiguous.  llama-server names
+            # the real cause in its own log far more clearly than in the
+            # short JSON it returns, so cross-check before reshaping.
+            _log_fault = False
+            if _is_500 and _fault != _FAULT_TEMPLATE:
+                _log_fault = _server_log_shows_fault()
+                if _log_fault:
+                    _fault = _FAULT_SERVER
+
+            # ── Server fault: do NOT reshape the request ───────────────
+            # Fall through to the generic retry-with-backoff path and, if
+            # the fault persists, surface the real cause (body + log tail +
+            # GPU-OOM hint) so it is not mistaken for a template problem.
+            if _is_500 and _fault == _FAULT_SERVER:
+                print("[🛠️Coworker] _openai_chat_completions: 500 SERVER fault "
+                      "(not a template problem) — keeping tools, will retry")
+                if _500_body:
+                    print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_500_body[:500]))
+                if _log_fault:
+                    print("[🛠️Coworker] _openai_chat_completions:   llama-server log "
+                          "confirms a resource/hardware fault")
+
             # ── Chat template crash fallback: inject tools as text ────
             # Some custom GGUF chat templates (e.g. Fable Fusion, DavidAU
             # fine-tunes) 500 on the ``tools`` parameter.  We inject tool
             # descriptions into the system prompt and retry without the
             # ``tools`` JSON parameter, preserving full agent functionality.
-            if tools_tried and isinstance(ex, urllib.error.HTTPError) and ex.code == 500:
-                # Read the error body from the server — this is critical for
-                # debugging chat template crashes, OOMs, and other server-side
-                # failures that are invisible without it.
-                _error_body = ""
-                try:
-                    _error_body = ex.read().decode("utf-8", errors="replace")
-                except Exception:
-                    pass
-                print("[🛠️Coworker] _openai_chat_completions: 500 error with tools — "
+            if tools_tried and _is_500 and _fault == _FAULT_TEMPLATE:
+                print("[🛠️Coworker] _openai_chat_completions: 500 TEMPLATE fault — "
                       "injecting tools as text and retrying")
-                if _error_body:
-                    print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_error_body[:500]))
+                if _500_body:
+                    print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_500_body[:500]))
                 tools_tried = False
+                # Tell the user why the agent's behaviour changed.  Without
+                # this the downgrade is invisible and looks like the model
+                # simply got worse at calling tools.
+                _agent_state.warning = (
+                    "This model's chat template rejects native tool calling, so "
+                    "Coworker switched to text-based tool calling for this "
+                    "request. Tool use may be less reliable than usual."
+                )
                 # Build a text description of available tools.
                 tool_text = (
                     "\n\nYou have access to the following tools. "
@@ -2304,20 +2466,16 @@ def _openai_chat_completions(
             # ── Chat template role error fallback ──────────────────────
             # Some models (Qwen, etc.) have strict Jinja templates that
             # reject non-standard message roles.  Sanitize roles and retry.
-            if isinstance(ex, urllib.error.HTTPError) and ex.code == 500:
-                _error_body = ""
-                try:
-                    _error_body = ex.read().decode("utf-8", errors="replace")
-                except Exception:
-                    pass
-                if "Unexpected message role" in _error_body:
-                    print("[🛠️Coworker] _openai_chat_completions: 500 error — "
-                          "unexpected message role, sanitizing and retrying")
-                    messages = _sanitize_message_roles(messages)
-                    body["messages"] = messages
-                    data_bytes = json.dumps(body).encode()
-                    req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
-                    continue
+            # Only reachable for template faults -- server faults returned
+            # above without reshaping the request.
+            if _is_500 and "Unexpected message role" in _500_body:
+                print("[🛠️Coworker] _openai_chat_completions: 500 error — "
+                      "unexpected message role, sanitizing and retrying")
+                messages = _sanitize_message_roles(messages)
+                body["messages"] = messages
+                data_bytes = json.dumps(body).encode()
+                req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
+                continue
 
             # -- Chat template parser-generation failure (400) --------
             # llama-server auto-generates a parser for the model's Jinja
@@ -2358,9 +2516,10 @@ def _openai_chat_completions(
                 _time.sleep(backoff)
                 continue
             if attempt < max_retries - 1:
-                # Read the error body for 500 errors to surface the real cause.
-                _error_body = ""
-                if isinstance(ex, urllib.error.HTTPError) and ex.code == 500:
+                # Reuse the body already read for 500 classification above
+                # (``ex.read()`` is empty on a second call).
+                _error_body = _500_body
+                if not _is_500 and isinstance(ex, urllib.error.HTTPError) and ex.code == 500:
                     try:
                         _error_body = ex.read().decode("utf-8", errors="replace")
                     except Exception:
@@ -2374,22 +2533,33 @@ def _openai_chat_completions(
                         attempt + 1, max_retries, str(ex)))
                 _time.sleep(2)
                 continue
-            # Read the error body for the final failure message.
-            _error_body = ""
-            if isinstance(ex, urllib.error.HTTPError):
-                try:
-                    _error_body = ex.read().decode("utf-8", errors="replace")
-                except Exception:
-                    pass
-            if _error_body:
-                print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — {:s}".format(str(ex)))
-                print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_error_body[:500]))
-                _agent_state.error = "LLM request failed: {:s}".format(_error_body[:500])
-                _agent_state.error_full = "LLM request failed: {:s}".format(_error_body)
+            # Surface the final failure.  For a server fault, build an
+            # actionable message (body + llama-server log tail + GPU-OOM
+            # hint) so a resource failure is not misread as a template bug.
+            if _is_500 and _fault == _FAULT_SERVER:
+                _msg = _server_fault_message(_500_body)
+                print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — "
+                      "LLM server fault ({:s})".format(str(ex)))
+                _agent_state.error = _msg[:500]
+                _agent_state.error_full = _msg
             else:
-                print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — {:s}".format(str(ex)))
-                _agent_state.error = "LLM request failed: {:s}".format(str(ex))
-                _agent_state.error_full = "LLM request failed: {:s}".format(str(ex))
+                # Re-read the body only when this exception is not the 500 we
+                # already consumed above (``ex.read()`` is empty on re-read).
+                _error_body = _500_body
+                if not _is_500 and isinstance(ex, urllib.error.HTTPError):
+                    try:
+                        _error_body = ex.read().decode("utf-8", errors="replace")
+                    except Exception:
+                        pass
+                if _error_body:
+                    print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — {:s}".format(str(ex)))
+                    print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_error_body[:500]))
+                    _agent_state.error = "LLM request failed: {:s}".format(_error_body[:500])
+                    _agent_state.error_full = "LLM request failed: {:s}".format(_error_body)
+                else:
+                    print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — {:s}".format(str(ex)))
+                    _agent_state.error = "LLM request failed: {:s}".format(str(ex))
+                    _agent_state.error_full = "LLM request failed: {:s}".format(str(ex))
             return None
     return None
 
@@ -3547,6 +3717,8 @@ def _run_conversation_turn_inner(
     _agent_state.streaming_text = ""
     _agent_state.reasoning_text = ""
     _agent_state.thinking_dots = 0
+    # Clear any warning from the previous turn.
+    _agent_state.warning = ""
 
     # Determine LLM URL.
     llm_port_local: int | None = None

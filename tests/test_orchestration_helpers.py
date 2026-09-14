@@ -28,6 +28,7 @@ Run with::
 __all__ = ()
 
 import contextlib
+import ast
 import io
 import json
 import os
@@ -112,6 +113,50 @@ _fit_history_to_budget = _extract_func(
     },
 )
 _flatten_for_plain_chat = _extract_func(_load_source(), "_flatten_for_plain_chat")
+
+# LLM 500 fault classification.  The marker tuples and the two result
+# constants are module-level names, so the extracted function needs them in
+# its namespace.  They are mirrored here rather than parsed out of the
+# source: the tests assert the *classification behaviour*, and duplicating
+# the lists would make the tests pass even if the real lists drifted.
+FAULT_TEMPLATE = "template"
+FAULT_SERVER = "server"
+
+_SERVER_FAULT_MARKERS = (
+    "out of memory",
+    "outofmemory",
+    "out of device memory",
+    "outofdevicememory",
+    "outofhostmemory",
+    "cuda error",
+    "cudamalloc",
+    "ggml_assert",
+    "ggml_vulkan",
+    "allocatememory",
+    "failed to allocate",
+    "failed to allocate vulkan0 buffer",
+    "failed to allocate buffer for kv cache",
+    "failed to allocate gpu buffer",
+)
+
+_TEMPLATE_FAULT_MARKERS = (
+    "unable to generate parser",
+    "unexpected message role",
+    "no user query found",
+    "jinja",
+    "chat template",
+    "template",
+)
+
+_classify_llm_500 = _extract_func(
+    _load_source(), "_classify_llm_500",
+    {
+        "_FAULT_TEMPLATE": FAULT_TEMPLATE,
+        "_FAULT_SERVER": FAULT_SERVER,
+        "_SERVER_FAULT_MARKERS": _SERVER_FAULT_MARKERS,
+        "_TEMPLATE_FAULT_MARKERS": _TEMPLATE_FAULT_MARKERS,
+    },
+)
 
 
 class TestTrimToolResultErrorTail(unittest.TestCase):
@@ -366,6 +411,112 @@ class TestFlattenRoleAlternation(unittest.TestCase):
         messages = [original]
         _flatten_for_plain_chat(messages)
         self.assertIn("tool_calls", original)
+
+
+class TestClassifyLlm500(unittest.TestCase):
+    """A 500 must be classified before choosing a recovery (issue #63).
+
+    Reshaping the request (tools-as-text) is only correct for a template
+    fault.  Applying it to a server fault silently downgrades the session
+    and hides the real cause, so the classifier must never mistake one for
+    the other.
+    """
+
+    def test_template_markers_classify_as_template(self):
+        """Known llama-server template rejections classify as template."""
+        for body in (
+            "Unable to generate parser for this template.",
+            "Error: Jinja Exception: Unexpected message role.",
+            "No user query found in messages.",
+            "Jinja template error while rendering.",
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(_classify_llm_500(body), FAULT_TEMPLATE)
+
+    def test_oom_markers_classify_as_server(self):
+        """Resource/hardware failures classify as server faults."""
+        for body in (
+            "CUDA error: out of memory",
+            "failed to allocate buffer for kv cache",
+            "ggml_vulkan: ErrorOutOfDeviceMemory",
+            "GGML_ASSERT: cudaMalloc failed",
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(_classify_llm_500(body), FAULT_SERVER)
+
+    def test_empty_body_classifies_as_server(self):
+        """An empty body is ambiguous -> safe default is server (no reshape)."""
+        for body in ("", None, "   ", "{}"):
+            with self.subTest(body=body):
+                self.assertEqual(_classify_llm_500(body), FAULT_SERVER)
+
+    def test_unrecognised_body_classifies_as_server(self):
+        """An unknown error must not trigger the template downgrade."""
+        self.assertEqual(
+            _classify_llm_500("Internal server error occurred."), FAULT_SERVER
+        )
+
+    def test_server_markers_win_over_generic_template_marker(self):
+        """An OOM mentioning 'template' is still a server fault.
+
+        This is the exact ambiguity that caused the original bug: the
+        generic marker 'template' appears in unrelated server messages, so
+        the specific server markers must be checked first.
+        """
+        body = "Failed to load template: CUDA error: out of memory"
+        self.assertEqual(_classify_llm_500(body), FAULT_SERVER)
+
+    def test_classification_is_case_insensitive(self):
+        """Marker matching must not depend on casing."""
+        self.assertEqual(
+            _classify_llm_500("UNABLE TO GENERATE PARSER FOR THIS TEMPLATE"),
+            FAULT_TEMPLATE,
+        )
+        self.assertEqual(
+            _classify_llm_500("OUT OF MEMORY"), FAULT_SERVER
+        )
+
+
+class TestClassifierMarkerSync(unittest.TestCase):
+    """Guard against the mirrored marker tuples drifting from the source.
+
+    The classifier tests above use lists mirrored in this module so that a
+    marker addition cannot silently turn a test green.  This test closes the
+    other half: it parses the real constants out of ``agent_controller.py``
+    and fails if the mirror no longer matches.
+    """
+
+    @staticmethod
+    def _source_tuple(name: str) -> tuple:
+        """Extract a top-level tuple-of-strings constant from the source."""
+        tree = ast.parse(_load_source())
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target = node.targets[0]
+                if isinstance(target, ast.Name) and target.id == name:
+                    return tuple(ast.literal_eval(node.value))
+        raise AssertionError("{:s} not found in agent_controller.py".format(name))
+
+    def test_server_markers_match_source(self):
+        self.assertEqual(self._source_tuple("_SERVER_FAULT_MARKERS"), _SERVER_FAULT_MARKERS)
+
+    def test_template_markers_match_source(self):
+        self.assertEqual(self._source_tuple("_TEMPLATE_FAULT_MARKERS"), _TEMPLATE_FAULT_MARKERS)
+
+    def test_fault_constants_match_source(self):
+        """FAULT_TEMPLATE / FAULT_SERVER values must match the source."""
+        tree = ast.parse(_load_source())
+        found = {}
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target = node.targets[0]
+                if isinstance(target, ast.Name) and target.id in (
+                    "_FAULT_TEMPLATE", "_FAULT_SERVER"
+                ):
+                    found[target.id] = ast.literal_eval(node.value)
+        self.assertEqual(
+            found, {"_FAULT_TEMPLATE": FAULT_TEMPLATE, "_FAULT_SERVER": FAULT_SERVER}
+        )
 
 
 class TestInternalCodeMainThreadMarker(unittest.TestCase):

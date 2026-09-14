@@ -139,6 +139,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   produced `user, user` runs, which strict templates reject. Consecutive `user`/`assistant`
   messages are now merged. New tests in `tests/test_orchestration_helpers.py` (25 total, green).
 
+- **HTTP 500 No Longer Misread as a Template Problem (#63)** - llama-server returns a bare HTTP 500
+  for two very different failures, and the old handler treated every one of them as "the chat
+  template rejected `tools`": it re-sent the conversation with the tool listing inlined as text.
+  That is correct for a template fault, but it silently downgraded the whole session to
+  text-based tool calling (far less reliable on small models) whenever the real cause was a
+  resource/hardware fault such as a GPU OOM — and it masked the cause, since the log pointed at
+  the template. The 500 path now classifies the response first via `_classify_llm_500()`: server
+  markers (OOM, `CUDA error`, `cudaMalloc`, `ggml_assert`, allocation failures) are checked
+  *before* the generic template markers, so an OOM message that happens to mention "template" is
+  still a server fault. A server fault keeps native tool calling and retries with backoff; if it
+  persists, `_server_fault_message()` surfaces the response body, the llama-server log tail, and
+  the existing GPU-OOM hint with its context-window advice — instead of a generic
+  "LLM request failed". An empty or unrecognised body is treated as a server fault, so an error we
+  don't understand can never trigger the downgrade. The downgrade itself is now visible: a
+  `warning` on `AgentState` (shown in the chat sidebar and cleared each turn) tells the user that
+  text-based tool calling is in use and why. Also fixed a latent bug: the body was read with
+  `ex.read()` in up to four separate branches, but `HTTPError` bodies are single-use, so every
+  read after the first silently returned empty and the diagnostics for the real cause were lost.
+  New tests in `tests/test_orchestration_helpers.py` (34 total, green), including a marker-sync
+  guard that parses the real constants out of the source so the test's mirrored lists cannot
+  drift.
+
 - **Tier 3h Quality Audit: 3 Critical Bugs** - Two MCP tools advertised to the LLM always failed:
   `execute_blender_plan` and `list_blender_templates` imported `_plan_to_code` / `_render_template` /
   `_TEMPLATES` / `_TEMPLATE_DEFAULTS` from the wrong module (`mcp_to_blender_server` instead of

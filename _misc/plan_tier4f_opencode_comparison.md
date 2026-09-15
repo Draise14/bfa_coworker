@@ -312,7 +312,7 @@ Bridge `9876`, MCP `9191`, LLM `8081`.
 | `external_directory` guard | ✅ | ❌ | Missing | 4f.3 |
 | **Doom-loop guard (3× identical)** | ✅ | 🟡 spiral (errors only, 2×) | Partial | 4f.3 |
 | **Subagents + Task tool** | ✅ | ❌ | Missing | 4f.4 |
-| Planner → specialists → validator | ✅ | 🟡 planned 6f.1 | Partial | 4f.4 |
+| Planner → specialists → validator | ✅ | 🟡 planned 4g.6 / 4f.4 | Partial | 4f.4 |
 | `subagent_depth` limit | ✅ | ❌ | Missing | 4f.4 |
 | Per-agent model/temperature/steps | ✅ | ❌ | Missing | 4f.4 |
 | Markdown agent definitions | ✅ | ❌ | Missing | 4f.4 |
@@ -375,7 +375,7 @@ Ranked by value-to-effort for BFA Coworker:
 | 6 | **Metrics-driven budget readout** | `limit.context` | 🟡 Med | 🟢 Low | 4f.1/4f.2 |
 | 7 | **On-demand skill loading** | `skill` tool | 🟡 Med | 🟡 Med | 4f.2 |
 | 8 | **Subagent + Task tool** | Agents | 🔴 High | 🔴 High | 4f.4 |
-| 9 | **Planner → specialists → validator** | Agents + 6f.1 | 🔴 High | 🔴 High | 4f.4 |
+| 9 | **Planner → specialists → validator** | Agents + 4g.6 | 🔴 High | 🔴 High | 4f.4 |
 | 10 | **Per-agent model/temperature/steps** | Agent options | 🟡 Med | 🟡 Med | 4f.4 |
 | 11 | **Markdown agent definitions** | `agents/*.md` | 🟡 Med | 🟢 Low | 4f.4 |
 | 12 | **`external_directory` guard** | Permissions | 🟡 Med | 🟢 Low | 4f.3 |

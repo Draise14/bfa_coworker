@@ -909,9 +909,9 @@ Passive background scanner that flags common issues (unapplied scale, missing UV
 
 **Source**: BlenderMCP Pro
 
-**Why deferred**: Interesting but complex. Requires background polling, issue detection heuristics, and safe auto-fix logic. Tier 6 material.
+**Why deferred**: Interesting but complex. Requires background polling, issue detection heuristics, and safe auto-fix logic. Tier 4g.6 material.
 
-**BFA applicability**: Deferred to Tier 6.
+**BFA applicability**: Deferred to Tier 4g.6 (`plan_tier4g_domain_tooling.md` §4g.6.1).
 
 ---
 
@@ -921,9 +921,9 @@ AI critiques a render with structured feedback and quality score. BlenderMCP Pro
 
 **Source**: BlenderMCP Pro, BlendAI
 
-**Why deferred**: Requires vision model support and render pipeline integration. Tier 6 material.
+**Why deferred**: Requires vision model support and render pipeline integration. Tier 4g.6 material.
 
-**BFA applicability**: Deferred to Tier 6.
+**BFA applicability**: Deferred to Tier 4g.6 (`plan_tier4g_domain_tooling.md` §4g.6.2).
 
 ---
 
@@ -1137,18 +1137,25 @@ These are the features we're deliberately NOT implementing in Tier 4b. They're o
 
 **Tier 5 delivers**: Quick chat access, reusable automation, robust queue, smoother onboarding, batch prompting, and in-app dependency install. This is the "power user" tier.
 
-#### Tier 6 — Advanced Intelligence (post-Tier 5, ~4-6 weeks)
+#### Advanced Intelligence — redistributed (2026-09-14)
 
-| # | Gap | Pattern | Source | Effort | Why Tier 6 |
+> The former "Tier 6" bucket was redistributed when the domain tooling plan was
+> elevated to **Tier 4g**. Agent Teams is now **Tier 4f.4**; Scene Co-Pilot, Render
+> Critic, external client config, and doc retrieval are **Tier 4g.6**; voice input and
+> TTS are **Tier 5**.
+
+| # | Gap | Pattern | Source | Effort | Now |
 |---|---|---|---|---|---|
-| 21 | **Agent Teams with planner** | P | BlenderMCP Pro | Very High | Multi-agent orchestration, dependency resolution, parallel execution. The most complex feature. |
-| 22 | **Scene Co-Pilot (passive issue detection)** | T | BlenderMCP Pro | High | Background polling, issue detection heuristics, safe auto-fix logic. |
-| 23 | **Render Critic with iterative refinement** | U | BlenderMCP Pro | High | Requires vision model + render pipeline integration + iterative loop. |
-| 24 | **Voice input** | — | BlenderMCP Pro | Medium | Local Whisper integration. No API key needed. |
-| 25 | **Text-to-speech output** | — | Chat Companion | Medium | Reads answers aloud. Unique among current competitors. |
-| 26 | **Document loading with vector search** | AC | BuddyCode GPT | High | RAG-style retrieval over project docs. Requires vector-store dependency; evaluate a lightweight chunk + scoring approach instead of FAISS. |
+| 21 | **Agent Teams with planner** | P | BlenderMCP Pro | Very High | **Tier 4f.4** — multi-agent orchestration, dependency resolution, parallel execution |
+| 22 | **Scene Co-Pilot (passive issue detection)** | T | BlenderMCP Pro | High | **Tier 4g.6.1** — background polling, issue detection heuristics, safe auto-fix |
+| 23 | **Render Critic with iterative refinement** | U | BlenderMCP Pro | High | **Tier 4g.6.2** — vision model + render pipeline + iterative loop |
+| 24 | **Voice input** | — | BlenderMCP Pro | Medium | **Tier 5** — local Whisper integration, no API key |
+| 25 | **Text-to-speech output** | — | Chat Companion | Medium | **Tier 5** — reads answers aloud |
+| 26 | **Document loading with vector search** | AC | BuddyCode GPT | High | **Tier 4g.6.4** — RAG-style retrieval; lightweight chunk + scoring before FAISS |
 
-**Tier 6 delivers**: Multi-agent orchestration, passive scene monitoring, render feedback loops, multimodal I/O, and project-doc retrieval. This is the "intelligence" tier.
+**Advanced Intelligence delivers**: Multi-agent orchestration (4f.4), passive scene
+monitoring, render feedback loops, and project-doc retrieval. This is the "intelligence"
+layer.
 
 #### Out of Scope
 
@@ -1670,13 +1677,13 @@ These patterns are noted but deferred to future tiers. Each has a concrete imple
 | **GPU auto-detection + one-click setup** | Blender Buddy | Tier 5 | 5f.5 | `plan_tier5_generative_local_systems.md` |
 | **Multi-pair / batch execution** | BuddyCode GPT | Tier 5 | 5f.6 | `plan_tier5_generative_local_systems.md` |
 | **In-app module installation** | BuddyCode GPT | Tier 5 | 5f.7 | `plan_tier5_generative_local_systems.md` |
-| **Agent Teams with planner** | BlenderMCP Pro | Tier 6 | 6f.1 | `plan_tier6_domain_tooling.md` |
-| **Scene Co-Pilot** | BlenderMCP Pro | Tier 6 | 6f.2 | `plan_tier6_domain_tooling.md` |
-| **Render Critic with iterative refinement** | BlenderMCP Pro, BlendAI | Tier 6 | 6f.3 | `plan_tier6_domain_tooling.md` |
-| **Voice input** | BlenderMCP Pro | Tier 6 | 6f.4 | `plan_tier6_domain_tooling.md` |
-| **Text-to-speech output** | Chat Companion | Tier 6 | 6f.5 | `plan_tier6_domain_tooling.md` |
-| **External client config (one-click)** | BlenderMCP Pro | Tier 6 | 6f.6 | `plan_tier6_domain_tooling.md` |
-| **Document loading with vector search** | BuddyCode GPT | Tier 6 | 6f.7 | `plan_tier6_domain_tooling.md` |
+| **Agent Teams with planner** | BlenderMCP Pro | Tier 4f.4 | 4f.4 | `plan_tier4f_agent_intelligence.md` |
+| **Scene Co-Pilot** | BlenderMCP Pro | Tier 4g.6 | 4g.6.1 | `plan_tier4g_domain_tooling.md` |
+| **Render Critic with iterative refinement** | BlenderMCP Pro, BlendAI | Tier 4g.6 | 4g.6.2 | `plan_tier4g_domain_tooling.md` |
+| **Voice input** | BlenderMCP Pro | Tier 5 | — | deferred |
+| **Text-to-speech output** | Chat Companion | Tier 5 | — | deferred |
+| **External client config (one-click)** | BlenderMCP Pro | Tier 4g.6 | 4g.6.3 | `plan_tier4g_domain_tooling.md` |
+| **Document loading with vector search** | BuddyCode GPT | Tier 4g.6 | 4g.6.4 | `plan_tier4g_domain_tooling.md` |
 | **Text Editor file browser** | BuddyCode GPT | Out of scope | — | Removed from Tier 4c (2026-09-01) — not artist-friendly tooling |
 | **Cross-DCC bridge** | BlenderMCP Pro | Out of scope | — | BFA-specific, not relevant |
 

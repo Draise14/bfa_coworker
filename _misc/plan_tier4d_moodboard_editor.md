@@ -1197,7 +1197,7 @@ Implementation: the moodboard chat panel prepends a context line to the message 
 
 ### 8.3 Agent Tools for the Moodboard (MCP)
 
-New MCP tools (following the toolcode pattern from Tier 6):
+New MCP tools (following the toolcode pattern from Tier 4g):
 
 | Tool | Purpose |
 |---|---|

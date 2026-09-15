@@ -1,8 +1,10 @@
-# BFA Coworker — Tier 6: Domain-Specific MCP Tooling Plan
+# BFA Coworker — Tier 4g: Domain-Specific MCP Tooling Plan
 
 **Date**: 2026-08-11
+**Elevated**: 2026-09-14 — was Tier 6, now **Tier 4g** (see `plan_tier4_master_coordination.md` §1)
 **Status**: Skills System Implemented — Tools Not Started
 **Depends on**: Existing MCP tool infrastructure (toolcode pattern, auto-discovery, bridge server)
+**Sibling**: `plan_tier4f_agent_intelligence.md` — the agent *runtime* (inference, context, permissions, orchestration). Orthogonal to this plan but mutually reinforcing; see §Relationship to Tier 4f below.
 
 ---
 
@@ -51,8 +53,21 @@ A version-aware skill system was implemented alongside this plan. See `addon/bfa
 > pathway). Phase 6c (Asset Browser) is already delivered in Tier 3d. Phase 6f
 > (Advanced Intelligence) becomes Tier 4 capstone (Phase 6 in §15). Each phase
 > below gets a **development pathway** matching the master plan.
+> *(Historical note — the 6a/6b/6d/6e labels below were renumbered to 4g.1–4g.5 on
+> 2026-09-14; see the Elevation note that follows.)*
 
-Tier 6 extends BFA Coworker's MCP tool set from **22 general-purpose tools** (scene inspection, screenshots, navigation, code execution, doc search) to **48 tools** by adding **26 domain-specific tools** across four editor domains. The goal is to make the agent **smarter without distilling models** — instead of the LLM generating correct `bpy` code from scratch for every editor operation, pre-authored, tested toolcode with structured `NamedTuple` inputs/outputs lets the LLM simply pick the right tool and parameters.
+> **Elevation (2026-09-14):** This plan is now **Tier 4g**. The "Tier 6" label had
+> become misleading: the plan has been implemented as *Tier 4 Phase 0* since
+> 2026-09-01, and every remaining phase is Tier 4 work. Tier 6 is now reserved for
+> the genuinely later-tier plans that need Tier 5 generative infrastructure first
+> (`plan_tier6_generative_3d_systems.md`, `plan_tier6_viewport_diffusion_renderer.md`).
+>
+> Phase labels are renumbered **6a→4g.1, 6b→4g.2, 6c→4g.3, 6d→4g.4, 6e→4g.5**.
+> Phase 6f (Advanced Intelligence) is **split**: 6f.1 → **Tier 4f.4** (already
+> specified), 6f.2/6f.3/6f.6/6f.7 → **Tier 4g.6**, and 6f.4/6f.5 (voice input,
+> text-to-speech) → **Tier 5**.
+
+Tier 4g extends BFA Coworker's MCP tool set from **22 general-purpose tools** (scene inspection, screenshots, navigation, code execution, doc search) to **48 tools** by adding **26 domain-specific tools** across four editor domains. The goal is to make the agent **smarter without distilling models** — instead of the LLM generating correct `bpy` code from scratch for every editor operation, pre-authored, tested toolcode with structured `NamedTuple` inputs/outputs lets the LLM simply pick the right tool and parameters.
 
 **Core insight**: The existing toolcode pattern (`MCP-facing .py` + `Blender-facing *_toolcode.py`) is the answer to "making the MCP smarter." Each tool bundles domain knowledge, error handling, and structured return types. The LLM only needs to understand the tool's description and parameter schema — not the Blender Python API for that domain. This is especially critical for smaller local models that struggle to generate correct `bpy` code.
 
@@ -93,27 +108,27 @@ Each new tool follows the **exact same pattern** as existing tools:
 
 | Domain | Read Tools | Navigate Tools | Write Tools | Feedback Tools | Total | Status |
 |---|---|---|---|---|---|---|
-| **6a: VSE / Sequencer** | 3 | 0 | 1 | 1 | **5** | 🟡 Pulled to Tier 4 Phase 0.1 |
-| **6b: Text Editor** | 3 | 0 | 1 | 1 | **5** | 🟡 Pulled to Tier 4 Phase 0.2 |
-| **6c: Asset Browser** | 5 | 1 | 2 | 1 | **9** | ✅ Done in Tier 3d |
-| **6d: Shader / Node Editor** | 3 | 0 | 3 | 1 | **7** | 🟡 Partial — 3 done, 4 pulled to Tier 4 Phase 0.3 |
+| **4g.1: VSE / Sequencer** | 3 | 0 | 1 | 1 | **5** | 🟡 Tier 4 Phase 0.1 |
+| **4g.2: Text Editor** | 3 | 0 | 1 | 1 | **5** | 🟡 Tier 4 Phase 0.2 |
+| **4g.3: Asset Browser** | 5 | 1 | 2 | 1 | **9** | ✅ Done in Tier 3d |
+| **4g.4: Shader / Node Editor** | 3 | 0 | 3 | 1 | **7** | 🟡 Partial — 3 done, 4 at Tier 4 Phase 0.3 |
 | **Total** | **14** | **1** | **7** | **4** | **26** | |
 
 ---
 
-## Phase 6a: VSE / Sequencer Tools (Est. 500 LOC) 🟡 PULLED TO TIER 4 PHASE 0.1
+## Phase 4g.1: VSE / Sequencer Tools (Est. 500 LOC) 🟡 TIER 4 PHASE 0.1
 
 *The Sequencer has the most complete bundled API + manual docs (30+ strip types, modifiers, channels, retiming), but zero dedicated tools. These give the LLM the ability to see, navigate, and manipulate strips without generating `bpy.ops.sequencer.*` code from scratch.*
 
-**Development pathway (master plan §15 Phase 0.1)**: implement 6a.1 → 6a.2 → 6a.3 (reads, parallelizable) → 6a.4 (write) → 6a.5 (feedback). Done when `test_tool_listing.py` shows 5 sequencer tools and the smoke test passes.
+**Development pathway (master plan §15 Phase 0.1)**: implement 4g.1.1 → 4g.1.2 → 4g.1.3 (reads, parallelizable) → 4g.1.4 (write) → 4g.1.5 (feedback). Done when `test_tool_listing.py` shows 5 sequencer tools and the smoke test passes.
 
 | Step | Description | Files | LOC |
 |---|---|---|---|
-| 6a.1 | `get_vse_strips_summary` — list all strips: channel, frame range, type, name, selection state, mute, lock | `get_vse_strips_summary.py` + `_toolcode.py` | ~100 |
-| 6a.2 | `get_vse_strip_detail` — full detail on one strip: transforms, crop, modifiers, source file path, speed, opacity, blend mode, color balance, proxy settings | `get_vse_strip_detail.py` + `_toolcode.py` | ~120 |
-| 6a.3 | `get_vse_timeline_overview` — timeline metadata: resolution, frame range, channels in use, gaps/overlaps, active strip, preview frame | `get_vse_timeline_overview.py` + `_toolcode.py` | ~100 |
-| 6a.4 | `set_strip_frame_range` — move/trim a strip by setting `frame_start` and/or `frame_end`; optionally set channel | `set_strip_frame_range.py` + `_toolcode.py` | ~90 |
-| 6a.5 | `render_vse_preview` — render a single VSE frame to a temp PNG file; returns file path for LLM vision feedback (uses deferred tool pattern) | `render_vse_preview.py` + `_toolcode.py` | ~90 |
+| 4g.1.1 | `get_vse_strips_summary` — list all strips: channel, frame range, type, name, selection state, mute, lock | `get_vse_strips_summary.py` + `_toolcode.py` | ~100 |
+| 4g.1.2 | `get_vse_strip_detail` — full detail on one strip: transforms, crop, modifiers, source file path, speed, opacity, blend mode, color balance, proxy settings | `get_vse_strip_detail.py` + `_toolcode.py` | ~120 |
+| 4g.1.3 | `get_vse_timeline_overview` — timeline metadata: resolution, frame range, channels in use, gaps/overlaps, active strip, preview frame | `get_vse_timeline_overview.py` + `_toolcode.py` | ~100 |
+| 4g.1.4 | `set_strip_frame_range` — move/trim a strip by setting `frame_start` and/or `frame_end`; optionally set channel | `set_strip_frame_range.py` + `_toolcode.py` | ~90 |
+| 4g.1.5 | `render_vse_preview` — render a single VSE frame to a temp PNG file; returns file path for LLM vision feedback (uses deferred tool pattern) | `render_vse_preview.py` + `_toolcode.py` | ~90 |
 
 ### Files Created (10 new files)
 
@@ -150,19 +165,19 @@ Agent loop:
 
 ---
 
-## Phase 6b: Text Editor Tools (Est. 450 LOC) 🟡 PULLED TO TIER 4 PHASE 0.2
+## Phase 4g.2: Text Editor Tools (Est. 450 LOC) 🟡 TIER 4 PHASE 0.2
 
 *Enables VS Code-style agent interaction: read scripts, make targeted edits, search, run code. The Text Editor has the thinnest manual docs but the API reference covers `bpy.ops.text.*` and `bpy.types.Text` well. These tools are the foundation for the agent being able to write and modify its own scripts.*
 
-**Development pathway (master plan §15 Phase 0.2)**: implement 6b.1 → 6b.2 → 6b.3 (reads) → 6b.4 (write) → 6b.5 (feedback). Done when the agent can read/edit/run a text block via chat.
+**Development pathway (master plan §15 Phase 0.2)**: implement 4g.2.1 → 4g.2.2 → 4g.2.3 (reads) → 4g.2.4 (write) → 4g.2.5 (feedback). Done when the agent can read/edit/run a text block via chat.
 
 | Step | Description | Files | LOC |
 |---|---|---|---|
-| 6b.1 | `get_text_documents` — list all text datablocks: name, line count, modified flag, syntax highlighting type, active state, file path (if external) | `get_text_documents.py` + `_toolcode.py` | ~80 |
-| 6b.2 | `get_text_content` — read content of a text datablock with optional line range (`start_line`, `end_line`); returns lines as list of strings | `get_text_content.py` + `_toolcode.py` | ~90 |
-| 6b.3 | `set_text_content` — replace text in a line range, insert at line, or overwrite entire document; supports append mode | `set_text_content.py` + `_toolcode.py` | ~110 |
-| 6b.4 | `search_in_text` — search a text datablock for a string or regex; return matching line numbers with surrounding context lines | `search_in_text.py` + `_toolcode.py` | ~80 |
-| 6b.5 | `run_text_script` — execute a text datablock as Python in Blender, capturing stdout/stderr and returning any result dict | `run_text_script.py` + `_toolcode.py` | ~90 |
+| 4g.2.1 | `get_text_documents` — list all text datablocks: name, line count, modified flag, syntax highlighting type, active state, file path (if external) | `get_text_documents.py` + `_toolcode.py` | ~80 |
+| 4g.2.2 | `get_text_content` — read content of a text datablock with optional line range (`start_line`, `end_line`); returns lines as list of strings | `get_text_content.py` + `_toolcode.py` | ~90 |
+| 4g.2.3 | `set_text_content` — replace text in a line range, insert at line, or overwrite entire document; supports append mode | `set_text_content.py` + `_toolcode.py` | ~110 |
+| 4g.2.4 | `search_in_text` — search a text datablock for a string or regex; return matching line numbers with surrounding context lines | `search_in_text.py` + `_toolcode.py` | ~80 |
+| 4g.2.5 | `run_text_script` — execute a text datablock as Python in Blender, capturing stdout/stderr and returning any result dict | `run_text_script.py` + `_toolcode.py` | ~90 |
 
 ### Files Created (10 new files)
 
@@ -203,21 +218,27 @@ Agent loop:
 
 ---
 
-## Phase 6c: Asset Browser Tools (Est. 800 LOC) ❌ NOT STARTED
+## Phase 4g.3: Asset Browser Tools (Est. 800 LOC) ✅ DELIVERED IN TIER 3d
 
 *The richest domain. Assets can be materials, node groups, objects, worlds, HDRI environments, etc. Tools need to handle catalog browsing, metadata reading, and type-aware import. The existing Poly Haven tools provide a partial reference pattern for the import logic.*
 
+> **Status (2026-09-14):** Delivered in Tier 3d as 13 tools (including the asset index and
+> wiring). The step list below is retained as the original design record; the shipped
+> tool names differ slightly (`list_asset_catalogs` vs `get_asset_catalogs`,
+> `load_asset_in_context` vs `import_asset_to_scene`). See
+> `Plans History/plan_tier3d_asset_browser_intelligence.md`.
+
 | Step | Description | Files | LOC |
 |---|---|---|---|
-| 6c.1 | `get_asset_libraries` — list all asset libraries: current file, user library, custom paths, with total asset counts per library | `get_asset_libraries.py` + `_toolcode.py` | ~80 |
-| 6c.2 | `get_asset_catalogs` — catalog tree for a library: catalog paths, UUIDs, parent-child hierarchy | `get_asset_catalogs.py` + `_toolcode.py` | ~90 |
-| 6c.3 | `list_assets_in_catalog` — assets in a catalog: name, type, tags, author, description snippet, preview thumbnail path | `list_assets_in_catalog.py` + `_toolcode.py` | ~100 |
-| 6c.4 | `search_assets` — search across libraries by name/tag/type; returns matching assets with metadata and library location | `search_assets.py` + `_toolcode.py` | ~100 |
-| 6c.5 | `get_asset_detail` — full metadata for one asset: description, author, tags, datablock type, preview image path, library reference | `get_asset_detail.py` + `_toolcode.py` | ~90 |
-| 6c.6 | `import_asset_to_scene` — type-aware import: auto-detects asset type and applies correctly (material→active object, GN→modifier, object→scene collection, world→scene world, HDRI→world environment) | `import_asset_to_scene.py` + `_toolcode.py` | ~140 |
-| 6c.7 | `link_asset_node_group` — link a node group asset into a specific node tree editor (shader/compositor/geometry nodes); accepts `tree_type` and `node_tree_name` | `link_asset_node_group.py` + `_toolcode.py` | ~80 |
-| 6c.8 | `create_asset_from_selection` — mark the current selection (object/material/node group) as an asset with user-provided metadata (description, tags) | `create_asset_from_selection.py` + `_toolcode.py` | ~60 |
-| 6c.9 | `jump_to_asset_browser` — switch to the Asset Browser workspace; optionally navigate to a specific catalog path | `jump_to_asset_browser.py` + `_toolcode.py` | ~60 |
+| 4g.3.1 | `get_asset_libraries` — list all asset libraries: current file, user library, custom paths, with total asset counts per library | `get_asset_libraries.py` + `_toolcode.py` | ~80 |
+| 4g.3.2 | `get_asset_catalogs` — catalog tree for a library: catalog paths, UUIDs, parent-child hierarchy | `get_asset_catalogs.py` + `_toolcode.py` | ~90 |
+| 4g.3.3 | `list_assets_in_catalog` — assets in a catalog: name, type, tags, author, description snippet, preview thumbnail path | `list_assets_in_catalog.py` + `_toolcode.py` | ~100 |
+| 4g.3.4 | `search_assets` — search across libraries by name/tag/type; returns matching assets with metadata and library location | `search_assets.py` + `_toolcode.py` | ~100 |
+| 4g.3.5 | `get_asset_detail` — full metadata for one asset: description, author, tags, datablock type, preview image path, library reference | `get_asset_detail.py` + `_toolcode.py` | ~90 |
+| 4g.3.6 | `import_asset_to_scene` — type-aware import: auto-detects asset type and applies correctly (material→active object, GN→modifier, object→scene collection, world→scene world, HDRI→world environment) | `import_asset_to_scene.py` + `_toolcode.py` | ~140 |
+| 4g.3.7 | `link_asset_node_group` — link a node group asset into a specific node tree editor (shader/compositor/geometry nodes); accepts `tree_type` and `node_tree_name` | `link_asset_node_group.py` + `_toolcode.py` | ~80 |
+| 4g.3.8 | `create_asset_from_selection` — mark the current selection (object/material/node group) as an asset with user-provided metadata (description, tags) | `create_asset_from_selection.py` + `_toolcode.py` | ~60 |
+| 4g.3.9 | `jump_to_asset_browser` — switch to the Asset Browser workspace; optionally navigate to a specific catalog path | `jump_to_asset_browser.py` + `_toolcode.py` | ~60 |
 
 ### Files Created (18 new files)
 
@@ -267,23 +288,23 @@ Agent loop:
 
 ---
 
-## Phase 6d: Shader / Node Editor Tools (Est. 650 LOC) 🟡 PARTIAL — 4 REMAINING PULLED TO TIER 4 PHASE 0.3
+## Phase 4g.4: Shader / Node Editor Tools (Est. 650 LOC) 🟡 PARTIAL — 4 REMAINING AT TIER 4 PHASE 0.3
 
 *Generic across Shader Editor, Compositor, and Geometry Nodes. All tools accept a `tree_type` parameter (`"ShaderNodeTree"`, `"CompositorNodeTree"`, `"GeometryNodeTree"`) — this avoids 3× duplication. The bundled API docs cover every node type exhaustively (~200+ node RST files).*
 
-**Status (2026-09-01)**: `get_active_node_tree` (6d.1), `get_node_group_interface` (6d.3) and `wire_node_group` are done in Tier 3. The remaining 4 tools (`get_node_detail`, `create_node`, `connect_nodes`, `set_node_input_value`, `mute_node` — ~380 LOC) are pulled forward to Tier 4 Phase 0.3.
+**Status (2026-09-01)**: `get_active_node_tree` (4g.4.1), `get_node_group_interface` (4g.4.3) and `wire_node_group` are done in Tier 3. The remaining 4 tools (`get_node_detail`, `create_node`, `connect_nodes`, `set_node_input_value`, `mute_node` — ~380 LOC) are at Tier 4 Phase 0.3.
 
 **Development pathway (master plan §15 Phase 0.3)**: implement `get_node_detail` (read) → `create_node` (write) → `connect_nodes` (write) → `set_node_input_value` (write) → `mute_node` (write). Done when the agent can create/connect/mute nodes via chat.
 
 | Step | Description | Files | LOC |
 |---|---|---|---|
-| 6d.1 | `get_active_node_tree` — full node tree structure for the active context: nodes (type, name, location, mute, color), links (from→to), frames (name, size, node membership), group inputs/outputs | `get_active_node_tree.py` + `_toolcode.py` | ~130 |
-| 6d.2 | `get_node_detail` — full properties of one node: all input socket values/types/defaults, output sockets, internal settings dict, label, color, mute state | `get_node_detail.py` + `_toolcode.py` | ~110 |
-| 6d.3 | `get_node_group_interface` — interface of a node group: input/output sockets with names, types, default values, min/max ranges, descriptions | `get_node_group_interface.py` + `_toolcode.py` | ~90 |
-| 6d.4 | `create_node` — add a node by `bl_idname` at a location in a specific node tree; returns the created node's name and socket list | `create_node.py` + `_toolcode.py` | ~100 |
-| 6d.5 | `connect_nodes` — link an output socket of one node to an input socket of another; validates socket types before connecting | `connect_nodes.py` + `_toolcode.py` | ~90 |
-| 6d.6 | `set_node_input_value` — set the value of a named input socket on a node; handles float, int, color (RGBA), vector (XYZ), boolean, and string types | `set_node_input_value.py` + `_toolcode.py` | ~80 |
-| 6d.7 | `mute_node` — toggle the mute state of a node; optionally set to a specific state | `mute_node.py` + `_toolcode.py` | ~50 |
+| 4g.4.1 | `get_active_node_tree` — full node tree structure for the active context: nodes (type, name, location, mute, color), links (from→to), frames (name, size, node membership), group inputs/outputs | `get_active_node_tree.py` + `_toolcode.py` | ~130 |
+| 4g.4.2 | `get_node_detail` — full properties of one node: all input socket values/types/defaults, output sockets, internal settings dict, label, color, mute state | `get_node_detail.py` + `_toolcode.py` | ~110 |
+| 4g.4.3 | `get_node_group_interface` — interface of a node group: input/output sockets with names, types, default values, min/max ranges, descriptions | `get_node_group_interface.py` + `_toolcode.py` | ~90 |
+| 4g.4.4 | `create_node` — add a node by `bl_idname` at a location in a specific node tree; returns the created node's name and socket list | `create_node.py` + `_toolcode.py` | ~100 |
+| 4g.4.5 | `connect_nodes` — link an output socket of one node to an input socket of another; validates socket types before connecting | `connect_nodes.py` + `_toolcode.py` | ~90 |
+| 4g.4.6 | `set_node_input_value` — set the value of a named input socket on a node; handles float, int, color (RGBA), vector (XYZ), boolean, and string types | `set_node_input_value.py` + `_toolcode.py` | ~80 |
+| 4g.4.7 | `mute_node` — toggle the mute state of a node; optionally set to a specific state | `mute_node.py` + `_toolcode.py` | ~50 |
 
 ### Files Created (14 new files)
 
@@ -333,17 +354,17 @@ Agent loop:
 
 ---
 
-## Phase 6e: System Prompt & Cross-Domain Integration (Est. 200 LOC) 🟡 PULLED TO TIER 4 PHASE 0.4
+## Phase 4g.5: System Prompt & Cross-Domain Integration (Est. 200 LOC) 🟡 TIER 4 PHASE 0.4
 
-**Development pathway (master plan §15 Phase 0.4)**: domain chapters + screenshot enrichment. Depends on 6a/6b/6d tools existing (0.1–0.3). Done when domain chapters are injected and screenshots include domain hints.
+**Development pathway (master plan §15 Phase 0.4)**: domain chapters + screenshot enrichment. Depends on 4g.1/4g.2/4g.4 tools existing (0.1–0.3). Done when domain chapters are injected and screenshots include domain hints.
 
 *After all tools are built, update the system prompt and screenshot enrichment to make the LLM aware of the new capabilities and provide better context.*
 
 | Step | Description | Files | LOC |
 |---|---|---|---|
-| 6e.1 | Update `prompts.yml` — add domain-specific guidance chapters for VSE, Text Editor, Asset Browser, and Shader/Node Editor; include tool usage patterns and cross-domain examples | `prompts.yml` | ~100 |
-| 6e.2 | Enrich `get_screenshot_of_window_as_json` — add VSE context (strip count, current frame, active strip name) and node editor detail (tree type, node count, active node name) to area info | `get_screenshot_of_window_as_json_toolcode.py` | ~60 |
-| 6e.3 | Add cross-domain examples to system prompt — e.g., "To add a geometry node modifier from the asset browser, use search_assets then import_asset_to_scene" | `prompts.yml` | ~40 |
+| 4g.5.1 | Update `prompts.yml` — add domain-specific guidance chapters for VSE, Text Editor, Asset Browser, and Shader/Node Editor; include tool usage patterns and cross-domain examples | `prompts.yml` | ~100 |
+| 4g.5.2 | Enrich `get_screenshot_of_window_as_json` — add VSE context (strip count, current frame, active strip name) and node editor detail (tree type, node count, active node name) to area info | `get_screenshot_of_window_as_json_toolcode.py` | ~60 |
+| 4g.5.3 | Add cross-domain examples to system prompt — e.g., "To add a geometry node modifier from the asset browser, use search_assets then import_asset_to_scene" | `prompts.yml` | ~40 |
 
 ### Files Modified (2 existing files)
 
@@ -354,51 +375,40 @@ mcp/blmcp/tools/get_screenshot_of_window_as_json_toolcode.py  # VSE + node edito
 
 ---
 
-## Phase 6f: Competitor UX Features — Advanced Intelligence (Est. 1,100 LOC) 🟡 TIER 4 CAPSTONE (PHASE 6)
+## Phase 4g.6: Advanced Intelligence (Est. ~750 LOC) 🟡 TIER 4 CAPSTONE
 
-*Becomes the Tier 4 capstone — master plan §15 Phase 6. Voice Input (6f.4) and Text-to-Speech (6f.5) deferred to Tier 5.*
+*Derived from the Tier 4b competitor analysis. These are the most ambitious features — the ones that separate a "chat assistant" from an "intelligent coworker." They require infrastructure (vision models, multi-agent orchestration, background polling) built across Tiers 4f and 5.*
 
-*Derived from the Tier 4b competitor analysis. These are the most ambitious features — the ones that separate a "chat assistant" from an "intelligent coworker." They require infrastructure (vision models, multi-agent orchestration, background polling) that's being built across Tiers 5-6.*
+> **Split (2026-09-14):** The former Phase 6f is distributed as follows:
+>
+> | Former | Now | Where |
+> |---|---|---|
+> | 6f.1 Agent Teams with Planner | **Tier 4f.4** | `plan_tier4f_agent_intelligence.md` §7 |
+> | 6f.2 Scene Co-Pilot | **4g.6.1** | below |
+> | 6f.3 Render Critic | **4g.6.2** | below |
+> | 6f.4 Voice Input | **Tier 5** | deferred — needs audio capture infra |
+> | 6f.5 Text-to-Speech | **Tier 5** | deferred — needs audio playback infra |
+> | 6f.6 External Client Config | **4g.6.3** | below |
+> | 6f.7 Document Loading / Vector Search | **4g.6.4** | below |
+>
+> **6f.1 is no longer specified here.** Agent Teams with Planner is now **Tier 4f.4**,
+> which supplies the concrete orchestration mechanics from the OpenCode harness — the
+> `Task` meta-tool for subagent dispatch, `subagent_depth` nesting limits, per-agent
+> model/temperature/steps, and markdown agent definitions. See
+> `plan_tier4f_agent_intelligence.md` §7 and `plan_tier4f_opencode_comparison.md` §3.2.
+> The original BlenderMCP Pro-derived design (PlannerAgent, TaskPlan, SpecialistAgent,
+> ValidatorAgent, AgentOrchestrator, `BFACW_PT_mission_panel`, single undo checkpoint)
+> is preserved there and extended.
 
-> **Cross-reference (2026-09-14):** The multi-agent orchestration mechanics for 6f.1
-> below are specified in **Tier 4f.4** (`plan_tier4f_agent_intelligence.md`), which
-> adopts the concrete implementation patterns from the OpenCode harness — the `Task`
-> meta-tool for subagent dispatch, `subagent_depth` nesting limits, per-agent
-> model/temperature/steps, and markdown agent definitions. See also
-> `plan_tier4f_opencode_comparison.md` §3.2. Implement 6f.1 via Tier 4f.4 rather than
-> as a standalone effort.
-
-### 6f.1 Agent Teams with Planner (Pattern P, BlenderMCP Pro) 🔴
-
-**Source**: BlenderMCP Pro 2.0 — Planner agent → specialist agents (Layout, Modeling, Materials, Lighting, Rigging, Geometry Nodes, Rendering) → Validator agent. Dependency-ordered task list, parallel execution, live task list, single undo checkpoint.
-
-**What**: The user describes a large goal ("Build a campfire scene — ground plane, three logs, stone circle, warm light, dark rocky material"). A planner agent decomposes it into dependency-ordered tasks. Specialist agents execute tasks in parallel where possible. A validator agent checks the result against the goal and auto-fixes issues.
-
-**Why Tier 6**: This is the most architecturally complex feature in the competitive landscape. It requires: multi-agent orchestration, dependency resolution, parallel execution with tool access scoping, validator heuristics, and undo checkpoint management. BlenderMCP Pro's implementation is the only reference — and it's a paid product. Getting this right in a free, open-source tool is a major differentiator.
-
-**Implementation** (~500 LOC):
-- `PlannerAgent` — takes a goal string, returns a `TaskPlan` (ordered list of `Task` objects with dependencies)
-- `TaskPlan` dataclass: tasks with id, description, domain, dependencies, status, assigned_agent
-- `SpecialistAgent` — scoped tool access (e.g., Materials agent only sees material/shader tools)
-- `ValidatorAgent` — compares final scene state against goal, returns `ValidationReport` (pass/fail/warn items)
-- `AgentOrchestrator` — executes tasks in dependency order, runs independent tasks in parallel threads
-- `BFACW_PT_mission_panel` — live task list with status icons, progress, cancel button
-- Single undo checkpoint: push before mission starts, one Ctrl+Z rolls back everything
-- Auto-fix: validator runs one repair pass before reporting done
-
-**Files**: `agent_teams.py` (new — Planner, Specialist, Validator, Orchestrator), `ui_chat.py` (mission panel), `agent_controller.py` (orchestrator integration)
-
-**Reference**: BlenderMCP Pro's Agent Teams 2.0 documentation at quadify3d.com
-
----
-
-### 6f.2 Scene Co-Pilot — Passive Issue Detection (Pattern T, BlenderMCP Pro) 🔴
+### 4g.6.1 Scene Co-Pilot — Passive Issue Detection (Pattern T, BlenderMCP Pro) 🔴
 
 **Source**: BlenderMCP Pro — passive background scanner that flags common issues (unapplied scale, missing UVs, non-manifold geo) with one-click fixes where safe.
 
 **What**: A background scanner that runs periodically (every 5s when idle) and checks the scene for common issues. Issues appear in a non-intrusive status bar in the chat panel. Each issue has a "Fix" button that applies a safe, pre-authored correction. Think: a spell-checker for your 3D scene.
 
-**Why Tier 6**: Requires background polling infrastructure, a library of issue detection heuristics, and safe auto-fix logic for each issue type. The detection heuristics need to be fast (sub-100ms for large scenes) and the fixes need to be non-destructive. This is complex but high-value — it catches problems before they cause downstream failures.
+**Why Tier 4g**: Requires background polling infrastructure, a library of issue detection heuristics, and safe auto-fix logic for each issue type. The detection heuristics need to be fast (sub-100ms for large scenes) and the fixes need to be non-destructive. This is complex but high-value — it catches problems before they cause downstream failures.
+
+**Dependency**: Benefits from **Tier 4f.4** — the validator agent's issue-detection heuristics are the same code path. Implement the detectors once, use them in both the passive scanner and the validator.
 
 **Implementation** (~300 LOC):
 - `SceneScanner` class with registered `IssueDetector` plugins
@@ -419,13 +429,15 @@ mcp/blmcp/tools/get_screenshot_of_window_as_json_toolcode.py  # VSE + node edito
 
 ---
 
-### 6f.3 Render Critic with Iterative Refinement (Pattern U, BlenderMCP Pro + BlendAI) 🔴
+### 4g.6.2 Render Critic with Iterative Refinement (Pattern U, BlenderMCP Pro + BlendAI) 🔴
 
 **Source**: BlenderMCP Pro (structured critique with quality score /10, 5 focus modes, "Fix with AI" button, iterative refinement loop). BlendAI (render suggestions).
 
 **What**: Render the current frame, send it to a vision-capable LLM for critique, get back a structured report with quality score and prioritized fixes. The user can click "Fix with AI" to apply the top fix, or enable iterative mode where the agent renders → critiques → fixes → re-renders until a target score is reached.
 
-**Why Tier 6**: Requires vision model support (already planned for Tier 4b Phase 6), render pipeline integration, structured critique parsing, and an iterative refinement loop. The iterative mode is particularly complex — it needs a termination condition (target score or max iterations) and must avoid infinite loops.
+**Why Tier 4g**: Requires vision model support (Tier 4b Phase 6), render pipeline integration, structured critique parsing, and an iterative refinement loop. The iterative mode is particularly complex — it needs a termination condition (target score or max iterations) and must avoid infinite loops.
+
+**Dependency**: The iterative loop is a natural **Tier 4f.4** subagent — a `render_critic` specialist with a bounded `steps` count. The doom-loop guard (Tier 4f.3) is the backstop against non-convergence.
 
 **Implementation** (~300 LOC):
 - `BFACW_OT_render_critic` operator: renders current frame, encodes as base64, sends to vision LLM
@@ -442,57 +454,13 @@ mcp/blmcp/tools/get_screenshot_of_window_as_json_toolcode.py  # VSE + node edito
 
 ---
 
-### 6f.4 Voice Input (BlenderMCP Pro) 🟡
-
-**Source**: BlenderMCP Pro — local Whisper integration, no API key needed, no internet after setup.
-
-**What**: Click a microphone icon in the chat input to dictate a message. Audio is transcribed locally using Whisper (no data leaves the machine). The transcribed text populates the chat input field. The user can edit before sending.
-
-**Why Tier 6**: Requires Whisper model download (~1.5 GB for `tiny.en`), audio capture from Blender (non-trivial — may need a small external helper), and real-time transcription. Valuable for accessibility and hands-free workflows, but not critical for core agent functionality.
-
-**Implementation** (~150 LOC):
-- `VoiceInputManager` — manages Whisper model download, loading, and inference
-- `BFACW_OT_voice_input` — modal operator: click to start recording, click again to stop
-- Audio capture: use `pyaudio` or `sounddevice` for microphone access
-- Transcription: `faster-whisper` with `tiny.en` model (~1.5 GB, ~2s latency)
-- Populate `chat_input` with transcribed text
-- Visual feedback: microphone icon pulses during recording
-
-**Files**: `voice_input.py` (new), `ui_chat.py` (microphone button), `llm_manager.py` (Whisper model download)
-
-**Reference**: BlenderMCP Pro's Voice Input documentation
-
----
-
-### 6f.5 Text-to-Speech Output (Chat Companion) 🟡
-
-**Source**: Chat Companion — reads answers aloud. Unique among current competitors.
-
-**What**: A "Read Aloud" button on each assistant message that speaks the response using a local TTS engine. Useful for accessibility and for users who want to listen while working in the viewport.
-
-**Why Tier 6**: Requires TTS model download, audio playback from Blender, and queue management (don't speak over yourself). Chat Companion is the only addon with this feature — it's a differentiator. But it's quality-of-life, not core functionality.
-
-**Implementation** (~100 LOC):
-- `TTSManager` — manages TTS model download and inference
-- `BFACW_OT_read_aloud` — operator on each assistant message
-- TTS engine: `piper-tts` (lightweight, ~50MB per voice, local)
-- Audio playback: `bpy.ops.sound.play()` or `playsound` library
-- Queue: if a message is already playing, stop it before starting new one
-- Speed control: normal (1.0x) / fast (1.5x) toggle
-
-**Files**: `tts_manager.py` (new), `ui_chat.py` (Read Aloud button)
-
-**Reference**: Chat Companion's TTS feature
-
----
-
-### 6f.6 External Client Config (BlenderMCP Pro) 🟡
+### 4g.6.3 External Client Config (BlenderMCP Pro) 🟡
 
 **Source**: BlenderMCP Pro — one-click config writing for Claude Desktop, Cursor, Windsurf, Claude.ai Web (via Cloudflare tunnel).
 
 **What**: A dropdown in the Coworker preferences to select an external MCP client (Claude Desktop, Cursor, Windsurf). Clicking "Write Config" auto-generates the correct JSON config file and writes it to the client's config directory. For Claude.ai Web, start a Cloudflare tunnel and display the public URL.
 
-**Why Tier 6**: We already have an MCP server and external harness mode. One-click config writing removes the friction of manually editing JSON config files. BlenderMCP Pro does this well — it's a polish feature that makes the MCP server actually usable by non-technical users.
+**Why Tier 4g**: We already have an MCP server and external harness mode. One-click config writing removes the friction of manually editing JSON config files. BlenderMCP Pro does this well — it's a polish feature that makes the MCP server actually usable by non-technical users.
 
 **Implementation** (~100 LOC):
 - `BFACW_OT_write_mcp_config` operator with client type dropdown
@@ -507,13 +475,13 @@ mcp/blmcp/tools/get_screenshot_of_window_as_json_toolcode.py  # VSE + node edito
 
 ---
 
-### 6f.7 Document Loading with Vector Search (Pattern AC, BuddyCode GPT) 🟢
+### 4g.6.4 Document Loading with Vector Search (Pattern AC, BuddyCode GPT) 🟢
 
 **Source**: BuddyCode GPT (load documents, query with FAISS vector search for context-aware generation)
 
 **What**: Let users load project documents (markdown, text, Python files) and have the agent retrieve the *relevant* chunks when answering — instead of injecting everything into context. This is RAG-style retrieval over project docs.
 
-**Why Tier 6**: We already inject project rules (markdown) wholesale. The gap is *retrieval* — today everything goes in; BuddyCode retrieves only the relevant chunk. For typical Blender scripts this is overkill, but valuable once docs grow large. Requires a vector-store dependency — evaluate a lightweight chunk + scoring approach before adopting FAISS.
+**Why Tier 4g**: We already inject project rules (markdown) wholesale. The gap is *retrieval* — today everything goes in; BuddyCode retrieves only the relevant chunk. For typical Blender scripts this is overkill, but valuable once docs grow large. Requires a vector-store dependency — evaluate a lightweight chunk + scoring approach before adopting FAISS.
 
 **Implementation** (~250 LOC):
 - `BFACW_OT_index_documents` — scan a folder for `.md`, `.txt`, `.py` files, chunk into ~500-token segments
@@ -526,16 +494,54 @@ mcp/blmcp/tools/get_screenshot_of_window_as_json_toolcode.py  # VSE + node edito
 
 ---
 
-## Total Estimated: ~3,950 LOC across 58+ new files + modifications to 4 existing files
+## Total Estimated: ~3,350 LOC across 52+ new files + modifications to 4 existing files
 
 | Phase | LOC | New Files | Status |
 |---|---|---|---|
-| 6a: VSE / Sequencer | ~500 | 10 | 🟡 Pulled to Tier 4 Phase 0.1 |
-| 6b: Text Editor | ~450 | 10 | 🟡 Pulled to Tier 4 Phase 0.2 |
-| 6c: Asset Browser | ~800 | 18 | ✅ Done in Tier 3d (13 tools incl. index + wiring) |
-| 6d: Shader / Node Editor | ~650 | 14 | 🟡 Partial — 3 done, 4 remaining pulled to Tier 4 Phase 0.3 |
-| 6e: System Prompt & Integration | ~200 | 0 | 🟡 Pulled to Tier 4 Phase 0.4 |
-| 6f: Competitor UX — Advanced Intelligence | ~1,350 | 6 | 🟡 Tier 4 capstone (Phase 6) |
+| 4g.1: VSE / Sequencer | ~500 | 10 | 🟡 Tier 4 Phase 0.1 |
+| 4g.2: Text Editor | ~450 | 10 | 🟡 Tier 4 Phase 0.2 |
+| 4g.3: Asset Browser | ~800 | 18 | ✅ Done in Tier 3d (13 tools incl. index + wiring) |
+| 4g.4: Shader / Node Editor | ~650 | 14 | 🟡 Partial — 3 done, 4 remaining at Tier 4 Phase 0.3 |
+| 4g.5: System Prompt & Integration | ~200 | 0 | 🟡 Tier 4 Phase 0.4 |
+| 4g.6: Advanced Intelligence | ~750 | 4 | 🟡 Tier 4 capstone (6f.1 → 4f.4; 6f.4/6f.5 → Tier 5) |
+
+> **Note**: the total dropped from ~3,950 to ~3,350 LOC because 6f.1 Agent Teams
+> (~500 LOC) moved to Tier 4f.4 and 6f.4/6f.5 voice/TTS (~250 LOC) moved to Tier 5.
+
+---
+
+## Relationship to Tier 4f (Agent Intelligence)
+
+Tier 4g and Tier 4f are **orthogonal but mutually reinforcing**. 4g is the *payload*
+(what the agent can do); 4f is the *runtime* (how well it does it).
+
+| | Tier 4g — Domain Tooling | Tier 4f — Agent Intelligence |
+|---|---|---|
+| **Improves** | Capability **breadth** | Runtime **efficiency** |
+| **Mechanism** | Pre-authored toolcode (`NamedTuple` in/out) | Context, permissions, orchestration, inference |
+| **Effect on local models** | Fewer hallucinations (no `bpy` from scratch) | Less context pressure, more speed |
+| **If missing** | Agent can't do VSE/text/node ops | Agent can, but slowly, unsafely, and forgets |
+
+**Five concrete intersections:**
+
+1. **Tool count vs. context** — 48 tools overwhelm 3B–7B models (see Further
+   Considerations #1). Tier 4f.2 (compaction + on-demand skills) plus the existing
+   domain scoping is the answer; Tier 4f.1 (KV quantization → bigger context) makes
+   the schemas affordable.
+2. **Write tools need a safety layer** — `set_strip_frame_range` (4g.1.4),
+   `set_text_content` (4g.2.3), and the node writes (4g.4.4–4g.4.7) are all
+   destructive. Tier 4f.3 is their permission gate.
+3. **6f.1 *is* 4f.4** — Agent Teams with Planner is the same feature. 4f.4 supplies
+   the mechanics (Task tool, `subagent_depth`, markdown defs).
+4. **4g.6.1/4g.6.2 need 4f.4** — Scene Co-Pilot and Render Critic are specialist
+   agents; they can't exist without subagent infrastructure.
+5. **4f.2's managed output files serve 4g's read tools** — node trees and asset lists
+   are exactly the large structured payloads that currently get lossily trimmed to
+   500 chars.
+
+**Recommended sequencing**: 4g.1/4g.2/4g.4 (Phase 0.1–0.3) are independent of 4f and
+can proceed immediately. 4g.6 should follow 4f.4. Tier 4f.1 and 4f.3 are independent
+of all 4g work and can run in parallel.
 
 ---
 
@@ -556,6 +562,11 @@ mcp/blmcp/tools/get_screenshot_of_window_as_json_toolcode.py  # VSE + node edito
 ## Further Considerations
 
 1. **Tool count growth**: 22 existing + 26 new = 48 total tools. Smaller local models (3B-7B parameters) may struggle with that many function definitions. If needed, add **domain filtering** — only register tools whose domain matches the user's current workspace (e.g., VSE tools only appear when in the Video Editing workspace). This is low-effort because each tool is a separate file.
+
+   > **Update (2026-09-14):** Domain filtering is already implemented — see
+   > `_SURFACE_TOOLS` / `_TOOL_DOMAINS` / `_load_tools` in `agent_controller.py`.
+   > Tier 4f.2 (compaction, on-demand skills) and Tier 4f.1 (KV quantization → larger
+   > context) further relieve the pressure. See §Relationship to Tier 4f above.
 
 2. **Bforartists VSE compatibility**: The VSE API is largely identical between Blender and Bforartists, but test strip creation, channel assignment, and the 3D Sequencer workspace on Bforartists before committing. The `SequencerTimelineChannel` API may differ.
 
@@ -637,7 +648,7 @@ Run these tests after implementing the skills system (Track A). All tests are ma
 | In Blender Advanced tab → click "Reload Skills" | Cache cleared |
 | Send a message | New skills content is picked up |
 
-### Tier 6 Tools — Verification Steps
+### Tier 4g Tools — Verification Steps
 
 Run these after implementing each tool domain (Track B). Each tool should be tested in isolation first, then in end-to-end LLM conversations.
 

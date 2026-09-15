@@ -3,7 +3,7 @@
 **Date**: 2026-09-14
 **Status**: Planning — Not Started
 **Depends on**: Tier 3g (tool domains, preflight, spiral detection), Tier 4 master §14.3/§14.6
-**Extends**: Tier 6f.1 (Agent Teams), Tier 4 master §14.3 (budget readout), §14.6 (checkpoint)
+**Extends**: Tier 4g.6 (Advanced Intelligence — Agent Teams, formerly 6f.1), Tier 4 master §14.3 (budget readout), §14.6 (checkpoint)
 **Comparison**: `plan_tier4f_opencode_comparison.md`
 **Purpose**: Adopt the transferable orchestration, context, and safety architecture from OpenCode, and go beyond it on GGUF-level inference tuning that OpenCode cannot reach.
 
@@ -35,8 +35,9 @@ work, and how fast its local model runs.
 
 Tier 4f fills that gap. It is the "make the agent itself smarter" lane.
 
-**Placement note**: Tier 6b is already taken (Text Editor tools). Tier 4f is the free
-slot and sits naturally beside 4c (IDE agent) and 4e (workflow tooling).
+**Placement note**: Tier 4g is the domain tooling lane (VSE, Text Editor, Node, Asset
+Browser). Tier 4f is the free slot for the agent's own runtime and sits naturally
+beside 4c (IDE agent) and 4e (workflow tooling).
 
 ### 1.1 The Core Problem
 
@@ -55,7 +56,7 @@ slot and sits naturally beside 4c (IDE agent) and 4e (workflow tooling).
 1. **Local-first** — optimize for 8–32K-context small models. Remote providers get the
    same features but no special tuning.
 2. **Extend, don't duplicate** — 4f.2 builds on the existing §14.3/§14.6 checkpoint
-   design; 4f.4 builds on Tier 6f.1.
+   design; 4f.4 builds on Tier 4g.6 (Agent Teams, formerly 6f.1).
 3. **Never regress** — the existing strengths (domain scoping, smart undo, vision,
    reasoning, tool-pair repair) must keep working.
 4. **Deterministic over clever** — prefer explicit rules (permissions, doom-loop) over
@@ -90,7 +91,7 @@ slot and sits naturally beside 4c (IDE agent) and 4e (workflow tooling).
 **Deliverables**:
 1. `_misc/plan_tier4f_opencode_comparison.md` — architecture deep-dive, gap matrix,
    "where we can beat OpenCode", non-goals, transferable-pattern ranking.
-2. Cross-reference pointer added to `_misc/plan_tier6_domain_tooling.md` §6f.
+2. Cross-reference pointer added to `_misc/plan_tier4g_domain_tooling.md` §4g.6.
 
 **Effort**: ~0 LOC (documentation only).
 
@@ -417,7 +418,7 @@ directory. Paths outside it resolve to `ask` (or `deny` in strict mode). Applies
 
 **Est. ~900 LOC, 4 files**
 **Dependencies**: 4f.3 (tool scoping per agent) + 4f.2 (per-subagent context isolation).
-**Extends**: Tier 6f.1 (Agent Teams with Planner).
+**Extends**: Tier 4g.6 (Advanced Intelligence — Agent Teams, formerly 6f.1).
 
 ### 7.4.1 Subagent infrastructure
 
@@ -646,7 +647,7 @@ entire operation.
 | `addon/bfa_coworker/agent_controller.py` | Managed outputs, compaction, permissions, doom-loop, Task tool | 4f.2/4f.3/4f.4 |
 | `addon/bfa_coworker/skills/__init__.py` | On-demand skill loading | 4f.2 |
 | `addon/bfa_coworker/ui_chat.py` | Token readout, mission panel, slash commands | 4f.2/4f.4 |
-| `_misc/plan_tier6_domain_tooling.md` | Cross-reference to 4f | 4f.0 |
+| `_misc/plan_tier4g_domain_tooling.md` | Cross-reference to 4f | 4f.0 |
 | `_misc/plan_tier4_master_coordination.md` | Link 4f; note §14.3/§14.6 extension | 4f.0 |
 
 ---
@@ -671,6 +672,6 @@ entire operation.
 | Tier 4 master §14.3 (budget readout) | **Extended** by 4f.2.3 — same design, now fed by real llama-server metrics |
 | Tier 4 master §14.6 (checkpoint/flush) | **Extended** by 4f.2.2 — same `Checkpoint` dataclass, now triggered by compaction |
 | Tier 4b Phase 2.1 (token streaming) | **Complementary** — streaming is perceived performance; 4f.1 is real performance |
-| Tier 6f.1 (Agent Teams) | **Extended** by 4f.4 — adds OpenCode's concrete mechanics (Task tool, depth limit, markdown defs) |
+| Tier 4g.6 (Advanced Intelligence) | **Extended** by 4f.4 — adds OpenCode's concrete mechanics (Task tool, depth limit, markdown defs) |
 | Tier 5a (speculative decoding) | **Prepared for** by 4f.1.5 — flag builder designed to accept it |
 | Tier 3g (spiral detection) | **Generalized** by 4f.3.2 — error-based spiral kept, call-based doom-loop added |

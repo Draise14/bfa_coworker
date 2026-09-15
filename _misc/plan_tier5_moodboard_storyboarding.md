@@ -265,7 +265,7 @@ Add ambient sound or narration to the animatic:
 
 - **Ambient sound**: Agent generates background audio via Chatterbox/Wan 2.1
 - **Narration**: Agent generates TTS from dialogue text
-- **Music**: Agent generates background music (future: Tier 6)
+- **Music**: Agent generates background music (future: Tier 6 generative systems)
 
 Audio strips are placed in VSE channel 2 (or higher for layered audio).
 

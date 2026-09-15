@@ -10,7 +10,7 @@
 
 1. [Tier 4 Overview and Sub-Plan Map](#1-tier-4-overview-and-sub-plan-map)
    - [1.1 Before / After Matrix — What Tier 4 Changes](#11-before--after-matrix--what-tier-4-changes)
-2. [Priority Reorder: Tier 6 Domain Tooling First](#2-priority-reorder-tier-6-domain-tooling-first)
+2. [Priority Reorder: Tier 4g Domain Tooling First](#2-priority-reorder-tier-4g-domain-tooling-first)
 3. [Gap: CHOYA Guided Prompting System](#3-gap-choya-guided-prompting-system)
 4. [Gap: Shared UI Component Library](#4-gap-shared-ui-component-library)
    - [4.5 Note: Native Blender Markdown Rendering Coming (Defer Draw Work to Tier 5)](#45-note-native-blender-markdown-rendering-coming-defer-draw-work-to-tier-5)
@@ -34,19 +34,20 @@
 
 | Sub-Plan | Document | Scope | Est. LOC |
 |----------|----------|-------|----------|
-| **Tier 4 (domain first)** | plan_tier6_domain_tooling.md (6a/6b/6d/6e lanes) | VSE + Text Editor + Node tools + prompt enrichment — pulled forward, see Section 2 | ~1,530 |
+| **Tier 4 (domain first)** | plan_tier4g_domain_tooling.md (4g.1/4g.2/4g.4/4g.5 lanes) | VSE + Text Editor + Node tools + prompt enrichment — first implementation lane, see Section 2 | ~1,530 |
 | **Tier 4** | plan_tier4_editor_integration.md | **Agent dedicated central editor** (Coworker workspace), viewport overlays | ~1,350 |
 | **Tier 4b** | plan_tier4b_competitor_ux_analysis.md | Chat UX, "Explain this to me", sessions, right-click explain | ~860 |
 | **Tier 4c** | plan_tier4c_text_editor_ide_agent.md | **Text Editor IDE agent**: code gen, fix, edit selection — Tier 4 focus area | ~880 (revised) |
 | **Tier 4e** | plan_tier4e_nice_to_haves.md | Rigging, animation, smart-save tooling | ~950 (est) |
 | **Tier 4f** | plan_tier4f_agent_intelligence.md | **Agent runtime**: GGUF/inference tuning, context management, permissions, orchestration. Comparison: plan_tier4f_opencode_comparison.md | ~2,350 |
+| **Tier 4g** | plan_tier4g_domain_tooling.md | **Domain tooling**: VSE, Text Editor, Asset Browser, Node Editor, prompt integration, advanced intelligence | ~3,350 |
 | **This doc** | plan_tier4_master_coordination.md | CHOYA, shared components, translation, macros, explainer | ~400 |
 | **→ Tier 5** | plan_tier5_moodboard_storyboarding.md | **Moodboard editor + UX moved out of Tier 4 entirely** — see Section 8 | ~520 (MVP) |
 
 **Total Tier 4 estimate (revised)**: ~5,970 LOC (Moodboard ~520 LOC removed → Tier 5) + ~2,350 LOC for Tier 4f.
 
 > **Ordering decisions (2026-09-01):**
-> 1. Tier 6 domain tooling is the **first implementation lane** (Section 2) — tooling breadth is what makes local models (and external harnesses) smart and reliable.
+> 1. Tier 4g domain tooling is the **first implementation lane** (Section 2) — tooling breadth is what makes local models (and external harnesses) smart and reliable.
 > 2. **Moodboard editor + UX moved out of Tier 4 entirely** → Tier 5 (Section 8). Tier 4 focuses on **agent access** (chat/Ask/explainer), the **Text Editor IDE agent** (Tier 4c), and the **agent dedicated central editor** (Coworker workspace).
 >
 > **Addition (2026-09-14):** **Tier 4f — Agent Intelligence** was added, derived from a
@@ -54,8 +55,8 @@
 > covers the agent's *own runtime* — llama-server inference tuning, context
 > management/compaction, permissions, and multi-agent orchestration. It **extends**
 > §14.3 (budget readout) and §14.6 (checkpoint/context-flush) below rather than
-> duplicating them, and it supplies the concrete orchestration mechanics for Tier 6f.1
-> (Agent Teams). All four phases are local-first and independent of the editor/UX lanes,
+> duplicating them, and it supplies the concrete orchestration mechanics for Tier 4g.6
+> (Agent Teams, formerly 6f.1). All four phases are local-first and independent of the editor/UX lanes,
 > so 4f.1 (inference) and 4f.3 (permissions) can proceed in parallel with any other
 > Tier 4 work.
 
@@ -63,20 +64,19 @@
 
 | # | Feature | Before (Tier 3) | After (Tier 4) | Difficulty | Order |
 |---|---------|-----------------|----------------|------------|-------|
-| 1 | **Domain tooling** (VSE, Text Editor, Node) | Agent hallucinates `bpy.ops.sequencer.*` / node wiring / text ops from memory; high spiral rate | Pre-authored toolcodes with structured params; agent picks tool + params, server does the how | 🟢 Easy–Medium (toolcode pattern already proven) | **1st** (Phase 0) |
-| 2 | **Smart-save tooling** (Tier 4e quick win) | Agent cannot save, check unsaved state, pack resources, or export — data-loss risk | `save_blend_file`, `check_unsaved_changes`, `pack_resources`, `export_selection`, `incremental_save` | 🟢 Easy (5 simple toolcodes) | **2nd** (Phase 0.5) |
+| 1 | **Domain tooling** (VSE, Text Editor, Node) | Agent hallucinates `bpy.ops.sequencer.*` / node wiring / text ops from memory; high spiral rate | Pre-authored toolcodes with structured params; agent picks tool + params, server does the how | 🟢 Easy–Medium (toolcode pattern already proven) | **1st** (Phase 0) || 2 | **Smart-save tooling** (Tier 4e quick win) | Agent cannot save, check unsaved state, pack resources, or export — data-loss risk | `save_blend_file`, `check_unsaved_changes`, `pack_resources`, `export_selection`, `incremental_save` | 🟢 Easy (5 simple toolcodes) | **2nd** (Phase 0.5) |
 | 3 | **Shared UI component library** (`ui_components.py`) | Markdown/code-block/status rendering duplicated in every panel | One shared module; all editors import from it. **Markdown draw mechanics deferred to Tier 5** (native `label_markdown()` inbound — see §4.5); components compose on either renderer | 🟢 Easy (extract + consolidate) | **3rd** (Phase 1) |
 | 4 | **Brand detection** (`shared.py`) | `_is_bfa` / `AGENT_ICON` defined locally in `ui_chat.py` | Shared constant imported everywhere | 🟢 Easy (~10 LOC) | **3rd** (Phase 1) |
 | 5 | **Chat UX** (Tier 4b: code blocks + Run, error-fix, sessions, right-click explain, vision, **token streaming**) | Markdown done in Tier 3; no Run button, no error-fix loop, no session history, no right-click explain; text arrives all-at-once after 10–60s | Competitor-parity chat: **token streaming (SSE)**, Run with confirmation, error→fix loop, sessions, explain, screenshot/vision, **token budget readout**. Markdown draw stays on Tier 3 impl (deferred) | 🟡 Medium (mostly UI + agent loop wiring; streaming is incremental-SSE parsing) | **4th** (Phase 2) |
 | 6 | **CHOYA guided prompting** | Agent concludes, user must think of next step and type it | Contextual action buttons after every conclusion; one click sends a new message | 🟡 Medium (option generation + UI) | **5th** (Phase 2.8) |
-| 7 | **Text Editor IDE agent** (Tier 4c) | Text Editor panel is a duplicate chat; no code tools | Artist-friendly code tools: generate, execute, error-fix, edit/explain selection, prompt templates | 🟡 Medium (needs 6b text tools first) | **6th** (Phase 3) |
+| 7 | **Text Editor IDE agent** (Tier 4c) | Text Editor panel is a duplicate chat; no code tools | Artist-friendly code tools: generate, execute, error-fix, edit/explain selection, prompt templates | 🟡 Medium (needs 4g.2 text tools first) | **6th** (Phase 3) |
 | 8 | **Agent dedicated central editor** (Tier 4) | Agent feedback is chat-only; no dedicated workspace | Coworker workspace (USERPREF-pattern center panels), viewport status overlay, focus highlight, CHOYA in viewport | 🟡 Medium (GPU draw handlers + workspace setup) | **7th** (Phase 4) |
 | 9 | **Rigging tooling** (Tier 4e) | Agent writes `parent_set`, `constraint_add`, IK chains from scratch — high hallucination | 6 toolcodes: add armature/bone/constraint, IK setup, mirror pose, bake | 🟡 Medium (bone/constraint domain knowledge) | **8th** (Phase 5+) |
 | 10 | **Animation tooling** (Tier 4e) | Agent writes `keyframe_insert` boilerplate, F-curve modifiers, NLA from memory | 5 toolcodes: batch keyframe, interpolation, F-curve modifier, NLA track, bake | 🟡 Medium | **9th** (Phase 5+) |
 | 11 | **Translation integration** | No translation support | Right-click translate with target-language preference | 🟢 Easy (reuses right-click explain plumbing) | **10th** (Phase 2.6) |
 | 12 | **"Explain this to me"** (docs-grounded UI explainer) | New users must search the manual / watch tutorials to learn what a button or concept does | Right-click any UI element / object / node → agent explains what → how → when to use → pitfalls, grounded in bundled docs via `search_manual_docs`/`search_api_docs`. Also `/explain` in Ask mode | 🟢 Easy (reuses right-click explain + doc tools + Ask mode) | **11th** (Phase 2.5) |
 | 13 | **Macro system** (design now, impl Tier 5) | No reusable action sequences | Data model + recording/replay designed; implementation deferred | 🟢 Easy (design only) | **12th** (design) |
-| 14 | **Advanced intelligence** (Tier 6f: Agent Teams, Scene Co-Pilot, Render Critic) | Single-agent loop only | Planner→specialists→validator, passive scene issue detection, render critique loop | 🔴 Hard (multi-agent orchestration) | **13th** (capstone) |
+| 14 | **Advanced intelligence** (Tier 4g.6: Scene Co-Pilot, Render Critic; Agent Teams → 4f.4) | Single-agent loop only | Planner→specialists→validator (4f.4), passive scene issue detection, render critique loop | 🔴 Hard (multi-agent orchestration) | **13th** (capstone) |
 | — | **Moodboard editor** (→ Tier 5) | No visual reference board; agent has no image context | **Moved out of Tier 4 entirely** — GPU-canvas image board with agent vision bridge lands in Tier 5 (see §8) | 🔴 Hard (GPU takeover, custom canvas) | **Tier 5** |
 
 **Reading the order column**: 1–2 are tooling (the foundation — makes the agent
@@ -92,14 +92,19 @@ central editor.
 
 ---
 
-## 2. Priority Reorder: Tier 6 Domain Tooling First
+## 2. Priority Reorder: Tier 4g Domain Tooling First
 
-> **Decision (2026-09-01):** The Tier 6 domain tooling plan is pulled forward to
+> **Decision (2026-09-01):** The domain tooling plan is pulled forward to
 > the **first implementation priority** of Tier 4. The tooling foundation
 > (domain MCP tools) is what makes the agent — especially local models —
 > efficient, smart and reliable. Interface polish without tooling breadth leaves
 > the agent guessing; tooling breadth alone improves every surface that talks to
 > it, including external harnesses.
+>
+> **Elevation (2026-09-14):** The plan is now formally **Tier 4g**
+> (`plan_tier4g_domain_tooling.md`), not Tier 6. Phase labels are renumbered
+> 6a→4g.1, 6b→4g.2, 6c→4g.3, 6d→4g.4, 6e→4g.5. Phase 6f is split: 6f.1 → Tier 4f.4,
+> 6f.2/6f.3/6f.6/6f.7 → Tier 4g.6, 6f.4/6f.5 → Tier 5.
 
 ### 2.1 Why Tooling Before Interface
 
@@ -108,30 +113,30 @@ central editor.
 | Interface first, tooling later | Local models still hallucinate `bpy` calls for VSE/node/text ops; chat shows prettier failures |
 | **Tooling first, interface later** | Every surface (chat, Text Editor, harness, CHOYA) instantly benefits; interface work has real tools behind it |
 
-The core insight from `plan_tier6_domain_tooling.md` still holds: each
+The core insight from `plan_tier4g_domain_tooling.md` still holds: each
 pre-authored toolcode bundles domain knowledge, error handling, and a structured
 return type, so the LLM only needs to understand the tool description + parameter
 schema — not the Blender Python API for that domain.
 
 ### 2.2 What We Pull Forward (and What We Skip)
 
-| Tier 6 Phase | Tools | Status in Tier 3 | Pull Forward? |
+| Tier 4g Phase | Tools | Status in Tier 3 | Pull Forward? |
 |---|---|---|---|
-| 6a — VSE / Sequencer | 5 tools (~500 LOC) | Not started | ✅ Yes — Reads + 1 write + render feedback. The Sequencer is invisible to the agent today |
-| 6b — Text Editor | 5 tools (~450 LOC) | Not started | ✅ Yes — Feeds Tier 4c; the agent learns to read/edit/run its own scripts |
-| 6c — Asset Browser | 9 tools (~800 LOC) | ✅ Done in Tier 3d (13 tools incl. index + wiring) | ❌ Skip — already delivered |
-| 6d — Shader / Node Editor | 7 tools (~650 LOC) | 🟡 Partial (`get_active_node_tree`, `get_node_group_interface`, `wire_node_group` done) | ✅ Yes — Add `get_node_detail`, `create_node`, `connect_nodes`, `set_node_input_value`, `mute_node` (~380 LOC). Highest-leverage domain for local models: node wiring is the #1 hallucination source |
-| 6e — Prompt + cross-domain | 2 files (~200 LOC) | Not started | ✅ Yes — Domain chapters + screenshot enrichment so the new tools actually get used |
-| 6f — Advanced intelligence | ~1,100 LOC | Not started | 🟡 Later in Tier 4 — Agent Teams, Scene Co-Pilot, Render Critic as the capstone; Voice Input deferred to Tier 5 |
+| 4g.1 — VSE / Sequencer | 5 tools (~500 LOC) | Not started | ✅ Yes — Reads + 1 write + render feedback. The Sequencer is invisible to the agent today |
+| 4g.2 — Text Editor | 5 tools (~450 LOC) | Not started | ✅ Yes — Feeds Tier 4c; the agent learns to read/edit/run its own scripts |
+| 4g.3 — Asset Browser | 9 tools (~800 LOC) | ✅ Done in Tier 3d (13 tools incl. index + wiring) | ❌ Skip — already delivered |
+| 4g.4 — Shader / Node Editor | 7 tools (~650 LOC) | 🟡 Partial (`get_active_node_tree`, `get_node_group_interface`, `wire_node_group` done) | ✅ Yes — Add `get_node_detail`, `create_node`, `connect_nodes`, `set_node_input_value`, `mute_node` (~380 LOC). Highest-leverage domain for local models: node wiring is the #1 hallucination source |
+| 4g.5 — Prompt + cross-domain | 2 files (~200 LOC) | Not started | ✅ Yes — Domain chapters + screenshot enrichment so the new tools actually get used |
+| 4g.6 — Advanced intelligence | ~750 LOC | Not started | 🟡 Later in Tier 4 — Scene Co-Pilot, Render Critic, external client config, doc retrieval. Agent Teams moved to Tier 4f.4; Voice/TTS deferred to Tier 5 |
 
-**Recommended first Tier 4 milestone: 6a + 6b + 6d-tools + 6e (~1,530 LOC, ~28 files).**
+**Recommended first Tier 4 milestone: 4g.1 + 4g.2 + 4g.4-tools + 4g.5 (~1,530 LOC, ~28 files).**
 
 ### 2.3 What the Domain Tools Buy Us
 
 - **Read-then-write discipline** — the plan's "read tools first" principle gives the agent situational awareness before acting (fewer spirals, fewer wrong guesses).
 - **Local model leverage** — a 7–14B model reliably picks a tool + params; it cannot reliably write `bpy.ops.sequencer.*` or wire nodes from memory.
 - **External harness parity** — every MCP tool is available to external harnesses (Opencode, Claude Desktop) for free.
-- **Feed-forward into Tier 4c** — Text Editor tools (6b) are the prerequisite for the IDE-agent experience.
+- **Feed-forward into Tier 4c** — Text Editor tools (4g.2) are the prerequisite for the IDE-agent experience.
 - **CHOYA subscriber** — guided options ("Add a speed ramp to strip X") become one-click tool invocations instead of raw code.
 - **Tier 4e synergy** — rigging/animation/save tooling (see Section 9) completes the domain matrix on top of the same toolcode pattern.
 
@@ -673,8 +678,8 @@ from .shared import _is_bfa, AGENT_ICON
 
 ```
 Foundation:
-  Domain tools (6a/6b/6d lanes) -> 4b CHOYA, 4c Text Editor, 4e tools
-  Domain tools (6a/6b/6d lanes) -> VSE / Node / Text chat capability
+  Domain tools (4g.1/4g.2/4g.4 lanes) -> 4b CHOYA, 4c Text Editor, 4e tools
+  Domain tools (4g.1/4g.2/4g.4 lanes) -> VSE / Node / Text chat capability
   ui_components.py -> Markdown, CHOYA (all editors)
   shared.py -> Brand detection (all editors)
 
@@ -998,7 +1003,7 @@ sessions, explain, vision, CHOYA, token readout.
 
 ### Phase 3 — Tier 4c Text Editor (Week 4–5)
 
-**Goal**: Artist-friendly Text Editor tooling on top of the 6b tools.
+**Goal**: Artist-friendly Text Editor tooling on top of the 4g.2 tools.
 
 | Step | What | Files | LOC | Done when |
 |------|------|-------|-----|-----------|
@@ -1067,7 +1072,8 @@ Additionally:
 - **Tier 4e** added: rigging, animation, and smart-save tooling (~950 LOC, 3 new domains)
 - **Hotkey policy**: no custom hotkeys in Tier 4; all features via sidebar/context menus
 - **Brand detection**: moved to shared.py for use across all editors
-- **Priority reorder (2026-09-01)**: Tier 6 domain tooling (VSE, Text Editor, Node) is now the first implementation lane — tooling breadth is what makes local models and external harnesses smart and reliable; interface polish builds on top.
+- **Priority reorder (2026-09-01)**: Tier 4g domain tooling (VSE, Text Editor, Node) is now the first implementation lane — tooling breadth is what makes local models and external harnesses smart and reliable; interface polish builds on top.
+- **Tier 4g elevation (2026-09-14)**: The domain tooling plan was renamed from Tier 6 to **Tier 4g** (`plan_tier4g_domain_tooling.md`) and its phases renumbered 6a→4g.1 … 6e→4g.5. Phase 6f was split: 6f.1 → Tier 4f.4, 6f.2/6f.3/6f.6/6f.7 → Tier 4g.6, 6f.4/6f.5 → Tier 5. Tier 6 is now reserved for the generative plans that need Tier 5 infrastructure.
 - **Markdown draw deferred to Tier 5 (2026-09-01)**: Blender PR #163254 adds native `layout.label_markdown()` (MD4C, bold/italic/code/lists/links, theme-aware). Tier 4 keeps the Tier 3 `_render_markdown()` as-is and only builds *components*; Tier 5 adopts the native API with feature-detect + fallback.
 - **"Explain this to me" added (2026-09-01)**: docs-grounded right-click explainer for any UI element / object / node + `/explain` in Ask mode — the highest-value feature for new users. Reuses the right-click plumbing, bundled doc tools, and Ask mode; grounded in `search_manual_docs`/`search_api_docs` to prevent hallucination. See §5.5.
 - **Streaming budget/readout added (2026-09-01)**: token streaming (SSE from llama-server) lands in Phase 2.1 — a *perceived-performance* + *early-abort* win, not a smarts win. The token budget/readout system (Phase 2.9) is the part that helps *smarts*: a hard per-turn token envelope + live readout + budget-aware trimming keeps small local models inside their context window. Feasibility is HIGH — SSE parsers, `streaming_text`, `on_reasoning`, `_trim_tool_result()`, and `usage` data all already exist. See §14.

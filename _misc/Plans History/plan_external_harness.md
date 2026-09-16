@@ -105,7 +105,7 @@ Blender Chat UI → agent_controller → LLM (local/remote)
 The **External Harness** mode restores the original two-layer bridge-only model:
 
 ```
-External MCP Client (Claude Desktop, Cursor, VS Code, etc.)
+External MCP Client (Claude Desktop, Cursor, VS Code, Freebuff, etc.)
          │
          │ MCP Protocol (stdio or HTTP)
          ▼
@@ -139,7 +139,7 @@ AGENT_MODE_ITEMS: list[tuple[str, str, str]] = [
         "EXTERNAL_HARNESS",
         "External Harness",
         "Bridge-only mode — run the TCP bridge server inside Blender "
-        "and connect an external MCP client (Claude Desktop, Cursor, "
+        "and connect an external MCP client (Claude Desktop, Cursor, Freebuff, "
         "VS Code, or any MCP-compatible tool)",
     ),
 ]
@@ -157,7 +157,7 @@ MCP_SERVER_MODE_ITEMS: list[tuple[str, str, str]] = [
         "STDIO",
         "Stdio (External Client)",
         "The MCP server runs via stdio — for external MCP clients like "
-        "Claude Desktop, Cursor, or VS Code. The addon provides config snippets "
+        "Claude Desktop, Cursor, VS Code, or Freebuff. The addon provides config snippets "
         "but does NOT manage the server process",
     ),
     (

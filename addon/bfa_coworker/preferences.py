@@ -1866,9 +1866,13 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     icon='BLANK1',
                 )
 
-                # ── Step 3: Paste into your client ──────────────────────
+                # ── Step 3: Configure your client ───────────────────────────
                 step3 = mcp_box.box()
-                step3.label(text="Step 3: Paste into your client's config file", icon='FILE_TEXT')
+                step3.label(text="Step 3: Configure your client (settings UI, harness chat, or config file)", icon='FILE_TEXT')
+                step3.label(
+                    text="Config file locations can vary per system and client version.",
+                    icon='BLANK1',
+                )
                 if preset is not None and preset.config_path_help:
                     for line in preset.config_path_help.split("\n"):
                         step3.label(text=line, icon='FILE_FOLDER')
@@ -1877,12 +1881,33 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                         text="Tip: {:s}".format(preset.chat_paste_hint),
                         icon='INFO',
                     )
-                row = step3.row(align=True)
-                op2 = row.operator("bfacw.open_config_folder", icon="FILE_FOLDER", text="Open Config Folder")
-                op2.preset_id = self.harness_preset
                 step3.label(
-                    text="Tip: The config file is a JSON file. Paste the copied text inside the top-level { } braces.",
+                    text="Alternative: most clients can be configured without editing files.",
+                    icon='BLANK1',
+                )
+                step3.label(
+                    text="Paste the copied config into the harness chat (e.g. /mcp in Claude Code),",
+                    icon='BLANK1',
+                )
+                step3.label(
+                    text="or add it in the client's agent/MCP settings UI (Cursor, Cline, Windsurf,",
+                    icon='BLANK1',
+                )
+                step3.label(
+                    text="Freebuff). Whichever flow your client offers is often easier and more",
+                    icon='BLANK1',
+                )
+                step3.label(
+                    text="reliable than hunting for a config file that varies per system.",
+                    icon='BLANK1',
+                )
+                step3.label(
+                    text="If you do edit the file: it is JSON - paste the copied text inside",
                     icon='INFO',
+                )
+                step3.label(
+                    text="the top-level { } braces.",
+                    icon='BLANK1',
                 )
 
                 # ── Step 4: Restart ─────────────────────────────────────
@@ -1895,18 +1920,20 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 )
                 if preset is not None and preset.notes:
                     step4.label(text="\u2139\ufe0f {:s}".format(preset.notes), icon='INFO')
-
-                # ── Advanced options ────────────────────────────────────
-                adv_box = mcp_box.box()
-                adv_box.label(text="Advanced Options", icon='SETTINGS')
-                adv_box.prop(self, "use_blender_python_for_harness")
+                # ── Detailed setup for this client ────────────────────────────
                 if preset is not None and preset.setup_steps:
-                    adv_box.label(text="Detailed setup for this client:", icon='PLAY')
+                    setup_box = mcp_box.box()
+                    setup_box.label(text="Detailed setup for this client:", icon='PLAY')
                     for i, step in enumerate(preset.setup_steps, 1):
-                        adv_box.label(
+                        setup_box.label(
                             text="{:d}. {:s}".format(i, step),
                             icon='DOT',
                         )
+
+                # ── Advanced options ──────────────────────────────────────
+                adv_box = mcp_box.box()
+                adv_box.label(text="Advanced Options", icon='SETTINGS')
+                adv_box.prop(self, "use_blender_python_for_harness")
 
                 # Config preview.
                 adv_box.label(text="Config Preview:", icon='COPYDOWN')

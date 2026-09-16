@@ -26,7 +26,6 @@ __all__ = (
     "BFACW_OT_test_polyhaven_texture",
     "BFACW_OT_open_harness_prefs",
     "BFACW_OT_open_addon_prefs",
-    "BFACW_OT_open_config_folder",
     "BFACW_OT_open_url",
     "BFACW_OT_open_log",
     "BFACW_OT_compare_benchmarks",
@@ -897,80 +896,6 @@ class BFACW_OT_open_addon_prefs(bpy.types.Operator):  # type: ignore[misc]
     def execute(self, context: bpy.types.Context) -> set[str]:
         _open_addon_prefs_filtered(context)
         return {"FINISHED"}
-
-
-# ---------------------------------------------------------------------------
-# Open Config Folder (reveals harness config file in OS file manager)
-
-class BFACW_OT_open_config_folder(bpy.types.Operator):  # type: ignore[misc]
-    """Open the harness config file location in the OS file manager."""
-    bl_idname = "bfacw.open_config_folder"
-    bl_label = "Open Config Folder"
-    bl_description = "Open the folder containing the MCP client config file"
-
-    preset_id: bpy.props.StringProperty(  # type: ignore[valid-type]
-        name="Preset ID",
-        default="claude_desktop",
-    )
-
-    def execute(self, context: bpy.types.Context) -> set[str]:
-        from .shared import get_harness_preset_by_id
-        preset = get_harness_preset_by_id(self.preset_id)
-        if preset is None:
-            self.report({"ERROR"}, "Unknown preset: {:s}".format(self.preset_id))
-            return {"CANCELLED"}
-
-        # Parse the first path from config_path_help.
-        path_text = preset.config_path_help
-        if not path_text:
-            self.report({"ERROR"}, "No config path known for {:s}".format(preset.name))
-            return {"CANCELLED"}
-
-        # Extract the first path line (before any newline or parenthetical).
-        first_line = path_text.split("\n")[0].strip()
-        # Remove label prefix like "Windows: " or "macOS: ".
-        if ": " in first_line:
-            _label, _, path_str = first_line.partition(": ")
-        else:
-            path_str = first_line
-
-        import os as _os
-        expanded = _os.path.expandvars(path_str)
-        folder = _os.path.dirname(expanded)
-        file_path = expanded
-
-        if _os.path.isdir(folder):
-            # Folder exists — open it in the OS file manager.
-            bpy.ops.wm.path_open(filepath=folder)
-            return {'FINISHED'}
-
-        # Folder does not exist — don't silently create it.  Instead, show a
-        # popup explaining what to do and offer to copy the config.
-        def _draw(self_inner, context_inner):  # type: ignore[no-untyped-def]
-            box = self_inner.layout.box()
-            box.label(text="Config folder not found", icon='ERROR')
-            box.separator()
-            box.label(text="Folder: {:s}".format(folder), icon='FILE_FOLDER')
-            box.separator()
-            box.label(text="Setup steps for {:s}:".format(preset.name), icon='INFO')
-            if preset.setup_steps:
-                for i, step in enumerate(preset.setup_steps, 1):
-                    box.label(text="{:d}. {:s}".format(i, step))
-            box.separator()
-            row = box.row(align=True)
-            row.scale_y = 1.4
-            op = row.operator("bfacw.copy_mcp_config", icon='COPYDOWN', text="Copy Config")
-            op.client_type = self_inner.preset_id
-            if preset.docs_url:
-                op2 = row.operator("bfacw.open_url", icon='URL', text="Docs")
-                op2.url = preset.docs_url
-
-        context.window_manager.popup_menu(
-            _draw,
-            title="{:s} — Setup Guide".format(preset.name),
-            icon='INFO',
-        )
-        return {'CANCELLED'}
 
 
 # ---------------------------------------------------------------------------

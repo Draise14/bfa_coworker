@@ -2085,7 +2085,7 @@ def generate_mcp_client_config(
         "env": env,
     }
 
-    if client_type in ("claude_desktop", "claude_code"):
+    if client_type in ("claude_desktop", "claude_code", "freebuff"):
         config = {
             "mcpServers": {
                 "bfa-coworker": dict(base_cmd),

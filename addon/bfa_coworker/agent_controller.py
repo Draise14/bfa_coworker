@@ -25,6 +25,7 @@ __all__ = (
     "check_ports_available",
     "migrate_vendor_deps",
     "generate_mcp_client_config",
+    "validate_mcp_client_config",
     "_get_blender_python_for_config",
 )
 
@@ -1279,7 +1280,20 @@ def _ensure_vendor_deps() -> bool:
 
     # Quick check: does the cache exist and contain mcp?
     if deps_dir.is_dir() and (deps_dir / "mcp" / "__init__.py").is_file():
-        return True
+        # Also require the blmcp package itself.  A source install can have
+        # deps but no vendor/blmcp/, which previously slipped through here and
+        # surfaced later as a bare "No module named 'blmcp'" traceback.
+        problems = _check_vendor_layout()
+        if not problems:
+            return True
+        print("[🛠️Coworker] _ensure_vendor_deps: deps present but layout incomplete:")
+        for problem in problems:
+            print("[🛠️Coworker] _ensure_vendor_deps:   - {:s}".format(problem))
+        # blmcp is source, not a wheel — pip cannot install it.  Try the
+        # dev-checkout copy first, then report.
+        if _copy_dev_blmcp_into_vendor():
+            return not _check_vendor_layout()
+        return False
 
     print("[🛠️Coworker] _ensure_vendor_deps: vendor deps cache is missing or empty — attempting auto-install...")
 
@@ -1349,6 +1363,278 @@ def _ensure_vendor_deps() -> bool:
     except Exception as ex:
         print("[🛠️Coworker] _ensure_vendor_deps: auto-install failed — {:s}".format(str(ex)))
         return False
+
+
+def _copy_dev_blmcp_into_vendor() -> bool:
+    """Copy ``<repo>/mcp/blmcp`` into ``<addon>/vendor/blmcp`` when missing.
+
+    ``blmcp`` is source, not a wheel, so ``pip install`` cannot provide it.
+    In a source checkout the package sits at ``<repo>/mcp/blmcp``; a built
+    addon expects it at ``<addon>/vendor/blmcp``.  When only the former
+    exists, copy it across so ``python -m blmcp`` resolves.
+
+    Returns ``True`` when ``vendor/blmcp`` exists afterwards.
+    """
+    this_dir = Path(__file__).resolve().parent
+    vendor_blmcp = this_dir / "vendor" / "blmcp"
+    if (vendor_blmcp / "__init__.py").is_file():
+        return True
+
+    dev_blmcp = this_dir.parent.parent / "mcp" / "blmcp"
+    if not (dev_blmcp / "__init__.py").is_file():
+        print("[🛠️Coworker] _copy_dev_blmcp_into_vendor: no dev checkout at {:s}".format(
+            str(dev_blmcp)))
+        return False
+
+    print("[🛠️Coworker] _copy_dev_blmcp_into_vendor: copying {:s} -> {:s}".format(
+        str(dev_blmcp), str(vendor_blmcp)))
+    try:
+        vendor_blmcp.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(
+            str(dev_blmcp), str(vendor_blmcp),
+            ignore=shutil.ignore_patterns("__pycache__"),
+            dirs_exist_ok=True,
+        )
+    except OSError as ex:
+        print("[🛠️Coworker] _copy_dev_blmcp_into_vendor: copy failed — {:s}".format(str(ex)))
+        return False
+    print("[🛠️Coworker] _copy_dev_blmcp_into_vendor: copy succeeded")
+    return True
+
+
+def _vendor_pythonpath_report() -> tuple[str, list[str]]:
+    """Return ``(pythonpath, missing_dirs)`` for the vendored MCP layout.
+
+    ``_find_vendor_pythonpath()`` silently omits directories that do not
+    exist, so a broken layout yields an empty (or partial) ``PYTHONPATH``
+    with no warning — the failure then only shows up as an opaque
+    ``ImportError`` in the child process.  This companion reports what was
+    expected but absent so callers can warn up front.
+    """
+    this_dir = Path(__file__).resolve().parent
+    vendor_dir = this_dir / "vendor"
+    deps_dir = _get_vendor_deps_dir()
+
+    missing: list[str] = []
+    if not (deps_dir / "mcp" / "__init__.py").is_file():
+        missing.append(str(deps_dir))
+    if not (vendor_dir / "blmcp" / "__init__.py").is_file():
+        # A source checkout keeps blmcp at <repo>/mcp/blmcp instead.
+        dev_blmcp = this_dir.parent.parent / "mcp" / "blmcp"
+        if not (dev_blmcp / "__init__.py").is_file():
+            missing.append(str(vendor_dir / "blmcp"))
+
+    return (_find_vendor_pythonpath(), missing)
+
+
+# ---------------------------------------------------------------------------
+# MCP launch failure diagnosis
+#
+# A bare "MCP server exited immediately" is useless to the user: the real
+# cause is the last line of the child's stderr (e.g. ``ImportError: No module
+# named 'blmcp'``), which the old code truncated away.  These helpers extract
+# the exception line, keep the untruncated text for copy-to-clipboard, and
+# map known signatures to an actionable hint.
+
+# Known failure signatures -> actionable hint.  Matched case-insensitively
+# against the child's combined stderr/stdout.
+_MCP_FAILURE_HINTS: tuple[tuple[str, str], ...] = (
+    (
+        "fastmcp was renamed to mcpserver",
+        "The installed MCP SDK is 2.x, which removed FastMCP. The add-on "
+        "requires mcp<2. Run 'python build_addon.py' to reinstall the pinned "
+        "vendor deps, or: pip install 'mcp[cli]>=1.2.0,<2.0.0'",
+    ),
+    (
+        "no module named 'mcp.server.fastmcp'",
+        "The installed MCP SDK is 2.x, which removed FastMCP. The add-on "
+        "requires mcp<2. Run 'python build_addon.py' to reinstall the pinned "
+        "vendor deps, or: pip install 'mcp[cli]>=1.2.0,<2.0.0'",
+    ),
+    (
+        "no module named 'blmcp'",
+        "The blmcp package is not on PYTHONPATH. Run 'python build_addon.py' "
+        "to populate vendor/blmcp/, or enable \"Use Blender's Python\" so the "
+        "config emits the vendor directory.",
+    ),
+    (
+        "no module named 'mcp'",
+        "The MCP SDK is missing. Run 'python build_addon.py' to populate "
+        "vendor/deps/, or install it: pip install bfa-coworker-mcp",
+    ),
+    (
+        "no module named 'yaml'",
+        "PyYAML is missing from the vendor deps. Run 'python build_addon.py' "
+        "to reinstall vendor/deps/.",
+    ),
+    (
+        "no module named 'docutils'",
+        "docutils is missing from the vendor deps. Run 'python build_addon.py' "
+        "to reinstall vendor/deps/.",
+    ),
+    (
+        "no module named 'starlette'",
+        "Starlette is missing from the vendor deps (needed for HTTP "
+        "transport). Run 'python build_addon.py' to reinstall vendor/deps/.",
+    ),
+    (
+        "no module named 'pydantic_core'",
+        "pydantic's native extension does not match this Python version. "
+        "Run 'python build_addon.py' to reinstall vendor/deps/ for Blender's "
+        "Python.",
+    ),
+    (
+        "no module named 'pywintypes'",
+        "pywin32 is installed but its modules are not on PYTHONPATH. The "
+        "add-on adds win32/ and win32/lib/ automatically — re-copy the config "
+        "from preferences, or run 'python build_addon.py'.",
+    ),
+    (
+        "no module named 'win32",
+        "pywin32 is missing from the vendor deps. Run 'python build_addon.py' "
+        "to reinstall vendor/deps/.",
+    ),
+    (
+        "no module named",
+        "A required package is missing from PYTHONPATH. Run "
+        "'python build_addon.py' to rebuild the vendor directories.",
+    ),
+    (
+        "modulenotfounderror",
+        "A required package is missing from PYTHONPATH. Run "
+        "'python build_addon.py' to rebuild the vendor directories.",
+    ),
+    (
+        "importerror",
+        "The MCP server failed to import a dependency. Run "
+        "'python build_addon.py' to rebuild the vendor directories.",
+    ),
+    (
+        "address already in use",
+        "The port is already bound by another process. Stop the other MCP "
+        "server, or raise port_offset in Preferences (Advanced tab).",
+    ),
+    (
+        "only one usage of each socket address",
+        "The port is already bound by another process. Stop the other MCP "
+        "server, or raise port_offset in Preferences (Advanced tab).",
+    ),
+    (
+        "permissionerror",
+        "Permission denied. A firewall or antivirus may be blocking the "
+        "Python interpreter, or the port is reserved.",
+    ),
+    (
+        "is not a valid win32 application",
+        "The Python interpreter path is wrong or corrupt. Re-enable "
+        "\"Use Blender's Python\" to regenerate the config.",
+    ),
+    (
+        "no such file or directory",
+        "The Python interpreter path does not exist. Re-enable "
+        "\"Use Blender's Python\" to regenerate the config.",
+    ),
+    (
+        "cannot find the file",
+        "The Python interpreter path does not exist. Re-enable "
+        "\"Use Blender's Python\" to regenerate the config.",
+    ),
+)
+
+
+def _classify_mcp_failure(text: str) -> str:
+    """Return an actionable hint for a known MCP launch failure, else ``""``.
+
+    *text* is the child process's combined stderr/stdout (or any error text).
+    Matching is case-insensitive and first-match-wins, so the specific
+    ``No module named 'blmcp'`` entry is checked before the generic
+    ``no module named`` fallback.
+    """
+    if not text:
+        return ""
+    lowered = text.lower()
+    for signature, hint in _MCP_FAILURE_HINTS:
+        if signature in lowered:
+            return hint
+    return ""
+
+
+def _summarize_mcp_failure(stderr_output: str, stdout_output: str) -> tuple[str, str]:
+    """Extract a short, useful summary and the full text from child output.
+
+    Returns ``(summary, full)`` where:
+
+    * *full* is the untruncated combined output (for ``error_full`` and
+      copy-to-clipboard troubleshooting).
+    * *summary* is the **last non-empty line** — the actual exception, e.g.
+      ``ImportError: No module named 'blmcp'`` — plus an actionable hint when
+      the signature is recognised.  Falls back to the first line when the
+      output has no trailing exception line.
+
+    The old code used ``error_detail[:200]``, which kept the *first* 200
+    characters of a traceback — i.e. the ``Traceback (most recent call last)``
+    header and the ``runpy`` frames — and cut off the exception itself.
+    """
+    stderr_output = stderr_output or ""
+    stdout_output = stdout_output or ""
+    full = stderr_output or stdout_output or "no output"
+
+    # The exception is the last non-empty line of stderr (falling back to
+    # stdout when stderr is empty).
+    lines = [ln.strip() for ln in full.splitlines() if ln.strip()]
+    if lines:
+        summary = lines[-1]
+    else:
+        summary = "no output"
+
+    hint = _classify_mcp_failure(full)
+    if hint:
+        summary = "{:s} — {:s}".format(summary, hint)
+    return (summary, full)
+
+
+def _check_vendor_layout() -> list[str]:
+    """Return a list of problems with the vendored MCP layout.
+
+    An empty list means the layout looks usable.  Checks the two things the
+    MCP subprocess needs on ``PYTHONPATH``:
+
+    * ``vendor/deps/mcp/`` — the MCP SDK (plus its transitive deps).
+    * ``vendor/blmcp/`` — the server package itself, including the
+      ``data/prompts.yml`` that ``blmcp.main()`` opens unconditionally.
+
+    ``_ensure_vendor_deps()`` historically only checked the first, so a
+    source install with deps but no ``vendor/blmcp/`` produced a bare
+    ``ImportError: No module named 'blmcp'`` traceback instead of a clear
+    message.
+    """
+    problems: list[str] = []
+    this_dir = Path(__file__).resolve().parent
+
+    deps_dir = _get_vendor_deps_dir()
+    if not (deps_dir / "mcp" / "__init__.py").is_file():
+        problems.append(
+            "vendor deps missing: {:s} (run 'python build_addon.py')".format(
+                str(deps_dir / "mcp"))
+        )
+
+    # blmcp may live in the addon's vendor/ (built addon) or in the repo's
+    # mcp/ directory (source checkout).
+    vendor_blmcp = this_dir / "vendor" / "blmcp"
+    dev_blmcp = this_dir.parent.parent / "mcp" / "blmcp"
+    blmcp_dir = vendor_blmcp if vendor_blmcp.is_dir() else dev_blmcp
+    if not (blmcp_dir / "__init__.py").is_file():
+        problems.append(
+            "blmcp package missing: {:s} (run 'python build_addon.py')".format(
+                str(vendor_blmcp))
+        )
+    elif not (blmcp_dir / "data" / "prompts.yml").is_file():
+        problems.append(
+            "blmcp data missing: {:s} (run 'python build_addon.py')".format(
+                str(blmcp_dir / "data" / "prompts.yml"))
+        )
+
+    return problems
 
 
 def _start_pipe_drainer(proc: subprocess.Popen) -> tuple[list[threading.Thread], list[str], list[str]]:
@@ -1544,11 +1830,21 @@ def _resolve_mcp_python() -> tuple[str | None, bool]:
     # 2. Fall back to Blender's bundled Python with vendor deps.
     if not mcp_exe:
         if not _ensure_vendor_deps():
-            _agent_state.error = (
-                "MCP server dependencies not found in vendor deps cache. "
-                "Run 'python build_addon.py' to build the extension, "
-                "or install manually: pip install --target ~/.cache/bfa_coworker/vendor_deps/ mcp[cli] pyyaml docutils"
-            )
+            # Report the specific layout problem rather than a generic
+            # "dependencies not found" — the two causes need different fixes.
+            problems = _check_vendor_layout()
+            if problems:
+                _agent_state.error = (
+                    "MCP server layout incomplete — {:s}. "
+                    "Run 'python build_addon.py' to build the extension.".format(
+                        "; ".join(problems))
+                )
+            else:
+                _agent_state.error = (
+                    "MCP server dependencies not found in vendor deps cache. "
+                    "Run 'python build_addon.py' to build the extension, "
+                    "or install manually: pip install --target ~/.cache/bfa_coworker/vendor_deps/ mcp[cli] pyyaml docutils"
+                )
             return (None, False)
 
         blender_py = _find_blender_python()
@@ -1703,6 +1999,7 @@ def start_mcp_server(
     _mcp_server_process = proc
     _agent_state.mcp_server_running = True
     _agent_state.error = ""
+    _agent_state.error_full = ""
     print("[🛠️Coworker] start_mcp_server: launched pid={:d}".format(proc.pid))
     print("[🛠️Coworker] start_mcp_server: command = {:s}".format(str(mcp_exe or "python -m blmcp")))
     print("[🛠️Coworker] start_mcp_server: BFACW_HOST={:s} BFACW_PORT={:d}".format(
@@ -1733,8 +2030,9 @@ def start_mcp_server(
         if "ModuleNotFoundError" in error_detail or "ImportError" in error_detail:
             if _retry_depth >= 1:
                 print("[🛠️Coworker] start_mcp_server: import error after retry — giving up")
-                _agent_state.error = "MCP server import failed after reinstall: {:s}".format(
-                    error_detail.split("\n")[-1].strip()[:200])
+                summary, full = _summarize_mcp_failure(stderr_output, stdout_output)
+                _agent_state.error = "MCP server import failed after reinstall: {:s}".format(summary)
+                _agent_state.error_full = full
                 _agent_state.mcp_server_running = False
                 _mcp_server_process = None
                 return None
@@ -1751,7 +2049,9 @@ def start_mcp_server(
                         port=port, blender_host=blender_host, blender_port=blender_port,
                         _retry_depth=_retry_depth + 1,
                     )
-        _agent_state.error = "MCP server exited immediately: {:s}".format(error_detail[:200])
+        summary, full = _summarize_mcp_failure(stderr_output, stdout_output)
+        _agent_state.error = "MCP server exited immediately: {:s}".format(summary)
+        _agent_state.error_full = full
         _agent_state.mcp_server_running = False
         _mcp_server_process = None
         return None
@@ -1772,7 +2072,10 @@ def start_mcp_server(
             print("[🛠️Coworker] start_mcp_server: stderr (tail) = {:s}".format(stderr_output[-1500:]))
         if stdout_output:
             print("[🛠️Coworker] start_mcp_server: stdout (tail) = {:s}".format(stdout_output[-1500:]))
-        _agent_state.error = "MCP server started but port {:d} never accepted connections".format(port)
+        summary, full = _summarize_mcp_failure(stderr_output, stdout_output)
+        _agent_state.error = "MCP server started but port {:d} never accepted connections: {:s}".format(
+            port, summary)
+        _agent_state.error_full = full
         _agent_state.mcp_server_running = False
         _mcp_server_process = None
         return None
@@ -1913,22 +2216,48 @@ def start_mcp_server_network(
     _mcp_server_process = proc
     _agent_state.mcp_server_running = True
     _agent_state.error = ""
+    _agent_state.error_full = ""
 
-    # Drain pipes.
-    _start_pipe_drainer(proc)
+    # Drain pipes.  Keep the collected lines so an early exit can be
+    # diagnosed — this path previously discarded them and reported a bare
+    # "MCP server exited immediately" with no cause at all.
+    _drainer_threads, _stdout_lines, _stderr_lines = _start_pipe_drainer(proc)
 
     # Wait for port.
     import time
     time.sleep(0.5)
     if proc.poll() is not None:
-        _agent_state.error = "MCP server exited immediately"
+        time.sleep(0.5)  # Let the drainer finish reading.
+        stderr_output = "\n".join(_stderr_lines[-100:])
+        stdout_output = "\n".join(_stdout_lines[-100:])
+        print("[🛠️Coworker] start_mcp_server_network: process exited with code {:d}".format(
+            proc.returncode))
+        if stderr_output:
+            print("[🛠️Coworker] start_mcp_server_network: stderr (tail) = {:s}".format(
+                stderr_output[-1500:]))
+        if stdout_output:
+            print("[🛠️Coworker] start_mcp_server_network: stdout (tail) = {:s}".format(
+                stdout_output[-1500:]))
+        summary, full = _summarize_mcp_failure(stderr_output, stdout_output)
+        _agent_state.error = "MCP server exited immediately: {:s}".format(summary)
+        _agent_state.error_full = full
         _agent_state.mcp_server_running = False
         _mcp_server_process = None
         return None
 
-    port_ready = _wait_for_port(host, port, timeout=15.0, interval=1.0)
+    port_ready = _wait_for_port(host, port, timeout=15.0, interval=1.0, proc=proc)
     if not port_ready:
-        _agent_state.error = "MCP server port {:d} never accepted connections".format(port)
+        time.sleep(1.0)
+        stderr_output = "\n".join(_stderr_lines[-100:])
+        stdout_output = "\n".join(_stdout_lines[-100:])
+        print("[🛠️Coworker] start_mcp_server_network: port {:d} never became ready".format(port))
+        if stderr_output:
+            print("[🛠️Coworker] start_mcp_server_network: stderr (tail) = {:s}".format(
+                stderr_output[-1500:]))
+        summary, full = _summarize_mcp_failure(stderr_output, stdout_output)
+        _agent_state.error = "MCP server port {:d} never accepted connections: {:s}".format(
+            port, summary)
+        _agent_state.error_full = full
         _agent_state.mcp_server_running = False
         _mcp_server_process = None
         return None
@@ -1956,7 +2285,10 @@ def _vendor_native_compat(python_path: str) -> bool:
 
     native_versions: set[str] = set()
     for pat in ("*.pyd", "*.so"):
-        for f in deps_dir.glob(pat):
+        # rglob, not glob: native extensions also live in subdirectories
+        # (e.g. pywin32_system32/, win32/lib/), and a top-level-only scan
+        # would miss a version mismatch and let the launch fail later.
+        for f in deps_dir.rglob(pat):
             name = f.name
             # Extract cpython tag: something like _cffi_backend.cp313-win_amd64.pyd
             for part in name.split("."):
@@ -2117,6 +2449,176 @@ def generate_mcp_client_config(
         config = dict(base_cmd)
 
     return json.dumps(config, indent=2)
+
+
+def validate_mcp_client_config(
+    client_type: str = "claude",
+    blender_host: str = "localhost",
+    blender_port: int = 9876,
+    use_blender_python: bool = True,
+    check_bridge: bool = True,
+) -> dict[str, Any]:
+    """Preflight the harness config that :func:`generate_mcp_client_config` emits.
+
+    The addon hands the user a config it has never executed, so a broken
+    interpreter path or a missing ``PYTHONPATH`` entry only surfaces later as
+    an opaque traceback inside the MCP client.  This runs the same resolution
+    the config generator uses and then actually launches the server with
+    ``--help`` to prove the import chain works.
+
+    Returns a dict::
+
+        {
+            "ok":          bool,          # True when every check passed
+            "python":      str,           # resolved interpreter (or command)
+            "python_ok":   bool,          # interpreter exists / is on PATH
+            "pythonpath":  str,           # resolved PYTHONPATH
+            "missing":     list[str],     # PYTHONPATH entries that don't exist
+            "import_ok":   bool,          # `-m blmcp --help` exited 0
+            "bridge_ok":   bool | None,   # None when check_bridge is False
+            "mcp_version": str,           # resolved MCP SDK version ("" if unknown)
+            "stderr_tail": str,           # last lines of the probe's stderr
+            "hint":        str,           # actionable hint ("" when fine)
+            "summary":     str,           # one-line human-readable result
+        }
+
+    ``--help`` is used rather than a full stdio handshake: it exercises the
+    whole import chain (``blmcp`` → ``mcp.server.fastmcp`` → ``yaml`` →
+    ``data/prompts.yml``) while staying fast and side-effect free.
+    """
+    result: dict[str, Any] = {
+        "ok": False,
+        "python": "",
+        "python_ok": False,
+        "pythonpath": "",
+        "missing": [],
+        "import_ok": False,
+        "bridge_ok": None,
+        "mcp_version": "",
+        "stderr_tail": "",
+        "hint": "",
+        "summary": "",
+    }
+
+    # ── 1. Resolve the interpreter and PYTHONPATH exactly as the config does.
+    if use_blender_python:
+        py_cmd, py_path = _get_blender_python_for_config()
+    else:
+        py_cmd, py_path = "python", ""
+    result["python"] = py_cmd
+    result["pythonpath"] = py_path
+
+    # ── 2. Does the interpreter exist?
+    if os.path.isabs(py_cmd) or os.sep in py_cmd or "/" in py_cmd:
+        result["python_ok"] = os.path.isfile(py_cmd)
+    else:
+        result["python_ok"] = shutil.which(py_cmd) is not None
+    if not result["python_ok"]:
+        result["hint"] = (
+            "Python interpreter not found at '{:s}'. Enable \"Use Blender's "
+            "Python\" to emit the bundled interpreter path, or install the "
+            "MCP server: pip install bfa-coworker-mcp".format(py_cmd)
+        )
+        result["summary"] = "Python interpreter not found: {:s}".format(py_cmd)
+        return result
+
+    # ── 3. Do all PYTHONPATH entries exist?
+    if py_path:
+        for entry in py_path.split(os.pathsep):
+            if entry and not os.path.isdir(entry):
+                result["missing"].append(entry)
+    if result["missing"]:
+        result["hint"] = (
+            "PYTHONPATH entries do not exist: {:s}. Run 'python build_addon.py' "
+            "to rebuild the vendor directories.".format(", ".join(result["missing"]))
+        )
+        result["summary"] = "PYTHONPATH entries missing: {:d}".format(len(result["missing"]))
+        return result
+
+    # ── 4. Actually launch the server with --help to prove the import chain.
+    env = os.environ.copy()
+    env["BFACW_HOST"] = blender_host
+    env["BFACW_PORT"] = str(blender_port)
+    if py_path:
+        env["PYTHONPATH"] = py_path
+    if sys.platform == "win32":
+        pywin32_system32 = _get_vendor_deps_dir() / "pywin32_system32"
+        if pywin32_system32.is_dir():
+            env["PATH"] = str(pywin32_system32) + os.pathsep + env.get("PATH", "")
+
+    try:
+        probe = subprocess.run(
+            [py_cmd, "-m", "blmcp", "--help"],
+            capture_output=True, text=True, timeout=30, env=env,
+        )
+    except subprocess.TimeoutExpired:
+        result["hint"] = (
+            "The MCP server did not respond within 30s. A firewall or "
+            "antivirus may be blocking the interpreter."
+        )
+        result["summary"] = "Probe timed out"
+        return result
+    except (FileNotFoundError, OSError) as ex:
+        result["hint"] = "Could not run the interpreter: {:s}".format(str(ex))
+        result["summary"] = "Probe failed to start"
+        return result
+
+    result["import_ok"] = (probe.returncode == 0)
+    stderr_text = probe.stderr or ""
+    result["stderr_tail"] = "\n".join(stderr_text.strip().splitlines()[-15:])
+
+    if not result["import_ok"]:
+        summary, _full = _summarize_mcp_failure(stderr_text, probe.stdout or "")
+        result["summary"] = summary
+        result["hint"] = _classify_mcp_failure(stderr_text) or (
+            "The MCP server failed to start. See the error above."
+        )
+        return result
+
+    # ── 4b. Report the resolved MCP SDK version.  mcp 2.x removed FastMCP,
+    # which blmcp imports, so a 2.x SDK is a latent failure even when the
+    # probe happens to pass (e.g. a shim module).
+    try:
+        ver_probe = subprocess.run(
+            [py_cmd, "-c",
+             "import importlib.metadata as m; print(m.version('mcp'))"],
+            capture_output=True, text=True, timeout=20, env=env,
+        )
+        if ver_probe.returncode == 0:
+            result["mcp_version"] = ver_probe.stdout.strip()
+            if result["mcp_version"].startswith("2."):
+                result["ok"] = False
+                result["summary"] = (
+                    "MCP SDK {:s} is too new — FastMCP was removed in 2.0".format(
+                        result["mcp_version"])
+                )
+                result["hint"] = (
+                    "The add-on requires mcp<2. Run 'python build_addon.py' to "
+                    "reinstall the pinned vendor deps, or: "
+                    "pip install 'mcp[cli]>=1.2.0,<2.0.0'"
+                )
+                return result
+    except (subprocess.TimeoutExpired, OSError):
+        pass  # Version is informational; never fail the check on it.
+
+    # ── 5. Optional: is the bridge reachable?  A config can be valid while
+    # the bridge is stopped, so this is reported separately.
+    if check_bridge:
+        try:
+            with socket.create_connection((blender_host, blender_port), timeout=3.0):
+                result["bridge_ok"] = True
+        except (OSError, socket.error):
+            result["bridge_ok"] = False
+
+    result["ok"] = True
+    if result["bridge_ok"] is False:
+        result["summary"] = (
+            "Config OK — but the bridge is not reachable on {:s}:{:d}. "
+            "Click Start Bridge in the chat panel.".format(blender_host, blender_port)
+        )
+    else:
+        result["summary"] = "Config OK — MCP server starts and imports cleanly"
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -4427,13 +4929,17 @@ def ping_agent(
     llm_port: int = 8081,
     bridge_port: int = 9876,
     operating_mode: str = "",
+    check_harness_config: bool = False,
+    use_blender_python: bool = True,
 ) -> dict[str, Any]:
     """
     Quick connectivity check for all three back-ends.
 
     When *operating_mode* is ``"EXTERNAL_HARNESS"``, only the bridge
     server is checked — MCP and LLM probes are skipped because those
-    services are managed externally.
+    services are managed externally.  Pass *check_harness_config* to also
+    preflight the generated MCP client config, so "Check Status" reports
+    whether the config the user copied can actually start the server.
 
     Returns a dict with test results suitable for display in the UI::
 
@@ -4442,6 +4948,7 @@ def ping_agent(
             "mcp_server":      "OK (N tools)" | "FAIL: <reason>" | "N/A (harness mode)",
             "llm_health":      "OK" | "FAIL: <reason>" | "N/A (harness mode)",
             "llm_chat":        "OK" | "FAIL: <reason>" | "N/A (harness mode)",
+            "harness_config":  "OK" | "FAIL: <reason>" | "N/A",
             "all_ok":          True | False,
         }
     """
@@ -4464,7 +4971,30 @@ def ping_agent(
         result["mcp_server"] = "N/A (harness mode)"
         result["llm_health"] = "N/A (harness mode)"
         result["llm_chat"] = "N/A (harness mode)"
-        result["all_ok"] = result.get("bridge_server", "").startswith("OK")
+
+        # Preflight the config the user is expected to paste into their client.
+        if check_harness_config:
+            try:
+                check = validate_mcp_client_config(
+                    blender_host="localhost",
+                    blender_port=bridge_port,
+                    use_blender_python=use_blender_python,
+                    check_bridge=False,
+                )
+                if check.get("ok"):
+                    result["harness_config"] = "OK"
+                else:
+                    result["harness_config"] = "FAIL: {:s}".format(
+                        check.get("summary") or "invalid")
+            except Exception as ex:  # pylint: disable=broad-exception-caught
+                result["harness_config"] = "FAIL: {:s}".format(str(ex))
+        else:
+            result["harness_config"] = "N/A"
+
+        result["all_ok"] = all(
+            v.startswith("OK") or v.startswith("N/A")
+            for k, v in result.items() if k != "all_ok"
+        )
         return result
 
     # 2 — LLM health

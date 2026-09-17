@@ -13,6 +13,73 @@ Before diving into specific issues, verify these basics:
 - [ ] You've copied the config for your harness and pasted it in the right file
 - [ ] You've **fully restarted** your MCP client (not just closed/reopened a window)
 
+## "MCP server exited immediately" with a `runpy` traceback
+
+If your client reports something like:
+
+```
+MCP server exited immediately: Traceback (most recent call last):
+  File "<frozen runpy>", line 189, in _run_module_as_main
+  File "<frozen runpy>", line 148, in _get_module_details
+  File "<frozen importlib._bootstrap>", line 112, in _get_module
+```
+
+…then `blmcp` **was found**, but importing it failed. This is an important
+distinction: when a module is genuinely missing, Python prints a one-line
+message (`No module named blmcp`) with **no traceback at all**. A traceback
+with these `runpy` frames means Python descended into `blmcp/__main__.py` and
+the failure happened *inside* the package.
+
+The real cause is the **last** line of the traceback, which older versions of
+the add-on truncated away. The most common causes, in order:
+
+1. **The MCP SDK is version 2.x.** `mcp` 2.0 removed `FastMCP`, but `blmcp`
+   imports `from mcp.server.fastmcp import FastMCP`. The last line reads:
+   ```
+   ModuleNotFoundError: No module named 'mcp.server.fastmcp'. This is mcp 2.x,
+   where FastMCP was renamed to MCPServer ...
+   ```
+   **Fix**: reinstall the pinned vendor deps:
+   ```bash
+   python build_addon.py
+   ```
+   or, for a system-Python setup:
+   ```bash
+   pip install "mcp[cli]>=1.2.0,<2.0.0"
+   ```
+
+2. **`vendor/blmcp/` is missing.** This happens when the add-on was installed
+   from source without running the build script. Run `python build_addon.py`,
+   then re-copy the config from preferences.
+
+3. **`PYTHONPATH` is missing the `vendor/` directory.** The config must point
+   at the *parent* of `vendor/blmcp/`, not at `vendor/blmcp/` itself. Enable
+   **"Use Blender's Python"** in preferences → Advanced → MCP Server and
+   re-copy the config — it emits the correct `PYTHONPATH` automatically.
+
+4. **`pydantic_core` or another native extension does not match your Python.**
+   The vendored deps are compiled for a specific Python version. The last line
+   reads `No module named 'pydantic_core._pydantic_core'`. Run
+   `python build_addon.py` to rebuild them for Blender's Python.
+
+5. **`pywintypes` is missing (Windows).** pywin32's importable modules live in
+   `win32/` and `win32/lib/`, which are normally exposed via a `.pth` file —
+   and `PYTHONPATH` ignores `.pth` files. The add-on adds those directories
+   automatically; re-copy the config from preferences.
+
+6. **The config is stale.** A config copied from an older Blender install
+   points at a Python path that no longer exists. Re-copy the config.
+
+### Verify before you paste
+
+Use the **Test Config** button next to *Copy to Clipboard* (preferences →
+Advanced → MCP Server → Step 2). It checks the interpreter path, every
+`PYTHONPATH` entry, the resolved MCP SDK version, and actually launches the
+server with `--help` to prove the import chain works — reporting the exact
+failure and a fix instead of a bare traceback. The same check runs
+automatically when you click *Copy to Clipboard*, and appears as **Config** in
+the *Check Status* output.
+
 ## "Bridge is running but my client says no tools"
 
 ### 1. Check the Python command

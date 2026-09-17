@@ -989,6 +989,10 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         row = diag_box.row()
         row.operator("bfacw.check_ports", icon="FILE_REFRESH", text="Check Ports")
         row.operator("bfacw.ping_agent", icon="FILE_REFRESH", text="Diagnose")
+        # Harness config preflight — only meaningful in External Harness mode.
+        if self.operating_mode == "EXTERNAL_HARNESS":
+            row = diag_box.row()
+            row.operator("bfacw.test_mcp_config", icon="CHECKMARK", text="Test Harness Config")
         # ── Multi-Step Test Suites ────────────────────────────────────
         diag_box.label(text="Test Suites (multi-step artist workflows)", icon='RENDER_RESULT')
         diag_box.label(
@@ -1861,10 +1865,44 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 row = step2.row(align=True)
                 op = row.operator("bfacw.copy_mcp_config", icon="COPYDOWN", text="Copy to Clipboard")
                 op.client_type = self.harness_preset
+                row.operator("bfacw.test_mcp_config", icon="CHECKMARK", text="Test Config")
                 step2.label(
                     text="This copies the connection settings for your selected client.",
                     icon='BLANK1',
                 )
+                step2.label(
+                    text="Test Config verifies the interpreter, PYTHONPATH and imports first.",
+                    icon='BLANK1',
+                )
+
+                # Show the last validation result, if any.
+                from . import operators_agent as _oa_cfg
+                # Reuse the chat panel's multiline renderer: it feature-detects
+                # Blender 5.3's native UILayout.label_multiline (which wraps to
+                # the real layout width) and only falls back to character-based
+                # wrapping on builds that lack the API.
+                from .ui_chat import _draw_multiline
+                _cfg_check = _oa_cfg.BFACW_OT_test_mcp_config._result
+                if _cfg_check:
+                    if _cfg_check.get("ok"):
+                        _icon = 'CHECKMARK'
+                        if _cfg_check.get("bridge_ok") is False:
+                            _icon = 'INFO'
+                    else:
+                        _icon = 'ERROR'
+                    step2.label(
+                        text=_cfg_check.get("summary", ""),
+                        icon=_icon,
+                    )
+                    if not _cfg_check.get("ok") and _cfg_check.get("hint"):
+                        _draw_multiline(step2, _cfg_check["hint"])
+                    if _cfg_check.get("stderr_tail"):
+                        _tail_box = step2.box()
+                        _tail_box.label(text="Server output (last lines):", icon='CONSOLE')
+                        _draw_multiline(
+                            _tail_box,
+                            "\n".join(_cfg_check["stderr_tail"].splitlines()[-8:]),
+                        )
 
                 # ── Step 3: Configure your client ───────────────────────────
                 step3 = mcp_box.box()
@@ -1980,8 +2018,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 ("mcp_server", "MCP"),
                 ("llm_health", "LLM"),
                 ("llm_chat", "Chat"),
+                ("harness_config", "Config"),
             ]:
                 val = ping.get(key, "—")
+                if val == "N/A":
+                    continue
                 is_ok = val.startswith("OK") or (is_harness and val.startswith("N/A"))
                 box.label(
                     text="{:<6s} {:s}".format(label + ":", val),

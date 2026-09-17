@@ -17,6 +17,7 @@ __all__ = (
     "_BFACW_OT_asset_selftest_run",
     "_BFACW_OT_asset_selftest_reset",
     "BFACW_OT_copy_mcp_config",
+    "BFACW_OT_test_mcp_config",
     "BFACW_OT_mcp_server_start",
     "BFACW_OT_mcp_server_stop",
     "BFACW_OT_save_provider",
@@ -160,6 +161,8 @@ class _BFACW_OT_ping_agent(bpy.types.Operator):  # type: ignore[misc]
             _BFACW_OT_ping_agent._result = _ac.ping_agent(
                 mcp_port=_mcp_port, llm_port=_llm_port, bridge_port=_bridge_port,
                 operating_mode=prefs.operating_mode,
+                check_harness_config=(prefs.operating_mode == "EXTERNAL_HARNESS"),
+                use_blender_python=getattr(prefs, "use_blender_python_for_harness", True),
             )
 
         thread = threading.Thread(target=_do_ping, daemon=True)
@@ -178,8 +181,11 @@ class _BFACW_OT_ping_agent(bpy.types.Operator):  # type: ignore[misc]
             ("mcp_server", "MCP"),
             ("llm_health", "LLM Health"),
             ("llm_chat", "LLM Chat"),
+            ("harness_config", "Harness Config"),
         ]:
             val = result.get(key, "not tested")
+            if val == "N/A":
+                continue
             lines.append("{:s}: {:s}".format(label, val))
 
         summary = " | ".join(lines)
@@ -808,8 +814,82 @@ class BFACW_OT_copy_mcp_config(bpy.types.Operator):  # type: ignore[misc]
             use_blender_python=use_blender_py,
         )
         context.window_manager.clipboard = config
-        self.report({"INFO"}, "MCP config copied to clipboard")
+
+        # Preflight the config we just handed out.  The addon previously
+        # emitted configs it had never executed, so a broken interpreter path
+        # or missing PYTHONPATH entry only surfaced as an opaque traceback
+        # inside the user's MCP client.  Copy anyway (the user may target a
+        # different machine) but warn with the actionable hint.
+        check = _ac_mod.validate_mcp_client_config(
+            client_type=self.client_type,
+            blender_host=prefs.host,
+            blender_port=_bridge_port,
+            use_blender_python=use_blender_py,
+        )
+        BFACW_OT_test_mcp_config._result = check
+        if not check.get("ok"):
+            self.report(
+                {"WARNING"},
+                "Config copied, but it may not work: {:s}".format(
+                    check.get("hint") or check.get("summary") or "validation failed"),
+            )
+        elif check.get("bridge_ok") is False:
+            self.report(
+                {"WARNING"},
+                "Config copied and valid — but the bridge is not running on "
+                "port {:d}. Click Start Bridge.".format(_bridge_port),
+            )
+        else:
+            self.report({"INFO"}, "MCP config copied to clipboard (validated)")
         return {"FINISHED"}
+
+
+class BFACW_OT_test_mcp_config(bpy.types.Operator):  # type: ignore[misc]
+    """Validate the generated MCP client config before the user pastes it."""
+    bl_idname = "bfacw.test_mcp_config"
+    bl_label = "Test Config"
+    bl_description = (
+        "Check that the generated MCP config can actually start the server: "
+        "verifies the Python interpreter, PYTHONPATH entries, and imports"
+    )
+
+    _result: dict = {}  # class-level storage for display in draw()
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        _bridge_port, _, _ = effective_ports(prefs)
+        use_blender_py = getattr(prefs, "use_blender_python_for_harness", True)
+        client_type = getattr(prefs, "harness_preset", "claude_desktop")
+
+        def _do_check() -> None:
+            BFACW_OT_test_mcp_config._result = _ac_mod.validate_mcp_client_config(
+                client_type=client_type,
+                blender_host=prefs.host,
+                blender_port=_bridge_port,
+                use_blender_python=use_blender_py,
+            )
+
+        thread = threading.Thread(target=_do_check, daemon=True)
+        thread.start()
+        thread.join(timeout=45)
+
+        result = BFACW_OT_test_mcp_config._result
+        if not result:
+            self.report({"ERROR"}, "Config check timed out")
+            return {"CANCELLED"}
+
+        if result.get("ok"):
+            self.report({"INFO"}, result.get("summary", "Config OK"))
+            return {"FINISHED"}
+
+        self.report(
+            {"ERROR"},
+            "{:s} — {:s}".format(
+                result.get("summary", "Config invalid"),
+                result.get("hint", ""),
+            ).strip(" —"),
+        )
+        return {"CANCELLED"}
 
 
 # ---------------------------------------------------------------------------

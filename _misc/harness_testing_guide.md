@@ -141,12 +141,68 @@ Followed by a null byte (Ctrl+@ on Windows, Ctrl+Shift+U 0000 on Linux).
 - PYTHONPATH is not set correctly
 - The vendor directory must include `vendor/` (parent of `vendor/blmcp/`)
 - Use the "Use Blender's Python" toggle in preferences — it sets PYTHONPATH automatically
+- If `vendor/blmcp/` does not exist at all, run `python build_addon.py`
 
 ### `ModuleNotFoundError: No module named 'mcp'`
 
 - The vendor deps directory is missing or not on PYTHONPATH
 - Run `python build_addon.py` to build the extension and populate vendor deps
 - Or manually: `pip install --target ~/.cache/bfa_coworker/vendor_deps/ mcp[cli] pyyaml docutils`
+
+## Preflighting the Config (recommended before manual testing)
+
+Rather than discovering a broken config by hand, use the built-in validator.
+From preferences → Advanced → MCP Server → Step 2, click **Test Config**.
+It runs the same resolution the config generator uses and then executes:
+
+```bash
+"<resolved-python>" -m blmcp --help
+```
+
+with the generated `PYTHONPATH`/`BFACW_*` environment. `--help` exercises the
+whole import chain (`blmcp` → `mcp.server.fastmcp` → `yaml` →
+`data/prompts.yml`) while staying fast and side-effect free — it does not bind
+a port or touch the bridge.
+
+Programmatically:
+
+```python
+from bfa_coworker import agent_controller as ac
+
+check = ac.validate_mcp_client_config(
+    client_type="claude_desktop",
+    blender_host="localhost",
+    blender_port=9876,
+    use_blender_python=True,
+)
+print(check["ok"], check["summary"], check["hint"])
+```
+
+The returned dict reports `python_ok`, `missing` (PYTHONPATH entries that do
+not exist), `import_ok`, `bridge_ok`, `mcp_version`, `stderr_tail`, and an
+actionable `hint`. `Copy to Clipboard` runs the same check and warns when the
+config would fail.
+
+### Why the traceback shape matters
+
+A genuinely missing module makes Python print a **one-line** message with no
+traceback:
+
+```
+python.exe: No module named blmcp
+```
+
+So a traceback containing `_run_module_as_main` / `_get_module_details` means
+`blmcp` *was* found and Python descended into `blmcp/__main__.py` — the failure
+is *inside* the package. The most common cause is **mcp 2.x**, which removed
+`FastMCP` while `blmcp/__init__.py` imports
+`from mcp.server.fastmcp import FastMCP`. The validator therefore also resolves
+the installed SDK version and rejects 2.x explicitly, even if the `--help`
+probe happens to pass.
+
+`tests/test_mcp_server.py::TestModuleEntryPoint` asserts both shapes:
+`test_missing_module_gives_short_message_not_traceback` and
+`test_package_found_but_import_fails_gives_the_reported_traceback`.
 
 ## Adding a New Harness Preset
 

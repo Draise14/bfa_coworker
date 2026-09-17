@@ -511,7 +511,7 @@ def generate_home(manifest: dict, operators: list, tools: list) -> str:
 | 📦 **Self-Contained** | Everything bundled — no external tools or Python setup needed |
 | 🧠 **Local LLM** | Download and run models locally via llama.cpp (10 curated presets) |
 | ☁️ **Remote API** | Connect to OpenAI, OpenRouter, or any OpenAI-compatible API |
-| 🔌 **External Harness** | Drive Blender from Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Cline, OpenCode, or any MCP client |
+| 🔌 **External Harness** | Drive Blender from Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Cline, OpenCode, Freebuff, or any MCP client |
 | 🔧 **MCP Tools** | {len(tools)} dedicated tools for scene inspection, navigation, rendering, and more |
 | 💬 **Chat UI** | In-Blender chat panel with streaming responses, reasoning display, @mentions |
 | 🎨 **Generative AI** | Experimental image/video/audio generation via plugins |
@@ -575,7 +575,7 @@ graph TB
 | 🔧 MCP tools available | **{len(tools)}** |
 | 🧠 Curated model presets | **10** (Light, Mid, Flagship + Custom) |
 | ☁️ Remote API providers | **2** (OpenRouter, Custom) |
-| 🔌 Supported external harnesses | **8** (Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Cline, OpenCode, Generic) |
+| 🔌 Supported external harnesses | **9** (Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Cline, OpenCode, Freebuff, Generic) |
 | 🧪 Built-in test suites | **15** |
 | 🎨 Generative plugin types | **4** (Image, Video, Audio, Text) |
 """
@@ -702,7 +702,7 @@ Best for maximum model quality without local hardware requirements.
 ### 🔌 Option C: External Harness
 
 Best if you already use an MCP-capable client (Claude Desktop, Claude Code, Codex,
-Cursor, Windsurf, Cline, OpenCode, …). Blender becomes a tool inside that client —
+Cursor, Windsurf, Cline, OpenCode, Freebuff, …). Blender becomes a tool inside that client —
 the add-on runs no LLM of its own.
 
 1. Go to **Edit** → **Preferences** → **Add-ons** → **Coworker**.
@@ -868,7 +868,7 @@ At the top of the preferences panel, you'll find the **Operating Mode** selector
 |------|-------------|
 | **Local LLM** | Run a local model via llama.cpp (self-contained, offline-capable) |
 | **Remote API** | Connect to OpenAI, OpenRouter, or any OpenAI-compatible API |
-| **External Harness** | Bridge-only — connect an external MCP client (Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Cline, OpenCode, …) |
+| **External Harness** | Bridge-only — connect an external MCP client (Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Cline, OpenCode, Freebuff, …) |
 
 {_screenshot(
     "Preferences panel showing the Operating Mode selector at the top",
@@ -995,10 +995,9 @@ Port settings, external harness configuration, skills, and diagnostics.
   - **Managed (HTTP)** — the add-on runs it as a subprocess (used by the built-in chat UI)
   - **Stdio (External Client)** — for external MCP clients; the add-on only provides config snippets
   - **Network (HTTP Server)** — listens on a configurable host:port for browser/remote clients
-- **Harness Preset** — pick your external client (Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Cline, OpenCode, Generic STDIO)
+- **Harness Preset** — pick your external client (Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Cline, OpenCode, Freebuff, Generic STDIO)
 - **Use Blender's Python** — when ON, generated configs use Blender's bundled Python with vendored deps (no `pip install` needed)
 - **Copy MCP Config** — copy the ready-to-paste JSON config for the selected preset
-- **Open Config Folder** — reveal the client's config file location in your OS file manager
 - **Configure Harness** — jump straight to this tab from the chat panel
 
 > 📖 See the [[User-Documentation/External-Harness|External Harness]] page for per-client setup and the [[User-Documentation/Harness-Troubleshooting|Harness Troubleshooting]] page for fixes.
@@ -1537,7 +1536,7 @@ def generate_external_harness(harness_presets: list[dict]) -> str:
 
 In **External Harness** mode the add-on does **not** run an LLM. Instead it exposes
 Blender to an *external* MCP client — the **harness** — that you already use for
-coding (Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Cline, OpenCode, …).
+coding (Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Cline, OpenCode, Freebuff, …).
 You keep your favourite client and its model; Blender becomes one more tool it can drive.
 
 | | Self-Contained (Local LLM / Remote API) | External Harness |
@@ -1577,7 +1576,7 @@ graph LR
     "Advanced preferences showing the Operating Mode selector, Harness Preset dropdown, and Copy MCP Config button",
     "Edit → Preferences → Add-ons → Coworker → Advanced tab",
     "External Harness operating mode selected, harness preset chosen, Copy MCP Config button visible",
-    "1. Operating Mode selector, 2. Harness Preset dropdown, 3. Use Blender's Python toggle, 4. Copy MCP Config button, 5. Open Config Folder button"
+    "1. Operating Mode selector, 2. Harness Preset dropdown, 3. Use Blender's Python toggle, 4. Copy MCP Config button"
 )}
 
 ---
@@ -3567,7 +3566,7 @@ A group of related MCP tools (e.g., Animation, Material, Modeling) that are load
 ### External Harness
 An operating mode where the add-on runs only the **bridge server** and an external
 MCP client (the *harness* — Claude Desktop, Claude Code, Codex, Cursor, Windsurf,
-Cline, OpenCode, …) launches the MCP server itself with
+Cline, OpenCode, Freebuff, …) launches the MCP server itself with
 `python -m blmcp --transport stdio`. See the [[User-Documentation/External-Harness|External Harness]] page.
 
 ---

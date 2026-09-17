@@ -458,7 +458,7 @@ mcp/blmcp/tools/get_screenshot_of_window_as_json_toolcode.py  # VSE + node edito
 
 **Source**: BlenderMCP Pro — one-click config writing for Claude Desktop, Cursor, Windsurf, Claude.ai Web (via Cloudflare tunnel).
 
-**What**: A dropdown in the Coworker preferences to select an external MCP client (Claude Desktop, Cursor, Windsurf). Clicking "Write Config" auto-generates the correct JSON config file and writes it to the client's config directory. For Claude.ai Web, start a Cloudflare tunnel and display the public URL.
+**What**: A dropdown in the Coworker preferences to select an external MCP client (Claude Desktop, Cursor, Windsurf, Freebuff). Clicking "Write Config" auto-generates the correct JSON config file and writes it to the client's config directory. For Claude.ai Web, start a Cloudflare tunnel and display the public URL.
 
 **Why Tier 4g**: We already have an MCP server and external harness mode. One-click config writing removes the friction of manually editing JSON config files. BlenderMCP Pro does this well — it's a polish feature that makes the MCP server actually usable by non-technical users.
 

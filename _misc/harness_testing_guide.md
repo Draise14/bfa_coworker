@@ -175,5 +175,5 @@ schema for that harness:
 
 - **Claude Desktop / Claude Code**: `{ "mcpServers": { "bfa-coworker": {...} } }`
 - **Cursor / Windsurf / Cline**: `{ "servers": { "bfa-coworker": { "type": "stdio", ... } } }`
-- **Codex / OpenCode**: `{ "mcpServers": { "bfa-coworker": {...} } }`
+- **Codex / OpenCode / Freebuff**: `{ "mcpServers": { "bfa-coworker": {...} } }`
 - **Generic**: raw `{ "command": "...", "args": [...], "env": {...} }`

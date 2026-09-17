@@ -438,6 +438,27 @@ _HARNESS_PRESETS: list[HarnessPreset] = [
         chat_paste_hint="OpenCode: paste the config into the OpenCode TUI - it configures the MCP server automatically (or use `opencode mcp add` in a terminal).",
     ),
     HarnessPreset(
+        identifier="freebuff",
+        name="Freebuff",
+        description="Freebuff agent client - configure via its MCP settings UI or harness chat; no config-file hunting needed.",
+        icon="URL",
+        is_open_source=True,
+        config_path_help=(
+            "Location varies by Freebuff version and install - the MCP/agent settings UI"
+
+            "or harness chat flow is the recommended way to add the server."
+        ),
+        setup_steps=[
+            "Open Freebuff settings and find the MCP / tools / agent servers section",
+            "Add a new MCP server and paste the config below",
+            "Or paste the config into the Freebuff harness chat and confirm the setup",
+            "Restart or reload Freebuff so the new tools are picked up",
+        ],
+        docs_url="",
+        notes="Freebuff accepts the Claude Desktop format (mcpServers key). Prefer the settings UI or chat flow - file locations vary per system.",
+        chat_paste_hint="Freebuff: paste the config into the harness chat or the MCP settings UI - it registers the server for you.",
+    ),
+    HarnessPreset(
         identifier="generic",
         name="Generic STDIO",
         description="Fallback config for any MCP-compatible client not listed above.",

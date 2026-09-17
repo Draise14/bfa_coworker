@@ -71,6 +71,18 @@ _CHAT_SAMPLING = {
 _DEFAULT_TEMPERATURE_CODE = 0.2
 _DEFAULT_TEMPERATURE_PROSE = 0.35
 
+# Appended to the system prompt in Ask mode (issue #66).  Ask mode is
+# informational only: the model must answer in prose and never emit tool
+# calls or executable code.  The base prompt describes tool workflows, so
+# without this addendum local models frequently call tools anyway.
+_ASK_MODE_PROMPT_ADDENDUM = (
+    "\n\n[Ask mode] You are in READ-ONLY Ask mode. Answer the user's "
+    "questions with explanations and information in plain text. Do NOT "
+    "attempt to call tools, run code, or modify the scene or any files. "
+    "If the user asks for a change, describe the steps they could take "
+    "(or the code they could run) instead of performing it yourself."
+)
+
 _DEFAULT_MAX_TOKENS = 1024
 # (removed: _DEEP_MAX_TOKENS was dead code)
 
@@ -2073,7 +2085,7 @@ def generate_mcp_client_config(
         "env": env,
     }
 
-    if client_type in ("claude_desktop", "claude_code"):
+    if client_type in ("claude_desktop", "claude_code", "freebuff"):
         config = {
             "mcpServers": {
                 "bfa-coworker": dict(base_cmd),
@@ -2327,7 +2339,10 @@ def _openai_chat_completions(
 
                     print("[🛠️Coworker] _openai_chat_completions: --- end reasoning ---")
                 # If we fell back to text-based tool calling, parse text calls.
-                if not tools_tried and not tool_calls:
+                # Only when tools were actually offered: with no tools in the
+                # request (Ask mode), parsed "calls" would be spurious — the
+                # model is just writing JSON/XML in prose (issue #66).
+                if not tools_tried and not tool_calls and tools:
                     text_calls = _parse_text_tool_calls(content)
                     if text_calls:
                         print("[🛠️Coworker] _openai_chat_completions: parsed {:d} text-based tool calls".format(
@@ -2341,7 +2356,9 @@ def _openai_chat_completions(
                 # Gemma 4 E4B) often emit tool calls as XML inside
                 # ``reasoning_content`` or ``content`` instead of the proper
                 # OpenAI ``tool_calls`` array.  Parse both fields.
-                if not msg.get("tool_calls"):
+                # Same gating as text-based parsing: without an offered
+                # tool list (Ask mode), XML blocks are prose, not calls.
+                if not msg.get("tool_calls") and tools:
                     xml_sources: list[tuple[str, str]] = []
                     if reasoning:
                         xml_sources.append(("reasoning_content", reasoning))
@@ -2407,7 +2424,7 @@ def _openai_chat_completions(
             # fine-tunes) 500 on the ``tools`` parameter.  We inject tool
             # descriptions into the system prompt and retry without the
             # ``tools`` JSON parameter, preserving full agent functionality.
-            if tools_tried and _is_500 and _fault == _FAULT_TEMPLATE:
+            if tools_tried and _is_500 and _fault == _FAULT_TEMPLATE and tools:
                 print("[🛠️Coworker] _openai_chat_completions: 500 TEMPLATE fault — "
                       "injecting tools as text and retrying")
                 if _500_body:
@@ -3680,6 +3697,17 @@ def _run_conversation_turn_inner(
     if _preflight_note and _preflight_marker not in history[0]["content"]:
         history[0]["content"] += _preflight_note
 
+    # ── Ask-mode system prompt addendum (issue #66) ──────────────────
+    # In Ask mode the system prompt must NOT invite tool use — the default
+    # prompt tells the model it can "inspect and modify the scene", which
+    # actively encourages tool calls in a mode that must be informational
+    # only.  Append a read-only instruction to the (cached) system prompt.
+    # Appended per-turn, not baked into the cache, so switching between
+    # Agent and Ask modes mid-session stays correct.  Marker-guarded so
+    # it is not duplicated on subsequent Ask-mode turns.
+    if chat_mode == "ASK" and _ASK_MODE_PROMPT_ADDENDUM not in history[0]["content"]:
+        history[0]["content"] += _ASK_MODE_PROMPT_ADDENDUM
+
     # Append the user message.
     history.append({"role": "user", "content": user_message, "turn_start": True})
 
@@ -3917,7 +3945,7 @@ def _run_conversation_turn_inner(
                 existing.insert(0, {"type": "image_url", "image_url": {"url": _pending_image}})
             _agent_state._pending_image = None  # Clear after use
 
-        response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model, max_tokens, thinking_budget_tokens=thinking_budget)
+        response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model, max_tokens, thinking_budget_tokens=thinking_budget, chat_mode=chat_mode)
 
         # ── Abort check ───────────────────────────────────────────────
         # If the user stopped the previous turn and started a new one, the
@@ -3960,7 +3988,7 @@ def _run_conversation_turn_inner(
             empty_retries += 1
             doubled_budget = min(doubled_budget * 2, 8192) if thinking_budget > 0 else 0
             print("[Coworker] empty response, retrying with thinking_budget={:d}".format(doubled_budget))
-            response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model, max_tokens, thinking_budget_tokens=doubled_budget)
+            response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model, max_tokens, thinking_budget_tokens=doubled_budget, chat_mode=chat_mode)
             if response is None:
                 break
             choice = response.get("choices", [{}])[0]
@@ -3992,6 +4020,7 @@ def _run_conversation_turn_inner(
             # Re-request with the same max_tokens.
             continue_response = _openai_chat_completions(
                 llm_url, history, openai_tools, api_key, model, max_tokens,
+                chat_mode=chat_mode,
             )
             if continue_response is None:
                 break
@@ -4057,6 +4086,18 @@ def _run_conversation_turn_inner(
 
         # Check for tool calls.
         raw_tool_calls = msg.get("tool_calls")
+
+        # ── Ask-mode hard guard (issue #66) ───────────────────────────
+        # Ask mode must be informational only.  Even though no tools are
+        # offered to the model, defensive layers above (text/XML fallback
+        # parsing) or the provider itself could still surface tool calls.
+        # Never execute them: keep the prose answer and drop the calls.
+        if chat_mode == "ASK" and raw_tool_calls:
+            print("[🛠️Coworker] run_conversation_turn: ASK mode — suppressed "
+                  "{:d} tool call(s) from LLM response".format(len(raw_tool_calls)))
+            msg["tool_calls"] = []
+            raw_tool_calls = None
+            finish_reason = "stop"
 
         # Process tool calls if present.
         if raw_tool_calls and finish_reason == "tool_calls":
@@ -4346,7 +4387,7 @@ def _run_conversation_turn_inner(
             "role": "user",
             "content": "[System: All tool calls are complete. Please summarize what was done in 1-2 sentences.]",
         })
-        final_response = _openai_chat_completions(llm_url, history, openai_tools, api_key, model, max_tokens, thinking_budget_tokens=thinking_budget)
+        final_response = _openai_chat_completions(llm_url, history, openai_tools, api_key, model, max_tokens, thinking_budget_tokens=thinking_budget, chat_mode=chat_mode)
         if final_response:
             final_choice = final_response.get("choices", [{}])[0]
             final_msg = final_choice.get("message", {})

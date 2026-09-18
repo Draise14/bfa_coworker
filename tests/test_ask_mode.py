@@ -123,10 +123,17 @@ class TestFallbackParsersGatedOnTools(unittest.TestCase):
         )
 
     def test_tools_as_text_downgrade_never_in_ask_mode_path(self):
-        """The 500 template-fault downgrade requires tools to be offered."""
+        """The 500 template-fault downgrade requires tools to be offered.
+
+        The trailing ``not _tools_as_text`` is a one-shot guard: the
+        downgrade reshapes the request into a strictly simpler shape, so a
+        second identical failure means the reshape did not help and the real
+        error should surface instead of looping.
+        """
         self.assertRegex(
             _src,
-            r'if tools_tried and _is_500 and _fault == _FAULT_TEMPLATE and tools:',
+            r'if tools_tried and _is_500 and _fault == _FAULT_TEMPLATE and tools'
+            r' and not _tools_as_text:',
         )
 
 

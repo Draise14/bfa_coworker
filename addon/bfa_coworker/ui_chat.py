@@ -627,9 +627,9 @@ def _draw_tool_summary(layout: bpy.types.UILayout, content: str, summary: str) -
         detail_box = layout.box()
         detail_row = detail_box.row()
         detail_row.label(text="Details:", icon='TEXT')
-        # Show truncated raw content.
-        raw_preview = content[:300] + ("..." if len(content) > 300 else "")
-        _draw_multiline(detail_box, raw_preview, width=_WRAP_WIDTH)
+        # Show the full raw content -- the user asked to see it all, and the
+        # panel scrolls.
+        _draw_multiline(detail_box, content, width=_WRAP_WIDTH)
 
 
 def _draw_tool_inline(
@@ -1610,6 +1610,22 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         # Load chat history.
         history = _load_chat_history()
         if history:
+            # ── Loaded-history diagnostic ─────────────────────────────
+            # A persisted history is restored verbatim, so a stale prompt or
+            # a bad shape from an earlier session is sent to the model as-is.
+            # Log what was loaded -- the first user message in particular
+            # reveals whether the model is answering a stale prompt.
+            print("[🛠️Coworker] _load_chat_history: loaded {:d} messages from {:s}".format(
+                len(history), _chat_history_path()))
+            print(agent_controller._describe_history_for_log(history))
+            # Sanitize before use: a history written by an older build may
+            # contain ui_only greetings, a leading assistant message,
+            # reasoning entries, or half-finished tool-call exchanges -- all
+            # of which trip strict Jinja chat templates.
+            history = agent_controller._sanitize_loaded_history(history)
+            if history:
+                print("[🛠️Coworker] _load_chat_history: after sanitize:")
+                print(agent_controller._describe_history_for_log(history))
             agent_controller._agent_state.conversation_history = history
 
         # Local-mode status is driven by the background thread (Starting →
@@ -2060,9 +2076,9 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                                     '"status": "error"' in (pc or "")
                                     or (pc or "").startswith("Error")
                                 )
+                                # Show the full result -- the user asked to see
+                                # it all, and the panel scrolls.
                                 d = ts if ts else (pc or "")
-                                if not ts and len(d) > 200:
-                                    d = d[:200] + "..."
                                 _draw_tool_inline(
                                     work_box, tn, d, ie,
                                     message_index=history.index(pm),
@@ -2077,7 +2093,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                             work_box.separator()
                             sb = work_box.box()
                             sb.label(text="✨ Coworker (live):", icon=_AGENT_ICON)
-                            _draw_multiline(sb, state.streaming_text[:300] + "...")
+                            _draw_multiline(sb, state.streaming_text)
 
                 # --- Conclusion (always visible) ---
                 if conclusion_msg:
@@ -2095,7 +2111,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 ):
                     turn_box.separator()
                     turn_box.label(text="✨ Coworker (live):", icon=_AGENT_ICON)
-                    _draw_multiline(turn_box, state.streaming_text[:300] + "...")
+                    _draw_multiline(turn_box, state.streaming_text)
 
         else:
             layout.label(
@@ -2337,7 +2353,7 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
                     display = summary if summary else (content or "")
                     preview = display[:80] + "..." if display and len(display) > 80 else (display or "")
                 else:
-                    preview = content[:80] + "..." if content and len(content) > 80 else (content or "")
+                    preview = content if content else ""
                 _draw_multiline(box, "[{:s}] {:s}".format(role, preview))
         else:
             layout.label(text="No conversation yet.", icon='INFO')

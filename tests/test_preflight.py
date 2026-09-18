@@ -25,8 +25,23 @@ def _load_preflight():
     with open(src_path, "r", encoding="utf-8") as f:
         source = f.read()
 
+    # Create a module with just re available.
+    mod = types.ModuleType("_preflight_test")
+    mod.__dict__["re"] = __import__("re")
+
+    # ``_preflight_check`` calls ``_imports_module``, so extract that first.
+    helper_start = source.find("\ndef _imports_module(")
+    if helper_start < 0:
+        raise ImportError("_imports_module not found in source")
+    helper_start += 1
+    helper_end = len(source)
+    for marker in ["\ndef _preflight_check(", "\nclass ", "\n# ---"]:
+        idx = source.find(marker, helper_start + 100)
+        if idx >= 0 and idx < helper_end:
+            helper_end = idx
+    exec(source[helper_start:helper_end], mod.__dict__)
+
     # Extract just the _preflight_check function and its imports.
-    # The function only uses `re` from stdlib.
     func_start = source.find("\ndef _preflight_check(")
     if func_start < 0:
         raise ImportError("_preflight_check not found in source")
@@ -42,9 +57,6 @@ def _load_preflight():
 
     func_source = source[func_start:func_end]
 
-    # Create a module with just re available.
-    mod = types.ModuleType("_preflight_test")
-    mod.__dict__["re"] = __import__("re")
     exec(func_source, mod.__dict__)
     return mod._preflight_check
 
@@ -499,7 +511,65 @@ bm = bmesh.from_edit_mesh(obj.data)
         issues = _preflight_check(code)
         names = [name for name, _ in issues]
         self.assertNotIn("missing_bmesh_import", names)
+    def test_bmesh_imported_in_comma_list_ok(self):
+        """``import bpy, bmesh, math`` must count as importing bmesh.
 
+        A plain substring test for 'import bmesh' misses this form, which
+        made the check fire on valid code and cost the model a wasted retry.
+        """
+        code = """
+import bpy, bmesh, math
+obj = bpy.context.active_object
+bm = bmesh.from_edit_mesh(obj.data)
+"""
+        issues = _preflight_check(code)
+        names = [i[0] for i in issues]
+        self.assertNotIn("missing_bmesh_import", names)
+
+    def test_bmesh_imported_with_alias_ok(self):
+        """``import bmesh as bm`` must count as importing bmesh."""
+        code = """
+import bpy
+import bmesh as bm
+obj = bpy.context.active_object
+mesh = bmesh.from_edit_mesh(obj.data)
+"""
+        issues = _preflight_check(code)
+        names = [i[0] for i in issues]
+        self.assertNotIn("missing_bmesh_import", names)
+
+    def test_bmesh_from_import_ok(self):
+        """``from bmesh import ops`` must count as importing bmesh."""
+        code = """
+import bpy
+from bmesh import ops
+obj = bpy.context.active_object
+"""
+        issues = _preflight_check(code)
+        names = [i[0] for i in issues]
+        self.assertNotIn("missing_bmesh_import", names)
+
+    def test_bpy_imported_in_comma_list_ok(self):
+        """``import bpy, bmesh`` must count as importing bpy."""
+        code = """
+import bpy, bmesh
+bpy.ops.mesh.primitive_cube_add()
+"""
+        issues = _preflight_check(code)
+        names = [i[0] for i in issues]
+        self.assertNotIn("missing_bpy", names)
+
+    def test_similar_module_name_does_not_count(self):
+        """``import bmesh_utils`` must NOT satisfy the bmesh import check."""
+        code = """
+import bpy
+import bmesh_utils
+obj = bpy.context.active_object
+bm = bmesh.from_edit_mesh(obj.data)
+"""
+        issues = _preflight_check(code)
+        names = [i[0] for i in issues]
+        self.assertIn("missing_bmesh_import", names)
     def test_bmesh_editmode_mismatch(self):
         """from_edit_mesh without mode_set is caught."""
         code = """

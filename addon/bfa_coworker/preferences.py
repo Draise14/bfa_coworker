@@ -1037,13 +1037,24 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 text="Step {:d}/{:d}".format(step_idx, total_steps),
                 icon='INFO',
             )
+            # Surface failures at the suite level so a broken run is obvious
+            # at a glance instead of looking like a fast, successful one.
+            _failed = _oa_suite._suite_failure_count(suite_key)
+            if _failed:
+                suite_header.label(
+                    text="{:d} failed".format(_failed),
+                    icon='ERROR',
+                )
 
             # Step buttons in a column.
             for step_i, (s_num, s_label, _) in enumerate(suite):
                 step_row = suite_box.row(align=True)
                 is_done = step_i < step_idx
                 is_current = step_i == step_idx
-                if is_done:
+                _status = _oa_suite._test_suite_status.get((suite_key, s_num))
+                if _status == "failed":
+                    step_icon = 'CANCEL'
+                elif is_done:
                     step_icon = 'CHECKBOX_HLT'
                 elif is_current:
                     step_icon = 'RADIOBUT_ON'
@@ -1059,6 +1070,18 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 elapsed = _oa_suite._test_suite_timings.get((suite_key, s_num))
                 if elapsed is not None:
                     step_row.label(text="{:.1f}s".format(elapsed))
+
+                # Show the failure reason inline.  Without this the error was
+                # only written to _agent_state.error, which this panel never
+                # displayed -- so a failed step showed nothing but a timing.
+                _err = _oa_suite._test_suite_errors.get((suite_key, s_num))
+                if _err:
+                    _err_row = suite_box.row()
+                    _err_row.scale_y = 0.8
+                    _err_row.label(
+                        text="\u26a0 {:s}".format(_err.split("\n")[0][:90]),
+                        icon='ERROR',
+                    )
 
             # Reset button at the bottom of each suite.
             reset_row = suite_box.row(align=True)

@@ -1285,8 +1285,10 @@ class TestAutoContinueSanitizesRequest(unittest.TestCase):
         self.assertIn("_cont_send = _sanitize_message_roles(_cont_send)", src)
 
     def test_continue_call_uses_sanitized_copy(self):
+        # The continuation request goes through the stream-aware wrapper
+        # (_llm_request); it must receive the sanitized copy, not raw history.
         src = _load_source()
-        self.assertIn("llm_url, _cont_send, openai_tools", src)
+        self.assertIn("_llm_request(_cont_send, openai_tools", src)
 
     def test_continue_call_forwards_thinking_budget(self):
         """Without the budget the continuation can spend it all on reasoning.
@@ -1296,9 +1298,10 @@ class TestAutoContinueSanitizesRequest(unittest.TestCase):
         max_tokens and truncate the tool call again.
         """
         src = _load_source()
-        self.assertIn(
-            "thinking_budget_tokens=thinking_budget, chat_mode=chat_mode", src
-        )
+        # The wrapper passes ``budget`` through as the thinking budget, and
+        # the continuation call site passes ``thinking_budget``.
+        self.assertIn("thinking_budget_tokens=budget", src)
+        self.assertIn("_llm_request(_cont_send, openai_tools, thinking_budget)", src)
 
     def test_continue_prompt_caps_the_next_step(self):
         """A bare 'Continue.' invites another oversized tool call."""

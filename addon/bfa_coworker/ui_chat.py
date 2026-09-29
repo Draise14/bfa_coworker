@@ -823,6 +823,8 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
                     model=model,
                     mcp_port=send_mcp_port,
                     chat_mode=props.chat_mode,
+                    on_stream_text=lambda t: _update_streaming(t),
+                    on_stream_reasoning=lambda r: _update_streaming(r),
                 )
             except Exception as ex:  # pylint: disable=broad-exception-caught
                 agent_controller._agent_state.error = str(ex)
@@ -856,6 +858,8 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
                     model=item.get("model"),
                     mcp_port=item.get("mcp_port", 0),
                     chat_mode=item.get("chat_mode", "AGENT"),
+                    on_stream_text=lambda t: _update_streaming(t),
+                    on_stream_reasoning=lambda r: _update_streaming(r),
                 )
             except Exception as ex:  # pylint: disable=broad-exception-caught
                 agent_controller._agent_state.error = str(ex)
@@ -1820,15 +1824,9 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             mode_row.label(text="Local LLM", icon='CONSOLE')
         else:
             mode_row.label(text="Remote API", icon='URL')
-        # Show model name if available.
-        model_name = prefs.model_filename or prefs.model_preset or ""
-        if model_name and not is_harness:
-            # Strip extension for display.
-            short = model_name.rsplit(".", 1)[0] if "." in model_name else model_name
-            # Truncate long names.
-            if len(short) > 24:
-                short = short[:22] + "…"
-            mode_row.label(text=short)
+        # NOTE: The model name is intentionally NOT shown here (issue #70).
+        # It lives only in the Status & Diagnostics panel, which shows the
+        # mode-correct model (local llama-server model or remote API model).
         mode_row.separator(factor=0.3)
         mode_row.operator("bfacw.open_addon_prefs", icon="PREFERENCES", text="")
 
@@ -2130,7 +2128,12 @@ class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        return not bpy.app.background
+        # Hidden in External Harness mode: chat (and thus the message
+        # queue) is handled entirely by the external MCP client.
+        if bpy.app.background:
+            return False
+        prefs = context.preferences.addons[__package__].preferences
+        return prefs.operating_mode != "EXTERNAL_HARNESS"
 
     def draw(self, context: bpy.types.Context) -> None:
         layout = self.layout
@@ -2240,6 +2243,22 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
             llm_cfg = llm_manager.get_config()
             if llm_cfg.mode == "remote" and llm_cfg.remote_model:
                 _draw_multiline(layout, "Model: {:s}".format(llm_cfg.remote_model))
+
+            # ── Token usage (issue #69) ──
+            # Both llama-server and OpenAI-compatible remote APIs report a
+            # usage object per request.  Show turn + session totals so the
+            # user can see what the chat is consuming.
+            _usage = agent_controller._agent_state.session_usage
+            if _usage:
+                _turn_usage = agent_controller._agent_state.turn_usage
+                _turn_tot = _turn_usage.get("total_tokens", 0)
+                _sess_p = _usage.get("prompt_tokens", 0)
+                _sess_c = _usage.get("completion_tokens", 0)
+                _sess_tot = _usage.get("total_tokens", 0)
+                _usage_text = "Tokens: {:d}+{:d}={:d}".format(_sess_p, _sess_c, _sess_tot)
+                if state.is_thinking and _turn_tot > 0:
+                    _usage_text += " (turn: {:d})".format(_turn_tot)
+                _draw_multiline(layout, _usage_text)
 
         # ── Export/Copy Log (advanced) ──
         if not is_harness:

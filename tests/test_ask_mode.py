@@ -223,36 +223,44 @@ class TestAskModeSystemPrompt(unittest.TestCase):
 
 
 class TestChatModeForwarding(unittest.TestCase):
-    """chat_mode must reach _openai_chat_completions in the turn loop."""
+    """chat_mode must reach the LLM request layer in the turn loop."""
 
     def test_main_call_forwards_chat_mode(self):
-        # The main request in the turn loop passes chat_mode.
+        # The main request goes through the stream-aware _llm_request
+        # wrapper, which forwards chat_mode to both request helpers.
         m = re.search(
-            r'response = _openai_chat_completions\(\s*llm_url, history_to_send, '
-            r'openai_tools, api_key, model, max_tokens, '
-            r'thinking_budget_tokens=thinking_budget, chat_mode=chat_mode\)',
+            r'response = _llm_request\(history_to_send, openai_tools, '
+            r'thinking_budget\)',
             _src,
         )
         self.assertIsNotNone(
-            m, "main _openai_chat_completions call must forward chat_mode")
+            m, "main request must route through _llm_request")
 
     def test_all_call_sites_forward_chat_mode(self):
-        """Every call site in the turn loop forwards chat_mode."""
-        sites = []
-        for m in re.finditer(r'_openai_chat_completions\(', _src):
-            s = m.start()
-            if _src[max(0, s - 4):s] == "def ":
-                continue  # the definition itself
-            sites.append(s)
-        calls = sites
-        self.assertGreaterEqual(len(calls), 4, "expected >= 4 call sites")
-        for s in calls:
-            # Grab the call's argument span up to the matching close paren.
-            window = _src[s:s+400]
+        """Every LLM request in the turn loop forwards chat_mode."""
+        # The _llm_request wrapper is the single request chokepoint; both
+        # helpers it calls must forward chat_mode, and every request site
+        # in the loop must use the wrapper.
+        self.assertIn(
+            "thinking_budget_tokens=budget, chat_mode=chat_mode", _src,
+            "_llm_request must forward chat_mode to the request helpers",
+        )
+        for helper in (
+            "_openai_chat_completions(",
+            "_openai_chat_completions_stream(",
+        ):
+            def_start = _src.find("def {:s}".format(helper.rstrip("(")))
+            self.assertGreaterEqual(def_start, 0)
+            sig_end = _src.find(") ->", def_start)
+            signature = _src[def_start:sig_end]
             self.assertIn(
-                "chat_mode=chat_mode", window,
-                "call site does not forward chat_mode: {:s}".format(window[:120]),
+                "chat_mode", signature,
+                "{:s} must accept chat_mode".format(helper),
             )
+        self.assertGreaterEqual(
+            _src.count("_llm_request("), 4,
+            "expected >= 4 _llm_request call sites",
+        )
 
 
 class TestAskModeNoToolListing(unittest.TestCase):

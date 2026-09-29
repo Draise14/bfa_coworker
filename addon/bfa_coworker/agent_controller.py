@@ -1269,6 +1269,23 @@ class AgentState:
     reasoning_text: str = ""  # Chain-of-thought from reasoning models
     thinking_dots: int = 0  # Animated spinner state (0-3)
 
+    # ── Token usage tracking (issue #69) ───────────────────────────
+    # Per-call usage comes from the LLM response ``usage`` object (stream
+    # final chunk or non-streaming body).  Turn totals reset each turn;
+    # session totals accumulate for the whole chat session.
+    turn_usage: dict[str, int] = field(default_factory=dict)
+    session_usage: dict[str, int] = field(default_factory=dict)
+
+    def record_usage(self, usage: dict[str, Any] | None) -> None:
+        """Accumulate one LLM call's ``usage`` into turn + session totals."""
+        if not isinstance(usage, dict):
+            return
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = usage.get(key)
+            if isinstance(value, int) and value >= 0:
+                self.turn_usage[key] = self.turn_usage.get(key, 0) + value
+                self.session_usage[key] = self.session_usage.get(key, 0) + value
+
     # ── Liveness tracking (Tier 1) ─────────────────────────────────
     last_bridge_activity: float = 0.0
     last_mcp_activity: float = 0.0
@@ -3468,6 +3485,248 @@ def _openai_chat_completions(
     return None
 
 
+def _extract_reasoning_delta(delta: dict[str, Any]) -> str:
+    """Extract reasoning text from a streaming chunk's delta.
+
+    Different providers stream chain-of-thought under different field
+    names:
+      * OpenRouter / some OpenAI-compatible servers: ``reasoning``
+      * DeepSeek / llama-server: ``reasoning_content``
+    Inline ``<think>...</think>`` tags are stripped so stored reasoning
+    matches the non-streaming path (see :func:`_strip_think_tags`).
+    """
+    reasoning = ""
+    if isinstance(delta, dict):
+        reasoning = delta.get("reasoning_content") or delta.get("reasoning") or ""
+    return _strip_think_tags(reasoning) if reasoning else ""
+
+
+def _parse_sse_chunk(chunk: dict[str, Any], acc: dict[str, Any]) -> None:
+    """Accumulate one OpenAI-compatible streaming chunk into *acc*.
+
+    *acc* is a dict with keys ``content`` (str), ``reasoning`` (str),
+    ``tool_calls`` (list of assembled OpenAI tool-call dicts),
+    ``finish_reason`` (str) and ``usage`` (dict, set by the final
+    ``include_usage`` chunk).  Malformed chunks are skipped silently —
+    a mid-stream provider hiccup should not abort an otherwise good
+    generation.
+    """
+    choices = chunk.get("choices") or []
+    if choices:
+        choice = choices[0]
+        delta = choice.get("delta") or {}
+        delta_content = delta.get("content")
+        if isinstance(delta_content, str) and delta_content:
+            acc["content"] += delta_content
+        # Some providers put <think>…</think> inline in content instead of
+        # the reasoning field; route the tagged part to reasoning.
+        if delta_content and "<think>" in delta_content:
+            stripped = _strip_think_tags(delta_content)
+            if stripped != delta_content:
+                acc["reasoning"] += delta_content.replace(stripped, "")
+                delta_content = stripped
+                acc["content"] += delta_content
+        delta_reasoning = _extract_reasoning_delta(delta)
+        if delta_reasoning:
+            acc["reasoning"] += delta_reasoning
+        for tc_delta in delta.get("tool_calls") or []:
+            idx = tc_delta.get("index", 0)
+            fn = tc_delta.get("function") or {}
+            while len(acc["tool_calls"]) <= idx:
+                acc["tool_calls"].append({
+                    "id": "",
+                    "type": "function",
+                    "function": {"name": "", "arguments": ""},
+                })
+            slot = acc["tool_calls"][idx]
+            if tc_delta.get("id"):
+                slot["id"] = tc_delta["id"]
+            if fn.get("name"):
+                slot["function"]["name"] = fn["name"]
+            if fn.get("arguments"):
+                slot["function"]["arguments"] += fn["arguments"]
+        if choice.get("finish_reason"):
+            acc["finish_reason"] = choice["finish_reason"]
+    if chunk.get("usage"):
+        acc["usage"] = chunk["usage"]
+
+
+def _assemble_stream_result(acc: dict[str, Any]) -> dict[str, Any]:
+    """Build the non-streaming response shape from accumulated stream chunks.
+
+    The rest of the turn loop consumes the standard
+    ``choices[0].message`` payload, so the streamed generation is
+    re-assembled into exactly that shape (plus ``usage`` when the
+    provider sent it).
+    """
+    msg: dict[str, Any] = {"role": "assistant", "content": acc["content"]}
+    if acc["reasoning"]:
+        msg["reasoning_content"] = acc["reasoning"]
+    if acc["tool_calls"]:
+        msg["tool_calls"] = [
+            {
+                "id": tc["id"] or "call_{}_{}".format(idx, tc["function"]["name"]),
+                "type": "function",
+                "function": tc["function"],
+            }
+            for idx, tc in enumerate(acc["tool_calls"])
+        ]
+        # Drop slots that never received a function name (provider glitch).
+        msg["tool_calls"] = [
+            tc for tc in msg["tool_calls"] if tc["function"].get("name")
+        ]
+        if not msg["tool_calls"]:
+            del msg["tool_calls"]
+    result: dict[str, Any] = {
+        "choices": [{
+            "message": msg,
+            "finish_reason": acc["finish_reason"] or "stop",
+        }],
+    }
+    if acc["usage"]:
+        result["usage"] = acc["usage"]
+    return result
+
+
+def _openai_chat_completions_stream(
+    url: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    api_key: str | None = None,
+    model: str | None = None,
+    max_tokens: int | None = None,
+    thinking_budget_tokens: int = 0,
+    chat_mode: str = "AGENT",
+    on_status: Callable[[str], None] | None = None,
+    on_stream_text: Callable[[str], None] | None = None,
+    on_stream_reasoning: Callable[[str], None] | None = None,
+) -> dict[str, Any] | None:
+    """POST a *streaming* chat-completions request and reassemble the reply.
+
+    Issue #69: in Remote API mode the non-streaming request is a black
+    box — nothing arrives until the full generation completes (up to the
+    600 s timeout) and Stop cannot cancel it.  Streaming gives live text
+    and reasoning for the Workshop, honours ``_stop_event`` mid-stream,
+    and captures ``usage`` from the final chunk for the token counters.
+
+    Returns the response in the same ``choices[0].message`` shape as
+    :func:`_openai_chat_completions` (with ``usage`` attached when the
+    provider provides it), or ``None`` when the stream failed before the
+    first token (callers then fall back to the non-streaming request).
+    """
+    temperature = _DEFAULT_TEMPERATURE_CODE if chat_mode == "AGENT" else _DEFAULT_TEMPERATURE_PROSE
+    body: dict[str, Any] = {
+        "messages": messages,
+        "stream": True,
+        # OpenAI-compatible extension: ask the provider to append a final
+        # usage-only chunk.  Servers that ignore it simply omit usage.
+        "stream_options": {"include_usage": True},
+        "max_tokens": max_tokens if max_tokens is not None else _DEFAULT_MAX_TOKENS,
+        "temperature": temperature,
+        **_CHAT_SAMPLING,
+    }
+    if thinking_budget_tokens > 0:
+        body["thinking_budget_tokens"] = thinking_budget_tokens
+    if model:
+        body["model"] = model
+    if tools:
+        body["tools"] = tools
+
+    data_bytes = json.dumps(body).encode()
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+        "HTTP-Referer": "https://bforartists.org",
+        "X-OpenRouter-Title": "Bforartists Coworker",
+    }
+    if api_key:
+        headers["Authorization"] = "Bearer {:s}".format(api_key)
+
+    print("[🛠️Coworker] _openai_chat_completions_stream: POST {:s}".format(url))
+    print("[🛠️Coworker] _openai_chat_completions_stream:   model = {:s}".format(model or "(auto-detect)"))
+    print("[🛠️Coworker] _openai_chat_completions_stream:   messages = {:d}, tools = {:d}".format(
+        len(messages), len(tools)))
+
+    req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
+    if on_status:
+        on_status("Contacting {:s}...".format(model or "API"))
+
+    acc: dict[str, Any] = {
+        "content": "",
+        "reasoning": "",
+        "tool_calls": [],
+        "finish_reason": "",
+        "usage": None,
+    }
+    got_first_token = False
+    try:
+        with urllib.request.urlopen(req, timeout=_STREAM_TIMEOUT) as resp:
+            if resp.status != 200:
+                raise urllib.error.URLError("HTTP {:d}".format(resp.status))
+            for raw_line in resp:
+                # Stop takes effect immediately, mid-generation: close the
+                # response, keep what has streamed so far as a partial.
+                if _stop_event.is_set():
+                    print("[🛠️Coworker] _openai_chat_completions_stream: "
+                          "stop requested mid-stream — aborting (partial kept)")
+                    break
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line or not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                if chunk.get("error"):
+                    # Some providers report errors inside a 200 SSE stream.
+                    err = chunk["error"]
+                    _err_msg = (
+                        str(err.get("message", err)) if isinstance(err, dict) else str(err)
+                    )
+                    raise urllib.error.URLError("stream error: {:s}".format(_err_msg))
+                if not got_first_token:
+                    got_first_token = True
+                    if on_status:
+                        on_status("Generating...")
+                _parse_sse_chunk(chunk, acc)
+                if on_stream_reasoning and acc["reasoning"]:
+                    on_stream_reasoning(acc["reasoning"])
+                if on_stream_text and acc["content"]:
+                    on_stream_text(acc["content"])
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError) as ex:
+        if got_first_token:
+            # Mid-stream drop: keep whatever arrived as a partial answer so
+            # the user sees the content rather than a blank panel.
+            print("[🛠️Coworker] _openai_chat_completions_stream: stream dropped "
+                  "mid-generation ({:s}) — returning partial".format(str(ex)))
+            _agent_state.warning = (
+                "The response stream was interrupted; the reply may be incomplete."
+            )
+            return _assemble_stream_result(acc)
+        print("[🛠️Coworker] _openai_chat_completions_stream: failed before first "
+              "token ({:s}) — falling back to non-streaming".format(str(ex)))
+        return None
+
+    if not got_first_token:
+        # Connected but never streamed a token (e.g. a 200 body that is a
+        # JSON error instead of SSE).  Let the caller retry non-streaming.
+        print("[🛠️Coworker] _openai_chat_completions_stream: no tokens received")
+        return None
+
+    result = _assemble_stream_result(acc)
+    if acc.get("usage"):
+        usage = acc["usage"]
+        print("[🛠️Coworker] _openai_chat_completions_stream: usage "
+              "prompt={:s} completion={:s} total={:s}".format(
+                  str(usage.get("prompt_tokens")),
+                  str(usage.get("completion_tokens")),
+                  str(usage.get("total_tokens"))))
+    return result
+
+
 def _mcp_tools_to_openai(mcp_tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Convert MCP tool metadata to OpenAI ``tools`` format."""
     result = []
@@ -4421,6 +4680,30 @@ def export_session_log(auto_saved: bool = False) -> None:
         lines.append("")
 
     lines.append("")
+
+    # Token usage (issue #69).
+    lines.append("--- Token Usage ---")
+    _turn_u = _agent_state.turn_usage
+    _sess_u = _agent_state.session_usage
+    if _sess_u:
+        lines.append(
+            "Turn: {:d} prompt / {:d} completion / {:d} total".format(
+                _turn_u.get("prompt_tokens", 0),
+                _turn_u.get("completion_tokens", 0),
+                _turn_u.get("total_tokens", 0),
+            )
+        )
+        lines.append(
+            "Session: {:d} prompt / {:d} completion / {:d} total".format(
+                _sess_u.get("prompt_tokens", 0),
+                _sess_u.get("completion_tokens", 0),
+                _sess_u.get("total_tokens", 0),
+            )
+        )
+    else:
+        lines.append("No usage reported by the LLM backend this session.")
+    lines.append("")
+
 # Error signatures.
     lines.append("--- Error Info ---")
     if _agent_state.error:
@@ -4494,6 +4777,8 @@ def run_conversation_turn(
     model: str | None = None,
     mcp_port: int = _MCP_SERVER_DEFAULT_PORT,
     chat_mode: str = "AGENT",
+    on_stream_text: Callable[[str], None] | None = None,
+    on_stream_reasoning: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Run a full conversation turn.
@@ -4524,6 +4809,7 @@ def run_conversation_turn(
         return _run_conversation_turn_inner(
             user_message, on_text, on_status, on_reasoning,
             llm_url, api_key, model, mcp_port, chat_mode,
+            on_stream_text, on_stream_reasoning,
         )
     finally:
         _agent_state.turn_active = False
@@ -4539,6 +4825,8 @@ def _run_conversation_turn_inner(
     model: str | None = None,
     mcp_port: int = _MCP_SERVER_DEFAULT_PORT,
     chat_mode: str = "AGENT",
+    on_stream_text: Callable[[str], None] | None = None,
+    on_stream_reasoning: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Inner body of ``run_conversation_turn`` — wrapped by the re-entrancy guard.
@@ -4645,8 +4933,42 @@ def _run_conversation_turn_inner(
     _agent_state.streaming_text = ""
     _agent_state.reasoning_text = ""
     _agent_state.thinking_dots = 0
+    # Fresh per-turn token usage counters (issue #69).
+    _agent_state.turn_usage = {}
     # Clear any warning from the previous turn.
     _agent_state.warning = ""
+
+    def _llm_request(
+        send_messages: list[dict[str, Any]],
+        send_tools: list[dict[str, Any]],
+        budget: int = 0,
+    ) -> dict[str, Any] | None:
+        """Run one LLM request with streaming and usage capture (issue #69).
+
+        Streams when possible so text and reasoning arrive live for the
+        Workshop and Stop aborts mid-generation; falls back to the
+        hardened non-streaming request when the provider rejects
+        streaming before the first token (its retry/reshape logic then
+        handles 503s, template faults, and 400 flattening as before).
+        Usage from whichever path succeeds is accumulated into the
+        turn/session totals.
+        """
+        response = _openai_chat_completions_stream(
+            llm_url, send_messages, send_tools, api_key, model,
+            max_tokens, thinking_budget_tokens=budget, chat_mode=chat_mode,
+            on_status=on_status,
+            on_stream_text=on_stream_text,
+            on_stream_reasoning=on_stream_reasoning,
+        )
+        if response is None:
+            # Streaming not supported by this endpoint — non-streaming fallback.
+            response = _openai_chat_completions(
+                llm_url, send_messages, send_tools, api_key, model,
+                max_tokens, thinking_budget_tokens=budget, chat_mode=chat_mode,
+            )
+        if response is not None:
+            _agent_state.record_usage(response.get("usage"))
+        return response
 
     # Determine LLM URL.
     llm_port_local: int | None = None
@@ -4877,16 +5199,33 @@ def _run_conversation_turn_inner(
                 existing.insert(0, {"type": "image_url", "image_url": {"url": _pending_image}})
             _agent_state._pending_image = None  # Clear after use
 
-        response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model, max_tokens, thinking_budget_tokens=thinking_budget, chat_mode=chat_mode)
+        response = _llm_request(history_to_send, openai_tools, thinking_budget)
 
         # ── Abort check ───────────────────────────────────────────────
-        # If the user stopped the previous turn and started a new one, the
-        # old turn's response may arrive late.  Discard it to avoid
-        # corrupting the new conversation.
+        # If the user stopped the turn, keep any partial streamed content
+        # in the Workshop (marked) instead of discarding it (issue #69).
+        # The partial is marked ``partial`` so a later turn never re-sends
+        # it to the model as a complete answer.
         if _stop_event.is_set():
-            print("[🛠️Coworker] run_conversation_turn: aborted — discarding stale response")
+            _partial = ""
+            if response is not None:
+                _partial = (
+                    response.get("choices", [{}])[0].get("message", {}).get("content") or ""
+                )
+            if _partial:
+                print("[🛠️Coworker] run_conversation_turn: aborted — keeping "
+                      "partial response ({:d} chars)".format(len(_partial)))
+                history.append({
+                    "role": "assistant",
+                    "content": _partial,
+                    "partial": True,
+                })
+            else:
+                print("[🛠️Coworker] run_conversation_turn: aborted — nothing streamed yet")
             _agent_state.is_thinking = False
             _agent_state.thinking_start_time = 0.0
+            if on_status:
+                on_status("Stopped")
             return history
 
         if response is None:
@@ -4920,7 +5259,7 @@ def _run_conversation_turn_inner(
             empty_retries += 1
             doubled_budget = min(doubled_budget * 2, 8192) if thinking_budget > 0 else 0
             print("[Coworker] empty response, retrying with thinking_budget={:d}".format(doubled_budget))
-            response = _openai_chat_completions(llm_url, history_to_send, openai_tools, api_key, model, max_tokens, thinking_budget_tokens=doubled_budget, chat_mode=chat_mode)
+            response = _llm_request(history_to_send, openai_tools, doubled_budget)
             if response is None:
                 break
             choice = response.get("choices", [{}])[0]
@@ -4973,10 +5312,7 @@ def _run_conversation_turn_inner(
             # nothing for the tool call, which then truncates mid-string and
             # fails to parse (HTTP 500) -- the exact failure this path exists
             # to recover from.
-            continue_response = _openai_chat_completions(
-                llm_url, _cont_send, openai_tools, api_key, model, max_tokens,
-                thinking_budget_tokens=thinking_budget, chat_mode=chat_mode,
-            )
+            continue_response = _llm_request(_cont_send, openai_tools, thinking_budget)
             if continue_response is None:
                 break
 
@@ -5342,7 +5678,7 @@ def _run_conversation_turn_inner(
             "role": "user",
             "content": "[System: All tool calls are complete. Please summarize what was done in 1-2 sentences.]",
         })
-        final_response = _openai_chat_completions(llm_url, history, openai_tools, api_key, model, max_tokens, thinking_budget_tokens=thinking_budget, chat_mode=chat_mode)
+        final_response = _llm_request(history, openai_tools, thinking_budget)
         if final_response:
             final_choice = final_response.get("choices", [{}])[0]
             final_msg = final_choice.get("message", {})

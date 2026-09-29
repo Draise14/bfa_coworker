@@ -37,10 +37,16 @@ import unittest
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _AC_PATH = os.path.join(_REPO, "addon", "bfa_coworker", "agent_controller.py")
+_LT_PATH = os.path.join(_REPO, "addon", "bfa_coworker", "llm_transport.py")
 
 
 def _load_source():
     with open(_AC_PATH, "r", encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _load_transport_source():
+    with open(_LT_PATH, "r", encoding="utf-8") as fh:
         return fh.read()
 
 
@@ -73,6 +79,7 @@ def _extract_func(source: str, name: str, extra: dict | None = None) -> object:
 
 
 _src = _load_source()
+_lt_src = _load_transport_source()
 _parse_text_tool_calls = _extract_func(_src, "_parse_text_tool_calls")
 _parse_xml_tool_calls = _extract_func(_src, "_parse_xml_tool_calls")
 
@@ -109,17 +116,19 @@ class TestFallbackParsersGatedOnTools(unittest.TestCase):
 
     def test_call_sites_gated_on_tools_being_offered(self):
         """Both fallback parse blocks run only when ``tools`` is non-empty."""
-        # Text-based fallback block.
+        # Both blocks now live in the transport module (inside
+        # openai_chat_completions' retry loop there); the injected-helper
+        # indirection (_h) is asserted too so the Ask-mode gating stays
+        # tied to the right call.
         self.assertRegex(
-            _src,
+            _lt_src,
             r'if not tools_tried and not tool_calls and tools:\n'
-            r'\s+text_calls = _parse_text_tool_calls',
+            r'\s+text_calls = _h..parse_text_tool_calls..',
         )
-        # XML fallback block.
         self.assertRegex(
-            _src,
-            r'if not msg\.get\("tool_calls"\) and tools:\n'
-            r'\s+xml_sources: list\[tuple\[str, str\]\] = \[\]',
+            _lt_src,
+            r'if not msg\.get..tool_calls.. and tools:\n'
+            r'\s+xml_sources: list.tuple.str, str.. = ..'
         )
 
     def test_tools_as_text_downgrade_never_in_ask_mode_path(self):
@@ -131,7 +140,7 @@ class TestFallbackParsersGatedOnTools(unittest.TestCase):
         error should surface instead of looping.
         """
         self.assertRegex(
-            _src,
+            _lt_src,
             r'if tools_tried and _is_500 and _fault == _FAULT_TEMPLATE and tools'
             r' and not _tools_as_text:',
         )
@@ -239,20 +248,22 @@ class TestChatModeForwarding(unittest.TestCase):
     def test_all_call_sites_forward_chat_mode(self):
         """Every LLM request in the turn loop forwards chat_mode."""
         # The _llm_request wrapper is the single request chokepoint; both
-        # helpers it calls must forward chat_mode, and every request site
-        # in the loop must use the wrapper.
+        # transport helpers it calls must forward chat_mode, and every
+        # request site in the loop must use the wrapper.  The transport
+        # helpers live in llm_transport.py since the module split, but the
+        # wrapper itself (which does the forwarding) stays in the loop.
         self.assertIn(
             "thinking_budget_tokens=budget, chat_mode=chat_mode", _src,
-            "_llm_request must forward chat_mode to the request helpers",
+            "_llm_request must forward chat_mode to the transport helpers",
         )
         for helper in (
-            "_openai_chat_completions(",
-            "_openai_chat_completions_stream(",
+            "openai_chat_completions(",
+            "openai_chat_completions_stream(",
         ):
-            def_start = _src.find("def {:s}".format(helper.rstrip("(")))
+            def_start = _lt_src.find("def {:s}".format(helper.rstrip("(")))
             self.assertGreaterEqual(def_start, 0)
-            sig_end = _src.find(") ->", def_start)
-            signature = _src[def_start:sig_end]
+            sig_end = _lt_src.find(") ->", def_start)
+            signature = _lt_src[def_start:sig_end]
             self.assertIn(
                 "chat_mode", signature,
                 "{:s} must accept chat_mode".format(helper),

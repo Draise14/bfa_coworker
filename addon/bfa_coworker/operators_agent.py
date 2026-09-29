@@ -17,6 +17,7 @@ __all__ = (
     "_BFACW_OT_asset_selftest_run",
     "_BFACW_OT_asset_selftest_reset",
     "BFACW_OT_copy_mcp_config",
+    "BFACW_OT_test_mcp_config",
     "BFACW_OT_mcp_server_start",
     "BFACW_OT_mcp_server_stop",
     "BFACW_OT_save_provider",
@@ -160,6 +161,8 @@ class _BFACW_OT_ping_agent(bpy.types.Operator):  # type: ignore[misc]
             _BFACW_OT_ping_agent._result = _ac.ping_agent(
                 mcp_port=_mcp_port, llm_port=_llm_port, bridge_port=_bridge_port,
                 operating_mode=prefs.operating_mode,
+                check_harness_config=(prefs.operating_mode == "EXTERNAL_HARNESS"),
+                use_blender_python=getattr(prefs, "use_blender_python_for_harness", True),
             )
 
         thread = threading.Thread(target=_do_ping, daemon=True)
@@ -178,8 +181,11 @@ class _BFACW_OT_ping_agent(bpy.types.Operator):  # type: ignore[misc]
             ("mcp_server", "MCP"),
             ("llm_health", "LLM Health"),
             ("llm_chat", "LLM Chat"),
+            ("harness_config", "Harness Config"),
         ]:
             val = result.get(key, "not tested")
+            if val == "N/A":
+                continue
             lines.append("{:s}: {:s}".format(label, val))
 
         summary = " | ".join(lines)
@@ -525,6 +531,13 @@ _test_suite_progress: dict[str, int] = {}
 _test_suite_running: dict[str, bool] = {}
 # Timing data: keyed by (suite_name, step_number) -> elapsed seconds.
 _test_suite_timings: dict[tuple[str, int], float] = {}
+# Per-step outcome: keyed by (suite_name, step_number) -> "ok" | "failed".
+# Without this a failed step was indistinguishable from a successful one in
+# the Diagnostics panel -- both showed only a timing, so a suite that failed
+# instantly looked like it had simply run quickly.
+_test_suite_status: dict[tuple[str, int], str] = {}
+# Per-step error text: keyed by (suite_name, step_number) -> message.
+_test_suite_errors: dict[tuple[str, int], str] = {}
 # Path to persist benchmark results.
 import os as _os
 _BENCHMARK_RESULTS_PATH = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "benchmark_results.json")
@@ -597,6 +610,13 @@ class _BFACW_OT_test_step_reset(bpy.types.Operator):  # type: ignore[misc]
     def execute(self, context: bpy.types.Context) -> set[str]:
         del context
         _test_suite_progress.pop(self.suite, None)
+        # Clear this suite's recorded outcomes so a re-run starts clean.
+        for key in [k for k in _test_suite_timings if k[0] == self.suite]:
+            _test_suite_timings.pop(key, None)
+        for key in [k for k in _test_suite_status if k[0] == self.suite]:
+            _test_suite_status.pop(key, None)
+        for key in [k for k in _test_suite_errors if k[0] == self.suite]:
+            _test_suite_errors.pop(key, None)
         self.report({"INFO"}, "Test suite '{:s}' reset to step 1".format(self.suite))
         return {"FINISHED"}
 
@@ -717,6 +737,35 @@ def _load_previous_benchmark() -> dict | None:
     return None
 
 
+def _record_step_outcome(
+    suite_key: str,
+    step_num: int,
+    elapsed: float,
+    error: str = "",
+) -> None:
+    """Record a step's timing and outcome for the Diagnostics panel.
+
+    *error* empty means the step succeeded.  A non-empty *error* marks the
+    step failed and stores the message so the panel can show it -- previously
+    only the timing was kept, so failures were invisible.
+    """
+    _test_suite_timings[(suite_key, step_num)] = elapsed
+    if error:
+        _test_suite_status[(suite_key, step_num)] = "failed"
+        _test_suite_errors[(suite_key, step_num)] = error
+    else:
+        _test_suite_status[(suite_key, step_num)] = "ok"
+        _test_suite_errors.pop((suite_key, step_num), None)
+
+
+def _suite_failure_count(suite_key: str) -> int:
+    """Return how many steps of *suite_key* have failed."""
+    return sum(
+        1 for (sk, _step), status in _test_suite_status.items()
+        if sk == suite_key and status == "failed"
+    )
+
+
 def _run_test_step(
     context: bpy.types.Context,
     suite_key: str,
@@ -754,6 +803,10 @@ def _run_test_step(
         import time as _time
         _test_suite_running[suite_key] = True
         t_start = _time.monotonic()
+        # Snapshot the error before the call.  We deliberately do NOT clear
+        # _agent_state.error up front: the session log exports it, and
+        # clearing it destroyed the evidence of what actually failed.
+        _prev_error = _ac._agent_state.error or ""
         try:
             _ac.run_conversation_turn(
                 user_message=prompt,
@@ -766,12 +819,29 @@ def _run_test_step(
                 mcp_port=test_mcp_port,
             )
             elapsed = _time.monotonic() - t_start
-            _test_suite_timings[(suite_key, step_num)] = elapsed
-            print("[🛠️Coworker] test suite '{:s}': step {:d}/{:s} completed in {:.1f}s".format(
-                suite_key, step_num, step_label, elapsed))
+            # run_conversation_turn does NOT raise on an LLM failure -- it
+            # returns normally and records the reason in _agent_state.error.
+            # Checking the exception alone therefore reported every failed
+            # step as a success, which is why a broken benchmark run looked
+            # like it had simply done nothing.
+            step_error = _ac._agent_state.error or ""
+            # An error that differs from the pre-call snapshot is this step's
+            # failure.  An unchanged error is stale (left by an earlier step)
+            # and must not be attributed here.  The one case this cannot
+            # distinguish is a step that fails with a byte-identical message
+            # to the previous step's -- rare, and erring toward "success"
+            # there keeps the log honest about which step introduced it.
+            if step_error and step_error != _prev_error:
+                _record_step_outcome(suite_key, step_num, elapsed, step_error)
+                print("[🛠️Coworker] test suite '{:s}': step {:d}/{:s} FAILED in {:.1f}s — {:s}".format(
+                    suite_key, step_num, step_label, elapsed, step_error))
+            else:
+                _record_step_outcome(suite_key, step_num, elapsed)
+                print("[🛠️Coworker] test suite '{:s}': step {:d}/{:s} completed in {:.1f}s".format(
+                    suite_key, step_num, step_label, elapsed))
         except Exception as ex:
             elapsed = _time.monotonic() - t_start
-            _test_suite_timings[(suite_key, step_num)] = elapsed
+            _record_step_outcome(suite_key, step_num, elapsed, str(ex))
             print("[🛠️Coworker] test suite '{:s}': step {:d}/{:s} FAILED in {:.1f}s — {:s}".format(
                 suite_key, step_num, step_label, elapsed, str(ex)))
             _ac._agent_state.error = str(ex)
@@ -808,8 +878,82 @@ class BFACW_OT_copy_mcp_config(bpy.types.Operator):  # type: ignore[misc]
             use_blender_python=use_blender_py,
         )
         context.window_manager.clipboard = config
-        self.report({"INFO"}, "MCP config copied to clipboard")
+
+        # Preflight the config we just handed out.  The addon previously
+        # emitted configs it had never executed, so a broken interpreter path
+        # or missing PYTHONPATH entry only surfaced as an opaque traceback
+        # inside the user's MCP client.  Copy anyway (the user may target a
+        # different machine) but warn with the actionable hint.
+        check = _ac_mod.validate_mcp_client_config(
+            client_type=self.client_type,
+            blender_host=prefs.host,
+            blender_port=_bridge_port,
+            use_blender_python=use_blender_py,
+        )
+        BFACW_OT_test_mcp_config._result = check
+        if not check.get("ok"):
+            self.report(
+                {"WARNING"},
+                "Config copied, but it may not work: {:s}".format(
+                    check.get("hint") or check.get("summary") or "validation failed"),
+            )
+        elif check.get("bridge_ok") is False:
+            self.report(
+                {"WARNING"},
+                "Config copied and valid — but the bridge is not running on "
+                "port {:d}. Click Start Bridge.".format(_bridge_port),
+            )
+        else:
+            self.report({"INFO"}, "MCP config copied to clipboard (validated)")
         return {"FINISHED"}
+
+
+class BFACW_OT_test_mcp_config(bpy.types.Operator):  # type: ignore[misc]
+    """Validate the generated MCP client config before the user pastes it."""
+    bl_idname = "bfacw.test_mcp_config"
+    bl_label = "Test Config"
+    bl_description = (
+        "Check that the generated MCP config can actually start the server: "
+        "verifies the Python interpreter, PYTHONPATH entries, and imports"
+    )
+
+    _result: dict = {}  # class-level storage for display in draw()
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        _bridge_port, _, _ = effective_ports(prefs)
+        use_blender_py = getattr(prefs, "use_blender_python_for_harness", True)
+        client_type = getattr(prefs, "harness_preset", "claude_desktop")
+
+        def _do_check() -> None:
+            BFACW_OT_test_mcp_config._result = _ac_mod.validate_mcp_client_config(
+                client_type=client_type,
+                blender_host=prefs.host,
+                blender_port=_bridge_port,
+                use_blender_python=use_blender_py,
+            )
+
+        thread = threading.Thread(target=_do_check, daemon=True)
+        thread.start()
+        thread.join(timeout=45)
+
+        result = BFACW_OT_test_mcp_config._result
+        if not result:
+            self.report({"ERROR"}, "Config check timed out")
+            return {"CANCELLED"}
+
+        if result.get("ok"):
+            self.report({"INFO"}, result.get("summary", "Config OK"))
+            return {"FINISHED"}
+
+        self.report(
+            {"ERROR"},
+            "{:s} — {:s}".format(
+                result.get("summary", "Config invalid"),
+                result.get("hint", ""),
+            ).strip(" —"),
+        )
+        return {"CANCELLED"}
 
 
 # ---------------------------------------------------------------------------

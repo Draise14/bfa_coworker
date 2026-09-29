@@ -362,6 +362,31 @@ def _code_is_undo_or_push(code: str) -> bool:
 # Returns a list of (pattern_name, guidance) tuples.  Empty = no issues.
 # ---------------------------------------------------------------------------
 
+def _imports_module(code: str, module: str) -> bool:
+    """Return True when *code* imports *module*.
+
+    Handles the forms an LLM actually writes:
+
+    * ``import bmesh``
+    * ``import bpy, bmesh, math``   (comma-separated)
+    * ``import bmesh as bm``
+    * ``from bmesh import ops``
+
+    A plain ``"import bmesh" in code`` substring test misses the
+    comma-separated form, which made the bmesh preflight check fire on
+    valid code and cost the model a wasted retry.
+    """
+    escaped = re.escape(module)
+    # ``import a, b, c`` / ``import a as x`` — module must be a whole name
+    # in the comma-separated list, not a prefix of another module.
+    if re.search(r"^\s*import\s+[^\n]*\b{:s}\b".format(escaped), code, re.MULTILINE):
+        return True
+    # ``from bmesh import ...``
+    if re.search(r"^\s*from\s+{:s}\b".format(escaped), code, re.MULTILINE):
+        return True
+    return False
+
+
 def _preflight_check(code: str) -> list[tuple[str, str]]:
     """Validate *code* for common LLM-generated mistakes before execution.
 
@@ -373,7 +398,7 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
 
     # 1. Missing bpy import — most common first-time failure.
     uses_bpy = re.search(r"\bbpy\.", code) or "bpy.ops." in code
-    has_import = "import bpy" in code
+    has_import = _imports_module(code, "bpy")
     if uses_bpy and not has_import:
         issues.append((
             "missing_bpy",
@@ -644,7 +669,11 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
             break  # One hint per call is enough.
 
     # 24. Missing bmesh import — code uses bmesh without importing it.
-    if re.search(r'\bbmesh\.', code) and 'import bmesh' not in code:
+    # Match the import properly: a plain substring test for 'import bmesh'
+    # misses the common comma-separated form (``import bpy, bmesh, math``),
+    # which made this fire on perfectly valid code and cost the model a
+    # wasted retry rewriting working code.
+    if re.search(r'\bbmesh\.', code) and not _imports_module(code, "bmesh"):
         issues.append((
             "missing_bmesh_import",
             "Code uses bmesh but does not 'import bmesh'. "

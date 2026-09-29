@@ -989,6 +989,10 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         row = diag_box.row()
         row.operator("bfacw.check_ports", icon="FILE_REFRESH", text="Check Ports")
         row.operator("bfacw.ping_agent", icon="FILE_REFRESH", text="Diagnose")
+        # Harness config preflight — only meaningful in External Harness mode.
+        if self.operating_mode == "EXTERNAL_HARNESS":
+            row = diag_box.row()
+            row.operator("bfacw.test_mcp_config", icon="CHECKMARK", text="Test Harness Config")
         # ── Multi-Step Test Suites ────────────────────────────────────
         diag_box.label(text="Test Suites (multi-step artist workflows)", icon='RENDER_RESULT')
         diag_box.label(
@@ -1033,13 +1037,24 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 text="Step {:d}/{:d}".format(step_idx, total_steps),
                 icon='INFO',
             )
+            # Surface failures at the suite level so a broken run is obvious
+            # at a glance instead of looking like a fast, successful one.
+            _failed = _oa_suite._suite_failure_count(suite_key)
+            if _failed:
+                suite_header.label(
+                    text="{:d} failed".format(_failed),
+                    icon='ERROR',
+                )
 
             # Step buttons in a column.
             for step_i, (s_num, s_label, _) in enumerate(suite):
                 step_row = suite_box.row(align=True)
                 is_done = step_i < step_idx
                 is_current = step_i == step_idx
-                if is_done:
+                _status = _oa_suite._test_suite_status.get((suite_key, s_num))
+                if _status == "failed":
+                    step_icon = 'CANCEL'
+                elif is_done:
                     step_icon = 'CHECKBOX_HLT'
                 elif is_current:
                     step_icon = 'RADIOBUT_ON'
@@ -1055,6 +1070,18 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 elapsed = _oa_suite._test_suite_timings.get((suite_key, s_num))
                 if elapsed is not None:
                     step_row.label(text="{:.1f}s".format(elapsed))
+
+                # Show the failure reason inline.  Without this the error was
+                # only written to _agent_state.error, which this panel never
+                # displayed -- so a failed step showed nothing but a timing.
+                _err = _oa_suite._test_suite_errors.get((suite_key, s_num))
+                if _err:
+                    _err_row = suite_box.row()
+                    _err_row.scale_y = 0.8
+                    _err_row.label(
+                        text="\u26a0 {:s}".format(_err.split("\n")[0][:90]),
+                        icon='ERROR',
+                    )
 
             # Reset button at the bottom of each suite.
             reset_row = suite_box.row(align=True)
@@ -1861,10 +1888,44 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 row = step2.row(align=True)
                 op = row.operator("bfacw.copy_mcp_config", icon="COPYDOWN", text="Copy to Clipboard")
                 op.client_type = self.harness_preset
+                row.operator("bfacw.test_mcp_config", icon="CHECKMARK", text="Test Config")
                 step2.label(
                     text="This copies the connection settings for your selected client.",
                     icon='BLANK1',
                 )
+                step2.label(
+                    text="Test Config verifies the interpreter, PYTHONPATH and imports first.",
+                    icon='BLANK1',
+                )
+
+                # Show the last validation result, if any.
+                from . import operators_agent as _oa_cfg
+                # Reuse the chat panel's multiline renderer: it feature-detects
+                # Blender 5.3's native UILayout.label_multiline (which wraps to
+                # the real layout width) and only falls back to character-based
+                # wrapping on builds that lack the API.
+                from .ui_chat import _draw_multiline
+                _cfg_check = _oa_cfg.BFACW_OT_test_mcp_config._result
+                if _cfg_check:
+                    if _cfg_check.get("ok"):
+                        _icon = 'CHECKMARK'
+                        if _cfg_check.get("bridge_ok") is False:
+                            _icon = 'INFO'
+                    else:
+                        _icon = 'ERROR'
+                    step2.label(
+                        text=_cfg_check.get("summary", ""),
+                        icon=_icon,
+                    )
+                    if not _cfg_check.get("ok") and _cfg_check.get("hint"):
+                        _draw_multiline(step2, _cfg_check["hint"])
+                    if _cfg_check.get("stderr_tail"):
+                        _tail_box = step2.box()
+                        _tail_box.label(text="Server output (last lines):", icon='CONSOLE')
+                        _draw_multiline(
+                            _tail_box,
+                            "\n".join(_cfg_check["stderr_tail"].splitlines()[-8:]),
+                        )
 
                 # ── Step 3: Configure your client ───────────────────────────
                 step3 = mcp_box.box()
@@ -1980,8 +2041,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 ("mcp_server", "MCP"),
                 ("llm_health", "LLM"),
                 ("llm_chat", "Chat"),
+                ("harness_config", "Config"),
             ]:
                 val = ping.get(key, "—")
+                if val == "N/A":
+                    continue
                 is_ok = val.startswith("OK") or (is_harness and val.startswith("N/A"))
                 box.label(
                     text="{:<6s} {:s}".format(label + ":", val),

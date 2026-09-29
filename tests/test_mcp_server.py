@@ -739,6 +739,166 @@ class TestMainConfiguration(unittest.TestCase):
         )
 
 
+class TestModuleEntryPoint(unittest.TestCase):
+    """
+    Verify ``python -m blmcp --help`` works with the repo ``mcp/`` on
+    PYTHONPATH.
+
+    This is the exact probe the add-on's harness-config validator runs
+    (``agent_controller.validate_mcp_client_config``).  It exercises the whole
+    import chain — ``blmcp`` -> ``mcp.server.fastmcp`` -> ``yaml`` ->
+    ``data/prompts.yml`` — without binding a port or touching the bridge.
+
+    A failure here means an External Harness config generated from this
+    checkout would fail with the ``runpy`` traceback users reported.
+    """
+
+    @staticmethod
+    def _candidate_pythonpaths() -> list[str]:
+        """
+        Return candidate PYTHONPATH values, most-preferred first.
+
+        The MCP SDK must be importable for the success cases.  Candidates:
+
+        1. ``mcp/`` + the add-on's vendored deps (what a built add-on uses).
+           The vendored deps pin ``mcp<2`` and include pywin32's subdirectories,
+           which PYTHONPATH does not expose via ``.pth`` files.
+        2. ``mcp/`` alone — relies on the running interpreter's own ``mcp``.
+        """
+        deps_dir = os.path.join(
+            _REPO_DIR, "addon", "bfa_coworker", "vendor", "deps")
+
+        with_deps = [_MCP_DIR]
+        if os.path.isdir(deps_dir):
+            with_deps.append(deps_dir)
+            for sub in ("win32", os.path.join("win32", "lib"),
+                        "win32com", "win32comext"):
+                sub_dir = os.path.join(deps_dir, sub)
+                if os.path.isdir(sub_dir):
+                    with_deps.append(sub_dir)
+
+        candidates = []
+        if len(with_deps) > 1:
+            candidates.append(os.pathsep.join(with_deps))
+        candidates.append(_MCP_DIR)
+        return candidates
+
+    @classmethod
+    def _probe_env(cls) -> dict[str, str] | None:
+        """
+        Return an env in which ``mcp.server.fastmcp`` imports, else ``None``.
+
+        Vendored deps are compiled for a specific Python version, so they only
+        work with a matching interpreter.  Try each candidate and return the
+        first that actually imports.
+        """
+        import subprocess
+        for pythonpath in cls._candidate_pythonpaths():
+            env = os.environ.copy()
+            env["PYTHONPATH"] = pythonpath
+            proc = subprocess.run(
+                [sys.executable, "-c", "import mcp.server.fastmcp"],
+                capture_output=True, text=True, timeout=60, env=env,
+            )
+            if proc.returncode == 0:
+                return env
+        return None
+
+    def _require_env(self) -> dict[str, str]:
+        """Return a working probe env, or skip the test."""
+        env = self._probe_env()
+        if env is None:
+            self.skipTest(
+                "mcp.server.fastmcp is not importable with this interpreter "
+                "(mcp 2.x removed FastMCP; the add-on pins mcp<2, and the "
+                "vendored deps are built for Blender's Python)")
+        return env
+
+    def test_module_help_exits_zero(self) -> None:
+        import subprocess
+
+        env = self._require_env()
+        proc = subprocess.run(
+            [sys.executable, "-m", "blmcp", "--help"],
+            capture_output=True, text=True, timeout=60, env=env,
+        )
+        self.assertEqual(
+            proc.returncode, 0,
+            "python -m blmcp --help failed:\n{:s}".format(proc.stderr[-2000:]),
+        )
+        # argparse writes usage to stdout.
+        self.assertIn("--transport", proc.stdout)
+
+    def test_module_help_lists_transports(self) -> None:
+        import subprocess
+
+        env = self._require_env()
+        proc = subprocess.run(
+            [sys.executable, "-m", "blmcp", "--help"],
+            capture_output=True, text=True, timeout=60, env=env,
+        )
+        self.assertIn("stdio", proc.stdout)
+        self.assertIn("http", proc.stdout)
+
+    def test_missing_module_gives_short_message_not_traceback(self) -> None:
+        """
+        A genuinely absent module produces a one-line message, NOT a traceback.
+
+        This is the key diagnostic fact: the traceback users reported
+        (``_run_module_as_main`` -> ``_get_module_details`` -> ``_get_module``)
+        means ``blmcp`` *was* found and Python descended into
+        ``blmcp.__main__``.  The failure is therefore *inside* the package —
+        typically ``from mcp.server.fastmcp import FastMCP`` (removed in
+        mcp 2.x) or a missing ``data/prompts.yml`` — not a missing package.
+        """
+        import subprocess
+
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        proc = subprocess.run(
+            [sys.executable, "-m", "blmcp", "--help"],
+            capture_output=True, text=True, timeout=60, env=env,
+            cwd=os.path.dirname(_MCP_DIR),  # avoid cwd-based resolution
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("No module named blmcp", proc.stderr)
+        # No traceback: runpy reports a missing module via sys.exit(msg).
+        self.assertNotIn("_run_module_as_main", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
+    def test_package_found_but_import_fails_gives_the_reported_traceback(self) -> None:
+        """
+        When ``blmcp`` is found but its import chain fails, the traceback has
+        exactly the reported shape: runpy frames, then the real exception.
+
+        Reproduces the user's report by pointing PYTHONPATH at ``mcp/`` while
+        hiding the MCP SDK, so ``blmcp/__init__.py`` fails on
+        ``from mcp.server.fastmcp import FastMCP``.
+        """
+        import subprocess
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = _MCP_DIR
+        # Force the SDK import to fail regardless of what is installed.
+        env["PYTHONNOUSERSITE"] = "1"
+        proc = subprocess.run(
+            [sys.executable, "-c",
+             "import sys; sys.path.insert(0, r'{:s}'); "
+             "sys.modules['mcp'] = None; "
+             "import runpy; runpy._run_module_as_main('blmcp')".format(_MCP_DIR)],
+            capture_output=True, text=True, timeout=60, env=env,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        # The reported shape: runpy frames present, real exception last.
+        self.assertIn("_run_module_as_main", proc.stderr)
+        self.assertIn("_get_module_details", proc.stderr)
+        self.assertIn("Traceback (most recent call last)", proc.stderr)
+        # And the summarizer must surface the exception, not the header.
+        lines = [ln for ln in proc.stderr.strip().splitlines() if ln.strip()]
+        self.assertTrue(lines[-1].startswith(("ImportError", "ModuleNotFoundError")),
+                        lines[-1])
+
+
 class TestGetPythonAPIDocs(unittest.TestCase):
     """
     Exercise the ``get_python_api_docs`` MCP tool end-to-end via a

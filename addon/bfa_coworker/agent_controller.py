@@ -4952,13 +4952,33 @@ def _run_conversation_turn_inner(
         handles 503s, template faults, and 400 flattening as before).
         Usage from whichever path succeeds is accumulated into the
         turn/session totals.
+
+        The stream deltas are also written straight into the rendered
+        state (``streaming_text`` / ``reasoning_text``) so the Workshop
+        shows text and reasoning live, before the response completes;
+        the post-response assignments later in the turn loop still
+        overwrite them with the final message.
         """
+        def _live_text(text: str) -> None:
+            if not text:
+                return
+            _agent_state.streaming_text = text
+            if on_stream_text:
+                on_stream_text(text)
+
+        def _live_reasoning(text: str) -> None:
+            if not text:
+                return
+            _agent_state.reasoning_text = text
+            if on_stream_reasoning:
+                on_stream_reasoning(text)
+
         response = _openai_chat_completions_stream(
             llm_url, send_messages, send_tools, api_key, model,
             max_tokens, thinking_budget_tokens=budget, chat_mode=chat_mode,
             on_status=on_status,
-            on_stream_text=on_stream_text,
-            on_stream_reasoning=on_stream_reasoning,
+            on_stream_text=_live_text,
+            on_stream_reasoning=_live_reasoning,
         )
         if response is None:
             # Streaming not supported by this endpoint — non-streaming fallback.
@@ -5371,8 +5391,9 @@ def _run_conversation_turn_inner(
 
             _agent_state.last_llm_activity = time.monotonic()
 
-        if content and on_text:
-            on_text(content)
+        if content:
+            if on_text:
+                on_text(content)
             _agent_state.streaming_text = content
 
         # Check for tool calls.

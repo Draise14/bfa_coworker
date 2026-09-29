@@ -68,10 +68,16 @@ from pathlib import Path
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _AC_PATH = os.path.join(_REPO, "addon", "bfa_coworker", "agent_controller.py")
+_LT_PATH = os.path.join(_REPO, "addon", "bfa_coworker", "llm_transport.py")
 
 
 def _load_source():
     with open(_AC_PATH, "r", encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _load_transport_source():
+    with open(_LT_PATH, "r", encoding="utf-8") as fh:
         return fh.read()
 
 
@@ -179,7 +185,7 @@ _describe_history_for_log = _extract_func(
     },
 )
 _toolcall_fault_message = _extract_func(
-    _load_source(), "_toolcall_fault_message",
+    _load_transport_source(), "toolcall_fault_message",
 )
 
 # LLM 500 fault classification.  The marker tuples and the two result
@@ -228,7 +234,7 @@ _TOOLCALL_FAULT_MARKERS = (
 )
 
 _classify_llm_500 = _extract_func(
-    _load_source(), "_classify_llm_500",
+    _load_transport_source(), "classify_llm_500",
     {
         "_FAULT_TEMPLATE": _FAULT_TEMPLATE,
         "_FAULT_SERVER": _FAULT_SERVER,
@@ -771,7 +777,7 @@ class TestRequestShapeDiagnostics(unittest.TestCase):
 
     def test_flatten_log_is_wired_in(self):
         """The 400 fallback must log the flattened shape."""
-        src = _load_source()
+        src = _load_transport_source()
         self.assertIn("flattened shape:", src)
 
 
@@ -1180,26 +1186,26 @@ class TestToolcallRetryWiring(unittest.TestCase):
     """The tool-call fault must retry once with a nudge, then surface."""
 
     def test_retry_guard_exists(self):
-        src = _load_source()
+        src = _load_transport_source()
         self.assertIn("_toolcall_nudged = False", src)
 
     def test_retry_branch_is_guarded(self):
-        src = _load_source()
+        src = _load_transport_source()
         self.assertIn(
             "_fault == _FAULT_TOOLCALL and not _toolcall_nudged", src
         )
 
     def test_nudge_instructs_well_formed_json(self):
-        src = _load_source()
+        src = _load_transport_source()
         self.assertIn("well-formed JSON arguments", src)
 
     def test_final_failure_surfaces_toolcall_message(self):
-        src = _load_source()
-        self.assertIn("_toolcall_fault_message(_500_body)", src)
+        src = _load_transport_source()
+        self.assertIn("toolcall_fault_message(_500_body)", src)
 
     def test_log_crosscheck_exempts_specific_faults(self):
         """A specific match must not be overridden by a stale log tail."""
-        src = _load_source()
+        src = _load_transport_source()
         self.assertIn(
             "_fault not in (_FAULT_TEMPLATE, _FAULT_TOOLCALL)", src
         )
@@ -1215,19 +1221,19 @@ class TestToolcallNudgeSplitsWork(unittest.TestCase):
     """
 
     def test_nudge_tells_model_to_split_the_work(self):
-        src = _load_source()
+        src = _load_transport_source()
         self.assertIn("split the work", src)
 
     def test_nudge_warns_against_repeating_the_same_call(self):
-        src = _load_source()
+        src = _load_transport_source()
         self.assertIn("Do NOT repeat the same large call", src)
 
     def test_nudge_gives_a_size_guidance(self):
-        src = _load_source()
+        src = _load_transport_source()
         self.assertIn("40 lines or fewer", src)
 
     def test_nudge_still_demands_well_formed_json(self):
-        src = _load_source()
+        src = _load_transport_source()
         self.assertIn("well-formed JSON arguments", src)
 
 
@@ -1241,13 +1247,13 @@ class TestToolcallNoPointlessRetry(unittest.TestCase):
     """
 
     def test_retry_path_skips_after_nudge(self):
-        src = _load_source()
+        src = _load_transport_source()
         self.assertIn(
             "_fault == _FAULT_TOOLCALL and _toolcall_nudged", src
         )
 
     def test_skip_is_logged(self):
-        src = _load_source()
+        src = _load_transport_source()
         self.assertIn("not retrying the same payload", src)
 
 
@@ -1321,13 +1327,13 @@ class TestClassifierMarkerSync(unittest.TestCase):
     @staticmethod
     def _source_tuple(name: str) -> tuple:
         """Extract a top-level tuple-of-strings constant from the source."""
-        tree = ast.parse(_load_source())
+        tree = ast.parse(_load_transport_source())
         for node in tree.body:
             if isinstance(node, ast.Assign) and len(node.targets) == 1:
                 target = node.targets[0]
                 if isinstance(target, ast.Name) and target.id == name:
                     return tuple(ast.literal_eval(node.value))
-        raise AssertionError("{:s} not found in agent_controller.py".format(name))
+        raise AssertionError("{:s} not found in llm_transport.py".format(name))
 
     def test_server_markers_match_source(self):
         self.assertEqual(self._source_tuple("_SERVER_FAULT_MARKERS"), _SERVER_FAULT_MARKERS)
@@ -1340,7 +1346,7 @@ class TestClassifierMarkerSync(unittest.TestCase):
 
     def test_fault_constants_match_source(self):
         """FAULT_TEMPLATE / FAULT_SERVER / FAULT_TOOLCALL must match source."""
-        tree = ast.parse(_load_source())
+        tree = ast.parse(_load_transport_source())
         found = {}
         for node in tree.body:
             if isinstance(node, ast.Assign) and len(node.targets) == 1:

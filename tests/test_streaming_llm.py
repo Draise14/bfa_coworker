@@ -56,15 +56,25 @@ from unittest import mock
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _AC_PATH = os.path.join(_REPO, "addon", "bfa_coworker", "agent_controller.py")
+_LT_PATH = os.path.join(_REPO, "addon", "bfa_coworker", "llm_transport.py")
 
 
 def _load_source():
-    with open(_AC_PATH, "r", encoding="utf-8") as fh:
-        return fh.read()
+    """Return agent_controller + llm_transport sources, concatenated.
+
+    Since the transport split, the streaming helpers live in
+    llm_transport.py; searching the concatenation keeps the loader
+    agnostic about which module a helper landed in.
+    """
+    parts = []
+    for path in (_AC_PATH, _LT_PATH):
+        with open(path, "r", encoding="utf-8") as fh:
+            parts.append(fh.read())
+    return "\n".join(parts)
 
 
 def _extract_func(source: str, name: str, extra: dict | None = None):
-    """Extract one top-level function from agent_controller.py source."""
+    """Extract one top-level function from the concatenated source."""
     marker = "\ndef {:s}(".format(name)
     start = source.find(marker)
     if start < 0:
@@ -97,11 +107,16 @@ _SOURCE = _load_source()
 _strip_think_tags = _extract_func(_SOURCE, "_strip_think_tags")
 _extract_reasoning_delta = _extract_func(
     _SOURCE, "_extract_reasoning_delta",
-    {"_strip_think_tags": _strip_think_tags},
+    {"_h": lambda name: _strip_think_tags if name == "strip_think_tags" else None},
 )
 _parse_sse_chunk = _extract_func(
     _SOURCE, "_parse_sse_chunk",
-    {"_extract_reasoning_delta": _extract_reasoning_delta},
+    {
+        "_extract_reasoning_delta": _extract_reasoning_delta,
+        # The chunk parser routes <think> stripping through the injected
+        # helper namespace (llm_transport._h).
+        "_h": lambda name: _strip_think_tags if name == "strip_think_tags" else None,
+    },
 )
 _assemble_stream_result = _extract_func(_SOURCE, "_assemble_stream_result")
 _stop_event = __import__("threading").Event()
@@ -116,7 +131,7 @@ def _quiet_print(*args, **kwargs):
 
 _openai_chat_completions_stream = _extract_func(
     _SOURCE,
-    "_openai_chat_completions_stream",
+    "openai_chat_completions_stream",
     {
         "json": json,
         "urllib": urllib,
@@ -129,7 +144,7 @@ _openai_chat_completions_stream = _extract_func(
         "time": time,
         "_parse_sse_chunk": _parse_sse_chunk,
         "_assemble_stream_result": _assemble_stream_result,
-        "_stop_event": _stop_event,
+        "_stop_requested": _stop_event.is_set,
         "_agent_state": types.SimpleNamespace(warning=""),
         "print": _quiet_print,
     },
@@ -591,9 +606,10 @@ class TestTurnLoopUsesStreamingWrapper(unittest.TestCase):
         loop_body = self._loop_body()
         # Each raw helper may be referenced only inside the _llm_request
         # wrapper (one call each); every request site goes through the
-        # wrapper, which also records usage.
-        self.assertEqual(loop_body.count("_openai_chat_completions_stream("), 1)
-        self.assertEqual(loop_body.count("_openai_chat_completions("), 1)
+        # wrapper, which also records usage.  The request helpers now live
+        # in llm_transport under public names.
+        self.assertEqual(loop_body.count("openai_chat_completions_stream("), 1)
+        self.assertEqual(loop_body.count("openai_chat_completions("), 1)
         self.assertGreaterEqual(loop_body.count("_llm_request("), 3)
 
     def test_run_conversation_turn_exposes_stream_callbacks(self):
@@ -668,7 +684,7 @@ class TestTurnLoopUsesStreamingWrapper(unittest.TestCase):
             "time": time,
             "_parse_sse_chunk": _parse_sse_chunk,
             "_assemble_stream_result": _assemble_stream_result,
-            "_stop_event": _threading.Event(),
+            "_stop_requested": lambda: False,
             "_agent_state": state,
             "print": _quiet_print,
             # Closure variables the wrapper reads from the turn-loop scope.
@@ -681,7 +697,7 @@ class TestTurnLoopUsesStreamingWrapper(unittest.TestCase):
             "on_stream_text": None,
             "on_stream_reasoning": None,
         }
-        start = _SOURCE.find("def _openai_chat_completions_stream(")
+        start = _SOURCE.find("def openai_chat_completions_stream(")
         end = _SOURCE.find("\ndef _mcp_tools_to_openai(", start)
         exec(compile(_SOURCE[start:end], _AC_PATH, "exec"), d)
         # The wrapper is nested in the turn loop at indent 4; dedent it so

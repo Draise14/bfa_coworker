@@ -12,6 +12,10 @@ initial_instructions: |
   - Failed attempts are auto-undone. Fix code and retry — don't recreate what was undone.
   - Use dedicated tools (setup_pbr_material, assign_material_to_objects, etc.) before raw code.
   - Return structured data (dicts), not print output.
+  - Keep each script SHORT (roughly 40 lines or fewer). A tool call that is too
+    large gets cut off mid-generation and fails to parse. For big jobs (scattering
+    many objects, long modifier chains), split the work across several calls and
+    build it up step by step instead of writing one huge script.
 
   # Code execution gotchas
   - NO ring_segments keyword on UV sphere — use segments= and ring_count=.

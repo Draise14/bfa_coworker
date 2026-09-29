@@ -1205,6 +1205,107 @@ class TestToolcallRetryWiring(unittest.TestCase):
         )
 
 
+class TestToolcallNudgeSplitsWork(unittest.TestCase):
+    """The nudge must change the *shape* of the retry, not repeat it.
+
+    The usual cause of a malformed tool call is a single oversized call (a
+    long script) that ran out of output tokens mid-string.  Asking the model
+    to "emit the tool call again" would truncate in exactly the same place,
+    so the nudge must tell it to split the work into smaller calls.
+    """
+
+    def test_nudge_tells_model_to_split_the_work(self):
+        src = _load_source()
+        self.assertIn("split the work", src)
+
+    def test_nudge_warns_against_repeating_the_same_call(self):
+        src = _load_source()
+        self.assertIn("Do NOT repeat the same large call", src)
+
+    def test_nudge_gives_a_size_guidance(self):
+        src = _load_source()
+        self.assertIn("40 lines or fewer", src)
+
+    def test_nudge_still_demands_well_formed_json(self):
+        src = _load_source()
+        self.assertIn("well-formed JSON arguments", src)
+
+
+class TestToolcallNoPointlessRetry(unittest.TestCase):
+    """After the nudge fails, the identical payload must not be re-sent.
+
+    A malformed tool call is a generation failure, not a transient one.  The
+    generic retry path would re-send the same nudged payload up to 4 more
+    times (~60s each) and fail identically, so it must be skipped once the
+    one-shot nudge has already been used.
+    """
+
+    def test_retry_path_skips_after_nudge(self):
+        src = _load_source()
+        self.assertIn(
+            "_fault == _FAULT_TOOLCALL and _toolcall_nudged", src
+        )
+
+    def test_skip_is_logged(self):
+        src = _load_source()
+        self.assertIn("not retrying the same payload", src)
+
+
+class TestToolcallFaultMessageSplitsWork(unittest.TestCase):
+    """The surfaced error must name the real remedy, not just the symptom."""
+
+    def test_message_explains_the_oversized_call_cause(self):
+        msg = _toolcall_fault_message("x")
+        self.assertIn("too large for one response", msg)
+
+    def test_message_suggests_smaller_steps(self):
+        msg = _toolcall_fault_message("x")
+        self.assertIn("smaller steps", msg)
+
+
+class TestAutoContinueSanitizesRequest(unittest.TestCase):
+    """The auto-continue path must not send the raw history.
+
+    The live history carries UI-only entries (the startup greeting) and
+    non-standard ``reasoning`` messages.  A strict Jinja template rejects
+    both with 400 "Unexpected message role", so the continuation request
+    must be sanitized exactly like the main request.
+    """
+
+    def test_continue_path_strips_reasoning(self):
+        src = _load_source()
+        self.assertIn("_cont_send = _strip_reasoning_from_history(history)", src)
+
+    def test_continue_path_strips_ui_only(self):
+        src = _load_source()
+        self.assertIn("_cont_send = _strip_ui_only_from_history(_cont_send)", src)
+
+    def test_continue_path_sanitizes_roles(self):
+        src = _load_source()
+        self.assertIn("_cont_send = _sanitize_message_roles(_cont_send)", src)
+
+    def test_continue_call_uses_sanitized_copy(self):
+        src = _load_source()
+        self.assertIn("llm_url, _cont_send, openai_tools", src)
+
+    def test_continue_call_forwards_thinking_budget(self):
+        """Without the budget the continuation can spend it all on reasoning.
+
+        The continuation exists to recover from a truncated generation, so
+        leaving the thinking budget unset would let chain-of-thought consume
+        max_tokens and truncate the tool call again.
+        """
+        src = _load_source()
+        self.assertIn(
+            "thinking_budget_tokens=thinking_budget, chat_mode=chat_mode", src
+        )
+
+    def test_continue_prompt_caps_the_next_step(self):
+        """A bare 'Continue.' invites another oversized tool call."""
+        src = _load_source()
+        self.assertIn("Keep this next step small", src)
+
+
 class TestClassifierMarkerSync(unittest.TestCase):
     """Guard against the mirrored marker tuples drifting from the source.
 

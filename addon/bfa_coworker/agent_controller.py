@@ -870,6 +870,10 @@ def _toolcall_fault_message(error_body: str) -> str:
         "The model produced a tool call whose arguments were not valid JSON, "
         "so the local LLM server could not parse it (HTTP 500). This is a "
         "model generation failure, not a server fault.",
+        "The usual cause is a single tool call that was too large for one "
+        "response: the arguments were cut off mid-string before the JSON was "
+        "complete. Ask for the work in smaller steps (e.g. \"do this in a few "
+        "smaller scripts\") so each tool call fits in one response.",
     ]
     if error_body:
         parts.append("--- server response ---\n{:s}".format(error_body[:800]))
@@ -3230,11 +3234,23 @@ def _openai_chat_completions(
                 # the live conversation history, and mutating it would
                 # permanently pollute the real system prompt.
                 messages = list(messages)
+                # The nudge must change the *shape* of the next attempt, not
+                # just ask for the same call again.  The usual cause is a
+                # single oversized tool call (a long script) that ran out of
+                # output tokens mid-string, so re-emitting it verbatim would
+                # truncate in exactly the same place.  Tell the model to
+                # split the work into smaller calls instead.
                 _nudge = (
                     "\n\nIMPORTANT: Your previous tool call could not be parsed "
-                    "because its arguments were not valid JSON. Emit the tool "
-                    "call again with complete, well-formed JSON arguments — do "
-                    "not truncate strings or code blocks."
+                    "because its arguments were not valid JSON — the arguments "
+                    "were cut off before the JSON was complete. This almost "
+                    "always means the tool call was too large for one response. "
+                    "Do NOT repeat the same large call. Instead, split the work "
+                    "into several smaller tool calls and make them one at a "
+                    "time: keep each script short (roughly 40 lines or fewer), "
+                    "and build the result up across multiple calls. Emit "
+                    "complete, well-formed JSON arguments — never truncate a "
+                    "string or a code block."
                 )
                 _nudged = False
                 for i in range(len(messages) - 1, -1, -1):
@@ -3388,23 +3404,33 @@ def _openai_chat_completions(
                 _time.sleep(backoff)
                 continue
             if attempt < max_retries - 1:
-                # Reuse the body already read for 500 classification above
-                # (``ex.read()`` is empty on a second call).
-                _error_body = _500_body
-                if not _is_500 and isinstance(ex, urllib.error.HTTPError) and ex.code == 500:
-                    try:
-                        _error_body = ex.read().decode("utf-8", errors="replace")
-                    except Exception:
-                        pass
-                if _error_body:
-                    print("[🛠️Coworker] _openai_chat_completions: attempt {:d}/{:d} FAILED — {:s}".format(
-                        attempt + 1, max_retries, str(ex)))
-                    print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_error_body[:500]))
+                # A malformed tool call is a *generation* failure, not a
+                # transient one.  Once the one-shot nudge has been sent, the
+                # payload already carries the "split the work up" instruction,
+                # so re-sending it verbatim would truncate in the same place
+                # and burn the whole retry budget (5 x ~60s) before reporting
+                # the same error.  Surface it immediately instead.
+                if _is_500 and _fault == _FAULT_TOOLCALL and _toolcall_nudged:
+                    print("[🛠️Coworker] _openai_chat_completions: malformed tool call "
+                          "persists after the nudge — not retrying the same payload")
                 else:
-                    print("[🛠️Coworker] _openai_chat_completions: attempt {:d}/{:d} FAILED — {:s}, retrying in 2s...".format(
-                        attempt + 1, max_retries, str(ex)))
-                _time.sleep(2)
-                continue
+                    # Reuse the body already read for 500 classification above
+                    # (``ex.read()`` is empty on a second call).
+                    _error_body = _500_body
+                    if not _is_500 and isinstance(ex, urllib.error.HTTPError) and ex.code == 500:
+                        try:
+                            _error_body = ex.read().decode("utf-8", errors="replace")
+                        except Exception:
+                            pass
+                    if _error_body:
+                        print("[🛠️Coworker] _openai_chat_completions: attempt {:d}/{:d} FAILED — {:s}".format(
+                            attempt + 1, max_retries, str(ex)))
+                        print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_error_body[:500]))
+                    else:
+                        print("[🛠️Coworker] _openai_chat_completions: attempt {:d}/{:d} FAILED — {:s}, retrying in 2s...".format(
+                            attempt + 1, max_retries, str(ex)))
+                    _time.sleep(2)
+                    continue
             # Surface the final failure.  For a server fault, build an
             # actionable message (body + llama-server log tail + GPU-OOM
             # hint) so a resource failure is not misread as a template bug.
@@ -4920,13 +4946,36 @@ def _run_conversation_turn_inner(
                 partial_msg["tool_calls"] = msg["tool_calls"]
             history.append(partial_msg)
 
-            # Send a brief continuation prompt.
-            history.append({"role": "user", "content": "Continue."})
+            # Send a brief continuation prompt.  It must also cap the size of
+            # the next step: a bare "Continue." invites the model to dump the
+            # whole remaining plan into one tool call, which then truncates
+            # mid-string and fails to parse (HTTP 500).
+            history.append({
+                "role": "user",
+                "content": (
+                    "Continue. Keep this next step small — if there is a lot "
+                    "left to do, do one short piece now and the rest in "
+                    "follow-up calls."
+                ),
+            })
 
             # Re-request with the same max_tokens.
+            # Send a *sanitized* copy, not the raw history: the live history
+            # carries UI-only entries (the startup greeting) and non-standard
+            # ``reasoning`` messages, and a strict Jinja template rejects both
+            # with 400 "Unexpected message role".  The main request path
+            # already strips them; this path must too.
+            _cont_send = _strip_reasoning_from_history(history)
+            _cont_send = _strip_ui_only_from_history(_cont_send)
+            _cont_send = _sanitize_message_roles(_cont_send)
+            # Forward the thinking budget.  Without it the continuation can
+            # spend the entire max_tokens on chain-of-thought and leave
+            # nothing for the tool call, which then truncates mid-string and
+            # fails to parse (HTTP 500) -- the exact failure this path exists
+            # to recover from.
             continue_response = _openai_chat_completions(
-                llm_url, history, openai_tools, api_key, model, max_tokens,
-                chat_mode=chat_mode,
+                llm_url, _cont_send, openai_tools, api_key, model, max_tokens,
+                thinking_budget_tokens=thinking_budget, chat_mode=chat_mode,
             )
             if continue_response is None:
                 break

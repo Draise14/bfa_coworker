@@ -62,6 +62,13 @@ initial_instructions: |
   3. Execute once with all desired properties.
   4. If it fails, the system cleans up — just fix the code and retry.
 
+  ⚠️ **CRITICAL — keep tool calls small:** A tool call whose arguments are too
+  large gets cut off mid-generation, and the server then cannot parse it as JSON
+  (HTTP 500). Keep each `execute_blender_code` script short — roughly 40 lines or
+  fewer. For large jobs (scattering many objects, long modifier chains, building
+  a whole scene), split the work across several calls and build it up step by
+  step. Several small, successful calls always beat one huge call that fails.
+
   To create multiple independent objects in a single turn, either batch them
   into one `execute_blender_code` call, or use different operators for each
   (e.g. `primitive_cube_add` for a cube, `primitive_uv_sphere_add` for a sphere).

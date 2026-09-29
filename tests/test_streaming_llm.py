@@ -49,6 +49,7 @@ import types
 import typing
 import unittest
 import urllib.error
+import urllib.request  # noqa: F401  (the extracted helper uses urllib.request.urlopen)
 from pathlib import Path
 from unittest import mock
 
@@ -498,11 +499,14 @@ class TestTurnLoopUsesStreamingWrapper(unittest.TestCase):
     the same loop, per the tier3 plan's pre-flight requirement.
     """
 
-    def test_all_call_sites_route_through_llm_request(self):
+    def _loop_body(self):
         source = _SOURCE
         start = source.find("def _run_conversation_turn_inner(")
         end = source.find("\ndef ping_agent(", start)
-        loop_body = source[start:end]
+        return source[start:end]
+
+    def test_all_call_sites_route_through_llm_request(self):
+        loop_body = self._loop_body()
         # Each raw helper may be referenced only inside the _llm_request
         # wrapper (one call each); every request site goes through the
         # wrapper, which also records usage.
@@ -519,12 +523,160 @@ class TestTurnLoopUsesStreamingWrapper(unittest.TestCase):
         self.assertIn("on_stream_reasoning", signature)
 
     def test_abort_keeps_partial_message(self):
-        source = _SOURCE
-        start = source.find("def _run_conversation_turn_inner(")
-        end = source.find("\ndef ping_agent(", start)
-        loop_body = source[start:end]
+        loop_body = self._loop_body()
         # Stop mid-turn must keep the partial streamed content (marked).
         self.assertIn('"partial": True', loop_body)
+
+    def test_llm_request_writes_deltas_into_rendered_state(self):
+        """Stream deltas must land in AgentState.streaming_text/
+        reasoning_text -- the fields the Workshop renders as
+        'Coworker (live)' -- while generation is still in progress.
+
+        Regression guard for the rendering gap: _update_streaming in the
+        UI only redraws, so if the wrapper passes the raw callbacks
+        through, deltas never reach the rendered state and nothing
+        appears until the full response arrives.
+        """
+        loop_body = self._loop_body()
+        # The wrapper must write the delta into the rendered state, not
+        # merely forward it to the UI callback.
+        self.assertIn("_agent_state.streaming_text = text", loop_body)
+        self.assertIn("_agent_state.reasoning_text = text", loop_body)
+        # ...and still forward to the caller's callback.
+        self.assertIn("if on_stream_text:", loop_body)
+        self.assertIn("if on_stream_reasoning:", loop_body)
+
+    def test_deltas_visible_before_completion(self):
+        """End-to-end through the real ``_llm_request`` wrapper: while the
+        SSE stream is mid-flight, the state the Workshop renders already
+        holds the streamed text and reasoning.
+        """
+        import threading as _threading
+        import textwrap as _textwrap
+
+        # Build an SSE body whose final chunks arrive only after the test
+        # releases a pause, so the rendered state can be sampled mid-stream
+        # with the reasoning and first text chunk already dispatched.
+        reasoning_chunk = b'data: {"choices": [{"delta": {"reasoning_content": "live chain of thought"}}]}\n\n'
+        text_chunk = b'data: {"choices": [{"delta": {"content": "live partial text"}}]}\n\n'
+        final_chunk = b'data: {"choices": [{"delta": {"content": " plus final"}, '
+        final_chunk += b'"finish_reason": "stop"}], "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}}\n\n'
+        done_chunk = b"data: [DONE]\n\n"
+
+        state = types.SimpleNamespace(
+            warning="",
+            streaming_text="",
+            reasoning_text="",
+            is_thinking=True,
+            turn_usage={},
+            session_usage={},
+            record_usage=lambda usage: None,
+        )
+        d = {
+            "json": json,
+            "urllib": urllib,
+            "typing": typing,
+            "Any": object,
+            "Callable": typing.Callable,
+            "_DEFAULT_MAX_TOKENS": 1024,
+            "_DEFAULT_TEMPERATURE_CODE": 0.2,
+            "_DEFAULT_TEMPERATURE_PROSE": 0.7,
+            "_CHAT_SAMPLING": {},
+            "_STREAM_TIMEOUT": 600.0,
+            "_parse_sse_chunk": _parse_sse_chunk,
+            "_assemble_stream_result": _assemble_stream_result,
+            "_stop_event": _threading.Event(),
+            "_agent_state": state,
+            "print": _quiet_print,
+            # Closure variables the wrapper reads from the turn-loop scope.
+            "llm_url": "http://x/v1/chat/completions",
+            "api_key": None,
+            "model": "gpt-test",
+            "max_tokens": 1024,
+            "chat_mode": "AGENT",
+            "on_status": None,
+            "on_stream_text": None,
+            "on_stream_reasoning": None,
+        }
+        start = _SOURCE.find("def _openai_chat_completions_stream(")
+        end = _SOURCE.find("\ndef _mcp_tools_to_openai(", start)
+        exec(compile(_SOURCE[start:end], _AC_PATH, "exec"), d)
+        # The wrapper is nested in the turn loop at indent 4; dedent it so
+        # it can be exec'd standalone with the closure vars supplied above.
+        w_start = _SOURCE.find("    def _llm_request(")
+        w_end = _SOURCE.find("\n    # Determine LLM URL.", w_start)
+        exec(
+            compile(_textwrap.dedent(_SOURCE[w_start:w_end]), _AC_PATH, "exec"), d,
+        )
+        llm_request = d["_llm_request"]
+
+        body_lines = [reasoning_chunk, text_chunk, b"PAUSE", final_chunk, done_chunk]
+        pause = _threading.Event()
+
+        class _MidStreamResponse:
+            status = 200
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                if body_lines:
+                    line = body_lines.pop(0)
+                    if line == b"PAUSE":
+                        # The reasoning and text chunks are already consumed
+                        # and dispatched; block here so the test can sample
+                        # the rendered state mid-stream.
+                        pause.wait(timeout=5)
+                        return b""
+                    return line
+                raise StopIteration
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with mock.patch(
+            "urllib.request.urlopen",
+            lambda req, timeout=None: _MidStreamResponse(),
+        ):
+            result_holder = {}
+
+            def _run():
+                result_holder["result"] = llm_request(
+                    [{"role": "user", "content": "hi"}], [],
+                )
+
+            worker = _threading.Thread(target=_run, daemon=True)
+            worker.start()
+            # The reader blocks after consuming the reasoning and text
+            # chunks; the rendered state must already hold both.  Poll
+            # instead of sleeping so the test is not timing-dependent.
+            midstream = _threading.Event()
+            deadline = 50  # ~5 s of 0.1 s polls
+            for _ in range(deadline):
+                if state.streaming_text == "live partial text":
+                    midstream.set()
+                    break
+                _threading.Event().wait(0.1)
+            self.assertTrue(
+                midstream.is_set(),
+                "streamed text never appeared in the rendered state mid-stream",
+            )
+            self.assertEqual(state.reasoning_text, "live chain of thought")
+            # Release the reader; the stream completes normally.
+            pause.set()
+            worker.join(timeout=10)
+            self.assertFalse(worker.is_alive())
+            result = result_holder["result"]
+        self.assertEqual(
+            result["choices"][0]["message"]["content"],
+            "live partial text plus final",
+        )
+        # The full text remains in the rendered state after completion
+        # (post-response assignment keeps the final message intact).
+        self.assertEqual(state.streaming_text, "live partial text plus final")
 
 
 if __name__ == "__main__":

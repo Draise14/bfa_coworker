@@ -45,6 +45,7 @@ __all__ = ()
 import io
 import json
 import os
+import time
 import types
 import typing
 import unittest
@@ -125,6 +126,7 @@ _openai_chat_completions_stream = _extract_func(
         "_DEFAULT_TEMPERATURE_PROSE": 0.7,
         "_CHAT_SAMPLING": {},
         "_STREAM_TIMEOUT": 600.0,
+        "time": time,
         "_parse_sse_chunk": _parse_sse_chunk,
         "_assemble_stream_result": _assemble_stream_result,
         "_stop_event": _stop_event,
@@ -349,6 +351,86 @@ class TestStreamRequest(unittest.TestCase):
             )
         self.assertEqual(reasonings[-1], "hmm")
         self.assertEqual(texts[-1], "ok")
+
+    def test_elapsed_status_phases_and_format(self):
+        """Per-phase elapsed status (issue #69): the reasoning phase shows
+        a 'Reasoning... (Ns)' status, the content phase a
+        'Generating... (Ns)' status, and the phases arrive in order.
+        Never asserts exact seconds -- only the format/prefix and that the
+        elapsed number is a non-negative integer string.
+        """
+        body = _sse([
+            # Chunk 1: reasoning only -> Reasoning... phase.
+            {"choices": [{"delta": {"reasoning_content": "thinking"}}]},
+            # Chunk 2: content starts -> Generating... phase.
+            {"choices": [{"delta": {"content": "answer"}}]},
+            # Chunk 3: mixed (both present) -> neither phase re-emitted
+            # (the generating status is already live via the text).
+            {"choices": [{"delta": {
+                "content": " more", "reasoning_content": " more",
+            }}]},
+        ])
+        statuses = []
+        with mock.patch("urllib.request.urlopen", _urlopen_returning(body)):
+            _openai_chat_completions_stream(
+                "http://x/v1/chat/completions", [{"role": "user", "content": "hi"}],
+                [], on_status=statuses.append,
+            )
+        # Phase order: contact, first token, reasoning elapsed, generating elapsed.
+        self.assertEqual(statuses[0], "Contacting API...")
+        self.assertEqual(statuses[1], "Generating...")
+        self.assertEqual(statuses[2], "Reasoning... (0s)")
+        self.assertEqual(statuses[3], "Generating... (0s)")
+        # No further phase statuses after the mixed chunk.
+        self.assertEqual(len(statuses), 4)
+        # Format: the elapsed part is always a non-negative integer.
+        import re
+        for s in statuses[2:]:
+            m = re.match(r"^(Reasoning|Generating)\.\.\. \((\d+)s\)$", s)
+            self.assertIsNotNone(m, "bad elapsed status format: {:s}".format(s))
+
+    def test_elapsed_status_reflects_fake_clock(self):
+        """The elapsed seconds come from time.monotonic at request start;
+        with a fake clock the number must track the injected value."""
+        body = _sse([
+            {"choices": [{"delta": {"reasoning_content": "think"}}]},
+        ])
+        fake_clock = [1000.0]
+
+        def _fake_monotonic():
+            fake_clock[0] += 7.0  # each call advances 7 s
+            return fake_clock[0]
+
+        statuses = []
+        with mock.patch("urllib.request.urlopen", _urlopen_returning(body)):
+            with mock.patch("time.monotonic", _fake_monotonic):
+                _openai_chat_completions_stream(
+                    "http://x/v1/chat/completions",
+                    [{"role": "user", "content": "hi"}],
+                    [], on_status=statuses.append,
+                )
+        reasoning_statuses = [s for s in statuses if s.startswith("Reasoning...")]
+        self.assertEqual(len(reasoning_statuses), 1)
+        # _request_start is captured on one monotonic call, the elapsed
+        # read on another: 7 s apart regardless of absolute values.
+        self.assertEqual(reasoning_statuses[0], "Reasoning... (7s)")
+
+    def test_no_reasoning_no_reasoning_status(self):
+        """A stream with content but no reasoning never shows the
+        Reasoning phase -- it goes straight to Generating."""
+        body = _sse([
+            {"choices": [{"delta": {"content": "answer"}}]},
+        ])
+        statuses = []
+        with mock.patch("urllib.request.urlopen", _urlopen_returning(body)):
+            _openai_chat_completions_stream(
+                "http://x/v1/chat/completions", [{"role": "user", "content": "hi"}],
+                [], on_status=statuses.append,
+            )
+        self.assertNotIn(
+            True, [s.startswith("Reasoning...") for s in statuses],
+        )
+        self.assertTrue(any(s.startswith("Generating...") for s in statuses))
 
     def test_stop_mid_stream_returns_partial(self):
         # A response whose first line arrives normally, but where the stop
@@ -583,6 +665,7 @@ class TestTurnLoopUsesStreamingWrapper(unittest.TestCase):
             "_DEFAULT_TEMPERATURE_PROSE": 0.7,
             "_CHAT_SAMPLING": {},
             "_STREAM_TIMEOUT": 600.0,
+            "time": time,
             "_parse_sse_chunk": _parse_sse_chunk,
             "_assemble_stream_result": _assemble_stream_result,
             "_stop_event": _threading.Event(),

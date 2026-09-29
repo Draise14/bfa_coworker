@@ -3658,7 +3658,10 @@ def _openai_chat_completions_stream(
         "finish_reason": "",
         "usage": None,
     }
+    _request_start = time.monotonic()
     got_first_token = False
+    _content_seen = False
+    _reasoning_since: float | None = None
     try:
         with urllib.request.urlopen(req, timeout=_STREAM_TIMEOUT) as resp:
             if resp.status != 200:
@@ -3692,6 +3695,26 @@ def _openai_chat_completions_stream(
                     if on_status:
                         on_status("Generating...")
                 _parse_sse_chunk(chunk, acc)
+                # Per-phase elapsed status (issue #69).  Phases are tracked
+                # by what the CURRENT chunk carries (not the accumulator,
+                # which is cumulative): a reasoning-only delta keeps the
+                # Reasoning phase alive with its elapsed time; the first
+                # content delta switches to the Generating phase.  The
+                # phase status is one-shot per transition so it is not
+                # re-emitted on every chunk; while reasoning continues,
+                # the elapsed seconds update once per second.
+                if on_status:
+                    _elapsed = time.monotonic() - _request_start
+                    if acc["content"]:
+                        if not _content_seen:
+                            _content_seen = True
+                            on_status("Generating... ({:.0f}s)".format(_elapsed))
+                    elif _reasoning_since is None:
+                        _reasoning_since = _elapsed
+                        on_status("Reasoning... ({:.0f}s)".format(_elapsed))
+                    elif _elapsed - _reasoning_since >= 1.0:
+                        _reasoning_since = _elapsed
+                        on_status("Reasoning... ({:.0f}s)".format(_elapsed))
                 if on_stream_reasoning and acc["reasoning"]:
                     on_stream_reasoning(acc["reasoning"])
                 if on_stream_text and acc["content"]:

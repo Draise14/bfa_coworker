@@ -42,8 +42,9 @@ from pathlib import Path
 import bpy  # pylint: disable=import-error
 from bpy.props import (  # pylint: disable=import-error
     BoolProperty,
-    StringProperty,
     EnumProperty,
+    IntProperty,
+    StringProperty,
 )
 from bpy.types import (  # pylint: disable=import-error
     Operator,

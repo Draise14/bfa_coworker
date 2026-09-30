@@ -532,6 +532,10 @@ class LLMConfig:
     hf_token: str = ""  # HuggingFace token for gated models
     llama_backend: str = "auto"  # "auto" | "cpu" | "cuda" | "vulkan"
     local_kv_cache_quant: bool = False  # Quantize KV cache to q8_0 (GPU backends only)
+    # Soft co-work lock: while a turn runs, make the coworker's own objects
+    # un-selectable in the UI so the user cannot re-target them mid-turn.
+    # Restored when the turn ends.
+    lock_scene_while_working: bool = True
     # Remote mode
     remote_api_url: str = ""
     remote_api_key: str = ""
@@ -1149,6 +1153,7 @@ def set_config(cfg: LLMConfig) -> None:
         _config.hf_token = cfg.hf_token
         _config.llama_backend = cfg.llama_backend
         _config.local_kv_cache_quant = cfg.local_kv_cache_quant
+        _config.lock_scene_while_working = cfg.lock_scene_while_working
         _config.remote_api_url = cfg.remote_api_url
         _config.remote_api_key = cfg.remote_api_key
         _config.remote_model = cfg.remote_model
@@ -1171,6 +1176,7 @@ def get_config() -> LLMConfig:
             hf_token=_config.hf_token,
             llama_backend=_config.llama_backend,
             local_kv_cache_quant=_config.local_kv_cache_quant,
+            lock_scene_while_working=_config.lock_scene_while_working,
             remote_api_url=_config.remote_api_url,
             remote_api_key=_config.remote_api_key,
             remote_model=_config.remote_model,

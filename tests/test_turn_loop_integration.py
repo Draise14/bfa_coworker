@@ -116,6 +116,14 @@ def _load_transport():
     module = importlib.util.module_from_spec(spec)
     assert spec is not None and spec.loader is not None
     spec.loader.exec_module(module)
+    # Load the co-work guard (scene safety Phase 1) so agent_controller's
+    # ``from . import co_work_guard`` resolves to a live instance.
+    _cw_spec = importlib.util.spec_from_file_location(
+        "bfa_coworker.co_work_guard",
+        os.path.join(_REPO, "addon", "bfa_coworker", "co_work_guard.py"))
+    _cw = importlib.util.module_from_spec(_cw_spec)
+    assert _cw_spec is not None and _cw_spec.loader is not None
+    _cw_spec.loader.exec_module(_cw)
     # agent_controller's relative imports (``from .llm_transport import
     # ...``) resolve through sys.modules["bfa_coworker"]; register a
     # package object carrying the loaded siblings so they resolve to the
@@ -127,6 +135,7 @@ def _load_transport():
         pkg.session_memory = _SM
         pkg.llm_manager = _LM
         pkg.llm_transport = module
+        pkg.co_work_guard = _cw
         sys.modules["bfa_coworker"] = pkg
     # Pin the submodule entries too, so agent_controller's
     # ``from .llm_transport import ...`` / ``from . import llm_manager``
@@ -135,6 +144,7 @@ def _load_transport():
     sys.modules["bfa_coworker.llm_transport"] = module
     sys.modules["bfa_coworker.session_memory"] = _SM
     sys.modules["bfa_coworker.llm_manager"] = _LM
+    sys.modules["bfa_coworker.co_work_guard"] = _cw
     return module
 
 

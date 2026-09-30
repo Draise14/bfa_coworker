@@ -49,6 +49,7 @@ from typing import Any
 
 from . import llm_transport as _transport
 from . import session_memory
+from . import co_work_guard
 from .llm_transport import (
     _CHAT_SAMPLING,
     _DEFAULT_MAX_TOKENS,
@@ -1371,7 +1372,13 @@ _stop_event = threading.Event()
 
 
 def request_stop() -> None:
-    """Request the current generation to stop as soon as possible."""
+    """Request the current generation to stop as soon as possible.
+
+    The co-work scene lock is NOT released here: ``request_stop`` runs on
+    Blender's main thread, and running the unlock toolcode would deadlock
+    against the main-thread MCP pump.  The active turn's ``finally``
+    releases the lock as soon as it unwinds.
+    """
     print("[🛠️Coworker] request_stop: stop requested")
     _stop_event.set()
     _agent_state.is_thinking = False
@@ -4078,6 +4085,75 @@ def export_session_log_to_clipboard() -> str:
     return "\n".join(lines)
 
 
+# MCP port of the turn that last locked datablocks, so the release path can
+# restore them without re-plumbing the port through the turn's call stack.
+_active_lock_mcp_port: int = 0
+
+
+def _lock_step_entities(step_diff: Any, mcp_port: int) -> None:
+    """Soft-lock a step's created/touched datablocks (scene safety Phase 1).
+
+    Sets ``hide_select`` on the objects/collections the step created or
+    touched so the user cannot re-target them in the viewport mid-turn while
+    the agent keeps full programmatic access.  Best-effort: never breaks a
+    turn, and a missing config/guard is silently ignored.
+    """
+    global _active_lock_mcp_port
+    try:
+        from . import llm_manager as _llm_mgr
+        if not getattr(_llm_mgr.get_config(), "lock_scene_while_working", True):
+            return
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    try:
+        objs = getattr(step_diff, "object_names", None) or set()
+        colls = getattr(step_diff, "collection_names", None) or set()
+        if not objs and not colls:
+            return
+        if mcp_port:
+            _active_lock_mcp_port = mcp_port
+        co_work_guard.record_managed(objs, colls)
+        raw = _call_mcp_tool_sync(
+            "execute_blender_code",
+            {"code": co_work_guard.build_lock_code(objs, colls)}, mcp_port)
+        # Best-effort: capture the true prior hide_select values so the
+        # unlock restores them exactly rather than a blanket False.
+        try:
+            data = json.loads(raw)
+            result = data.get("result", {}) if isinstance(data, dict) else {}
+            co_work_guard.record_prior(
+                result.get("prior_hide_select"),
+                result.get("prior_hide_select_coll"))
+        except (json.JSONDecodeError, TypeError):
+            pass
+        print("[🛠️Coworker] _lock_step_entities: locked {:d} objects, {:d} "
+              "collections".format(len(objs), len(colls)))
+    except Exception as _ex:  # pylint: disable=broad-exception-caught
+        print("[🛠️Coworker] _lock_step_entities: skipped — {:s}".format(str(_ex)))
+
+
+def _release_scene_lock() -> None:
+    """Restore every co-work-locked datablock and clear the registry.
+
+    Runs on the turn's worker thread (safe for ``_call_mcp_tool_sync``);
+    never runs on the main thread because the MCP pump would deadlock.
+    Best-effort: never raises.
+    """
+    if not co_work_guard.is_locked():
+        return
+    try:
+        if _active_lock_mcp_port:
+            _call_mcp_tool_sync(
+                "execute_blender_code",
+                {"code": co_work_guard.build_unlock_code()},
+                _active_lock_mcp_port)
+            print("[🛠️Coworker] _release_scene_lock: released co-work scene lock")
+    except Exception as _ex:  # pylint: disable=broad-exception-caught
+        print("[🛠️Coworker] _release_scene_lock: unlock skipped — {:s}".format(str(_ex)))
+    finally:
+        co_work_guard.clear()
+
+
 def run_conversation_turn(
     user_message: str,
     on_text: Callable[[str], None] | None = None,
@@ -4124,6 +4200,9 @@ def run_conversation_turn(
         )
     finally:
         _agent_state.turn_active = False
+        # Always release the co-work scene lock (FINISH, error, Stop, or an
+        # exception all pass through here).
+        _release_scene_lock()
 
 
 # Turn counter for memory-block "Last updated" stamps (Tier 3).
@@ -5157,6 +5236,12 @@ def _run_conversation_turn_inner(
                                         _turn_entities.merge(step_diff)
                                         _turn_snapshot = current_snap
                                         # Entity context is now injected AFTER the tool result.
+                                        # Co-work soft lock (Phase 1): make this
+                                        # step's created/touched datablocks
+                                        # un-selectable for the rest of the
+                                        # turn so the user cannot re-target
+                                        # them mid-turn.
+                                        _lock_step_entities(step_diff, mcp_port)
                         except (json.JSONDecodeError, TypeError):
                             pass
 
@@ -5325,6 +5410,11 @@ def _run_conversation_turn_inner(
 def cleanup() -> None:
     """Stop the MCP server subprocess. Safe to call multiple times."""
     stop_mcp_server()
+    # Forget the co-work lock registry.  We cannot run the unlock toolcode
+    # here (this runs on the main thread during shutdown/disable), but the
+    # hide_select flags are scene state that resets on file reload, and the
+    # registry is only an in-memory bookkeeping aid.
+    co_work_guard.clear()
     _agent_state.conversation_history.clear()
     _agent_state.streaming_text = ""
     _agent_state.reasoning_text = ""

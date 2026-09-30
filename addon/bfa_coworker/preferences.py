@@ -278,6 +278,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         cfg.local_max_tokens = self.local_max_tokens
         cfg.thinking_budget_tokens = self.thinking_budget_tokens
         cfg.local_kv_cache_quant = self.local_kv_cache_quant
+        cfg.lock_scene_while_working = self.lock_scene_while_working
         llm.set_config(cfg)
         # If switching to remote, stop any running local LLM.
         if self.llm_mode == "remote":
@@ -689,6 +690,17 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             "Slight quality cost. GPU backends only; applies on next server start."
         ),
         default=False,
+    )
+
+    lock_scene_while_working: BoolProperty(  # type: ignore[valid-type]
+        name="Lock Scene While Working",
+        description=(
+            "While the coworker is running a turn, temporarily make the objects "
+            "and collections it created or touched un-selectable, so they cannot "
+            "be re-targeted in the viewport mid-turn. Everything is restored when "
+            "the turn ends. Turn this off to allow full selection during a turn"
+        ),
+        default=True,
     )
 
     def _update_ctx_preset(self, _context: bpy.types.Context) -> None:

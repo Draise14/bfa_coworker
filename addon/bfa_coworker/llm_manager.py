@@ -240,6 +240,31 @@ def _filter_flags_for_build(flags: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(out)
 
 
+def _current_preset_extra_args() -> tuple[str, ...]:
+    """Return the extra llama-server flags for the configured model preset.
+
+    Matches the running config's ``model_repo_id`` + ``model_filename``
+    against :data:`PRESET_MODELS` (the preferences enum is not carried by
+    ``LLMConfig``).  Returns an empty tuple for a custom or unknown model.
+
+    Never raises: a lookup failure must not break server launch.  Without
+    this helper the Qwen presets' ``--no-context-shift`` flag was silently
+    never applied (the call site referenced a function that did not exist,
+    so launch raised ``NameError``).
+    """
+    try:
+        repo = getattr(_config, "model_repo_id", "") or ""
+        fname = getattr(_config, "model_filename", "") or ""
+        if repo and fname:
+            for preset in PRESET_MODELS:
+                if preset.repo_id == repo and preset.filename == fname:
+                    return tuple(preset.extra_server_args)
+    except Exception as _ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] _current_preset_extra_args: lookup failed — {:s}".format(
+            str(_ex)))
+    return ()
+
+
 _llama_server_version_cache: str = ""
 
 

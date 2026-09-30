@@ -70,7 +70,11 @@ _MCP_SERVER_DEFAULT_PORT = 9191
 _MCP_SERVER_HEALTH_URL = "http://127.0.0.1:{:d}/health"
 _MCP_TOOLS_URL = "http://127.0.0.1:{:d}/tools/list"
 _LLM_CHAT_URL = "http://127.0.0.1:{:d}/v1/chat/completions"
-_MAX_TOOL_ITERATIONS = 8
+# Local (Qwen-family) models often need an extra repair round after an error
+# or a truncation, so they get a larger budget; remote models do not and a
+# smaller cap keeps a stalled remote run from looping.
+_LOCAL_MAX_TOOL_ITERATIONS = 12
+_REMOTE_MAX_TOOL_ITERATIONS = 8
 
 # Sampling parameters tuned for MoE local models.
 # Defined in llm_transport (the module that sends them) and re-exported
@@ -4687,7 +4691,12 @@ def _run_conversation_turn_inner(
         return msgs, None
 
     iterations = 0
-    while iterations < _MAX_TOOL_ITERATIONS:
+    # Mode-aware iteration budget: local models get more repair rounds.
+    _max_iterations = (
+        _LOCAL_MAX_TOOL_ITERATIONS if llm_port_local is not None
+        else _REMOTE_MAX_TOOL_ITERATIONS
+    )
+    while iterations < _max_iterations:
         iterations += 1
 
         # Abort early if the user pressed Stop.
@@ -5272,7 +5281,7 @@ def _run_conversation_turn_inner(
 
     # If we hit the iteration limit, the LLM kept calling tools.
     # Add an explicit instruction to summarize and make one final call.
-    if iterations >= _MAX_TOOL_ITERATIONS:
+    if iterations >= _max_iterations:
         print("[🛠️Coworker] run_conversation_turn: hit max iterations, forcing summary")
         history.append({
             "role": "user",

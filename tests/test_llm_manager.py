@@ -619,5 +619,45 @@ class TestFilterFlagsForBuild(unittest.TestCase):
                         preset.identifier))
 
 
+class TestCurrentPresetExtraArgs(unittest.TestCase):
+    """Tests for _current_preset_extra_args (local hardening Phase 7).
+
+    The helper was referenced by start_local_llama but never defined, so the
+    Qwen presets' ``--no-context-shift`` flag was silently never applied and
+    launch raised ``NameError``.  These tests pin the lookup and its
+    never-raise contract.
+    """
+
+    def setUp(self) -> None:
+        self.llm_manager = load_llm_manager_module()
+        self._saved = self.llm_manager._config
+
+    def tearDown(self) -> None:
+        self.llm_manager._config = self._saved
+
+    def _set_model(self, repo: str, fname: str) -> None:
+        cfg = self.llm_manager.LLMConfig()
+        cfg.model_repo_id = repo
+        cfg.model_filename = fname
+        self.llm_manager.set_config(cfg)
+
+    def test_qwen_preset_returns_no_context_shift(self) -> None:
+        preset = self.llm_manager.get_preset_by_id("qwen38_27b_q8")
+        self.assertIsNotNone(preset)
+        self._set_model(preset.repo_id, preset.filename)
+        self.assertEqual(
+            self.llm_manager._current_preset_extra_args(),
+            ("--no-context-shift",))
+
+    def test_custom_model_returns_empty(self) -> None:
+        self._set_model("some/custom-gguf", "custom.gguf")
+        self.assertEqual(self.llm_manager._current_preset_extra_args(), ())
+
+    def test_never_raises_on_broken_config(self) -> None:
+        # An object with no attributes must not raise (launch must survive).
+        self.llm_manager._config = object()
+        self.assertEqual(self.llm_manager._current_preset_extra_args(), ())
+
+
 if __name__ == "__main__":
     unittest.main()

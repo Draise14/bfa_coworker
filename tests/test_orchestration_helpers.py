@@ -1516,5 +1516,18 @@ class TestInternalCodeMainThreadMarker(unittest.TestCase):
         self.assertIn("# blmcp-toolcode-skip-preflight", code)
 
 
+class TestModeAwareIterationBudget(unittest.TestCase):
+    """Local runs get more tool iterations than remote (local hardening Phase 7)."""
+
+    def test_iteration_constants_codegen(self):
+        src = _load_source()
+        self.assertIn("_LOCAL_MAX_TOOL_ITERATIONS = 12", src)
+        self.assertIn("_REMOTE_MAX_TOOL_ITERATIONS = 8", src)
+        # The budget must be resolved per turn, not a single hard cap.
+        self.assertIn("_max_iterations = (", src)
+        self.assertIn("while iterations < _max_iterations:", src)
+        self.assertIn("if iterations >= _max_iterations:", src)
+
+
 if __name__ == "__main__":
     unittest.main()

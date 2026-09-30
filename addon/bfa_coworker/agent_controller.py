@@ -1263,19 +1263,12 @@ class AgentState:
 
 _agent_state = AgentState()
 
-# Shared state for the LLM transport layer (issue: module split).
-_transport.bind(_agent_state, _stop_event)
-_transport.bind_helpers(
-    types.SimpleNamespace(
-        strip_think_tags=_strip_think_tags,
-        parse_text_tool_calls=_parse_text_tool_calls,
-        parse_xml_tool_calls=_parse_xml_tool_calls,
-        sanitize_message_roles=_sanitize_message_roles,
-        describe_message_roles=_describe_message_roles,
-        describe_history_for_log=_describe_history_for_log,
-        flatten_for_plain_chat=_flatten_for_plain_chat,
-    )
-)
+# NOTE: the shared-state binding for the LLM transport layer
+# (``_transport.bind`` / ``_transport.bind_helpers``) is deferred to the END
+# of this module.  The names it references — ``_stop_event`` and the tool-call
+# parsers ``_parse_text_tool_calls`` / ``_parse_xml_tool_calls`` — are defined
+# further down, so binding here referenced names that did not exist yet and
+# raised ``NameError: name '_stop_event' is not defined`` at import time.
 
 
 @dataclass
@@ -3151,6 +3144,27 @@ def _parse_xml_tool_calls(text: str) -> list[dict[str, Any]]:
 # LLM-generated code or a deadlocked bridge.
 _TOOL_CALL_WATCHDOG_SECONDS = 120
 _TOOL_CALL_WATCHDOG_LAST: dict[str, float] = {}
+
+
+# ---------------------------------------------------------------------------
+# Shared state binding for the LLM transport layer
+# ---------------------------------------------------------------------------
+# Deferred to here (not next to ``_agent_state``) because these references
+# need ``_stop_event`` and the tool-call parsers defined above; binding at
+# module top raised ``NameError: name '_stop_event' is not defined``.
+_transport.bind(_agent_state, _stop_event)
+_transport.bind_helpers(
+    types.SimpleNamespace(
+        strip_think_tags=_strip_think_tags,
+        parse_text_tool_calls=_parse_text_tool_calls,
+        parse_xml_tool_calls=_parse_xml_tool_calls,
+        sanitize_message_roles=_sanitize_message_roles,
+        describe_message_roles=_describe_message_roles,
+        describe_history_for_log=_describe_history_for_log,
+        flatten_for_plain_chat=_flatten_for_plain_chat,
+    )
+)
+
 
 def _tool_call_watchdog_hit(tool_name: str) -> None:
     """Report (once) that a tool call has exceeded the watchdog budget."""

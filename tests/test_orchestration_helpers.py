@@ -1529,5 +1529,29 @@ class TestModeAwareIterationBudget(unittest.TestCase):
         self.assertIn("if iterations >= _max_iterations:", src)
 
 
+class TestTransportBindOrdering(unittest.TestCase):
+    """The transport bind block must run after the names it references.
+
+    Regression guard for ``NameError: name '_stop_event' is not defined``:
+    ``_transport.bind(_agent_state, _stop_event)`` / ``bind_helpers``
+    reference ``_stop_event`` and the tool-call parsers, which are defined
+    further down the module.  Binding before those definitions raised at
+    import time in Blender (the integration harness used to mask it by
+    seeding the names).
+    """
+
+    def test_bind_runs_after_its_dependencies(self):
+        src = _load_source()
+        bind_at = src.index("_transport.bind(_agent_state, _stop_event)")
+        for name in (
+            "_stop_event = threading.Event()",
+            "def _parse_text_tool_calls(",
+            "def _parse_xml_tool_calls(",
+        ):
+            self.assertGreater(
+                bind_at, src.index(name),
+                "{:s} must be defined before the transport bind".format(name))
+
+
 if __name__ == "__main__":
     unittest.main()

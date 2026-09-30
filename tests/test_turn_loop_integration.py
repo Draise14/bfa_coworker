@@ -197,17 +197,7 @@ def _exec_agent_controller(sm, lm):
         "sys": _sys,
         "threading": threading,
         "textwrap": _tw,
-        # Module-level stop event placeholder: the source defines its own
-        # real one at line ~1340, but ``_transport.bind`` at line 1236 runs
-        # BEFORE that definition, so seed the name to survive the exec.
-        "_stop_event": threading.Event(),
         "types": __import__("types"),
-        # Forward-referenced helpers: _parse_text_tool_calls and
-        # _parse_xml_tool_calls are defined later in the source than the
-        # module-level bind_helpers call; seed the names so the exec
-        # survives (the source's own definitions then shadow these).
-        "_parse_text_tool_calls": lambda content: [],
-        "_parse_xml_tool_calls": lambda text: [],
     }
     # Exec into a REAL module object's __dict__: the test must be able to
     # rebind module globals (_agent_state, _stop_event, _session_turn_count)

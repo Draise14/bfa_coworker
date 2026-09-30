@@ -1552,6 +1552,17 @@ class TestTransportBindOrdering(unittest.TestCase):
                 bind_at, src.index(name),
                 "{:s} must be defined before the transport bind".format(name))
 
+    def test_types_module_is_imported(self):
+        """The bind block uses types.SimpleNamespace; 'import types' must exist.
+
+        The transport split dropped 'import types' while keeping the usage,
+        which raised 'NameError: name types is not defined' at import once the
+        earlier _stop_event crash was fixed.
+        """
+        src = _load_source()
+        self.assertRegex(src, r"(?m)^import types$")
+        self.assertIn("types.SimpleNamespace(", src)
+
 
 if __name__ == "__main__":
     unittest.main()

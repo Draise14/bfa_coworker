@@ -197,7 +197,6 @@ def _exec_agent_controller(sm, lm):
         "sys": _sys,
         "threading": threading,
         "textwrap": _tw,
-        "types": __import__("types"),
     }
     # Exec into a REAL module object's __dict__: the test must be able to
     # rebind module globals (_agent_state, _stop_event, _session_turn_count)

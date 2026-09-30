@@ -26,6 +26,11 @@ stop event.
 """
 
 __all__ = (
+    "_CHAT_SAMPLING",
+    "_DEFAULT_MAX_TOKENS",
+    "_DEFAULT_TEMPERATURE_CODE",
+    "_DEFAULT_TEMPERATURE_PROSE",
+    "_STREAM_TIMEOUT",
     "bind",
     "classify_llm_500",
     "server_fault_message",
@@ -41,7 +46,29 @@ import time
 import typing
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from typing import Any
+
+# ── Sampling parameters (owned here; agent_controller imports them) ─
+# Sampling tuned for MoE local models.
+_CHAT_SAMPLING = {
+    "repeat_penalty": 1.1,
+    "top_p": 0.8,
+    "top_k": 20,
+    "min_p": 0.0,
+}
+
+# Temperature auto-switches based on mode:
+#   Agent mode (code gen) -> 0.2: sharp, deterministic
+#   Ask mode (prose/UI)  -> 0.35: natural writing
+_DEFAULT_TEMPERATURE_CODE = 0.2
+_DEFAULT_TEMPERATURE_PROSE = 0.35
+
+# Default max output tokens per call when the caller does not pin one.
+_DEFAULT_MAX_TOKENS = 1024
+
+# Socket timeout (seconds) for streaming and non-streaming LLM requests.
+_STREAM_TIMEOUT = 600.0
 
 # ── Shared state, injected by agent_controller at import time ──────
 # The transport needs to flag non-fatal notices (mid-stream drops,
@@ -270,6 +297,9 @@ def openai_chat_completions(
 ) -> dict[str, Any] | None:
     """POST to a chat completions endpoint and return the parsed JSON response.
 
+    *tools* may be ``None`` or ``[]`` (both mean "no tool schema"); callers
+    such as the session-memory writer legitimately pass ``None``.
+
     *model* — when provided, included in the request body. Required for
     remote APIs (OpenRouter, OpenAI, etc.). Omitted for local llama-server
     which auto-detects the model.
@@ -299,6 +329,7 @@ def openai_chat_completions(
     if api_key:
         headers["Authorization"] = "Bearer {:s}".format(api_key)
 
+    tools = tools or []
     print("[🛠️Coworker] _openai_chat_completions: POST {:s}".format(url))
     print("[🛠️Coworker] _openai_chat_completions:   model = {:s}".format(model or "(auto-detect)"))
     print("[🛠️Coworker] _openai_chat_completions:   messages = {:d}, tools = {:d}, body = {:d} bytes".format(

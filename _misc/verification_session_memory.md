@@ -3,7 +3,16 @@
 Items that can only be exercised inside Blender/Bforartists with a live
 llama-server. Everything testable outside Blender is already covered by the
 unit suite (`python -m unittest tests.test_context_budget
-tests.test_session_memory tests.test_llm_manager` — 251 tests green).
+tests.test_session_memory tests.test_llm_manager
+tests.test_turn_loop_integration` — 255 tests green). The integration
+harness in `tests/test_turn_loop_integration.py` additionally drives a real
+`run_conversation_turn` against a fake llama-server HTTP endpoint and proves,
+behaviourally and in order: prompt preflight shapes the request, the ~60%
+compaction trigger fires with a real memory-writer LLM call, reasoning
+entries are pruned from stored history once outside the verbatim window, a
+`reason="compaction"` checkpoint is recorded, and the memory block is
+injected into the following request exactly once (no accumulation in the
+stored system prompt).
 
 ## Setup
 

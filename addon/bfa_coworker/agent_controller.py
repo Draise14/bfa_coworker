@@ -50,6 +50,10 @@ from typing import Any
 from . import llm_transport as _transport
 from . import session_memory
 from .llm_transport import (
+    _CHAT_SAMPLING,
+    _DEFAULT_MAX_TOKENS,
+    _DEFAULT_TEMPERATURE_CODE,
+    _DEFAULT_TEMPERATURE_PROSE,
     classify_llm_500,
     openai_chat_completions,
     openai_chat_completions_stream,
@@ -69,18 +73,9 @@ _LLM_CHAT_URL = "http://127.0.0.1:{:d}/v1/chat/completions"
 _MAX_TOOL_ITERATIONS = 8
 
 # Sampling parameters tuned for MoE local models.
-_CHAT_SAMPLING = {
-    "repeat_penalty": 1.1,
-    "top_p": 0.8,
-    "top_k": 20,
-    "min_p": 0.0,
-}
-
-# Temperature auto-switches based on mode:
-#   Agent mode (code gen) -> 0.2: sharp, deterministic
-#   Ask mode (prose/UI)  -> 0.35: natural writing
-_DEFAULT_TEMPERATURE_CODE = 0.2
-_DEFAULT_TEMPERATURE_PROSE = 0.35
+# Defined in llm_transport (the module that sends them) and re-exported
+# here via the import block above; the duplicated local copies were
+# removed after the tier-3 transport split left them drifting apart.
 
 # Appended to the system prompt in Ask mode (issue #66).  Ask mode is
 # informational only: the model must answer in prose and never emit tool
@@ -94,7 +89,6 @@ _ASK_MODE_PROMPT_ADDENDUM = (
     "(or the code they could run) instead of performing it yourself."
 )
 
-_DEFAULT_MAX_TOKENS = 1024
 # (removed: _DEEP_MAX_TOKENS was dead code)
 
 _STREAM_TIMEOUT = 600.0
@@ -4170,6 +4164,17 @@ def _maybe_compact_session(
     st.memory_updated_turn = _session_turn_count
     st.append_archive(retired)
     history[:] = kept
+    # Reasoning entries exist for the chat panel while a turn is young, but
+    # once they fall outside the verbatim window they are dead weight: they
+    # are stripped before every LLM request anyway. Prune them from STORAGE
+    # (not just at send time) so archived sessions and later compactions do
+    # not carry stale chain-of-thought. The most recent window is preserved
+    # verbatim for the panel.
+    _reasoning_boundary = session_memory.find_retire_boundary(history)
+    history[:] = (
+        history[:_reasoning_boundary]
+        + [m for m in history[_reasoning_boundary:] if m.get("role") != "reasoning"]
+    )
     # Automatic checkpoint of the compacted state (D6).
     st.snapshot(history, reason="compaction", turn_index=_session_turn_count)
     print("[🛠️Coworker] _maybe_compact_session: retired {:d} messages, "
@@ -4577,10 +4582,15 @@ def _run_conversation_turn_inner(
         _mem_block = session_memory.store.memory_block
         if _mem_block and history_to_send and history_to_send[0].get("role") == "system":
             _sys0 = history_to_send[0]
-            _sys0["content"] = (
-                str(_sys0.get("content") or "").rstrip()
-                + "\n\n" + _mem_block
-            )
+            _base = str(_sys0.get("content") or "")
+            if _mem_block not in _base:
+                # Copy before mutating: history_to_send[0] is usually the
+                # SAME dict as history[0] (no slice happened), so writing
+                # in place would accumulate the block in the stored history
+                # and double it on every subsequent request.
+                _sys0 = dict(_sys0)
+                _sys0["content"] = _base.rstrip() + "\n\n" + _mem_block
+                history_to_send[0] = _sys0
 
         # ── Pre-flight: last check right before the POST ──────────────
         # Counts history + tool schema together; re-trims or surfaces a

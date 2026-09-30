@@ -709,6 +709,65 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
             "Use: bm.update_edit_mesh(mesh) — no extra args.",
         ))
 
+    # 28. Operator context preconditions (scene safety Phase 2).
+    #     bpy.ops.object.join takes NO arguments and acts on the current
+    #     selection + active object, so it is the most fragile operator:
+    #     if the user re-targeted the scene between tool calls it raises
+    #     "poll() failed, context is incorrect".  Require an explicit
+    #     selection before it.
+    if re.search(r"bpy\.ops\.object\.(join|join_shapes)\s*\(", code):
+        if not re.search(r"select_set\(|select_all\(", code):
+            issues.append((
+                "op_requires_selection",
+                "bpy.ops.object.join() needs >= 2 selected objects AND one "
+                "active object, but no selection call precedes it. Select "
+                "explicitly first: for o in objs: o.select_set(True); then "
+                "bpy.context.view_layer.objects.active = objs[0].",
+            ))
+
+    # 29. Operators that act on the active object need it set first.
+    _NEED_ACTIVE = ("modifier_apply", "modifier_remove", "shade_smooth",
+                    "shade_flat", "convert", "origin_set", "make_single_user")
+    for _op in _NEED_ACTIVE:
+        if "bpy.ops.object." + _op + "(" in code:
+            if ("view_layer.objects.active" not in code
+                    and "bpy.data.objects.get(" not in code):
+                issues.append((
+                    "op_requires_active_object",
+                    "bpy.ops.object.{:s}() acts on the active object, but no "
+                    "active object is set in this script. Set it first: "
+                    "bpy.context.view_layer.objects.active = obj "
+                    "(and obj.select_set(True)).".format(_op),
+                ))
+                break  # One hint per block.
+
+    # 30. Unguarded literal index into a Blender collection (scene safety
+    #     Phase 3).  selected_objects / bpy.data.<coll> may be empty, and the
+    #     selection can change between tool calls, so `selected_objects[0]`
+    #     raises IndexError.  Anchored on known collection roots only, and
+    #     suppressed when the block already guards with len()/get()/iter()/if.
+    _COLL_INDEX_ROOTS = (
+        r"bpy\.context\.selected_objects",
+        r"\bselected_objects",
+        r"bpy\.data\.objects",
+        r"bpy\.data\.materials",
+        r"bpy\.data\.meshes",
+        r"bpy\.data\.collections",
+        r"\bscene\.objects",
+        r"\bview_layer\.objects",
+    )
+    for _root in _COLL_INDEX_ROOTS:
+        if re.search(_root + r"\[\s*\d+\s*\]", code):
+            if not re.search(r"len\(|next\(iter\(|\.get\(|\bif\b", code):
+                issues.append((
+                    "unguarded_list_index",
+                    "Indexing a Blender collection with a literal index can "
+                    "raise IndexError when it is empty, and the selection may "
+                    "have changed since your last call. Guard with len() or "
+                    "next(iter(...), None), and re-fetch references by name.",
+                ))
+                break  # One hint per block.
+
     return issues
 
 def _execute_code(

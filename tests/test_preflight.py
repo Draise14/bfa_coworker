@@ -723,5 +723,63 @@ n.base_color = (1, 0, 0)
         self.assertIn("missing_bpy", names)
 
 
+class TestOperatorContextPreflight(unittest.TestCase):
+    """Scene-safety Phase 2: operator context preconditions."""
+
+    def _names(self, code):
+        return [name for name, _ in _preflight_check(code)]
+
+    def test_join_without_selection_flagged(self):
+        code = "import bpy\nbpy.ops.object.join()\n"
+        self.assertIn("op_requires_selection", self._names(code))
+
+    def test_join_with_explicit_selection_passes(self):
+        code = (
+            "import bpy\n"
+            "objs = [bpy.data.objects.get('A'), bpy.data.objects.get('B')]\n"
+            "for o in objs:\n    o.select_set(True)\n"
+            "bpy.context.view_layer.objects.active = objs[0]\n"
+            "bpy.ops.object.join()\n"
+        )
+        self.assertNotIn("op_requires_selection", self._names(code))
+
+    def test_modifier_apply_without_active_flagged(self):
+        code = "import bpy\nbpy.ops.object.modifier_apply(modifier='S')\n"
+        self.assertIn("op_requires_active_object", self._names(code))
+
+    def test_modifier_apply_with_active_passes(self):
+        code = (
+            "import bpy\n"
+            "obj = bpy.data.objects.get('Cube')\n"
+            "bpy.context.view_layer.objects.active = obj\n"
+            "bpy.ops.object.modifier_apply(modifier='S')\n"
+        )
+        self.assertNotIn("op_requires_active_object", self._names(code))
+
+
+class TestUnguardedIndexPreflight(unittest.TestCase):
+    """Scene-safety Phase 3: unguarded literal indexing of collections."""
+
+    def _names(self, code):
+        return [name for name, _ in _preflight_check(code)]
+
+    def test_selected_objects_index_flagged(self):
+        code = "import bpy\nobj = bpy.context.selected_objects[0]\nprint(obj)\n"
+        self.assertIn("unguarded_list_index", self._names(code))
+
+    def test_guarded_index_passes(self):
+        code = (
+            "import bpy\n"
+            "objs = bpy.context.selected_objects\n"
+            "if len(objs):\n    print(objs[0])\n"
+        )
+        self.assertNotIn("unguarded_list_index", self._names(code))
+
+    def test_non_collection_index_not_flagged(self):
+        # A plain Python list index must not trip the collection-root check.
+        code = "import bpy\nverts = [1, 2, 3]\nprint(verts[0])\n"
+        self.assertNotIn("unguarded_list_index", self._names(code))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -38,6 +38,7 @@ __all__ = ()
 import importlib.util
 import json
 import os
+import sys
 import threading
 import types
 import unittest
@@ -73,6 +74,38 @@ def _load_llm_manager():
 
 
 _SM = _load_session_memory()
+
+
+def _mk_fake_bpy():
+    """Minimal bpy stand-in for the exec'd module.
+
+    The agent_controller source does ``import bpy`` inside its functions;
+    when a pip-installed fake-bpy-module is present that import would
+    resolve to it (which lacks ``app.timers``), so the fake is pinned into
+    ``sys.modules['bpy']`` for the duration of each turn.  Only
+    ``bpy.app.timers.register`` is touched outside guarded try/excepts:
+    ``_save_code_to_text_editor_deferred`` uses it to defer text-editor
+    writes to Blender's main thread. Here the timer callback is recorded
+    and never run (there is no main-thread loop) — the callback body is
+    fully guarded anyway.
+    """
+    registered = []
+
+    def _register(cb, first_interval=0.0):  # noqa: ANN001
+        registered.append(cb)
+
+    mod = types.ModuleType("bpy")
+    mod.app = types.SimpleNamespace(
+        timers=types.SimpleNamespace(
+            register=_register,
+            unregister=lambda cb: None,
+        ),
+        version=(4, 5, 0),
+    )
+    return mod, registered
+
+
+_FAKE_BPY, _FAKE_BPY_TIMERS = _mk_fake_bpy()
 _LM = _load_llm_manager()
 
 
@@ -139,7 +172,10 @@ def _exec_agent_controller(sm, lm):
         "__name__": "bfa_coworker.agent_controller_live",
         "__package__": "bfa_coworker",
         "__file__": _AC_PATH,
-        "bpy": None,  # guarded imports fall back; never None-dereferenced
+        # Minimal bpy stand-in: guarded imports fall back gracefully, and
+        # _save_code_to_text_editor_deferred's bpy.app.timers.register call
+        # (unguarded) lands on a recording no-op.
+        "bpy": _FAKE_BPY,
         "json": json,
         "os": os,
         "re": _re,
@@ -206,31 +242,69 @@ class _FakeLLMHandler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError):
             body = {}
         server = self.server
+
+        # ── JSON-RPC bridge stub (MCP tools/list + tools/call) ─────────
+        # The bridge client's Accept header matches the LLM stream path, so
+        # the JSON-RPC envelope is the reliable discriminator. FastMCP
+        # stateless mode wraps the JSON-RPC response in SSE.
+        if body.get("jsonrpc") == "2.0":
+            with server.lock:
+                server.mcp_requests.append(body)
+            if body.get("method") == "tools/list":
+                result = {"tools": server.mcp_tools}
+            else:
+                result = {"content": [{
+                    "type": "text",
+                    "text": json.dumps(
+                        {"status": "ok", "message": "executed"}),
+                }]}
+            payload = (
+                b"event: message\ndata: "
+                + json.dumps({"jsonrpc": "2.0", "id": body.get("id"),
+                              "result": result}).encode()
+                + b"\n\n"
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+
+        # ── OpenAI-compatible chat completions ─────────────────────────
         is_stream = "text/event-stream" in (self.headers.get("Accept") or "")
+        messages = body.get("messages") or []
+        is_writer_prompt = bool(messages) and "session-memory note" in str(
+            (messages or [{}])[0].get("content") or "") and "Previous note:" in str(
+            (messages or [{}, {}])[-1].get("content") or "")
         with server.lock:
             server.requests.append(body)
-            idx = len(server.requests) - 1
-            messages = body.get("messages") or []
-            is_writer_prompt = bool(messages) and "session-memory note" in str(
-                (messages or [{}])[0].get("content") or "") and "Previous note:" in str(
-                (messages or [{}, {}])[-1].get("content") or "")
             if is_writer_prompt:
                 # Memory-writer calls: non-streaming, no tools, small
                 # max_tokens, and the distinctive session-memory system
-                # prompt from session_memory.memory_writer_prompt.
+                # prompt from session_memory.memory_writer_prompt. They are
+                # recorded but must NOT consume scripted chat indices.
                 server.memory_writer_calls.append(body)
-        script = server.scripted_responses
-        with server.lock:
-            if idx < len(script):
-                content = script[idx]
             else:
-                content = script[-1] if script else "ok"
+                server.chat_count += 1
+                idx = server.chat_count - 1
+        if is_writer_prompt:
+            response_msg = {"content": "note"}
+        else:
+            script = server.scripted_responses
+            with server.lock:
+                if idx < len(script):
+                    response_msg = script[idx]
+                else:
+                    response_msg = script[-1] if script else {"content": "ok"}
+        if isinstance(response_msg, str):
+            response_msg = {"content": response_msg}
         if is_stream:
-            # SSE response: one full-content delta chunk, then [DONE].
+            # SSE response: one full delta chunk, then [DONE].
             chunk = {
                 "choices": [{
-                    "delta": {"role": "assistant", "content": content},
-                    "finish_reason": "stop",
+                    "delta": dict(response_msg),
+                    "finish_reason": response_msg.get("finish_reason", "stop"),
                 }],
             }
             payload = (
@@ -243,10 +317,12 @@ class _FakeLLMHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
             return
+        message = {"role": "assistant"}
+        message.update(response_msg)
         payload = json.dumps({
             "choices": [{
-                "message": {"role": "assistant", "content": content},
-                "finish_reason": "stop",
+                "message": message,
+                "finish_reason": response_msg.get("finish_reason", "stop"),
             }],
             "usage": {"prompt_tokens": 10, "completion_tokens": 5,
                       "total_tokens": 15},
@@ -258,11 +334,14 @@ class _FakeLLMHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
-def _start_fake_server(script):
+def _start_fake_server(script, mcp_tools=None):
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeLLMHandler)
     server.scripted_responses = list(script)
     server.requests = []
+    server.chat_count = 0
     server.memory_writer_calls = []
+    server.mcp_requests = []
+    server.mcp_tools = list(mcp_tools or [])
     server.lock = threading.Lock()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -337,6 +416,22 @@ class _TurnLoopTestBase(unittest.TestCase):
 
     # -- helpers -----------------------------------------------------------
 
+    def _pin_fake_bpy(self):
+        """Pin the fake bpy into sys.modules for the duration of a turn.
+
+        agent_controller does function-local ``import bpy``; the pin makes
+        those resolve to the recording stand-in regardless of whether a
+        pip-installed fake-bpy-module is importable in this environment.
+        """
+        self._saved_bpy = sys.modules.get("bpy")
+        sys.modules["bpy"] = _FAKE_BPY
+
+    def _unpin_fake_bpy(self):
+        if self._saved_bpy is not None:
+            sys.modules["bpy"] = self._saved_bpy
+        else:
+            sys.modules.pop("bpy", None)
+
     def _seed_history(self, turns=30, with_reasoning=True):
         """Seed a history large enough to trip the ~60% compaction trigger.
 
@@ -358,15 +453,19 @@ class _TurnLoopTestBase(unittest.TestCase):
     def _run_turn(self, message="hello", chat_mode="ASK"):
         statuses = []
         texts = []
-        history = self.ac.run_conversation_turn(
-            message,
-            on_text=texts.append,
-            on_status=statuses.append,
-            chat_mode=chat_mode,
-            llm_url=None,  # resolve via (monkeypatched) llm_manager config
-            model="fake-model",
-            mcp_port=0,
-        )
+        self._pin_fake_bpy()
+        try:
+            history = self.ac.run_conversation_turn(
+                message,
+                on_text=texts.append,
+                on_status=statuses.append,
+                chat_mode=chat_mode,
+                llm_url=None,  # resolve via (monkeypatched) llm_manager config
+                model="fake-model",
+                mcp_port=0,
+            )
+        finally:
+            self._unpin_fake_bpy()
         return history, texts, statuses
 
 
@@ -519,6 +618,276 @@ class TestTurnLoopIntegration(_TurnLoopTestBase):
         result = self.ac.run_conversation_turn("should not run")
         self.assertEqual(result, before)
         self.assertEqual(len(self.server.requests), 0)
+
+
+# MCP tools/list format for the tool the fake LLM calls in AGENT-mode
+# tests (the real ``_mcp_tools_to_openai`` converts this to OpenAI format).
+_EXECUTE_CODE_TOOL = {
+    "name": "execute_blender_code",
+    "description": "Execute Python code in Blender",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "code": {"type": "string", "description": "code to run"},
+        },
+        "required": ["code"],
+    },
+}
+
+
+def _tool_call_msg(call_id, code):
+    """Scripted assistant message that issues one execute_blender_code call."""
+    # Non-empty content: the turn loop appends a filler user message after
+    # an iteration whose assistant content is blank, which would pollute
+    # the expected role sequence.
+    return {
+        "content": "Working on it.",
+        "tool_calls": [{
+            "id": call_id,
+            "type": "function",
+            "function": {
+                "name": "execute_blender_code",
+                "arguments": json.dumps({"code": code}),
+            },
+        }],
+        "finish_reason": "tool_calls",
+    }
+
+
+class TestToolLoopIntegration(_TurnLoopTestBase):
+    """AGENT-mode turn loop with real tool-call iterations.
+
+    The fake server doubles as the MCP JSON-RPC bridge (tools/list +
+    tools/call on the same port), so the REAL ``_call_mcp_tool_sync`` HTTP
+    path executes every tool call. Scripted results are status-ok so no
+    smart-undo / spiral / cleanup side effects fire; the real
+    ``_undo_code`` push/undo calls issued by the loop itself are answered
+    by the same stub.
+    """
+
+    def _mk_server(self, script):
+        self.server.shutdown()
+        self.server.server_close()
+        self.server = _start_fake_server(
+            script, mcp_tools=[_EXECUTE_CODE_TOOL])
+        self.port = self.server.server_address[1]
+        cfg = self.lm.LLMConfig()
+        cfg.mode = "local"
+        cfg.local_port = self.port
+        cfg.local_ctx_size = 8192
+        cfg.local_max_tokens = 1024
+        cfg.thinking_budget_tokens = 0
+        self.lm.set_config(cfg)
+
+    def _mcp_calls(self, name=None):
+        with self.server.lock:
+            calls = list(self.server.mcp_requests)
+        if name is not None:
+            calls = [c for c in calls if c.get("method") == name]
+        return calls
+
+    def _main_requests(self):
+        with self.server.lock:
+            return [r for r in self.server.requests
+                    if r not in self.server.memory_writer_calls]
+
+    def test_multi_iteration_tool_loop_end_to_end(self):
+        """Two tool iterations, then a final prose reply.
+
+        Proves in order: tools/list runs first; every LLM request offers
+        the tool schema and passes preflight; the assistant tool_calls and
+        tool results pair up in stored history in call order; the memory
+        block is injected exactly once per request and never accumulates
+        in the stored system prompt; and reasoning entries stay out of the
+        sent request.
+        """
+        self._mk_server([
+            _tool_call_msg("call_1", "print('step one')"),
+            _tool_call_msg("call_2", "print('step two')"),
+            {"content": "all done"},
+        ])
+        self.state.conversation_history = [
+            {"role": "system", "content": "You are a helpful agent."}]
+        texts = []
+        self._pin_fake_bpy()
+        try:
+            history = self.ac.run_conversation_turn(
+                "do the thing", on_text=texts.append, chat_mode="AGENT",
+                llm_url=None, model="fake-model", mcp_port=self.port)
+        finally:
+            self._unpin_fake_bpy()
+
+        # The turn completed with the final scripted reply.
+        self.assertEqual(self.state.error, "")
+        self.assertIn("all done", texts)
+
+        # tools/list ran first and advertised the tool.
+        listed = self._mcp_calls("tools/list")
+        self.assertGreaterEqual(len(listed), 1)
+
+        # Exactly three LLM requests: two tool iterations + final reply.
+        main = self._main_requests()
+        self.assertEqual(len(main), 3)
+        # Every request offers the tool schema and fits the budget.
+        for req in main:
+            self.assertIn("tools", req)
+            self.assertEqual(req["tools"][0]["function"]["name"],
+                             "execute_blender_code")
+            total_chars = sum(len(str(m.get("content") or ""))
+                              for m in req["messages"])
+            self.assertLess(total_chars, 8192 * 3.5)
+
+        # Stored history: system, user, assistant(tool_calls_1), tool_1,
+        # assistant(tool_calls_2), tool_2, assistant(final) — pairs intact,
+        # in call order, with matching tool_call_ids.
+        roles = [m.get("role") for m in history]
+        self.assertEqual(roles, [
+            "system", "user", "assistant", "tool", "assistant", "tool",
+            "assistant"])
+        self.assertEqual(history[3]["tool_call_id"], "call_1")
+        self.assertEqual(history[5]["tool_call_id"], "call_2")
+        self.assertIn("executed", history[3]["content"])
+        self.assertEqual(history[6]["content"], "all done")
+
+        # Memory block (never built here — no compaction) is absent from
+        # the stored system prompt.
+        self.assertEqual(self.sm.store.memory_block, "")
+        self.assertNotIn("Session memory", history[0]["content"])
+
+    def test_memory_block_injected_once_per_tool_request(self):
+        """Compaction on turn 1, then a tool turn: block present exactly
+        once per request, and never accumulates in the stored prompt."""
+        # Turn 1 (ASK): seed large history → compaction builds a block.
+        self._seed_history(turns=30)
+        self._run_turn("first question")
+        mem_block = self.sm.store.memory_block
+        self.assertTrue(mem_block)
+        stored_sys = self.state.conversation_history[0]["content"]
+        self.assertNotIn(mem_block, stored_sys)
+
+        # Turn 2 (AGENT): small history + a one-iteration tool call.
+        self.state.conversation_history = [
+            {"role": "system", "content": "You are a helpful agent."}]
+        self._mk_server([
+            _tool_call_msg("call_a", "print('step')"),
+            {"content": "done with tools"},
+        ])
+        self._pin_fake_bpy()
+        try:
+            history = self.ac.run_conversation_turn(
+                "now with tools", on_text=lambda s: None, chat_mode="AGENT",
+                llm_url=None, model="fake-model", mcp_port=self.port)
+        finally:
+            self._unpin_fake_bpy()
+
+        self.assertEqual(self.state.error, "")
+        main = self._main_requests()
+        # Both requests (tool iteration + final reply) carry the block...
+        self.assertGreaterEqual(len(main), 2)
+        for req in main:
+            self.assertEqual(
+                req["messages"][0]["content"].count(mem_block), 1,
+                "memory block must appear exactly once per request")
+        # ...and the STORED system prompt stays block-free.
+        self.assertNotIn(
+            mem_block, self.state.conversation_history[0]["content"])
+        # Tool-call pair survived intact.
+        roles = [m.get("role") for m in history]
+        self.assertEqual(roles, [
+            "system", "user", "assistant", "tool", "assistant"])
+
+    def test_compaction_mid_tool_loop_keeps_pairs_intact(self):
+        """A seeded history large enough to re-trigger compaction on the
+        SECOND loop iteration must not corrupt the in-flight tool sequence:
+        after the mid-loop compaction, the request still contains a
+        well-formed assistant(tool_calls) + tool result pair for the
+        in-flight call, and the turn completes normally."""
+        self._mk_server([
+            _tool_call_msg("call_1", "print('one')"),
+            _tool_call_msg("call_2", "print('two')"),
+            {"content": "loop finished"},
+        ])
+        # Build a history whose recent verbatim window (~20 messages of
+        # 1400 chars ≈ 7.4k tokens) alone exceeds 60% of the safe budget —
+        # so compaction fires AGAIN on iteration 2 even after turn 1's
+        # compaction retired everything older.
+        history = [{"role": "system", "content": "You are a helpful agent."}]
+        for i in range(30):
+            history.append({"role": "user",
+                            "content": "old {:d} ".format(i) + "x" * 1400})
+            history.append({"role": "assistant",
+                            "content": "old reply {:d} ".format(i) + "y" * 1400})
+        history.append({"role": "user", "content": "run the loop"})
+        self.state.conversation_history = history
+
+        texts = []
+        self._pin_fake_bpy()
+        try:
+            result = self.ac.run_conversation_turn(
+                "run the loop", on_text=texts.append, chat_mode="AGENT",
+                llm_url=None, model="fake-model", mcp_port=self.port)
+        finally:
+            self._unpin_fake_bpy()
+        self.assertEqual(self.state.error, "")
+        self.assertIn("loop finished", texts)
+
+        # Compaction fired (memory block exists) and reasoning entries
+        # outside the window are gone from storage.
+        self.assertTrue(self.sm.store.memory_block)
+        stored_roles = [m.get("role") for m in result]
+        self.assertNotIn("reasoning", stored_roles)
+
+        # Every stored tool result still has its assistant(tool_calls)
+        # parent immediately before it — pairs intact after compaction.
+        for i, m in enumerate(result):
+            if m.get("role") == "tool":
+                parent = result[i - 1]
+                self.assertEqual(parent.get("role"), "assistant")
+                self.assertTrue(parent.get("tool_calls"),
+                                "orphaned tool result after mid-loop compaction")
+                self.assertEqual(parent["tool_calls"][0]["id"],
+                                 m["tool_call_id"])
+
+        # The final request was within budget.
+        main = self._main_requests()
+        self.assertEqual(len(main), 3)
+        last = main[-1]
+        total_chars = sum(len(str(m.get("content") or ""))
+                          for m in last["messages"])
+        self.assertLess(total_chars, 8192 * 3.5)
+
+    def test_conversation_no_longer_fits_error_fires_last(self):
+        """When the CURRENT user request alone cannot fit the budget, the
+        friendly 'conversation no longer fits' error fires — and nothing
+        is sent to the LLM for that request.
+
+        Compaction fires first (seeded history >> trigger) and retires the
+        old turns into the memory block, but the live request is pinned
+        verbatim by both compaction and _fit_history_to_budget: when that
+        single turn alone exceeds the budget (the user pasted a huge
+        prompt), preflight must give up with the friendly error instead of
+        sending a doomed request."""
+        self._mk_server([{"content": "should never be reached"}])
+        history = [{"role": "system", "content": "You are a helpful agent."}]
+        for i in range(25):
+            history.append({"role": "user",
+                            "content": "old {:d} ".format(i) + "x" * 3000})
+            history.append({"role": "assistant",
+                            "content": "old reply {:d} ".format(i) + "y" * 3000})
+        self.state.conversation_history = history
+        self._pin_fake_bpy()
+        try:
+            history = self.ac.run_conversation_turn(
+                "z" * 60000, chat_mode="AGENT", llm_url=None,
+                model="fake-model", mcp_port=self.port)
+        finally:
+            self._unpin_fake_bpy()
+        self.assertIn("no longer fits the local context window",
+                      self.state.error)
+        self.assertIn("Compact Now", self.state.error)
+        # No LLM request went out.
+        self.assertEqual(len(self._main_requests()), 0)
+        self.assertIs(history, self.state.conversation_history)
 
 
 if __name__ == "__main__":

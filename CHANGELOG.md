@@ -15,13 +15,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Medium Priority
 - [ ] **Add history chat to a text file with a button to open it in a floating window** - so we can copy and paste the results and save the log from the chat
 - [x] **SKILL.md Update** — Rewrite `.github/skills/self-contained-blender-mcp/SKILL.md` to reflect current project goals and branding.
-- [ ] **DOCUMENTATION.md** — Create user-facing documentation covering installation, quick start, model management, remote API setup, and troubleshooting.
+- [x] **DOCUMENTATION.md** — Create user-facing documentation covering installation, quick start, model management, remote API setup, and troubleshooting.
 - [ ] **GGUF Header Parsing** — Read GGUF file headers to detect parameter count and quantization for non-preset models, enabling auto-populated RAM/disk estimates.
 
 #### Low Priority
 - [ ] **System RAM Detection** — Use platform-specific API to detect available RAM and filter/hide presets that exceed system capacity.
 - [ ] **Add Model Generator** locally, Ultrashape, Hunyuan, similar to here: https://github.com/ahujasid/blender-mcp
 - [x] **Add CC0 resource downloader** from Polyhaven, AmbientC00, Sketchfab, etc — Polyhaven tools implemented in v1.1.37.
+
+## [Unreleased]
+
+### Fixed
+
+- **Graceful HTTP 400/500 handling on the local LLM path** — A request that exceeded llama-server's context window was reported to the user as a bare `LLM request failed: HTTP Error 400: Bad Request` (the error body was read once, never cached, then re-read from an already-exhausted stream), retried five times identically, and eventually surfaced with no actionable cause. The transport now reads and caches the error body a single time so the real server reason always survives, recognises llama-server's context-window 400 (`exceed_context_size_error`) and flags it as `context_overflow`, fails fast on non-template 400s instead of retrying an identical payload, and reports the true cause. The turn loop then **auto-compacts the conversation and retries once**, and only shows a friendly "conversation no longer fits the local context window" message if the reduced window still cannot fit.
+- **Every request path is now budgeted** — the viewport **screenshot** is counted against the budget (it was previously appended *after* the preflight and was therefore unbudgeted — a direct route to a 400), screenshots are costed at a fixed vision-token count rather than their base64 length, the **auto-continue** (`finish_reason=length`) and **forced-summary** requests are trimmed and preflighted like the main request, and budget enforcement stays on with a conservative fallback context when `/props` is unavailable instead of silently disabling trimming.
+- **Non-fatal memory-writer failures no longer poison the turn** — a transient failure of the session-memory writer LLM call is handled by the heuristic fallback but no longer leaves its error in the agent state; a request that succeeds after an overflow recovery also clears the stale error.
+- **Qwen preset launch flags are actually applied** — `start_local_llama` called `_current_preset_extra_args()`, a function that did not exist, so the Qwen presets' `--no-context-shift` was never applied and launch could raise `NameError`. The helper is implemented (matches config repo + filename against `PRESET_MODELS`, returns `()` for custom models, never raises).
+
+### Added
+
+- **Soft co-work scene lock (scene safety Phase 1)** — while a turn runs, the objects and collections the coworker created or touched are temporarily made un-selectable in the UI (`hide_select`) so the user cannot re-target them mid-turn; programmatic access is unaffected and everything is restored when the turn ends (FINISH, error, Stop, or exception). New `co_work_guard.py` (bpy-free, unit-tested), a **Lock Scene While Working** preference (default on), and a `lock_scene_while_working` config field.
+- **Scene preflight checks (Phases 2–3)** — the code validator now flags `bpy.ops.object.join`/`join_shapes` without a preceding selection, active-object operators (`modifier_apply`/`modifier_remove`/`shade_smooth`/`shade_flat`/`convert`/`origin_set`/`make_single_user`) with no active object set, and literal indexing into Blender collection roots (`selected_objects`, `bpy.data.*`, `scene.objects`, `view_layer.objects`) when unguarded — each with an actionable fix, anchored to known roots to avoid false positives.
+- **Operator-aware error hints & collapsing (Phase 4)** — `poll() failed, context is incorrect` is collapsed to an **operator-specific** one-line fix (join / modifier_apply / mode_set / …) with a generic `temp_override` fallback; `IndexError: list index out of range` is collapsed to a guard-your-collection hint; both are wired into tool-result storage, the spiral corrective message, and the runtime traceback HINT block.
+- **Prompt guidance** — the compact and full system prompts and `skills/best_practices.md` now state that *the selection is not yours* (the user edits the same scene, so re-fetch by name and set selection/active object explicitly in the same script) and describe the temporary co-work lock.
+- **Benchmark harness** — the fake turn-loop server supports scriptable per-request HTTP error injection, and new `TestBenchmarkErrorSurvival` tests prove a multi-turn run survives injected 400/500 errors (context-overflow recovery and streaming fallback). A repeatable `make benchmark` target runs the offline suite `BENCH_RUNS` times; `tests/test_llm_transport_errors.py` covers the transport error paths directly.
+- Mode-aware tool-iteration budget (12 local / 8 remote) instead of a single hard cap.
 
 ## [Unreleased - v1.1.37]
 

@@ -112,6 +112,23 @@ initial_instructions: |
   active state as a side effect, so re-set both between sequential operator calls on
   different objects.
 
+  ⚠️ **CRITICAL — the selection is not yours:** The user works in the same scene while you
+  run, so the selection / active object / mode can change between your tool calls. Never
+  rely on the current selection. Re-fetch objects by name (`bpy.data.objects.get(...)`) and
+  set the selection + active object explicitly in the SAME script right before any operator
+  that needs them, e.g.:
+  ```python
+  objs = [bpy.data.objects.get("Cube"), bpy.data.objects.get("Sphere")]
+  objs = [o for o in objs if o]
+  for o in objs:
+      o.select_set(True)
+  bpy.context.view_layer.objects.active = objs[0]
+  bpy.ops.object.join()
+  ```
+  While you work, the objects you create or touch are temporarily un-selectable in the UI so
+  the user cannot re-target them mid-turn. Programmatic access is unaffected, and they are
+  released automatically when your turn ends.
+
   Update the dependency graph after changes before reading computed properties
   (world matrices, modifier results, etc.).
 

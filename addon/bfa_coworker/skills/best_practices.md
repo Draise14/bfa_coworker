@@ -59,6 +59,25 @@ obj = bpy.context.view_layer.objects.active  # Capture now, not later
 - The **active object** and **selection** are distinct. Many operators require both.
 - Set mode and selection explicitly before each operator call.
 - Operators change selection/active state as side effects — re-set between sequential calls.
+- **The selection is not yours.** The user edits the same scene while you run, so the
+  selection / active object / mode can change between your tool calls. Never rely on the
+  current selection: re-fetch by name (`bpy.data.objects.get(...)`) and set the selection
+  and active object explicitly in the **same** script right before the operator that needs
+  them. `bpy.ops.object.join` is the most fragile case — it takes no arguments and acts on
+  the current selection/active object.
+
+  ```python
+  objs = [o for o in (bpy.data.objects.get("Cube"),
+                      bpy.data.objects.get("Sphere")) if o]
+  for o in objs:
+      o.select_set(True)
+  bpy.context.view_layer.objects.active = objs[0]
+  bpy.ops.object.join()
+  ```
+
+- While you work, the objects/collections you create or touch are temporarily made
+  un-selectable in the UI so the user cannot re-target them mid-turn. Programmatic access is
+  unaffected, and they are released automatically when your turn ends.
 
 ## Dependency Graph
 

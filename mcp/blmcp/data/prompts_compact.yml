@@ -20,6 +20,10 @@ initial_instructions: |
   # Code execution gotchas
   - NO ring_segments keyword on UV sphere — use segments= and ring_count=.
   - Never reuse object references from earlier calls — auto-undo deletes them. Re-fetch with bpy.data.objects.get().
+  - YOUR SELECTION IS NOT YOURS. The user may change the selection / active object / mode between
+    your calls. Never assume bpy.context.selected_objects or .active_object still holds. Re-fetch
+    objects by name (bpy.data.objects.get) and set the selection explicitly in the SAME script right
+    before any operator that needs it (o.select_set(True); bpy.context.view_layer.objects.active = o).
   - Edit-mode selections live on bmesh, not bpy.context. Use bmesh.from_edit_mesh().
   - Geometry Nodes 5.2+: never use "Socket_3" in modifier — use getattr(modifier.properties.inputs, "Socket_3").
   - Prefer operators for standard actions; data API for batch/procedural work.
@@ -42,3 +46,6 @@ initial_instructions: |
   # Stability
   - Do NOT call bpy.ops.object.auto_sync_object_data_name() — it crashes.
   - Avoid mode switches mid-script. Mode-dependent operators fail silently in wrong mode.
+  - Co-working: while you work, the objects and collections you create or touch are temporarily
+    un-selectable in the UI so the user cannot re-target them mid-turn. Programmatic access is
+    unaffected, and they are released automatically when your turn ends.

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Blender Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """
 Tests for the co-work scene lock (scene safety Phase 1).
 

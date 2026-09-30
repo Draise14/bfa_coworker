@@ -2952,11 +2952,22 @@ def start_local_llama(
             port = _config.local_port
         print("[🛠️Coworker] start_local_llama: using configured port {:d}".format(port))
     # Auto-select a free port if the configured one is busy.
+    _configured_port = port
     try:
         port = _find_free_port(port)
     except RuntimeError as ex:
         _set_error(str(ex))
         return None
+    if port != _configured_port:
+        print("[🛠️Coworker] start_local_llama: port {:d} is busy (another "
+              "llama-server or process?) — launching on {:d} instead".format(
+                  _configured_port, port))
+    # Keep the config in sync with the port the server actually binds.  Without
+    # this, health checks and chat requests kept targeting the configured port
+    # (which something else was holding) while the server ran on the free one —
+    # the readiness probe then misreported startup.
+    with _lock:
+        _config.local_port = port
 
     with _lock:
         ctx_size = _config.local_ctx_size or 16384
@@ -3276,9 +3287,21 @@ def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = No
             print("[🛠️Coworker] wait_until_ready: server is ready")
             return True
         if proc is not None and proc.poll() is not None:
+            # The process we launched is gone.  That is NOT necessarily a
+            # startup failure: a server may already be answering on the port
+            # (another instance was launched, or this process was replaced/
+            # stopped).  Only report a failure when nothing is serving.
+            if health_check():
+                print("[🛠️Coworker] wait_until_ready: launched process exited but a "
+                      "server is answering on the port — treating as ready")
+                return True
+            with _lock:
+                _port = _config.local_port
             tail = get_llama_server_log_tail()
-            msg = "llama-server exited during startup (exit code {:d}{:s}) — check the model file, mmproj, GPU memory, and port".format(
-                proc.returncode, _describe_exit_code(proc.returncode))
+            msg = ("llama-server exited during startup (exit code {:d}{:s}) on port "
+                   "{:d} — check the model file, mmproj, GPU memory, and whether "
+                   "another process is using the port").format(
+                       proc.returncode, _describe_exit_code(proc.returncode), _port)
             # DLL_NOT_FOUND on Windows — the CUDA/Vulkan runtime DLLs are
             # missing from the bundled directory.
             if sys.platform == "win32" and (proc.returncode & 0xFFFFFFFF) == 0xC0000135:

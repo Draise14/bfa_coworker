@@ -44,6 +44,8 @@ __all__ = (
     "detect_vram_gb",
     "recommend_context_size",
     "hardware_context_hint",
+    "get_runtime_ctx",
+    "validate_ctx_against_hardware",
     "resolve_gpu_backend",
     "ctx_preset_label",
     "ctx_preset_sizes",
@@ -107,6 +109,13 @@ _LLAMA_SERVER_VERSION = "b10154"
 # Minimum build number required for Qwen3 hybrid (SSM/Mamba) architecture.
 # Builds before this lack blk.*.ssm_conv1d.weight support.
 _MIN_SUPPORTED_BUILD = 9500
+
+# Minimum build for the optional launch flags assembled in
+# start_local_llama (--cache-reuse).  Flags guarded by this threshold are
+# silently dropped on older/custom builds instead of crashing startup with
+# "error: invalid argument".
+_MIN_BUILD_CACHE_REUSE = 4000
+
 
 def _parse_llama_build_number(version_line: str) -> int:
     """Extract the numeric build number from a llama-server --version line.
@@ -178,6 +187,57 @@ def get_llama_server_log_tail(n_lines: int = 40, max_chars: int = 4000) -> str:
         if newline != -1:
             tail = tail[newline + 1:]
     return tail
+
+
+# Build thresholds for optional llama-server flags (see _filter_flags_for_build).
+_FLAG_BUILD_MINIMUMS: dict[str, int] = {
+    "--cache-reuse": _MIN_BUILD_CACHE_REUSE,
+}
+
+
+def _filter_flags_for_build(flags: tuple[str, ...]) -> tuple[str, ...]:
+    """Return *flags* filtered to those supported by the pinned server build.
+
+    Values that belong to a flag (e.g. ``'256'`` after ``--cache-reuse``)
+    are kept with their flag.  Flags without a known build minimum always
+    pass through; when the binary's actual build number cannot be parsed
+    the pinned :data:`_LLAMA_SERVER_VERSION` is used as a safe fallback.
+    """
+    pinned = _parse_llama_build_number(
+        "version: " + _LLAMA_SERVER_VERSION.lstrip("b"))
+    try:
+        exe = find_llama_server()
+    except Exception:  # pylint: disable=broad-exception-caught
+        exe = None
+    build = 0
+    if exe:
+        try:
+            build = _parse_llama_build_number(_llama_server_version(exe))
+        except Exception:  # pylint: disable=broad-exception-caught
+            build = 0
+    if not build:
+        build = pinned
+    if not build:
+        return flags  # Cannot determine build at all — pass through.
+    out: list[str] = []
+    drop_value = False
+    for tok in flags:
+        if drop_value:
+            # The previous (dropped) flag took a value — drop it too,
+            # unless the next token is itself a flag.
+            drop_value = False
+            if tok.startswith("--"):
+                out.append(tok)  # fall through to flag handling
+            else:
+                continue
+        minimum = _FLAG_BUILD_MINIMUMS.get(tok)
+        if minimum is not None and build < minimum:
+            print("[Coworker] _filter_flags_for_build: dropping {:s} "
+                  "(needs build >={:d}, have {:d})".format(tok, minimum, build))
+            drop_value = True
+            continue
+        out.append(tok)
+    return tuple(out)
 
 
 _llama_server_version_cache: str = ""
@@ -446,6 +506,7 @@ class LLMConfig:
     thinking_budget_tokens: int = 1024  # Max chain-of-thought reasoning tokens per API call
     hf_token: str = ""  # HuggingFace token for gated models
     llama_backend: str = "auto"  # "auto" | "cpu" | "cuda" | "vulkan"
+    local_kv_cache_quant: bool = False  # Quantize KV cache to q8_0 (GPU backends only)
     # Remote mode
     remote_api_url: str = ""
     remote_api_key: str = ""
@@ -490,6 +551,10 @@ class ModelPreset:
     hardware_note: str = ""  # Hardware recommendation (RAM + GPU gen, e.g. "RTX 3090/4090/5090")
     why: str = ""  # One-line "why pick this" per sub-tier
     expected_sha256: str = ""  # SHA-256 hash for download verification (empty = skip check)
+    # Extra llama-server CLI flags for this model (e.g. Qwen-specific
+    # switches). Appended after the base flags when the pinned server build
+    # is new enough for every flag in the tuple; silently skipped otherwise.
+    extra_server_args: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -518,6 +583,14 @@ class RemoteModelPreset:
     context_window: int = 200000  # Default context window size
 
 
+# Extra llama-server flags applied to Qwen-family presets. All exist in
+# the pinned build (b10154):
+#   --no-context-shift: deterministic KV sizing so the client-side prompt
+#   budget (Phase 1) matches what the server actually reserves.
+_QWEN_EXTRA_SERVER_ARGS: tuple[str, ...] = (
+    "--no-context-shift",
+)
+
 PRESET_MODELS: list[ModelPreset] = [
     # ── Flagship (24 GB+ VRAM) ──────────────────────────────────────
     ModelPreset(
@@ -535,6 +608,7 @@ PRESET_MODELS: list[ModelPreset] = [
         mmproj_filename="mmproj-F16.gguf",
         hardware_note="RTX 3090/4090/5090 — 24 GB+ VRAM",
         why="Latest Qwen3.8 — best coding + vision + agentic reasoning at high precision",
+        extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
             "Qwen3.8-27B at Q8_0 — the latest Qwen generation. Native vision-language,\n"
             "thinking mode, and agentic tool calling. 262K context. Apache 2.0.\n"
@@ -556,6 +630,7 @@ PRESET_MODELS: list[ModelPreset] = [
         mmproj_filename="mmproj-F16.gguf",
         hardware_note="RTX 3090/4090/5090 — 24 GB+ VRAM",
         why="Top-ranked fine-tune — ARC-711 benchmark, uncensored, vision-capable",
+        extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
             "Multi-stage fine-tune of Qwen3.6-27B. Exceeds base model in 6/7 benchmarks.\n"
             "Vision-capable, 256K context, uncensored. Apache 2.0.\n"
@@ -577,6 +652,7 @@ PRESET_MODELS: list[ModelPreset] = [
         mmproj_filename="mmproj-F16.gguf",
         hardware_note="RTX 3090/4090/5090 — 24 GB+ VRAM (MoE, ~3.4B active)",
         why="MoE efficiency — 3.4B active params, fast inference, sharpened template",
+        extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
             "Qwen3.6-35B-A3B with improved chat template and force-applied terseness prompt.\n"
             "~3.4B active params — runs fast on 24 GB cards. Vision-capable.\n"
@@ -620,6 +696,7 @@ PRESET_MODELS: list[ModelPreset] = [
         mmproj_filename="mmproj-F16.gguf",
         hardware_note="RTX 3090/4090 — 16 GB+ VRAM",
         why="Latest Qwen3.8 at Q4 — vision + agentic, fits 16 GB cards",
+        extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
             "Qwen3.8-27B at Q4_K_M — the latest Qwen generation. Native vision-language,\n"
             "thinking mode, and agentic tool calling. 262K context. Apache 2.0.\n"
@@ -641,6 +718,7 @@ PRESET_MODELS: list[ModelPreset] = [
         mmproj_filename="mmproj-F16.gguf",
         hardware_note="RTX 3090/4090 — 16 GB+ VRAM",
         why="Fable Fusion at IQ4 — fits 16 GB, still top-tier reasoning",
+        extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
             "Fable Fusion 27B at IQ4_XS — smaller quant that still outperforms base Qwen3.6.\n"
             "Vision-capable, 256K context. Apache 2.0.\n"
@@ -684,6 +762,7 @@ PRESET_MODELS: list[ModelPreset] = [
         mmproj_filename="mmproj.gguf",
         hardware_note="Any GPU — 4 GB+ VRAM",
         why="DeepSeek-V4 distilled reasoning — best reasoning-per-GB in light tier",
+        extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
             "Qwen3.5-9B fine-tuned with DeepSeek-V4 reasoning distillation.\n"
             "Vision-capable, 262K context. Apache 2.0.\n"
@@ -705,6 +784,7 @@ PRESET_MODELS: list[ModelPreset] = [
         mmproj_filename="mmproj-F16.gguf",
         hardware_note="Any GPU — 8 GB+ VRAM",
         why="Highest quality light quant — Q8_0 precision, vision, 262K context",
+        extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
             "Qwen3.5-9B at Q8_0 — highest quality quantization for the light tier.\n"
             "Vision-capable, 262K context, thinking mode. Apache 2.0.\n"
@@ -1043,6 +1123,7 @@ def set_config(cfg: LLMConfig) -> None:
         _config.thinking_budget_tokens = cfg.thinking_budget_tokens
         _config.hf_token = cfg.hf_token
         _config.llama_backend = cfg.llama_backend
+        _config.local_kv_cache_quant = cfg.local_kv_cache_quant
         _config.remote_api_url = cfg.remote_api_url
         _config.remote_api_key = cfg.remote_api_key
         _config.remote_model = cfg.remote_model
@@ -1064,6 +1145,7 @@ def get_config() -> LLMConfig:
             thinking_budget_tokens=_config.thinking_budget_tokens,
             hf_token=_config.hf_token,
             llama_backend=_config.llama_backend,
+            local_kv_cache_quant=_config.local_kv_cache_quant,
             remote_api_url=_config.remote_api_url,
             remote_api_key=_config.remote_api_key,
             remote_model=_config.remote_model,
@@ -1448,6 +1530,9 @@ def _detect_hardware_cached() -> tuple[float | None, float | None]:
 
 _RUNTIME_OVERHEAD_MB = 700
 _KV_MB_PER_1K_CTX = 70
+# Bytes of KV cache per token — same ~70 MB/1K-ctx estimate as above,
+# expressed per token for validate_ctx_against_hardware.
+_KV_BYTES_PER_TOKEN = _KV_MB_PER_1K_CTX * 1024
 _TYPICAL_LAYERS = 33
 _FULL_OFFLOAD = 99
 
@@ -1664,6 +1749,100 @@ def hardware_context_hint(model_gb: float = 0.0, backend: str = "auto") -> str:
         "Recommended for your hardware ({:s}): {:s} \u2014 larger sizes need much "
         "more memory and can crash startup.".format(hw, ctx_preset_label(recommended))
     )
+
+
+def validate_ctx_against_hardware(
+    model_gb: float,
+    backend: str,
+    ctx: int,
+) -> str | None:
+    """Return a warning string if *ctx* looks too large for the hardware.
+
+    Pure recommendation check (D4: startup-only validation — never restarts
+    or changes the running server). Compares the KV-cache requirement
+    (estimated with the same ~256 KB/token upper bound used by
+    :func:`recommend_context_size`) against free VRAM (GPU backends) or
+    free system RAM (CPU backend), leaving headroom for weights + runtime.
+    Returns ``None`` when the configuration looks safe.
+    """
+    if ctx <= 0 or model_gb <= 0:
+        return None
+    ram_gb, vram_gb = _detect_hardware_cached()
+    resolved = resolve_gpu_backend(backend)
+    kv_gb = (ctx * _KV_BYTES_PER_TOKEN) / (1024 ** 3)
+    if resolved in ("cuda", "vulkan"):
+        if not vram_gb:
+            return None  # No VRAM data — do not guess.
+        free_gb = max(vram_gb - model_gb - 1.5, 0.0)  # 1.5 GB runtime headroom
+        if kv_gb > free_gb:
+            return (
+                "Context size {:,} needs ~{:.1f} GB of KV cache but only ~{:.1f} GB "
+                "of VRAM is left after the {:.1f} GB model — lower Context Size or "
+                "enable KV-cache quantization to avoid an out-of-memory crash.".format(
+                    ctx, kv_gb, free_gb, model_gb)
+            )
+    else:
+        if not ram_gb:
+            return None
+        free_gb = max(ram_gb - model_gb - 2.0, 0.0)  # OS + Blender headroom
+        if kv_gb > free_gb:
+            return (
+                "Context size {:,} needs ~{:.1f} GB of KV cache in RAM but only "
+                "~{:.1f} GB is left after the {:.1f} GB model — lower Context Size "
+                "to avoid swapping or an out-of-memory crash.".format(
+                    ctx, kv_gb, free_gb, model_gb)
+            )
+    return None
+
+
+# Cached runtime context size, invalidated per llama-server launch.
+_runtime_ctx_cache: int | None = None
+_runtime_ctx_logged_mismatch = False
+
+
+def get_runtime_ctx(port: int | None = None) -> int | None:
+    """Return the context size actually applied by the running llama-server.
+
+    Queries ``http://127.0.0.1:<port>/props`` and reads the applied
+    ``n_ctx`` (which may differ from the configured value if the model or
+    build clamped it). Returns ``None`` when the server is not reachable or
+    does not expose the field — callers then fall back to the configured
+    size. Results are cached per launch (the cache is cleared in
+    :func:`start_local_llama`) and mismatches between configured and applied
+    values are logged once.
+    """
+    global _runtime_ctx_cache, _runtime_ctx_logged_mismatch
+    if port is None:
+        with _lock:
+            port = _config.local_port
+    if port <= 0:
+        return None
+    if _runtime_ctx_cache is not None:
+        return _runtime_ctx_cache
+    url = "http://127.0.0.1:{:d}/props".format(port)
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            body = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except (urllib.error.URLError, OSError, ValueError) as ex:
+        print("[🛠️Coworker] get_runtime_ctx: /props unreachable — {:s}".format(str(ex)))
+        return None
+    n_ctx = body.get("default_generation_settings", {}).get("n_ctx")
+    if n_ctx is None:
+        n_ctx = body.get("n_ctx")
+    if not isinstance(n_ctx, int) or n_ctx <= 0:
+        print("[Coworker] get_runtime_ctx: /props returned no usable n_ctx")
+        return None
+    _runtime_ctx_cache = n_ctx
+    with _lock:
+        configured = _config.local_ctx_size or 0
+    if configured and n_ctx != configured and not _runtime_ctx_logged_mismatch:
+        _runtime_ctx_logged_mismatch = True
+        print(
+            "[Coworker] get_runtime_ctx: applied n_ctx ({:d}) differs from "
+            "configured local_ctx_size ({:d}) — using the server's value for "
+            "prompt budgeting".format(n_ctx, configured))
+    return n_ctx
 
 
 def cancel_download() -> None:
@@ -2750,12 +2929,17 @@ def start_local_llama(
 
     with _lock:
         ctx_size = _config.local_ctx_size or 16384
-    # Auto-upgrade from the old 8192 default to 32768 for existing users.
-    # 8192 is too small for system prompt + tools + conversation.
+    # NOTE: no silent auto-upgrade — the configured size is applied verbatim
+    # and the real applied value is reported via /props (see get_runtime_ctx).
+    # If it looks too small for agent work, warn (never restart mid-session).
     if ctx_size <= 8192:
-        ctx_size = 32768
-        print("[🛠️Coworker] start_local_llama: auto-upgraded ctx_size from 8192 to 32768")
+        print(
+            "[Coworker] start_local_llama: ctx_size {:d} is small for agent work "
+            "(system prompt + tools + conversation); consider 16K-32K in preferences".format(ctx_size))
     print("[🛠️Coworker] start_local_llama: using ctx_size {:d}".format(ctx_size))
+    global _runtime_ctx_cache, _runtime_ctx_logged_mismatch
+    _runtime_ctx_cache = None
+    _runtime_ctx_logged_mismatch = False
 
     # Large context windows on big models need a LOT of KV-cache memory.
     # Warn loudly so an OOM-ish startup failure is self-explanatory.
@@ -2809,6 +2993,40 @@ def start_local_llama(
             '--ctx-size', str(ctx_size),
             '--n-gpu-layers', str(ngpu_layers),
         ]
+        # Model-specific extra flags (e.g. Qwen3 knobs), version-guarded
+        # against the pinned llama-server build so an unknown flag never
+        # crashes startup on an older binary.
+        with _lock:
+            preset_extra = _current_preset_extra_args()
+        if preset_extra:
+            extra = _filter_flags_for_build(preset_extra)
+            if extra:
+                args.extend(extra)
+                print("[🛠️Coworker] start_local_llama: preset extra args = {:s}".format(str(extra)))
+        # CPU backend: keep launch flags minimal — no attention/KV knobs,
+        # they mainly benefit GPU paths and risk breaking exotic CPU builds.
+        if backend in ("cuda", "vulkan"):
+            # Flash-attention is supported since long before the pinned build;
+            # it meaningfully reduces KV-cache memory and speeds up attention.
+            args.append('--flash-attn')
+            # KV-cache quantization — opt-in via preference, on by default only
+            # when VRAM headroom is tight.
+            with _lock:
+                kv_quant = getattr(_config, "local_kv_cache_quant", False)
+            if kv_quant:
+                kv_args = _filter_flags_for_build(
+                    ('--cache-type-k', 'q8_0', '--cache-type-v', 'q8_0'))
+                if kv_args:
+                    args.extend(kv_args)
+            # Batch/ubatch: modest default that avoids pathological prompt-
+            # processing slowdowns on some GGUFs.
+            args.extend(_filter_flags_for_build(
+                ('--batch-size', '2048', '--ubatch-size', '512')))
+        # Reuse the server's prompt cache across restarts within the same
+        # session (supported since ~b4xxx, well before the pinned build).
+        cache_reuse = _filter_flags_for_build(('--cache-reuse', '256'))
+        if cache_reuse:
+            args.extend(cache_reuse)
         if use_hf:
             args.extend(['--hf-repo', hf_repo, '--hf-file', hf_file])
         else:

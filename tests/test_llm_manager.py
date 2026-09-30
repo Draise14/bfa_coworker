@@ -6,6 +6,7 @@
 
 import importlib.util
 import io
+import json
 import struct
 import tempfile
 import unittest
@@ -431,6 +432,191 @@ class TestGGUFLayerCountIntegration(unittest.TestCase):
         path.write_bytes(header)
         result = self.llm_manager._gguf_layer_count(path)
         self.assertEqual(result, 46)
+
+
+class TestValidateCtxAgainstHardware(unittest.TestCase):
+    """Tests for validate_ctx_against_hardware (Tier 3 Phase 2)."""
+
+    def setUp(self) -> None:
+        self.llm_manager = load_llm_manager_module()
+
+    def _with_hardware(self, ram, vram, fn):
+        original = self.llm_manager._detect_hardware_cached
+        self.llm_manager._detect_hardware_cached = lambda: (ram, vram)
+        try:
+            return fn()
+        finally:
+            self.llm_manager._detect_hardware_cached = original
+
+    def test_none_when_config_fits(self) -> None:
+        # 8 GB model, 8 GB free VRAM after headroom, 16K ctx ~1.1 GB KV: OK.
+        warning = self._with_hardware(
+            32.0, 24.0,
+            lambda: self.llm_manager.validate_ctx_against_hardware(
+                8.0, "cuda", 16384))
+        self.assertIsNone(warning)
+
+    def test_warning_when_kv_exceeds_vram(self) -> None:
+        # 24 GB model on a 24 GB card: nothing left for a 131K KV cache.
+        warning = self._with_hardware(
+            64.0, 24.0,
+            lambda: self.llm_manager.validate_ctx_against_hardware(
+                23.0, "cuda", 131072))
+        self.assertIsNotNone(warning)
+        self.assertIn("KV cache", warning)
+
+    def test_cpu_backend_uses_ram(self) -> None:
+        warning = self._with_hardware(
+            8.0, 0.0,
+            lambda: self.llm_manager.validate_ctx_against_hardware(
+                5.0, "cpu", 131072))
+        self.assertIsNotNone(warning)
+        self.assertIn("RAM", warning)
+
+    def test_no_warning_without_hardware_data(self) -> None:
+        warning = self._with_hardware(
+            0.0, 0.0,
+            lambda: self.llm_manager.validate_ctx_against_hardware(
+                8.0, "cuda", 131072))
+        self.assertIsNone(warning)
+
+    def test_degenerate_inputs(self) -> None:
+        self.assertIsNone(self.llm_manager.validate_ctx_against_hardware(0, "cuda", 16384))
+        self.assertIsNone(self.llm_manager.validate_ctx_against_hardware(8.0, "cuda", 0))
+
+
+class TestGetRuntimeCtx(unittest.TestCase):
+    """Tests for get_runtime_ctx /props parsing (Tier 3 Phase 2)."""
+
+    def setUp(self) -> None:
+        self.llm_manager = load_llm_manager_module()
+        # Reset the per-launch cache.
+        self.llm_manager._runtime_ctx_cache = None
+        self.llm_manager._runtime_ctx_logged_mismatch = False
+
+    def tearDown(self) -> None:
+        self.llm_manager._runtime_ctx_cache = None
+        self.llm_manager._runtime_ctx_logged_mismatch = False
+
+    def _with_props(self, body, fn):
+        import io as _io
+        import urllib.error as _ue
+
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return json.dumps(body).encode("utf-8")
+
+        captured = {}
+
+        def fake_urlopen(req, timeout=0):
+            captured["url"] = req.full_url if hasattr(req, "full_url") else req
+            return _Resp()
+
+        original = self.llm_manager.urllib.request.urlopen
+        self.llm_manager.urllib.request.urlopen = fake_urlopen
+        try:
+            return fn(captured)
+        finally:
+            self.llm_manager.urllib.request.urlopen = original
+
+    def test_parses_default_generation_settings(self) -> None:
+        def run(captured):
+            result = self.llm_manager.get_runtime_ctx(8081)
+            self.assertEqual(result, 16384)
+            self.assertIn("/props", captured["url"])
+
+        self._with_props(
+            {"default_generation_settings": {"n_ctx": 16384}}, run)
+
+    def test_parses_top_level_n_ctx(self) -> None:
+        def run(captured):
+            self.assertEqual(self.llm_manager.get_runtime_ctx(8081), 32768)
+
+        self._with_props({"n_ctx": 32768}, run)
+
+    def test_returns_none_without_n_ctx(self) -> None:
+        def run(captured):
+            self.assertIsNone(self.llm_manager.get_runtime_ctx(8081))
+
+        self._with_props({"unrelated": True}, run)
+
+    def test_caches_per_launch(self) -> None:
+        calls = {"n": 0}
+
+        def fake_urlopen(req, timeout=0):
+            calls["n"] += 1
+
+            class _Resp:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *a):
+                    return False
+
+                def read(self):
+                    return json.dumps({"n_ctx": 4096}).encode("utf-8")
+
+            return _Resp()
+
+        original = self.llm_manager.urllib.request.urlopen
+        self.llm_manager.urllib.request.urlopen = fake_urlopen
+        try:
+            self.llm_manager.get_runtime_ctx(8081)
+            self.llm_manager.get_runtime_ctx(8081)
+        finally:
+            self.llm_manager.urllib.request.urlopen = original
+        self.assertEqual(calls["n"], 1)
+
+
+class TestFilterFlagsForBuild(unittest.TestCase):
+    """Tests for the version-guarded extra-flag assembly (Tier 3 Phase 3)."""
+
+    def setUp(self) -> None:
+        self.llm_manager = load_llm_manager_module()
+
+    def test_passthrough_when_flag_supported(self) -> None:
+        # The pinned build (b10154) is newer than every known minimum.
+        out = self.llm_manager._filter_flags_for_build(("--cache-reuse", "256"))
+        self.assertEqual(out, ("--cache-reuse", "256"))
+
+    def test_drops_old_flag_with_value(self) -> None:
+        original = self.llm_manager._MIN_BUILD_CACHE_REUSE
+        try:
+            self.llm_manager._MIN_BUILD_CACHE_REUSE = 999999
+            # Rebuild the thresholds dict against the patched minimum.
+            self.llm_manager._FLAG_BUILD_MINIMUMS["--cache-reuse"] = 999999
+            out = self.llm_manager._filter_flags_for_build(
+                ("--cache-reuse", "256", "--flash-attn"))
+            self.assertEqual(out, ("--flash-attn",))
+        finally:
+            self.llm_manager._MIN_BUILD_CACHE_REUSE = original
+            self.llm_manager._FLAG_BUILD_MINIMUMS["--cache-reuse"] = original
+
+    def test_unknown_flags_pass_through(self) -> None:
+        out = self.llm_manager._filter_flags_for_build(
+            ("--some-future-flag", "val"))
+        self.assertEqual(out, ("--some-future-flag", "val"))
+
+    def test_qwen_presets_carry_extra_args(self) -> None:
+        qwen_ids = {"qwen38_27b_q8", "qwen38_27b_q4", "nail_35b_q4",
+                    "qwen35_9b_q8", "qwen35_9b_dsv4_q4",
+                    "fable_fusion_27b_q6", "fable_fusion_27b_iq4"}
+        for preset in self.llm_manager.PRESET_MODELS:
+            if preset.identifier in qwen_ids:
+                self.assertTrue(
+                    preset.extra_server_args,
+                    "Qwen preset {:s} missing extra_server_args".format(preset.identifier))
+            else:
+                self.assertEqual(
+                    preset.extra_server_args, (),
+                    "Non-Qwen preset {:s} unexpectedly carries extra args".format(
+                        preset.identifier))
 
 
 if __name__ == "__main__":

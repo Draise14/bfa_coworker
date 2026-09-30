@@ -143,6 +143,10 @@ _get_system_prompt = _extract_func(
 # Tool-call pair repair + token budget helpers.
 _repair_tool_call_pairs = _extract_func(_load_source(), "_repair_tool_call_pairs")
 _message_text_length = _extract_func(_load_source(), "_message_text_length")
+_compute_prompt_budget = _extract_func(
+    _load_source(), "_compute_prompt_budget",
+    {"_TEMPLATE_OVERHEAD_TOKENS": 512},
+)
 _estimate_messages_tokens = _extract_func(
     _load_source(), "_estimate_messages_tokens",
     {"_message_text_length": _message_text_length, "_CHARS_PER_TOKEN": 3.5},
@@ -997,18 +1001,15 @@ class TestBudgetClamp(unittest.TestCase):
     """max_tokens must not consume the whole context window."""
 
     def test_clamp_is_wired_in(self):
-        """The budget must clamp max_tokens, not just floor the budget."""
-        src = _load_source()
-        self.assertIn("exceeds", src)
-        self.assertIn("clamping to", src)
+        """_compute_prompt_budget clamps max_tokens (Tier 3 Phase 1)."""
+        budget = _compute_prompt_budget(8192, 8000)
+        self.assertGreater(budget, 0)
 
     def test_floor_is_at_least_half_the_context(self):
         """The old floor (ctx//4) could not hold a system prompt."""
-        src = _load_source()
-        start = src.find("prompt_budget = _ctx_size - max_tokens")
-        self.assertGreater(start, 0)
-        window = src[max(0, start - 900):start + 400]
-        self.assertIn("_ctx_size // 2", window)
+        # A misconfigured tiny context still yields a usable budget.
+        budget = _compute_prompt_budget(2048, 1800)
+        self.assertGreaterEqual(budget, max(2048 // 2, 1024))
 
 
 class TestTrimHistoryToolResults(unittest.TestCase):

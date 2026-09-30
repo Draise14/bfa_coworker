@@ -277,6 +277,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         cfg.local_ctx_size = self.local_ctx_size
         cfg.local_max_tokens = self.local_max_tokens
         cfg.thinking_budget_tokens = self.thinking_budget_tokens
+        cfg.local_kv_cache_quant = self.local_kv_cache_quant
         llm.set_config(cfg)
         # If switching to remote, stop any running local LLM.
         if self.llm_mode == "remote":
@@ -678,6 +679,16 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         max=262144,
         step=1024,
         subtype='UNSIGNED',
+    )
+
+    local_kv_cache_quant: BoolProperty(  # type: ignore[valid-type]
+        name="Quantize KV Cache (q8_0)",
+        description=(
+            "Store the KV cache in 8-bit instead of 16-bit — roughly halves its "
+            "memory and lets you run a larger context on the same VRAM. "
+            "Slight quality cost. GPU backends only; applies on next server start."
+        ),
+        default=False,
     )
 
     def _update_ctx_preset(self, _context: bpy.types.Context) -> None:
@@ -1629,6 +1640,17 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             text=llm.hardware_context_hint(model_gb, self.llama_backend),
             icon='INFO',
         )
+        # Startup-only hardware validation (Tier 3 Phase 2, D4): warn when
+        # the chosen context cannot fit KV cache in the detected memory.
+        _ctx_warning = llm.validate_ctx_against_hardware(
+            model_gb, self.llama_backend, self.local_ctx_size)
+        if _ctx_warning:
+            ctx_box.label(text="Context may not fit your hardware:", icon='ERROR')
+            for _wline in _ctx_warning.split("\n"):
+                ctx_box.label(text=_wline, icon='BLANK1')
+        # KV-cache quantization — pairs with the context size choice.
+        if self.llama_backend != "cpu":
+            ctx_box.prop(self, "local_kv_cache_quant")
 
         # -- Reasoning Effort (next to the Context Window row) -------
         ctx_box.separator()

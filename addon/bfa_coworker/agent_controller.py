@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import Any
 
 from . import llm_transport as _transport
+from . import session_memory
 from .llm_transport import (
     classify_llm_500,
     openai_chat_completions,
@@ -446,6 +447,91 @@ def _fit_history_to_budget(
     # system prompt plus the pinned turn rather than an empty prompt -- the
     # model must always see the user's question.
     return head + pinned
+
+
+def _estimate_tools_tokens(tools: list[dict[str, Any]] | None) -> int:
+    """Estimate the token cost of the OpenAI tool-schema array.
+
+    The tool JSON is re-sent with every request, so on a 16K local context
+    it is a significant share of the budget (the full schema can be several
+    thousand tokens). Uses the JSON-serialized size of the schema at
+    :data:`_CHARS_PER_TOKEN`, consistent with the message estimator.
+    """
+    if not tools:
+        return 0
+    try:
+        blob = json.dumps(tools, default=str)
+    except (TypeError, ValueError):
+        blob = ""
+    return int(len(blob) / _CHARS_PER_TOKEN) + _TEMPLATE_OVERHEAD_TOKENS // 2
+
+
+def _compute_prompt_budget(ctx: int, max_tokens: int) -> int:
+    """Compute the prompt token budget for a context window.
+
+    Reserves *max_tokens* for the generated reply plus
+    :data:`_TEMPLATE_OVERHEAD_TOKENS` for chat-template scaffolding and a
+    ~10% safety margin, then returns what is left for the prompt. Never
+    returns a value below a floor that can hold a system prompt plus a user
+    turn, and clamps an oversized *max_tokens* so the budget cannot go
+    negative (a negative budget would trim the prompt to nothing and the
+    model would invent a task).
+    """
+    if ctx <= 0:
+        return 0
+    # A reply can never need the whole window; cap it at half so the
+    # prompt always keeps room.
+    max_allowed = max(ctx // 2, 512)
+    if max_tokens > max_allowed:
+        max_tokens = max_allowed
+    margin = max(int(ctx * 0.1), 256)
+    budget = ctx - max_tokens - _TEMPLATE_OVERHEAD_TOKENS - margin
+    if budget < 1024:
+        # Misconfigured (tiny context): keep a floor that can actually
+        # hold a system prompt plus a user turn.
+        budget = max(ctx // 2, 1024)
+    return budget
+
+
+def _prompt_preflight(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    budget: int,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Check a request against the prompt budget right before it is sent.
+
+    Counts everything the server will actually put into the context: the
+    message history, the tool schema (re-sent on every request), and any
+    screenshot data already injected into the messages. When the estimate
+    exceeds the budget the history is re-trimmed with
+    :func:`_fit_history_to_budget` (which keeps the system prompt and the
+    last user turn). Only when even that pinned turn cannot fit is a
+    friendly, actionable error returned instead — surfacing it locally beats
+    letting the server reject the POST with a raw 400 the user cannot act
+    on.
+
+    Returns ``(messages, error)``; *messages* may be the re-trimmed copy and
+    *error* is ``None`` when the request can proceed.
+    """
+    if budget <= 0:
+        return messages, None
+    tools_tokens = _estimate_tools_tokens(tools)
+    headroom = budget - tools_tokens
+    if headroom <= 0:
+        # Degenerate (tool schema alone eats the budget): fall back to half
+        # the budget rather than trimming the prompt to nothing.
+        headroom = max(budget // 2, 1024)
+    if _estimate_messages_tokens(messages) <= headroom:
+        return messages, None
+    fitted = _fit_history_to_budget(messages, headroom)
+    fitted = _repair_tool_call_pairs(fitted)
+    if _estimate_messages_tokens(fitted) > headroom:
+        return fitted, (
+            "This conversation no longer fits the local context window — "
+            "compacting conversation… Use 'Compact Now' in the Session panel "
+            "or start a new chat."
+        )
+    return fitted, None
 
 
 def _strip_think_tags(text: str) -> str:
@@ -3194,6 +3280,35 @@ def _tool_result_summary(result_text: str, max_len: int = 150) -> str:
     return result_text[:max_len] + "..."
 
 
+# The context-incorrect poll() failure: a full Python traceback for a one-line
+# mistake (the operator needs an active object / wrong mode).  Collapsing it
+# keeps the history small and the corrective hint actionable.
+_POLL_FAILED_MARKER = "poll() failed, context is incorrect"
+
+
+def _collapse_poll_failed_error(result_text: str) -> str:
+    """Collapse a ``poll() failed, context is incorrect`` traceback to a hint.
+
+    bpy.operator poll() failures produce a multi-line traceback whose only
+    real content is the operator name and the fact that the context was
+    wrong.  Store (and send) a one-line corrective hint instead.  Any other
+    error text is returned unchanged for the normal smart-trim path.
+    """
+    if _POLL_FAILED_MARKER not in result_text:
+        return result_text
+    op_name = ""
+    m = re.search(r"Operator bpy\.ops\.([\w.]+)\.poll\(\) failed", result_text)
+    if m:
+        op_name = m.group(1)
+    hint = (
+        "{:s} failed its poll() check — the operator's context was incorrect. "
+        "Fix: use bpy.context.temp_override() to supply the required context "
+        "(e.g. active_object / selected_objects / area), or ensure the right "
+        "mode and an active object are set before calling it."
+    ).format(op_name or "The operator")
+    return json.dumps({"status": "error", "message": hint})
+
+
 def _trim_tool_result(result_text: str, max_chars: int = _MAX_TOOL_RESULT_CHARS) -> str:
     """Smart-trim a tool result for LLM context, stripping JSON boilerplate.
 
@@ -3987,6 +4102,80 @@ def run_conversation_turn(
         _agent_state.turn_active = False
 
 
+# Turn counter for memory-block "Last updated" stamps (Tier 3).
+_session_turn_count = 0
+
+
+def _memory_writer_factory(llm_url: str, api_key: str, model: str, max_tokens: int):
+    """Return a memory_writer callback using a small dedicated LLM call."""
+    def _writer(retired_text: str, prior_memory: str) -> str | None:
+        messages = session_memory.memory_writer_prompt(retired_text, prior_memory)
+        response = _transport.openai_chat_completions(
+            llm_url, messages, None, api_key, model,
+            max_tokens=max_tokens, thinking_budget_tokens=0,
+        )
+        if not response:
+            return None
+        try:
+            return (
+                response.get("choices", [{}])[0]
+                .get("message", {}).get("content") or None
+            )
+        except (IndexError, AttributeError):
+            return None
+    return _writer
+
+
+def _maybe_compact_session(
+    history: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    prompt_budget: int,
+    on_status: Callable[[str], None] | None = None,
+    memory_writer: Callable[[str, str], str | None] | None = None,
+) -> None:
+    """Trigger session-memory compaction when the prompt approaches the budget.
+
+    Retires turns beyond the verbatim window into ``session_memory.store``
+    (archive + memory block) when the estimated prompt (history + tool
+    schema) reaches :data:`COMPACTION_TRIGGER_RATIO` of the safe budget, or
+    when the history outgrows the verbatim window.  Visible status, automatic
+    checkpoint after compaction (D5/D6).  Never raises.
+    """
+    global _session_turn_count
+    _session_turn_count += 1
+    st = session_memory.store
+    tools_tokens = _estimate_tools_tokens(tools)
+    safe = (prompt_budget - tools_tokens) if prompt_budget else 0
+    estimated = _estimate_messages_tokens(history) + tools_tokens
+    trigger = (
+        (safe > 0 and estimated >= safe * session_memory.COMPACTION_TRIGGER_RATIO)
+        or (
+            sum(1 for m in history if not m.get("ui_only"))
+            > session_memory.MAX_WINDOW_TURNS + 1
+        )
+    )
+    if not trigger:
+        return
+    if on_status:
+        on_status("Compacting conversation…")
+    print("[🛠️Coworker] _maybe_compact_session: estimated {:d} / safe {:d} tokens "
+          "— compacting".format(estimated, safe))
+    kept, memory_block, retired = session_memory.compact_history(
+        history,
+        prior_memory=st.memory_block,
+        memory_writer=memory_writer,
+        updated_turn=_session_turn_count,
+    )
+    st.memory_block = memory_block
+    st.memory_updated_turn = _session_turn_count
+    st.append_archive(retired)
+    history[:] = kept
+    # Automatic checkpoint of the compacted state (D6).
+    st.snapshot(history, reason="compaction", turn_index=_session_turn_count)
+    print("[🛠️Coworker] _maybe_compact_session: retired {:d} messages, "
+          "archived, checkpoint saved".format(len(retired)))
+
+
 def _run_conversation_turn_inner(
     user_message: str,
     on_text: Callable[[str], None] | None = None,
@@ -4227,36 +4416,38 @@ def _run_conversation_turn_inner(
     print("[🛠️Coworker] run_conversation_turn: using max_tokens={:d}".format(max_tokens))
 
     # ── Prompt token budget ────────────────────────────────────────────
-    # The context window must hold the prompt AND the generated reply, so
-    # reserve room for max_tokens plus template scaffolding.  Only the local
-    # path knows its context size; remote providers get 0 (no trimming).
+    # The context window must hold the prompt AND the generated reply.  The
+    # budget is computed against the context size the server *actually*
+    # applied (queried from /props via llm_manager.get_runtime_ctx), falling
+    # back to the configured value.  Remote providers get 0 (no trimming).
     #
-    # A max_tokens that consumes the whole context window is self-defeating:
-    # the budget goes negative and the prompt is trimmed to nothing, leaving
-    # the model with no user turn at all -- it then invents a task.  Clamp
-    # silently so the configuration "just works" instead of surfacing a
-    # warning the user cannot act on mid-run.
+    # Startup-only sizing (D4): a wrong ctx is handled by preflight + the
+    # compaction path — never by restarting the server mid-session.
     prompt_budget = 0
+    ctx_size_used = 0
     if llm_port_local is not None:
         _ctx_size = getattr(_llm_cfg, "local_ctx_size", 0) or 0
+        try:
+            _runtime_ctx = _llm_mgr.get_runtime_ctx(llm_port_local)
+        except Exception as _ctx_ex:  # pylint: disable=broad-exception-caught
+            print("[🛠️Coworker] run_conversation_turn: get_runtime_ctx failed — {:s}".format(str(_ctx_ex)))
+            _runtime_ctx = None
+        if _runtime_ctx:
+            if _ctx_size and _runtime_ctx != _ctx_size:
+                print("[🛠️Coworker] run_conversation_turn: runtime n_ctx {:d} != configured {:d} — "
+                      "budgeting against the server's value".format(_runtime_ctx, _ctx_size))
+            _ctx_size = _runtime_ctx
         if _ctx_size > 0:
-            # Leave at least half the window for the prompt.  A reply can
-            # never need the entire context, and the prompt always needs
-            # room for the system prompt plus the user's turn.
-            _max_allowed = max(_ctx_size // 2, 512)
-            if max_tokens > _max_allowed:
-                print("[🛠️Coworker] run_conversation_turn: max_tokens {:d} exceeds "
-                      "half the context window — clamping to {:d} so the prompt "
-                      "has room".format(max_tokens, _max_allowed))
-                max_tokens = _max_allowed
-            prompt_budget = _ctx_size - max_tokens - _TEMPLATE_OVERHEAD_TOKENS
-            if prompt_budget <= 0:
-                # Still misconfigured (tiny context): keep a floor that can
-                # actually hold a system prompt plus a user turn.
-                prompt_budget = max(_ctx_size // 2, 1024)
+            ctx_size_used = _ctx_size
+            prompt_budget = _compute_prompt_budget(_ctx_size, max_tokens)
             print("[🛠️Coworker] run_conversation_turn: prompt budget {:d} tokens "
-                  "(ctx {:d} - max_tokens {:d} - overhead {:d})".format(
-                      prompt_budget, _ctx_size, max_tokens, _TEMPLATE_OVERHEAD_TOKENS))
+                  "(ctx {:d}, max_tokens {:d})".format(prompt_budget, _ctx_size, max_tokens))
+        # Record actual context usage for the Session panel indicator.
+        try:
+            _agent_state.ctx_size_used = _ctx_size
+            _agent_state.prompt_budget = prompt_budget
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
 
     # ── Tool domain system (hybrid: pre-detect + on-demand) ────────────
     # Pre-detect the domain from the user's prompt AND from the current
@@ -4312,6 +4503,19 @@ def _run_conversation_turn_inner(
                 on_status("Stopped")
             return history
 
+        # ── Session memory compaction check (Tier 3 Phase 4) ───────────
+        # Retire old turns once the estimated prompt approaches the safe
+        # budget, keeping a structured memory block in the system prompt and
+        # archiving what was retired.  Best-effort: never blocks the turn.
+        try:
+            _maybe_compact_session(
+                history, openai_tools, prompt_budget, on_status=on_status,
+                memory_writer=_memory_writer_factory(
+                    llm_url, api_key, model, min(max_tokens, 1024)))
+        except Exception as _compact_ex:  # pylint: disable=broad-exception-caught
+            print("[🛠️Coworker] run_conversation_turn: session compaction skipped — {:s}".format(
+                str(_compact_ex)))
+
         # Slice history to avoid unbounded context growth.
         # Always keep the system prompt (index 0) if present.
         # Must preserve tool-call pairs: each "tool" role message
@@ -4365,6 +4569,32 @@ def _run_conversation_turn_inner(
                 print("[🛠️Coworker] run_conversation_turn: trimmed prompt "
                       "{:d} -> {:d} tokens ({:d} messages)".format(
                           _before, _after, len(history_to_send)))
+
+        # ── Inject the session memory block into the system prompt ────
+        # The block is small (bounded) and carries retired context; Qwen's
+        # Jinja template requires system content up front, so it is appended
+        # to message 0 like the domain skills.
+        _mem_block = session_memory.store.memory_block
+        if _mem_block and history_to_send and history_to_send[0].get("role") == "system":
+            _sys0 = history_to_send[0]
+            _sys0["content"] = (
+                str(_sys0.get("content") or "").rstrip()
+                + "\n\n" + _mem_block
+            )
+
+        # ── Pre-flight: last check right before the POST ──────────────
+        # Counts history + tool schema together; re-trims or surfaces a
+        # friendly error instead of a raw server 400.
+        if prompt_budget > 0:
+            history_to_send, _preflight_err = _prompt_preflight(
+                history_to_send, openai_tools, prompt_budget)
+            if _preflight_err:
+                _agent_state.is_thinking = False
+                _agent_state.thinking_start_time = 0.0
+                _agent_state.error = _preflight_err
+                if on_status:
+                    on_status("Error: conversation too large for context window")
+                return history
 
         # ── Request-shape diagnostic ──────────────────────────────────
         # Log exactly what is about to be sent.  This is the single most
@@ -4764,6 +4994,13 @@ def _run_conversation_turn_inner(
 
                 # Build a human-readable summary for the UI.
                 result_summary = _tool_result_summary(result_text)
+
+                # Collapse known-noisy errors before storage (Tier 3 Phase 6):
+                # a poll() failure traceback becomes a one-line corrective hint
+                # both in the stored history and for the model; every other
+                # error keeps the full text (smart-trim happens at request
+                # time, head+tail preserved).
+                result_text = _collapse_poll_failed_error(result_text)
 
                 # Store the FULL tool result in history.  Trimming happens
                 # when the request is built, not here: the chat panel renders

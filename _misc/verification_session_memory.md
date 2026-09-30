@@ -26,7 +26,7 @@ block and the following request's system prompt.
 
 ## Setup
 
-- [ ] Start Bforartists, enable the Coworker addon, download/launch a local
+- [x] Start Bforartists, enable the Coworker addon, download/launch a local
       model (any Qwen-family preset recommended), start the Coworker agent.
 
 ## Phase 1 — Budget against the real context
@@ -35,6 +35,9 @@ block and the following request's system prompt.
       `prompt budget ... tokens (ctx N, max_tokens M)` shows N matching what
       llama-server actually applied (check the llama-server console window
       for `n_ctx`), not merely the configured preference.
+
+      **Feedback:** Cannot see anything. So might not be in debugging messages.
+
 - [ ] On a 16K context, run a long session (20+ turns, several tool calls).
       No server 400 ("context window exceeded" / "request too large") should
       appear; if the prompt truly cannot fit, the chat shows the friendly

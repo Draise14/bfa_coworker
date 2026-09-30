@@ -4,7 +4,7 @@ Items that can only be exercised inside Blender/Bforartists with a live
 llama-server. Everything testable outside Blender is already covered by the
 unit suite (`python -m unittest tests.test_context_budget
 tests.test_session_memory tests.test_llm_manager
-tests.test_turn_loop_integration` — 259 tests green). The integration
+tests.test_turn_loop_integration` — 261 tests green). The integration
 harness in `tests/test_turn_loop_integration.py` drives a real
 `run_conversation_turn` against a fake llama-server HTTP endpoint in both
 ASK mode and full AGENT tool-loop mode (the fake server doubles as the MCP
@@ -18,7 +18,11 @@ stored system prompt, reasoning entries are pruned from stored history once
 outside the verbatim window, a `reason="compaction"` checkpoint is recorded,
 and the friendly "conversation no longer fits the local context window"
 error fires only when even the pinned current request cannot fit — with no
-LLM request sent for that turn.
+LLM request sent for that turn. The harness additionally proves the
+entity-diff context warning ("you already created these entities") is
+injected exactly once per request and never accumulates in stored history,
+and that the memory-writer's LLM note lands verbatim in the stored memory
+block and the following request's system prompt.
 
 ## Setup
 

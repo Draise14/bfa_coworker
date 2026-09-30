@@ -248,11 +248,42 @@ class _FakeLLMHandler(BaseHTTPRequestHandler):
         # the JSON-RPC envelope is the reliable discriminator. FastMCP
         # stateless mode wraps the JSON-RPC response in SSE.
         if body.get("jsonrpc") == "2.0":
+            params = body.get("params") or {}
+            args = (params.get("arguments") or {}) if isinstance(params, dict) else {}
+            code = str(args.get("code") or "")
             with server.lock:
                 server.mcp_requests.append(body)
             if body.get("method") == "tools/list":
                 result = {"tools": server.mcp_tools}
+            elif "undo_push(message='bfa_coworker_" in code and "'snapshot'" in code:
+                # The loop merges the undo bookmark + entity snapshot into a
+                # single execute_blender_code call (pre-script push and
+                # per-step push). When armed, the stub behaves like the real
+                # bridge: the code's `result` dict is wrapped as result.result
+                # and delivered via content[].text, and the snapshot reflects
+                # the stub scene's CURRENT contents (so step diffs see newly
+                # "created" entities, exactly like a real session).
+                merged = {"status": "ok", "message": "push executed"}
+                with server.lock:
+                    armed = server.snapshot_script
+                    names = sorted(server.scene_objects)
+                if armed:
+                    merged["result"] = {"snapshot": {
+                        "object_names": names,
+                        "mesh_names": names,
+                    }}
+                result = {"content": [{
+                    "type": "text",
+                    "text": json.dumps(merged),
+                }]}
             else:
+                # User tool code: mutate the stub scene for known scripted
+                # creations so the next snapshot push diffs non-empty.
+                with server.lock:
+                    if "primitive_cube_add" in code and "Cube" not in server.scene_objects:
+                        server.scene_objects.append("Cube")
+                    if "primitive_uv_sphere_add" in code and "Sphere" not in server.scene_objects:
+                        server.scene_objects.append("Sphere")
                 result = {"content": [{
                     "type": "text",
                     "text": json.dumps(
@@ -289,7 +320,10 @@ class _FakeLLMHandler(BaseHTTPRequestHandler):
                 server.chat_count += 1
                 idx = server.chat_count - 1
         if is_writer_prompt:
-            response_msg = {"content": "note"}
+            # Distinctive (configurable) note: tests assert the note text
+            # actually lands in the injected memory block, not just that
+            # the writer call fired.
+            response_msg = {"content": server.writer_note}
         else:
             script = server.scripted_responses
             with server.lock:
@@ -342,6 +376,9 @@ def _start_fake_server(script, mcp_tools=None):
     server.memory_writer_calls = []
     server.mcp_requests = []
     server.mcp_tools = list(mcp_tools or [])
+    server.snapshot_script = None
+    server.scene_objects = []
+    server.writer_note = "note"
     server.lock = threading.Lock()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -691,6 +728,11 @@ class TestToolLoopIntegration(_TurnLoopTestBase):
             return [r for r in self.server.requests
                     if r not in self.server.memory_writer_calls]
 
+    def _arm_snapshots(self):
+        """Arm the stub bridge to answer merged undo+snapshot pushes with a
+        live snapshot of the stub scene (mirrors result.snapshot)."""
+        self.server.snapshot_script = True
+
     def test_multi_iteration_tool_loop_end_to_end(self):
         """Two tool iterations, then a final prose reply.
 
@@ -855,6 +897,133 @@ class TestToolLoopIntegration(_TurnLoopTestBase):
         total_chars = sum(len(str(m.get("content") or ""))
                           for m in last["messages"])
         self.assertLess(total_chars, 8192 * 3.5)
+
+    def test_entity_context_injected_once_per_request_never_accumulates(self):
+        """The entity-diff context branch fires and behaves like the
+        memory-block injection: exactly once per REQUEST (never
+        accumulating in stored history).
+
+        The context message is appended to the STORED history once (after
+        the first result-bearing code call), but the REQUEST-side copies of
+        the system prompt / user turns are re-derived per iteration. This
+        test proves both sides: the request carries the marker at least
+        once (compaction re-fires here, so the per-request injection also
+        runs) and the stored history gains it exactly once — the aliasing
+        defect class found with the memory block in ASK mode would make it
+        grow per iteration."""
+        self._mk_server([
+            _tool_call_msg("call_1", "bpy.ops.mesh.primitive_cube_add()"),
+            _tool_call_msg("call_2", "bpy.ops.mesh.primitive_uv_sphere_add()"),
+            {"content": "created two primitives"},
+        ])
+        # Both scripted calls are mutation code. The stub bridge answers
+        # every merged undo+snapshot push with a live snapshot of the stub
+        # scene: empty at the initial push, {'Cube'} after call_1, and
+        # {'Cube','Sphere'} after call_2 — so the step diffs see each newly
+        # "created" entity exactly like a real session, and the warning
+        # must reflect the ACCUMULATED diff (both entities).
+        self._arm_snapshots()
+        self.state.conversation_history = [
+            {"role": "system", "content": "You are a helpful agent."}]
+        texts = []
+        self._pin_fake_bpy()
+        try:
+            history = self.ac.run_conversation_turn(
+                "make primitives", on_text=texts.append, chat_mode="AGENT",
+                llm_url=None, model="fake-model", mcp_port=self.port)
+        finally:
+            self._unpin_fake_bpy()
+
+        self.assertEqual(self.state.error, "")
+        self.assertIn("created two primitives", texts)
+
+        marker = "[System: WARNING"
+        # Exactly ONE context message in stored history (appended once,
+        # guarded by _entity_context_injected). By design it fires after
+        # the FIRST result-bearing call, so it names only that call's
+        # creation — the accumulated diff would only appear if the flag
+        # allowed later updates, which it deliberately does not.
+        ctx_msgs = [m for m in history
+                    if m.get("role") == "user" and marker in str(m.get("content") or "")]
+        self.assertEqual(len(ctx_msgs), 1,
+                         "entity context must be stored exactly once")
+        self.assertIn("objects: Cube", ctx_msgs[0]["content"])
+        self.assertIn("meshes: Cube", ctx_msgs[0]["content"])
+        self.assertNotIn("Sphere", ctx_msgs[0]["content"])
+        # ...placed right after the first tool result.
+        first_tool = next(i for i, m in enumerate(history)
+                          if m.get("role") == "tool")
+        self.assertIs(history[first_tool + 1], ctx_msgs[0])
+
+        # ── Request side: the warning reaches the model on every request
+        # after it was stored, but never duplicated within one request.
+        main = self._main_requests()
+        self.assertGreaterEqual(len(main), 2)
+        first_req_with = None
+        for req_i, req in enumerate(main):
+            count = sum(
+                str(m.get("content") or "").count(marker)
+                for m in req["messages"])
+            if req_i == 0:
+                # Request 1 happens before the first result is stored...
+                self.assertEqual(count, 0,
+                                 "no entity warning before the first tool result")
+            else:
+                if count and first_req_with is None:
+                    first_req_with = req_i
+                if count:
+                    self.assertEqual(
+                        count, 1,
+                        "entity warning must appear exactly once per request")
+        self.assertIsNotNone(
+            first_req_with,
+            "the entity warning must reach the model in a later request")
+
+        # The stored user/system turns stay clean — only the standalone
+        # context message carries the marker.
+        stored = self.state.conversation_history
+        self.assertEqual(
+            sum(str(m.get("content") or "").count(marker)
+                for m in stored if m.get("role") in ("system", "user")
+                and m is not ctx_msgs[0]),
+            0,
+            "entity warning must not accumulate into system/user turns")
+
+    def test_memory_writer_note_lands_in_injected_block(self):
+        """The memory-writer LLM note is not just requested — its text is
+        what compaction stores and what gets injected into the next
+        request's system prompt."""
+        NOTE = ("Goal: build a lighthouse. Decisions: low-poly style. "
+                "Pending: add lamp glass.")
+        self._seed_history(turns=30)
+        self.server.writer_note = NOTE
+        history, texts, statuses = self._run_turn("first question")
+
+        self.assertEqual(self.state.error, "")
+        # The writer fired and received the retired conversation.
+        with self.server.lock:
+            writers = list(self.server.memory_writer_calls)
+        self.assertGreaterEqual(len(writers), 1)
+        self.assertIn("Previous note:", writers[0]["messages"][-1]["content"])
+
+        # The LLM note IS the stored block (bounded, with the update stamp).
+        block = self.sm.store.memory_block
+        self.assertTrue(block)
+        self.assertIn("build a lighthouse", block)
+        self.assertIn("add lamp glass", block)
+        self.assertIn("Last updated", block)
+
+        # And the SAME note text is what the (single) request's system
+        # prompt carries — exactly once, without touching stored history.
+        main = self._main_requests()
+        self.assertEqual(len(main), 1,
+                         "one main LLM request; the writer call is separate")
+        self.assertEqual(
+            main[0]["messages"][0]["content"].count("build a lighthouse"), 1,
+            "the writer note must reach the model exactly once per request")
+        self.assertNotIn("build a lighthouse",
+                         self.state.conversation_history[0]["content"],
+                         "stored system prompt must not accumulate the note")
 
     def test_conversation_no_longer_fits_error_fires_last(self):
         """When the CURRENT user request alone cannot fit the budget, the

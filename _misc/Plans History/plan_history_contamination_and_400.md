@@ -1,7 +1,12 @@
 # Plan — Conversation History Contamination & the Persistent 400
 
-**Status**: Phase A/B/0 complete — all reported issues fixed
-**Date**: 2026-09-17
+> ✅ **DONE — fully implemented & audited (2026-09-30).** Archived to
+> `_misc/Plans History/`. Every Phase A/B/0 item is present in the codebase and
+> covered by tests; see [§8 Audit](#8-audit--closure-2026-09-30) for the
+> file:line verification.
+
+**Status**: ✅ Complete — all phases (A, B, 0, C, D) implemented, tested, audited
+**Date**: 2026-09-17 (implemented) · 2026-09-30 (audited + archived)
 **Related**: issue #62 (history slicing), issue #63 (500 fault classification)
 
 ---
@@ -368,4 +373,32 @@ produced the evidence above.
    - `roles` contains no `reasoning`
    - no 400
 3. Confirm the model builds a ground mesh, not a temple/cabin/living room.
+
+---
+
+## 8. Audit & closure (2026-09-30)
+
+Independent audit of this plan against the current source. **Every claimed
+fix is present and wired** — nothing in the plan was left partial.
+
+| Plan item | Claim | Verified in |
+|---|---|---|
+| 0.5.1 comma-import false positive | `_imports_module()` checks `import a, b` + `from x import` | `mcp_to_blender_server.py:365`; used for bpy (`:401`) and bmesh (`:676`); `tests/test_preflight.py` |
+| 0.5.2 full tool result stored | `_MAX_TOOL_RESULT_CHARS` = 2000; store full, trim at send | `agent_controller.py:126`, `_trim_history_tool_results()` `:614`; `tests/test_orchestration_helpers.py::TestTrimHistoryToolResults` `:1018` |
+| 0.5.3 malformed tool-call 500 | `_FAULT_TOOLCALL` class + marker ordering + one-shot nudge | `llm_transport.py:147,213,546`; `_toolcall_fault_message()` |
+| 0.5.4 recovery actually recovers | nudge says "split the work"; one-shot guard surfaces immediately; auto-continue sanitizes + forwards thinking budget | `llm_transport.py:546,760`; `agent_controller.py:5065-5067` |
+| B1 flatten drops `reasoning`, maps unknown → `user`, drops empty | yes | `_flatten_for_plain_chat()` `agent_controller.py:767` (reasoning drop `:801`) |
+| B2 budget reserves last user turn + clamps `max_tokens` | yes | `_fit_history_to_budget()` (pins last user turn); `_compute_prompt_budget()` clamps `max_tokens` |
+| B3 sanitize history on load | `_sanitize_loaded_history()` called before assignment | `agent_controller.py:571`; `ui_chat.py:1694` |
+| D tests | orchestration-helper coverage | `tests/test_orchestration_helpers.py`, `tests/test_preflight.py` |
+
+**Regression status**: the whole `tests/test_orchestration_helpers.py` and
+`tests/test_context_budget.py` suites pass (see CI). The 400 root cause
+(`reasoning` role reaching the template) and the hallucination root cause
+(negative prompt budget trimming the user turn away) are both closed.
+
+**Related follow-up (same area, later branch)**: the transport-400 graceful
+handling and budget hardening for live llama-server context overflows are in
+`plan_tier3_session_memory_checkpoints.md` and the scene-safety plan — this
+document covers the *reasoning-role / negative-budget* 400 only.
 

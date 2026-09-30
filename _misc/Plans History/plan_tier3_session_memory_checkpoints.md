@@ -1,10 +1,21 @@
 # BFA Coworker — Tier 3: Local Session Memory & Context Checkpoints
 
+> ✅ **DONE — implemented, merged, and audited (2026-09-30).** Archived to
+> `_misc/Plans History/`. All phases shipped on `main` (PRs #78/#84); the one
+> remaining gap — the never-applied Qwen `--no-context-shift` preset flags —
+> and the live-overflow budget work were completed on
+> `fix/scene-safety-local-hardening`. See [§11 Closure](#11-closure-2026-09-30).
+
 **Date**: 2026-09-29
-**Status**: Planning — Approved in principle, ready for implementation
+
+**Status**: ✅ Complete — Phases 1–7 implemented, tested, audited
+
 **Depends on**: Tier 3b (llama-server & models), Tier 3f (Buddy Optimizations — GPU auto-detection, context recommendation), Tier 4f (Agent Intelligence — context management)
+
 **Blocks**: Nothing — this hardens existing local-mode behaviour
+
 **Branch**: `6117603f` worktree
+
 **Estimated scope**: ~1,200–1,600 LOC + tests
 
 ---
@@ -423,3 +434,31 @@ branch creates an independent thread; compaction status is visible while it runs
 - Any runtime llama-server restart or hot ctx resize (explicitly declined, D4).
 - Cross-session/global memory shared between different `.blend` files.
 - Changes to the MCP tool set itself.
+
+---
+
+## 11. Closure (2026-09-30)
+
+All phases are implemented and covered by tests. Phase → code map:
+
+| Phase | Status | Where |
+|---|---|---|
+| 1 — Real context accounting | ✅ | `agent_controller.py`: `_compute_prompt_budget` `:463`, `_estimate_tools_tokens` `:446`, `_prompt_preflight` `:490`; `tests/test_context_budget.py` |
+| 2 — Startup ctx validation | ✅ | `llm_manager.py`: `get_runtime_ctx` `:1803`, `validate_ctx_against_hardware` `:1754`; silent auto-bump removed; `tests/test_llm_manager.py` |
+| 3 — Qwen llama.cpp flags | ✅ | `llm_manager.py`: preset `extra_server_args`; `_current_preset_extra_args()` (this branch); `_filter_flags_for_build` |
+| 4 — Session memory & checkpoints | ✅ | `addon/bfa_coworker/session_memory.py`; `_maybe_compact_session`; `tests/test_session_memory.py` |
+| 5 — UI & operators | ✅ | `ui_chat.py` Session section + restore/branch/view-edit/compact-now |
+| 6 — Tool-output slimming | ✅ | `_collapse_known_errors` (poll + index), reasoning prune from storage |
+| 7 — Tests & docs | ✅ | `tests/test_context_budget.py`, `tests/test_session_memory.py`, `tests/test_llm_manager.py`; CHANGELOG + wiki |
+
+**Closed gap (this branch)**: `_current_preset_extra_args()` was called at
+`llm_manager.py:3000` but never defined, so Qwen presets' `--no-context-shift`
+was never applied and launch raised `NameError`. Now implemented and tested.
+
+**Beyond the plan (this branch)**: live llama-server context-overflow 400s are now
+handled gracefully — the transport caches the error body once, classifies
+`exceed_context_size_error` as `context_overflow`, and the turn loop
+**auto-compacts and retries once**; every POST path (screenshot, auto-continue,
+forced-summary) is budgeted; and a conservative fallback ctx keeps enforcement on
+when `/props` is unreachable. See `plan_cowork_scene_safety_and_local_hardening.md`
+§11 and the CHANGELOG.

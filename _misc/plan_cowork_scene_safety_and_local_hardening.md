@@ -1,7 +1,10 @@
 # BFA Coworker — Co-work Scene Safety & Local (Qwen) Run Hardening
 
 **Date**: 2026-09-30
-**Status**: Planning — Approved in principle, ready for implementation
+**Status**: 🚧 In progress — Phases **1, 2, 3, 4, 7, 8 done** on branch
+`fix/scene-safety-local-hardening`; Phases **5 (user-edit detection)** and
+**6 (scoped auto-undo)** deferred — they touch the destructive-undo path and need
+a live Blender session to verify. See [§11 Progress](#11-progress-2026-09-30).
 **Depends on**: Tier 3 (session memory & context budget), Tier 3g (MCP intent architecture / preflight), Tier 3h (quality audit)
 **Blocks**: Nothing — hardens existing local-mode behaviour
 **Branch**: `6117603f` worktree
@@ -534,3 +537,29 @@ make check_all
 - **Multi-user / networked co-editing** — single-session co-working only.
 - **Replacing the LLM's code generation with a restricted DSL** — the preflight + hints approach
   is retained.
+
+---
+
+## 11. Progress (2026-09-30)
+
+Branch `fix/scene-safety-local-hardening`. Implemented and unit-tested; the
+shared graceful-error / budget hardening that this plan depends on also landed on
+the same branch.
+
+| Phase | Status | Where |
+|---|---|---|
+| 1 — Co-work scene lock | ✅ Done | `addon/bfa_coworker/co_work_guard.py` (new); `lock_scene_while_working` in `llm_manager.py` / `preferences.py`; lock/release wired into `run_conversation_turn`'s `finally`; `tests/test_co_work_guard.py` |
+| 2 — Preflight operator context | ✅ Done | `mcp_to_blender_server.py` `_preflight_check` checks 28–29 (`op_requires_selection`, `op_requires_active_object`); `tests/test_preflight.py` |
+| 3 — Preflight unguarded indexing | ✅ Done | `mcp_to_blender_server.py` check 30 (`unguarded_list_index`); `tests/test_preflight.py` |
+| 4 — Error hints & collapsing | ✅ Done | `_collapse_poll_failed_error` operator table + `_collapse_index_error` / `_collapse_known_errors`; `_spiral_corrective_message` branches; traceback HINTs; covered in `tests/test_context_budget.py` |
+| 7 — Local (Qwen) hardening | ✅ Done | `_current_preset_extra_args()` implemented; mode-aware iteration cap (12 local / 8 remote); `tests/test_llm_manager.py`, `tests/test_orchestration_helpers.py` |
+| 8 — Prompts & docs | ✅ Done | "selection is not yours" + co-work note in `prompts.yml`, `prompts_compact.yml`, `skills/best_practices.md`; `tests/test_prompt_rules.py`; CHANGELOG entry |
+| **5 — User-edit detection & re-sync** | ⏸️ **Deferred** | Needs a live Blender to exercise the fingerprint/snapshot path safely |
+| **6 — Scoped auto-undo** | ⏸️ **Deferred** | Mutates the destructive global-undo path; unsafe to land unverified |
+
+**Relationship to the history-contamination plan**: the `reasoning`-role and
+negative-budget 400s are closed by
+`Plans History/plan_history_contamination_and_400.md`; this plan's Phase 4 holds
+the operator-specific collapsing first introduced for that work. The live
+llama-server context-overflow 400 (transport body caching, auto-compact-and-retry,
+budget on every POST path) is implemented on this branch too.

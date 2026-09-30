@@ -543,6 +543,46 @@ Auto-start enabled?
 | Low VRAM / OOM | Recommend lightweight presets (Q4_K_M, 3B-8B params). |
 | Remote API rate limit | Show error, suggest retry. Store last error in state. |
 | Port conflicts | Port killer + availability check. Effective ports shown in UI. |
+
+## Plan Documents & Lifecycle
+
+Design plans live in `_misc/` as `plan_<topic>.md`. They are the working record
+of *intended* changes — not user documentation — and they must state their own
+status so the folder listing shows at a glance what is open and what is done.
+
+### Status labels
+
+Every plan carries a status line with an emoji:
+
+| Emoji | Status | Meaning |
+|---|---|---|
+| 📝 | Draft | Being written, not yet approved |
+| 🚧 | In progress | Approved; implementation under way. **Name the completed phases** and the deferred ones (and why) |
+| ✅ | Done | Fully implemented, tested, and audited |
+| ⏸️ | Paused | Deliberately stopped, superseded, or blocked |
+| ❌ | Rejected | Decided against (record the reason) |
+
+A partially-done plan must say **which phases are complete** and which are
+deferred.
+
+### When a plan is done
+
+1. Update the header to `**Status**: ✅ Complete — …` with both the implemented
+   and audited dates.
+2. Append an **Audit** section: a table mapping every plan item → the `file:line`
+   that implements it, plus a note on test coverage. Verify each item against the
+   code — never trust the plan's own claims.
+3. **Move the file** with `git mv _misc/plan_<topic>.md
+   "_misc/Plans History/plan_<topic>.md"`. Archived plans are the durable record
+   of what was actually built.
+4. Leave active work at the `_misc/` root so the open plans are obvious.
+
+### Auditing a plan
+
+For each symbol the plan claims was added, confirm it **exists and is wired**
+(defined is not enough): grep the module for the function/constant, check its call
+site, and confirm the tests the plan names actually exist. Report — explicitly —
+anything the plan claims but the code does not contain.
 | Subprocess pipe deadlock | Pipe drainer threads prevent Blender hang. |
 | Orphaned tool messages in history | `_drop_orphaned_tool_messages()` prevents Jinja errors. |
 | `finish_reason=length` truncation | Auto-continue with concatenation (max 2 attempts). |

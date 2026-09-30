@@ -14,6 +14,7 @@ Also registers a Text Editor side panel for prompt-based interaction.
 __all__ = (
     "ChatHistoryProperties",
     "BFACW_PT_chat_panel",
+    "BFACW_PT_chat_history",
     "BFACW_PT_chat_queue",
     "BFACW_PT_chat_status",
     "BFACW_PT_chat_text_editor",
@@ -77,7 +78,10 @@ def _sync_prefs_to_config(prefs: bpy.types.AddonPreferences) -> None:
     llm_cfg.local_ctx_size = prefs.local_ctx_size
     llm_cfg.local_max_tokens = prefs.local_max_tokens
     llm_cfg.thinking_budget_tokens = prefs.thinking_budget_tokens
-    llm_cfg.lock_scene_while_working = prefs.lock_scene_while_working
+    # getattr with a default: a Blender session that still has an older
+    # _BFACW_Preferences class registered (e.g. before a restart after an
+    # addon update) must not crash agent start over a newer preference.
+    llm_cfg.lock_scene_while_working = getattr(prefs, "lock_scene_while_working", True)
     llm_cfg.remote_api_url = prefs.remote_api_url
     llm_cfg.remote_api_key = prefs.remote_api_key
     llm_cfg.remote_model = prefs.remote_model
@@ -1999,9 +2003,29 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         # ── Session section (Tier 3): memory, checkpoints, context usage ──
         _draw_session_section(layout, context, props, state)
 
-        layout.separator()
+        # NOTE: the conversation history is drawn in its own panel
+        # (BFACW_PT_chat_history) so a long history never crowds the input
+        # area.  This draw() method ends here.
 
-        # ── Conversation history ──
+
+class BFACW_PT_chat_history(Panel):  # type: ignore[misc]
+    """Conversation history in its own panel, separate from the input."""
+    bl_label = "History"
+    bl_idname = "BFACW_PT_chat_history"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Coworker"
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return not bpy.app.background
+
+    def draw(self, context: bpy.types.Context) -> None:
+        layout = self.layout
+        wm = context.window_manager
+        props = wm.bfacw_chat_props  # type: ignore[attr-defined]
+        state = agent_controller._agent_state
+        prefs = context.preferences.addons[__package__].preferences
         history = state.conversation_history
         if history:
             # Display order toggle + message count.
@@ -2654,6 +2678,7 @@ _classes = (
 
     BFACW_PT_chat_queue,
     BFACW_PT_chat_panel,
+    BFACW_PT_chat_history,
     BFACW_PT_chat_status,
     BFACW_PT_chat_text_editor,
 )

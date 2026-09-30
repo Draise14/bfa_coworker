@@ -278,7 +278,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         cfg.local_max_tokens = self.local_max_tokens
         cfg.thinking_budget_tokens = self.thinking_budget_tokens
         cfg.local_kv_cache_quant = self.local_kv_cache_quant
-        cfg.lock_scene_while_working = self.lock_scene_while_working
+        cfg.lock_scene_while_working = getattr(self, "lock_scene_while_working", True)
         llm.set_config(cfg)
         # If switching to remote, stop any running local LLM.
         if self.llm_mode == "remote":

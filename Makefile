@@ -12,6 +12,9 @@ Targets
    * test:              Run unit tests.
    * test_rst_parse:    Run unit tests for RST manual/API doc parsing.
    * test_rst_search:   Run unit tests for the RST text-search layer.
+   * benchmark:         Run the headless benchmark suite (offline fake
+                        LLM/MCP servers) under injected 400/500 errors.
+                        Repeats BENCH_RUNS times (default 1).
    * test_integration:  Run integration tests (requires BLENDER_BIN).
                         Loads .env if present (e.g. ANTHROPIC_API_KEY).
                         Uses .test_venv (delete to force a rebuild).
@@ -47,6 +50,8 @@ Environment Variables
    Variables may be set in a .env file (loaded automatically).
 
    PYTHON              Python interpreter (default: python).
+   BENCH_RUNS          Number of times `make benchmark` repeats the
+                       headless benchmark suite (default: 1).
    BLENDER_BIN         Path to the Blender binary (default: blender).
    BFACW_MCP           Path to the bfa-coworker-mcp command (default: bfa-coworker-mcp).
    BLENDER_PATH        Path to the Blender binary used by the MCP server
@@ -96,6 +101,22 @@ test_rst_parse:
 
 test_rst_search:
 	$(PYTHON) tests/test_rst_search.py
+
+# Headless benchmark suite.  Drives the REAL conversation turn loop against
+# offline fake LLM + MCP servers, injecting HTTP 400 (context overflow) and
+# 500 responses to prove the run degrades gracefully instead of dying.
+# Deterministic and network-free, so it is safe to repeat.
+BENCH_RUNS ?= 1
+benchmark:
+	@i=0; while [ $$i -lt $(BENCH_RUNS) ]; do \
+		i=$$((i+1)); \
+		echo "=== benchmark run $$i/$(BENCH_RUNS) ==="; \
+		PYTHONIOENCODING=utf-8 $(PYTHON) -m unittest \
+			tests.test_llm_transport_errors \
+			tests.test_context_budget \
+			tests.test_session_memory \
+			tests.test_turn_loop_integration || exit 1; \
+	done
 
 test_integration:
 ifdef TESTS_LIST

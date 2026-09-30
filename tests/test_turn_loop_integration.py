@@ -308,6 +308,7 @@ class _FakeLLMHandler(BaseHTTPRequestHandler):
         is_writer_prompt = bool(messages) and "session-memory note" in str(
             (messages or [{}])[0].get("content") or "") and "Previous note:" in str(
             (messages or [{}, {}])[-1].get("content") or "")
+        spec = None
         with server.lock:
             server.requests.append(body)
             if is_writer_prompt:
@@ -317,8 +318,28 @@ class _FakeLLMHandler(BaseHTTPRequestHandler):
                 # recorded but must NOT consume scripted chat indices.
                 server.memory_writer_calls.append(body)
             else:
-                server.chat_count += 1
-                idx = server.chat_count - 1
+                # Error injection (benchmark harness): a matching spec makes
+                # this chat request fail with a chosen HTTP status/body and
+                # must NOT consume a scripted response index.  Specs match on
+                # the stream flag (True/False) or on any request (None).
+                for _i, _s in enumerate(server.chat_error_specs):
+                    if _s.get("is_stream") is None or bool(
+                            _s.get("is_stream")) == is_stream:
+                        spec = server.chat_error_specs.pop(_i)
+                        break
+                if spec is None:
+                    server.chat_count += 1
+                    idx = server.chat_count - 1
+        if spec is not None:
+            err_body = str(spec.get("body", "{}"))
+            err_status = int(spec.get("status", 500))
+            err_bytes = err_body.encode()
+            self.send_response(err_status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(err_bytes)))
+            self.end_headers()
+            self.wfile.write(err_bytes)
+            return
         if is_writer_prompt:
             # Distinctive (configurable) note: tests assert the note text
             # actually lands in the injected memory block, not just that
@@ -379,6 +400,9 @@ def _start_fake_server(script, mcp_tools=None):
     server.snapshot_script = None
     server.scene_objects = []
     server.writer_note = "note"
+    # Benchmark error injection: list of {"is_stream", "status", "body"}
+    # specs consumed in order by matching chat requests.
+    server.chat_error_specs = []
     server.lock = threading.Lock()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -1059,5 +1083,135 @@ class TestToolLoopIntegration(_TurnLoopTestBase):
         self.assertIs(history, self.state.conversation_history)
 
 
+class TestBenchmarkErrorSurvival(_TurnLoopTestBase):
+    """A benchmark run must survive injected 400/500 errors.
+
+    The addon benchmark driver presses through a suite of turns.  A single
+    server error used to be fatal (a raw ``HTTP Error 400: Bad Request``
+    with no recovery).  These tests inject errors into the fake server and
+    prove the turn loop degrades gracefully: it recovers from a
+    context-overflow 400 (compact + retry) and a transient 500 (streaming
+    fallback), and a multi-turn run completes with no exception.
+
+    The injection is deterministic and offline, so it is safe to run many
+    times in CI — the same building block the real benchmark loops over.
+    """
+
+    _OVERFLOW_BODY = json.dumps({
+        "error": {
+            "code": 400,
+            "message": "the request exceeds the available context size, "
+                       "try increasing it",
+            "type": "exceed_context_size_error",
+        }
+    })
+
+    def _mk_server(self, script):
+        self.server.shutdown()
+        self.server.server_close()
+        self.server = _start_fake_server(script, mcp_tools=[_EXECUTE_CODE_TOOL])
+        self.port = self.server.server_address[1]
+        cfg = self.lm.LLMConfig()
+        cfg.mode = "local"
+        cfg.local_port = self.port
+        cfg.local_ctx_size = 8192
+        cfg.local_max_tokens = 1024
+        cfg.thinking_budget_tokens = 0
+        self.lm.set_config(cfg)
+
+    def _inject(self, is_stream, status, body):
+        self.server.chat_error_specs.append(
+            {"is_stream": is_stream, "status": status, "body": body})
+
+    def _main_requests(self):
+        with self.server.lock:
+            return [r for r in self.server.requests
+                    if r not in self.server.memory_writer_calls]
+
+    def _run_agent_turn(self, message):
+        texts = []
+        self._pin_fake_bpy()
+        try:
+            history = self.ac.run_conversation_turn(
+                message, on_text=texts.append, chat_mode="AGENT",
+                llm_url=None, model="fake-model", mcp_port=self.port)
+        finally:
+            self._unpin_fake_bpy()
+        return history, texts
+
+    def test_context_overflow_recovers_by_compacting_and_retrying(self):
+        """A context-window 400 triggers compaction + a single retry."""
+        self._mk_server([{"content": "recovered ok"}])
+        # Seed enough history that a forced compaction has something to
+        # retire.
+        self._seed_history(turns=30)
+        # The stream attempt fails first (endpoint hiccup), so the
+        # non-streaming fallback is the request that sees the overflow body.
+        self._inject(True, 400, "{\"error\": {\"message\": \"stream busy\"}}")
+        self._inject(False, 400, self._OVERFLOW_BODY)
+
+        history, texts = self._run_agent_turn("continue the build")
+
+        # The turn recovered rather than surfacing a raw 400.
+        self.assertEqual(self.state.error, "")
+        self.assertIn("recovered ok", texts)
+        self.assertNotIn("HTTP Error 400", self.state.error_full)
+
+        # An overflow checkpoint was recorded (proves the forced compaction
+        # ran and snapshotted).
+        payload = self.sm.store.to_payload()
+        reasons = [c.get("reason") for c in payload.get("checkpoints", [])]
+        self.assertIn("overflow", reasons,
+                      "a forced-compaction checkpoint (reason=overflow) "
+                      "must be recorded on 400 recovery")
+
+    def test_transient_500_on_stream_falls_back_and_succeeds(self):
+        """A 500 on the streaming attempt falls back and the turn succeeds."""
+        self._mk_server([{"content": "survived the 500"}])
+        self.state.conversation_history = [
+            {"role": "system", "content": "You are a helpful agent."}]
+        self._inject(True, 500, "Internal Server Error")
+
+        history, texts = self._run_agent_turn("hello")
+
+        self.assertEqual(self.state.error, "")
+        self.assertIn("survived the 500", texts)
+
+    def test_multi_turn_benchmark_run_survives_repeated_errors(self):
+        """A 4-turn run completes even with errors injected at two turns.
+
+        This mirrors a benchmark run: several turns driven back to back,
+        some of which see server errors.  No turn may abort the run.
+        """
+        self._mk_server([
+            {"content": "turn one ok"},
+            {"content": "turn two ok"},
+            {"content": "turn three ok"},
+            {"content": "turn four ok"},
+        ])
+        self.state.conversation_history = [
+            {"role": "system", "content": "You are a helpful agent."}]
+
+        outcomes = []
+        for turn in range(4):
+            if turn == 1:
+                # Transient 500 on the stream attempt.
+                self._inject(True, 500, "Internal Server Error")
+            if turn == 2:
+                # Full context-overflow pair (stream + non-stream fallback).
+                self._inject(True, 400, "{\"error\": {\"message\": \"stream busy\"}}")
+                self._inject(False, 400, self._OVERFLOW_BODY)
+            history, texts = self._run_agent_turn(
+                "benchmark step {:d}".format(turn))
+            outcomes.append(bool(texts))
+            # A failing turn must never raise or leave the run wedged.
+            self.assertIs(history, self.state.conversation_history)
+
+        # Every turn produced an answer; the run completed.
+        self.assertTrue(all(outcomes), "every benchmark turn must complete")
+        self.assertEqual(self.state.error, "")
+
+
 if __name__ == "__main__":
     unittest.main()
+

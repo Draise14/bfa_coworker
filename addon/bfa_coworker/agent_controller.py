@@ -120,6 +120,24 @@ _TEMPLATE_OVERHEAD_TOKENS = 512
 # ballooning past a small local model's context window.
 _MAX_TOOL_RESULT_CHARS = 2000
 
+# Fixed token cost of an injected screenshot.  A vision encoder turns an
+# image into a roughly fixed number of tokens regardless of its base64 size,
+# so the raw data-URI length must NOT be counted as text.  Used by
+# :func:`_message_text_length` so a pending screenshot is budgeted without
+# wildly over-trimming the prompt.
+_SCREENSHOT_TOKENS = 1500
+
+# Conservative context window used to keep budget enforcement *on* when the
+# server's real window cannot be read (``/props`` unreachable) and no value
+# is configured.  Trimming slightly is always better than sending an
+# unbounded prompt that the server answers with a raw HTTP 400.
+_DEFAULT_LOCAL_CTX_FALLBACK = 8192
+
+# Reduced verbatim window used by a *forced* compaction (context-overflow
+# recovery).  Smaller than MAX_WINDOW_TURNS so an over-budget prompt has
+# something left to retire even after the threshold compaction ran.
+_FORCE_COMPACT_KEEP_RECENT = 8
+
 
 def _use_compact_prompt() -> bool:
     """Return ``True`` when the compact system prompt should be used.
@@ -355,11 +373,14 @@ def _message_text_length(message: dict[str, Any]) -> int:
     elif isinstance(content, list):
         for block in content:
             if isinstance(block, dict):
-                # Text blocks carry "text"; image blocks carry a base64 URL.
+                # Text blocks carry "text"; image blocks carry an
+                # ``image_url``.  An image's base64 length is meaningless to
+                # the text tokenizer (a vision tower consumes a roughly fixed
+                # token count), so it is counted at that fixed cost rather
+                # than by the data-URI length.
                 total += len(str(block.get("text", "")))
-                image_url = block.get("image_url")
-                if isinstance(image_url, dict):
-                    total += len(str(image_url.get("url", "")))
+                if isinstance(block.get("image_url"), dict):
+                    total += int(_SCREENSHOT_TOKENS * _CHARS_PER_TOKEN)
             else:
                 total += len(str(block))
     for call in message.get("tool_calls") or []:
@@ -1181,7 +1202,12 @@ class AgentState:
     status_text: str = "Idle"
     error: str = ""
     error_full: str = ""  # Untruncated error text (for copy-to-clipboard troubleshooting)
+    error_kind: str = ""  # Machine-readable classification (e.g. "context_overflow")
     warning: str = ""  # Non-fatal notice (e.g. tool-calling downgrade)
+    # Context accounting for the Session panel indicator.  Set each turn from
+    # the runtime/configured window and the computed prompt budget.
+    ctx_size_used: int = 0
+    prompt_budget: int = 0
     tool_count: int = 0  # Number of MCP tools available (0 = not loaded yet)
     conversation_history: list[dict[str, Any]] = field(default_factory=list)
     streaming_text: str = ""
@@ -4104,10 +4130,21 @@ def _memory_writer_factory(llm_url: str, api_key: str, model: str, max_tokens: i
     """Return a memory_writer callback using a small dedicated LLM call."""
     def _writer(retired_text: str, prior_memory: str) -> str | None:
         messages = session_memory.memory_writer_prompt(retired_text, prior_memory)
-        response = _transport.openai_chat_completions(
-            llm_url, messages, None, api_key, model,
-            max_tokens=max_tokens, thinking_budget_tokens=0,
-        )
+        # A writer failure is non-fatal (the heuristic fallback is used), so
+        # preserve the main turn's error state across the call: otherwise a
+        # transient writer hiccup is left in ``_agent_state.error`` and the
+        # UI / benchmark recorder reports a failed turn that actually
+        # succeeded.
+        _saved_err = (_agent_state.error, _agent_state.error_full,
+                      _agent_state.error_kind)
+        try:
+            response = _transport.openai_chat_completions(
+                llm_url, messages, None, api_key, model,
+                max_tokens=max_tokens, thinking_budget_tokens=0,
+            )
+        finally:
+            (_agent_state.error, _agent_state.error_full,
+             _agent_state.error_kind) = _saved_err
         if not response:
             return None
         try:
@@ -4179,6 +4216,56 @@ def _maybe_compact_session(
     st.snapshot(history, reason="compaction", turn_index=_session_turn_count)
     print("[🛠️Coworker] _maybe_compact_session: retired {:d} messages, "
           "archived, checkpoint saved".format(len(retired)))
+
+
+def _force_compact_session(
+    history: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    prompt_budget: int,
+    on_status: Callable[[str], None] | None = None,
+    memory_writer: Callable[[str, str], str | None] | None = None,
+) -> int:
+    """Compact aggressively to recover from a context-overflow 400.
+
+    The server rejected the request as larger than its window even though the
+    threshold trigger did not shrink it enough (e.g. the retained verbatim
+    window itself was large).  Retire into a *smaller* window than the normal
+    :data:`session_memory.MAX_WINDOW_TURNS` so there is something left to
+    drop, archive the retired turns, refresh the memory block, and snapshot a
+    checkpoint.  The caller then rebuilds and retries the request; if even the
+    reduced window does not fit, the preflight surfaces the friendly
+    "conversation no longer fits" message.  Returns the number retired.
+
+    Never raises.
+    """
+    global _session_turn_count
+    st = session_memory.store
+    if on_status:
+        on_status("Compacting conversation…")
+    kept, memory_block, retired = session_memory.compact_history(
+        history,
+        prior_memory=st.memory_block,
+        memory_writer=memory_writer,
+        keep_recent=_FORCE_COMPACT_KEEP_RECENT,
+        updated_turn=_session_turn_count,
+    )
+    st.memory_block = memory_block
+    st.memory_updated_turn = _session_turn_count
+    st.append_archive(retired)
+    history[:] = kept
+    # Same reasoning-entry prune as the threshold path: once outside the
+    # verbatim window they are UI-only dead weight that is stripped before
+    # every request anyway.
+    _boundary = session_memory.find_retire_boundary(history)
+    history[:] = (
+        history[:_boundary]
+        + [m for m in history[_boundary:] if m.get("role") != "reasoning"]
+    )
+    if retired:
+        st.snapshot(history, reason="overflow", turn_index=_session_turn_count)
+    print("[🛠️Coworker] _force_compact_session: retired {:d} messages "
+          "(keep_recent={:d})".format(len(retired), _FORCE_COMPACT_KEEP_RECENT))
+    return len(retired)
 
 
 def _run_conversation_turn_inner(
@@ -4442,6 +4529,15 @@ def _run_conversation_turn_inner(
                 print("[🛠️Coworker] run_conversation_turn: runtime n_ctx {:d} != configured {:d} — "
                       "budgeting against the server's value".format(_runtime_ctx, _ctx_size))
             _ctx_size = _runtime_ctx
+        if _ctx_size <= 0:
+            # Never silently disable budget enforcement: without a real or
+            # configured window the prompt would be unbounded and the server
+            # would answer with a raw 400.  Use a conservative fallback and
+            # say so.
+            _ctx_size = _DEFAULT_LOCAL_CTX_FALLBACK
+            print("[🛠️Coworker] run_conversation_turn: no runtime/configured context "
+                  "size — using conservative fallback {:d} so the prompt stays "
+                  "bounded".format(_ctx_size))
         if _ctx_size > 0:
             ctx_size_used = _ctx_size
             prompt_budget = _compute_prompt_budget(_ctx_size, max_tokens)
@@ -4495,6 +4591,101 @@ def _run_conversation_turn_inner(
     else:
         _all_tools = openai_tools  # Unused in remote mode, but keep for consistency.
 
+    # ── Request payload builder ────────────────────────────────────────
+    # Extracted so the context-overflow recovery can rebuild the payload
+    # from the (now smaller) history and retry without duplicating the
+    # slice/strip/trim/inject/budget sequence.  Closes over ``history``,
+    # ``openai_tools`` and ``prompt_budget``; returns ``(messages, error)``
+    # where *error* is set only when even the pinned turn cannot fit.
+    def _build_send_messages() -> tuple[list[dict[str, Any]], str | None]:
+        # Slice history to avoid unbounded context growth.  Always keep the
+        # system prompt (index 0) if present.  Must preserve tool-call pairs:
+        # each "tool" role message MUST follow an "assistant" with tool_calls.
+        if len(history) > _MAX_HISTORY_MESSAGES:
+            keep = min(_MAX_HISTORY_MESSAGES, len(history))
+            if history[0].get("role") == "system":
+                msgs = [history[0]] + history[-(keep - 1):]
+            else:
+                msgs = list(history[-keep:])
+        else:
+            msgs = list(history)
+
+        # Repair half-finished tool-call exchanges.  This must run for ALL
+        # history sizes: the slice above can cut a pair in half, and Qwen's
+        # Jinja template crashes with "Unexpected message role" on either an
+        # orphaned tool result or an orphaned assistant tool_calls.
+        msgs = _repair_tool_call_pairs(msgs)
+
+        # Strip reasoning (non-standard "reasoning" role) and UI-only entries
+        # (the startup greeting) before sending to the LLM.
+        msgs = _strip_reasoning_from_history(msgs)
+        msgs = _strip_ui_only_from_history(msgs)
+
+        # Trim oversized tool results for the request only.  History keeps the
+        # full text so the chat panel can display it; the model gets the gist.
+        msgs = _trim_history_tool_results(msgs)
+
+        # Sanitize any remaining non-standard roles to "user".
+        msgs = _sanitize_message_roles(msgs)
+
+        # ── Inject the session memory block into the system prompt ──
+        # The block is small (bounded) and carries retired context; Qwen's
+        # Jinja template requires system content up front, so it is appended
+        # to message 0 like the domain skills.
+        _mem_block = session_memory.store.memory_block
+        if _mem_block and msgs and msgs[0].get("role") == "system":
+            _sys0 = msgs[0]
+            _base = str(_sys0.get("content") or "")
+            if _mem_block not in _base:
+                # Copy before mutating: msgs[0] is usually the SAME dict as
+                # history[0] (no slice happened), so writing in place would
+                # accumulate the block in the stored history and double it on
+                # every subsequent request.
+                _sys0 = dict(_sys0)
+                _sys0["content"] = _base.rstrip() + "\n\n" + _mem_block
+                msgs[0] = _sys0
+
+        # ── Inject a pending screenshot into the last user message ──
+        # Done BEFORE budgeting so the image is counted against the window
+        # (a pending screenshot used to be appended after the preflight and
+        # was therefore completely unbudgeted — a direct route to a 400).
+        # A copy is used so the stored history keeps its plain-text content.
+        _pending_image: str | None = getattr(_agent_state, "_pending_image", None)
+        if _pending_image and msgs and msgs[-1].get("role") == "user":
+            _last = dict(msgs[-1])
+            _existing = _last.get("content")
+            if isinstance(_existing, str):
+                _last["content"] = [
+                    {"type": "image_url", "image_url": {"url": _pending_image}},
+                    {"type": "text", "text": _existing},
+                ]
+            elif isinstance(_existing, list):
+                _existing = list(_existing)
+                _existing.insert(0, {"type": "image_url", "image_url": {"url": _pending_image}})
+                _last["content"] = _existing
+            msgs[-1] = _last
+            _agent_state._pending_image = None  # Clear after use
+
+        # ── Enforce the token budget, then preflight ──────────────────
+        # The message-count cap above is a blunt instrument: a few large tool
+        # results can still overflow a small local context window.  Trim
+        # oldest-first, then run the last-check preflight (counts history +
+        # tool schema) which re-trims or surfaces a friendly, actionable
+        # error instead of a raw server 400.
+        if prompt_budget > 0:
+            _before = _estimate_messages_tokens(msgs)
+            msgs = _fit_history_to_budget(msgs, prompt_budget)
+            # Trimming can cut a tool-call exchange in half — repair again.
+            msgs = _repair_tool_call_pairs(msgs)
+            _after = _estimate_messages_tokens(msgs)
+            if _after < _before:
+                print("[🛠️Coworker] run_conversation_turn: trimmed prompt "
+                      "{:d} -> {:d} tokens ({:d} messages)".format(
+                          _before, _after, len(msgs)))
+            msgs, _err = _prompt_preflight(msgs, openai_tools, prompt_budget)
+            return msgs, _err
+        return msgs, None
+
     iterations = 0
     while iterations < _MAX_TOOL_ITERATIONS:
         iterations += 1
@@ -4521,90 +4712,15 @@ def _run_conversation_turn_inner(
             print("[🛠️Coworker] run_conversation_turn: session compaction skipped — {:s}".format(
                 str(_compact_ex)))
 
-        # Slice history to avoid unbounded context growth.
-        # Always keep the system prompt (index 0) if present.
-        # Must preserve tool-call pairs: each "tool" role message
-        # MUST follow an "assistant" message with "tool_calls".
-        if len(history) > _MAX_HISTORY_MESSAGES:
-            keep = min(_MAX_HISTORY_MESSAGES, len(history))
-            # Keep system message + last N messages.
-            if history[0].get("role") == "system":
-                history_to_send = [history[0]] + history[-(keep - 1):]
-            else:
-                history_to_send = history[-keep:]
-        else:
-            history_to_send = history
-
-        # Repair half-finished tool-call exchanges.  This must run for ALL
-        # history sizes: the slice above can cut a pair in half, and Qwen's
-        # Jinja template crashes with "Unexpected message role" on either an
-        # orphaned tool result or an orphaned assistant tool_calls.
-        history_to_send = _repair_tool_call_pairs(history_to_send)
-
-        # Strip reasoning messages before sending to the LLM.
-        # Reasoning (chain-of-thought) uses a non-standard "reasoning"
-        # role that wastes context window tokens without providing
-        # useful signal to the model.
-        history_to_send = _strip_reasoning_from_history(history_to_send)
-
-        # Strip UI-only entries (the startup greeting).  They exist for the
-        # chat panel, not the model -- sending the greeting adds a phantom
-        # assistant turn ahead of the system prompt.
-        history_to_send = _strip_ui_only_from_history(history_to_send)
-
-        # Trim oversized tool results for the request only.  History keeps the
-        # full text so the chat panel can display it; the model gets the gist.
-        history_to_send = _trim_history_tool_results(history_to_send)
-
-        # Sanitize any remaining non-standard roles to "user".
-        # Some models (Qwen, etc.) have strict Jinja templates that
-        # raise "Unexpected message role" on unknown roles.
-        history_to_send = _sanitize_message_roles(history_to_send)
-
-        # Enforce the token budget.  The message-count cap above is a blunt
-        # instrument: a few large tool results can still overflow a small
-        # local context window.  Trim oldest-first until the prompt fits.
-        if prompt_budget > 0:
-            _before = _estimate_messages_tokens(history_to_send)
-            history_to_send = _fit_history_to_budget(history_to_send, prompt_budget)
-            # Trimming can cut a tool-call exchange in half — repair again.
-            history_to_send = _repair_tool_call_pairs(history_to_send)
-            _after = _estimate_messages_tokens(history_to_send)
-            if _after < _before:
-                print("[🛠️Coworker] run_conversation_turn: trimmed prompt "
-                      "{:d} -> {:d} tokens ({:d} messages)".format(
-                          _before, _after, len(history_to_send)))
-
-        # ── Inject the session memory block into the system prompt ────
-        # The block is small (bounded) and carries retired context; Qwen's
-        # Jinja template requires system content up front, so it is appended
-        # to message 0 like the domain skills.
-        _mem_block = session_memory.store.memory_block
-        if _mem_block and history_to_send and history_to_send[0].get("role") == "system":
-            _sys0 = history_to_send[0]
-            _base = str(_sys0.get("content") or "")
-            if _mem_block not in _base:
-                # Copy before mutating: history_to_send[0] is usually the
-                # SAME dict as history[0] (no slice happened), so writing
-                # in place would accumulate the block in the stored history
-                # and double it on every subsequent request.
-                _sys0 = dict(_sys0)
-                _sys0["content"] = _base.rstrip() + "\n\n" + _mem_block
-                history_to_send[0] = _sys0
-
-        # ── Pre-flight: last check right before the POST ──────────────
-        # Counts history + tool schema together; re-trims or surfaces a
-        # friendly error instead of a raw server 400.
-        if prompt_budget > 0:
-            history_to_send, _preflight_err = _prompt_preflight(
-                history_to_send, openai_tools, prompt_budget)
-            if _preflight_err:
-                _agent_state.is_thinking = False
-                _agent_state.thinking_start_time = 0.0
-                _agent_state.error = _preflight_err
-                if on_status:
-                    on_status("Error: conversation too large for context window")
-                return history
+        # ── Build the exact message payload for this POST ─────────────
+        history_to_send, _preflight_err = _build_send_messages()
+        if _preflight_err:
+            _agent_state.is_thinking = False
+            _agent_state.thinking_start_time = 0.0
+            _agent_state.error = _preflight_err
+            if on_status:
+                on_status("Error: conversation too large for context window")
+            return history
 
         # ── Request-shape diagnostic ──────────────────────────────────
         # Log exactly what is about to be sent.  This is the single most
@@ -4614,24 +4730,36 @@ def _run_conversation_turn_inner(
         print("[🛠️Coworker] run_conversation_turn: request shape:")
         print(_describe_history_for_log(history_to_send))
 
-        # ── Inject screenshot images into the next user message ───────
-        # If the last tool result contained an image (screenshot), inject
-        # it as an image_url content block in the next user message so
-        # vision-capable models can "see" the viewport.
-        _pending_image: str | None = getattr(_agent_state, "_pending_image", None)
-        if _pending_image and history_to_send and history_to_send[-1].get("role") == "user":
-            # Prepend the image to the existing user message content.
-            existing = history_to_send[-1]["content"]
-            if isinstance(existing, str):
-                history_to_send[-1]["content"] = [
-                    {"type": "image_url", "image_url": {"url": _pending_image}},
-                    {"type": "text", "text": existing},
-                ]
-            elif isinstance(existing, list):
-                existing.insert(0, {"type": "image_url", "image_url": {"url": _pending_image}})
-            _agent_state._pending_image = None  # Clear after use
-
         response = _llm_request(history_to_send, openai_tools, thinking_budget)
+
+        # ── Context-overflow recovery: compact, rebuild, retry once ───
+        # The server rejected the request as larger than its context window.
+        # Force an aggressive compaction, rebuild the payload from the now
+        # smaller history, and retry — instead of surfacing a raw HTTP 400
+        # the user cannot act on.  Bounded to a single retry; if the reduced
+        # window still does not fit, the preflight shows the friendly message.
+        if response is None and getattr(_agent_state, "error_kind", "") == "context_overflow":
+            print("[🛠️Coworker] run_conversation_turn: context overflow — forcing "
+                  "compaction and retrying once")
+            try:
+                _force_compact_session(
+                    history, openai_tools, prompt_budget, on_status=on_status,
+                    memory_writer=_memory_writer_factory(
+                        llm_url, api_key, model, min(max_tokens, 1024)))
+            except Exception as _force_ex:  # pylint: disable=broad-exception-caught
+                print("[🛠️Coworker] run_conversation_turn: forced compaction failed — "
+                      "{:s}".format(str(_force_ex)))
+            history_to_send, _preflight_err = _build_send_messages()
+            if _preflight_err:
+                _agent_state.is_thinking = False
+                _agent_state.thinking_start_time = 0.0
+                _agent_state.error = _preflight_err
+                if on_status:
+                    on_status("Error: conversation too large for context window")
+                return history
+            print("[🛠️Coworker] run_conversation_turn: retry request shape:")
+            print(_describe_history_for_log(history_to_send))
+            response = _llm_request(history_to_send, openai_tools, thinking_budget)
 
         # ── Abort check ───────────────────────────────────────────────
         # If the user stopped the turn, keep any partial streamed content
@@ -4663,10 +4791,28 @@ def _run_conversation_turn_inner(
         if response is None:
             _agent_state.is_thinking = False
             _agent_state.thinking_start_time = 0.0
-            _agent_state.error = "No response from LLM"
-            if on_status:
-                on_status("Error: No response from LLM")
+            # Keep the transport's specific reason (context overflow, server
+            # fault, malformed tool call) in ``error`` so the chat panel and
+            # the benchmark recorder see the real cause; the generic text is
+            # only a last resort when the transport left no detail at all.
+            _detail = _agent_state.error_full or _agent_state.error
+            if _detail:
+                _agent_state.error = _detail[:500]
+                if on_status:
+                    on_status("Error: {:s}".format(_agent_state.error))
+            else:
+                _agent_state.error = "No response from LLM"
+                if on_status:
+                    on_status("Error: No response from LLM")
             return history
+
+        # A successful request clears any error the recovery path recorded
+        # (e.g. a context-overflow 400 that was compacted away and retried).
+        # Without this the stale message would be shown even though the turn
+        # produced an answer.
+        _agent_state.error = ""
+        _agent_state.error_full = ""
+        _agent_state.error_kind = ""
 
         # Safety: log the approximate body size for debugging.  When a budget
         # is active the prompt was already trimmed to fit, so this is purely
@@ -4739,6 +4885,20 @@ def _run_conversation_turn_inner(
             _cont_send = _strip_reasoning_from_history(history)
             _cont_send = _strip_ui_only_from_history(_cont_send)
             _cont_send = _sanitize_message_roles(_cont_send)
+            # Budget the continuation request too: it re-sends the full
+            # history (plus the appended partial + "Continue." turn), so it
+            # can exceed the window even when the trimmed request before it
+            # fit.  Re-trim and preflight; stop auto-continue if it still
+            # cannot fit rather than clashing with the server's 400.
+            if prompt_budget > 0:
+                _cont_send = _fit_history_to_budget(_cont_send, prompt_budget)
+                _cont_send = _repair_tool_call_pairs(_cont_send)
+                _cont_send, _cont_err = _prompt_preflight(
+                    _cont_send, openai_tools, prompt_budget)
+                if _cont_err:
+                    print("[🛠️Coworker] run_conversation_turn: continuation cannot fit "
+                          "the context window — stopping auto-continue")
+                    break
             # Forward the thinking budget.  Without it the continuation can
             # spend the entire max_tokens on chain-of-thought and leave
             # nothing for the tool call, which then truncates mid-string and
@@ -5118,7 +5278,21 @@ def _run_conversation_turn_inner(
             "role": "user",
             "content": "[System: All tool calls are complete. Please summarize what was done in 1-2 sentences.]",
         })
-        final_response = _llm_request(history, openai_tools, thinking_budget)
+        # Budget the forced-summary request too: it sends the full history.
+        _summary_send: list[dict[str, Any]] | None = history
+        if prompt_budget > 0:
+            _summary_send = _fit_history_to_budget(history, prompt_budget)
+            _summary_send = _repair_tool_call_pairs(_summary_send)
+            _summary_send, _sum_err = _prompt_preflight(
+                _summary_send, openai_tools, prompt_budget)
+            if _sum_err:
+                print("[🛠️Coworker] run_conversation_turn: forced summary cannot fit "
+                      "the context window — skipping")
+                _summary_send = None
+        final_response = (
+            _llm_request(_summary_send, openai_tools, thinking_budget)
+            if _summary_send is not None else None
+        )
         if final_response:
             final_choice = final_response.get("choices", [{}])[0]
             final_msg = final_choice.get("message", {})

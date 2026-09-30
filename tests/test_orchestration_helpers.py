@@ -142,7 +142,10 @@ _get_system_prompt = _extract_func(
 
 # Tool-call pair repair + token budget helpers.
 _repair_tool_call_pairs = _extract_func(_load_source(), "_repair_tool_call_pairs")
-_message_text_length = _extract_func(_load_source(), "_message_text_length")
+_message_text_length = _extract_func(
+    _load_source(), "_message_text_length",
+    {"_SCREENSHOT_TOKENS": 1500, "_CHARS_PER_TOKEN": 3.5},
+)
 _compute_prompt_budget = _extract_func(
     _load_source(), "_compute_prompt_budget",
     {"_TEMPLATE_OVERHEAD_TOKENS": 512},
@@ -676,7 +679,7 @@ class TestLeadingAssistantGuard(unittest.TestCase):
     def test_ui_only_strip_runs_before_send(self):
         """The strip must be wired into the per-request pipeline."""
         src = _load_source()
-        self.assertIn("history_to_send = _strip_ui_only_from_history(history_to_send)", src)
+        self.assertIn("msgs = _strip_ui_only_from_history(msgs)", src)
 
     def test_warmup_marks_welcome_ui_only(self):
         """The greeting must be marked ui_only, not appended as a plain turn."""
@@ -1056,7 +1059,7 @@ class TestTrimHistoryToolResults(unittest.TestCase):
     def test_request_pipeline_trims(self):
         """The trim must be wired into the per-request pipeline."""
         src = _load_source()
-        self.assertIn("history_to_send = _trim_history_tool_results(history_to_send)", src)
+        self.assertIn("msgs = _trim_history_tool_results(msgs)", src)
 
 
 class TestClassifyLlm500(unittest.TestCase):

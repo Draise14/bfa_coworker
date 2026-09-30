@@ -33,6 +33,8 @@ __all__ = (
     "_STREAM_TIMEOUT",
     "bind",
     "classify_llm_500",
+    "is_context_overflow",
+    "context_overflow_message",
     "server_fault_message",
     "toolcall_fault_message",
     "openai_chat_completions",
@@ -214,6 +216,52 @@ def classify_llm_500(error_body: str) -> str:
     return _FAULT_SERVER
 
 
+# ── HTTP 400: context-window exhaustion ────────────────────────────
+# llama-server answers a request larger than the window it was started
+# with using HTTP 400 and a JSON body identifying the cause.  Re-sending
+# the identical payload can never succeed, so this class of 400 is
+# detected and handled separately from the chat-template 400s.
+_CONTEXT_OVERFLOW_MARKERS = (
+    "exceeds the available context size",
+    "exceed_context_size_error",
+    "exceeds context size",
+    "available context size",
+    "context length exceeded",
+    "prompt is too long",
+    "too many tokens",
+)
+
+
+def is_context_overflow(error_body: str) -> bool:
+    """True when a 400 body means the request exceeded the context window.
+
+    The recovery differs completely from a template 400: the payload must
+    be made *smaller* (compaction / re-trim), so the caller needs to tell
+    the two apart.  Never raises.
+    """
+    lowered = (error_body or "").lower()
+    return any(marker in lowered for marker in _CONTEXT_OVERFLOW_MARKERS)
+
+
+def context_overflow_message(error_body: str) -> str:
+    """Build an actionable message for a context-window 400.
+
+    Names the real cause (the request was larger than the window the
+    server was started with) and what the agent will do about it, instead
+    of the bare ``HTTP Error 400: Bad Request`` the raw exception carries.
+    """
+    parts = [
+        "The conversation grew larger than the local context window, so the "
+        "model server rejected the request (HTTP 400).",
+        "Coworker is compacting the conversation and retrying automatically. "
+        "If this keeps happening, use 'Compact Now' in the Session panel or "
+        "start a new chat to reset the working window.",
+    ]
+    if error_body:
+        parts.append("--- server response ---\n{:s}".format(error_body[:800]))
+    return "\n\n".join(parts)
+
+
 def _server_log_shows_fault() -> bool:
     """True when the llama-server log tail shows a resource/hardware fault.
 
@@ -305,6 +353,10 @@ def openai_chat_completions(
     which auto-detects the model.
     *max_tokens* — max output tokens per call. ``None`` uses 16384 default.
     """
+    # Start each call with a clean error classification so a stale overflow
+    # from a previous call is never mistaken for the current failure.
+    if _agent_state is not None:
+        _agent_state.error_kind = ""
     temperature = _DEFAULT_TEMPERATURE_CODE if chat_mode == "AGENT" else _DEFAULT_TEMPERATURE_PROSE
     body: dict[str, Any] = {
         "messages": messages,
@@ -360,6 +412,10 @@ def openai_chat_completions(
     _roles_sanitized = False
     _tools_as_text = False
     _toolcall_nudged = False
+    # Body of the most recent HTTP error, read once per attempt.  Carried
+    # across attempts so the final failure block can always surface the
+    # real server reason (``ex.read()`` returns empty on a second call).
+    _last_error_body = ""
     for attempt in range(max_retries + max_503_retries):
         try:
             with urllib.request.urlopen(req, timeout=_STREAM_TIMEOUT) as resp:
@@ -432,6 +488,21 @@ def openai_chat_completions(
 
                 return result
         except (urllib.error.HTTPError, urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
+            # ── Capture the error body ONCE for every HTTP error ────────
+            # ``ex.read()`` returns empty on a second call, so the body MUST
+            # be read exactly once here and reused by the 500 classifier, the
+            # 400 reshape, and the final failure block.  Losing it was how a
+            # real context-window 400 was previously reported to the user as
+            # a bare "HTTP Error 400: Bad Request".
+            _is_500 = isinstance(ex, urllib.error.HTTPError) and ex.code == 500
+            _http_body = ""
+            if isinstance(ex, urllib.error.HTTPError):
+                try:
+                    _http_body = ex.read().decode("utf-8", errors="replace")
+                except Exception:
+                    _http_body = ""
+            _500_body = _http_body
+            _last_error_body = _http_body
             # ── HTTP 500: distinguish template fault from server fault ──
             # Both arrive as a bare 500, and the recovery differs completely:
             #   * template fault -> reshape the request (tools as text)
@@ -439,17 +510,6 @@ def openai_chat_completions(
             # Reshaping on a server fault silently downgrades the session to
             # text-based tool calling and masks the real cause (usually an
             # OOM).  Classify first, then choose.
-            #
-            # The body is read ONCE here and reused by every branch below --
-            # ``ex.read()`` returns empty on a second call.
-            _500_body = ""
-            _is_500 = False
-            if isinstance(ex, urllib.error.HTTPError) and ex.code == 500:
-                _is_500 = True
-                try:
-                    _500_body = ex.read().decode("utf-8", errors="replace")
-                except Exception:
-                    pass
             _fault = classify_llm_500(_500_body) if _is_500 else ""
 
             # A bare or generic 500 body is ambiguous.  llama-server names
@@ -616,11 +676,24 @@ def openai_chat_completions(
             # system/user/assistant messages and retry without tools; the
             # model then answers in text (text tool calls are still parsed).
             if isinstance(ex, urllib.error.HTTPError) and ex.code == 400:
-                _error_body = ""
-                try:
-                    _error_body = ex.read().decode("utf-8", errors="replace")
-                except Exception:
-                    pass
+                # Reuse the body read once at the top of the handler.
+                _error_body = _last_error_body
+                # ── Context window exceeded: fail fast, do not retry ──
+                # The request was larger than the window the server was
+                # started with.  Re-sending the identical payload can never
+                # succeed and only burns the retry budget; flag it so the
+                # caller can compact the conversation and retry, and surface
+                # the real server reason instead of a bare 400.
+                if is_context_overflow(_error_body):
+                    _agent_state.error_kind = "context_overflow"
+                    _msg = context_overflow_message(_error_body)
+                    print("[🛠️Coworker] _openai_chat_completions: 400 context window "
+                          "exceeded — not retrying the same payload")
+                    if _error_body:
+                        print("[🛠️Coworker] _openai_chat_completions:   400 body = {:s}".format(_error_body[:500]))
+                    _agent_state.error = _msg[:500]
+                    _agent_state.error_full = _msg
+                    return None
                 if ("parser" in _error_body and "template" in _error_body) or "Unexpected message role" in _error_body:
                     if _flattened:
                         # Already flattened once and it still failed, so the
@@ -650,6 +723,20 @@ def openai_chat_completions(
                         data_bytes = json.dumps(body).encode()
                         req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
                         continue
+
+                # Any other 400 (including a template/parser 400 that
+                # persists after flattening) is a malformed request that
+                # re-sending verbatim cannot fix.  Surface the real server
+                # reason now instead of burning the whole retry budget on the
+                # identical payload and then reporting a bare "HTTP Error 400".
+                _msg = "LLM request failed: {:s}".format(_error_body or str(ex))
+                print("[🛠️Coworker] _openai_chat_completions: 400 request rejected — "
+                      "not retrying the same payload")
+                if _error_body:
+                    print("[🛠️Coworker] _openai_chat_completions:   400 body = {:s}".format(_error_body[:500]))
+                _agent_state.error = _msg[:500]
+                _agent_state.error_full = _msg
+                return None
 
             # ── 503 Service Unavailable: model still loading ──────────
             # llama-server returns 503 while the model is loading into
@@ -707,14 +794,11 @@ def openai_chat_completions(
                 _agent_state.error = _msg[:500]
                 _agent_state.error_full = _msg
             else:
-                # Re-read the body only when this exception is not the 500 we
-                # already consumed above (``ex.read()`` is empty on re-read).
-                _error_body = _500_body
-                if not _is_500 and isinstance(ex, urllib.error.HTTPError):
-                    try:
-                        _error_body = ex.read().decode("utf-8", errors="replace")
-                    except Exception:
-                        pass
+                # Reuse the body read once at the top of the handler.  Reading
+                # ``ex.read()`` again returns empty, which is exactly how a
+                # real 400 reason was previously lost and surfaced as a bare
+                # "HTTP Error 400: Bad Request".
+                _error_body = _last_error_body
                 if _error_body:
                     print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — {:s}".format(str(ex)))
                     print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_error_body[:500]))
@@ -857,6 +941,10 @@ def openai_chat_completions_stream(
     provider provides it), or ``None`` when the stream failed before the
     first token (callers then fall back to the non-streaming request).
     """
+    # Start each call with a clean error classification (see the
+    # non-streaming helper) so a stale overflow is never misattributed.
+    if _agent_state is not None:
+        _agent_state.error_kind = ""
     temperature = _DEFAULT_TEMPERATURE_CODE if chat_mode == "AGENT" else _DEFAULT_TEMPERATURE_PROSE
     body: dict[str, Any] = {
         "messages": messages,

@@ -4,15 +4,21 @@ Items that can only be exercised inside Blender/Bforartists with a live
 llama-server. Everything testable outside Blender is already covered by the
 unit suite (`python -m unittest tests.test_context_budget
 tests.test_session_memory tests.test_llm_manager
-tests.test_turn_loop_integration` — 255 tests green). The integration
-harness in `tests/test_turn_loop_integration.py` additionally drives a real
-`run_conversation_turn` against a fake llama-server HTTP endpoint and proves,
-behaviourally and in order: prompt preflight shapes the request, the ~60%
-compaction trigger fires with a real memory-writer LLM call, reasoning
-entries are pruned from stored history once outside the verbatim window, a
-`reason="compaction"` checkpoint is recorded, and the memory block is
-injected into the following request exactly once (no accumulation in the
-stored system prompt).
+tests.test_turn_loop_integration` — 259 tests green). The integration
+harness in `tests/test_turn_loop_integration.py` drives a real
+`run_conversation_turn` against a fake llama-server HTTP endpoint in both
+ASK mode and full AGENT tool-loop mode (the fake server doubles as the MCP
+JSON-RPC bridge, so the real `_call_mcp_tool_sync` HTTP path executes every
+`execute_blender_code` call). Proven, behaviourally and in order: prompt
+preflight runs on every request including mid-tool-loop, the ~60% compaction
+trigger fires with a real memory-writer LLM call, mid-loop compaction never
+corrupts the in-flight assistant(tool_calls)/tool pair sequence, the memory
+block is injected exactly once per request and never accumulates in the
+stored system prompt, reasoning entries are pruned from stored history once
+outside the verbatim window, a `reason="compaction"` checkpoint is recorded,
+and the friendly "conversation no longer fits the local context window"
+error fires only when even the pinned current request cannot fit — with no
+LLM request sent for that turn.
 
 ## Setup
 

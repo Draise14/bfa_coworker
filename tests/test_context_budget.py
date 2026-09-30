@@ -103,7 +103,27 @@ _prompt_preflight = _extract_func(
 )
 _collapse_poll_failed_error = _extract_func(
     _src, "_collapse_poll_failed_error",
-    {"_POLL_FAILED_MARKER": "poll() failed, context is incorrect"},
+    {
+        "_POLL_FAILED_MARKER": "poll() failed, context is incorrect",
+        # Mirrored operator fixes for the operators exercised below.  Kept
+        # identical to the source text so the assertions are meaningful.
+        "_POLL_OP_FIXES": {
+            "join": "join() needs >= 2 selected objects AND one active object. "
+                    "Select explicitly (o.select_set(True)) and set "
+                    "bpy.context.view_layer.objects.active before calling it.",
+            "shade_smooth": "set the active object before shade_smooth().",
+            "modifier_apply": "set bpy.context.view_layer.objects.active to the object "
+                              "that owns the modifier, and confirm the modifier name exists.",
+        },
+    },
+)
+_collapse_index_error = _extract_func(_src, "_collapse_index_error")
+_collapse_known_errors = _extract_func(
+    _src, "_collapse_known_errors",
+    {
+        "_collapse_poll_failed_error": _collapse_poll_failed_error,
+        "_collapse_index_error": _collapse_index_error,
+    },
 )
 
 
@@ -224,7 +244,7 @@ class TestPromptPreflight(unittest.TestCase):
 
 class TestCollapsePollFailedError(unittest.TestCase):
 
-    def test_collapses_traceback(self):
+    def test_collapses_traceback_operator_specific(self):
         tb = (
             'TypeError: calling "bpy.ops.object.shade_smooth()" error: '
             'Operator bpy.ops.object.shade_smooth.poll() failed, '
@@ -236,9 +256,16 @@ class TestCollapsePollFailedError(unittest.TestCase):
         out = _collapse_poll_failed_error(
             json.dumps({"status": "error", "message": tb}))
         self.assertIn("shade_smooth", out)
-        self.assertIn("temp_override", out)
+        # Operator-specific fix (not the generic temp_override text).
+        self.assertIn("active object", out)
         self.assertNotIn("Traceback", out)
         self.assertLess(len(out), 400)
+
+    def test_join_gets_selection_hint(self):
+        tb = "RuntimeError: Operator bpy.ops.object.join.poll() failed, context is incorrect"
+        out = _collapse_poll_failed_error(tb)
+        self.assertIn("join", out)
+        self.assertIn("selected objects", out)
 
     def test_leaves_other_errors_untouched(self):
         other = json.dumps({"status": "error", "message": "SyntaxError: bad code"})
@@ -248,10 +275,42 @@ class TestCollapsePollFailedError(unittest.TestCase):
         ok = json.dumps({"status": "ok", "result": "done"})
         self.assertEqual(_collapse_poll_failed_error(ok), ok)
 
-    def test_unnamed_operator(self):
+    def test_unnamed_operator_uses_generic_hint(self):
         tb = "poll() failed, context is incorrect"
         out = _collapse_poll_failed_error(tb)
         self.assertIn("temp_override", out)
+
+    def test_unlisted_operator_uses_generic_hint(self):
+        tb = "Operator bpy.ops.object.duplicate.poll() failed, context is incorrect"
+        out = _collapse_poll_failed_error(tb)
+        self.assertIn("temp_override", out)
+
+
+class TestCollapseIndexError(unittest.TestCase):
+    """Scene-safety Phase 4: IndexError collapsing."""
+
+    def test_collapses_index_error(self):
+        tb = (
+            "Traceback (most recent call last):\n"
+            '  File "<string>", line 1, in <module>\n'
+            "IndexError: list index out of range\n"
+        )
+        out = _collapse_index_error(json.dumps({"status": "error", "message": tb}))
+        self.assertIn("IndexError", out)
+        self.assertIn("empty", out.lower())
+        self.assertNotIn("Traceback", out)
+
+    def test_leaves_other_errors_untouched(self):
+        other = json.dumps({"status": "error", "message": "ValueError: nope"})
+        self.assertEqual(_collapse_index_error(other), other)
+
+    def test_dispatcher_handles_both(self):
+        poll = "Operator bpy.ops.object.join.poll() failed, context is incorrect"
+        idx = "IndexError: list index out of range"
+        untouched = json.dumps({"status": "ok", "result": 1})
+        self.assertIn("join", _collapse_known_errors(poll))
+        self.assertIn("IndexError", _collapse_known_errors(idx))
+        self.assertEqual(_collapse_known_errors(untouched), untouched)
 
 
 if __name__ == "__main__":

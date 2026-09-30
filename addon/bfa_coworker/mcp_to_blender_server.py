@@ -941,6 +941,31 @@ def _execute_code(
                     "Create an object first with `bpy.ops.mesh.primitive_cube_add()` or "
                     "check `bpy.context.view_layer.objects.active` before calling mode-dependent operators."
                 )
+            # Scene safety Phase 4: operator-context and indexing hints.
+            if "poll() failed" in tb_str:
+                tb_str += (
+                    "\n\nHINT: A bpy operator's poll() failed because its context was "
+                    "wrong (usually no active object, or the wrong/empty selection). "
+                    "Fix per operator:\n"
+                    "  * object.join / join_shapes -> select >= 2 objects and set "
+                    "bpy.context.view_layer.objects.active before calling it.\n"
+                    "  * object.modifier_apply / modifier_remove -> set the active "
+                    "object to the one owning the modifier; confirm the name exists.\n"
+                    "  * object.mode_set -> an active object is required (and an "
+                    "armature for POSE).\n"
+                    "  * anything else -> use bpy.context.temp_override(...) to supply "
+                    "the required context.\n"
+                    "The selection may have changed since your last call — set it "
+                    "explicitly in the SAME script."
+                )
+            if "IndexError: list index out of range" in tb_str:
+                tb_str += (
+                    "\n\nHINT: The collection was empty (or the index was out of "
+                    "range). selected_objects / bpy.data.<coll> can be empty, and "
+                    "auto-undo or a user edit may have removed objects since your "
+                    "last call. Guard with len() or use next(iter(...), None), and "
+                    "re-fetch references by name with bpy.data.objects.get('Name')."
+                )
             if "use_auto_smooth" in tb_str and "has no attribute" in tb_str:
                 tb_str += (
                     "\n\nHINT: `mesh.use_auto_smooth` was REMOVED in Blender 5.3. "

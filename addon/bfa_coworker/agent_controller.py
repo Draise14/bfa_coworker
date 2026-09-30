@@ -3316,6 +3316,28 @@ def _tool_result_summary(result_text: str, max_len: int = 150) -> str:
 # keeps the history small and the corrective hint actionable.
 _POLL_FAILED_MARKER = "poll() failed, context is incorrect"
 
+# Operator-specific fix text for a poll() failure (scene safety Phase 4).
+# Keyed on the `bpy.ops.<area>.<op>` name extracted from the traceback; a
+# generic temp_override hint is used when the operator is not listed.
+_POLL_OP_FIXES: dict[str, str] = {
+    "join": "join() needs >= 2 selected objects AND one active object. "
+            "Select explicitly (o.select_set(True)) and set "
+            "bpy.context.view_layer.objects.active before calling it.",
+    "join_shapes": "join_shapes() needs the shapes selected and one active "
+                   "object; select them and set view_layer.objects.active first.",
+    "modifier_apply": "set bpy.context.view_layer.objects.active to the object "
+                      "that owns the modifier, and confirm the modifier name exists.",
+    "modifier_remove": "set the active object to the object that owns the "
+                       "modifier before removing it.",
+    "mode_set": "an active object is required (and for POSE, an armature); "
+                "select it and set view_layer.objects.active first.",
+    "origin_set": "select the objects and set the active object before origin_set().",
+    "convert": "set the active object / selection before convert().",
+    "shade_smooth": "set the active object before shade_smooth().",
+    "shade_flat": "set the active object before shade_flat().",
+    "make_single_user": "set the active object before make_single_user().",
+}
+
 
 def _collapse_poll_failed_error(result_text: str) -> str:
     """Collapse a ``poll() failed, context is incorrect`` traceback to a hint.
@@ -3331,13 +3353,51 @@ def _collapse_poll_failed_error(result_text: str) -> str:
     m = re.search(r"Operator bpy\.ops\.([\w.]+)\.poll\(\) failed", result_text)
     if m:
         op_name = m.group(1)
-    hint = (
-        "{:s} failed its poll() check — the operator's context was incorrect. "
-        "Fix: use bpy.context.temp_override() to supply the required context "
-        "(e.g. active_object / selected_objects / area), or ensure the right "
-        "mode and an active object are set before calling it."
-    ).format(op_name or "The operator")
+    _op_fix = _POLL_OP_FIXES.get(op_name.split(".")[-1])
+    if _op_fix:
+        hint = (
+            "{:s} failed its poll() check \u2014 the operator's context was "
+            "incorrect. Fix: {:s}"
+        ).format(op_name or "The operator", _op_fix)
+    else:
+        hint = (
+            "{:s} failed its poll() check \u2014 the operator's context was incorrect. "
+            "Fix: use bpy.context.temp_override() to supply the required context "
+            "(e.g. active_object / selected_objects / area), or ensure the right "
+            "mode and an active object are set before calling it."
+        ).format(op_name or "The operator")
     return json.dumps({"status": "error", "message": hint})
+
+
+def _collapse_index_error(result_text: str) -> str:
+    """Collapse an ``IndexError: list index out of range`` into a hint.
+
+    Usually a literal index into an empty Blender collection (or one that
+    was emptied by auto-undo or a user edit between tool calls).  Returns
+    *result_text* unchanged for any other error.
+    """
+    if "IndexError" not in result_text or "list index out of range" not in result_text:
+        return result_text
+    hint = (
+        "IndexError: the collection was empty (or the index was out of range). "
+        "A Blender collection such as selected_objects / bpy.data.<coll> can be "
+        "empty, and the selection may have changed since your last call (auto-undo "
+        "or a user edit can remove objects). Guard with len() or use "
+        "next(iter(...), None), and re-fetch references by name with "
+        "bpy.data.objects.get('Name') before acting."
+    )
+    return json.dumps({"status": "error", "message": hint})
+
+
+def _collapse_known_errors(result_text: str) -> str:
+    """Collapse known-noisy errors before storage (scene safety Phase 4).
+
+    Dispatches to the poll() / IndexError collapsers; anything else is
+    returned unchanged for the normal smart-trim path.
+    """
+    result_text = _collapse_poll_failed_error(result_text)
+    result_text = _collapse_index_error(result_text)
+    return result_text
 
 
 def _trim_tool_result(result_text: str, max_chars: int = _MAX_TOOL_RESULT_CHARS) -> str:
@@ -3471,6 +3531,24 @@ def _extract_error_signature(result_text: str) -> str:
 def _spiral_corrective_message(error_sig: str) -> str:
     """Return a corrective user message based on the repeated error signature."""
     sig_lower = error_sig.lower()
+    if "poll() failed" in sig_lower:
+        return (
+            "[System: You keep getting 'poll() failed, context is incorrect'. "
+            "The operator's context is wrong \u2014 usually no active object or the "
+            "wrong selection. Set the selection AND the active object explicitly "
+            "in the SAME script right before the operator call "
+            "(obj.select_set(True); bpy.context.view_layer.objects.active = obj), "
+            "or use bpy.context.temp_override(...). Fix the code \u2014 do not retry "
+            "it verbatim.]"
+        )
+    if "index out of range" in sig_lower or "indexerror" in sig_lower:
+        return (
+            "[System: You keep getting 'IndexError: list index out of range'. "
+            "The collection is empty (or changed since your last call). Do not "
+            "index with [0]; guard with len(), use next(iter(...), None), and "
+            "re-fetch references by name with bpy.data.objects.get('Name'). "
+            "Fix the code \u2014 do not retry it verbatim.]"
+        )
     if "context missing active object" in sig_lower or "context missing object" in sig_lower:
         return (
             "[System: You keep getting 'Context missing active object'. "
@@ -5259,12 +5337,12 @@ def _run_conversation_turn_inner(
                 # Build a human-readable summary for the UI.
                 result_summary = _tool_result_summary(result_text)
 
-                # Collapse known-noisy errors before storage (Tier 3 Phase 6):
-                # a poll() failure traceback becomes a one-line corrective hint
-                # both in the stored history and for the model; every other
-                # error keeps the full text (smart-trim happens at request
-                # time, head+tail preserved).
-                result_text = _collapse_poll_failed_error(result_text)
+                # Collapse known-noisy errors before storage (Tier 3 Phase 6,
+                # scene safety Phase 4): a poll() failure becomes an
+                # operator-specific corrective hint and an IndexError becomes
+                # a guard-your-collection hint, both in the stored history and
+                # for the model; every other error keeps the full text.
+                result_text = _collapse_known_errors(result_text)
 
                 # Store the FULL tool result in history.  Trimming happens
                 # when the request is built, not here: the chat panel renders

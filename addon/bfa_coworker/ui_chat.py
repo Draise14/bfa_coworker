@@ -106,35 +106,6 @@ def _spinner_char(state) -> str:
     return _SPINNERS[int(getattr(state, "thinking_dots", 0) or 0) % len(_SPINNERS)]
 
 
-def _draw_live_readout(layout, state) -> None:
-    """Draw the live Coworker readout in the always-visible panel area.
-
-    The Workshop (the tool-call narrative) is collapsed by default, so the
-    live stream needs a home the user can always see.  This draws a friendly
-    icon + "Coworker" label with an animated spinner while the coworker is
-    working, plus the text as it streams (falling back to the reasoning when
-    no answer text has arrived yet).  Hidden when idle.
-    """
-    thinking = bool(getattr(state, "is_thinking", False))
-    streaming = str(getattr(state, "streaming_text", "") or "")
-    reasoning = str(getattr(state, "reasoning_text", "") or "")
-    if not thinking and not streaming:
-        return
-    box = layout.box()
-    if thinking:
-        box.label(text="Coworker {:s}".format(_spinner_char(state)),
-                  icon=_AGENT_ICON)
-    else:
-        box.label(text="Coworker", icon=_AGENT_ICON)
-    if streaming:
-        _draw_multiline(box, streaming)
-    elif reasoning:
-        _draw_multiline(box, reasoning)
-    elif thinking:
-        box.label(text="Working...", icon='SORTTIME')
-
-
-
 def _wrap_text(text: str, width: int = _WRAP_WIDTH) -> str:
     """Wrap text to a given width for display in Blender labels."""
     if not text:
@@ -2027,11 +1998,6 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             layout.label(text="Chat handled by external client.", icon='INFO')
             return
 
-        # -- Live readout (always visible, outside the Workshop) ------
-        # Drawn before the input/history so the user always sees what the
-        # coworker is doing, even when the Workshop panel is collapsed.
-        _draw_live_readout(layout, state)
-
         # -- Mode toggle --
         row = layout.row(align=True)
         row.prop(props, "chat_mode", expand=True)
@@ -2173,6 +2139,16 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 #turn_box.separator()
                 _draw_multiline(turn_box, user_msg.get("content", ""))
 
+                # Only the active (newest) turn animates while thinking --
+                # past turns keep a static label.  The live readout is drawn
+                # into this turn box (see below), not inside the collapsible
+                # Workshop, so it stays visible while the Workshop is closed.
+                is_active_turn = state.is_thinking and (
+                    (props.chat_newest_first and _display_idx == 0)
+                    or (not props.chat_newest_first
+                        and _display_idx == len(visible_turns) - 1)
+                )
+
                 # --- Working (collapsible --- only the internals collapse) ---
                 if has_proc:
                     ph, pb = turn_box.panel(
@@ -2180,16 +2156,8 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         default_closed=True,
                     )
                     pb_icon = "WARNING" if has_err else "PACKAGE"
-                    # Only the active (newest) turn animates while thinking --
-                    # past turns keep a static label.
-                    is_active_turn = state.is_thinking and (
-                        (props.chat_newest_first and _display_idx == 0)
-                        or (not props.chat_newest_first
-                            and _display_idx == len(visible_turns) - 1)
-                    )
                     if is_active_turn:
-                        spinners = ["\u25d0", "\u25d3", "\u25d1", "\u25d2"]
-                        ws_label = "Workshop {:s}".format(spinners[state.thinking_dots % 4])
+                        ws_label = "Workshop {:s}".format(_spinner_char(state))
                     else:
                         ws_label = "Workshop"
                     ph.label(text=ws_label, icon=pb_icon)
@@ -2234,12 +2202,6 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                             elif pr == "assistant":
                                 work_box.label(text="Self Prompt", icon="CONSOLE")
                                 _draw_multiline(work_box, pc)
-                        if state.is_thinking and state.streaming_text and _display_idx == 0:
-                            work_box.separator()
-                            sb = work_box.box()
-                            sb.label(text="Coworker (live) {:s}".format(_spinner_char(state)),
-                                     icon=_AGENT_ICON)
-                            _draw_multiline(sb, state.streaming_text)
 
                 # --- Conclusion (always visible) ---
                 if conclusion_msg:
@@ -2249,12 +2211,11 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                     op.message_index = history.index(conclusion_msg)
                     _render_markdown(turn_box, conclusion_msg.get("content", ""))
-                elif (
-                    state.is_thinking
-                    and state.streaming_text
-                    and _display_idx == 0
-                    and not has_proc
-                ):
+                elif is_active_turn and state.streaming_text:
+                    # Live readout lives inside the ACTIVE turn box, so it is
+                    # visible even while the Workshop is collapsed.  Once the
+                    # turn finishes it is replaced by the conclusion above;
+                    # the next turn's readout appears in the new active turn.
                     turn_box.separator()
                     turn_box.label(
                         text="Coworker (live) {:s}".format(_spinner_char(state)),

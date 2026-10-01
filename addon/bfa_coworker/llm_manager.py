@@ -3011,15 +3011,22 @@ def start_local_llama(
         # CPU backend: keep launch flags minimal — no attention/KV knobs,
         # they mainly benefit GPU paths and risk breaking exotic CPU builds.
         if backend in ("cuda", "vulkan"):
-            # Flash-attention reduces KV-cache memory and speeds up attention.
-            # In current llama.cpp `--flash-attn` takes an optional value
-            # `[on|off|auto]`; passed bare BEFORE another flag the parser
-            # consumes that flag as its value and exits 1
-            # ("unknown value for --flash-attn: '--batch-size'").  Use the
-            # explicit `=` form so it can never swallow the next argument.
-            args.append('--flash-attn=on')
-            # KV-cache quantization — opt-in via preference, on by default only
-            # when VRAM headroom is tight.
+            # Flash-attention: deliberately NOT passed.
+            #
+            # In current llama.cpp `--flash-attn` takes an *optional* value
+            # (`[on|off|auto]`), which makes it a startup hazard:
+            #   * bare `--flash-attn` followed by another flag makes the
+            #     parser eat that flag as its value  ("unknown value for
+            #     --flash-attn: '--batch-size'");
+            #   * the `=` form is rejected outright by the pinned build
+            #     ("invalid argument: --flash-attn=on");
+            #   * the space form (`--flash-attn on`) works on the pinned
+            #     build but breaks on older boolean-only builds (stray `on`).
+            # llama-server already defaults flash-attention to 'auto' (enable
+            # it when the backend supports it), which is exactly what we want
+            # on GPU, so we rely on that default and sidestep the bug class.
+            #
+            # KV-cache quantization — opt-in via preference.
             with _lock:
                 kv_quant = getattr(_config, "local_kv_cache_quant", False)
             if kv_quant:

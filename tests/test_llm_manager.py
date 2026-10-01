@@ -719,13 +719,19 @@ class TestLaunchFlagSafety(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.llm_manager = load_llm_manager_module()
 
-    def test_flash_attn_passed_with_explicit_value(self):
-        # In current llama.cpp `--flash-attn [on|off|auto]` takes an optional
-        # value; passed bare before another flag the parser consumes that
-        # flag as its value and exits 1
-        # ("unknown value for --flash-attn: '--batch-size'").  Must use `=`.
-        self.assertIn("'--flash-attn=on'", self.source)
+    def test_flash_attn_is_not_passed(self):
+        # `--flash-attn` takes an *optional* value in current llama.cpp, which
+        # is a startup hazard in every form the launcher could emit:
+        #   bare  -> eats the next flag ("unknown value for --flash-attn")
+        #   =on   -> rejected ("invalid argument: --flash-attn=on")
+        #   space -> breaks on older boolean-only builds (stray `on`)
+        # The launcher therefore does not pass it at all and relies on
+        # llama-server's 'auto' default.  Guard against regressions by looking
+        # for quoted literals in code (the explanatory comment is unquoted).
         self.assertNotIn("append('--flash-attn')", self.source)
+        self.assertNotIn("append('--flash-attn=on')", self.source)
+        self.assertNotIn("'--flash-attn'", self.source)
+        self.assertNotIn('"--flash-attn"', self.source)
 
     def test_debug_console_creation_flag_defined(self):
         self.assertEqual(

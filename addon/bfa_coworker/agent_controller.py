@@ -1468,6 +1468,38 @@ class AgentState:
     # Lets a slow turn be traced to prompt-eval (big prompt) vs generation
     # (reasoning effort) instead of guessing.
     last_timings: dict[str, Any] = field(default_factory=dict)
+    # Per-turn cost ledger (Tier 3i).  Accumulates the llama-server timings
+    # across EVERY request in a turn plus the loop counters, so a slow turn
+    # can be attributed to prefill / generation / tool overhead instead of
+    # guessed at.  Reset at turn start (``reset_turn_cost``).
+    last_turn_cost: dict[str, Any] = field(default_factory=dict)
+
+    def record_request_timings(self, timings: dict[str, Any] | None) -> None:
+        """Accumulate one request's llama-server ``timings`` into the ledger.
+
+        Adds prompt/generation token counts and milliseconds, and bumps the
+        per-turn request counter.  Best-effort and never raises.
+        """
+        if not isinstance(timings, dict) or not timings:
+            return
+        cost = self.last_turn_cost
+        cost["requests"] = int(cost.get("requests", 0)) + 1
+        for key in ("prompt_n", "predicted_n"):
+            value = timings.get(key)
+            if isinstance(value, (int, float)) and value >= 0:
+                cost[key] = cost.get(key, 0) + int(value)
+        for key in ("prompt_ms", "predicted_ms"):
+            value = timings.get(key)
+            if isinstance(value, (int, float)) and value >= 0:
+                cost[key] = cost.get(key, 0.0) + float(value)
+
+    def bump_turn_cost(self, key: str, amount: int = 1) -> None:
+        """Increment a loop counter in the turn cost ledger (tools/nudges/...)."""
+        self.last_turn_cost[key] = int(self.last_turn_cost.get(key, 0)) + int(amount)
+
+    def reset_turn_cost(self) -> None:
+        """Start a fresh per-turn cost ledger (called at turn start)."""
+        self.last_turn_cost = {"requests": 0, "start": time.time()}
 
     def record_usage(self, usage: dict[str, Any] | None) -> None:
         """Accumulate one LLM call's ``usage`` into turn + session totals."""
@@ -1493,6 +1525,7 @@ class AgentState:
         self.turn_usage.clear()
         self.session_usage.clear()
         self.last_prompt_tokens = 0
+        self.last_turn_cost = {}
 
     # -- Liveness tracking (Tier 1) ---------------------------------
     last_bridge_activity: float = 0.0
@@ -4823,6 +4856,47 @@ def clear_session_scene_lock() -> None:
     co_work_guard.clear_session()
 
 
+def _log_turn_cost() -> None:
+    """Print + store a one-line cost summary for the turn that just ended.
+
+    Tier 3i (measurement-first): attributes a turn's wall time to prompt
+    prefill vs generation vs tool/loop overhead, so a slow turn can be
+    diagnosed from the console instead of guessed at.  Uses the dominated
+    llama-server timings accumulated by ``AgentState.record_request_timings``.
+    Never raises.
+    """
+    try:
+        cost = _agent_state.last_turn_cost
+        if not isinstance(cost, dict) or not cost.get("requests"):
+            return
+        _start = float(cost.get("start", 0.0) or 0.0)
+        wall = (time.time() - _start) if _start else 0.0
+        cost["wall"] = wall
+        _p_n = int(cost.get("prompt_n", 0))
+        _g_n = int(cost.get("predicted_n", 0))
+        _p_ms = float(cost.get("prompt_ms", 0.0))
+        _g_ms = float(cost.get("predicted_ms", 0.0))
+        _pp = (_p_n / (_p_ms / 1000.0)) if _p_ms > 0 else 0.0
+        _gp = (_g_n / (_g_ms / 1000.0)) if _g_ms > 0 else 0.0
+        print(
+            "[Coworker] turn cost: {reqs} req | prefill {pn} tok / {ps:.0f}s "
+            "({pp:.0f} tok/s) | gen {gn} tok / {gs:.0f}s ({gp:.0f} tok/s) | "
+            "tools {tools} | nudges {nudges} | cont {cont} | bad {bad} | "
+            "wall {wall:.0f}s".format(
+                reqs=int(cost.get("requests", 0)),
+                pn=_p_n, ps=_p_ms / 1000.0, pp=_pp,
+                gn=_g_n, gs=_g_ms / 1000.0, gp=_gp,
+                tools=int(cost.get("tools", 0)),
+                nudges=int(cost.get("nudges", 0)),
+                cont=int(cost.get("continues", 0)),
+                bad=int(cost.get("malformed", 0)),
+                wall=wall,
+            )
+        )
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+
+
 def run_conversation_turn(
     user_message: str,
     on_text: Callable[[str], None] | None = None,
@@ -4877,6 +4951,8 @@ def run_conversation_turn(
         # Always release the co-work scene lock (FINISH, error, Stop, or an
         # exception all pass through here).
         _release_scene_lock()
+        # Tier 3i: log the turn's cost breakdown (prefill vs gen vs overhead).
+        _log_turn_cost()
 
 
 # Turn counter for memory-block "Last updated" stamps (Tier 3).
@@ -5215,6 +5291,8 @@ def _run_conversation_turn_inner(
     # Fresh per-turn token usage counters (issue #69).
     _agent_state.turn_usage = {}
     _agent_state.last_timings = {}
+    # Fresh per-turn cost ledger (Tier 3i): prefill vs generation vs overhead.
+    _agent_state.reset_turn_cost()
     # Clear any warning from the previous turn.
     _agent_state.warning = ""
 
@@ -5275,6 +5353,8 @@ def _run_conversation_turn_inner(
             _t = response.get("timings")
             if isinstance(_t, dict) and _t:
                 _agent_state.last_timings = _t
+                # Accumulate into the per-turn cost ledger (Tier 3i).
+                _agent_state.record_request_timings(_t)
                 print("[Coworker] timings: prompt {:d} tok in {:.0f} ms "
                       "({:.0f} tok/s), gen {:d} tok in {:.0f} ms ({:.0f} tok/s)".format(
                           int(_t.get("prompt_n", 0) or 0),
@@ -5852,6 +5932,7 @@ def _run_conversation_turn_inner(
         continue_attempts = 0
         while finish_reason == "length" and continue_attempts < 2:
             continue_attempts += 1
+            _agent_state.bump_turn_cost("continues")
             print("[Coworker] run_conversation_turn: finish_reason=length, "
                   "auto-continue attempt {:d}/2".format(continue_attempts))
 
@@ -6010,6 +6091,7 @@ def _run_conversation_turn_inner(
             and _malformed_retries < _MAX_MALFORMED_RETRIES
         ):
             _malformed_retries += 1
+            _agent_state.bump_turn_cost("malformed")
             print("[Coworker] run_conversation_turn: all tool calls malformed -- "
                   "asking the model to re-emit (attempt {:d}/{:d})".format(
                       _malformed_retries, _MAX_MALFORMED_RETRIES))
@@ -6268,6 +6350,7 @@ def _run_conversation_turn_inner(
 
                 # Call the MCP tool.
                 result_text = _call_mcp_tool_sync(tool_name, args, mcp_port)
+                _agent_state.bump_turn_cost("tools")
 
                 # -- Track code execution for smart undo ----------------
                 if tool_name == "execute_blender_code":
@@ -6466,6 +6549,7 @@ def _run_conversation_turn_inner(
             and (not content.strip() or _looks_like_unfinished_action(content))
         ):
             _action_nudges += 1
+            _agent_state.bump_turn_cost("nudges")
             print("[Coworker] run_conversation_turn: assistant promised an "
                   "action but called no tool -- nudging to execute "
                   "(attempt {:d}/{:d})".format(_action_nudges, _MAX_ACTION_NUDGES))

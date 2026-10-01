@@ -2570,6 +2570,25 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
                         "Speed: {:.0f} tok/s prompt, {:.0f} tok/s gen".format(_pp, _tp),
                     )
 
+            # -- Last turn cost (Tier 3i) --
+            # Prefill vs generation vs tool/loop overhead for the previous
+            # turn, so a slow turn can be attributed at a glance.
+            _cost = agent_controller._agent_state.last_turn_cost
+            if _cost and _cost.get("requests"):
+                _wall = float(_cost.get("wall", 0.0) or 0.0)
+                _p_s = float(_cost.get("prompt_ms", 0.0)) / 1000.0
+                _g_s = float(_cost.get("predicted_ms", 0.0)) / 1000.0
+                _draw_multiline(
+                    layout,
+                    "Last turn: {:.0f}s wall | gen {:d} tok/{:.0f}s, "
+                    "prefill {:d} tok/{:.0f}s | {:d} tools".format(
+                        _wall,
+                        int(_cost.get("predicted_n", 0)), _g_s,
+                        int(_cost.get("prompt_n", 0)), _p_s,
+                        int(_cost.get("tools", 0)),
+                    ),
+                )
+
         # -- Export/Copy Log (advanced) --
         if not is_harness:
             layout.separator()

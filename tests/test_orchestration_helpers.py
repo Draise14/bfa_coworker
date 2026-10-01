@@ -148,7 +148,7 @@ _message_text_length = _extract_func(
 )
 _compute_prompt_budget = _extract_func(
     _load_source(), "_compute_prompt_budget",
-    {"_TEMPLATE_OVERHEAD_TOKENS": 512},
+    {"_TEMPLATE_OVERHEAD_TOKENS": 512, "_MIN_REPLY_TOKENS": 256},
 )
 _estimate_messages_tokens = _extract_func(
     _load_source(), "_estimate_messages_tokens",

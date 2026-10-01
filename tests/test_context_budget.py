@@ -42,6 +42,7 @@ _AC_PATH = os.path.join(_REPO, "addon", "bfa_coworker", "agent_controller.py")
 
 _CHARS_PER_TOKEN = 3.5
 _TEMPLATE_OVERHEAD_TOKENS = 512
+_MIN_REPLY_TOKENS = 256
 
 
 def _load_source():
@@ -90,7 +91,13 @@ _fit_history_to_budget = _extract_func(
 )
 _compute_prompt_budget = _extract_func(
     _src, "_compute_prompt_budget",
-    {"_TEMPLATE_OVERHEAD_TOKENS": _TEMPLATE_OVERHEAD_TOKENS},
+    {"_TEMPLATE_OVERHEAD_TOKENS": _TEMPLATE_OVERHEAD_TOKENS,
+     "_MIN_REPLY_TOKENS": _MIN_REPLY_TOKENS},
+)
+_cap_reply_tokens = _extract_func(
+    _src, "_cap_reply_tokens",
+    {"_TEMPLATE_OVERHEAD_TOKENS": _TEMPLATE_OVERHEAD_TOKENS,
+     "_MIN_REPLY_TOKENS": _MIN_REPLY_TOKENS},
 )
 _prompt_preflight = _extract_func(
     _src, "_prompt_preflight",
@@ -162,17 +169,21 @@ class TestEstimateToolsTokens(unittest.TestCase):
 
 class TestComputePromptBudget(unittest.TestCase):
 
-    def test_reserves_max_tokens_and_overhead(self):
-        ctx, max_tokens = 16384, 4096
-        budget = _compute_prompt_budget(ctx, max_tokens)
-        self.assertLessEqual(budget, ctx - max_tokens - _TEMPLATE_OVERHEAD_TOKENS)
+    def test_reserves_only_min_reply(self):
+        # The reply reservation is the small floor, not max_tokens, so the
+        # prompt keeps almost the whole window (regression: an oversized
+        # max_tokens default used to starve the prompt and refuse turn 1).
+        ctx = 16384
+        margin = max(int(ctx * 0.1), 256)
+        budget = _compute_prompt_budget(ctx, 4096)
+        self.assertEqual(
+            budget, ctx - _MIN_REPLY_TOKENS - _TEMPLATE_OVERHEAD_TOKENS - margin)
         self.assertGreater(budget, ctx // 2)
 
-    def test_clamps_oversized_max_tokens(self):
-        budget = _compute_prompt_budget(8192, 8000)
-        # max_tokens was clamped to half the window; budget stays usable.
-        self.assertGreater(budget, 0)
-        self.assertLessEqual(budget, 8192 - 8192 // 2)
+    def test_max_tokens_does_not_shrink_budget(self):
+        # max_tokens no longer affects the prompt budget at all.
+        self.assertEqual(_compute_prompt_budget(8192, 8000),
+                         _compute_prompt_budget(8192, 1024))
 
     def test_tiny_context_keeps_floor(self):
         budget = _compute_prompt_budget(2048, 1500)
@@ -187,6 +198,66 @@ class TestComputePromptBudget(unittest.TestCase):
             _compute_prompt_budget(8192, 2048),
             _compute_prompt_budget(32768, 2048),
         )
+
+
+class TestCapReplyTokens(unittest.TestCase):
+    """The reply must be capped so prompt + reply fits the window."""
+
+    def test_small_prompt_keeps_requested(self):
+        self.assertEqual(_cap_reply_tokens(16384, 4096, 2000), 4096)
+
+    def test_large_prompt_shrinks_reply(self):
+        ctx = 16384
+        margin = max(int(ctx * 0.1), 256)
+        capped = _cap_reply_tokens(ctx, 8192, 12000)
+        self.assertEqual(capped, ctx - 12000 - _TEMPLATE_OVERHEAD_TOKENS - margin)
+
+    def test_never_below_floor(self):
+        self.assertEqual(_cap_reply_tokens(8192, 4096, 8192), _MIN_REPLY_TOKENS)
+
+    def test_prompt_plus_reply_fits(self):
+        ctx = 16384
+        for prompt in (500, 4000, 9000, 14000):
+            reply = _cap_reply_tokens(ctx, 8192, prompt)
+            self.assertLessEqual(
+                prompt + reply + _TEMPLATE_OVERHEAD_TOKENS, ctx)
+
+
+class TestFirstTurnFits(unittest.TestCase):
+    """Regression: the first turn must never be refused on a normal context.
+
+    The default ``local_max_tokens`` equals the whole context size.  The old
+    budget reserved that (clamped to half the window) for the reply, starving
+    the prompt so that even the first turn's system prompt + tool schema no
+    longer fit — the user saw "This conversation no longer fits the local
+    context window" on their very first message.
+    """
+
+    @staticmethod
+    def _messages(system_chars, user_chars=40):
+        return [
+            {"role": "system", "content": "s" * system_chars},
+            {"role": "user", "content": "u" * user_chars},
+        ]
+
+    @staticmethod
+    def _tools(chars):
+        return [{"type": "function", "function": {
+            "name": "t", "description": "d" * chars,
+            "parameters": {"type": "object", "properties": {}}}}]
+
+    def test_oversized_max_tokens_does_not_starve_first_turn(self):
+        ctx = 16384
+        budget = _compute_prompt_budget(ctx, 16384)  # default max_tokens == ctx
+        msgs = self._messages(9000)   # ~2570-token system prompt (with skills)
+        tools = self._tools(20000)    # ~5715-token tool schema
+        fitted, err = _prompt_preflight(msgs, tools, budget)
+        self.assertIsNone(err, "first turn must fit despite an oversized max_tokens")
+        prompt_tokens = (_estimate_messages_tokens(fitted)
+                         + _estimate_tools_tokens(tools))
+        reply = _cap_reply_tokens(ctx, 16384, prompt_tokens)
+        self.assertGreaterEqual(reply, 256)
+        self.assertLessEqual(prompt_tokens + reply + _TEMPLATE_OVERHEAD_TOKENS, ctx)
 
 
 class TestPromptPreflight(unittest.TestCase):

@@ -144,6 +144,12 @@ _DEFAULT_LOCAL_CTX_FALLBACK = 8192
 # something left to retire even after the threshold compaction ran.
 _FORCE_COMPACT_KEEP_RECENT = 8
 
+# Minimum reply allowance kept when capping the reply to the space left after
+# the prompt (see :func:`_cap_reply_tokens`).  A floor this small is far better
+# than refusing the turn; the model can still answer, and auto-continue picks
+# up the rest if it hits the limit.
+_MIN_REPLY_TOKENS = 256
+
 
 def _use_compact_prompt() -> bool:
     """Return ``True`` when the compact system prompt should be used.
@@ -488,30 +494,50 @@ def _estimate_tools_tokens(tools: list[dict[str, Any]] | None) -> int:
 
 
 def _compute_prompt_budget(ctx: int, max_tokens: int) -> int:
-    """Compute the prompt token budget for a context window.
+    """Return the maximum prompt size (messages + tool schema), in tokens.
 
-    Reserves *max_tokens* for the generated reply plus
-    :data:`_TEMPLATE_OVERHEAD_TOKENS` for chat-template scaffolding and a
-    ~10% safety margin, then returns what is left for the prompt. Never
-    returns a value below a floor that can hold a system prompt plus a user
-    turn, and clamps an oversized *max_tokens* so the budget cannot go
-    negative (a negative budget would trim the prompt to nothing and the
-    model would invent a task).
+    The budget reserves the *minimum* reply space rather than the full
+    configured ``max_tokens``.  Reserving the full reply was a real defect:
+    ``local_max_tokens`` defaults to the whole context size, so reserving it
+    (clamped to half the window) left only ~a third of a 16K window for the
+    system prompt and the tool schema — and on a smaller window the fixed
+    overhead no longer fit at all, so the very first turn was refused with a
+    "conversation no longer fits" error even though nothing had been said.
+
+    The reply is instead capped to whatever legitimately remains after the
+    prompt is built (see :func:`_cap_reply_tokens`), so the prompt is never
+    starved and ``prompt + reply`` can never exceed the window.
+
+    *max_tokens* is accepted for signature compatibility and no longer
+    reduces the prompt budget.
     """
     if ctx <= 0:
         return 0
-    # A reply can never need the whole window; cap it at half so the
-    # prompt always keeps room.
-    max_allowed = max(ctx // 2, 512)
-    if max_tokens > max_allowed:
-        max_tokens = max_allowed
     margin = max(int(ctx * 0.1), 256)
-    budget = ctx - max_tokens - _TEMPLATE_OVERHEAD_TOKENS - margin
+    budget = ctx - _MIN_REPLY_TOKENS - _TEMPLATE_OVERHEAD_TOKENS - margin
     if budget < 1024:
         # Misconfigured (tiny context): keep a floor that can actually
         # hold a system prompt plus a user turn.
         budget = max(ctx // 2, 1024)
     return budget
+
+
+def _cap_reply_tokens(ctx: int, requested: int, prompt_tokens: int) -> int:
+    """Cap the reply allowance so ``prompt + reply`` fits the window.
+
+    Returns the number of tokens the model may generate for this request:
+    the user's request, reduced to the space actually left after the built
+    prompt and the fixed chat-template overhead, but never below
+    :data:`_MIN_REPLY_TOKENS`.  When even that floor does not fit, the
+    caller's preflight has already refused the turn.
+    """
+    if ctx <= 0:
+        return requested if requested > 0 else 0
+    margin = max(int(ctx * 0.1), 256)
+    room = ctx - prompt_tokens - _TEMPLATE_OVERHEAD_TOKENS - margin
+    if room < _MIN_REPLY_TOKENS:
+        return _MIN_REPLY_TOKENS
+    return min(requested, room) if requested > 0 else room
 
 
 def _prompt_preflight(
@@ -4352,21 +4378,32 @@ def _maybe_compact_session(
     _session_turn_count += 1
     st = session_memory.store
     tools_tokens = _estimate_tools_tokens(tools)
-    safe = (prompt_budget - tools_tokens) if prompt_budget else 0
+    # Compare consistently: ``estimated`` (messages + tool schema) against the
+    # *whole* prompt budget.  The previous code subtracted the tool schema from
+    # the budget AND added it to the estimate, so the trigger fired far too
+    # early — on the first turn it fired with two messages and, because there
+    # was nothing old enough to retire, produced a no-op "Compacting…" status
+    # and an empty checkpoint.
     estimated = _estimate_messages_tokens(history) + tools_tokens
-    trigger = (
-        (safe > 0 and estimated >= safe * session_memory.COMPACTION_TRIGGER_RATIO)
-        or (
-            sum(1 for m in history if not m.get("ui_only"))
-            > session_memory.MAX_WINDOW_TURNS + 1
+    _boundary = session_memory.find_retire_boundary(history)
+    _can_retire = _boundary < len(history)
+    _over_window = (
+        sum(1 for m in history if not m.get("ui_only"))
+        > session_memory.MAX_WINDOW_TURNS + 1
+    )
+    trigger = _can_retire and (
+        (
+            prompt_budget > 0
+            and estimated >= prompt_budget * session_memory.COMPACTION_TRIGGER_RATIO
         )
+        or _over_window
     )
     if not trigger:
         return
     if on_status:
         on_status("Compacting conversation…")
-    print("[🛠️Coworker] _maybe_compact_session: estimated {:d} / safe {:d} tokens "
-          "— compacting".format(estimated, safe))
+    print("[🛠️Coworker] _maybe_compact_session: estimated {:d} / budget {:d} tokens "
+          "— compacting".format(estimated, prompt_budget))
     kept, memory_block, retired = session_memory.compact_history(
         history,
         prior_memory=st.memory_block,
@@ -4903,6 +4940,17 @@ def _run_conversation_turn_inner(
                 on_status("Error: conversation too large for context window")
             return history
 
+        # ── Cap the reply allowance to the space the prompt left ──────
+        # The prompt now fits the window; give the model whatever is left for
+        # the reply (never the whole configured max_tokens, which by default
+        # equals the context size and would overflow the server).
+        if ctx_size_used > 0:
+            _prompt_tokens_est = (
+                _estimate_messages_tokens(history_to_send)
+                + _estimate_tools_tokens(openai_tools)
+            )
+            max_tokens = _cap_reply_tokens(ctx_size_used, max_tokens, _prompt_tokens_est)
+
         # ── Request-shape diagnostic ──────────────────────────────────
         # Log exactly what is about to be sent.  This is the single most
         # useful signal when a chat template rejects a request: it shows the
@@ -4940,6 +4988,12 @@ def _run_conversation_turn_inner(
                 return history
             print("[🛠️Coworker] run_conversation_turn: retry request shape:")
             print(_describe_history_for_log(history_to_send))
+            if ctx_size_used > 0:
+                _prompt_tokens_est = (
+                    _estimate_messages_tokens(history_to_send)
+                    + _estimate_tools_tokens(openai_tools)
+                )
+                max_tokens = _cap_reply_tokens(ctx_size_used, max_tokens, _prompt_tokens_est)
             response = _llm_request(history_to_send, openai_tools, thinking_budget)
 
         # ── Abort check ───────────────────────────────────────────────

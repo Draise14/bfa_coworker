@@ -572,7 +572,11 @@ class TestTurnLoopIntegration(_TurnLoopTestBase):
         self.assertEqual(main_roles[-1], "user")
         self.assertEqual(main["messages"][-1]["content"], "hello there")
         self.assertEqual(main.get("model"), "fake-model")
-        self.assertEqual(main.get("max_tokens"), 1024)
+        # The reply is capped to the space left after the fitted prompt: never
+        # above the configured 1024, never below the small floor.  (The prompt
+        # keeps priority so a turn always fits the window.)
+        self.assertLessEqual(main.get("max_tokens"), 1024)
+        self.assertGreaterEqual(main.get("max_tokens"), 256)
         self.assertNotIn("tools", main,
                          "ASK mode sends no tool schema")
         # Budget fit: prompt must respect the computed budget.

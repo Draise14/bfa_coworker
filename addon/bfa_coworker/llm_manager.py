@@ -635,7 +635,7 @@ class LLMConfig:
     model_filename: str = "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
     downloaded_models_dir: str = ""
     local_port: int = _LOCAL_LLM_DEFAULT_PORT
-    local_ctx_size: int = 16384
+    local_ctx_size: int = 32768
     local_max_tokens: int = 16384  # Max output tokens per API call
     thinking_budget_tokens: int = 1024  # Max chain-of-thought reasoning tokens per API call
     hf_token: str = ""  # HuggingFace token for gated models
@@ -2933,7 +2933,7 @@ def start_local_llama(
         _config.local_port = port
 
     with _lock:
-        ctx_size = _config.local_ctx_size or 16384
+        ctx_size = _config.local_ctx_size or 32768
     # NOTE: no silent auto-upgrade -- the configured size is applied verbatim
     # and the real applied value is reported via /props (see get_runtime_ctx).
     # If it looks too small for agent work, warn (never restart mid-session).

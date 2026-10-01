@@ -25,6 +25,14 @@ __all__ = (
 
 from pathlib import Path
 
+# Approximate characters per token -- must match agent_controller._CHARS_PER_TOKEN.
+_CHARS_PER_TOKEN = 3.5
+
+# Always-loaded reference files, in PRIORITY order (after the version-drift
+# files).  When a token budget is supplied only the leading whole files that
+# fit are included.
+_ALWAYS_FILES = ("best_practices.md", "mcp_tools.md", "naming.md")
+
 # ---------------------------------------------------------------------------
 # Cache
 
@@ -46,19 +54,29 @@ _read_cache: dict[str, str | None] = {}
 def get_always_loaded_skills(
     bpy_version: tuple[int, int, int] | None = None,
     custom_text: str = "",
+    max_tokens: int | None = None,
 ) -> str:
     """Return concatenated built-in skill content for the system prompt.
 
     *bpy_version* -- ``(5, 3, 0)`` or ``None`` to skip version-specific files.
     *custom_text* -- optional user-provided custom skills text injected after
     built-in skills.
+    *max_tokens* -- when given, include only the WHOLE files that fit, in
+    priority order (version-drift files first -- they prevent hard API
+    crashes -- then best practices, MCP tool guide, naming).  A file is never
+    truncated; a file that does not fit is skipped so later, smaller files
+    still make it.  This keeps the most important guidance on a small window
+    instead of dropping the entire skills block.
 
     Result is cached until ``clear_cache()`` is called.
     """
     # pylint: disable=global-statement
     global _skills_cache, _skills_list, _skills_cache_key
 
-    key = bpy_version[1] if bpy_version and len(bpy_version) > 1 else None
+    key = (
+        bpy_version[1] if bpy_version and len(bpy_version) > 1 else None,
+        max_tokens,
+    )
     if (_skills_cache is not None and _skills_list is not None
             and _skills_cache_key == key):
         return _build_final(_skills_cache, custom_text)
@@ -66,6 +84,18 @@ def get_always_loaded_skills(
     skills_dir = _get_skills_dir()
     parts: list[str] = []
     loaded: list[str] = []
+    used = 0
+
+    def _add(text: str | None, name: str) -> None:
+        nonlocal used
+        if not text:
+            return
+        cost = int(len(text) / _CHARS_PER_TOKEN) + 1
+        if max_tokens is not None and parts and used + cost > max_tokens:
+            return  # skip; a later smaller file may still fit
+        parts.append(text)
+        loaded.append(name)
+        used += cost
 
     # 1. Version-specific files (cumulative: 5.3 loads 5.0-5.1 + 5.2 + 5.3).
     if bpy_version is not None:
@@ -74,22 +104,17 @@ def get_always_loaded_skills(
         # compare against 53 -- not the minor alone (3), which matched nothing
         # and silently dropped every version-drift skill.
         _current = _major * 10 + _minor
-        for fname in sorted(skills_dir.glob("blender_*.md")):
+        # Newest-first: the current version's drift file is the most relevant,
+        # so a tight budget should keep it over an older one.
+        for fname in sorted(skills_dir.glob("blender_*.md"), reverse=True):
             # Parse version from filename like "blender_50_51.md" or "blender_52.md".
             ver_part = fname.stem[len("blender_"):]  # e.g. "50_51" or "52"
             if _version_loaded(ver_part, _current):
-                text = _read_skill(fname)
-                if text:
-                    parts.append(text)
-                    loaded.append(fname.name)
+                _add(_read_skill(fname), fname.name)
 
-    # 2. Always-loaded reference files.
-    for name in ("best_practices.md", "naming.md", "mcp_tools.md"):
-        fpath = skills_dir / name
-        text = _read_skill(fpath)
-        if text:
-            parts.append(text)
-            loaded.append(name)
+    # 2. Always-loaded reference files, in priority order.
+    for name in _ALWAYS_FILES:
+        _add(_read_skill(skills_dir / name), name)
 
     _skills_cache = "\n\n".join(parts) if parts else ""
     _skills_list = loaded

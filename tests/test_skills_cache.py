@@ -64,6 +64,34 @@ class TestSkillsCacheKey(unittest.TestCase):
         listed = _skills.list_loaded_skills()
         self.assertNotIn("blender_53.md", listed)
 
+    def test_small_budget_keeps_version_files_whole(self):
+        # On a small window the version-drift files (which prevent hard API
+        # crashes) must win over the large reference docs, and no file may be
+        # truncated to fit.  The current version's file must survive.
+        _skills.clear_cache()
+        text = _skills.get_always_loaded_skills(
+            bpy_version=(5, 3, 0), max_tokens=3000)
+        listed = _skills.list_loaded_skills()
+        self.assertIn("blender_53.md", listed)
+        # Whatever was included fits the budget (whole files only).
+        self.assertLessEqual(int(len(text) / 3.5), 3000)
+        # best_practices.md is the largest file and cannot fit this budget.
+        self.assertNotIn("best_practices.md", listed)
+
+    def test_large_budget_includes_all(self):
+        _skills.clear_cache()
+        _skills.get_always_loaded_skills(bpy_version=(5, 3, 0), max_tokens=100000)
+        listed = _skills.list_loaded_skills()
+        for name in ("blender_53.md", "best_practices.md", "mcp_tools.md", "naming.md"):
+            self.assertIn(name, listed)
+
+    def test_budget_is_a_cache_key(self):
+        # Different budgets must build different blocks (no stale reuse).
+        _skills.clear_cache()
+        small = _skills.get_always_loaded_skills(bpy_version=(5, 3, 0), max_tokens=3000)
+        big = _skills.get_always_loaded_skills(bpy_version=(5, 3, 0), max_tokens=100000)
+        self.assertLess(len(small), len(big))
+
 
 if __name__ == "__main__":
     unittest.main()

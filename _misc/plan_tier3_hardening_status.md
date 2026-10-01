@@ -177,9 +177,25 @@ the "no longer fits" message. Two changes make it self-heal with no user action:
 - On a preflight refusal the turn loop now **auto-forces a compaction and rebuilds once**
   before surfacing any error — the user should never have to press "Compact Now".
 
-Note: on a 16K window the built-in skills will be dropped for most turns (they simply do
-not fit alongside the tool schema); a larger context window keeps them. A follow-up could
-budget the always-loaded skills to the window instead of dropping them whole.
+Note: the always-loaded skills are now **budgeted to the window** rather than
+dropped whole (see below), so a 16K window keeps the version-drift files + best
+practices instead of losing every skill. A larger context keeps everything.
+
+**Window-aware skills + 32K default (2026-10-01)** — the built-in skills
+(~7k tokens) plus the tool schema did not fit a 16K window, so the send-time
+fallback dropped the entire skills block and the agent lost all its API
+guidance. Two changes:
+
+- `skills.get_always_loaded_skills(..., max_tokens=...)` now includes only the
+  **whole files that fit**, in priority order (newest version-drift file first --
+  it prevents hard API crashes -- then older drift files, best practices, MCP
+  tool guide, naming). A file is never truncated. On 16K this keeps ~6.3k tokens
+  (all drift files + best practices + naming); on 32K it keeps everything.
+  `_get_system_prompt_with_rules` sets the budget to ~40% of the configured
+  window.
+- `LLMConfig.local_ctx_size` default raised **16384 -> 32768** (the Preferences
+  default was already 32768, so this aligns the two, and matches the "hardware
+  unknown" recommendation).
 
 **Follow-up pass (2026-10-01, later)** -- the remaining memory-hygiene and proof gaps:
 

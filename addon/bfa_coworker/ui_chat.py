@@ -121,6 +121,60 @@ def _phase_text(state) -> str:
     return "Thinking"
 
 
+def _is_system_note_msg(msg: dict) -> bool:
+    """True for an agent-injected user message (begins with ``[System:``)."""
+    return (
+        msg.get("role") == "user"
+        and isinstance(msg.get("content"), str)
+        and msg.get("content", "").startswith("[System:")
+    )
+
+
+def _group_turns(history: list) -> list[list[dict]]:
+    """Group conversation history into turns (one real user send = one turn).
+
+    A real user message always starts a turn; agent-injected messages begin
+    with ``[System:`` and are excluded.  This deliberately does NOT rely on
+    the ``turn_start`` flag: that flag can be lost when the history is sliced,
+    compacted, or reloaded, and its loss dropped the user's own message into
+    the collapsed Workshop (so it looked like it had disappeared).  UI-only
+    greetings never anchor a turn -- otherwise the welcome created a phantom
+    "Turn 1" with no user message.
+    """
+    turns: list[list[dict]] = []
+    current_turn: list[dict] = []
+    for msg in history:
+        if msg.get("ui_only"):
+            continue
+        role = msg.get("role", "")
+        if role == "user" and not _is_system_note_msg(msg):
+            if current_turn:
+                turns.append(current_turn)
+            current_turn = [msg]
+        elif role in ("assistant", "tool", "reasoning", "user"):
+            current_turn.append(msg)
+    if current_turn:
+        turns.append(current_turn)
+    return turns
+
+
+def _split_turn(turn: list[dict]) -> tuple[dict | None, list[dict], dict | None]:
+    """Split a turn into (user message, process messages, conclusion message)."""
+    user_msg: dict | None = None
+    process_msgs: list[dict] = []
+    conclusion_msg: dict | None = None
+    for msg in turn:
+        role = msg.get("role", "")
+        if role == "user" and not _is_system_note_msg(msg):
+            user_msg = msg
+        elif role in ("reasoning", "tool", "user") or _is_system_note_msg(msg):
+            process_msgs.append(msg)
+        elif role == "assistant":
+            if not msg.get("tool_calls"):
+                conclusion_msg = msg
+    return user_msg, process_msgs, conclusion_msg
+
+
 def _wrap_text(text: str, width: int = _WRAP_WIDTH) -> str:
     """Wrap text to a given width for display in Blender labels."""
     if not text:
@@ -2082,27 +2136,16 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 hist_box,
                 "({:d} messages)".format(displayable),
             )
+            # The UI-only welcome greeting no longer forms a turn, so show it
+            # once here -- otherwise it would never be visible.
+            for _g in history:
+                if (_g.get("ui_only") and _g.get("role") == "assistant"
+                        and _g.get("content")):
+                    _draw_multiline(hist_box, _g.get("content", ""))
+                    break
 
-            # Detect old sessions (no turn_start flags) for backward compat.
-            _has_any_turn_start = any(m.get("turn_start") for m in history)
-
-            # Group messages into turns (user-orientated: one user send = one turn).
-            turns: list[list[dict]] = []
-            current_turn: list[dict] = []
-            for msg in history:
-                role = msg.get("role", "")
-                is_turn_start = msg.get("turn_start", False)
-                # New sessions: only turn_start=True starts a turn.
-                # Old sessions (no flags anywhere): treat role="user" as turn start.
-                _is_old_user_turn = (not _has_any_turn_start and role == "user")
-                if role == "user" and (is_turn_start or _is_old_user_turn):
-                    if current_turn:
-                        turns.append(current_turn)
-                    current_turn = [msg]
-                elif role in ("assistant", "tool", "reasoning", "user"):
-                    current_turn.append(msg)
-            if current_turn:
-                turns.append(current_turn)
+            # Group messages into turns (see _group_turns for the rules).
+            turns = _group_turns(history)
 
             # Determine display order and turn limit.
             max_turns = prefs.chat_max_visible_turns
@@ -2113,21 +2156,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             )
 
             for _display_idx, turn in enumerate(turn_iter):
-                user_msg = None
-                process_msgs = []
-                conclusion_msg = None
-                for msg in turn:
-                    role = msg.get("role", "")
-                    c2 = msg.get("content", "")
-                    is_turn_start = msg.get("turn_start", False)
-                    is_sys = (role == "user" and isinstance(c2, str) and c2.startswith("[System:"))
-                    if role == "user" and not is_sys and is_turn_start:
-                        user_msg = msg
-                    elif role in ("reasoning", "tool", "user") or is_sys:
-                        process_msgs.append(msg)
-                    elif role == "assistant":
-                        if not msg.get("tool_calls"):
-                            conclusion_msg = msg
+                user_msg, process_msgs, conclusion_msg = _split_turn(turn)
                 turn_num = turns.index(turn) + 1
                 if not user_msg:
                     if conclusion_msg:

@@ -164,13 +164,20 @@ _DOMAIN_SKILL_MAP: dict[str, list[str]] = {
 }
 
 
-def get_domain_skills(domains: set[str]) -> str:
+def get_domain_skills(domains: set[str], max_chars: int | None = None) -> str:
     """Load and concatenate skill files for the given domain set.
 
     Searches both the dev layout (``mcp/blmcp/data/skills/``) and the
     deployed layout (``vendor/blmcp/data/skills/``) for each skill file.
     Returns empty string if no domain skills are found or if no matching
     files exist.
+
+    When *max_chars* is given, only **whole** skill files that fit are
+    included.  A skill file is never truncated — cutting a rule in half is
+    worse than omitting the file (the caller can fall back to the always
+    available ``get_python_api_docs`` / ``search_api_docs`` tools).  Files are
+    considered in a stable (sorted) order; a file that does not fit is skipped
+    so later, smaller files can still make it in.
     """
     if not domains:
         return ""
@@ -191,19 +198,31 @@ def get_domain_skills(domains: set[str]) -> str:
         this_dir.parent.parent / "vendor" / "blmcp" / "data" / "skills",  # deployed
     ]
 
+    sep = "\n\n---\n\n"
     parts: list[str] = []
+    used = 0
     for fname in sorted(filenames):
         for sp in search_paths:
             fpath = sp / fname
             text = _read_skill(fpath)
             if text:
+                if max_chars is not None and max_chars > 0:
+                    cost = len(text) + (len(sep) if parts else 0)
+                    if used + cost > max_chars:
+                        print(
+                            "[Coworker] get_domain_skills: skipping {:s} "
+                            "({:d} chars) — would exceed the {:d}-char skill "
+                            "budget (whole files only, never truncated)".format(
+                                fname, len(text), max_chars))
+                        break
+                    used += cost
                 parts.append(text)
                 break
 
     if not parts:
         return ""
 
-    return "## Domain Skills\n{:s}".format("\n\n---\n\n".join(parts))
+    return "## Domain Skills\n{:s}".format(sep.join(parts))
 
 
 # ── User skill loader ──────────────────────────────────────────────

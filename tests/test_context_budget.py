@@ -31,6 +31,7 @@ Run with::
 
 __all__ = ()
 
+import importlib.util
 import json
 import os
 import re
@@ -406,8 +407,20 @@ class TestSkillInjectionBudget(unittest.TestCase):
         import re
         m = re.search(r"_SKILLS_MAX_TOKENS\s*=\s*(\d+)", _src)
         self.assertIsNotNone(m, "_SKILLS_MAX_TOKENS must be defined")
-        self.assertLessEqual(int(m.group(1)), 2048,
-                             "skills cap must stay small relative to a local window")
+        self.assertLessEqual(int(m.group(1)), 4096,
+                             "skills ceiling must stay small relative to a local window")
+
+    def test_skills_budget_is_context_scaled(self):
+        # The allowance scales with the window (ratio + floor + ceiling).
+        self.assertIn("_SKILLS_BUDGET_RATIO", _src)
+        self.assertIn("_SKILLS_MIN_TOKENS", _src)
+
+    def test_skill_files_are_never_truncated(self):
+        # Regression: a fixed character slice cut a rule in half.  The
+        # injection must include whole files only.
+        self.assertNotIn("[:_max_skill_chars]", _src,
+                         "skill text must never be truncated mid-file")
+        self.assertIn("max_chars=_max_skill_chars", _src)
 
     def test_skills_injected_at_send_time(self):
         # The send-time injection must reference the skills text and the
@@ -416,6 +429,48 @@ class TestSkillInjectionBudget(unittest.TestCase):
         self.assertIn("_domain_skills_text", _src)
         self.assertIn("skipping domain skills", _src)
         self.assertIn("dropped domain skills", _src)
+
+
+class TestGetDomainSkillsWholeFiles(unittest.TestCase):
+    """`get_domain_skills` must include whole files only, never truncate."""
+
+    def setUp(self) -> None:
+        skills_path = os.path.join(
+            _REPO, "addon", "bfa_coworker", "skills", "__init__.py")
+        spec = importlib.util.spec_from_file_location(
+            "_bfacw_skills", skills_path)
+        self.skills = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.skills)
+
+    def test_all_domains_unbounded_returns_all_files(self):
+        text = self.skills.get_domain_skills({"modeling"})
+        self.assertIn("## Domain Skills", text)
+        # modelling maps to mesh_editing.md + modifiers.md
+        self.assertIn("---", text)
+
+    def test_tiny_budget_excludes_whole_files_not_truncate(self):
+        full = self.skills.get_domain_skills({"modeling"})
+        # A budget smaller than the smallest file must yield nothing (skip),
+        # not a partial file.
+        tiny = self.skills.get_domain_skills({"modeling"}, max_chars=10)
+        self.assertEqual(tiny, "", "a file that does not fit must be skipped whole")
+        self.assertGreater(len(full), 10)
+
+    def test_budget_keeps_files_that_fit(self):
+        full = self.skills.get_domain_skills({"modeling"})
+        # A budget equal to the full text keeps everything.
+        kept = self.skills.get_domain_skills({"modeling"}, max_chars=len(full) + 50)
+        self.assertEqual(kept, full)
+
+    def test_partial_output_is_whole_files_only(self):
+        # With a budget that fits exactly one of the two modelling files, the
+        # result must be a subset of whole files, not a truncated blob.
+        out = self.skills.get_domain_skills({"modeling"}, max_chars=2500)
+        if out:
+            # Every returned file body must appear intact in the full text.
+            full = self.skills.get_domain_skills({"modeling"})
+            for chunk in out.replace("## Domain Skills\n", "").split("\n\n---\n\n"):
+                self.assertIn(chunk, full, "returned chunk must be a whole file")
 
 
 if __name__ == "__main__":

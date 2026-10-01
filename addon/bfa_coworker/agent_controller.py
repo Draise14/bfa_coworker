@@ -150,12 +150,15 @@ _FORCE_COMPACT_KEEP_RECENT = 8
 # up the rest if it hits the limit.
 _MIN_REPLY_TOKENS = 256
 
-# Hard cap on the domain-skill reference text injected into the system prompt.
-# The skill files are large (up to ~1.7k tokens each) and several can be pulled
-# in at once; this bounds their fixed cost so a small local window still leaves
-# room for the conversation.  The text is also dropped entirely when it will not
-# fit the budget (see ``_build_send_messages``).
-_SKILLS_MAX_TOKENS = 1200
+# Budget for the domain-skill reference injected into the system prompt.
+# The skill files are large (up to ~1.7k tokens each) and several can be
+# pulled in at once.  The allowance scales with the context window so a big
+# window keeps more of the model's domain knowledge, while a small window
+# still leaves room for the conversation.  Only WHOLE skill files are ever
+# included — a truncated rule is worse than an omitted one.
+_SKILLS_BUDGET_RATIO = 0.08    # share of the context window for skills
+_SKILLS_MIN_TOKENS = 600       # floor (small windows still get some skills)
+_SKILLS_MAX_TOKENS = 2000      # ceiling (avoid extremes on huge windows)
 
 
 def _use_compact_prompt() -> bool:
@@ -4795,20 +4798,29 @@ def _run_conversation_turn_inner(
         # ── Domain skill reference (injected at send time, budget-aware) ─
         # These files (animation.md, materials.md, ...) give version-aware
         # API rules for the detected domains without a lookup round-trip.
-        # They are LARGE (up to ~1.7k tokens each), so they are injected
-        # only when they fit the remaining budget — never at the cost of
-        # refusing the turn.  A small hard cap also keeps several domains'
-        # skills from crowding out the conversation.
+        # They are LARGE (up to ~1.7k tokens each), so they are injected only
+        # when they fit the remaining budget — never at the cost of refusing
+        # the turn.  Only WHOLE files are included (never truncated).
         if _detected_domains:
             try:
                 from . import skills as _skills_mod  # pylint: disable=import-error
-                _domain_skills_text = _skills_mod.get_domain_skills(_detected_domains) or ""
-                _max_skill_chars = int(_SKILLS_MAX_TOKENS * _CHARS_PER_TOKEN)
-                if len(_domain_skills_text) > _max_skill_chars:
-                    _domain_skills_text = _domain_skills_text[:_max_skill_chars]
+                # Scale the allowance to the window so a big context keeps
+                # more domain knowledge; clamp to a floor/ceiling.
+                if ctx_size_used > 0:
+                    _skill_tokens = max(
+                        _SKILLS_MIN_TOKENS,
+                        min(int(ctx_size_used * _SKILLS_BUDGET_RATIO),
+                            _SKILLS_MAX_TOKENS),
+                    )
+                else:
+                    _skill_tokens = _SKILLS_MIN_TOKENS
+                _max_skill_chars = int(_skill_tokens * _CHARS_PER_TOKEN)
+                _domain_skills_text = _skills_mod.get_domain_skills(
+                    _detected_domains, max_chars=_max_skill_chars) or ""
                 print("[🛠️Coworker] run_conversation_turn: domain skills for {:s} "
-                      "({:d} chars)".format(",".join(sorted(_detected_domains)),
-                                            len(_domain_skills_text)))
+                      "({:d} chars, budget {:d} chars, whole files only)".format(
+                          ",".join(sorted(_detected_domains)),
+                          len(_domain_skills_text), _max_skill_chars))
             except Exception:
                 _domain_skills_text = ""  # Best-effort; don't break the loop.
     else:

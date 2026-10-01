@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Co-working, safely: the agent now notices when you touch the scene mid-turn (scene-safety Phases 5 & 6).** Every step boundary compares a scene fingerprint (active object, selection, mode -- carried by the merged undo+snapshot toolcode) against the previous one, attributing a change to the agent's own code only when that code plausibly performed it. When *you* re-target the scene while the coworker works, it is told exactly what changed (`[System: The user changed the scene while you were working -- active object is now X ...]`) and re-fetches by name instead of fighting your edits. The failed-step recovery is now **scoped**: the failed attempt's partial creations are captured with a snapshot-only toolcode (no undo bookmark, so the undo cannot pop our own), the global `bpy.ops.ed.undo()` fires **only** when no foreign edit was seen since the baseline -- it can no longer revert YOUR last edit -- and an idempotent cleanup removes only the failed step's own datablocks, restores the pre-step active object and selection, and re-baselines the snapshot. In-place edits (modifier_apply, mesh edits) remain deliberately unreverted.
+
 ### Fixed
 
 - **Turn-scoped system notes could become false session memories.** The addon's injected context messages ("[System: WARNING -- You already created these entities this turn ...]", the tool-result filler prompt) were stored as `user` messages, and at compaction they were fed to the memory writer and the heuristic summarizer verbatim -- so a warning that was only true for the turn that produced it was carried into the memory block as "Recent context". In a later turn, or in a brand-new thread, the model then reasoned in circles about entities it was told it "already created this turn" (visible as the confused mangled-prompt session log). Turn-scoped `[System: ...]` messages are now excluded from memory building, and the tool-result filler prompt carries the same `[System: ...]` marker so it is excluded too.

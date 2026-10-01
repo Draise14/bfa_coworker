@@ -272,29 +272,90 @@ class _FakeLLMHandler(BaseHTTPRequestHandler):
                 merged = {"status": "ok", "message": "push executed"}
                 with server.lock:
                     armed = server.snapshot_script
+                    # Serve a simulated USER edit BEFORE building this
+                    # snapshot so the change is visible in it (Phase 5
+                    # detection compares consecutive snapshots).
+                    server._snap_serves = getattr(server, "_snap_serves", 0) + 1
+                    if (armed and server.user_edit_at_push_index
+                            and server._snap_serves == server.user_edit_at_push_index):
+                        server.scene_state["active_object"] = "UserCube"
                     names = sorted(server.scene_objects)
+                    scene_state = dict(server.scene_state)
                 if armed:
                     merged["result"] = {"snapshot": {
                         "object_names": names,
                         "mesh_names": names,
+                        "active_object": scene_state.get("active_object", ""),
+                        "selected_object_names": list(
+                            scene_state.get("selected", [])),
+                        "mode": scene_state.get("mode", "OBJECT"),
                     }}
+                result = {"content": [{
+                    "type": "text",
+                    "text": json.dumps(merged),
+                }]}
+            elif "'snapshot': {" in code and "undo_push(message=" not in code:
+                # Snapshot-ONLY call (scoped auto-undo, Phase 6): capture the
+                # scene without touching the undo stack.
+                with server.lock:
+                    armed = server.snapshot_script
+                    server._snap_serves = getattr(server, "_snap_serves", 0) + 1
+                    if (armed and server.user_edit_at_push_index
+                            and server._snap_serves == server.user_edit_at_push_index):
+                        server.scene_state["active_object"] = "UserCube"
+                    names = sorted(server.scene_objects)
+                    scene_state = dict(server.scene_state)
+                merged = {"status": "ok", "result": {"snapshot": {}}}
+                if armed:
+                    # The real bridge wraps the code's executed `result` dict
+                    # as result.result -- mirror that shape exactly.
+                    merged["result"] = {
+                        "status": "ok",
+                        "snapshot": {
+                            "object_names": names,
+                            "mesh_names": names,
+                            "active_object": scene_state.get("active_object", ""),
+                            "selected_object_names": list(
+                                scene_state.get("selected", [])),
+                            "mode": scene_state.get("mode", "OBJECT"),
+                        },
+                    }
                 result = {"content": [{
                     "type": "text",
                     "text": json.dumps(merged),
                 }]}
             else:
                 # User tool code: mutate the stub scene for known scripted
-                # creations so the next snapshot push diffs non-empty.
+                # creations so the next snapshot push diffs non-empty.  A
+                # pending failure marker makes the call ERROR once (the
+                # failed-step recovery path).
                 with server.lock:
-                    if "primitive_cube_add" in code and "Cube" not in server.scene_objects:
-                        server.scene_objects.append("Cube")
-                    if "primitive_uv_sphere_add" in code and "Sphere" not in server.scene_objects:
-                        server.scene_objects.append("Sphere")
-                result = {"content": [{
-                    "type": "text",
-                    "text": json.dumps(
-                        {"status": "ok", "message": "executed"}),
-                }]}
+                    _fail = False
+                    for _i, _m in enumerate(server.fail_tool_markers):
+                        if _m in code:
+                            server.fail_tool_markers.pop(_i)
+                            _fail = True
+                            break
+                    if not _fail:
+                        if "primitive_cube_add" in code and "Cube" not in server.scene_objects:
+                            server.scene_objects.append("Cube")
+                            server.scene_state["active_object"] = "Cube"
+                        if "primitive_uv_sphere_add" in code and "Sphere" not in server.scene_objects:
+                            server.scene_objects.append("Sphere")
+                            server.scene_state["active_object"] = "Sphere"
+                if _fail:
+                    result = {"content": [{
+                        "type": "text",
+                        "text": json.dumps(
+                            {"status": "error",
+                             "message": "RuntimeError: scene busy"}),
+                    }]}
+                else:
+                    result = {"content": [{
+                        "type": "text",
+                        "text": json.dumps(
+                            {"status": "ok", "message": "executed"}),
+                    }]}
             payload = (
                 b"event: message\ndata: "
                 + json.dumps({"jsonrpc": "2.0", "id": body.get("id"),
@@ -412,6 +473,17 @@ def _start_fake_server(script, mcp_tools=None):
     server.mcp_tools = list(mcp_tools or [])
     server.snapshot_script = None
     server.scene_objects = []
+    # Co-work fingerprint the stub reports in snapshots (Phase 5): the
+    # "user's" live active object / selection / mode.
+    server.scene_state = {"active_object": "", "selected": [], "mode": "OBJECT"}
+    # When set to N (1-based), the stub simulates the user re-targeting the
+    # active object right before serving the Nth armed snapshot response
+    # (foreign-edit detection, Phase 5).
+    server.user_edit_at_push_index = None
+    server._snap_serves = 0
+    # Pending tool-failure markers: a user tool call whose code contains one
+    # errors ONCE (failed-step recovery path, Phase 6).
+    server.fail_tool_markers = []
     server.writer_note = "note"
     # Benchmark error injection: list of {"is_stream", "status", "body"}
     # specs consumed in order by matching chat requests.
@@ -1377,6 +1449,164 @@ class TestToolcall500MidToolLoop(TestBenchmarkErrorSurvival):
         # which the transport surfaces the friendly message instead of
         # burning the remaining retry budget on the same oversized payload.
         self.assertEqual(len(self._main_requests()), 4)
+
+
+class TestCoWorkUserEditAndScopedUndo(_TurnLoopTestBase):
+    """Co-work scene-safety Phases 5 and 6, exercised through the REAL turn
+    loop against the stub bridge.
+
+    Phase 5: a user edit between two snapshots (active object re-targeted)
+    must be detected at the step boundary and re-synced to the model with a
+    ``[System: The user changed the scene ...]`` message.
+
+    Phase 6: after a FAILED step, recovery must capture the failed step's
+    partial diff snapshot-only, run the global undo ONLY when no foreign
+    edit was seen (D8 -- a global undo pops the newest step regardless of
+    author and would revert the user's work), clean up step-attributed
+    datablocks, restore the pre-step fingerprint, and re-baseline.
+    """
+
+    _FAIL_MARKER = "# co-work-fail-marker"
+
+    def _mk_server(self, script):
+        self.server.shutdown()
+        self.server.server_close()
+        self.server = _start_fake_server(
+            script, mcp_tools=[_EXECUTE_CODE_TOOL])
+        self.port = self.server.server_address[1]
+        cfg = self.lm.LLMConfig()
+        cfg.mode = "local"
+        cfg.local_port = self.port
+        cfg.local_ctx_size = 8192
+        cfg.local_max_tokens = 1024
+        cfg.thinking_budget_tokens = 0
+        self.lm.set_config(cfg)
+
+    def _mcp_codes(self):
+        with self.server.lock:
+            return [str((c.get("params") or {}).get("arguments", {}).get("code", ""))
+                    for c in self.server.mcp_requests
+                    if c.get("method") == "tools/call"]
+
+    def _main_requests(self):
+        with self.server.lock:
+            return [r for r in self.server.requests
+                    if r not in self.server.memory_writer_calls]
+
+    def _run_agent_turn(self, message):
+        texts = []
+        self._pin_fake_bpy()
+        try:
+            history = self.ac.run_conversation_turn(
+                message, on_text=texts.append, chat_mode="AGENT",
+                llm_url=None, model="fake-model", mcp_port=self.port)
+        finally:
+            self._unpin_fake_bpy()
+        return history, texts
+
+    def test_user_edit_detected_and_model_resynced(self):
+        """A foreign active-object change between snapshots injects the
+        re-sync message into history AND into the next request."""
+        self._mk_server([
+            _tool_call_msg("call_1", "bpy.ops.mesh.primitive_cube_add()"),
+            _tool_call_msg("call_2", "bpy.ops.mesh.primitive_uv_sphere_add()"),
+            {"content": "done"},
+        ])
+        self.server.snapshot_script = True
+        # The user re-targets the scene right before the 3rd armed snapshot
+        # (the push after step 2), so the step-2 boundary sees the change.
+        self.server.user_edit_at_push_index = 3
+
+        history, texts = self._run_agent_turn("build the set")
+
+        self.assertEqual(self.state.error, "")
+        self.assertIn("done", texts)
+        resync = [m for m in history
+                  if "The user changed the scene while you were working" in
+                  str(m.get("content") or "")]
+        self.assertEqual(len(resync), 1,
+                         "exactly one re-sync message for one foreign edit")
+        self.assertIn("active object is now UserCube", resync[0]["content"])
+        self.assertTrue(resync[0]["content"].startswith("[System:"),
+                        "turn-scoped note must carry the [System:] marker")
+        # The model actually received it: the request after the detection
+        # carries the message in the conversation.
+        main = self._main_requests()
+        self.assertTrue(
+            any("The user changed the scene while you were working" in
+                str(m.get("content") or "")
+                for r in main for m in r.get("messages", [])),
+            "the re-sync message must reach the model")
+
+    def test_scoped_undo_runs_after_failed_step(self):
+        """A failed step (no foreign edit): snapshot-only capture, then the
+        global undo, then the fingerprint restore and a fresh baseline."""
+        self._mk_server([
+            _tool_call_msg("call_1", "bpy.ops.mesh.primitive_cube_add()"),
+            _tool_call_msg("call_2", self._FAIL_MARKER + "\\nimport bpy"),
+            _tool_call_msg("call_3", "bpy.ops.mesh.primitive_uv_sphere_add()"),
+            {"content": "recovered"},
+        ])
+        self.server.snapshot_script = True
+        self.server.fail_tool_markers.append(self._FAIL_MARKER)
+
+        history, texts = self._run_agent_turn("build the set")
+
+        self.assertEqual(self.state.error, "")
+        self.assertIn("recovered", texts)
+        codes = self._mcp_codes()
+        undo_pushes = [i for i, c in enumerate(codes)
+                       if "undo_push(" in c and "'snapshot'" in c]
+        snapshot_only = [i for i, c in enumerate(codes)
+                         if "'snapshot': {" in c and "undo_push(" not in c]
+        undo_calls = [i for i, c in enumerate(codes)
+                      if "bpy.ops.ed.undo()" in c]
+        restores = [i for i, c in enumerate(codes)
+                    if "restored_active" in c]
+        # Recovery order: snapshot-only capture BEFORE the global undo.
+        self.assertTrue(snapshot_only, "failed step must be captured snapshot-only")
+        self.assertTrue(undo_calls,
+                        "global undo fires when no foreign edit was seen")
+        self.assertLess(snapshot_only[0], undo_calls[0],
+                        "capture must precede the undo (a push in between "
+                        "would make the undo pop our own bookmark)")
+        self.assertTrue(restores, "pre-step fingerprint must be restored")
+        self.assertIn("bpy.data.objects.get('Cube')", "\n".join(
+            codes[i] for i in restores))
+        # The turn continued past the failure (sphere was created).
+        self.assertIn("Sphere", self.server.scene_objects)
+
+    def test_global_undo_skipped_when_user_edited_scene(self):
+        """With a foreign edit before the recovery (D8), the global undo
+        must NOT fire -- the user's undo step must be safe."""
+        self._mk_server([
+            _tool_call_msg("call_1", "bpy.ops.mesh.primitive_cube_add()"),
+            _tool_call_msg("call_2", self._FAIL_MARKER + "\\nimport bpy"),
+            _tool_call_msg("call_3", "bpy.ops.mesh.primitive_uv_sphere_add()"),
+            {"content": "recovered safely"},
+        ])
+        self.server.snapshot_script = True
+        self.server.fail_tool_markers.append(self._FAIL_MARKER)
+        # The user edit lands right before the snapshot-only capture (3rd
+        # armed snapshot response: init push, step push, failed capture).
+        self.server.user_edit_at_push_index = 3
+
+        history, texts = self._run_agent_turn("build the set")
+
+        self.assertEqual(self.state.error, "")
+        self.assertIn("recovered safely", texts)
+        codes = self._mcp_codes()
+        undo_calls = [c for c in codes if "bpy.ops.ed.undo()" in c]
+        self.assertEqual(
+            undo_calls, [],
+            "a global undo after a foreign edit could revert the USER's work")
+        # Re-sync still tells the model what happened.
+        self.assertTrue(
+            any("The user changed the scene while you were working" in
+                str(m.get("content") or "") for m in history),
+            "the foreign edit detected at failure must re-sync the model")
+        # The turn recovered.
+        self.assertIn("Sphere", self.server.scene_objects)
 
 
 if __name__ == "__main__":

@@ -3828,7 +3828,14 @@ def _code_is_readonly(code: str) -> bool:
 
 @dataclass
 class _EntitySnapshot:
-    """Snapshot of all datablock names in the scene at a point in time."""
+    """Snapshot of all datablock names in the scene at a point in time.
+
+    The last three fields are the co-work fingerprint (scene-safety Phase 5):
+    they record what the USER can change mid-turn (active object, selection,
+    mode) so a foreign edit can be detected at the next step boundary and
+    the model re-synced.  Older payloads (pre-Phase-5 checkpoints, archives)
+    lack them; ``from_dict`` reads them defensively.
+    """
     object_names: set[str] = field(default_factory=set)
     mesh_names: set[str] = field(default_factory=set)
     material_names: set[str] = field(default_factory=set)
@@ -3841,6 +3848,9 @@ class _EntitySnapshot:
     grease_pencil_names: set[str] = field(default_factory=set)
     armature_names: set[str] = field(default_factory=set)
     text_names: set[str] = field(default_factory=set)
+    active_object: str = ""
+    selected_object_names: set[str] = field(default_factory=set)
+    mode: str = ""
 
     @classmethod
     def from_dict(cls, data: dict[str, list[str]]) -> "_EntitySnapshot":
@@ -3858,6 +3868,9 @@ class _EntitySnapshot:
             grease_pencil_names=set(data.get("grease_pencil_names", [])),
             armature_names=set(data.get("armature_names", [])),
             text_names=set(data.get("text_names", [])),
+            active_object=str(data.get("active_object", "") or ""),
+            selected_object_names=set(data.get("selected_object_names", [])),
+            mode=str(data.get("mode", "") or ""),
         )
 
 
@@ -3942,13 +3955,140 @@ def _entity_diff_to_context_message(diff: _EntityDiff) -> str:
     ).format(summary)
 
 
-def _build_cleanup_code(diff: _EntityDiff) -> str:
-    """Generate Blender Python code to delete entities created by a failed execution.
+def _detect_foreign_edit(
+    pre_snap: "_EntitySnapshot",
+    post_snap: "_EntitySnapshot",
+    step_code: str = "",
+) -> str:
+    """Detect scene changes between two snapshots that the step's own code
+    cannot account for -- i.e. the USER edited the scene mid-turn
+    (scene-safety Phase 5).
 
-    Uses the entity diff to remove objects, meshes, materials, lights, cameras,
-    collections, curves, grease pencils, armatures, and node groups that were
-    created since the last snapshot.  This is a fallback when ``bpy.ops.ed.undo()``
-    fails (e.g. no window/area available, or undo stack is empty).
+    Comparison is deliberately conservative: a change is attributed to the
+    step when the step's code plausibly performed it (``mode_set``,
+    ``select_set``, an explicit active-object assignment, or an object the
+    step just created), so the re-sync guidance only fires on real doubt and
+    never nags the model about its own doing.
+
+    Returns ``""`` when nothing foreign was found, otherwise a short
+    human-readable description suitable for the re-sync context message.
+    Best-effort by design: the caller wraps it and never lets it break a
+    turn.
+    """
+    if pre_snap is None or post_snap is None:
+        return ""
+    code = str(step_code or "")
+    notes: list[str] = []
+
+    pre_mode = str(getattr(pre_snap, "mode", "") or "")
+    post_mode = str(getattr(post_snap, "mode", "") or "")
+    if post_mode != pre_mode and "mode_set(" not in code:
+        notes.append("mode is now {:s}".format(post_mode or "(none)"))
+
+    pre_active = str(getattr(pre_snap, "active_object", "") or "")
+    post_active = str(getattr(post_snap, "active_object", "") or "")
+    if post_active != pre_active:
+        created = (
+            set(getattr(post_snap, "object_names", ()) or ())
+            - set(getattr(pre_snap, "object_names", ()) or ())
+        )
+        if post_active and (post_active in created or post_active in code):
+            pass  # The step created or explicitly targeted the new active.
+        else:
+            notes.append(
+                "active object is now {:s}".format(post_active or "(none)"))
+
+    pre_sel = set(getattr(pre_snap, "selected_object_names", ()) or ())
+    post_sel = set(getattr(post_snap, "selected_object_names", ()) or ())
+    if post_sel != pre_sel and not any(
+            m in code for m in ("select_set(", "select_all(", ".select = ")):
+        names = sorted(post_sel)[:5]
+        notes.append("selection is now [{:s}]".format(
+            ", ".join(names) if names else "empty"))
+
+    return "; ".join(notes)
+
+
+def _scene_snapshot_code() -> str:
+    """Generate a snapshot-ONLY toolcode (no undo bookmark).
+
+    Used by the scoped auto-undo (scene-safety Phase 6) to capture a FAILED
+    step's partial creations before any recovery runs -- pushing an undo
+    bookmark first would make the subsequent ``bpy.ops.ed.undo()`` pop our
+    own no-op bookmark instead of the failed attempt.
+    """
+    return (
+        "# blmcp-toolcode-skip-preflight\n"
+        "import bpy\n"
+        "def _sn(seq):\n"
+        "    try:\n"
+        "        return sorted(x.name for x in seq)\n"
+        "    except Exception:\n"
+        "        return []\n"
+        "def _act():\n"
+        "    try:\n"
+        "        _a = bpy.context.view_layer.objects.active\n"
+        "        return _a.name if _a else ''\n"
+        "    except Exception:\n"
+        "        return ''\n"
+        "result = {'status': 'ok', 'snapshot': {\n"
+        + _SNAPSHOT_KEYS
+        + "}}\n"
+    )
+
+
+def _build_scene_restore_code(active_name: str, selected_names) -> str:
+    """Generate toolcode restoring the pre-step active object and selection
+    (scene-safety Phase 6, step 2 of the scoped-undo algorithm).
+
+    Restores by NAME (never by stale reference), only touches objects that
+    still exist, and every step is guarded so the restore can never break a
+    recovery.  The selection is re-set explicitly because the user may have
+    changed it mid-turn (Phase 5) and operators act on the live selection.
+    """
+    parts = [
+        "# blmcp-toolcode-skip-preflight",
+        "import bpy",
+        "result = {'status': 'ok', 'restored_active': False, "
+        "'restored_selection': 0}",
+    ]
+    active_name = str(active_name or "")
+    if active_name:
+        parts.append(
+            "_act_obj = bpy.data.objects.get({:s})\n"
+            "if _act_obj is not None:\n"
+            "    try:\n"
+            "        bpy.context.view_layer.objects.active = _act_obj\n"
+            "        result['restored_active'] = True\n"
+            "    except Exception:\n"
+            "        pass".format(repr(active_name)))
+    names = [str(n) for n in (selected_names or ()) if str(n)]
+    if names:
+        names_str = ", ".join(repr(n) for n in sorted(names))
+        parts.append(
+            "for _name in [{:s}]:\n"
+            "    _sel_obj = bpy.data.objects.get(_name)\n"
+            "    if _sel_obj is not None:\n"
+            "        try:\n"
+            "            _sel_obj.select_set(True)\n"
+            "            result['restored_selection'] += 1\n"
+            "        except Exception:\n"
+            "            pass".format(names_str))
+    return "\n".join(parts) + "\n"
+
+
+def _build_cleanup_code(diff: _EntityDiff) -> str:
+    """Generate Blender Python code to remove STEP-ATTRIBUTED datablocks.
+
+    This is the PRIMARY recovery path (scene-safety Phase 6, scoped
+    auto-undo): it deletes only the datablocks recorded in *diff* -- the
+    diff of the failed step (or, as a legacy fallback, the whole-turn diff)
+    -- so it can never touch datablocks the user created.  It is idempotent
+    (each name is looked up and removed only if present), which is what makes
+    it safe to run AFTER a global undo as a catch-all for datablocks the
+    undo could not revert (e.g. data-API creations without an undo step).
+    In-place edits (modifier_apply, mesh edits) are deliberately NOT reverted
+    (design decision D9): they cannot be undone per-datablock.
     """
     parts: list[str] = [
         "# blmcp-toolcode-skip-preflight",
@@ -4016,6 +4156,12 @@ def _undo_code(action: str, message: str = "", extra_result: str = "") -> str:
         "        return sorted(x.name for x in seq)\n"
         "    except Exception:\n"
         "        return []\n"
+        "def _act():\n"
+        "    try:\n"
+        "        _a = bpy.context.view_layer.objects.active\n"
+        "        return _a.name if _a else ''\n"
+        "    except Exception:\n"
+        "        return ''\n"
         "result = {{'status': 'ok', 'message': '{:s} executed'{:s}}}\n"
         "# Try VIEW_3D first, fall back to any area type.\n"
         "for w in bpy.context.window_manager.windows:\n"
@@ -4043,12 +4189,12 @@ def _undo_code(action: str, message: str = "", extra_result: str = "") -> str:
 
 
 # Snapshot JSON keys used as extra_result for merged undo+snapshot calls.
-# Each datablock iteration is wrapped in a try/except so that a single
-# corrupted datablock (e.g. from a depsgraph crash) doesn't kill the
-# entire snapshot -- the other datablock types are still captured.
-_SNAPSHOT_EXTRA = (
-    ",\n"
-    "    'snapshot': {\n"
+# Each datablock iteration is wrapped in a try/except (via the generated
+# ``_sn``/``_act`` helpers) so that a single corrupted datablock (e.g. from a
+# depsgraph crash) doesn't kill the entire snapshot.  The last three keys are
+# the co-work fingerprint (scene-safety Phase 5): active object, selection,
+# and mode -- what the user can change mid-turn.
+_SNAPSHOT_KEYS = (
     "        'object_names':       _sn(bpy.data.objects),\n"
     "        'mesh_names':         _sn(bpy.data.meshes),\n"
     "        'material_names':     _sn(bpy.data.materials),\n"
@@ -4061,7 +4207,16 @@ _SNAPSHOT_EXTRA = (
     "        'grease_pencil_names': _sn(bpy.data.grease_pencils),\n"
     "        'armature_names':     _sn(bpy.data.armatures),\n"
     "        'text_names':         _sn(bpy.data.texts),\n"
-    "    }\n"
+    "        'active_object':      _act(),\n"
+    "        'selected_object_names': _sn(bpy.context.selected_objects),\n"
+    "        'mode':               str(bpy.context.mode or ''),\n"
+    "    "
+)
+_SNAPSHOT_EXTRA = (
+    ",\n"
+    "    'snapshot': {\n"
+    + _SNAPSHOT_KEYS
+    + "}\n"
 )
 
 
@@ -4711,6 +4866,11 @@ def _run_conversation_turn_inner(
     _turn_snapshot: _EntitySnapshot | None = None
     _turn_entities: _EntityDiff = _EntityDiff()
     _entity_context_injected: bool = False  # True once we've injected entity context.
+    # Co-work scene-safety Phase 6 (D8): ``_undo_safe`` is False while a
+    # foreign (user) edit has been seen since the last baseline push -- the
+    # global undo must not fire in that window because it would revert the
+    # USER's work. Reset when a fresh baseline is pushed.
+    _undo_safe: bool = True
 
     # -- Spiral detection (per-turn) -----------------------------------
     # Tracks consecutive identical tool errors to break LLM retry loops.
@@ -5547,23 +5707,103 @@ def _run_conversation_turn_inner(
                         pass  # Context injected after tool result.
                     if should_undo:
                         print("[Coworker] run_conversation_turn: smart undo triggered -- {:s}".format(reason))
-                        # Undo to the state before the previous execute_blender_code.
-                        # Must use context override -- bpy.ops.ed.undo() needs a window context
-                        # which isn't available in the bridge server's exec() namespace.
-                        _undo_result = _call_mcp_tool_sync("execute_blender_code",
-                            {"code": _undo_code("undo")}, mcp_port)
-                        # Check if undo actually succeeded -- if not, fall back to
-                        # retroactive entity cleanup using the snapshot diff.
-                        if '"status": "error"' in _undo_result:
-                            print("[Coworker] run_conversation_turn: undo FAILED -- falling back to entity cleanup")
+                        # -- Scene-safety Phase 6: SCOPED auto-undo (D8) ----
+                        # A global ``bpy.ops.ed.undo()`` pops the newest undo
+                        # step regardless of who created it, so when the user
+                        # edited the scene mid-turn (Phase 5) it would revert
+                        # the USER's work.  Algorithm:
+                        #   1. Snapshot-only capture of the failed step's
+                        #      partial diff (NO bookmark push -- pushing first
+                        #      would make the undo pop our own bookmark).
+                        #   2. Global undo ONLY when no foreign edit was seen
+                        #      since the baseline push (``_undo_safe``).
+                        #   3. Idempotent cleanup of the failed step's own
+                        #      datablocks (catches what undo could not revert;
+                        #      data-API creations carry no undo step).
+                        #   4. Restore the pre-step active object + selection
+                        #      from the fingerprint (Phase 5).
+                        #   5. Re-push the baseline WITH a snapshot so the
+                        #      next step diffs against the post-recovery
+                        #      scene; the undo guard then resets (D8).
+                        _failed_diff = _EntityDiff()
+                        _fail_raw = _call_mcp_tool_sync("execute_blender_code",
+                            {"code": _scene_snapshot_code()}, mcp_port)
+                        _undo_safe_here = _undo_safe
+                        try:
+                            _fail_data = json.loads(_fail_raw)
+                            if _fail_data.get("status") == "ok":
+                                _fail_snap = _fail_data.get("result", {}).get("snapshot")
+                                if _fail_snap and _turn_snapshot is not None:
+                                    _failed_snap = _EntitySnapshot.from_dict(_fail_snap)
+                                    _failed_diff = _diff_snapshots(_turn_snapshot, _failed_snap)
+                                    _foreign_fail = _detect_foreign_edit(
+                                        _turn_snapshot, _failed_snap, _prev_code or "")
+                                    if _foreign_fail:
+                                        _undo_safe = False
+                                        _undo_safe_here = False
+                                        print("[Coworker] run_conversation_turn: foreign edit at failure -- {:s}".format(_foreign_fail))
+                                        history.append({
+                                            "role": "user",
+                                            "content": (
+                                                "[System: The user changed the scene while you were working -- {:s}. "
+                                                "Re-fetch references by name (bpy.data.objects.get) and re-select explicitly "
+                                                "before acting. Do not assume your previous selection still holds.]"
+                                            ).format(_foreign_fail),
+                                        })
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                        if _undo_safe_here and _undo_pushed:
+                            # Must use context override -- bpy.ops.ed.undo() needs a window
+                            # context which isn't available in the bridge server's exec() namespace.
+                            _undo_result = _call_mcp_tool_sync("execute_blender_code",
+                                {"code": _undo_code("undo")}, mcp_port)
+                            if '"status": "error"' in _undo_result:
+                                print("[Coworker] run_conversation_turn: undo FAILED -- falling back to entity cleanup")
+                        elif not _undo_safe_here:
+                            print("[Coworker] run_conversation_turn: global undo SKIPPED -- "
+                                  "user edited the scene mid-turn; scoped cleanup only (D8)")
+                        # Idempotent cleanup of the failed step's OWN datablocks
+                        # (after the undo: anything it already reverted is simply
+                        # not found).  Whole-turn diff only as a legacy fallback
+                        # when the failed diff could not be captured AND the
+                        # global undo did not run.
+                        if not _failed_diff.is_empty():
+                            _cleanup_code = _build_cleanup_code(_failed_diff)
+                        elif not (_undo_safe_here and _undo_pushed):
                             _cleanup_code = _build_cleanup_code(_turn_entities)
-                            if _cleanup_code:
+                        else:
+                            _cleanup_code = ""
+                        if _cleanup_code:
+                            _call_mcp_tool_sync("execute_blender_code",
+                                {"code": _cleanup_code}, mcp_port)
+                        # Restore the pre-step active object + selection (Phase 5
+                        # fingerprint) so the retry's operators act on the same
+                        # context the model assumed.
+                        if _turn_snapshot is not None:
+                            _restore_code = _build_scene_restore_code(
+                                getattr(_turn_snapshot, "active_object", ""),
+                                getattr(_turn_snapshot, "selected_object_names", set()))
+                            if "restored_active" in _restore_code or "select_set" in _restore_code:
                                 _call_mcp_tool_sync("execute_blender_code",
-                                    {"code": _cleanup_code}, mcp_port)
-                        # Push a fresh undo state so the next iteration can undo this one.
-                        _call_mcp_tool_sync("execute_blender_code",
-                            {"code": _undo_code("push", "bfa_coworker_pre_script")},
+                                    {"code": _restore_code}, mcp_port)
+                        # Push a fresh undo state so the next iteration can undo this one,
+                        # WITH a snapshot: it is the new baseline (fingerprints and
+                        # entity diffing resume from the post-recovery scene).
+                        _repush_extra = _SNAPSHOT_EXTRA if not _code_is_readonly(_prev_code or "") else ""
+                        _repush_raw = _call_mcp_tool_sync("execute_blender_code",
+                            {"code": _undo_code("push", "bfa_coworker_pre_script", extra_result=_repush_extra)},
                             mcp_port)
+                        try:
+                            _repush_data = json.loads(_repush_raw)
+                            if _repush_data.get("status") == "ok":
+                                _repush_snap = _repush_data.get("result", {}).get("snapshot")
+                                if _repush_snap:
+                                    _turn_snapshot = _EntitySnapshot.from_dict(_repush_snap)
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                        # Fresh baseline: foreign edits observed before it are
+                        # baked in, so the global-undo guard resets (D8).
+                        _undo_safe = True
 
                 # -- Push initial undo state + initial snapshot (merged) -
                 # Merging saves 1 round-trip at the start of each turn.
@@ -5626,6 +5866,24 @@ def _run_conversation_turn_inner(
                                 if snap_data and _turn_snapshot is not None:
                                     current_snap = _EntitySnapshot.from_dict(snap_data)
                                     step_diff = _diff_snapshots(_turn_snapshot, current_snap)
+                                    # -- Scene-safety Phase 5: foreign-edit
+                                    # detection at the step boundary.  Runs
+                                    # even when the step created nothing: a
+                                    # user edit between two snapshots is
+                                    # exactly what must not be missed.
+                                    _foreign = _detect_foreign_edit(
+                                        _turn_snapshot, current_snap, _prev_code or "")
+                                    if _foreign:
+                                        _undo_safe = False
+                                        print("[Coworker] run_conversation_turn: foreign scene edit detected -- {:s}".format(_foreign))
+                                        history.append({
+                                            "role": "user",
+                                            "content": (
+                                                "[System: The user changed the scene while you were working -- {:s}. "
+                                                "Re-fetch references by name (bpy.data.objects.get) and re-select explicitly "
+                                                "before acting. Do not assume your previous selection still holds.]"
+                                            ).format(_foreign),
+                                        })
                                     if not step_diff.is_empty():
                                         _turn_entities.merge(step_diff)
                                         _turn_snapshot = current_snap
@@ -5636,6 +5894,11 @@ def _run_conversation_turn_inner(
                                         # turn so the user cannot re-target
                                         # them mid-turn.
                                         _lock_step_entities(step_diff, mcp_port)
+                                    elif _foreign:
+                                        # No new entities, but the fingerprint
+                                        # changed: adopt it so the next boundary
+                                        # compares against the CURRENT scene.
+                                        _turn_snapshot = current_snap
                         except (json.JSONDecodeError, TypeError):
                             pass
 

@@ -121,6 +121,10 @@ _trim_history_tool_results = _extract_func(
 )
 _undo_code = _extract_func(_load_source(), "_undo_code")
 _build_cleanup_code = _extract_func(_load_source(), "_build_cleanup_code")
+_detect_foreign_edit = _extract_func(_load_source(), "_detect_foreign_edit")
+_scene_snapshot_code = _extract_func(
+    _load_source(), "_scene_snapshot_code", {"_SNAPSHOT_KEYS": ""})
+_build_scene_restore_code = _extract_func(_load_source(), "_build_scene_restore_code")
 
 # Prompt-variant helpers.  ``_prompt_candidates`` needs ``Path`` in its
 # namespace; ``_get_system_prompt`` additionally needs ``textwrap`` and the
@@ -1521,6 +1525,102 @@ class TestInternalCodeMainThreadMarker(unittest.TestCase):
         })
         code = _build_cleanup_code(empty)
         self.assertIn("# blmcp-toolcode-skip-preflight", code)
+
+
+class TestCoWorkForeignEditDetection(unittest.TestCase):
+    """Scene-safety Phase 5: conservative foreign-edit detection + restore
+    toolcode.  Fixtures are attribute-compatible stand-ins for
+    ``_EntitySnapshot`` (the detector reads attributes only)."""
+
+    @staticmethod
+    def _snap(active="", selected=(), mode="OBJECT", objects=()):
+        return types.SimpleNamespace(
+            active_object=active,
+            selected_object_names=set(selected),
+            mode=mode,
+            object_names=set(objects),
+        )
+
+    def test_no_change_is_not_foreign(self):
+        self.assertEqual(
+            _detect_foreign_edit(
+                self._snap(active="Cube", selected=("Cube",)),
+                self._snap(active="Cube", selected=("Cube",)),
+            ), "")
+
+    def test_active_change_is_foreign(self):
+        note = _detect_foreign_edit(
+            self._snap(active="Cube"), self._snap(active="UserCube"))
+        self.assertIn("active object is now UserCube", note)
+
+    def test_active_change_attributed_to_created_object(self):
+        note = _detect_foreign_edit(
+            self._snap(active="", objects=()),
+            self._snap(active="Cube", objects=("Cube",)))
+        self.assertEqual(note, "", "a step making its own creation active "
+                                   "is not a user edit")
+
+    def test_active_change_attributed_to_step_code(self):
+        note = _detect_foreign_edit(
+            self._snap(active="Cube"), self._snap(active="Target"),
+            step_code="bpy.context.view_layer.objects.active = "
+                      "bpy.data.objects.get('Target')")
+        self.assertEqual(note, "")
+
+    def test_mode_change_foreign_unless_mode_set_in_code(self):
+        self.assertIn("mode is now EDIT_MESH", _detect_foreign_edit(
+            self._snap(mode="OBJECT"), self._snap(mode="EDIT_MESH")))
+        self.assertEqual(_detect_foreign_edit(
+            self._snap(mode="OBJECT"), self._snap(mode="EDIT_MESH"),
+            step_code="bpy.ops.object.mode_set(mode='EDIT')"), "")
+
+    def test_selection_change_foreign_unless_select_set_in_code(self):
+        self.assertIn("selection is now [Sphere]", _detect_foreign_edit(
+            self._snap(selected=()), self._snap(selected=("Sphere",))))
+        self.assertEqual(_detect_foreign_edit(
+            self._snap(selected=()), self._snap(selected=("Sphere",)),
+            step_code="o.select_set(True)"), "")
+
+    def test_none_snapshots_are_safe(self):
+        self.assertEqual(_detect_foreign_edit(None, None), "")
+
+    def test_restore_code_sets_active_and_selection(self):
+        code = _build_scene_restore_code("Cube", {"Cube", "Sphere"})
+        self.assertIn("# blmcp-toolcode-skip-preflight", code)
+        self.assertIn("bpy.data.objects.get('Cube')", code)
+        self.assertIn("view_layer.objects.active = _act_obj", code)
+        self.assertIn("select_set(True)", code)
+        self.assertIn("'Sphere'", code)
+
+    def test_restore_code_without_fingerprint_is_noop(self):
+        code = _build_scene_restore_code("", set())
+        self.assertIn("# blmcp-toolcode-skip-preflight", code)
+        self.assertNotIn("select_set", code)
+        self.assertNotIn("_act_obj", code)
+
+    def test_scene_snapshot_code_shape(self):
+        code = _scene_snapshot_code()
+        self.assertIn("# blmcp-toolcode-skip-preflight", code)
+        self.assertIn("'snapshot': {", code)
+        self.assertNotIn("undo_push", code,
+                         "snapshot-only capture must not touch the undo stack")
+        self.assertIn("def _sn(seq)", code)
+        self.assertIn("def _act()", code)
+
+    def test_undo_code_defines_fingerprint_helpers(self):
+        """The merged undo+snapshot toolcode must define the helpers the
+        fingerprint keys call (``_act``), or the snapshot would crash."""
+        code = _undo_code("push", "bfa_coworker_step")
+        self.assertIn("def _act()", code)
+        self.assertIn("def _sn(seq)", code)
+
+    def test_snapshot_keys_carry_fingerprint_fields(self):
+        """Source-level check: the snapshot keys include the Phase 5
+        fingerprint (active object, selection, mode)."""
+        src = _load_source()
+        self.assertIn("'active_object':      _act()", src)
+        self.assertIn("'selected_object_names': _sn(bpy.context.selected_objects)", src)
+        self.assertIn("'mode':               str(bpy.context.mode or '')", src)
 
 
 class TestModeAwareIterationBudget(unittest.TestCase):

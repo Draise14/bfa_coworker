@@ -220,6 +220,36 @@ guidance. Two changes:
   functions came from another (any class after the first ran against an unbound
   transport).
 
+**Co-work Phases 5 & 6 (2026-10-01, latest)** -- the two previously deferred scene-safety
+phases are now implemented and verified through the real turn loop against the stub
+bridge (no live Blender needed for the decision logic; the generated toolcode is
+string-tested):
+
+- Phase 5 -- user-edit detection & re-sync: `_EntitySnapshot` gains a co-work
+  fingerprint (`active_object`, `selected_object_names`, `mode`), reported by the merged
+  undo+snapshot toolcode (guarded `_act` helper) and read defensively by `from_dict`. At
+  every successful step boundary `_detect_foreign_edit` compares the pre-step and
+  post-step fingerprints, attributing a change to the step only when the step's code
+  plausibly performed it (`mode_set`, `select_set`, an explicit active assignment, or an
+  object the step just created). A foreign edit injects a turn-scoped
+  `[System: The user changed the scene ...]` re-sync message (excluded from session
+  memory by the `[System:]` filter) and disarms the global undo.
+- Phase 6 -- scoped auto-undo (D8): after a failed non-code-bug step the loop first
+  captures the failed step's partial diff with a snapshot-ONLY toolcode (no undo
+  bookmark -- pushing first would make the undo pop our own bookmark), then runs the
+  global undo ONLY when no foreign edit was seen since the baseline; the idempotent
+  `_build_cleanup_code` then removes the failed step's own datablocks (whole-turn diff
+  only as a legacy fallback when the capture failed AND the undo did not run);
+  `_build_scene_restore_code` restores the pre-step active object and selection by name;
+  and a fresh baseline push WITH snapshot re-arms diffing and resets the undo guard.
+  In-place edits (modifier_apply, mesh edits) remain deliberately unreverted (D9).
+- Tests: `TestCoWorkForeignEditDetection` (detector attribution rules, restore and
+  snapshot-only toolcode shapes, fingerprint keys) and
+  `TestCoWorkUserEditAndScopedUndo` (user edit detected and re-synced through the real
+  loop; scoped recovery order capture-before-undo; global undo skipped when the user
+  edited). The stub bridge reports the fingerprint, supports snapshot-only capture and
+  one-shot tool failures.
+
 **Deferred / by design**
 
 - LOW — no automated cross-session (Blender-restart) checkpoint restore test; the JSON

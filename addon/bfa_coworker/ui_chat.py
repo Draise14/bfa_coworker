@@ -96,6 +96,43 @@ _WRAP_WIDTH = 60
 _is_bfa: bool = hasattr(bpy.types, "VIEW3D_MT_view")
 _AGENT_ICON: str = "WIZARD" if _is_bfa else "GHOST_ENABLED"
 
+# Animated "thinking" spinner frames (quarter-circle rotation).  Written as
+# \u escapes so the source stays ASCII; rendered as glyphs by Blender's UI.
+_SPINNERS: tuple[str, ...] = ("\u25d0", "\u25d3", "\u25d1", "\u25d2")
+
+
+def _spinner_char(state) -> str:
+    """Return the current animated spinner glyph for *state*."""
+    return _SPINNERS[int(getattr(state, "thinking_dots", 0) or 0) % len(_SPINNERS)]
+
+
+def _draw_live_readout(layout, state) -> None:
+    """Draw the live Coworker readout in the always-visible panel area.
+
+    The Workshop (the tool-call narrative) is collapsed by default, so the
+    live stream needs a home the user can always see.  This draws a friendly
+    icon + "Coworker" label with an animated spinner while the coworker is
+    working, plus the text as it streams (falling back to the reasoning when
+    no answer text has arrived yet).  Hidden when idle.
+    """
+    thinking = bool(getattr(state, "is_thinking", False))
+    streaming = str(getattr(state, "streaming_text", "") or "")
+    reasoning = str(getattr(state, "reasoning_text", "") or "")
+    if not thinking and not streaming:
+        return
+    box = layout.box()
+    if thinking:
+        box.label(text="Coworker {:s}".format(_spinner_char(state)),
+                  icon=_AGENT_ICON)
+    else:
+        box.label(text="Coworker", icon=_AGENT_ICON)
+    if streaming:
+        _draw_multiline(box, streaming)
+    elif reasoning:
+        _draw_multiline(box, reasoning)
+    elif thinking:
+        box.label(text="Working...", icon='SORTTIME')
+
 
 
 def _wrap_text(text: str, width: int = _WRAP_WIDTH) -> str:
@@ -1982,6 +2019,11 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             layout.label(text="Chat handled by external client.", icon='INFO')
             return
 
+        # -- Live readout (always visible, outside the Workshop) ------
+        # Drawn before the input/history so the user always sees what the
+        # coworker is doing, even when the Workshop panel is collapsed.
+        _draw_live_readout(layout, state)
+
         # -- Mode toggle --
         row = layout.row(align=True)
         row.prop(props, "chat_mode", expand=True)
@@ -2187,7 +2229,8 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         if state.is_thinking and state.streaming_text and _display_idx == 0:
                             work_box.separator()
                             sb = work_box.box()
-                            sb.label(text="* Coworker (live):", icon=_AGENT_ICON)
+                            sb.label(text="Coworker (live) {:s}".format(_spinner_char(state)),
+                                     icon=_AGENT_ICON)
                             _draw_multiline(sb, state.streaming_text)
 
                 # --- Conclusion (always visible) ---
@@ -2205,7 +2248,9 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     and not has_proc
                 ):
                     turn_box.separator()
-                    turn_box.label(text="* Coworker (live):", icon=_AGENT_ICON)
+                    turn_box.label(
+                        text="Coworker (live) {:s}".format(_spinner_char(state)),
+                        icon=_AGENT_ICON)
                     _draw_multiline(turn_box, state.streaming_text)
 
         else:
@@ -2585,7 +2630,7 @@ def _draw_session_section(layout, context, props, state) -> None:
         for i in range(len(checkpoints) - 1, -1, -1):
             cp = checkpoints[i]
             row = cp_box.row(align=True)
-            row.prop(props, "session_checkpoint_index", index=i, text="", icon='FOLDER')
+            row.prop(props, "session_checkpoint_index", index=i, text="", icon='OPEN_RECENT')
             label = "#{:d} {:s} ({:s}, {:d} msgs)".format(
                 i, cp.get("reason", "?"), cp.get("timestamp", "?"),
                 cp.get("message_count", 0))

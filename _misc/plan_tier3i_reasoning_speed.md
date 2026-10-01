@@ -103,8 +103,40 @@ prefill / generation / tool overhead.
 
 ## 9. Further considerations
 
-1. Shrink the reasoning budget on later iterations (committed work needs less
-   thinking)?
-2. A per-turn wall/token budget (auto-stop with a summary), or always finish?
-3. Measure schema-token growth vs generation-token savings before adding many
-   tools.
+1. **Shrink the reasoning budget on later iterations?** The first iteration of a
+   turn needs the full budget (understand + plan); iterations 2-12 are usually
+   mechanical follow-ups that re-think the whole plan. Candidate: a high budget
+   for iteration 1, a lower one (e.g. 256-512) afterwards. Tradeoff: less room to
+   recover from a genuinely hard later sub-problem. Cheap/reversible; data-gated.
+2. **Per-turn wall/token budget?** RESOLVED: **let the turn finish** -- no
+   auto-stop. Do not prod the agent; it must complete its job. (Stop remains a
+   manual escape hatch; the end-of-turn execution nudge helps it finish.)
+3. **Tools without a ceiling -- see Tier 3j below.**
+
+## 10. Tier 3j (proposed): Tool Discovery -- no ceiling, cheap
+
+The tool schema is currently fully resident, so every added tool permanently
+costs context -- that is the ceiling. Replace "catalogue dump" with a
+**two-tier working set**:
+
+| Tier | Resident | Cost |
+|---|---|---|
+| Index | every tool `name` + one-line purpose (grouped by domain) | ~15-30 tok/tool (~1.5k for all) |
+| Active | full JSON schema for tools in play | ~200-800 tok/active tool |
+
+- **Always available**: a compact index, and/or a `find_tools(query)` search tool
+  returning ranked `name + one-line` matches. The model knows what exists without
+  paying for every schema.
+- **On demand**: `load_tools(domain)` / `load_tools(names=[...])` promotes chosen
+  tools to full schema for the rest of the session (session-sticky -> prompt-cache
+  stable; already the `load_tools`/domain behaviour, generalized).
+- **Smarts not brute force**: existing keyword + scene domain detection pre-loads
+  the likely tools; the index lets the model discover the rest mid-task.
+
+**Why it removes the ceiling**: tool #61 costs one index line (~20 tok), not a
+full schema (~500 tok). Context scales with tools *used*, not tools *available*.
+
+**Measurement**: with the 3i.0 ledger, `prompt_n` already includes the tool
+schema -- compare `prompt_n` with/without a tool vs the `predicted_n` it saves on
+repetitive tasks. With discovery the schema cost is ~0 until use, so
+tool-over-code (3i.6) becomes unambiguously a net win.

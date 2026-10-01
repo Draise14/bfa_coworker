@@ -2137,10 +2137,14 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 "({:d} messages)".format(displayable),
             )
             # The UI-only welcome greeting no longer forms a turn, so show it
-            # once here -- otherwise it would never be visible.
+            # once here -- otherwise it would never be visible.  Keep the
+            # agent hat/icon header so it reads as a Coworker message, not a
+            # bare line of text.
             for _g in history:
                 if (_g.get("ui_only") and _g.get("role") == "assistant"
                         and _g.get("content")):
+                    _gr = hist_box.row()
+                    _gr.label(text="* Coworker:", icon=_AGENT_ICON)
                     _draw_multiline(hist_box, _g.get("content", ""))
                     break
 

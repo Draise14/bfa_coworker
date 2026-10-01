@@ -135,6 +135,21 @@ Severity: HIGH = data loss / wrong result / crash-class; MED = incorrect/fragile
 - MED-HIGH — failed scene unlock leaked `hide_select`; lock registry not thread-safe.
 - LOW — stored tool results unbounded; skills cache not version-keyed; skill files re-read every request.
 
+**Post-verification fix (2026-10-01)** — two regressions introduced by the ASCII sweep,
+caught during a live addon load:
+
+- The sweep mapped the box-drawing corner `U+2514` to a bare backslash, producing
+  `col.label(text="\ ...")` in `preferences.py` (an invalid escape -> `SyntaxWarning`).
+  Mapped to `-` instead; the two affected labels are fixed.
+- The sweep expanded `ui_chat._SUPERSCRIPT_TR`'s superscript glyphs to multi-character
+  `^n` strings, breaking `str.maketrans` ("arguments must have equal length") at register
+  time. Restored via `\uXXXX` escapes (ASCII source, real superscripts at runtime:
+  `^2` -> `2` superscript).
+
+The sweep tool now protects `str.maketrans(...)` tables and no longer emits a bare
+backslash for corner glyphs; a repo-wide `py_compile -W error::SyntaxWarning` pass over
+the non-vendor source is clean.
+
 **Deferred / by design**
 
 - LOW — the session turn counter still increments per tool-loop iteration, so the memory

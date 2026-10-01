@@ -54,7 +54,8 @@ _SEQUENCES = (
 _SINGLES = {
     "\u2500": "-",      # box drawings light horizontal
     "\u2502": "|",
-    "\u2514": "\\",
+    "\u2514": "-",       # box-drawing corner -> ASCII dash (NOT a backslash:
+    #                       a bare backslash makes an invalid string escape)
     "\u258e": "|",
     "\u2014": "--",     # em dash
     "\u2013": "-",      # en dash
@@ -131,6 +132,11 @@ def _escape_non_ascii(text: str) -> str:
 
 
 _LATEX_BLOCK_RE = re.compile(r"(_LATEX_SYMBOLS\s*=\s*\{)(.*?)(\n\})", re.DOTALL)
+# ``str.maketrans(a, b)`` requires ``a`` and ``b`` to have EQUAL length.  A
+# transliteration that turns one superscript char into ``^2`` would break that
+# pairing, so maketrans tables are preserved by escaping their non-ASCII to
+# ``\uXXXX`` instead of being transliterated.
+_MAKETRANS_RE = re.compile(r"(str\.maketrans\s*\(.*?\))", re.DOTALL)
 
 
 def _protect_latex_map(text: str) -> str:
@@ -139,6 +145,11 @@ def _protect_latex_map(text: str) -> str:
         return m.group(1) + _escape_non_ascii(m.group(2)) + m.group(3)
 
     return _LATEX_BLOCK_RE.sub(_repl, text)
+
+
+def _protect_maketrans(text: str) -> str:
+    """Escape non-ASCII inside ``str.maketrans(...)`` calls (length-paired)."""
+    return _MAKETRANS_RE.sub(lambda m: _escape_non_ascii(m.group(1)), text)
 
 
 def _transliterate(text: str) -> str:
@@ -175,6 +186,7 @@ def main() -> int:
         if original.isascii():
             continue
         text = _protect_latex_map(original)
+        text = _protect_maketrans(text)
         text = _transliterate(text)
         still = sorted({c for c in text if ord(c) > 127})
         if still:

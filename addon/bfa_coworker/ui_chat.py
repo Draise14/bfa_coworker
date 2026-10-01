@@ -268,7 +268,9 @@ _INLINE_CODE_PROTECT_RE = re.compile(r"(`[^`\n]+`)")
 # x^2 -> x^2, 10^{-3} -> 10^-^3. Only digits + sign chars are converted, so
 # `2^k`, `^L` (control chars in docs), and code paths like `path^foo`
 # are left alone.
-_SUPERSCRIPT_TR = str.maketrans('0123456789-+', '^0^1^2^3^4^5^6^7^8^9^-^+')
+_SUPERSCRIPT_TR = str.maketrans(
+    '0123456789-+',
+    '\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079\u207b\u207a')
 _SUPERSCRIPT_RE = re.compile(r'\^(\{[\d\-+]+\}|[\d\-+]+)')
 
 

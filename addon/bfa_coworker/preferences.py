@@ -1491,7 +1491,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             col = row.column(align=True)
             col.scale_y = 0.8
             col.label(text="| {:s}".format(preset.hardware_note))
-            col.label(text="\ {:s}".format(preset.why))
+            col.label(text="- {:s}".format(preset.why))
 
         pri_box.label(
             text="Vision is built-in with these models and downloaded additionally",
@@ -1532,7 +1532,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     col = row.column(align=True)
                     col.scale_y = 0.8
                     col.label(text="| {:s}".format(preset.hardware_note))
-                    col.label(text="\ {:s}".format(preset.why))
+                    col.label(text="- {:s}".format(preset.why))
 
         # -- Or use a local file -------------------------------------------
         local_box = box.box()

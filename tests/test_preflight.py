@@ -194,6 +194,42 @@ for fc in obj.animation_data.action.fcurves:
         names = [name for name, _ in issues]
         self.assertIn("wrong_fcurves", names)
 
+    def test_gn_socket_membership_caught(self):
+        """`x in modifier` (removed in 5.2) is caught."""
+        code = """
+import bpy
+mod = bpy.context.object.modifiers['GeometryNodes']
+if 'Socket_3' in mod:
+    print('has socket')
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("gn_socket_membership", names)
+
+    def test_plain_membership_not_caught(self):
+        """A normal `x in some_list` must NOT be flagged."""
+        code = """
+import bpy
+names = [o.name for o in bpy.data.objects]
+if 'Ground' in names:
+    print('found')
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertNotIn("gn_socket_membership", names)
+
+    def test_manual_channelbag_caught(self):
+        """Manual channelbag/slot construction (crashes) is caught."""
+        code = """
+import bpy
+action = bpy.data.actions.new('A')
+cb = action.layers[0].strips[0].channelbag(action.slots.new())
+print(cb)
+"""
+        issues = _preflight_check(code)
+        names = [name for name, _ in issues]
+        self.assertIn("manual_channelbag", names)
+
     def test_multiple_issues(self):
         """Multiple issues are all reported."""
         code = """

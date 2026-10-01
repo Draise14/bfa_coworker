@@ -451,6 +451,31 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
             "Use keyframe_insert() for keyframe creation.",
         ))
 
+    # 7a. GN modifier socket membership (removed in Blender 5.2+).
+    #   ``identifier in modifier`` and ``modifier["..."]`` no longer work;
+    #   sockets live on ``modifier.properties.inputs``.  Only flag when a
+    #   modifier-like name is on the right side, so a plain ``x in some_list``
+    #   is not caught.
+    if re.search(r"\bin\s+(?:mod|modifier)\b", code):
+        issues.append((
+            "gn_socket_membership",
+            "Geometry-Nodes modifier socket membership (`identifier in modifier`) "
+            "was removed in Blender 5.2+. Access sockets via "
+            "`getattr(modifier.properties.inputs, 'Socket_3')` (and draw "
+            "`.value` on the returned socket), not with `in` or `modifier[...]`.",
+        ))
+
+    # 7b. Manual layered-animation channelbag construction (crashes).
+    if re.search(r"\.channelbag\(|action\.slots\.new|action\.layers\b", code):
+        issues.append((
+            "manual_channelbag",
+            "Do not build layered-animation channelbags/slots manually "
+            "(action.layers / action.slots.new / .channelbag(...)) -- this "
+            "crashes Blender. Use obj.keyframe_insert() to create keys; read "
+            "existing F-Curves only via the read-only helper in the blender_53 "
+            "skill guidance.",
+        ))
+
     # 8. Using bpy.ops in a loop without context override.
     ops_in_loop = re.search(
         r"(for|while)\s+.+:\s*\n\s+bpy\.ops\.", code

@@ -1029,6 +1029,40 @@ class TestToolLoopIntegration(_TurnLoopTestBase):
         self.assertIn("tool", [m.get("role") for m in history])
         self.assertEqual(history[-1]["content"], "done")
 
+    def test_streamed_text_tool_call_is_recovered(self):
+        """A tool call emitted as TEXT in a successful stream must run.
+
+        The transport's text/XML fallback only runs on the non-streaming
+        path, but the turn loop prefers streaming -- so a local model that
+        emits ``<tool_call>`` inside a successful stream was silently
+        ignored and the turn ended with narration.  ``_llm_request`` must
+        apply the same fallback to the streamed message.
+        """
+        _xml = (
+            '<tool_call><function=execute_blender_code>'
+            '<parameter=code>print("xmlstep")</parameter>'
+            '</function></tool_call>'
+        )
+        self._mk_server([
+            {"content": _xml, "finish_reason": "stop"},  # no native tool_calls
+            {"content": "done via xml"},
+        ])
+        self.state.conversation_history = [
+            {"role": "system", "content": "You are a helpful agent."}]
+        self._pin_fake_bpy()
+        try:
+            history = self.ac.run_conversation_turn(
+                "do it", chat_mode="AGENT",
+                llm_url=None, model="fake-model", mcp_port=self.port)
+        finally:
+            self._unpin_fake_bpy()
+
+        self.assertEqual(self.state.error, "")
+        # The recovered call executed (an MCP execute_blender_code ran).
+        self.assertGreaterEqual(len(self._mcp_calls("tools/call")), 1)
+        self.assertIn("tool", [m.get("role") for m in history])
+        self.assertEqual(history[-1]["content"], "done via xml")
+
     def test_memory_block_injected_once_per_tool_request(self):
         """Compaction on turn 1, then a tool turn: block present exactly
         once per request, and never accumulates in the stored prompt."""

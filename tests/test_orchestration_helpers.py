@@ -210,12 +210,22 @@ def _load_action_promise_re():
     end = src.index("\ndef _looks_like_unfinished_action", start)
     ns = {"re": __import__("re")}
     exec(compile(src[start:end], _AC_PATH, "exec"), ns)
-    return ns["_ACTION_PROMISE_RE"]
+    return ns
 
+
+_ACTION_NS = _load_action_promise_re()
 
 _looks_like_unfinished_action = _extract_func(
     _load_source(), "_looks_like_unfinished_action",
-    {"_ACTION_PROMISE_RE": _load_action_promise_re()},
+    {
+        "_ACTION_PROMISE_RE": _ACTION_NS["_ACTION_PROMISE_RE"],
+        "_PERMISSION_ASK_RE": _ACTION_NS["_PERMISSION_ASK_RE"],
+    },
+)
+
+# Spiral corrective messages (repeated-error guidance).
+_spiral_corrective_message = _extract_func(
+    _load_source(), "_spiral_corrective_message",
 )
 
 # Malformed tool-call filtering (truncated JSON arguments).
@@ -1784,6 +1794,33 @@ class TestEndOfTurnExecutionGuarantee(unittest.TestCase):
         ):
             self.assertFalse(_looks_like_unfinished_action(msg), msg)
 
+    def test_permission_ask_is_unfinished(self):
+        for msg in (
+            "Shall I proceed with the rocks?",
+            "Should I continue to the bushes?",
+            "Would you like me to proceed?",
+            "Do you want me to go ahead?",
+            "Shall I go ahead and add the trees?",
+            "Ready when you are.",
+        ):
+            self.assertTrue(_looks_like_unfinished_action(msg), msg)
+
+    def test_benign_offer_is_not_unfinished(self):
+        # A genuine closing offer must NOT trigger the nudge.
+        for msg in (
+            "Let me know if you'd like changes.",
+            "Would you like me to adjust the size or radius?",
+            "The scene is ready. Want me to tweak the lighting values?",
+        ):
+            self.assertFalse(_looks_like_unfinished_action(msg), msg)
+
+    def test_nudge_fires_on_empty_content(self):
+        # The nudge condition must also cover an EMPTY final message (a
+        # reasoning-only reply with no text and no tool call).
+        src = _load_source()
+        self.assertIn(
+            "not content.strip() or _looks_like_unfinished_action(content)", src)
+
     def test_nudge_wiring_present_and_bounded(self):
         src = _load_source()
         self.assertIn("_MAX_ACTION_NUDGES = 3", src)
@@ -1805,6 +1842,69 @@ class TestEndOfTurnExecutionGuarantee(unittest.TestCase):
         self.assertIn('if raw_tool_calls and finish_reason != "length":', src)
         self.assertNotIn(
             'if raw_tool_calls and finish_reason == "tool_calls":', src)
+
+
+class TestSpiralCorrectiveMessages(unittest.TestCase):
+    """Repeated-error guidance must cover the common Blender failure classes.
+
+    A model that repeats the same error twice gets a corrective user message;
+    if the message is the vague default it usually repeats the error a third
+    time.  Each branch must name the specific fix.
+    """
+
+    def test_reference_error_mentions_refetch(self):
+        msg = _spiral_corrective_message("ReferenceError: StructRNA of type removed")
+        self.assertIn("re-fetch", msg.lower())
+
+    def test_out_of_memory_says_reduce(self):
+        msg = _spiral_corrective_message("OutOfMemoryError: could not allocate")
+        self.assertIn("reduce", msg.lower())
+
+    def test_context_incorrect_mentions_override(self):
+        msg = _spiral_corrective_message("RuntimeError: context is incorrect")
+        self.assertIn("temp_override", msg)
+
+    def test_keyerror_mentions_get(self):
+        msg = _spiral_corrective_message("KeyError: 'Foo'")
+        self.assertIn(".get(", msg)
+
+    def test_typeerror_mentions_signature(self):
+        msg = _spiral_corrective_message("TypeError: expected float, got str")
+        self.assertIn("get_python_api_docs", msg)
+
+    def test_valueerror_mentions_copy(self):
+        msg = _spiral_corrective_message("ValueError: list modified during iteration")
+        self.assertIn("copy", msg.lower())
+
+    def test_generic_attribute_error_mentions_dir(self):
+        msg = _spiral_corrective_message("AttributeError: 'Mesh' has no attribute 'foo'")
+        self.assertIn("dir(", msg)
+
+    def test_existing_fcurves_branch_unchanged(self):
+        # Subdivision branch must still take precedence for that signature.
+        msg = _spiral_corrective_message(
+            "AttributeError: 'SubdivisionModifier' has no attribute 'subdivisions'")
+        self.assertIn("SubdivisionSurfaceModifier", msg)
+
+    def test_default_is_not_empty(self):
+        msg = _spiral_corrective_message("Some totally unknown error xyz")
+        self.assertTrue(msg.strip())
+        self.assertIn("reconsider", msg.lower())
+
+
+class TestStreamingToolCallRecovery(unittest.TestCase):
+    """Streamed responses must run the text/XML tool-call fallback.
+
+    The transport's fallback runs only on the non-streaming path, but the
+    turn loop prefers streaming -- so a tool call emitted as text inside a
+    successful stream was silently ignored and the turn ended with narration.
+    """
+
+    def test_llm_request_applies_fallback(self):
+        src = _load_source()
+        self.assertIn("recovered {:d} text/XML", src)
+        self.assertIn('_m["tool_calls"] = _recovered', src)
+        self.assertIn('_ch[0]["finish_reason"] = "tool_calls"', src)
 
 
 class TestTransportBindOrdering(unittest.TestCase):

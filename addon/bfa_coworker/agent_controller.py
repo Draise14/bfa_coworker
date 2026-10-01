@@ -108,6 +108,24 @@ _ACTION_PROMISE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "Waiting for permission" phrasing: a local model that is BLOCKED mid-task
+# often ends by asking the user whether to continue.  In Agent mode that is a
+# stall, not a finished turn.  Deliberately limited to strong blocked signals
+# so a genuine closing offer ("let me know if you'd like changes") is left
+# alone where it does not masquerade as a request to proceed.
+_PERMISSION_ASK_RE = re.compile(
+    r"(?:"
+    r"\b(?:shall|should)\s+i\s+"
+    r"(?:proceed|continue|go|start|do|add|create|build|move|apply|now)"
+    r"|\b(?:would you like|do you want|want)\s+me\s+to\s+"
+    r"(?:proceed|continue|go|start|do|now)"
+    r"|\bshall i go ahead\b"
+    r"|\bready when you are\b"
+    r"|\blet me know (?:how|whether)\b"
+    r")",
+    re.IGNORECASE,
+)
+
 
 def _looks_like_unfinished_action(content: str) -> bool:
     """True when a final assistant message promises work it never started.
@@ -129,7 +147,10 @@ def _looks_like_unfinished_action(content: str) -> bool:
     # but nothing was emitted.
     if tail.endswith("...") or tail.endswith("\u2026") or tail.endswith(":"):
         return True
-    return bool(_ACTION_PROMISE_RE.search(tail[-250:]))
+    if _ACTION_PROMISE_RE.search(tail[-250:]):
+        return True
+    # Asking the user for permission mid-task is a stall in Agent mode.
+    return bool(_PERMISSION_ASK_RE.search(tail[-200:]))
 
 
 # Sampling parameters tuned for MoE local models.
@@ -3827,6 +3848,80 @@ def _spiral_corrective_message(error_sig: str) -> str:
             "Use get_python_api_docs('bpy.types.SubdivisionSurfaceModifier') "
             "for the exact API. Fix the code \u2014 do not retry it verbatim.]"
         )
+    if (
+        "referenceerror" in sig_lower
+        or "has been removed" in sig_lower
+        or "structrna" in sig_lower
+    ):
+        return (
+            "[System: You keep getting a ReferenceError / 'StructRNA has been "
+            "removed'. The object you referenced was deleted or invalidated "
+            "(often by an earlier undo or by re-creating it). Never hold a "
+            "reference across operators: re-fetch it by name with "
+            "bpy.data.objects.get('Name') and check it is not None right "
+            "before every use. Fix the code \u2014 do not retry it verbatim.]"
+        )
+    if "out of memory" in sig_lower or "memoryerror" in sig_lower:
+        return (
+            "[System: You keep hitting an out-of-memory error. The operation "
+            "is too heavy for this machine. Reduce the counts, resolution, "
+            "remesh voxel detail, or subdivision levels, and split the work "
+            "into smaller steps. Do not retry the same heavy call.]"
+        )
+    if "context is incorrect" in sig_lower:
+        return (
+            "[System: You keep getting 'context is incorrect'. The operator "
+            "needs a specific area/mode/selection. Set the active object AND "
+            "selection in the SAME script, ensure the right mode, and use "
+            "bpy.context.temp_override(...) if the operator requires a "
+            "specific area. Fix the code \u2014 do not retry it verbatim.]"
+        )
+    if "keyerror" in sig_lower:
+        return (
+            "[System: You keep getting a KeyError. A dictionary or RNA "
+            "collection lookup used a name/key that does not exist. Verify "
+            "names first (e.g. print(list(bpy.data.objects.keys()))), and use "
+            "bpy.data.objects.get('Name') (which returns None instead of "
+            "raising). Do not index blindly.]"
+        )
+    if "typeerror" in sig_lower:
+        return (
+            "[System: You keep getting a TypeError. An argument has the wrong "
+            "type (e.g. a string where a float is needed, or the wrong socket "
+            "value). Check the signature with "
+            "get_python_api_docs('bpy.types.<Type>') or print(dir(obj)) before "
+            "retrying. Fix the code \u2014 do not retry it verbatim.]"
+        )
+    if "valueerror" in sig_lower:
+        return (
+            "[System: You keep getting a ValueError. A value is out of range "
+            "or a collection changed while iterating. Clamp values to the "
+            "allowed range and iterate over a COPY (list(collection)) when you "
+            "may modify it. Fix the code \u2014 do not retry it verbatim.]"
+        )
+    if "not found" in sig_lower or "cannot be found" in sig_lower:
+        return (
+            "[System: A referenced name/datablock was not found. Re-check the "
+            "scene with get_objects_summary and use the EXACT names it reports "
+            "(they may have .001 suffixes). Create the object first if it is "
+            "genuinely missing. Do not assume a name exists.]"
+        )
+    if "runtimeerror" in sig_lower:
+        return (
+            "[System: You keep getting a RuntimeError \u2014 usually an operator "
+            "context problem (no active object, wrong mode, or wrong editor "
+            "area). Make the object active and selected in the same script, set "
+            "the correct mode, and prefer data-API calls over bpy.ops where "
+            "possible. Fix the code \u2014 do not retry it verbatim.]"
+        )
+    if "has no attribute" in sig_lower:
+        return (
+            "[System: You keep using an attribute that does not exist on this "
+            "Blender type. List the real names with print(dir(obj)) or "
+            "get_python_api_docs('bpy.types.<Type>') before retrying. Most "
+            "properties live on obj.data, and node inputs on "
+            "node.inputs['Name']. Fix the code \u2014 do not retry it verbatim.]"
+        )
     return (
         "[System: You've hit the same error multiple times in a row. "
         "Stop and reconsider your approach. Read the error message carefully "
@@ -5104,6 +5199,27 @@ def _run_conversation_turn_inner(
             )
         if response is not None:
             _agent_state.record_usage(response.get("usage"))
+            # Streaming bypasses the transport's text/XML tool-call fallback,
+            # so a local model that emits a tool call as TEXT inside a
+            # successful stream would be silently ignored (the turn then ends
+            # with narration).  Apply the same fallback here when the streamed
+            # message carries no native tool calls.
+            try:
+                _ch = response.get("choices") or [{}]
+                _m = (_ch[0] or {}).get("message") or {}
+                if send_tools and not _m.get("tool_calls"):
+                    _src = "{:s}\n{:s}".format(
+                        str(_m.get("reasoning_content") or _m.get("reasoning") or ""),
+                        str(_m.get("content") or ""))
+                    _recovered = _parse_xml_tool_calls(_src)
+                    if _recovered:
+                        _m["tool_calls"] = _recovered
+                        _ch[0]["finish_reason"] = "tool_calls"
+                        print("[Coworker] _llm_request: recovered {:d} text/XML "
+                              "tool call(s) from a streamed response".format(
+                                  len(_recovered)))
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
         return response
 
     # Determine LLM URL.
@@ -6244,7 +6360,7 @@ def _run_conversation_turn_inner(
             chat_mode != "ASK"
             and openai_tools
             and _action_nudges < _MAX_ACTION_NUDGES
-            and _looks_like_unfinished_action(content)
+            and (not content.strip() or _looks_like_unfinished_action(content))
         ):
             _action_nudges += 1
             print("[Coworker] run_conversation_turn: assistant promised an "

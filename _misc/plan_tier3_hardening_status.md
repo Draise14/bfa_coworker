@@ -150,6 +150,20 @@ The sweep tool now protects `str.maketrans(...)` tables and no longer emits a ba
 backslash for corner glyphs; a repo-wide `py_compile -W error::SyntaxWarning` pass over
 the non-vendor source is clean.
 
+**Live-UI fix (2026-10-01)** — `BFACW_PT_chat_session.draw` raised
+`TypeError: UILayout.textbox(): ... invalid keyword argument(s) (text)` on every
+redraw, breaking the Session panel. The bound memory editor used
+`textbox(props, "session_memory_edit", text=...)`; `UILayout.textbox()` accepts
+`data, property, initial_visible_lines, placeholder, ...` — no `text`. Fixed to
+`textbox(props, "session_memory_edit", placeholder=...)`.
+
+**First-turn robustness (2026-10-01)** — a first turn on a tight/small context could
+still be refused if the fixed tool schema plus the system prompt exceeded the budget.
+`_build_send_messages` now has a last-resort step after dropping domain skills: reduce
+the tool schema to the always-available surface tools + `load_tools` (the model re-loads
+domains on demand) and re-check before refusing. The refusal message now also reports
+the message/tool/budget token counts so the cause is diagnosable.
+
 **Deferred / by design**
 
 - LOW — the session turn counter still increments per tool-loop iteration, so the memory

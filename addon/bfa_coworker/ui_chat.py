@@ -2565,7 +2565,8 @@ def _draw_session_section(layout, context, props, state) -> None:
     # can see what is remembered.
     if not props.session_memory_edit and st.memory_block:
         props.session_memory_edit = st.memory_block
-    mem_box.textbox(props, "session_memory_edit", text="")
+    mem_box.textbox(props, "session_memory_edit",
+                    placeholder="Session memory (empty = reload current)")
     row = mem_box.row(align=True)
     row.operator("bfacw.session_memory_view_edit", icon='TEXT', text="Apply Memory")
     row.operator("bfacw.session_compact_now", icon='FILE_REFRESH', text="Compact Now")

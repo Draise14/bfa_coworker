@@ -599,7 +599,10 @@ def _prompt_preflight(
         return fitted, (
             "This conversation no longer fits the local context window -- "
             "compacting conversation... Use 'Compact Now' in the Session panel "
-            "or start a new chat."
+            "or start a new chat. "
+            "(messages ~{:d} + tools ~{:d} tokens vs a {:d}-token prompt "
+            "budget -- increase the context window if this is a fresh chat.)".format(
+                _estimate_messages_tokens(fitted), tools_tokens, budget)
         )
     return fitted, None
 
@@ -4876,6 +4879,7 @@ def _run_conversation_turn_inner(
     # ``openai_tools`` and ``prompt_budget``; returns ``(messages, error)``
     # where *error* is set only when even the pinned turn cannot fit.
     def _build_send_messages() -> tuple[list[dict[str, Any]], str | None]:
+        nonlocal openai_tools  # may be reduced below to fit the window
         # Slice history to avoid unbounded context growth.  Always keep the
         # system prompt (index 0) if present.  Must preserve tool-call pairs:
         # each "tool" role message MUST follow an "assistant" with tool_calls.
@@ -5026,6 +5030,27 @@ def _run_conversation_turn_inner(
                 print("[Coworker] run_conversation_turn: dropped domain skills to "
                       "fit the context window")
                 msgs, _err = _prompt_preflight(msgs, openai_tools, prompt_budget)
+            if _err:
+                # Last resort: the fixed tool schema may be too large for the
+                # window (a small context, or a broad pre-detected domain set).
+                # Reduce it to the always-available surface tools plus
+                # ``load_tools`` -- the model can re-load domains on demand --
+                # and re-check before refusing the turn.  This keeps a first
+                # turn on a tight window working instead of failing outright.
+                _minimal_tools = [
+                    t for t in _all_tools
+                    if t.get("function", {}).get("name") in _SURFACE_TOOLS
+                ]
+                _minimal_tools.append(_LOAD_TOOLS_SCHEMA)
+                _minimal_tools.sort(
+                    key=lambda t: t.get("function", {}).get("name", ""))
+                _msgs_min, _err_min = _prompt_preflight(
+                    msgs, _minimal_tools, prompt_budget)
+                if _err_min is None:
+                    openai_tools = _minimal_tools
+                    print("[Coworker] run_conversation_turn: reduced the tool schema "
+                          "to surface tools to fit the context window")
+                    msgs, _err = _msgs_min, _err_min
             return msgs, _err
         return msgs, None
 

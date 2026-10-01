@@ -199,6 +199,25 @@ _toolcall_fault_message = _extract_func(
     _load_transport_source(), "toolcall_fault_message",
 )
 
+
+# End-of-turn execution guarantee: the "promised action" detector.  The
+# compiled pattern is defined in the source BEFORE the function and the
+# extractor starts at the ``def``, so the real pattern is loaded from source
+# (rather than mirrored) to keep the test honest.
+def _load_action_promise_re():
+    src = _load_source()
+    start = src.index("_ACTION_PROMISE_RE = re.compile(")
+    end = src.index("\ndef _looks_like_unfinished_action", start)
+    ns = {"re": __import__("re")}
+    exec(compile(src[start:end], _AC_PATH, "exec"), ns)
+    return ns["_ACTION_PROMISE_RE"]
+
+
+_looks_like_unfinished_action = _extract_func(
+    _load_source(), "_looks_like_unfinished_action",
+    {"_ACTION_PROMISE_RE": _load_action_promise_re()},
+)
+
 # LLM 500 fault classification.  The marker tuples and the two result
 # constants are module-level names, so the extracted function needs them in
 # its namespace.  They are mirrored here, using the same private names as
@@ -1634,6 +1653,75 @@ class TestModeAwareIterationBudget(unittest.TestCase):
         self.assertIn("_max_iterations = (", src)
         self.assertIn("while iterations < _max_iterations:", src)
         self.assertIn("if iterations >= _max_iterations:", src)
+
+
+class TestEndOfTurnExecutionGuarantee(unittest.TestCase):
+    """Agent mode must execute the work, not just narrate it.
+
+    A local model sometimes ends a turn by *describing* the next step
+    ("Now I'll add the rocks...") without emitting the tool call -- the live
+    bouncing-ball benchmark stalled this way at step 3 ("Props": the model
+    inspected the scene, announced the scatter, and stopped).  The loop now
+    detects the promised action and nudges the model to actually perform it;
+    tool calls also execute for any non-truncated finish_reason.
+    """
+
+    def test_benchmark_stall_message_is_unfinished(self):
+        msg = (
+            "The ground is there. I'll build this in small pieces -- first "
+            "the props collection plus a ring of cartoon rocks (lumpy "
+            "displaced icospheres), each with its own color and size. "
+            "Bushes and trees come next."
+        )
+        self.assertTrue(_looks_like_unfinished_action(msg))
+
+    def test_promise_patterns_detected(self):
+        for msg in (
+            "Now I'll add the bushes.",
+            "Let me create the trees next.",
+            "First, I'll set up the collection.",
+            "Next, I'll scatter the rocks.",
+            "I'm going to build the canopy now.",
+            "Bushes and trees come next.",
+            "That's the plan. Up next: the trunk.",
+            "Starting with the rocks, then the rest...",
+        ):
+            self.assertTrue(_looks_like_unfinished_action(msg), msg)
+
+    def test_finished_summary_is_not_unfinished(self):
+        for msg in (
+            "",
+            "   ",
+            "Done. The Ground object is created and verified in one pass: "
+            "flat rounded-corner rectangle, 20 m x 14 m, single face.",
+            "The scene is empty. Here is the current state and a summary "
+            "of everything that was created this turn.",
+            "If you would like, I can add a material next.",
+            "Would you like me to adjust the size or radius?",
+        ):
+            self.assertFalse(_looks_like_unfinished_action(msg), msg)
+
+    def test_nudge_wiring_present_and_bounded(self):
+        src = _load_source()
+        self.assertIn("_MAX_ACTION_NUDGES = 2", src)
+        self.assertIn("_action_nudges", src)
+        self.assertIn("_looks_like_unfinished_action(content)", src)
+        # Bounded, and never fires in Ask mode.
+        self.assertIn("_action_nudges < _MAX_ACTION_NUDGES", src)
+        self.assertIn('chat_mode != "ASK"', src)
+
+    def test_tool_calls_execute_regardless_of_finish_reason(self):
+        """Tool calls must run for any non-truncated finish_reason.
+
+        The old guard required ``finish_reason == "tool_calls"``; a provider
+        reporting "stop" alongside tool calls dropped them and ended the turn
+        with nothing executed.  Only a truncated ("length") response -- whose
+        arguments may be cut mid-string -- is still skipped.
+        """
+        src = _load_source()
+        self.assertIn('if raw_tool_calls and finish_reason != "length":', src)
+        self.assertNotIn(
+            'if raw_tool_calls and finish_reason == "tool_calls":', src)
 
 
 class TestTransportBindOrdering(unittest.TestCase):

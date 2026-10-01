@@ -78,6 +78,52 @@ _LLM_CHAT_URL = "http://127.0.0.1:{:d}/v1/chat/completions"
 _LOCAL_MAX_TOOL_ITERATIONS = 12
 _REMOTE_MAX_TOOL_ITERATIONS = 8
 
+# -- End-of-turn execution guarantee ---------------------------------
+# How many times the loop will nudge a model that *narrates* an action but
+# emits no tool call (Agent mode only; Ask mode is never nudged).
+_MAX_ACTION_NUDGES = 2
+
+# Forward-looking "I am about to do this" phrasing, matched against the tail
+# of the final assistant message.  Kept deliberately tight: a genuine closing
+# summary rarely ends by promising to <verb>.
+_ACTION_PROMISE_RE = re.compile(
+    r"(?:"
+    r"\b(?:i'?ll|i will|i'?m going to|i am going to|let me|let'?s)\s+"
+    r"(?:now\s+)?"
+    r"(?:add|build|make|create|start|begin|write|run|generate|scatter|"
+    r"place|move|apply|continue|proceed|try|whip|finish|set|call|work)"
+    r"|"
+    r"\b(?:starting|next|then|now|first)\b[^.\n]{0,20}"
+    r"\b(?:i'?ll|i will|let me|let'?s)\b"
+    r"|"
+    r"\b(?:come|comes)\s+next\b"
+    r"|"
+    r"\b(?:next\s+up|up\s+next)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_unfinished_action(content: str) -> bool:
+    """True when a final assistant message promises work it never started.
+
+    Local models sometimes end a turn by *narrating* the next step ("Now I'll
+    add the rocks...") without emitting the tool call, which would leave the
+    turn with nothing executed.  Only the tail of the message is inspected: a
+    forward-looking action phrase there means the model is mid-task, while a
+    real closing summary keeps its promises out of the final sentence.
+    """
+    if not content:
+        return False
+    tail = content.strip()
+    if not tail:
+        return False
+    # A trailing ellipsis signals the model stopped mid-thought.
+    if tail.endswith("...") or tail.endswith("\u2026"):
+        return True
+    return bool(_ACTION_PROMISE_RE.search(tail[-250:]))
+
+
 # Sampling parameters tuned for MoE local models.
 # Defined in llm_transport (the module that sends them) and re-exported
 # here via the import block above; the duplicated local copies were
@@ -1332,6 +1378,11 @@ class AgentState:
     # session totals accumulate for the whole chat session.
     turn_usage: dict[str, int] = field(default_factory=dict)
     session_usage: dict[str, int] = field(default_factory=dict)
+    # Prompt tokens of the MOST RECENT LLM request -- i.e. how full the
+    # context window currently is.  This is what the Session panel's
+    # context bar shows, so it must be a latest value, not a running sum
+    # (a cumulative sum only ever grows and pins the bar at 100%).
+    last_prompt_tokens: int = 0
 
     def record_usage(self, usage: dict[str, Any] | None) -> None:
         """Accumulate one LLM call's ``usage`` into turn + session totals."""
@@ -1342,6 +1393,21 @@ class AgentState:
             if isinstance(value, int) and value >= 0:
                 self.turn_usage[key] = self.turn_usage.get(key, 0) + value
                 self.session_usage[key] = self.session_usage.get(key, 0) + value
+        # Track the current context occupancy separately (latest, not summed).
+        prompt = usage.get("prompt_tokens")
+        if isinstance(prompt, int) and prompt >= 0:
+            self.last_prompt_tokens = prompt
+
+    def reset_usage(self) -> None:
+        """Clear all token accounting (new thread / agent restart).
+
+        The cumulative session totals and the current-occupancy snapshot are
+        both cleared so the Session panel returns to "No usage recorded
+        yet" until the next request repopulates them.
+        """
+        self.turn_usage.clear()
+        self.session_usage.clear()
+        self.last_prompt_tokens = 0
 
     # -- Liveness tracking (Tier 1) ---------------------------------
     last_bridge_activity: float = 0.0
@@ -4876,6 +4942,11 @@ def _run_conversation_turn_inner(
     # Tracks consecutive identical tool errors to break LLM retry loops.
     _consecutive_errors: list[str] = []
 
+    # -- End-of-turn execution guarantee (per-turn) --------------------
+    # Counts nudges sent when the model narrated an action but called no
+    # tool; bounded so a genuinely-finished turn can never loop.
+    _action_nudges: int = 0
+
     # In Ask mode, skip tool listing and execution entirely.
     if chat_mode == "ASK":
         openai_tools = []
@@ -5619,8 +5690,12 @@ def _run_conversation_turn_inner(
             raw_tool_calls = None
             finish_reason = "stop"
 
-        # Process tool calls if present.
-        if raw_tool_calls and finish_reason == "tool_calls":
+        # Process tool calls if present.  Execute whenever the model returned
+        # tool calls: only a truncated ("length") response is skipped (its
+        # arguments may be cut mid-string), because everything else --
+        # including providers that report "stop" alongside tool calls -- must
+        # still run.  This is the end-of-turn execution guarantee.
+        if raw_tool_calls and finish_reason != "length":
             # Add assistant message with tool calls to history.
             history.append({"role": "assistant", "content": content, "tool_calls": raw_tool_calls})
 
@@ -6022,6 +6097,37 @@ def _run_conversation_turn_inner(
                         "on these results.]"
                     ),
                 })
+            continue
+
+        # -- End-of-turn execution guarantee (Agent mode) --------------
+        # A model that *narrates* the next action ("Now I'll add the
+        # rocks...") without emitting the tool call would end the turn with
+        # nothing executed.  Detect a promised action in the tail of the
+        # final message and nudge the model to actually perform it.  Bounded
+        # so a genuinely-finished turn cannot loop; Ask mode is informational
+        # only and is never nudged.
+        if (
+            chat_mode != "ASK"
+            and openai_tools
+            and _action_nudges < _MAX_ACTION_NUDGES
+            and _looks_like_unfinished_action(content)
+        ):
+            _action_nudges += 1
+            print("[Coworker] run_conversation_turn: assistant promised an "
+                  "action but called no tool -- nudging to execute "
+                  "(attempt {:d}/{:d})".format(_action_nudges, _MAX_ACTION_NUDGES))
+            history.append({"role": "assistant", "content": content})
+            history.append({
+                "role": "user",
+                "content": (
+                    "[System: You described your next step but did not call "
+                    "any tool, so nothing was executed. In Agent mode you must "
+                    "carry out the work yourself: call the tool now (e.g. "
+                    "execute_blender_code) instead of describing it. Keep each "
+                    "call small. If the task is genuinely finished, reply with "
+                    "the final result only.]"
+                ),
+            })
             continue
 
         # No more tool calls -- add the final assistant message and we're done.

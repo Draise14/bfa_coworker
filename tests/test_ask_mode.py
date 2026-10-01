@@ -181,9 +181,10 @@ class TestAskModeExecutionGuard(unittest.TestCase):
     def test_guard_executes_no_mcp_tools_in_ask_mode(self):
         """Every MCP execution site in the turn loop checks ASK first."""
         # The only path to _call_mcp_tool_sync inside the turn loop runs
-        # under `if raw_tool_calls and finish_reason == "tool_calls":`,
-        # which the guard neutralizes by clearing both conditions.
-        start = _src.find('if raw_tool_calls and finish_reason == "tool_calls":')
+        # under the tool-execution condition (`if raw_tool_calls and
+        # finish_reason != "length":`), which the guard neutralizes by
+        # clearing raw_tool_calls and forcing finish_reason to "stop".
+        start = _src.find('if raw_tool_calls and finish_reason != "length":')
         self.assertGreater(start, 0, "tool execution block missing")
         # The guard must appear BEFORE the execution condition.
         guard = _src.find('if chat_mode == "ASK" and raw_tool_calls:')

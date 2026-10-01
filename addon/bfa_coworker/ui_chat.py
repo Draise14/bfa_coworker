@@ -1005,6 +1005,9 @@ class BFACW_OT_chat_clear(Operator):  # type: ignore[misc]
         agent_controller._agent_state.streaming_text = ""
         agent_controller._agent_state.reasoning_text = ""
         agent_controller._agent_state.thinking_dots = 0
+        # Reset token accounting so the context bar returns to
+        # "No usage recorded yet" for the new thread.
+        agent_controller._agent_state.reset_usage()
         # Reset session memory + checkpoints so the new thread does not inherit
         # the previous thread's memory block or turn counter.
         with _sm.store_lock:
@@ -1785,6 +1788,9 @@ class BFACW_OT_agent_stop(Operator):  # type: ignore[misc]
 
         props.chat_status = "Stopped"
         agent_controller._agent_state.mcp_server_running = False
+        # Stopping the agent ends the working session -- clear the token
+        # accounting so the context bar does not stay pinned at its old value.
+        agent_controller._agent_state.reset_usage()
         _redraw_areas(context)
         return {"FINISHED"}
 
@@ -1812,6 +1818,8 @@ class BFACW_OT_agent_restart(Operator):  # type: ignore[misc]
                 bpy.app.timers.unregister(execute_interactive.run)
 
         agent_controller._agent_state.mcp_server_running = False
+        # Fresh agent session -- clear stale token accounting.
+        agent_controller._agent_state.reset_usage()
 
         # Start again after a brief delay.
         def _deferred_start():
@@ -2579,9 +2587,11 @@ def _draw_session_section(layout, context, props, state) -> None:
     st = _sm.store
 
     # -- Context usage ----------------------------------------------
-    usage = getattr(state, "session_usage", {}) or {}
+    # Use the LATEST request's prompt tokens (current occupancy), not the
+    # cumulative session sum -- a running sum only grows, so the bar could
+    # never fall after compaction and would pin at 100%.
     ctx_size = getattr(state, "ctx_size_used", 0) or 0
-    last_prompt = usage.get("prompt_tokens", 0)
+    last_prompt = getattr(state, "last_prompt_tokens", 0) or 0
     ctx_box = layout.box()
     ctx_box.label(text="Context Window", icon='MEMORY')
     if ctx_size > 0 and last_prompt > 0:

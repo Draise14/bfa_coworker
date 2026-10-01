@@ -609,6 +609,38 @@ class TestAgentStateRecordUsage(unittest.TestCase):
         state.record_usage({"prompt_tokens": -3})
         self.assertEqual(state.turn_usage, {})
         self.assertEqual(state.session_usage, {})
+        self.assertEqual(state.last_prompt_tokens, 0)
+
+    def test_tracks_latest_prompt_tokens_not_sum(self):
+        """The context bar needs the CURRENT occupancy, not a running sum.
+
+        Regression: the Session panel's context bar read
+        ``session_usage["prompt_tokens"]`` (cumulative across every call),
+        so it only ever grew and pinned at 100% even after compaction.
+        ``last_prompt_tokens`` must hold the most recent request's value so
+        it can fall when the prompt shrinks.
+        """
+        State = self._extract_state()
+        state = State()
+        state.record_usage({"prompt_tokens": 5000, "completion_tokens": 10,
+                            "total_tokens": 5010})
+        self.assertEqual(state.last_prompt_tokens, 5000)
+        # A later, smaller request (e.g. after compaction) must lower it --
+        # while the session total keeps accumulating.
+        state.record_usage({"prompt_tokens": 800, "completion_tokens": 10,
+                            "total_tokens": 810})
+        self.assertEqual(state.last_prompt_tokens, 800)
+        self.assertEqual(state.session_usage["prompt_tokens"], 5800)
+
+    def test_reset_usage_clears_everything(self):
+        State = self._extract_state()
+        state = State()
+        state.record_usage({"prompt_tokens": 5000, "completion_tokens": 10,
+                            "total_tokens": 5010})
+        state.reset_usage()
+        self.assertEqual(state.turn_usage, {})
+        self.assertEqual(state.session_usage, {})
+        self.assertEqual(state.last_prompt_tokens, 0)
 
 
 class TestTurnLoopUsesStreamingWrapper(unittest.TestCase):

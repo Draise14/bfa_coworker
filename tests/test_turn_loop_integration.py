@@ -942,6 +942,44 @@ class TestToolLoopIntegration(_TurnLoopTestBase):
         self.assertEqual(self.sm.store.memory_block, "")
         self.assertNotIn("Session memory", history[0]["content"])
 
+    def test_narrated_action_is_nudged_to_execute(self):
+        """A model that narrates an action without a tool call is nudged.
+
+        The live benchmark stalled this way: the model inspected the scene,
+        announced "Now I'll create the props...", emitted no tool call, and
+        the turn ended with nothing executed.  The loop must detect the
+        promised action, nudge the model, and let the tool run.
+        """
+        self._mk_server([
+            {"content": "Now I'll create the props. Then I'll scatter them."},
+            _tool_call_msg("call_1", "print('scatter')"),
+            {"content": "scattered"},
+        ])
+        self.state.conversation_history = [
+            {"role": "system", "content": "You are a helpful agent."}]
+        self._pin_fake_bpy()
+        try:
+            history = self.ac.run_conversation_turn(
+                "scatter props", chat_mode="AGENT",
+                llm_url=None, model="fake-model", mcp_port=self.port)
+        finally:
+            self._unpin_fake_bpy()
+
+        self.assertEqual(self.state.error, "")
+        main = self._main_requests()
+        self.assertGreaterEqual(len(main), 3)
+        marker = "you described your next step but did not call any tool"
+        # The first request had no nudge; the second did (the retry fired).
+        self.assertNotIn(marker, str(main[0]["messages"][-1].get("content")).lower())
+        second = " ".join(
+            str(m.get("content") or "") for m in main[1]["messages"]).lower()
+        self.assertIn(marker, second)
+        # The narrated tool call actually executed.
+        self.assertGreaterEqual(len(self._mcp_calls("tools/call")), 1)
+        roles = [m.get("role") for m in history]
+        self.assertIn("tool", roles)
+        self.assertEqual(history[-1]["content"], "scattered")
+
     def test_memory_block_injected_once_per_tool_request(self):
         """Compaction on turn 1, then a tool turn: block present exactly
         once per request, and never accumulates in the stored prompt."""

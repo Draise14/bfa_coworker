@@ -83,6 +83,11 @@ class TestFindRetireBoundary(unittest.TestCase):
         kept, _, _ = _sm.compact_history(history, keep_recent=5)
         self.assertEqual(kept[0]["role"], "system")
 
+    def test_compact_never_retires_system_prompt(self):
+        history = _mk_history(20)
+        _, _, retired = _sm.compact_history(history, keep_recent=5)
+        self.assertNotIn("system", [m.get("role") for m in retired])
+
     def test_never_cuts_tool_pair(self):
         history = _mk_history(20, with_tools=True)
         boundary = _sm.find_retire_boundary(history, keep_recent=5)
@@ -131,11 +136,31 @@ class TestBuildMemoryBlock(unittest.TestCase):
 
 class TestCompactHistory(unittest.TestCase):
 
+    def test_manual_compact_rejects_young_history(self):
+        # "Compact Now" must treat find_retire_boundary == len(history) as
+        # "nothing to compact", so a young conversation is never reduced to
+        # the system prompt.
+        history = _mk_history(3)  # 7 messages, well under keep_recent
+        self.assertGreaterEqual(_sm.find_retire_boundary(history, 8), len(history))
+
+    def test_manual_compact_is_reversible_via_pre_snapshot(self):
+        st = _sm.CheckpointStore()
+        history = _mk_history(20)
+        before = json.loads(json.dumps(history))
+        # The operator snapshots the PRE-compaction state first.
+        st.snapshot(history, reason="manual-compaction")
+        kept, _, _ = _sm.compact_history(history, keep_recent=8)
+        self.assertLess(len(kept), len(history))
+        restored = st.restore(0, kept)
+        self.assertEqual(restored, before)
+
     def test_retires_and_keeps_recent(self):
         history = _mk_history(20)
         kept, memory, retired = _sm.compact_history(history, keep_recent=5)
         self.assertLessEqual(len(kept), 7)  # system + window (+1 user shift)
-        self.assertEqual(len(retired), len(history) - (len(kept) - 1))
+        # retired excludes the system prompt, which kept always retains.
+        self.assertEqual(len(retired), len(history) - len(kept))
+        self.assertNotIn("system", [m.get("role") for m in retired])
         self.assertTrue(memory)
 
     def test_ui_only_not_retired(self):
@@ -247,6 +272,36 @@ class TestCheckpointStore(unittest.TestCase):
         self.assertFalse(
             (Path(self._tmp.name) / "archive.jsonl").exists())
 
+    def test_restore_at_capacity_returns_selected(self):
+        # Fill to capacity so the pre-restore snapshot triggers a trim, which
+        # would shift every index if the target were looked up afterwards.
+        for i in range(_sm.CheckpointStore.MAX_CHECKPOINTS):
+            self.store.snapshot(
+                [{"role": "system", "content": "s"},
+                 {"role": "user", "content": "cp{:d}".format(i)}],
+                reason="r{:d}".format(i))
+        restored = self.store.restore(0, _mk_history(1))
+        self.assertEqual(restored[-1]["content"], "cp0")
+
+    def test_restore_restores_memory_updated_turn(self):
+        self.store.memory_updated_turn = 3
+        self.store.snapshot(_mk_history(2), reason="compaction")
+        self.store.memory_updated_turn = 99
+        self.store.restore(0, _mk_history(1))
+        self.assertEqual(self.store.memory_updated_turn, 3)
+
+    def test_archive_rotation_bounds_lines(self):
+        old = _sm.MAX_ARCHIVE_MESSAGES
+        try:
+            _sm.MAX_ARCHIVE_MESSAGES = 5
+            self.store.append_archive(
+                [{"role": "user", "content": "m{:d}".format(i)} for i in range(8)])
+            loaded = self.store.load_archive()
+            self.assertEqual(len(loaded), 5)
+            self.assertEqual(loaded[-1]["content"], "m7")
+        finally:
+            _sm.MAX_ARCHIVE_MESSAGES = old
+
     def test_payload_persistence(self):
         self.store.memory_block = "note"
         self.store.memory_updated_turn = 5
@@ -266,13 +321,7 @@ class TestCheckpointStore(unittest.TestCase):
         self.assertEqual(other.checkpoints, [{"reason": "ok"}])
 
 
-class TestEstimateAndPrompt(unittest.TestCase):
-
-    def test_estimate_matches_agent_controller_rule(self):
-        history = _mk_history(2)
-        est = _sm.estimate_history_tokens(history)
-        expected = sum(int(len(m["content"]) / 3.5) + 1 for m in history)
-        self.assertEqual(est, expected)
+class TestMemoryWriterPrompt(unittest.TestCase):
 
     def test_memory_writer_prompt_structure(self):
         msgs = _sm.memory_writer_prompt("convo text", "prior note")

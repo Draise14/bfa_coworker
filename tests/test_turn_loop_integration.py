@@ -611,6 +611,39 @@ class TestTurnLoopIntegration(_TurnLoopTestBase):
             c.get("reason") == "compaction" for c in ckpts),
             "an automatic checkpoint with reason=compaction must be recorded")
 
+    def test_recent_reasoning_survives_compaction(self):
+        # Reasoning in the RECENT verbatim window must remain visible in the
+        # Workshop after compaction.  Regression: the prune had its slices
+        # reversed, so it stripped reasoning from the *recent* window (what the
+        # panel shows) and kept it in the retired region — every compaction
+        # wiped the reasoning/trace the user wanted to see.  This seed puts
+        # reasoning on EVERY turn (the realistic case), so the retained window
+        # itself contains reasoning.
+        history = [{"role": "system", "content": "You are a helpful agent."}]
+        for i in range(30):
+            history.append({"role": "user",
+                            "content": "request {:d} ".format(i) + "x" * 1400})
+            history.append({"role": "reasoning",
+                            "content": "thought {:d} ".format(i) + "z" * 300})
+            history.append({"role": "assistant",
+                            "content": "reply {:d} ".format(i) + "y" * 1400})
+        self.state.conversation_history = history
+        n_before = len(history)
+
+        self._run_turn("hello there")
+
+        stored = self.state.conversation_history
+        # Compaction must have fired (the seed overflows the window).  Note
+        # compaction mutates the list in place, so compare against the length
+        # captured before the turn.
+        self.assertLess(len(stored), n_before,
+                        "compaction must retire old turns")
+        # ...and the retained window must still carry its reasoning.
+        self.assertTrue(
+            any(m.get("role") == "reasoning" for m in stored),
+            "reasoning inside the verbatim window must survive compaction "
+            "(the reverse-slice bug stripped it)")
+
     def test_memory_block_does_not_accumulate_in_stored_system_prompt(self):
         # Turn 1: seeds + compaction + memory block built.
         self._seed_history(turns=30)

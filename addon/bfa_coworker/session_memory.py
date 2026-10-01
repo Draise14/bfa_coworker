@@ -31,12 +31,14 @@ __all__ = (
     "heuristic_memory_block",
     "find_retire_boundary",
     "compact_history",
-    "estimate_history_tokens",
     "memory_writer_prompt",
+    "MAX_ARCHIVE_MESSAGES",
+    "store_lock",
 )
 
 import hashlib
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -62,6 +64,13 @@ _CHARS_PER_TOKEN = 3.5
 _MAX_MEMORY_CHARS = int(MEMORY_TARGET_TOKENS * _CHARS_PER_TOKEN)
 _MAX_BULLET_CHARS = 160
 _MAX_RETIRE_TEXT_CHARS = 6000
+
+# Hard cap on ``archive.jsonl`` length.  When a compaction appends past this
+# many messages the oldest lines are dropped (newest-N rotation), so a very
+# long session cannot grow the archive without bound.  The archive is a
+# debugging/continuity fallback, not the active conversation, so trimming the
+# oldest raw turns is safe.
+MAX_ARCHIVE_MESSAGES = 5000
 
 
 # ---------------------------------------------------------------------------
@@ -170,34 +179,6 @@ def memory_writer_prompt(retired_text: str, prior_memory: str) -> list[dict[str,
 # Compaction
 
 
-def estimate_history_tokens(messages: list[dict[str, Any]]) -> int:
-    """Estimate the token size of *messages* (same rule as agent_controller)."""
-    def _text_len(m: dict[str, Any]) -> int:
-        content = m.get("content")
-        if isinstance(content, str):
-            total = len(content)
-        elif isinstance(content, list):
-            total = 0
-            for block in content:
-                if isinstance(block, dict):
-                    total += len(str(block.get("text", "")))
-                    image_url = block.get("image_url")
-                    if isinstance(image_url, dict):
-                        total += len(str(image_url.get("url", "")))
-                else:
-                    total += len(str(block))
-        else:
-            total = len(str(content or ""))
-        for call in m.get("tool_calls") or []:
-            if isinstance(call, dict):
-                fn = call.get("function", {})
-                total += len(str(fn.get("name", "")))
-                total += len(str(fn.get("arguments", "")))
-        return total
-
-    return sum(int(_text_len(m) / _CHARS_PER_TOKEN) + 1 for m in messages)
-
-
 def find_retire_boundary(messages: list[dict[str, Any]], keep_recent: int = MAX_WINDOW_TURNS) -> int:
     """Return the index where older messages may be retired up to.
 
@@ -235,9 +216,13 @@ def compact_history(
     *retired* and snapshotting a checkpoint afterwards.
     """
     boundary = find_retire_boundary(history, keep_recent)
-    retired = [m for m in history[:boundary] if not m.get("ui_only")]
+    # Never retire or archive the system prompt (index 0): it is a live
+    # instruction, not conversation, and must always survive in *kept*.
+    _has_system = bool(history) and history[0].get("role") == "system"
+    _start = 1 if _has_system else 0
+    retired = [m for m in history[_start:boundary] if not m.get("ui_only")]
     kept = history[boundary:]
-    if history and history[0].get("role") == "system" and (not kept or kept[0] is not history[0]):
+    if _has_system and (not kept or kept[0] is not history[0]):
         kept = [history[0]] + kept
 
     summary: str | None = None
@@ -303,6 +288,7 @@ class CheckpointStore:
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "reason": reason,
             "memory_block": self.memory_block,
+            "memory_updated_turn": self.memory_updated_turn,
             "window_hash": _window_hash(history),
             "message_count": len(history),
             "history": json.loads(json.dumps(history, default=str)),
@@ -315,6 +301,18 @@ class CheckpointStore:
     def list_checkpoints(self) -> list[dict[str, Any]]:
         """Return the checkpoint records (oldest first)."""
         return list(self.checkpoints)
+
+    def reset(self) -> None:
+        """Clear all session state (memory, checkpoints, archive binding).
+
+        Used by "New Thread" so a fresh conversation does not inherit the
+        previous thread's memory block or checkpoints.  The archive *file* is
+        left on disk as history; only the live binding is cleared.
+        """
+        self.checkpoints = []
+        self.memory_block = ""
+        self.memory_updated_turn = 0
+        self.archive_path = None
 
     def restore(
         self,
@@ -330,9 +328,15 @@ class CheckpointStore:
         """
         if not 0 <= index < len(self.checkpoints):
             raise IndexError("checkpoint index out of range: {:d}".format(index))
-        self.snapshot(current_history, reason="pre-restore", turn_index=turn_index)
+        # Capture the target BEFORE snapshotting: the pre-restore snapshot is
+        # appended (and, at MAX_CHECKPOINTS, trims the oldest), which would
+        # shift every index and make ``self.checkpoints[index]`` return the
+        # wrong record -- or, at the cap with the newest index, the just-added
+        # pre-restore snapshot (a silent no-op).
         target = self.checkpoints[index]
+        self.snapshot(current_history, reason="pre-restore", turn_index=turn_index)
         self.memory_block = target.get("memory_block", "")
+        self.memory_updated_turn = int(target.get("memory_updated_turn", 0) or 0)
         return json.loads(json.dumps(target.get("history", []), default=str))
 
     def branch(self, index: int) -> list[dict[str, Any]]:
@@ -346,20 +350,52 @@ class CheckpointStore:
     # -- archive -----------------------------------------------------------
 
     def append_archive(self, retired: list[dict[str, Any]]) -> int:
-        """Append retired turns to ``archive.jsonl``.  Returns bytes written."""
+        """Append retired turns to ``archive.jsonl``.  Returns bytes written.
+
+        The file is capped at :data:`MAX_ARCHIVE_MESSAGES` lines; when the cap
+        is exceeded the oldest lines are dropped (newest-N rotation) so a very
+        long session cannot grow the archive without bound.  The return value
+        is the number of bytes appended by *this* call.
+        """
         if not retired:
             return 0
         path = self.archive_path
         if path is None:
             return 0
+        written = 0
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             with open(str(path), "a", encoding="utf-8") as fh:
                 for m in retired:
-                    fh.write(json.dumps(m, default=str) + "\n")
-            return path.stat().st_size
+                    line = json.dumps(m, default=str) + "\n"
+                    fh.write(line)
+                    written += len(line.encode("utf-8"))
+            self._rotate_archive(path)
+            return written
         except OSError:
             return 0
+
+    @staticmethod
+    def _rotate_archive(path: Path) -> None:
+        """Keep only the newest :data:`MAX_ARCHIVE_MESSAGES` lines of *path*."""
+        try:
+            with open(str(path), "r", encoding="utf-8") as fh:
+                lines = fh.readlines()
+        except OSError:
+            return
+        if len(lines) <= MAX_ARCHIVE_MESSAGES:
+            return
+        keep = lines[-MAX_ARCHIVE_MESSAGES:]
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        try:
+            with open(str(tmp), "w", encoding="utf-8") as fh:
+                fh.writelines(keep)
+            tmp.replace(path)
+        except OSError:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
     def load_archive(self) -> list[dict[str, Any]]:
         """Read all archived turns back (for the memory viewer / debugging)."""
@@ -404,3 +440,8 @@ class CheckpointStore:
 
 # Module singleton — mirrors agent_controller's ``_agent_state`` pattern.
 store = CheckpointStore()
+
+# Guards ``store`` mutations shared between the turn worker thread
+# (compaction) and the UI operators (restore / compact / reset).  A re-entrant
+# lock so the same thread can nest acquisitions safely.
+store_lock = threading.RLock()

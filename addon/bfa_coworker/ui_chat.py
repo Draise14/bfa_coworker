@@ -106,6 +106,21 @@ def _spinner_char(state) -> str:
     return _SPINNERS[int(getattr(state, "thinking_dots", 0) or 0) % len(_SPINNERS)]
 
 
+def _phase_text(state) -> str:
+    """Human label for the pre-first-token activity phase.
+
+    So a send does not read as "frozen": "Reading your message" while the
+    prompt is assembled, "Warming up the model" while a local server loads,
+    then "Thinking" once tokens arrive.
+    """
+    phase = str(getattr(state, "turn_phase", "") or "")
+    if phase == "reading":
+        return "Reading your message"
+    if phase == "warming":
+        return "Warming up the model"
+    return "Thinking"
+
+
 def _wrap_text(text: str, width: int = _WRAP_WIDTH) -> str:
     """Wrap text to a given width for display in Blender labels."""
     if not text:
@@ -887,9 +902,11 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             _redraw_areas(context)
             return {"FINISHED"}
 
-        # Clear input and start processing.
+        # Clear input and start processing.  Show the "reading" phase at once,
+        # before the worker thread even starts, so the send never looks frozen.
         props.chat_input = ""
-        props.chat_status = "Thinking..."
+        agent_controller._agent_state.turn_phase = "reading"
+        props.chat_status = "Reading your message..."
 
         def _do_turn():
             try:
@@ -1956,9 +1973,9 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         else:
             status = props.chat_status
             if state.is_thinking:
-                spinners = ["\u25d0", "\u25d3", "\u25d1", "\u25d2"]
                 elapsed = time.time() - state.thinking_start_time if state.thinking_start_time else 0.0
-                status = "Thinking {:s} ({:.0f}s)".format(spinners[state.thinking_dots % 4], elapsed)
+                status = "{:s} {:s} ({:.0f}s)".format(
+                    _phase_text(state), _spinner_char(state), elapsed)
             elif not state.mcp_server_running:
                 status = "Offline"
             elif state.error:
@@ -2217,6 +2234,14 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                     op.message_index = history.index(conclusion_msg)
                     _render_markdown(turn_box, conclusion_msg.get("content", ""))
+                elif is_active_turn and not state.streaming_text and getattr(state, "turn_phase", ""):
+                    # Pre-first-token: no text yet, so show the activity phase
+                    # ("Reading your message" / "Warming up the model") right
+                    # in the turn the user just sent, instead of an empty box.
+                    turn_box.separator()
+                    turn_box.label(
+                        text="{:s} {:s}".format(_phase_text(state), _spinner_char(state)),
+                        icon=_AGENT_ICON)
                 elif is_active_turn and state.streaming_text:
                     # Live readout lives inside the ACTIVE turn box, so it is
                     # visible even while the Workshop is collapsed.  Once the

@@ -1433,6 +1433,10 @@ class AgentState:
     streaming_text: str = ""
     reasoning_text: str = ""  # Chain-of-thought from reasoning models
     thinking_dots: int = 0  # Animated spinner state (0-3)
+    # Pre-first-token activity phase so the UI can say "reading" / "warming up"
+    # instead of showing "Thinking (0s)", which reads as frozen while a local
+    # model loads/warms.  Values: "" (idle) | "reading" | "warming" | "thinking".
+    turn_phase: str = ""
 
     # -- Token usage tracking (issue #69) ---------------------------
     # Per-call usage comes from the LLM response ``usage`` object (stream
@@ -5143,8 +5147,12 @@ def _run_conversation_turn_inner(
         tools = _list_tools_sync(mcp_port)
         openai_tools = _mcp_tools_to_openai(tools) if tools else []
 
+    # The message has been received; we are assembling the prompt.  This is
+    # the very first instant after Send, so show a friendly "reading" state
+    # (not "Thinking", which looks frozen before the first token arrives).
+    _agent_state.turn_phase = "reading"
     if on_status:
-        on_status("Thinking...")
+        on_status("Reading your message...")
     _agent_state.is_thinking = True
     _agent_state.thinking_start_time = time.time()
     _agent_state.streaming_text = ""
@@ -5179,6 +5187,7 @@ def _run_conversation_turn_inner(
         def _live_text(text: str) -> None:
             if not text:
                 return
+            _agent_state.turn_phase = "thinking"
             _agent_state.streaming_text = text
             if on_stream_text:
                 on_stream_text(text)
@@ -5186,6 +5195,7 @@ def _run_conversation_turn_inner(
         def _live_reasoning(text: str) -> None:
             if not text:
                 return
+            _agent_state.turn_phase = "thinking"
             _agent_state.reasoning_text = text
             if on_stream_reasoning:
                 on_stream_reasoning(text)
@@ -5258,6 +5268,11 @@ def _run_conversation_turn_inner(
     # accepts connections. Without this wait, the first chat request
     # would fail with "connection refused".
     if llm_port_local is not None:
+        # The local server can still be loading/warming; say so instead of
+        # letting the status look stuck.
+        _agent_state.turn_phase = "warming"
+        if on_status:
+            on_status("Warming up the model...")
         print("[Coworker] run_conversation_turn: waiting for LLM on 127.0.0.1:{:d}...".format(llm_port_local))
         from . import llm_manager as _llm_mgr
         if not _wait_for_port(
@@ -6427,6 +6442,7 @@ def _run_conversation_turn_inner(
 
     _agent_state.is_thinking = False
     _agent_state.thinking_start_time = 0.0
+    _agent_state.turn_phase = ""
     if on_status:
         on_status("Idle")
     return history

@@ -301,7 +301,9 @@ def _classify_pref_tab(name: str, label: str, desc: str) -> str:
     # LLM properties
     if name in ("llm_mode", "llama_path", "model_repo_id", "model_filename",
                  "downloaded_models_dir", "model_preset", "model_preset_info",
-                 "existing_model_path", "local_ctx_size", "local_max_tokens", "hf_token"):
+                 "existing_model_path", "local_ctx_size", "local_ctx_preset",
+                 "local_max_tokens", "reasoning_effort", "thinking_budget_tokens",
+                 "local_kv_cache_quant", "hf_token"):
         return "Local LLM"
     # Remote API properties
     if name in ("remote_api_url", "remote_api_key", "remote_provider",
@@ -317,6 +319,7 @@ def _classify_pref_tab(name: str, label: str, desc: str) -> str:
                  "use_blender_python_for_harness", "harness_preset",
                  "port_offset", "bridge_port", "mcp_port", "llm_port",
                  "custom_skills_text", "save_code_to_text_editor",
+                 "lock_scene_while_working", "reset_scene_on_failure",
                  "saved_providers_json", "pref_tab"):
         return "Advanced"
     return "Other"
@@ -514,6 +517,7 @@ def generate_home(manifest: dict, operators: list, tools: list) -> str:
 | 🔌 **External Harness** | Drive Blender from Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Cline, OpenCode, Freebuff, or any MCP client |
 | 🔧 **MCP Tools** | {len(tools)} dedicated tools for scene inspection, navigation, rendering, and more |
 | 💬 **Chat UI** | In-Blender chat panel with streaming responses, reasoning display, @mentions |
+| 🧠 **Session Memory** | Long conversations compact automatically — goals, decisions and pending work are remembered across the context window |
 | 🎨 **Generative AI** | Experimental image/video/audio generation via plugins |
 | 🌐 **Poly Haven** | Download CC0 assets (HDRIs, textures) directly from the agent |
 | 🧪 **Test Suites** | Built-in multi-step artist workflow benchmarks |
@@ -562,7 +566,7 @@ graph TB
 | Section | Pages |
 |---------|-------|
 | 🚀 **[Quick Start](Quick-Start)** | Install → Configure → Chat in 3 steps |
-| 👤 **[User Documentation](Installation)** | Installation, Configuration, Chat Interface, Local LLM, Remote API, External Harness, Generative AI, Troubleshooting |
+| 👤 **[User Documentation](Installation)** | Installation, Configuration, Chat Interface, Session Memory, Local LLM, Remote API, External Harness, Generative AI, Troubleshooting |
 | 🛠️ **[Developer Documentation](Architecture)** | Architecture, Addon Structure, MCP Server, MCP Tools, Plugin System, Skills, Building, Contributing |
 | 📋 **[API & Glossary](Operators-Reference)** | Operators Reference, Preferences Reference, MCP Tools Reference, Glossary |
 
@@ -592,6 +596,7 @@ def generate_sidebar() -> str:
   - 📥 [Installation](https://github.com/Draise14/bfa_coworker/wiki/Installation)
   - ⚙️ [Configuration](https://github.com/Draise14/bfa_coworker/wiki/Configuration)
   - 💬 [Chat Interface](https://github.com/Draise14/bfa_coworker/wiki/Chat-Interface)
+  - 🧠 [Session Memory](https://github.com/Draise14/bfa_coworker/wiki/Session-Memory)
   - 🖥️ [Local LLM Setup](https://github.com/Draise14/bfa_coworker/wiki/Local-LLM-Setup)
   - ☁️ [Remote API Setup](https://github.com/Draise14/bfa_coworker/wiki/Remote-API-Setup)
   - 🔌 [External Harness](https://github.com/Draise14/bfa_coworker/wiki/External-Harness)
@@ -913,8 +918,10 @@ Curated model presets organized by hardware capability (10 entries incl. Custom)
 - Resolved llama-server path with an **Open Folder** button
 - Model Repo ID (HuggingFace)
 - Model Filename
+- **Context Window Preset** — one-click sizes (4K / 8K / 16K / 32K / 64K / 128K / Custom); the recommended size for your hardware is suggested when you pick a model
 - Context Window Size (4096–262144 tokens)
 - **Reasoning Effort** — Off / Low / Medium / High / Custom (maps to a per-reply thinking budget of 0 / 512 / 1024 / 2048 tokens; local path only)
+- **Quantize KV Cache (q8_0)** — store the KV cache in 8-bit to roughly halve its memory and fit a larger context on the same VRAM (slight quality cost; GPU backends only; applies on next server start)
 - Max Output Tokens (512–131072)
 - HuggingFace Token (for gated models)
 
@@ -1005,6 +1012,8 @@ Port settings, external harness configuration, skills, and diagnostics.
 ### 🤖 Agent Control
 - Auto-Start Agent toggle
 - Check Status button (pings bridge, MCP, and LLM)
+- **Lock Scene While Working** — while a turn runs, temporarily make the objects and collections the coworker created or touched un-selectable, so they cannot be re-targeted mid-turn (default on; see [[User-Documentation/Chat-Interface|Chat Interface]])
+- **Reset Scene On Benchmark Step Failure** — when a benchmark step fails, delete the objects it left behind and return to object mode, so one bad step cannot corrupt the next (test suites only)
 
 ### 🔌 Port Settings
 - Port Offset (global offset for all ports)
@@ -1076,6 +1085,15 @@ def generate_chat_interface() -> str:
 
 The Coworker chat panel provides an in-Blender interface for interacting with the AI agent. It's available in the **3D Viewport sidebar** and the **Text Editor sidebar**.
 
+The sidebar is split into four stacked panels, in order:
+
+| Panel | Purpose |
+|-------|---------|
+| **Coworker** | Mode, Start/Stop, status line, input, and the conversation history |
+| **Session** | Context usage, session memory, compaction, and checkpoints |
+| **Queue** | Messages queued while the agent is busy |
+| **Status & Diagnostics** | Health dots, model info, token/speed readouts, logs |
+
 """ + _screenshot(
     "Full chat panel in the 3D View sidebar showing a conversation",
     "3D Viewport → Sidebar (N key) → Coworker tab",
@@ -1085,28 +1103,68 @@ The Coworker chat panel provides an in-Blender interface for interacting with th
 
 ---
 
-## Panel Layout
+## 🗂️ Panel Layout
 
-### 📋 Header Section
-- **Agent Status** — Shows current state (Idle, Thinking..., Running, Stopped)
-- **Liveness Dots** — Green/yellow/red indicators for Bridge, MCP, and LLM
-- **Mode Indicator** — Shows current chat mode (Agent or Ask)
-- **Tool Count** — Number of tools available to the agent
+### 💬 Coworker Panel
+
+The main panel holds everything you need to hold a conversation:
+
+- **Mode row** — shows the active operating mode (Local LLM / Remote API / External MCP) and a **Settings** button that jumps to the add-on preferences. The model name is deliberately *not* shown here — it lives in **Status & Diagnostics**.
+- **Start / Stop** — starts or stops the agent (or the bridge, in External Harness mode).
+- **Status line** — a one-line state readout with an icon:
+  - `Reading your message` / `Warming up the model` / `Thinking` while a turn runs, with a spinner and elapsed seconds
+  - `Offline` when the agent is stopped
+  - `Error: …` with a **Copy Error** button when something fails
+  - a non-fatal **warning** line (e.g. a tool-calling downgrade) when there is no error
+- **Scene protection notice** — while the coworker works, the objects it created are briefly un-selectable (see [Co-work Scene Lock](#-co-work-scene-lock)); this row tells you how many are locked.
+- **Mode toggle** — **Agent** or **Ask** (see [Chat Modes](#-chat-modes)).
+- **Input** — a multi-line text box, with an **@ Mention** button below it.
+- **Action buttons** — **Send** + **New Thread** when idle; **Queue** + **Stop** while a turn is running.
+- **Conversation history** — drawn directly under the input so the chat reads as one continuous thread (see below).
 
 ### 💭 Conversation History
-- Messages grouped into turns (user + agent response)
-- Newest messages appear at the top
-- Each turn shows:
-  - **User message** with copy button
-  - **Agent response** with reasoning (collapsible) and tool results
-  - **Tool results** shown in sub-boxes with summary and expandable details
 
-### ⌨️ Input Area
-- Multi-line text input field
-- **@mention** button for searching and inserting object names
-- **Send** button (or Ctrl+Enter)
-- **Stop** button to interrupt generation
-- **New Thread** button to clear conversation
+Messages are grouped into **turns** — one real user send is one turn. Each turn is a box containing:
+
+- **Turn header** — `Turn N` with a status icon (✓ when the turn concluded) and a copy button.
+- **`You:`** — your message, always visible.
+- **Workshop** — a collapsible section holding the turn's internals: reasoning, tool calls and their results, injected system context, and self-prompts. It is collapsed by default; only the internals collapse, so the turn header and your message stay visible.
+- **`* Coworker:`** — the final reply, rendered as markdown.
+
+While a turn is still running, the **active turn** shows a live readout (`Coworker (live)` with a spinner) that streams the answer as it forms; it is replaced by the final message only when the turn ends. A **Newest First** toggle flips the display order, and the number of visible turns is capped by the **Max Visible Turns** preference.
+
+> 📸 **SCREENSHOT NEEDED:** A single expanded turn showing the Workshop with reasoning and tool results
+>
+> - **Where:** 3D Viewport → Sidebar → Coworker tab → a turn's Workshop
+> - **State:** A completed turn with the Workshop expanded, showing reasoning and a tool result box
+> - **Callouts:** 1. Turn header, 2. You: message, 3. Workshop (expanded), 4. Tool result, 5. Coworker reply
+
+### 🗃️ Session Panel
+
+The **Session** panel is where long conversations are managed. It shows:
+
+- **Context Window** — a live usage bar (percent of the context window currently occupied) with a warning once old turns are about to be compacted.
+- **Memory** — the compact session-memory note, with a multiline editor, an **Apply Memory** button, and a **Compact Now** button.
+- **Checkpoints** — a collapsible list of automatic snapshots, each with a radio button to pick the restore target and a **Restore** button.
+
+See the [[User-Documentation/Session-Memory|Session Memory & Checkpoints]] page for the full story.
+
+### 📥 Queue Panel
+
+While the agent is busy you can keep typing: **Queue** adds your message to a pending list instead of interrupting the turn. The **Queue** panel lists the pending messages (with their mode) and offers **Clear Queue**.
+
+### 🩺 Status & Diagnostics Panel
+
+Collapsed by default. It shows:
+
+- **Liveness dots** — Bridge, MCP, and LLM indicators.
+- **Restart Coworker** — restart the agent without leaving Blender.
+- **Mode** and **Tools loaded** count.
+- **Model** — the active local or remote model name.
+- **Tokens** — session prompt + completion totals (and the current turn's total while thinking).
+- **Speed** — prompt-eval and generation throughput (tok/s) from llama-server.
+- **Last turn** — a one-line cost breakdown: wall time, generation tokens/seconds, prefill tokens/seconds, and tool calls.
+- **Export Log** / **Copy Log** — dump the full session (history, system prompt, version info) to a text block or the clipboard.
 
 """ + _screenshot(
     "Chat panel input area showing the @mention popup with object search",
@@ -1125,13 +1183,13 @@ The LLM can execute tools — create objects, modify scenes, render, etc. Full a
 ### ❓ Ask Mode
 Read-only Q&A mode. The LLM can search documentation and inspect the scene but cannot make changes.
 
-Toggle between modes using the dropdown in the chat panel header.
+Toggle between modes using the **Agent / Ask** buttons in the Coworker panel.
 
 ---
 
 ## @️ Mentions
 
-Type `@` in the chat input or click the **@** button to open the object search popup. This lets you:
+Type `@` in the chat input or click the **@ Mention** button to open the object search popup. This lets you:
 
 - Search for objects by name
 - Insert precise object references into your message
@@ -1156,11 +1214,23 @@ Rules are useful for:
 
 ---
 
+## 🔒 Co-work Scene Lock
+
+The coworker edits the *same* scene you do. To stop the two of you fighting over the selection mid-turn, the add-on applies a **soft scene lock** while a turn runs:
+
+- The objects and collections the coworker created or touched are temporarily made **un-selectable** in the viewport.
+- Programmatic access is unaffected, and the objects you had selected (and the active object) when the turn started are **excluded** from the lock.
+- Everything is released when the turn ends — FINISH, error, Stop, or exception.
+
+The Coworker panel shows a **Scene protection** row while the lock is active. Turn it off with the **Lock Scene While Working** preference (Advanced tab).
+
+---
+
 ## 💾 Conversation History
 
 - Chat history is automatically saved per `.blend` file
 - Stored as JSON in `scripts/bfa_coworker_chat_history/`
-- **New Thread** clears the current conversation
+- **New Thread** clears the current conversation *and* resets the session memory, checkpoints, and turn counter
 - **Copy Message** button on each message copies content to clipboard
 - History persists across Blender sessions
 
@@ -1176,6 +1246,130 @@ The Coworker panel is also available in the **Text Editor** sidebar, providing t
     "Text Editor open with a Python script, Coworker chat panel visible in sidebar",
     "1. Text Editor area, 2. Coworker chat panel in sidebar"
 ) + """
+"""
+
+
+def generate_session_memory() -> str:
+    """Generate Session-Memory.md."""
+    return _header("Session Memory & Checkpoints", "How the coworker remembers across a long conversation") + """
+
+---
+
+## 🧠 Why Session Memory Exists
+
+A local model has a fixed **context window** — the maximum number of tokens it can read at once. A long conversation eventually fills it. Instead of failing, the coworker **compacts**: it retires the oldest turns, summarizes them into a compact **memory block**, and keeps going. The memory block is injected into the system prompt, so the agent still knows the goal, the decisions, and what is pending.
+
+Everything is visible and controllable from the **Session** panel in the 3D Viewport sidebar.
+
+""" + _screenshot(
+    "Session panel showing the context usage bar, memory editor, and checkpoint list",
+    "3D Viewport → Sidebar → Coworker tab → Session panel",
+    "Session panel visible with a partially-filled context bar, a memory note, and checkpoints expanded",
+    "1. Context Window bar, 2. Memory editor, 3. Apply Memory / Compact Now, 4. Checkpoints list, 5. Restore"
+) + """
+
+---
+
+## 📊 Context Window
+
+The **Context Window** box shows how full the window is:
+
+- A percentage and a progress bar for the **latest request's** prompt tokens (current occupancy — not a running total, so the bar falls again after a compaction).
+- A note — *"Approaching limit — old turns will be compacted"* — once usage reaches the compaction trigger.
+
+---
+
+## 🗜️ Automatic Compaction
+
+Compaction runs automatically when the estimated prompt reaches **60%** of the safe prompt budget (`COMPACTION_TRIGGER_RATIO`). It can also fire on an **overflow** — when a request would exceed the window — and the turn then retries once with the reduced history.
+
+When it runs:
+
+1. The oldest turns are **retired** from the live history (the most recent ~20 messages stay verbatim).
+2. The retired turns are appended to a disk **archive** (`archive.jsonl`).
+3. A dedicated, small LLM call rewrites the **memory block** (with a heuristic fallback if that call fails).
+4. An automatic **checkpoint** snapshots the *pre-compaction* state.
+
+The system prompt is never retired or archived — it is a live instruction, not conversation.
+
+---
+
+## 📝 The Memory Block
+
+The memory block is a compact, structured note kept under ~600 tokens, with fixed headings:
+
+```
+[Session memory]
+Goal: …
+Decisions: …
+Objects & files touched: …
+Pending: …
+Errors seen: …
+Last updated: turn N
+```
+
+- It is injected into the **sent** system prompt on every request (the stored prompt is untouched).
+- Turn-scoped `[System: …]` context messages are **excluded** from memory building, so a warning that was only true for one turn never becomes a false memory.
+- You can edit it by hand: type in the **Memory** box and click **Apply Memory**. Leaving the box empty reloads the current note.
+
+---
+
+## 🖐️ Compact Now
+
+The **Compact Now** button compacts on demand:
+
+- It keeps a smaller recent window (8 messages) than the automatic path.
+- It refuses to run when there is nothing genuinely retirable — a young conversation is never reduced to the system prompt.
+- It snapshots the pre-compaction state first, so the action is **reversible** via a checkpoint.
+
+---
+
+## 🚩 Checkpoints
+
+Checkpoints are automatic snapshots of the session (memory block + history + message count). They are created at each compaction and at other key moments, and are labelled by **reason**:
+
+| Reason | Created when |
+|--------|--------------|
+| `compaction` | The automatic 60% trigger fires |
+| `overflow` | A request would exceed the window |
+| `manual-compaction` | You press **Compact Now** |
+| `pre-restore` | You restore a checkpoint (the current state is saved first) |
+
+The list keeps the newest **10** checkpoints. Each row shows its reason, time, and message count, with a radio button to pick the **restore target**.
+
+### ♻️ Restore
+
+**Restore** rewinds the conversation to the selected checkpoint. It is **non-destructive**: the current session is snapshotted as a `pre-restore` checkpoint first, so nothing is lost.
+
+---
+
+## 🗄️ The Archive
+
+Retired turns are appended to `archive.jsonl` next to the chat-history JSON. The archive is a continuity/debugging fallback, not the active conversation, so it is capped (newest-N rotation) and cannot grow without bound.
+
+---
+
+## 🧹 New Thread
+
+**New Thread** clears the conversation *and* resets all session state — the memory block, the checkpoints, the turn counter, and the loaded tool domains — so a fresh thread never inherits stale context.
+
+---
+
+## 📁 Where It Lives
+
+| File | Contents |
+|------|----------|
+| `scripts/bfa_coworker_chat_history/<blend>.json` | The live conversation history |
+| `scripts/bfa_coworker_chat_history/default_session_memory.json` | Memory block + checkpoints (sidecar) |
+| `scripts/bfa_coworker_chat_history/archive.jsonl` | Retired turns (capped) |
+
+---
+
+## 🔗 Related
+
+- [[User-Documentation/Chat-Interface|Chat Interface]] — the panels these controls live in
+- [[User-Documentation/Configuration|Configuration]] — context window and reasoning settings
+- [[API-Glossary/Glossary|Glossary]] — Compaction, Checkpoint, Memory Block
 """
 
 
@@ -2249,6 +2443,8 @@ User Message → Chat Panel → Agent Controller → LLM API
 | **Separate MCP process** | Avoids blocking Blender's UI thread during tool execution |
 | **TCP bridge** | Decouples MCP server from Blender's Python environment |
 | **Tool domains** | Keeps context window small by loading only relevant tools |
+| **Session memory** | Retires old turns into a compact memory block so long conversations survive the context window |
+| **Co-work scene lock** | Temporarily makes agent-created objects un-selectable so the user cannot re-target them mid-turn |
 | **Smart undo** | Tracks entity changes per turn for automatic rollback |
 | **Weak sandbox** | Blocks dangerous operations without full isolation overhead |
 | **Vendored dependencies** | No pip install needed — everything bundled in the addon |
@@ -2273,9 +2469,15 @@ addon/bfa_coworker/
 ├── operators_agent.py       # Agent operators (test, ping, test suites, Poly Haven)
 ├── agent_controller.py      # Conversation loop, MCP client, tool orchestration
 ├── llm_manager.py           # LLM lifecycle — download, start/stop, config
+├── llm_transport.py         # HTTP transport for LLM requests (streaming, retries)
+├── session_memory.py        # Session memory, compaction, checkpoints (bpy-free)
+├── co_work_guard.py         # Soft co-work scene lock (bpy-free)
 ├── ui_chat.py               # Chat panel UI, operators, @mentions, history
 ├── mcp_to_blender_server.py # TCP bridge server inside Blender
 ├── gen_controller.py        # Generative AI controller
+├── autofix.py               # Automatic code-fix helpers for failed tool code
+├── asset_selftests.py       # Deterministic asset-tool self-tests (no LLM)
+├── blender_templates.py     # Blender text-datablock templates
 ├── gen_plugins/             # Generative plugin system
 │   ├── __init__.py          # Plugin auto-discovery & registry
 │   ├── base.py              # GenPlugin base class
@@ -2317,7 +2519,10 @@ addon/bfa_coworker/
         ["`operators_agent.py`", "Agent operations", "`_BFACW_OT_ping_agent`, `_BFACW_OT_test_step`"],
         ["`agent_controller.py`", "Conversation orchestration", "`run_conversation_turn()`, `start_mcp_server()`"],
         ["`llm_manager.py`", "LLM lifecycle", "`download_model()`, `start_local_llama()`, `LLMConfig`"],
-        ["`ui_chat.py`", "Chat panel UI", "`BFACW_PT_chat_panel`, `BFACW_OT_chat_send`"],
+        ["`llm_transport.py`", "LLM HTTP transport", "`chat_completion()`, streaming, retry/error handling"],
+        ["`session_memory.py`", "Session memory & checkpoints", "`compact_history()`, `CheckpointStore`, `build_memory_block()`"],
+        ["`co_work_guard.py`", "Co-work scene lock", "`lock()`, `unlock()`, `is_locked()`, `managed_names()`"],
+        ["`ui_chat.py`", "Chat panel UI", "`BFACW_PT_chat_panel`, `BFACW_PT_chat_session`, `BFACW_OT_chat_send`"],
         ["`mcp_to_blender_server.py`", "TCP bridge server", "`start()`, `stop()`, `poll()`, `_execute_code()`"],
         ["`gen_controller.py`", "Generative AI", "`GenConfig`, `GenState`, `generate()`"],
         ["`gen_plugins/`", "Plugin system", "`GenPlugin`, `PLUGIN_REGISTRY`, `discover()`"],
@@ -3540,8 +3745,14 @@ A feature allowing users to configure and save multiple remote API provider prof
 ### Chat Panel
 The in-Blender UI for interacting with the AI agent. Available in the 3D Viewport and Text Editor sidebars.
 
+### Checkpoint
+An automatic snapshot of the session (memory block + history + message count), created at each compaction and other key moments. Restoring one is non-destructive — the current state is saved first. See [[User-Documentation/Session-Memory|Session Memory & Checkpoints]].
+
 ### CLI (Command Line Interface)
 The `bfa_coworker` CLI command for running the bridge server in background mode: `blender --background file.blend --command bfa_coworker`.
+
+### Compaction
+Retiring the oldest conversation turns into the session memory and archive when the prompt approaches the context limit, so a long conversation keeps going instead of failing. See [[User-Documentation/Session-Memory|Session Memory & Checkpoints]].
 
 ### Context Window
 The maximum number of tokens the LLM can process at once. Larger values allow longer conversations but use more RAM.
@@ -3642,6 +3853,9 @@ The preference controlling how the MCP server is launched: **Managed (HTTP)**, *
 ### MCP Tools
 Individual capabilities exposed by the MCP server (e.g., scene inspection, rendering, documentation search).
 
+### Memory Block
+A compact, structured note (Goal / Decisions / Objects & files touched / Pending / Errors seen) that summarizes retired turns and is injected into the system prompt so the agent remembers across compactions. See [[User-Documentation/Session-Memory|Session Memory & Checkpoints]].
+
 ---
 
 ## O
@@ -3682,8 +3896,14 @@ Chain-of-thought output from the LLM, shown in a collapsible panel in the chat U
 
 ## S
 
+### Scene Lock (Co-work)
+A soft lock applied while a turn runs: the objects and collections the coworker created or touched are temporarily made un-selectable so they cannot be re-targeted mid-turn. Released when the turn ends. See [[User-Documentation/Chat-Interface|Chat Interface]].
+
 ### Self-Contained
 A design principle where the add-on bundles everything needed — no external tools, no manual server setup, no Python environment wrangling.
+
+### Session Memory
+The engine that retires old turns, summarizes them into a memory block, and archives them so the agent remembers goals and pending work across compactions. See [[User-Documentation/Session-Memory|Session Memory & Checkpoints]].
 
 ### Skills
 Version-aware markdown files containing Blender-specific knowledge injected into the LLM's system prompt.
@@ -3723,6 +3943,9 @@ Skill files that are loaded based on the current Blender version, ensuring the L
 
 ### Weak Sandbox
 A lightweight security layer that blocks dangerous operations (like `wm.quit_blender()`) without the overhead of full isolation.
+
+### Workshop
+The collapsible section inside each conversation turn that holds the turn's internals — reasoning, tool calls and results, injected system context, and self-prompts. See [[User-Documentation/Chat-Interface|Chat Interface]].
 """
 
 
@@ -3806,6 +4029,7 @@ def main() -> int:
         ("User-Documentation/Installation.md", generate_installation(manifest)),
         ("User-Documentation/Configuration.md", generate_configuration(manifest, prefs)),
         ("User-Documentation/Chat-Interface.md", generate_chat_interface()),
+        ("User-Documentation/Session-Memory.md", generate_session_memory()),
         ("User-Documentation/Local-LLM-Setup.md", generate_local_llm_setup()),
         ("User-Documentation/Remote-API-Setup.md", generate_remote_api_setup()),
         ("User-Documentation/External-Harness.md", generate_external_harness(presets)),

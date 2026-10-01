@@ -62,6 +62,29 @@ beside 4c (IDE agent) and 4e (workflow tooling).
 4. **Deterministic over clever** — prefer explicit rules (permissions, doom-loop) over
    model-dependent behavior.
 
+### 1.3 Handoff from Tier 3i / 3j (reasoning latency & tool discovery)
+
+Tier 3i (`_misc/plan_tier3i_reasoning_speed.md`) started the **local-latency** work
+and deliberately stopped at the low-risk parts for a release. The deeper items below
+belong here in Tier 4f — they are the *runtimes* that make the agent faster without
+changing what it can do:
+
+| From Tier 3i / 3j | Where it lands in Tier 4f |
+|---|---|
+| Cost ledger (prefill vs generation vs overhead per turn) — **landed** as Tier 3i.0 (`AgentState.last_turn_cost`, `_log_turn_cost`, "Last turn" UI line) | Feeds **4f.1.4 metrics** and **4f.2 context management** — reuse it to prove every later optimization. |
+| Concise STYLE header for local models — **landed** as Tier 3i.2 | Keep; belongs with the local-prompt tuning in 4f.2. |
+| Reply cap for local turns (3i.1) | 4f.2 (context/answer budgeting) |
+| Reasoning budget shrink on later iterations (3i.3) | 4f.1/4f.2 (inference + context tuning) |
+| Iteration economy / no-progress cut-out (3i.4) | 4f.3 doom-loop guard (generalize it) |
+| On-demand skill loading (3i.5) | **4f.2 already plans this** ("on-demand loading via a `skill` tool") — implement together. |
+| Tool-over-code helper tools (3i.6) | 4g domain tooling (pre-authored toolcode) |
+| **Tier 3j tool discovery** (cheap always-resident index + on-demand full schemas, so adding tools costs an index line not a schema) | **4f.2** (context management) + **4g** — implement as the tool-registry mechanism that lets 4g grow without a schema ceiling. |
+| Speculative decoding (Tier 5a) | Tier 5a unchanged (upstream-blocked). |
+
+> **Note**: none of the above changes *what* the agent can do — they reduce the
+> tokens and wall time a turn spends. Do them only with the Tier 3i.0 ledger in hand
+> so each change is measured, not assumed.
+
 ---
 
 ## 2. Scope and Non-Goals

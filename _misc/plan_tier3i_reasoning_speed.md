@@ -1,12 +1,18 @@
 # BFA Coworker - Tier 3i: Reasoning Latency & Token Efficiency
 
 **Date**: 2026-10-01
-**Status**: In progress - Phase 3i.0 (measurement ledger) IMPLEMENTED; 3i.1-3i.7 proposed (data-gated)
+**Status**: PARTIAL - only the low-risk, release-safe parts are implemented on this
+branch. Everything else is PINNED and handed to Tier 4 (see §11).
 **Branch**: `fix/scene-safety-local-hardening`
 **Depends on**: timings instrumentation (llama-server `timings` capture + Speed readout)
 **Related**: Tier 4f.1 (inference flags), 4f.2 (on-demand skills), 4f.4 (subagents),
 Tier 4g (domain tooling), Tier 5a (speculative decoding - upstream-blocked)
 **Scope**: measurement (done) + ~150-400 LOC of targeted changes + tests
+
+> **Scope decision (2026-10-01, for this release/Pull Request):** keep this branch
+> **functional and non-invasive**. Land only low-hanging, low-risk fruit here; defer
+> the deeper latency work to the Tier 4 plans (they change behavior and carry more
+> risk). See §11 for exactly what shipped vs what is pinned.
 
 ---
 
@@ -140,3 +146,27 @@ full schema (~500 tok). Context scales with tools *used*, not tools *available*.
 schema -- compare `prompt_n` with/without a tool vs the `predicted_n` it saves on
 repetitive tasks. With discovery the schema cost is ~0 until use, so
 tool-over-code (3i.6) becomes unambiguously a net win.
+
+## 11. Shipped vs PINNED (for this branch / release)
+
+**Shipped here (low-risk, release-safe):**
+- **3i.0 Cost ledger** - `AgentState.last_turn_cost` / `record_request_timings` /
+  `bump_turn_cost` / `reset_turn_cost`; `_log_turn_cost()` one-line summary at turn
+  end; "Last turn" line in Status & Diagnostics. Observation only - no behavior change.
+- **3i.2 Concise local STYLE** - the verbose "think aloud / be thorough" prompt line
+  is now remote-only; local gets "Be concise and decisive".
+- Tests: `tests/test_turn_cost.py`.
+
+**PINNED -> Tier 4 (deeper, higher risk; do NOT do on this branch):**
+- 3i.1 reply cap for local turns -> Tier 4f.2
+- 3i.3 reasoning-budget shrinking on later iterations -> Tier 4f.1/4f.2
+- 3i.4 iteration economy / no-progress cut-out -> Tier 4f.3 (doom-loop guard)
+- 3i.5 on-demand skill loading -> Tier 4f.2 (already planned there)
+- 3i.6 tool-over-code helper tools -> Tier 4g
+- **Tier 3j tool discovery** (index + on-demand schemas) -> Tier 4f.2 / 4g
+- Tier 5a speculative decoding -> unchanged (upstream-blocked)
+
+Mapping lives in `plan_tier4f_agent_intelligence.md` §1.3 and the Tier 4 master
+coordination doc. Rationale: keep this branch functional and non-invasive; the
+pinned items change agent behavior and should land behind the Tier 3i.0 ledger so
+each is measured.

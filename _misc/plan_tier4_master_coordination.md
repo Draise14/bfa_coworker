@@ -59,6 +59,16 @@
 > (Agent Teams, formerly 6f.1). All four phases are local-first and independent of the editor/UX lanes,
 > so 4f.1 (inference) and 4f.3 (permissions) can proceed in parallel with any other
 > Tier 4 work.
+>
+> **Addition (2026-10-01):** **Tier 3i/3j — reasoning latency & tool discovery**
+> (`plan_tier3i_reasoning_speed.md`) began the *local-latency* work and intentionally
+> stopped at the low-risk parts for a release (cost ledger 3i.0, concise local STYLE
+> 3i.2). The deeper items — reply cap, reasoning-budget shrinking, iteration economy,
+> on-demand skills, tool-over-code helpers, and the two-tier tool-discovery registry
+> that removes the tool ceiling — are **deferred into Tier 4f (runtime) and Tier 4g
+> (tooling)**; see `plan_tier4f_agent_intelligence.md` §1.3 for the mapping. They
+> change nothing about *what* the agent can do — only the tokens/wall time a turn
+> spends — and must be measured with the Tier 3i.0 ledger before landing.
 
 ### 1.1 Before / After Matrix — What Tier 4 Changes
 

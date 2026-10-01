@@ -80,6 +80,13 @@ _LOCAL_LLM_HEALTH_URL = "http://127.0.0.1:{:d}/health"
 _LOCAL_LLM_CHAT_URL = "http://127.0.0.1:{:d}/v1/chat/completions"
 _MODEL_DOWNLOAD_TIMEOUT = 300  # seconds
 
+# Windows: run child processes without a console window.  Blender is a GUI
+# app, so a plain Popen of a console program can flash a console window;
+# CREATE_NEW_CONSOLE (the old launcher) sent output somewhere we could not
+# read.  CREATE_NO_WINDOW keeps things quiet and — with stdio redirected —
+# lets us capture every line.
+_CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
 def _port_is_taken(port: int) -> bool:
     """Return True if *port* is already in use on localhost."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -286,6 +293,7 @@ def _server_supported_flags(server_exe: str) -> "set[str] | None":
         out = subprocess.run(
             [server_exe, "--help"],
             capture_output=True, text=True, timeout=15,
+            creationflags=_CREATE_NO_WINDOW,
         )
         text = (out.stdout or "") + "\n" + (out.stderr or "")
         flags = set(re.findall(r"(?<![\w-])(--[A-Za-z0-9][A-Za-z0-9-]*)", text))
@@ -304,13 +312,15 @@ def _server_supports_flag(server_exe: str, flag: str) -> bool:
 
 
 def _filter_flags_against_help(
-    args: list[str], supported: "set[str]",
+    args: list[str], supported: "set[str]", keep: "set[str]" = frozenset(),
 ) -> tuple[list[str], list[str]]:
     """Drop ``--flags`` not in *supported* (and their values).
 
     *args[0]* is the executable and is always kept.  Any ``--flag`` in
-    *supported* is kept with the value token that follows it; an unsupported
-    flag and its value are removed.  Returns ``(new_args, dropped)``.
+    *supported* -- or in *keep*, which holds launch-critical flags that must
+    never be dropped even if the help probe missed them -- is kept with the
+    value token that follows it; any other flag and its value are removed.
+    Returns ``(new_args, dropped)``.
     """
     out: list[str] = [args[0]] if args else []
     dropped: list[str] = []
@@ -320,7 +330,7 @@ def _filter_flags_against_help(
         tok = args[i]
         if tok.startswith("--"):
             name = tok.split("=", 1)[0]
-            if name in supported:
+            if name in supported or name in keep:
                 out.append(tok)
             else:
                 dropped.append(name)
@@ -330,6 +340,15 @@ def _filter_flags_against_help(
             out.append(tok)
         i += 1
     return out, dropped
+
+
+# Flags the server cannot run without.  These are never dropped by the
+# help-filter, so a help-probe miss can never launch a server missing its
+# port, model, or context size.
+_REQUIRED_LLAMA_FLAGS: "frozenset[str]" = frozenset({
+    "--jinja", "--host", "--port", "--ctx-size", "--n-gpu-layers",
+    "--model", "--mmproj", "--hf-repo", "--hf-file",
+})
 
 
 _llama_server_version_cache: str = ""
@@ -348,6 +367,7 @@ def _llama_server_version(server_exe: str) -> str:
         result = subprocess.run(
             [server_exe, "--version"],
             capture_output=True, text=True, timeout=10,
+            creationflags=_CREATE_NO_WINDOW,
         )
         output = (result.stdout or result.stderr or "").strip()
         _llama_server_version_cache = output.splitlines()[0] if output else "unknown"
@@ -2767,175 +2787,14 @@ def remove_llama_server() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# New-console launch (Windows only)
+# Process launch
 #
-# subprocess.Popen(CREATE_NEW_CONSOLE) cannot set the title of the new
-# console window — subprocess.STARTUPINFO exposes no lpTitle — and calling
-# SetConsoleTitleW from the parent renames the *parent's* console instead
-# (which is why the Blender/Bforartists terminal was getting retitled).
-# CreateProcessW with STARTUPINFOW.lpTitle sets the title on the new console
-# at creation time, with no wrapper process: the returned handle still
-# refers to llama-server itself, so termination behaves exactly as before.
+# llama-server is launched with subprocess.Popen on every platform, with its
+# stdout/stderr redirected to the log file so a startup failure is always
+# visible.  (The previous Windows CreateProcessW + CREATE_NEW_CONSOLE launcher
+# sent output to a console window the addon could not read, so a crash showed
+# no reason; it was removed in favour of CREATE_NO_WINDOW + redirection.)
 
-
-class _ConsoleProcess:
-    """Minimal Popen-like handle for a process launched via CreateProcessW.
-
-    Exposes the subset of ``subprocess.Popen`` used by the rest of this
-    module: ``pid``, ``poll``, ``returncode``, ``wait``, ``terminate`` and
-    ``kill``.
-    """
-
-    _STILL_ACTIVE = 259  # STILL_ACTIVE (winnt.h)
-
-    def __init__(self, handle: int, pid: int) -> None:
-        from ctypes import wintypes
-        self._handle = handle
-        self.pid = pid
-        self._returncode: int | None = None
-        # Declare the Win32 prototypes explicitly.  Without them ctypes assumes
-        # 32-bit ``int`` for the HANDLE and can truncate the 64-bit process
-        # handle, so GetExitCodeProcess may read the wrong process (spurious
-        # "exited") and TerminateProcess may act on the wrong handle.
-        k32 = ctypes.windll.kernel32
-        k32.GetExitCodeProcess.restype = wintypes.BOOL
-        k32.GetExitCodeProcess.argtypes = [
-            wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-        k32.WaitForSingleObject.restype = wintypes.DWORD
-        k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-        k32.TerminateProcess.restype = wintypes.BOOL
-        k32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
-        k32.CloseHandle.restype = wintypes.BOOL
-        k32.CloseHandle.argtypes = [wintypes.HANDLE]
-        self._k32 = k32
-
-    @property
-    def returncode(self) -> int | None:
-        return self._returncode
-
-    def poll(self) -> int | None:
-        if self._returncode is None:
-            from ctypes import wintypes
-            code = wintypes.DWORD()
-            if self._k32.GetExitCodeProcess(self._handle, ctypes.byref(code)) \
-                    and code.value != _ConsoleProcess._STILL_ACTIVE:
-                self._returncode = int(code.value)
-        return self._returncode
-
-    def wait(self, timeout: float | None = None) -> int:
-        if self._returncode is not None:
-            return self._returncode
-        if timeout is None:
-            self._k32.WaitForSingleObject(self._handle, 0xFFFFFFFF)
-        elif self._k32.WaitForSingleObject(
-            self._handle, int(timeout * 1000)
-        ) == 0x00000102:  # WAIT_TIMEOUT
-            raise subprocess.TimeoutExpired(self.pid, timeout)
-        self.poll()
-        return self._returncode if self._returncode is not None else 0
-
-    def terminate(self) -> None:
-        self._k32.TerminateProcess(self._handle, 1)
-
-    kill = terminate
-
-    def __del__(self) -> None:
-        try:
-            if self._handle:
-                self._k32.CloseHandle(self._handle)
-                self._handle = None
-        except Exception:  # pylint: disable=broad-exception-caught
-            pass
-
-
-def _popen_new_console(
-    args: list[str],
-    env: dict[str, str],
-    title: str,
-) -> _ConsoleProcess:
-    """Launch *args* in a brand-new console window titled *title*.
-
-    Equivalent to ``subprocess.Popen(args, creationflags=CREATE_NEW_CONSOLE)``
-    but passes ``STARTUPINFOW.lpTitle`` so the new window is titled instead
-    of inheriting the executable name. Standard output/error are left
-    connected to the new console (nothing is redirected, so the parent
-    console keeps all of its own output). Windows only.
-    """
-    import ctypes
-    from ctypes import wintypes
-
-    class STARTUPINFOW(ctypes.Structure):
-        _fields_ = [
-            ("cb", wintypes.DWORD),
-            ("lpReserved", wintypes.LPWSTR),
-            ("lpDesktop", wintypes.LPWSTR),
-            ("lpTitle", wintypes.LPWSTR),
-            ("dwX", wintypes.DWORD),
-            ("dwY", wintypes.DWORD),
-            ("dwXSize", wintypes.DWORD),
-            ("dwYSize", wintypes.DWORD),
-            ("dwXCountChars", wintypes.DWORD),
-            ("dwYCountChars", wintypes.DWORD),
-            ("dwFillAttribute", wintypes.DWORD),
-            ("dwFlags", wintypes.DWORD),
-            ("wShowWindow", wintypes.WORD),
-            ("cbReserved2", wintypes.WORD),
-            ("lpReserved2", ctypes.POINTER(wintypes.BYTE)),
-            ("hStdInput", wintypes.HANDLE),
-            ("hStdOutput", wintypes.HANDLE),
-            ("hStdError", wintypes.HANDLE),
-        ]
-
-    class PROCESS_INFORMATION(ctypes.Structure):
-        _fields_ = [
-            ("hProcess", wintypes.HANDLE),
-            ("hThread", wintypes.HANDLE),
-            ("dwProcessId", wintypes.DWORD),
-            ("dwThreadId", wintypes.DWORD),
-        ]
-
-    kernel32 = ctypes.windll.kernel32
-    kernel32.CreateProcessW.restype = wintypes.BOOL
-    kernel32.CreateProcessW.argtypes = [
-        wintypes.LPCWSTR,  # lpApplicationName
-        wintypes.LPWSTR,  # lpCommandLine
-        wintypes.LPVOID,  # lpProcessAttributes
-        wintypes.LPVOID,  # lpThreadAttributes
-        wintypes.BOOL,  # bInheritHandles
-        wintypes.DWORD,  # dwCreationFlags
-        wintypes.LPVOID,  # lpEnvironment
-        wintypes.LPCWSTR,  # lpCurrentDirectory
-        ctypes.POINTER(STARTUPINFOW),  # lpStartupInfo
-        ctypes.POINTER(PROCESS_INFORMATION),  # lpProcessInformation
-    ]
-
-    si = STARTUPINFOW()
-    si.cb = ctypes.sizeof(STARTUPINFOW)
-    si.lpTitle = title
-
-    # Environment block: NUL-separated UTF-16 "KEY=VALUE" pairs with a
-    # trailing double NUL; CREATE_UNICODE_ENVIRONMENT must be set.
-    env_block = "".join("{}={}\0".format(k, v) for k, v in env.items()) + "\0"
-    env_buf = ctypes.create_unicode_buffer(env_block)
-
-    pi = PROCESS_INFORMATION()
-    ok = kernel32.CreateProcessW(
-        None,  # lpApplicationName — resolved from the command line
-        ctypes.create_unicode_buffer(subprocess.list2cmdline(args)),  # lpCommandLine
-        None,  # lpProcessAttributes
-        None,  # lpThreadAttributes
-        False,  # bInheritHandles
-        0x00000010 | 0x00000400,  # CREATE_NEW_CONSOLE | CREATE_UNICODE_ENVIRONMENT
-        env_buf,  # lpEnvironment
-        None,  # lpCurrentDirectory — inherit
-        ctypes.byref(si),
-        ctypes.byref(pi),
-    )
-    if not ok:
-        raise ctypes.WinError(ctypes.get_last_error())
-
-    kernel32.CloseHandle(pi.hThread)
-    return _ConsoleProcess(int(pi.hProcess), int(pi.dwProcessId))
 
 
 # ---------------------------------------------------------------------------
@@ -3172,25 +3031,14 @@ def start_local_llama(
 
         # ── Fresh, captureable server log ──────────────────────────────
         # Remove any previous log so the tail we read on failure reflects
-        # THIS launch.  On Windows the launcher uses a brand-new console and
-        # writes no log at all, so a stale file from a previous POSIX run was
-        # being shown next to a real "exit code 1" — deeply misleading.
+        # THIS launch.  The server's stdout/stderr are redirected to this
+        # file below (both platforms), so a startup crash is always visible.
         try:
             _logp = _llama_server_log_path()
             if _logp.is_file():
                 _logp.unlink()
         except OSError:
             pass
-        # Ask the server to write its own log to that path when the build
-        # supports it, so a Windows (new-console) failure is still visible in
-        # the error tail.  Validated by the help-filter below.
-        if _server_supports_flag(server_exe, "--log-file"):
-            args.extend(['--log-file', str(_llama_server_log_path())])
-            print("[🛠️Coworker] start_local_llama:   capturing server log to {:s}".format(
-                str(_llama_server_log_path())))
-        else:
-            print("[🛠️Coworker] start_local_llama:   this build has no --log-file; "
-                  "server output goes to its console window only")
 
         # ── Drop flags this binary does not accept ─────────────────────
         # A build that rejects a flag prints "unknown argument" and exits 1
@@ -3199,7 +3047,8 @@ def start_local_llama(
         # (e.g. --no-context-shift / --flash-attn on an older or CPU build).
         _supported = _server_supported_flags(server_exe)
         if _supported is not None:
-            args, _dropped = _filter_flags_against_help(args, _supported)
+            args, _dropped = _filter_flags_against_help(
+                args, _supported, keep=_REQUIRED_LLAMA_FLAGS)
             if _dropped:
                 print("[⚠️Coworker] start_local_llama: dropping flags unsupported by this "
                       "build: {:s}".format(", ".join(sorted(set(_dropped)))))
@@ -3237,43 +3086,33 @@ def start_local_llama(
             except OSError as ex:
                 print("[🛠️Coworker] start_local_llama: os.add_dll_directory failed — {:s}".format(str(ex)))
 
-        # On Windows the output goes to the new console window.
-        # On Linux/macOS it goes to a log file to avoid hijacking the Blender console.
-
+        # Redirect the server's stdout/stderr to the log file on BOTH
+        # platforms so its output is always captured.  On Windows this
+        # replaces the old CREATE_NEW_CONSOLE launch, which sent output to a
+        # window the addon could not read -- so a startup crash reported no
+        # reason at all and the error tail showed a stale file.
+        try:
+            log_handle = open(str(_llama_server_log_path()), "w", encoding="utf-8", errors="replace")
+        except OSError as ex:
+            log_handle = None
+            print("[🛠️Coworker] start_local_llama: could not open log file — {:s}".format(str(ex)))
+        stdio_target = log_handle if log_handle is not None else subprocess.DEVNULL
+        print("[🛠️Coworker] start_local_llama:   args = {:s}".format(str(args)))
+        print("[🛠️Coworker] start_local_llama:   log = {:s}".format(str(_llama_server_log_path())))
         if sys.platform == "win32":
-            # Launch llama-server in a NEW console window so the user can
-            # see its output and close the window to stop it.
-            # CreateProcessW(CREATE_NEW_CONSOLE) gives us a proper handle
-            # that terminates the actual server, not a wrapper.
-            # stdout/stderr are NOT redirected -- the output goes to the new
-            # console window so the user can see model loading, health
-            # checks, and errors in real time.  Nothing about the parent
-            # (Blender/Bforartists) console is touched.
-            print("[🛠️Coworker] start_local_llama: WIN32 path (CREATE_NEW_CONSOLE)")
-            print("[🛠️Coworker] start_local_llama:   args = {:s}".format(str(args)))
-            # The window title is set via STARTUPINFOW.lpTitle at creation
-            # time, so the NEW console is titled.  (SetConsoleTitleW from
-            # here would retitle the Blender/Bforartists terminal instead —
-            # the parent's own console.)
-            proc = _popen_new_console(
+            # CREATE_NO_WINDOW: no console window, and (with stdio redirected
+            # above) every line is captured for the failure tail.
+            proc = subprocess.Popen(
                 args,
+                stdin=subprocess.DEVNULL,
+                stdout=stdio_target,
+                stderr=stdio_target,
+                creationflags=_CREATE_NO_WINDOW,
                 env=env,
-                title="BFA Coworker — llama-server",
             )
-            print("[🛠️Coworker] start_local_llama:   Popen returned pid={:d}".format(proc.pid))
         else:
             # Linux / macOS: detach from the parent process group so the
-            # server survives Blender exiting.  Redirect stdio to the log
-            # file so it does not hijack the Blender console.
-            try:
-                log_handle = open(str(_llama_server_log_path()), "w", encoding="utf-8", errors="replace")
-            except OSError as ex:
-                log_handle = None
-                print("[🛠️Coworker] start_local_llama: could not open log file — {:s}".format(str(ex)))
-            stdio_target = log_handle if log_handle is not None else subprocess.DEVNULL
-            print("[🛠️Coworker] start_local_llama: POSIX path (start_new_session=True)")
-            print("[🛠️Coworker] start_local_llama:   args = {:s}".format(str(args)))
-            print("[🛠️Coworker] start_local_llama:   log = {:s}".format(str(_llama_server_log_path())))
+            # server survives Blender exiting.
             proc = subprocess.Popen(
                 args,
                 stdin=subprocess.DEVNULL,
@@ -3281,7 +3120,7 @@ def start_local_llama(
                 stderr=stdio_target,
                 start_new_session=True,
             )
-            print("[🛠️Coworker] start_local_llama:   Popen returned pid={:d}".format(proc.pid))
+        print("[🛠️Coworker] start_local_llama:   Popen returned pid={:d}".format(proc.pid))
 
     except FileNotFoundError:
         print("[🛠️Coworker] start_local_llama: FileNotFoundError — binary not found")
@@ -3393,6 +3232,31 @@ def health_check(url: str | None = None) -> bool:
         return False
 
 
+def _abandon_launched_server(proc: "subprocess.Popen | None") -> None:
+    """Give up on a launched server that never became ready.
+
+    Terminates the process if it is still alive (a timed-out load otherwise
+    lingers and holds the port, so the next start hits "already running" or a
+    port conflict) and clears the running state so a retry starts clean.
+    """
+    global _llama_process
+    try:
+        if proc is not None and proc.poll() is None:
+            print("[🛠️Coworker] _abandon_launched_server: terminating pid={:d}".format(proc.pid))
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except Exception:  # pylint: disable=broad-exception-caught
+                proc.kill()
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[🛠️Coworker] _abandon_launched_server: {:s}".format(str(ex)))
+    with _lock:
+        if _llama_process is proc:
+            _llama_process = None
+        _state.is_running = False
+        _state.current_mode = "off"
+
+
 def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = None) -> bool:
     """Block until the local llama-server answers a health check.
 
@@ -3482,6 +3346,7 @@ def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = No
             _set_error(msg)
             print("[🛠️Coworker] wait_until_ready: process exited early (rc={:d}){:s}".format(
                 proc.returncode, ":\n{:s}".format(tail) if tail else ""))
+            _abandon_launched_server(proc)
             return False
         _time.sleep(poll)
         poll = min(poll * 1.5, 3.0)
@@ -3491,6 +3356,7 @@ def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = No
         msg += "\n\n--- llama-server.log (tail) ---\n{:s}".format(tail)
     _set_error(msg)
     print("[🛠️Coworker] wait_until_ready: timed out")
+    _abandon_launched_server(proc)
     return False
 
 

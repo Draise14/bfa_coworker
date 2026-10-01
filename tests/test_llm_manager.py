@@ -691,6 +691,22 @@ class TestFilterFlagsAgainstHelp(unittest.TestCase):
         self.assertEqual(out, [])
         self.assertEqual(dropped, [])
 
+    def test_required_flags_are_never_dropped(self):
+        # Even if a help probe misses a required flag, it must survive.
+        args = ["exe", "--model", "m.gguf", "--port", "8081", "--weird"]
+        keep = frozenset({"--model", "--port"})
+        out, dropped = self.llm_manager._filter_flags_against_help(
+            args, set(), keep=keep)
+        self.assertIn("--model", out)
+        self.assertIn("m.gguf", out)
+        self.assertIn("--port", out)
+        self.assertEqual(dropped, ["--weird"])
+
+    def test_required_flag_set_includes_core_launch_flags(self):
+        required = self.llm_manager._REQUIRED_LLAMA_FLAGS
+        for flag in ("--port", "--model", "--ctx-size", "--host"):
+            self.assertIn(flag, required)
+
 
 if __name__ == "__main__":
     unittest.main()

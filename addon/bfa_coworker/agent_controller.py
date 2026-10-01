@@ -4714,11 +4714,19 @@ def _lock_step_entities(step_diff: Any, mcp_port: int) -> None:
             return
         if mcp_port:
             _active_lock_mcp_port = mcp_port
-        co_work_guard.record_managed(objs, colls)
+        # Lock only the names NOT already managed.  Re-locking an
+        # already-locked datablock would read ``hide_select = True`` as its
+        # "prior" and the unlock would then re-lock it forever -- the
+        # reported "can't edit what was built after a turn".
+        new_objs, new_colls = co_work_guard.record_managed(objs, colls)
         co_work_guard.remember_session(objs, colls)
+        if not new_objs and not new_colls:
+            # Already locked this cycle (e.g. re-locked by the session pass);
+            # nothing to do, and the priors are already captured.
+            return
         raw = _call_mcp_tool_sync(
             "execute_blender_code",
-            {"code": co_work_guard.build_lock_code(objs, colls)}, mcp_port)
+            {"code": co_work_guard.build_lock_code(new_objs, new_colls)}, mcp_port)
         # Best-effort: capture the true prior hide_select values so the
         # unlock restores them exactly rather than a blanket False.
         try:
@@ -4730,7 +4738,7 @@ def _lock_step_entities(step_diff: Any, mcp_port: int) -> None:
         except (json.JSONDecodeError, TypeError):
             pass
         print("[Coworker] _lock_step_entities: locked {:d} objects, {:d} "
-              "collections".format(len(objs), len(colls)))
+              "collections".format(len(new_objs), len(new_colls)))
     except Exception as _ex:  # pylint: disable=broad-exception-caught
         print("[Coworker] _lock_step_entities: skipped -- {:s}".format(str(_ex)))
 
@@ -4752,13 +4760,29 @@ def _release_scene_lock() -> None:
         print("[Coworker] _release_scene_lock: no MCP port -- deferring unlock")
         return
     try:
-        _call_mcp_tool_sync(
+        raw = _call_mcp_tool_sync(
             "execute_blender_code",
             {"code": co_work_guard.build_unlock_code()},
             _active_lock_mcp_port)
-        print("[Coworker] _release_scene_lock: released co-work scene lock")
-        co_work_guard.clear()
-        _active_lock_mcp_port = 0
+        # Only forget the priors when the unlock actually SUCCEEDED.  A
+        # returned error (the tool result, which does not raise) or an
+        # unparseable body means some datablocks may still be locked --
+        # clearing here would discard the restore data and leave them
+        # ``hide_select = True`` permanently.  Keep the priors + port so the
+        # next turn's release retries with the true values.
+        _ok = False
+        try:
+            _data = json.loads(raw)
+            _ok = isinstance(_data, dict) and _data.get("status") == "ok"
+        except (json.JSONDecodeError, TypeError):
+            _ok = '"status": "ok"' in (raw or "")
+        if _ok:
+            print("[Coworker] _release_scene_lock: released co-work scene lock")
+            co_work_guard.clear()
+            _active_lock_mcp_port = 0
+        else:
+            print("[Coworker] _release_scene_lock: unlock reported an error -- "
+                  "keeping priors for a later retry (scene may stay protected)")
     except Exception as _ex:  # pylint: disable=broad-exception-caught
         print("[Coworker] _release_scene_lock: unlock failed, keeping priors "
               "for a later retry -- {:s}".format(str(_ex)))

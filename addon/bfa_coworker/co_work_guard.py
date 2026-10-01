@@ -53,6 +53,14 @@ _MANAGED_OBJECTS: dict[str, bool] = {}
 _MANAGED_COLLECTIONS: dict[str, bool] = {}
 _LOCKED: bool = False
 
+# Names whose true prior ``hide_select`` has ALREADY been captured for the
+# current lock cycle.  Re-locking an already-locked name would read its
+# now-``True`` hide_select as the "prior" and clobber the real value, so the
+# unlock would re-lock the object forever (the reported "can't edit after a
+# turn").  Capture a prior once, then ignore later reads for that name.
+_PRIOR_KNOWN_OBJECTS: set[str] = set()
+_PRIOR_KNOWN_COLLECTIONS: set[str] = set()
+
 # Guards the registry against the turn worker thread (lock/release) racing a
 # new turn or UI action after a Stop (the re-entrancy guard clears
 # ``turn_active`` while the old thread may still be in flight).
@@ -73,22 +81,32 @@ def managed_names() -> tuple[set[str], set[str]]:
 def record_managed(
     objects: object = (),
     collections: object = (),
-) -> None:
+) -> tuple[set[str], set[str]]:
     """Register *objects*/*collections* as managed.
 
     New names are recorded with an assumed prior ``hide_select = False``;
     :func:`record_prior` then replaces that with the true prior value once
     the lock toolcode reports it.  Idempotent.
+
+    Returns ``(new_object_names, new_collection_names)`` -- the names added
+    by THIS call.  Callers should lock only these, so an already-locked name
+    is never re-locked (which would read ``hide_select = True`` as its prior
+    and clobber the real value -- see :func:`record_prior`).
     """
-    for name in objects or ():
-        if name and name not in _MANAGED_OBJECTS:
-            _MANAGED_OBJECTS[str(name)] = False
-    for name in collections or ():
-        if name and name not in _MANAGED_COLLECTIONS:
-            _MANAGED_COLLECTIONS[str(name)] = False
+    new_objs: set[str] = set()
+    new_colls: set[str] = set()
     global _LOCKED
     with _registry_lock:
+        for name in objects or ():
+            if name and str(name) not in _MANAGED_OBJECTS:
+                _MANAGED_OBJECTS[str(name)] = False
+                new_objs.add(str(name))
+        for name in collections or ():
+            if name and str(name) not in _MANAGED_COLLECTIONS:
+                _MANAGED_COLLECTIONS[str(name)] = False
+                new_colls.add(str(name))
         _LOCKED = bool(_MANAGED_OBJECTS or _MANAGED_COLLECTIONS)
+    return new_objs, new_colls
 
 
 def record_prior(
@@ -97,17 +115,23 @@ def record_prior(
 ) -> None:
     """Store the true prior ``hide_select`` values reported by the lock code.
 
-    Best-effort: unknown names are ignored.  Never raises.
+    A prior is captured **once per name**: a later lock of an already-locked
+    datablock reports ``hide_select = True``, and writing that back would make
+    the unlock re-lock the object permanently.  Best-effort: unknown names are
+    ignored.  Never raises.
     """
     try:
-        if isinstance(prior_objects, dict):
-            for name, value in prior_objects.items():
-                if name in _MANAGED_OBJECTS:
-                    _MANAGED_OBJECTS[name] = bool(value)
-        if isinstance(prior_collections, dict):
-            for name, value in prior_collections.items():
-                if name in _MANAGED_COLLECTIONS:
-                    _MANAGED_COLLECTIONS[name] = bool(value)
+        with _registry_lock:
+            if isinstance(prior_objects, dict):
+                for name, value in prior_objects.items():
+                    if name in _MANAGED_OBJECTS and name not in _PRIOR_KNOWN_OBJECTS:
+                        _MANAGED_OBJECTS[name] = bool(value)
+                        _PRIOR_KNOWN_OBJECTS.add(name)
+            if isinstance(prior_collections, dict):
+                for name, value in prior_collections.items():
+                    if name in _MANAGED_COLLECTIONS and name not in _PRIOR_KNOWN_COLLECTIONS:
+                        _MANAGED_COLLECTIONS[name] = bool(value)
+                        _PRIOR_KNOWN_COLLECTIONS.add(name)
     except Exception:  # pylint: disable=broad-exception-caught
         pass
 
@@ -118,6 +142,8 @@ def clear() -> None:
     with _registry_lock:
         _MANAGED_OBJECTS.clear()
         _MANAGED_COLLECTIONS.clear()
+        _PRIOR_KNOWN_OBJECTS.clear()
+        _PRIOR_KNOWN_COLLECTIONS.clear()
         _LOCKED = False
 
 

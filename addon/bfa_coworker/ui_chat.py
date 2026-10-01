@@ -2094,6 +2094,26 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             warn_row.label(text="", icon='INFO')
             _draw_multiline(warn_row, state.warning)
 
+        # -- Co-work scene protection notice (scene safety Phase 1) -----
+        # While the coworker works it briefly makes the objects it created
+        # un-selectable (the soft lock), so the user cannot re-target them
+        # mid-turn.  Say so -- otherwise the "I can't click this" moment
+        # looks like a bug.  Everything is released when the turn ends.
+        if not is_harness:
+            try:
+                from . import co_work_guard as _cwg
+                if _cwg.is_locked():
+                    _lo, _lc = _cwg.managed_names()
+                    lock_row = layout.row()
+                    lock_row.scale_y = 0.8
+                    lock_row.label(
+                        text="Scene protection: {:d} object(s) temporarily "
+                             "unselectable while working".format(len(_lo) + len(_lc)),
+                        icon='LOCKED',
+                    )
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+
         # -- External Harness mode --
         if is_harness:
             if mcp_to_blender_server.is_running():

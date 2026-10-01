@@ -93,10 +93,61 @@ class TestRegistry(unittest.TestCase):
         _cw.record_managed({"Cube"}, set())
         self.assertEqual(_cw.managed_names()[0], {"Cube"})
 
+    def test_record_managed_returns_only_new_names(self):
+        # First call adds both; a second call adds nothing new, so callers
+        # lock only genuinely-new datablocks (never re-locking a locked one).
+        new_objs, new_colls = _cw.record_managed({"Cube", "Sphere"}, {"Props"})
+        self.assertEqual(new_objs, {"Cube", "Sphere"})
+        self.assertEqual(new_colls, {"Props"})
+        new_objs2, new_colls2 = _cw.record_managed({"Cube"}, {"Props"})
+        self.assertEqual(new_objs2, set())
+        self.assertEqual(new_colls2, set())
+
     def test_clear_unlocks(self):
         _cw.record_managed({"Cube"}, set())
         _cw.clear()
         self.assertFalse(_cw.is_locked())
+
+
+class TestPriorNotClobbered(unittest.TestCase):
+    """Re-locking an already-locked datablock must not overwrite its prior.
+
+    Regression: the lock code re-reads ``hide_select`` every time it runs.  If
+    a datablock is locked twice in a session the second read sees ``True`` and,
+    without a guard, that becomes the stored "prior" -- so the unlock restores
+    ``hide_select = True`` and the object stays locked forever (the reported
+    "can't edit what was built after a turn").
+    """
+
+    def setUp(self) -> None:
+        _cw.clear()
+
+    def tearDown(self) -> None:
+        _cw.clear()
+
+    def test_second_prior_read_is_ignored(self):
+        _cw.record_managed({"Cube"}, set())
+        _cw.record_prior({"Cube": False}, None)   # true prior before lock
+        _cw.record_prior({"Cube": True}, None)    # re-read of the locked value
+        bpy = _FakeBPY(objects={"Cube": True}, collections={})
+        _cw.record_prior({"Cube": True}, None)
+        result = _run(_cw.build_unlock_code(), bpy)
+        # Prior stayed False -> unlock restores selectable (not re-locked).
+        self.assertFalse(bpy.data.objects["Cube"].hide_select)
+        self.assertEqual(result["unlocked"], 1)
+
+    def test_relock_then_unlock_restores_original(self):
+        bpy = _FakeBPY(objects={"Cube": False}, collections={})
+        # Lock, capture the true prior (False), then re-lock the same name
+        # (session + step passes) before a single unlock.
+        _cw.record_managed({"Cube"}, set())
+        lock_result = _run(_cw.build_lock_code({"Cube"}, set()), bpy)
+        _cw.record_prior(lock_result["prior_hide_select"], None)
+        # Re-lock pass: the object is now hidden; its read must be ignored.
+        _cw.record_managed({"Cube"}, set())
+        _cw.record_prior({"Cube": bpy.data.objects["Cube"].hide_select}, None)
+        _run(_cw.build_unlock_code(), bpy)
+        self.assertFalse(bpy.data.objects["Cube"].hide_select)
 
 
 class TestSessionMemory(unittest.TestCase):

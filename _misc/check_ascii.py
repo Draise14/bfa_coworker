@@ -24,6 +24,10 @@ _SCAN_DIRS = (
 # Directories to skip (relative to the repository root).
 _SKIP_DIRS = (
     os.path.join("mcp", "blmcp", "data", "api", "examples"),
+    # Vendored third-party dependencies (rich, docutils, idna, ...) are
+    # downloaded at build time and are not this project's source.  They
+    # legitimately contain Unicode tables and must not be ASCII-linted.
+    os.path.join("addon", "bfa_coworker", "vendor"),
 )
 
 # File extensions to check.

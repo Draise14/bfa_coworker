@@ -43,7 +43,8 @@ surfaced **L9** (`--flash-attn` eating `--batch-size`) as the actual blocker.
 | S4 | **HIGH** | The prompt budget reserved the *configured* reply size (`local_max_tokens`, default == the whole context) — clamped to half the window — for the answer. On an effective 16K window that left ~a third for the system prompt, skills and tool schema, so the **first message was refused** with "This conversation no longer fits…" even though nothing had been said. | **Fixed** — the budget reserves only a small reply floor and gives the prompt the rest; the reply is capped to what genuinely remains (`_cap_reply_tokens`), never below a floor. `prompt + reply` now always fits. |
 | S5 | MED | `_maybe_compact_session` double-counted the tool schema (`estimated` added it, `safe` = budget − it), firing the trigger far too early, and could fire a **no-op compaction** (and show a "Compacting…" status) on the first turn when there was nothing old enough to retire. | **Fixed** — compare (messages + tools) against the whole budget; require that there is actually something to retire (`find_retire_boundary`). |
 | S6 | **HIGH** | Domain-skill reference files were appended to the **stored** system prompt. Scene detection selects a domain for almost any scene (mesh → modelling, material → materials, world → lighting), so several large files (~up to 6.5k tokens total) accumulated in the system prompt across a session — filling the context and, on a smaller window, refusing the first turn. | **Fixed** — injected into the **sent** system copy only (never stored), so the model still reads them every request. The allowance scales with the context (`_SKILLS_BUDGET_RATIO` 8%, floor/ceiling 600/2000 tokens); only **whole** files are included (never truncated mid-rule); dropped as a last resort before refusing. |
-| S7 | MED | The first cut of the fix truncated skill text at a fixed 1200-token character boundary. Cutting a rule in half is lossy and harms model quality — worse than omitting the file. | **Fixed** — `get_domain_skills(domains, max_chars=…)` now includes whole files only; a file that does not fit is skipped (API-docs tools remain the fallback). Budget is context-scaled. |
+| S7 | MED | The first cut of the fix truncated skill text at a fixed 1200-token character boundary. Cutting a rule in half is lossy and harms model quality — worse than omitting the file. | **Fixed** — `get_domain_skills(domains, max_chars=…)` now includes whole files only; a file that does not fit is skipped (API-docs tools remain the fallback). |
+| S8 | LOW | A fraction-of-context ratio + floor/ceiling for skills is still a magic constant the user might have to tune. | **Fixed** — the allowance is now the *spare* space after messages, tool schema, and a conversation reserve (`_SKILLS_RESERVE_RATIO`/`_SKILLS_RESERVE_TOKENS`), computed where the real message list exists. It self-tunes to the window and conversation; no ratio/ceiling to configure. |
 
 ---
 
@@ -101,6 +102,59 @@ python -m unittest tests.test_llm_manager tests.test_addon_imports \
   tests.test_turn_loop_integration tests.test_preflight \
   tests.test_prompt_rules tests.test_co_work_guard tests.test_streaming_llm
 ```
+
+---
+
+## Second pass — quality audit (2026-10-01)
+
+A verification-first re-read of the *new* subsystems (session memory, checkpoints,
+UI operators, context budgeting/transport, scene guards, skills, remote mode).
+Full plan: `_misc/plan_tier3_scene_safety_local_hardening.md`.
+
+**Status changes to earlier items**
+
+- **S3 (turn-counter over-count)** — still deferred; `_session_turn_count` is
+  incremented per tool-loop iteration, so the memory "Last updated" stamp can
+  over-count on multi-iteration AGENT turns. Cosmetic.
+- **G1 (ASCII sweep)** — *partially addressed.* `_misc/check_ascii.py` now skips
+  the vendored third-party deps (`addon/bfa_coworker/vendor/`), which were the
+  bulk of the red. The remaining ~1,171 non-ASCII lines in our own tracked
+  source are a mechanical cosmetic sweep still to be done. Low severity:
+  Blender's console is UTF-8, so the em-dash/emoji output has not crashed in-app.
+- **K2 (cross-restart restore test)** — still deferred (needs a live Blender).
+
+**New findings fixed on this pass**
+
+- **HIGH** — `restore()` returned the wrong checkpoint at capacity (index shift
+  from the pre-restore snapshot trim); `memory_updated_turn` not restored.
+- **HIGH** — auto-checkpoints snapshotted *after* compaction (could not rewind
+  before the summary); now pre-compaction.
+- **HIGH** — "Compact Now" could retire the whole conversation down to the
+  system prompt with no undo; now bounded + pre-snapshot + retire guard.
+- **HIGH** — "Branch" overwrote the live session (contradicting its tooltip);
+  removed.
+- **HIGH** — streamed inline `thinking` content was appended twice.
+- **HIGH** — version-drift skills never loaded (`53 <= 3` comparison).
+- **HIGH** — five MCP tools were unreachable (orphaned from surface + domains).
+- **MED** — New Thread leaked memory/checkpoints/turn count/domains.
+- **MED** — "View / Edit Memory" wrote to an unbound property (no textbox).
+- **MED** — compaction could archive the system prompt; archive unbounded;
+  no lock around the store.
+- **MED** — reply allowance decayed across tool-loop iterations.
+- **MED** — non-retryable 4xx retried 5×; 503 backoff unbounded; stale errors
+  not cleared; stream pre-first-token failures lost their reason.
+- **MED** — scene asset domain key mismatch; `_detect_domain` first-match only.
+- **MED** — remote mode had no domain filtering/skills; `load_tools` local-only.
+- **MED** — preflight suppression defeated by any `if`/`.get(`.
+- **MED-HIGH** — failed scene unlock leaked `hide_select`; lock registry not
+  thread-safe.
+- **LOW** — stored tool results unbounded; skills cache not version-keyed;
+  skill files re-read every request.
+
+**New tests**: `tests/test_tool_coverage.py`, `tests/test_skills_cache.py`,
+plus checkpoint-capacity/rotation, manual-compaction reversibility, inline
+think-tag, preflight suppression, and streaming-helper regressions.
+
 
 Then rebuild + install and start the agent once. With Debug / Diagnostics on,
 watch the llama-server console window; with it off, any failure tail shows the

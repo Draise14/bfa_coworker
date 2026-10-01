@@ -538,6 +538,17 @@ _test_suite_timings: dict[tuple[str, int], float] = {}
 _test_suite_status: dict[tuple[str, int], str] = {}
 # Per-step error text: keyed by (suite_name, step_number) -> message.
 _test_suite_errors: dict[tuple[str, int], str] = {}
+
+# Steps whose prompt is deliberately vague / impossible / contradictory: the
+# correct behaviour is to ASK a clarifying question or DECLINE, not to act.
+# The end-of-turn execution guarantee must NOT force these steps to act -- for
+# the contradictory "delete everything but keep all objects" prompt, forcing
+# action could nudge a destructive mistake.  Keyed by (suite, step_number).
+_REFUSAL_STEPS: set[tuple[str, int]] = {
+    ("error_handling", 1),
+    ("error_handling", 2),
+    ("error_handling", 3),
+}
 # Path to persist benchmark results.
 import os as _os
 _BENCHMARK_RESULTS_PATH = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "benchmark_results.json")
@@ -576,7 +587,13 @@ class _BFACW_OT_test_step(bpy.types.Operator):  # type: ignore[misc]
             return {"FINISHED"}
 
         step_num, step_label, prompt = suite[step_idx]
-        _run_test_step(context, self.suite, step_num, step_label, prompt)
+        # Capture the pre-step object set (main thread) so a FAILED step can
+        # be rolled back and not poison the next step.
+        _before_objects = {o.name for o in bpy.data.objects}
+        _run_test_step(
+            context, self.suite, step_num, step_label, prompt,
+            before_objects=_before_objects,
+        )
 
         # Advance progress.
         _test_suite_progress[self.suite] = step_idx + 1
@@ -766,14 +783,58 @@ def _suite_failure_count(suite_key: str) -> int:
     )
 
 
+def _reset_scene_to_before(before_objects: set[str]) -> None:
+    """Delete objects created since *before_objects* -- main-thread rollback.
+
+    Called after a FAILED benchmark step (when "Reset on failure" is on) so
+    the step's leftover geometry does not corrupt the next step (duplicate
+    objects, ``.001`` name drift).  MUST run on the main thread -- bpy data
+    edits are not thread-safe, so the caller schedules this via a timer.
+    """
+    try:
+        added = [o for o in list(bpy.data.objects) if o.name not in before_objects]
+        for obj in added:
+            try:
+                bpy.data.objects.remove(obj, do_unlink=True)
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+        # Return to a neutral context so the next step starts cleanly.
+        try:
+            if bpy.context.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+        # Purge datablocks the failed step orphaned (meshes, materials, ...).
+        for coll in (
+            bpy.data.meshes, bpy.data.materials, bpy.data.curves,
+            bpy.data.lights, bpy.data.cameras, bpy.data.images,
+            bpy.data.node_groups, bpy.data.collections,
+        ):
+            for block in [b for b in coll if b.users == 0]:
+                try:
+                    coll.remove(block)
+                except Exception:  # pylint: disable=broad-exception-caught
+                    pass
+        print("[Coworker] benchmark reset: removed {:d} object(s) left by "
+              "the failed step".format(len(added)))
+    except Exception as _ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] benchmark reset failed: {:s}".format(str(_ex)))
+
+
 def _run_test_step(
     context: bpy.types.Context,
     suite_key: str,
     step_num: int,
     step_label: str,
     prompt: str,
+    before_objects: set[str] | None = None,
 ) -> None:
-    """Run a single test step through the full agent pipeline in a background thread."""
+    """Run a single test step through the full agent pipeline in a background thread.
+
+    *before_objects* is the object-name set captured before the step; when a
+    step FAILS and "Reset on failure" is enabled, the scene is rolled back to
+    it so the failure does not poison the following step.
+    """
     _ac = get_agent_controller()
 
     prefs = context.preferences.addons[__package__].preferences
@@ -781,6 +842,10 @@ def _run_test_step(
     # Use actual port if auto-shuffle kicked in.
     actual_mcp = _ac._agent_state.mcp_port_actual
     test_mcp_port = actual_mcp if actual_mcp else _mcp_port
+
+    # Refusal steps must not be force-nudged into acting (see _REFUSAL_STEPS).
+    allow_action_nudge = (suite_key, step_num) not in _REFUSAL_STEPS
+    reset_on_failure = bool(getattr(prefs, "reset_scene_on_failure", True))
 
     # Resolve LLM config (same as chat_send).
     llm = get_llm_manager()
@@ -803,6 +868,7 @@ def _run_test_step(
         import time as _time
         _test_suite_running[suite_key] = True
         t_start = _time.monotonic()
+        _failed = False
         # Snapshot the error before the call.  We deliberately do NOT clear
         # _agent_state.error up front: the session log exports it, and
         # clearing it destroyed the evidence of what actually failed.
@@ -817,6 +883,7 @@ def _run_test_step(
                 api_key=api_key or None,
                 model=model,
                 mcp_port=test_mcp_port,
+                allow_action_nudge=allow_action_nudge,
             )
             elapsed = _time.monotonic() - t_start
             # run_conversation_turn does NOT raise on an LLM failure -- it
@@ -832,6 +899,7 @@ def _run_test_step(
             # to the previous step's -- rare, and erring toward "success"
             # there keeps the log honest about which step introduced it.
             if step_error and step_error != _prev_error:
+                _failed = True
                 _record_step_outcome(suite_key, step_num, elapsed, step_error)
                 print("[Coworker] test suite '{:s}': step {:d}/{:s} FAILED in {:.1f}s -- {:s}".format(
                     suite_key, step_num, step_label, elapsed, step_error))
@@ -840,6 +908,7 @@ def _run_test_step(
                 print("[Coworker] test suite '{:s}': step {:d}/{:s} completed in {:.1f}s".format(
                     suite_key, step_num, step_label, elapsed))
         except Exception as ex:
+            _failed = True
             elapsed = _time.monotonic() - t_start
             _record_step_outcome(suite_key, step_num, elapsed, str(ex))
             print("[Coworker] test suite '{:s}': step {:d}/{:s} FAILED in {:.1f}s -- {:s}".format(
@@ -847,6 +916,15 @@ def _run_test_step(
             _ac._agent_state.error = str(ex)
         finally:
             _test_suite_running[suite_key] = False
+            # Reset-on-failure: roll the scene back to its pre-step object set
+            # so the failed step's leftovers do not corrupt the next step.
+            # Scheduled on the MAIN thread -- bpy data edits are not thread-safe.
+            if _failed and reset_on_failure and before_objects is not None:
+                bpy.app.timers.register(
+                    (lambda _b=set(before_objects): (
+                        _reset_scene_to_before(_b), None)[1]),
+                    first_interval=0.0,
+                )
 
     thread = threading.Thread(target=_do_step, daemon=True)
     thread.start()

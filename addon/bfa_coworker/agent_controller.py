@@ -4781,6 +4781,7 @@ def run_conversation_turn(
     chat_mode: str = "AGENT",
     on_stream_text: Callable[[str], None] | None = None,
     on_stream_reasoning: Callable[[str], None] | None = None,
+    allow_action_nudge: bool = True,
 ) -> list[dict[str, Any]]:
     """
     Run a full conversation turn.
@@ -4792,6 +4793,10 @@ def run_conversation_turn(
 
     When *chat_mode* is ``"ASK"``, tool execution is skipped and the LLM
     responds with text only (read-only Q&A).
+
+    When *allow_action_nudge* is False the end-of-turn "you did not act"
+    nudge is suppressed -- used by benchmark steps whose correct response is
+    to ask or decline (never to act).
 
     This is a BLOCKING call -- run it via ``schedule_coro`` or in a thread.
     """
@@ -4811,7 +4816,7 @@ def run_conversation_turn(
         return _run_conversation_turn_inner(
             user_message, on_text, on_status, on_reasoning,
             llm_url, api_key, model, mcp_port, chat_mode,
-            on_stream_text, on_stream_reasoning,
+            on_stream_text, on_stream_reasoning, allow_action_nudge,
         )
     finally:
         _agent_state.turn_active = False
@@ -5021,6 +5026,7 @@ def _run_conversation_turn_inner(
     chat_mode: str = "AGENT",
     on_stream_text: Callable[[str], None] | None = None,
     on_stream_reasoning: Callable[[str], None] | None = None,
+    allow_action_nudge: bool = True,
 ) -> list[dict[str, Any]]:
     """
     Inner body of ``run_conversation_turn`` -- wrapped by the re-entrancy guard.
@@ -6359,6 +6365,7 @@ def _run_conversation_turn_inner(
         if (
             chat_mode != "ASK"
             and openai_tools
+            and allow_action_nudge
             and _action_nudges < _MAX_ACTION_NUDGES
             and (not content.strip() or _looks_like_unfinished_action(content))
         ):

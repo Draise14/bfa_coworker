@@ -704,6 +704,16 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default=True,
     )
 
+    reset_scene_on_failure: BoolProperty(  # type: ignore[valid-type]
+        name="Reset Scene On Benchmark Step Failure",
+        description=(
+            "When a benchmark step FAILS, delete the objects it left behind and "
+            "return to object mode, so one bad step cannot corrupt the next one "
+            "(duplicate geometry, .001 name drift). Only affects the test suites"
+        ),
+        default=True,
+    )
+
     def _update_ctx_preset(self, _context: bpy.types.Context) -> None:
         """Sync the context preset button to the numeric context size."""
         if self.local_ctx_preset != "custom":
@@ -1024,6 +1034,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                  "Use Reset to start over.",
             icon='BLANK1',
         )
+        # Reset-on-failure keeps one bad step from corrupting the next.
+        diag_box.prop(self, "reset_scene_on_failure", icon='TRASH')
 
         _SUITE_META = [
             ("scene_build",   "Scene Build",   'MESH_CUBE',           6),

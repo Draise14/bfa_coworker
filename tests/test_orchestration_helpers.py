@@ -1907,6 +1907,25 @@ class TestStreamingToolCallRecovery(unittest.TestCase):
         self.assertIn('_ch[0]["finish_reason"] = "tool_calls"', src)
 
 
+class TestActionNudgeGate(unittest.TestCase):
+    """allow_action_nudge=False must suppress the end-of-turn nudge.
+
+    Benchmark steps whose correct answer is to ask or decline (the
+    error_handling suite) opt out, so the guarantee cannot push the agent to
+    act -- which for "delete everything but keep all objects" could nudge a
+    destructive mistake.
+    """
+
+    def test_param_threaded_through(self):
+        src = _load_source()
+        self.assertIn("allow_action_nudge: bool = True", src)
+        self.assertIn("on_stream_reasoning, allow_action_nudge,", src)
+
+    def test_gate_includes_flag(self):
+        src = _load_source()
+        self.assertIn("and allow_action_nudge", src)
+
+
 class TestTransportBindOrdering(unittest.TestCase):
     """The transport bind block must run after the names it references.
 

@@ -980,6 +980,33 @@ class TestToolLoopIntegration(_TurnLoopTestBase):
         self.assertIn("tool", roles)
         self.assertEqual(history[-1]["content"], "scattered")
 
+    def test_allow_action_nudge_false_suppresses_the_nudge(self):
+        """A refusal step must not be force-nudged into acting.
+
+        The error_handling prompts are meant to be declined; with
+        allow_action_nudge=False the turn ends on the model's clarifying
+        reply instead of retrying to force a tool call.
+        """
+        self._mk_server([
+            {"content": "Shall I proceed with deleting everything?"},
+        ])
+        self.state.conversation_history = [
+            {"role": "system", "content": "You are a helpful agent."}]
+        self._pin_fake_bpy()
+        try:
+            history = self.ac.run_conversation_turn(
+                "Delete everything but keep all objects.", chat_mode="AGENT",
+                llm_url=None, model="fake-model", mcp_port=self.port,
+                allow_action_nudge=False)
+        finally:
+            self._unpin_fake_bpy()
+
+        # Exactly one LLM request -- no nudge retry.
+        self.assertEqual(len(self._main_requests()), 1)
+        # No tool executed, and the clarifying reply is the final message.
+        self.assertEqual(len(self._mcp_calls("tools/call")), 0)
+        self.assertIn("Shall I proceed", history[-1]["content"])
+
     def test_malformed_tool_call_is_dropped_valid_one_runs(self):
         """A truncated tool call must be dropped, not executed or stored.
 

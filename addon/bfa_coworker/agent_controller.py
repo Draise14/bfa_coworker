@@ -247,6 +247,16 @@ _MIN_REPLY_TOKENS = 256
 _SKILLS_RESERVE_RATIO = 0.30   # reserve this share of the prompt budget
 _SKILLS_RESERVE_TOKENS = 1024  # ...but at least this many
 
+# Always-loaded skills sit in the system prompt of EVERY request, so they are
+# the single largest fixed per-request cost -- and on local models that cost is
+# prompt-eval time on the first request of each turn.  Cap them tightly and
+# prefer the version-drift files (which prevent hard API crashes) over prose.
+# Without this the budget was 40% of the window and loaded every file, which
+# multiplied time-to-first-token.
+_SKILLS_LOAD_RATIO = 0.15
+_SKILLS_LOAD_MAX = 4500
+_SKILLS_LOAD_MIN = 1024
+
 # Remote modes keep ``prompt_budget = 0`` (no client-side window), so the
 # spare-minus-reserve formula has no input.  Use a conservative flat cap for
 # the remote domain-skill allowance (whole files only).  Remote models
@@ -374,14 +384,18 @@ def _get_system_prompt_with_rules() -> str:
             # Budget the built-in skills to the context window so the most
             # important guidance (the version-drift files that prevent hard
             # API crashes) survives on a small window, instead of the whole
-            # block being dropped at send time.  ~40% of the window leaves
-            # room for the tool schema, the base instructions, and a turn.
+            # block being dropped at send time.  Kept deliberately tight
+            # (_SKILLS_LOAD_RATIO/_MAX): the block sits in EVERY request's
+            # system prompt and dominates prompt-eval time on a local model.
             _skills_budget = None
             try:
                 from . import llm_manager as _llm_mgr  # pylint: disable=import-error
                 _ctx = getattr(_llm_mgr.get_config(), "local_ctx_size", 0) or 0
                 if _ctx > 0:
-                    _skills_budget = max(1024, int(_ctx * 0.4))
+                    _skills_budget = max(
+                        _SKILLS_LOAD_MIN,
+                        min(int(_ctx * _SKILLS_LOAD_RATIO), _SKILLS_LOAD_MAX),
+                    )
             except Exception:  # pylint: disable=broad-exception-caught
                 _skills_budget = None
             skills_block = _skills_mod.get_always_loaded_skills(
@@ -1449,6 +1463,11 @@ class AgentState:
     # context bar shows, so it must be a latest value, not a running sum
     # (a cumulative sum only ever grows and pins the bar at 100%).
     last_prompt_tokens: int = 0
+    # Most recent llama-server ``timings`` (prompt_n / prompt_ms /
+    # prompt_per_second, predicted_n / predicted_ms / predicted_per_second).
+    # Lets a slow turn be traced to prompt-eval (big prompt) vs generation
+    # (reasoning effort) instead of guessing.
+    last_timings: dict[str, Any] = field(default_factory=dict)
 
     def record_usage(self, usage: dict[str, Any] | None) -> None:
         """Accumulate one LLM call's ``usage`` into turn + session totals."""
@@ -5160,6 +5179,7 @@ def _run_conversation_turn_inner(
     _agent_state.thinking_dots = 0
     # Fresh per-turn token usage counters (issue #69).
     _agent_state.turn_usage = {}
+    _agent_state.last_timings = {}
     # Clear any warning from the previous turn.
     _agent_state.warning = ""
 
@@ -5215,6 +5235,19 @@ def _run_conversation_turn_inner(
             )
         if response is not None:
             _agent_state.record_usage(response.get("usage"))
+            # Log where the time went: prompt-eval (big prompt) vs generation
+            # (reasoning effort).  llama-server reports this per request.
+            _t = response.get("timings")
+            if isinstance(_t, dict) and _t:
+                _agent_state.last_timings = _t
+                print("[Coworker] timings: prompt {:d} tok in {:.0f} ms "
+                      "({:.0f} tok/s), gen {:d} tok in {:.0f} ms ({:.0f} tok/s)".format(
+                          int(_t.get("prompt_n", 0) or 0),
+                          float(_t.get("prompt_ms", 0.0) or 0.0),
+                          float(_t.get("prompt_per_second", 0.0) or 0.0),
+                          int(_t.get("predicted_n", 0) or 0),
+                          float(_t.get("predicted_ms", 0.0) or 0.0),
+                          float(_t.get("predicted_per_second", 0.0) or 0.0)))
             # Streaming bypasses the transport's text/XML tool-call fallback,
             # so a local model that emits a tool call as TEXT inside a
             # successful stream would be silently ignored (the turn then ends

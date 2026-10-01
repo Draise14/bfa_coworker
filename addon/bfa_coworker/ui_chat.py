@@ -2454,6 +2454,20 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
                     _usage_text += " (turn: {:d})".format(_turn_tot)
                 _draw_multiline(layout, _usage_text)
 
+            # -- Speed (llama-server timings) --
+            # Per-request prompt-eval vs generation throughput.  Prompt tok/s
+            # collapsing means the prompt is too big; gen tok/s collapsing
+            # means the model is over-reasoning.  Only llama-server reports it.
+            _timings = agent_controller._agent_state.last_timings
+            if _timings:
+                _pp = float(_timings.get("prompt_per_second", 0.0) or 0.0)
+                _tp = float(_timings.get("predicted_per_second", 0.0) or 0.0)
+                if _pp > 0 or _tp > 0:
+                    _draw_multiline(
+                        layout,
+                        "Speed: {:.0f} tok/s prompt, {:.0f} tok/s gen".format(_pp, _tp),
+                    )
+
         # -- Export/Copy Log (advanced) --
         if not is_harness:
             layout.separator()

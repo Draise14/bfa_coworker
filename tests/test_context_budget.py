@@ -464,6 +464,20 @@ class TestSkillInjectionBudget(unittest.TestCase):
         self.assertNotIn("_SKILLS_BUDGET_RATIO", _src)
         self.assertNotIn("_SKILLS_MAX_TOKENS", _src)
 
+    def test_always_loaded_skills_budget_is_tight_and_bounded(self):
+        # The always-loaded block sits in EVERY request's system prompt, so a
+        # large budget multiplies prompt-eval time on a local model.  It must
+        # be a small window ratio with a real ceiling -- not the old 40%.
+        self.assertIn("_SKILLS_LOAD_RATIO", _src)
+        self.assertIn("_SKILLS_LOAD_MAX", _src)
+        self.assertIn("_SKILLS_LOAD_MIN", _src)
+        self.assertNotIn("int(_ctx * 0.4)", _src)
+        # The ratio must be well under the reserve-derived allowance that the
+        # rest of the prompt gets.
+        m = re.search(r"_SKILLS_LOAD_RATIO\s*=\s*([0-9.]+)", _src)
+        self.assertIsNotNone(m)
+        self.assertLess(float(m.group(1)), 0.30)
+
     def test_skill_files_are_never_truncated(self):
         # Regression: a fixed character slice cut a rule in half.  The
         # injection must pass a whole-file budget to get_domain_skills.

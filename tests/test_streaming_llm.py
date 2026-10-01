@@ -202,6 +202,7 @@ class TestParseSSEChunk(unittest.TestCase):
             "tool_calls": [],
             "finish_reason": "",
             "usage": None,
+            "timings": None,
         }
 
     def test_content_delta_appended(self):
@@ -291,6 +292,17 @@ class TestParseSSEChunk(unittest.TestCase):
         )
         self.assertEqual(acc["usage"]["total_tokens"], 15)
 
+    def test_timings_captured(self):
+        acc = self._acc()
+        _parse_sse_chunk(
+            {"choices": [], "timings": {
+                "prompt_n": 100, "predicted_n": 10,
+                "prompt_per_second": 2000.0, "predicted_per_second": 100.0,
+            }}, acc,
+        )
+        self.assertEqual(acc["timings"]["prompt_n"], 100)
+        self.assertEqual(acc["timings"]["predicted_per_second"], 100.0)
+
     def test_malformed_chunk_ignored(self):
         acc = self._acc()
         # Missing/None deltas must not raise.
@@ -348,6 +360,26 @@ class TestAssembleStreamResult(unittest.TestCase):
             "finish_reason": "stop", "usage": usage,
         })
         self.assertEqual(result["usage"], usage)
+
+    def test_timings_forwarded(self):
+        # llama-server reports per-request timings; the assembled response
+        # must carry them so the controller can surface prompt/gen speed.
+        timings = {"prompt_n": 100, "prompt_ms": 50.0,
+                   "prompt_per_second": 2000.0,
+                   "predicted_n": 10, "predicted_ms": 100.0,
+                   "predicted_per_second": 100.0}
+        result = _assemble_stream_result({
+            "content": "a", "reasoning": "", "tool_calls": [],
+            "finish_reason": "stop", "usage": None, "timings": timings,
+        })
+        self.assertEqual(result["timings"], timings)
+
+    def test_timings_absent_when_not_reported(self):
+        result = _assemble_stream_result({
+            "content": "a", "reasoning": "", "tool_calls": [],
+            "finish_reason": "stop", "usage": None, "timings": None,
+        })
+        self.assertNotIn("timings", result)
 
 
 class TestStreamRequest(unittest.TestCase):

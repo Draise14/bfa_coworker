@@ -936,6 +936,11 @@ def _parse_sse_chunk(chunk: dict[str, Any], acc: dict[str, Any]) -> None:
             acc["finish_reason"] = choice["finish_reason"]
     if chunk.get("usage"):
         acc["usage"] = chunk["usage"]
+    # llama.cpp reports per-request timings in the final chunk
+    # (prompt_n / prompt_ms / prompt_per_second, predicted_*).  Captured so the
+    # turn loop can log where the time actually went (prompt-eval vs gen).
+    if chunk.get("timings"):
+        acc["timings"] = chunk["timings"]
 
 
 def _assemble_stream_result(acc: dict[str, Any]) -> dict[str, Any]:
@@ -972,6 +977,8 @@ def _assemble_stream_result(acc: dict[str, Any]) -> dict[str, Any]:
     }
     if acc["usage"]:
         result["usage"] = acc["usage"]
+    if acc.get("timings"):
+        result["timings"] = acc["timings"]
     return result
 
 
@@ -1048,6 +1055,7 @@ def openai_chat_completions_stream(
         "tool_calls": [],
         "finish_reason": "",
         "usage": None,
+        "timings": None,
     }
     _request_start = time.monotonic()
     got_first_token = False

@@ -99,6 +99,42 @@ class TestRegistry(unittest.TestCase):
         self.assertFalse(_cw.is_locked())
 
 
+class TestSessionMemory(unittest.TestCase):
+    """The session set survives clear() so the next turn can re-lock it."""
+
+    def setUp(self) -> None:
+        _cw.clear()
+        _cw.clear_session()
+
+    def tearDown(self) -> None:
+        _cw.clear()
+        _cw.clear_session()
+
+    def test_remember_session_persists_across_clear(self):
+        _cw.remember_session({"Ground"}, {"Props"})
+        _cw.clear()
+        objs, colls = _cw.session_names()
+        self.assertEqual(objs, {"Ground"})
+        self.assertEqual(colls, {"Props"})
+        # clear() forgets the *managed* (priors) registry but not the session.
+        self.assertEqual(_cw.managed_names(), (set(), set()))
+
+    def test_remember_session_is_idempotent(self):
+        _cw.remember_session({"Ground"}, set())
+        _cw.remember_session({"Ground"}, set())
+        self.assertEqual(_cw.session_names()[0], {"Ground"})
+
+    def test_clear_session_forgets_everything(self):
+        _cw.remember_session({"Ground", "Tree"}, {"Props"})
+        _cw.clear_session()
+        self.assertEqual(_cw.session_names(), (set(), set()))
+
+    def test_ignores_empty_names(self):
+        _cw.remember_session({"", "Ground", None}, {""})
+        self.assertEqual(_cw.session_names()[0], {"Ground"})
+        self.assertEqual(_cw.session_names()[1], set())
+
+
 class TestLockUnlockRoundTrip(unittest.TestCase):
     """The generated code must lock then restore the exact prior values."""
 

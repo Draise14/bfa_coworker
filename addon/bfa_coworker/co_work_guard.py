@@ -36,7 +36,10 @@ __all__ = (
     "managed_names",
     "record_managed",
     "record_prior",
+    "remember_session",
+    "session_names",
     "clear",
+    "clear_session",
     "build_lock_code",
     "build_unlock_code",
 )
@@ -116,6 +119,45 @@ def clear() -> None:
         _MANAGED_OBJECTS.clear()
         _MANAGED_COLLECTIONS.clear()
         _LOCKED = False
+
+
+# -- Session-scoped memory ------------------------------------------------
+# Names the coworker created, remembered ACROSS turns (they survive
+# ``clear()``).  At each turn start they are re-locked, so an object made in
+# an earlier turn stays protected while the agent works on it in a later one
+# -- the per-step lock only covers entities created in the current turn, so
+# cross-turn objects were user-selectable (how an accidental deletion of the
+# agent's own "Ground" happened).  Cleared only on New Thread / Stop.
+_SESSION_OBJECTS: set[str] = set()
+_SESSION_COLLECTIONS: set[str] = set()
+
+
+def remember_session(objects: object = (), collections: object = ()) -> None:
+    """Remember names the coworker created for the rest of the session.
+
+    Persists across :func:`clear` so the next turn can re-lock them.
+    Idempotent; never raises.
+    """
+    with _registry_lock:
+        for name in objects or ():
+            if name:
+                _SESSION_OBJECTS.add(str(name))
+        for name in collections or ():
+            if name:
+                _SESSION_COLLECTIONS.add(str(name))
+
+
+def session_names() -> tuple[set[str], set[str]]:
+    """Return ``(object_names, collection_names)`` created this session."""
+    with _registry_lock:
+        return set(_SESSION_OBJECTS), set(_SESSION_COLLECTIONS)
+
+
+def clear_session() -> None:
+    """Forget every session-remembered name (New Thread / Stop)."""
+    with _registry_lock:
+        _SESSION_OBJECTS.clear()
+        _SESSION_COLLECTIONS.clear()
 
 
 def build_lock_code(

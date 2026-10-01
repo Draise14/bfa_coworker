@@ -26,6 +26,7 @@ __all__ = (
     "migrate_vendor_deps",
     "generate_mcp_client_config",
     "validate_mcp_client_config",
+    "clear_session_scene_lock",
     "_get_blender_python_for_config",
 )
 
@@ -4593,6 +4594,7 @@ def _lock_step_entities(step_diff: Any, mcp_port: int) -> None:
         if mcp_port:
             _active_lock_mcp_port = mcp_port
         co_work_guard.record_managed(objs, colls)
+        co_work_guard.remember_session(objs, colls)
         raw = _call_mcp_tool_sync(
             "execute_blender_code",
             {"code": co_work_guard.build_lock_code(objs, colls)}, mcp_port)
@@ -4639,6 +4641,34 @@ def _release_scene_lock() -> None:
     except Exception as _ex:  # pylint: disable=broad-exception-caught
         print("[Coworker] _release_scene_lock: unlock failed, keeping priors "
               "for a later retry -- {:s}".format(str(_ex)))
+
+
+def _lock_session_entities(mcp_port: int) -> None:
+    """Re-lock the objects the coworker created in EARLIER turns.
+
+    The per-step lock only covers entities created in the current turn, so
+    an object from a previous turn (e.g. a "Ground" made in benchmark step
+    1) stayed user-selectable while the agent worked on it in step 2 -- how
+    the reported accidental deletion happened.  Re-applying the lock to the
+    session-remembered names at the start of each turn keeps them protected
+    while the agent works; they are released at turn end like the rest (and
+    forgotten on New Thread / Stop).
+    """
+    objs, colls = co_work_guard.session_names()
+    if not objs and not colls:
+        return
+    _lock_step_entities(
+        types.SimpleNamespace(object_names=objs, collection_names=colls),
+        mcp_port)
+
+
+def clear_session_scene_lock() -> None:
+    """Forget the session's created-entity set (New Thread / Stop).
+
+    Called from the UI when the user starts a fresh thread or stops the
+    agent, so a later turn does not re-lock datablocks from the old thread.
+    """
+    co_work_guard.clear_session()
 
 
 def run_conversation_turn(
@@ -6000,6 +6030,9 @@ def _run_conversation_turn_inner(
                     if _turn_snapshot is None:
                         print("[Coworker] run_conversation_turn: initial entity snapshot FAILED -- "
                               "continuing without the co-work scene lock for this turn")
+                    # Re-lock objects the coworker created in earlier turns so
+                    # they stay protected while it works on them this turn.
+                    _lock_session_entities(mcp_port)
 
                 # -- Inject resolution from preferences -------------
                 if tool_name in ("download_polyhaven_asset", "setup_pbr_material"):

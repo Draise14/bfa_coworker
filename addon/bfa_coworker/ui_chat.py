@@ -985,6 +985,9 @@ class BFACW_OT_chat_clear(Operator):  # type: ignore[misc]
             _sm.store.reset()
         agent_controller._session_turn_count = 0
         agent_controller._reset_session_domains()
+        # Fresh thread -> forget which datablocks the coworker created so a
+        # later turn does not re-lock the old thread's objects.
+        agent_controller.clear_session_scene_lock()
         # Clear Coworker_* text datablocks from the text editor.
         agent_controller._clear_coworker_text_blocks()
         # Clear cached system prompt so project rules are reloaded on next turn.
@@ -1762,6 +1765,7 @@ class BFACW_OT_agent_stop(Operator):  # type: ignore[misc]
         # Stopping the agent ends the working session -- clear the token
         # accounting so the context bar does not stay pinned at its old value.
         agent_controller._agent_state.reset_usage()
+        agent_controller.clear_session_scene_lock()
         _redraw_areas(context)
         return {"FINISHED"}
 
@@ -1789,8 +1793,10 @@ class BFACW_OT_agent_restart(Operator):  # type: ignore[misc]
                 bpy.app.timers.unregister(execute_interactive.run)
 
         agent_controller._agent_state.mcp_server_running = False
-        # Fresh agent session -- clear stale token accounting.
+        # Fresh agent session -- clear stale token accounting and the
+        # session-created entity set.
         agent_controller._agent_state.reset_usage()
+        agent_controller.clear_session_scene_lock()
 
         # Start again after a brief delay.
         def _deferred_start():

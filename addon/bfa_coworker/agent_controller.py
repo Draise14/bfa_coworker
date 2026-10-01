@@ -360,15 +360,32 @@ def _get_system_prompt_with_rules() -> str:
 
         # -- Blender version announcement ----------------------
         version_str = ".".join(str(v) for v in bpy.app.version[:3])
+        # STYLE is mode-aware (Tier 3i / 3i.2).  The verbose "think aloud in
+        # full paragraphs, be thorough" style directly contradicts the compact
+        # prompt's "Be concise and decisive" and bloats generation on local
+        # models (the dominant cost of a slow turn).  Remote providers keep the
+        # verbose style (large windows, higher quality reasoning). Decide once
+        # via ``_use_compact_prompt`` so it matches the prompt variant.
+        if _use_compact_prompt():
+            _style = (
+                "STYLE: Be concise and decisive. State what you are about to do in "
+                "one short sentence, then do it. Do not narrate long plans or repeat "
+                "yourself; the user can see your tool calls. When reporting tool "
+                "results, be brief -- just say what happened."
+            )
+        else:
+            _style = (
+                "STYLE: Think aloud in full paragraphs. Explain your reasoning step by step -- "
+                "what you observe, what you plan to do, and why. The user should be able to "
+                "follow your thought process. Be thorough but not repetitive. "
+                "When reporting tool results, be brief -- just state what happened and whether "
+                "it succeeded."
+            )
         version_header = (
             "You are connected to Blender {:s}. "
             "All code you write must be compatible with this version.\n\n"
-            "STYLE: Think aloud in full paragraphs. Explain your reasoning step by step -- "
-            "what you observe, what you plan to do, and why. The user should be able to "
-            "follow your thought process. Be thorough but not repetitive. "
-            "When reporting tool results, be brief -- just state what happened and whether "
-            "it succeeded."
-        ).format(version_str)
+            "{:s}"
+        ).format(version_str, _style)
 
         # -- Built-in skills (version-aware, from addon/skills/) --
         try:

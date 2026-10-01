@@ -761,8 +761,9 @@ def _save_session_memory_state() -> None:
     st = _sm.store
     st.archive_path = _session_memory_archive_path()
     try:
-        payload = st.to_payload()
-        payload["archive_path"] = str(st.archive_path)
+        with _sm.store_lock:
+            payload = st.to_payload()
+            payload["archive_path"] = str(st.archive_path)
         with open(str(_session_memory_state_path()), "w", encoding="utf-8") as fh:
             json.dump(payload, fh, indent=2)
     except OSError:
@@ -780,7 +781,8 @@ def _load_session_memory_state() -> None:
     try:
         with open(str(path), "r", encoding="utf-8") as fh:
             payload = json.load(fh)
-        st.load_payload(payload)
+        with _sm.store_lock:
+            st.load_payload(payload)
     except (json.JSONDecodeError, OSError):
         pass
 
@@ -959,10 +961,17 @@ class BFACW_OT_chat_clear(Operator):  # type: ignore[misc]
     bl_description = "Clear conversation history and start a fresh thread (system prompt stays)"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
+        from . import session_memory as _sm
         agent_controller._agent_state.conversation_history.clear()
         agent_controller._agent_state.streaming_text = ""
         agent_controller._agent_state.reasoning_text = ""
         agent_controller._agent_state.thinking_dots = 0
+        # Reset session memory + checkpoints so the new thread does not inherit
+        # the previous thread's memory block or turn counter.
+        with _sm.store_lock:
+            _sm.store.reset()
+        agent_controller._session_turn_count = 0
+        agent_controller.reset_session_domains()
         # Clear Coworker_* text datablocks from the text editor.
         agent_controller._clear_coworker_text_blocks()
         # Clear cached system prompt so project rules are reloaded on next turn.
@@ -2546,10 +2555,18 @@ def _draw_session_section(layout, context, props, state) -> None:
     if st.memory_block:
         mem_lines = st.memory_block.splitlines()
         _draw_multiline(mem_box, mem_lines[0] if mem_lines else "")
-        mem_box.operator("bfacw.session_memory_view_edit", icon='TEXT', text="View / Edit Memory")
     else:
         mem_box.label(text="Nothing remembered yet", icon='INFO')
-    mem_box.operator("bfacw.session_compact_now", icon='FILE_REFRESH', text="Compact Now")
+    # Bound multiline editor: the textbox shows and edits the memory block;
+    # the Apply button writes it back (an empty box reloads the current one).
+    # Initialise the editor from the store while it is untouched so the user
+    # can see what is remembered.
+    if not props.session_memory_edit and st.memory_block:
+        props.session_memory_edit = st.memory_block
+    mem_box.textbox(props, "session_memory_edit", text="")
+    row = mem_box.row(align=True)
+    row.operator("bfacw.session_memory_view_edit", icon='TEXT', text="Apply Memory")
+    row.operator("bfacw.session_compact_now", icon='FILE_REFRESH', text="Compact Now")
 
     # ── Checkpoints (Restore / Branch) ─────────────────────────────
     cp_box = layout.box()
@@ -2565,14 +2582,13 @@ def _draw_session_section(layout, context, props, state) -> None:
         for i in range(len(checkpoints) - 1, -1, -1):
             cp = checkpoints[i]
             row = cp_box.row(align=True)
-            row.prop(props, "session_checkpoint_index", index=i, text="", icon='BOOKMARK')
+            row.prop(props, "session_checkpoint_index", index=i, text="", icon='FOLDER')
             label = "#{:d} {:s} ({:s}, {:d} msgs)".format(
                 i, cp.get("reason", "?"), cp.get("timestamp", "?"),
                 cp.get("message_count", 0))
             row.label(text=label)
         row = cp_box.row(align=True)
         row.operator("bfacw.session_checkpoint_restore", icon='LOOP_BACK', text="Restore")
-        row.operator("bfacw.session_checkpoint_branch", icon='FORWARD', text="Branch")
 
 
 class BFACW_OT_session_checkpoint_restore(Operator):  # type: ignore[misc]
@@ -2589,61 +2605,47 @@ class BFACW_OT_session_checkpoint_restore(Operator):  # type: ignore[misc]
         st = _sm.store
         index = context.window_manager.bfacw_chat_props.session_checkpoint_index  # type: ignore[attr-defined]
         try:
-            restored = st.restore(
-                index,
-                agent_controller._agent_state.conversation_history,
-            )
+            with _sm.store_lock:
+                restored = st.restore(
+                    index,
+                    agent_controller._agent_state.conversation_history,
+                )
+                agent_controller._agent_state.conversation_history[:] = restored
         except IndexError:
             self.report({"WARNING"}, "Checkpoint no longer exists")
             return {"CANCELLED"}
-        agent_controller._agent_state.conversation_history[:] = restored
         _save_chat_history()
         self.report({"INFO"}, "Checkpoint restored (current session was saved as 'pre-restore')")
-        return {"FINISHED"}
-
-
-class BFACW_OT_session_checkpoint_branch(Operator):  # type: ignore[misc]
-    """Branch from the selected checkpoint into a new thread"""
-    bl_idname = "bfacw.session_checkpoint_branch"
-    bl_label = "Branch"
-    bl_description = (
-        "Start a new conversation from this checkpoint without touching the "
-        "current session."
-    )
-
-    def execute(self, context: bpy.types.Context) -> set[str]:
-        from . import session_memory as _sm
-        st = _sm.store
-        index = context.window_manager.bfacw_chat_props.session_checkpoint_index  # type: ignore[attr-defined]
-        try:
-            branched = st.branch(index)
-        except IndexError:
-            self.report({"WARNING"}, "Checkpoint no longer exists")
-            return {"CANCELLED"}
-        agent_controller._agent_state.conversation_history[:] = branched
-        _save_chat_history()
-        self.report({"INFO"}, "Branched from checkpoint into the current thread")
         return {"FINISHED"}
 
 
 class BFACW_OT_session_memory_view_edit(Operator):  # type: ignore[misc]
     """View or edit the session memory block"""
     bl_idname = "bfacw.session_memory_view_edit"
-    bl_label = "Edit Memory"
-    bl_description = "Apply the edited session memory block (empty text keeps the current one)"
+    bl_label = "Apply Memory"
+    bl_description = ("Write the edited session memory block to the store, or "
+                      "reload it into the editor when the box is left empty")
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         from . import session_memory as _sm
-        text = context.window_manager.bfacw_chat_props.session_memory_edit  # type: ignore[attr-defined]
-        if text.strip():
-            _sm.store.memory_block = text.strip()
-            self.report({"INFO"}, "Session memory updated")
-        else:
-            context.window_manager.bfacw_chat_props.session_memory_edit = (  # type: ignore[attr-defined]
-                _sm.store.memory_block)
-            self.report({"INFO"}, "Loaded current session memory into the editor")
+        props = context.window_manager.bfacw_chat_props  # type: ignore[attr-defined]
+        text = props.session_memory_edit
+        with _sm.store_lock:
+            if text.strip():
+                _sm.store.memory_block = text.strip()
+                message = "Session memory updated"
+            else:
+                props.session_memory_edit = _sm.store.memory_block
+                message = "Loaded current session memory into the editor"
         _save_chat_history()
+        self.report({"INFO"}, message)
         return {"FINISHED"}
+
+
+# Manual "Compact Now" keeps a larger recent window than the forced-overflow
+# path but smaller than the automatic window, and always snapshots the
+# pre-compaction state so the action is reversible.
+_MANUAL_COMPACT_KEEP_RECENT = 8
 
 
 class BFACW_OT_session_compact_now(Operator):  # type: ignore[misc]
@@ -2652,23 +2654,31 @@ class BFACW_OT_session_compact_now(Operator):  # type: ignore[misc]
     bl_label = "Compact Now"
     bl_description = (
         "Retire the oldest conversation turns into the session memory and "
-        "archive, then save an automatic checkpoint."
+        "archive. The pre-compaction state is saved as a checkpoint first."
     )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         from . import session_memory as _sm
         st = _sm.store
         history = agent_controller._agent_state.conversation_history
-        if len(history) < 4:
+        # Only compact when there is genuinely something safe to retire: never
+        # let a manual compaction reduce a young conversation to the system
+        # prompt (find_retire_boundary returns len(history) when nothing is
+        # retirable).
+        boundary = _sm.find_retire_boundary(history, _MANUAL_COMPACT_KEEP_RECENT)
+        if boundary >= len(history):
             self.report({"INFO"}, "Nothing to compact yet")
             return {"CANCELLED"}
-        kept, memory_block, retired = _sm.compact_history(
-            history, prior_memory=st.memory_block)
-        st.memory_block = memory_block
         st.archive_path = _session_memory_archive_path()
-        st.append_archive(retired)
-        history[:] = kept
-        st.snapshot(history, reason="manual-compaction")
+        with _sm.store_lock:
+            # Snapshot the PRE-compaction state so "Compact Now" is reversible.
+            st.snapshot(history, reason="manual-compaction")
+            kept, memory_block, retired = _sm.compact_history(
+                history, prior_memory=st.memory_block,
+                keep_recent=_MANUAL_COMPACT_KEEP_RECENT)
+            st.memory_block = memory_block
+            st.append_archive(retired)
+            history[:] = kept
         _save_chat_history()
         self.report({"INFO"}, "Compacted: {:d} messages retired".format(len(retired)))
         return {"FINISHED"}
@@ -2680,7 +2690,6 @@ class BFACW_OT_session_compact_now(Operator):  # type: ignore[misc]
 _classes = (
     ChatHistoryProperties,
     BFACW_OT_session_checkpoint_restore,
-    BFACW_OT_session_checkpoint_branch,
     BFACW_OT_session_memory_view_edit,
     BFACW_OT_session_compact_now,
     BFACW_OT_chat_send,

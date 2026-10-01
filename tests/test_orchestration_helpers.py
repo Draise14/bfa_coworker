@@ -218,6 +218,13 @@ _looks_like_unfinished_action = _extract_func(
     {"_ACTION_PROMISE_RE": _load_action_promise_re()},
 )
 
+# Malformed tool-call filtering (truncated JSON arguments).
+_tool_call_args_valid = _extract_func(_load_source(), "_tool_call_args_valid")
+_filter_valid_tool_calls = _extract_func(
+    _load_source(), "_filter_valid_tool_calls",
+    {"_tool_call_args_valid": _tool_call_args_valid},
+)
+
 # LLM 500 fault classification.  The marker tuples and the two result
 # constants are module-level names, so the extracted function needs them in
 # its namespace.  They are mirrored here, using the same private names as
@@ -1600,6 +1607,23 @@ class TestCoWorkForeignEditDetection(unittest.TestCase):
             self._snap(selected=()), self._snap(selected=("Sphere",)),
             step_code="o.select_set(True)"), "")
 
+    def test_object_removal_is_foreign(self):
+        note = _detect_foreign_edit(
+            self._snap(objects=("Ground",)), self._snap(objects=()))
+        self.assertIn("removed object(s) [Ground]", note)
+
+    def test_object_removal_by_step_code_is_not_foreign(self):
+        note = _detect_foreign_edit(
+            self._snap(objects=("Ground",)), self._snap(objects=()),
+            step_code="bpy.data.objects.remove(bpy.data.objects['Ground'])")
+        self.assertEqual(note, "")
+
+    def test_rename_is_not_foreign(self):
+        note = _detect_foreign_edit(
+            self._snap(objects=("Cube",)), self._snap(objects=("Ground",)),
+            step_code="o = bpy.data.objects['Cube']\no.name = 'Ground'")
+        self.assertEqual(note, "")
+
     def test_none_snapshots_are_safe(self):
         self.assertEqual(_detect_foreign_edit(None, None), "")
 
@@ -1653,6 +1677,56 @@ class TestModeAwareIterationBudget(unittest.TestCase):
         self.assertIn("_max_iterations = (", src)
         self.assertIn("while iterations < _max_iterations:", src)
         self.assertIn("if iterations >= _max_iterations:", src)
+
+
+class TestMalformedToolCallFilter(unittest.TestCase):
+    """A tool call with unparseable JSON arguments must be dropped.
+
+    A response truncated at the token limit can cut a tool call's arguments
+    mid-string.  Executing it fails tool validation, and storing it in
+    history makes llama-server reject the whole conversation with HTTP 500
+    on every later turn -- the live failure after a truncated
+    execute_blender_code call.
+    """
+
+    def test_valid_arguments_pass(self):
+        tc = {"id": "1", "function": {"name": "t", "arguments": '{"a": 1}'}}
+        self.assertTrue(_tool_call_args_valid(tc))
+
+    def test_truncated_arguments_are_invalid(self):
+        tc = {"id": "1", "function": {
+            "name": "execute_blender_code",
+            "arguments": '{"code": "import bpy\\nbpy.ops.mesh.primitive',
+        }}
+        self.assertFalse(_tool_call_args_valid(tc))
+
+    def test_missing_or_empty_arguments_are_invalid(self):
+        for args in (None, "", "   "):
+            tc = {"id": "1", "function": {"name": "t", "arguments": args}}
+            self.assertFalse(_tool_call_args_valid(tc), repr(args))
+
+    def test_malformed_shapes_are_invalid(self):
+        self.assertFalse(_tool_call_args_valid({}))
+        self.assertFalse(_tool_call_args_valid({"function": None}))
+        self.assertFalse(_tool_call_args_valid("nope"))
+
+    def test_filter_keeps_only_valid(self):
+        good = {"id": "a", "function": {"name": "t", "arguments": "{}"}}
+        bad = {"id": "b", "function": {"name": "t", "arguments": "{broken"}}
+        self.assertEqual(_filter_valid_tool_calls([good, bad]), [good])
+        self.assertEqual(_filter_valid_tool_calls(None), [])
+        self.assertEqual(_filter_valid_tool_calls([]), [])
+
+    def test_wiring_drops_malformed_before_history(self):
+        src = _load_source()
+        self.assertIn("_MAX_MALFORMED_RETRIES = 2", src)
+        self.assertIn("_dropped_malformed = True", src)
+        self.assertIn("_filter_valid_tool_calls(raw_tool_calls)", src)
+        # The malformed call must never be stored with the assistant message.
+        self.assertIn('msg["tool_calls"] = _valid_calls', src)
+        # Auto-continue must prefer the continuation's complete calls.
+        self.assertIn(
+            'msg["tool_calls"] = _filter_valid_tool_calls(cont_tool_calls)', src)
 
 
 class TestEndOfTurnExecutionGuarantee(unittest.TestCase):

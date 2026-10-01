@@ -83,6 +83,10 @@ _REMOTE_MAX_TOOL_ITERATIONS = 8
 # emits no tool call (Agent mode only; Ask mode is never nudged).
 _MAX_ACTION_NUDGES = 2
 
+# How many times the loop asks the model to re-emit a tool call whose
+# arguments were not valid JSON (truncated / cut mid-string).
+_MAX_MALFORMED_RETRIES = 2
+
 # Forward-looking "I am about to do this" phrasing, matched against the tail
 # of the final assistant message.  Kept deliberately tight: a genuine closing
 # summary rarely ends by promising to <verb>.
@@ -459,6 +463,39 @@ def _repair_tool_call_pairs(messages: list[dict[str, Any]]) -> list[dict[str, An
                 continue
         repaired.append(msg)
     return repaired
+
+
+def _tool_call_args_valid(tool_call: dict[str, Any]) -> bool:
+    """True when a tool call's ``arguments`` string is parseable JSON.
+
+    A response truncated at the token limit -- or one the model cut off
+    mid-string -- can leave a tool call's arguments incomplete.  Such a call
+    can neither be executed (``json.loads`` fails, so the tool receives empty
+    args and rejects them) nor stored in history: re-sending it makes
+    llama-server fail to render the chat template and reject the WHOLE
+    request with HTTP 500, which then poisons every later turn until
+    compaction.
+    """
+    if not isinstance(tool_call, dict):
+        return False
+    function = tool_call.get("function")
+    if not isinstance(function, dict):
+        return False
+    arguments = function.get("arguments")
+    if not isinstance(arguments, str) or not arguments.strip():
+        return False
+    try:
+        json.loads(arguments)
+    except (ValueError, TypeError):
+        return False
+    return True
+
+
+def _filter_valid_tool_calls(
+    tool_calls: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Return only the tool calls whose arguments are valid JSON."""
+    return [tc for tc in (tool_calls or []) if _tool_call_args_valid(tc)]
 
 
 def _message_text_length(message: dict[str, Any]) -> int:
@@ -4072,6 +4109,20 @@ def _detect_foreign_edit(
         notes.append("selection is now [{:s}]".format(
             ", ".join(names) if names else "empty"))
 
+    # A previously-present object that vanished, when the step's own code did
+    # not remove it, is a user deletion: the agent must resync rather than
+    # keep referencing a name that no longer exists (and its auto-undo must
+    # not fire, since the deletion was the user's work).
+    _removed = (
+        set(getattr(pre_snap, "object_names", ()) or ())
+        - set(getattr(post_snap, "object_names", ()) or ())
+    )
+    if _removed and not any(
+            m in code for m in (".remove(", "do_unlink", "delete(",
+                                ".name =", "name=")):
+        _names = sorted(_removed)[:5]
+        notes.append("removed object(s) [{:s}]".format(", ".join(_names)))
+
     return "; ".join(notes)
 
 
@@ -4946,6 +4997,9 @@ def _run_conversation_turn_inner(
     # Counts nudges sent when the model narrated an action but called no
     # tool; bounded so a genuinely-finished turn can never loop.
     _action_nudges: int = 0
+    # Counts re-emit requests sent when a tool call's arguments were not
+    # valid JSON; bounded so a model that keeps truncating cannot loop.
+    _malformed_retries: int = 0
 
     # In Ask mode, skip tool listing and execution entirely.
     if chat_mode == "ASK":
@@ -5628,15 +5682,16 @@ def _run_conversation_turn_inner(
             cont_tool_calls = cont_msg.get("tool_calls") or []
 
             content = content + cont_content
+            # The original response was truncated mid-generation, so its
+            # tool calls may carry incomplete (unparseable) JSON arguments.
+            # The continuation re-emits the call complete -- prefer those and
+            # never keep the truncated originals (a malformed call cannot run
+            # and makes the server reject later requests with HTTP 500).
             if cont_tool_calls:
-                # Merge tool calls from continuation, deduplicating by ID.
-                existing = msg.get("tool_calls") or []
-                seen_ids = {tc.get("id") for tc in existing if tc.get("id")}
-                for tc in cont_tool_calls:
-                    if tc.get("id") not in seen_ids:
-                        existing.append(tc)
-                        seen_ids.add(tc.get("id"))
-                msg["tool_calls"] = existing
+                msg["tool_calls"] = _filter_valid_tool_calls(cont_tool_calls)
+            else:
+                msg["tool_calls"] = _filter_valid_tool_calls(
+                    msg.get("tool_calls"))
             msg["content"] = content
             finish_reason = cont_choice.get("finish_reason", "")
             print("[Coworker] run_conversation_turn:   after continue: "
@@ -5689,6 +5744,49 @@ def _run_conversation_turn_inner(
             msg["tool_calls"] = []
             raw_tool_calls = None
             finish_reason = "stop"
+
+        # -- Drop malformed tool calls (truncated arguments) -----------
+        # A call whose arguments are not valid JSON can never run (the tool
+        # receives empty args and rejects them) and, worse, poisons history:
+        # re-sending it makes llama-server reject the whole conversation with
+        # HTTP 500 on every later turn.  Drop such calls before executing or
+        # storing them.
+        _dropped_malformed = False
+        if raw_tool_calls:
+            _valid_calls = _filter_valid_tool_calls(raw_tool_calls)
+            if len(_valid_calls) != len(raw_tool_calls):
+                _dropped_malformed = True
+                print("[Coworker] run_conversation_turn: dropped {:d} malformed "
+                      "tool call(s) with unparseable JSON arguments".format(
+                          len(raw_tool_calls) - len(_valid_calls)))
+            msg["tool_calls"] = _valid_calls
+            raw_tool_calls = _valid_calls or None
+
+        # Every call was malformed -- nothing usable to run.  Ask the model
+        # to re-emit the step with complete arguments instead of silently
+        # ending the turn.
+        if (
+            _dropped_malformed
+            and not raw_tool_calls
+            and chat_mode != "ASK"
+            and _malformed_retries < _MAX_MALFORMED_RETRIES
+        ):
+            _malformed_retries += 1
+            print("[Coworker] run_conversation_turn: all tool calls malformed -- "
+                  "asking the model to re-emit (attempt {:d}/{:d})".format(
+                      _malformed_retries, _MAX_MALFORMED_RETRIES))
+            if content:
+                history.append({"role": "assistant", "content": content})
+            history.append({
+                "role": "user",
+                "content": (
+                    "[System: Your previous tool call was cut off and its "
+                    "arguments were not valid JSON, so it could not be run. "
+                    "Emit the call again as ONE short, complete step (keep the "
+                    "script small) with complete, well-formed JSON arguments.]"
+                ),
+            })
+            continue
 
         # Process tool calls if present.  Execute whenever the model returned
         # tool calls: only a truncated ("length") response is skipped (its

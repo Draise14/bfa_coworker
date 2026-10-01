@@ -980,6 +980,55 @@ class TestToolLoopIntegration(_TurnLoopTestBase):
         self.assertIn("tool", roles)
         self.assertEqual(history[-1]["content"], "scattered")
 
+    def test_malformed_tool_call_is_dropped_valid_one_runs(self):
+        """A truncated tool call must be dropped, not executed or stored.
+
+        Regression for the live HTTP 500: a response carried a tool call
+        whose JSON arguments were cut mid-string.  It must not execute (its
+        empty args would fail tool validation) and must not be stored in
+        history -- re-sending it makes the server reject the whole
+        conversation with HTTP 500 on every later turn.
+        """
+        _bad = {
+            "index": 0,
+            "id": "bad_1",
+            "type": "function",
+            "function": {
+                "name": "execute_blender_code",
+                "arguments": '{"code": "import bpy\\nbpy.ops.mesh.primitive',
+            },
+        }
+        _good = dict(_tool_call_msg("good_1", "print('ok')")["tool_calls"][0])
+        _good["index"] = 1
+        self._mk_server([
+            {
+                "content": "Working on it.",
+                "tool_calls": [_bad, _good],
+                "finish_reason": "tool_calls",
+            },
+            {"content": "done"},
+        ])
+        self.state.conversation_history = [
+            {"role": "system", "content": "You are a helpful agent."}]
+        self._pin_fake_bpy()
+        try:
+            history = self.ac.run_conversation_turn(
+                "do it", chat_mode="AGENT",
+                llm_url=None, model="fake-model", mcp_port=self.port)
+        finally:
+            self._unpin_fake_bpy()
+
+        self.assertEqual(self.state.error, "")
+        # Only the valid call is stored, never the malformed one.
+        stored_ids = [
+            tc.get("id")
+            for m in history if m.get("role") == "assistant"
+            for tc in (m.get("tool_calls") or [])
+        ]
+        self.assertEqual(stored_ids, ["good_1"])
+        self.assertIn("tool", [m.get("role") for m in history])
+        self.assertEqual(history[-1]["content"], "done")
+
     def test_memory_block_injected_once_per_tool_request(self):
         """Compaction on turn 1, then a tool turn: block present exactly
         once per request, and never accumulates in the stored prompt."""

@@ -175,6 +175,30 @@ def _split_turn(turn: list[dict]) -> tuple[dict | None, list[dict], dict | None]
     return user_msg, process_msgs, conclusion_msg
 
 
+def _hist_index(history: list, msg: dict) -> int:
+    """Return *msg*'s index in *history*, or -1 when it is no longer present.
+
+    The conversation history is mutated on the turn's worker thread
+    (compaction replaces it, spiral recovery truncates it, auto-continue pops
+    from it) while this panel draws on the main thread.  A message captured by
+    ``_group_turns`` can therefore be gone by the time its index is needed --
+    and ``list.index`` raises ``ValueError``, which aborts the whole Panel
+    draw and blanked the chat history for the rest of a long turn.  The copy
+    operators already treat a negative index as "no message" (see
+    ``BFACW_OT_copy_message``), so returning -1 is the correct, safe result.
+
+    Matching is by IDENTITY first (handles equal-valued messages), falling
+    back to equality.
+    """
+    for i, m in enumerate(history):
+        if m is msg:
+            return i
+    try:
+        return history.index(msg)
+    except ValueError:
+        return -1
+
+
 def _wrap_text(text: str, width: int = _WRAP_WIDTH) -> str:
     """Wrap text to a given width for display in Blender labels."""
     if not text:
@@ -2121,7 +2145,14 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
         state = agent_controller._agent_state
         prefs = context.preferences.addons[__package__].preferences
-        history = state.conversation_history
+        # Snapshot the history ONCE per frame.  The turn loop runs on a worker
+        # thread and MUTATES this same list mid-draw (compaction reassigns it,
+        # spiral recovery truncates it, auto-continue pops from it).  Iterating
+        # the live list raised "list changed size during iteration", which
+        # aborted the Panel draw and made the whole chat history disappear for
+        # the rest of a long turn.  ``list()`` copies atomically under the GIL,
+        # so grouping, lookup and rendering all see one consistent view.
+        history = list(state.conversation_history)
         if history:
             # Display order toggle + message count.
             hist_box = layout.box()
@@ -2160,137 +2191,173 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             )
 
             for _display_idx, turn in enumerate(turn_iter):
-                user_msg, process_msgs, conclusion_msg = _split_turn(turn)
-                turn_num = turns.index(turn) + 1
-                if not user_msg:
-                    if conclusion_msg:
-                        tb = hist_box.box()
-                        cr = tb.row()
-                        cr.label(text="Turn {:d} -- Coworker:".format(turn_num), icon=_AGENT_ICON)
-                        op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
-                        op.message_index = history.index(conclusion_msg)
-                        _draw_multiline(tb, conclusion_msg.get("content", ""))
-                        #_render_markdown(tb, conclusion_msg.get("content", ""))
-                    continue
-                has_proc = bool(process_msgs)
-                turn_box = hist_box.box()
-
-                # --- Turn header (always visible) ---
-                has_err = has_proc and any(
-                    p.get("role") == "tool"
-                    and ('"status": "error"' in (p.get("content") or "")
-                         or (p.get("content") or "").startswith("Error"))
-                    for p in process_msgs
-                )
-                tic = "CHECKMARK" if conclusion_msg else "USER"
-                hr = turn_box.row(align=True)
-                hr.label(text="", icon=tic)
-                sub = hr.row(align=True)
-                sub.scale_x = 0.5
-                sub.label(text="Turn {:d}".format(turn_num))
-                op = hr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
-                op.message_index = history.index(user_msg)
-
-                # --- User message (always visible) ---
-                #turn_box.separator()
-                _draw_multiline(turn_box, user_msg.get("content", ""))
-
-                # Only the active (newest) turn animates while thinking --
-                # past turns keep a static label.  The live readout is drawn
-                # into this turn box (see below), not inside the collapsible
-                # Workshop, so it stays visible while the Workshop is closed.
-                is_active_turn = state.is_thinking and (
-                    (props.chat_newest_first and _display_idx == 0)
-                    or (not props.chat_newest_first
-                        and _display_idx == len(visible_turns) - 1)
-                )
-
-                # --- Working (collapsible --- only the internals collapse) ---
-                if has_proc:
-                    ph, pb = turn_box.panel(
-                        "turn_proc_{:d}".format(turn_num),
-                        default_closed=True,
+                # Absolute turn number by IDENTITY (not list.index, which
+                # compares by value and could collide on equal turns).
+                _turn_num = next(
+                    (i + 1 for i, t in enumerate(turns) if t is turn), 0)
+                try:
+                    self._draw_turn(
+                        hist_box, history, turn, _turn_num,
+                        _display_idx, len(visible_turns), props, state,
                     )
-                    pb_icon = "WARNING" if has_err else "PACKAGE"
-                    if is_active_turn:
-                        ws_label = "Workshop {:s}".format(_spinner_char(state))
-                    else:
-                        ws_label = "Workshop"
-                    ph.label(text=ws_label, icon=pb_icon)
-                    if pb:
-                        work_box = pb.box()
-                        for pm in process_msgs:
-                            pr = pm.get("role", "")
-                            pc = pm.get("content", "")
-                            is_sm = (
-                                pr == "user"
-                                and isinstance(pc, str)
-                                and pc.startswith("[System:")
-                            )
-                            if is_sm:
-                                sb = work_box.box()
-                                sb.label(text="System Context", icon="INFO")
-                                _draw_multiline(sb, pc)
-                            elif pr == "reasoning":
-                                _draw_reasoning(
-                                    work_box, pc, pm.get("label", "Thinking"),
-                                    is_thinking=False,
-                                    thinking_dots=0,
-                                    message_index=history.index(pm),
-                                )
-                            elif pr == "tool":
-                                tn = pm.get("name", "")
-                                ts = pm.get("summary", "")
-                                ie = (
-                                    '"status": "error"' in (pc or "")
-                                    or (pc or "").startswith("Error")
-                                )
-                                # Show the full result -- the user asked to see
-                                # it all, and the panel scrolls.
-                                d = ts if ts else (pc or "")
-                                _draw_tool_inline(
-                                    work_box, tn, d, ie,
-                                    message_index=history.index(pm),
-                                )
-                            elif pr == "user":
-                                work_box.label(text="Agent Context", icon="INFO")
-                                _draw_multiline(work_box, pc)
-                            elif pr == "assistant":
-                                work_box.label(text="Self Prompt", icon="CONSOLE")
-                                _draw_multiline(work_box, pc)
-
-                # --- Conclusion (always visible) ---
-                if conclusion_msg:
-                    turn_box.separator()
-                    cr = turn_box.row()
-                    cr.label(text="* Coworker:", icon=_AGENT_ICON)
-                    op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
-                    op.message_index = history.index(conclusion_msg)
-                    _render_markdown(turn_box, conclusion_msg.get("content", ""))
-                elif is_active_turn and not state.streaming_text and getattr(state, "turn_phase", ""):
-                    # Pre-first-token: no text yet, so show the activity phase
-                    # ("Reading your message" / "Warming up the model") right
-                    # in the turn the user just sent, instead of an empty box.
-                    turn_box.separator()
-                    turn_box.label(
-                        text="{:s} {:s}".format(_phase_text(state), _spinner_char(state)),
-                        icon=_AGENT_ICON)
-                elif is_active_turn and state.streaming_text:
-                    # Live readout lives inside the ACTIVE turn box, so it is
-                    # visible even while the Workshop is collapsed.  Once the
-                    # turn finishes it is replaced by the conclusion above;
-                    # the next turn's readout appears in the new active turn.
-                    turn_box.separator()
-                    turn_box.label(
-                        text="Coworker (live) {:s}".format(_spinner_char(state)),
-                        icon=_AGENT_ICON)
-                    _draw_multiline(turn_box, state.streaming_text)
+                except Exception as _draw_ex:  # pylint: disable=broad-exception-caught
+                    # One unexpected turn must never blank the WHOLE history
+                    # (a single raising lookup/draw used to vanish the panel
+                    # for the rest of a long turn).  Skip just this turn.
+                    print("[Coworker] chat history: skipped a turn that failed "
+                          "to draw -- {:s}".format(str(_draw_ex)))
 
         else:
             layout.label(
                 text="Start a conversation by typing a message and clicking Send.",
                 icon='INFO',
             )
+
+    def _draw_turn(
+        self,
+        hist_box,
+        history: list,
+        turn: list,
+        turn_num: int,
+        display_idx: int,
+        visible_count: int,
+        props,
+        state,
+    ) -> None:
+        """Draw one conversation turn (user input, Workshop, reply).
+
+        Split out of ``_draw_chat_history`` so a single bad turn can be skipped
+        in isolation (see the caller's try/except) instead of aborting the
+        whole panel -- the failure mode that hid the chat history during a
+        long turn.
+        """
+        user_msg, process_msgs, conclusion_msg = _split_turn(turn)
+        if not user_msg:
+            if conclusion_msg:
+                tb = hist_box.box()
+                cr = tb.row()
+                cr.label(text="Turn {:d} -- Coworker:".format(turn_num), icon=_AGENT_ICON)
+                op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
+                op.message_index = _hist_index(history, conclusion_msg)
+                _draw_multiline(tb, conclusion_msg.get("content", ""))
+            return
+        has_proc = bool(process_msgs)
+        turn_box = hist_box.box()
+
+        # --- Turn header (always visible) ---
+        has_err = has_proc and any(
+            p.get("role") == "tool"
+            and ('"status": "error"' in (p.get("content") or "")
+                 or (p.get("content") or "").startswith("Error"))
+            for p in process_msgs
+        )
+        tic = "CHECKMARK" if conclusion_msg else "USER"
+        hr = turn_box.row(align=True)
+        hr.label(text="", icon=tic)
+        sub = hr.row(align=True)
+        sub.scale_x = 0.5
+        sub.label(text="Turn {:d}".format(turn_num))
+        op = hr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
+        op.message_index = _hist_index(history, user_msg)
+
+        # --- User message (always visible) ---
+        # Labelled so every turn clearly shows what the user typed, mirroring
+        # the "* Coworker:" label on the reply below.
+        urow = turn_box.row()
+        urow.label(text="You:", icon='USER')
+        _draw_multiline(turn_box, user_msg.get("content", ""))
+
+        # Only the active (newest) turn animates while thinking -- past turns
+        # keep a static label.
+        is_active_turn = state.is_thinking and (
+            (props.chat_newest_first and display_idx == 0)
+            or (not props.chat_newest_first
+                and display_idx == visible_count - 1)
+        )
+
+        # --- Workshop (collapsible: only the internals collapse) ---
+        if has_proc:
+            ph, pb = turn_box.panel(
+                "turn_proc_{:d}".format(turn_num),
+                default_closed=True,
+            )
+            pb_icon = "WARNING" if has_err else "PACKAGE"
+            if is_active_turn:
+                ws_label = "Workshop {:s}".format(_spinner_char(state))
+            else:
+                ws_label = "Workshop"
+            ph.label(text=ws_label, icon=pb_icon)
+            if pb:
+                work_box = pb.box()
+                for pm in process_msgs:
+                    pr = pm.get("role", "")
+                    pc = pm.get("content", "")
+                    is_sm = (
+                        pr == "user"
+                        and isinstance(pc, str)
+                        and pc.startswith("[System:")
+                    )
+                    if is_sm:
+                        sb = work_box.box()
+                        sb.label(text="System Context", icon="INFO")
+                        _draw_multiline(sb, pc)
+                    elif pr == "reasoning":
+                        _draw_reasoning(
+                            work_box, pc, pm.get("label", "Thinking"),
+                            is_thinking=False,
+                            thinking_dots=0,
+                            message_index=_hist_index(history, pm),
+                        )
+                    elif pr == "tool":
+                        tn = pm.get("name", "")
+                        ts = pm.get("summary", "")
+                        ie = (
+                            '"status": "error"' in (pc or "")
+                            or (pc or "").startswith("Error")
+                        )
+                        # Show the full result -- the user asked to see it all,
+                        # and the panel scrolls.
+                        d = ts if ts else (pc or "")
+                        _draw_tool_inline(
+                            work_box, tn, d, ie,
+                            message_index=_hist_index(history, pm),
+                        )
+                    elif pr == "user":
+                        work_box.label(text="Agent Context", icon="INFO")
+                        _draw_multiline(work_box, pc)
+                    elif pr == "assistant":
+                        work_box.label(text="Self Prompt", icon="CONSOLE")
+                        _draw_multiline(work_box, pc)
+
+        # --- Coworker reply: live while thinking, then the final message ---
+        # While THIS turn is still being generated, show the live readout so
+        # the user watches the answer form; only when the turn finishes is it
+        # replaced by the final message.  Ordering matters: the active-turn
+        # check comes FIRST so a mid-turn "final-looking" message (e.g. one
+        # that triggers the end-of-turn execution nudge) cannot show a
+        # conclusion while the turn is plainly still running.
+        if is_active_turn:
+            turn_box.separator()
+            if not state.streaming_text and getattr(state, "turn_phase", ""):
+                # Pre-first-token: show the activity phase ("Reading your
+                # message" / "Warming up the model") in the turn just sent.
+                turn_box.label(
+                    text="{:s} {:s}".format(_phase_text(state), _spinner_char(state)),
+                    icon=_AGENT_ICON)
+            else:
+                # Live readout lives inside the ACTIVE turn box, visible even
+                # while the Workshop is collapsed.
+                turn_box.label(
+                    text="Coworker (live) {:s}".format(_spinner_char(state)),
+                    icon=_AGENT_ICON)
+                _draw_multiline(turn_box, state.streaming_text)
+        elif conclusion_msg:
+            turn_box.separator()
+            cr = turn_box.row()
+            cr.label(text="* Coworker:", icon=_AGENT_ICON)
+            op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
+            op.message_index = _hist_index(history, conclusion_msg)
+            _render_markdown(turn_box, conclusion_msg.get("content", ""))
 
 
 class BFACW_PT_chat_session(Panel):  # type: ignore[misc]

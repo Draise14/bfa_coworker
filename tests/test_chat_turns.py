@@ -56,6 +56,7 @@ _group_turns = _extract_func(
     "_group_turns", {"_is_system_note_msg": _is_system_note_msg})
 _split_turn = _extract_func(
     "_split_turn", {"_is_system_note_msg": _is_system_note_msg})
+_hist_index = _extract_func("_hist_index")
 
 
 def _user(content, turn_start=True, **kw):
@@ -104,6 +105,40 @@ class TestGroupTurns(unittest.TestCase):
         turns = _group_turns(history)
         self.assertEqual(len(turns), 1, turns)
         self.assertEqual(turns[0][0]["content"], "real request")
+
+
+class TestHistIndex(unittest.TestCase):
+    """_hist_index must never raise when a message has left the history.
+
+    Regression: the chat panel called ``history.index(msg)`` while the turn's
+    worker thread mutated the same list, so a message captured by
+    ``_group_turns`` could be gone by lookup time and ``list.index`` raised
+    ``ValueError`` -- aborting the Panel draw and blanking the whole history
+    for the rest of a long turn.
+    """
+
+    def test_present_message_returns_index(self):
+        a = {"role": "user", "content": "a"}
+        b = {"role": "assistant", "content": "b"}
+        history = [a, b]
+        self.assertEqual(_hist_index(history, a), 0)
+        self.assertEqual(_hist_index(history, b), 1)
+
+    def test_missing_message_returns_minus_one(self):
+        history = [{"role": "user", "content": "a"}]
+        gone = {"role": "assistant", "content": "b"}
+        self.assertEqual(_hist_index(history, gone), -1)
+
+    def test_identity_wins_over_equal_value(self):
+        # Two distinct dicts that compare equal must map to their own slot.
+        x = {"role": "assistant", "content": "same"}
+        y = {"role": "assistant", "content": "same"}
+        history = [x, y]
+        self.assertEqual(_hist_index(history, x), 0)
+        self.assertEqual(_hist_index(history, y), 1)
+
+    def test_empty_history_returns_minus_one(self):
+        self.assertEqual(_hist_index([], {"role": "user", "content": "z"}), -1)
 
 
 class TestSplitTurn(unittest.TestCase):

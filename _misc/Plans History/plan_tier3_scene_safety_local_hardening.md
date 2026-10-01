@@ -1,11 +1,14 @@
 # BFA Coworker — Tier 3: Scene Safety & Local-Mode Hardening (Quality Pass)
 
+> ✅ **DONE — all phases shipped, verified, and committed (2026-10-01).**
+> Archived to `_misc/Plans History/`. Status summary: `_misc/plan_tier3_hardening_status.md`.
+
 **Date**: 2026-10-01
 **Branch**: `fix/scene-safety-local-hardening`
 **Issue**: Drowse14/bfa_coworker#74 — Harden local-mode context handling (session memory & auto-checkpoints)
-**Status**: Planned — verification-first audit of the co-work / session / context hardening work
-**Relates to**: `_misc/adversarial_review_stability.md` (this pass closes its deferred LOW items), Tier 3
-session-memory plan (`Plans History/plan_tier3_session_memory_checkpoints.md`)
+**Status**: ✅ Complete — all phases landed and committed
+**Relates to**: `adversarial_review_stability.md` (this pass closed its deferred LOW items), Tier 3
+session-memory plan (`plan_tier3_session_memory_checkpoints.md`)
 
 ---
 

@@ -1,10 +1,11 @@
 # BFA Coworker — Co-work Scene Safety & Local (Qwen) Run Hardening
 
+> 📦 **Archived (2026-10-01).** Phases 1-4, 7, 8 shipped on this branch; Phases 5 (user-edit
+> detection) and 6 (scoped auto-undo) remain deferred (they mutate the destructive global-undo
+> path and need a live Blender to verify). Status summary: `_misc/plan_tier3_hardening_status.md`.
+
 **Date**: 2026-09-30
-**Status**: 🚧 In progress — Phases **1, 2, 3, 4, 7, 8 done** on branch
-`fix/scene-safety-local-hardening`; Phases **5 (user-edit detection)** and
-**6 (scoped auto-undo)** deferred — they touch the destructive-undo path and need
-a live Blender session to verify. See [§11 Progress](#11-progress-2026-09-30).
+**Status**: 📦 Archived — Phases 1-4, 7, 8 done; Phases 5 and 6 deferred
 **Depends on**: Tier 3 (session memory & context budget), Tier 3g (MCP intent architecture / preflight), Tier 3h (quality audit)
 **Blocks**: Nothing — hardens existing local-mode behaviour
 **Branch**: `6117603f` worktree

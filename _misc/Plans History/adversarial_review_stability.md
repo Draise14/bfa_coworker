@@ -1,5 +1,9 @@
 # Adversarial Review — Launch / Run / Memory / Session Stability
 
+> 📦 **Archived (2026-10-01).** The deferred items this review tracked were closed by the
+> quality pass; see `plan_tier3_scene_safety_local_hardening.md` and the status summary
+> `_misc/plan_tier3_hardening_status.md`.
+
 **Date**: 2026-09-30
 **Branch**: `fix/scene-safety-local-hardening`
 **Scope**: launching, running, memory, sessions, logging, caching, compacting,
@@ -109,7 +113,7 @@ python -m unittest tests.test_llm_manager tests.test_addon_imports \
 
 A verification-first re-read of the *new* subsystems (session memory, checkpoints,
 UI operators, context budgeting/transport, scene guards, skills, remote mode).
-Full plan: `_misc/plan_tier3_scene_safety_local_hardening.md`.
+Full plan: `plan_tier3_scene_safety_local_hardening.md`.
 
 **Status changes to earlier items**
 

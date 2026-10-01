@@ -164,6 +164,23 @@ the tool schema to the always-available surface tools + `load_tools` (the model 
 domains on demand) and re-check before refusing. The refusal message now also reports
 the message/tool/budget token counts so the cause is diagnosable.
 
+**Auto-recovery for a full context (2026-10-01, from a live session)** — a fresh
+2-turn session on the default 16K window filled up: the system prompt (built-in skills,
+~10.7k tokens) plus the tool schema (~4k) exceeded the 16K window, so *no* amount of
+turn-compaction could help (there were no old turns to retire) and the turn stopped with
+the "no longer fits" message. Two changes make it self-heal with no user action:
+
+- `_build_send_messages` gained a final degradation rung: when even the minimal tool set
+  does not fit, drop the `## Built-in Skills` section from the **sent** system copy
+  (`_strip_builtin_skills`; the stored prompt is untouched) and re-check. This reclaims
+  several thousand tokens, so the turn runs. The API-docs tools remain for lookups.
+- On a preflight refusal the turn loop now **auto-forces a compaction and rebuilds once**
+  before surfacing any error — the user should never have to press "Compact Now".
+
+Note: on a 16K window the built-in skills will be dropped for most turns (they simply do
+not fit alongside the tool schema); a larger context window keeps them. A follow-up could
+budget the always-loaded skills to the window instead of dropping them whole.
+
 **Deferred / by design**
 
 - LOW — the session turn counter still increments per tool-loop iteration, so the memory

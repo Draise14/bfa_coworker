@@ -109,6 +109,10 @@ _prompt_preflight = _extract_func(
         "_repair_tool_call_pairs": _repair_tool_call_pairs,
     },
 )
+_BUILTIN_SKILLS_RE = re.compile(
+    r"\n\n## Built-in Skills\n.*?(?=\n\n## |\Z)", re.DOTALL)
+_strip_builtin_skills = _extract_func(
+    _src, "_strip_builtin_skills", {"_BUILTIN_SKILLS_RE": _BUILTIN_SKILLS_RE})
 _collapse_poll_failed_error = _extract_func(
     _src, "_collapse_poll_failed_error",
     {
@@ -259,6 +263,51 @@ class TestFirstTurnFits(unittest.TestCase):
         reply = _cap_reply_tokens(ctx, 16384, prompt_tokens)
         self.assertGreaterEqual(reply, 256)
         self.assertLessEqual(prompt_tokens + reply + _TEMPLATE_OVERHEAD_TOKENS, ctx)
+
+
+class TestBuiltinSkillsBudgetFallback(unittest.TestCase):
+    """Last-resort degradation: the built-in skills block may be dropped.
+
+    On a small local window the system prompt's built-in skills section can
+    be the largest single item, so when even the trimmed conversation plus a
+    minimal tool schema cannot fit, it is removed from the SENT copy (keeping
+    the core instructions) so the turn still runs instead of stopping the
+    user.
+    """
+
+    def _system_prompt(self, skills_chars):
+        return (
+            "You are connected to Blender.\n\n"
+            "## Built-in Skills\n" + "x" * skills_chars + "\n\n"
+            "## Instructions\nBe concise and decisive."
+        )
+
+    def test_strip_removes_skills_keeps_instructions(self):
+        sp = self._system_prompt(5000)
+        out = _strip_builtin_skills(sp)
+        self.assertNotIn("Built-in Skills", out)
+        self.assertNotIn("xxxx", out)
+        self.assertIn("Be concise and decisive.", out)
+        self.assertIn("You are connected to Blender.", out)
+
+    def test_strip_is_noop_without_the_section(self):
+        sp = "header\n\n## Instructions\ncore"
+        self.assertEqual(_strip_builtin_skills(sp), sp)
+
+    def test_stripping_lets_an_otherwise_overflowing_turn_fit(self):
+        # A system prompt dominated by skills overflows a tight budget; after
+        # dropping the skills block the same turn fits.
+        budget = 3000
+        tools = []  # isolate the message side
+        sp_with = self._system_prompt(3000 * 4)
+        msgs = [{"role": "system", "content": sp_with},
+                {"role": "user", "content": "build a stage"}]
+        _, err = _prompt_preflight(msgs, tools, budget)
+        self.assertIsNotNone(err)
+        stripped = _strip_builtin_skills(msgs[0]["content"])
+        _, err2 = _prompt_preflight(
+            [{"role": "system", "content": stripped}, msgs[1]], tools, budget)
+        self.assertIsNone(err2)
 
 
 class TestPromptPreflight(unittest.TestCase):

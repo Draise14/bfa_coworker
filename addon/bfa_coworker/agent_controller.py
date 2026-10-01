@@ -621,6 +621,23 @@ def _strip_think_tags(text: str) -> str:
     return text.strip()
 
 
+_BUILTIN_SKILLS_RE = re.compile(
+    r"\n\n## Built-in Skills\n.*?(?=\n\n## |\Z)", re.DOTALL)
+
+
+def _strip_builtin_skills(text: str) -> str:
+    """Remove the ``## Built-in Skills`` section from a system-prompt copy.
+
+    The built-in skills block is by far the largest part of the local system
+    prompt (several thousand tokens on a small window).  When even the
+    trimmed conversation plus a minimal tool schema cannot fit, dropping it
+    from the *sent* copy keeps the turn running instead of stopping the user;
+    the always-available ``get_python_api_docs`` / ``search_api_docs`` tools
+    remain for lookups.  The stored history is never modified.
+    """
+    return _BUILTIN_SKILLS_RE.sub("", text)
+
+
 def _sanitize_loaded_history(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Clean a history restored from disk before it is used.
 
@@ -5051,6 +5068,23 @@ def _run_conversation_turn_inner(
                     print("[Coworker] run_conversation_turn: reduced the tool schema "
                           "to surface tools to fit the context window")
                     msgs, _err = _msgs_min, _err_min
+            if _err and msgs and msgs[0].get("role") == "system":
+                # Final degradation: the built-in skills block is by far the
+                # largest part of the local system prompt.  Drop it from the
+                # SENT copy (never the stored one) alongside the minimal tool
+                # set, so a turn on a small window still runs instead of
+                # stopping.  The API-docs tools remain available for lookups.
+                _stripped = dict(msgs[0])
+                _stripped["content"] = _strip_builtin_skills(
+                    str(_stripped.get("content") or ""))
+                _msgs_sk, _err_sk = _prompt_preflight(
+                    [_stripped] + msgs[1:], _minimal_tools, prompt_budget)
+                if _err_sk is None:
+                    msgs = _msgs_sk
+                    openai_tools = _minimal_tools
+                    _err = None
+                    print("[Coworker] run_conversation_turn: dropped built-in "
+                          "skills to fit the context window")
             return msgs, _err
         return msgs, None
 
@@ -5087,6 +5121,22 @@ def _run_conversation_turn_inner(
 
         # -- Build the exact message payload for this POST -------------
         history_to_send, _preflight_err = _build_send_messages()
+        if _preflight_err:
+            # Auto-recover instead of stopping the user: the prompt did not fit
+            # even after the degradation ladder, so force an aggressive
+            # compaction (retire whatever can be retired) and rebuild once.
+            # The user should never have to press "Compact Now".
+            print("[Coworker] run_conversation_turn: prompt does not fit -- "
+                  "auto-compacting and retrying")
+            try:
+                _force_compact_session(
+                    history, openai_tools, prompt_budget, on_status=on_status,
+                    memory_writer=_memory_writer_factory(
+                        llm_url, api_key, model, min(_requested_max_tokens, 1024)))
+            except Exception as _fc_ex:  # pylint: disable=broad-exception-caught
+                print("[Coworker] run_conversation_turn: auto-compaction failed -- "
+                      "{:s}".format(str(_fc_ex)))
+            history_to_send, _preflight_err = _build_send_messages()
         if _preflight_err:
             _agent_state.is_thinking = False
             _agent_state.thinking_start_time = 0.0

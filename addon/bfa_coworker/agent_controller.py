@@ -82,7 +82,7 @@ _REMOTE_MAX_TOOL_ITERATIONS = 8
 # -- End-of-turn execution guarantee ---------------------------------
 # How many times the loop will nudge a model that *narrates* an action but
 # emits no tool call (Agent mode only; Ask mode is never nudged).
-_MAX_ACTION_NUDGES = 2
+_MAX_ACTION_NUDGES = 3
 
 # How many times the loop asks the model to re-emit a tool call whose
 # arguments were not valid JSON (truncated / cut mid-string).
@@ -123,8 +123,11 @@ def _looks_like_unfinished_action(content: str) -> bool:
     tail = content.strip()
     if not tail:
         return False
-    # A trailing ellipsis signals the model stopped mid-thought.
-    if tail.endswith("...") or tail.endswith("\u2026"):
+    # A trailing ellipsis signals the model stopped mid-thought; a trailing
+    # colon is a lead-in ("Step 1 -- create the props:") to an action that
+    # never arrived.  Both mean the message continued in the model's head
+    # but nothing was emitted.
+    if tail.endswith("...") or tail.endswith("\u2026") or tail.endswith(":"):
         return True
     return bool(_ACTION_PROMISE_RE.search(tail[-250:]))
 
@@ -6252,11 +6255,12 @@ def _run_conversation_turn_inner(
                 "role": "user",
                 "content": (
                     "[System: You described your next step but did not call "
-                    "any tool, so nothing was executed. In Agent mode you must "
-                    "carry out the work yourself: call the tool now (e.g. "
-                    "execute_blender_code) instead of describing it. Keep each "
-                    "call small. If the task is genuinely finished, reply with "
-                    "the final result only.]"
+                    "any tool, so NOTHING was executed. In Agent mode you must "
+                    "carry the work out yourself: do NOT describe the step -- "
+                    "emit the actual tool call (execute_blender_code) in your "
+                    "VERY NEXT reply, now. Keep each call small (one short "
+                    "script). Only if the task is genuinely finished, reply "
+                    "with the final result and no tool call.]"
                 ),
             })
             continue

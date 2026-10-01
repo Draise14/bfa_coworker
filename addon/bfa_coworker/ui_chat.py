@@ -2604,6 +2604,12 @@ def _draw_session_section(layout, context, props, state) -> None:
         # Default the selection to the newest checkpoint.
         if props.session_checkpoint_index >= len(checkpoints):
             props.session_checkpoint_index = len(checkpoints) - 1
+        # Make clear what the radio index selects -- without this the number
+        # reads as an unexplained "0".
+        _sel = props.session_checkpoint_index
+        if 0 <= _sel < len(checkpoints):
+            cp_box.label(text="Restore target: #{:d}  {:s}".format(
+                _sel, checkpoints[_sel].get("reason", "?")))
         for i in range(len(checkpoints) - 1, -1, -1):
             cp = checkpoints[i]
             ts = cp.get("timestamp", "?")

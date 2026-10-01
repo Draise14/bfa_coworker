@@ -1749,6 +1749,15 @@ class TestEndOfTurnExecutionGuarantee(unittest.TestCase):
         )
         self.assertTrue(_looks_like_unfinished_action(msg))
 
+    def test_trailing_colon_lead_in_is_unfinished(self):
+        # The live stall: the model ended on a lead-in colon with no tool call.
+        self.assertTrue(_looks_like_unfinished_action(
+            "Continuing with the scatter. Step 1 -- create COL_Props and "
+            "place 6 cartoon rocks, each with its own grey-brown material:"
+        ))
+        self.assertTrue(_looks_like_unfinished_action("Now the props:"))
+        self.assertTrue(_looks_like_unfinished_action("Here goes..."))
+
     def test_promise_patterns_detected(self):
         for msg in (
             "Now I'll add the bushes.",
@@ -1777,7 +1786,7 @@ class TestEndOfTurnExecutionGuarantee(unittest.TestCase):
 
     def test_nudge_wiring_present_and_bounded(self):
         src = _load_source()
-        self.assertIn("_MAX_ACTION_NUDGES = 2", src)
+        self.assertIn("_MAX_ACTION_NUDGES = 3", src)
         self.assertIn("_action_nudges", src)
         self.assertIn("_looks_like_unfinished_action(content)", src)
         # Bounded, and never fires in Ask mode.

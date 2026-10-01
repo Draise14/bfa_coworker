@@ -384,5 +384,39 @@ class TestCollapseIndexError(unittest.TestCase):
         self.assertEqual(_collapse_known_errors(untouched), untouched)
 
 
+class TestSkillInjectionBudget(unittest.TestCase):
+    """Domain-skill reference must never be baked into the stored history.
+
+    Regression: skills were appended to ``history[0]["content"]`` in place, so
+    over a session several large skill files accumulated in the stored system
+    prompt (up to ~6.5k tokens), crowding out the conversation and — on a
+    smaller window — making even the first turn overflow the budget.  They are
+    now injected into the *sent* system copy, capped and budget-aware.
+    """
+
+    def test_no_in_place_skill_append_to_history(self):
+        # The *skills* must not be appended to stored history.  (Other
+        # one-time notes legitimately are — e.g. the preflight note and the
+        # ASK-mode addendum — so match the skills-specific pattern.)
+        self.assertNotIn('+= "\\n\\n" + _domain_skills_text', _src,
+                         "domain skills must not be appended to STORED history")
+        self.assertNotIn("history[0][\"content\"] += _domain_skills_text", _src)
+
+    def test_skills_cap_constant_is_bounded(self):
+        import re
+        m = re.search(r"_SKILLS_MAX_TOKENS\s*=\s*(\d+)", _src)
+        self.assertIsNotNone(m, "_SKILLS_MAX_TOKENS must be defined")
+        self.assertLessEqual(int(m.group(1)), 2048,
+                             "skills cap must stay small relative to a local window")
+
+    def test_skills_injected_at_send_time(self):
+        # The send-time injection must reference the skills text and the
+        # preflight budget (i.e. it is budget-aware), and the degradation path
+        # must exist.
+        self.assertIn("_domain_skills_text", _src)
+        self.assertIn("skipping domain skills", _src)
+        self.assertIn("dropped domain skills", _src)
+
+
 if __name__ == "__main__":
     unittest.main()

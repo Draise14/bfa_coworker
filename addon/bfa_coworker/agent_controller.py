@@ -150,6 +150,13 @@ _FORCE_COMPACT_KEEP_RECENT = 8
 # up the rest if it hits the limit.
 _MIN_REPLY_TOKENS = 256
 
+# Hard cap on the domain-skill reference text injected into the system prompt.
+# The skill files are large (up to ~1.7k tokens each) and several can be pulled
+# in at once; this bounds their fixed cost so a small local window still leaves
+# room for the conversation.  The text is also dropped entirely when it will not
+# fit the budget (see ``_build_send_messages``).
+_SKILLS_MAX_TOKENS = 1200
+
 
 def _use_compact_prompt() -> bool:
     """Return ``True`` when the compact system prompt should be used.
@@ -4768,6 +4775,11 @@ def _run_conversation_turn_inner(
     # scene content (0 extra round-trips).  The LLM can also call
     # ``load_tools`` mid-turn to switch domains.
     _loaded_domains: set[str] = set()
+    # Domain skill reference text for the detected domains (empty when none
+    # or when it does not fit the budget).  Injected into the *sent* system
+    # copy inside ``_build_send_messages`` — never mutated into the stored
+    # history, so it can never accumulate across turns.
+    _domain_skills_text = ""
     if llm_port_local is not None and openai_tools:
         _all_tools = openai_tools  # Keep full list for on-demand loading.
         _detected_domains: set[str] = set()
@@ -4780,27 +4792,25 @@ def _run_conversation_turn_inner(
         _loaded_domains.update(_detected_domains)
         openai_tools = _build_tool_set(_all_tools, _detected_domains)
 
-        # ── Domain skill auto-injection ────────────────────────────────
-        # Inject relevant skill files (e.g. animation.md, materials.md)
-        # into the system prompt so the LLM has version-aware API rules
-        # for the detected domains without needing to search for them.
+        # ── Domain skill reference (injected at send time, budget-aware) ─
+        # These files (animation.md, materials.md, ...) give version-aware
+        # API rules for the detected domains without a lookup round-trip.
+        # They are LARGE (up to ~1.7k tokens each), so they are injected
+        # only when they fit the remaining budget — never at the cost of
+        # refusing the turn.  A small hard cap also keeps several domains'
+        # skills from crowding out the conversation.
         if _detected_domains:
             try:
                 from . import skills as _skills_mod  # pylint: disable=import-error
-                _domain_skills_text = _skills_mod.get_domain_skills(_detected_domains)
-                if _domain_skills_text:
-                    # Append domain skills to the system prompt (position 0)
-                    # rather than creating a new message — Qwen's Jinja template
-                    # requires all system messages at the beginning.
-                    # Guard: check if this domain's skills are already injected
-                    # to avoid duplicating on subsequent turns.
-                    _skills_marker = _domain_skills_text[:40]  # First 40 chars as marker
-                    if _skills_marker not in history[0]["content"]:
-                        history[0]["content"] += "\n\n" + _domain_skills_text
-                        print("[🛠️Coworker] run_conversation_turn: domain skills injected for {:s}".format(
-                            ",".join(sorted(_detected_domains))))
+                _domain_skills_text = _skills_mod.get_domain_skills(_detected_domains) or ""
+                _max_skill_chars = int(_SKILLS_MAX_TOKENS * _CHARS_PER_TOKEN)
+                if len(_domain_skills_text) > _max_skill_chars:
+                    _domain_skills_text = _domain_skills_text[:_max_skill_chars]
+                print("[🛠️Coworker] run_conversation_turn: domain skills for {:s} "
+                      "({:d} chars)".format(",".join(sorted(_detected_domains)),
+                                            len(_domain_skills_text)))
             except Exception:
-                pass  # Best-effort; don't break the agent loop.
+                _domain_skills_text = ""  # Best-effort; don't break the loop.
     else:
         _all_tools = openai_tools  # Unused in remote mode, but keep for consistency.
 
@@ -4858,6 +4868,30 @@ def _run_conversation_turn_inner(
                 _sys0["content"] = _base.rstrip() + "\n\n" + _mem_block
                 msgs[0] = _sys0
 
+        # ── Inject domain-skill reference (send copy, budget-aware) ──
+        # Appended to the system copy like the memory block (Qwen's Jinja
+        # template needs all system content up front).  Only injected when it
+        # fits the budget alongside the tool schema and history; otherwise it
+        # is skipped — a reference is never worth refusing the turn.
+        if _domain_skills_text and msgs and msgs[0].get("role") == "system":
+            _cand = dict(msgs[0])
+            _cand["content"] = str(_cand.get("content") or "").rstrip() + "\n\n" + _domain_skills_text
+            _probe = [_cand] + msgs[1:]
+            _fits = (
+                prompt_budget <= 0
+                or (
+                    _estimate_messages_tokens(_probe)
+                    + _estimate_tools_tokens(openai_tools)
+                    <= prompt_budget
+                )
+            )
+            if _fits:
+                msgs[0] = _cand
+            else:
+                print("[🛠️Coworker] run_conversation_turn: skipping domain skills "
+                      "({:d} chars) — would not fit the prompt budget".format(
+                          len(_domain_skills_text)))
+
         # ── Inject a pending screenshot into the last user message ──
         # Done BEFORE budgeting so the image is counted against the window
         # (a pending screenshot used to be appended after the preflight and
@@ -4896,6 +4930,18 @@ def _run_conversation_turn_inner(
                       "{:d} -> {:d} tokens ({:d} messages)".format(
                           _before, _after, len(msgs)))
             msgs, _err = _prompt_preflight(msgs, openai_tools, prompt_budget)
+            # Last-resort degradation: if even the trimmed/pinned turn does not
+            # fit, drop the (optional) domain-skill reference and re-check.
+            # Only when THAT still fails do we surface the friendly error, so a
+            # turn is refused solely by genuinely unavoidable content.
+            if _err and _domain_skills_text and msgs and msgs[0].get("role") == "system":
+                _stripped = dict(msgs[0])
+                _stripped["content"] = str(_stripped.get("content") or "").replace(
+                    "\n\n" + _domain_skills_text, "")
+                msgs[0] = _stripped
+                print("[🛠️Coworker] run_conversation_turn: dropped domain skills to "
+                      "fit the context window")
+                msgs, _err = _prompt_preflight(msgs, openai_tools, prompt_budget)
             return msgs, _err
         return msgs, None
 

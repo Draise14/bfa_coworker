@@ -14,7 +14,7 @@ Also registers a Text Editor side panel for prompt-based interaction.
 __all__ = (
     "ChatHistoryProperties",
     "BFACW_PT_chat_panel",
-    "BFACW_PT_chat_history",
+    "BFACW_PT_chat_session",
     "BFACW_PT_chat_queue",
     "BFACW_PT_chat_status",
     "BFACW_PT_chat_text_editor",
@@ -2000,27 +2000,18 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
 
         layout.separator()
 
-        # ── Session section (Tier 3): memory, checkpoints, context usage ──
-        _draw_session_section(layout, context, props, state)
+        # ── Conversation history ──────────────────────────────────────
+        # Drawn here, directly under the input and action buttons, so the
+        # messages read as one continuous chat instead of a detached panel.
+        self._draw_chat_history(context)
 
-        # NOTE: the conversation history is drawn in its own panel
-        # (BFACW_PT_chat_history) so a long history never crowds the input
-        # area.  This draw() method ends here.
+    def _draw_chat_history(self, context: bpy.types.Context) -> None:
+        """Draw the conversation history (turns) into this panel.
 
-
-class BFACW_PT_chat_history(Panel):  # type: ignore[misc]
-    """Conversation history in its own panel, separate from the input."""
-    bl_label = "History"
-    bl_idname = "BFACW_PT_chat_history"
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'UI'
-    bl_category = "Coworker"
-
-    @classmethod
-    def poll(cls, context: bpy.types.Context) -> bool:
-        return not bpy.app.background
-
-    def draw(self, context: bpy.types.Context) -> None:
+        Kept as a method so it renders with the chat input, Send button and
+        agent controls (the History ``Panel`` was removed; the section now
+        lives inside the Coworker panel).
+        """
         layout = self.layout
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
@@ -2213,6 +2204,27 @@ class BFACW_PT_chat_history(Panel):  # type: ignore[misc]
             )
 
 
+class BFACW_PT_chat_session(Panel):  # type: ignore[misc]
+    """Session panel — context usage, memory, compaction, and checkpoints."""
+    bl_label = "Session"
+    bl_idname = "BFACW_PT_chat_session"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Coworker"
+    bl_order = 1
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return not bpy.app.background
+
+    def draw(self, context: bpy.types.Context) -> None:
+        layout = self.layout
+        wm = context.window_manager
+        props = wm.bfacw_chat_props  # type: ignore[attr-defined]
+        state = agent_controller._agent_state
+        _draw_session_section(layout, context, props, state)
+
+
 class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
     """Top-level queue panel — shows pending queued messages."""
     bl_label = "Queue"
@@ -2220,6 +2232,7 @@ class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = "Coworker"
+    bl_order = 2
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -2267,6 +2280,7 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
     bl_region_type = 'UI'
     bl_category = "Coworker"
     bl_options = {'DEFAULT_CLOSED'}
+    bl_order = 3
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -2500,35 +2514,47 @@ def _redraw_areas_safe() -> None:
 # Session memory & checkpoint operators (Tier 3 Phase 5)
 
 def _draw_session_section(layout, context, props, state) -> None:
-    """Draw the Session section: context usage, memory preview, checkpoints."""
+    """Draw the Session panel: context usage, memory preview, checkpoints.
+
+    Shown in the dedicated ``BFACW_PT_chat_session`` panel, separate from the
+    chat panel (which holds the message history, input and controls).
+    """
     from . import session_memory as _sm
     st = _sm.store
-    box = layout.box()
-    box.label(text="Session", icon='BOOKMARKS')
 
-    # Context-usage bar (from Phase 1 usage accounting).
+    # ── Context usage ──────────────────────────────────────────────
     usage = getattr(state, "session_usage", {}) or {}
     ctx_size = getattr(state, "ctx_size_used", 0) or 0
     last_prompt = usage.get("prompt_tokens", 0)
+    ctx_box = layout.box()
+    ctx_box.label(text="Context Window", icon='MEMORY')
     if ctx_size > 0 and last_prompt > 0:
         pct = min(int(last_prompt * 100 / ctx_size), 100)
-        row = box.row(align=True)
-        row.label(text="Context: {:d}%".format(pct), icon='MEMORY')
+        row = ctx_box.row(align=True)
+        row.label(text="{:d}% used".format(pct))
         row.progress(factor=pct / 100.0, type='BAR')
         if pct >= int(_sm.COMPACTION_TRIGGER_RATIO * 100):
-            box.label(text="Approaching context limit — compaction will retire "
-                           "old turns automatically", icon='INFO')
+            ctx_box.label(
+                text="Approaching limit — old turns will be compacted",
+                icon='INFO')
+    else:
+        ctx_box.label(text="No usage recorded yet", icon='INFO')
 
-    # Compaction status / memory preview.
+    # ── Memory note (compaction summary) ───────────────────────────
+    mem_box = layout.box()
+    mem_box.label(text="Memory", icon='BOOKMARKS')
     if st.memory_block:
         mem_lines = st.memory_block.splitlines()
-        _draw_multiline(box, mem_lines[0] if mem_lines else "")
-        box.operator("bfacw.session_memory_view_edit", icon='TEXT', text="View / Edit Memory")
-    box.operator("bfacw.session_compact_now", icon='FILE_REFRESH', text="Compact Now")
+        _draw_multiline(mem_box, mem_lines[0] if mem_lines else "")
+        mem_box.operator("bfacw.session_memory_view_edit", icon='TEXT', text="View / Edit Memory")
+    else:
+        mem_box.label(text="Nothing remembered yet", icon='INFO')
+    mem_box.operator("bfacw.session_compact_now", icon='FILE_REFRESH', text="Compact Now")
 
-    # Checkpoint list (Restore / Branch).
+    # ── Checkpoints (Restore / Branch) ─────────────────────────────
+    cp_box = layout.box()
     checkpoints = st.list_checkpoints()
-    row = box.row(align=True)
+    row = cp_box.row(align=True)
     row.prop(props, "session_show_checkpoints",
              icon='TRIA_DOWN' if props.session_show_checkpoints else 'TRIA_RIGHT',
              text="Checkpoints ({:d})".format(len(checkpoints)))
@@ -2538,13 +2564,13 @@ def _draw_session_section(layout, context, props, state) -> None:
             props.session_checkpoint_index = len(checkpoints) - 1
         for i in range(len(checkpoints) - 1, -1, -1):
             cp = checkpoints[i]
-            row = box.row(align=True)
+            row = cp_box.row(align=True)
             row.prop(props, "session_checkpoint_index", index=i, text="", icon='BOOKMARK')
             label = "#{:d} {:s} ({:s}, {:d} msgs)".format(
                 i, cp.get("reason", "?"), cp.get("timestamp", "?"),
                 cp.get("message_count", 0))
             row.label(text=label)
-        row = box.row(align=True)
+        row = cp_box.row(align=True)
         row.operator("bfacw.session_checkpoint_restore", icon='LOOP_BACK', text="Restore")
         row.operator("bfacw.session_checkpoint_branch", icon='FORWARD', text="Branch")
 
@@ -2678,7 +2704,7 @@ _classes = (
 
     BFACW_PT_chat_queue,
     BFACW_PT_chat_panel,
-    BFACW_PT_chat_history,
+    BFACW_PT_chat_session,
     BFACW_PT_chat_status,
     BFACW_PT_chat_text_editor,
 )

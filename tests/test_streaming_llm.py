@@ -45,6 +45,7 @@ __all__ = ()
 import io
 import json
 import os
+import re
 import time
 import types
 import typing
@@ -91,6 +92,7 @@ def _extract_func(source: str, name: str, extra: dict | None = None):
     func_source = source[start:end]
     mod = types.ModuleType("_ac_stream_extract")
     mod.__dict__["json"] = json
+    mod.__dict__["re"] = re
     mod.__dict__["Any"] = object
     # Annotations are evaluated at exec time and the signature subscripts
     # Callable, so it must be the real (subscriptable) typing alias.
@@ -109,10 +111,18 @@ _extract_reasoning_delta = _extract_func(
     _SOURCE, "_extract_reasoning_delta",
     {"_h": lambda name: _strip_think_tags if name == "strip_think_tags" else None},
 )
+
+_THINK_BLOCK_RE = re.compile(
+    r"<think\b[^>]*>(.*?)</think\s*>", re.DOTALL | re.IGNORECASE)
+_split_inline_think = _extract_func(
+    _SOURCE, "_split_inline_think",
+    {"re": re, "_THINK_BLOCK_RE": _THINK_BLOCK_RE},
+)
 _parse_sse_chunk = _extract_func(
     _SOURCE, "_parse_sse_chunk",
     {
         "_extract_reasoning_delta": _extract_reasoning_delta,
+        "_split_inline_think": _split_inline_think,
         # The chunk parser routes <think> stripping through the injected
         # helper namespace (llm_transport._h).
         "_h": lambda name: _strip_think_tags if name == "strip_think_tags" else None,
@@ -145,6 +155,7 @@ _openai_chat_completions_stream = _extract_func(
         "_parse_sse_chunk": _parse_sse_chunk,
         "_assemble_stream_result": _assemble_stream_result,
         "_stop_requested": _stop_event.is_set,
+        "_clear_stale_errors": lambda: None,
         "_agent_state": types.SimpleNamespace(warning=""),
         "print": _quiet_print,
     },
@@ -223,7 +234,19 @@ class TestParseSSEChunk(unittest.TestCase):
             {"choices": [{"delta": {"reasoning_content": "<think>deep</think>"}}]}, acc,
         )
         self.assertEqual(acc["reasoning"], "deep")
-
+    def test_inline_think_in_content_not_duplicated(self):
+        # A content delta that inlines a think block must add the visible text
+        # to content EXACTLY once and route the tagged body to reasoning.
+        _lt, _gt = chr(60), chr(62)
+        open_tag = _lt + "think" + _gt
+        close_tag = _lt + "/think" + _gt
+        acc = self._acc()
+        _parse_sse_chunk(
+            {"choices": [{"delta": {
+                "content": "Ans " + open_tag + "why" + close_tag}}]}, acc,
+        )
+        self.assertEqual(acc["content"], "Ans ")
+        self.assertEqual(acc["reasoning"], "why")
     def test_tool_call_deltas_merged(self):
         acc = self._acc()
         tool_call_delta_1 = {
@@ -685,6 +708,7 @@ class TestTurnLoopUsesStreamingWrapper(unittest.TestCase):
             "_parse_sse_chunk": _parse_sse_chunk,
             "_assemble_stream_result": _assemble_stream_result,
             "_stop_requested": lambda: False,
+            "_clear_stale_errors": lambda: None,
             "_agent_state": state,
             "print": _quiet_print,
             # Closure variables the wrapper reads from the turn-loop scope.

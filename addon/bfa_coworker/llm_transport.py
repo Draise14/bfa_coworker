@@ -401,7 +401,7 @@ def openai_chat_completions(
     # the response.
     import time as _time
     max_retries = 5
-    max_503_retries = 60  # Up to ~120s with exponential backoff for model loading.
+    max_503_retries = 12  # Bounded so total 503 backoff stays under ~120s.
     tools_tried = bool(tools)
     _503_attempts = 0
     # One-shot guards for the request-reshaping fallbacks.  Each reshapes the
@@ -486,6 +486,7 @@ def openai_chat_completions(
                             result["_xml_tool_fallback"] = True
                             break
 
+                _clear_stale_errors()
                 return result
         except (urllib.error.HTTPError, urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
             # ── Capture the error body ONCE for every HTTP error ────────
@@ -750,6 +751,24 @@ def openai_chat_completions(
                           "model still loading, retrying in {:.0f}s...".format(_503_attempts, backoff))
                 _time.sleep(backoff)
                 continue
+            # ── Non-retryable 4xx: fail fast with the real reason ─────
+            # 401/403/404/422 are deterministic client errors; retrying the
+            # identical payload wastes ~8s and masks the real cause behind a
+            # generic "HTTP Error".  (400 has its own reshape/fail-fast path
+            # above; 408/429 fall through to the generic transient retry.)
+            if isinstance(ex, urllib.error.HTTPError) and ex.code in (401, 403, 404, 422):
+                _body = ""
+                try:
+                    _body = ex.read().decode("utf-8", errors="replace")
+                except Exception:  # pylint: disable=broad-exception-caught
+                    _body = ""
+                _msg = "LLM request failed: HTTP {:d} — {:s}".format(
+                    ex.code, (_body or str(ex))[:500])
+                print("[🛠️Coworker] _openai_chat_completions: HTTP {:d} is not "
+                      "retryable — surfacing the reason".format(ex.code))
+                _agent_state.error = _msg[:500]
+                _agent_state.error_full = _msg
+                return None
             if attempt < max_retries - 1:
                 # A malformed tool call is a *generation* failure, not a
                 # transient one.  Once the one-shot nudge has been sent, the
@@ -812,6 +831,38 @@ def openai_chat_completions(
     return None
 
 
+_THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>(.*?)</think\s*>", re.DOTALL | re.IGNORECASE)
+
+
+def _split_inline_think(text: str) -> tuple[str, str]:
+    """Split a content delta that inlines `` thinking...</think>`` blocks.
+
+    Returns ``(visible, reasoning)``.  Only *complete* tagged blocks are routed
+    to reasoning; any unmatched tag (a tag split across streaming chunks) is
+    removed from the visible text so it never leaks, and its body stays in
+    visible (best-effort — correct for the common whole-tag-in-one-delta case).
+    """
+    reasoning = "".join(_THINK_BLOCK_RE.findall(text))
+    visible = _THINK_BLOCK_RE.sub("", text)
+    visible = re.sub(r"\s?</?think\b[^>]*>", "", visible, flags=re.IGNORECASE)
+    return visible, reasoning
+
+
+def _clear_stale_errors() -> None:
+    """Clear a previous request's error state after a successful request.
+
+    Only ``error_kind`` used to be reset per call, so a stale ``error`` /
+    ``error_full`` from an earlier failure could be read between calls.
+    """
+    if _agent_state is None:
+        return
+    for _attr in ("error", "error_full", "error_kind"):
+        try:
+            setattr(_agent_state, _attr, "")
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+
+
 def _extract_reasoning_delta(delta: dict[str, Any]) -> str:
     """Extract reasoning text from a streaming chunk's delta.
 
@@ -825,7 +876,15 @@ def _extract_reasoning_delta(delta: dict[str, Any]) -> str:
     reasoning = ""
     if isinstance(delta, dict):
         reasoning = delta.get("reasoning_content") or delta.get("reasoning") or ""
-    return _h('strip_think_tags')(reasoning) if reasoning else ""
+    if not reasoning:
+        return ""
+    # Remove only the ``think`` wrapper tokens (and the whitespace immediately
+    # touching them); keep every OTHER whitespace so streamed token spaces
+    # survive.  Trimming the delta (as ``_strip_think_tags`` does) would
+    # concatenate the whole chain-of-thought into one unreadable word
+    # ("Letmethinkabout...").  End-trimming happens once, on the assembled
+    # text, in the caller.
+    return re.sub(r"\s?</?think>\s?", "", reasoning)
 
 
 def _parse_sse_chunk(chunk: dict[str, Any], acc: dict[str, Any]) -> None:
@@ -844,15 +903,16 @@ def _parse_sse_chunk(chunk: dict[str, Any], acc: dict[str, Any]) -> None:
         delta = choice.get("delta") or {}
         delta_content = delta.get("content")
         if isinstance(delta_content, str) and delta_content:
-            acc["content"] += delta_content
+            if "<think" in delta_content.lower():
+                # Inline think tags in ``content``: route the tagged part to
+                # reasoning and the plain text to content, each EXACTLY once.
+                _visible, _think = _split_inline_think(delta_content)
+                acc["content"] += _visible
+                acc["reasoning"] += _think
+            else:
+                acc["content"] += delta_content
         # Some providers put <think>…</think> inline in content instead of
         # the reasoning field; route the tagged part to reasoning.
-        if delta_content and "<think>" in delta_content:
-            stripped = _h('strip_think_tags')(delta_content)
-            if stripped != delta_content:
-                acc["reasoning"] += delta_content.replace(stripped, "")
-                delta_content = stripped
-                acc["content"] += delta_content
         delta_reasoning = _extract_reasoning_delta(delta)
         if delta_reasoning:
             acc["reasoning"] += delta_reasoning
@@ -1062,6 +1122,18 @@ def openai_chat_completions_stream(
             return _assemble_stream_result(acc)
         print("[🛠️Coworker] _openai_chat_completions_stream: failed before first "
               "token ({:s}) — falling back to non-streaming".format(str(ex)))
+        # Record the reason so a caller that does not retry non-streaming can
+        # still report it (the error body is not re-readable once consumed).
+        if isinstance(ex, urllib.error.HTTPError):
+            try:
+                _stream_body = ex.read().decode("utf-8", errors="replace")
+            except Exception:  # pylint: disable=broad-exception-caught
+                _stream_body = ""
+            if _stream_body and is_context_overflow(_stream_body):
+                if _agent_state is not None:
+                    _agent_state.error_kind = "context_overflow"
+            if _stream_body and _agent_state is not None:
+                _agent_state.error_full = "LLM stream failed: {:s}".format(_stream_body[:500])
         return None
 
     if not got_first_token:
@@ -1078,4 +1150,5 @@ def openai_chat_completions_stream(
                   str(usage.get("prompt_tokens")),
                   str(usage.get("completion_tokens")),
                   str(usage.get("total_tokens"))))
+    _clear_stale_errors()
     return result

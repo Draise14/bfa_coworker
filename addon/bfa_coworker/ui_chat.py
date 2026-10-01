@@ -655,26 +655,36 @@ def _render_markdown(layout, md, width=40):
         _emit_para(_strip_inline(stripped))
         i += 1
 
-def _draw_multiline(layout: bpy.types.UILayout, text: str, width: int = _WRAP_WIDTH) -> None:
-    """Draw multi-line text in a layout.
+def _draw_multiline(
+    layout: bpy.types.UILayout,
+    text: str,
+    width: int = _WRAP_WIDTH,
+    icon: str = 'NONE',
+) -> None:
+    """Draw multi-line text in a layout, optionally with a leading icon.
 
     Prefers the host build's native ``label_multiline`` (Blender PR
     #154351, workshop builds) which wraps to the real layout width with
     a tight 0.75 UI_UNIT_Y line height - no manual chopping, no tall
     full-height rows per wrap chunk, so chat messages condense
     vertically. Falls back to character-based wrapping on builds that
-    lack the API.
+    lack the API.  When *icon* is given it is placed on the first line
+    (the fallback cannot attach an icon to a whole wrapped block).
     """
     if not text:
         return
     if _can_multiline():
         try:
-            layout.label_multiline(text=text)
+            if icon and icon != 'NONE':
+                layout.label_multiline(text=text, icon=icon)
+            else:
+                layout.label_multiline(text=text)
             return
         except Exception:  # pylint: disable=broad-exception-caught
             pass
-    for line in _wrap_text(text, width=width).split("\n"):
-        layout.label(text=line)
+    lines = _wrap_text(text, width=width).split("\n")
+    for i, line in enumerate(lines):
+        layout.label(text=line, icon=icon if i == 0 else 'NONE')
 
 
 def _draw_reasoning(
@@ -2208,8 +2218,9 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                           "to draw -- {:s}".format(str(_draw_ex)))
 
         else:
-            layout.label(
-                text="Start a conversation by typing a message and clicking Send.",
+            _draw_multiline(
+                layout,
+                "Start a conversation by typing a message and clicking Send.",
                 icon='INFO',
             )
 

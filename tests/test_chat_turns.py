@@ -57,6 +57,31 @@ _group_turns = _extract_func(
 _split_turn = _extract_func(
     "_split_turn", {"_is_system_note_msg": _is_system_note_msg})
 _hist_index = _extract_func("_hist_index")
+_draw_multiline = _extract_func(
+    "_draw_multiline",
+    {
+        # ``_draw_multiline``'s annotations reference bpy.types.UILayout,
+        # evaluated at def time -- stub it.
+        "bpy": types.SimpleNamespace(
+            types=types.SimpleNamespace(UILayout=object)),
+        # Force the character-wrap fallback so the icon-on-first-line path
+        # is exercised without a live Blender build.
+        "_can_multiline": lambda: False,
+        "_wrap_text": lambda text, width=60: text,
+        "_WRAP_WIDTH": 60,
+    },
+)
+
+
+class _FakeLayout:
+    def __init__(self):
+        self.calls = []
+
+    def label(self, text="", icon="NONE"):
+        self.calls.append(("label", text, icon))
+
+    def label_multiline(self, text="", icon="NONE"):
+        self.calls.append(("ml", text, icon))
 
 
 def _user(content, turn_start=True, **kw):
@@ -170,6 +195,26 @@ class TestSplitTurn(unittest.TestCase):
         user_msg, _process, conclusion = _split_turn(turn)
         self.assertIsNone(user_msg)
         self.assertEqual(conclusion["content"], "hi")
+
+
+class TestDrawMultiline(unittest.TestCase):
+    """_draw_multiline must render wrapped text and attach an optional icon."""
+
+    def test_fallback_puts_icon_on_first_line_only(self):
+        lo = _FakeLayout()
+        _draw_multiline(lo, "line1\nline2", icon='INFO')
+        self.assertEqual(lo.calls[0], ("label", "line1", "INFO"))
+        self.assertEqual(lo.calls[1], ("label", "line2", "NONE"))
+
+    def test_default_icon_is_none(self):
+        lo = _FakeLayout()
+        _draw_multiline(lo, "hello")
+        self.assertEqual(lo.calls[0], ("label", "hello", "NONE"))
+
+    def test_empty_text_draws_nothing(self):
+        lo = _FakeLayout()
+        _draw_multiline(lo, "", icon='INFO')
+        self.assertEqual(lo.calls, [])
 
 
 if __name__ == "__main__":

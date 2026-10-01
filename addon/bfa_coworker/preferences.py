@@ -2113,7 +2113,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             # Show loaded skill files.
             try:
                 from . import skills as _skills_mod  # pylint: disable=import-error
-                loaded = _skills_mod.list_loaded_skills()
+                _bpy_ver = tuple(bpy.app.version) if hasattr(bpy, "app") else None
+                loaded = _skills_mod.list_loaded_skills(bpy_version=_bpy_ver)
                 if loaded:
                     col = skills_box.column(align=True)
                     col.label(text="Loaded Skills:", icon='CHECKMARK')

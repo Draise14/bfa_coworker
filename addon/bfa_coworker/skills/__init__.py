@@ -30,6 +30,14 @@ from pathlib import Path
 
 _skills_cache: str | None = None
 _skills_list: list[str] | None = None
+# Blender minor version the cache was built for.  The cache MUST be keyed on
+# the version: ``list_loaded_skills()`` (Preferences draw) builds it without a
+# version, and without a key that version-less build would poison every later
+# versioned call — silently dropping all ``blender_*.md`` drift skills.
+_UNSET = object()
+_skills_cache_key: object = _UNSET
+# Per-path skill file read cache (cleared by ``clear_cache``).
+_read_cache: dict[str, str | None] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -48,9 +56,11 @@ def get_always_loaded_skills(
     Result is cached until ``clear_cache()`` is called.
     """
     # pylint: disable=global-statement
-    global _skills_cache, _skills_list
+    global _skills_cache, _skills_list, _skills_cache_key
 
-    if _skills_cache is not None and _skills_list is not None:
+    key = bpy_version[1] if bpy_version and len(bpy_version) > 1 else None
+    if (_skills_cache is not None and _skills_list is not None
+            and _skills_cache_key == key):
         return _build_final(_skills_cache, custom_text)
 
     skills_dir = _get_skills_dir()
@@ -60,10 +70,14 @@ def get_always_loaded_skills(
     # 1. Version-specific files (cumulative: 5.3 loads 5.0-5.1 + 5.2 + 5.3).
     if bpy_version is not None:
         _major, _minor, _patch = bpy_version[:3]
+        # The filenames encode major+minor (e.g. "blender_53.md" = 5.3), so
+        # compare against 53 -- not the minor alone (3), which matched nothing
+        # and silently dropped every version-drift skill.
+        _current = _major * 10 + _minor
         for fname in sorted(skills_dir.glob("blender_*.md")):
             # Parse version from filename like "blender_50_51.md" or "blender_52.md".
             ver_part = fname.stem[len("blender_"):]  # e.g. "50_51" or "52"
-            if _version_loaded(ver_part, _minor):
+            if _version_loaded(ver_part, _current):
                 text = _read_skill(fname)
                 if text:
                     parts.append(text)
@@ -79,15 +93,25 @@ def get_always_loaded_skills(
 
     _skills_cache = "\n\n".join(parts) if parts else ""
     _skills_list = loaded
+    _skills_cache_key = key
 
     return _build_final(_skills_cache, custom_text)
 
 
-def list_loaded_skills() -> list[str]:
-    """Return the list of built-in skill file names currently loaded."""
+def list_loaded_skills(bpy_version: tuple[int, int, int] | None = None) -> list[str]:
+    """Return the list of built-in skill file names currently loaded.
+
+    *bpy_version* — when given, the versioned list is built/returned; without
+    it the current cache is used as-is (never rebuilt version-less, which
+    would drop the ``blender_*.md`` files for the session).
+    """
     # pylint: disable=global-statement
     global _skills_list
-    if _skills_list is None:
+    if bpy_version is not None:
+        # Force the versioned build: if the cache was built version-less
+        # (Preferences draw), get_always_loaded_skills rebuilds for this key.
+        get_always_loaded_skills(bpy_version=bpy_version)
+    elif _skills_list is None:
         get_always_loaded_skills()
     return _skills_list or []
 
@@ -95,9 +119,11 @@ def list_loaded_skills() -> list[str]:
 def clear_cache() -> None:
     """Clear the skills cache so the next call rebuilds from disk."""
     # pylint: disable=global-statement
-    global _skills_cache, _skills_list
+    global _skills_cache, _skills_list, _skills_cache_key
     _skills_cache = None
     _skills_list = None
+    _skills_cache_key = _UNSET
+    _read_cache.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -111,23 +137,30 @@ def _get_skills_dir() -> Path:
 
 def _read_skill(path: Path) -> str | None:
     """Read a skill .md file, returning ``None`` if missing or unreadable."""
+    key = str(path)
+    if key in _read_cache:
+        return _read_cache[key]
     try:
-        return path.read_text(encoding="utf-8").strip()
+        text: str | None = path.read_text(encoding="utf-8").strip()
     except OSError:
-        return None
+        text = None
+    _read_cache[key] = text
+    return text
 
 
-def _version_loaded(ver_part: str, current_minor: int) -> bool:
-    """Return True if *ver_part* should be loaded for *current_minor*.
+def _version_loaded(ver_part: str, current_ver: int) -> bool:
+    """Return True if *ver_part* should be loaded for *current_ver*.
+
+    *current_ver* is ``major*10 + minor`` (5.3 -> 53).
 
     Examples:
-        "50_51" with current_minor=3 → True
-        "52"     with current_minor=3 → True
-        "53"     with current_minor=3 → True
-        "54"     with current_minor=3 → False
+        "50_51" with current_ver=53 -> True
+        "52"     with current_ver=53 -> True
+        "53"     with current_ver=53 -> True
+        "54"     with current_ver=53 -> False
     """
-    # Extract the highest minor version from the filename.
-    # "50_51" → 51, "52" → 52, "53_preview" → 53
+    # Extract the highest version number from the filename.
+    # "50_51" -> 51, "52" -> 52, "53_preview" -> 53
     parts = ver_part.replace("_", " ").replace("-", " ").split()
     max_ver = 0
     for p in parts:
@@ -136,7 +169,7 @@ def _version_loaded(ver_part: str, current_minor: int) -> bool:
             max_ver = max(max_ver, v)
         except ValueError:
             continue
-    return max_ver > 0 and max_ver <= current_minor
+    return max_ver > 0 and max_ver <= current_ver
 
 
 def _build_final(built_in: str, custom_text: str) -> str:

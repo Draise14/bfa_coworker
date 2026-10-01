@@ -116,11 +116,15 @@ Full plan: `_misc/plan_tier3_scene_safety_local_hardening.md`.
 - **S3 (turn-counter over-count)** — still deferred; `_session_turn_count` is
   incremented per tool-loop iteration, so the memory "Last updated" stamp can
   over-count on multi-iteration AGENT turns. Cosmetic.
-- **G1 (ASCII sweep)** — *partially addressed.* `_misc/check_ascii.py` now skips
-  the vendored third-party deps (`addon/bfa_coworker/vendor/`), which were the
-  bulk of the red. The remaining ~1,171 non-ASCII lines in our own tracked
-  source are a mechanical cosmetic sweep still to be done. Low severity:
-  Blender's console is UTF-8, so the em-dash/emoji output has not crashed in-app.
+- **G1 (ASCII sweep)** — **addressed.** `_misc/check_ascii.py` now exits 0:
+  it skips the vendored third-party deps (`addon/bfa_coworker/vendor/`) and the
+  upstream API examples, and the remaining non-ASCII in our own tracked source
+  (box-drawing comment rules, dashes, arrows, emoji prefixes) was swept to
+  ASCII via the repeatable `_misc/ascii_sweep.py`.  The console emoji prefixes
+  were replaced with **ANSI colors** (cyan `[Coworker]`, yellow
+  `[Coworker][WARN]`, red for error lines; `NO_COLOR` respected), and
+  `ui_chat._LATEX_SYMBOLS` — a deliberate ASCII->Unicode glyph table — was
+  preserved by rewriting its values as `\uXXXX` escapes.
 - **K2 (cross-restart restore test)** — still deferred (needs a live Blender).
 
 **New findings fixed on this pass**

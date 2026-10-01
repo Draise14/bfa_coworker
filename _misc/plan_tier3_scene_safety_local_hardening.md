@@ -199,6 +199,11 @@ Dependencies: `1 -> 2`; `3` and `4` parallel; `4.5` after `4`; `5` independent; 
 Run `python _misc/check_ascii.py`, replace every flagged character across `.py`/`.toml`, and update any test
 that asserted non-ASCII prompt/log text. The checker must exit 0.
 
+**Done.** `_misc/check_ascii.py` now exits 0. `_misc/ascii_sweep.py` (idempotent, with `--check`) performs the
+transliteration and skips the same dirs as the checker (vendored deps, upstream API examples). The console
+emoji prefixes became **ANSI-colored ASCII tags** (cyan/yellow/red, `NO_COLOR` respected) — see `log.py`'s
+`_colorize` — and `ui_chat._LATEX_SYMBOLS` was protected by escaping its glyph values to `\uXXXX`.
+
 ### Phase 6 — tests & docs [after all]
 New regression tests (section 7), expanded benchmark error injection (500 template/toolcall fault, 503, OOM,
 stale-error clear), CHANGELOG, wiki/docs, and adversarial-doc status updates.

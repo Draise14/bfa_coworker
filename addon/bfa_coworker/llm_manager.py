@@ -3130,10 +3130,16 @@ def start_local_llama(
         if show_console:
             # A visible console receives the server's stdout/stderr directly
             # (stdio_target=None), so keep the log file populated for the
-            # failure tail via the server's own --log-file.
+            # failure tail via the server's own --log-file.  Only add it when
+            # the build advertises it: the flag filter above already ran, so
+            # appending an unknown flag here would exit 1 unvalidated.
             stdio_target = None
-            if "--log-file" not in args:
+            _log_flag_ok = _supported is None or "--log-file" in _supported
+            if _log_flag_ok and "--log-file" not in args:
                 args.extend(["--log-file", str(_llama_server_log_path())])
+            elif not _log_flag_ok:
+                print("[⚠️Coworker] start_local_llama: this build has no --log-file; "
+                      "Debug console will not write a log tail")
             print("[🛠️Coworker] start_local_llama: Debug mode — showing llama-server console window")
         else:
             try:

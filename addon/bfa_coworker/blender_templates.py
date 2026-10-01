@@ -275,7 +275,7 @@ _TEMPLATES = {
 
 
 # ---------------------------------------------------------------------------
-# Template metadata — prepared for Tier 4 (per-editor registries, CHOYA
+# Template metadata -- prepared for Tier 4 (per-editor registries, CHOYA
 # next-step buttons, contextual panels).
 
 # Editor identifiers use the same values as bpy.types.Area.type.

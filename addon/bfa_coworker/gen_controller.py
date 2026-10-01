@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Generation Controller — orchestrates generative model loading,
+Generation Controller -- orchestrates generative model loading,
 inference, and output routing.
 
 Manages the plugin registry, model download/cache, async job queue,
@@ -216,7 +216,7 @@ def _set_error(msg: str) -> None:
 # Model Presets (curated list, like PRESET_MODELS in llm_manager.py)
 
 GEN_MODEL_PRESETS: list[GenModelPreset] = [
-    # ── Image Models ──
+    # -- Image Models --
     GenModelPreset(
         identifier="flux-klein-9b",
         name="FLUX.2 Klein 9B",
@@ -262,7 +262,7 @@ GEN_MODEL_PRESETS: list[GenModelPreset] = [
         description="Classic SD 1.5, runs on 4 GB VRAM",
     ),
 
-    # ── Video Models ──
+    # -- Video Models --
     GenModelPreset(
         identifier="ltx-23",
         name="LTX-2.3",
@@ -286,7 +286,7 @@ GEN_MODEL_PRESETS: list[GenModelPreset] = [
         description="High-quality text-to-video generation",
     ),
 
-    # ── Audio Models ──
+    # -- Audio Models --
     GenModelPreset(
         identifier="chatterbox-tts",
         name="Chatterbox TTS",
@@ -331,7 +331,7 @@ def get_preset_by_id(identifier: str) -> GenModelPreset | None:
 def discover_plugins() -> dict:
     """Ensure plugins are discovered and return the registry.
 
-    Safe to call multiple times — discovery is idempotent.
+    Safe to call multiple times -- discovery is idempotent.
     """
     _lazy_import_gen_plugins()
     from .gen_plugins import discover
@@ -361,7 +361,7 @@ def get_output_dir() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Synchronous generation (blocking — call from background thread)
+# Synchronous generation (blocking -- call from background thread)
 
 def generate(
     model_id: str,
@@ -371,7 +371,7 @@ def generate(
 ) -> str:
     """Run generation synchronously and return the output file path.
 
-    This is a **blocking** call — it should only be called from a
+    This is a **blocking** call -- it should only be called from a
     background thread.  Use ``generate_async()`` for non-blocking
     generation with progress tracking.
 
@@ -434,7 +434,7 @@ def generate(
 
 
 # ---------------------------------------------------------------------------
-# Async generation (non-blocking — returns job_id)
+# Async generation (non-blocking -- returns job_id)
 
 # Background thread for processing the job queue.
 _worker_thread: threading.Thread | None = None

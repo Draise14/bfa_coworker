@@ -7,7 +7,7 @@ Generative plugin auto-discovery and registry.
 
 Scans ``gen_plugins/<media_type>/`` for ``GenPlugin`` subclasses
 and populates ``PLUGIN_REGISTRY``.  Plugins are discovered at import
-time — dropping a ``.py`` file into the right folder is all that is
+time -- dropping a ``.py`` file into the right folder is all that is
 needed to register a new model.
 """
 
@@ -30,10 +30,10 @@ from .base import GenPlugin
 # ---------------------------------------------------------------------------
 # Registry
 
-#: Map of ``MODEL_ID`` → ``GenPlugin`` instance.
+#: Map of ``MODEL_ID`` -> ``GenPlugin`` instance.
 PLUGIN_REGISTRY: dict[str, GenPlugin] = {}
 
-#: Map of ``MODEL_TYPE`` → list of ``(MODEL_ID, DISPLAY_NAME, DESCRIPTION)``
+#: Map of ``MODEL_TYPE`` -> list of ``(MODEL_ID, DISPLAY_NAME, DESCRIPTION)``
 #: tuples suitable for Blender ``EnumProperty`` items.
 _ENUM_ITEMS: dict[str, list[tuple[str, str, str]]] = {}
 
@@ -47,7 +47,7 @@ _discovered: bool = False
 def discover() -> None:
     """Scan ``gen_plugins/`` for ``GenPlugin`` subclasses.
 
-    Idempotent — subsequent calls are no-ops.  Plugins are loaded
+    Idempotent -- subsequent calls are no-ops.  Plugins are loaded
     via ``importlib`` so they can use relative imports to access
     shared utilities.
     """
@@ -73,7 +73,7 @@ def discover() -> None:
 
         # Build a synthetic module name so relative imports work.
         # e.g. gen_plugins/image/flux_klein_9b.py
-        #   → <package_root>.gen_plugins.image.flux_klein_9b
+        #   -> <package_root>.gen_plugins.image.flux_klein_9b
         rel = py_file.relative_to(plugins_dir.parent)
         mod_name = package_root + "." + str(
             rel.with_suffix("")
@@ -85,7 +85,7 @@ def discover() -> None:
             )
             if spec is None or spec.loader is None:
                 print(
-                    "[🛠️Coworker] gen_plugins: cannot load spec for {:s}".format(
+                    "[Coworker] gen_plugins: cannot load spec for {:s}".format(
                         str(py_file)
                     )
                 )
@@ -128,14 +128,14 @@ def discover() -> None:
                 )
 
                 print(
-                    "[🛠️Coworker] gen_plugins: registered {:s} ({:s})".format(
+                    "[Coworker] gen_plugins: registered {:s} ({:s})".format(
                         instance.MODEL_ID, instance.MODEL_TYPE
                     )
                 )
 
         except Exception as ex:
             print(
-                "[🛠️Coworker] gen_plugins: error loading {:s}: {:s}".format(
+                "[Coworker] gen_plugins: error loading {:s}: {:s}".format(
                     str(py_file), str(ex)
                 )
             )
@@ -203,7 +203,7 @@ def get_enum_items(model_type: str) -> list[tuple[str, str, str]]:
     """Return ``EnumProperty`` items for *model_type*.
 
     Suitable for use as the ``items`` parameter of a Blender
-    ``EnumProperty``.  Returns a static list — callers should not
+    ``EnumProperty``.  Returns a static list -- callers should not
     modify it.
     """
     discover()

@@ -36,7 +36,7 @@ CACHE_DIR = Path.home() / ".cache" / "bfa_coworker" / "polyhaven"
 _USER_AGENT = "bfa-coworker/1.0"
 
 
-# ── API helpers ────────────────────────────────────────────────────────
+# -- API helpers --------------------------------------------------------
 
 
 def _api_get(endpoint: str, timeout: int = 15) -> dict | None:
@@ -63,7 +63,7 @@ def _download_file(url: str, dest: Path) -> str | None:
         return str(ex)
 
 
-# ── Texture map resolution ─────────────────────────────────────────────
+# -- Texture map resolution ---------------------------------------------
 
 
 def _pick_file_url(
@@ -109,12 +109,12 @@ def resolve_polyhaven_files(
     asset_type:
         One of ``"hdris"``, ``"textures"``, or ``"models"``.
     resolution:
-        Desired resolution — ``"512"``, ``"1k"``, ``"2k"``, ``"4k"``, ``"8k"``.
+        Desired resolution -- ``"512"``, ``"1k"``, ``"2k"``, ``"4k"``, ``"8k"``.
 
     Returns
     -------
     dict
-        Map name → ``(url, filename)`` for every available map.
+        Map name -> ``(url, filename)`` for every available map.
         For HDRIs the key is ``"hdri"``.
         For models the key is the format (``"gltf"``, ``"blend"``, etc.)
         and may include ``"textures"`` with the full include dict.
@@ -133,7 +133,7 @@ def resolve_polyhaven_files(
         return result
 
     if asset_type == "textures":
-        # ── Diffuse / Base Color ──
+        # -- Diffuse / Base Color --
         for color_key in ("Diffuse", "BaseColor", "Color", "Albedo"):
             if color_key in data and isinstance(data[color_key], dict):
                 url, fname = _pick_file_url(data[color_key], resolution)
@@ -141,31 +141,31 @@ def resolve_polyhaven_files(
                     result["diffuse"] = (url, fname)
                 break
 
-        # ── Normal Map (OpenGL — Blender default) ──
+        # -- Normal Map (OpenGL -- Blender default) --
         if "nor_gl" in data and isinstance(data["nor_gl"], dict):
             url, fname = _pick_file_url(data["nor_gl"], resolution)
             if url:
                 result["normal"] = (url, fname)
 
-        # ── Roughness (separate map) ──
+        # -- Roughness (separate map) --
         if "Roughness" in data and isinstance(data["Roughness"], dict):
             url, fname = _pick_file_url(data["Roughness"], resolution)
             if url:
                 result["roughness"] = (url, fname)
 
-        # ── ARM packed texture (AO/Roughness/Metallic) ──
+        # -- ARM packed texture (AO/Roughness/Metallic) --
         if "arm" in data and isinstance(data["arm"], dict):
             url, fname = _pick_file_url(data["arm"], resolution)
             if url:
                 result["arm"] = (url, fname)
 
-        # ── Ambient Occlusion ──
+        # -- Ambient Occlusion --
         if "AO" in data and isinstance(data["AO"], dict):
             url, fname = _pick_file_url(data["AO"], resolution)
             if url:
                 result["ao"] = (url, fname)
 
-        # ── Displacement / Height ──
+        # -- Displacement / Height --
         for disp_key in ("Displacement", "displacement"):
             if disp_key in data and isinstance(data[disp_key], dict):
                 url, fname = _pick_file_url(data[disp_key], resolution)
@@ -175,7 +175,7 @@ def resolve_polyhaven_files(
 
         return result
 
-    # ── Models ──
+    # -- Models --
     # Try glTF first, then blend, fbx, obj.
     for model_key in ("gltf", "glb", "blend", "fbx", "obj", "usd"):
         candidate = data.get(model_key)
@@ -213,7 +213,7 @@ def _collect_include_textures(
     return textures
 
 
-# ── Download ───────────────────────────────────────────────────────────
+# -- Download -----------------------------------------------------------
 
 
 def download_texture_set(
@@ -227,7 +227,7 @@ def download_texture_set(
     Returns
     -------
     dict
-        Map name → local file path for each downloaded map.
+        Map name -> local file path for each downloaded map.
     """
     if cache_dir is None:
         cache_dir = CACHE_DIR
@@ -261,7 +261,7 @@ def download_texture_set(
     return downloaded
 
 
-# ── Blender PBR code generation ────────────────────────────────────────
+# -- Blender PBR code generation ----------------------------------------
 
 
 def build_pbr_material_code(
@@ -278,7 +278,7 @@ def build_pbr_material_code(
     material_name:
         Name for the new material datablock.
     texture_map_paths:
-        Map name → local file path.  Recognised keys:
+        Map name -> local file path.  Recognised keys:
         ``diffuse``, ``normal``, ``roughness``, ``arm``, ``ao``,
         ``displacement``.
     base_color:
@@ -302,14 +302,14 @@ def build_pbr_material_code(
     lines = [
         "import bpy",
         "",
-        "# ── Create material ──",
+        "# -- Create material --",
         f"mat = bpy.data.materials.new(name='{material_name}')",
         "mat.use_nodes = True",
         "nodes = mat.node_tree.nodes",
         "links = mat.node_tree.links",
         "nodes.clear()",
         "",
-        "# ── Principled BSDF and Material Output ──",
+        "# -- Principled BSDF and Material Output --",
         "bsdf = nodes.new('ShaderNodeBsdfPrincipled')",
         "bsdf.location = (0, 0)",
         "output = nodes.new('ShaderNodeOutputMaterial')",
@@ -318,11 +318,11 @@ def build_pbr_material_code(
         "",
     ]
 
-    # ── Base Color / Diffuse ──
+    # -- Base Color / Diffuse --
     if has_diffuse:
         safe_path = _safe(texture_map_paths["diffuse"])
         lines += [
-            "# ── Diffuse / Base Color ──",
+            "# -- Diffuse / Base Color --",
             f"_diff_img = bpy.data.images.load('{safe_path}')",
             "_diff_img.colorspace_settings.name = 'sRGB'",
             "_diff_node = nodes.new('ShaderNodeTexImage')",
@@ -331,10 +331,10 @@ def build_pbr_material_code(
             "",
         ]
         if has_ao:
-            # Multiply diffuse × AO for ambient occlusion.
+            # Multiply diffuse x AO for ambient occlusion.
             safe_ao = _safe(texture_map_paths["ao"])
             lines += [
-                "# ── AO mixed with Diffuse ──",
+                "# -- AO mixed with Diffuse --",
                 f"_ao_img = bpy.data.images.load('{safe_ao}')",
                 "_ao_img.colorspace_settings.name = 'Non-Color'",
                 "_ao_node = nodes.new('ShaderNodeTexImage')",
@@ -359,22 +359,22 @@ def build_pbr_material_code(
         rgba = [float(x) for x in base_color.split(",")]
         rgba = (rgba + [1.0] * 4)[:4]
         lines += [
-            "# ── Base Color (fallback — no texture) ──",
+            "# -- Base Color (fallback -- no texture) --",
             f"bsdf.inputs['Base Color'].default_value = {rgba}",
             "",
         ]
 
-    # ── Metallic ──
+    # -- Metallic --
     lines += [
         f"bsdf.inputs['Metallic'].default_value = {metallic}",
         "",
     ]
 
-    # ── Normal Map ──
+    # -- Normal Map --
     if has_normal:
         safe_nor = _safe(texture_map_paths["normal"])
         lines += [
-            "# ── Normal Map ──",
+            "# -- Normal Map --",
             f"_nor_img = bpy.data.images.load('{safe_nor}')",
             "_nor_img.colorspace_settings.name = 'Non-Color'",
             "_nor_tex = nodes.new('ShaderNodeTexImage')",
@@ -387,11 +387,11 @@ def build_pbr_material_code(
             "",
         ]
 
-    # ── Roughness ──
+    # -- Roughness --
     if has_roughness:
         safe_rough = _safe(texture_map_paths["roughness"])
         lines += [
-            "# ── Roughness ──",
+            "# -- Roughness --",
             f"_rough_img = bpy.data.images.load('{safe_rough}')",
             "_rough_img.colorspace_settings.name = 'Non-Color'",
             "_rough_tex = nodes.new('ShaderNodeTexImage')",
@@ -404,7 +404,7 @@ def build_pbr_material_code(
         # Extract Roughness from ARM packed texture (Green channel).
         safe_arm = _safe(texture_map_paths["arm"])
         lines += [
-            "# ── Roughness from ARM (Green channel) ──",
+            "# -- Roughness from ARM (Green channel) --",
             f"_arm_img = bpy.data.images.load('{safe_arm}')",
             "_arm_img.colorspace_settings.name = 'Non-Color'",
             "_arm_tex = nodes.new('ShaderNodeTexImage')",
@@ -425,11 +425,11 @@ def build_pbr_material_code(
             "",
         ]
 
-    # ── Displacement ──
+    # -- Displacement --
     if has_displacement:
         safe_disp = _safe(texture_map_paths["displacement"])
         lines += [
-            "# ── Displacement ──",
+            "# -- Displacement --",
             f"_disp_img = bpy.data.images.load('{safe_disp}')",
             "_disp_img.colorspace_settings.name = 'Non-Color'",
             "_disp_tex = nodes.new('ShaderNodeTexImage')",
@@ -442,9 +442,9 @@ def build_pbr_material_code(
             "",
         ]
 
-    # ── Assign to active object ──
+    # -- Assign to active object --
     lines += [
-        "# ── Assign to active object ──",
+        "# -- Assign to active object --",
         "_obj = bpy.context.view_layer.objects.active",
         "if _obj and _obj.type == 'MESH':",
         "    if _obj.data.materials:",

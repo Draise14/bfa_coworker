@@ -8,7 +8,7 @@ Composite tool: set up a PBR material from Polyhaven textures in one call.
 
 Downloads a Polyhaven texture set, creates a material, and wires up the
 PBR node tree (Principled BSDF + Normal Map + Roughness + AO + Displacement)
-— all in a single ``send_code`` call.  Saves the LLM 3-5 round-trips.
+-- all in a single ``send_code`` call.  Saves the LLM 3-5 round-trips.
 
 For non-Polyhaven use, also supports manual PBR parameters (base color,
 metallic, roughness) without textures.
@@ -69,7 +69,7 @@ def register(mcp: FastMCP) -> None:
                 Polyhaven textures for the given asset.
             polyhaven_asset_id: Polyhaven asset ID (e.g. ``"concrete_floor_01"``).
                 Required when *use_polyhaven_textures* is ``True``.
-            polyhaven_resolution: Download resolution — ``"512"``, ``"1k"``,
+            polyhaven_resolution: Download resolution -- ``"512"``, ``"1k"``,
                 ``"2k"``, ``"4k"``, or ``"8k"``.  Typically injected from
                 addon preferences.
 
@@ -102,7 +102,7 @@ def _setup_manual(
     """Create a PBR material with manual parameters (no textures)."""
     code = build_pbr_material_code(
         material_name=material_name,
-        texture_map_paths={},  # No textures — uses fallback values.
+        texture_map_paths={},  # No textures -- uses fallback values.
         base_color=base_color,
         metallic=metallic,
         roughness=roughness,

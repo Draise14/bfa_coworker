@@ -56,7 +56,7 @@ class _BFACW_OT_download_model(bpy.types.Operator):  # type: ignore[misc]
         state = llm.get_state()
 
         if not self._start_msg_shown:
-            self.report({"INFO"}, "Download started — see Preferences for progress")
+            self.report({"INFO"}, "Download started -- see Preferences for progress")
             self._start_msg_shown = True
 
         # Show progress if it changed.
@@ -131,7 +131,7 @@ class _BFACW_OT_download_model(bpy.types.Operator):  # type: ignore[misc]
         self._start_msg_shown = False
         self._latest_progress = ""
 
-        # download_model returns None immediately — we poll state for completion.
+        # download_model returns None immediately -- we poll state for completion.
         llm.download_model(progress_callback=None)
 
         self._timer = bpy.app.timers.register(
@@ -155,7 +155,7 @@ def _make_download_poll(op):
             op._error = state.error
             # If no error but model file exists, check if we should auto-set existing_model_path.
             if not state.error and op._model_dest and Path(op._model_dest).exists():
-                pass  # The model file is there — download succeeded.
+                pass  # The model file is there -- download succeeded.
             return None
         for wm in bpy.data.window_managers:
             for win in wm.windows:
@@ -232,7 +232,7 @@ class _BFACW_OT_start_llm(bpy.types.Operator):  # type: ignore[misc]
                 return None
             bpy.app.timers.register(_report, first_interval=0.1)
             if state_error:
-                print("[🛠️Coworker] start_llm: {:s}".format(state_error))
+                print("[Coworker] start_llm: {:s}".format(state_error))
 
         thread = threading.Thread(target=_do_start, daemon=True)
         thread.start()
@@ -266,9 +266,9 @@ class _BFACW_OT_download_llama_server(bpy.types.Operator):  # type: ignore[misc]
     bl_description = (
         "Download and install the llama-server binary from GitHub releases.\n"
         "Select the GPU backend above (Auto / CUDA / Vulkan / CPU) before downloading.\n"
-        "The addon bundles its own copy — no manual PATH setup needed.\n"
+        "The addon bundles its own copy -- no manual PATH setup needed.\n"
         "To use a custom llama.cpp build instead, add its folder to your PATH:\n"
-        "  Windows: System Properties → Environment Variables → Path\n"
+        "  Windows: System Properties -> Environment Variables -> Path\n"
         "  macOS/Linux: export PATH=\"/path/to/llama.cpp/build/bin:$PATH\""
     )
 
@@ -392,7 +392,7 @@ class _BFACW_OT_remove_llama_server(bpy.types.Operator):  # type: ignore[misc]
         if removed:
             self.report({"INFO"}, "llama-server binaries removed")
         else:
-            # The bundled dir was empty — check whether a binary is still
+            # The bundled dir was empty -- check whether a binary is still
             # available from another source (PATH / system install).
             llm.invalidate_llama_server_cache()
             still_found = llm.find_llama_server()

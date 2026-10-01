@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-LLM Manager — handles detection, download, and lifecycle of local/remote LLM backends.
+LLM Manager -- handles detection, download, and lifecycle of local/remote LLM backends.
 
 Local mode: manages ``llama-server`` subprocess (downloads models, starts/stops server).
 Remote mode: validates API connectivity.
@@ -83,7 +83,7 @@ _MODEL_DOWNLOAD_TIMEOUT = 300  # seconds
 # Windows: run child processes without a console window.  Blender is a GUI
 # app, so a plain Popen of a console program can flash a console window;
 # CREATE_NEW_CONSOLE (the old launcher) sent output somewhere we could not
-# read.  CREATE_NO_WINDOW keeps things quiet and — with stdio redirected —
+# read.  CREATE_NO_WINDOW keeps things quiet and -- with stdio redirected --
 # lets us capture every line.
 _CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
@@ -97,7 +97,7 @@ def _show_llama_console() -> bool:
     """True when the llama-server console window should be visible.
 
     Only on Windows, and only when the user has enabled Debug / Diagnostics
-    mode — the visible console is a debugging aid.  Reads the preference at
+    mode -- the visible console is a debugging aid.  Reads the preference at
     call time and never raises (returns False outside Blender / on error).
     """
     if sys.platform != "win32":
@@ -247,12 +247,12 @@ def _filter_flags_for_build(flags: tuple[str, ...]) -> tuple[str, ...]:
     if not build:
         build = pinned
     if not build:
-        return flags  # Cannot determine build at all — pass through.
+        return flags  # Cannot determine build at all -- pass through.
     out: list[str] = []
     drop_value = False
     for tok in flags:
         if drop_value:
-            # The previous (dropped) flag took a value — drop it too,
+            # The previous (dropped) flag took a value -- drop it too,
             # unless the next token is itself a flag.
             drop_value = False
             if tok.startswith("--"):
@@ -289,7 +289,7 @@ def _current_preset_extra_args() -> tuple[str, ...]:
                 if preset.repo_id == repo and preset.filename == fname:
                     return tuple(preset.extra_server_args)
     except Exception as _ex:  # pylint: disable=broad-exception-caught
-        print("[Coworker] _current_preset_extra_args: lookup failed — {:s}".format(
+        print("[Coworker] _current_preset_extra_args: lookup failed -- {:s}".format(
             str(_ex)))
     return ()
 
@@ -305,7 +305,7 @@ def _server_supported_flags(server_exe: str) -> "set[str] | None":
     """Return the set of ``--flags`` *server_exe* lists in ``--help``.
 
     Cached per executable path.  Returns ``None`` when the probe fails (in
-    which case callers must NOT filter — better to pass a flag the build
+    which case callers must NOT filter -- better to pass a flag the build
     might ignore than to strip a needed one).
     """
     if server_exe in _server_supported_flags_cache:
@@ -321,7 +321,7 @@ def _server_supported_flags(server_exe: str) -> "set[str] | None":
         flags = set(re.findall(r"(?<![\w-])(--[A-Za-z0-9][A-Za-z0-9-]*)", text))
         result = flags or None
     except Exception as ex:  # pylint: disable=broad-exception-caught
-        print("[Coworker] _server_supported_flags: probe failed — {:s}".format(str(ex)))
+        print("[Coworker] _server_supported_flags: probe failed -- {:s}".format(str(ex)))
         result = None
     _server_supported_flags_cache[server_exe] = result
     return result
@@ -379,7 +379,7 @@ _llama_server_version_cache: str = ""
 def _llama_server_version(server_exe: str) -> str:
     """Return the llama-server build version string (cached per session).
 
-    The version is logged at launch — an outdated llama.cpp build is a common
+    The version is logged at launch -- an outdated llama.cpp build is a common
     reason a brand-new preset fails to load (unknown model architecture).
     """
     global _llama_server_version_cache
@@ -402,7 +402,7 @@ def _llama_server_version(server_exe: str) -> str:
 # Truncated / corrupt model detection
 #
 # The most common "llama-server crashes at startup" cause with local files is
-# a GGUF that was cut off mid-download or mid-copy — llama-server fails with
+# a GGUF that was cut off mid-download or mid-copy -- llama-server fails with
 # ``missing tensor ...`` after loading a few dozen layers.  We compare the
 # local file size against the size on HuggingFace (for curated presets) and
 # surface an actionable hint.
@@ -510,7 +510,7 @@ def _mmproj_mismatch_hint(model_path: Path | str | None) -> str:
         if local_name else "use the addon's Download button"
     )
     return (
-        "The vision projector (mmproj) does not match this model — the generic "
+        "The vision projector (mmproj) does not match this model -- the generic "
         "mmproj-F16.gguf / mmproj.gguf in the model folder belongs to a different "
         "model, and several presets share the same generic projector filename, so "
         "they overwrite each other. Fix: delete the stray projector and use the "
@@ -562,7 +562,7 @@ def _gpu_oom_hint() -> str:
     ctx_part = ""
     if ctx and ctx >= 65536:
         ctx_part = (
-            " You are using a {:d}-token context window — at that size the KV cache "
+            " You are using a {:d}-token context window -- at that size the KV cache "
             "alone is several GB of VRAM on a 27B-class model, so it usually does "
             "not fit alongside the weights.".format(ctx)
         )
@@ -576,7 +576,7 @@ def _gpu_oom_hint() -> str:
         backend_part = (
             " This log is from the Vulkan backend (ggml_vulkan). If you have an "
             "NVIDIA GPU, switch the backend to CUDA and use the addon's "
-            "'Download llama-server' button so it fetches the CUDA build — Vulkan "
+            "'Download llama-server' button so it fetches the CUDA build -- Vulkan "
             "is often less memory-efficient, and on laptops it may pick the "
             "integrated GPU. Check the 'ggml_vulkan: Found N devices' line in "
             "llama-server.log for which device was selected."
@@ -585,7 +585,7 @@ def _gpu_oom_hint() -> str:
         "The GPU ran out of memory while loading the model{:s}. With --n-gpu-layers "
         "99 both the weights and the KV cache are placed in VRAM.{:s}{:s}\n"
         "Fixes to try:\n"
-        "  1. Reduce the context size (e.g. 32768 instead of {:d}) — the KV cache "
+        "  1. Reduce the context size (e.g. 32768 instead of {:d}) -- the KV cache "
         "is the biggest VRAM consumer.\n"
         "  2. Lower --n-gpu-layers so part of the model stays in system RAM "
         "(llama_backend / GPU layers in preferences).\n"
@@ -599,12 +599,12 @@ def _gpu_oom_hint() -> str:
 # Windows NTSTATUS crash codes: llama-server segfaulting shows up as a large
 # negative-looking exit code (e.g. 3221225477 = 0xC0000005 = access violation).
 _WIN_CRASH_CODES: dict[int, str] = {
-    0xC0000005: "ACCESS_VIOLATION — crashed, often a GPU driver / OOM issue",
-    0xC000001D: "ILLEGAL_INSTRUCTION — the CPU lacks an instruction this build needs (try another llama-server build)",
-    0xC0000374: "HEAP_CORRUPTION — crashed, possible driver bug",
-    0xC0000409: "STACK_BUFFER_OVERRUN — crashed, possible driver bug",
+    0xC0000005: "ACCESS_VIOLATION -- crashed, often a GPU driver / OOM issue",
+    0xC000001D: "ILLEGAL_INSTRUCTION -- the CPU lacks an instruction this build needs (try another llama-server build)",
+    0xC0000374: "HEAP_CORRUPTION -- crashed, possible driver bug",
+    0xC0000409: "STACK_BUFFER_OVERRUN -- crashed, possible driver bug",
     0xC00000FD: "STACK_OVERFLOW",
-    0xC0000135: "DLL_NOT_FOUND — a required DLL is missing (use the bundled build)",
+    0xC0000135: "DLL_NOT_FOUND -- a required DLL is missing (use the bundled build)",
     0xC0000142: "DLL_INIT_FAILED",
     0xC0000094: "INTEGER_DIVIDE_BY_ZERO",
     0xC000000D: "INVALID_PARAMETER",
@@ -616,7 +616,7 @@ def _describe_exit_code(rc: int) -> str:
     """Return a readable description for a Windows crash exit code."""
     unsigned = rc & 0xFFFFFFFF
     name = _WIN_CRASH_CODES.get(unsigned, "")
-    suffix = (" — " + name) if name else ""
+    suffix = (" -- " + name) if name else ""
     return " (0x{:08X}{:s})".format(unsigned, suffix)
 
 
@@ -730,7 +730,7 @@ _QWEN_EXTRA_SERVER_ARGS: tuple[str, ...] = (
 )
 
 PRESET_MODELS: list[ModelPreset] = [
-    # ── Flagship (24 GB+ VRAM) ──────────────────────────────────────
+    # -- Flagship (24 GB+ VRAM) --------------------------------------
     ModelPreset(
         identifier="qwen38_27b_q8",
         name="Qwen3.8-27B (Q8_0)",
@@ -744,11 +744,11 @@ PRESET_MODELS: list[ModelPreset] = [
         max_tokens=16384,
         vision=True,
         mmproj_filename="mmproj-F16.gguf",
-        hardware_note="RTX 3090/4090/5090 — 24 GB+ VRAM",
-        why="Latest Qwen3.8 — best coding + vision + agentic reasoning at high precision",
+        hardware_note="RTX 3090/4090/5090 -- 24 GB+ VRAM",
+        why="Latest Qwen3.8 -- best coding + vision + agentic reasoning at high precision",
         extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
-            "Qwen3.8-27B at Q8_0 — the latest Qwen generation. Native vision-language,\n"
+            "Qwen3.8-27B at Q8_0 -- the latest Qwen generation. Native vision-language,\n"
             "thinking mode, and agentic tool calling. 262K context. Apache 2.0.\n"
             "Best quality flagship for complex multi-step Blender tasks."
         ),
@@ -766,8 +766,8 @@ PRESET_MODELS: list[ModelPreset] = [
         max_tokens=16384,
         vision=True,
         mmproj_filename="mmproj-F16.gguf",
-        hardware_note="RTX 3090/4090/5090 — 24 GB+ VRAM",
-        why="Top-ranked fine-tune — ARC-711 benchmark, uncensored, vision-capable",
+        hardware_note="RTX 3090/4090/5090 -- 24 GB+ VRAM",
+        why="Top-ranked fine-tune -- ARC-711 benchmark, uncensored, vision-capable",
         extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
             "Multi-stage fine-tune of Qwen3.6-27B. Exceeds base model in 6/7 benchmarks.\n"
@@ -788,16 +788,16 @@ PRESET_MODELS: list[ModelPreset] = [
         max_tokens=16384,
         vision=True,
         mmproj_filename="mmproj-F16.gguf",
-        hardware_note="RTX 3090/4090/5090 — 24 GB+ VRAM (MoE, ~3.4B active)",
-        why="MoE efficiency — 3.4B active params, fast inference, sharpened template",
+        hardware_note="RTX 3090/4090/5090 -- 24 GB+ VRAM (MoE, ~3.4B active)",
+        why="MoE efficiency -- 3.4B active params, fast inference, sharpened template",
         extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
             "Qwen3.6-35B-A3B with improved chat template and force-applied terseness prompt.\n"
-            "~3.4B active params — runs fast on 24 GB cards. Vision-capable.\n"
+            "~3.4B active params -- runs fast on 24 GB cards. Vision-capable.\n"
             "Apache 2.0. Best throughput-to-quality ratio in flagship tier."
         ),
     ),
-    # ── Mid-Range (16-20 GB VRAM) ───────────────────────────────────
+    # -- Mid-Range (16-20 GB VRAM) -----------------------------------
     ModelPreset(
         identifier="gpt_oss_20b_q4",
         name="GPT-OSS 20B (Q4_K_M)",
@@ -811,8 +811,8 @@ PRESET_MODELS: list[ModelPreset] = [
         max_tokens=16384,
         vision=False,
         mmproj_filename="",
-        hardware_note="RTX 3090/4090 — 12 GB+ VRAM (MoE, 3.6B active)",
-        why="OpenAI's open-weight reasoning model — best Blender benchmarked default",
+        hardware_note="RTX 3090/4090 -- 12 GB+ VRAM (MoE, 3.6B active)",
+        why="OpenAI's open-weight reasoning model -- best Blender benchmarked default",
         description=(
             "OpenAI's open-weight reasoning model. 21B params / 3.6B active.\n"
             "Native function calling, structured outputs, and agentic capabilities.\n"
@@ -832,11 +832,11 @@ PRESET_MODELS: list[ModelPreset] = [
         max_tokens=16384,
         vision=True,
         mmproj_filename="mmproj-F16.gguf",
-        hardware_note="RTX 3090/4090 — 16 GB+ VRAM",
-        why="Latest Qwen3.8 at Q4 — vision + agentic, fits 16 GB cards",
+        hardware_note="RTX 3090/4090 -- 16 GB+ VRAM",
+        why="Latest Qwen3.8 at Q4 -- vision + agentic, fits 16 GB cards",
         extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
-            "Qwen3.8-27B at Q4_K_M — the latest Qwen generation. Native vision-language,\n"
+            "Qwen3.8-27B at Q4_K_M -- the latest Qwen generation. Native vision-language,\n"
             "thinking mode, and agentic tool calling. 262K context. Apache 2.0.\n"
             "Fits 16 GB VRAM while keeping excellent quality."
         ),
@@ -854,16 +854,16 @@ PRESET_MODELS: list[ModelPreset] = [
         max_tokens=16384,
         vision=True,
         mmproj_filename="mmproj-F16.gguf",
-        hardware_note="RTX 3090/4090 — 16 GB+ VRAM",
-        why="Fable Fusion at IQ4 — fits 16 GB, still top-tier reasoning",
+        hardware_note="RTX 3090/4090 -- 16 GB+ VRAM",
+        why="Fable Fusion at IQ4 -- fits 16 GB, still top-tier reasoning",
         extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
-            "Fable Fusion 27B at IQ4_XS — smaller quant that still outperforms base Qwen3.6.\n"
+            "Fable Fusion 27B at IQ4_XS -- smaller quant that still outperforms base Qwen3.6.\n"
             "Vision-capable, 256K context. Apache 2.0.\n"
             "Best mid-range choice for users with 16 GB cards."
         ),
     ),
-    # ── Lightweight (≤8 GB VRAM) ────────────────────────────────────
+    # -- Lightweight (<=8 GB VRAM) ------------------------------------
     ModelPreset(
         identifier="gemma4_e4b_q4",
         name="Gemma 4 E4B (Q4_K_M)",
@@ -877,12 +877,12 @@ PRESET_MODELS: list[ModelPreset] = [
         max_tokens=12288,
         vision=True,
         mmproj_filename="mmproj-F16.gguf",
-        hardware_note="Any GPU or integrated — 4 GB+ VRAM",
-        why="Google's small agentic model — vision + function calling, runs anywhere",
+        hardware_note="Any GPU or integrated -- 4 GB+ VRAM",
+        why="Google's small agentic model -- vision + function calling, runs anywhere",
         description=(
-            "Google's Gemma 4 E4B — 4.5B effective params with native function calling,\n"
+            "Google's Gemma 4 E4B -- 4.5B effective params with native function calling,\n"
             "thinking mode, and vision. 128K context. Apache 2.0.\n"
-            "Best all-round light pick — runs on almost any hardware."
+            "Best all-round light pick -- runs on almost any hardware."
         ),
     ),
     ModelPreset(
@@ -898,8 +898,8 @@ PRESET_MODELS: list[ModelPreset] = [
         max_tokens=12288,
         vision=True,
         mmproj_filename="mmproj.gguf",
-        hardware_note="Any GPU — 4 GB+ VRAM",
-        why="DeepSeek-V4 distilled reasoning — best reasoning-per-GB in light tier",
+        hardware_note="Any GPU -- 4 GB+ VRAM",
+        why="DeepSeek-V4 distilled reasoning -- best reasoning-per-GB in light tier",
         extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
             "Qwen3.5-9B fine-tuned with DeepSeek-V4 reasoning distillation.\n"
@@ -920,11 +920,11 @@ PRESET_MODELS: list[ModelPreset] = [
         max_tokens=12288,
         vision=True,
         mmproj_filename="mmproj-F16.gguf",
-        hardware_note="Any GPU — 8 GB+ VRAM",
-        why="Highest quality light quant — Q8_0 precision, vision, 262K context",
+        hardware_note="Any GPU -- 8 GB+ VRAM",
+        why="Highest quality light quant -- Q8_0 precision, vision, 262K context",
         extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
-            "Qwen3.5-9B at Q8_0 — highest quality quantization for the light tier.\n"
+            "Qwen3.5-9B at Q8_0 -- highest quality quantization for the light tier.\n"
             "Vision-capable, 262K context, thinking mode. Apache 2.0.\n"
             "Best quality-to-size ratio for users with 8 GB+ VRAM."
         ),
@@ -946,7 +946,7 @@ def get_preset_by_id(identifier: str) -> ModelPreset | None:
 
 
 # ---------------------------------------------------------------------------
-# Remote Provider Presets — OpenRouter curated models
+# Remote Provider Presets -- OpenRouter curated models
 
 PRESET_REMOTE_PROVIDERS: list[RemoteProviderPreset] = [
     RemoteProviderPreset(
@@ -964,7 +964,7 @@ PRESET_REMOTE_PROVIDERS: list[RemoteProviderPreset] = [
                 identifier="anthropic/claude-sonnet-4.6",
                 name="Claude 4.6 Sonnet",
                 provider_name="Anthropic",
-                description="Best all-around — strong coding, tool use, and reasoning. 200K context.",
+                description="Best all-around -- strong coding, tool use, and reasoning. 200K context.",
                 context_window=200000,
             ),
             RemoteModelPreset(
@@ -1006,7 +1006,7 @@ PRESET_REMOTE_PROVIDERS: list[RemoteProviderPreset] = [
                 identifier="qwen/qwen3.6-35b-a3b",
                 name="Qwen3.6 35B A3B",
                 provider_name="Qwen",
-                description="MoE architecture — efficient, strong coding. Native MCP support.",
+                description="MoE architecture -- efficient, strong coding. Native MCP support.",
                 context_window=131072,
             ),
             RemoteModelPreset(
@@ -1075,7 +1075,7 @@ def fetch_remote_models(
     else:
         url = "{:s}/models".format(base)
 
-    print("[🛠️Coworker] fetch_remote_models: GET {:s}".format(url))
+    print("[Coworker] fetch_remote_models: GET {:s}".format(url))
 
     req = urllib.request.Request(
         url,
@@ -1108,12 +1108,12 @@ def fetch_remote_models(
             # Sort alphabetically by id.
             models.sort(key=lambda x: x["id"].lower())
 
-            print("[🛠️Coworker] fetch_remote_models: {:d} models found".format(len(models)))
+            print("[Coworker] fetch_remote_models: {:d} models found".format(len(models)))
             return models, ""
 
     except (urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
         msg = "Failed to fetch models: {:s}".format(str(ex))
-        print("[🛠️Coworker] fetch_remote_models: {:s}".format(msg))
+        print("[Coworker] fetch_remote_models: {:s}".format(msg))
         return [], msg
 
 
@@ -1319,9 +1319,9 @@ def find_llama_server() -> str | None:
         active_backend = _detect_gpu_backend()
 
     bundled_dir = _get_bundled_llama_dir()
-    _log = "[🛠️Coworker] find_llama_server"
+    _log = "[Coworker] find_llama_server"
 
-    # 0. Custom source — the user explicitly provided their own binary.
+    # 0. Custom source -- the user explicitly provided their own binary.
     #    Only that path is used; we never fall through to PATH/bundled so
     #    the addon never tampers with a user-managed setup.
     if llama_source == "custom":
@@ -1330,11 +1330,11 @@ def find_llama_server() -> str | None:
             _find_llama_server_cache = llama_path
             _check_llama_version(llama_path)
             return llama_path
-        print("{:s}: custom source set but path missing/invalid — {:s}".format(_log, llama_path or "(empty)"))
+        print("{:s}: custom source set but path missing/invalid -- {:s}".format(_log, llama_path or "(empty)"))
         _find_llama_server_cache = None
         return None
 
-    # 1. Bundled directory FIRST — this is the Coworker-managed version
+    # 1. Bundled directory FIRST -- this is the Coworker-managed version
     #    (downloaded via the "Download llama-server" button, always recent).
     # Check backend-specific binary first (e.g. llama-server-cuda.exe),
     # then the generic fallback (llama-server.exe).  This ensures the
@@ -1378,7 +1378,7 @@ def _check_llama_version(exe_path: str) -> None:
     build = _parse_llama_build_number(ver)
     if build and build < _MIN_SUPPORTED_BUILD:
         print(
-            "[⚠️Coworker] WARNING: llama-server build {:d} is outdated "
+            "[Coworker][WARN] WARNING: llama-server build {:d} is outdated "
             "(minimum {:d} for Qwen3 SSM models). "
             "Use 'Download llama-server' in preferences to get the latest version."
             .format(build, _MIN_SUPPORTED_BUILD)
@@ -1396,7 +1396,7 @@ def invalidate_llama_server_cache() -> None:
     the configured path, so the addon detects it without a Blender restart.
     """
     global _find_llama_server_cache, _find_llama_server_checked, _gpu_backend_cache
-    print("[🛠️Coworker] invalidate_llama_server_cache: cache cleared")
+    print("[Coworker] invalidate_llama_server_cache: cache cleared")
     _find_llama_server_checked = False
     _find_llama_server_cache = None
     _gpu_backend_cache = None
@@ -1413,28 +1413,28 @@ def _get_models_dir() -> Path:
         custom_path = Path(custom)
         if custom_path.exists():
             if custom_path.is_dir():
-                print("[🛠️Coworker] _get_models_dir: using custom dir {:s}".format(str(custom_path)))
+                print("[Coworker] _get_models_dir: using custom dir {:s}".format(str(custom_path)))
                 return custom_path
             print(
-                "[🛠️Coworker] _get_models_dir: custom models dir exists but is not a directory: {:s}".format(
+                "[Coworker] _get_models_dir: custom models dir exists but is not a directory: {:s}".format(
                     str(custom_path)
                 )
             )
         else:
             try:
                 custom_path.mkdir(parents=True, exist_ok=True)
-                print("[🛠️Coworker] _get_models_dir: created custom dir {:s}".format(str(custom_path)))
+                print("[Coworker] _get_models_dir: created custom dir {:s}".format(str(custom_path)))
                 return custom_path
             except OSError as ex:
                 print(
-                    "[🛠️Coworker] _get_models_dir: failed to create custom dir {:s}: {:s}".format(
+                    "[Coworker] _get_models_dir: failed to create custom dir {:s}: {:s}".format(
                         str(custom_path), str(ex)
                     )
                 )
     # Default: <user_home>/bfa_coworker_models/
     default = Path.home() / "bfa_coworker_models"
     default.mkdir(parents=True, exist_ok=True)
-    print("[🛠️Coworker] _get_models_dir: using default dir {:s}".format(str(default)))
+    print("[Coworker] _get_models_dir: using default dir {:s}".format(str(default)))
     return default
 
 
@@ -1480,7 +1480,7 @@ def _set_download_kind(kind: str) -> None:
         _state.download_kind = kind
 
 
-# Cache for GPU backend detection — nvidia-smi/wmic are expensive and
+# Cache for GPU backend detection -- nvidia-smi/wmic are expensive and
 # called from multiple places (find_llama_server, start_local_llama,
 # download_llama_server).  Cache the result so we only spawn once.
 _gpu_backend_cache: str | None = None
@@ -1498,7 +1498,7 @@ def _detect_gpu_backend() -> str:
 
     if sys.platform != "win32":
         # Non-Windows: default to cpu (or vulkan on Linux if available).
-        # We don't auto-detect on macOS/Linux — user can override manually.
+        # We don't auto-detect on macOS/Linux -- user can override manually.
         _gpu_backend_cache = "cpu"
         return _gpu_backend_cache
 
@@ -1510,7 +1510,7 @@ def _detect_gpu_backend() -> str:
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
-            print("[🛠️Coworker] _detect_gpu_backend: NVIDIA GPU detected -> cuda")
+            print("[Coworker] _detect_gpu_backend: NVIDIA GPU detected -> cuda")
             _gpu_backend_cache = "cuda"
             return _gpu_backend_cache
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
@@ -1549,12 +1549,12 @@ def _detect_gpu_backend() -> str:
             pass
 
     if gpu_found:
-        print("[🛠️Coworker] _detect_gpu_backend: AMD/Intel GPU detected -> vulkan")
+        print("[Coworker] _detect_gpu_backend: AMD/Intel GPU detected -> vulkan")
         _gpu_backend_cache = "vulkan"
         return _gpu_backend_cache
 
     # 3. Fallback to CPU.
-    print("[🛠️Coworker] _detect_gpu_backend: no compatible GPU detected -> cpu")
+    print("[Coworker] _detect_gpu_backend: no compatible GPU detected -> cpu")
     _gpu_backend_cache = "cpu"
     return _gpu_backend_cache
 
@@ -1562,7 +1562,7 @@ def _detect_gpu_backend() -> str:
 def resolve_gpu_backend(backend: str) -> str:
     """Resolve a "auto" backend selector to a concrete backend name.
 
-    Returns ``cuda``, ``vulkan``, or ``cpu`` — the backend llama-server will
+    Returns ``cuda``, ``vulkan``, or ``cpu`` -- the backend llama-server will
     actually use (relevant for memory planning).
     """
     if backend != "auto":
@@ -1670,7 +1670,7 @@ def _detect_hardware_cached() -> tuple[float | None, float | None]:
 
 _RUNTIME_OVERHEAD_MB = 700
 _KV_MB_PER_1K_CTX = 70
-# Bytes of KV cache per token — same ~70 MB/1K-ctx estimate as above,
+# Bytes of KV cache per token -- same ~70 MB/1K-ctx estimate as above,
 # expressed per token for validate_ctx_against_hardware.
 _KV_BYTES_PER_TOKEN = _KV_MB_PER_1K_CTX * 1024
 _TYPICAL_LAYERS = 33
@@ -1761,7 +1761,7 @@ def _gguf_layer_count(model_path: Path) -> int | None:
                     elen = int.from_bytes(fobj.read(8), "little")
                     fobj.read(elen)
                 else:
-                    break  # Unknown element type — bail.
+                    break  # Unknown element type -- bail.
 
     try:
         with open(str(model_path), "rb") as f:
@@ -1770,7 +1770,7 @@ def _gguf_layer_count(model_path: Path) -> int | None:
                 return None
             version = int.from_bytes(f.read(4), "little")
             if version < 2:
-                return None  # V1 format — no standard metadata layout.
+                return None  # V1 format -- no standard metadata layout.
             n_tensors = int.from_bytes(f.read(4), "little")
             n_kv = int.from_bytes(f.read(4), "little")
             # Read key-value metadata entries looking for block_count.
@@ -1787,7 +1787,7 @@ def _gguf_layer_count(model_path: Path) -> int | None:
                         print("[Coworker] _gguf_layer_count: {:s} has {:d} layers".format(
                             model_path.name, lc))
                         return lc
-                    # Zero layer count — skip.
+                    # Zero layer count -- skip.
                     continue
                 if val_type == _GGUF_UINT64 and "block_count" in key:
                     lc = int.from_bytes(f.read(8), "little")
@@ -1796,7 +1796,7 @@ def _gguf_layer_count(model_path: Path) -> int | None:
                             model_path.name, lc))
                         return lc
                     continue
-                # Not block_count (or wrong type) — skip the value.
+                # Not block_count (or wrong type) -- skip the value.
                 _skip_value_bytes(f, val_type)
             return None
     except (OSError, struct.error, ValueError):
@@ -1843,7 +1843,7 @@ def recommend_context_size(
     """Recommend a context size (tokens) that fits the detected hardware.
 
     Heuristic: assume ~256 KB of KV-cache memory per token of context (an
-    upper bound for 27B-class GQA models — smaller models need far less),
+    upper bound for 27B-class GQA models -- smaller models need far less),
     i.e. ~4096 tokens per GB of budget.  The KV cache must fit in VRAM when
     a GPU backend is used, otherwise in system RAM.  Returns one of
     :data:`ctx_preset_sizes`.
@@ -1862,7 +1862,7 @@ def recommend_context_size(
         # Weights in RAM; leave 2 GB for the OS + Blender.
         budget_gb = max(ram_gb - model_gb - 2.0, 2.0)
     else:
-        return 32768  # Hardware unknown — safe mid-range default.
+        return 32768  # Hardware unknown -- safe mid-range default.
     tokens = int(budget_gb * 4096)
     tokens = max(4096, min(tokens, 131072))
     # Snap down to the nearest standard preset size.
@@ -1884,7 +1884,7 @@ def hardware_context_hint(model_gb: float = 0.0, backend: str = "auto") -> str:
         parts.append("{:.0f} GB RAM".format(ram))
     if vram:
         parts.append("{:.0f} GB VRAM".format(vram))
-    hw = " · ".join(parts) if parts else "unknown hardware"
+    hw = " * ".join(parts) if parts else "unknown hardware"
     return (
         "Recommended for your hardware ({:s}): {:s} \u2014 larger sizes need much "
         "more memory and can crash startup.".format(hw, ctx_preset_label(recommended))
@@ -1898,7 +1898,7 @@ def validate_ctx_against_hardware(
 ) -> str | None:
     """Return a warning string if *ctx* looks too large for the hardware.
 
-    Pure recommendation check (D4: startup-only validation — never restarts
+    Pure recommendation check (D4: startup-only validation -- never restarts
     or changes the running server). Compares the KV-cache requirement
     (estimated with the same ~256 KB/token upper bound used by
     :func:`recommend_context_size`) against free VRAM (GPU backends) or
@@ -1912,12 +1912,12 @@ def validate_ctx_against_hardware(
     kv_gb = (ctx * _KV_BYTES_PER_TOKEN) / (1024 ** 3)
     if resolved in ("cuda", "vulkan"):
         if not vram_gb:
-            return None  # No VRAM data — do not guess.
+            return None  # No VRAM data -- do not guess.
         free_gb = max(vram_gb - model_gb - 1.5, 0.0)  # 1.5 GB runtime headroom
         if kv_gb > free_gb:
             return (
                 "Context size {:,} needs ~{:.1f} GB of KV cache but only ~{:.1f} GB "
-                "of VRAM is left after the {:.1f} GB model — lower Context Size or "
+                "of VRAM is left after the {:.1f} GB model -- lower Context Size or "
                 "enable KV-cache quantization to avoid an out-of-memory crash.".format(
                     ctx, kv_gb, free_gb, model_gb)
             )
@@ -1928,7 +1928,7 @@ def validate_ctx_against_hardware(
         if kv_gb > free_gb:
             return (
                 "Context size {:,} needs ~{:.1f} GB of KV cache in RAM but only "
-                "~{:.1f} GB is left after the {:.1f} GB model — lower Context Size "
+                "~{:.1f} GB is left after the {:.1f} GB model -- lower Context Size "
                 "to avoid swapping or an out-of-memory crash.".format(
                     ctx, kv_gb, free_gb, model_gb)
             )
@@ -1946,7 +1946,7 @@ def get_runtime_ctx(port: int | None = None) -> int | None:
     Queries ``http://127.0.0.1:<port>/props`` and reads the applied
     ``n_ctx`` (which may differ from the configured value if the model or
     build clamped it). Returns ``None`` when the server is not reachable or
-    does not expose the field — callers then fall back to the configured
+    does not expose the field -- callers then fall back to the configured
     size. Results are cached per launch (the cache is cleared in
     :func:`start_local_llama`) and mismatches between configured and applied
     values are logged once.
@@ -1965,7 +1965,7 @@ def get_runtime_ctx(port: int | None = None) -> int | None:
         with urllib.request.urlopen(req, timeout=3) as resp:
             body = json.loads(resp.read().decode("utf-8", errors="replace"))
     except (urllib.error.URLError, OSError, ValueError) as ex:
-        print("[🛠️Coworker] get_runtime_ctx: /props unreachable — {:s}".format(str(ex)))
+        print("[Coworker] get_runtime_ctx: /props unreachable -- {:s}".format(str(ex)))
         return None
     n_ctx = body.get("default_generation_settings", {}).get("n_ctx")
     if n_ctx is None:
@@ -1980,7 +1980,7 @@ def get_runtime_ctx(port: int | None = None) -> int | None:
         _runtime_ctx_logged_mismatch = True
         print(
             "[Coworker] get_runtime_ctx: applied n_ctx ({:d}) differs from "
-            "configured local_ctx_size ({:d}) — using the server's value for "
+            "configured local_ctx_size ({:d}) -- using the server's value for "
             "prompt budgeting".format(n_ctx, configured))
     return n_ctx
 
@@ -1991,7 +1991,7 @@ def cancel_download() -> None:
     The download thread checks the cancel event between chunks and aborts,
     deleting the partial file. Safe to call even if no download is active.
     """
-    print("[🛠️Coworker] cancel_download: cancellation requested")
+    print("[Coworker] cancel_download: cancellation requested")
     _download_cancel_event.set()
 
 
@@ -2006,18 +2006,18 @@ def _check_disk_space(dest: Path, required_bytes: int | None) -> bool:
     try:
         usage = shutil.disk_usage(str(dest.parent if dest.parent.exists() else dest))
     except OSError as ex:
-        print("[🛠️Coworker] _check_disk_space: could not query disk usage — {:s}".format(str(ex)))
-        return True  # Can't determine — let the download try anyway.
+        print("[Coworker] _check_disk_space: could not query disk usage -- {:s}".format(str(ex)))
+        return True  # Can't determine -- let the download try anyway.
     # Require the file size plus a 5% safety margin.
     needed = int(required_bytes * 1.05)
     if usage.free < needed:
         msg = (
             "Not enough disk space: need {:s} but only {:s} free on {:s}"
         ).format(_format_bytes(needed), _format_bytes(usage.free), str(dest.parent))
-        print("[🛠️Coworker] _check_disk_space: {:s}".format(msg))
+        print("[Coworker] _check_disk_space: {:s}".format(msg))
         _set_error(msg)
         return False
-    print("[🛠️Coworker] _check_disk_space: OK — {:s} free, need {:s}".format(
+    print("[Coworker] _check_disk_space: OK -- {:s} free, need {:s}".format(
         _format_bytes(usage.free), _format_bytes(needed)))
     return True
 
@@ -2070,18 +2070,18 @@ def _get_hf_file_size(repo_id: str, filename: str) -> int | None:
     Returns the size in bytes, or ``None`` if it cannot be determined.
     """
     url = "https://huggingface.co/{:s}/resolve/main/{:s}".format(repo_id, filename)
-    print("[🛠️Coworker] _get_hf_file_size: checking {:s}".format(url))
+    print("[Coworker] _get_hf_file_size: checking {:s}".format(url))
     try:
         req = urllib.request.Request(url, method="HEAD")
         with urllib.request.urlopen(req, timeout=10) as resp:
             size_str = resp.headers.get("Content-Length")
             if size_str:
                 size = int(size_str)
-                print("[🛠️Coworker] _get_hf_file_size: size = {:d} bytes ({:s})".format(
+                print("[Coworker] _get_hf_file_size: size = {:d} bytes ({:s})".format(
                     size, _format_bytes(size)))
                 return size
     except (urllib.error.URLError, OSError, ValueError) as ex:
-        print("[🛠️Coworker] _get_hf_file_size: failed — {:s}".format(str(ex)))
+        print("[Coworker] _get_hf_file_size: failed -- {:s}".format(str(ex)))
     return None
 
 
@@ -2302,15 +2302,15 @@ def download_model(
     with _lock:
         r = repo_id or _config.model_repo_id
         f = filename or _config.model_filename
-    print("[🛠️Coworker] download_model: repo_id={:s}, filename={:s}".format(r, f))
+    print("[Coworker] download_model: repo_id={:s}, filename={:s}".format(r, f))
     if not r or not f:
-        print("[🛠️Coworker] download_model: repo ID or filename not configured")
+        print("[Coworker] download_model: repo ID or filename not configured")
         _set_error("Model repo ID and filename must be configured")
         return None
 
     models_dir = _get_models_dir()
     dest = models_dir / f
-    print("[🛠️Coworker] download_model: dest = {:s}".format(str(dest)))
+    print("[Coworker] download_model: dest = {:s}".format(str(dest)))
 
     # Clear stale state before starting.
     _clear_download_state()
@@ -2319,7 +2319,7 @@ def download_model(
 
     # Check if already downloaded.
     if dest.exists():
-        print("[🛠️Coworker] download_model: already exists, skipping download")
+        print("[Coworker] download_model: already exists, skipping download")
         _set_download_progress("Model already downloaded: {:s}".format(str(dest)))
         if progress_callback:
             progress_callback("Model already downloaded: {:s}".format(str(dest)))
@@ -2338,10 +2338,10 @@ def download_model(
     def _do_download():
         """Try direct HTTP download first, then fall back to llama-server."""
         try:
-            # ── Primary: direct HTTP download ────────────────────────
+            # -- Primary: direct HTTP download ------------------------
             success = _download_gguf_direct(r, f, dest, progress_callback)
             if success:
-                # Download succeeded — report and done.
+                # Download succeeded -- report and done.
                 _set_download_progress("Download complete: {:s}".format(f))
                 if progress_callback:
                     progress_callback("Model downloaded to {:s}".format(str(dest)))
@@ -2349,19 +2349,19 @@ def download_model(
                 _download_mmproj_if_needed(r, f, models_dir, progress_callback)
                 return
 
-            # Cancelled — don't fall through to the fallback path.
+            # Cancelled -- don't fall through to the fallback path.
             if _download_cancel_event.is_set():
                 return
 
-            # ── Fallback: llama-server --hf-repo/--hf-file ──────────
+            # -- Fallback: llama-server --hf-repo/--hf-file ----------
             # If direct download failed for a non-auth reason (network
             # restrictions, proxy issues), try the server's built-in downloader.
             error_state = get_state().error or ""
             if "401" in error_state or "403" in error_state or "404" in error_state:
-                # Auth/gating/not-found — don't retry, just surface the error.
+                # Auth/gating/not-found -- don't retry, just surface the error.
                 return
 
-            print("[🛠️Coworker] download_model: direct download failed, falling back to llama-server --hf-repo")
+            print("[Coworker] download_model: direct download failed, falling back to llama-server --hf-repo")
             _set_download_progress("Downloading via llama-server...")
             if progress_callback:
                 progress_callback("Trying alternate download method...")
@@ -2381,12 +2381,12 @@ def download_model(
             poll_interval = 2.0
             while time.time() < deadline:
                 if _download_cancel_event.is_set():
-                    print("[🛠️Coworker] download_model: fallback cancelled by user")
+                    print("[Coworker] download_model: fallback cancelled by user")
                     _set_download_progress("Download cancelled")
                     return
                 if health_check():
                     _set_download_progress(
-                        "Download complete — llama-server is running on port {:d}".format(
+                        "Download complete -- llama-server is running on port {:d}".format(
                             server_port
                         )
                     )
@@ -2399,7 +2399,7 @@ def download_model(
                     error = "llama-server process exited unexpectedly during download"
                     if tail:
                         error += "\n\n--- llama-server.log (tail) ---\n{:s}".format(tail)
-                    print("[🛠️Coworker] download_model: {:s}".format(error))
+                    print("[Coworker] download_model: {:s}".format(error))
                     _set_error(error)
                     return
                 time.sleep(poll_interval)
@@ -2412,14 +2412,14 @@ def download_model(
             if progress_callback:
                 progress_callback("Download failed: {:s}".format(str(ex)))
         finally:
-            # Download is done (success or failure) — clear the active flag.
+            # Download is done (success or failure) -- clear the active flag.
             with _lock:
                 _state.download_active = False
 
     thread = threading.Thread(target=_do_download, daemon=True)
     thread.start()
 
-    # Return None immediately — the download is async.
+    # Return None immediately -- the download is async.
     # The caller should poll get_state() for progress.
     return None
 
@@ -2442,7 +2442,7 @@ def _find_model_in_hf_cache(repo_id: str, filename: str) -> str | None:
     # Collect all possible cache roots to search.
     cache_roots: list[Path] = []
 
-    # 1. Local models dir .hf_cache (primary — redirected downloads).
+    # 1. Local models dir .hf_cache (primary -- redirected downloads).
     with _lock:
         local_models = _config.downloaded_models_dir
     if local_models and os.path.isdir(local_models):
@@ -2468,10 +2468,10 @@ def _find_model_in_hf_cache(repo_id: str, filename: str) -> str | None:
             for candidate in files:
                 if candidate == filename:
                     found = os.path.join(walk_root, candidate)
-                    print("[🛠️Coworker] _find_model_in_hf_cache: found {:s}".format(found))
+                    print("[Coworker] _find_model_in_hf_cache: found {:s}".format(found))
                     return found
 
-    print("[🛠️Coworker] _find_model_in_hf_cache: {:s} not found in cache".format(filename))
+    print("[Coworker] _find_model_in_hf_cache: {:s} not found in cache".format(filename))
     return None
 
 
@@ -2490,7 +2490,7 @@ def download_llama_server(
     (or the platform-equivalent binary) into the bundled directory
     (``~/.cache/bfa_coworker_llama/``).
 
-    *backend* — one of ``"auto"``, ``"cpu"``, ``"cuda"``, ``"vulkan"``.
+    *backend* -- one of ``"auto"``, ``"cpu"``, ``"cuda"``, ``"vulkan"``.
       If ``None`` or ``"auto"``, auto-detects via :func:`_detect_gpu_backend`.
       On Windows, CUDA 12.4 also downloads ``cudart`` DLLs.
 
@@ -2567,7 +2567,7 @@ def download_llama_server(
     # Check if already downloaded.
     if dest_binary.is_file():
         msg = "llama-server already downloaded at {:s}".format(str(dest_binary))
-        print("[🛠️Coworker] download_llama_server: {:s}".format(msg))
+        print("[Coworker] download_llama_server: {:s}".format(msg))
         _set_download_progress(msg)
         if progress_callback:
             progress_callback(msg)
@@ -2578,8 +2578,8 @@ def download_llama_server(
     if progress_callback:
         progress_callback("Downloading llama-server ({:s}) ...".format(tag))
 
-    print("[🛠️Coworker] download_llama_server: url = {:s}".format(url))
-    print("[🛠️Coworker] download_llama_server: dest_dir = {:s}".format(str(dest_dir)))
+    print("[Coworker] download_llama_server: url = {:s}".format(url))
+    print("[Coworker] download_llama_server: dest_dir = {:s}".format(str(dest_dir)))
 
     try:
         # Stream the zip download with progress.
@@ -2616,7 +2616,7 @@ def download_llama_server(
         if progress_callback:
             progress_callback("Extracting llama-server ...")
 
-        # Companion DLL extensions — extract these alongside the binary
+        # Companion DLL extensions -- extract these alongside the binary
         # so CUDA/Vulkan runtime libraries are co-located.
         # On Linux, versioned shared libs like ``libcublas.so.12`` don't end
         # in ``.so`` so we also match ``.so.`` followed by digits.
@@ -2646,18 +2646,18 @@ def download_llama_server(
                     return None
                 # Extract the binary + ALL companion DLLs/SOs.
                 # The CUDA release zip bundles cudart, cublas, cublasLt etc.
-                # alongside the exe — we need them all.
+                # alongside the exe -- we need them all.
                 members_to_extract = list(binary_members)
                 for m in zf.namelist():
                     if m in members_to_extract:
                         continue
                     if _is_companion_file(m):
                         members_to_extract.append(m)
-                print("[🛠️Coworker] download_llama_server: extracting {:d} files from archive".format(
+                print("[Coworker] download_llama_server: extracting {:d} files from archive".format(
                     len(members_to_extract)))
                 for m in members_to_extract:
                     zf.extract(m, str(dest_dir))
-                # The extracted binary may be in a subdirectory — move to dest.
+                # The extracted binary may be in a subdirectory -- move to dest.
                 extracted_bin = dest_dir / binary_members[0]
                 if not extracted_bin.is_file():
                     # Zip entry had a directory prefix (e.g. bin/llama-server.exe).
@@ -2680,7 +2680,7 @@ def download_llama_server(
                         continue
                     if _is_companion_file(m.name):
                         members_to_extract.append(m)
-                print("[🛠️Coworker] download_llama_server: extracting {:d} files from archive".format(
+                print("[Coworker] download_llama_server: extracting {:d} files from archive".format(
                     len(members_to_extract)))
                 tf.extractall(str(dest_dir), members=members_to_extract)
                 extracted_bin = dest_dir / os.path.basename(binary_members[0].name)
@@ -2691,7 +2691,7 @@ def download_llama_server(
         shutil.move(str(extracted_bin), str(dest_binary))
 
         # For CUDA builds, also download the separate cudart zip as a safety
-        # net — the main zip should already have the DLLs (extracted above),
+        # net -- the main zip should already have the DLLs (extracted above),
         # but the cudart zip provides the canonical set.
         if cudart_url:
             _set_download_progress("Downloading CUDA runtime DLLs (backup) ...")
@@ -2703,10 +2703,10 @@ def download_llama_server(
                     cudart_data = io.BytesIO(cudart_resp.read())
                 with zipfile.ZipFile(cudart_data) as cudart_zf:
                     cudart_zf.extractall(str(dest_dir))
-                print("[🛠️Coworker] download_llama_server: cudart DLLs (backup) extracted to {:s}".format(str(dest_dir)))
+                print("[Coworker] download_llama_server: cudart DLLs (backup) extracted to {:s}".format(str(dest_dir)))
             except (urllib.error.URLError, OSError, zipfile.BadZipFile) as ex:
-                print("[🛠️Coworker] download_llama_server: cudart backup download failed — {:s}".format(str(ex)))
-                # Non-fatal — the main zip should have already provided them.
+                print("[Coworker] download_llama_server: cudart backup download failed -- {:s}".format(str(ex)))
+                # Non-fatal -- the main zip should have already provided them.
 
         # Post-extraction: verify critical DLLs are present for CUDA backend.
         if backend == "cuda" and sys.platform == "win32":
@@ -2714,18 +2714,18 @@ def download_llama_server(
             missing = [d for d in expected_dlls if not (dest_dir / d).is_file()]
             if missing:
                 print(
-                    "[⚠️Coworker] download_llama_server: WARNING — missing DLLs after extraction: {:s}"
+                    "[Coworker][WARN] download_llama_server: WARNING -- missing DLLs after extraction: {:s}"
                     .format(", ".join(missing))
                 )
             else:
-                print("[🛠️Coworker] download_llama_server: all CUDA DLLs verified in {:s}".format(str(dest_dir)))
+                print("[Coworker] download_llama_server: all CUDA DLLs verified in {:s}".format(str(dest_dir)))
 
         # Make executable on non-Windows.
         if sys.platform != "win32":
             dest_binary.chmod(dest_binary.stat().st_mode | 0o111)
 
         msg = "llama-server installed at {:s}".format(str(dest_binary))
-        print("[🛠️Coworker] download_llama_server: {:s}".format(msg))
+        print("[Coworker] download_llama_server: {:s}".format(msg))
         _set_download_progress(msg)
         if progress_callback:
             progress_callback(msg)
@@ -2742,7 +2742,7 @@ def download_llama_server(
         err = "Failed to download llama-server (HTTP {:d}: {:s})".format(
             ex.code, ex.reason
         )
-        print("[🛠️Coworker] download_llama_server: {:s}".format(err))
+        print("[Coworker] download_llama_server: {:s}".format(err))
         _set_error(err)
         if progress_callback:
             progress_callback(err)
@@ -2750,7 +2750,7 @@ def download_llama_server(
         return None
     except (urllib.error.URLError, OSError, zipfile.BadZipFile) as ex:
         err = "Failed to download/extract llama-server: {:s}".format(str(ex))
-        print("[🛠️Coworker] download_llama_server: {:s}".format(err))
+        print("[Coworker] download_llama_server: {:s}".format(err))
         _set_error(err)
         if progress_callback:
             progress_callback(err)
@@ -2767,12 +2767,12 @@ def remove_llama_server() -> bool:
     so the next find_llama_server() re-searches from scratch.
 
     If the binary was found via PATH (e.g. WinGet), the cache is
-    still invalidated — the bundled copy is preferred on next search.
+    still invalidated -- the bundled copy is preferred on next search.
 
     Returns True if any action was taken (files removed or cache cleared).
     """
     bundled_dir = _get_bundled_llama_dir()
-    _log = "[⚠️Coworker] remove_llama_server"
+    _log = "[Coworker][WARN] remove_llama_server"
 
     removed = False
     if bundled_dir.is_dir():
@@ -2791,9 +2791,9 @@ def remove_llama_server() -> bool:
                     print("{:s}: removed dir {:s}".format(_log, item.name))
                     removed = True
             except OSError as ex:
-                print("{:s}: failed to remove {:s} — {:s}".format(_log, item.name, str(ex)))
+                print("{:s}: failed to remove {:s} -- {:s}".format(_log, item.name, str(ex)))
     else:
-        print("{:s}: bundled dir does not exist — {:s}".format(_log, str(bundled_dir)))
+        print("{:s}: bundled dir does not exist -- {:s}".format(_log, str(bundled_dir)))
 
     # Always invalidate cache so find_llama_server re-searches.
     global _find_llama_server_checked, _find_llama_server_cache, _llama_server_version_cache
@@ -2835,22 +2835,22 @@ def start_local_llama(
     """
     Launch ``llama-server`` as a subprocess.
 
-    *model_path* — if ``None``, uses the configured model.  If the local
+    *model_path* -- if ``None``, uses the configured model.  If the local
       file does NOT exist, passes ``--hf-repo``/``--hf-file`` to
       ``llama-server`` so it auto-downloads via HuggingFace.
-    *port* — if ``None``, uses the configured local port.
+    *port* -- if ``None``, uses the configured local port.
     Returns the ``Popen`` handle, or ``None`` on failure.
     """
     global _llama_process
     global _last_launched_model_path
 
-    print("[🛠️Coworker] start_local_llama: called")
-    print("[🛠️Coworker] start_local_llama:   model_path={:s}".format(str(model_path)))
-    print("[🛠️Coworker] start_local_llama:   port={:s}".format(str(port)))
+    print("[Coworker] start_local_llama: called")
+    print("[Coworker] start_local_llama:   model_path={:s}".format(str(model_path)))
+    print("[Coworker] start_local_llama:   port={:s}".format(str(port)))
 
     with _lock:
         if _llama_process is not None and _llama_process.poll() is None:
-            print("[🛠️Coworker] start_local_llama: already running, returning None")
+            print("[Coworker] start_local_llama: already running, returning None")
             _set_error("llama-server is already running")
             return None
 
@@ -2861,15 +2861,15 @@ def start_local_llama(
         invalidate_llama_server_cache()
         server_exe = find_llama_server()
     if not server_exe:
-        print("[🛠️Coworker] start_local_llama: server_exe not found, aborting")
+        print("[Coworker] start_local_llama: server_exe not found, aborting")
         _set_error(
-            "llama-server not found — use \"Download llama-server\" in preferences "
+            "llama-server not found -- use \"Download llama-server\" in preferences "
             "or set the path manually"
         )
         return None
 
-    print("[🛠️Coworker] start_local_llama: server_exe = {:s}".format(server_exe))
-    print("[🛠️Coworker] start_local_llama: llama-server version = {:s}".format(_llama_server_version(server_exe)))
+    print("[Coworker] start_local_llama: server_exe = {:s}".format(server_exe))
+    print("[Coworker] start_local_llama: llama-server version = {:s}".format(_llama_server_version(server_exe)))
 
     # Resolve model source.  We prefer a local .gguf file, but fall back
     # to ``--hf-repo``/``--hf-file`` so llama-server can auto-download.
@@ -2883,17 +2883,17 @@ def start_local_llama(
             fname = _config.model_filename
             repo = _config.model_repo_id
         model_path = models_dir / fname if fname else None
-        print("[🛠️Coworker] start_local_llama: resolved model_path = {:s}".format(str(model_path)))
+        print("[Coworker] start_local_llama: resolved model_path = {:s}".format(str(model_path)))
 
     if model_path and os.path.isfile(str(model_path)):
-        print("[🛠️Coworker] start_local_llama: local model file exists at {:s}".format(str(model_path)))
+        print("[Coworker] start_local_llama: local model file exists at {:s}".format(str(model_path)))
         _last_launched_model_path = Path(model_path)
         integrity_warning = check_model_file_integrity(model_path)
         if integrity_warning:
-            print("[🛠️Coworker] start_local_llama: WARNING — {:s}".format(integrity_warning))
+            print("[Coworker] start_local_llama: WARNING -- {:s}".format(integrity_warning))
     else:
-        # No local .gguf — try the HuggingFace cache first.
-        print("[🛠️Coworker] start_local_llama: local model NOT found, checking HF cache...")
+        # No local .gguf -- try the HuggingFace cache first.
+        print("[Coworker] start_local_llama: local model NOT found, checking HF cache...")
         _last_launched_model_path = None
         with _lock:
             repo = _config.model_repo_id
@@ -2902,10 +2902,10 @@ def start_local_llama(
         if hf_cached:
             model_path = Path(hf_cached)
             _last_launched_model_path = Path(hf_cached)
-            print("[🛠️Coworker] start_local_llama: using HF cached model at {:s}".format(hf_cached))
+            print("[Coworker] start_local_llama: using HF cached model at {:s}".format(hf_cached))
         else:
-            # Not in cache either — try --hf-repo/--hf-file as last resort.
-            print("[🛠️Coworker] start_local_llama: not in HF cache either, will use --hf-repo/--hf-file")
+            # Not in cache either -- try --hf-repo/--hf-file as last resort.
+            print("[Coworker] start_local_llama: not in HF cache either, will use --hf-repo/--hf-file")
             hf_repo = repo
             hf_file = fname
             use_hf = True
@@ -2913,7 +2913,7 @@ def start_local_llama(
     if port is None:
         with _lock:
             port = _config.local_port
-        print("[🛠️Coworker] start_local_llama: using configured port {:d}".format(port))
+        print("[Coworker] start_local_llama: using configured port {:d}".format(port))
     # Auto-select a free port if the configured one is busy.
     _configured_port = port
     try:
@@ -2922,26 +2922,26 @@ def start_local_llama(
         _set_error(str(ex))
         return None
     if port != _configured_port:
-        print("[🛠️Coworker] start_local_llama: port {:d} is busy (another "
-              "llama-server or process?) — launching on {:d} instead".format(
+        print("[Coworker] start_local_llama: port {:d} is busy (another "
+              "llama-server or process?) -- launching on {:d} instead".format(
                   _configured_port, port))
     # Keep the config in sync with the port the server actually binds.  Without
     # this, health checks and chat requests kept targeting the configured port
-    # (which something else was holding) while the server ran on the free one —
+    # (which something else was holding) while the server ran on the free one --
     # the readiness probe then misreported startup.
     with _lock:
         _config.local_port = port
 
     with _lock:
         ctx_size = _config.local_ctx_size or 16384
-    # NOTE: no silent auto-upgrade — the configured size is applied verbatim
+    # NOTE: no silent auto-upgrade -- the configured size is applied verbatim
     # and the real applied value is reported via /props (see get_runtime_ctx).
     # If it looks too small for agent work, warn (never restart mid-session).
     if ctx_size <= 8192:
         print(
             "[Coworker] start_local_llama: ctx_size {:d} is small for agent work "
             "(system prompt + tools + conversation); consider 16K-32K in preferences".format(ctx_size))
-    print("[🛠️Coworker] start_local_llama: using ctx_size {:d}".format(ctx_size))
+    print("[Coworker] start_local_llama: using ctx_size {:d}".format(ctx_size))
     global _runtime_ctx_cache, _runtime_ctx_logged_mismatch
     _runtime_ctx_cache = None
     _runtime_ctx_logged_mismatch = False
@@ -2957,12 +2957,12 @@ def start_local_llama(
         model_bytes = 0
     if ctx_size > 32768 and model_bytes >= 12 * 1024 * 1024 * 1024:
         print(
-            "[🛠️Coworker] start_local_llama: WARNING — {:d} context on a {:.1f} GB model "
+            "[Coworker] start_local_llama: WARNING -- {:d} context on a {:.1f} GB model "
             "needs a very large KV cache; if llama-server fails to start, lower "
             "Context Size in preferences (16K-32K is plenty for agent work)".format(
                 ctx_size, model_bytes / (1024 ** 3)))
 
-    print("[🛠️Coworker] start_local_llama: platform = {:s}".format(sys.platform))
+    print("[Coworker] start_local_llama: platform = {:s}".format(sys.platform))
 
     try:
         # Build args and environment (shared across platforms).
@@ -2976,14 +2976,14 @@ def start_local_llama(
         if backend == "vulkan" and sys.platform == "win32":
             vulkan_dll = shutil.which("vulkan-1.dll")
             if vulkan_dll is None:
-                # Also check System32 directly — shutil.which may miss it.
+                # Also check System32 directly -- shutil.which may miss it.
                 sys32 = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "vulkan-1.dll")
                 if not os.path.isfile(sys32):
-                    print("[⚠️Coworker] start_local_llama: vulkan-1.dll not found — Vulkan backend may fail")
+                    print("[Coworker][WARN] start_local_llama: vulkan-1.dll not found -- Vulkan backend may fail")
                 else:
-                    print("[🛠️Coworker] start_local_llama: vulkan-1.dll found at {:s}".format(sys32))
+                    print("[Coworker] start_local_llama: vulkan-1.dll found at {:s}".format(sys32))
             else:
-                print("[🛠️Coworker] start_local_llama: vulkan-1.dll found at {:s}".format(vulkan_dll))
+                print("[Coworker] start_local_llama: vulkan-1.dll found at {:s}".format(vulkan_dll))
 
         if backend in ("cuda", "vulkan") and model_path and os.path.isfile(str(model_path)):
             ngpu_layers = autodetect_gpu_layers(Path(str(model_path)), ctx_size)
@@ -3007,8 +3007,8 @@ def start_local_llama(
             extra = _filter_flags_for_build(preset_extra)
             if extra:
                 args.extend(extra)
-                print("[🛠️Coworker] start_local_llama: preset extra args = {:s}".format(str(extra)))
-        # CPU backend: keep launch flags minimal — no attention/KV knobs,
+                print("[Coworker] start_local_llama: preset extra args = {:s}".format(str(extra)))
+        # CPU backend: keep launch flags minimal -- no attention/KV knobs,
         # they mainly benefit GPU paths and risk breaking exotic CPU builds.
         if backend in ("cuda", "vulkan"):
             # Flash-attention: deliberately NOT passed.
@@ -3026,7 +3026,7 @@ def start_local_llama(
             # it when the backend supports it), which is exactly what we want
             # on GPU, so we rely on that default and sidestep the bug class.
             #
-            # KV-cache quantization — opt-in via preference.
+            # KV-cache quantization -- opt-in via preference.
             with _lock:
                 kv_quant = getattr(_config, "local_kv_cache_quant", False)
             if kv_quant:
@@ -3060,9 +3060,9 @@ def start_local_llama(
             mmproj_path = _resolve_mmproj_path(model_path)
             if mmproj_path:
                 args.extend(['--mmproj', str(mmproj_path)])
-                print("[🛠️Coworker] start_local_llama: using mmproj at {:s}".format(str(mmproj_path)))
+                print("[Coworker] start_local_llama: using mmproj at {:s}".format(str(mmproj_path)))
 
-        # ── Fresh, captureable server log ──────────────────────────────
+        # -- Fresh, captureable server log ------------------------------
         # Remove any previous log so the tail we read on failure reflects
         # THIS launch.  The server's stdout/stderr are redirected to this
         # file below (both platforms), so a startup crash is always visible.
@@ -3073,7 +3073,7 @@ def start_local_llama(
         except OSError:
             pass
 
-        # ── Drop flags this binary does not accept ─────────────────────
+        # -- Drop flags this binary does not accept ---------------------
         # A build that rejects a flag prints "unknown argument" and exits 1
         # before logging anything.  Verify against the binary's own --help so
         # an unsupported optional flag is dropped instead of killing startup
@@ -3083,7 +3083,7 @@ def start_local_llama(
             args, _dropped = _filter_flags_against_help(
                 args, _supported, keep=_REQUIRED_LLAMA_FLAGS)
             if _dropped:
-                print("[⚠️Coworker] start_local_llama: dropping flags unsupported by this "
+                print("[Coworker][WARN] start_local_llama: dropping flags unsupported by this "
                       "build: {:s}".format(", ".join(sorted(set(_dropped)))))
 
         # Redirect HF cache into models dir so all downloads are
@@ -3116,11 +3116,11 @@ def start_local_llama(
         if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
             try:
                 _bundled_dll_handle = os.add_dll_directory(bundled_dir)
-                print("[🛠️Coworker] start_local_llama: registered DLL dir {:s}".format(bundled_dir))
+                print("[Coworker] start_local_llama: registered DLL dir {:s}".format(bundled_dir))
             except OSError as ex:
-                print("[🛠️Coworker] start_local_llama: os.add_dll_directory failed — {:s}".format(str(ex)))
+                print("[Coworker] start_local_llama: os.add_dll_directory failed -- {:s}".format(str(ex)))
 
-        # ── Console visibility (Debug mode) ────────────────────────────
+        # -- Console visibility (Debug mode) ----------------------------
         # Debug / Diagnostics mode shows the server in its own console
         # window so the user can watch it load a model live.  Otherwise the
         # server runs silently with stdio redirected to the log file, so a
@@ -3138,18 +3138,18 @@ def start_local_llama(
             if _log_flag_ok and "--log-file" not in args:
                 args.extend(["--log-file", str(_llama_server_log_path())])
             elif not _log_flag_ok:
-                print("[⚠️Coworker] start_local_llama: this build has no --log-file; "
+                print("[Coworker][WARN] start_local_llama: this build has no --log-file; "
                       "Debug console will not write a log tail")
-            print("[🛠️Coworker] start_local_llama: Debug mode — showing llama-server console window")
+            print("[Coworker] start_local_llama: Debug mode -- showing llama-server console window")
         else:
             try:
                 log_handle = open(str(_llama_server_log_path()), "w", encoding="utf-8", errors="replace")
             except OSError as ex:
                 log_handle = None
-                print("[🛠️Coworker] start_local_llama: could not open log file — {:s}".format(str(ex)))
+                print("[Coworker] start_local_llama: could not open log file -- {:s}".format(str(ex)))
             stdio_target = log_handle if log_handle is not None else subprocess.DEVNULL
-        print("[🛠️Coworker] start_local_llama:   args = {:s}".format(str(args)))
-        print("[🛠️Coworker] start_local_llama:   log = {:s}".format(str(_llama_server_log_path())))
+        print("[Coworker] start_local_llama:   args = {:s}".format(str(args)))
+        print("[Coworker] start_local_llama:   log = {:s}".format(str(_llama_server_log_path())))
         if sys.platform == "win32":
             # CREATE_NO_WINDOW (default): silent, every line captured for the
             # failure tail.  CREATE_NEW_CONSOLE (Debug mode): visible console.
@@ -3171,14 +3171,14 @@ def start_local_llama(
                 stderr=stdio_target,
                 start_new_session=True,
             )
-        print("[🛠️Coworker] start_local_llama:   Popen returned pid={:d}".format(proc.pid))
+        print("[Coworker] start_local_llama:   Popen returned pid={:d}".format(proc.pid))
 
     except FileNotFoundError:
-        print("[🛠️Coworker] start_local_llama: FileNotFoundError — binary not found")
-        _set_error("Failed to launch llama-server — binary not found")
+        print("[Coworker] start_local_llama: FileNotFoundError -- binary not found")
+        _set_error("Failed to launch llama-server -- binary not found")
         return None
     except OSError as ex:
-        print("[🛠️Coworker] start_local_llama: OSError — {:s}".format(str(ex)))
+        print("[Coworker] start_local_llama: OSError -- {:s}".format(str(ex)))
         _set_error("Failed to launch llama-server: {:s}".format(str(ex)))
         return None
 
@@ -3190,7 +3190,7 @@ def start_local_llama(
         _state.error = ""
         _state.download_progress = ""
 
-    print("[🛠️Coworker] start_local_llama: SUCCESS — server launched")
+    print("[Coworker] start_local_llama: SUCCESS -- server launched")
     return proc
 
 
@@ -3198,31 +3198,31 @@ def stop_local_llama() -> None:
     """Gracefully terminate the ``llama-server`` subprocess."""
     global _llama_process
 
-    print("[🛠️Coworker] stop_local_llama: called")
+    print("[Coworker] stop_local_llama: called")
     # NOTE: `_shutting_down` lives on AgentState (agent_controller),
-    # not LLMState — do not set it here.
+    # not LLMState -- do not set it here.
     _state.error = "Stopping LLM..."
 
     with _lock:
         proc = _llama_process
 
-    print("[🛠️Coworker] stop_local_llama:   tracked proc = {:s}".format(str(proc)))
+    print("[Coworker] stop_local_llama:   tracked proc = {:s}".format(str(proc)))
 
     # Try to terminate the tracked process first.
     if proc is not None:
         try:
-            print("[🛠️Coworker] stop_local_llama:   calling proc.terminate()")
+            print("[Coworker] stop_local_llama:   calling proc.terminate()")
             proc.terminate()
-            print("[🛠️Coworker] stop_local_llama:   waiting up to 10s for exit...")
+            print("[Coworker] stop_local_llama:   waiting up to 10s for exit...")
             proc.wait(timeout=10)
-            print("[🛠️Coworker] stop_local_llama:   process exited")
+            print("[Coworker] stop_local_llama:   process exited")
         except subprocess.TimeoutExpired:
-            print("[🛠️Coworker] stop_local_llama:   timeout — force killing")
+            print("[Coworker] stop_local_llama:   timeout -- force killing")
             _state.error = "Force killing LLM..."
             proc.kill()
             proc.wait(timeout=3)
         except Exception as ex:  # pylint: disable=broad-exception-caught
-            print("[🛠️Coworker] stop_local_llama:   exception during terminate: {:s}".format(str(ex)))
+            print("[Coworker] stop_local_llama:   exception during terminate: {:s}".format(str(ex)))
 
     _llama_process = None
 
@@ -3231,32 +3231,32 @@ def stop_local_llama() -> None:
     # still be holding the port.
     try:
         if sys.platform == "win32":
-            print("[🛠️Coworker] stop_local_llama:   running taskkill /f /im llama-server.exe")
+            print("[Coworker] stop_local_llama:   running taskkill /f /im llama-server.exe")
             result = subprocess.run(
                 ["taskkill", "/f", "/im", "llama-server.exe"],
                 capture_output=True,
                 timeout=5,
             )
-            print("[🛠️Coworker] stop_local_llama:   taskkill stdout = {:s}".format(result.stdout.decode().strip()))
-            print("[🛠️Coworker] stop_local_llama:   taskkill stderr = {:s}".format(result.stderr.decode().strip()))
+            print("[Coworker] stop_local_llama:   taskkill stdout = {:s}".format(result.stdout.decode().strip()))
+            print("[Coworker] stop_local_llama:   taskkill stderr = {:s}".format(result.stderr.decode().strip()))
         else:
-            print("[🛠️Coworker] stop_local_llama:   running pkill -f llama-server")
+            print("[Coworker] stop_local_llama:   running pkill -f llama-server")
             result = subprocess.run(
                 ["pkill", "-f", "llama-server"],
                 capture_output=True,
                 timeout=5,
             )
-            print("[🛠️Coworker] stop_local_llama:   pkill stdout = {:s}".format(result.stdout.decode().strip()))
-            print("[🛠️Coworker] stop_local_llama:   pkill stderr = {:s}".format(result.stderr.decode().strip()))
+            print("[Coworker] stop_local_llama:   pkill stdout = {:s}".format(result.stdout.decode().strip()))
+            print("[Coworker] stop_local_llama:   pkill stderr = {:s}".format(result.stderr.decode().strip()))
     except Exception as ex:  # pylint: disable=broad-exception-caught
-        print("[🛠️Coworker] stop_local_llama:   fallback kill exception: {:s}".format(str(ex)))
+        print("[Coworker] stop_local_llama:   fallback kill exception: {:s}".format(str(ex)))
 
     with _lock:
         _state.is_running = False
         _state.current_mode = "off"
     _state.error = ""
 
-    print("[🛠️Coworker] stop_local_llama: done")
+    print("[Coworker] stop_local_llama: done")
 
 
 # ---------------------------------------------------------------------------
@@ -3266,20 +3266,20 @@ def health_check(url: str | None = None) -> bool:
     """
     Ping the LLM backend to confirm it is ready.
 
-    *url* — defaults to ``http://127.0.0.1:{port}/health`` using the configured port.
+    *url* -- defaults to ``http://127.0.0.1:{port}/health`` using the configured port.
     """
     if url is None:
         with _lock:
             port = _config.local_port
         url = _LOCAL_LLM_HEALTH_URL.format(port)
-    print("[🛠️Coworker] health_check: pinging {:s} ...".format(url))
+    print("[Coworker] health_check: pinging {:s} ...".format(url))
     try:
         with urllib.request.urlopen(url, timeout=5) as resp:
             ok = resp.status == 200
-            print("[🛠️Coworker] health_check: status={:d} -> {:s}".format(resp.status, "OK" if ok else "FAIL"))
+            print("[Coworker] health_check: status={:d} -> {:s}".format(resp.status, "OK" if ok else "FAIL"))
             return ok
     except (urllib.error.URLError, OSError) as ex:
-        print("[🛠️Coworker] health_check: connection failed — {:s}".format(str(ex)))
+        print("[Coworker] health_check: connection failed -- {:s}".format(str(ex)))
         return False
 
 
@@ -3293,14 +3293,14 @@ def _abandon_launched_server(proc: "subprocess.Popen | None") -> None:
     global _llama_process
     try:
         if proc is not None and proc.poll() is None:
-            print("[🛠️Coworker] _abandon_launched_server: terminating pid={:d}".format(proc.pid))
+            print("[Coworker] _abandon_launched_server: terminating pid={:d}".format(proc.pid))
             proc.terminate()
             try:
                 proc.wait(timeout=5)
             except Exception:  # pylint: disable=broad-exception-caught
                 proc.kill()
     except Exception as ex:  # pylint: disable=broad-exception-caught
-        print("[🛠️Coworker] _abandon_launched_server: {:s}".format(str(ex)))
+        print("[Coworker] _abandon_launched_server: {:s}".format(str(ex)))
     with _lock:
         if _llama_process is proc:
             _llama_process = None
@@ -3321,10 +3321,10 @@ def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = No
     import time as _time
     deadline = _time.monotonic() + timeout
     poll = 0.5
-    print("[🛠️Coworker] wait_until_ready: waiting up to {:.0f}s for llama-server...".format(timeout))
+    print("[Coworker] wait_until_ready: waiting up to {:.0f}s for llama-server...".format(timeout))
     while _time.monotonic() < deadline:
         if health_check():
-            print("[🛠️Coworker] wait_until_ready: server is ready")
+            print("[Coworker] wait_until_ready: server is ready")
             return True
         if proc is not None and proc.poll() is not None:
             # The launched process reports as exited.  That is NOT necessarily
@@ -3339,26 +3339,26 @@ def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = No
                     break
                 _time.sleep(0.5)
             if _serving:
-                print("[🛠️Coworker] wait_until_ready: launched process exited but a "
-                      "server is answering on the port — treating as ready")
+                print("[Coworker] wait_until_ready: launched process exited but a "
+                      "server is answering on the port -- treating as ready")
                 return True
             with _lock:
                 _port = _config.local_port
             tail = get_llama_server_log_tail()
             msg = ("llama-server exited during startup (exit code {:d}{:s}) on port "
-                   "{:d} — check the model file, mmproj, GPU memory, and whether "
+                   "{:d} -- check the model file, mmproj, GPU memory, and whether "
                    "another process is using the port").format(
                        proc.returncode, _describe_exit_code(proc.returncode), _port)
             if not tail:
                 # No log was captured (the build has no --log-file, or it died
                 # before writing one).  Say so instead of showing a stale file,
                 # and point at the console window where its output went.
-                msg += ("\n\nNo server log was captured — llama-server printed no "
+                msg += ("\n\nNo server log was captured -- llama-server printed no "
                         "output before exiting (this build has no --log-file, so its "
                         "output went to its own console window). A very early exit "
                         "is most often an unsupported launch flag or a missing/"
                         "unreadable model file.")
-            # DLL_NOT_FOUND on Windows — the CUDA/Vulkan runtime DLLs are
+            # DLL_NOT_FOUND on Windows -- the CUDA/Vulkan runtime DLLs are
             # missing from the bundled directory.
             if sys.platform == "win32" and (proc.returncode & 0xFFFFFFFF) == 0xC0000135:
                 bundled = _get_bundled_llama_dir()
@@ -3395,7 +3395,7 @@ def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = No
             if tail:
                 msg += "\n\n--- llama-server.log (tail) ---\n{:s}".format(tail)
             _set_error(msg)
-            print("[🛠️Coworker] wait_until_ready: process exited early (rc={:d}){:s}".format(
+            print("[Coworker] wait_until_ready: process exited early (rc={:d}){:s}".format(
                 proc.returncode, ":\n{:s}".format(tail) if tail else ""))
             _abandon_launched_server(proc)
             return False
@@ -3406,7 +3406,7 @@ def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = No
     if tail:
         msg += "\n\n--- llama-server.log (tail) ---\n{:s}".format(tail)
     _set_error(msg)
-    print("[🛠️Coworker] wait_until_ready: timed out")
+    print("[Coworker] wait_until_ready: timed out")
     _abandon_launched_server(proc)
     return False
 
@@ -3425,7 +3425,7 @@ def check_remote_api(base_url: str, api_key: str) -> bool:
     else:
         url = "{:s}/models".format(base)
 
-    print("[🛠️Coworker] check_remote_api: checking {:s}".format(url))
+    print("[Coworker] check_remote_api: checking {:s}".format(url))
 
     req = urllib.request.Request(
         url,
@@ -3436,17 +3436,17 @@ def check_remote_api(base_url: str, api_key: str) -> bool:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
             ok = "data" in data
-            print("[🛠️Coworker] check_remote_api: status={:d}, has_data={:s}".format(resp.status, str(ok)))
+            print("[Coworker] check_remote_api: status={:d}, has_data={:s}".format(resp.status, str(ok)))
             return ok
     except (urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
-        print("[🛠️Coworker] check_remote_api: failed — {:s}".format(str(ex)))
+        print("[Coworker] check_remote_api: failed -- {:s}".format(str(ex)))
         return False
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 
-_MIN_MMPROJ_BYTES = 1 * 1024 * 1024  # 1 MB — real projectors are 100s of MB
+_MIN_MMPROJ_BYTES = 1 * 1024 * 1024  # 1 MB -- real projectors are 100s of MB
 
 
 def _is_valid_mmproj(candidate: Path, model_name: str) -> bool:
@@ -3460,7 +3460,7 @@ def _is_valid_mmproj(candidate: Path, model_name: str) -> bool:
         return False
     if size < _MIN_MMPROJ_BYTES:
         print(
-            "[🛠️Coworker] _resolve_mmproj_path: skipping {:s} — only {:.0f} KB "
+            "[Coworker] _resolve_mmproj_path: skipping {:s} -- only {:.0f} KB "
             "(truncated/broken download?)".format(str(candidate), size / 1024.0)
         )
         return False
@@ -3508,7 +3508,7 @@ def _resolve_mmproj_path(model_path: Path | str | None) -> Path | None:
       ``mmproj_filename`` (vision-capable model), prefer the per-model
       projector file (``mmproj-F16-Qwen3.5-9B.gguf``).  Fall back to the
       generic name (``mmproj-F16.gguf``) only when this folder holds exactly
-      one vision-preset model — otherwise the generic file could be another
+      one vision-preset model -- otherwise the generic file could be another
       model's projector.
     * Otherwise, pick up a generic ``mmproj-*.gguf`` next to the model only
       when the model name itself looks vision-capable (contains "vl" or
@@ -3533,7 +3533,7 @@ def _resolve_mmproj_path(model_path: Path | str | None) -> Path | None:
 
         # Preferred: the per-model projector file (unique per preset).
         candidates = [model_dir / _local_mmproj_name(preset)]
-        # Fallback: the generic name — but only when this folder holds exactly
+        # Fallback: the generic name -- but only when this folder holds exactly
         # one vision-preset model, so the generic file can't be a different
         # model's projector.
         if _count_vision_models_in_dir(model_dir) == 1:
@@ -3542,7 +3542,7 @@ def _resolve_mmproj_path(model_path: Path | str | None) -> Path | None:
         for candidate in candidates:
             if _is_valid_mmproj(candidate, model_name):
                 print(
-                    "[🛠️Coworker] _resolve_mmproj_path: using {:s} (preset {:s})".format(
+                    "[Coworker] _resolve_mmproj_path: using {:s} (preset {:s})".format(
                         str(candidate), preset.identifier)
                 )
                 return candidate
@@ -3551,25 +3551,25 @@ def _resolve_mmproj_path(model_path: Path | str | None) -> Path | None:
         generic = model_dir / preset.mmproj_filename
         if generic.is_file() and _count_vision_models_in_dir(model_dir) > 1:
             print(
-                "[🛠️Coworker] _resolve_mmproj_path: {:s} is present but the folder contains several "
-                "vision models — one shared projector can't match them all, so it is not attached. "
+                "[Coworker] _resolve_mmproj_path: {:s} is present but the folder contains several "
+                "vision models -- one shared projector can't match them all, so it is not attached. "
                 "Use the addon's Download button (saves each projector under its own name) or rename "
                 "it to {:s}".format(generic.name, _local_mmproj_name(preset))
             )
         else:
             print(
-                "[🛠️Coworker] _resolve_mmproj_path: preset {:s} needs {:s} but it is missing — "
+                "[Coworker] _resolve_mmproj_path: preset {:s} needs {:s} but it is missing -- "
                 "vision input will be unavailable".format(preset.identifier, _local_mmproj_name(preset))
             )
         return None
 
-    # 2. Non-preset model that looks vision-capable — generic projector names.
+    # 2. Non-preset model that looks vision-capable -- generic projector names.
     if "vl" in model_name or "vision" in model_name:
         for candidate_name in ("mmproj-F16.gguf", "mmproj.gguf", "mmproj-BF16.gguf"):
             candidate = model_dir / candidate_name
             if _is_valid_mmproj(candidate, model_name):
                 print(
-                    "[🛠️Coworker] _resolve_mmproj_path: using {:s} for vision model {:s}".format(
+                    "[Coworker] _resolve_mmproj_path: using {:s} for vision model {:s}".format(
                         str(candidate), model_name)
                 )
                 return candidate
@@ -3589,7 +3589,7 @@ def _download_mmproj_if_needed(
     Skips if the projector already exists or the model doesn't have one.
 
     The projector is saved under a per-model name (see :func:`_local_mmproj_name`)
-    because several presets share the generic HF filename ``mmproj-F16.gguf`` —
+    because several presets share the generic HF filename ``mmproj-F16.gguf`` --
     saving them all under that name would clobber each other when multiple
     vision models share one models folder.
     """
@@ -3606,11 +3606,11 @@ def _download_mmproj_if_needed(
     local_name = _local_mmproj_name(preset)
     mmproj_dest = models_dir / local_name
     if mmproj_dest.exists():
-        print("[🛠️Coworker] _download_mmproj_if_needed: {:s} already exists".format(str(mmproj_dest)))
+        print("[Coworker] _download_mmproj_if_needed: {:s} already exists".format(str(mmproj_dest)))
         return
 
     print(
-        "[🛠️Coworker] _download_mmproj_if_needed: downloading {:s} as {:s} from {:s}".format(
+        "[Coworker] _download_mmproj_if_needed: downloading {:s} as {:s} from {:s}".format(
             mmproj_fname, local_name, repo_id)
     )
     _set_download_progress("Downloading vision projector {:s} ...".format(local_name))
@@ -3622,12 +3622,12 @@ def _download_mmproj_if_needed(
     success = _download_gguf_direct(repo_id, mmproj_fname, mmproj_dest, progress_callback)
     if success:
         print(
-            "[🛠️Coworker] _download_mmproj_if_needed: {:s} downloaded to {:s}".format(
+            "[Coworker] _download_mmproj_if_needed: {:s} downloaded to {:s}".format(
                 mmproj_fname, str(mmproj_dest))
         )
     else:
-        print("[🛠️Coworker] _download_mmproj_if_needed: failed to download {:s}".format(mmproj_fname))
-        # Non-fatal — the model can still run without vision.
+        print("[Coworker] _download_mmproj_if_needed: failed to download {:s}".format(mmproj_fname))
+        # Non-fatal -- the model can still run without vision.
 
 
 def _set_error(msg: str) -> None:

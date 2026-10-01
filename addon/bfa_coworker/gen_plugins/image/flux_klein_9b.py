@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-FLUX.2 Klein 9B — fast 4-step distilled image generation.
+FLUX.2 Klein 9B -- fast 4-step distilled image generation.
 
 Supports text-to-image, image-to-image, and inpainting.
 Runs on 12+ GB VRAM with fp16, or 8 GB with cpu_offload.
@@ -23,7 +23,7 @@ from ..base import (
 
 
 class FluxKlein9BPlugin(GenPlugin):
-    """FLUX.2 Klein 9B — distilled 4-step image generation."""
+    """FLUX.2 Klein 9B -- distilled 4-step image generation."""
 
     MODEL_ID = "bfl/flux-klein-9b"
     DISPLAY_NAME = "Image: FLUX.2 Klein 9B"
@@ -63,7 +63,7 @@ class FluxKlein9BPlugin(GenPlugin):
     min_vram_gb = 12
     required_packages = ["diffusers", "torch", "transformers", "PIL"]
 
-    # ── Lifecycle ──────────────────────────────────────────────────
+    # -- Lifecycle --------------------------------------------------
 
     def load(self, prefs, scene, **kwargs):
         """Load the FLUX.2 Klein 9B pipeline."""
@@ -74,7 +74,7 @@ class FluxKlein9BPlugin(GenPlugin):
         repo_id = "BFL-ML/FLUX.2-Klein-9B"
 
         print(
-            "[🛠️Coworker] FluxKlein9B: loading {:s} (mode={:s})".format(
+            "[Coworker] FluxKlein9B: loading {:s} (mode={:s})".format(
                 repo_id, mode
             )
         )
@@ -134,7 +134,7 @@ class FluxKlein9BPlugin(GenPlugin):
 
         # Run inference.
         print(
-            "[🛠️Coworker] FluxKlein9B: generating {:d}x{:d} image...".format(
+            "[Coworker] FluxKlein9B: generating {:d}x{:d} image...".format(
                 inputs.width, inputs.height
             )
         )
@@ -151,7 +151,7 @@ class FluxKlein9BPlugin(GenPlugin):
         result.save(output_path)
 
         print(
-            "[🛠️Coworker] FluxKlein9B: saved to {:s}".format(output_path)
+            "[Coworker] FluxKlein9B: saved to {:s}".format(output_path)
         )
         return output_path
 

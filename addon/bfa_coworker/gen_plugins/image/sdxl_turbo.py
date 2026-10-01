@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-SDXL Turbo — single-step image generation.
+SDXL Turbo -- single-step image generation.
 
 Adversarial diffusion distillation enables high-quality images
 in a single inference step.  Runs on 8 GB VRAM.
@@ -23,7 +23,7 @@ from ..base import (
 
 
 class SDXLTurboPlugin(GenPlugin):
-    """SDXL Turbo — single-step adversarial diffusion distillation."""
+    """SDXL Turbo -- single-step adversarial diffusion distillation."""
 
     MODEL_ID = "stability/sdxl-turbo"
     DISPLAY_NAME = "Image: SDXL Turbo"
@@ -62,7 +62,7 @@ class SDXLTurboPlugin(GenPlugin):
     min_vram_gb = 8
     required_packages = ["diffusers", "torch", "transformers", "PIL"]
 
-    # ── Lifecycle ──────────────────────────────────────────────────
+    # -- Lifecycle --------------------------------------------------
 
     def load(self, prefs, scene, **kwargs):
         """Load the SDXL Turbo pipeline."""
@@ -73,7 +73,7 @@ class SDXLTurboPlugin(GenPlugin):
         repo_id = "stabilityai/sdxl-turbo"
 
         print(
-            "[🛠️Coworker] SDXLTurbo: loading {:s} (mode={:s})".format(
+            "[Coworker] SDXLTurbo: loading {:s} (mode={:s})".format(
                 repo_id, mode
             )
         )
@@ -127,7 +127,7 @@ class SDXLTurboPlugin(GenPlugin):
             kwargs["strength"] = inputs.strength
 
         print(
-            "[🛠️Coworker] SDXLTurbo: generating {:d}x{:d} image...".format(
+            "[Coworker] SDXLTurbo: generating {:d}x{:d} image...".format(
                 inputs.width, inputs.height
             )
         )
@@ -144,7 +144,7 @@ class SDXLTurboPlugin(GenPlugin):
         result.save(output_path)
 
         print(
-            "[🛠️Coworker] SDXLTurbo: saved to {:s}".format(output_path)
+            "[Coworker] SDXLTurbo: saved to {:s}".format(output_path)
         )
         return output_path
 

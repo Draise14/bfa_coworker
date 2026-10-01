@@ -7,9 +7,9 @@
 MCP tool for downloading Poly Haven assets and importing them into Blender.
 
 Supports:
-- HDRIs — world environment shader with proper node tree.
-- Textures — full PBR material (Diffuse, Normal, Roughness, AO, Displacement).
-- Models — glTF/FBX/OBJ import with textures, or .blend append.
+- HDRIs -- world environment shader with proper node tree.
+- Textures -- full PBR material (Diffuse, Normal, Roughness, AO, Displacement).
+- Models -- glTF/FBX/OBJ import with textures, or .blend append.
 """
 
 __all__ = (
@@ -136,7 +136,7 @@ def register(mcp: FastMCP) -> None:
             asset_id: The asset ID from ``search_polyhaven_assets``
                 (e.g. ``"concrete_floor_01"``).
             asset_type: ``"hdris"``, ``"textures"``, or ``"models"``.
-            resolution: Download resolution — ``"512"``, ``"1k"``, ``"2k"``,
+            resolution: Download resolution -- ``"512"``, ``"1k"``, ``"2k"``,
                 ``"4k"``, or ``"8k"`` (HDRIs/textures).  Models always use
                 the resolution that best matches.
 
@@ -156,7 +156,7 @@ def register(mcp: FastMCP) -> None:
                 f"Choose from: {', '.join(_VALID_RESOLUTIONS)}."
             )
 
-        # ── Resolve all file URLs via the Polyhaven API ──
+        # -- Resolve all file URLs via the Polyhaven API --
         resolved = resolve_polyhaven_files(asset_id, asset_type, resolution)
         if not resolved:
             return (
@@ -164,7 +164,7 @@ def register(mcp: FastMCP) -> None:
                 f"'{asset_id}'. Check the asset ID and try again."
             )
 
-        # ── HDRIs ──
+        # -- HDRIs --
         if asset_type == "hdris":
             hdri_info = resolved.get("hdri")
             if not hdri_info:
@@ -190,7 +190,7 @@ def register(mcp: FastMCP) -> None:
                 f"{result.get('message', str(result))}"
             )
 
-        # ── Textures (full PBR) ──
+        # -- Textures (full PBR) --
         if asset_type == "textures":
             downloaded = download_texture_set(
                 asset_id, asset_type, resolution, CACHE_DIR
@@ -227,8 +227,8 @@ def register(mcp: FastMCP) -> None:
                 f"{result.get('message', str(result))}"
             )
 
-        # ── Models ──
-        # Check for .blend file first (highest quality — pre-made materials).
+        # -- Models --
+        # Check for .blend file first (highest quality -- pre-made materials).
         blend_info = resolved.get("blend")
         if blend_info:
             url, filename = blend_info
@@ -257,10 +257,10 @@ def register(mcp: FastMCP) -> None:
                             f"Appended model '{asset_id}' from .blend file "
                             f"({resolution})."
                         )
-                    # .blend import failed — fall through to glTF.
+                    # .blend import failed -- fall through to glTF.
                     print(
                         f"[Coworker] .blend import failed for {asset_id}: "
-                        f"{result.get('message', '')} — trying glTF"
+                        f"{result.get('message', '')} -- trying glTF"
                     )
 
         # Fall back to glTF/FBX/OBJ import.

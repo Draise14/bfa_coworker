@@ -15,7 +15,7 @@ work across compactions.
 Checkpoints are automatic snapshots of the session (memory block + history
 hash + message count) taken at each compaction and at session start.
 Restoring or branching from a checkpoint is always a user action and never
-destroys the current state — restoring first snapshots the current session.
+destroys the current state -- restoring first snapshots the current session.
 
 This module is deliberately free of ``bpy`` so it can be unit-tested
 outside Blender.
@@ -58,7 +58,7 @@ MEMORY_TARGET_TOKENS = 600
 # safe prompt budget (see agent_controller._compute_prompt_budget).
 COMPACTION_TRIGGER_RATIO = 0.6
 
-# Approximate characters per token — must match agent_controller._CHARS_PER_TOKEN.
+# Approximate characters per token -- must match agent_controller._CHARS_PER_TOKEN.
 _CHARS_PER_TOKEN = 3.5
 
 _MAX_MEMORY_CHARS = int(MEMORY_TARGET_TOKENS * _CHARS_PER_TOKEN)
@@ -137,7 +137,7 @@ def build_memory_block(
 
     *summary* is the LLM-written memory text from the dedicated compaction
     turn (when available); without it a heuristic summary is built from the
-    retired turns.  The result is the full replacement block — prior memory
+    retired turns.  The result is the full replacement block -- prior memory
     content is expected to be folded into *summary* by the writer prompt,
     or is preserved verbatim here when no summary was produced.
     """
@@ -159,7 +159,7 @@ def memory_writer_prompt(retired_text: str, prior_memory: str) -> list[dict[str,
     sys_text = (
         "You maintain a compact session-memory note for a Blender AI agent. "
         "Rewrite the note so it captures the goal, decisions made, objects & "
-        "files touched, pending work, and errors seen — using ONLY the "
+        "files touched, pending work, and errors seen -- using ONLY the "
         "conversation below plus the previous note. Keep the exact section "
         "headings: Goal / Decisions / Objects & files touched / Pending / "
         "Errors seen. Be terse (bullet points, under {:d} tokens total). "
@@ -211,7 +211,7 @@ def compact_history(
 
     Returns ``(new_history, memory_block, retired)``.  *memory_writer* (when
     given) receives the retired conversation text plus the prior memory and
-    returns the LLM-written note (or ``None`` on failure — the heuristic
+    returns the LLM-written note (or ``None`` on failure -- the heuristic
     fallback is used then).  The caller is responsible for archiving
     *retired* and snapshotting a checkpoint afterwards.
     """
@@ -438,7 +438,7 @@ class CheckpointStore:
             self.checkpoints = [c for c in checkpoints if isinstance(c, dict)]
 
 
-# Module singleton — mirrors agent_controller's ``_agent_state`` pattern.
+# Module singleton -- mirrors agent_controller's ``_agent_state`` pattern.
 store = CheckpointStore()
 
 # Guards ``store`` mutations shared between the turn worker thread

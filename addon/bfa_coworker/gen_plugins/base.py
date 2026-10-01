@@ -7,7 +7,7 @@ Base classes and data types for generative model plugins.
 
 Plugins subclass ``GenPlugin`` and are placed in
 ``gen_plugins/<media_type>/`` for auto-discovery.  Adding a new model
-means dropping a single ``.py`` file — no registration code needed.
+means dropping a single ``.py`` file -- no registration code needed.
 
 The framework collects inputs from the UI (or MCP tools), calls
 ``load()`` once to prepare the pipeline, then calls ``generate()``
@@ -59,7 +59,7 @@ class GenUISection(Enum):
     """Ordered sections the UI panel renders for a plugin.
 
     The panel iterates ``plugin.UI_SECTIONS`` and calls the matching
-    renderer.  Sections not listed are hidden — the user never sees
+    renderer.  Sections not listed are hidden -- the user never sees
     controls they cannot use.
     """
 
@@ -164,29 +164,29 @@ class GenPlugin:
         Default values for generation controls.
     """
 
-    # ── Required Identity (override in subclass) ──
+    # -- Required Identity (override in subclass) --
 
     MODEL_ID: str = ""
     DISPLAY_NAME: str = ""
     MODEL_TYPE: str = ""       # "image" | "video" | "audio" | "text" | "3d"
     DESCRIPTION: str = ""
 
-    # ── Declarative Inputs ──
+    # -- Declarative Inputs --
 
     INPUTS: GenInputSpec = GenInputSpec.PROMPT
 
-    # ── Declarative UI ──
+    # -- Declarative UI --
 
     UI_SECTIONS: list[GenUISection] = [
         GenUISection.PROMPT,
         GenUISection.SEED,
     ]
 
-    # ── Default Parameters ──
+    # -- Default Parameters --
 
     DEFAULT_PARAMS: GenParams = field(default_factory=GenParams)
 
-    # ── Capability Flags ──
+    # -- Capability Flags --
 
     supports_img2img: bool = False
     supports_inpaint: bool = False
@@ -195,7 +195,7 @@ class GenPlugin:
     min_vram_gb: int = 6
     required_packages: list[str] = field(default_factory=list)
 
-    # ── Lifecycle ──────────────────────────────────────────────────
+    # -- Lifecycle --------------------------------------------------
 
     def is_available(self) -> bool:
         """Check whether required Python packages are installed.
@@ -254,12 +254,12 @@ class GenPlugin:
         """Release GPU memory held by the pipeline.
 
         Called when switching models or shutting down.  The default
-        implementation does nothing — override if your pipeline holds
+        implementation does nothing -- override if your pipeline holds
         GPU resources that need explicit cleanup.
         """
         _ = pipe_obj
 
-    # ── Optional UI Overrides ──────────────────────────────────────
+    # -- Optional UI Overrides --------------------------------------
 
     def draw_custom_ui(self, col, context) -> bool:
         """Draw custom UI controls for this plugin.

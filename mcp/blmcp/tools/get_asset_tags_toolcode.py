@@ -155,7 +155,7 @@ def main(params: Params) -> Result:
             metadata=metadata,
         )
 
-    # Fallback: live inspection (append in the session — the pre-Phase C path).
+    # Fallback: live inspection (append in the session -- the pre-Phase C path).
     # Find the blend file containing this asset.
     blend_path = None
     for root, _dirs, files in os.walk(lib_path):
@@ -406,7 +406,7 @@ def _get_preview_path(datablock) -> str:
     """Return the preview image path for a datablock, or empty string."""
     try:
         if hasattr(datablock, "preview") and datablock.preview:
-            # Blender preview image — try to get the file path.
+            # Blender preview image -- try to get the file path.
             preview = datablock.preview
             if hasattr(preview, "image_size_raw"):
                 return ""  # In-memory only, no file path.

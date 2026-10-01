@@ -59,7 +59,7 @@ class _BFACW_OT_test_remote_api(bpy.types.Operator):  # type: ignore[misc]
         if ok:
             self.report({"INFO"}, "Remote API connection successful")
         else:
-            self.report({"ERROR"}, "Remote API connection failed — check URL and key")
+            self.report({"ERROR"}, "Remote API connection failed -- check URL and key")
         return {"FINISHED"}
 
 
@@ -71,7 +71,7 @@ class _BFACW_OT_refresh_remote_models(bpy.types.Operator):  # type: ignore[misc]
     def execute(self, context: bpy.types.Context) -> set[str]:
         prefs = context.preferences.addons[__package__].preferences
         if not prefs.remote_api_url:
-            self.report({"ERROR"}, "No API URL configured — select a provider first")
+            self.report({"ERROR"}, "No API URL configured -- select a provider first")
             return {"CANCELLED"}
         if not prefs.remote_api_key:
             self.report({"ERROR"}, "No API key configured")
@@ -138,9 +138,9 @@ class _BFACW_OT_check_ports(bpy.types.Operator):  # type: ignore[misc]
 
         summary = "  |  ".join(lines)
         if all(result.values()):
-            self.report({"INFO"}, "All ports available — {:s}".format(summary))
+            self.report({"INFO"}, "All ports available -- {:s}".format(summary))
         else:
-            self.report({"WARNING"}, "Some ports in use — {:s}".format(summary))
+            self.report({"WARNING"}, "Some ports in use -- {:s}".format(summary))
 
         return {"FINISHED"}
 
@@ -190,7 +190,7 @@ class _BFACW_OT_ping_agent(bpy.types.Operator):  # type: ignore[misc]
 
         summary = " | ".join(lines)
         if result.get("all_ok"):
-            self.report({"INFO"}, "All OK — {:s}".format(summary))
+            self.report({"INFO"}, "All OK -- {:s}".format(summary))
         else:
             self.report({"ERROR"}, summary)
 
@@ -198,19 +198,19 @@ class _BFACW_OT_ping_agent(bpy.types.Operator):  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
-# Multi-Step Test Suites — natural artist workflow sequences
+# Multi-Step Test Suites -- natural artist workflow sequences
 #
 # Each test suite is a list of (step_number, label, prompt) tuples.
 # Steps are designed to be run in order, building on each other like
-# a real artist would work. The prompts use natural language — as if
+# a real artist would work. The prompts use natural language -- as if
 # you're asking a colleague to do something.
 
 _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
-    # ── Scene Building Workflow ──────────────────────────────────────
+    # -- Scene Building Workflow --------------------------------------
     # Tests object creation, collections, materials, lighting, camera
     "scene_build": [
         (1, "Ground",
-         "I'm setting up a scene to render. First, create a rounded corner ground mesh — "
+         "I'm setting up a scene to render. First, create a rounded corner ground mesh -- "
          "like a large stage floor or backdrop. "
          "Name it \"Ground\"."),
         (2, "Props",
@@ -232,17 +232,17 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
          "for fill. Put both in the Lighting collection."),
         (6, "Camera",
          "Place the camera to frame the whole scene from a slight "
-         "high angle — like a long shot. Use a nice portrait "
+         "high angle -- like a long shot. Use a nice portrait "
          "focal length. Render at a decent HD resolution with EEVEE."),
     ],
-    # ── Animation Workflow ──────────────────────────────────────────
+    # -- Animation Workflow ------------------------------------------
     # Tests keyframes, timeline, motion paths
     "animation": [
         (1, "Ball",
          "Create a sphere at the origin, name it \"Bouncing Ball\". "
          "Give it a shiny red rubber material with smooth shading and a bit of SSS."),
         (2, "Floor",
-         "Add floor below the ball — position it "
+         "Add floor below the ball -- position it "
          "just under the ball and scale it wide enoguh for the animation. "
          "Give it a simple tiled floor material (like a gym floor) and name it \"Floor\"."),
         (3, "Bounce Keys",
@@ -294,7 +294,7 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
          "report the final vertex count and modifier stack."),
     ],
 
-    # ── Asset Browser Workflow ─────────────────────────────────────
+    # -- Asset Browser Workflow -------------------------------------
     # Tests asset browser search, material assignment, node groups
     "assets_browser": [
         (1, "Search",
@@ -311,7 +311,7 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
         (6, "World",
          "Load a world asset from the asset browser and set it as the scene world."),
     ],
-    # ── Poly Haven Workflow ───────────────────────────────────────
+    # -- Poly Haven Workflow ---------------------------------------
     # Tests Poly Haven integration, PBR materials, model import
     "polyhaven": [
         (1, "Texture",
@@ -325,33 +325,33 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
         (5, "Render",
          "Add camera and lighting, render the scene with the imported assets."),
     ],
-    # ── Shader Nodes Workflow ─────────────────────────────────────
+    # -- Shader Nodes Workflow -------------------------------------
     # Tests material creation, node tree building
     "shader_nodes": [
         (1, "Material",
          "Create a new material named \"Procedural_Grass\"."),
         (2, "Node Tree",
-         "Build a node tree: Noise Texture → ColorRamp → Principled BSDF. "
+         "Build a node tree: Noise Texture -> ColorRamp -> Principled BSDF. "
          "Use green colors for the grass look."),
         (3, "Assign",
          "Create a plane and assign the Procedural_Grass material to it."),
         (4, "Preview",
          "Take a screenshot of the 3D viewport to preview the shader."),
     ],
-    # ── Geometry Nodes Workflow ───────────────────────────────────
+    # -- Geometry Nodes Workflow -----------------------------------
     # Tests GN modifier, node tree building
     "geometry_nodes": [
         (1, "GN Modifier",
          "Create a Geometry Nodes modifier on a new grid object."),
         (2, "Node Tree",
-         "Build a GN node tree: Distribute Points on Faces → Instance on Points "
-         "(using an Ico Sphere) → Set Shade Smooth."),
+         "Build a GN node tree: Distribute Points on Faces -> Instance on Points "
+         "(using an Ico Sphere) -> Set Shade Smooth."),
         (3, "Random Scale",
          "Add a Random Value node to vary the instance scale between 0.5 and 2.0."),
         (4, "Verify",
          "Take a screenshot of the 3D viewport to verify the geometry nodes result."),
     ],
-    # ── Sequencer Workflow ────────────────────────────────────────
+    # -- Sequencer Workflow ----------------------------------------
     # Tests video sequence editor operations
     "sequencer": [
         (1, "Color Strip",
@@ -363,29 +363,29 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
         (4, "Range",
          "Set the render frame range from 1 to 100 for the sequencer output."),
     ],
-    # ── Image Editor Workflow ─────────────────────────────────────
+    # -- Image Editor Workflow -------------------------------------
     # Tests image creation, pixel manipulation
     "image_editor": [
         (1, "New Image",
          "Create a new 512x512 image named \"Test_Pattern\" in the Image Editor."),
         (2, "Draw",
-         "Draw a colored rectangle on the image — fill the center half with red."),
+         "Draw a colored rectangle on the image -- fill the center half with red."),
         (3, "Save",
          "Save the image to disk as test_pattern.png."),
     ],
-    # ── Compositor Workflow ───────────────────────────────────────
+    # -- Compositor Workflow ---------------------------------------
     # Tests compositor node setup
     "compositor": [
         (1, "Enable",
          "Enable the compositor and set it to use nodes."),
         (2, "Node Tree",
-         "Add Render Layers → Blur → Viewer node chain in the compositor."),
+         "Add Render Layers -> Blur -> Viewer node chain in the compositor."),
         (3, "Settings",
          "Set the blur to use Gaussian with 10px size."),
         (4, "Render",
          "Render a frame and verify the compositor output."),
     ],
-    # ── Multi-Editor Cross-Context ────────────────────────────────
+    # -- Multi-Editor Cross-Context --------------------------------
     # Tests agent ability to work across multiple editors
     "multi_editor_cross": [
         (1, "Mesh",
@@ -397,11 +397,11 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
         (4, "Render",
          "Render a frame of the monkey with the GN modifier and material applied."),
     ],
-    # ── Baseline Latency (quick sanity — fun scene) ─────────────────
+    # -- Baseline Latency (quick sanity -- fun scene) -----------------
     "baseline": [
         (1, "Stone Ring",
          "Can you make a stonehenge? First, create a ring of stone "
-         "pillars — tall, rough-hewn blocks arranged in a circle "
+         "pillars -- tall, rough-hewn blocks arranged in a circle "
          "around the center, evenly spaced. Make them look like "
          "standing stones. Name them \"Pillar_1\" through \"Pillar_8\"."),
         (2, "Lintels",
@@ -410,7 +410,7 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
          "Make each one thick enough to look like a solid stone "
          "crossbeam. Name them \"Lintel_1\" through \"Lintel_8\"."),
         (3, "Ground",
-         "Add a large flat ground plane beneath the circle — a wide "
+         "Add a large flat ground plane beneath the circle -- a wide "
          "flat disc. Give it a grassy green material."),
         (4, "Material",
          "Give all the stone pillars and lintels a rough stone "
@@ -426,7 +426,7 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
          "Use a wide focal length for a dramatic shot. "
          "Frame and render at square resolution."),
     ],
-    # ── Error Handling (ambiguous prompts) ──────────────────────────
+    # -- Error Handling (ambiguous prompts) --------------------------
     "error_handling": [
         (1, "Vague",
          "Make it nicer."),
@@ -435,7 +435,7 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
         (3, "Contradiction",
          "Delete everything but keep all objects."),
     ],
-    # ── Vision: Camera Placement ────────────────────────────────────
+    # -- Vision: Camera Placement ------------------------------------
     # For vision-capable models. Tests whether the model can SEE the
     # viewport via get_screenshot_of_area_as_image and use what it sees
     # to place, reframe, and verify a camera.
@@ -443,7 +443,7 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
         (1, "Stage",
          "I'm testing camera framing, so build me a small product stage: "
          "a round ground disc with a light gray material, and three distinct "
-         "objects on it — a red cube, a blue cylinder, and a green sphere. "
+         "objects on it -- a red cube, a blue cylinder, and a green sphere. "
          "Place them asymmetrically (not in a line, not all at the center) "
          "at different distances from the center so the composition is "
          "interesting. Name them \"Cube_A\", \"Cylinder_B\", \"Sphere_C\". "
@@ -464,7 +464,7 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
          "like a product advertisement. Take a screenshot of the viewport "
          "with get_screenshot_of_area_as_image and LOOK at it. Adjust the "
          "camera position, angle, and target until the composition looks "
-         "intentional — all three objects visible and balanced, the ground "
+         "intentional -- all three objects visible and balanced, the ground "
          "disc framing the bottom of the shot. Iterate with more screenshots "
          "until it looks good, then report the camera location, rotation, "
          "and what the final screenshot showed."),
@@ -478,10 +478,10 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
          "camera location, rotation, and focal length, and what the final "
          "screenshot looks like."),
     ],
-    # ── Vision: Relative Placement ──────────────────────────────────
+    # -- Vision: Relative Placement ----------------------------------
     # For vision-capable models. Tests whether the model can SEE one
     # object in relation to another and position new objects correctly
-    # (on top, centered, touching) — verified via screenshots.
+    # (on top, centered, touching) -- verified via screenshots.
     "vision_relative": [
         (1, "Table",
          "I'm testing how well you can judge object placement visually. "
@@ -503,7 +503,7 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
          "Place a small green sphere (a marble, 0.08m radius) on top of the "
          "cup's rim, balanced on the opening. Take a screenshot with "
          "get_screenshot_of_area_as_image and LOOK at it: the marble must sit "
-         "centered on the cup's opening — not floating above it, not half- "
+         "centered on the cup's opening -- not floating above it, not half- "
          "buried inside. Adjust the marble's position and re-screenshot until "
          "the screenshot shows it balanced on top. Name it \"Marble\"."),
         (4, "Centered Cone",
@@ -512,12 +512,12 @@ _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
          "the cone exactly centered on the cylinder's top face. Take a "
          "screenshot with get_screenshot_of_area_as_image, look at it, and "
          "adjust the cone's X/Y position until it is visually dead-center on "
-         "the cylinder — neither leaning nor off to the side. Name them "
+         "the cylinder -- neither leaning nor off to the side. Name them "
          "\"Pedestal\" and \"Cone\"."),
         (5, "Touch",
          "Create one more cube (0.4m) and place it NEXT TO the pedestal: "
          "the new cube's side must touch the pedestal's side exactly, both "
-         "sitting on the table top — no gap and no overlap. Take a screenshot "
+         "sitting on the table top -- no gap and no overlap. Take a screenshot "
          "with get_screenshot_of_area_as_image, look at it, and adjust the "
          "cube's position until the two objects are flush. Name it "
          "\"Neighbor\" and report how you verified the contact."),
@@ -588,10 +588,10 @@ class _BFACW_OT_test_step(bpy.types.Operator):  # type: ignore[misc]
             _test_suite_progress[self.suite] = 0
             # Persist results.
             _save_benchmark_results()
-            self.report({"INFO"}, "Step {:d}/{:d} '{:s}' done — suite complete, auto-reset!".format(
+            self.report({"INFO"}, "Step {:d}/{:d} '{:s}' done -- suite complete, auto-reset!".format(
                 step_num, total, step_label))
         else:
-            self.report({"INFO"}, "Step {:d}/{:d} '{:s}' done — {:d} more to go".format(
+            self.report({"INFO"}, "Step {:d}/{:d} '{:s}' done -- {:d} more to go".format(
                 step_num, total, step_label, remaining))
         return {"FINISHED"}
 
@@ -648,7 +648,7 @@ class _BFACW_OT_asset_selftest_run(bpy.types.Operator):  # type: ignore[misc]
             try:
                 _ast.run_auto_suite()
             except Exception as ex:  # pylint: disable=broad-exception-caught
-                print("[🛠️Coworker] asset self-test crashed: {:s}".format(str(ex)))
+                print("[Coworker] asset self-test crashed: {:s}".format(str(ex)))
 
         threading.Thread(target=_do_run, daemon=True).start()
         return {"RUNNING_MODAL"}
@@ -718,9 +718,9 @@ def _save_benchmark_results() -> None:
         existing = existing[-20:]
         with open(_BENCHMARK_RESULTS_PATH, "w") as f:
             _json.dump(existing, f, indent=2)
-        print("[🛠️Coworker] Benchmark results saved to {:s}".format(_BENCHMARK_RESULTS_PATH))
+        print("[Coworker] Benchmark results saved to {:s}".format(_BENCHMARK_RESULTS_PATH))
     except Exception as ex:
-        print("[🛠️Coworker] Failed to save benchmark results: {:s}".format(str(ex)))
+        print("[Coworker] Failed to save benchmark results: {:s}".format(str(ex)))
 
 
 def _load_previous_benchmark() -> dict | None:
@@ -795,9 +795,9 @@ def _run_test_step(
         api_key = llm_cfg.remote_api_key
         model = llm_cfg.remote_model or None
 
-    print("[🛠️Coworker] test suite '{:s}': step {:d}/{:s} starting...".format(
+    print("[Coworker] test suite '{:s}': step {:d}/{:s} starting...".format(
         suite_key, step_num, step_label))
-    print("[🛠️Coworker] test suite '{:s}': prompt = {:s}".format(suite_key, prompt))
+    print("[Coworker] test suite '{:s}': prompt = {:s}".format(suite_key, prompt))
 
     def _do_step():
         import time as _time
@@ -811,7 +811,7 @@ def _run_test_step(
             _ac.run_conversation_turn(
                 user_message=prompt,
                 on_text=None,
-                on_status=lambda s: print("[🛠️Coworker] test suite '{:s}': status = {:s}".format(
+                on_status=lambda s: print("[Coworker] test suite '{:s}': status = {:s}".format(
                     suite_key, s)),
                 llm_url=llm_url or None,
                 api_key=api_key or None,
@@ -833,16 +833,16 @@ def _run_test_step(
             # there keeps the log honest about which step introduced it.
             if step_error and step_error != _prev_error:
                 _record_step_outcome(suite_key, step_num, elapsed, step_error)
-                print("[🛠️Coworker] test suite '{:s}': step {:d}/{:s} FAILED in {:.1f}s — {:s}".format(
+                print("[Coworker] test suite '{:s}': step {:d}/{:s} FAILED in {:.1f}s -- {:s}".format(
                     suite_key, step_num, step_label, elapsed, step_error))
             else:
                 _record_step_outcome(suite_key, step_num, elapsed)
-                print("[🛠️Coworker] test suite '{:s}': step {:d}/{:s} completed in {:.1f}s".format(
+                print("[Coworker] test suite '{:s}': step {:d}/{:s} completed in {:.1f}s".format(
                     suite_key, step_num, step_label, elapsed))
         except Exception as ex:
             elapsed = _time.monotonic() - t_start
             _record_step_outcome(suite_key, step_num, elapsed, str(ex))
-            print("[🛠️Coworker] test suite '{:s}': step {:d}/{:s} FAILED in {:.1f}s — {:s}".format(
+            print("[Coworker] test suite '{:s}': step {:d}/{:s} FAILED in {:.1f}s -- {:s}".format(
                 suite_key, step_num, step_label, elapsed, str(ex)))
             _ac._agent_state.error = str(ex)
         finally:
@@ -900,7 +900,7 @@ class BFACW_OT_copy_mcp_config(bpy.types.Operator):  # type: ignore[misc]
         elif check.get("bridge_ok") is False:
             self.report(
                 {"WARNING"},
-                "Config copied and valid — but the bridge is not running on "
+                "Config copied and valid -- but the bridge is not running on "
                 "port {:d}. Click Start Bridge.".format(_bridge_port),
             )
         else:
@@ -948,10 +948,10 @@ class BFACW_OT_test_mcp_config(bpy.types.Operator):  # type: ignore[misc]
 
         self.report(
             {"ERROR"},
-            "{:s} — {:s}".format(
+            "{:s} -- {:s}".format(
                 result.get("summary", "Config invalid"),
                 result.get("hint", ""),
-            ).strip(" —"),
+            ).strip(" --"),
         )
         return {"CANCELLED"}
 
@@ -966,8 +966,8 @@ def _open_addon_prefs_filtered(context: bpy.types.Context, pref_tab: str | None 
     legacy add-ons whose module is registered in ``addon_utils.addons_fake_modules``
     (extension add-ons get a ``bl_ext.`` module prefix and are skipped), and it
     fails silently when called before the preferences window has finished
-    building.  Instead we set the same state that operator would set — the
-    addon search filter — directly, deferred until the preferences area exists.
+    building.  Instead we set the same state that operator would set -- the
+    addon search filter -- directly, deferred until the preferences area exists.
     """
     bpy.ops.screen.userpref_show('INVOKE_DEFAULT')
     context.preferences.active_section = 'ADDONS'
@@ -980,7 +980,7 @@ def _open_addon_prefs_filtered(context: bpy.types.Context, pref_tab: str | None 
         except Exception:
             pass
 
-    # Defer the search filter until the preferences window is fully drawn —
+    # Defer the search filter until the preferences window is fully drawn --
     # calling it synchronously races the addon list population and is dropped.
     def _apply_filter() -> float | None:
         try:
@@ -1234,9 +1234,9 @@ class BFACW_OT_test_polyhaven_hdri(bpy.types.Operator):  # type: ignore[misc]
                     "download_polyhaven_asset",
                     {"asset_id": "sunset_meadow", "asset_type": "hdris", "resolution": "2k"},
                 )
-                print("[🛠️Coworker] Poly Haven test HDRI result: {:s}".format(str(result)[:200]))
+                print("[Coworker] Poly Haven test HDRI result: {:s}".format(str(result)[:200]))
             except Exception as ex:
-                print("[🛠️Coworker] Poly Haven test HDRI failed: {:s}".format(str(ex)))
+                print("[Coworker] Poly Haven test HDRI failed: {:s}".format(str(ex)))
         thread = threading.Thread(target=_do_download, daemon=True)
         thread.start()
         return {"FINISHED"}
@@ -1266,9 +1266,9 @@ class BFACW_OT_test_polyhaven_texture(bpy.types.Operator):  # type: ignore[misc]
                     "download_polyhaven_asset",
                     {"asset_id": "brick_wall_001", "asset_type": "textures", "resolution": "2k"},
                 )
-                print("[🛠️Coworker] Poly Haven test texture result: {:s}".format(str(result)[:200]))
+                print("[Coworker] Poly Haven test texture result: {:s}".format(str(result)[:200]))
             except Exception as ex:
-                print("[🛠️Coworker] Poly Haven test texture failed: {:s}".format(str(ex)))
+                print("[Coworker] Poly Haven test texture failed: {:s}".format(str(ex)))
         thread = threading.Thread(target=_do_download, daemon=True)
         thread.start()
         return {"FINISHED"}
@@ -1392,7 +1392,7 @@ class BFACW_OT_compare_benchmarks(bpy.types.Operator):  # type: ignore[misc]
         prev_timings = prev_data.get("timings", {})
         prev_ts = prev_data.get("timestamp", 0)
 
-        print("\n[🛠️Coworker] Benchmark Comparison")
+        print("\n[Coworker] Benchmark Comparison")
         print("  Previous run: {:s}".format(
             _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(prev_ts))))
         print("  Current run: {:s}".format(
@@ -1413,7 +1413,7 @@ class BFACW_OT_compare_benchmarks(bpy.types.Operator):  # type: ignore[misc]
             else:
                 print("  {:<25s} {:>8s} {:>7.1f}s {:>8s}".format(
                     "{:s}:{:d}".format(suite, step),
-                    "—", elapsed, "NEW"))
+                    "--", elapsed, "NEW"))
 
         self.report({"INFO"}, "Benchmark comparison printed to console.")
         return {"FINISHED"}

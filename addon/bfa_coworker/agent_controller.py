@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Agent Controller — orchestrates the conversation loop inside Blender.
+Agent Controller -- orchestrates the conversation loop inside Blender.
 
 Manages the MCP server subprocess and the LLM conversation
 loop. All async I/O runs on a background daemon thread and communicates
@@ -161,7 +161,7 @@ _MIN_REPLY_TOKENS = 256
 # is injected only into whatever space is genuinely SPARE after the messages,
 # the tool schema, and this reserve (room for the turn's own tool exchanges and
 # follow-ups), so the allowance tunes itself to the window and the conversation
-# — there is no fraction-of-context or ceiling for the user to tune.  A larger
+# -- there is no fraction-of-context or ceiling for the user to tune.  A larger
 # window, or a shorter conversation, automatically keeps more skills.
 _SKILLS_RESERVE_RATIO = 0.30   # reserve this share of the prompt budget
 _SKILLS_RESERVE_TOKENS = 1024  # ...but at least this many
@@ -241,11 +241,11 @@ def _get_system_prompt(use_compact: bool | None = None) -> str:
             text = textwrap.dedent(body).strip()
             if text:
                 _system_prompt_cache[variant] = text
-                print("[🛠️Coworker] _get_system_prompt: loaded {:d} chars ({:s}) from {:s}".format(
+                print("[Coworker] _get_system_prompt: loaded {:d} chars ({:s}) from {:s}".format(
                     len(text), variant, str(prompt_path)))
                 return text
         except Exception as ex:  # pylint: disable=broad-exception-caught
-            print("[🛠️Coworker] _get_system_prompt: error loading {:s}: {:s}".format(
+            print("[Coworker] _get_system_prompt: error loading {:s}: {:s}".format(
                 str(prompt_path), str(ex)))
 
     # Fallback: a brief built-in system prompt.
@@ -267,19 +267,19 @@ def _get_system_prompt_with_rules() -> str:
     try:
         import bpy  # pylint: disable=import-error
 
-        # ── Blender version announcement ──────────────────────
+        # -- Blender version announcement ----------------------
         version_str = ".".join(str(v) for v in bpy.app.version[:3])
         version_header = (
             "You are connected to Blender {:s}. "
             "All code you write must be compatible with this version.\n\n"
-            "STYLE: Think aloud in full paragraphs. Explain your reasoning step by step — "
+            "STYLE: Think aloud in full paragraphs. Explain your reasoning step by step -- "
             "what you observe, what you plan to do, and why. The user should be able to "
             "follow your thought process. Be thorough but not repetitive. "
-            "When reporting tool results, be brief — just state what happened and whether "
+            "When reporting tool results, be brief -- just state what happened and whether "
             "it succeeded."
         ).format(version_str)
 
-        # ── Built-in skills (version-aware, from addon/skills/) ──
+        # -- Built-in skills (version-aware, from addon/skills/) --
         try:
             from . import skills as _skills_mod  # pylint: disable=import-error
             # Get user custom skills text from preferences.
@@ -294,7 +294,7 @@ def _get_system_prompt_with_rules() -> str:
                 bpy_version=bpy.app.version,
                 custom_text=custom_text,
             )
-            # ── User skills (from SCRIPTS/bfa_coworker_skills/*.md) ──
+            # -- User skills (from SCRIPTS/bfa_coworker_skills/*.md) --
             user_skills_block = _skills_mod.get_user_skills()
             if user_skills_block:
                 if skills_block:
@@ -304,7 +304,7 @@ def _get_system_prompt_with_rules() -> str:
         except Exception:
             skills_block = ""
 
-        # ── Project rules (user .md files) ────────────────────
+        # -- Project rules (user .md files) --------------------
         rules_dir = Path(bpy.utils.user_resource("SCRIPTS")) / "bfa_coworker_rules"
         rules_parts = []
         global_rules = rules_dir / "global.md"
@@ -316,7 +316,7 @@ def _get_system_prompt_with_rules() -> str:
             if blend_rules.exists():
                 rules_parts.append(blend_rules.read_text(encoding="utf-8"))
 
-        # ── Assemble ──────────────────────────────────────────
+        # -- Assemble ------------------------------------------
         parts: list[str] = [version_header]
 
         if skills_block:
@@ -523,7 +523,7 @@ def _compute_prompt_budget(ctx: int, max_tokens: int) -> int:
     configured ``max_tokens``.  Reserving the full reply was a real defect:
     ``local_max_tokens`` defaults to the whole context size, so reserving it
     (clamped to half the window) left only ~a third of a 16K window for the
-    system prompt and the tool schema — and on a smaller window the fixed
+    system prompt and the tool schema -- and on a smaller window the fixed
     overhead no longer fit at all, so the very first turn was refused with a
     "conversation no longer fits" error even though nothing had been said.
 
@@ -576,7 +576,7 @@ def _prompt_preflight(
     exceeds the budget the history is re-trimmed with
     :func:`_fit_history_to_budget` (which keeps the system prompt and the
     last user turn). Only when even that pinned turn cannot fit is a
-    friendly, actionable error returned instead — surfacing it locally beats
+    friendly, actionable error returned instead -- surfacing it locally beats
     letting the server reject the POST with a raw 400 the user cannot act
     on.
 
@@ -597,8 +597,8 @@ def _prompt_preflight(
     fitted = _repair_tool_call_pairs(fitted)
     if _estimate_messages_tokens(fitted) > headroom:
         return fitted, (
-            "This conversation no longer fits the local context window — "
-            "compacting conversation… Use 'Compact Now' in the Session panel "
+            "This conversation no longer fits the local context window -- "
+            "compacting conversation... Use 'Compact Now' in the Session panel "
             "or start a new chat."
         )
     return fitted, None
@@ -902,8 +902,8 @@ def _flatten_for_plain_chat(messages: list[dict[str, Any]]) -> list[dict[str, An
     return merged
 
 
-# ── Tool domain system (hybrid: pre-detect + on-demand) ────────────
-# Surface tools are always loaded — they cover code execution and basic
+# -- Tool domain system (hybrid: pre-detect + on-demand) ------------
+# Surface tools are always loaded -- they cover code execution and basic
 # scene inspection.  Domain tools are loaded based on the user's prompt
 # (pre-detected) or on-demand via the ``load_tools`` meta-tool.
 #
@@ -911,11 +911,11 @@ def _flatten_for_plain_chat(messages: list[dict[str, Any]]) -> list[dict[str, An
 # giving the LLM access to all tools when needed.
 
 _SURFACE_TOOLS = frozenset({
-    # ── Code execution ──────────────────────────────────────────────
+    # -- Code execution ----------------------------------------------
     "execute_blender_code",
     "execute_blender_plan",  # Two-phase: plan -> tested code
     "list_blender_templates",  # Discover available templates
-    # ── Scene inspection ─────────────────────────────────────────────
+    # -- Scene inspection ---------------------------------------------
     "get_blendfile_summary_datablocks",
     "get_blendfile_summary_missing_files",
     "get_blendfile_summary_of_linked_libraries",
@@ -924,15 +924,15 @@ _SURFACE_TOOLS = frozenset({
     "get_object_detail_summary",
     "get_objects_summary",
     "get_operation_history",      # Avoid repeating failed operations.
-    # Read-only asset/polyhaven status — useful for any domain, was previously
+    # Read-only asset/polyhaven status -- useful for any domain, was previously
     # unreachable because it appeared in no surface/domain set.
     "get_polyhaven_status",
-    # ── Visual feedback (always useful for any domain) ────────────────
+    # -- Visual feedback (always useful for any domain) ----------------
     "get_screenshot_of_window_as_image",
     "get_screenshot_of_window_as_json",
     "render_thumbnail_to_path",
-    # ── Bundled Blender API + manual docs — read-only, no network ────
-    # Bundled Blender API + manual docs — read-only, no network
+    # -- Bundled Blender API + manual docs -- read-only, no network ----
+    # Bundled Blender API + manual docs -- read-only, no network
     # Always available so the agent can look up correct APIs on error.
     "get_python_api_docs",
     "search_api_docs",
@@ -1042,7 +1042,7 @@ _DOMAIN_KEYWORDS: dict[str, list[str]] = {
 }
 
 # Synthetic tool schema for on-demand domain loading.
-# This is NOT a real MCP tool — the conversation loop intercepts it.
+# This is NOT a real MCP tool -- the conversation loop intercepts it.
 _LOAD_TOOLS_SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -1095,7 +1095,7 @@ def _detect_domain_from_scene() -> set[str]:
     Scans ``bpy.data`` for objects, materials, lights, cameras, modifiers,
     sequencer strips, etc. and returns a set of domain keys that match
     what's already in the scene.  This runs in addition to keyword-based
-    detection — if the scene has armatures with animation data, the
+    detection -- if the scene has armatures with animation data, the
     "animation" domain is pre-loaded even if the user didn't type "animate".
     """
     domains: set[str] = set()
@@ -1163,8 +1163,8 @@ def _build_tool_set(
 ) -> list[dict[str, Any]]:
     """Build the tool set for local AND remote mode: surface + domains + load_tools.
 
-    *all_openai_tools* — the full list of all available tools in OpenAI format.
-    *domains* — set of pre-detected domains, or ``None`` for surface only.
+    *all_openai_tools* -- the full list of all available tools in OpenAI format.
+    *domains* -- set of pre-detected domains, or ``None`` for surface only.
     """
     allowed = set(_SURFACE_TOOLS)
     if domains:
@@ -1183,7 +1183,7 @@ def _build_tool_set(
     # their order).
     filtered.sort(key=lambda t: t.get("function", {}).get("name", ""))
 
-    print("[🛠️Coworker] _build_tool_set: {:d} -> {:d} tools (domains={:s})".format(
+    print("[Coworker] _build_tool_set: {:d} -> {:d} tools (domains={:s})".format(
         len(all_openai_tools), len(filtered), ",".join(sorted(domains)) if domains else "none"))
     return filtered
 
@@ -1217,7 +1217,7 @@ def _parse_sse_text_response(raw: str) -> str:
     Handles both ``type: "text"`` and ``type: "image"`` content blocks.
     For images, returns a descriptive message so the LLM knows the
     screenshot was captured (the image data is not passed to the LLM
-    via this path — it goes through the MCP ``Image`` return type).
+    via this path -- it goes through the MCP ``Image`` return type).
     """
     result = _parse_sse_json(raw)
     if result is None:
@@ -1286,7 +1286,7 @@ class AgentState:
     reasoning_text: str = ""  # Chain-of-thought from reasoning models
     thinking_dots: int = 0  # Animated spinner state (0-3)
 
-    # ── Token usage tracking (issue #69) ───────────────────────────
+    # -- Token usage tracking (issue #69) ---------------------------
     # Per-call usage comes from the LLM response ``usage`` object (stream
     # final chunk or non-streaming body).  Turn totals reset each turn;
     # session totals accumulate for the whole chat session.
@@ -1303,7 +1303,7 @@ class AgentState:
                 self.turn_usage[key] = self.turn_usage.get(key, 0) + value
                 self.session_usage[key] = self.session_usage.get(key, 0) + value
 
-    # ── Liveness tracking (Tier 1) ─────────────────────────────────
+    # -- Liveness tracking (Tier 1) ---------------------------------
     last_bridge_activity: float = 0.0
     last_mcp_activity: float = 0.0
     last_llm_activity: float = 0.0
@@ -1311,20 +1311,20 @@ class AgentState:
     mcp_live: bool = False
     llm_live: bool = False
 
-    # ── Re-entrancy guard ──────────────────────────────────────────
+    # -- Re-entrancy guard ------------------------------------------
     turn_active: bool = False  # True while a conversation turn is in progress.
 
-    # ── Vision pipeline ────────────────────────────────────────────
+    # -- Vision pipeline --------------------------------------------
     _pending_image: str | None = None  # Base64 data URI of last screenshot
 
-    # ── Auto port-shuffle tracking ─────────────────────────────────
+    # -- Auto port-shuffle tracking ---------------------------------
     # When a port is in use, the start functions try subsequent ports
     # and store the actual port used here.  0 = use configured port.
     bridge_port_actual: int = 0
     mcp_port_actual: int = 0
     llm_port_actual: int = 0
 
-    # ── Shutdown tracking ──────────────────────────────────────────
+    # -- Shutdown tracking ------------------------------------------
     _shutting_down: bool = False  # True during graceful shutdown.
 
 
@@ -1332,8 +1332,8 @@ _agent_state = AgentState()
 
 # NOTE: the shared-state binding for the LLM transport layer
 # (``_transport.bind`` / ``_transport.bind_helpers``) is deferred to the END
-# of this module.  The names it references — ``_stop_event`` and the tool-call
-# parsers ``_parse_text_tool_calls`` / ``_parse_xml_tool_calls`` — are defined
+# of this module.  The names it references -- ``_stop_event`` and the tool-call
+# parsers ``_parse_text_tool_calls`` / ``_parse_xml_tool_calls`` -- are defined
 # further down, so binding here referenced names that did not exist yet and
 # raised ``NameError: name '_stop_event' is not defined`` at import time.
 
@@ -1439,7 +1439,7 @@ def request_stop() -> None:
     against the main-thread MCP pump.  The active turn's ``finally``
     releases the lock as soon as it unwinds.
     """
-    print("[🛠️Coworker] request_stop: stop requested")
+    print("[Coworker] request_stop: stop requested")
     _stop_event.set()
     _agent_state.is_thinking = False
     _agent_state.thinking_start_time = 0.0
@@ -1490,7 +1490,7 @@ def _get_vendor_deps_dir() -> Path:
 
     Returns ``~/.cache/bfa_coworker/vendor_deps/``, creating the directory
     if needed.  On first call, migrates any existing ``vendor/deps/`` from
-    the legacy addon-relative location into the cache — this removes the
+    the legacy addon-relative location into the cache -- this removes the
     directory from the addon tree so Blender's sandbox no longer scans it.
     """
     cache = Path.home() / ".cache" / "bfa_coworker" / "vendor_deps"
@@ -1499,18 +1499,18 @@ def _get_vendor_deps_dir() -> Path:
     # move it to the cache location now.
     legacy = Path(__file__).resolve().parent / "vendor" / "deps"
     if legacy.is_dir() and not cache.is_dir():
-        print("[🛠️Coworker] _get_vendor_deps_dir: migrating legacy vendor/deps/ to {:s}".format(str(cache)))
+        print("[Coworker] _get_vendor_deps_dir: migrating legacy vendor/deps/ to {:s}".format(str(cache)))
         cache.parent.mkdir(parents=True, exist_ok=True)
         try:
             legacy.rename(cache)
-            print("[🛠️Coworker] _get_vendor_deps_dir: migration successful — removed from addon tree")
+            print("[Coworker] _get_vendor_deps_dir: migration successful -- removed from addon tree")
         except OSError:
-            # Rename may fail across filesystems — fall back to copy.
-            print("[🛠️Coworker] _get_vendor_deps_dir: rename failed, copying instead...")
+            # Rename may fail across filesystems -- fall back to copy.
+            print("[Coworker] _get_vendor_deps_dir: rename failed, copying instead...")
             import shutil as _shutil
             _shutil.copytree(str(legacy), str(cache))
             _shutil.rmtree(str(legacy), ignore_errors=True)
-            print("[🛠️Coworker] _get_vendor_deps_dir: copy+remove successful")
+            print("[Coworker] _get_vendor_deps_dir: copy+remove successful")
     elif not cache.is_dir():
         cache.mkdir(parents=True, exist_ok=True)
 
@@ -1562,9 +1562,9 @@ def _find_vendor_pythonpath() -> str:
     Returns a ``os.pathsep``-joined string suitable for the ``PYTHONPATH``
     environment variable.  The returned path includes:
 
-    * ``~/.cache/bfa_coworker/vendor_deps/`` — pip-installed pure-Python
+    * ``~/.cache/bfa_coworker/vendor_deps/`` -- pip-installed pure-Python
       dependencies (mcp, pyyaml, docutils, and their transitive deps).
-    * ``vendor/`` — parent of ``vendor/blmcp/``, so ``import blmcp``
+    * ``vendor/`` -- parent of ``vendor/blmcp/``, so ``import blmcp``
       resolves to ``vendor/blmcp/__init__.py``.
 
     If a directory does not exist, it is silently omitted so the addon
@@ -1581,7 +1581,7 @@ def _find_vendor_pythonpath() -> str:
         # pywin32 layout: the importable ``pywintypes``/``pythoncom`` modules
         # live in ``win32/lib/`` and are normally exposed via a ``pywin32.pth``
         # file.  ``.pth`` files are only processed for real site-packages
-        # directories at interpreter startup — NOT for PYTHONPATH entries.
+        # directories at interpreter startup -- NOT for PYTHONPATH entries.
         # Since the MCP subprocess only gets these dirs via PYTHONPATH, the
         # .pth is ignored, so we must add the pywin32 subdirectories directly.
         for sub in ("win32", "win32/lib", "win32com", "win32comext"):
@@ -1618,21 +1618,21 @@ def _ensure_vendor_deps() -> bool:
         problems = _check_vendor_layout()
         if not problems:
             return True
-        print("[🛠️Coworker] _ensure_vendor_deps: deps present but layout incomplete:")
+        print("[Coworker] _ensure_vendor_deps: deps present but layout incomplete:")
         for problem in problems:
-            print("[🛠️Coworker] _ensure_vendor_deps:   - {:s}".format(problem))
-        # blmcp is source, not a wheel — pip cannot install it.  Try the
+            print("[Coworker] _ensure_vendor_deps:   - {:s}".format(problem))
+        # blmcp is source, not a wheel -- pip cannot install it.  Try the
         # dev-checkout copy first, then report.
         if _copy_dev_blmcp_into_vendor():
             return not _check_vendor_layout()
         return False
 
-    print("[🛠️Coworker] _ensure_vendor_deps: vendor deps cache is missing or empty — attempting auto-install...")
+    print("[Coworker] _ensure_vendor_deps: vendor deps cache is missing or empty -- attempting auto-install...")
 
     # Try to install using Blender's pip.
     blender_py = _find_blender_python()
     if not blender_py:
-        print("[🛠️Coworker] _ensure_vendor_deps: cannot find Blender's Python for auto-install")
+        print("[Coworker] _ensure_vendor_deps: cannot find Blender's Python for auto-install")
         return False
 
     # Bootstrap pip if needed (ensurepip is stdlib, always available).
@@ -1659,10 +1659,10 @@ def _ensure_vendor_deps() -> bool:
             timeout=180,
         )
         if result.returncode != 0:
-            print("[🛠️Coworker] _ensure_vendor_deps: pip install failed (exit {:d})".format(
+            print("[Coworker] _ensure_vendor_deps: pip install failed (exit {:d})".format(
                 result.returncode))
-            print("[🛠️Coworker] _ensure_vendor_deps: stderr = {:s}".format(result.stderr[-2000:] or "(empty)"))
-            print("[🛠️Coworker] _ensure_vendor_deps: stdout = {:s}".format(result.stdout[-2000:] or "(empty)"))
+            print("[Coworker] _ensure_vendor_deps: stderr = {:s}".format(result.stderr[-2000:] or "(empty)"))
+            print("[Coworker] _ensure_vendor_deps: stdout = {:s}".format(result.stdout[-2000:] or "(empty)"))
             return False
         # Verify that the critical import actually works.
         blender_py_verify = _find_blender_python()
@@ -1681,19 +1681,19 @@ def _ensure_vendor_deps() -> bool:
                 capture_output=True, text=True, timeout=30, env=verify_env,
             )
             if verify.returncode != 0:
-                print("[🛠️Coworker] _ensure_vendor_deps: post-install import verification FAILED")
-                print("[🛠️Coworker] _ensure_vendor_deps: verify stderr = {:s}".format(
+                print("[Coworker] _ensure_vendor_deps: post-install import verification FAILED")
+                print("[Coworker] _ensure_vendor_deps: verify stderr = {:s}".format(
                     verify.stderr[-1500:] or "(empty)"))
                 return False
-            print("[🛠️Coworker] _ensure_vendor_deps: post-install import verification OK")
+            print("[Coworker] _ensure_vendor_deps: post-install import verification OK")
         # Clean __pycache__ to save space.
         for root, dirs, _files in os.walk(str(deps_dir)):
             if '__pycache__' in dirs:
                 shutil.rmtree(os.path.join(root, '__pycache__'), ignore_errors=True)
-        print("[🛠️Coworker] _ensure_vendor_deps: auto-install succeeded")
+        print("[Coworker] _ensure_vendor_deps: auto-install succeeded")
         return True
     except Exception as ex:
-        print("[🛠️Coworker] _ensure_vendor_deps: auto-install failed — {:s}".format(str(ex)))
+        print("[Coworker] _ensure_vendor_deps: auto-install failed -- {:s}".format(str(ex)))
         return False
 
 
@@ -1714,11 +1714,11 @@ def _copy_dev_blmcp_into_vendor() -> bool:
 
     dev_blmcp = this_dir.parent.parent / "mcp" / "blmcp"
     if not (dev_blmcp / "__init__.py").is_file():
-        print("[🛠️Coworker] _copy_dev_blmcp_into_vendor: no dev checkout at {:s}".format(
+        print("[Coworker] _copy_dev_blmcp_into_vendor: no dev checkout at {:s}".format(
             str(dev_blmcp)))
         return False
 
-    print("[🛠️Coworker] _copy_dev_blmcp_into_vendor: copying {:s} -> {:s}".format(
+    print("[Coworker] _copy_dev_blmcp_into_vendor: copying {:s} -> {:s}".format(
         str(dev_blmcp), str(vendor_blmcp)))
     try:
         vendor_blmcp.parent.mkdir(parents=True, exist_ok=True)
@@ -1728,9 +1728,9 @@ def _copy_dev_blmcp_into_vendor() -> bool:
             dirs_exist_ok=True,
         )
     except OSError as ex:
-        print("[🛠️Coworker] _copy_dev_blmcp_into_vendor: copy failed — {:s}".format(str(ex)))
+        print("[Coworker] _copy_dev_blmcp_into_vendor: copy failed -- {:s}".format(str(ex)))
         return False
-    print("[🛠️Coworker] _copy_dev_blmcp_into_vendor: copy succeeded")
+    print("[Coworker] _copy_dev_blmcp_into_vendor: copy succeeded")
     return True
 
 
@@ -1739,7 +1739,7 @@ def _vendor_pythonpath_report() -> tuple[str, list[str]]:
 
     ``_find_vendor_pythonpath()`` silently omits directories that do not
     exist, so a broken layout yields an empty (or partial) ``PYTHONPATH``
-    with no warning — the failure then only shows up as an opaque
+    with no warning -- the failure then only shows up as an opaque
     ``ImportError`` in the child process.  This companion reports what was
     expected but absent so callers can warn up front.
     """
@@ -1818,7 +1818,7 @@ _MCP_FAILURE_HINTS: tuple[tuple[str, str], ...] = (
     (
         "no module named 'pywintypes'",
         "pywin32 is installed but its modules are not on PYTHONPATH. The "
-        "add-on adds win32/ and win32/lib/ automatically — re-copy the config "
+        "add-on adds win32/ and win32/lib/ automatically -- re-copy the config "
         "from preferences, or run 'python build_addon.py'.",
     ),
     (
@@ -1898,14 +1898,14 @@ def _summarize_mcp_failure(stderr_output: str, stdout_output: str) -> tuple[str,
 
     * *full* is the untruncated combined output (for ``error_full`` and
       copy-to-clipboard troubleshooting).
-    * *summary* is the **last non-empty line** — the actual exception, e.g.
-      ``ImportError: No module named 'blmcp'`` — plus an actionable hint when
+    * *summary* is the **last non-empty line** -- the actual exception, e.g.
+      ``ImportError: No module named 'blmcp'`` -- plus an actionable hint when
       the signature is recognised.  Falls back to the first line when the
       output has no trailing exception line.
 
     The old code used ``error_detail[:200]``, which kept the *first* 200
-    characters of a traceback — i.e. the ``Traceback (most recent call last)``
-    header and the ``runpy`` frames — and cut off the exception itself.
+    characters of a traceback -- i.e. the ``Traceback (most recent call last)``
+    header and the ``runpy`` frames -- and cut off the exception itself.
     """
     stderr_output = stderr_output or ""
     stdout_output = stdout_output or ""
@@ -1921,7 +1921,7 @@ def _summarize_mcp_failure(stderr_output: str, stdout_output: str) -> tuple[str,
 
     hint = _classify_mcp_failure(full)
     if hint:
-        summary = "{:s} — {:s}".format(summary, hint)
+        summary = "{:s} -- {:s}".format(summary, hint)
     return (summary, full)
 
 
@@ -1931,8 +1931,8 @@ def _check_vendor_layout() -> list[str]:
     An empty list means the layout looks usable.  Checks the two things the
     MCP subprocess needs on ``PYTHONPATH``:
 
-    * ``vendor/deps/mcp/`` — the MCP SDK (plus its transitive deps).
-    * ``vendor/blmcp/`` — the server package itself, including the
+    * ``vendor/deps/mcp/`` -- the MCP SDK (plus its transitive deps).
+    * ``vendor/blmcp/`` -- the server package itself, including the
       ``data/prompts.yml`` that ``blmcp.main()`` opens unconditionally.
 
     ``_ensure_vendor_deps()`` historically only checked the first, so a
@@ -2026,7 +2026,7 @@ def _kill_process_on_port(port: int) -> None:
                         ["taskkill", "/f", "/pid", pid],
                         capture_output=True, timeout=5,
                     )
-                    print("[🛠️Coworker] _kill_process_on_port: killed PID {:s} on port {:d}".format(pid, port))
+                    print("[Coworker] _kill_process_on_port: killed PID {:s} on port {:d}".format(pid, port))
                     break
         except Exception:  # pylint: disable=broad-exception-caught
             pass
@@ -2054,7 +2054,7 @@ def _wait_for_port(
     ``False`` if the timeout expires.
 
     If *proc* is given, the wait aborts early (returns ``False``) the moment
-    the process exits — so a crashed llama-server surfaces immediately
+    the process exits -- so a crashed llama-server surfaces immediately
     instead of hanging for the full timeout.
     """
     import time
@@ -2065,7 +2065,7 @@ def _wait_for_port(
         try:
             with socket.create_connection((host, port), timeout=0.5):
                 elapsed = timeout - (deadline - time.monotonic())
-                print("[🛠️Coworker] _wait_for_port: {:s}:{:d} ready after {:.1f}s".format(
+                print("[Coworker] _wait_for_port: {:s}:{:d} ready after {:.1f}s".format(
                     host, port, elapsed))
                 return True
         except (OSError, socket.error):
@@ -2073,14 +2073,14 @@ def _wait_for_port(
         if proc is not None:
             rc = proc.poll()
             if rc is not None:
-                print("[🛠️Coworker] _wait_for_port: {:s}:{:d} — process exited early (rc={:d}), aborting wait".format(
+                print("[Coworker] _wait_for_port: {:s}:{:d} -- process exited early (rc={:d}), aborting wait".format(
                     host, port, rc))
                 return False
         if attempt % 2 == 0:
-            print("[🛠️Coworker] _wait_for_port: still waiting for {:s}:{:d} ({:.0f}s remaining)".format(
+            print("[Coworker] _wait_for_port: still waiting for {:s}:{:d} ({:.0f}s remaining)".format(
                 host, port, deadline - time.monotonic()))
         time.sleep(interval)
-    print("[🛠️Coworker] _wait_for_port: TIMEOUT — {:s}:{:d} not ready after {:.1f}s".format(
+    print("[Coworker] _wait_for_port: TIMEOUT -- {:s}:{:d} not ready after {:.1f}s".format(
         host, port, timeout))
     return False
 
@@ -2106,7 +2106,7 @@ def check_ports_available(
         except (OSError, socket.error) as ex:
             s.close()
             result[label] = False
-            print("[🛠️Coworker] check_ports_available: {:s} port {:d} is in use — {:s}".format(
+            print("[Coworker] check_ports_available: {:s} port {:d} is in use -- {:s}".format(
                 label, p, str(ex)))
     return result
 
@@ -2114,7 +2114,7 @@ def check_ports_available(
 def _find_available_port(preferred: int, max_offset: int = 100) -> int:
     """Return the first available port starting at *preferred*.
 
-    Tries ``preferred``, ``preferred + 1``, … up to ``preferred + max_offset``.
+    Tries ``preferred``, ``preferred + 1``, ... up to ``preferred + max_offset``.
     Returns the first port that can be bound, or 0 if none are available.
     """
     for offset in range(max_offset + 1):
@@ -2126,13 +2126,13 @@ def _find_available_port(preferred: int, max_offset: int = 100) -> int:
             s.bind(("127.0.0.1", candidate))
             s.close()
             if offset > 0:
-                print("[🛠️Coworker] _find_available_port: port {:d} in use, shuffled to {:d}".format(
+                print("[Coworker] _find_available_port: port {:d} in use, shuffled to {:d}".format(
                     preferred, candidate))
             return candidate
         except (OSError, socket.error):
             s.close()
             continue
-    print("[🛠️Coworker] _find_available_port: no port available in range {:d}–{:d}".format(
+    print("[Coworker] _find_available_port: no port available in range {:d}-{:d}".format(
         preferred, preferred + max_offset))
     return 0
 
@@ -2163,11 +2163,11 @@ def _resolve_mcp_python() -> tuple[str | None, bool]:
     if not mcp_exe:
         if not _ensure_vendor_deps():
             # Report the specific layout problem rather than a generic
-            # "dependencies not found" — the two causes need different fixes.
+            # "dependencies not found" -- the two causes need different fixes.
             problems = _check_vendor_layout()
             if problems:
                 _agent_state.error = (
-                    "MCP server layout incomplete — {:s}. "
+                    "MCP server layout incomplete -- {:s}. "
                     "Run 'python build_addon.py' to build the extension.".format(
                         "; ".join(problems))
                 )
@@ -2184,21 +2184,21 @@ def _resolve_mcp_python() -> tuple[str | None, bool]:
             if _vendor_native_compat(blender_py):
                 mcp_exe = blender_py
                 use_module = True
-                print("[🛠️Coworker] _resolve_mcp_python: using Blender's Python at {:s}".format(mcp_exe))
+                print("[Coworker] _resolve_mcp_python: using Blender's Python at {:s}".format(mcp_exe))
             else:
                 # Blender's Python is incompatible; try system python.
-                print("[🛠️Coworker] _resolve_mcp_python: Blender's Python {!s} incompatible with vendor native extensions".format(blender_py))
+                print("[Coworker] _resolve_mcp_python: Blender's Python {!s} incompatible with vendor native extensions".format(blender_py))
                 sys_py = shutil.which("python3") or shutil.which("python")
                 if sys_py and _vendor_native_compat(sys_py):
                     mcp_exe = sys_py
                     use_module = True
-                    print("[🛠️Coworker] _resolve_mcp_python: using compatible system Python at {:s}".format(mcp_exe))
+                    print("[Coworker] _resolve_mcp_python: using compatible system Python at {:s}".format(mcp_exe))
 
     # 3. Last resort: system python.
     if not mcp_exe:
         mcp_exe = shutil.which("python") or "python"
         use_module = True
-        print("[🛠️Coworker] _resolve_mcp_python: falling back to system python at {:s}".format(mcp_exe))
+        print("[Coworker] _resolve_mcp_python: falling back to system python at {:s}".format(mcp_exe))
 
     return (mcp_exe, use_module)
 
@@ -2254,7 +2254,7 @@ def start_mcp_server(
     global _mcp_server_process, _mcp_launch_retry_count, _mcp_shutting_down
 
     if _mcp_shutting_down:
-        print("[🛠️Coworker] start_mcp_server: shutdown in progress — skipping launch")
+        print("[Coworker] start_mcp_server: shutdown in progress -- skipping launch")
         return None
 
     # Kill existing process if known.
@@ -2287,7 +2287,7 @@ def start_mcp_server(
         )
         return None
     if shuffled_port != port:
-        print("[🛠️Coworker] start_mcp_server: port {:d} in use, shuffled to {:d}".format(port, shuffled_port))
+        print("[Coworker] start_mcp_server: port {:d} in use, shuffled to {:d}".format(port, shuffled_port))
         port = shuffled_port
     _agent_state.mcp_port_actual = port
 
@@ -2304,7 +2304,7 @@ def start_mcp_server(
 
     try:
         if use_module:
-            print("[🛠️Coworker] start_mcp_server: running {:s} -m blmcp with PYTHONPATH={:s}".format(
+            print("[Coworker] start_mcp_server: running {:s} -m blmcp with PYTHONPATH={:s}".format(
                 mcp_exe, env.get("PYTHONPATH", "(unset)")))
             proc = subprocess.Popen(
                 [mcp_exe, "-m", "blmcp", "--transport", "http", "--port", str(port)],
@@ -2332,9 +2332,9 @@ def start_mcp_server(
     _agent_state.mcp_server_running = True
     _agent_state.error = ""
     _agent_state.error_full = ""
-    print("[🛠️Coworker] start_mcp_server: launched pid={:d}".format(proc.pid))
-    print("[🛠️Coworker] start_mcp_server: command = {:s}".format(str(mcp_exe or "python -m blmcp")))
-    print("[🛠️Coworker] start_mcp_server: BFACW_HOST={:s} BFACW_PORT={:d}".format(
+    print("[Coworker] start_mcp_server: launched pid={:d}".format(proc.pid))
+    print("[Coworker] start_mcp_server: command = {:s}".format(str(mcp_exe or "python -m blmcp")))
+    print("[Coworker] start_mcp_server: BFACW_HOST={:s} BFACW_PORT={:d}".format(
         blender_host, blender_port))
 
     # Spawn background threads to drain stdout/stderr pipes.
@@ -2346,36 +2346,36 @@ def start_mcp_server(
     import time
     time.sleep(0.5)  # Brief pause for process to start or fail.
     if proc.poll() is not None:
-        # Process exited — collect from drainer.
+        # Process exited -- collect from drainer.
         time.sleep(0.5)  # Let drainer finish reading.
         stderr_output = "\n".join(_stderr_lines[-100:])
         stdout_output = "\n".join(_stdout_lines[-100:])
         error_detail = (stderr_output or stdout_output or "no output")
-        print("[🛠️Coworker] start_mcp_server: process already exited with code {:d}".format(
+        print("[Coworker] start_mcp_server: process already exited with code {:d}".format(
             proc.returncode))
         if stderr_output:
-            print("[🛠️Coworker] start_mcp_server: stderr (tail) = {:s}".format(stderr_output[-1500:]))
+            print("[Coworker] start_mcp_server: stderr (tail) = {:s}".format(stderr_output[-1500:]))
         if stdout_output:
-            print("[🛠️Coworker] start_mcp_server: stdout (tail) = {:s}".format(stdout_output[-1500:]))
+            print("[Coworker] start_mcp_server: stdout (tail) = {:s}".format(stdout_output[-1500:]))
 
         # Check if it's a ModuleNotFoundError (likely wrong Python version).
         if "ModuleNotFoundError" in error_detail or "ImportError" in error_detail:
             if _retry_depth >= 1:
-                print("[🛠️Coworker] start_mcp_server: import error after retry — giving up")
+                print("[Coworker] start_mcp_server: import error after retry -- giving up")
                 summary, full = _summarize_mcp_failure(stderr_output, stdout_output)
                 _agent_state.error = "MCP server import failed after reinstall: {:s}".format(summary)
                 _agent_state.error_full = full
                 _agent_state.mcp_server_running = False
                 _mcp_server_process = None
                 return None
-            print("[🛠️Coworker] start_mcp_server: import error detected — attempting dependency reinstall")
+            print("[Coworker] start_mcp_server: import error detected -- attempting dependency reinstall")
             # Clear deps and retry once with Blender's Python.
             deps_dir = _get_vendor_deps_dir()
             if deps_dir.is_dir():
                 shutil.rmtree(str(deps_dir), ignore_errors=True)
                 if _ensure_vendor_deps():
                     # Try launching again (depth-limited).
-                    print("[🛠️Coworker] start_mcp_server: deps reinstalled — retrying launch (attempt {:d})".format(
+                    print("[Coworker] start_mcp_server: deps reinstalled -- retrying launch (attempt {:d})".format(
                         _retry_depth + 1))
                     return start_mcp_server(
                         port=port, blender_host=blender_host, blender_port=blender_port,
@@ -2388,22 +2388,22 @@ def start_mcp_server(
         _mcp_server_process = None
         return None
 
-    # Process is alive — actively wait for the port to accept connections.
+    # Process is alive -- actively wait for the port to accept connections.
     # FastMCP + Starlette imports can take 5-10s, so we poll up to 15s.
-    print("[🛠️Coworker] start_mcp_server: process alive, waiting for port {:d}...".format(port))
+    print("[Coworker] start_mcp_server: process alive, waiting for port {:d}...".format(port))
     port_ready = _wait_for_port("127.0.0.1", port, timeout=15.0, interval=1.0)
 
     if not port_ready:
-        # Port never came up — collect drainer output for diagnostics.
+        # Port never came up -- collect drainer output for diagnostics.
         time.sleep(1.0)
         stderr_output = "\n".join(_stderr_lines[-100:])
         stdout_output = "\n".join(_stdout_lines[-100:])
         error_detail = (stderr_output or stdout_output or "no output")
-        print("[🛠️Coworker] start_mcp_server: port {:d} never became ready".format(port))
+        print("[Coworker] start_mcp_server: port {:d} never became ready".format(port))
         if stderr_output:
-            print("[🛠️Coworker] start_mcp_server: stderr (tail) = {:s}".format(stderr_output[-1500:]))
+            print("[Coworker] start_mcp_server: stderr (tail) = {:s}".format(stderr_output[-1500:]))
         if stdout_output:
-            print("[🛠️Coworker] start_mcp_server: stdout (tail) = {:s}".format(stdout_output[-1500:]))
+            print("[Coworker] start_mcp_server: stdout (tail) = {:s}".format(stdout_output[-1500:]))
         summary, full = _summarize_mcp_failure(stderr_output, stdout_output)
         _agent_state.error = "MCP server started but port {:d} never accepted connections: {:s}".format(
             port, summary)
@@ -2412,19 +2412,19 @@ def start_mcp_server(
         _mcp_server_process = None
         return None
 
-    print("[🛠️Coworker] start_mcp_server: port {:d} is ready".format(port))
+    print("[Coworker] start_mcp_server: port {:d} is ready".format(port))
 
     # Log collected output for diagnostics.
     if _stdout_lines:
-        print("[🛠️Coworker] start_mcp_server: process alive, stdout so far ({:d} lines):".format(
+        print("[Coworker] start_mcp_server: process alive, stdout so far ({:d} lines):".format(
             len(_stdout_lines)))
         for line in _stdout_lines[-15:]:
-            print("[🛠️Coworker] start_mcp_server:   stdout | {:s}".format(line))
+            print("[Coworker] start_mcp_server:   stdout | {:s}".format(line))
     if _stderr_lines:
-        print("[🛠️Coworker] start_mcp_server: process alive, stderr so far ({:d} lines):".format(
+        print("[Coworker] start_mcp_server: process alive, stderr so far ({:d} lines):".format(
             len(_stderr_lines)))
         for line in _stderr_lines[-15:]:
-            print("[🛠️Coworker] start_mcp_server:   stderr | {:s}".format(line))
+            print("[Coworker] start_mcp_server:   stderr | {:s}".format(line))
 
     return proc
 
@@ -2458,7 +2458,7 @@ def stop_mcp_server() -> None:
 
 
 # ---------------------------------------------------------------------------
-# MCP server — Network mode (External Harness)
+# MCP server -- Network mode (External Harness)
 
 def start_mcp_server_network(
     host: str = "127.0.0.1",
@@ -2478,7 +2478,7 @@ def start_mcp_server_network(
     global _mcp_server_process, _mcp_shutting_down
 
     if _mcp_shutting_down:
-        print("[🛠️Coworker] start_mcp_server_network: shutdown in progress — skipping")
+        print("[Coworker] start_mcp_server_network: shutdown in progress -- skipping")
         return None
 
     # Kill existing process if known.
@@ -2509,7 +2509,7 @@ def start_mcp_server_network(
         )
         return None
     if shuffled_port != port:
-        print("[🛠️Coworker] start_mcp_server_network: port {:d} in use, shuffled to {:d}".format(port, shuffled_port))
+        print("[Coworker] start_mcp_server_network: port {:d} in use, shuffled to {:d}".format(port, shuffled_port))
         port = shuffled_port
     _agent_state.mcp_port_actual = port
 
@@ -2551,7 +2551,7 @@ def start_mcp_server_network(
     _agent_state.error_full = ""
 
     # Drain pipes.  Keep the collected lines so an early exit can be
-    # diagnosed — this path previously discarded them and reported a bare
+    # diagnosed -- this path previously discarded them and reported a bare
     # "MCP server exited immediately" with no cause at all.
     _drainer_threads, _stdout_lines, _stderr_lines = _start_pipe_drainer(proc)
 
@@ -2562,13 +2562,13 @@ def start_mcp_server_network(
         time.sleep(0.5)  # Let the drainer finish reading.
         stderr_output = "\n".join(_stderr_lines[-100:])
         stdout_output = "\n".join(_stdout_lines[-100:])
-        print("[🛠️Coworker] start_mcp_server_network: process exited with code {:d}".format(
+        print("[Coworker] start_mcp_server_network: process exited with code {:d}".format(
             proc.returncode))
         if stderr_output:
-            print("[🛠️Coworker] start_mcp_server_network: stderr (tail) = {:s}".format(
+            print("[Coworker] start_mcp_server_network: stderr (tail) = {:s}".format(
                 stderr_output[-1500:]))
         if stdout_output:
-            print("[🛠️Coworker] start_mcp_server_network: stdout (tail) = {:s}".format(
+            print("[Coworker] start_mcp_server_network: stdout (tail) = {:s}".format(
                 stdout_output[-1500:]))
         summary, full = _summarize_mcp_failure(stderr_output, stdout_output)
         _agent_state.error = "MCP server exited immediately: {:s}".format(summary)
@@ -2582,9 +2582,9 @@ def start_mcp_server_network(
         time.sleep(1.0)
         stderr_output = "\n".join(_stderr_lines[-100:])
         stdout_output = "\n".join(_stdout_lines[-100:])
-        print("[🛠️Coworker] start_mcp_server_network: port {:d} never became ready".format(port))
+        print("[Coworker] start_mcp_server_network: port {:d} never became ready".format(port))
         if stderr_output:
-            print("[🛠️Coworker] start_mcp_server_network: stderr (tail) = {:s}".format(
+            print("[Coworker] start_mcp_server_network: stderr (tail) = {:s}".format(
                 stderr_output[-1500:]))
         summary, full = _summarize_mcp_failure(stderr_output, stdout_output)
         _agent_state.error = "MCP server port {:d} never accepted connections: {:s}".format(
@@ -2609,7 +2609,7 @@ def _vendor_native_compat(python_path: str) -> bool:
     against the target interpreter's major.minor version.
 
     Returns ``True`` when compatible (or when there are no native
-    extensions — pure-Python deps work everywhere).
+    extensions -- pure-Python deps work everywhere).
     """
     deps_dir = _get_vendor_deps_dir()
     if not deps_dir.is_dir():
@@ -2648,7 +2648,7 @@ def _vendor_native_compat(python_path: str) -> bool:
     for nv in native_versions:
         if nv != target_tag:
             print(
-                "[🛠️Coworker] _vendor_native_compat: MISMATCH — "
+                "[Coworker] _vendor_native_compat: MISMATCH -- "
                 "vendor native exts are {!s} but target Python is {!s}".format(
                     nv, target_tag
                 )
@@ -2678,9 +2678,9 @@ def _get_blender_python_for_config() -> tuple[str, str]:
         # Blender's Python is incompatible with vendor native extensions.
         # Try to find a system Python that matches the vendor deps.
         print(
-            "[🛠️Coworker] _get_blender_python_for_config: "
+            "[Coworker] _get_blender_python_for_config: "
             "Blender Python {!s} incompatible with vendor native extensions "
-            "— searching for compatible system Python...".format(
+            "-- searching for compatible system Python...".format(
                 blender_py
             )
         )
@@ -2688,15 +2688,15 @@ def _get_blender_python_for_config() -> tuple[str, str]:
             py = _shutil.which(candidate)
             if py and _vendor_native_compat(py):
                 print(
-                    "[🛠️Coworker] _get_blender_python_for_config: "
+                    "[Coworker] _get_blender_python_for_config: "
                     "using {!s} (compatible with vendor deps)".format(py)
                 )
                 return (py, pythonpath)
         # No compatible Python found; fall back to Blender's anyway with a warning.
         print(
-            "[⚠️Coworker] _get_blender_python_for_config: "
+            "[Coworker][WARN] _get_blender_python_for_config: "
             "no compatible Python found. Using Blender Python {!s} "
-            "— vendor deps may fail to import.".format(blender_py)
+            "-- vendor deps may fail to import.".format(blender_py)
         )
         return (blender_py, pythonpath)
     return ("python", "")
@@ -2715,7 +2715,7 @@ def generate_mcp_client_config(
 
     When *use_blender_python* is True (default), the config emits the full
     path to Blender's bundled Python with ``PYTHONPATH`` set to the vendor
-    directories — no pip install needed.
+    directories -- no pip install needed.
 
     Returns a JSON string suitable for the client's config file.
     """
@@ -2777,7 +2777,7 @@ def generate_mcp_client_config(
             }
         }
     else:
-        # Generic / fallback — raw command block.
+        # Generic / fallback -- raw command block.
         config = dict(base_cmd)
 
     return json.dumps(config, indent=2)
@@ -2815,7 +2815,7 @@ def validate_mcp_client_config(
         }
 
     ``--help`` is used rather than a full stdio handshake: it exercises the
-    whole import chain (``blmcp`` → ``mcp.server.fastmcp`` → ``yaml`` →
+    whole import chain (``blmcp`` -> ``mcp.server.fastmcp`` -> ``yaml`` ->
     ``data/prompts.yml``) while staying fast and side-effect free.
     """
     result: dict[str, Any] = {
@@ -2832,7 +2832,7 @@ def validate_mcp_client_config(
         "summary": "",
     }
 
-    # ── 1. Resolve the interpreter and PYTHONPATH exactly as the config does.
+    # -- 1. Resolve the interpreter and PYTHONPATH exactly as the config does.
     if use_blender_python:
         py_cmd, py_path = _get_blender_python_for_config()
     else:
@@ -2840,7 +2840,7 @@ def validate_mcp_client_config(
     result["python"] = py_cmd
     result["pythonpath"] = py_path
 
-    # ── 2. Does the interpreter exist?
+    # -- 2. Does the interpreter exist?
     if os.path.isabs(py_cmd) or os.sep in py_cmd or "/" in py_cmd:
         result["python_ok"] = os.path.isfile(py_cmd)
     else:
@@ -2854,7 +2854,7 @@ def validate_mcp_client_config(
         result["summary"] = "Python interpreter not found: {:s}".format(py_cmd)
         return result
 
-    # ── 3. Do all PYTHONPATH entries exist?
+    # -- 3. Do all PYTHONPATH entries exist?
     if py_path:
         for entry in py_path.split(os.pathsep):
             if entry and not os.path.isdir(entry):
@@ -2867,7 +2867,7 @@ def validate_mcp_client_config(
         result["summary"] = "PYTHONPATH entries missing: {:d}".format(len(result["missing"]))
         return result
 
-    # ── 4. Actually launch the server with --help to prove the import chain.
+    # -- 4. Actually launch the server with --help to prove the import chain.
     env = os.environ.copy()
     env["BFACW_HOST"] = blender_host
     env["BFACW_PORT"] = str(blender_port)
@@ -2907,7 +2907,7 @@ def validate_mcp_client_config(
         )
         return result
 
-    # ── 4b. Report the resolved MCP SDK version.  mcp 2.x removed FastMCP,
+    # -- 4b. Report the resolved MCP SDK version.  mcp 2.x removed FastMCP,
     # which blmcp imports, so a 2.x SDK is a latent failure even when the
     # probe happens to pass (e.g. a shim module).
     try:
@@ -2921,7 +2921,7 @@ def validate_mcp_client_config(
             if result["mcp_version"].startswith("2."):
                 result["ok"] = False
                 result["summary"] = (
-                    "MCP SDK {:s} is too new — FastMCP was removed in 2.0".format(
+                    "MCP SDK {:s} is too new -- FastMCP was removed in 2.0".format(
                         result["mcp_version"])
                 )
                 result["hint"] = (
@@ -2933,7 +2933,7 @@ def validate_mcp_client_config(
     except (subprocess.TimeoutExpired, OSError):
         pass  # Version is informational; never fail the check on it.
 
-    # ── 5. Optional: is the bridge reachable?  A config can be valid while
+    # -- 5. Optional: is the bridge reachable?  A config can be valid while
     # the bridge is stopped, so this is reported separately.
     if check_bridge:
         try:
@@ -2945,11 +2945,11 @@ def validate_mcp_client_config(
     result["ok"] = True
     if result["bridge_ok"] is False:
         result["summary"] = (
-            "Config OK — but the bridge is not reachable on {:s}:{:d}. "
+            "Config OK -- but the bridge is not reachable on {:s}:{:d}. "
             "Click Start Bridge in the chat panel.".format(blender_host, blender_port)
         )
     else:
-        result["summary"] = "Config OK — MCP server starts and imports cleanly"
+        result["summary"] = "Config OK -- MCP server starts and imports cleanly"
     return result
 
 
@@ -2997,7 +2997,7 @@ async def list_mcp_tools(port: int = _MCP_SERVER_DEFAULT_PORT) -> list[dict[str,
     standard MCP list-tools mechanism.
     """
     url = "http://127.0.0.1:{:d}/".format(port)
-    print("[🛠️Coworker] list_mcp_tools: trying {:s}".format(url))
+    print("[Coworker] list_mcp_tools: trying {:s}".format(url))
 
     # Use urllib (stdlib, avoids Blender sandbox policy violation from vendored httpx).
     try:
@@ -3012,23 +3012,23 @@ async def list_mcp_tools(port: int = _MCP_SERVER_DEFAULT_PORT) -> list[dict[str,
             },
             method="POST",
         )
-        print("[🛠️Coworker] list_mcp_tools: urllib POST {:s}".format(url))
+        print("[Coworker] list_mcp_tools: urllib POST {:s}".format(url))
         with urllib.request.urlopen(req, timeout=10) as resp:
             raw = resp.read().decode()
-            print("[🛠️Coworker] list_mcp_tools: urllib status={:d}, {:d} bytes".format(resp.status, len(raw)))
-            print("[🛠️Coworker] list_mcp_tools: urllib first 300 chars: {:s}".format(raw[:300]))
+            print("[Coworker] list_mcp_tools: urllib status={:d}, {:d} bytes".format(resp.status, len(raw)))
+            print("[Coworker] list_mcp_tools: urllib first 300 chars: {:s}".format(raw[:300]))
             # FastMCP in stateless_http mode returns SSE
             # (``event: message`` / ``data: {...}``) even for
             # single-response JSON-RPC calls.
             data = _parse_sse_json(raw)
             if data is None:
-                print("[🛠️Coworker] list_mcp_tools: urllib SSE parse returned None")
+                print("[Coworker] list_mcp_tools: urllib SSE parse returned None")
                 return []
             tools = data.get("result", {}).get("tools", [])
-            print("[🛠️Coworker] list_mcp_tools: urllib returned {:d} tools".format(len(tools)))
+            print("[Coworker] list_mcp_tools: urllib returned {:d} tools".format(len(tools)))
             return tools
     except Exception as ex:  # pylint: disable=broad-exception-caught
-        print("[🛠️Coworker] list_mcp_tools: urllib failed — {:s}".format(str(ex)))
+        print("[Coworker] list_mcp_tools: urllib failed -- {:s}".format(str(ex)))
 
     return []
 
@@ -3037,35 +3037,35 @@ def _list_tools_sync(port: int = _MCP_SERVER_DEFAULT_PORT, operating_mode: str =
     """Synchronous wrapper for listing MCP tools, with retry on 0 tools.
 
     When *operating_mode* is ``"EXTERNAL_HARNESS"``, returns ``[]``
-    immediately — the MCP server is managed externally.
+    immediately -- the MCP server is managed externally.
     """
     if operating_mode == "EXTERNAL_HARNESS":
-        print("[🛠️Coworker] _list_tools_sync: harness mode — skipping")
+        print("[Coworker] _list_tools_sync: harness mode -- skipping")
         return []
 
     import time
     max_retries = 5
     for attempt in range(1, max_retries + 1):
-        print("[🛠️Coworker] _list_tools_sync: port={:d} attempt={:d}/{:d}".format(
+        print("[Coworker] _list_tools_sync: port={:d} attempt={:d}/{:d}".format(
             port, attempt, max_retries))
         future = schedule_coro(list_mcp_tools(port))
         try:
             result = future.result(timeout=15)
             count = len(result) if result else 0
-            print("[🛠️Coworker] _list_tools_sync: got {:d} tools".format(count))
+            print("[Coworker] _list_tools_sync: got {:d} tools".format(count))
             if count > 0:
                 _agent_state.tool_count = count
                 return result
-            # 0 tools — retry if server is still running.
+            # 0 tools -- retry if server is still running.
             if not _agent_state.mcp_server_running:
-                print("[🛠️Coworker] _list_tools_sync: server not running, aborting")
+                print("[Coworker] _list_tools_sync: server not running, aborting")
                 return result or []
             if attempt < max_retries:
                 delay = min(1.0 * attempt, 4.0)  # Backoff: 1s, 2s, 3s, 4s.
-                print("[🛠️Coworker] _list_tools_sync: 0 tools, retrying in {:.0f}s...".format(delay))
+                print("[Coworker] _list_tools_sync: 0 tools, retrying in {:.0f}s...".format(delay))
                 time.sleep(delay)
         except Exception as ex:  # pylint: disable=broad-exception-caught
-            print("[🛠️Coworker] _list_tools_sync: attempt {:d} FAILED — {:s}".format(attempt, str(ex)))
+            print("[Coworker] _list_tools_sync: attempt {:d} FAILED -- {:s}".format(attempt, str(ex)))
             if attempt < max_retries:
                 time.sleep(1.0)
                 continue
@@ -3154,7 +3154,7 @@ def _parse_xml_tool_calls(text: str) -> list[dict[str, Any]]:
     import re
     tool_calls: list[dict[str, Any]] = []
 
-    # ── Format A: <function=name><parameter=key>value</parameter></function> ──
+    # -- Format A: <function=name><parameter=key>value</parameter></function> --
     # Find all <function=...> blocks, optionally wrapped in <tool_call>.
     func_pattern = r'(?:<tool_call>\s*)?<function=([^>]+)>(.*?)</function>(?:\s*</tool_call>)?'
     for match in re.finditer(func_pattern, text, re.DOTALL):
@@ -3182,7 +3182,7 @@ def _parse_xml_tool_calls(text: str) -> list[dict[str, Any]]:
                 },
             })
 
-    # ── Format B: <tool_call>{JSON}</tool_call> ──
+    # -- Format B: <tool_call>{JSON}</tool_call> --
     if not tool_calls:
         json_pattern = r'<tool_call>\s*(\{.*?\})\s*</tool_call>'
         for match in re.finditer(json_pattern, text, re.DOTALL):
@@ -3241,7 +3241,7 @@ def _tool_call_watchdog_hit(tool_name: str) -> None:
     if now - last < 30:
         return  # debounce: do not spam every redraw cycle
     _TOOL_CALL_WATCHDOG_LAST[tool_name] = now
-    print("[🛠️Coworker] _call_mcp_tool_sync: TOOL CALL TIMEOUT ({:d}s) for {:s} — "
+    print("[Coworker] _call_mcp_tool_sync: TOOL CALL TIMEOUT ({:d}s) for {:s} -- "
           "the bridge may be hung; the HTTP request will surface the error.".format(
         _TOOL_CALL_WATCHDOG_SECONDS, tool_name))
 
@@ -3273,7 +3273,7 @@ def _call_mcp_tool_sync(
         },
         method="POST",
     )
-    print("[🛠️Coworker] _call_mcp_tool_sync: {:s} args={:s}".format(
+    print("[Coworker] _call_mcp_tool_sync: {:s} args={:s}".format(
         tool_name, json.dumps(arguments)[:200]))
     try:
         # Start a daemon watchdog that reports if this call exceeds the
@@ -3290,7 +3290,7 @@ def _call_mcp_tool_sync(
                 # FastMCP in stateless_http mode wraps the JSON-RPC
                 # response in SSE (``event: message`` / ``data: {...}``).
                 result = _parse_sse_text_response(raw)
-                print("[🛠️Coworker] _call_mcp_tool_sync: result = {:s}".format(
+                print("[Coworker] _call_mcp_tool_sync: result = {:s}".format(
                     result[:300]))
                 # Update liveness and log operation.
                 _agent_state.last_mcp_activity = _time.monotonic()
@@ -3299,11 +3299,11 @@ def _call_mcp_tool_sync(
         finally:
             _wd.cancel()
     except (urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
-        print("[🛠️Coworker] _call_mcp_tool_sync: FAILED — {:s}".format(str(ex)))
+        print("[Coworker] _call_mcp_tool_sync: FAILED -- {:s}".format(str(ex)))
         return "Error calling tool '{:s}': {:s}".format(tool_name, str(ex))
 
 
-# ── Friendly tool names for UI status ─────────────────────────────
+# -- Friendly tool names for UI status -----------------------------
 
 _TOOL_FRIENDLY_NAMES: dict[str, str] = {
     "execute_blender_code": "Running code in Blender",
@@ -3336,13 +3336,13 @@ def _friendly_tool_status(tool_name: str) -> str:
     return "{:s}...".format(readable.capitalize())
 
 
-# ── Tool error formatting ─────────────────────────────────────────
+# -- Tool error formatting -----------------------------------------
 
 def _format_tool_error(result_text: str) -> str:
     """Extract a human-readable summary from a tool error result.
 
     Parses ``{"status": "error", "message": "Traceback..."}`` and returns
-    a friendly message like ``"I had trouble with that step — AttributeError"``.
+    a friendly message like ``"I had trouble with that step -- AttributeError"``.
 
     Returns *result_text* unchanged if it doesn't match the error pattern.
     """
@@ -3500,7 +3500,7 @@ def _trim_tool_result(result_text: str, max_chars: int = _MAX_TOOL_RESULT_CHARS)
     try:
         data = json.loads(result_text)
     except (json.JSONDecodeError, TypeError):
-        # Not JSON — fall back to hard truncation.
+        # Not JSON -- fall back to hard truncation.
         return result_text[:max_chars] + "\n...[+{:d} more chars]".format(
             len(result_text) - max_chars)
 
@@ -3510,7 +3510,7 @@ def _trim_tool_result(result_text: str, max_chars: int = _MAX_TOOL_RESULT_CHARS)
 
     status = data.get("status", "")
 
-    # Error results: preserve the TAIL of the message — Python tracebacks
+    # Error results: preserve the TAIL of the message -- Python tracebacks
     # put the actual exception (type + message + the failing line of the
     # model's own code) on the LAST lines. Head-truncating cut that off,
     # leaving the model blind to the real error while it could still see
@@ -3535,7 +3535,7 @@ def _trim_tool_result(result_text: str, max_chars: int = _MAX_TOOL_RESULT_CHARS)
         return inner_str[:max_chars] + "\n...[+{:d} more chars]".format(
             len(inner_str) - max_chars)
 
-    # Unknown format — just return the raw status + truncated content.
+    # Unknown format -- just return the raw status + truncated content.
     return "(status={:s}) {:s}".format(
         status, result_text[:max_chars - 40] + "...")
 
@@ -3545,7 +3545,7 @@ def _error_is_code_bug(error_text: str) -> bool:
 
     Code-bug errors (KeyError, AttributeError, NameError) fail before
     creating any objects or modifying the scene.  There's nothing to undo
-    — skipping the undo saves 2 round-trips and avoids depsgraph crashes
+    -- skipping the undo saves 2 round-trips and avoids depsgraph crashes
     from undo+push on empty scenes.
 
     NOTE: ``ValueError`` and ``TypeError`` are deliberately excluded from
@@ -3565,7 +3565,7 @@ def _error_is_code_bug(error_text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Spiral detection helpers — break repeated error loops
+# Spiral detection helpers -- break repeated error loops
 
 def _extract_error_signature(result_text: str) -> str:
     """Extract a normalized error signature from a tool result.
@@ -3580,7 +3580,7 @@ def _extract_error_signature(result_text: str) -> str:
     m = re.search(r'"message":\s*"', result_text)
     if not m:
         return ""
-    # The closing quote is always the LAST '"' in the result text — true for
+    # The closing quote is always the LAST '"' in the result text -- true for
     # escaped JSON and for the unescaped re-serialization produced by
     # _trim_tool_result alike, so messages with embedded quotes (e.g.
     # `File "<string>"` tracebacks) are captured in full.
@@ -3590,7 +3590,7 @@ def _extract_error_signature(result_text: str) -> str:
     raw = result_text[m.end():end]
     # Unescape JSON escapes; a no-op when the text is already raw.
     raw = raw.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
-    # Drop any appended "HINT: ..." guidance block — the signature must be the
+    # Drop any appended "HINT: ..." guidance block -- the signature must be the
     # actual error line, not the tail of the hint text.
     hint_idx = raw.find("\n\nHINT:")
     if hint_idx != -1:
@@ -3691,7 +3691,7 @@ def _spiral_corrective_message(error_sig: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Smart undo helpers — detect code iteration and auto-undo duplicates
+# Smart undo helpers -- detect code iteration and auto-undo duplicates
 
 def _extract_code_operations(code: str) -> set[str]:
     """Extract operation signatures from a code string for overlap detection.
@@ -3758,7 +3758,7 @@ def _code_is_readonly(code: str) -> bool:
     Read-only code only inspects the scene (e.g. ``len(bpy.data.objects)``)
     and doesn't create, modify, or delete any datablocks.  Skipping the
     entity snapshot for read-only code saves 12 datablock iterations per
-    successful execution — a significant saving when the LLM makes many
+    successful execution -- a significant saving when the LLM makes many
     inspection calls between mutation calls.
     """
     _MUTATION_PATTERNS = (
@@ -3784,7 +3784,7 @@ def _code_is_readonly(code: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Entity snapshot / diff — track what the LLM creates during a turn
+# Entity snapshot / diff -- track what the LLM creates during a turn
 
 @dataclass
 class _EntitySnapshot:
@@ -3823,7 +3823,7 @@ class _EntitySnapshot:
 
 @dataclass
 class _EntityDiff:
-    """Difference between two snapshots — entities created in between."""
+    """Difference between two snapshots -- entities created in between."""
     object_names: set[str] = field(default_factory=set)
     mesh_names: set[str] = field(default_factory=set)
     material_names: set[str] = field(default_factory=set)
@@ -3895,7 +3895,7 @@ def _entity_diff_to_context_message(diff: _EntityDiff) -> str:
     if diff.is_empty():
         return ""
     return (
-        "[System: WARNING — You already created these entities this turn:\n"
+        "[System: WARNING -- You already created these entities this turn:\n"
         "{:s}\n"
         "DO NOT create them again. Modify the existing ones by name. "
         "Create something DIFFERENT with distinct names only.]"
@@ -3950,7 +3950,7 @@ def _build_cleanup_code(diff: _EntityDiff) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Undo helper — generates code that works in any workspace
+# Undo helper -- generates code that works in any workspace
 
 def _undo_code(action: str, message: str = "", extra_result: str = "") -> str:
     """Generate Blender Python code for undo/push that works in any workspace.
@@ -3959,9 +3959,9 @@ def _undo_code(action: str, message: str = "", extra_result: str = "") -> str:
     (e.g. Scripting workspace).  Without this fallback, the ``for...else``
     loop silently skips and the undo never fires, leaving duplicate objects.
 
-    *action* — ``"undo"`` or ``"push"``.
-    *message* — undo step name (only used when *action* is ``"push"``).
-    *extra_result* — optional extra JSON keys to append to the result dict
+    *action* -- ``"undo"`` or ``"push"``.
+    *message* -- undo step name (only used when *action* is ``"push"``).
+    *extra_result* -- optional extra JSON keys to append to the result dict
         (e.g. ``'\\n    "snapshot": {...},\\n'``).
     """
     if action == "undo":
@@ -3988,7 +3988,7 @@ def _undo_code(action: str, message: str = "", extra_result: str = "") -> str:
         "        continue\n"
         "    break\n"
         "else:\n"
-        "    # No VIEW_3D found — try any area in any window.\n"
+        "    # No VIEW_3D found -- try any area in any window.\n"
         "    for w in bpy.context.window_manager.windows:\n"
         "        for a in w.screen.areas:\n"
         "            with bpy.context.temp_override(window=w, area=a):\n"
@@ -4005,7 +4005,7 @@ def _undo_code(action: str, message: str = "", extra_result: str = "") -> str:
 # Snapshot JSON keys used as extra_result for merged undo+snapshot calls.
 # Each datablock iteration is wrapped in a try/except so that a single
 # corrupted datablock (e.g. from a depsgraph crash) doesn't kill the
-# entire snapshot — the other datablock types are still captured.
+# entire snapshot -- the other datablock types are still captured.
 _SNAPSHOT_EXTRA = (
     ",\n"
     "    'snapshot': {\n"
@@ -4066,9 +4066,9 @@ def _save_code_to_text_editor_deferred(code: str, seq: str) -> None:
                 name = "Coworker_{:s}".format(seq)
                 text_block = _bpy.data.texts.new(name)
                 text_block.write(code)
-                print("[🛠️Coworker] saved code to text editor '{:s}'".format(name))
+                print("[Coworker] saved code to text editor '{:s}'".format(name))
         except Exception as _ex:
-            print("[🛠️Coworker] FAILED to save code to text editor: {:s}".format(str(_ex)))
+            print("[Coworker] FAILED to save code to text editor: {:s}".format(str(_ex)))
 
     import bpy as _bpy  # pylint: disable=import-error
     _bpy.app.timers.register(_do_save, first_interval=0.0)
@@ -4210,9 +4210,9 @@ def export_session_log(auto_saved: bool = False) -> None:
         try:
             text_block = _bpy.data.texts.new(block_name)
             text_block.write("\n".join(lines))
-            print("[🛠️Coworker] Session log exported to text block '{:s}'".format(block_name))
+            print("[Coworker] Session log exported to text block '{:s}'".format(block_name))
         except Exception as ex:
-            print("[🛠️Coworker] Failed to export session log: {:s}".format(str(ex)))
+            print("[Coworker] Failed to export session log: {:s}".format(str(ex)))
 
     _bpy.app.timers.register(_do_export, first_interval=0.0)
 
@@ -4285,10 +4285,10 @@ def _lock_step_entities(step_diff: Any, mcp_port: int) -> None:
                 result.get("prior_hide_select_coll"))
         except (json.JSONDecodeError, TypeError):
             pass
-        print("[🛠️Coworker] _lock_step_entities: locked {:d} objects, {:d} "
+        print("[Coworker] _lock_step_entities: locked {:d} objects, {:d} "
               "collections".format(len(objs), len(colls)))
     except Exception as _ex:  # pylint: disable=broad-exception-caught
-        print("[🛠️Coworker] _lock_step_entities: skipped — {:s}".format(str(_ex)))
+        print("[Coworker] _lock_step_entities: skipped -- {:s}".format(str(_ex)))
 
 
 def _release_scene_lock() -> None:
@@ -4297,7 +4297,7 @@ def _release_scene_lock() -> None:
     Runs on the turn's worker thread (safe for ``_call_mcp_tool_sync``);
     never runs on the main thread because the MCP pump would deadlock.
     Best-effort: never raises.  On failure the priors are KEPT (not cleared)
-    so a later turn's release can still restore them — clearing here would
+    so a later turn's release can still restore them -- clearing here would
     discard the restore data while the scene keeps ``hide_select = True``
     (which, if the user saves the .blend, persists the lock).
     """
@@ -4305,19 +4305,19 @@ def _release_scene_lock() -> None:
     if not co_work_guard.is_locked():
         return
     if not _active_lock_mcp_port:
-        print("[🛠️Coworker] _release_scene_lock: no MCP port — deferring unlock")
+        print("[Coworker] _release_scene_lock: no MCP port -- deferring unlock")
         return
     try:
         _call_mcp_tool_sync(
             "execute_blender_code",
             {"code": co_work_guard.build_unlock_code()},
             _active_lock_mcp_port)
-        print("[🛠️Coworker] _release_scene_lock: released co-work scene lock")
+        print("[Coworker] _release_scene_lock: released co-work scene lock")
         co_work_guard.clear()
         _active_lock_mcp_port = 0
     except Exception as _ex:  # pylint: disable=broad-exception-caught
-        print("[🛠️Coworker] _release_scene_lock: unlock failed, keeping priors "
-              "for a later retry — {:s}".format(str(_ex)))
+        print("[Coworker] _release_scene_lock: unlock failed, keeping priors "
+              "for a later retry -- {:s}".format(str(_ex)))
 
 
 def run_conversation_turn(
@@ -4344,18 +4344,18 @@ def run_conversation_turn(
     When *chat_mode* is ``"ASK"``, tool execution is skipped and the LLM
     responds with text only (read-only Q&A).
 
-    This is a BLOCKING call — run it via ``schedule_coro`` or in a thread.
+    This is a BLOCKING call -- run it via ``schedule_coro`` or in a thread.
     """
-    # ── Re-entrancy guard ──────────────────────────────────────────────
+    # -- Re-entrancy guard ----------------------------------------------
     if _agent_state.turn_active:
         if _stop_event.is_set():
-            # Previous turn was aborted by the user — the blocking HTTP
+            # Previous turn was aborted by the user -- the blocking HTTP
             # request is still in-flight but we clear the flag so the new
             # message can proceed.  The old turn's response will be discarded.
             _agent_state.turn_active = False
-            print("[🛠️Coworker] run_conversation_turn: previous turn aborted, clearing guard")
+            print("[Coworker] run_conversation_turn: previous turn aborted, clearing guard")
         else:
-            print("[🛠️Coworker] run_conversation_turn: re-entrancy blocked — turn already active")
+            print("[Coworker] run_conversation_turn: re-entrancy blocked -- turn already active")
             return _agent_state.conversation_history
     _agent_state.turn_active = True
     try:
@@ -4382,7 +4382,7 @@ _session_turn_count = 0
 _session_loaded_domains: set[str] = set()
 
 
-def reset_session_domains() -> None:
+def _reset_session_domains() -> None:
     """Forget the session-sticky loaded domains (called by New Thread)."""
     global _session_loaded_domains
     _session_loaded_domains = set()
@@ -4441,8 +4441,8 @@ def _maybe_compact_session(
     # Compare consistently: ``estimated`` (messages + tool schema) against the
     # *whole* prompt budget.  The previous code subtracted the tool schema from
     # the budget AND added it to the estimate, so the trigger fired far too
-    # early — on the first turn it fired with two messages and, because there
-    # was nothing old enough to retire, produced a no-op "Compacting…" status
+    # early -- on the first turn it fired with two messages and, because there
+    # was nothing old enough to retire, produced a no-op "Compacting..." status
     # and an empty checkpoint.
     estimated = _estimate_messages_tokens(history) + tools_tokens
     _boundary = session_memory.find_retire_boundary(history)
@@ -4461,9 +4461,9 @@ def _maybe_compact_session(
     if not trigger:
         return
     if on_status:
-        on_status("Compacting conversation…")
-    print("[🛠️Coworker] _maybe_compact_session: estimated {:d} / budget {:d} tokens "
-          "— compacting".format(estimated, prompt_budget))
+        on_status("Compacting conversation...")
+    print("[Coworker] _maybe_compact_session: estimated {:d} / budget {:d} tokens "
+          "-- compacting".format(estimated, prompt_budget))
     # Automatic checkpoint of the PRE-compaction state so restore can rewind
     # before the summary.  Taken before history/memory are mutated.
     with session_memory.store_lock:
@@ -4489,7 +4489,7 @@ def _maybe_compact_session(
     # ``find_retire_boundary`` returns the index where the RECENT verbatim
     # window begins, or ``len(history)`` when the whole history IS the recent
     # window (nothing retirable).  Only prune reasoning from the OLD region
-    # ``[:boundary]`` and ONLY when a boundary actually exists — otherwise the
+    # ``[:boundary]`` and ONLY when a boundary actually exists -- otherwise the
     # recent window (which is what the Workshop shows) must stay verbatim.
     _reasoning_boundary = session_memory.find_retire_boundary(history)
     if _reasoning_boundary < len(history):
@@ -4497,7 +4497,7 @@ def _maybe_compact_session(
             [m for m in history[:_reasoning_boundary] if m.get("role") != "reasoning"]
             + history[_reasoning_boundary:]
         )
-    print("[🛠️Coworker] _maybe_compact_session: retired {:d} messages, "
+    print("[Coworker] _maybe_compact_session: retired {:d} messages, "
           "archived, checkpoint saved".format(len(retired)))
 
 
@@ -4524,7 +4524,7 @@ def _force_compact_session(
     global _session_turn_count
     st = session_memory.store
     if on_status:
-        on_status("Compacting conversation…")
+        on_status("Compacting conversation...")
     # Snapshot the PRE-compaction state (only when something will retire).
     _pre_boundary = session_memory.find_retire_boundary(history, _FORCE_COMPACT_KEEP_RECENT)
     if _pre_boundary < len(history):
@@ -4552,7 +4552,7 @@ def _force_compact_session(
             [m for m in history[:_boundary] if m.get("role") != "reasoning"]
             + history[_boundary:]
         )
-    print("[🛠️Coworker] _force_compact_session: retired {:d} messages "
+    print("[Coworker] _force_compact_session: retired {:d} messages "
           "(keep_recent={:d})".format(len(retired), _FORCE_COMPACT_KEEP_RECENT))
     return len(retired)
 
@@ -4571,7 +4571,7 @@ def _run_conversation_turn_inner(
     on_stream_reasoning: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Inner body of ``run_conversation_turn`` — wrapped by the re-entrancy guard.
+    Inner body of ``run_conversation_turn`` -- wrapped by the re-entrancy guard.
     """
     clear_stop()
     history = _agent_state.conversation_history
@@ -4586,26 +4586,26 @@ def _run_conversation_turn_inner(
     # later, and dropping them here would remove the greeting from the panel.
     while history and history[0].get("role") == "assistant" and not history[0].get("ui_only"):
         dropped = history.pop(0)
-        print("[🛠️Coworker] run_conversation_turn: dropped leading assistant "
+        print("[Coworker] run_conversation_turn: dropped leading assistant "
               "message ({:d} chars)".format(len(str(dropped.get("content") or ""))))
 
     # Ensure the first message is the system prompt.
     if not history or history[0].get("role") != "system":
         system_text = _get_system_prompt_with_rules()
         history.insert(0, {"role": "system", "content": system_text})
-        print("[🛠️Coworker] run_conversation_turn: inserted system prompt ({:d} chars)".format(
+        print("[Coworker] run_conversation_turn: inserted system prompt ({:d} chars)".format(
             len(system_text)))
 
-    # Clear any pending screenshot image from a previous turn — the user
+    # Clear any pending screenshot image from a previous turn -- the user
     # is starting fresh, so the old screenshot is stale.
     _agent_state._pending_image = None
 
-    # ── Pre-flight empty-scene check ──────────────────────────────────
+    # -- Pre-flight empty-scene check ----------------------------------
     # Small local models often call mode-dependent operators (mode_set, etc.)
     # on an empty scene, which fails with "Context missing active object".
     # Warn the LLM upfront so it creates objects first.
     # NOTE: We append to the existing system prompt (position 0) rather than
-    # creating a new message — Qwen's Jinja template requires ALL system
+    # creating a new message -- Qwen's Jinja template requires ALL system
     # messages at the beginning and rejects any mid-conversation system role.
     _preflight_note = ""
     try:
@@ -4622,13 +4622,13 @@ def _run_conversation_turn_inner(
 
     # Inject the preflight note into the system prompt (not a separate message)
     # so the message sequence stays: [system, user, ...].
-    # Guard: only inject once — don't duplicate on subsequent turns.
+    # Guard: only inject once -- don't duplicate on subsequent turns.
     _preflight_marker = "[Note: The Blender scene is currently empty"
     if _preflight_note and _preflight_marker not in history[0]["content"]:
         history[0]["content"] += _preflight_note
 
-    # ── Ask-mode system prompt addendum (issue #66) ──────────────────
-    # In Ask mode the system prompt must NOT invite tool use — the default
+    # -- Ask-mode system prompt addendum (issue #66) ------------------
+    # In Ask mode the system prompt must NOT invite tool use -- the default
     # prompt tells the model it can "inspect and modify the scene", which
     # actively encourages tool calls in a mode that must be informational
     # only.  Append a read-only instruction to the (cached) system prompt.
@@ -4641,7 +4641,7 @@ def _run_conversation_turn_inner(
     # Append the user message.
     history.append({"role": "user", "content": user_message, "turn_start": True})
 
-    # ── Smart undo tracking (per-turn) ────────────────────────────────
+    # -- Smart undo tracking (per-turn) --------------------------------
     # Tracks the last execute_blender_code call to detect iteration and
     # auto-undo duplicates. Reset at the start of each turn.
     _prev_code: str | None = None
@@ -4649,14 +4649,14 @@ def _run_conversation_turn_inner(
     _prev_code_error: str = ""  # Error text for code-bug detection.
     _undo_pushed: bool = False  # True once we've pushed the first undo state.
 
-    # ── Entity tracking (per-turn) ────────────────────────────────────
+    # -- Entity tracking (per-turn) ------------------------------------
     # Initial snapshot is taken lazily inside the first undo push (merged
     # into a single round-trip). Reset at the start of each turn.
     _turn_snapshot: _EntitySnapshot | None = None
     _turn_entities: _EntityDiff = _EntityDiff()
     _entity_context_injected: bool = False  # True once we've injected entity context.
 
-    # ── Spiral detection (per-turn) ───────────────────────────────────
+    # -- Spiral detection (per-turn) -----------------------------------
     # Tracks consecutive identical tool errors to break LLM retry loops.
     _consecutive_errors: list[str] = []
 
@@ -4723,7 +4723,7 @@ def _run_conversation_turn_inner(
             on_stream_reasoning=_live_reasoning,
         )
         if response is None:
-            # Streaming not supported by this endpoint — non-streaming fallback.
+            # Streaming not supported by this endpoint -- non-streaming fallback.
             response = openai_chat_completions(
                 llm_url, send_messages, send_tools, api_key, model,
                 max_tokens, thinking_budget_tokens=budget, chat_mode=chat_mode,
@@ -4735,7 +4735,7 @@ def _run_conversation_turn_inner(
     # Determine LLM URL.
     llm_port_local: int | None = None
     if llm_url is None:
-        # No URL provided — resolve from config mode.
+        # No URL provided -- resolve from config mode.
         from . import llm_manager as _llm_mgr
         _llm_cfg = _llm_mgr.get_config()
         if _llm_cfg.mode == "remote":
@@ -4762,7 +4762,7 @@ def _run_conversation_turn_inner(
     # accepts connections. Without this wait, the first chat request
     # would fail with "connection refused".
     if llm_port_local is not None:
-        print("[🛠️Coworker] run_conversation_turn: waiting for LLM on 127.0.0.1:{:d}...".format(llm_port_local))
+        print("[Coworker] run_conversation_turn: waiting for LLM on 127.0.0.1:{:d}...".format(llm_port_local))
         from . import llm_manager as _llm_mgr
         if not _wait_for_port(
             "127.0.0.1", llm_port_local, timeout=120.0, proc=_llm_mgr.get_llama_process()
@@ -4772,7 +4772,7 @@ def _run_conversation_turn_inner(
             _log_tail = _llm_mgr.get_llama_server_log_tail()
             if _log_tail:
                 _agent_state.error = (
-                    "LLM server did not become ready — llama-server exited or is stuck.\n\n"
+                    "LLM server did not become ready -- llama-server exited or is stuck.\n\n"
                     "--- llama-server.log (tail) ---\n{:s}".format(_log_tail)
                 )
             else:
@@ -4797,17 +4797,17 @@ def _run_conversation_turn_inner(
         if llm_port_local is not None else 0
     )
     if thinking_budget > 0:
-        print("[🛠️Coworker] run_conversation_turn: thinking_budget_tokens={:d}".format(thinking_budget))
-    print("[🛠️Coworker] run_conversation_turn: using max_tokens={:d}".format(max_tokens))
+        print("[Coworker] run_conversation_turn: thinking_budget_tokens={:d}".format(thinking_budget))
+    print("[Coworker] run_conversation_turn: using max_tokens={:d}".format(max_tokens))
 
-    # ── Prompt token budget ────────────────────────────────────────────
+    # -- Prompt token budget --------------------------------------------
     # The context window must hold the prompt AND the generated reply.  The
     # budget is computed against the context size the server *actually*
     # applied (queried from /props via llm_manager.get_runtime_ctx), falling
     # back to the configured value.  Remote providers get 0 (no trimming).
     #
     # Startup-only sizing (D4): a wrong ctx is handled by preflight + the
-    # compaction path — never by restarting the server mid-session.
+    # compaction path -- never by restarting the server mid-session.
     prompt_budget = 0
     ctx_size_used = 0
     if llm_port_local is not None:
@@ -4815,11 +4815,11 @@ def _run_conversation_turn_inner(
         try:
             _runtime_ctx = _llm_mgr.get_runtime_ctx(llm_port_local)
         except Exception as _ctx_ex:  # pylint: disable=broad-exception-caught
-            print("[🛠️Coworker] run_conversation_turn: get_runtime_ctx failed — {:s}".format(str(_ctx_ex)))
+            print("[Coworker] run_conversation_turn: get_runtime_ctx failed -- {:s}".format(str(_ctx_ex)))
             _runtime_ctx = None
         if _runtime_ctx:
             if _ctx_size and _runtime_ctx != _ctx_size:
-                print("[🛠️Coworker] run_conversation_turn: runtime n_ctx {:d} != configured {:d} — "
+                print("[Coworker] run_conversation_turn: runtime n_ctx {:d} != configured {:d} -- "
                       "budgeting against the server's value".format(_runtime_ctx, _ctx_size))
             _ctx_size = _runtime_ctx
         if _ctx_size <= 0:
@@ -4828,13 +4828,13 @@ def _run_conversation_turn_inner(
             # would answer with a raw 400.  Use a conservative fallback and
             # say so.
             _ctx_size = _DEFAULT_LOCAL_CTX_FALLBACK
-            print("[🛠️Coworker] run_conversation_turn: no runtime/configured context "
-                  "size — using conservative fallback {:d} so the prompt stays "
+            print("[Coworker] run_conversation_turn: no runtime/configured context "
+                  "size -- using conservative fallback {:d} so the prompt stays "
                   "bounded".format(_ctx_size))
         if _ctx_size > 0:
             ctx_size_used = _ctx_size
             prompt_budget = _compute_prompt_budget(_ctx_size, max_tokens)
-            print("[🛠️Coworker] run_conversation_turn: prompt budget {:d} tokens "
+            print("[Coworker] run_conversation_turn: prompt budget {:d} tokens "
                   "(ctx {:d}, max_tokens {:d})".format(prompt_budget, _ctx_size, max_tokens))
         # Record actual context usage for the Session panel indicator.
         try:
@@ -4843,7 +4843,7 @@ def _run_conversation_turn_inner(
         except Exception:  # pylint: disable=broad-exception-caught
             pass
 
-    # ── Tool domain system (hybrid: pre-detect + on-demand) ────────────
+    # -- Tool domain system (hybrid: pre-detect + on-demand) ------------
     # Pre-detect the domain from the user's prompt AND from the current
     # scene content (0 extra round-trips).  The LLM can also call
     # ``load_tools`` mid-turn to switch domains.
@@ -4869,7 +4869,7 @@ def _run_conversation_turn_inner(
         openai_tools = _build_tool_set(_all_tools, _loaded_domains)
         _domain_skill_domains = set(_loaded_domains)
 
-    # ── Request payload builder ────────────────────────────────────────
+    # -- Request payload builder ----------------------------------------
     # Extracted so the context-overflow recovery can rebuild the payload
     # from the (now smaller) history and retry without duplicating the
     # slice/strip/trim/inject/budget sequence.  Closes over ``history``,
@@ -4906,7 +4906,7 @@ def _run_conversation_turn_inner(
         # Sanitize any remaining non-standard roles to "user".
         msgs = _sanitize_message_roles(msgs)
 
-        # ── Inject the session memory block into the system prompt ──
+        # -- Inject the session memory block into the system prompt --
         # The block is small (bounded) and carries retired context; Qwen's
         # Jinja template requires system content up front, so it is appended
         # to message 0 like the domain skills.
@@ -4923,11 +4923,11 @@ def _run_conversation_turn_inner(
                 _sys0["content"] = _base.rstrip() + "\n\n" + _mem_block
                 msgs[0] = _sys0
 
-        # ── Inject domain-skill reference (send copy, self-tuning) ────
+        # -- Inject domain-skill reference (send copy, self-tuning) ----
         # Appended to the system copy like the memory block (Qwen's Jinja
         # template needs all system content up front).  In LOCAL mode the
         # allowance is whatever is genuinely SPARE after the messages, the
-        # tool schema, and a conversation reserve — so it tunes itself to the
+        # tool schema, and a conversation reserve -- so it tunes itself to the
         # window and the conversation with no ratio/ceiling to configure.  In
         # REMOTE mode there is no client-side window (prompt_budget == 0), so
         # a conservative flat cap is used.  Only WHOLE files are included
@@ -4947,7 +4947,7 @@ def _run_conversation_turn_inner(
                 )
                 _allow_tokens = _spare - _reserve
             else:
-                # Remote: no window to compute spare from — use the flat cap.
+                # Remote: no window to compute spare from -- use the flat cap.
                 _allow_tokens = _SKILLS_REMOTE_MAX_TOKENS
             if _allow_tokens > 0:
                 try:
@@ -4976,10 +4976,10 @@ def _run_conversation_turn_inner(
                 else:
                     _domain_skills_text = ""  # Safety net; reserve should prevent this.
 
-        # ── Inject a pending screenshot into the last user message ──
+        # -- Inject a pending screenshot into the last user message --
         # Done BEFORE budgeting so the image is counted against the window
         # (a pending screenshot used to be appended after the preflight and
-        # was therefore completely unbudgeted — a direct route to a 400).
+        # was therefore completely unbudgeted -- a direct route to a 400).
         # A copy is used so the stored history keeps its plain-text content.
         _pending_image: str | None = getattr(_agent_state, "_pending_image", None)
         if _pending_image and msgs and msgs[-1].get("role") == "user":
@@ -4997,7 +4997,7 @@ def _run_conversation_turn_inner(
             msgs[-1] = _last
             _agent_state._pending_image = None  # Clear after use
 
-        # ── Enforce the token budget, then preflight ──────────────────
+        # -- Enforce the token budget, then preflight ------------------
         # The message-count cap above is a blunt instrument: a few large tool
         # results can still overflow a small local context window.  Trim
         # oldest-first, then run the last-check preflight (counts history +
@@ -5006,11 +5006,11 @@ def _run_conversation_turn_inner(
         if prompt_budget > 0:
             _before = _estimate_messages_tokens(msgs)
             msgs = _fit_history_to_budget(msgs, prompt_budget)
-            # Trimming can cut a tool-call exchange in half — repair again.
+            # Trimming can cut a tool-call exchange in half -- repair again.
             msgs = _repair_tool_call_pairs(msgs)
             _after = _estimate_messages_tokens(msgs)
             if _after < _before:
-                print("[🛠️Coworker] run_conversation_turn: trimmed prompt "
+                print("[Coworker] run_conversation_turn: trimmed prompt "
                       "{:d} -> {:d} tokens ({:d} messages)".format(
                           _before, _after, len(msgs)))
             msgs, _err = _prompt_preflight(msgs, openai_tools, prompt_budget)
@@ -5023,7 +5023,7 @@ def _run_conversation_turn_inner(
                 _stripped["content"] = str(_stripped.get("content") or "").replace(
                     "\n\n" + _domain_skills_text, "")
                 msgs[0] = _stripped
-                print("[🛠️Coworker] run_conversation_turn: dropped domain skills to "
+                print("[Coworker] run_conversation_turn: dropped domain skills to "
                       "fit the context window")
                 msgs, _err = _prompt_preflight(msgs, openai_tools, prompt_budget)
             return msgs, _err
@@ -5040,14 +5040,14 @@ def _run_conversation_turn_inner(
 
         # Abort early if the user pressed Stop.
         if _stop_event.is_set():
-            print("[🛠️Coworker] run_conversation_turn: aborted by user")
+            print("[Coworker] run_conversation_turn: aborted by user")
             _agent_state.is_thinking = False
             _agent_state.thinking_start_time = 0.0
             if on_status:
                 on_status("Stopped")
             return history
 
-        # ── Session memory compaction check (Tier 3 Phase 4) ───────────
+        # -- Session memory compaction check (Tier 3 Phase 4) -----------
         # Retire old turns once the estimated prompt approaches the safe
         # budget, keeping a structured memory block in the system prompt and
         # archiving what was retired.  Best-effort: never blocks the turn.
@@ -5057,10 +5057,10 @@ def _run_conversation_turn_inner(
                 memory_writer=_memory_writer_factory(
                     llm_url, api_key, model, min(_requested_max_tokens, 1024)))
         except Exception as _compact_ex:  # pylint: disable=broad-exception-caught
-            print("[🛠️Coworker] run_conversation_turn: session compaction skipped — {:s}".format(
+            print("[Coworker] run_conversation_turn: session compaction skipped -- {:s}".format(
                 str(_compact_ex)))
 
-        # ── Build the exact message payload for this POST ─────────────
+        # -- Build the exact message payload for this POST -------------
         history_to_send, _preflight_err = _build_send_messages()
         if _preflight_err:
             _agent_state.is_thinking = False
@@ -5070,7 +5070,7 @@ def _run_conversation_turn_inner(
                 on_status("Error: conversation too large for context window")
             return history
 
-        # ── Cap the reply allowance to the space the prompt left ──────
+        # -- Cap the reply allowance to the space the prompt left ------
         # The prompt now fits the window; give the model whatever is left for
         # the reply (never the whole configured max_tokens, which by default
         # equals the context size and would overflow the server).
@@ -5081,24 +5081,24 @@ def _run_conversation_turn_inner(
             )
             max_tokens = _cap_reply_tokens(ctx_size_used, _requested_max_tokens, _prompt_tokens_est)
 
-        # ── Request-shape diagnostic ──────────────────────────────────
+        # -- Request-shape diagnostic ----------------------------------
         # Log exactly what is about to be sent.  This is the single most
         # useful signal when a chat template rejects a request: it shows the
         # role sequence, whether any empty-content messages survived, and
         # which user prompt the model will actually answer.
-        print("[🛠️Coworker] run_conversation_turn: request shape:")
+        print("[Coworker] run_conversation_turn: request shape:")
         print(_describe_history_for_log(history_to_send))
 
         response = _llm_request(history_to_send, openai_tools, thinking_budget)
 
-        # ── Context-overflow recovery: compact, rebuild, retry once ───
+        # -- Context-overflow recovery: compact, rebuild, retry once ---
         # The server rejected the request as larger than its context window.
         # Force an aggressive compaction, rebuild the payload from the now
-        # smaller history, and retry — instead of surfacing a raw HTTP 400
+        # smaller history, and retry -- instead of surfacing a raw HTTP 400
         # the user cannot act on.  Bounded to a single retry; if the reduced
         # window still does not fit, the preflight shows the friendly message.
         if response is None and getattr(_agent_state, "error_kind", "") == "context_overflow":
-            print("[🛠️Coworker] run_conversation_turn: context overflow — forcing "
+            print("[Coworker] run_conversation_turn: context overflow -- forcing "
                   "compaction and retrying once")
             try:
                 _force_compact_session(
@@ -5106,7 +5106,7 @@ def _run_conversation_turn_inner(
                     memory_writer=_memory_writer_factory(
                         llm_url, api_key, model, min(_requested_max_tokens, 1024)))
             except Exception as _force_ex:  # pylint: disable=broad-exception-caught
-                print("[🛠️Coworker] run_conversation_turn: forced compaction failed — "
+                print("[Coworker] run_conversation_turn: forced compaction failed -- "
                       "{:s}".format(str(_force_ex)))
             history_to_send, _preflight_err = _build_send_messages()
             if _preflight_err:
@@ -5116,7 +5116,7 @@ def _run_conversation_turn_inner(
                 if on_status:
                     on_status("Error: conversation too large for context window")
                 return history
-            print("[🛠️Coworker] run_conversation_turn: retry request shape:")
+            print("[Coworker] run_conversation_turn: retry request shape:")
             print(_describe_history_for_log(history_to_send))
             if ctx_size_used > 0:
                 _prompt_tokens_est = (
@@ -5126,7 +5126,7 @@ def _run_conversation_turn_inner(
                 max_tokens = _cap_reply_tokens(ctx_size_used, _requested_max_tokens, _prompt_tokens_est)
             response = _llm_request(history_to_send, openai_tools, thinking_budget)
 
-        # ── Abort check ───────────────────────────────────────────────
+        # -- Abort check -----------------------------------------------
         # If the user stopped the turn, keep any partial streamed content
         # in the Workshop (marked) instead of discarding it (issue #69).
         # The partial is marked ``partial`` so a later turn never re-sends
@@ -5138,7 +5138,7 @@ def _run_conversation_turn_inner(
                     response.get("choices", [{}])[0].get("message", {}).get("content") or ""
                 )
             if _partial:
-                print("[🛠️Coworker] run_conversation_turn: aborted — keeping "
+                print("[Coworker] run_conversation_turn: aborted -- keeping "
                       "partial response ({:d} chars)".format(len(_partial)))
                 history.append({
                     "role": "assistant",
@@ -5146,7 +5146,7 @@ def _run_conversation_turn_inner(
                     "partial": True,
                 })
             else:
-                print("[🛠️Coworker] run_conversation_turn: aborted — nothing streamed yet")
+                print("[Coworker] run_conversation_turn: aborted -- nothing streamed yet")
             _agent_state.is_thinking = False
             _agent_state.thinking_start_time = 0.0
             if on_status:
@@ -5185,7 +5185,7 @@ def _run_conversation_turn_inner(
         # known context size to budget against).
         body_approx = len(json.dumps(history_to_send, default=str))
         if prompt_budget <= 0 and body_approx > 30000:
-            print("[🛠️Coworker] run_conversation_turn: WARNING — history body is {:d} bytes, "
+            print("[Coworker] run_conversation_turn: WARNING -- history body is {:d} bytes, "
                   "may exceed model context window".format(body_approx))
 
         choice = response.get("choices", [{}])[0]
@@ -5211,14 +5211,14 @@ def _run_conversation_turn_inner(
             content = msg.get("content") or ""
 
 
-        # ── Auto-continue on finish_reason=length ─────────────────────
+        # -- Auto-continue on finish_reason=length ---------------------
         # Reasoning models (Qwen, DeepSeek, Gemma 4) can hit the token
         # limit mid-reasoning before emitting tool calls or text.
         # We detect this and ask the model to continue.
         continue_attempts = 0
         while finish_reason == "length" and continue_attempts < 2:
             continue_attempts += 1
-            print("[🛠️Coworker] run_conversation_turn: finish_reason=length, "
+            print("[Coworker] run_conversation_turn: finish_reason=length, "
                   "auto-continue attempt {:d}/2".format(continue_attempts))
 
             # Append partial assistant message to history so the model
@@ -5235,7 +5235,7 @@ def _run_conversation_turn_inner(
             history.append({
                 "role": "user",
                 "content": (
-                    "Continue. Keep this next step small — if there is a lot "
+                    "Continue. Keep this next step small -- if there is a lot "
                     "left to do, do one short piece now and the rest in "
                     "follow-up calls."
                 ),
@@ -5261,8 +5261,8 @@ def _run_conversation_turn_inner(
                 _cont_send, _cont_err = _prompt_preflight(
                     _cont_send, openai_tools, prompt_budget)
                 if _cont_err:
-                    print("[🛠️Coworker] run_conversation_turn: continuation cannot fit "
-                          "the context window — stopping auto-continue")
+                    print("[Coworker] run_conversation_turn: continuation cannot fit "
+                          "the context window -- stopping auto-continue")
                     break
             # Forward the thinking budget.  Without it the continuation can
             # spend the entire max_tokens on chain-of-thought and leave
@@ -5275,7 +5275,7 @@ def _run_conversation_turn_inner(
 
             # Pop the "Continue." user message so it doesn't pollute history.
             history.pop()
-            # Pop the partial assistant message — we'll replace it with the
+            # Pop the partial assistant message -- we'll replace it with the
             # concatenated version.
             history.pop()
 
@@ -5297,11 +5297,11 @@ def _run_conversation_turn_inner(
                 msg["tool_calls"] = existing
             msg["content"] = content
             finish_reason = cont_choice.get("finish_reason", "")
-            print("[🛠️Coworker] run_conversation_turn:   after continue: "
+            print("[Coworker] run_conversation_turn:   after continue: "
                   "finish_reason={:s}, content_len={:d}, tool_calls={:d}".format(
                       finish_reason, len(content), len(msg.get("tool_calls") or [])))
 
-        # ── End auto-continue ─────────────────────────────────────────
+        # -- End auto-continue -----------------------------------------
 
         # Deliver reasoning (chain-of-thought) to UI if present.
         # Different providers use different field names:
@@ -5311,7 +5311,7 @@ def _run_conversation_turn_inner(
         # Strip <think> wrapper tags for display/storage.
         reasoning = _strip_think_tags(reasoning)
         if reasoning:
-            print("[🛠️Coworker] run_conversation_turn: reasoning ({:d} chars) — storing in history".format(
+            print("[Coworker] run_conversation_turn: reasoning ({:d} chars) -- storing in history".format(
                 len(reasoning)))
             _agent_state.reasoning_text = reasoning
             # Pick a random thinking label that sticks for this reasoning block.
@@ -5336,13 +5336,13 @@ def _run_conversation_turn_inner(
         # Check for tool calls.
         raw_tool_calls = msg.get("tool_calls")
 
-        # ── Ask-mode hard guard (issue #66) ───────────────────────────
+        # -- Ask-mode hard guard (issue #66) ---------------------------
         # Ask mode must be informational only.  Even though no tools are
         # offered to the model, defensive layers above (text/XML fallback
         # parsing) or the provider itself could still surface tool calls.
         # Never execute them: keep the prose answer and drop the calls.
         if chat_mode == "ASK" and raw_tool_calls:
-            print("[🛠️Coworker] run_conversation_turn: ASK mode — suppressed "
+            print("[Coworker] run_conversation_turn: ASK mode -- suppressed "
                   "{:d} tool call(s) from LLM response".format(len(raw_tool_calls)))
             msg["tool_calls"] = []
             raw_tool_calls = None
@@ -5356,7 +5356,7 @@ def _run_conversation_turn_inner(
             # Process each tool call.
             for tc in raw_tool_calls:
                 if _stop_event.is_set():
-                    print("[🛠️Coworker] run_conversation_turn: aborted during tool calls")
+                    print("[Coworker] run_conversation_turn: aborted during tool calls")
                     _agent_state.is_thinking = False
                     _agent_state.thinking_start_time = 0.0
                     if on_status:
@@ -5372,8 +5372,8 @@ def _run_conversation_turn_inner(
                 tool_name = fn.get("name", "")
                 tool_id = tc.get("id", "")
 
-                # ── load_tools meta-tool (on-demand domain loading) ────
-                # Intercepted here — not sent to the MCP server.  Handled in
+                # -- load_tools meta-tool (on-demand domain loading) ----
+                # Intercepted here -- not sent to the MCP server.  Handled in
                 # every mode (the tool is offered locally AND to remote
                 # providers), so the gate is not local-only.
                 if tool_name == "load_tools":
@@ -5392,7 +5392,7 @@ def _run_conversation_turn_inner(
                         openai_tools.append(_LOAD_TOOLS_SCHEMA)
                         openai_tools.sort(
                             key=lambda t: t.get("function", {}).get("name", ""))
-                        print("[🛠️Coworker] run_conversation_turn: load_tools '{:s}' — now {:d} tools".format(
+                        print("[Coworker] run_conversation_turn: load_tools '{:s}' -- now {:d} tools".format(
                             domain, len(openai_tools)))
                         history.append({
                             "role": "tool",
@@ -5408,19 +5408,19 @@ def _run_conversation_turn_inner(
                             "name": "load_tools",
                             "content": "Domain '{:s}' already loaded or unknown.".format(domain),
                         })
-                    continue  # Skip MCP call — handled locally.
+                    continue  # Skip MCP call -- handled locally.
 
                 if on_status:
                     on_status(_friendly_tool_status(tool_name))
 
-                # ── Smart undo: auto-undo before re-executing code ─────
+                # -- Smart undo: auto-undo before re-executing code -----
                 # If this is execute_blender_code and the previous call
                 # errored, undo to clean up partial effects before retrying.
                 # On successful overlap (same operations detected), inject
                 # context so the LLM knows what already exists.
                 #
                 # Skip undo for pure code-bug errors (KeyError, AttributeError,
-                # TypeError, NameError, ValueError) — these fail before creating
+                # TypeError, NameError, ValueError) -- these fail before creating
                 # any objects, so there's nothing to undo.  Undoing wastes 2
                 # round-trips and can trigger depsgraph crashes.
                 if tool_name == "execute_blender_code" and _prev_code is not None:
@@ -5428,23 +5428,23 @@ def _run_conversation_turn_inner(
                     reason = ""
                     if _prev_code_errored:
                         if _error_is_code_bug(_prev_code_error):
-                            print("[🛠️Coworker] run_conversation_turn: smart undo SKIPPED — code-bug error, no side effects")
+                            print("[Coworker] run_conversation_turn: smart undo SKIPPED -- code-bug error, no side effects")
                         else:
                             should_undo = True
                             reason = "previous call errored"
                     elif _codes_overlap(_prev_code, args.get("code", "")):
                         pass  # Context injected after tool result.
                     if should_undo:
-                        print("[🛠️Coworker] run_conversation_turn: smart undo triggered — {:s}".format(reason))
+                        print("[Coworker] run_conversation_turn: smart undo triggered -- {:s}".format(reason))
                         # Undo to the state before the previous execute_blender_code.
-                        # Must use context override — bpy.ops.ed.undo() needs a window context
+                        # Must use context override -- bpy.ops.ed.undo() needs a window context
                         # which isn't available in the bridge server's exec() namespace.
                         _undo_result = _call_mcp_tool_sync("execute_blender_code",
                             {"code": _undo_code("undo")}, mcp_port)
-                        # Check if undo actually succeeded — if not, fall back to
+                        # Check if undo actually succeeded -- if not, fall back to
                         # retroactive entity cleanup using the snapshot diff.
                         if '"status": "error"' in _undo_result:
-                            print("[🛠️Coworker] run_conversation_turn: undo FAILED — falling back to entity cleanup")
+                            print("[Coworker] run_conversation_turn: undo FAILED -- falling back to entity cleanup")
                             _cleanup_code = _build_cleanup_code(_turn_entities)
                             if _cleanup_code:
                                 _call_mcp_tool_sync("execute_blender_code",
@@ -5454,7 +5454,7 @@ def _run_conversation_turn_inner(
                             {"code": _undo_code("push", "bfa_coworker_pre_script")},
                             mcp_port)
 
-                # ── Push initial undo state + initial snapshot (merged) ─
+                # -- Push initial undo state + initial snapshot (merged) -
                 # Merging saves 1 round-trip at the start of each turn.
                 # Skip entity snapshot for read-only code (no scene mutations).
                 if tool_name == "execute_blender_code" and not _undo_pushed:
@@ -5470,14 +5470,14 @@ def _run_conversation_turn_inner(
                             snap_data = init_data.get("result", {}).get("snapshot")
                             if snap_data:
                                 _turn_snapshot = _EntitySnapshot.from_dict(snap_data)
-                                print("[🛠️Coworker] run_conversation_turn: initial entity snapshot taken")
+                                print("[Coworker] run_conversation_turn: initial entity snapshot taken")
                     except (json.JSONDecodeError, TypeError):
                         pass
                     if _turn_snapshot is None:
-                        print("[🛠️Coworker] run_conversation_turn: initial entity snapshot FAILED — "
+                        print("[Coworker] run_conversation_turn: initial entity snapshot FAILED -- "
                               "continuing without the co-work scene lock for this turn")
 
-                # ── Inject resolution from preferences ─────────────
+                # -- Inject resolution from preferences -------------
                 if tool_name in ("download_polyhaven_asset", "setup_pbr_material"):
                     try:
                         _prefs = bpy.context.preferences.addons[__package__].preferences
@@ -5492,13 +5492,13 @@ def _run_conversation_turn_inner(
                 # Call the MCP tool.
                 result_text = _call_mcp_tool_sync(tool_name, args, mcp_port)
 
-                # ── Track code execution for smart undo ────────────────
+                # -- Track code execution for smart undo ----------------
                 if tool_name == "execute_blender_code":
                     _prev_code = args.get("code", "")
                     _prev_code_errored = '"status": "error"' in result_text
                     _prev_code_error = result_text if _prev_code_errored else ""
 
-                    # ── Push bookmark + entity snapshot (merged) ───────
+                    # -- Push bookmark + entity snapshot (merged) -------
                     # Merging these into a single execute_blender_code call
                     # saves 2 round-trips per iteration vs separate calls.
                     # Skip entity snapshot for read-only code (no scene mutations).
@@ -5528,7 +5528,7 @@ def _run_conversation_turn_inner(
                         except (json.JSONDecodeError, TypeError):
                             pass
 
-                    # ── Save to text editor memory bank ────────────────
+                    # -- Save to text editor memory bank ----------------
                     seq = _next_code_sequence()
                     if _prev_code_errored:
                         # Save error-producing code with error prefix.
@@ -5579,7 +5579,7 @@ def _run_conversation_turn_inner(
                         history.append({"role": "user", "content": ctx})
                         _entity_context_injected = True
 
-                # ── Extract screenshot image for vision-capable models ─
+                # -- Extract screenshot image for vision-capable models -
                 # If the tool result contains an image (screenshot), store
                 # it on the agent state so it can be injected into the next
                 # user message as an image_url content block.
@@ -5589,11 +5589,11 @@ def _run_conversation_turn_inner(
                         img_data = _extract_image_from_tool_result(result_obj)
                         if img_data:
                             _agent_state._pending_image = img_data
-                            print("[🛠️Coworker] run_conversation_turn: screenshot image captured for vision model")
+                            print("[Coworker] run_conversation_turn: screenshot image captured for vision model")
                     except (json.JSONDecodeError, TypeError):
                         pass
 
-                # ── Spiral detection: break repeated error loops ──────
+                # -- Spiral detection: break repeated error loops ------
                 if tool_name == "execute_blender_code":
                     # Use the trimmed form for signature extraction: the
                     # signature only needs the error line, and the full result
@@ -5649,14 +5649,14 @@ def _run_conversation_turn_inner(
                 })
             continue
 
-        # No more tool calls — add the final assistant message and we're done.
+        # No more tool calls -- add the final assistant message and we're done.
         history.append({"role": "assistant", "content": content})
         break
 
     # If we hit the iteration limit, the LLM kept calling tools.
     # Add an explicit instruction to summarize and make one final call.
     if iterations >= _max_iterations:
-        print("[🛠️Coworker] run_conversation_turn: hit max iterations, forcing summary")
+        print("[Coworker] run_conversation_turn: hit max iterations, forcing summary")
         history.append({
             "role": "user",
             "content": "[System: All tool calls are complete. Please summarize what was done in 1-2 sentences.]",
@@ -5669,8 +5669,8 @@ def _run_conversation_turn_inner(
             _summary_send, _sum_err = _prompt_preflight(
                 _summary_send, openai_tools, prompt_budget)
             if _sum_err:
-                print("[🛠️Coworker] run_conversation_turn: forced summary cannot fit "
-                      "the context window — skipping")
+                print("[Coworker] run_conversation_turn: forced summary cannot fit "
+                      "the context window -- skipping")
                 _summary_send = None
         final_response = (
             _llm_request(_summary_send, openai_tools, thinking_budget)
@@ -5727,7 +5727,7 @@ def ping_agent(
     Quick connectivity check for all three back-ends.
 
     When *operating_mode* is ``"EXTERNAL_HARNESS"``, only the bridge
-    server is checked — MCP and LLM probes are skipped because those
+    server is checked -- MCP and LLM probes are skipped because those
     services are managed externally.  Pass *check_harness_config* to also
     preflight the generated MCP client config, so "Check Status" reports
     whether the config the user copied can actually start the server.
@@ -5746,7 +5746,7 @@ def ping_agent(
     is_harness = (operating_mode == "EXTERNAL_HARNESS")
     result: dict[str, Any] = {}
 
-    # 1 — Bridge server (raw TCP inside Blender)
+    # 1 -- Bridge server (raw TCP inside Blender)
     import socket as _socket_mod
     try:
         s = _socket_mod.socket(_socket_mod.AF_INET, _socket_mod.SOCK_STREAM)
@@ -5757,7 +5757,7 @@ def ping_agent(
     except Exception as ex:
         result["bridge_server"] = "FAIL: {:s}".format(str(ex))
 
-    # In harness mode, skip MCP and LLM probes — they're external.
+    # In harness mode, skip MCP and LLM probes -- they're external.
     if is_harness:
         result["mcp_server"] = "N/A (harness mode)"
         result["llm_health"] = "N/A (harness mode)"
@@ -5788,7 +5788,7 @@ def ping_agent(
         )
         return result
 
-    # 2 — LLM health
+    # 2 -- LLM health
     try:
         url = "http://127.0.0.1:{:d}/health".format(llm_port)
         with urllib.request.urlopen(url, timeout=5) as resp:
@@ -5796,7 +5796,7 @@ def ping_agent(
     except Exception as ex:
         result["llm_health"] = "FAIL: {:s}".format(str(ex))
 
-    # 3 — LLM chat (simple echo)
+    # 3 -- LLM chat (simple echo)
     try:
         url = _LLM_CHAT_URL.format(llm_port)
         body = {
@@ -5820,7 +5820,7 @@ def ping_agent(
     except Exception as ex:
         result["llm_chat"] = "FAIL: {:s}".format(str(ex))
 
-    # 4 — MCP server (verify with a real tools/list RPC;
+    # 4 -- MCP server (verify with a real tools/list RPC;
     # FastMCP streamable-HTTP does NOT expose /health.)
     try:
         tools = _list_tools_sync(mcp_port, operating_mode)
@@ -5847,7 +5847,7 @@ def warmup_agent(
 
     This does a lightweight tool-list fetch (so ``tool_count`` is populated
     and the UI shows the agent is ready) and posts a friendly welcome
-    message into the conversation history. It does NOT invoke the LLM —
+    message into the conversation history. It does NOT invoke the LLM --
     that's deferred until the user's first real message.
 
     Call this after the LLM backend is confirmed running but before the
@@ -5860,13 +5860,13 @@ def warmup_agent(
         tools = _list_tools_sync(mcp_port)
         if tools:
             _agent_state.tool_count = len(tools)
-            print("[🛠️Coworker] warmup_agent: {:d} tools loaded".format(len(tools)))
+            print("[Coworker] warmup_agent: {:d} tools loaded".format(len(tools)))
     except Exception as ex:  # pylint: disable=broad-exception-caught
-        print("[🛠️Coworker] warmup_agent: tool warmup failed — {:s}".format(str(ex)))
+        print("[Coworker] warmup_agent: tool warmup failed -- {:s}".format(str(ex)))
 
     # 1.5 In local mode, only post the welcome once the LLM backend is
     #     actually healthy.  Posting it unconditionally right after Popen
-    #     is a lie — a mid-range model takes 30-120s to load, and a crashed
+    #     is a lie -- a mid-range model takes 30-120s to load, and a crashed
     #     llama-server would otherwise still get a "we're ready!" message
     #     (the "welcome message happens, then closes" symptom).
     try:
@@ -5875,16 +5875,16 @@ def warmup_agent(
             _tail = _llm_mgr.get_llama_server_log_tail()
             _detail = "\n\n--- llama-server.log (tail) ---\n{:s}".format(_tail) if _tail else ""
             _msg = (
-                "LLM backend is not ready yet — wait for the model to load, "
+                "LLM backend is not ready yet -- wait for the model to load, "
                 "or check the llama-server log (last lines above).{:s}".format(_detail)
             )
             _agent_state.error = _msg
             if on_status:
                 on_status("Error: LLM backend not ready")
-            print("[🛠️Coworker] warmup_agent: LLM backend not ready — welcome suppressed")
+            print("[Coworker] warmup_agent: LLM backend not ready -- welcome suppressed")
             return
     except Exception as ex:  # pylint: disable=broad-exception-caught
-        print("[🛠️Coworker] warmup_agent: health pre-check failed — {:s}".format(str(ex)))
+        print("[Coworker] warmup_agent: health pre-check failed -- {:s}".format(str(ex)))
 
     # 2. Post the welcome message.
     # It is a greeting, not a model turn, so it is marked ``ui_only``: the
@@ -5903,14 +5903,14 @@ def warmup_agent(
     if on_status:
         on_status("Ready")
 
-    print("[🛠️Coworker] warmup_agent: welcome message posted (UI only)")
+    print("[Coworker] warmup_agent: welcome message posted (UI only)")
 
 
 # ---------------------------------------------------------------------------
 # Module-level: migrate vendor/deps/ out of the addon tree immediately.
 # Blender 5.3+ sandbox scans the addon directory tree at load time and
 # flags any subdirectory matching a known top-level Python package
-# (rich/, click/, httpx/, etc.) as a policy violation — even if never
+# (rich/, click/, httpx/, etc.) as a policy violation -- even if never
 # imported.  We move vendor/deps/ to ~/.cache/bfa_coworker/vendor_deps/
 # at module import time so the scan never sees the package directories.
 if (Path(__file__).resolve().parent / "vendor" / "deps").is_dir():

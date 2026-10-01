@@ -7,7 +7,7 @@
 Composite tool: set up a three-point lighting rig in one call.
 
 Creates a key light, fill light, and rim light with proper positioning,
-colors, and energy — all in a single ``execute_blender_code`` call.
+colors, and energy -- all in a single ``execute_blender_code`` call.
 Saves the LLM 3-5 round-trips.
 """
 
@@ -40,8 +40,8 @@ def register(mcp: FastMCP) -> None:
         """
         Create a three-point lighting rig (key, fill, rim) targeting an object.
 
-        *target_object* — name of the object to light (empty string = active object).
-        *distance* — how far from the target the lights are placed.
+        *target_object* -- name of the object to light (empty string = active object).
+        *distance* -- how far from the target the lights are placed.
         Colors are comma-separated RGB strings (e.g. "1.0, 0.95, 0.9").
         """
         code = _build_rig_code(

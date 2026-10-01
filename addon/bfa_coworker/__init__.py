@@ -187,14 +187,14 @@ def register() -> None:
 
     # Discover generative plugins (Tier 5).
     # This scans gen_plugins/ and populates the registry.
-    # Safe to call — discovery is idempotent.
+    # Safe to call -- discovery is idempotent.
     try:
         from .gen_plugins import discover, PLUGIN_REGISTRY
         discover()
-        print("[🛠️Coworker] gen_plugins: {:d} plugins registered".format(
+        print("[Coworker] gen_plugins: {:d} plugins registered".format(
             len(PLUGIN_REGISTRY)))
     except Exception as ex:
-        print("[🛠️Coworker] gen_plugins: discovery skipped — {:s}".format(str(ex)))
+        print("[Coworker] gen_plugins: discovery skipped -- {:s}".format(str(ex)))
 
     # Defer auto-start so the server does not slow down Blender's startup.
     if not bpy.app.background:
@@ -231,10 +231,10 @@ def _autostart_agent_timer() -> None:
     # In External Harness mode, only the bridge server is needed.
     # The MCP server and LLM are managed externally.
     if prefs.operating_mode == "EXTERNAL_HARNESS":
-        print("[🛠️Coworker] Agent auto-start: External Harness mode — bridge only")
+        print("[Coworker] Agent auto-start: External Harness mode -- bridge only")
         return
 
-    print("[🛠️Coworker] Agent auto-start: using ports bridge={:d} mcp={:d} llm={:d}".format(
+    print("[Coworker] Agent auto-start: using ports bridge={:d} mcp={:d} llm={:d}".format(
         _bridge_port, _mcp_port, _llm_port))
 
     # Start the MCP HTTP server.
@@ -242,7 +242,7 @@ def _autostart_agent_timer() -> None:
     if not _ac._agent_state.mcp_server_running:
         proc = _ac.start_mcp_server(port=_mcp_port, blender_port=_bridge_port)
         if proc is None:
-            print("[⚠️Coworker] Agent auto-start: MCP server failed — {:s}".format(_ac._agent_state.error))
+            print("[Coworker][WARN] Agent auto-start: MCP server failed -- {:s}".format(_ac._agent_state.error))
             return
 
     # Start local LLM if configured.
@@ -271,7 +271,7 @@ def _autostart_agent_timer() -> None:
             else:
                 _llm.start_local_llama()
     elif prefs.operating_mode == "REMOTE_API":
-        # Remote mode — sync remote prefs to config so chat_send finds them.
+        # Remote mode -- sync remote prefs to config so chat_send finds them.
         _llm = get_llm_manager()
         _llm_cfg = _llm.get_config()
         _llm_cfg.mode = "remote"
@@ -280,7 +280,7 @@ def _autostart_agent_timer() -> None:
         _llm_cfg.remote_model = prefs.remote_model
         _llm.set_config(_llm_cfg)
 
-    print("[🛠️Coworker] Agent auto-start: full agent running on ports bridge={:d} mcp={:d} llm={:d}".format(
+    print("[Coworker] Agent auto-start: full agent running on ports bridge={:d} mcp={:d} llm={:d}".format(
         _bridge_port, _mcp_port, _llm_port))
 
 

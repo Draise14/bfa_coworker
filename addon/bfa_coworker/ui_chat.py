@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Bforartists Coworker Chat Panel — provides an in-Blender chat interface to the MCP agent.
+Bforartists Coworker Chat Panel -- provides an in-Blender chat interface to the MCP agent.
 
 Registers a ``VIEW_3D`` sidebar panel with conversation history, multi-line
 input, send/clear/stop buttons, and a status bar.
@@ -110,7 +110,7 @@ def _wrap_text(text: str, width: int = _WRAP_WIDTH) -> str:
 
 #
 # Blender UI primitives can't render bold or italic, don't have a monospace
-# label, and have no table widget — but we can simulate most of it with
+# label, and have no table widget -- but we can simulate most of it with
 # row/column layouts, scale_y tricks for headings, boxes for code/quotes,
 # and splitting pipe tables into aligned columns.
 # ---------------------------------------------------------------------------
@@ -175,10 +175,10 @@ def _wrap_for_label(text, width=40):
   # tighter again for monospace-style code blocks
 
 
-# --- LaTeX → plain text -----------------------------------------------------
-# The model occasionally emits $$…$$ blocks or \frac{a}{b}-style markup even
+# --- LaTeX -> plain text -----------------------------------------------------
+# The model occasionally emits $$...$$ blocks or \frac{a}{b}-style markup even
 # though the system prompt says not to. Blender's UI labels can't render math,
-# so we preprocess to readable ASCII / Unicode equivalents — matches how a
+# so we preprocess to readable ASCII / Unicode equivalents -- matches how a
 # human would write the same equation in a chat message.
 
 _LATEX_BLOCK_RE  = re.compile(r"\$\$\s*(.+?)\s*\$\$", re.DOTALL)
@@ -198,35 +198,35 @@ _LATEX_STRIP_CMD_RE = re.compile(
 )
 
 _LATEX_SYMBOLS = {
-    r"\cdot":   "·",
-    r"\times":  "×",
-    r"\div":    "÷",
-    r"\pm":     "±",
-    r"\mp":     "∓",
-    r"\approx": "≈",
-    r"\neq":    "≠",
-    r"\leq":    "≤",
-    r"\geq":    "≥",
-    r"\to":     "→",
-    r"\infty":  "∞",
-    r"\sum":    "Σ",
-    r"\prod":   "Π",
-    r"\int":    "∫",
-    r"\partial": "∂",
-    r"\nabla":  "∇",
-    r"\langle": "⟨", r"\rangle": "⟩",
-    r"\lceil":  "⌈", r"\rceil":  "⌉",
-    r"\lfloor": "⌊", r"\rfloor": "⌋",
-    r"\|":      "‖",  # double-bar (norm)
-    r"\alpha":  "α", r"\beta":  "β", r"\gamma":   "γ", r"\delta":  "δ",
-    r"\epsilon":"ε", r"\zeta":  "ζ", r"\eta":     "η", r"\theta":  "θ",
-    r"\iota":   "ι", r"\kappa": "κ", r"\lambda":  "λ", r"\mu":     "μ",
-    r"\nu":     "ν", r"\xi":    "ξ", r"\pi":      "π", r"\rho":    "ρ",
-    r"\sigma":  "σ", r"\tau":   "τ", r"\phi":     "φ", r"\chi":    "χ",
-    r"\psi":    "ψ", r"\omega": "ω",
-    r"\Gamma":  "Γ", r"\Delta": "Δ", r"\Theta":   "Θ", r"\Lambda": "Λ",
-    r"\Xi":     "Ξ", r"\Pi":    "Π", r"\Sigma":   "Σ", r"\Phi":    "Φ",
-    r"\Psi":    "Ψ", r"\Omega": "Ω",
+    r"\cdot":   "\u00b7",
+    r"\times":  "\u00d7",
+    r"\div":    "\u00f7",
+    r"\pm":     "\u00b1",
+    r"\mp":     "\u2213",
+    r"\approx": "\u2248",
+    r"\neq":    "\u2260",
+    r"\leq":    "\u2264",
+    r"\geq":    "\u2265",
+    r"\to":     "\u2192",
+    r"\infty":  "\u221e",
+    r"\sum":    "\u03a3",
+    r"\prod":   "\u03a0",
+    r"\int":    "\u222b",
+    r"\partial": "\u2202",
+    r"\nabla":  "\u2207",
+    r"\langle": "\u27e8", r"\rangle": "\u27e9",
+    r"\lceil":  "\u2308", r"\rceil":  "\u2309",
+    r"\lfloor": "\u230a", r"\rfloor": "\u230b",
+    r"\|":      "\u2016",  # double-bar (norm)
+    r"\alpha":  "\u03b1", r"\beta":  "\u03b2", r"\gamma":   "\u03b3", r"\delta":  "\u03b4",
+    r"\epsilon":"\u03b5", r"\zeta":  "\u03b6", r"\eta":     "\u03b7", r"\theta":  "\u03b8",
+    r"\iota":   "\u03b9", r"\kappa": "\u03ba", r"\lambda":  "\u03bb", r"\mu":     "\u03bc",
+    r"\nu":     "\u03bd", r"\xi":    "\u03be", r"\pi":      "\u03c0", r"\rho":    "\u03c1",
+    r"\sigma":  "\u03c3", r"\tau":   "\u03c4", r"\phi":     "\u03c6", r"\chi":    "\u03c7",
+    r"\psi":    "\u03c8", r"\omega": "\u03c9",
+    r"\Gamma":  "\u0393", r"\Delta": "\u0394", r"\Theta":   "\u0398", r"\Lambda": "\u039b",
+    r"\Xi":     "\u039e", r"\Pi":    "\u03a0", r"\Sigma":   "\u03a3", r"\Phi":    "\u03a6",
+    r"\Psi":    "\u03a8", r"\Omega": "\u03a9",
     r"\left":   "",  r"\right": "",
     r"\,":      " ", r"\;":     " ", r"\!":       "",
     r"\\":      "\n",  # LaTeX line break inside an equation
@@ -235,7 +235,7 @@ _LATEX_SYMBOLS = {
 
 def _convert_latex_expr(expr):
     """Convert a single LaTeX expression body to plain text."""
-    # 1) Strip styling/wrapper commands first — this collapses
+    # 1) Strip styling/wrapper commands first -- this collapses
     #    \mathbf{v}, \text{normalized}, \vec{x} etc. to their inner content,
     #    so frac/sqrt's flat-brace regex can see through them. Iterate to
     #    handle nesting like \mathbf{\hat{n}}.
@@ -244,18 +244,18 @@ def _convert_latex_expr(expr):
         if new == expr:
             break
         expr = new
-    # 2) frac/sqrt — also iterate because substitutions can expose new matches.
+    # 2) frac/sqrt -- also iterate because substitutions can expose new matches.
     for _ in range(6):
         new = _LATEX_FRAC_RE.sub(r"(\1)/(\2)", expr)
-        new = _LATEX_SQRT_RE.sub(r"√(\1)", new)
+        new = _LATEX_SQRT_RE.sub(r"sqrt(\1)", new)
         if new == expr:
             break
         expr = new
     # 3) Symbols.
     for k, v in _LATEX_SYMBOLS.items():
         expr = expr.replace(k, v)
-    # 4) Strip remaining \command tokens — keep the name as a fallback so
-    #    users can still see what was meant (e.g., \mathbb → mathbb).
+    # 4) Strip remaining \command tokens -- keep the name as a fallback so
+    #    users can still see what was meant (e.g., \mathbb -> mathbb).
     expr = _LATEX_CMD_TAIL_RE.sub(r"\1", expr)
     # 5) Collapse braces left over from stripped commands.
     expr = expr.replace("{", "").replace("}", "")
@@ -265,10 +265,10 @@ def _convert_latex_expr(expr):
 _FENCE_PROTECT_RE       = re.compile(r"(```.*?```)", re.DOTALL)
 _INLINE_CODE_PROTECT_RE = re.compile(r"(`[^`\n]+`)")
 
-# x^2 → x², 10^{-3} → 10⁻³. Only digits + sign chars are converted, so
+# x^2 -> x^2, 10^{-3} -> 10^-^3. Only digits + sign chars are converted, so
 # `2^k`, `^L` (control chars in docs), and code paths like `path^foo`
 # are left alone.
-_SUPERSCRIPT_TR = str.maketrans('0123456789-+', '⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺')
+_SUPERSCRIPT_TR = str.maketrans('0123456789-+', '^0^1^2^3^4^5^6^7^8^9^-^+')
 _SUPERSCRIPT_RE = re.compile(r'\^(\{[\d\-+]+\}|[\d\-+]+)')
 
 
@@ -283,7 +283,7 @@ def _superscript_powers(text):
 
 
 def _convert_latex(text):
-    """Replace $$…$$ blocks and inline $…$ with readable plain text.
+    """Replace $$...$$ blocks and inline $...$ with readable plain text.
     Code fences and inline `code` are passed through untouched so $-syntax
     in shell snippets / variables doesn't get mangled."""
     def _block(m):
@@ -315,7 +315,7 @@ def _convert_latex(text):
 
 def _close_trailing_fence(text):
     """If the markdown text contains an odd number of triple-backtick
-    fences, it ends with an open code block — typically because the
+    fences, it ends with an open code block -- typically because the
     model hit max_tokens mid-snippet. Append a closing fence plus a
     one-line truncation note so the renderer doesn't treat everything
     that follows as code."""
@@ -345,7 +345,7 @@ def _render_markdown(layout, md, width=40):
     and render in their own layouts so they aren't squished.
     """
     md = _convert_latex(md)
-    # Auto-close an unterminated fenced block — common when the model
+    # Auto-close an unterminated fenced block -- common when the model
     # hits max_tokens mid-code and the last ``` got truncated. Without
     # this, the markdown renderer treats everything after the opening
     # fence as one giant code block and the conversation layout breaks.
@@ -353,7 +353,7 @@ def _render_markdown(layout, md, width=40):
     lines = md.splitlines()
     n = len(lines)
 
-    # Rolling paragraph column — lazily created so each block break gets
+    # Rolling paragraph column -- lazily created so each block break gets
     # its own column (which keeps tight spacing within but separates
     # visually from whatever comes next).
     para_col = [None]
@@ -404,7 +404,7 @@ def _render_markdown(layout, md, width=40):
 
             box = layout.box()
             # Header row: language label on the left, [Copy][Run] on the
-            # right. Run is Python-only — executing a shell/JSON/etc fence
+            # right. Run is Python-only -- executing a shell/JSON/etc fence
             # doesn't make sense and would just error.
             hrow = box.row(align=False)
             left = hrow.row()
@@ -523,13 +523,13 @@ def _render_markdown(layout, md, width=40):
             qcol = qbox.column(align=True)
             qcol.scale_y = _PARA_SCALE_Y
             qtext = _strip_inline(mq.group(1) or "")
-            for chunk in _wrap_for_label("▎ " + qtext, width=width):
+            for chunk in _wrap_for_label("| " + qtext, width=width):
                 qcol.label(text=chunk)
             i += 1
             _break_para()
             continue
 
-        # List item — rendered into the rolling para column so successive
+        # List item -- rendered into the rolling para column so successive
         # items share spacing.
         ml = _LIST_RE.match(raw)
         if ml:
@@ -537,12 +537,12 @@ def _render_markdown(layout, md, width=40):
             bullet = ml.group(2)
             text = _strip_inline(ml.group(3))
             prefix = "  " * (indent // 2)
-            marker = "• " if bullet in ("-", "*", "+") else f"{bullet} "
+            marker = "* " if bullet in ("-", "*", "+") else f"{bullet} "
             _emit_para(text, indent=prefix + marker)
             i += 1
             continue
 
-        # Blank line — break paragraph, no separator (keeps spacing tight).
+        # Blank line -- break paragraph, no separator (keeps spacing tight).
         if not stripped:
             _break_para()
             i += 1
@@ -703,7 +703,7 @@ class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
         default=True,
     )
 
-    # ── Session memory & checkpoints (Tier 3) ──────────────────────
+    # -- Session memory & checkpoints (Tier 3) ----------------------
     session_show_checkpoints: BoolProperty(  # type: ignore[valid-type]
         name="Show Checkpoints",
         description="Expand the checkpoint list in the Session section",
@@ -733,14 +733,14 @@ def _load_chat_history() -> list[dict]:
                 history = json.load(fh)
             # Detect old sessions (no turn_start flags anywhere) for backward compat.
             # New sessions keep their turn_start flags so only real user messages
-            # create turns — agent-injected messages won't inflate turn count.
+            # create turns -- agent-injected messages won't inflate turn count.
             return history
         except (json.JSONDecodeError, OSError):
             pass
     return []
 
 
-# Thread lock for history serialization — prevents concurrent threads
+# Thread lock for history serialization -- prevents concurrent threads
 # from writing partial dumps when a turn finishes while another is active.
 _history_save_lock = threading.Lock()
 
@@ -944,7 +944,7 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             _redraw_areas_safe()
 
         def _update_streaming(text: str) -> None:
-            """Called when reasoning or streaming text arrives — refresh UI."""
+            """Called when reasoning or streaming text arrives -- refresh UI."""
             _redraw_areas_safe()
 
         import threading
@@ -971,7 +971,7 @@ class BFACW_OT_chat_clear(Operator):  # type: ignore[misc]
         with _sm.store_lock:
             _sm.store.reset()
         agent_controller._session_turn_count = 0
-        agent_controller.reset_session_domains()
+        agent_controller._reset_session_domains()
         # Clear Coworker_* text datablocks from the text editor.
         agent_controller._clear_coworker_text_blocks()
         # Clear cached system prompt so project rules are reloaded on next turn.
@@ -1504,9 +1504,9 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
             self.report({"INFO"}, "Bridge server already running")
             actual = mcp_to_blender_server.get_actual_port()
             if actual:
-                props.chat_status = "External Harness — Bridge on port {:d}".format(actual)
+                props.chat_status = "External Harness -- Bridge on port {:d}".format(actual)
             else:
-                props.chat_status = "External Harness — Bridge running"
+                props.chat_status = "External Harness -- Bridge running"
             return {"FINISHED"}
 
         if bpy.app.background:
@@ -1530,10 +1530,10 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
 
         actual = mcp_to_blender_server.get_actual_port()
         if actual:
-            props.chat_status = "External Harness — Bridge on port {:d}".format(actual)
+            props.chat_status = "External Harness -- Bridge on port {:d}".format(actual)
             self.report({"INFO"}, "Bridge server started on port {:d}".format(actual))
         else:
-            props.chat_status = "External Harness — Bridge running"
+            props.chat_status = "External Harness -- Bridge running"
             self.report({"INFO"}, "Bridge server started")
         _redraw_areas(context)
         return {"FINISHED"}
@@ -1643,7 +1643,7 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
                 thread.start()
                 props.chat_status = "Starting LLM backend..."
             else:
-                # Already running — warmup in background thread, but only
+                # Already running -- warmup in background thread, but only
                 # after the model has actually finished loading.
                 def _warmup_existing():
                     if llm_manager.get_config().mode == "local":
@@ -1693,12 +1693,12 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         # Restore the session-memory store (memory note + checkpoints).
         _load_session_memory_state()
         if history:
-            # ── Loaded-history diagnostic ─────────────────────────────
+            # -- Loaded-history diagnostic -----------------------------
             # A persisted history is restored verbatim, so a stale prompt or
             # a bad shape from an earlier session is sent to the model as-is.
             # Log what was loaded -- the first user message in particular
             # reveals whether the model is answering a stale prompt.
-            print("[🛠️Coworker] _load_chat_history: loaded {:d} messages from {:s}".format(
+            print("[Coworker] _load_chat_history: loaded {:d} messages from {:s}".format(
                 len(history), _chat_history_path()))
             print(agent_controller._describe_history_for_log(history))
             # Sanitize before use: a history written by an older build may
@@ -1707,12 +1707,12 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
             # of which trip strict Jinja chat templates.
             history = agent_controller._sanitize_loaded_history(history)
             if history:
-                print("[🛠️Coworker] _load_chat_history: after sanitize:")
+                print("[Coworker] _load_chat_history: after sanitize:")
                 print(agent_controller._describe_history_for_log(history))
             agent_controller._agent_state.conversation_history = history
 
-        # Local-mode status is driven by the background thread (Starting →
-        # Loading → Connected / Error: ...); only remote mode marks
+        # Local-mode status is driven by the background thread (Starting ->
+        # Loading -> Connected / Error: ...); only remote mode marks
         # "Connected" here.
         if llm_cfg.mode != "local":
             props.chat_status = "Connected"
@@ -1875,7 +1875,7 @@ def _open_mention_for_at(text: str) -> float | None:
 # Panels
 
 class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
-    """Main chat panel in the 3D Viewport sidebar — input and messages."""
+    """Main chat panel in the 3D Viewport sidebar -- input and messages."""
     bl_label = "Coworker"
     bl_idname = "BFACW_PT_chat_panel"
     bl_space_type = 'VIEW_3D'
@@ -1894,7 +1894,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         prefs = context.preferences.addons[__package__].preferences
         is_harness = (prefs.operating_mode == "EXTERNAL_HARNESS")
 
-        # ── Mode info + Settings button ──
+        # -- Mode info + Settings button --
         mode_row = layout.row(align=True)
         mode_row.scale_y = 0.9
         if is_harness:
@@ -1909,7 +1909,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         mode_row.separator(factor=0.3)
         mode_row.operator("bfacw.open_addon_prefs", icon="PREFERENCES", text="")
 
-        # ── Agent control buttons (compact) ──
+        # -- Agent control buttons (compact) --
         row = layout.row(align=True)
         row.scale_y = 1.8
         if is_harness:
@@ -1925,7 +1925,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             else:
                 row.operator("bfacw.agent_start", icon="PLAY", text="Start")
 
-        # ── Compact status line ──
+        # -- Compact status line --
         if is_harness:
             status = "Bridge Running" if mcp_to_blender_server.is_running() else "Bridge Offline"
             is_ok = mcp_to_blender_server.is_running()
@@ -1965,7 +1965,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             warn_row.label(text="", icon='INFO')
             _draw_multiline(warn_row, state.warning)
 
-        # ── External Harness mode ──
+        # -- External Harness mode --
         if is_harness:
             if mcp_to_blender_server.is_running():
                 box = layout.box()
@@ -1980,20 +1980,20 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             layout.label(text="Chat handled by external client.", icon='INFO')
             return
 
-        # ── Mode toggle ──
+        # -- Mode toggle --
         row = layout.row(align=True)
         row.prop(props, "chat_mode", expand=True)
 
         layout.separator()
 
-        # ── Input area ──
+        # -- Input area --
         layout.textbox(props, "chat_input")
 
         # @mention button.
         row = layout.row(align=True)
         row.operator("bfacw.mention_search", icon="OUTLINER_OB_MESH", text="@ Mention")
 
-        # ── Action buttons ──
+        # -- Action buttons --
         if state.is_thinking:
             # During thinking: Stop + Queue side by side.
             btn_row = layout.row(align=True)
@@ -2009,7 +2009,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
 
         layout.separator()
 
-        # ── Conversation history ──────────────────────────────────────
+        # -- Conversation history --------------------------------------
         # Drawn here, directly under the input and action buttons, so the
         # messages read as one continuous chat instead of a detached panel.
         self._draw_chat_history(context)
@@ -2092,7 +2092,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     if conclusion_msg:
                         tb = hist_box.box()
                         cr = tb.row()
-                        cr.label(text="Turn {:d} — Coworker:".format(turn_num), icon=_AGENT_ICON)
+                        cr.label(text="Turn {:d} -- Coworker:".format(turn_num), icon=_AGENT_ICON)
                         op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                         op.message_index = history.index(conclusion_msg)
                         _draw_multiline(tb, conclusion_msg.get("content", ""))
@@ -2128,7 +2128,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         default_closed=True,
                     )
                     pb_icon = "WARNING" if has_err else "PACKAGE"
-                    # Only the active (newest) turn animates while thinking —
+                    # Only the active (newest) turn animates while thinking --
                     # past turns keep a static label.
                     is_active_turn = state.is_thinking and (
                         (props.chat_newest_first and _display_idx == 0)
@@ -2185,14 +2185,14 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         if state.is_thinking and state.streaming_text and _display_idx == 0:
                             work_box.separator()
                             sb = work_box.box()
-                            sb.label(text="✨ Coworker (live):", icon=_AGENT_ICON)
+                            sb.label(text="* Coworker (live):", icon=_AGENT_ICON)
                             _draw_multiline(sb, state.streaming_text)
 
                 # --- Conclusion (always visible) ---
                 if conclusion_msg:
                     turn_box.separator()
                     cr = turn_box.row()
-                    cr.label(text="✨ Coworker:", icon=_AGENT_ICON)
+                    cr.label(text="* Coworker:", icon=_AGENT_ICON)
                     op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                     op.message_index = history.index(conclusion_msg)
                     _render_markdown(turn_box, conclusion_msg.get("content", ""))
@@ -2203,7 +2203,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     and not has_proc
                 ):
                     turn_box.separator()
-                    turn_box.label(text="✨ Coworker (live):", icon=_AGENT_ICON)
+                    turn_box.label(text="* Coworker (live):", icon=_AGENT_ICON)
                     _draw_multiline(turn_box, state.streaming_text)
 
         else:
@@ -2214,7 +2214,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
 
 
 class BFACW_PT_chat_session(Panel):  # type: ignore[misc]
-    """Session panel — context usage, memory, compaction, and checkpoints."""
+    """Session panel -- context usage, memory, compaction, and checkpoints."""
     bl_label = "Session"
     bl_idname = "BFACW_PT_chat_session"
     bl_space_type = 'VIEW_3D'
@@ -2235,7 +2235,7 @@ class BFACW_PT_chat_session(Panel):  # type: ignore[misc]
 
 
 class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
-    """Top-level queue panel — shows pending queued messages."""
+    """Top-level queue panel -- shows pending queued messages."""
     bl_label = "Queue"
     bl_idname = "BFACW_PT_chat_queue"
     bl_space_type = 'VIEW_3D'
@@ -2282,7 +2282,7 @@ class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
 
 
 class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
-    """Status sub-panel — health dots, model info, tools, advanced diagnostics."""
+    """Status sub-panel -- health dots, model info, tools, advanced diagnostics."""
     bl_label = "Status & Diagnostics"
     bl_idname = "BFACW_PT_chat_status"
     bl_space_type = 'VIEW_3D'
@@ -2303,7 +2303,7 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
         prefs = context.preferences.addons[__package__].preferences
         is_harness = (prefs.operating_mode == "EXTERNAL_HARNESS")
 
-        # ── Liveness dots ──
+        # -- Liveness dots --
         if not is_harness and state.mcp_server_running:
             agent_controller._check_liveness()
             liveness_row = layout.row(align=True)
@@ -2321,13 +2321,13 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
             )
             layout.separator()
 
-        # ── Restart button ──
+        # -- Restart button --
         if state.mcp_server_running or (is_harness and mcp_to_blender_server.is_running()):
             restart_row = layout.row()
             restart_row.scale_y = 0.8
             restart_row.operator("bfacw.agent_restart", icon="LOOP_BACK", text="Restart Coworker")
 
-        # ── Mode indicator ──
+        # -- Mode indicator --
         if not is_harness:
             mode_row = layout.row(align=True)
             if prefs.operating_mode == "REMOTE_API":
@@ -2335,7 +2335,7 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
             else:
                 mode_row.label(text="Mode: Local LLM", icon='CONSOLE')
 
-        # ── Tool count ──
+        # -- Tool count --
         if not is_harness and state.mcp_server_running:
             if state.tool_count > 0:
                 layout.label(text="Tools: {:d} loaded".format(state.tool_count), icon='MODIFIER')
@@ -2345,7 +2345,7 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
                     icon='WARNING',
                 )
 
-        # ── LLM info ──
+        # -- LLM info --
         if not is_harness:
             llm_state = llm_manager.get_state()
             if llm_state.is_running:
@@ -2362,7 +2362,7 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
             if llm_cfg.mode == "remote" and llm_cfg.remote_model:
                 _draw_multiline(layout, "Model: {:s}".format(llm_cfg.remote_model))
 
-            # ── Token usage (issue #69) ──
+            # -- Token usage (issue #69) --
             # Both llama-server and OpenAI-compatible remote APIs report a
             # usage object per request.  Show turn + session totals so the
             # user can see what the chat is consuming.
@@ -2378,7 +2378,7 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
                     _usage_text += " (turn: {:d})".format(_turn_tot)
                 _draw_multiline(layout, _usage_text)
 
-        # ── Export/Copy Log (advanced) ──
+        # -- Export/Copy Log (advanced) --
         if not is_harness:
             layout.separator()
             row = layout.row(align=True)
@@ -2386,7 +2386,7 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
             row.operator("bfacw.export_session_log", icon="EXPORT", text="Export Log")
             row.operator("bfacw.copy_session_log", icon="COPYDOWN", text="Copy Log")
 
-        # ── External Harness MCP server controls ──
+        # -- External Harness MCP server controls --
         if is_harness and mcp_to_blender_server.is_running():
             box = layout.box()
             box.label(text="MCP Server Mode:", icon='SETTINGS')
@@ -2474,7 +2474,7 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
 
         layout.separator()
 
-        # Conversation summary — latest message first.
+        # Conversation summary -- latest message first.
         history = state.conversation_history
         display_history = [m for m in history if m.get("role") != "system"]
         if display_history:
@@ -2531,7 +2531,7 @@ def _draw_session_section(layout, context, props, state) -> None:
     from . import session_memory as _sm
     st = _sm.store
 
-    # ── Context usage ──────────────────────────────────────────────
+    # -- Context usage ----------------------------------------------
     usage = getattr(state, "session_usage", {}) or {}
     ctx_size = getattr(state, "ctx_size_used", 0) or 0
     last_prompt = usage.get("prompt_tokens", 0)
@@ -2544,12 +2544,12 @@ def _draw_session_section(layout, context, props, state) -> None:
         row.progress(factor=pct / 100.0, type='BAR')
         if pct >= int(_sm.COMPACTION_TRIGGER_RATIO * 100):
             ctx_box.label(
-                text="Approaching limit — old turns will be compacted",
+                text="Approaching limit -- old turns will be compacted",
                 icon='INFO')
     else:
         ctx_box.label(text="No usage recorded yet", icon='INFO')
 
-    # ── Memory note (compaction summary) ───────────────────────────
+    # -- Memory note (compaction summary) ---------------------------
     mem_box = layout.box()
     mem_box.label(text="Memory", icon='BOOKMARKS')
     if st.memory_block:
@@ -2568,7 +2568,7 @@ def _draw_session_section(layout, context, props, state) -> None:
     row.operator("bfacw.session_memory_view_edit", icon='TEXT', text="Apply Memory")
     row.operator("bfacw.session_compact_now", icon='FILE_REFRESH', text="Compact Now")
 
-    # ── Checkpoints (Restore / Branch) ─────────────────────────────
+    # -- Checkpoints (Restore / Branch) -----------------------------
     cp_box = layout.box()
     checkpoints = st.list_checkpoints()
     row = cp_box.row(align=True)
@@ -2720,7 +2720,7 @@ _classes = (
 
 
 def register() -> None:
-    # Idempotent registration — unregister old classes first if re-enabling.
+    # Idempotent registration -- unregister old classes first if re-enabling.
     if hasattr(bpy.types.WindowManager, "bfacw_chat_props"):
         unregister()
 

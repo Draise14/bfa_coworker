@@ -30,7 +30,7 @@ from mcp.types import ToolAnnotations  # pylint: disable=import-error,no-name-in
 
 _POLYHAVEN_API = "https://api.polyhaven.com"
 
-# ── In-memory catalog cache (5 min TTL) ──────────────────────────────
+# -- In-memory catalog cache (5 min TTL) ------------------------------
 _catalog_cache: dict[str, dict] = {}
 _catalog_timestamps: dict[str, float] = {}
 _CACHE_TTL = 300.0  # seconds
@@ -73,7 +73,7 @@ def _score_asset(
     description = info.get("description", "").lower()
     downloads = info.get("download_count", 0)
 
-    # ── Tag filter: asset must match ALL filter tags ──
+    # -- Tag filter: asset must match ALL filter tags --
     if tag_filter:
         tag_set = set(tags)
         cat_set = set(categories)
@@ -84,10 +84,10 @@ def _score_asset(
                 if not any(ft_lower in t for t in tag_set | cat_set):
                     return 0.0
 
-    # ── Relevance scoring ──
+    # -- Relevance scoring --
     score = 0.0
     if not query_words:
-        # No query — sort purely by popularity.
+        # No query -- sort purely by popularity.
         score = math.log10(max(downloads, 1))
         return score
 
@@ -151,7 +151,7 @@ def register(mcp: FastMCP) -> None:
         names, tags, categories, and descriptions.
 
         Args:
-            category: Asset type — ``"hdris"``, ``"textures"``, or ``"models"``.
+            category: Asset type -- ``"hdris"``, ``"textures"``, or ``"models"``.
             query: Search term to find matching assets (e.g. ``"brick wall"``,
                 ``"sunset"``, ``"wood floor"``).
             tags: Comma-separated tags to filter by (e.g. ``"brick, outdoor"``).

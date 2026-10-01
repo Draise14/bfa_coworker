@@ -142,7 +142,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         subtype="TIME_ABSOLUTE",
     )
 
-    # ── Chat Display ─────────────────────────────────────────────
+    # -- Chat Display ---------------------------------------------
 
     chat_max_visible_turns: IntProperty(  # type: ignore[valid-type]
         name="Max Visible Turns",
@@ -156,7 +156,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         max=100,
     )
 
-    # ── Debug Mode ──────────────────────────────────────────────────
+    # -- Debug Mode --------------------------------------------------
 
     def _update_debug_mode(self, _context: bpy.types.Context) -> None:
         _log_module.set_suppress_console(not self.debug_mode)
@@ -172,7 +172,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         update=_update_debug_mode,
     )
 
-    # ── Log Level ───────────────────────────────────────────────────
+    # -- Log Level ---------------------------------------------------
 
     def _update_log_level(self, _context: bpy.types.Context) -> None:
         mcp_to_blender_server.log_level = self.log_level
@@ -181,9 +181,9 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         name="Log Level",
         description=(
             "Tool-call logging granularity:\n"
-            "  Off — no logging\n"
-            "  Errors Only — log only failed tool calls\n"
-            "  All — log every tool request and response"
+            "  Off -- no logging\n"
+            "  Errors Only -- log only failed tool calls\n"
+            "  All -- log every tool request and response"
         ),
         items=[
             ("OFF", "Off", "No tool-call logging"),
@@ -259,7 +259,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         update=_update_timer_interval_idle_delay,
     )
 
-    # ── LLM Configuration Properties ─────────────────────────────────
+    # -- LLM Configuration Properties ---------------------------------
 
     def _update_llm_mode(self, _context: bpy.types.Context) -> None:
         """Sync llm_mode to llm_manager config and stop local LLM if switching to remote."""
@@ -295,12 +295,12 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         update=_update_llm_mode,
     )
 
-    # ── Unified Operating Mode ──────────────────────────────────────────
+    # -- Unified Operating Mode ------------------------------------------
 
     def _update_operating_mode(self, _context: bpy.types.Context) -> None:
         """Sync operating_mode to agent_mode and llm_mode, and switch to the relevant tab.
 
-        Rejects the change when the agent is already running — switching modes
+        Rejects the change when the agent is already running -- switching modes
         mid-flight can kill the MCP server and leave the agent in a broken state.
         The user must stop the agent first.
         """
@@ -308,7 +308,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         if _ac._agent_state.mcp_server_running:
             # Revert to the previous mode.
             _prev = _ac._agent_state.current_mode or "off"
-            print("[Coworker] operating_mode change rejected — agent is running. Stop the agent first.")
+            print("[Coworker] operating_mode change rejected -- agent is running. Stop the agent first.")
             # Force revert by resetting to the current active mode.
             if _prev == "local":
                 self["operating_mode"] = "LOCAL_LLM"
@@ -335,11 +335,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         name="Operating Mode",
         description=(
             "Select how the Coworker agent connects to an LLM.\n"
-            "  Local — run a local LLM via llama-server (requires download)\n"
-            "  Remote — use a remote API like OpenAI or OpenRouter\n"
-            "  External Harness — MCP tools only, no built-in LLM\n"
+            "  Local -- run a local LLM via llama-server (requires download)\n"
+            "  Remote -- use a remote API like OpenAI or OpenRouter\n"
+            "  External Harness -- MCP tools only, no built-in LLM\n"
             "\n"
-            "⚠ Cannot be changed while the agent is running.\n"
+            "WARN  Cannot be changed while the agent is running.\n"
             "Stop the agent first, then switch modes."
         ),
         items=OPERATING_MODE_ITEMS,
@@ -363,9 +363,9 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         description=(
             "Path to a custom llama-server.exe. Leave empty to use the bundled version.\n"
             "To add a custom llama.cpp installation to PATH:\n"
-            "  Windows: System Properties → Environment Variables → Path → add the folder\n"
+            "  Windows: System Properties -> Environment Variables -> Path -> add the folder\n"
             "  macOS/Linux: export PATH=\"/path/to/llama.cpp/build/bin:$PATH\"\n"
-            "The addon bundles its own copy — only set this if you need a specific build."
+            "The addon bundles its own copy -- only set this if you need a specific build."
         ),
         update=_update_llama_path,
     )
@@ -383,14 +383,14 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         name="llama-server Source",
         description=(
             "Where llama-server comes from.\n"
-            "  Bundled — the addon downloads and manages its own copy\n"
+            "  Bundled -- the addon downloads and manages its own copy\n"
             "            (Download / Update / Remove buttons are shown).\n"
-            "  Custom — you provide your own llama.cpp build via a path.\n"
+            "  Custom -- you provide your own llama.cpp build via a path.\n"
             "            The addon never modifies or updates it."
         ),
         items=[
             ("BUNDLED", "Bundled (auto-managed)", "The addon downloads and manages llama-server automatically"),
-            ("CUSTOM", "Custom (user-provided)", "Use your own llama.cpp build — the addon never modifies it"),
+            ("CUSTOM", "Custom (user-provided)", "Use your own llama.cpp build -- the addon never modifies it"),
         ],
         default="BUNDLED",
         update=_update_llama_source,
@@ -409,19 +409,19 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         name="GPU Backend",
         description=(
             "Select the GPU backend for llama-server.\n"
-            "  Auto — detect NVIDIA (CUDA), AMD/Intel (Vulkan), or CPU\n"
-            "  CUDA — NVIDIA GPUs (RTX 20xx+; 3090/4090/5090 recommended)\n"
-            "  Vulkan — AMD Radeon, Intel Arc, or NVIDIA fallback\n"
-            "  CPU — no GPU acceleration\n"
+            "  Auto -- detect NVIDIA (CUDA), AMD/Intel (Vulkan), or CPU\n"
+            "  CUDA -- NVIDIA GPUs (RTX 20xx+; 3090/4090/5090 recommended)\n"
+            "  Vulkan -- AMD Radeon, Intel Arc, or NVIDIA fallback\n"
+            "  CPU -- no GPU acceleration\n"
             "\n"
-            "⚠ Cannot be changed while the agent is running.\n"
+            "WARN  Cannot be changed while the agent is running.\n"
             "Stop the agent first, then change the backend."
         ),
         items=[
             ("auto", "Auto (Detect)", "Auto-detect the best backend for your GPU"),
-            ("cuda", "CUDA 12.4", "NVIDIA GPUs — RTX 20xx+ (3090/4090/5090 recommended)"),
+            ("cuda", "CUDA 12.4", "NVIDIA GPUs -- RTX 20xx+ (3090/4090/5090 recommended)"),
             ("vulkan", "Vulkan", "AMD Radeon, Intel Arc, or NVIDIA fallback"),
-            ("cpu", "CPU", "No GPU acceleration — runs on CPU only"),
+            ("cpu", "CPU", "No GPU acceleration -- runs on CPU only"),
         ],
         default="auto",
         update=_update_llama_backend,
@@ -443,7 +443,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         subtype='DIR_PATH',
     )
 
-    # ── Model Preset ─────────────────────────────────────────────────
+    # -- Model Preset -------------------------------------------------
 
     def _update_model_preset(self, _context: bpy.types.Context) -> None:
         """When user picks a preset, auto-fill repo_id, filename, ctx_size, and max_tokens."""
@@ -457,7 +457,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             self._apply_recommended_ctx(preset)
             # Auto-set max output tokens from preset.
             self.local_max_tokens = preset.max_tokens
-            # Clear existing model path — using preset now.
+            # Clear existing model path -- using preset now.
             self.existing_model_path = ""
             # Build info string for display.
             self.model_preset_info = (
@@ -546,7 +546,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default=False,
     )
 
-    # ── Existing Model Selector ──────────────────────────────────────
+    # -- Existing Model Selector --------------------------------------
 
     existing_model_path: StringProperty(  # type: ignore[valid-type]
         name="Existing Model Path",
@@ -576,7 +576,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         description="Your API key. Get one at openrouter.ai/keys",
     )
 
-    # ── Remote Provider ────────────────────────────────────────────
+    # -- Remote Provider --------------------------------------------
 
     def _update_remote_provider(self, _context: bpy.types.Context) -> None:
         """When user picks a provider, auto-fill the API URL."""
@@ -597,7 +597,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default="openrouter",
     )
 
-    # ── Remote Model ───────────────────────────────────────────────
+    # -- Remote Model -----------------------------------------------
 
     remote_model: StringProperty(  # type: ignore[valid-type]
         name="Model Name",
@@ -634,7 +634,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         max=100,
     )
 
-    # ── Individual Port Overrides ─────────────────────────────────
+    # -- Individual Port Overrides ---------------------------------
 
     bridge_port: IntProperty(  # type: ignore[valid-type]
         name="Bridge Port",
@@ -672,7 +672,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         description=(
             "Context window size (in tokens) passed to llama-server via --ctx-size.\n"
             "Larger values allow longer conversations but use much more RAM/VRAM.\n"
-            "Prefer the preset buttons above the Custom slider — a context that is "
+            "Prefer the preset buttons above the Custom slider -- a context that is "
             "too large for your memory is the most common startup crash.\n"
             "Default 32768 works for most models. Gemma 4 supports up to 262144."
         ),
@@ -686,7 +686,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
     local_kv_cache_quant: BoolProperty(  # type: ignore[valid-type]
         name="Quantize KV Cache (q8_0)",
         description=(
-            "Store the KV cache in 8-bit instead of 16-bit — roughly halves its "
+            "Store the KV cache in 8-bit instead of 16-bit -- roughly halves its "
             "memory and lets you run a larger context on the same VRAM. "
             "Slight quality cost. GPU backends only; applies on next server start."
         ),
@@ -720,12 +720,12 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             "Custom reveals a manual slider for fine control."
         ),
         items=[
-            ("4096", "4K", "4096 tokens — minimal, fastest to load"),
-            ("8192", "8K", "8192 tokens — short conversations"),
-            ("16384", "16K", "16384 tokens — good default for most agent work"),
-            ("32768", "32K", "32768 tokens — recommended default"),
-            ("65536", "64K", "65536 tokens — long conversations, needs lots of memory"),
-            ("131072", "128K", "131072 tokens — only on high-end hardware"),
+            ("4096", "4K", "4096 tokens -- minimal, fastest to load"),
+            ("8192", "8K", "8192 tokens -- short conversations"),
+            ("16384", "16K", "16384 tokens -- good default for most agent work"),
+            ("32768", "32K", "32768 tokens -- recommended default"),
+            ("65536", "64K", "65536 tokens -- long conversations, needs lots of memory"),
+            ("131072", "128K", "131072 tokens -- only on high-end hardware"),
             ("custom", "Custom", "Manually set the context size with a slider"),
         ],
         default="32768",
@@ -757,15 +757,15 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
     reasoning_effort: EnumProperty(  # type: ignore[valid-type]
         name="Reasoning Effort",
         description=(
-            "How hard the model thinks before it answers — a friendly name "
+            "How hard the model thinks before it answers -- a friendly name "
             "for the token budget sent to llama-server as "
             "thinking_budget_tokens. Custom reveals the exact number."
         ),
         items=[
-            ("0", "Off", "No cap — the model thinks as long as it needs (slowest replies)"),
-            ("512", "Low", "Light thinking ≈ 512 tokens — snappy replies, simple tasks"),
-            ("1024", "Medium", "Balanced ≈ 1024 tokens — good default for most work"),
-            ("2048", "High", "Deep thinking ≈ 2048 tokens — complex, multi-step tasks"),
+            ("0", "Off", "No cap -- the model thinks as long as it needs (slowest replies)"),
+            ("512", "Low", "Light thinking ~ 512 tokens -- snappy replies, simple tasks"),
+            ("1024", "Medium", "Balanced ~ 1024 tokens -- good default for most work"),
+            ("2048", "High", "Deep thinking ~ 2048 tokens -- complex, multi-step tasks"),
             ("custom", "Custom", "Set the exact token budget with a slider"),
         ],
         default="1024",
@@ -798,7 +798,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         ),
     )
 
-    # ── Generation (Tier 5) Properties ──────────────────────────────
+    # -- Generation (Tier 5) Properties ------------------------------
 
     gen_backend: EnumProperty(  # type: ignore[valid-type]
         name="Generation Backend",
@@ -851,7 +851,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         description="API key for the remote generation service",
     )
 
-    # ── Poly Haven Resolution ───────────────────────────────────────────
+    # -- Poly Haven Resolution -------------------------------------------
 
     polyhaven_resolution: EnumProperty(  # type: ignore[valid-type]
         name="Poly Haven Resolution",
@@ -869,7 +869,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default=2,
     )
 
-    # ── Preferences Tab ──────────────────────────────────────────────────
+    # -- Preferences Tab --------------------------------------------------
 
     pref_tab: EnumProperty(  # type: ignore[valid-type]
         name="Tab",
@@ -882,7 +882,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default="LOCAL_LLM",
     )
 
-    # ── Agent Mode ───────────────────────────────────────────────────────
+    # -- Agent Mode -------------------------------------------------------
 
     agent_mode: EnumProperty(  # type: ignore[valid-type]
         name="Coworker Mode",
@@ -891,7 +891,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default="SELF_CONTAINED",
     )
 
-    # ── MCP Server Mode (for External Harness) ───────────────────────────
+    # -- MCP Server Mode (for External Harness) ---------------------------
 
     mcp_server_mode: EnumProperty(  # type: ignore[valid-type]
         name="MCP Server Mode",
@@ -900,7 +900,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default="STDIO",
     )
 
-    # ── MCP Server Network Settings ──────────────────────────────────────
+    # -- MCP Server Network Settings --------------------------------------
 
     mcp_server_host: StringProperty(  # type: ignore[valid-type]
         name="MCP Server Host",
@@ -916,13 +916,13 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         max=65535,
     )
 
-    # ── Harness Configuration ─────────────────────────────────────────
+    # -- Harness Configuration -----------------------------------------
 
     use_blender_python_for_harness: BoolProperty(  # type: ignore[valid-type]
         name="Use Blender's Python",
         description=(
             "When ON, harness configs use Blender's bundled Python with "
-            "vendor dependencies — no pip install needed.\n"
+            "vendor dependencies -- no pip install needed.\n"
             "When OFF, uses system 'python' (requires pip-installed "
             "bfa-coworker-mcp)"
         ),
@@ -941,7 +941,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         from .shared import HARNESS_PRESET_ITEMS
         return HARNESS_PRESET_ITEMS
 
-    # ── Skills (Tier 6) ────────────────────────────────────────────────
+    # -- Skills (Tier 6) ------------------------------------------------
 
     custom_skills_text: StringProperty(  # type: ignore[valid-type]
         name="Custom Skills",
@@ -953,7 +953,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default="",
     )
 
-    # ── Text Editor Memory Bank ────────────────────────────────────────
+    # -- Text Editor Memory Bank ----------------------------------------
 
     save_code_to_text_editor: BoolProperty(  # type: ignore[valid-type]
         name="Save Executed Code to Text Editor",
@@ -964,7 +964,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default=True,
     )
 
-    # ── BYOK Provider Profiles (Tier 2) ─────────────────────────────────
+    # -- BYOK Provider Profiles (Tier 2) ---------------------------------
 
     saved_providers_json: StringProperty(  # type: ignore[valid-type]
         name="Saved Providers",
@@ -992,7 +992,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         col.label(text="Effective:  Bridge {:d}  |  MCP {:d}  |  LLM {:d}".format(
             bridge, mcp, llm))
 
-    # ── Diagnostics (debug only, behind flag) ───────────────────────────
+    # -- Diagnostics (debug only, behind flag) ---------------------------
 
     def _draw_diagnostics(self, layout) -> None:
         """Draw the diagnostics panel below all tabs when debug mode is enabled."""
@@ -1001,10 +1001,10 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         diag_box = layout.box()
         diag_box.label(text="\U0001f6e0\ufe0f Diagnostics", icon='INFO')
         diag_box.label(
-            text="Temporary debug tools — hidden when Debug mode is off",
+            text="Temporary debug tools -- hidden when Debug mode is off",
             icon='BLANK1',
         )
-        # ── Open Log button ─────────────────────────────────────────
+        # -- Open Log button -----------------------------------------
         diag_box.operator(
             "bfacw.open_log",
             icon='CONSOLE',
@@ -1013,11 +1013,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         row = diag_box.row()
         row.operator("bfacw.check_ports", icon="FILE_REFRESH", text="Check Ports")
         row.operator("bfacw.ping_agent", icon="FILE_REFRESH", text="Diagnose")
-        # Harness config preflight — only meaningful in External Harness mode.
+        # Harness config preflight -- only meaningful in External Harness mode.
         if self.operating_mode == "EXTERNAL_HARNESS":
             row = diag_box.row()
             row.operator("bfacw.test_mcp_config", icon="CHECKMARK", text="Test Harness Config")
-        # ── Multi-Step Test Suites ────────────────────────────────────
+        # -- Multi-Step Test Suites ------------------------------------
         diag_box.label(text="Test Suites (multi-step artist workflows)", icon='RENDER_RESULT')
         diag_box.label(
             text="Click any step to run it (steps build on each other). "
@@ -1118,7 +1118,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
         from . import asset_selftests as _ast
 
-        # ── Asset Tool Self-Tests (deterministic, no LLM) ─────────────
+        # -- Asset Tool Self-Tests (deterministic, no LLM) -------------
         selftest_box = diag_box.box()
         header = selftest_box.row()
         header.label(text="Asset Tool Self-Tests (no LLM)", icon='ASSET_MANAGER')
@@ -1139,7 +1139,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             selftest_box.label(
                 text="Error: {:s}".format(_ast.last_error())[:120], icon='ERROR')
         selftest_box.label(
-            text="Runs every asset tool against a throwaway fixture library — "
+            text="Runs every asset tool against a throwaway fixture library -- "
                  "no MCP server or LLM needed.",
             icon='BLANK1',
         )
@@ -1162,7 +1162,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         man_box = selftest_box.box()
         man_box.label(text="Manual Steps (need the UI)", icon='HAND')
         for _key, m_label, m_text in _ast.MANUAL_STEPS:
-            man_box.label(text="• {:s}".format(m_label), icon='BLANK1')
+            man_box.label(text="* {:s}".format(m_label), icon='BLANK1')
             man_box.label(text="    {:s}".format(m_text)[:140], icon='BLANK1')
 
         # Compare button for benchmark results.
@@ -1194,7 +1194,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 ("llm_health", "LLM"),
                 ("llm_chat", "Chat"),
             ]:
-                val = ping.get(key, "—")
+                val = ping.get(key, "--")
                 # In harness mode, N/A is not an error.
                 is_ok = val.startswith("OK") or (is_harness and val.startswith("N/A"))
                 diag_box.label(
@@ -1205,7 +1205,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
     def draw(self, context: bpy.types.Context) -> None:
         layout = self.layout
 
-        # ── Operating Mode selector (top-level, always visible) ─────────
+        # -- Operating Mode selector (top-level, always visible) ---------
         # Disable while the agent is running to prevent premature stops.
         from . import agent_controller as _ac
         agent_running = _ac._agent_state.mcp_server_running
@@ -1222,7 +1222,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             )
         layout.separator()
 
-        # ── Tab selector row ────────────────────────────────────────────
+        # -- Tab selector row --------------------------------------------
         row = layout.row(align=True)
         row.scale_y = 1.3
         for tab_id, tab_label, tab_icon in [
@@ -1249,7 +1249,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
         layout.separator()
 
-        # ── Draw the active tab ─────────────────────────────────────────
+        # -- Draw the active tab -----------------------------------------
         if self.pref_tab == 'LOCAL_LLM':
             if self.operating_mode == "LOCAL_LLM":
                 self._draw_tab_local_llm(context)
@@ -1265,22 +1265,22 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         elif self.pref_tab == 'ADVANCED':
             self._draw_tab_advanced(context)
 
-        # ── Diagnostics (debug only, behind flag) ───────────────────────
+        # -- Diagnostics (debug only, behind flag) -----------------------
         self._draw_diagnostics(layout)
 
-    # ── Tab: Local LLM ─────────────────────────────────────────────────
+    # -- Tab: Local LLM -------------------------------------------------
 
     def _draw_tab_local_llm(self, context: bpy.types.Context) -> None:
         del context
         layout = self.layout
 
-        # ── LLM Configuration (Local mode only) ────────────────────────
+        # -- LLM Configuration (Local mode only) ------------------------
         box = layout.box()
         box.label(text="1. Configure Local LLM Backend", icon='CONSOLE')
 
-        # ── llama-server source toggle ────────────────────────────
-        #   Bundled — the addon downloads & manages its own copy.
-        #   Custom  — you provide your own llama.cpp build; the addon
+        # -- llama-server source toggle ----------------------------
+        #   Bundled -- the addon downloads & manages its own copy.
+        #   Custom  -- you provide your own llama.cpp build; the addon
         #             never modifies or updates it.
         box.prop(self, "llama_source", expand=True)
 
@@ -1288,7 +1288,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         llm_state = llm.get_state()
 
         if self.llama_source == "CUSTOM":
-            # ── Custom (user-provided) binary ──────────────────────
+            # -- Custom (user-provided) binary ----------------------
             box.prop(self, "llama_path", text="Path")
             llama_found = llm.find_llama_server()
             # Validate that the cached result still exists on disk;
@@ -1318,15 +1318,15 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 )
             else:
                 row.label(
-                    text="llama-server: Not found — check the path above",
+                    text="llama-server: Not found -- check the path above",
                     icon='ERROR',
                 )
             box.label(
-                text="Your custom binary — the addon will not modify or update it.",
+                text="Your custom binary -- the addon will not modify or update it.",
                 icon='INFO',
             )
         else:
-            # ── Bundled (addon-managed) binary ─────────────────────
+            # -- Bundled (addon-managed) binary ---------------------
             llama_found = llm.find_llama_server()
             # Validate that the cached result still exists on disk;
             # an external uninstall or file move would leave stale cache.
@@ -1346,7 +1346,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 if _outdated:
                     row = box.row(align=True)
                     row.label(
-                        text="OUTDATED — build {:d} (min {:d}) [{:s}]".format(
+                        text="OUTDATED -- build {:d} (min {:d}) [{:s}]".format(
                             _build, llm._MIN_SUPPORTED_BUILD, _source),
                         icon='ERROR',
                     )
@@ -1361,7 +1361,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                         text="Remove",
                     )
                 elif not _build:
-                    # Unknown build — the version string could not be
+                    # Unknown build -- the version string could not be
                     # parsed. Offer Update so the user can force a fresh
                     # download instead of being stuck with no way forward.
                     row = box.row(align=True)
@@ -1422,7 +1422,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     text="Install to: {:s}".format(str(llm._get_bundled_llama_dir())),
                     icon='FILE_FOLDER',
                 )
-            # GPU backend selector — disabled while agent is running
+            # GPU backend selector -- disabled while agent is running
             # (changing backend requires restarting llama-server).
             from . import agent_controller as _ac_backend
             _backend_row = box.row()
@@ -1442,7 +1442,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     row.progress(factor=pct / 100.0, type='BAR')
                 if llm_state.download_active:
                     row = box.row(align=True)
-                    # Icon-only (text="") — the operator's bl_label shows as tooltip.
+                    # Icon-only (text="") -- the operator's bl_label shows as tooltip.
                     row.operator("bfacw.cancel_download", icon='CANCEL', text="")
 
         # -- Model Selection (restructured) --------------------------------
@@ -1458,18 +1458,18 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             ram_gb = 0
         sys_info = "{:.0f} GB RAM".format(ram_gb) if ram_gb > 0 else ""
         if self.llama_backend == "cuda":
-            sys_info += " · CUDA"
+            sys_info += " * CUDA"
         elif self.llama_backend == "vulkan":
-            sys_info += " · Vulkan"
+            sys_info += " * Vulkan"
         elif self.llama_backend == "metal":
-            sys_info += " · Metal"
+            sys_info += " * Metal"
         if sys_info:
             box.label(text=sys_info, icon='INFO')
 
         # Primary family header
         pri_box = box.box()
         pri_box.label(
-            text="Recommended — Qwen3.8-27B (vision + agentic)",
+            text="Recommended -- Qwen3.8-27B (vision + agentic)",
             icon='HIDE_OFF',
         )
 
@@ -1490,8 +1490,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             op.preset_id = preset.identifier
             col = row.column(align=True)
             col.scale_y = 0.8
-            col.label(text="│ {:s}".format(preset.hardware_note))
-            col.label(text="└ {:s}".format(preset.why))
+            col.label(text="| {:s}".format(preset.hardware_note))
+            col.label(text="\ {:s}".format(preset.why))
 
         pri_box.label(
             text="Vision is built-in with these models and downloaded additionally",
@@ -1512,7 +1512,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             _MORE_CATEGORIES = [
                 ("flagship", "Flagship (24 GB+ VRAM)", 'SORT_ASC'),
                 ("mid_range", "Mid-Range (16-20 GB VRAM)", 'VIEWZOOM'),
-                ("lightweight", "Lightweight (≤ 8 GB VRAM)", 'LIGHT_SUN'),
+                ("lightweight", "Lightweight (<= 8 GB VRAM)", 'LIGHT_SUN'),
             ]
             for cat_id, cat_label, cat_icon in _MORE_CATEGORIES:
                 cat_presets = [p for p in more_presets if p.category == cat_id]
@@ -1531,8 +1531,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     op.preset_id = preset.identifier
                     col = row.column(align=True)
                     col.scale_y = 0.8
-                    col.label(text="│ {:s}".format(preset.hardware_note))
-                    col.label(text="└ {:s}".format(preset.why))
+                    col.label(text="| {:s}".format(preset.hardware_note))
+                    col.label(text="\ {:s}".format(preset.why))
 
         # -- Or use a local file -------------------------------------------
         local_box = box.box()
@@ -1574,7 +1574,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         model_exists = model_file and model_file.exists()
 
         if llm_state.download_active:
-            btn_text = "Downloading …"
+            btn_text = "Downloading ..."
             btn_icon = 'FILE_REFRESH'
             btn_enabled = False
         elif model_exists:
@@ -1661,7 +1661,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             ctx_box.label(text="Context may not fit your hardware:", icon='ERROR')
             for _wline in _ctx_warning.split("\n"):
                 ctx_box.label(text=_wline, icon='BLANK1')
-        # KV-cache quantization — pairs with the context size choice.
+        # KV-cache quantization -- pairs with the context size choice.
         if self.llama_backend != "cpu":
             ctx_box.prop(self, "local_kv_cache_quant")
 
@@ -1672,8 +1672,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             icon='SOLO_ON',
         )
         ctx_box.label(
-            text="Same setting the numeric row used to show — each level maps to a "
-                 "≈ token budget. Hover the buttons for the exact count.",
+            text="Same setting the numeric row used to show -- each level maps to a "
+                 "~ token budget. Hover the buttons for the exact count.",
             icon='INFO',
         )
         row = ctx_box.row(align=True)
@@ -1683,7 +1683,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         _budget = self.thinking_budget_tokens
         ctx_box.label(
             text="Current: {:s}".format(
-                "no cap — the model thinks freely" if _budget <= 0
+                "no cap -- the model thinks freely" if _budget <= 0
                 else "{:d} tokens of thinking per reply".format(_budget)),
             icon='BLANK1',
         )
@@ -1706,19 +1706,19 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         box.prop(self, "local_max_tokens")
         box.prop(self, "hf_token")
 
-    # ── Tab: Remote API ────────────────────────────────────────────────
+    # -- Tab: Remote API ------------------------------------------------
 
     def _draw_tab_remote_api(self, context: bpy.types.Context) -> None:
         del context
         layout = self.layout
 
-        # ── Remote API Configuration ────────────────────────────────────
+        # -- Remote API Configuration ------------------------------------
         box = layout.box()
         box.label(text="Remote API Configuration", icon='WORLD')
 
         llm = get_llm_manager()
 
-        # ── Remote Provider ─────────────────────────────────────
+        # -- Remote Provider -------------------------------------
         box.label(text="Provider", icon='WORLD')
         box.prop(self, "remote_provider")
 
@@ -1729,7 +1729,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 for line in provider.description.split("\n"):
                     box.label(text=line, icon='INFO')
 
-        # ── API URL & Key ───────────────────────────────────────
+        # -- API URL & Key ---------------------------------------
         box.prop(self, "remote_api_url")
         box.prop(self, "remote_api_key")
 
@@ -1744,7 +1744,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         else:
             row.label(text="Enter your API key for the remote service")
 
-        # ── Model ───────────────────────────────────────────────
+        # -- Model -----------------------------------------------
         box.label(text="Model", icon='VIEWZOOM')
         box.prop(self, "remote_model")
         row = box.row(align=True)
@@ -1760,11 +1760,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         if self.remote_models_fetch_error:
             box.label(text=self.remote_models_fetch_error, icon='ERROR')
 
-        # ── Test Connection ─────────────────────────────────────
+        # -- Test Connection -------------------------------------
         row = box.row()
         row.operator("bfacw.test_remote_api", icon="URL")
 
-        # ── Saved Provider Profiles (BYOK, Tier 2) ──────────────
+        # -- Saved Provider Profiles (BYOK, Tier 2) --------------
         box.separator()
         box.label(text="Saved Provider Profiles", icon='BOOKMARKS')
         providers = self._get_saved_providers()
@@ -1788,13 +1788,13 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         row = box.row()
         row.operator("bfacw.save_provider", icon="ADD", text="Save Current as Profile")
 
-    # ── Tab: Generative ─────────────────────────────────────────────
+    # -- Tab: Generative ---------------------------------------------
 
     def _draw_tab_generative_ai(self, context: bpy.types.Context) -> None:
         del context
         layout = self.layout
 
-        # ── Generation (Tier 5) ────────────────────────────────────────
+        # -- Generation (Tier 5) ----------------------------------------
         gen_box = layout.box()
         gen_box.label(text="Generative (Image / Video / Audio)", icon='RENDER_RESULT')
         gen_box.label(text="Experimental (WIP)", icon='WARNING')
@@ -1848,7 +1848,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             gen_box.prop(self, "gen_remote_url")
             gen_box.prop(self, "gen_remote_key")
 
-        # ── Poly Haven Asset Download (Tier 1) ────────────────────────
+        # -- Poly Haven Asset Download (Tier 1) ------------------------
         ph_box = layout.box()
         ph_box.label(text="Poly Haven Asset Download", icon='WORLD')
         ph_box.label(
@@ -1863,17 +1863,17 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         row.operator("bfacw.test_polyhaven_hdri", icon='WORLD', text="Download Test HDRI")
         row.operator("bfacw.test_polyhaven_texture", icon='TEXTURE', text="Download Test Texture")
 
-    # ── Tab: Advanced ──────────────────────────────────────────────────
+    # -- Tab: Advanced --------------------------------------------------
 
     def _draw_tab_advanced(self, context: bpy.types.Context) -> None:
         del context
         layout = self.layout
 
-        # ── Mode hint ──────────────────────────────────────────────────
+        # -- Mode hint --------------------------------------------------
         mode_labels = {
-            "LOCAL_LLM": "Local LLM mode — some settings are hidden",
-            "REMOTE_API": "Remote API mode — some settings are hidden",
-            "EXTERNAL_HARNESS": "External Harness mode — some settings are hidden",
+            "LOCAL_LLM": "Local LLM mode -- some settings are hidden",
+            "REMOTE_API": "Remote API mode -- some settings are hidden",
+            "EXTERNAL_HARNESS": "External Harness mode -- some settings are hidden",
         }
         hint = mode_labels.get(self.operating_mode, "")
         if hint:
@@ -1881,7 +1881,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             hint_row.label(text=hint, icon='INFO')
             hint_row.scale_y = 0.6
 
-        # ── Bridge Server (always visible) ────────────────────────────
+        # -- Bridge Server (always visible) ----------------------------
         bridge_box = layout.box()
         bridge_box.label(text="Bridge Server", icon='NETWORK_DRIVE')
         bridge_box.prop(self, "host")
@@ -1896,14 +1896,14 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         else:
             bridge_box.label(text="Status: Stopped", icon='X')
 
-        # ── MCP Server (External Harness mode only) ────────────────
+        # -- MCP Server (External Harness mode only) ----------------
         if self.operating_mode == "EXTERNAL_HARNESS":
             mcp_box = layout.box()
             mcp_box.label(text="MCP Server (External Harness)", icon='SETTINGS')
             mcp_box.prop(self, "mcp_server_mode", expand=True)
 
             if self.mcp_server_mode == "STDIO":
-                # ── Step 1: Pick your harness ───────────────────────────
+                # -- Step 1: Pick your harness ---------------------------
                 step1 = mcp_box.box()
                 step1.label(text="Step 1: Pick your MCP client", icon='FORWARD')
                 step1.prop(self, "harness_preset", text="")
@@ -1917,7 +1917,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     if preset.docs_url:
                         row.operator("bfacw.open_url", icon='URL', text="Docs").url = preset.docs_url
 
-                # ── Step 2: Copy the config ─────────────────────────────
+                # -- Step 2: Copy the config -----------------------------
                 step2 = mcp_box.box()
                 step2.label(text="Step 2: Copy the config", icon='COPYDOWN')
                 row = step2.row(align=True)
@@ -1962,7 +1962,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                             "\n".join(_cfg_check["stderr_tail"].splitlines()[-8:]),
                         )
 
-                # ── Step 3: Configure your client ───────────────────────────
+                # -- Step 3: Configure your client ---------------------------
                 step3 = mcp_box.box()
                 step3.label(text="Step 3: Configure your client (settings UI, harness chat, or config file)", icon='FILE_TEXT')
                 step3.label(
@@ -2006,7 +2006,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     icon='BLANK1',
                 )
 
-                # ── Step 4: Restart ─────────────────────────────────────
+                # -- Step 4: Restart -------------------------------------
                 step4 = mcp_box.box()
                 step4.label(text="Step 4: Restart your MCP client", icon='LOOP_BACK')
                 step4.label(
@@ -2016,7 +2016,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 )
                 if preset is not None and preset.notes:
                     step4.label(text="\u2139\ufe0f {:s}".format(preset.notes), icon='INFO')
-                # ── Detailed setup for this client ────────────────────────────
+                # -- Detailed setup for this client ----------------------------
                 if preset is not None and preset.setup_steps:
                     setup_box = mcp_box.box()
                     setup_box.label(text="Detailed setup for this client:", icon='PLAY')
@@ -2026,7 +2026,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                             icon='DOT',
                         )
 
-                # ── Advanced options ──────────────────────────────────────
+                # -- Advanced options --------------------------------------
                 adv_box = mcp_box.box()
                 adv_box.label(text="Advanced Options", icon='SETTINGS')
                 adv_box.prop(self, "use_blender_python_for_harness")
@@ -2059,7 +2059,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 else:
                     row.operator("bfacw.mcp_server_start", icon="PLAY", text="Start MCP Server")
 
-        # ── Agent Control ─────────────────────────────────────────────
+        # -- Agent Control ---------------------------------------------
         box = layout.box()
         box.label(text="Coworker Control", icon='WORKSPACE')
         box.prop(self, "agent_autostart")
@@ -2078,7 +2078,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 ("llm_chat", "Chat"),
                 ("harness_config", "Config"),
             ]:
-                val = ping.get(key, "—")
+                val = ping.get(key, "--")
                 if val == "N/A":
                     continue
                 is_ok = val.startswith("OK") or (is_harness and val.startswith("N/A"))
@@ -2087,7 +2087,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     icon=status_icon if is_ok else "ERROR",
                 )
 
-        # ── Port Settings ──────────────────────────────────────────────
+        # -- Port Settings ----------------------------------------------
         port_box = layout.box()
         port_box.label(text="Port Settings", icon='SETTINGS')
         port_box.prop(self, "port_offset")
@@ -2097,7 +2097,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         row.prop(self, "mcp_port")
         row.prop(self, "llm_port")
 
-        # ── Skills (not in External Harness mode) ───────────────────────
+        # -- Skills (not in External Harness mode) -----------------------
         if self.operating_mode != "EXTERNAL_HARNESS":
             skills_box = layout.box()
             skills_box.label(text="Skills", icon='TEXT')
@@ -2127,7 +2127,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             row = skills_box.row()
             row.operator("bfacw.reload_skills", icon="FILE_REFRESH", text="Reload Skills")
 
-        # ── Custom Skills (not in External Harness mode) ────────────────
+        # -- Custom Skills (not in External Harness mode) ----------------
         if self.operating_mode != "EXTERNAL_HARNESS":
             custom_box = layout.box()
             custom_box.label(text="Custom Skills", icon='GREASEPENCIL')
@@ -2137,10 +2137,10 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                      "or workflow rules. Markdown format supported.",
                 icon='INFO',
             )
-            # Multiline textbox (5.3 textbox API — same as chat input).
+            # Multiline textbox (5.3 textbox API -- same as chat input).
             custom_box.textbox(self, "custom_skills_text")
 
-        # ── Text Editor Memory Bank (not in External Harness mode) ──────
+        # -- Text Editor Memory Bank (not in External Harness mode) ------
         if self.operating_mode != "EXTERNAL_HARNESS":
             mem_box = layout.box()
             mem_box.label(text="Text Editor Memory Bank", icon='TEXT')
@@ -2151,7 +2151,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             )
             mem_box.prop(self, "save_code_to_text_editor")
 
-        # ── Chat Display ───────────────────────────────────────────────
+        # -- Chat Display -----------------------------------------------
         chat_box = layout.box()
         chat_box.label(text="Chat Display", icon='SORTTIME')
         chat_box.prop(self, "chat_max_visible_turns")
@@ -2160,7 +2160,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             icon='INFO',
         )
 
-        # ── Debug Mode ─────────────────────────────────────────────────
+        # -- Debug Mode -------------------------------------------------
         debug_box = layout.box()
         debug_box.label(text="Debug Mode", icon='MODIFIER')
         debug_box.prop(self, "debug_mode")

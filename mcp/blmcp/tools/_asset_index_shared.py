@@ -16,10 +16,10 @@ What this buys:
 - ``get_asset_tags`` and ``search_assets`` answer from an on-disk index
   instead of appending datablocks into the live session (no junk in
   ``bpy.data``, no undo steps, no append renames).
-- The index captures the full Asset Details region metadata — tags,
+- The index captures the full Asset Details region metadata -- tags,
   description, author, copyright, license, catalog, color tag and
   ``preferred_import_method`` (``APPEND`` / ``LINK`` / ``PACK``) plus
-  per-type facts (node counts, socket interface for node groups) — so
+  per-type facts (node counts, socket interface for node groups) -- so
   ``load_asset_in_context`` can honor an asset's self-declared import
   method *before* loading anything.
 - The index lives in the addon's user cache, never inside the library

@@ -51,7 +51,7 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
-# ── Sampling parameters (owned here; agent_controller imports them) ─
+# -- Sampling parameters (owned here; agent_controller imports them) -
 # Sampling tuned for MoE local models.
 _CHAT_SAMPLING = {
     "repeat_penalty": 1.1,
@@ -72,7 +72,7 @@ _DEFAULT_MAX_TOKENS = 1024
 # Socket timeout (seconds) for streaming and non-streaming LLM requests.
 _STREAM_TIMEOUT = 600.0
 
-# ── Shared state, injected by agent_controller at import time ──────
+# -- Shared state, injected by agent_controller at import time ------
 # The transport needs to flag non-fatal notices (mid-stream drops,
 # tool-calling downgrades) and observe user stops, but it must not own
 # the state: one owner (AgentState in agent_controller), one writer per
@@ -89,7 +89,7 @@ def bind(state: Any, stop_event: threading.Event) -> None:
     _stop_event = stop_event
 
 
-# ── Pure conversation helpers, injected by agent_controller ────────
+# -- Pure conversation helpers, injected by agent_controller --------
 # These live in agent_controller (they shape the conversation history)
 # but the transport's fallback paths need them.  Injected as a namespace
 # so the dependency stays one-way: transport never imports the loop.
@@ -118,7 +118,7 @@ def _stop_requested() -> bool:
     return _stop_event is not None and _stop_event.is_set()
 
 
-# ── LLM HTTP 500 fault classification ──────────────────────────────
+# -- LLM HTTP 500 fault classification ------------------------------
 # An HTTP 500 from llama-server means one of two very different things, and
 # only one of them is safe to "fix" by reshaping the request:
 #
@@ -216,7 +216,7 @@ def classify_llm_500(error_body: str) -> str:
     return _FAULT_SERVER
 
 
-# ── HTTP 400: context-window exhaustion ────────────────────────────
+# -- HTTP 400: context-window exhaustion ----------------------------
 # llama-server answers a request larger than the window it was started
 # with using HTTP 400 and a JSON body identifying the cause.  Re-sending
 # the identical payload can never succeed, so this class of 400 is
@@ -348,10 +348,10 @@ def openai_chat_completions(
     *tools* may be ``None`` or ``[]`` (both mean "no tool schema"); callers
     such as the session-memory writer legitimately pass ``None``.
 
-    *model* — when provided, included in the request body. Required for
+    *model* -- when provided, included in the request body. Required for
     remote APIs (OpenRouter, OpenAI, etc.). Omitted for local llama-server
     which auto-detects the model.
-    *max_tokens* — max output tokens per call. ``None`` uses 16384 default.
+    *max_tokens* -- max output tokens per call. ``None`` uses 16384 default.
     """
     # Start each call with a clean error classification so a stale overflow
     # from a previous call is never mistaken for the current failure.
@@ -382,16 +382,16 @@ def openai_chat_completions(
         headers["Authorization"] = "Bearer {:s}".format(api_key)
 
     tools = tools or []
-    print("[🛠️Coworker] _openai_chat_completions: POST {:s}".format(url))
-    print("[🛠️Coworker] _openai_chat_completions:   model = {:s}".format(model or "(auto-detect)"))
-    print("[🛠️Coworker] _openai_chat_completions:   messages = {:d}, tools = {:d}, body = {:d} bytes".format(
+    print("[Coworker] _openai_chat_completions: POST {:s}".format(url))
+    print("[Coworker] _openai_chat_completions:   model = {:s}".format(model or "(auto-detect)"))
+    print("[Coworker] _openai_chat_completions:   messages = {:d}, tools = {:d}, body = {:d} bytes".format(
         len(messages), len(tools), len(data_bytes)))
 
     req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
 
     # Retry loop for transient failures (e.g. server just became ready
     # but the HTTP worker hasn't started yet).
-    # Also handles 503 Service Unavailable — llama-server returns this
+    # Also handles 503 Service Unavailable -- llama-server returns this
     # while the model is still loading (can take 30-120s for large models).
     # We retry 503 with exponential backoff up to 120s total.
     # Also handles chat template crashes: custom GGUF templates (DavidAU
@@ -420,9 +420,9 @@ def openai_chat_completions(
         try:
             with urllib.request.urlopen(req, timeout=_STREAM_TIMEOUT) as resp:
                 raw = resp.read().decode()
-                print("[🛠️Coworker] _openai_chat_completions: status={:d}, response={:d} bytes".format(
+                print("[Coworker] _openai_chat_completions: status={:d}, response={:d} bytes".format(
                     resp.status, len(raw)))
-                print("[🛠️Coworker] _openai_chat_completions: first 500 chars: {:s}".format(raw[:500]))
+                print("[Coworker] _openai_chat_completions: first 500 chars: {:s}".format(raw[:500]))
                 result: dict[str, Any] = json.loads(raw)
                 # Log the assistant message content and any tool calls.
                 choice = result.get("choices", [{}])[0]
@@ -431,38 +431,38 @@ def openai_chat_completions(
                 content = msg.get("content") or ""
 
                 tool_calls = msg.get("tool_calls") or []
-                print("[🛠️Coworker] _openai_chat_completions: finish_reason={:s}".format(finish))
-                print("[🛠️Coworker] _openai_chat_completions: content   = {:s}".format(
+                print("[Coworker] _openai_chat_completions: finish_reason={:s}".format(finish))
+                print("[Coworker] _openai_chat_completions: content   = {:s}".format(
                     repr(content[:200]) if content else "(empty)"))
-                print("[🛠️Coworker] _openai_chat_completions: tool_calls= {:d}".format(len(tool_calls)))
+                print("[Coworker] _openai_chat_completions: tool_calls= {:d}".format(len(tool_calls)))
                 for i, tc in enumerate(tool_calls):
                     fn = tc.get("function", {})
-                    print("[🛠️Coworker] _openai_chat_completions:   tool[{:d}] = {:s}({:s})".format(
+                    print("[Coworker] _openai_chat_completions:   tool[{:d}] = {:s}({:s})".format(
                         i, fn.get("name", "?"), str(fn.get("arguments", ""))[:120]))
                 # Log reasoning content (chain-of-thought) for debugging.
                 reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
                 if reasoning:
-                    print("[🛠️Coworker] _openai_chat_completions: reasoning ({:d} chars):".format(
+                    print("[Coworker] _openai_chat_completions: reasoning ({:d} chars):".format(
                         len(reasoning)))
                     # Collapse consecutive blank lines to reduce console clutter.
                     _clean = re.sub(r"\n{3,}", "\n\n", _h('strip_think_tags')(reasoning))
                     print(_clean)
 
-                    print("[🛠️Coworker] _openai_chat_completions: --- end reasoning ---")
+                    print("[Coworker] _openai_chat_completions: --- end reasoning ---")
                 # If we fell back to text-based tool calling, parse text calls.
                 # Only when tools were actually offered: with no tools in the
-                # request (Ask mode), parsed "calls" would be spurious — the
+                # request (Ask mode), parsed "calls" would be spurious -- the
                 # model is just writing JSON/XML in prose (issue #66).
                 if not tools_tried and not tool_calls and tools:
                     text_calls = _h('parse_text_tool_calls')(content)
                     if text_calls:
-                        print("[🛠️Coworker] _openai_chat_completions: parsed {:d} text-based tool calls".format(
+                        print("[Coworker] _openai_chat_completions: parsed {:d} text-based tool calls".format(
                             len(text_calls)))
                         msg["tool_calls"] = text_calls
                         choice["finish_reason"] = "tool_calls"
                         result["_text_tool_fallback"] = True
 
-                # ── XML tool call fallback ────────────────────────────────
+                # -- XML tool call fallback --------------------------------
                 # Light reasoning models (Qwen3.5-9B DeepSeek-V4-Flash,
                 # Gemma 4 E4B) often emit tool calls as XML inside
                 # ``reasoning_content`` or ``content`` instead of the proper
@@ -478,7 +478,7 @@ def openai_chat_completions(
                     for source_name, source_text in xml_sources:
                         xml_calls = _h('parse_xml_tool_calls')(source_text)
                         if xml_calls:
-                            print("[🛠️Coworker] _openai_chat_completions: "
+                            print("[Coworker] _openai_chat_completions: "
                                   "parsed {:d} XML tool calls from {:s}".format(
                                       len(xml_calls), source_name))
                             msg["tool_calls"] = xml_calls
@@ -489,7 +489,7 @@ def openai_chat_completions(
                 _clear_stale_errors()
                 return result
         except (urllib.error.HTTPError, urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
-            # ── Capture the error body ONCE for every HTTP error ────────
+            # -- Capture the error body ONCE for every HTTP error --------
             # ``ex.read()`` returns empty on a second call, so the body MUST
             # be read exactly once here and reused by the 500 classifier, the
             # 400 reshape, and the final failure block.  Losing it was how a
@@ -504,7 +504,7 @@ def openai_chat_completions(
                     _http_body = ""
             _500_body = _http_body
             _last_error_body = _http_body
-            # ── HTTP 500: distinguish template fault from server fault ──
+            # -- HTTP 500: distinguish template fault from server fault --
             # Both arrive as a bare 500, and the recovery differs completely:
             #   * template fault -> reshape the request (tools as text)
             #   * server fault   -> keep the request, retry with backoff
@@ -524,20 +524,20 @@ def openai_chat_completions(
                 if _log_fault:
                     _fault = _FAULT_SERVER
 
-            # ── Server fault: do NOT reshape the request ───────────────
+            # -- Server fault: do NOT reshape the request ---------------
             # Fall through to the generic retry-with-backoff path and, if
             # the fault persists, surface the real cause (body + log tail +
             # GPU-OOM hint) so it is not mistaken for a template problem.
             if _is_500 and _fault == _FAULT_SERVER:
-                print("[🛠️Coworker] _openai_chat_completions: 500 SERVER fault "
-                      "(not a template problem) — keeping tools, will retry")
+                print("[Coworker] _openai_chat_completions: 500 SERVER fault "
+                      "(not a template problem) -- keeping tools, will retry")
                 if _500_body:
-                    print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_500_body[:500]))
+                    print("[Coworker] _openai_chat_completions:   500 body = {:s}".format(_500_body[:500]))
                 if _log_fault:
-                    print("[🛠️Coworker] _openai_chat_completions:   llama-server log "
+                    print("[Coworker] _openai_chat_completions:   llama-server log "
                           "confirms a resource/hardware fault")
 
-            # ── Malformed tool call: retry once with a nudge ───────────
+            # -- Malformed tool call: retry once with a nudge -----------
             # The request was valid; the model emitted tool-call arguments
             # that were not valid JSON (usually a string left unterminated
             # because generation was cut off).  Reshaping the request cannot
@@ -546,10 +546,10 @@ def openai_chat_completions(
             # error instead of looping.
             if _is_500 and _fault == _FAULT_TOOLCALL and not _toolcall_nudged:
                 _toolcall_nudged = True
-                print("[🛠️Coworker] _openai_chat_completions: 500 TOOLCALL fault — "
+                print("[Coworker] _openai_chat_completions: 500 TOOLCALL fault -- "
                       "model emitted malformed tool-call JSON, retrying once with a nudge")
                 if _500_body:
-                    print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_500_body[:500]))
+                    print("[Coworker] _openai_chat_completions:   500 body = {:s}".format(_500_body[:500]))
                 # Copy the list and the target dict: when the caller's
                 # history is short enough to be sent as-is, ``messages`` IS
                 # the live conversation history, and mutating it would
@@ -563,14 +563,14 @@ def openai_chat_completions(
                 # split the work into smaller calls instead.
                 _nudge = (
                     "\n\nIMPORTANT: Your previous tool call could not be parsed "
-                    "because its arguments were not valid JSON — the arguments "
+                    "because its arguments were not valid JSON -- the arguments "
                     "were cut off before the JSON was complete. This almost "
                     "always means the tool call was too large for one response. "
                     "Do NOT repeat the same large call. Instead, split the work "
                     "into several smaller tool calls and make them one at a "
                     "time: keep each script short (roughly 40 lines or fewer), "
                     "and build the result up across multiple calls. Emit "
-                    "complete, well-formed JSON arguments — never truncate a "
+                    "complete, well-formed JSON arguments -- never truncate a "
                     "string or a code block."
                 )
                 _nudged = False
@@ -589,17 +589,17 @@ def openai_chat_completions(
                 req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
                 continue
 
-            # ── Chat template crash fallback: inject tools as text ────
+            # -- Chat template crash fallback: inject tools as text ----
             # Some custom GGUF chat templates (e.g. Fable Fusion, DavidAU
             # fine-tunes) 500 on the ``tools`` parameter.  We inject tool
             # descriptions into the system prompt and retry without the
             # ``tools`` JSON parameter, preserving full agent functionality.
             if tools_tried and _is_500 and _fault == _FAULT_TEMPLATE and tools and not _tools_as_text:
                 _tools_as_text = True
-                print("[🛠️Coworker] _openai_chat_completions: 500 TEMPLATE fault — "
+                print("[Coworker] _openai_chat_completions: 500 TEMPLATE fault -- "
                       "injecting tools as text and retrying")
                 if _500_body:
-                    print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_500_body[:500]))
+                    print("[Coworker] _openai_chat_completions:   500 body = {:s}".format(_500_body[:500]))
                 tools_tried = False
                 # Tell the user why the agent's behaviour changed.  Without
                 # this the downgrade is invisible and looks like the model
@@ -651,18 +651,18 @@ def openai_chat_completions(
                 req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
                 continue
 
-            # ── Chat template role error fallback ──────────────────────
+            # -- Chat template role error fallback ----------------------
             # Some models (Qwen, etc.) have strict Jinja templates that
             # reject non-standard message roles.  Sanitize roles and retry.
             # Only reachable for template faults -- server faults returned
             # above without reshaping the request.
             if _is_500 and "Unexpected message role" in _500_body and not _roles_sanitized:
                 _roles_sanitized = True
-                print("[🛠️Coworker] _openai_chat_completions: 500 error — "
+                print("[Coworker] _openai_chat_completions: 500 error -- "
                       "unexpected message role, sanitizing and retrying")
                 messages = _h('sanitize_message_roles')(messages)
                 body["messages"] = messages
-                print("[🛠️Coworker] _openai_chat_completions:   sanitized roles = {:s}".format(
+                print("[Coworker] _openai_chat_completions:   sanitized roles = {:s}".format(
                     _h('describe_message_roles')(messages)))
                 data_bytes = json.dumps(body).encode()
                 req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
@@ -679,7 +679,7 @@ def openai_chat_completions(
             if isinstance(ex, urllib.error.HTTPError) and ex.code == 400:
                 # Reuse the body read once at the top of the handler.
                 _error_body = _last_error_body
-                # ── Context window exceeded: fail fast, do not retry ──
+                # -- Context window exceeded: fail fast, do not retry --
                 # The request was larger than the window the server was
                 # started with.  Re-sending the identical payload can never
                 # succeed and only burns the retry budget; flag it so the
@@ -688,10 +688,10 @@ def openai_chat_completions(
                 if is_context_overflow(_error_body):
                     _agent_state.error_kind = "context_overflow"
                     _msg = context_overflow_message(_error_body)
-                    print("[🛠️Coworker] _openai_chat_completions: 400 context window "
-                          "exceeded — not retrying the same payload")
+                    print("[Coworker] _openai_chat_completions: 400 context window "
+                          "exceeded -- not retrying the same payload")
                     if _error_body:
-                        print("[🛠️Coworker] _openai_chat_completions:   400 body = {:s}".format(_error_body[:500]))
+                        print("[Coworker] _openai_chat_completions:   400 body = {:s}".format(_error_body[:500]))
                     _agent_state.error = _msg[:500]
                     _agent_state.error_full = _msg
                     return None
@@ -701,14 +701,14 @@ def openai_chat_completions(
                         # template rejects even the plain shape.  Fall through
                         # to the generic retry path so the real error surfaces
                         # instead of looping on an identical payload.
-                        print("[🛠️Coworker] _openai_chat_completions: 400 template/parser error "
-                              "persists after flattening — not retrying the same shape")
+                        print("[Coworker] _openai_chat_completions: 400 template/parser error "
+                              "persists after flattening -- not retrying the same shape")
                     else:
                         _flattened = True
-                        print("[🛠️Coworker] _openai_chat_completions: 400 template/parser error - "
+                        print("[Coworker] _openai_chat_completions: 400 template/parser error - "
                               "flattening conversation and retrying without tools")
                         if _error_body:
-                            print("[🛠️Coworker] _openai_chat_completions:   400 body = {:s}".format(_error_body[:300]))
+                            print("[Coworker] _openai_chat_completions:   400 body = {:s}".format(_error_body[:300]))
                         tools_tried = False
                         body.pop("tools", None)
                         # Reassign ``messages`` as well as the body.  Setting
@@ -717,9 +717,9 @@ def openai_chat_completions(
                         # identically -- the fallback could never converge.
                         messages = _h('flatten_for_plain_chat')(messages)
                         body["messages"] = messages
-                        print("[🛠️Coworker] _openai_chat_completions:   flattened roles = {:s}".format(
+                        print("[Coworker] _openai_chat_completions:   flattened roles = {:s}".format(
                             _h('describe_message_roles')(messages)))
-                        print("[🛠️Coworker] _openai_chat_completions:   flattened shape:")
+                        print("[Coworker] _openai_chat_completions:   flattened shape:")
                         print(_h('describe_history_for_log')(messages))
                         data_bytes = json.dumps(body).encode()
                         req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
@@ -731,15 +731,15 @@ def openai_chat_completions(
                 # reason now instead of burning the whole retry budget on the
                 # identical payload and then reporting a bare "HTTP Error 400".
                 _msg = "LLM request failed: {:s}".format(_error_body or str(ex))
-                print("[🛠️Coworker] _openai_chat_completions: 400 request rejected — "
+                print("[Coworker] _openai_chat_completions: 400 request rejected -- "
                       "not retrying the same payload")
                 if _error_body:
-                    print("[🛠️Coworker] _openai_chat_completions:   400 body = {:s}".format(_error_body[:500]))
+                    print("[Coworker] _openai_chat_completions:   400 body = {:s}".format(_error_body[:500]))
                 _agent_state.error = _msg[:500]
                 _agent_state.error_full = _msg
                 return None
 
-            # ── 503 Service Unavailable: model still loading ──────────
+            # -- 503 Service Unavailable: model still loading ----------
             # llama-server returns 503 while the model is loading into
             # memory (can take 30-120s for large models).  Retry with
             # exponential backoff up to 120s total.
@@ -747,11 +747,11 @@ def openai_chat_completions(
                 _503_attempts += 1
                 backoff = min(2.0 * _503_attempts, 10.0)  # 2s, 4s, 6s, ... 10s max
                 if _503_attempts % 5 == 0:
-                    print("[🛠️Coworker] _openai_chat_completions: 503 attempt {:d} — "
+                    print("[Coworker] _openai_chat_completions: 503 attempt {:d} -- "
                           "model still loading, retrying in {:.0f}s...".format(_503_attempts, backoff))
                 _time.sleep(backoff)
                 continue
-            # ── Non-retryable 4xx: fail fast with the real reason ─────
+            # -- Non-retryable 4xx: fail fast with the real reason -----
             # 401/403/404/422 are deterministic client errors; retrying the
             # identical payload wastes ~8s and masks the real cause behind a
             # generic "HTTP Error".  (400 has its own reshape/fail-fast path
@@ -762,10 +762,10 @@ def openai_chat_completions(
                     _body = ex.read().decode("utf-8", errors="replace")
                 except Exception:  # pylint: disable=broad-exception-caught
                     _body = ""
-                _msg = "LLM request failed: HTTP {:d} — {:s}".format(
+                _msg = "LLM request failed: HTTP {:d} -- {:s}".format(
                     ex.code, (_body or str(ex))[:500])
-                print("[🛠️Coworker] _openai_chat_completions: HTTP {:d} is not "
-                      "retryable — surfacing the reason".format(ex.code))
+                print("[Coworker] _openai_chat_completions: HTTP {:d} is not "
+                      "retryable -- surfacing the reason".format(ex.code))
                 _agent_state.error = _msg[:500]
                 _agent_state.error_full = _msg
                 return None
@@ -777,8 +777,8 @@ def openai_chat_completions(
                 # and burn the whole retry budget (5 x ~60s) before reporting
                 # the same error.  Surface it immediately instead.
                 if _is_500 and _fault == _FAULT_TOOLCALL and _toolcall_nudged:
-                    print("[🛠️Coworker] _openai_chat_completions: malformed tool call "
-                          "persists after the nudge — not retrying the same payload")
+                    print("[Coworker] _openai_chat_completions: malformed tool call "
+                          "persists after the nudge -- not retrying the same payload")
                 else:
                     # Reuse the body already read for 500 classification above
                     # (``ex.read()`` is empty on a second call).
@@ -789,11 +789,11 @@ def openai_chat_completions(
                         except Exception:
                             pass
                     if _error_body:
-                        print("[🛠️Coworker] _openai_chat_completions: attempt {:d}/{:d} FAILED — {:s}".format(
+                        print("[Coworker] _openai_chat_completions: attempt {:d}/{:d} FAILED -- {:s}".format(
                             attempt + 1, max_retries, str(ex)))
-                        print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_error_body[:500]))
+                        print("[Coworker] _openai_chat_completions:   500 body = {:s}".format(_error_body[:500]))
                     else:
-                        print("[🛠️Coworker] _openai_chat_completions: attempt {:d}/{:d} FAILED — {:s}, retrying in 2s...".format(
+                        print("[Coworker] _openai_chat_completions: attempt {:d}/{:d} FAILED -- {:s}, retrying in 2s...".format(
                             attempt + 1, max_retries, str(ex)))
                     _time.sleep(2)
                     continue
@@ -802,13 +802,13 @@ def openai_chat_completions(
             # hint) so a resource failure is not misread as a template bug.
             if _is_500 and _fault == _FAULT_SERVER:
                 _msg = server_fault_message(_500_body)
-                print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — "
+                print("[Coworker] _openai_chat_completions: all attempts FAILED -- "
                       "LLM server fault ({:s})".format(str(ex)))
                 _agent_state.error = _msg[:500]
                 _agent_state.error_full = _msg
             elif _is_500 and _fault == _FAULT_TOOLCALL:
                 _msg = toolcall_fault_message(_500_body)
-                print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — "
+                print("[Coworker] _openai_chat_completions: all attempts FAILED -- "
                       "malformed tool call ({:s})".format(str(ex)))
                 _agent_state.error = _msg[:500]
                 _agent_state.error_full = _msg
@@ -819,12 +819,12 @@ def openai_chat_completions(
                 # "HTTP Error 400: Bad Request".
                 _error_body = _last_error_body
                 if _error_body:
-                    print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — {:s}".format(str(ex)))
-                    print("[🛠️Coworker] _openai_chat_completions:   500 body = {:s}".format(_error_body[:500]))
+                    print("[Coworker] _openai_chat_completions: all attempts FAILED -- {:s}".format(str(ex)))
+                    print("[Coworker] _openai_chat_completions:   500 body = {:s}".format(_error_body[:500]))
                     _agent_state.error = "LLM request failed: {:s}".format(_error_body[:500])
                     _agent_state.error_full = "LLM request failed: {:s}".format(_error_body)
                 else:
-                    print("[🛠️Coworker] _openai_chat_completions: all attempts FAILED — {:s}".format(str(ex)))
+                    print("[Coworker] _openai_chat_completions: all attempts FAILED -- {:s}".format(str(ex)))
                     _agent_state.error = "LLM request failed: {:s}".format(str(ex))
                     _agent_state.error_full = "LLM request failed: {:s}".format(str(ex))
             return None
@@ -840,7 +840,7 @@ def _split_inline_think(text: str) -> tuple[str, str]:
     Returns ``(visible, reasoning)``.  Only *complete* tagged blocks are routed
     to reasoning; any unmatched tag (a tag split across streaming chunks) is
     removed from the visible text so it never leaks, and its body stays in
-    visible (best-effort — correct for the common whole-tag-in-one-delta case).
+    visible (best-effort -- correct for the common whole-tag-in-one-delta case).
     """
     reasoning = "".join(_THINK_BLOCK_RE.findall(text))
     visible = _THINK_BLOCK_RE.sub("", text)
@@ -893,7 +893,7 @@ def _parse_sse_chunk(chunk: dict[str, Any], acc: dict[str, Any]) -> None:
     *acc* is a dict with keys ``content`` (str), ``reasoning`` (str),
     ``tool_calls`` (list of assembled OpenAI tool-call dicts),
     ``finish_reason`` (str) and ``usage`` (dict, set by the final
-    ``include_usage`` chunk).  Malformed chunks are skipped silently —
+    ``include_usage`` chunk).  Malformed chunks are skipped silently --
     a mid-stream provider hiccup should not abort an otherwise good
     generation.
     """
@@ -911,7 +911,7 @@ def _parse_sse_chunk(chunk: dict[str, Any], acc: dict[str, Any]) -> None:
                 acc["reasoning"] += _think
             else:
                 acc["content"] += delta_content
-        # Some providers put <think>…</think> inline in content instead of
+        # Some providers put <think>...</think> inline in content instead of
         # the reasoning field; route the tagged part to reasoning.
         delta_reasoning = _extract_reasoning_delta(delta)
         if delta_reasoning:
@@ -991,7 +991,7 @@ def openai_chat_completions_stream(
     """POST a *streaming* chat-completions request and reassemble the reply.
 
     Issue #69: in Remote API mode the non-streaming request is a black
-    box — nothing arrives until the full generation completes (up to the
+    box -- nothing arrives until the full generation completes (up to the
     600 s timeout) and Stop cannot cancel it.  Streaming gives live text
     and reasoning for the Workshop, honours ``_stop_event`` mid-stream,
     and captures ``usage`` from the final chunk for the token counters.
@@ -1033,9 +1033,9 @@ def openai_chat_completions_stream(
     if api_key:
         headers["Authorization"] = "Bearer {:s}".format(api_key)
 
-    print("[🛠️Coworker] _openai_chat_completions_stream: POST {:s}".format(url))
-    print("[🛠️Coworker] _openai_chat_completions_stream:   model = {:s}".format(model or "(auto-detect)"))
-    print("[🛠️Coworker] _openai_chat_completions_stream:   messages = {:d}, tools = {:d}".format(
+    print("[Coworker] _openai_chat_completions_stream: POST {:s}".format(url))
+    print("[Coworker] _openai_chat_completions_stream:   model = {:s}".format(model or "(auto-detect)"))
+    print("[Coworker] _openai_chat_completions_stream:   messages = {:d}, tools = {:d}".format(
         len(messages), len(tools)))
 
     req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
@@ -1061,8 +1061,8 @@ def openai_chat_completions_stream(
                 # Stop takes effect immediately, mid-generation: close the
                 # response, keep what has streamed so far as a partial.
                 if _stop_requested():
-                    print("[🛠️Coworker] _openai_chat_completions_stream: "
-                          "stop requested mid-stream — aborting (partial kept)")
+                    print("[Coworker] _openai_chat_completions_stream: "
+                          "stop requested mid-stream -- aborting (partial kept)")
                     break
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line or not line.startswith("data:"):
@@ -1114,14 +1114,14 @@ def openai_chat_completions_stream(
         if got_first_token:
             # Mid-stream drop: keep whatever arrived as a partial answer so
             # the user sees the content rather than a blank panel.
-            print("[🛠️Coworker] _openai_chat_completions_stream: stream dropped "
-                  "mid-generation ({:s}) — returning partial".format(str(ex)))
+            print("[Coworker] _openai_chat_completions_stream: stream dropped "
+                  "mid-generation ({:s}) -- returning partial".format(str(ex)))
             _agent_state.warning = (
                 "The response stream was interrupted; the reply may be incomplete."
             )
             return _assemble_stream_result(acc)
-        print("[🛠️Coworker] _openai_chat_completions_stream: failed before first "
-              "token ({:s}) — falling back to non-streaming".format(str(ex)))
+        print("[Coworker] _openai_chat_completions_stream: failed before first "
+              "token ({:s}) -- falling back to non-streaming".format(str(ex)))
         # Record the reason so a caller that does not retry non-streaming can
         # still report it (the error body is not re-readable once consumed).
         if isinstance(ex, urllib.error.HTTPError):
@@ -1139,13 +1139,13 @@ def openai_chat_completions_stream(
     if not got_first_token:
         # Connected but never streamed a token (e.g. a 200 body that is a
         # JSON error instead of SSE).  Let the caller retry non-streaming.
-        print("[🛠️Coworker] _openai_chat_completions_stream: no tokens received")
+        print("[Coworker] _openai_chat_completions_stream: no tokens received")
         return None
 
     result = _assemble_stream_result(acc)
     if acc.get("usage"):
         usage = acc["usage"]
-        print("[🛠️Coworker] _openai_chat_completions_stream: usage "
+        print("[Coworker] _openai_chat_completions_stream: usage "
               "prompt={:s} completion={:s} total={:s}".format(
                   str(usage.get("prompt_tokens")),
                   str(usage.get("completion_tokens")),

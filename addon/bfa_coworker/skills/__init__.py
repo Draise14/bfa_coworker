@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Skills Loader — injects version-aware built-in skill files into the system prompt.
+Skills Loader -- injects version-aware built-in skill files into the system prompt.
 
 Always-loaded skills (injected into every conversation):
-- Version-specific API changes (``blender_*.md``, cumulative ≤ current version)
+- Version-specific API changes (``blender_*.md``, cumulative <= current version)
 - Best practices (``best_practices.md``)
 - Naming conventions (``naming.md``)
 - MCP tool guidance (``mcp_tools.md``)
@@ -33,7 +33,7 @@ _skills_list: list[str] | None = None
 # Blender minor version the cache was built for.  The cache MUST be keyed on
 # the version: ``list_loaded_skills()`` (Preferences draw) builds it without a
 # version, and without a key that version-less build would poison every later
-# versioned call — silently dropping all ``blender_*.md`` drift skills.
+# versioned call -- silently dropping all ``blender_*.md`` drift skills.
 _UNSET = object()
 _skills_cache_key: object = _UNSET
 # Per-path skill file read cache (cleared by ``clear_cache``).
@@ -49,8 +49,8 @@ def get_always_loaded_skills(
 ) -> str:
     """Return concatenated built-in skill content for the system prompt.
 
-    *bpy_version* — ``(5, 3, 0)`` or ``None`` to skip version-specific files.
-    *custom_text* — optional user-provided custom skills text injected after
+    *bpy_version* -- ``(5, 3, 0)`` or ``None`` to skip version-specific files.
+    *custom_text* -- optional user-provided custom skills text injected after
     built-in skills.
 
     Result is cached until ``clear_cache()`` is called.
@@ -101,7 +101,7 @@ def get_always_loaded_skills(
 def list_loaded_skills(bpy_version: tuple[int, int, int] | None = None) -> list[str]:
     """Return the list of built-in skill file names currently loaded.
 
-    *bpy_version* — when given, the versioned list is built/returned; without
+    *bpy_version* -- when given, the versioned list is built/returned; without
     it the current cache is used as-is (never rebuilt version-less, which
     would drop the ``blender_*.md`` files for the session).
     """
@@ -180,7 +180,7 @@ def _build_final(built_in: str, custom_text: str) -> str:
     return result
 
 
-# ── Domain-to-skill mapping ────────────────────────────────────────
+# -- Domain-to-skill mapping ----------------------------------------
 # Maps domain keys (from _TOOL_DOMAINS in agent_controller.py) to
 # skill filenames in mcp/blmcp/data/skills/ (or vendor/blmcp/data/skills/
 # in deployed builds).
@@ -206,7 +206,7 @@ def get_domain_skills(domains: set[str], max_chars: int | None = None) -> str:
     files exist.
 
     When *max_chars* is given, only **whole** skill files that fit are
-    included.  A skill file is never truncated — cutting a rule in half is
+    included.  A skill file is never truncated -- cutting a rule in half is
     worse than omitting the file (the caller can fall back to the always
     available ``get_python_api_docs`` / ``search_api_docs`` tools).  Files are
     considered in a stable (sorted) order; a file that does not fit is skipped
@@ -244,7 +244,7 @@ def get_domain_skills(domains: set[str], max_chars: int | None = None) -> str:
                     if used + cost > max_chars:
                         print(
                             "[Coworker] get_domain_skills: skipping {:s} "
-                            "({:d} chars) — would exceed the {:d}-char skill "
+                            "({:d} chars) -- would exceed the {:d}-char skill "
                             "budget (whole files only, never truncated)".format(
                                 fname, len(text), max_chars))
                         break
@@ -258,7 +258,7 @@ def get_domain_skills(domains: set[str], max_chars: int | None = None) -> str:
     return "## Domain Skills\n{:s}".format(sep.join(parts))
 
 
-# ── User skill loader ──────────────────────────────────────────────
+# -- User skill loader ----------------------------------------------
 # Loads custom .md skill files from the user's SCRIPTS directory.
 # Users can drop .md files into SCRIPTS/bfa_coworker_skills/ and they
 # will be loaded alongside the built-in skills on every conversation.

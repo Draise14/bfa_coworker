@@ -111,7 +111,7 @@ def main(params: Params) -> Result:
         try:
             bpy.ops.ed.undo_push(message="wire_node_group:\n{:s}".format(params.asset_name))
         except Exception:
-            pass  # No window/area — still proceed.
+            pass  # No window/area -- still proceed.
 
         node = tree.nodes.new(type=_NODE_TYPE_BY_TREE[tree_type])
         node.node_tree = ng
@@ -254,7 +254,7 @@ def _resolve_tree(params: Params, tree_type: str, bpy) -> Any:
         for mod in obj.modifiers:
             if mod.type == "NODES" and mod.node_group is not None:
                 return mod.node_group
-        # No existing modifier — create one with the loaded group? No: wire
+        # No existing modifier -- create one with the loaded group? No: wire
         # into an *existing* tree only; the caller should use the GN-modifier
         # fallback path in load_asset_in_context for first-use.
         return None
@@ -296,7 +296,7 @@ def _replace_active(node: Any, tree: Any, params: Params, bpy) -> tuple[list[str
     links_created: list[str] = []
     unmapped: list[str] = []
 
-    # Incoming links → group inputs.
+    # Incoming links -> group inputs.
     used_inputs: set[str] = set()
     for sock in target.inputs:
         for link in list(sock.links):
@@ -311,7 +311,7 @@ def _replace_active(node: Any, tree: Any, params: Params, bpy) -> tuple[list[str
             links_created.append("{:s} -> {:s}.{:s}".format(
                 _link_str(link.from_node, from_sock), node.name, match.name))
 
-    # Outgoing links → group outputs.
+    # Outgoing links -> group outputs.
     used_outputs: set[str] = set()
     for sock in target.outputs:
         for link in list(sock.links):
@@ -358,13 +358,13 @@ def _insert_between(node: Any, tree: Any, params: Params, bpy) -> tuple[list[str
         (from_n.location.y + to_n.location.y) / 2.0,
     )
 
-    # Upstream → group input.
+    # Upstream -> group input.
     match_in = _pick_socket(node.inputs, from_sock, set(), params.auto_map, "in")
     if match_in is None:
         raise LookupError(
             "Group '{:s}' has no input socket compatible with '{:s}' ({:s})".format(
                 params.asset_name, from_sock.name, from_sock.type))
-    # Group output → downstream.
+    # Group output -> downstream.
     match_out = _pick_socket(node.outputs, to_sock, set(), params.auto_map, "out")
     if match_out is None:
         raise LookupError(
@@ -449,8 +449,8 @@ def _pick_socket(sockets: Any, hint_socket: Any, used: set[str], auto_map: bool,
     socket of a compatible type.  Returns ``None`` when nothing fits.
 
     *direction* is ``"in"`` when picking a group **input** to receive from
-    the hint socket (source → destination check) and ``"out"`` when picking
-    a group **output** that feeds the hint socket (source → destination
+    the hint socket (source -> destination check) and ``"out"`` when picking
+    a group **output** that feeds the hint socket (source -> destination
     check from the group's side).
     """
     hint = hint_socket.name

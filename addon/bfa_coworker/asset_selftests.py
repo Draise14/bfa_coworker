@@ -7,7 +7,7 @@
 Deterministic in-session asset-tool self-tests (Tier 3d Phase B).
 
 Runs the *same* ``*_toolcode.py`` modules the MCP layer executes against a
-throwaway fixture library, entirely in-session — no MCP server, no LLM, no
+throwaway fixture library, entirely in-session -- no MCP server, no LLM, no
 agent. Each step reports PASS/FAIL and a wall-clock timing so the
 diagnostics UI can show a one-click health check of the asset tools.
 
@@ -15,8 +15,8 @@ Steps that genuinely need a live editor/UI (opening the Asset Browser,
 visually verifying a load, renders) are listed as *manual* steps with
 instructions: the test harness cannot automate them headless.
 
-Run from the addon's diagnostics panel (Preferences → Advanced →
-Diagnostics → Asset Tool Self-Tests), or programmatically::
+Run from the addon's diagnostics panel (Preferences -> Advanced ->
+Diagnostics -> Asset Tool Self-Tests), or programmatically::
 
     from bfa_coworker import asset_selftests
     asset_selftests.run_auto_suite()
@@ -33,7 +33,7 @@ import tempfile
 import time
 import types
 
-# Modules that hold the fixture datablocks — matching the reset purger in
+# Modules that hold the fixture datablocks -- matching the reset purger in
 # the integration harness.
 _PURGE_ATTRS = (
     "objects", "node_groups", "materials", "meshes", "lattices",
@@ -136,7 +136,7 @@ def _register_library(bpy, name, path):
 
 
 def _unlink_all_objects(bpy):
-    # Only fixture-created objects (distinctive names — a debug tool must
+    # Only fixture-created objects (distinctive names -- a debug tool must
     # never touch unrelated scene content).
     for scene in bpy.data.scenes:
         for coll in list(bpy.data.collections) + [scene.collection]:
@@ -155,7 +155,7 @@ def _is_fixture_name(name):
 def _purge_datablocks(bpy, keep_fixture_lib=False):
     import bpy as _bpy  # noqa: F401 (shadow guard)
 
-    # Only touch datablocks this suite created — never the user's scene.
+    # Only touch datablocks this suite created -- never the user's scene.
     _unlink_all_objects(bpy)
     for attr in _PURGE_ATTRS:
         coll = getattr(bpy.data, attr, None)

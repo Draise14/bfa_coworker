@@ -7,24 +7,24 @@ Template for creating new generative model plugins.
 
 Copy this file to ``gen_plugins/<media_type>/`` and fill in the
 required attributes.  The plugin will be auto-discovered on the
-next panel refresh — no registration code needed.
+next panel refresh -- no registration code needed.
 
 Required
 --------
-- ``MODEL_ID`` — unique key, e.g. ``"author/model-name"``
-- ``DISPLAY_NAME`` — dropdown label, e.g. ``"Image: My Model"``
-- ``MODEL_TYPE`` — ``"image"``, ``"video"``, ``"audio"``, ``"text"``, or ``"3d"``
-- ``DESCRIPTION`` — tooltip text
-- ``load()`` — prepare the pipeline
-- ``generate()`` — run inference
+- ``MODEL_ID`` -- unique key, e.g. ``"author/model-name"``
+- ``DISPLAY_NAME`` -- dropdown label, e.g. ``"Image: My Model"``
+- ``MODEL_TYPE`` -- ``"image"``, ``"video"``, ``"audio"``, ``"text"``, or ``"3d"``
+- ``DESCRIPTION`` -- tooltip text
+- ``load()`` -- prepare the pipeline
+- ``generate()`` -- run inference
 
 Optional
 --------
-- ``INPUTS`` — bitflag of required inputs (default: ``PROMPT``)
-- ``UI_SECTIONS`` — ordered list of UI sections to render
-- ``DEFAULT_PARAMS`` — default values for generation controls
-- ``required_packages`` — list of pip packages needed
-- ``min_vram_gb`` — minimum VRAM in GB
+- ``INPUTS`` -- bitflag of required inputs (default: ``PROMPT``)
+- ``UI_SECTIONS`` -- ordered list of UI sections to render
+- ``DEFAULT_PARAMS`` -- default values for generation controls
+- ``required_packages`` -- list of pip packages needed
+- ``min_vram_gb`` -- minimum VRAM in GB
 """
 
 import os
@@ -40,22 +40,22 @@ from ..base import (
 
 
 class TemplatePlugin(GenPlugin):
-    """Template plugin — copy and customize."""
+    """Template plugin -- copy and customize."""
 
-    # ── Required Identity ──
+    # -- Required Identity --
     MODEL_ID = "author/template-model"
     DISPLAY_NAME = "Image: Template Model"
     MODEL_TYPE = "image"
     DESCRIPTION = "A template for creating new generative plugins"
 
-    # ── Declarative Inputs ──
+    # -- Declarative Inputs --
     INPUTS = (
         GenInputSpec.PROMPT
         | GenInputSpec.NEG_PROMPT
         | GenInputSpec.IMAGE
     )
 
-    # ── Declarative UI ──
+    # -- Declarative UI --
     UI_SECTIONS = [
         GenUISection.PROMPT,
         GenUISection.NEG_PROMPT,
@@ -65,7 +65,7 @@ class TemplatePlugin(GenPlugin):
         GenUISection.SEED,
     ]
 
-    # ── Default Parameters ──
+    # -- Default Parameters --
     DEFAULT_PARAMS = GenParams(
         width=1024,
         height=1024,
@@ -73,12 +73,12 @@ class TemplatePlugin(GenPlugin):
         guidance=3.5,
     )
 
-    # ── Capabilities ──
+    # -- Capabilities --
     supports_img2img = True
     min_vram_gb = 8
     required_packages = ["diffusers", "torch", "transformers"]
 
-    # ── Lifecycle ──
+    # -- Lifecycle --
 
     def load(self, prefs, scene, **kwargs):
         """Load the model pipeline.

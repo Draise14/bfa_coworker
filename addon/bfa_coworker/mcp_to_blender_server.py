@@ -96,7 +96,7 @@ def get_actual_port() -> int:
 def _find_available_port(preferred: int, max_offset: int = 100) -> int:
     """Return the first available port starting at *preferred*.
 
-    Tries ``preferred``, ``preferred + 1``, … up to ``preferred + max_offset``.
+    Tries ``preferred``, ``preferred + 1``, ... up to ``preferred + max_offset``.
     Returns the first port that can be bound, or 0 if none are available.
     """
     for offset in range(max_offset + 1):
@@ -108,13 +108,13 @@ def _find_available_port(preferred: int, max_offset: int = 100) -> int:
             s.bind(("127.0.0.1", candidate))
             s.close()
             if offset > 0:
-                print("[🛠️Coworker] _find_available_port: port {:d} in use, shuffled to {:d}".format(
+                print("[Coworker] _find_available_port: port {:d} in use, shuffled to {:d}".format(
                     preferred, candidate))
             return candidate
         except (OSError, socket.error):
             s.close()
             continue
-    print("[🛠️Coworker] _find_available_port: no port available in range {:d}–{:d}".format(
+    print("[Coworker] _find_available_port: no port available in range {:d}-{:d}".format(
         preferred, preferred + max_offset))
     return 0
 
@@ -292,8 +292,8 @@ def _safe_depsgraph_sync(allow_full_sync: bool = True) -> None:
     except ImportError:
         return  # Not running inside Blender.
 
-    # ── Strategy 1: Tag each object for update ──────────────────────
-    # This is the safest approach — it marks objects as needing a
+    # -- Strategy 1: Tag each object for update ----------------------
+    # This is the safest approach -- it marks objects as needing a
     # re-evaluation without triggering a full depsgraph rebuild.
     # The rebuild is what crashes in Blender 5.3 after collection ops.
     try:
@@ -302,20 +302,20 @@ def _safe_depsgraph_sync(allow_full_sync: bool = True) -> None:
                 _obj.update_tag()
             except (ReferenceError, AttributeError):
                 pass  # Object may have been deleted mid-iteration.
-        # print("[🛠️Coworker] _safe_depsgraph_sync: used update_tag strategy")
+        # print("[Coworker] _safe_depsgraph_sync: used update_tag strategy")
         return
     except Exception:  # pylint: disable=broad-exception-caught
         if not allow_full_sync:
             return  # Don't fall through to view_layer.update().
         pass  # Fall through to strategy 2.
 
-    # ── Strategy 2: Full view_layer.update() ────────────────────────
+    # -- Strategy 2: Full view_layer.update() ------------------------
     # This is the traditional approach.  It can crash in Blender 5.3
     # after collection manipulation, but is the only option when
     # update_tag() is not available (e.g. very old Blender versions).
     try:
         _bpy.context.view_layer.update()
-        # print("[🛠️Coworker] _safe_depsgraph_sync: used view_layer.update strategy")
+        # print("[Coworker] _safe_depsgraph_sync: used view_layer.update strategy")
     except Exception:  # pylint: disable=broad-exception-caught
         pass  # Best-effort; view_layer may not be available.
 
@@ -358,7 +358,7 @@ def _code_is_undo_or_push(code: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Preflight code validation — catches common LLM mistakes before exec().
+# Preflight code validation -- catches common LLM mistakes before exec().
 # Returns a list of (pattern_name, guidance) tuples.  Empty = no issues.
 # ---------------------------------------------------------------------------
 
@@ -377,7 +377,7 @@ def _imports_module(code: str, module: str) -> bool:
     valid code and cost the model a wasted retry.
     """
     escaped = re.escape(module)
-    # ``import a, b, c`` / ``import a as x`` — module must be a whole name
+    # ``import a, b, c`` / ``import a as x`` -- module must be a whole name
     # in the comma-separated list, not a prefix of another module.
     if re.search(r"^\s*import\s+[^\n]*\b{:s}\b".format(escaped), code, re.MULTILINE):
         return True
@@ -391,12 +391,12 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
     """Validate *code* for common LLM-generated mistakes before execution.
 
     Returns a list of ``(pattern_name, guidance)`` tuples.  An empty list
-    means the code passed all checks.  Each check is a lightweight regex —
+    means the code passed all checks.  Each check is a lightweight regex --
     total cost is <1ms.
     """
     issues: list[tuple[str, str]] = []
 
-    # 1. Missing bpy import — most common first-time failure.
+    # 1. Missing bpy import -- most common first-time failure.
     uses_bpy = re.search(r"\bbpy\.", code) or "bpy.ops." in code
     has_import = _imports_module(code, "bpy")
     if uses_bpy and not has_import:
@@ -462,7 +462,7 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
             "Batch operations with bpy.data or bpy.context instead.",
         ))
 
-    # 9. No output — code runs but returns nothing visible.
+    # 9. No output -- code runs but returns nothing visible.
     has_result = "result" in code and ("=" in code or "{" in code)
     has_print = "print(" in code
     if not has_result and not has_print and len(code.strip()) > 50:
@@ -648,7 +648,7 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
 
     # 23. Passing INVALID transform kwargs to primitive add operators.
     #     location=/rotation=/scale= ARE accepted in 5.3 (verified against
-    #     the dev build) — only rotation_euler/rotation_mode are invalid.
+    #     the dev build) -- only rotation_euler/rotation_mode are invalid.
     _PRIM_OPS = ["primitive_cube_add", "primitive_uv_sphere_add",
                  "primitive_ico_sphere_add", "primitive_cylinder_add",
                  "primitive_cone_add", "primitive_torus_add",
@@ -668,7 +668,7 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
                     break
             break  # One hint per call is enough.
 
-    # 24. Missing bmesh import — code uses bmesh without importing it.
+    # 24. Missing bmesh import -- code uses bmesh without importing it.
     # Match the import properly: a plain substring test for 'import bmesh'
     # misses the common comma-separated form (``import bpy, bmesh, math``),
     # which made this fire on perfectly valid code and cost the model a
@@ -680,7 +680,7 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
             "Add 'import bmesh' at the top of your script.",
         ))
 
-    # 25. bmesh edit mode mismatch — using from_edit_mesh without entering edit mode,
+    # 25. bmesh edit mode mismatch -- using from_edit_mesh without entering edit mode,
     #     or using from_mesh (object mode) when edit mode was intended.
     if 'bmesh.from_edit_mesh' in code and 'mode_set' not in code and 'EDIT' not in code:
         issues.append((
@@ -689,7 +689,7 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
             "Switch to edit mode first: bpy.ops.object.mode_set(mode='EDIT')",
         ))
 
-    # 26. Vector arithmetic type errors — adding float/tuple to Vector.
+    # 26. Vector arithmetic type errors -- adding float/tuple to Vector.
     #     Common pattern: vert.co += offset + random.uniform(-0.1, 0.1)
     #     Fix: use mathutils.Vector for offsets, or add component-wise.
     if re.search(r'vert\.co\s*\+=.*\+\s*[a-z]', code):
@@ -706,7 +706,7 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
         issues.append((
             "update_edit_mesh_args",
             "bmesh.update_edit_mesh() takes at most 1 argument in Blender 5.x. "
-            "Use: bm.update_edit_mesh(mesh) — no extra args.",
+            "Use: bm.update_edit_mesh(mesh) -- no extra args.",
         ))
 
     # 28. Operator context preconditions (scene safety Phase 2).
@@ -801,7 +801,7 @@ def _execute_code(
     from .weak_sandbox import WeakSandboxForLLM
 
     # Pre-populate common modules so LLM-generated code doesn't need to
-    # import them explicitly — reduces a common failure mode.
+    # import them explicitly -- reduces a common failure mode.
     namespace: dict[str, object] = {
         "result": {},
         "math": math,
@@ -831,7 +831,7 @@ def _execute_code(
                 from .autofix import _autofix_code
                 code, _fixes = _autofix_code(code)
                 if _fixes:
-                    print("[🛠️Coworker] autofix applied: {:s}".format(", ".join(_fixes)))
+                    print("[Coworker] autofix applied: {:s}".format(", ".join(_fixes)))
 
             # Preflight: validate code before execution. Toolcode-generated
             # payloads (marked by the MCP tools) are repository-controlled and
@@ -931,7 +931,7 @@ def _execute_code(
                 header = tb_lines[0]  # "Traceback (most recent call last):"
                 # Find the exception line (last non-empty line).
                 exc_line = tb_lines[-1] if tb_lines[-1].strip() else tb_lines[-2]
-                # Take last 6 lines before the exception (3 frames × 2 lines each).
+                # Take last 6 lines before the exception (3 frames x 2 lines each).
                 frame_lines = tb_lines[-7:-1] if len(tb_lines) >= 8 else tb_lines[1:-1]
                 tb_str = "{:s}\n{:s}\n{:s}".format(header, "\n".join(frame_lines), exc_line)
                 tb_str += "\n[Traceback truncated to last 3 frames]"
@@ -967,7 +967,7 @@ def _execute_code(
                     "armature for POSE).\n"
                     "  * anything else -> use bpy.context.temp_override(...) to supply "
                     "the required context.\n"
-                    "The selection may have changed since your last call — set it "
+                    "The selection may have changed since your last call -- set it "
                     "explicitly in the SAME script."
                 )
             if "IndexError: list index out of range" in tb_str:
@@ -997,7 +997,7 @@ def _execute_code(
             if "'Context' object has no attribute 'selected_" in tb_str:
                 tb_str += (
                     "\n\nHINT: `bpy.context` has NO `selected_edges` / `selected_faces` / "
-                    "`selected_verts` attribute — edit-mode selections live on the mesh data, "
+                    "`selected_verts` attribute -- edit-mode selections live on the mesh data, "
                     "not on context. Read them with bmesh:\n"
                     "    import bmesh\n"
                     "    bm = bmesh.from_edit_mesh(bpy.context.view_layer.objects.active.data)\n"
@@ -1006,13 +1006,13 @@ def _execute_code(
                     "    sel_verts = [v for v in bm.verts if v.select]\n"
                     "To write selections, set `e.select` / `f.select` / `v.select` and call "
                     "`bm.select_flush_mode()`, or use `bmesh.ops.select_*`. "
-                    "`bpy.context.selected_objects` IS valid — but only in OBJECT mode "
+                    "`bpy.context.selected_objects` IS valid -- but only in OBJECT mode "
                     "for objects."
                 )
             if "Converting py args to operator properties" in tb_str and "unrecognized" in tb_str:
                 tb_str += (
                     "\n\nHINT: You passed a keyword argument that this operator does not accept "
-                    "(e.g. `ring_segments` — the UV sphere uses `segments` and `ring_count`). "
+                    "(e.g. `ring_segments` -- the UV sphere uses `segments` and `ring_count`). "
                     "Discover the real parameters from the operator docstring:\n"
                     "    print(bpy.ops.mesh.primitive_uv_sphere_add.__doc__)\n"
                     "Common primitive keywords: cube/plane/monkey/grid: `size=`; "
@@ -1416,7 +1416,7 @@ def start(host: str, port: int) -> None:
     ``execute_blocking``).
 
     If *port* is in use, the function automatically tries the next
-    available port (``port + 1``, ``port + 2``, … up to +100) and
+    available port (``port + 1``, ``port + 2``, ... up to +100) and
     stores the actual port in ``_actual_port``.
 
     Callers should catch ``Exception`` broadly rather than specific types,
@@ -1443,7 +1443,7 @@ def start(host: str, port: int) -> None:
         _probe.settimeout(0.5)
         _probe.connect((host, port))
         _probe.close()
-        # Port is in use — auto-shuffle to the next available port.
+        # Port is in use -- auto-shuffle to the next available port.
         new_port = _find_available_port(port)
         if new_port == 0:
             raise OSError(
@@ -1451,11 +1451,11 @@ def start(host: str, port: int) -> None:
                 "Increase port_offset in Preferences (Advanced tab) to use a "
                 "different set of ports.".format(port)
             )
-        print("[🛠️Coworker] start: port {:d} in use — shuffled to {:d}".format(port, new_port))
+        print("[Coworker] start: port {:d} in use -- shuffled to {:d}".format(port, new_port))
         port = new_port
         _actual_port = port
     except (ConnectionRefusedError, TimeoutError, OSError):
-        # Expected — port is free (connection refused or timed out).
+        # Expected -- port is free (connection refused or timed out).
         _probe.close()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

@@ -60,13 +60,13 @@ def main(params: Params) -> Result:
     )
     """Load an asset from the asset browser into the current context.
 
-    *link_mode* — ``"APPEND"`` (default, full independent copy) or
+    *link_mode* -- ``"APPEND"`` (default, full independent copy) or
     ``"LINK"`` (shared reference to the source file).  Append is
     preferred for materials, node groups, and small assets.  Link is
     useful for large collections you want to keep in sync with the
     source library.
 
-    *location* — optional ``(x, y, z)`` world position for COLLECTION
+    *location* -- optional ``(x, y, z)`` world position for COLLECTION
     and OBJECT assets.  Ignored for other types.
     """
     import bpy  # pylint: disable=import-error
@@ -197,7 +197,7 @@ def main(params: Params) -> Result:
 
             ng_type = _tree_type_name(ng.type)  # GeometryNodeTree / ShaderNodeTree / CompositorNodeTree
 
-            # --- Geometry Nodes → add as modifier on active object ---
+            # --- Geometry Nodes -> add as modifier on active object ---
             if ng_type == "GeometryNodeTree":
                 obj = _resolve_object(bpy, params)
                 if obj and obj.type == "MESH":
@@ -221,7 +221,7 @@ def main(params: Params) -> Result:
                         loaded_into="data_only",
                     )
 
-            # --- Compositor → add to compositor node tree ---
+            # --- Compositor -> add to compositor node tree ---
             elif ng_type == "CompositorNodeTree":
                 scene = _resolve_scene(bpy, params)
                 scene.use_nodes = True
@@ -248,7 +248,7 @@ def main(params: Params) -> Result:
                         loaded_into="data_only",
                     )
 
-            # --- Shader → add to a material's node tree ---
+            # --- Shader -> add to a material's node tree ---
             else:
                 shader_tree = _resolve_shader_tree(bpy, params)
                 if shader_tree is not None:
@@ -286,7 +286,7 @@ def main(params: Params) -> Result:
                     loaded_into="none",
                 )
             bpy.context.scene.collection.children.link(col)
-            # Position if location provided — move all objects in the collection.
+            # Position if location provided -- move all objects in the collection.
             if location is not None:
                 _set_collection_location(col, location)
             return Result(

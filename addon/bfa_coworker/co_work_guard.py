@@ -24,6 +24,12 @@ agent *modifies* (but does not create) are not tracked by the created-entity
 snapshot diff, so they remain user-selectable; the created-only scope is a
 deliberate limit of the snapshot-diff implementation.
 
+The objects the USER is working on -- their selection and active object at
+the moment a turn starts -- are NEVER locked (see :func:`lockable_names`).
+The lock protects what the AGENT creates/edits; it must not take control
+away from the user of the thing they are editing, so those names are always
+excluded from both the per-step lock and the session re-lock.
+
 The registry is *session state* held in this module, not scene state: a
 Blender crash cannot leave objects permanently locked, and ``unregister``
 clears it.  This module is deliberately free of ``bpy`` -- it only produces
@@ -42,6 +48,7 @@ __all__ = (
     "clear_session",
     "build_lock_code",
     "build_unlock_code",
+    "lockable_names",
 )
 
 import threading
@@ -184,6 +191,19 @@ def clear_session() -> None:
     with _registry_lock:
         _SESSION_OBJECTS.clear()
         _SESSION_COLLECTIONS.clear()
+
+
+def lockable_names(names: object = (), protect: object = ()) -> set[str]:
+    """Return *names* minus *protect* -- the datablocks safe to lock.
+
+    *protect* holds the objects the USER is working on (their selection and
+    active object when the turn started).  Locking those would take control
+    of them away from the user mid-turn, so they are always excluded: the
+    lock protects what the AGENT creates/edits, not what the user is editing.
+    Pure and never raises; returns plain names.
+    """
+    blocked = {str(p) for p in (protect or ()) if p}
+    return {str(n) for n in (names or ()) if n and str(n) not in blocked}
 
 
 def build_lock_code(

@@ -180,6 +180,19 @@ class TestSessionMemory(unittest.TestCase):
         _cw.clear_session()
         self.assertEqual(_cw.session_names(), (set(), set()))
 
+    def test_lockable_names_excludes_user_working_set(self):
+        # The user's turn-start selection must never be locked, so an object
+        # they are editing keeps their control even if the coworker made it.
+        names = {"Cube", "Ground", "Tree"}
+        result = _cw.lockable_names(names, {"Ground"})
+        self.assertEqual(result, {"Cube", "Tree"})
+
+    def test_lockable_names_no_protect_keeps_all(self):
+        self.assertEqual(_cw.lockable_names({"A", "B"}), {"A", "B"})
+
+    def test_lockable_names_ignores_empty(self):
+        self.assertEqual(_cw.lockable_names({"", "A", None}, {""}), {"A"})
+
     def test_ignores_empty_names(self):
         _cw.remember_session({"", "Ground", None}, {""})
         self.assertEqual(_cw.session_names()[0], {"Ground"})

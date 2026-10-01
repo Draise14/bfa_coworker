@@ -4692,13 +4692,16 @@ def export_session_log_to_clipboard() -> str:
 _active_lock_mcp_port: int = 0
 
 
-def _lock_step_entities(step_diff: Any, mcp_port: int) -> None:
+def _lock_step_entities(step_diff: Any, mcp_port: int, protect: object = ()) -> None:
     """Soft-lock a step's created/touched datablocks (scene safety Phase 1).
 
     Sets ``hide_select`` on the objects/collections the step created or
     touched so the user cannot re-target them in the viewport mid-turn while
-    the agent keeps full programmatic access.  Best-effort: never breaks a
-    turn, and a missing config/guard is silently ignored.
+    the agent keeps full programmatic access.  *protect* names are skipped:
+    the objects the USER was working on when the turn started are never
+    locked (they are what the user wants to edit, not what the agent owns).
+    Best-effort: never breaks a turn, and a missing config/guard is silently
+    ignored.
     """
     global _active_lock_mcp_port
     try:
@@ -4708,8 +4711,10 @@ def _lock_step_entities(step_diff: Any, mcp_port: int) -> None:
     except Exception:  # pylint: disable=broad-exception-caught
         pass
     try:
-        objs = getattr(step_diff, "object_names", None) or set()
-        colls = getattr(step_diff, "collection_names", None) or set()
+        objs = co_work_guard.lockable_names(
+            getattr(step_diff, "object_names", None) or set(), protect)
+        colls = co_work_guard.lockable_names(
+            getattr(step_diff, "collection_names", None) or set(), protect)
         if not objs and not colls:
             return
         if mcp_port:
@@ -4788,7 +4793,7 @@ def _release_scene_lock() -> None:
               "for a later retry -- {:s}".format(str(_ex)))
 
 
-def _lock_session_entities(mcp_port: int) -> None:
+def _lock_session_entities(mcp_port: int, protect: object = ()) -> None:
     """Re-lock the objects the coworker created in EARLIER turns.
 
     The per-step lock only covers entities created in the current turn, so
@@ -4797,14 +4802,16 @@ def _lock_session_entities(mcp_port: int) -> None:
     the reported accidental deletion happened.  Re-applying the lock to the
     session-remembered names at the start of each turn keeps them protected
     while the agent works; they are released at turn end like the rest (and
-    forgotten on New Thread / Stop).
+    forgotten on New Thread / Stop).  ``protect`` (the user's turn-start
+    selection) is always excluded -- an object the user is editing stays
+    theirs even if the coworker made it earlier.
     """
     objs, colls = co_work_guard.session_names()
     if not objs and not colls:
         return
     _lock_step_entities(
         types.SimpleNamespace(object_names=objs, collection_names=colls),
-        mcp_port)
+        mcp_port, protect=protect)
 
 
 def clear_session_scene_lock() -> None:
@@ -5163,6 +5170,10 @@ def _run_conversation_turn_inner(
     # into a single round-trip). Reset at the start of each turn.
     _turn_snapshot: _EntitySnapshot | None = None
     _turn_entities: _EntityDiff = _EntityDiff()
+    # Objects the USER is working on: their selection + active object captured
+    # when the turn started (before the agent runs).  Never locked -- taking
+    # these would remove the user's own control of what they are editing.
+    _lock_exclude: set[str] = set()
     _entity_context_injected: bool = False  # True once we've injected entity context.
     # Co-work scene-safety Phase 6 (D8): ``_undo_safe`` is False while a
     # foreign (user) edit has been seen since the last baseline push -- the
@@ -6222,6 +6233,18 @@ def _run_conversation_turn_inner(
                             if snap_data:
                                 _turn_snapshot = _EntitySnapshot.from_dict(snap_data)
                                 print("[Coworker] run_conversation_turn: initial entity snapshot taken")
+                                # The user's selection at TURN START is their
+                                # working set -- capture it so the lock never
+                                # protects objects the user is actively editing.
+                                _lock_exclude = set(
+                                    getattr(_turn_snapshot, "selected_object_names", set()) or set())
+                                _tip = getattr(_turn_snapshot, "active_object", "") or ""
+                                if _tip:
+                                    _lock_exclude.add(_tip)
+                                if _lock_exclude:
+                                    print("[Coworker] run_conversation_turn: excluding the user's "
+                                          "{:d} selected object(s) from the co-work lock".format(
+                                              len(_lock_exclude)))
                     except (json.JSONDecodeError, TypeError):
                         pass
                     if _turn_snapshot is None:
@@ -6229,7 +6252,7 @@ def _run_conversation_turn_inner(
                               "continuing without the co-work scene lock for this turn")
                     # Re-lock objects the coworker created in earlier turns so
                     # they stay protected while it works on them this turn.
-                    _lock_session_entities(mcp_port)
+                    _lock_session_entities(mcp_port, _lock_exclude)
 
                 # -- Inject resolution from preferences -------------
                 if tool_name in ("download_polyhaven_asset", "setup_pbr_material"):
@@ -6295,8 +6318,9 @@ def _run_conversation_turn_inner(
                                         # step's created/touched datablocks
                                         # un-selectable for the rest of the
                                         # turn so the user cannot re-target
-                                        # them mid-turn.
-                                        _lock_step_entities(step_diff, mcp_port)
+                                        # them mid-turn.  Objects the user is
+                                        # working on (_lock_exclude) are skipped.
+                                        _lock_step_entities(step_diff, mcp_port, _lock_exclude)
                                     elif _foreign:
                                         # No new entities, but the fingerprint
                                         # changed: adopt it so the next boundary

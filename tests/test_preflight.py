@@ -756,6 +756,16 @@ class TestOperatorContextPreflight(unittest.TestCase):
         )
         self.assertNotIn("op_requires_active_object", self._names(code))
 
+    def test_unrelated_get_does_not_suppress_active_check(self):
+        # Fetching some object with .get() elsewhere must not hide the fact
+        # that no active object is set before the operator.
+        code = (
+            "import bpy\n"
+            "x = bpy.data.objects.get('Other')\n"
+            "bpy.ops.object.modifier_apply(modifier='S')\n"
+        )
+        self.assertIn("op_requires_active_object", self._names(code))
+
 
 class TestUnguardedIndexPreflight(unittest.TestCase):
     """Scene-safety Phase 3: unguarded literal indexing of collections."""
@@ -779,6 +789,28 @@ class TestUnguardedIndexPreflight(unittest.TestCase):
         # A plain Python list index must not trip the collection-root check.
         code = "import bpy\nverts = [1, 2, 3]\nprint(verts[0])\n"
         self.assertNotIn("unguarded_list_index", self._names(code))
+
+    def test_unrelated_if_does_not_suppress_index_check(self):
+        # A bare `if` elsewhere must not defeat the check (the previous
+        # broad suppression hid the exact selected_objects[0] class).
+        code = (
+            "import bpy\n"
+            "if True:\n    print('hi')\n"
+            "obj = bpy.context.selected_objects[0]\n"
+        )
+        self.assertIn("unguarded_list_index", self._names(code))
+
+    def test_len_on_same_root_suppresses_index_check(self):
+        code = (
+            "import bpy\n"
+            "if len(bpy.context.selected_objects) > 0:\n"
+            "    obj = bpy.context.selected_objects[0]\n"
+        )
+        self.assertNotIn("unguarded_list_index", self._names(code))
+
+    def test_data_collection_index_flagged(self):
+        code = "import bpy\nmat = bpy.data.materials[0]\n"
+        self.assertIn("unguarded_list_index", self._names(code))
 
 
 if __name__ == "__main__":

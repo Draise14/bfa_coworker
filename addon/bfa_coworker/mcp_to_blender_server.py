@@ -730,8 +730,10 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
                     "shade_flat", "convert", "origin_set", "make_single_user")
     for _op in _NEED_ACTIVE:
         if "bpy.ops.object." + _op + "(" in code:
+            # Require an ACTUAL active-object assignment; merely fetching an
+            # object with .get() elsewhere must not suppress the check.
             if ("view_layer.objects.active" not in code
-                    and "bpy.data.objects.get(" not in code):
+                    and not re.search(r"\.active\s*=", code)):
                 issues.append((
                     "op_requires_active_object",
                     "bpy.ops.object.{:s}() acts on the active object, but no "
@@ -748,17 +750,27 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
     #     suppressed when the block already guards with len()/get()/iter()/if.
     _COLL_INDEX_ROOTS = (
         r"bpy\.context\.selected_objects",
-        r"\bselected_objects",
         r"bpy\.data\.objects",
         r"bpy\.data\.materials",
         r"bpy\.data\.meshes",
         r"bpy\.data\.collections",
         r"\bscene\.objects",
-        r"\bview_layer\.objects",
+        r"bpy\.context\.view_layer\.objects",
     )
     for _root in _COLL_INDEX_ROOTS:
         if re.search(_root + r"\[\s*\d+\s*\]", code):
-            if not re.search(r"len\(|next\(iter\(|\.get\(|\bif\b", code):
+            # Suppress ONLY when a guard actually covers THIS root: a len() or
+            # next(iter()) on it, a .get() on it, or an `if` that mentions it.
+            # A bare `if` / `.get()` elsewhere in the script must not defeat
+            # the check (that hid the exact `selected_objects[0]` IndexError
+            # class this check targets).
+            _guarded = (
+                re.search(r"len\(\s*" + _root, code)
+                or re.search(_root + r"\s*\.get\(", code)
+                or re.search(r"next\(iter\(\s*" + _root, code)
+                or re.search(r"if\b[^\n]*" + _root, code)
+            )
+            if not _guarded:
                 issues.append((
                     "unguarded_list_index",
                     "Indexing a Blender collection with a literal index can "

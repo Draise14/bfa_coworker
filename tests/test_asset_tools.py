@@ -1471,9 +1471,13 @@ class TestBridgeExecThreading(unittest.TestCase):
         idx = self.source.find("is_toolcode = ")
         self.assertGreater(idx, 0)
         # The inline branch executes in the *calling* thread — no
-        # threading.Thread spawn for the trusted-marker path.
-        segment = self.source[idx:idx + 400]
-        self.assertIn("if is_toolcode:", segment)
+        # threading.Thread spawn for the trusted-marker path.  bpy-touching
+        # LLM code is routed inline too (a worker thread would race Blender's
+        # global Python context counter and spam the "context internal state
+        # bug" message).
+        segment = self.source[idx:idx + 900]
+        self.assertIn("_code_uses_bpy", segment)
+        self.assertIn("if is_toolcode or _code_uses_bpy(code):", segment)
 
 
 

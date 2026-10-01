@@ -64,6 +64,30 @@ def _load_preflight():
 _preflight_check = _load_preflight()
 
 
+def _load_code_uses_bpy():
+    """Load _code_uses_bpy + its regex from mcp_to_blender_server.py."""
+    src_path = os.path.join(_ADDON_DIR, "bfa_coworker", "mcp_to_blender_server.py")
+    with open(src_path, "r", encoding="utf-8") as f:
+        source = f.read()
+    mod = types.ModuleType("_bpy_guard_test")
+    mod.__dict__["re"] = __import__("re")
+    const_start = source.find("\n_BPY_MODULE_REF_RE = ")
+    func_start = source.find("\ndef _code_uses_bpy(")
+    if const_start < 0 or func_start < 0:
+        raise ImportError("_code_uses_bpy not found in source")
+    func_end = len(source)
+    for marker in ["\ndef _", "\nclass ", "\n# ---"]:
+        idx = source.find(marker, func_start + 100)
+        if idx >= 0 and idx < func_end:
+            func_end = idx
+    # Slice covers the regex assignment + the function definition.
+    exec(source[const_start + 1:func_end], mod.__dict__)
+    return mod._code_uses_bpy
+
+
+_code_uses_bpy = _load_code_uses_bpy()
+
+
 def _load_autofix():
     """Load _autofix_code from autofix.py (standalone, no bpy)."""
     import importlib.util
@@ -847,6 +871,32 @@ class TestUnguardedIndexPreflight(unittest.TestCase):
     def test_data_collection_index_flagged(self):
         code = "import bpy\nmat = bpy.data.materials[0]\n"
         self.assertIn("unguarded_list_index", self._names(code))
+
+
+class TestCodeUsesBpy(unittest.TestCase):
+    """_code_uses_bpy gates main-thread (inline) execution.
+
+    Code that touches Blender's C API must NOT run on the MCP worker thread:
+    that races Blender's global Python context counter and spams the
+    "Python context internal state bug" message.  This predicate decides it.
+    """
+
+    def test_detects_bpy_api_use(self):
+        self.assertTrue(_code_uses_bpy("import bpy\nbpy.data.objects.new('x', None)"))
+
+    def test_detects_import_forms(self):
+        self.assertTrue(_code_uses_bpy("from bpy import data"))
+        self.assertTrue(_code_uses_bpy("import bmesh"))
+
+    def test_detects_other_c_backed_modules(self):
+        self.assertTrue(_code_uses_bpy("v = mathutils.Vector((1, 2, 3))"))
+
+    def test_pure_python_is_false(self):
+        self.assertFalse(_code_uses_bpy("total = sum(range(10))\nprint(total)"))
+
+    def test_no_partial_word_false_positive(self):
+        # 'bpy' embedded in a longer identifier must not match (word bounds).
+        self.assertFalse(_code_uses_bpy("label = 'unbpyable'"))
 
 
 if __name__ == "__main__":

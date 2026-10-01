@@ -2685,10 +2685,15 @@ def _draw_session_section(layout, context, props, state) -> None:
             # shown in the compact list (the full stamp is too long and
             # pushed the reason out of the row).
             ts_short = ts.split(" ", 1)[1] if " " in ts else ts
-            # Primary row: the radio selector + the reason, on its own line
-            # so it stays readable (no icon on the prop -- it stole width).
+            # Primary row: a radio button (not a bare index number) so it is
+            # obvious at a glance which checkpoint is the restore target.
             row = cp_box.row(align=True)
-            row.prop(props, "session_checkpoint_index", index=i, text="")
+            row.operator(
+                "bfacw.session_checkpoint_select",
+                text="",
+                icon='RADIOBUT_ON' if i == _sel else 'RADIOBUT_OFF',
+                emboss=False,
+            ).index = i
             row.label(text="#{:d}  {:s}".format(i, cp.get("reason", "?")))
             # Detail row: smaller, indented timestamp + message count.
             detail = cp_box.row()
@@ -2724,6 +2729,19 @@ class BFACW_OT_session_checkpoint_restore(Operator):  # type: ignore[misc]
             return {"CANCELLED"}
         _save_chat_history()
         self.report({"INFO"}, "Checkpoint restored (current session was saved as 'pre-restore')")
+        return {"FINISHED"}
+
+
+class BFACW_OT_session_checkpoint_select(Operator):  # type: ignore[misc]
+    """Choose a checkpoint as the restore target (radio button)"""
+    bl_idname = "bfacw.session_checkpoint_select"
+    bl_label = "Select Checkpoint"
+    bl_description = "Choose this checkpoint as the restore target"
+
+    index: IntProperty(default=0, min=0)  # type: ignore[valid-type]
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        context.window_manager.bfacw_chat_props.session_checkpoint_index = self.index  # type: ignore[attr-defined]
         return {"FINISHED"}
 
 
@@ -2797,6 +2815,7 @@ class BFACW_OT_session_compact_now(Operator):  # type: ignore[misc]
 
 _classes = (
     ChatHistoryProperties,
+    BFACW_OT_session_checkpoint_select,
     BFACW_OT_session_checkpoint_restore,
     BFACW_OT_session_memory_view_edit,
     BFACW_OT_session_compact_now,

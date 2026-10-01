@@ -387,6 +387,31 @@ def _imports_module(code: str, module: str) -> bool:
     return False
 
 
+# --- Main-thread execution guard -------------------------------------------
+# Blender's Python context counter (``py_call_level`` in bpy_interface.cc) is a
+# single global, and ``bpy_context_set`` / ``bpy_context_clear`` only balance on
+# the main thread.  Entering Blender's C API from a worker thread races that
+# counter and spams
+#
+#     ERROR: Python context internal state bug. this should not happen!
+#
+# to the console, while also exposing an empty context (``bpy.context.window``
+# is None there).  So any code that references these C-backed modules must run
+# inline on the calling (main) thread.
+_BPY_MODULE_REF_RE = re.compile(
+    r"\b(?:bpy|bmesh|mathutils|gpu|blf|aud|bpy_extras)\b")
+
+
+def _code_uses_bpy(code: str) -> bool:
+    """Return True when *code* references Blender's C-backed modules.
+
+    Such code must be executed on the main thread (see the module note above).
+    False positives are harmless -- they only skip the worker-thread hang
+    timeout and run inline instead.
+    """
+    return bool(_BPY_MODULE_REF_RE.search(code))
+
+
 def _preflight_check(code: str) -> list[tuple[str, str]]:
     """Validate *code* for common LLM-generated mistakes before execution.
 
@@ -888,16 +913,23 @@ def _execute_code(
             # browser) fail with "No active window" through the harness.
             is_toolcode = "# blmcp-toolcode-skip-preflight" in code
             _exec_error = [None]
-            if is_toolcode:
-                # Trusted repository-controlled code: no hang-timeout
-                # wrapper needed, and it must run on the main thread.
+            # LLM code that touches Blender must run on the calling (main)
+            # thread.  A worker thread races Blender's global Python context
+            # counter -- spamming "ERROR: Python context internal state bug.
+            # this should not happen!" -- and exposes an empty context.  Pure
+            # Python (no bpy) still uses a worker thread so an accidental
+            # infinite loop is caught by the timeout.
+            if is_toolcode or _code_uses_bpy(code):
+                # Trusted toolcode and any bpy-touching code run inline so
+                # bpy.context (window / screen / active object) is populated
+                # and Blender's context counter stays balanced.
                 try:
                     exec(code, namespace)
                 except Exception as _e:
                     _exec_error[0] = _e
             else:
-                # Run LLM-generated exec() in a thread with a timeout to
-                # prevent hangs.
+                # Run pure-Python exec() in a thread with a timeout to prevent
+                # hangs.  Safe because it never enters Blender's C API.
                 def _run_code():
                     try:
                         exec(code, namespace)

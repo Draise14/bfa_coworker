@@ -137,6 +137,13 @@ def _load_transport():
         pkg.llm_transport = module
         pkg.co_work_guard = _cw
         sys.modules["bfa_coworker"] = pkg
+    else:
+        # A later test class re-loads the transport: the package attribute
+        # MUST be updated too, or ``from . import llm_transport`` (used for
+        # bind/bind_helpers in setUp) and ``from .llm_transport import ...``
+        # (used by the turn loop's request calls) resolve to DIFFERENT
+        # module instances and the loop runs against an unbound transport.
+        sys.modules["bfa_coworker"].llm_transport = module
     # Pin the submodule entries too, so agent_controller's
     # ``from .llm_transport import ...`` / ``from . import llm_manager``
     # reuses the harness-loaded instances instead of importing fresh
@@ -321,7 +328,14 @@ class _FakeLLMHandler(BaseHTTPRequestHandler):
                 # this chat request fail with a chosen HTTP status/body and
                 # must NOT consume a scripted response index.  Specs match on
                 # the stream flag (True/False) or on any request (None).
+                # Optional "min_request" delays activation until the main
+                # chat request with that 0-based index (so an error can be
+                # scripted to hit request 2+ of a tool loop, leaving the
+                # scripted first response intact).
                 for _i, _s in enumerate(server.chat_error_specs):
+                    _min_req = _s.get("min_request")
+                    if _min_req is not None and server.chat_count < int(_min_req):
+                        continue
                     if _s.get("is_stream") is None or bool(
                             _s.get("is_stream")) == is_stream:
                         spec = server.chat_error_specs.pop(_i)
@@ -1155,9 +1169,10 @@ class TestBenchmarkErrorSurvival(_TurnLoopTestBase):
         cfg.thinking_budget_tokens = 0
         self.lm.set_config(cfg)
 
-    def _inject(self, is_stream, status, body):
+    def _inject(self, is_stream, status, body, min_request=None):
         self.server.chat_error_specs.append(
-            {"is_stream": is_stream, "status": status, "body": body})
+            {"is_stream": is_stream, "status": status, "body": body,
+             "min_request": min_request})
 
     def _main_requests(self):
         with self.server.lock:
@@ -1246,6 +1261,122 @@ class TestBenchmarkErrorSurvival(_TurnLoopTestBase):
         # Every turn produced an answer; the run completed.
         self.assertTrue(all(outcomes), "every benchmark turn must complete")
         self.assertEqual(self.state.error, "")
+
+
+class TestToolcall500MidToolLoop(TestBenchmarkErrorSurvival):
+    """The live failure from the second local benchmark (bouncing ball):
+
+    the model emitted one oversized ``execute_blender_code`` tool call and
+    llama-server answered HTTP 500 "Failed to parse tool call arguments as
+    JSON ... column 1525 ... missing closing quote" -- the arguments were
+    cut off mid-string.  These tests replay that exact body mid-tool-loop
+    through the REAL turn loop and prove the bounded recovery: one retry
+    with the split-into-smaller-calls nudge, then -- if the model keeps
+    failing -- the friendly actionable message with the history intact
+    (never a raw error, never a crash).
+    """
+
+    _TOOLCALL_500_BODY = json.dumps({
+        "error": {
+            "code": 500,
+            "message": (
+                "Failed to parse tool call arguments as JSON: "
+                "[json.exception.parse_error.101] parse error at line 1, "
+                "column 1525: syntax error while parsing value - invalid "
+                "string: missing closing quote; last read: '\"import bpy, "
+                "math, json\\n\\nscene = bpy.context.scene\\n...'")
+        }
+    })
+
+    def setUp(self):
+        super().setUp()
+        self._mk_server([_tool_call_msg("call_1", "print('step')"),
+                         {"content": "split into smaller calls"}])
+        # Arm the merged undo+snapshot pushes with a live stub-scene
+        # snapshot (same stub behaviour the tool-loop tests use).
+        self.server.snapshot_script = True
+
+    def _inject(self, is_stream, status, body, min_request=None):
+        self.server.chat_error_specs.append(
+            {"is_stream": is_stream, "status": status, "body": body,
+             "min_request": min_request})
+
+    def _main_requests(self):
+        with self.server.lock:
+            return [r for r in self.server.requests
+                    if r not in self.server.memory_writer_calls]
+
+    def _run_agent_turn(self, message):
+        texts = []
+        self._pin_fake_bpy()
+        try:
+            history = self.ac.run_conversation_turn(
+                message, on_text=texts.append, chat_mode="AGENT",
+                llm_url=None, model="fake-model", mcp_port=self.port)
+        finally:
+            self._unpin_fake_bpy()
+        return history, texts
+
+    def test_toolcall_500_recovers_via_nudge_mid_tool_loop(self):
+        """A toolcall 500 mid-loop: stream 500 -> fallback 500 -> one nudge
+        retry succeeds and the turn completes in the same live turn."""
+        # Request 1 (stream) is scripted: the oversized tool call.
+        # Requests 2 (stream) and 3 (non-stream fallback) get the exact 500.
+        # Request 4 (the transport's one-shot nudge retry, non-stream) hits
+        # script index 1: the model obeys and replies in prose.
+        self._inject(True, 500, self._TOOLCALL_500_BODY, min_request=1)
+        self._inject(False, 500, self._TOOLCALL_500_BODY, min_request=1)
+
+        history, texts = self._run_agent_turn("make the bouncing ball")
+
+        self.assertEqual(self.state.error, "",
+                         "the bounded recovery must clear the error")
+        self.assertIn("split into smaller calls", texts)
+
+        # The nudge actually fired: the retry request's system message
+        # carries the split-into-smaller-calls instruction.
+        main = self._main_requests()
+        self.assertGreaterEqual(len(main), 4)
+        _NUDGE_MARK = "Your previous tool call could not be parsed"
+        self.assertIn(_NUDGE_MARK, main[3]["messages"][0]["content"])
+        self.assertIn("well-formed JSON arguments", main[3]["messages"][0]["content"])
+        # The earlier requests did NOT carry the nudge (the marker is unique
+        # to it -- the static prompt's own "split the work" rule is not).
+        self.assertNotIn(_NUDGE_MARK, main[0]["messages"][0]["content"])
+
+        # The tool-call exchange from before the fault stays in history, so
+        # the user can simply continue the session.
+        roles = [m.get("role") for m in history]
+        self.assertIn("assistant", roles)
+        self.assertTrue(
+            any(m.get("role") == "assistant" and m.get("tool_calls")
+                for m in history),
+            "the tool exchange must survive for the next turn")
+
+    def test_toolcall_500_spent_budget_fails_friendly(self):
+        """With the nudge retry ALSO 500ing, the turn ends with the friendly
+        actionable message -- not a raw HTTP error, not an exception."""
+        self._inject(True, 500, self._TOOLCALL_500_BODY, min_request=1)   # stream attempt
+        self._inject(False, 500, self._TOOLCALL_500_BODY, min_request=1)  # fallback
+        self._inject(False, 500, self._TOOLCALL_500_BODY, min_request=1)  # nudge retry
+
+        history, texts = self._run_agent_turn("make the bouncing ball")
+
+        # Friendly, actionable failure (matches the live incident report).
+        self.assertIn("not valid JSON", self.state.error)
+        self.assertIn("smaller steps", self.state.error)
+        self.assertIn("Failed to parse tool call arguments as JSON",
+                      self.state.error_full)
+        # The only UI text is the pre-fault assistant content; the failed
+        # generation produced nothing.
+        self.assertEqual(texts, ["Working on it."])
+        # The turn loop returned the live history -- the session continues.
+        self.assertIs(history, self.state.conversation_history)
+        # Exactly four main POSTs: the scripted tool call, the stream 500,
+        # the non-stream fallback 500, and the one-shot nudge retry -- after
+        # which the transport surfaces the friendly message instead of
+        # burning the remaining retry budget on the same oversized payload.
+        self.assertEqual(len(self._main_requests()), 4)
 
 
 if __name__ == "__main__":

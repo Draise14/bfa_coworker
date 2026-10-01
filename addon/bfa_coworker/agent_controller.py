@@ -133,6 +133,12 @@ _MAX_TOOL_RESULT_CHARS = 2000
 # Ordinary results are unaffected.
 _MAX_STORED_TOOL_RESULT_CHARS = 20000
 
+# Bounded excerpt of a chain-of-thought entry in the exported session log.
+# Reasoning blocks can be thousands of characters (and local models often
+# emit them with whitespace glitches); the log needs a debug excerpt, not
+# the full transcript.
+_LOG_REASONING_CHARS = 600
+
 # Fixed token cost of an injected screenshot.  A vision encoder turns an
 # image into a roughly fixed number of tokens regardless of its base64 size,
 # so the raw data-URI length must NOT be counted as text.  Used by
@@ -290,9 +296,23 @@ def _get_system_prompt_with_rules() -> str:
                     custom_text = prefs.custom_skills_text or ""
             except Exception:
                 pass
+            # Budget the built-in skills to the context window so the most
+            # important guidance (the version-drift files that prevent hard
+            # API crashes) survives on a small window, instead of the whole
+            # block being dropped at send time.  ~40% of the window leaves
+            # room for the tool schema, the base instructions, and a turn.
+            _skills_budget = None
+            try:
+                from . import llm_manager as _llm_mgr  # pylint: disable=import-error
+                _ctx = getattr(_llm_mgr.get_config(), "local_ctx_size", 0) or 0
+                if _ctx > 0:
+                    _skills_budget = max(1024, int(_ctx * 0.4))
+            except Exception:  # pylint: disable=broad-exception-caught
+                _skills_budget = None
             skills_block = _skills_mod.get_always_loaded_skills(
                 bpy_version=bpy.app.version,
                 custom_text=custom_text,
+                max_tokens=_skills_budget,
             )
             # -- User skills (from SCRIPTS/bfa_coworker_skills/*.md) --
             user_skills_block = _skills_mod.get_user_skills()
@@ -4173,7 +4193,16 @@ def export_session_log(auto_saved: bool = False) -> None:
             elif r == "tool":
                 lines.append("Result: {:s}".format(str(c)[:1000]))
             elif r == "reasoning":
-                lines.append("Thinking: {:s}".format(str(c)))
+                # Chain-of-thought can be thousands of chars (and local models
+                # often emit it with whitespace glitches); the log only needs
+                # a bounded excerpt for debugging.
+                _r_text = str(c)
+                if len(_r_text) > _LOG_REASONING_CHARS:
+                    _r_text = (
+                        _r_text[:_LOG_REASONING_CHARS]
+                        + " ... [truncated, {:d} chars total]".format(len(str(c)))
+                    )
+                lines.append("Thinking: {:s}".format(_r_text))
         lines.append("")
 
     lines.append("")
@@ -4451,11 +4480,14 @@ def _maybe_compact_session(
     Retires turns beyond the verbatim window into ``session_memory.store``
     (archive + memory block) when the estimated prompt (history + tool
     schema) reaches :data:`COMPACTION_TRIGGER_RATIO` of the safe budget, or
-    when the history outgrows the verbatim window.  Visible status, automatic
+    when the history outgrows the verbatim window.    Visible status, automatic
     checkpoint after compaction (D5/D6).  Never raises.
+
+    The turn counter is read here but incremented once per user turn (in
+    ``_run_conversation_turn_inner``), not per tool-loop iteration -- this
+    function runs on every loop iteration, and counting there made the
+    memory block's "Last updated: turn N" stamp over-count (S3).
     """
-    global _session_turn_count
-    _session_turn_count += 1
     st = session_memory.store
     tools_tokens = _estimate_tools_tokens(tools)
     # Compare consistently: ``estimated`` (messages + tool schema) against the
@@ -4594,6 +4626,10 @@ def _run_conversation_turn_inner(
     Inner body of ``run_conversation_turn`` -- wrapped by the re-entrancy guard.
     """
     clear_stop()
+    # One count per user turn (not per tool-loop iteration) so the memory
+    # block's "Last updated: turn N" stamp reflects real user turns (S3).
+    global _session_turn_count
+    _session_turn_count += 1
     history = _agent_state.conversation_history
 
     # Drop any leading assistant messages that are NOT UI-only.  A
@@ -5718,8 +5754,9 @@ def _run_conversation_turn_inner(
                 history.append({
                     "role": "user",
                     "content": (
-                        "The tool results are above. "
-                        "Please provide a helpful response to the user based on these results."
+                        "[System: The tool results are above. "
+                        "Please provide a helpful response to the user based "
+                        "on these results.]"
                     ),
                 })
             continue

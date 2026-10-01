@@ -181,10 +181,31 @@ Note: on a 16K window the built-in skills will be dropped for most turns (they s
 not fit alongside the tool schema); a larger context window keeps them. A follow-up could
 budget the always-loaded skills to the window instead of dropping them whole.
 
+**Follow-up pass (2026-10-01, later)** -- the remaining memory-hygiene and proof gaps:
+
+- MED -- turn-scoped `[System: ...]` context messages (entity warnings, the tool-result
+  filler prompt) were fed to the memory writer and heuristic verbatim at compaction, so a
+  warning that was only true for its own turn ("You have already created these entities
+  this turn") became a false memory in the block -- the exact mangled-prompt session-log
+  confusion. They are now excluded from memory building, and the filler prompt carries the
+  same `[System: ...]` marker.
+- LOW (S3, previously deferred) -- the session turn counter incremented per tool-loop
+  iteration (in `_maybe_compact_session`); it now increments once per user turn in the turn
+  entry, so the memory "Last updated: turn N" stamp is accurate.
+- LOW -- the exported session log dumped every `[REASONING]` entry untruncated; entries are
+  now bounded to a 600-char excerpt with a truncation note.
+- PROOF -- the exact live HTTP 500 tool-call fault ("Failed to parse tool call arguments as
+  JSON ... column 1525 ... missing closing quote") is now replayed mid-tool-loop through
+  the real turn loop: one nudge retry recovers in the same turn, and a persistent fault
+  ends the turn with the friendly actionable message and the history intact.
+- TEST HARNESS -- fixed a latent integration-harness defect the new tests exposed: the
+  per-class transport reload updated `sys.modules` but not the package attribute, so
+  `bind()`/`bind_helpers()` landed on one module instance while the turn loop's request
+  functions came from another (any class after the first ran against an unbound
+  transport).
+
 **Deferred / by design**
 
-- LOW — the session turn counter still increments per tool-loop iteration, so the memory
-  "Last updated: turn N" stamp can over-count on multi-iteration AGENT turns. Cosmetic.
 - LOW — no automated cross-session (Blender-restart) checkpoint restore test; the JSON
   round-trip is unit-tested.
 - By design — `co_work_guard` locks only *created* datablocks (not merely *modified* ones);
@@ -211,7 +232,6 @@ include a live run. After compiling:
 ## 5. Follow-ups (nice to have)
 
 - A live-Blender cross-session checkpoint restore test (issue-#74 K2).
-- Per-user-turn (not per-iteration) turn counting for the memory stamp (S3).
 - A dedicated `check_namespace.py` cleanup pass (pre-existing `__all__` noise).
 - Co-work plan Phases 5 (user-edit detection) and 6 (scoped auto-undo) remain deferred —
   they mutate the destructive global-undo path and need a live Blender to verify.

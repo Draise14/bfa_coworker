@@ -29,6 +29,7 @@ __all__ = (
     "store",
     "build_memory_block",
     "heuristic_memory_block",
+    "is_system_note",
     "find_retire_boundary",
     "compact_history",
     "memory_writer_prompt",
@@ -77,6 +78,29 @@ MAX_ARCHIVE_MESSAGES = 5000
 # Memory block
 
 
+# Prefix of the addon's own injected context messages (entity warnings,
+# spiral corrections, tool-result fillers).  They are turn-scoped: "already
+# created this turn" is only true for the turn that produced them.  Retired
+# into a memory block they become false memories that confuse the model in
+# a later turn or thread, so they are excluded from memory building.
+_SYSTEM_NOTE_PREFIX = "[System:"
+
+
+def is_system_note(message: dict[str, Any]) -> bool:
+    """True for the addon's injected ``[System: ...]`` context messages.
+
+    These are stored with the ``user`` role so they reach the model, but
+    they are system-authored, turn-scoped context -- not user intent.
+    """
+    if message.get("role") != "user":
+        return False
+    content = message.get("content")
+    if isinstance(content, list):
+        content = " ".join(
+            str(b.get("text", "")) for b in content if isinstance(b, dict))
+    return str(content or "").lstrip().startswith(_SYSTEM_NOTE_PREFIX)
+
+
 def heuristic_memory_block(retired_turns: list[dict[str, Any]]) -> str:
     """Build a memory block from *retired_turns* without an LLM.
 
@@ -92,7 +116,7 @@ def heuristic_memory_block(retired_turns: list[dict[str, Any]]) -> str:
 
     for m in retired_turns:
         role = m.get("role")
-        if m.get("ui_only"):
+        if m.get("ui_only") or is_system_note(m):
             continue
         text = m.get("content")
         if isinstance(text, list):
@@ -228,13 +252,16 @@ def compact_history(
     summary: str | None = None
     if memory_writer is not None and retired:
         def _msg_text(m: dict[str, Any]) -> str:
+            if is_system_note(m):
+                return ""
             content = m.get("content")
             if isinstance(content, list):
                 content = " ".join(
                     str(b.get("text", "")) for b in content if isinstance(b, dict))
             return "{:s}: {:s}".format(m.get("role", "?"), str(content or ""))
 
-        retired_text = "\n".join(_msg_text(m) for m in retired)
+        retired_text = "\n".join(
+            t for t in (_msg_text(m) for m in retired) if t)
         try:
             summary = memory_writer(retired_text, prior_memory)
         except Exception:  # pylint: disable=broad-exception-caught

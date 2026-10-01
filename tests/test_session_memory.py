@@ -133,6 +133,59 @@ class TestBuildMemoryBlock(unittest.TestCase):
         block = _sm.build_memory_block(turns, prior_memory="old note")
         self.assertIn("old note", block)
 
+    def test_turn_scoped_system_notes_never_enter_memory(self):
+        """Injected ``[System: ...]`` context messages are turn-scoped.
+
+        "You have already created these entities in this turn" was written
+        for the turn that produced it.  Carried into the memory block it
+        becomes a false memory that confuses the model in a later turn or a
+        NEW THREAD (the mangled-prompt session log showed the model
+        reasoning in circles about exactly such a stale warning).
+        """
+        turns = [
+            {"role": "user", "content": "Build a ground slab named Ground"},
+            {"role": "assistant", "content": "created the Ground slab"},
+            {"role": "user", "content":
+             "[System: WARNING -- You already created these entities this "
+             "turn: objects: Ground; meshes: Ground. Do not recreate them.]"},
+            {"role": "user", "content":
+             "[System: The tool results are above. Please provide a helpful "
+             "response to the user based on these results.]"},
+        ]
+        block = _sm.build_memory_block(turns)
+        self.assertIn("Goal: Build a ground slab", block,
+                      "the real user goal must still be extracted")
+        self.assertNotIn("already created", block)
+        self.assertNotIn("this turn", block,
+                         "a turn-scoped warning must not survive retirement")
+        self.assertNotIn("tool results are above", block)
+
+    def test_system_notes_excluded_from_writer_text(self):
+        """The LLM memory writer must not receive ``[System: ...]`` messages
+        as conversation content either -- it would fold the same false
+        turn-scoped claims into the note it writes."""
+        captured: dict[str, str] = {}
+
+        def _writer(retired_text: str, prior_memory: str):
+            captured["text"] = retired_text
+            return "Goal: X"
+
+        history = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "old request"},
+            {"role": "assistant", "content": "old answer"},
+            {"role": "user", "content":
+             "[System: WARNING -- You already created these entities this "
+             "turn: objects: Ground]"},
+            # Pad past the verbatim window so there is something to retire.
+            * [{"role": "user", "content": "filler {:d}".format(i)}
+               for i in range(_sm.MAX_WINDOW_TURNS + 3)],
+        ]
+        _sm.compact_history(history, memory_writer=_writer)
+        self.assertIn("old request", captured["text"])
+        self.assertNotIn("already created", captured["text"])
+        self.assertNotIn("[System:", captured["text"])
+
 
 class TestCompactHistory(unittest.TestCase):
 

@@ -2600,12 +2600,21 @@ def _draw_session_section(layout, context, props, state) -> None:
             props.session_checkpoint_index = len(checkpoints) - 1
         for i in range(len(checkpoints) - 1, -1, -1):
             cp = checkpoints[i]
+            ts = cp.get("timestamp", "?")
+            # The timestamp is a full date+time; only the time-of-day is
+            # shown in the compact list (the full stamp is too long and
+            # pushed the reason out of the row).
+            ts_short = ts.split(" ", 1)[1] if " " in ts else ts
+            # Primary row: the radio selector + the reason, on its own line
+            # so it stays readable (no icon on the prop -- it stole width).
             row = cp_box.row(align=True)
-            row.prop(props, "session_checkpoint_index", index=i, text="", icon='OPEN_RECENT')
-            label = "#{:d} {:s} ({:s}, {:d} msgs)".format(
-                i, cp.get("reason", "?"), cp.get("timestamp", "?"),
-                cp.get("message_count", 0))
-            row.label(text=label)
+            row.prop(props, "session_checkpoint_index", index=i, text="")
+            row.label(text="#{:d}  {:s}".format(i, cp.get("reason", "?")))
+            # Detail row: smaller, indented timestamp + message count.
+            detail = cp_box.row()
+            detail.scale_y = 0.8
+            detail.label(text="       {:s}, {:d} messages".format(
+                ts_short, cp.get("message_count", 0)))
         row = cp_box.row(align=True)
         row.operator("bfacw.session_checkpoint_restore", icon='LOOP_BACK', text="Restore")
 

@@ -659,5 +659,38 @@ class TestCurrentPresetExtraArgs(unittest.TestCase):
         self.assertEqual(self.llm_manager._current_preset_extra_args(), ())
 
 
+class TestFilterFlagsAgainstHelp(unittest.TestCase):
+    """Flags the binary does not advertise must be dropped (not kill startup)."""
+
+    def setUp(self) -> None:
+        self.llm_manager = load_llm_manager_module()
+
+    def test_drops_unknown_flag_and_its_value(self):
+        args = [
+            "llama-server", "--jinja", "--flash-attn",
+            "--no-context-shift", "--port", "8081", "--model", "m.gguf",
+        ]
+        supported = {"--jinja", "--flash-attn", "--port", "--model"}
+        out, dropped = self.llm_manager._filter_flags_against_help(args, supported)
+        self.assertEqual(
+            out,
+            ["llama-server", "--jinja", "--flash-attn", "--port", "8081",
+             "--model", "m.gguf"],
+        )
+        self.assertEqual(dropped, ["--no-context-shift"])
+
+    def test_keeps_exe_and_supported_flags(self):
+        args = ["exe", "--port", "8081"]
+        out, dropped = self.llm_manager._filter_flags_against_help(
+            args, {"--port"})
+        self.assertEqual(out, args)
+        self.assertEqual(dropped, [])
+
+    def test_empty_args_is_safe(self):
+        out, dropped = self.llm_manager._filter_flags_against_help([], set())
+        self.assertEqual(out, [])
+        self.assertEqual(dropped, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -265,6 +265,73 @@ def _current_preset_extra_args() -> tuple[str, ...]:
     return ()
 
 
+# Cache of the --flags a given llama-server binary advertises in --help.
+# A stricter or mismatched build prints "unknown argument" and exits 1 on any
+# flag it does not accept, and version numbers drift, so the binary's own
+# --help is the only reliable source of truth.
+_server_supported_flags_cache: dict[str, "set[str] | None"] = {}
+
+
+def _server_supported_flags(server_exe: str) -> "set[str] | None":
+    """Return the set of ``--flags`` *server_exe* lists in ``--help``.
+
+    Cached per executable path.  Returns ``None`` when the probe fails (in
+    which case callers must NOT filter — better to pass a flag the build
+    might ignore than to strip a needed one).
+    """
+    if server_exe in _server_supported_flags_cache:
+        return _server_supported_flags_cache[server_exe]
+    result: "set[str] | None" = None
+    try:
+        out = subprocess.run(
+            [server_exe, "--help"],
+            capture_output=True, text=True, timeout=15,
+        )
+        text = (out.stdout or "") + "\n" + (out.stderr or "")
+        flags = set(re.findall(r"(?<![\w-])(--[A-Za-z0-9][A-Za-z0-9-]*)", text))
+        result = flags or None
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] _server_supported_flags: probe failed — {:s}".format(str(ex)))
+        result = None
+    _server_supported_flags_cache[server_exe] = result
+    return result
+
+
+def _server_supports_flag(server_exe: str, flag: str) -> bool:
+    """True when the binary's --help lists *flag* (conservative on failure)."""
+    flags = _server_supported_flags(server_exe)
+    return flags is not None and flag in flags
+
+
+def _filter_flags_against_help(
+    args: list[str], supported: "set[str]",
+) -> tuple[list[str], list[str]]:
+    """Drop ``--flags`` not in *supported* (and their values).
+
+    *args[0]* is the executable and is always kept.  Any ``--flag`` in
+    *supported* is kept with the value token that follows it; an unsupported
+    flag and its value are removed.  Returns ``(new_args, dropped)``.
+    """
+    out: list[str] = [args[0]] if args else []
+    dropped: list[str] = []
+    i = 1
+    n = len(args)
+    while i < n:
+        tok = args[i]
+        if tok.startswith("--"):
+            name = tok.split("=", 1)[0]
+            if name in supported:
+                out.append(tok)
+            else:
+                dropped.append(name)
+                if i + 1 < n and not args[i + 1].startswith("--"):
+                    i += 1  # also drop this flag's value
+        else:
+            out.append(tok)
+        i += 1
+    return out, dropped
+
+
 _llama_server_version_cache: str = ""
 
 
@@ -2722,9 +2789,25 @@ class _ConsoleProcess:
     _STILL_ACTIVE = 259  # STILL_ACTIVE (winnt.h)
 
     def __init__(self, handle: int, pid: int) -> None:
+        from ctypes import wintypes
         self._handle = handle
         self.pid = pid
         self._returncode: int | None = None
+        # Declare the Win32 prototypes explicitly.  Without them ctypes assumes
+        # 32-bit ``int`` for the HANDLE and can truncate the 64-bit process
+        # handle, so GetExitCodeProcess may read the wrong process (spurious
+        # "exited") and TerminateProcess may act on the wrong handle.
+        k32 = ctypes.windll.kernel32
+        k32.GetExitCodeProcess.restype = wintypes.BOOL
+        k32.GetExitCodeProcess.argtypes = [
+            wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        k32.WaitForSingleObject.restype = wintypes.DWORD
+        k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        k32.TerminateProcess.restype = wintypes.BOOL
+        k32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        k32.CloseHandle.restype = wintypes.BOOL
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        self._k32 = k32
 
     @property
     def returncode(self) -> int | None:
@@ -2732,20 +2815,19 @@ class _ConsoleProcess:
 
     def poll(self) -> int | None:
         if self._returncode is None:
-            code = ctypes.c_ulong()
-            if ctypes.windll.kernel32.GetExitCodeProcess(
-                self._handle, ctypes.byref(code)
-            ) and code.value != _ConsoleProcess._STILL_ACTIVE:
+            from ctypes import wintypes
+            code = wintypes.DWORD()
+            if self._k32.GetExitCodeProcess(self._handle, ctypes.byref(code)) \
+                    and code.value != _ConsoleProcess._STILL_ACTIVE:
                 self._returncode = int(code.value)
         return self._returncode
 
     def wait(self, timeout: float | None = None) -> int:
         if self._returncode is not None:
             return self._returncode
-        kernel32 = ctypes.windll.kernel32
         if timeout is None:
-            kernel32.WaitForSingleObject(self._handle, 0xFFFFFFFF)
-        elif kernel32.WaitForSingleObject(
+            self._k32.WaitForSingleObject(self._handle, 0xFFFFFFFF)
+        elif self._k32.WaitForSingleObject(
             self._handle, int(timeout * 1000)
         ) == 0x00000102:  # WAIT_TIMEOUT
             raise subprocess.TimeoutExpired(self.pid, timeout)
@@ -2753,14 +2835,14 @@ class _ConsoleProcess:
         return self._returncode if self._returncode is not None else 0
 
     def terminate(self) -> None:
-        ctypes.windll.kernel32.TerminateProcess(self._handle, 1)
+        self._k32.TerminateProcess(self._handle, 1)
 
     kill = terminate
 
     def __del__(self) -> None:
         try:
             if self._handle:
-                ctypes.windll.kernel32.CloseHandle(self._handle)
+                self._k32.CloseHandle(self._handle)
                 self._handle = None
         except Exception:  # pylint: disable=broad-exception-caught
             pass
@@ -3072,12 +3154,55 @@ def start_local_llama(
         if use_hf:
             args.extend(['--hf-repo', hf_repo, '--hf-file', hf_file])
         else:
+            # Guard: launching with a missing/empty model file makes llama-server
+            # exit 1 immediately ("failed to load model"), and on Windows that
+            # error is not captured.  Fail early with an actionable message.
+            if not model_path or not os.path.isfile(str(model_path)):
+                _set_error(
+                    "Model file not found: {:s}. Download a model in Preferences "
+                    "(or point at an existing .gguf) before starting the agent.".format(
+                        str(model_path) if model_path else "(none selected)"))
+                return None
             args.extend(['--model', str(model_path)])
             # Add --mmproj if a projector file exists next to the model.
             mmproj_path = _resolve_mmproj_path(model_path)
             if mmproj_path:
                 args.extend(['--mmproj', str(mmproj_path)])
                 print("[🛠️Coworker] start_local_llama: using mmproj at {:s}".format(str(mmproj_path)))
+
+        # ── Fresh, captureable server log ──────────────────────────────
+        # Remove any previous log so the tail we read on failure reflects
+        # THIS launch.  On Windows the launcher uses a brand-new console and
+        # writes no log at all, so a stale file from a previous POSIX run was
+        # being shown next to a real "exit code 1" — deeply misleading.
+        try:
+            _logp = _llama_server_log_path()
+            if _logp.is_file():
+                _logp.unlink()
+        except OSError:
+            pass
+        # Ask the server to write its own log to that path when the build
+        # supports it, so a Windows (new-console) failure is still visible in
+        # the error tail.  Validated by the help-filter below.
+        if _server_supports_flag(server_exe, "--log-file"):
+            args.extend(['--log-file', str(_llama_server_log_path())])
+            print("[🛠️Coworker] start_local_llama:   capturing server log to {:s}".format(
+                str(_llama_server_log_path())))
+        else:
+            print("[🛠️Coworker] start_local_llama:   this build has no --log-file; "
+                  "server output goes to its console window only")
+
+        # ── Drop flags this binary does not accept ─────────────────────
+        # A build that rejects a flag prints "unknown argument" and exits 1
+        # before logging anything.  Verify against the binary's own --help so
+        # an unsupported optional flag is dropped instead of killing startup
+        # (e.g. --no-context-shift / --flash-attn on an older or CPU build).
+        _supported = _server_supported_flags(server_exe)
+        if _supported is not None:
+            args, _dropped = _filter_flags_against_help(args, _supported)
+            if _dropped:
+                print("[⚠️Coworker] start_local_llama: dropping flags unsupported by this "
+                      "build: {:s}".format(", ".join(sorted(set(_dropped)))))
 
         # Redirect HF cache into models dir so all downloads are
         # consolidated in the user's configured models directory.
@@ -3287,11 +3412,18 @@ def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = No
             print("[🛠️Coworker] wait_until_ready: server is ready")
             return True
         if proc is not None and proc.poll() is not None:
-            # The process we launched is gone.  That is NOT necessarily a
-            # startup failure: a server may already be answering on the port
-            # (another instance was launched, or this process was replaced/
-            # stopped).  Only report a failure when nothing is serving.
-            if health_check():
+            # The launched process reports as exited.  That is NOT necessarily
+            # a startup failure: a server may already be answering on the port,
+            # or a very fast handle read can be wrong.  Give a short grace
+            # during which a still-starting server can answer.
+            _grace_deadline = _time.monotonic() + 3.0
+            _serving = False
+            while _time.monotonic() < _grace_deadline:
+                if health_check():
+                    _serving = True
+                    break
+                _time.sleep(0.5)
+            if _serving:
                 print("[🛠️Coworker] wait_until_ready: launched process exited but a "
                       "server is answering on the port — treating as ready")
                 return True
@@ -3302,6 +3434,15 @@ def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = No
                    "{:d} — check the model file, mmproj, GPU memory, and whether "
                    "another process is using the port").format(
                        proc.returncode, _describe_exit_code(proc.returncode), _port)
+            if not tail:
+                # No log was captured (the build has no --log-file, or it died
+                # before writing one).  Say so instead of showing a stale file,
+                # and point at the console window where its output went.
+                msg += ("\n\nNo server log was captured — llama-server printed no "
+                        "output before exiting (this build has no --log-file, so its "
+                        "output went to its own console window). A very early exit "
+                        "is most often an unsupported launch flag or a missing/"
+                        "unreadable model file.")
             # DLL_NOT_FOUND on Windows — the CUDA/Vulkan runtime DLLs are
             # missing from the bundled directory.
             if sys.platform == "win32" and (proc.returncode & 0xFFFFFFFF) == 0xC0000135:

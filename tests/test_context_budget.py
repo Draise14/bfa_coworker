@@ -403,31 +403,31 @@ class TestSkillInjectionBudget(unittest.TestCase):
                          "domain skills must not be appended to STORED history")
         self.assertNotIn("history[0][\"content\"] += _domain_skills_text", _src)
 
-    def test_skills_cap_constant_is_bounded(self):
-        import re
-        m = re.search(r"_SKILLS_MAX_TOKENS\s*=\s*(\d+)", _src)
-        self.assertIsNotNone(m, "_SKILLS_MAX_TOKENS must be defined")
-        self.assertLessEqual(int(m.group(1)), 4096,
-                             "skills ceiling must stay small relative to a local window")
-
-    def test_skills_budget_is_context_scaled(self):
-        # The allowance scales with the window (ratio + floor + ceiling).
-        self.assertIn("_SKILLS_BUDGET_RATIO", _src)
-        self.assertIn("_SKILLS_MIN_TOKENS", _src)
+    def test_skills_allowance_is_spare_minus_reserve(self):
+        # The allowance is self-tuning: whatever is spare after the messages
+        # and tool schema, minus a conversation reserve.  No fraction-of-context
+        # ratio or fixed ceiling to tune.
+        self.assertIn("_SKILLS_RESERVE_RATIO", _src)
+        self.assertIn("_SKILLS_RESERVE_TOKENS", _src)
+        self.assertIn("_spare", _src)
+        self.assertIn("_allow_tokens", _src)
+        # The old magic ratio/ceiling must be gone.
+        self.assertNotIn("_SKILLS_BUDGET_RATIO", _src)
+        self.assertNotIn("_SKILLS_MAX_TOKENS", _src)
 
     def test_skill_files_are_never_truncated(self):
         # Regression: a fixed character slice cut a rule in half.  The
-        # injection must include whole files only.
+        # injection must pass a whole-file budget to get_domain_skills.
         self.assertNotIn("[:_max_skill_chars]", _src,
                          "skill text must never be truncated mid-file")
-        self.assertIn("max_chars=_max_skill_chars", _src)
+        self.assertIn("_allow_tokens * _CHARS_PER_TOKEN", _src)
 
     def test_skills_injected_at_send_time(self):
         # The send-time injection must reference the skills text and the
         # preflight budget (i.e. it is budget-aware), and the degradation path
         # must exist.
         self.assertIn("_domain_skills_text", _src)
-        self.assertIn("skipping domain skills", _src)
+        self.assertIn("_domain_skill_domains", _src)
         self.assertIn("dropped domain skills", _src)
 
 

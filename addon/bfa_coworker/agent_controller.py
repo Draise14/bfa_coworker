@@ -126,6 +126,13 @@ _TEMPLATE_OVERHEAD_TOKENS = 512
 # ballooning past a small local model's context window.
 _MAX_TOOL_RESULT_CHARS = 2000
 
+# Absolute cap on a tool result STORED in history.  The chat panel renders
+# from ``conversation_history``, so the stored copy is far larger than the
+# send-time cap above -- but a pathological traceback (e.g. a deep
+# RecursionError) would otherwise grow the in-memory session without limit.
+# Ordinary results are unaffected.
+_MAX_STORED_TOOL_RESULT_CHARS = 20000
+
 # Fixed token cost of an injected screenshot.  A vision encoder turns an
 # image into a roughly fixed number of tokens regardless of its base64 size,
 # so the raw data-URI length must NOT be counted as text.  Used by
@@ -150,15 +157,21 @@ _FORCE_COMPACT_KEEP_RECENT = 8
 # up the rest if it hits the limit.
 _MIN_REPLY_TOKENS = 256
 
-# Budget for the domain-skill reference injected into the system prompt.
-# The skill files are large (up to ~1.7k tokens each) and several can be
-# pulled in at once.  The allowance scales with the context window so a big
-# window keeps more of the model's domain knowledge, while a small window
-# still leaves room for the conversation.  Only WHOLE skill files are ever
-# included — a truncated rule is worse than an omitted one.
-_SKILLS_BUDGET_RATIO = 0.08    # share of the context window for skills
-_SKILLS_MIN_TOKENS = 600       # floor (small windows still get some skills)
-_SKILLS_MAX_TOKENS = 2000      # ceiling (avoid extremes on huge windows)
+# Conversation reserve for the domain-skill allowance.  The skill reference
+# is injected only into whatever space is genuinely SPARE after the messages,
+# the tool schema, and this reserve (room for the turn's own tool exchanges and
+# follow-ups), so the allowance tunes itself to the window and the conversation
+# — there is no fraction-of-context or ceiling for the user to tune.  A larger
+# window, or a shorter conversation, automatically keeps more skills.
+_SKILLS_RESERVE_RATIO = 0.30   # reserve this share of the prompt budget
+_SKILLS_RESERVE_TOKENS = 1024  # ...but at least this many
+
+# Remote modes keep ``prompt_budget = 0`` (no client-side window), so the
+# spare-minus-reserve formula has no input.  Use a conservative flat cap for
+# the remote domain-skill allowance (whole files only).  Remote models
+# generally predate the Blender 5.2/5.3 API changes, so the version-drift
+# skills are especially valuable there.
+_SKILLS_REMOTE_MAX_TOKENS = 2000
 
 
 def _use_compact_prompt() -> bool:
@@ -904,9 +917,16 @@ _SURFACE_TOOLS = frozenset({
     "list_blender_templates",  # Discover available templates
     # ── Scene inspection ─────────────────────────────────────────────
     "get_blendfile_summary_datablocks",
+    "get_blendfile_summary_missing_files",
+    "get_blendfile_summary_of_linked_libraries",
+    "get_blendfile_summary_path_info",
+    "get_blendfile_summary_usage_guess",
     "get_object_detail_summary",
     "get_objects_summary",
     "get_operation_history",      # Avoid repeating failed operations.
+    # Read-only asset/polyhaven status — useful for any domain, was previously
+    # unreachable because it appeared in no surface/domain set.
+    "get_polyhaven_status",
     # ── Visual feedback (always useful for any domain) ────────────────
     "get_screenshot_of_window_as_image",
     "get_screenshot_of_window_as_json",
@@ -1053,17 +1073,20 @@ _LOAD_TOOLS_SCHEMA: dict[str, Any] = {
 }
 
 
-def _detect_domain(prompt: str) -> str | None:
-    """Heuristic: detect the Blender domain from a user prompt.
+def _detect_domains(prompt: str) -> set[str]:
+    """Heuristic: detect ALL Blender domains referenced by a user prompt.
 
-    Returns a domain key from ``_TOOL_DOMAINS``, or ``None`` if no
-    domain is detected (surface tools only).
+    Returns every domain key from ``_TOOL_DOMAINS`` whose keywords appear in
+    the prompt (not just the first match), so a multi-domain request such as
+    "animate this material" loads both the animation and material tools and
+    skill references.
     """
     prompt_lower = prompt.lower()
+    found: set[str] = set()
     for domain, keywords in _DOMAIN_KEYWORDS.items():
         if any(kw in prompt_lower for kw in keywords):
-            return domain
-    return None
+            found.add(domain)
+    return found
 
 
 def _detect_domain_from_scene() -> set[str]:
@@ -1123,7 +1146,10 @@ def _detect_domain_from_scene() -> set[str]:
         # Asset Browser: any configured asset libraries.
         if hasattr(_bpy.context, "preferences") and hasattr(_bpy.context.preferences, "filepaths"):
             if _bpy.context.preferences.filepaths.asset_libraries:
-                domains.add("asset_browser")
+                # Must match the domain key used by _TOOL_DOMAINS / the skill
+                # map ("assets"), not a separate "asset_browser" key, or the
+                # detected domain is silently ignored.
+                domains.add("assets")
 
     except Exception:
         pass  # Best-effort; not running inside Blender.
@@ -1135,7 +1161,7 @@ def _build_tool_set(
     all_openai_tools: list[dict[str, Any]],
     domains: set[str] | None,
 ) -> list[dict[str, Any]]:
-    """Build the tool set for local mode: surface + domains + load_tools.
+    """Build the tool set for local AND remote mode: surface + domains + load_tools.
 
     *all_openai_tools* — the full list of all available tools in OpenAI format.
     *domains* — set of pre-detected domains, or ``None`` for surface only.
@@ -1152,8 +1178,12 @@ def _build_tool_set(
     ]
     # Always include the load_tools meta-tool.
     filtered.append(_LOAD_TOOLS_SCHEMA)
+    # Sort by name: a stable, deterministic tool order keeps the provider's
+    # prompt-cache prefix valid across turns (only the tool SET changes, never
+    # their order).
+    filtered.sort(key=lambda t: t.get("function", {}).get("name", ""))
 
-    print("[🛠️Coworker] _build_tool_set: {:d} → {:d} tools (domains={:s})".format(
+    print("[🛠️Coworker] _build_tool_set: {:d} -> {:d} tools (domains={:s})".format(
         len(all_openai_tools), len(filtered), ",".join(sorted(domains)) if domains else "none"))
     return filtered
 
@@ -4266,21 +4296,28 @@ def _release_scene_lock() -> None:
 
     Runs on the turn's worker thread (safe for ``_call_mcp_tool_sync``);
     never runs on the main thread because the MCP pump would deadlock.
-    Best-effort: never raises.
+    Best-effort: never raises.  On failure the priors are KEPT (not cleared)
+    so a later turn's release can still restore them — clearing here would
+    discard the restore data while the scene keeps ``hide_select = True``
+    (which, if the user saves the .blend, persists the lock).
     """
+    global _active_lock_mcp_port
     if not co_work_guard.is_locked():
         return
+    if not _active_lock_mcp_port:
+        print("[🛠️Coworker] _release_scene_lock: no MCP port — deferring unlock")
+        return
     try:
-        if _active_lock_mcp_port:
-            _call_mcp_tool_sync(
-                "execute_blender_code",
-                {"code": co_work_guard.build_unlock_code()},
-                _active_lock_mcp_port)
-            print("[🛠️Coworker] _release_scene_lock: released co-work scene lock")
-    except Exception as _ex:  # pylint: disable=broad-exception-caught
-        print("[🛠️Coworker] _release_scene_lock: unlock skipped — {:s}".format(str(_ex)))
-    finally:
+        _call_mcp_tool_sync(
+            "execute_blender_code",
+            {"code": co_work_guard.build_unlock_code()},
+            _active_lock_mcp_port)
+        print("[🛠️Coworker] _release_scene_lock: released co-work scene lock")
         co_work_guard.clear()
+        _active_lock_mcp_port = 0
+    except Exception as _ex:  # pylint: disable=broad-exception-caught
+        print("[🛠️Coworker] _release_scene_lock: unlock failed, keeping priors "
+              "for a later retry — {:s}".format(str(_ex)))
 
 
 def run_conversation_turn(
@@ -4336,6 +4373,19 @@ def run_conversation_turn(
 
 # Turn counter for memory-block "Last updated" stamps (Tier 3).
 _session_turn_count = 0
+
+# Domains loaded for the current session.  Session-sticky: it only grows and
+# is never trimmed mid-session, so the tool schema sent to a remote provider
+# changes rarely (keeping the prompt-cache prefix stable) and a domain the
+# user moved on from stays available if the conversation circles back.
+# Reset on New Thread.
+_session_loaded_domains: set[str] = set()
+
+
+def reset_session_domains() -> None:
+    """Forget the session-sticky loaded domains (called by New Thread)."""
+    global _session_loaded_domains
+    _session_loaded_domains = set()
 
 
 def _memory_writer_factory(llm_url: str, api_key: str, model: str, max_tokens: int):
@@ -4414,29 +4464,39 @@ def _maybe_compact_session(
         on_status("Compacting conversation…")
     print("[🛠️Coworker] _maybe_compact_session: estimated {:d} / budget {:d} tokens "
           "— compacting".format(estimated, prompt_budget))
+    # Automatic checkpoint of the PRE-compaction state so restore can rewind
+    # before the summary.  Taken before history/memory are mutated.
+    with session_memory.store_lock:
+        st.snapshot(history, reason="compaction", turn_index=_session_turn_count)
     kept, memory_block, retired = session_memory.compact_history(
         history,
         prior_memory=st.memory_block,
         memory_writer=memory_writer,
         updated_turn=_session_turn_count,
     )
-    st.memory_block = memory_block
-    st.memory_updated_turn = _session_turn_count
-    st.append_archive(retired)
-    history[:] = kept
+    with session_memory.store_lock:
+        st.memory_block = memory_block
+        st.memory_updated_turn = _session_turn_count
+        st.append_archive(retired)
+        history[:] = kept
     # Reasoning entries exist for the chat panel while a turn is young, but
     # once they fall outside the verbatim window they are dead weight: they
     # are stripped before every LLM request anyway. Prune them from STORAGE
     # (not just at send time) so archived sessions and later compactions do
     # not carry stale chain-of-thought. The most recent window is preserved
     # verbatim for the panel.
+    #
+    # ``find_retire_boundary`` returns the index where the RECENT verbatim
+    # window begins, or ``len(history)`` when the whole history IS the recent
+    # window (nothing retirable).  Only prune reasoning from the OLD region
+    # ``[:boundary]`` and ONLY when a boundary actually exists — otherwise the
+    # recent window (which is what the Workshop shows) must stay verbatim.
     _reasoning_boundary = session_memory.find_retire_boundary(history)
-    history[:] = (
-        history[:_reasoning_boundary]
-        + [m for m in history[_reasoning_boundary:] if m.get("role") != "reasoning"]
-    )
-    # Automatic checkpoint of the compacted state (D6).
-    st.snapshot(history, reason="compaction", turn_index=_session_turn_count)
+    if _reasoning_boundary < len(history):
+        history[:] = (
+            [m for m in history[:_reasoning_boundary] if m.get("role") != "reasoning"]
+            + history[_reasoning_boundary:]
+        )
     print("[🛠️Coworker] _maybe_compact_session: retired {:d} messages, "
           "archived, checkpoint saved".format(len(retired)))
 
@@ -4465,6 +4525,11 @@ def _force_compact_session(
     st = session_memory.store
     if on_status:
         on_status("Compacting conversation…")
+    # Snapshot the PRE-compaction state (only when something will retire).
+    _pre_boundary = session_memory.find_retire_boundary(history, _FORCE_COMPACT_KEEP_RECENT)
+    if _pre_boundary < len(history):
+        with session_memory.store_lock:
+            st.snapshot(history, reason="overflow", turn_index=_session_turn_count)
     kept, memory_block, retired = session_memory.compact_history(
         history,
         prior_memory=st.memory_block,
@@ -4472,20 +4537,21 @@ def _force_compact_session(
         keep_recent=_FORCE_COMPACT_KEEP_RECENT,
         updated_turn=_session_turn_count,
     )
-    st.memory_block = memory_block
-    st.memory_updated_turn = _session_turn_count
-    st.append_archive(retired)
-    history[:] = kept
+    with session_memory.store_lock:
+        st.memory_block = memory_block
+        st.memory_updated_turn = _session_turn_count
+        st.append_archive(retired)
+        history[:] = kept
     # Same reasoning-entry prune as the threshold path: once outside the
     # verbatim window they are UI-only dead weight that is stripped before
-    # every request anyway.
+    # every request anyway.  Prune the OLD region only and only when a
+    # boundary exists (see the note in ``_maybe_compact_session``).
     _boundary = session_memory.find_retire_boundary(history)
-    history[:] = (
-        history[:_boundary]
-        + [m for m in history[_boundary:] if m.get("role") != "reasoning"]
-    )
-    if retired:
-        st.snapshot(history, reason="overflow", turn_index=_session_turn_count)
+    if _boundary < len(history):
+        history[:] = (
+            [m for m in history[:_boundary] if m.get("role") != "reasoning"]
+            + history[_boundary:]
+        )
     print("[🛠️Coworker] _force_compact_session: retired {:d} messages "
           "(keep_recent={:d})".format(len(retired), _FORCE_COMPACT_KEEP_RECENT))
     return len(retired)
@@ -4719,6 +4785,10 @@ def _run_conversation_turn_inner(
     from . import llm_manager as _llm_mgr
     _llm_cfg = _llm_mgr.get_config()
     max_tokens = _llm_cfg.local_max_tokens if llm_port_local is not None else 16384
+    # The configured reply size is immutable: the per-iteration cap must be
+    # recomputed from THIS, or feeding the already-capped value back in makes
+    # the allowance monotonically shrink across tool-loop iterations.
+    _requested_max_tokens = max_tokens
     # `thinking_budget_tokens` is a llama-server parameter; strict
     # OpenAI-compatible endpoints reject unknown fields, so only send it
     # on the local path (llm_port_local is None in remote mode).
@@ -4777,54 +4847,27 @@ def _run_conversation_turn_inner(
     # Pre-detect the domain from the user's prompt AND from the current
     # scene content (0 extra round-trips).  The LLM can also call
     # ``load_tools`` mid-turn to switch domains.
-    _loaded_domains: set[str] = set()
-    # Domain skill reference text for the detected domains (empty when none
-    # or when it does not fit the budget).  Injected into the *sent* system
-    # copy inside ``_build_send_messages`` — never mutated into the stored
-    # history, so it can never accumulate across turns.
-    _domain_skills_text = ""
-    if llm_port_local is not None and openai_tools:
-        _all_tools = openai_tools  # Keep full list for on-demand loading.
+    _loaded_domains: set[str] = set(_session_loaded_domains)
+    # Domains whose skill reference should be injected into the *sent* system
+    # copy.  The actual text (and how much of it fits) is computed inside
+    # ``_build_send_messages`` from the real message list, so the allowance
+    # tunes itself to the window and the conversation.  Never mutated into the
+    # stored history, so it can never accumulate across turns.
+    _domain_skill_domains: set[str] = set()
+    _all_tools = openai_tools  # Keep full list for on-demand loading.
+    if openai_tools:
+        # Detect domains for BOTH local and remote.  Remote providers now get
+        # the same smart tool filtering + skill reference as local, instead of
+        # the full unfiltered schema on every request (smaller schema; and the
+        # API-docs tools remain the always-available fallback).
         _detected_domains: set[str] = set()
-        _kw_domain = _detect_domain(user_message)
-        if _kw_domain:
-            _detected_domains.add(_kw_domain)
+        _detected_domains.update(_detect_domains(user_message))
         # Also detect domains from scene content (armatures, materials, etc.).
-        _scene_domains = _detect_domain_from_scene()
-        _detected_domains.update(_scene_domains)
+        _detected_domains.update(_detect_domain_from_scene())
+        _session_loaded_domains.update(_detected_domains)
         _loaded_domains.update(_detected_domains)
-        openai_tools = _build_tool_set(_all_tools, _detected_domains)
-
-        # ── Domain skill reference (injected at send time, budget-aware) ─
-        # These files (animation.md, materials.md, ...) give version-aware
-        # API rules for the detected domains without a lookup round-trip.
-        # They are LARGE (up to ~1.7k tokens each), so they are injected only
-        # when they fit the remaining budget — never at the cost of refusing
-        # the turn.  Only WHOLE files are included (never truncated).
-        if _detected_domains:
-            try:
-                from . import skills as _skills_mod  # pylint: disable=import-error
-                # Scale the allowance to the window so a big context keeps
-                # more domain knowledge; clamp to a floor/ceiling.
-                if ctx_size_used > 0:
-                    _skill_tokens = max(
-                        _SKILLS_MIN_TOKENS,
-                        min(int(ctx_size_used * _SKILLS_BUDGET_RATIO),
-                            _SKILLS_MAX_TOKENS),
-                    )
-                else:
-                    _skill_tokens = _SKILLS_MIN_TOKENS
-                _max_skill_chars = int(_skill_tokens * _CHARS_PER_TOKEN)
-                _domain_skills_text = _skills_mod.get_domain_skills(
-                    _detected_domains, max_chars=_max_skill_chars) or ""
-                print("[🛠️Coworker] run_conversation_turn: domain skills for {:s} "
-                      "({:d} chars, budget {:d} chars, whole files only)".format(
-                          ",".join(sorted(_detected_domains)),
-                          len(_domain_skills_text), _max_skill_chars))
-            except Exception:
-                _domain_skills_text = ""  # Best-effort; don't break the loop.
-    else:
-        _all_tools = openai_tools  # Unused in remote mode, but keep for consistency.
+        openai_tools = _build_tool_set(_all_tools, _loaded_domains)
+        _domain_skill_domains = set(_loaded_domains)
 
     # ── Request payload builder ────────────────────────────────────────
     # Extracted so the context-overflow recovery can rebuild the payload
@@ -4880,29 +4923,58 @@ def _run_conversation_turn_inner(
                 _sys0["content"] = _base.rstrip() + "\n\n" + _mem_block
                 msgs[0] = _sys0
 
-        # ── Inject domain-skill reference (send copy, budget-aware) ──
+        # ── Inject domain-skill reference (send copy, self-tuning) ────
         # Appended to the system copy like the memory block (Qwen's Jinja
-        # template needs all system content up front).  Only injected when it
-        # fits the budget alongside the tool schema and history; otherwise it
-        # is skipped — a reference is never worth refusing the turn.
-        if _domain_skills_text and msgs and msgs[0].get("role") == "system":
-            _cand = dict(msgs[0])
-            _cand["content"] = str(_cand.get("content") or "").rstrip() + "\n\n" + _domain_skills_text
-            _probe = [_cand] + msgs[1:]
-            _fits = (
-                prompt_budget <= 0
-                or (
-                    _estimate_messages_tokens(_probe)
-                    + _estimate_tools_tokens(openai_tools)
-                    <= prompt_budget
+        # template needs all system content up front).  In LOCAL mode the
+        # allowance is whatever is genuinely SPARE after the messages, the
+        # tool schema, and a conversation reserve — so it tunes itself to the
+        # window and the conversation with no ratio/ceiling to configure.  In
+        # REMOTE mode there is no client-side window (prompt_budget == 0), so
+        # a conservative flat cap is used.  Only WHOLE files are included
+        # (never truncated); unmatched files are skipped and the API-docs
+        # tools remain the fallback.
+        _domain_skills_text = ""
+        if _domain_skill_domains and msgs and msgs[0].get("role") == "system":
+            if prompt_budget > 0:
+                _spare = (
+                    prompt_budget
+                    - _estimate_messages_tokens(msgs)
+                    - _estimate_tools_tokens(openai_tools)
                 )
-            )
-            if _fits:
-                msgs[0] = _cand
+                _reserve = max(
+                    _SKILLS_RESERVE_TOKENS,
+                    int(prompt_budget * _SKILLS_RESERVE_RATIO),
+                )
+                _allow_tokens = _spare - _reserve
             else:
-                print("[🛠️Coworker] run_conversation_turn: skipping domain skills "
-                      "({:d} chars) — would not fit the prompt budget".format(
-                          len(_domain_skills_text)))
+                # Remote: no window to compute spare from — use the flat cap.
+                _allow_tokens = _SKILLS_REMOTE_MAX_TOKENS
+            if _allow_tokens > 0:
+                try:
+                    from . import skills as _skills_mod  # pylint: disable=import-error
+                    _domain_skills_text = _skills_mod.get_domain_skills(
+                        _domain_skill_domains,
+                        max_chars=int(_allow_tokens * _CHARS_PER_TOKEN),
+                    ) or ""
+                except Exception:  # pylint: disable=broad-exception-caught
+                    _domain_skills_text = ""
+            if _domain_skills_text:
+                _cand = dict(msgs[0])
+                _cand["content"] = str(_cand.get("content") or "").rstrip() + "\n\n" + _domain_skills_text
+                if prompt_budget > 0:
+                    _probe = [_cand] + msgs[1:]
+                    _fits = (
+                        _estimate_messages_tokens(_probe)
+                        + _estimate_tools_tokens(openai_tools)
+                        <= prompt_budget
+                    )
+                else:
+                    # Remote: allowance already caps the size; no hard window.
+                    _fits = True
+                if _fits:
+                    msgs[0] = _cand
+                else:
+                    _domain_skills_text = ""  # Safety net; reserve should prevent this.
 
         # ── Inject a pending screenshot into the last user message ──
         # Done BEFORE budgeting so the image is counted against the window
@@ -4983,7 +5055,7 @@ def _run_conversation_turn_inner(
             _maybe_compact_session(
                 history, openai_tools, prompt_budget, on_status=on_status,
                 memory_writer=_memory_writer_factory(
-                    llm_url, api_key, model, min(max_tokens, 1024)))
+                    llm_url, api_key, model, min(_requested_max_tokens, 1024)))
         except Exception as _compact_ex:  # pylint: disable=broad-exception-caught
             print("[🛠️Coworker] run_conversation_turn: session compaction skipped — {:s}".format(
                 str(_compact_ex)))
@@ -5007,7 +5079,7 @@ def _run_conversation_turn_inner(
                 _estimate_messages_tokens(history_to_send)
                 + _estimate_tools_tokens(openai_tools)
             )
-            max_tokens = _cap_reply_tokens(ctx_size_used, max_tokens, _prompt_tokens_est)
+            max_tokens = _cap_reply_tokens(ctx_size_used, _requested_max_tokens, _prompt_tokens_est)
 
         # ── Request-shape diagnostic ──────────────────────────────────
         # Log exactly what is about to be sent.  This is the single most
@@ -5032,7 +5104,7 @@ def _run_conversation_turn_inner(
                 _force_compact_session(
                     history, openai_tools, prompt_budget, on_status=on_status,
                     memory_writer=_memory_writer_factory(
-                        llm_url, api_key, model, min(max_tokens, 1024)))
+                        llm_url, api_key, model, min(_requested_max_tokens, 1024)))
             except Exception as _force_ex:  # pylint: disable=broad-exception-caught
                 print("[🛠️Coworker] run_conversation_turn: forced compaction failed — "
                       "{:s}".format(str(_force_ex)))
@@ -5051,7 +5123,7 @@ def _run_conversation_turn_inner(
                     _estimate_messages_tokens(history_to_send)
                     + _estimate_tools_tokens(openai_tools)
                 )
-                max_tokens = _cap_reply_tokens(ctx_size_used, max_tokens, _prompt_tokens_est)
+                max_tokens = _cap_reply_tokens(ctx_size_used, _requested_max_tokens, _prompt_tokens_est)
             response = _llm_request(history_to_send, openai_tools, thinking_budget)
 
         # ── Abort check ───────────────────────────────────────────────
@@ -5301,11 +5373,14 @@ def _run_conversation_turn_inner(
                 tool_id = tc.get("id", "")
 
                 # ── load_tools meta-tool (on-demand domain loading) ────
-                # Intercepted here — not sent to the MCP server.
-                if tool_name == "load_tools" and llm_port_local is not None:
+                # Intercepted here — not sent to the MCP server.  Handled in
+                # every mode (the tool is offered locally AND to remote
+                # providers), so the gate is not local-only.
+                if tool_name == "load_tools":
                     domain = args.get("domain", "")
                     if domain in _TOOL_DOMAINS and domain not in _loaded_domains:
                         _loaded_domains.add(domain)
+                        _session_loaded_domains.add(domain)
                         # Rebuild with all loaded domains.
                         _combined = set(_SURFACE_TOOLS)
                         for d in _loaded_domains:
@@ -5315,6 +5390,8 @@ def _run_conversation_turn_inner(
                             if t.get("function", {}).get("name") in _combined
                         ]
                         openai_tools.append(_LOAD_TOOLS_SCHEMA)
+                        openai_tools.sort(
+                            key=lambda t: t.get("function", {}).get("name", ""))
                         print("[🛠️Coworker] run_conversation_turn: load_tools '{:s}' — now {:d} tools".format(
                             domain, len(openai_tools)))
                         history.append({
@@ -5397,7 +5474,8 @@ def _run_conversation_turn_inner(
                     except (json.JSONDecodeError, TypeError):
                         pass
                     if _turn_snapshot is None:
-                        print("[🛠️Coworker] run_conversation_turn: initial entity snapshot FAILED (continuing without)")
+                        print("[🛠️Coworker] run_conversation_turn: initial entity snapshot FAILED — "
+                              "continuing without the co-work scene lock for this turn")
 
                 # ── Inject resolution from preferences ─────────────
                 if tool_name in ("download_polyhaven_asset", "setup_pbr_material"):
@@ -5477,11 +5555,17 @@ def _run_conversation_turn_inner(
                 # the user see a 500-char stub instead of the real output.
                 # The model still gets a trimmed version (see
                 # _trim_history_tool_results), so context bloat is unchanged.
+                _stored_result = result_text
+                if len(_stored_result) > _MAX_STORED_TOOL_RESULT_CHARS:
+                    _stored_result = (
+                        _stored_result[:_MAX_STORED_TOOL_RESULT_CHARS]
+                        + "\n[truncated {:d} chars]".format(
+                            len(result_text) - _MAX_STORED_TOOL_RESULT_CHARS))
                 history.append({
                     "role": "tool",
                     "tool_call_id": tool_id,
                     "name": tool_name,
-                    "content": result_text,
+                    "content": _stored_result,
                     "summary": result_summary,
                 })
 

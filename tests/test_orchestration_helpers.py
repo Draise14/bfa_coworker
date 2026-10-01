@@ -1048,13 +1048,20 @@ class TestTrimHistoryToolResults(unittest.TestCase):
         self.assertEqual(_trim_history_tool_results([]), [])
 
     def test_history_stores_full_result(self):
-        """The store site must not truncate -- that is the reported bug."""
+        """The store site must not apply the small send-time trim.
+
+        It may only apply the large safety cap (``_MAX_STORED_TOOL_RESULT_CHARS``)
+        so a pathological traceback cannot grow the session without bound,
+        while the chat panel still shows the real output for normal results.
+        """
         src = _load_source()
-        start = src.find('"content": result_text,')
+        start = src.find('"content": _stored_result,')
         self.assertGreater(start, 0)
-        window = src[max(0, start - 700):start + 300]
+        window = src[max(0, start - 900):start + 300]
         self.assertIn('"role": "tool",', window)
-        self.assertNotIn("truncated", window)
+        # The send-time cap must NOT be what stores the result.
+        self.assertNotIn("_MAX_TOOL_RESULT_CHARS", window)
+        self.assertIn("_MAX_STORED_TOOL_RESULT_CHARS", window)
 
     def test_request_pipeline_trims(self):
         """The trim must be wired into the per-request pipeline."""

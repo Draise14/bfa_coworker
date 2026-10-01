@@ -20,6 +20,7 @@ import os
 import sys
 import types
 import unittest
+from unittest import mock
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -63,16 +64,16 @@ class TestShouldPassThrough(unittest.TestCase):
         _log.set_suppress_console(True)
 
     def test_routine_addon_line_suppressed(self):
-        self.assertFalse(_log._should_pass_through("[🛠️Coworker] health ping"))
+        self.assertFalse(_log._should_pass_through("[Coworker] health ping"))
         self.assertFalse(_log._should_pass_through("[Coworker] startup trace"))
 
     def test_warning_passes(self):
-        self.assertTrue(_log._should_pass_through("[⚠️Coworker] outdated build"))
+        self.assertTrue(_log._should_pass_through("[Coworker][WARN] outdated build"))
 
     def test_error_markers_pass(self):
         for line in (
-            "[Coworker] all attempts FAILED — stopping",
-            "[🛠️Coworker] ERROR in loader",
+            "[Coworker] all attempts FAILED -- stopping",
+            "[Coworker] ERROR in loader",
             "[Coworker] TRACEBACK follows",
         ):
             self.assertTrue(_log._should_pass_through(line), line)
@@ -87,7 +88,39 @@ class TestShouldPassThrough(unittest.TestCase):
 
     def test_debug_mode_shows_everything(self):
         _log.set_suppress_console(False)
-        self.assertTrue(_log._should_pass_through("[🛠️Coworker] anything"))
+        self.assertTrue(_log._should_pass_through("[Coworker] anything"))
+
+
+class TestConsoleColor(unittest.TestCase):
+    """The console tag is ASCII and colored instead of emoji-prefixed."""
+
+    def test_prefixes_are_ascii(self):
+        for prefix in _log._ADDON_PREFIXES + _log._WARN_PREFIXES:
+            self.assertTrue(prefix.isascii(), prefix)
+
+    def test_color_for_line(self):
+        self.assertEqual(_log._color_for_line("[Coworker] routine"), "cyan")
+        self.assertEqual(_log._color_for_line("[Coworker][WARN] heads up"), "yellow")
+        self.assertEqual(_log._color_for_line("[Coworker] ERROR boom"), "red")
+        self.assertEqual(_log._color_for_line("[Coworker] FAILED hard"), "red")
+        self.assertEqual(_log._color_for_line("blend | user message"), "")
+
+    def test_colorize_is_noop_without_color(self):
+        # Without a supporting TTY, output must be byte-for-byte unchanged
+        # (and therefore still fully ASCII for addon lines).
+        with mock.patch.object(_log, "_supports_color", lambda: False):
+            line = "[Coworker] hello"
+            self.assertEqual(_log._colorize(line), line)
+
+    def test_colorize_wraps_addon_line_when_enabled(self):
+        with mock.patch.object(_log, "_supports_color", lambda: True):
+            out = _log._colorize("[Coworker] hello")
+            self.assertIn("\033[36m", out)
+            self.assertTrue(out.endswith("\033[0m"))
+
+    def test_colorize_leaves_foreign_output_alone(self):
+        with mock.patch.object(_log, "_supports_color", lambda: True):
+            self.assertEqual(_log._colorize("blend | saving"), "blend | saving")
 
 
 class TestTeeStream(unittest.TestCase):
@@ -105,14 +138,14 @@ class TestTeeStream(unittest.TestCase):
 
     def test_suppressed_lines_leave_no_blank_lines(self):
         self.emit("[Coworker] health check ping")
-        self.emit("[🛠️Coworker] startup trace: 42")
+        self.emit("[Coworker] startup trace: 42")
         self.assertEqual(self.sink.data, "")
         # No blanks folded back into the console stream.
         self.assertNotIn("\n", self.sink.data)
 
     def test_warnings_and_errors_pass_with_newline(self):
-        self.emit("[⚠️Coworker] outdated build")
-        self.emit("[Coworker] load FAILED — missing dll")
+        self.emit("[Coworker][WARN] outdated build")
+        self.emit("[Coworker] load FAILED -- missing dll")
         self.assertIn("outdated build", self.sink.data)
         self.assertIn("FAILED", self.sink.data)
         # Each kept a single trailing newline (no doubled blank lines).
@@ -120,7 +153,7 @@ class TestTeeStream(unittest.TestCase):
 
     def test_mixed_stream_preserves_only_real_blank_lines(self):
         self.emit("[Coworker] hidden line")
-        self.emit("[⚠️Coworker] warning line")
+        self.emit("[Coworker][WARN] warning line")
         self.emit("blend | user message")
         self.tee.write("\n")  # Blender's own deliberate blank line
         console = self.sink.data

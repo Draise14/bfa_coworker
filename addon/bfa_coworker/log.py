@@ -6,7 +6,7 @@
 Lightweight file-based logging for the Coworker add-on.
 
 All modules already emit rich ``print()`` diagnostics prefixed with
-``[🛠️Coworker]``. Those go to Blender's system console and vanish when
+``[Coworker]``. Those go to Blender's system console and vanish when
 Blender closes. This module tees those messages to a rotating log file so
 users (and bug reports) can retrieve them after the fact.
 
@@ -38,14 +38,84 @@ _LOG_MAX_BYTES = 1_000_000  # ~1 MB before rotation.
 _tee_installed = False
 _suppress_console = True  # When True, routine [Coworker] lines are log-only (not Blender console).
 
-# Prefixes identifying this addon's own diagnostic lines.
-_ADDON_PREFIXES = ("[🛠️Coworker]", "[Coworker]")
-# Addon lines that indicate warnings — always shown even when console
+# Prefixes identifying this addon's own diagnostic lines.  ASCII only so the
+# output can never raise UnicodeEncodeError on a non-UTF-8 console (cp1252).
+_ADDON_PREFIXES = ("[Coworker]",)
+# Addon lines that indicate warnings -- always shown even when console
 # suppression is on.
-_WARN_PREFIXES = ("[⚠️Coworker]",)
+_WARN_PREFIXES = ("[Coworker][WARN]",)
 # Severity markers that mark an addon line as a key issue (errors, hard
-# failures) — always shown even when console suppression is on.
+# failures) -- always shown even when console suppression is on.
 _SEVERITY_MARKERS = ("ERROR", "FAILED", "FATAL", "TRACEBACK")
+
+# ANSI colors.  Emoji prefixes in console output were replaced with colored
+# ASCII tags: cyan for routine diagnostics, yellow for warnings, red for
+# error-level lines.  Color is applied only when the console supports it (and
+# never to the log file), and is opt-out via the NO_COLOR environment variable.
+_ANSI = {
+    "reset": "\033[0m",
+    "cyan": "\033[36m",
+    "yellow": "\033[33m",
+    "red": "\033[31m",
+}
+_color_enabled: "bool | None" = None
+
+
+def _supports_color() -> bool:
+    """True when ANSI color should be emitted to the console.
+
+    Requires a TTY, no ``NO_COLOR`` opt-out, and (on Windows) virtual-terminal
+    processing enabled on the console handle.
+    """
+    global _color_enabled
+    if _color_enabled is None:
+        _color_enabled = False
+        try:
+            if os.environ.get("NO_COLOR"):
+                return False
+            stream = sys.stdout
+            if stream is not None and getattr(stream, "isatty", None) and stream.isatty():
+                if os.name == "nt":
+                    try:
+                        import ctypes
+                        _k = ctypes.windll.kernel32
+                        _k.SetConsoleMode(_k.GetStdHandle(-11), 7)
+                    except Exception:  # pylint: disable=broad-exception-caught
+                        pass
+                _color_enabled = True
+        except Exception:  # pylint: disable=broad-exception-caught
+            _color_enabled = False
+    return _color_enabled
+
+
+def _color_for_line(line: str) -> str:
+    """Return the ANSI color name for a console line ('' = no color)."""
+    if line.startswith(_WARN_PREFIXES):
+        return "yellow"
+    if line.startswith(_ADDON_PREFIXES):
+        upper = line.upper()
+        if any(marker in upper for marker in _SEVERITY_MARKERS):
+            return "red"
+        return "cyan"
+    return ""
+
+
+def _colorize(data: str) -> str:
+    """Wrap addon diagnostic lines in ANSI color for the console.
+
+    Applied only on the console pass-through, never to the log file.  Non-addon
+    output (Blender messages, user scripts, tracebacks) is left untouched.
+    """
+    if not data or not _supports_color() or "[Coworker]" not in data:
+        return data
+    if "\n" not in data:
+        color = _color_for_line(data)
+        return (_ANSI[color] + data + _ANSI["reset"]) if color else data
+    out = []
+    for line in data.split("\n"):
+        color = _color_for_line(line)
+        out.append((_ANSI[color] + line + _ANSI["reset"]) if color else line)
+    return "\n".join(out)
 
 
 def _should_pass_through(data: str) -> bool:
@@ -89,7 +159,7 @@ def _rotate_if_needed(path: Path) -> None:
 def write(msg: str, level: str = "INFO") -> None:
     """Append a timestamped line to the log file.
 
-    This does NOT print to the console — callers that already ``print()``
+    This does NOT print to the console -- callers that already ``print()``
     get file output automatically via :func:`install_print_tee`.
     """
     import datetime
@@ -102,7 +172,7 @@ def write(msg: str, level: str = "INFO") -> None:
             with open(str(path), "a", encoding="utf-8") as fh:
                 fh.write(line)
         except OSError:
-            pass  # Disk full / read-only — ignore, don't crash.
+            pass  # Disk full / read-only -- ignore, don't crash.
 
 
 def read_tail(max_lines: int = 200) -> list[str]:
@@ -154,7 +224,7 @@ class _TeeStream:
         # everything that is not this addon's own output.
         if _should_pass_through(data):
             try:
-                self._original.write(data)
+                self._original.write(_colorize(data))
             except Exception:  # pylint: disable=broad-exception-caught
                 pass
             self._pending_suppressed_newline = False
@@ -196,8 +266,8 @@ def set_suppress_console(enabled: bool) -> None:
     """Toggle console suppression for this addon's routine diagnostics.
 
     When *enabled* is True (the default, Debug Mode off), this addon's
-    routine [🛠️Coworker]/[Coworker] lines are written to the log file only
-    and do not appear in Blender's console. Warnings ([⚠️Coworker]) and
+    routine [Coworker]/[Coworker] lines are written to the log file only
+    and do not appear in Blender's console. Warnings ([Coworker][WARN]) and
     error-level lines (ERROR/FAILED/FATAL/TRACEBACK) always pass through,
     as does everything that is not this addon's own output (user scripts,
     Blender's messages, tracebacks). When *enabled* is False (Debug Mode
@@ -244,8 +314,8 @@ def _coalescing_showwarning(message, category, filename, lineno, file=None, line
         if not _policy_summary_printed and _policy_warning_count >= 5:
             _policy_summary_printed = True
             print_policy_warning_summary()
-        return  # Swallow — do NOT print to console.
-    # Not a policy warning — pass through to the original handler.
+        return  # Swallow -- do NOT print to console.
+    # Not a policy warning -- pass through to the original handler.
     if _original_showwarning is not None:
         _original_showwarning(message, category, filename, lineno, file, line)
 
@@ -269,8 +339,8 @@ def print_policy_warning_summary() -> None:
     if _policy_warning_count:
         mods = ", ".join(sorted(_policy_warning_modules)) or "vendor packages"
         print(
-            "[🛠️Coworker] Blender policy: suppressed {:d} sandbox warning(s) "
-            "for {:s} (expected; vendored deps still load — see log)".format(
+            "[Coworker] Blender policy: suppressed {:d} sandbox warning(s) "
+            "for {:s} (expected; vendored deps still load -- see log)".format(
                 _policy_warning_count, mods
             )
         )

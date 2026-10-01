@@ -87,6 +87,28 @@ _MODEL_DOWNLOAD_TIMEOUT = 300  # seconds
 # lets us capture every line.
 _CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
+# Windows: give the child its own *visible* console window.  Used only when
+# Debug / Diagnostics mode is on, so the user can watch llama-server load a
+# model live (token/s, GPU offload, errors).  Normal launches stay silent.
+_CREATE_NEW_CONSOLE = 0x00000010 if sys.platform == "win32" else 0
+
+
+def _show_llama_console() -> bool:
+    """True when the llama-server console window should be visible.
+
+    Only on Windows, and only when the user has enabled Debug / Diagnostics
+    mode — the visible console is a debugging aid.  Reads the preference at
+    call time and never raises (returns False outside Blender / on error).
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        from .shared import is_debug_mode  # type: ignore[import-not-found]
+        return bool(is_debug_mode())
+    except Exception:  # pylint: disable=broad-exception-caught
+        return False
+
+
 def _port_is_taken(port: int) -> bool:
     """Return True if *port* is already in use on localhost."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -2989,9 +3011,13 @@ def start_local_llama(
         # CPU backend: keep launch flags minimal — no attention/KV knobs,
         # they mainly benefit GPU paths and risk breaking exotic CPU builds.
         if backend in ("cuda", "vulkan"):
-            # Flash-attention is supported since long before the pinned build;
-            # it meaningfully reduces KV-cache memory and speeds up attention.
-            args.append('--flash-attn')
+            # Flash-attention reduces KV-cache memory and speeds up attention.
+            # In current llama.cpp `--flash-attn` takes an optional value
+            # `[on|off|auto]`; passed bare BEFORE another flag the parser
+            # consumes that flag as its value and exits 1
+            # ("unknown value for --flash-attn: '--batch-size'").  Use the
+            # explicit `=` form so it can never swallow the next argument.
+            args.append('--flash-attn=on')
             # KV-cache quantization — opt-in via preference, on by default only
             # when VRAM headroom is tight.
             with _lock:
@@ -3075,8 +3101,9 @@ def start_local_llama(
             env["PATH"] = bundled_dir + os.pathsep + existing_path
 
         # On Windows, also register the bundled dir as a DLL search directory.
-        # PATH-based DLL discovery is unreliable with CREATE_NEW_CONSOLE;
-        # os.add_dll_directory() (Python 3.8+) is the robust alternative.
+        # PATH-based DLL discovery is unreliable when the child gets its own
+        # console (Debug mode) or no console; os.add_dll_directory() (Python
+        # 3.8+) is the robust alternative.
         global _bundled_dll_handle
         _bundled_dll_handle = None
         if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
@@ -3086,28 +3113,39 @@ def start_local_llama(
             except OSError as ex:
                 print("[🛠️Coworker] start_local_llama: os.add_dll_directory failed — {:s}".format(str(ex)))
 
-        # Redirect the server's stdout/stderr to the log file on BOTH
-        # platforms so its output is always captured.  On Windows this
-        # replaces the old CREATE_NEW_CONSOLE launch, which sent output to a
-        # window the addon could not read -- so a startup crash reported no
-        # reason at all and the error tail showed a stale file.
-        try:
-            log_handle = open(str(_llama_server_log_path()), "w", encoding="utf-8", errors="replace")
-        except OSError as ex:
-            log_handle = None
-            print("[🛠️Coworker] start_local_llama: could not open log file — {:s}".format(str(ex)))
-        stdio_target = log_handle if log_handle is not None else subprocess.DEVNULL
+        # ── Console visibility (Debug mode) ────────────────────────────
+        # Debug / Diagnostics mode shows the server in its own console
+        # window so the user can watch it load a model live.  Otherwise the
+        # server runs silently with stdio redirected to the log file, so a
+        # startup crash is still captured for the failure tail.
+        show_console = _show_llama_console()
+        log_handle = None
+        if show_console:
+            # A visible console receives the server's stdout/stderr directly
+            # (stdio_target=None), so keep the log file populated for the
+            # failure tail via the server's own --log-file.
+            stdio_target = None
+            if "--log-file" not in args:
+                args.extend(["--log-file", str(_llama_server_log_path())])
+            print("[🛠️Coworker] start_local_llama: Debug mode — showing llama-server console window")
+        else:
+            try:
+                log_handle = open(str(_llama_server_log_path()), "w", encoding="utf-8", errors="replace")
+            except OSError as ex:
+                log_handle = None
+                print("[🛠️Coworker] start_local_llama: could not open log file — {:s}".format(str(ex)))
+            stdio_target = log_handle if log_handle is not None else subprocess.DEVNULL
         print("[🛠️Coworker] start_local_llama:   args = {:s}".format(str(args)))
         print("[🛠️Coworker] start_local_llama:   log = {:s}".format(str(_llama_server_log_path())))
         if sys.platform == "win32":
-            # CREATE_NO_WINDOW: no console window, and (with stdio redirected
-            # above) every line is captured for the failure tail.
+            # CREATE_NO_WINDOW (default): silent, every line captured for the
+            # failure tail.  CREATE_NEW_CONSOLE (Debug mode): visible console.
             proc = subprocess.Popen(
                 args,
                 stdin=subprocess.DEVNULL,
                 stdout=stdio_target,
                 stderr=stdio_target,
-                creationflags=_CREATE_NO_WINDOW,
+                creationflags=_CREATE_NEW_CONSOLE if show_console else _CREATE_NO_WINDOW,
                 env=env,
             )
         else:

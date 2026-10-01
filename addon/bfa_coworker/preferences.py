@@ -165,7 +165,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         name="Debug / Diagnostics",
         description=(
             "Show the Diagnostics panel in Preferences with port checking, "
-            "benchmark suites, and other developer tools"
+            "benchmark suites, and other developer tools. Also shows the "
+            "llama-server console window while the local model starts"
         ),
         default=False,
         update=_update_debug_mode,

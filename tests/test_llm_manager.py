@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import struct
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -706,6 +707,38 @@ class TestFilterFlagsAgainstHelp(unittest.TestCase):
         required = self.llm_manager._REQUIRED_LLAMA_FLAGS
         for flag in ("--port", "--model", "--ctx-size", "--host"):
             self.assertIn(flag, required)
+
+
+class TestLaunchFlagSafety(unittest.TestCase):
+    """Guards against regressions that made llama-server exit 1 at startup."""
+
+    def setUp(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        self.source = (
+            repo_root / "addon" / "bfa_coworker" / "llm_manager.py"
+        ).read_text(encoding="utf-8")
+        self.llm_manager = load_llm_manager_module()
+
+    def test_flash_attn_passed_with_explicit_value(self):
+        # In current llama.cpp `--flash-attn [on|off|auto]` takes an optional
+        # value; passed bare before another flag the parser consumes that
+        # flag as its value and exits 1
+        # ("unknown value for --flash-attn: '--batch-size'").  Must use `=`.
+        self.assertIn("'--flash-attn=on'", self.source)
+        self.assertNotIn("append('--flash-attn')", self.source)
+
+    def test_debug_console_creation_flag_defined(self):
+        self.assertEqual(
+            self.llm_manager._CREATE_NEW_CONSOLE,
+            0x00000010 if sys.platform == "win32" else 0)
+
+    def test_show_llama_console_returns_bool_and_never_raises(self):
+        self.assertIsInstance(self.llm_manager._show_llama_console(), bool)
+
+    def test_debug_console_uses_log_file_for_capture(self):
+        # When the console is shown the server must still write the log file
+        # (via --log-file) so the failure tail still works.
+        self.assertIn("--log-file", self.source)
 
 
 if __name__ == "__main__":

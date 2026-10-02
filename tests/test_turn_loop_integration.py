@@ -40,6 +40,7 @@ import json
 import os
 import sys
 import threading
+import time
 import types
 import unittest
 import urllib.request
@@ -1842,6 +1843,42 @@ class TestWorkerThreadBpySafety(_TurnLoopTestBase):
         self.assertIn("agent_controller._agent_state.ui_status = text", source)
         # ... and never writes the bpy property from the worker path.
         self.assertNotIn("props.chat_status = text", source)
+
+
+class TestTurnDurationStamp(_TurnLoopTestBase):
+    """Each finished turn records its wall time on its last message."""
+
+    def test_stamp_helper_exists(self):
+        self.assertTrue(callable(
+            getattr(self.ac, "_stamp_turn_duration", None)))
+
+    def test_stamp_sets_turn_seconds(self):
+        hist = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "done"},
+        ]
+        self.state.conversation_history = hist
+        # Pretend the turn started 90s ago.
+        self.state.last_turn_cost = {"requests": 1, "start": time.time() - 90}
+        self.ac._stamp_turn_duration()
+        self.assertIn("turn_seconds", hist[-1])
+        self.assertGreaterEqual(hist[-1]["turn_seconds"], 89)
+
+    def test_stamp_without_start_is_noop(self):
+        hist = [{"role": "user", "content": "hi"}]
+        self.state.conversation_history = hist
+        self.state.last_turn_cost = {}
+        self.ac._stamp_turn_duration()
+        self.assertNotIn("turn_seconds", hist[-1])
+
+    def test_finished_turn_is_stamped(self):
+        """A real turn through the loop leaves ``turn_seconds`` on its tail."""
+        history = self.ac.AgentState().conversation_history
+        self.state.conversation_history = history
+        out, _texts, _statuses = self._run_turn("hello")
+        self.assertTrue(out)
+        self.assertIn("turn_seconds", out[-1])
 
 
 if __name__ == "__main__":

@@ -430,6 +430,15 @@ def openai_chat_completions(
     # real server reason (``ex.read()`` returns empty on a second call).
     _last_error_body = ""
     for attempt in range(max_retries + max_503_retries):
+        # Honour Stop between attempts.  The streaming path checks
+        # ``_stop_requested()`` mid-stream; without this the non-streaming
+        # fallback ignored Stop entirely and blocked on the 600s read (across
+        # up to 17 retries), leaving the turn "frozen" and new messages queued.
+        # Returning None here lets the turn loop take its normal abort path.
+        if _stop_requested():
+            print("[Coworker] _openai_chat_completions: stop requested -- "
+                  "aborting non-streaming request")
+            return None
         try:
             with urllib.request.urlopen(req, timeout=_STREAM_TIMEOUT) as resp:
                 raw = resp.read().decode()

@@ -1599,6 +1599,11 @@ class AgentState:
 
     # -- Re-entrancy guard ------------------------------------------
     turn_active: bool = False  # True while a conversation turn is in progress.
+    # Monotonic token identifying the turn that currently owns the guard.  A
+    # stopped turn whose worker is still unwinding must NOT clear a NEWER
+    # turn's guard or release its scene lock, so every turn checks the token
+    # before it cleans up.
+    turn_token: int = 0
 
     # -- Vision pipeline --------------------------------------------
     _pending_image: str | None = None  # Base64 data URI of last screenshot
@@ -4959,6 +4964,26 @@ def _log_turn_cost() -> None:
         pass
 
 
+def _stamp_turn_duration() -> None:
+    """Record the just-finished turn's wall time on its last history message.
+
+    The chat panel reads ``turn_seconds`` back so each finished turn can show
+    how long it took (formatted with minutes).  Uses the per-turn cost ledger's
+    start stamp (set at turn start); best-effort and never raises.
+    """
+    try:
+        cost = _agent_state.last_turn_cost
+        start = float(cost.get("start", 0.0) or 0.0) if isinstance(cost, dict) else 0.0
+        if not start:
+            return
+        hist = _agent_state.conversation_history
+        if not hist:
+            return
+        hist[-1]["turn_seconds"] = round(time.time() - start, 1)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+
+
 def run_conversation_turn(
     user_message: str,
     on_text: Callable[[str], None] | None = None,
@@ -5002,6 +5027,8 @@ def run_conversation_turn(
             print("[Coworker] run_conversation_turn: re-entrancy blocked -- turn already active")
             return _agent_state.conversation_history
     _agent_state.turn_active = True
+    _agent_state.turn_token += 1
+    _my_token = _agent_state.turn_token
     try:
         return _run_conversation_turn_inner(
             user_message, on_text, on_status, on_reasoning,
@@ -5009,12 +5036,22 @@ def run_conversation_turn(
             on_stream_text, on_stream_reasoning, allow_action_nudge,
         )
     finally:
-        _agent_state.turn_active = False
-        # Always release the co-work scene lock (FINISH, error, Stop, or an
-        # exception all pass through here).
-        _release_scene_lock()
-        # Tier 3i: log the turn's cost breakdown (prefill vs gen vs overhead).
-        _log_turn_cost()
+        # Only the turn that still owns the guard may clear it and release the
+        # scene lock.  A STOPPED worker often keeps unwinding for a while (a
+        # blocking non-streaming read or a tool call cannot be interrupted
+        # instantly); if the user already sent a new message, that newer turn
+        # bumped the token and now owns the guard -- this old worker must not
+        # clobber it.
+        if _agent_state.turn_token == _my_token:
+            _agent_state.turn_active = False
+            # Always release the co-work scene lock (FINISH, error, Stop, or
+            # an exception all pass through here).
+            _release_scene_lock()
+            # Tier 3i: log the turn's cost breakdown (prefill vs gen vs overhead).
+            _log_turn_cost()
+            # Record the turn's wall time on its last message so the chat panel
+            # can show each finished turn's duration.
+            _stamp_turn_duration()
 
 
 # Turn counter for memory-block "Last updated" stamps (Tier 3).

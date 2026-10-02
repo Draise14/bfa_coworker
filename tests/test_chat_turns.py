@@ -57,6 +57,7 @@ _group_turns = _extract_func(
 _split_turn = _extract_func(
     "_split_turn", {"_is_system_note_msg": _is_system_note_msg})
 _hist_index = _extract_func("_hist_index")
+_fmt_duration = _extract_func("_fmt_duration")
 _draw_multiline = _extract_func(
     "_draw_multiline",
     {
@@ -251,6 +252,29 @@ class TestDrawMultiline(unittest.TestCase):
         lo = _FakeLayout()
         _draw_multiline(lo, "", icon='INFO')
         self.assertEqual(lo.calls, [])
+
+
+class TestFmtDuration(unittest.TestCase):
+    """Durations roll up into minutes/hours instead of raw seconds."""
+
+    def test_seconds(self):
+        self.assertEqual(_fmt_duration(0), "0s")
+        self.assertEqual(_fmt_duration(45), "45s")
+        self.assertEqual(_fmt_duration(59), "59s")
+
+    def test_minutes(self):
+        self.assertEqual(_fmt_duration(60), "1m")
+        self.assertEqual(_fmt_duration(125), "2m 05s")
+        self.assertEqual(_fmt_duration(742), "12m 22s")
+
+    def test_hours(self):
+        self.assertEqual(_fmt_duration(3600), "1h 00m")
+        self.assertEqual(_fmt_duration(3900), "1h 05m")
+
+    def test_bad_input_is_safe(self):
+        self.assertEqual(_fmt_duration(None), "")
+        self.assertEqual(_fmt_duration("nope"), "")
+        self.assertEqual(_fmt_duration(-5), "0s")
 
 
 class TestUnifiedHistoryRender(unittest.TestCase):

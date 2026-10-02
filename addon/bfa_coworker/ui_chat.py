@@ -131,8 +131,14 @@ _BLOCK: tuple[str, ...] = (
     "\u28ff", "\u28f7", "\u28ef", "\u28df", "\u287f",
     "\u28bf", "\u28fb", "\u28fd", "\u28fe", "\u28ff",
 )
+# "Sweep": a diagonal blade that grows corner-to-corner, then melts away.
+_SWEEP: tuple[str, ...] = (
+    "\u2800", "\u2840", "\u28c0", "\u28c4", "\u28e4", "\u28e6",
+    "\u28f6", "\u28f7", "\u28ff", "\u28bf", "\u283f", "\u283b",
+    "\u281b", "\u2819", "\u2809", "\u2808", "\u2800",
+)
 _PHASES: tuple[tuple[str, ...], ...] = (
-    _EXPAND, _CONTRACT, _WORMY, _WAVY, _GROW, _BLOCK,
+    _EXPAND, _CONTRACT, _WORMY, _WAVY, _GROW, _BLOCK, _SWEEP,
 )
 _PHASE_TOTAL = sum(len(_phase) for _phase in _PHASES)
 
@@ -177,6 +183,29 @@ def _phase_text(state) -> str:
     if phase == "warming":
         return "Warming up the model"
     return "Thinking"
+
+
+def _fmt_duration(seconds: float) -> str:
+    """Format a duration for display, rolling up into minutes and hours.
+
+    Long local turns run into the minutes, so raw seconds ("742s") read badly.
+    Examples: ``45s``, ``2m 05s``, ``18m``, ``1h 02m``.  Sub-second values
+    render as ``0s``; negatives are clamped to ``0s``.
+    """
+    try:
+        total = int(seconds)
+    except (TypeError, ValueError):
+        return ""
+    if total < 0:
+        total = 0
+    if total < 60:
+        return "{:d}s".format(total)
+    if total < 3600:
+        mins, secs = divmod(total, 60)
+        return "{:d}m {:02d}s".format(mins, secs) if secs else "{:d}m".format(mins)
+    hours, rem = divmod(total, 3600)
+    mins = rem // 60
+    return "{:d}h {:02d}m".format(hours, mins)
 
 
 def _is_system_note_msg(msg: dict) -> bool:
@@ -1059,8 +1088,15 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
         actual_mcp = agent_controller._agent_state.mcp_port_actual
         send_mcp_port = actual_mcp if actual_mcp else _mcp_port
 
-        # If a turn is already active, queue the message.
-        if agent_controller._agent_state.turn_active:
+        # If a turn is already active, queue the message -- UNLESS the user has
+        # pressed Stop.  After a Stop the old worker may still be unwinding
+        # (a blocking read or tool call cannot be interrupted instantly); if we
+        # queued here, the message would sit behind a worker that may not drain
+        # the queue for a while ("frozen").  Instead we start a new turn, which
+        # clears the stale guard (see run_conversation_turn) and supersedes the
+        # old worker via the turn token.
+        if (agent_controller._agent_state.turn_active
+                and not agent_controller._stop_event.is_set()):
             pos = agent_controller.enqueue_message(
                 message=message,
                 chat_mode=props.chat_mode,
@@ -2195,8 +2231,9 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             status = props.chat_status
             if state.is_thinking:
                 elapsed = time.time() - state.thinking_start_time if state.thinking_start_time else 0.0
-                status = "{:s} {:s} ({:.0f}s)".format(
-                    _phase_text(state), _spinner_char(state), elapsed)
+                status = "{:s} {:s} ({:s})".format(
+                    _phase_text(state), _spinner_char(state),
+                    _fmt_duration(elapsed))
             elif not state.mcp_server_running:
                 status = "Offline"
             elif state.error:
@@ -2440,6 +2477,15 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         has_proc = bool(process_msgs)
         turn_box = hist_box.box()
 
+        # Only the active (newest) turn animates while thinking -- past turns
+        # keep a static label.  Computed before the header so the header can
+        # show the live elapsed time for the running turn.
+        is_active_turn = state.is_thinking and (
+            (props.chat_newest_first and display_idx == 0)
+            or (not props.chat_newest_first
+                and display_idx == visible_count - 1)
+        )
+
         # --- Turn header (always visible) ---
         has_err = has_proc and any(
             p.get("role") == "tool"
@@ -2453,6 +2499,21 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         sub = hr.row(align=True)
         sub.scale_x = 0.5
         sub.label(text="Turn {:d}".format(turn_num))
+        # Turn duration: the finished turn carries ``turn_seconds`` (stamped by
+        # the turn loop on its last message); the active turn shows elapsed so
+        # far.  Formatted with minutes (long local turns run into the minutes).
+        _turn_seconds = None
+        for _m in reversed(turn):
+            if isinstance(_m.get("turn_seconds"), (int, float)):
+                _turn_seconds = float(_m["turn_seconds"])
+                break
+        _dur_text = ""
+        if is_active_turn and getattr(state, "thinking_start_time", 0.0):
+            _dur_text = _fmt_duration(time.time() - state.thinking_start_time)
+        elif _turn_seconds is not None:
+            _dur_text = _fmt_duration(_turn_seconds)
+        if _dur_text:
+            sub.label(text="| {:s}".format(_dur_text))
         _copy(hr.operator("bfacw.copy_message", text="", icon="COPYDOWN"),
               user_msg)
 
@@ -2462,14 +2523,6 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         urow = turn_box.row()
         urow.label(text="You:", icon='USER')
         _draw_multiline(turn_box, user_msg.get("content", ""))
-
-        # Only the active (newest) turn animates while thinking -- past turns
-        # keep a static label.
-        is_active_turn = state.is_thinking and (
-            (props.chat_newest_first and display_idx == 0)
-            or (not props.chat_newest_first
-                and display_idx == visible_count - 1)
-        )
 
         # --- Workshop (collapsible: only the internals collapse) ---
         if has_proc:
@@ -2756,11 +2809,11 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
                 _g_s = float(_cost.get("predicted_ms", 0.0)) / 1000.0
                 _draw_multiline(
                     layout,
-                    "Last turn: {:.0f}s wall | gen {:d} tok/{:.0f}s, "
-                    "prefill {:d} tok/{:.0f}s | {:d} tools".format(
-                        _wall,
-                        int(_cost.get("predicted_n", 0)), _g_s,
-                        int(_cost.get("prompt_n", 0)), _p_s,
+                    "Last turn: {:s} wall | gen {:d} tok/{:s}, "
+                    "prefill {:d} tok/{:s} | {:d} tools".format(
+                        _fmt_duration(_wall),
+                        int(_cost.get("predicted_n", 0)), _fmt_duration(_g_s),
+                        int(_cost.get("prompt_n", 0)), _fmt_duration(_p_s),
                         int(_cost.get("tools", 0)),
                     ),
                 )

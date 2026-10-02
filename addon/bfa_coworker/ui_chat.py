@@ -36,6 +36,7 @@ __all__ = (
 import json
 import re
 import os
+import random
 import time
 import threading
 from pathlib import Path
@@ -96,14 +97,77 @@ _WRAP_WIDTH = 60
 _is_bfa: bool = hasattr(bpy.types, "VIEW3D_MT_view")
 _AGENT_ICON: str = "WIZARD" if _is_bfa else "GHOST_ENABLED"
 
-# Animated "thinking" spinner frames (quarter-circle rotation).  Written as
-# \u escapes so the source stays ASCII; rendered as glyphs by Blender's UI.
-_SPINNERS: tuple[str, ...] = ("\u25d0", "\u25d3", "\u25d1", "\u25d2")
+# Animated "thinking" spinner frames, assembled from named phase groups: a
+# braille dot grows into a full cell and shrinks back (diagonal and bar
+# variants), the classic multi-dot "wormy" orbit, a travelling "wavy" ripple,
+# and a "block" gap rotating through a full cell.  Rather than replaying the
+# same order every loop, the groups are shuffled per cycle (see
+# _ordered_phases) so a long wait keeps looking new.  Written as \u escapes so
+# the source stays ASCII; rendered as glyphs by Blender's UI.
+_EXPAND: tuple[str, ...] = (
+    "\u2801", "\u2803", "\u2807", "\u280f", "\u281f", "\u283f",
+)
+_CONTRACT: tuple[str, ...] = (
+    "\u281f", "\u280f", "\u2807", "\u2803", "\u2801",
+)
+# "Wormy": the classic multi-dot braille orbit -- dots chase each other around.
+_WORMY: tuple[str, ...] = (
+    "\u280b", "\u2819", "\u2839", "\u2838", "\u283c",
+    "\u2834", "\u2826", "\u2827", "\u2807", "\u280f",
+)
+# "Wavy": a ripple travelling along the braille columns.
+_WAVY: tuple[str, ...] = (
+    "\u2809", "\u280b", "\u2819", "\u281a", "\u2812", "\u2802", "\u2802",
+    "\u2812", "\u2832", "\u2834", "\u2826", "\u2816", "\u2812", "\u2810",
+)
+# "Growing bar": fills the left column top-to-bottom, then the right column
+# bottom-to-top, then unwinds -- a bar that grows out and collapses back.
+_GROW: tuple[str, ...] = (
+    "\u2801", "\u2803", "\u2807", "\u2827", "\u2837",
+    "\u283f", "\u2837", "\u2827", "\u2807", "\u2803",
+)
+# "Block": a full cell with a gap that rotates around it.
+_BLOCK: tuple[str, ...] = (
+    "\u28ff", "\u28f7", "\u28ef", "\u28df", "\u287f",
+    "\u28bf", "\u28fb", "\u28fd", "\u28fe", "\u28ff",
+)
+# "Sweep": a diagonal blade that grows corner-to-corner, then melts away.
+_SWEEP: tuple[str, ...] = (
+    "\u2800", "\u2840", "\u28c0", "\u28c4", "\u28e4", "\u28e6",
+    "\u28f6", "\u28f7", "\u28ff", "\u28bf", "\u283f", "\u283b",
+    "\u281b", "\u2819", "\u2809", "\u2808", "\u2800",
+)
+_PHASES: tuple[tuple[str, ...], ...] = (
+    _EXPAND, _CONTRACT, _WORMY, _WAVY, _GROW, _BLOCK, _SWEEP,
+)
+_PHASE_TOTAL = sum(len(_phase) for _phase in _PHASES)
+
+
+def _ordered_phases(cycle: int) -> list[tuple[str, ...]]:
+    """Phase play order for cycle number *cycle*, deterministically shuffled.
+
+    Seeding on the cycle number gives every widget drawn in the same frame the
+    same order, and a fresh shuffle each loop -- variety with no shared mutable
+    state and no mid-frame flicker.
+    """
+    order = list(_PHASES)
+    random.Random(cycle * 2654435761 & 0xFFFFFFFF).shuffle(order)
+    return order
+
+
+def _spinner_glyph(tick: int) -> str:
+    """Return the spinner glyph for monotonic *tick* (wraps across all phases)."""
+    cycle, pos = divmod(tick, _PHASE_TOTAL)
+    for phase in _ordered_phases(cycle):
+        if pos < len(phase):
+            return phase[pos]
+        pos -= len(phase)
+    return _PHASES[0][0]  # Unreachable: pos < _PHASE_TOTAL always resolves.
 
 
 def _spinner_char(state) -> str:
     """Return the current animated spinner glyph for *state*."""
-    return _SPINNERS[int(getattr(state, "thinking_dots", 0) or 0) % len(_SPINNERS)]
+    return _spinner_glyph(int(getattr(state, "thinking_dots", 0) or 0))
 
 
 def _phase_text(state) -> str:
@@ -119,6 +183,29 @@ def _phase_text(state) -> str:
     if phase == "warming":
         return "Warming up the model"
     return "Thinking"
+
+
+def _fmt_duration(seconds: float) -> str:
+    """Format a duration for display, rolling up into minutes and hours.
+
+    Long local turns run into the minutes, so raw seconds ("742s") read badly.
+    Examples: ``45s``, ``2m 05s``, ``18m``, ``1h 02m``.  Sub-second values
+    render as ``0s``; negatives are clamped to ``0s``.
+    """
+    try:
+        total = int(seconds)
+    except (TypeError, ValueError):
+        return ""
+    if total < 0:
+        total = 0
+    if total < 60:
+        return "{:d}s".format(total)
+    if total < 3600:
+        mins, secs = divmod(total, 60)
+        return "{:d}m {:02d}s".format(mins, secs) if secs else "{:d}m".format(mins)
+    hours, rem = divmod(total, 3600)
+    mins = rem // 60
+    return "{:d}h {:02d}m".format(hours, mins)
 
 
 def _is_system_note_msg(msg: dict) -> bool:
@@ -151,7 +238,7 @@ def _group_turns(history: list) -> list[list[dict]]:
             if current_turn:
                 turns.append(current_turn)
             current_turn = [msg]
-        elif role in ("assistant", "tool", "reasoning", "user"):
+        elif role in ("assistant", "tool", "reasoning", "user", "compaction"):
             current_turn.append(msg)
     if current_turn:
         turns.append(current_turn)
@@ -167,7 +254,7 @@ def _split_turn(turn: list[dict]) -> tuple[dict | None, list[dict], dict | None]
         role = msg.get("role", "")
         if role == "user" and not _is_system_note_msg(msg):
             user_msg = msg
-        elif role in ("reasoning", "tool", "user") or _is_system_note_msg(msg):
+        elif role in ("reasoning", "tool", "user", "compaction") or _is_system_note_msg(msg):
             process_msgs.append(msg)
         elif role == "assistant":
             if not msg.get("tool_calls"):
@@ -694,6 +781,7 @@ def _draw_reasoning(
     is_thinking: bool = False,
     thinking_dots: int = 0,
     message_index: int = -1,
+    archived: bool = False,
 ) -> None:
     """Draw reasoning (chain-of-thought) content in a collapsible panel.
 
@@ -708,8 +796,7 @@ def _draw_reasoning(
 
     # Animate the label with Unicode spinner while thinking.
     if is_thinking:
-        spinners = ["\u25d0", "\u25d3", "\u25d1", "\u25d2"]
-        display_label = "{:s} {:s}".format(label, spinners[thinking_dots % 4])
+        display_label = "{:s} {:s}".format(label, _spinner_glyph(thinking_dots))
         icon = _AGENT_ICON
     else:
         display_label = label
@@ -721,6 +808,7 @@ def _draw_reasoning(
     if message_index >= 0:
         op = header.operator("bfacw.copy_message", text="", icon='COPYDOWN')
         op.message_index = message_index
+        op.archived = archived
 
     if body:
         body.separator()
@@ -751,12 +839,36 @@ def _draw_tool_summary(layout: bpy.types.UILayout, content: str, summary: str) -
         _draw_multiline(detail_box, content, width=_WRAP_WIDTH)
 
 
+def _draw_archive_node(
+    layout: bpy.types.UILayout,
+    retired_count: int,
+    summary: str,
+) -> None:
+    """Draw an 'Archive' node in the Workshop timeline.
+
+    Marks where a compaction retired older turns out of the model's context, so
+    the user can see exactly where their history was compressed.  The summary
+    is the memory block written at that point.  Display-only -- never sent to
+    the model.
+    """
+    box = layout.box()
+    row = box.row()
+    row.label(
+        text="Archive \u2014 {:d} turn(s) compacted".format(retired_count),
+        icon='FILE_ARCHIVE',
+    )
+    body = str(summary or "").strip()
+    if body:
+        _draw_multiline(box, body)
+
+
 def _draw_tool_inline(
     layout: bpy.types.UILayout,
     tool_name: str,
     display: str,
     is_error: bool,
     message_index: int = -1,
+    archived: bool = False,
 ) -> None:
     """Draw a tool result as a sub-box inside the agent's message box."""
     tool_box = layout.box()
@@ -768,6 +880,7 @@ def _draw_tool_inline(
     if message_index >= 0:
         op = row.operator("bfacw.copy_message", text="", icon='COPYDOWN')
         op.message_index = message_index
+        op.archived = archived
     _draw_multiline(tool_box, display)
 
 
@@ -975,8 +1088,15 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
         actual_mcp = agent_controller._agent_state.mcp_port_actual
         send_mcp_port = actual_mcp if actual_mcp else _mcp_port
 
-        # If a turn is already active, queue the message.
-        if agent_controller._agent_state.turn_active:
+        # If a turn is already active, queue the message -- UNLESS the user has
+        # pressed Stop.  After a Stop the old worker may still be unwinding
+        # (a blocking read or tool call cannot be interrupted instantly); if we
+        # queued here, the message would sit behind a worker that may not drain
+        # the queue for a while ("frozen").  Instead we start a new turn, which
+        # clears the stale guard (see run_conversation_turn) and supersedes the
+        # old worker via the turn token.
+        if (agent_controller._agent_state.turn_active
+                and not agent_controller._stop_event.is_set()):
             pos = agent_controller.enqueue_message(
                 message=message,
                 chat_mode=props.chat_mode,
@@ -995,6 +1115,11 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
         props.chat_input = ""
         agent_controller._agent_state.turn_phase = "reading"
         props.chat_status = "Reading your message..."
+        agent_controller._agent_state.ui_status = "Reading your message..."
+        # Refresh bpy-derived values (system prompt, prefs) HERE, on the main
+        # thread, so the turn worker never reads bpy itself -- an off-main
+        # bpy read races Blender's context counter and spams the console.
+        agent_controller.prefetch_main_thread_context()
 
         def _do_turn():
             try:
@@ -1024,7 +1149,9 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             """Try to process the next queued message."""
             next_msg = agent_controller.dequeue_message()
             if next_msg:
-                props.chat_status = "Processing queued message..."
+                # Runs on the turn worker thread: record the status as plain
+                # Python state; the main-thread timer mirrors it to the UI.
+                agent_controller._agent_state.ui_status = "Processing queued message..."
                 _redraw_areas_safe()
                 # Start processing the next message in a new thread.
                 import threading as _threading
@@ -1055,7 +1182,12 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
                 _redraw_areas_safe()
 
         def _update_status(text: str) -> None:
-            props.chat_status = text
+            # Called from the turn WORKER thread.  Do NOT write the bpy chat
+            # property here: an off-main RNA write races Blender's global
+            # Python context counter and spams "Python context internal state
+            # bug".  Record plain Python state; the main-thread timer mirrors
+            # it into props.chat_status.
+            agent_controller._agent_state.ui_status = text
             _redraw_areas_safe()
 
         def _update_streaming(text: str) -> None:
@@ -1262,8 +1394,18 @@ class BFACW_OT_copy_message(Operator):  # type: ignore[misc]
         default=-1,
     )
 
+    archived: bpy.props.BoolProperty(  # type: ignore[valid-type]
+        name="Archived",
+        description="Read the message from the retired-history archive",
+        default=False,
+    )
+
     def execute(self, context: bpy.types.Context) -> set[str]:
-        history = agent_controller._agent_state.conversation_history
+        from . import session_memory as _sm
+        history = (
+            _sm.store.retired_history if self.archived
+            else agent_controller._agent_state.conversation_history
+        )
         if self.message_index < 0 or self.message_index >= len(history):
             self.report({"ERROR"}, "Message not found (stale index)")
             return {"CANCELLED"}
@@ -1663,6 +1805,10 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
 
+        # Warm the main-thread bpy-derived cache (system prompt, prefs) now, on
+        # the main thread, so the first turn worker never reads bpy itself.
+        agent_controller.prefetch_main_thread_context()
+
         # Step 1: Start the MCP bridge server (inside Blender).
         if not mcp_to_blender_server.is_running():
             if bpy.app.background:
@@ -1820,7 +1966,7 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
             # Log what was loaded -- the first user message in particular
             # reveals whether the model is answering a stale prompt.
             print("[Coworker] _load_chat_history: loaded {:d} messages from {:s}".format(
-                len(history), _chat_history_path()))
+                len(history), str(_chat_history_path())))
             print(agent_controller._describe_history_for_log(history))
             # Sanitize before use: a history written by an older build may
             # contain ui_only greetings, a leading assistant message,
@@ -1933,6 +2079,13 @@ class BFACW_OT_agent_restart(Operator):  # type: ignore[misc]
 # Track whether we already opened the mention popup for the current @
 _mention_popup_open = False
 
+# Last status mirrored from the turn worker into the UI property.  The worker
+# records ``_agent_state.ui_status`` (plain Python); the main-thread timer
+# applies it to ``props.chat_status``.  The marker avoids re-applying an
+# unchanged value (which would clobber status text set directly by the
+# start/stop operators on the main thread).
+_last_applied_ui_status = ""
+
 
 def chat_timer_update() -> float | None:
     """
@@ -1943,11 +2096,25 @@ def chat_timer_update() -> float | None:
     Registered when the add-on starts, runs while Blender is alive.
     """
     global _mention_popup_open
+    global _last_applied_ui_status
     from . import agent_controller as _ac
 
     # Animate thinking dots.
     if _ac._agent_state.is_thinking:
         _ac._agent_state.thinking_dots += 1
+
+    # Mirror the turn worker's status into the UI property.  The worker must
+    # not touch a bpy property itself (that races Blender's context counter);
+    # it records plain Python state and we apply it here on the main thread.
+    # Apply only when it CHANGED, so status text set directly by the start/stop
+    # operators is not clobbered on the next tick.
+    _ui_status = _ac._agent_state.ui_status
+    if _ui_status and _ui_status != _last_applied_ui_status:
+        for wm in bpy.data.window_managers:
+            _props = getattr(wm, "bfacw_chat_props", None)
+            if _props is not None:
+                _props.chat_status = _ui_status
+        _last_applied_ui_status = _ui_status
 
     # Auto-open @mention popup when user types @ in input.
     try:
@@ -1981,7 +2148,9 @@ def chat_timer_update() -> float | None:
                     area.tag_redraw()
                 if area.type == 'TEXT_EDITOR':
                     area.tag_redraw()
-    return 0.5  # Check every 0.5 seconds.
+    # Tick faster while a turn is running so the spinner reads as motion;
+    # otherwise keep the light idle cadence.
+    return 0.1 if _ac._agent_state.is_thinking else 0.5
 
 
 def _open_mention_for_at(text: str) -> float | None:
@@ -2062,8 +2231,9 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             status = props.chat_status
             if state.is_thinking:
                 elapsed = time.time() - state.thinking_start_time if state.thinking_start_time else 0.0
-                status = "{:s} {:s} ({:.0f}s)".format(
-                    _phase_text(state), _spinner_char(state), elapsed)
+                status = "{:s} {:s} ({:s})".format(
+                    _phase_text(state), _spinner_char(state),
+                    _fmt_duration(elapsed))
             elif not state.mcp_server_running:
                 status = "Offline"
             elif state.error:
@@ -2182,8 +2352,20 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         # aborted the Panel draw and made the whole chat history disappear for
         # the rest of a long turn.  ``list()`` copies atomically under the GIL,
         # so grouping, lookup and rendering all see one consistent view.
-        history = list(state.conversation_history)
-        if history:
+        live = list(state.conversation_history)
+        # Cumulative display: retired turns (kept in memory by the session
+        # store) are rendered as ORDINARY turns above the live window in ONE
+        # continuous conversation, so a compaction never looks like the chat
+        # vanished.  Grouping the COMBINED list also recombines a turn whose
+        # prompt was retired while its reply stayed live (an earlier compaction
+        # could split one) back into a single bubble.  The model's context is
+        # unaffected -- retired turns are never re-sent.
+        from . import session_memory as _sm
+        archived = list(_sm.store.retired_history)
+        combined = archived + live
+        archived_ids = {id(m) for m in archived}
+
+        if combined:
             # Display order toggle + message count.
             hist_box = layout.box()
             toggle_row = hist_box.row(align=True)
@@ -2192,7 +2374,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 icon='SORTTIME', text="Newest First",
             )
             # Count displayable messages (exclude system/internal).
-            displayable = sum(1 for m in history if m.get("role") != "system")
+            displayable = sum(1 for m in combined if m.get("role") != "system")
             _draw_multiline(
                 hist_box,
                 "({:d} messages)".format(displayable),
@@ -2201,7 +2383,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             # once here -- otherwise it would never be visible.  Keep the
             # agent hat/icon header so it reads as a Coworker message, not a
             # bare line of text.
-            for _g in history:
+            for _g in combined:
                 if (_g.get("ui_only") and _g.get("role") == "assistant"
                         and _g.get("content")):
                     _gr = hist_box.row()
@@ -2209,8 +2391,11 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     _draw_multiline(hist_box, _g.get("content", ""))
                     break
 
-            # Group messages into turns (see _group_turns for the rules).
-            turns = _group_turns(history)
+            # Group the FULL conversation (retired + live) into turns.  Each
+            # question renders as ONE bubble: your prompt, the reasoning
+            # (surface), the Workshop (deeper), then the conclusion -- whether
+            # or not the turn has since been retired from the model's context.
+            turns = _group_turns(combined)
 
             # Determine display order and turn limit.
             max_turns = prefs.chat_max_visible_turns
@@ -2227,8 +2412,9 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     (i + 1 for i, t in enumerate(turns) if t is turn), 0)
                 try:
                     self._draw_turn(
-                        hist_box, history, turn, _turn_num,
-                        _display_idx, len(visible_turns), props, state,
+                        hist_box, archived, live, archived_ids, turn,
+                        _turn_num, _display_idx, len(visible_turns),
+                        props, state,
                     )
                 except Exception as _draw_ex:  # pylint: disable=broad-exception-caught
                     # One unexpected turn must never blank the WHOLE history
@@ -2247,7 +2433,9 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
     def _draw_turn(
         self,
         hist_box,
-        history: list,
+        archived: list,
+        live: list,
+        archived_ids: set,
         turn: list,
         turn_num: int,
         display_idx: int,
@@ -2261,19 +2449,42 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         in isolation (see the caller's try/except) instead of aborting the
         whole panel -- the failure mode that hid the chat history during a
         long turn.
+
+        A turn's messages may live in the retired store, the live history, or
+        (for a turn split by an earlier compaction) both; each copy action is
+        pointed at the list its message actually belongs to.
         """
+        def _idx(msg: dict) -> tuple[int, bool]:
+            """(index, archived) for *msg* from whichever list holds it."""
+            if id(msg) in archived_ids:
+                return _hist_index(archived, msg), True
+            return _hist_index(live, msg), False
+
+        def _copy(op, msg: dict) -> None:
+            """Point a copy operator at the right source list + index."""
+            op.message_index, op.archived = _idx(msg)
+
         user_msg, process_msgs, conclusion_msg = _split_turn(turn)
         if not user_msg:
             if conclusion_msg:
                 tb = hist_box.box()
                 cr = tb.row()
                 cr.label(text="Turn {:d} -- Coworker:".format(turn_num), icon=_AGENT_ICON)
-                op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
-                op.message_index = _hist_index(history, conclusion_msg)
+                _copy(cr.operator("bfacw.copy_message", text="", icon="COPYDOWN"),
+                      conclusion_msg)
                 _draw_multiline(tb, conclusion_msg.get("content", ""))
             return
         has_proc = bool(process_msgs)
         turn_box = hist_box.box()
+
+        # Only the active (newest) turn animates while thinking -- past turns
+        # keep a static label.  Computed before the header so the header can
+        # show the live elapsed time for the running turn.
+        is_active_turn = state.is_thinking and (
+            (props.chat_newest_first and display_idx == 0)
+            or (not props.chat_newest_first
+                and display_idx == visible_count - 1)
+        )
 
         # --- Turn header (always visible) ---
         has_err = has_proc and any(
@@ -2288,8 +2499,23 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         sub = hr.row(align=True)
         sub.scale_x = 0.5
         sub.label(text="Turn {:d}".format(turn_num))
-        op = hr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
-        op.message_index = _hist_index(history, user_msg)
+        # Turn duration: the finished turn carries ``turn_seconds`` (stamped by
+        # the turn loop on its last message); the active turn shows elapsed so
+        # far.  Formatted with minutes (long local turns run into the minutes).
+        _turn_seconds = None
+        for _m in reversed(turn):
+            if isinstance(_m.get("turn_seconds"), (int, float)):
+                _turn_seconds = float(_m["turn_seconds"])
+                break
+        _dur_text = ""
+        if is_active_turn and getattr(state, "thinking_start_time", 0.0):
+            _dur_text = _fmt_duration(time.time() - state.thinking_start_time)
+        elif _turn_seconds is not None:
+            _dur_text = _fmt_duration(_turn_seconds)
+        if _dur_text:
+            sub.label(text="| {:s}".format(_dur_text))
+        _copy(hr.operator("bfacw.copy_message", text="", icon="COPYDOWN"),
+              user_msg)
 
         # --- User message (always visible) ---
         # Labelled so every turn clearly shows what the user typed, mirroring
@@ -2297,14 +2523,6 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         urow = turn_box.row()
         urow.label(text="You:", icon='USER')
         _draw_multiline(turn_box, user_msg.get("content", ""))
-
-        # Only the active (newest) turn animates while thinking -- past turns
-        # keep a static label.
-        is_active_turn = state.is_thinking and (
-            (props.chat_newest_first and display_idx == 0)
-            or (not props.chat_newest_first
-                and display_idx == visible_count - 1)
-        )
 
         # --- Workshop (collapsible: only the internals collapse) ---
         if has_proc:
@@ -2333,11 +2551,13 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         sb.label(text="System Context", icon="INFO")
                         _draw_multiline(sb, pc)
                     elif pr == "reasoning":
+                        _pm_idx, _pm_arch = _idx(pm)
                         _draw_reasoning(
                             work_box, pc, pm.get("label", "Thinking"),
                             is_thinking=False,
                             thinking_dots=0,
-                            message_index=_hist_index(history, pm),
+                            message_index=_pm_idx,
+                            archived=_pm_arch,
                         )
                     elif pr == "tool":
                         tn = pm.get("name", "")
@@ -2349,10 +2569,19 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         # Show the full result -- the user asked to see it all,
                         # and the panel scrolls.
                         d = ts if ts else (pc or "")
+                        _pm_idx, _pm_arch = _idx(pm)
                         _draw_tool_inline(
                             work_box, tn, d, ie,
-                            message_index=_hist_index(history, pm),
+                            message_index=_pm_idx,
+                            archived=_pm_arch,
                         )
+                    elif pr == "compaction":
+                        # Timeline marker: context was compressed here.
+                        try:
+                            _retired_n = int(pm.get("retired", 0) or 0)
+                        except (TypeError, ValueError):
+                            _retired_n = 0
+                        _draw_archive_node(work_box, _retired_n, pc)
                     elif pr == "user":
                         work_box.label(text="Agent Context", icon="INFO")
                         _draw_multiline(work_box, pc)
@@ -2386,8 +2615,8 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             turn_box.separator()
             cr = turn_box.row()
             cr.label(text="* Coworker:", icon=_AGENT_ICON)
-            op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
-            op.message_index = _hist_index(history, conclusion_msg)
+            _copy(cr.operator("bfacw.copy_message", text="", icon="COPYDOWN"),
+                  conclusion_msg)
             _render_markdown(turn_box, conclusion_msg.get("content", ""))
 
 
@@ -2580,11 +2809,11 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
                 _g_s = float(_cost.get("predicted_ms", 0.0)) / 1000.0
                 _draw_multiline(
                     layout,
-                    "Last turn: {:.0f}s wall | gen {:d} tok/{:.0f}s, "
-                    "prefill {:d} tok/{:.0f}s | {:d} tools".format(
-                        _wall,
-                        int(_cost.get("predicted_n", 0)), _g_s,
-                        int(_cost.get("prompt_n", 0)), _p_s,
+                    "Last turn: {:s} wall | gen {:d} tok/{:s}, "
+                    "prefill {:d} tok/{:s} | {:d} tools".format(
+                        _fmt_duration(_wall),
+                        int(_cost.get("predicted_n", 0)), _fmt_duration(_g_s),
+                        int(_cost.get("prompt_n", 0)), _fmt_duration(_p_s),
                         int(_cost.get("tools", 0)),
                     ),
                 )
@@ -2687,7 +2916,15 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
 
         # Conversation summary -- latest message first.
         history = state.conversation_history
-        display_history = [m for m in history if m.get("role") != "system"]
+        # Prefix retired turns so the count reflects the WHOLE conversation;
+        # the last-10 preview still draws from the tail.  Mirrors the main
+        # panel's "Archived context" so nothing appears to vanish.
+        try:
+            from . import session_memory as _sm
+            _combined = list(_sm.store.retired_history) + list(history)
+        except Exception:  # pylint: disable=broad-exception-caught
+            _combined = list(history)
+        display_history = [m for m in _combined if m.get("role") != "system"]
         if display_history:
             box = layout.box()
             box.label(text="History ({:d} messages)".format(len(display_history)), icon='TEXT')
@@ -2700,6 +2937,12 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
                 elif role == "tool":
                     display = summary if summary else (content or "")
                     preview = display[:80] + "..." if display and len(display) > 80 else (display or "")
+                elif role == "compaction":
+                    try:
+                        _rn = int(msg.get("retired", 0) or 0)
+                    except (TypeError, ValueError):
+                        _rn = 0
+                    preview = "compacted {:d} turn(s)".format(_rn)
                 else:
                     preview = content if content else ""
                 _draw_multiline(box, "[{:s}] {:s}".format(role, preview))
@@ -2925,6 +3168,7 @@ class BFACW_OT_session_compact_now(Operator):  # type: ignore[misc]
                 keep_recent=_MANUAL_COMPACT_KEEP_RECENT)
             st.memory_block = memory_block
             st.append_archive(retired)
+            st.append_retired(retired)
             history[:] = kept
         _save_chat_history()
         self.report({"INFO"}, "Compacted: {:d} messages retired".format(len(retired)))

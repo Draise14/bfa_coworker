@@ -25,6 +25,7 @@ __all__ = (
     "MAX_WINDOW_TURNS",
     "MEMORY_TARGET_TOKENS",
     "COMPACTION_TRIGGER_RATIO",
+    "COMPACTION_ROLE",
     "CheckpointStore",
     "store",
     "build_memory_block",
@@ -84,6 +85,13 @@ MAX_ARCHIVE_MESSAGES = 5000
 # into a memory block they become false memories that confuse the model in
 # a later turn or thread, so they are excluded from memory building.
 _SYSTEM_NOTE_PREFIX = "[System:"
+
+# Synthetic role stamped on the timeline marker recorded in
+# ``retired_history`` when a compaction retires turns.  It is display-only:
+# the chat panel renders it as an "Archive" node in the Workshop timeline so
+# the user can audit exactly where their context was compressed.  It is never
+# sent to the model.
+COMPACTION_ROLE = "compaction"
 
 
 def is_system_note(message: dict[str, Any]) -> bool:
@@ -203,25 +211,65 @@ def memory_writer_prompt(retired_text: str, prior_memory: str) -> list[dict[str,
 # Compaction
 
 
-def find_retire_boundary(messages: list[dict[str, Any]], keep_recent: int = MAX_WINDOW_TURNS) -> int:
+def _is_real_user(message: dict[str, Any]) -> bool:
+    """True for a genuine user turn -- NOT an injected ``[System: ...]`` note.
+
+    The addon stores its turn-scoped context messages (entity warnings, the
+    tool-result filler prompt) with the ``user`` role so the model sees them,
+    but they are NOT conversation boundaries.  Treating them as boundaries
+    let a compaction land mid-turn and retire the CURRENT turn's real prompt --
+    which then left the live window anchored on an injected note, so the chat
+    panel (which only anchors turns on real user messages) showed no turn at
+    all while the real prompt sat in the archive.
+    """
+    return message.get("role") == "user" and not is_system_note(message)
+
+
+def find_retire_boundary(
+    messages: list[dict[str, Any]],
+    keep_recent: int = MAX_WINDOW_TURNS,
+    fallback_to_last_user: bool = False,
+) -> int:
     """Return the index where older messages may be retired up to.
 
     Keeps the system prompt (index 0) and the most recent *keep_recent*
-    messages verbatim.  The boundary is pushed forward to the next ``user``
-    message so a tool-call exchange is never cut in half; returns the length
-    of *messages* when there is nothing safe to retire.
+    messages verbatim.  The boundary is pushed forward to the next REAL
+    ``user`` message (injected ``[System: ...]`` notes are not boundaries) so
+    a tool-call exchange is never cut in half AND the current turn's prompt is
+    never retired; returns the length of *messages* when there is nothing safe
+    to retire.
+
+    When *fallback_to_last_user* is set and the recent window holds no
+    ``user`` boundary (a long single-turn agent/reasoning run whose tail is
+    all assistant/tool/reasoning messages), the boundary falls back to the
+    LAST real ``user`` message so older turns can still be retired while the
+    current turn is always kept verbatim.  Returns the length of *messages*
+    when there is no real ``user`` message at all.
     """
     n = len(messages)
     if n == 0:
         return 0
     start = 1 if messages[0].get("role") == "system" else 0
     boundary = max(start, n - keep_recent)
-    if boundary <= start:
+    if boundary <= start and not fallback_to_last_user:
         return n
-    # Advance to the next user message so no orphaned tool result remains.
-    while boundary < n and messages[boundary].get("role") != "user":
-        boundary += 1
-    return boundary if boundary < n else n
+    # Advance to the next REAL user message so no orphaned tool result remains
+    # and the current turn's prompt is never retired.
+    adv = max(boundary, start)
+    while adv < n and not _is_real_user(messages[adv]):
+        adv += 1
+    if adv < n:
+        return adv
+    if not fallback_to_last_user:
+        return n
+    # Nothing retirable inside the recent window: keep the current turn by
+    # retiring up to the last real user message instead of wiping everything.
+    # (A last real user at ``start`` means there is only one turn -- nothing
+    # to retire -- so return ``n``.)
+    for i in range(n - 1, start - 1, -1):
+        if _is_real_user(messages[i]):
+            return i if i > start else n
+    return n
 
 
 def compact_history(
@@ -230,6 +278,7 @@ def compact_history(
     memory_writer: Callable[[str, str], str | None] | None = None,
     keep_recent: int = MAX_WINDOW_TURNS,
     updated_turn: int = 0,
+    fallback_to_last_user: bool = False,
 ) -> tuple[list[dict[str, Any]], str, list[dict[str, Any]]]:
     """Retire old turns from *history* and produce a fresh memory block.
 
@@ -238,8 +287,17 @@ def compact_history(
     returns the LLM-written note (or ``None`` on failure -- the heuristic
     fallback is used then).  The caller is responsible for archiving
     *retired* and snapshotting a checkpoint afterwards.
+
+    When there is nothing safe to retire (no ``user``-role boundary past the
+    verbatim window) the history is returned UNCHANGED with an empty retired
+    list -- never reduced to just the system prompt.
     """
-    boundary = find_retire_boundary(history, keep_recent)
+    boundary = find_retire_boundary(history, keep_recent, fallback_to_last_user)
+    if boundary >= len(history):
+        # Nothing retirable: the boundary is the whole length (no user-role
+        # message to land on).  Retiring here would gut the conversation to
+        # the system prompt, so return it untouched instead.
+        return list(history), prior_memory, []
     # Never retire or archive the system prompt (index 0): it is a live
     # instruction, not conversation, and must always survive in *kept*.
     _has_system = bool(history) and history[0].get("role") == "system"
@@ -300,6 +358,11 @@ class CheckpointStore:
         self.archive_path: Path | None = None
         self.memory_block: str = ""
         self.memory_updated_turn: int = 0
+        # Retired turns kept in memory for the cumulative chat display: the
+        # sidebar shows the WHOLE conversation (retired turns above the live
+        # window) even though the model's context stays compacted.  Bounded to
+        # MAX_ARCHIVE_MESSAGES; older turns remain on disk (append_archive).
+        self.retired_history: list[dict[str, Any]] = []
 
     # -- checkpoints -------------------------------------------------------
 
@@ -340,6 +403,7 @@ class CheckpointStore:
         self.memory_block = ""
         self.memory_updated_turn = 0
         self.archive_path = None
+        self.retired_history = []
 
     def restore(
         self,
@@ -364,6 +428,10 @@ class CheckpointStore:
         self.snapshot(current_history, reason="pre-restore", turn_index=turn_index)
         self.memory_block = target.get("memory_block", "")
         self.memory_updated_turn = int(target.get("memory_updated_turn", 0) or 0)
+        # A checkpoint predates the current compaction, so its history already
+        # contains the turns that were retired afterwards.  Clear the display
+        # aggregate to avoid showing the restored turns twice.
+        self.retired_history = []
         return json.loads(json.dumps(target.get("history", []), default=str))
 
     def branch(self, index: int) -> list[dict[str, Any]]:
@@ -401,6 +469,32 @@ class CheckpointStore:
             return written
         except OSError:
             return 0
+
+    def append_retired(self, retired: list[dict[str, Any]]) -> None:
+        """Accumulate retired turns for the cumulative chat display.
+
+        Unlike :meth:`append_archive` (a disk-only debug fallback), this keeps
+        the retired turns in memory so the sidebar can show the WHOLE
+        conversation -- retired turns above the live window -- even though the
+        model's context stays compacted.  Bounded to
+        :data:`MAX_ARCHIVE_MESSAGES` so a very long session cannot grow memory
+        without limit; older turns remain on disk via :meth:`append_archive`.
+        """
+        if not retired:
+            return
+        self.retired_history.extend(retired)
+        # Record a timeline marker at the compaction boundary so the chat panel
+        # can show WHEN the context was compressed (inside the Workshop).  The
+        # marker carries the fresh memory summary; it is display-only and never
+        # re-sent to the model.
+        self.retired_history.append({
+            "role": COMPACTION_ROLE,
+            "content": self.memory_block,
+            "retired": len(retired),
+            "turn": self.memory_updated_turn,
+        })
+        if len(self.retired_history) > MAX_ARCHIVE_MESSAGES:
+            self.retired_history = self.retired_history[-MAX_ARCHIVE_MESSAGES:]
 
     @staticmethod
     def _rotate_archive(path: Path) -> None:
@@ -452,6 +546,7 @@ class CheckpointStore:
             "memory_block": self.memory_block,
             "memory_updated_turn": self.memory_updated_turn,
             "checkpoints": self.checkpoints,
+            "retired_history": self.retired_history,
         }
 
     def load_payload(self, payload: dict[str, Any]) -> None:
@@ -463,6 +558,11 @@ class CheckpointStore:
         checkpoints = payload.get("checkpoints")
         if isinstance(checkpoints, list):
             self.checkpoints = [c for c in checkpoints if isinstance(c, dict)]
+        retired_history = payload.get("retired_history")
+        if isinstance(retired_history, list):
+            self.retired_history = [
+                m for m in retired_history if isinstance(m, dict)
+            ]
 
 
 # Module singleton -- mirrors agent_controller's ``_agent_state`` pattern.

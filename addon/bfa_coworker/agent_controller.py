@@ -79,6 +79,14 @@ _LLM_CHAT_URL = "http://127.0.0.1:{:d}/v1/chat/completions"
 _LOCAL_MAX_TOOL_ITERATIONS = 12
 _REMOTE_MAX_TOOL_ITERATIONS = 8
 
+# Soft wall-clock budget for a single turn (seconds).  Backstop against a
+# pathological run that keeps making requests but never finishes: once the
+# turn has run this long it stops cleanly with a visible warning instead of
+# spinning forever.  Generous enough not to cut off a legitimately long local
+# turn (a stalled single request is caught far sooner by the stream watchdog
+# in llm_transport).  Set to 0 to disable.
+_TURN_WALL_BUDGET_SECONDS = 1200.0
+
 # -- End-of-turn execution guarantee ---------------------------------
 # How many times the loop will nudge a model that *narrates* an action but
 # emits no tool call (Agent mode only; Ask mode is never nudged).
@@ -470,6 +478,32 @@ def _clear_system_prompt_cache() -> None:
         from . import skills as _skills_mod  # pylint: disable=import-error
         _skills_mod.clear_cache()
     except Exception:
+        pass
+
+
+def prefetch_main_thread_context() -> None:
+    """Refresh bpy-derived values for the turn worker.  Run on the MAIN thread.
+
+    The conversation turn loop runs on a worker thread.  Reading
+    ``bpy.app.version`` / ``bpy.context.preferences`` / ``bpy.utils.user_resource``
+    from that worker races Blender's single global Python context counter
+    (``py_call_level``), which ``bpy_context_clear`` detects and reports as
+    "Python context internal state bug. this should not happen!" -- spamming
+    the console.  Cache those values here (main thread) so the worker only
+    reads plain Python state.  Call this right before spawning the turn thread
+    (and at agent start).  Best-effort; never raises.
+    """
+    try:
+        _agent_state.prefetched_system_prompt = _get_system_prompt_with_rules()
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    try:
+        import bpy as _bpy  # pylint: disable=import-error
+        prefs = _bpy.context.preferences.addons[__package__].preferences
+        res = getattr(prefs, "polyhaven_resolution", "") or ""
+        if res:
+            _agent_state.prefetched_polyhaven_resolution = str(res)
+    except Exception:  # pylint: disable=broad-exception-caught
         pass
 
 
@@ -1463,11 +1497,22 @@ class AgentState:
     conversation_history: list[dict[str, Any]] = field(default_factory=list)
     streaming_text: str = ""
     reasoning_text: str = ""  # Chain-of-thought from reasoning models
-    thinking_dots: int = 0  # Animated spinner state (0-3)
+    thinking_dots: int = 0  # Monotonic tick; UI wraps it modulo the spinner frames
     # Pre-first-token activity phase so the UI can say "reading" / "warming up"
     # instead of showing "Thinking (0s)", which reads as frozen while a local
     # model loads/warms.  Values: "" (idle) | "reading" | "warming" | "thinking".
     turn_phase: str = ""
+    # Status line for the chat panel, written from the turn WORKER thread (a
+    # plain-Python field).  The main-thread timer mirrors it into the UI
+    # property; writing a bpy property from the worker races Blender's global
+    # Python context counter and spams "Python context internal state bug".
+    ui_status: str = ""
+    # bpy-derived values the turn worker must NOT read itself (bpy.app.version,
+    # bpy.context.preferences, bpy.utils.user_resource): reading them off the
+    # main thread races the context counter.  Populated on the main thread by
+    # ``prefetch_main_thread_context()`` before the worker starts.
+    prefetched_system_prompt: str = ""
+    prefetched_polyhaven_resolution: str = ""
 
     # -- Token usage tracking (issue #69) ---------------------------
     # Per-call usage comes from the LLM response ``usage`` object (stream
@@ -1554,6 +1599,11 @@ class AgentState:
 
     # -- Re-entrancy guard ------------------------------------------
     turn_active: bool = False  # True while a conversation turn is in progress.
+    # Monotonic token identifying the turn that currently owns the guard.  A
+    # stopped turn whose worker is still unwinding must NOT clear a NEWER
+    # turn's guard or release its scene lock, so every turn checks the token
+    # before it cleans up.
+    turn_token: int = 0
 
     # -- Vision pipeline --------------------------------------------
     _pending_image: str | None = None  # Base64 data URI of last screenshot
@@ -4914,6 +4964,26 @@ def _log_turn_cost() -> None:
         pass
 
 
+def _stamp_turn_duration() -> None:
+    """Record the just-finished turn's wall time on its last history message.
+
+    The chat panel reads ``turn_seconds`` back so each finished turn can show
+    how long it took (formatted with minutes).  Uses the per-turn cost ledger's
+    start stamp (set at turn start); best-effort and never raises.
+    """
+    try:
+        cost = _agent_state.last_turn_cost
+        start = float(cost.get("start", 0.0) or 0.0) if isinstance(cost, dict) else 0.0
+        if not start:
+            return
+        hist = _agent_state.conversation_history
+        if not hist:
+            return
+        hist[-1]["turn_seconds"] = round(time.time() - start, 1)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+
+
 def run_conversation_turn(
     user_message: str,
     on_text: Callable[[str], None] | None = None,
@@ -4957,6 +5027,8 @@ def run_conversation_turn(
             print("[Coworker] run_conversation_turn: re-entrancy blocked -- turn already active")
             return _agent_state.conversation_history
     _agent_state.turn_active = True
+    _agent_state.turn_token += 1
+    _my_token = _agent_state.turn_token
     try:
         return _run_conversation_turn_inner(
             user_message, on_text, on_status, on_reasoning,
@@ -4964,12 +5036,22 @@ def run_conversation_turn(
             on_stream_text, on_stream_reasoning, allow_action_nudge,
         )
     finally:
-        _agent_state.turn_active = False
-        # Always release the co-work scene lock (FINISH, error, Stop, or an
-        # exception all pass through here).
-        _release_scene_lock()
-        # Tier 3i: log the turn's cost breakdown (prefill vs gen vs overhead).
-        _log_turn_cost()
+        # Only the turn that still owns the guard may clear it and release the
+        # scene lock.  A STOPPED worker often keeps unwinding for a while (a
+        # blocking non-streaming read or a tool call cannot be interrupted
+        # instantly); if the user already sent a new message, that newer turn
+        # bumped the token and now owns the guard -- this old worker must not
+        # clobber it.
+        if _agent_state.turn_token == _my_token:
+            _agent_state.turn_active = False
+            # Always release the co-work scene lock (FINISH, error, Stop, or
+            # an exception all pass through here).
+            _release_scene_lock()
+            # Tier 3i: log the turn's cost breakdown (prefill vs gen vs overhead).
+            _log_turn_cost()
+            # Record the turn's wall time on its last message so the chat panel
+            # can show each finished turn's duration.
+            _stamp_turn_duration()
 
 
 # Turn counter for memory-block "Last updated" stamps (Tier 3).
@@ -5048,8 +5130,19 @@ def _maybe_compact_session(
     # early -- on the first turn it fired with two messages and, because there
     # was nothing old enough to retire, produced a no-op "Compacting..." status
     # and an empty checkpoint.
-    estimated = _estimate_messages_tokens(history) + tools_tokens
-    _boundary = session_memory.find_retire_boundary(history)
+    # The prompt estimate must reflect what is actually SENT.  ``reasoning``
+    # (chain-of-thought) messages are stripped before every request, so a long
+    # CoT would otherwise over-inflate the estimate and trip the compaction
+    # trigger far too early (the meter then lies about real occupancy).
+    estimated = _estimate_messages_tokens(
+        [m for m in history if m.get("role") != "reasoning"]
+    ) + tools_tokens
+    # Fall back to the LAST real user message when the recent window has no
+    # user boundary (a long in-progress turn): older COMPLETE turns can still
+    # be retired while the current turn is always kept.  Without the fallback a
+    # long current turn could only grow until overflow.
+    _boundary = session_memory.find_retire_boundary(
+        history, fallback_to_last_user=True)
     _can_retire = _boundary < len(history)
     _over_window = (
         sum(1 for m in history if not m.get("ui_only"))
@@ -5077,11 +5170,13 @@ def _maybe_compact_session(
         prior_memory=st.memory_block,
         memory_writer=memory_writer,
         updated_turn=_session_turn_count,
+        fallback_to_last_user=True,
     )
     with session_memory.store_lock:
         st.memory_block = memory_block
         st.memory_updated_turn = _session_turn_count
         st.append_archive(retired)
+        st.append_retired(retired)
         history[:] = kept
     # Reasoning entries exist for the chat panel while a turn is young, but
     # once they fall outside the verbatim window they are dead weight: they
@@ -5127,24 +5222,38 @@ def _force_compact_session(
     """
     global _session_turn_count
     st = session_memory.store
+    # Find what can be retired while ALWAYS keeping the current turn: when the
+    # recent window is a long single-turn agent/reasoning run with no user
+    # boundary, fall back to the last user message.  If even that yields
+    # nothing, do nothing -- never reduce the conversation to the system prompt.
+    _pre_boundary = session_memory.find_retire_boundary(
+        history, _FORCE_COMPACT_KEEP_RECENT, fallback_to_last_user=True)
+    if _pre_boundary >= len(history):
+        print("[Coworker] _force_compact_session: nothing retirable -- skipping "
+              "(history left intact)")
+        return 0
     if on_status:
         on_status("Compacting conversation...")
-    # Snapshot the PRE-compaction state (only when something will retire).
-    _pre_boundary = session_memory.find_retire_boundary(history, _FORCE_COMPACT_KEEP_RECENT)
-    if _pre_boundary < len(history):
-        with session_memory.store_lock:
-            st.snapshot(history, reason="overflow", turn_index=_session_turn_count)
+    # compact_history computes the new lists WITHOUT mutating *history*, so the
+    # commit below can still snapshot the true pre-compaction state.
     kept, memory_block, retired = session_memory.compact_history(
         history,
         prior_memory=st.memory_block,
         memory_writer=memory_writer,
         keep_recent=_FORCE_COMPACT_KEEP_RECENT,
         updated_turn=_session_turn_count,
+        fallback_to_last_user=True,
     )
+    if not retired:
+        # Nothing actually retirable (e.g. only ui_only messages): leave the
+        # history untouched rather than mutating it to a near-empty state.
+        return 0
     with session_memory.store_lock:
+        st.snapshot(history, reason="overflow", turn_index=_session_turn_count)
         st.memory_block = memory_block
         st.memory_updated_turn = _session_turn_count
         st.append_archive(retired)
+        st.append_retired(retired)
         history[:] = kept
     # Same reasoning-entry prune as the threshold path: once outside the
     # verbatim window they are UI-only dead weight that is stripped before
@@ -5200,7 +5309,13 @@ def _run_conversation_turn_inner(
 
     # Ensure the first message is the system prompt.
     if not history or history[0].get("role") != "system":
-        system_text = _get_system_prompt_with_rules()
+        # Prefer the main-thread-prefetched prompt: building it here (worker
+        # thread) reads bpy.app.version / bpy.context.preferences /
+        # bpy.utils.user_resource, which races Blender's global Python context
+        # counter.  The prefetch is best-effort; fall back to a build.
+        system_text = (
+            _agent_state.prefetched_system_prompt or _get_system_prompt_with_rules()
+        )
         history.insert(0, {"role": "system", "content": system_text})
         print("[Coworker] run_conversation_turn: inserted system prompt ({:d} chars)".format(
             len(system_text)))
@@ -5359,10 +5474,18 @@ def _run_conversation_turn_inner(
         )
         if response is None:
             # Streaming not supported by this endpoint -- non-streaming fallback.
-            response = openai_chat_completions(
-                llm_url, send_messages, send_tools, api_key, model,
-                max_tokens, thinking_budget_tokens=budget, chat_mode=chat_mode,
-            )
+            # EXCEPT when the stream hit its liveness watchdog (no first token):
+            # the same busy/stalled server would make the non-streaming request
+            # wait against the 600 s hard ceiling too, so fail fast with the
+            # friendly "no response" message instead of hanging again.
+            if getattr(_agent_state, "error_kind", "") == "stream_timeout":
+                print("[Coworker] _llm_request: stream timed out before any token "
+                      "-- not retrying non-streaming (server is not responding)")
+            else:
+                response = openai_chat_completions(
+                    llm_url, send_messages, send_tools, api_key, model,
+                    max_tokens, thinking_budget_tokens=budget, chat_mode=chat_mode,
+                )
         if response is not None:
             _agent_state.record_usage(response.get("usage"))
             # Log where the time went: prompt-eval (big prompt) vs generation
@@ -5761,6 +5884,28 @@ def _run_conversation_turn_inner(
             if on_status:
                 on_status("Stopped")
             return history
+
+        # -- Per-turn wall-clock backstop -------------------------------
+        # A turn that keeps issuing requests but never finishes (a model that
+        # loops, or repeated slow responses) is stopped cleanly here instead
+        # of running unbounded.  The stream watchdog catches a single stalled
+        # request; this catches an endlessly-productive-but-never-done turn.
+        if _TURN_WALL_BUDGET_SECONDS > 0:
+            _wall_elapsed = time.time() - _agent_state.thinking_start_time
+            if _wall_elapsed >= _TURN_WALL_BUDGET_SECONDS:
+                print("[Coworker] run_conversation_turn: wall-clock budget "
+                      "{:.0f}s reached -- ending the turn".format(_TURN_WALL_BUDGET_SECONDS))
+                _agent_state.warning = (
+                    "This turn ran for over {:.0f} minutes and was stopped to "
+                    "keep things responsive. The work so far is kept -- send "
+                    "another message to continue.".format(_TURN_WALL_BUDGET_SECONDS / 60.0)
+                )
+                _agent_state.is_thinking = False
+                _agent_state.thinking_start_time = 0.0
+                _agent_state.turn_phase = ""
+                if on_status:
+                    on_status("Stopped (time budget reached)")
+                break
 
         # -- Session memory compaction check (Tier 3 Phase 4) -----------
         # Retire old turns once the estimated prompt approaches the safe
@@ -6355,15 +6500,22 @@ def _run_conversation_turn_inner(
 
                 # -- Inject resolution from preferences -------------
                 if tool_name in ("download_polyhaven_asset", "setup_pbr_material"):
-                    try:
-                        _prefs = bpy.context.preferences.addons[__package__].preferences
+                    # Prefer the main-thread-prefetched resolution: reading
+                    # bpy.context.preferences from this worker thread races
+                    # Blender's context counter.  Fall back to a guarded read.
+                    _res = _agent_state.prefetched_polyhaven_resolution
+                    if not _res:
+                        try:
+                            _prefs = bpy.context.preferences.addons[__package__].preferences
+                            _res = _prefs.polyhaven_resolution
+                        except Exception:
+                            _res = ""
+                    if _res:
                         if "resolution" not in args or not args.get("resolution"):
-                            args["resolution"] = _prefs.polyhaven_resolution
+                            args["resolution"] = _res
                         # Also inject polyhaven_resolution for setup_pbr_material.
                         if tool_name == "setup_pbr_material" and "polyhaven_resolution" not in args:
-                            args["polyhaven_resolution"] = _prefs.polyhaven_resolution
-                    except Exception:
-                        pass  # Best-effort; don't break the tool call.
+                            args["polyhaven_resolution"] = _res
 
                 # Call the MCP tool.
                 result_text = _call_mcp_tool_sync(tool_name, args, mcp_port)

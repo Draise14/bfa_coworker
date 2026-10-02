@@ -99,5 +99,60 @@ class TestCoreModuleImports(unittest.TestCase):
                 ast.parse(_read(path))
 
 
+class TestNoPathStrFormat(unittest.TestCase):
+    """``Path`` objects must not be formatted with ``{:s}``.
+
+    ``"{:s}".format(Path(...))`` raises
+    ``TypeError: unsupported format string passed to WindowsPath.__format__``
+    at runtime (Blender aborted the operator).  This guards the known
+    Path-returning helpers: a bare ``helper()`` call is unsafe whenever it is
+    used as a value (e.g. a ``.format()`` argument); it is safe only when
+    wrapped in ``str(...)``, used with a path operator (``.parent`` / ``/``),
+    or when the call is a definition / plain assignment.
+
+    The scan is over the WHOLE source (not line by line) because the bug this
+    pins had the format string and the offending call on different lines.
+    """
+
+    _PATH_HELPERS = (
+        "_chat_history_path",
+        "_chat_history_dir",
+        "_session_memory_state_path",
+        "_session_memory_archive_path",
+        "_rules_dir",
+        "_llama_server_log_path",
+        "_get_bundled_llama_dir",
+        "_get_models_dir",
+    )
+
+    def _unsafe_uses(self, src):
+        pattern = re.compile(
+            r"(?<![\w.])(%s)\(\s*\)" % "|".join(self._PATH_HELPERS))
+        bad = []
+        for m in pattern.finditer(src):
+            prefix = src[:m.start()].rstrip()
+            suffix = src[m.end():].lstrip()
+            if prefix.endswith("str("):
+                continue  # str(helper()) -- safe
+            if prefix.endswith("def") or prefix.endswith("=") \
+                    or prefix.endswith("return"):
+                continue  # definition / assignment -- no formatting
+            if suffix[:1] == "." or suffix.startswith("/"):
+                continue  # path operator (.parent / ` / `) -- safe
+            lineno = src.count("\n", 0, m.start()) + 1
+            bad.append("{:d}: {:s}".format(lineno, m.group(0)))
+        return bad
+
+    def test_no_bare_path_in_str_format(self):
+        offenders = {}
+        for path in _modules():
+            bad = self._unsafe_uses(_read(path))
+            if bad:
+                offenders[os.path.basename(path)] = bad
+        self.assertEqual(
+            offenders, {},
+            "Path helper used as a bare value (needs str()): {!r}".format(offenders))
+
+
 if __name__ == "__main__":
     unittest.main()

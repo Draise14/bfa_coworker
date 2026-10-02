@@ -36,6 +36,7 @@ __all__ = (
 import json
 import re
 import os
+import random
 import time
 import threading
 from pathlib import Path
@@ -96,29 +97,71 @@ _WRAP_WIDTH = 60
 _is_bfa: bool = hasattr(bpy.types, "VIEW3D_MT_view")
 _AGENT_ICON: str = "WIZARD" if _is_bfa else "GHOST_ENABLED"
 
-# Animated "thinking" spinner frames: a braille dot expands into a full cell,
-# contracts back, then a single dot orbits the cell one way and back the other.
-# Kept as named phase tuples so the intent stays readable, then concatenated
-# into one looping sequence.  Written as \u escapes so the source stays ASCII;
-# rendered as glyphs by Blender's UI.
+# Animated "thinking" spinner frames, assembled from named phase groups: a
+# braille dot grows into a full cell and shrinks back (diagonal and bar
+# variants), the classic multi-dot "wormy" orbit, a travelling "wavy" ripple,
+# and a "block" gap rotating through a full cell.  Rather than replaying the
+# same order every loop, the groups are shuffled per cycle (see
+# _ordered_phases) so a long wait keeps looking new.  Written as \u escapes so
+# the source stays ASCII; rendered as glyphs by Blender's UI.
 _EXPAND: tuple[str, ...] = (
     "\u2801", "\u2803", "\u2807", "\u280f", "\u281f", "\u283f",
 )
 _CONTRACT: tuple[str, ...] = (
     "\u281f", "\u280f", "\u2807", "\u2803", "\u2801",
 )
-_SPIN_OUT: tuple[str, ...] = (
-    "\u2808", "\u2810", "\u2820", "\u2804", "\u2802",
+# "Wormy": the classic multi-dot braille orbit -- dots chase each other around.
+_WORMY: tuple[str, ...] = (
+    "\u280b", "\u2819", "\u2839", "\u2838", "\u283c",
+    "\u2834", "\u2826", "\u2827", "\u2807", "\u280f",
 )
-_SPIN_BACK: tuple[str, ...] = (
-    "\u2804", "\u2820", "\u2810", "\u2808",
+# "Wavy": a ripple travelling along the braille columns.
+_WAVY: tuple[str, ...] = (
+    "\u2809", "\u280b", "\u2819", "\u281a", "\u2812", "\u2802", "\u2802",
+    "\u2812", "\u2832", "\u2834", "\u2826", "\u2816", "\u2812", "\u2810",
 )
-_SPINNERS: tuple[str, ...] = _EXPAND + _CONTRACT + _SPIN_OUT + _SPIN_BACK
+# "Growing bar": fills the left column top-to-bottom, then the right column
+# bottom-to-top, then unwinds -- a bar that grows out and collapses back.
+_GROW: tuple[str, ...] = (
+    "\u2801", "\u2803", "\u2807", "\u2827", "\u2837",
+    "\u283f", "\u2837", "\u2827", "\u2807", "\u2803",
+)
+# "Block": a full cell with a gap that rotates around it.
+_BLOCK: tuple[str, ...] = (
+    "\u28ff", "\u28f7", "\u28ef", "\u28df", "\u287f",
+    "\u28bf", "\u28fb", "\u28fd", "\u28fe", "\u28ff",
+)
+_PHASES: tuple[tuple[str, ...], ...] = (
+    _EXPAND, _CONTRACT, _WORMY, _WAVY, _GROW, _BLOCK,
+)
+_PHASE_TOTAL = sum(len(_phase) for _phase in _PHASES)
+
+
+def _ordered_phases(cycle: int) -> list[tuple[str, ...]]:
+    """Phase play order for cycle number *cycle*, deterministically shuffled.
+
+    Seeding on the cycle number gives every widget drawn in the same frame the
+    same order, and a fresh shuffle each loop -- variety with no shared mutable
+    state and no mid-frame flicker.
+    """
+    order = list(_PHASES)
+    random.Random(cycle * 2654435761 & 0xFFFFFFFF).shuffle(order)
+    return order
+
+
+def _spinner_glyph(tick: int) -> str:
+    """Return the spinner glyph for monotonic *tick* (wraps across all phases)."""
+    cycle, pos = divmod(tick, _PHASE_TOTAL)
+    for phase in _ordered_phases(cycle):
+        if pos < len(phase):
+            return phase[pos]
+        pos -= len(phase)
+    return _PHASES[0][0]  # Unreachable: pos < _PHASE_TOTAL always resolves.
 
 
 def _spinner_char(state) -> str:
     """Return the current animated spinner glyph for *state*."""
-    return _SPINNERS[int(getattr(state, "thinking_dots", 0) or 0) % len(_SPINNERS)]
+    return _spinner_glyph(int(getattr(state, "thinking_dots", 0) or 0))
 
 
 def _phase_text(state) -> str:
@@ -724,8 +767,7 @@ def _draw_reasoning(
 
     # Animate the label with Unicode spinner while thinking.
     if is_thinking:
-        display_label = "{:s} {:s}".format(
-            label, _SPINNERS[thinking_dots % len(_SPINNERS)])
+        display_label = "{:s} {:s}".format(label, _spinner_glyph(thinking_dots))
         icon = _AGENT_ICON
     else:
         display_label = label
@@ -1888,7 +1930,7 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
             # Log what was loaded -- the first user message in particular
             # reveals whether the model is answering a stale prompt.
             print("[Coworker] _load_chat_history: loaded {:d} messages from {:s}".format(
-                len(history), _chat_history_path()))
+                len(history), str(_chat_history_path())))
             print(agent_controller._describe_history_for_log(history))
             # Sanitize before use: a history written by an older build may
             # contain ui_only greetings, a leading assistant message,
@@ -2072,7 +2114,7 @@ def chat_timer_update() -> float | None:
                     area.tag_redraw()
     # Tick faster while a turn is running so the spinner reads as motion;
     # otherwise keep the light idle cadence.
-    return 0.15 if _ac._agent_state.is_thinking else 0.5
+    return 0.1 if _ac._agent_state.is_thinking else 0.5
 
 
 def _open_mention_for_at(text: str) -> float | None:

@@ -1003,6 +1003,11 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
         props.chat_input = ""
         agent_controller._agent_state.turn_phase = "reading"
         props.chat_status = "Reading your message..."
+        agent_controller._agent_state.ui_status = "Reading your message..."
+        # Refresh bpy-derived values (system prompt, prefs) HERE, on the main
+        # thread, so the turn worker never reads bpy itself -- an off-main
+        # bpy read races Blender's context counter and spams the console.
+        agent_controller.prefetch_main_thread_context()
 
         def _do_turn():
             try:
@@ -1032,7 +1037,9 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             """Try to process the next queued message."""
             next_msg = agent_controller.dequeue_message()
             if next_msg:
-                props.chat_status = "Processing queued message..."
+                # Runs on the turn worker thread: record the status as plain
+                # Python state; the main-thread timer mirrors it to the UI.
+                agent_controller._agent_state.ui_status = "Processing queued message..."
                 _redraw_areas_safe()
                 # Start processing the next message in a new thread.
                 import threading as _threading
@@ -1063,7 +1070,12 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
                 _redraw_areas_safe()
 
         def _update_status(text: str) -> None:
-            props.chat_status = text
+            # Called from the turn WORKER thread.  Do NOT write the bpy chat
+            # property here: an off-main RNA write races Blender's global
+            # Python context counter and spams "Python context internal state
+            # bug".  Record plain Python state; the main-thread timer mirrors
+            # it into props.chat_status.
+            agent_controller._agent_state.ui_status = text
             _redraw_areas_safe()
 
         def _update_streaming(text: str) -> None:
@@ -1681,6 +1693,10 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
 
+        # Warm the main-thread bpy-derived cache (system prompt, prefs) now, on
+        # the main thread, so the first turn worker never reads bpy itself.
+        agent_controller.prefetch_main_thread_context()
+
         # Step 1: Start the MCP bridge server (inside Blender).
         if not mcp_to_blender_server.is_running():
             if bpy.app.background:
@@ -1951,6 +1967,13 @@ class BFACW_OT_agent_restart(Operator):  # type: ignore[misc]
 # Track whether we already opened the mention popup for the current @
 _mention_popup_open = False
 
+# Last status mirrored from the turn worker into the UI property.  The worker
+# records ``_agent_state.ui_status`` (plain Python); the main-thread timer
+# applies it to ``props.chat_status``.  The marker avoids re-applying an
+# unchanged value (which would clobber status text set directly by the
+# start/stop operators on the main thread).
+_last_applied_ui_status = ""
+
 
 def chat_timer_update() -> float | None:
     """
@@ -1961,11 +1984,25 @@ def chat_timer_update() -> float | None:
     Registered when the add-on starts, runs while Blender is alive.
     """
     global _mention_popup_open
+    global _last_applied_ui_status
     from . import agent_controller as _ac
 
     # Animate thinking dots.
     if _ac._agent_state.is_thinking:
         _ac._agent_state.thinking_dots += 1
+
+    # Mirror the turn worker's status into the UI property.  The worker must
+    # not touch a bpy property itself (that races Blender's context counter);
+    # it records plain Python state and we apply it here on the main thread.
+    # Apply only when it CHANGED, so status text set directly by the start/stop
+    # operators is not clobbered on the next tick.
+    _ui_status = _ac._agent_state.ui_status
+    if _ui_status and _ui_status != _last_applied_ui_status:
+        for wm in bpy.data.window_managers:
+            _props = getattr(wm, "bfacw_chat_props", None)
+            if _props is not None:
+                _props.chat_status = _ui_status
+        _last_applied_ui_status = _ui_status
 
     # Auto-open @mention popup when user types @ in input.
     try:

@@ -473,6 +473,32 @@ def _clear_system_prompt_cache() -> None:
         pass
 
 
+def prefetch_main_thread_context() -> None:
+    """Refresh bpy-derived values for the turn worker.  Run on the MAIN thread.
+
+    The conversation turn loop runs on a worker thread.  Reading
+    ``bpy.app.version`` / ``bpy.context.preferences`` / ``bpy.utils.user_resource``
+    from that worker races Blender's single global Python context counter
+    (``py_call_level``), which ``bpy_context_clear`` detects and reports as
+    "Python context internal state bug. this should not happen!" -- spamming
+    the console.  Cache those values here (main thread) so the worker only
+    reads plain Python state.  Call this right before spawning the turn thread
+    (and at agent start).  Best-effort; never raises.
+    """
+    try:
+        _agent_state.prefetched_system_prompt = _get_system_prompt_with_rules()
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    try:
+        import bpy as _bpy  # pylint: disable=import-error
+        prefs = _bpy.context.preferences.addons[__package__].preferences
+        res = getattr(prefs, "polyhaven_resolution", "") or ""
+        if res:
+            _agent_state.prefetched_polyhaven_resolution = str(res)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+
+
 def _repair_tool_call_pairs(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Drop half-finished tool-call exchanges from a message list.
 
@@ -1468,6 +1494,17 @@ class AgentState:
     # instead of showing "Thinking (0s)", which reads as frozen while a local
     # model loads/warms.  Values: "" (idle) | "reading" | "warming" | "thinking".
     turn_phase: str = ""
+    # Status line for the chat panel, written from the turn WORKER thread (a
+    # plain-Python field).  The main-thread timer mirrors it into the UI
+    # property; writing a bpy property from the worker races Blender's global
+    # Python context counter and spams "Python context internal state bug".
+    ui_status: str = ""
+    # bpy-derived values the turn worker must NOT read itself (bpy.app.version,
+    # bpy.context.preferences, bpy.utils.user_resource): reading them off the
+    # main thread races the context counter.  Populated on the main thread by
+    # ``prefetch_main_thread_context()`` before the worker starts.
+    prefetched_system_prompt: str = ""
+    prefetched_polyhaven_resolution: str = ""
 
     # -- Token usage tracking (issue #69) ---------------------------
     # Per-call usage comes from the LLM response ``usage`` object (stream
@@ -5221,7 +5258,13 @@ def _run_conversation_turn_inner(
 
     # Ensure the first message is the system prompt.
     if not history or history[0].get("role") != "system":
-        system_text = _get_system_prompt_with_rules()
+        # Prefer the main-thread-prefetched prompt: building it here (worker
+        # thread) reads bpy.app.version / bpy.context.preferences /
+        # bpy.utils.user_resource, which races Blender's global Python context
+        # counter.  The prefetch is best-effort; fall back to a build.
+        system_text = (
+            _agent_state.prefetched_system_prompt or _get_system_prompt_with_rules()
+        )
         history.insert(0, {"role": "system", "content": system_text})
         print("[Coworker] run_conversation_turn: inserted system prompt ({:d} chars)".format(
             len(system_text)))
@@ -6376,15 +6419,22 @@ def _run_conversation_turn_inner(
 
                 # -- Inject resolution from preferences -------------
                 if tool_name in ("download_polyhaven_asset", "setup_pbr_material"):
-                    try:
-                        _prefs = bpy.context.preferences.addons[__package__].preferences
+                    # Prefer the main-thread-prefetched resolution: reading
+                    # bpy.context.preferences from this worker thread races
+                    # Blender's context counter.  Fall back to a guarded read.
+                    _res = _agent_state.prefetched_polyhaven_resolution
+                    if not _res:
+                        try:
+                            _prefs = bpy.context.preferences.addons[__package__].preferences
+                            _res = _prefs.polyhaven_resolution
+                        except Exception:
+                            _res = ""
+                    if _res:
                         if "resolution" not in args or not args.get("resolution"):
-                            args["resolution"] = _prefs.polyhaven_resolution
+                            args["resolution"] = _res
                         # Also inject polyhaven_resolution for setup_pbr_material.
                         if tool_name == "setup_pbr_material" and "polyhaven_resolution" not in args:
-                            args["polyhaven_resolution"] = _prefs.polyhaven_resolution
-                    except Exception:
-                        pass  # Best-effort; don't break the tool call.
+                            args["polyhaven_resolution"] = _res
 
                 # Call the MCP tool.
                 result_text = _call_mcp_tool_sync(tool_name, args, mcp_port)

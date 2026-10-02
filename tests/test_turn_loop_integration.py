@@ -1816,6 +1816,34 @@ class TestForceCompactSafety(_TurnLoopTestBase):
         self.assertIn("turn 1 reply", retired_contents)
 
 
+class TestWorkerThreadBpySafety(_TurnLoopTestBase):
+    """The turn worker must not touch bpy; it records plain Python state.
+
+    Writing a bpy property (or reading bpy.app / bpy.context) from the turn
+    worker thread races Blender's single global Python context counter and
+    spams "ERROR: Python context internal state bug. this should not happen!".
+    """
+
+    def test_agent_state_has_worker_safe_fields(self):
+        st = self.ac.AgentState()
+        self.assertTrue(hasattr(st, "ui_status"))
+        self.assertTrue(hasattr(st, "prefetched_system_prompt"))
+        self.assertTrue(hasattr(st, "prefetched_polyhaven_resolution"))
+
+    def test_prefetch_helper_exists(self):
+        self.assertTrue(callable(
+            getattr(self.ac, "prefetch_main_thread_context", None)))
+
+    def test_worker_status_does_not_write_bpy_property(self):
+        ui_path = os.path.join(_REPO, "addon", "bfa_coworker", "ui_chat.py")
+        with open(ui_path, "r", encoding="utf-8") as fh:
+            source = fh.read()
+        # The worker-side status callback records plain Python state ...
+        self.assertIn("agent_controller._agent_state.ui_status = text", source)
+        # ... and never writes the bpy property from the worker path.
+        self.assertNotIn("props.chat_status = text", source)
+
+
 if __name__ == "__main__":
     unittest.main()
 

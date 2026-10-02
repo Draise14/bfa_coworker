@@ -5092,7 +5092,12 @@ def _maybe_compact_session(
     estimated = _estimate_messages_tokens(
         [m for m in history if m.get("role") != "reasoning"]
     ) + tools_tokens
-    _boundary = session_memory.find_retire_boundary(history)
+    # Fall back to the LAST real user message when the recent window has no
+    # user boundary (a long in-progress turn): older COMPLETE turns can still
+    # be retired while the current turn is always kept.  Without the fallback a
+    # long current turn could only grow until overflow.
+    _boundary = session_memory.find_retire_boundary(
+        history, fallback_to_last_user=True)
     _can_retire = _boundary < len(history)
     _over_window = (
         sum(1 for m in history if not m.get("ui_only"))
@@ -5120,6 +5125,7 @@ def _maybe_compact_session(
         prior_memory=st.memory_block,
         memory_writer=memory_writer,
         updated_turn=_session_turn_count,
+        fallback_to_last_user=True,
     )
     with session_memory.store_lock:
         st.memory_block = memory_block

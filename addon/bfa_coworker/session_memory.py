@@ -203,6 +203,20 @@ def memory_writer_prompt(retired_text: str, prior_memory: str) -> list[dict[str,
 # Compaction
 
 
+def _is_real_user(message: dict[str, Any]) -> bool:
+    """True for a genuine user turn -- NOT an injected ``[System: ...]`` note.
+
+    The addon stores its turn-scoped context messages (entity warnings, the
+    tool-result filler prompt) with the ``user`` role so the model sees them,
+    but they are NOT conversation boundaries.  Treating them as boundaries
+    let a compaction land mid-turn and retire the CURRENT turn's real prompt --
+    which then left the live window anchored on an injected note, so the chat
+    panel (which only anchors turns on real user messages) showed no turn at
+    all while the real prompt sat in the archive.
+    """
+    return message.get("role") == "user" and not is_system_note(message)
+
+
 def find_retire_boundary(
     messages: list[dict[str, Any]],
     keep_recent: int = MAX_WINDOW_TURNS,
@@ -211,16 +225,18 @@ def find_retire_boundary(
     """Return the index where older messages may be retired up to.
 
     Keeps the system prompt (index 0) and the most recent *keep_recent*
-    messages verbatim.  The boundary is pushed forward to the next ``user``
-    message so a tool-call exchange is never cut in half; returns the length
-    of *messages* when there is nothing safe to retire.
+    messages verbatim.  The boundary is pushed forward to the next REAL
+    ``user`` message (injected ``[System: ...]`` notes are not boundaries) so
+    a tool-call exchange is never cut in half AND the current turn's prompt is
+    never retired; returns the length of *messages* when there is nothing safe
+    to retire.
 
     When *fallback_to_last_user* is set and the recent window holds no
     ``user`` boundary (a long single-turn agent/reasoning run whose tail is
     all assistant/tool/reasoning messages), the boundary falls back to the
-    LAST ``user`` message so older turns can still be retired while the
+    LAST real ``user`` message so older turns can still be retired while the
     current turn is always kept verbatim.  Returns the length of *messages*
-    when there is no ``user`` message at all.
+    when there is no real ``user`` message at all.
     """
     n = len(messages)
     if n == 0:
@@ -229,19 +245,22 @@ def find_retire_boundary(
     boundary = max(start, n - keep_recent)
     if boundary <= start and not fallback_to_last_user:
         return n
-    # Advance to the next user message so no orphaned tool result remains.
+    # Advance to the next REAL user message so no orphaned tool result remains
+    # and the current turn's prompt is never retired.
     adv = max(boundary, start)
-    while adv < n and messages[adv].get("role") != "user":
+    while adv < n and not _is_real_user(messages[adv]):
         adv += 1
     if adv < n:
         return adv
     if not fallback_to_last_user:
         return n
     # Nothing retirable inside the recent window: keep the current turn by
-    # retiring up to the last user message instead of wiping everything.
+    # retiring up to the last real user message instead of wiping everything.
+    # (A last real user at ``start`` means there is only one turn -- nothing
+    # to retire -- so return ``n``.)
     for i in range(n - 1, start - 1, -1):
-        if messages[i].get("role") == "user":
-            return i
+        if _is_real_user(messages[i]):
+            return i if i > start else n
     return n
 
 

@@ -101,6 +101,56 @@ class TestFindRetireBoundary(unittest.TestCase):
                 self.assertEqual(prev.get("role"), "assistant")
                 self.assertTrue(prev.get("tool_calls"))
 
+    def test_injected_system_note_is_not_a_boundary(self):
+        """Injected ``[System: ...]`` notes share the ``user`` role but are
+        NOT turn boundaries.  Before the fix the boundary landed on such a
+        note mid-turn and retired the current turn's real prompt, leaving the
+        live window anchored on the note (so the panel showed no turn).
+        """
+        history = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "turn 1 request"},
+            {"role": "assistant", "content": "turn 1 reply"},
+            {"role": "user", "content": "turn 2 request"},
+        ] + [
+            {"role": "assistant", "content": "step {:d}".format(i)}
+            for i in range(6)
+        ] + [
+            {"role": "user",
+             "content": "[System: The tool results are above. Please respond.]"},
+            {"role": "assistant", "content": "more"},
+        ]
+        boundary = _sm.find_retire_boundary(history, keep_recent=4)
+        # The only "user" message in the boundary region is the injected note,
+        # so there is nothing safely retirable -- the whole history is kept
+        # (``compact_history`` treats this as a no-op) and the current turn's
+        # real prompt is never retired.
+        self.assertEqual(boundary, len(history))
+        self.assertFalse(_sm._is_real_user(history[boundary - 2]))
+        # And compact_history is a true no-op here (no prompt archived).
+        kept, _mem, retired = _sm.compact_history(history, keep_recent=4)
+        self.assertEqual(retired, [])
+        self.assertIn("turn 2 request", [m.get("content") for m in kept])
+
+    def test_fallback_skips_system_notes(self):
+        """With no real user boundary in the window, the fallback must pick
+        the last REAL user message -- never an injected ``[System: ...]`` note.
+        """
+        history = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "turn 1 request"},
+            {"role": "assistant", "content": "turn 1 reply"},
+            {"role": "user", "content": "turn 2 request"},
+        ] + [
+            {"role": "assistant", "content": "step {:d}".format(i)}
+            for i in range(6)
+        ] + [
+            {"role": "user", "content": "[System: filler note]"},
+        ]
+        boundary = _sm.find_retire_boundary(
+            history, keep_recent=3, fallback_to_last_user=True)
+        self.assertEqual(history[boundary]["content"], "turn 2 request")
+
     def test_fallback_to_last_user_keeps_current_turn(self):
         """A long single-turn run has no user boundary in the recent window.
 

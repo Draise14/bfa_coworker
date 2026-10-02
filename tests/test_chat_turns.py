@@ -131,6 +131,25 @@ class TestGroupTurns(unittest.TestCase):
         self.assertEqual(len(turns), 1, turns)
         self.assertEqual(turns[0][0]["content"], "real request")
 
+    def test_combined_retired_and_live_recombines_split_turn(self):
+        """Rendering ``retired + live`` as one list recombines a turn whose
+        prompt was retired while its reply stayed live (an earlier compaction
+        could split a single turn across the archive and the live window).
+        The user's prompt must appear in the SAME bubble as its reply.
+        """
+        retired = [
+            _user("make a lighthouse"),
+        ]
+        live = [
+            {"role": "assistant", "content": "Working on it..."},
+            {"role": "assistant", "content": "Done -- lighthouse built."},
+        ]
+        turns = _group_turns(retired + live)
+        self.assertEqual(len(turns), 1, turns)
+        self.assertEqual(turns[0][0]["content"], "make a lighthouse")
+        contents = [m.get("content") for m in turns[0]]
+        self.assertIn("Done -- lighthouse built.", contents)
+
 
 class TestHistIndex(unittest.TestCase):
     """_hist_index must never raise when a message has left the history.
@@ -215,6 +234,40 @@ class TestDrawMultiline(unittest.TestCase):
         lo = _FakeLayout()
         _draw_multiline(lo, "", icon='INFO')
         self.assertEqual(lo.calls, [])
+
+
+class TestUnifiedHistoryRender(unittest.TestCase):
+    """The chat panel renders retired + live turns as ONE conversation.
+
+    Source-level pin: ``_draw_chat_history`` must build the display from the
+    combined list (``archived + live``) and render it with the ordinary turn
+    drawer.  The earlier separate "Archived context" collapsible section (which
+    split a turn across two boxes) must be gone.
+    """
+
+    def test_renders_combined_and_drops_archive_section(self):
+        src = _load_source()
+        # Find the _draw_chat_history body up to the next method.
+        start = src.find("\n    def _draw_chat_history(")
+        self.assertGreaterEqual(start, 0)
+        end = src.find("\n    def _draw_turn(", start)
+        self.assertGreater(end, start)
+        body = src[start:end]
+        self.assertIn("combined = archived + live", body)
+        self.assertIn("_group_turns(combined)", body)
+        self.assertNotIn("archived_context", body)
+        self.assertNotIn("Archived context", body)
+
+    def test_draw_turn_resolves_copy_source_per_message(self):
+        src = _load_source()
+        start = src.find("\n    def _draw_turn(")
+        end = src.find("\nclass BFACW_PT_chat_session", start)
+        body = src[start:end]
+        # Per-message source resolution for copy actions.
+        self.assertIn("def _idx(", body)
+        self.assertIn("id(msg) in archived_ids", body)
+        # No stale whole-turn source flag / combined-list index lookups.
+        self.assertNotIn("_hist_index(history", body)
 
 
 if __name__ == "__main__":

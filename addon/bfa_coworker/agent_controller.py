@@ -79,6 +79,14 @@ _LLM_CHAT_URL = "http://127.0.0.1:{:d}/v1/chat/completions"
 _LOCAL_MAX_TOOL_ITERATIONS = 12
 _REMOTE_MAX_TOOL_ITERATIONS = 8
 
+# Soft wall-clock budget for a single turn (seconds).  Backstop against a
+# pathological run that keeps making requests but never finishes: once the
+# turn has run this long it stops cleanly with a visible warning instead of
+# spinning forever.  Generous enough not to cut off a legitimately long local
+# turn (a stalled single request is caught far sooner by the stream watchdog
+# in llm_transport).  Set to 0 to disable.
+_TURN_WALL_BUDGET_SECONDS = 1200.0
+
 # -- End-of-turn execution guarantee ---------------------------------
 # How many times the loop will nudge a model that *narrates* an action but
 # emits no tool call (Agent mode only; Ask mode is never nudged).
@@ -5429,10 +5437,18 @@ def _run_conversation_turn_inner(
         )
         if response is None:
             # Streaming not supported by this endpoint -- non-streaming fallback.
-            response = openai_chat_completions(
-                llm_url, send_messages, send_tools, api_key, model,
-                max_tokens, thinking_budget_tokens=budget, chat_mode=chat_mode,
-            )
+            # EXCEPT when the stream hit its liveness watchdog (no first token):
+            # the same busy/stalled server would make the non-streaming request
+            # wait against the 600 s hard ceiling too, so fail fast with the
+            # friendly "no response" message instead of hanging again.
+            if getattr(_agent_state, "error_kind", "") == "stream_timeout":
+                print("[Coworker] _llm_request: stream timed out before any token "
+                      "-- not retrying non-streaming (server is not responding)")
+            else:
+                response = openai_chat_completions(
+                    llm_url, send_messages, send_tools, api_key, model,
+                    max_tokens, thinking_budget_tokens=budget, chat_mode=chat_mode,
+                )
         if response is not None:
             _agent_state.record_usage(response.get("usage"))
             # Log where the time went: prompt-eval (big prompt) vs generation
@@ -5831,6 +5847,28 @@ def _run_conversation_turn_inner(
             if on_status:
                 on_status("Stopped")
             return history
+
+        # -- Per-turn wall-clock backstop -------------------------------
+        # A turn that keeps issuing requests but never finishes (a model that
+        # loops, or repeated slow responses) is stopped cleanly here instead
+        # of running unbounded.  The stream watchdog catches a single stalled
+        # request; this catches an endlessly-productive-but-never-done turn.
+        if _TURN_WALL_BUDGET_SECONDS > 0:
+            _wall_elapsed = time.time() - _agent_state.thinking_start_time
+            if _wall_elapsed >= _TURN_WALL_BUDGET_SECONDS:
+                print("[Coworker] run_conversation_turn: wall-clock budget "
+                      "{:.0f}s reached -- ending the turn".format(_TURN_WALL_BUDGET_SECONDS))
+                _agent_state.warning = (
+                    "This turn ran for over {:.0f} minutes and was stopped to "
+                    "keep things responsive. The work so far is kept -- send "
+                    "another message to continue.".format(_TURN_WALL_BUDGET_SECONDS / 60.0)
+                )
+                _agent_state.is_thinking = False
+                _agent_state.thinking_start_time = 0.0
+                _agent_state.turn_phase = ""
+                if on_status:
+                    on_status("Stopped (time budget reached)")
+                break
 
         # -- Session memory compaction check (Tier 3 Phase 4) -----------
         # Retire old turns once the estimated prompt approaches the safe

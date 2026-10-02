@@ -96,9 +96,13 @@ _WRAP_WIDTH = 60
 _is_bfa: bool = hasattr(bpy.types, "VIEW3D_MT_view")
 _AGENT_ICON: str = "WIZARD" if _is_bfa else "GHOST_ENABLED"
 
-# Animated "thinking" spinner frames (quarter-circle rotation).  Written as
-# \u escapes so the source stays ASCII; rendered as glyphs by Blender's UI.
-_SPINNERS: tuple[str, ...] = ("\u25d0", "\u25d3", "\u25d1", "\u25d2")
+# Animated "thinking" spinner frames: a braille dot that expands to a full
+# arc and contracts back (a pulse).  Written as \u escapes so the source stays
+# ASCII; rendered as glyphs by Blender's UI.
+_SPINNERS: tuple[str, ...] = (
+    "\u2801", "\u2803", "\u2807", "\u2827", "\u2837",
+    "\u283f", "\u2837", "\u2827", "\u2807", "\u2803",
+)
 
 
 def _spinner_char(state) -> str:
@@ -694,6 +698,7 @@ def _draw_reasoning(
     is_thinking: bool = False,
     thinking_dots: int = 0,
     message_index: int = -1,
+    archived: bool = False,
 ) -> None:
     """Draw reasoning (chain-of-thought) content in a collapsible panel.
 
@@ -708,8 +713,8 @@ def _draw_reasoning(
 
     # Animate the label with Unicode spinner while thinking.
     if is_thinking:
-        spinners = ["\u25d0", "\u25d3", "\u25d1", "\u25d2"]
-        display_label = "{:s} {:s}".format(label, spinners[thinking_dots % 4])
+        display_label = "{:s} {:s}".format(
+            label, _SPINNERS[thinking_dots % len(_SPINNERS)])
         icon = _AGENT_ICON
     else:
         display_label = label
@@ -721,6 +726,7 @@ def _draw_reasoning(
     if message_index >= 0:
         op = header.operator("bfacw.copy_message", text="", icon='COPYDOWN')
         op.message_index = message_index
+        op.archived = archived
 
     if body:
         body.separator()
@@ -757,6 +763,7 @@ def _draw_tool_inline(
     display: str,
     is_error: bool,
     message_index: int = -1,
+    archived: bool = False,
 ) -> None:
     """Draw a tool result as a sub-box inside the agent's message box."""
     tool_box = layout.box()
@@ -768,6 +775,7 @@ def _draw_tool_inline(
     if message_index >= 0:
         op = row.operator("bfacw.copy_message", text="", icon='COPYDOWN')
         op.message_index = message_index
+        op.archived = archived
     _draw_multiline(tool_box, display)
 
 
@@ -1262,8 +1270,18 @@ class BFACW_OT_copy_message(Operator):  # type: ignore[misc]
         default=-1,
     )
 
+    archived: bpy.props.BoolProperty(  # type: ignore[valid-type]
+        name="Archived",
+        description="Read the message from the retired-history archive",
+        default=False,
+    )
+
     def execute(self, context: bpy.types.Context) -> set[str]:
-        history = agent_controller._agent_state.conversation_history
+        from . import session_memory as _sm
+        history = (
+            _sm.store.retired_history if self.archived
+            else agent_controller._agent_state.conversation_history
+        )
         if self.message_index < 0 or self.message_index >= len(history):
             self.report({"ERROR"}, "Message not found (stale index)")
             return {"CANCELLED"}
@@ -2183,7 +2201,46 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         # the rest of a long turn.  ``list()`` copies atomically under the GIL,
         # so grouping, lookup and rendering all see one consistent view.
         history = list(state.conversation_history)
-        if history:
+        # Cumulative display: retired turns (kept in memory by the session
+        # store) are shown ABOVE the live window so a compaction never looks
+        # like the conversation vanished -- even though the model's context
+        # stays compacted.  ``retired_history`` is append-only, so a shallow
+        # copy is a consistent snapshot (compaction runs on the worker thread).
+        from . import session_memory as _sm
+        archived = list(_sm.store.retired_history)
+        archived_turns = _group_turns(archived)
+
+        if history or archived_turns:
+            # -- Archived context (older, retired turns) ----------------
+            # Collapsed by default so the live conversation stays front and
+            # centre; expanding it recovers the full history.  These turns are
+            # no longer sent to the model -- the user just gets to keep seeing
+            # them, so a compaction never reads as "the chat was wiped".
+            if archived_turns:
+                arch_box = layout.box()
+                _ah, _ab = arch_box.panel(
+                    "archived_context", default_closed=True)
+                _ah.label(
+                    text="Archived context ({:d} turn(s))".format(
+                        len(archived_turns)),
+                    icon='FILE_ARCHIVE')
+                if _ab:
+                    _ab.label(
+                        text="Older turns retired from the model's context "
+                             "(still remembered):",
+                        icon='INFO')
+                    for _ai, turn in enumerate(archived_turns):
+                        try:
+                            self._draw_turn(
+                                _ab, archived, turn, _ai + 1, 0,
+                                len(archived_turns), props, state,
+                                archived=True,
+                            )
+                        except Exception as _arch_ex:  # pylint: disable=broad-exception-caught
+                            print("[Coworker] chat history: skipped an archived "
+                                  "turn that failed to draw -- {:s}".format(
+                                      str(_arch_ex)))
+
             # Display order toggle + message count.
             hist_box = layout.box()
             toggle_row = hist_box.row(align=True)
@@ -2220,10 +2277,13 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 else visible_turns
             )
 
+            # Turn numbers continue after the archived turns.
+            _turn_base = len(archived_turns)
+
             for _display_idx, turn in enumerate(turn_iter):
                 # Absolute turn number by IDENTITY (not list.index, which
                 # compares by value and could collide on equal turns).
-                _turn_num = next(
+                _turn_num = _turn_base + next(
                     (i + 1 for i, t in enumerate(turns) if t is turn), 0)
                 try:
                     self._draw_turn(
@@ -2254,6 +2314,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         visible_count: int,
         props,
         state,
+        archived: bool = False,
     ) -> None:
         """Draw one conversation turn (user input, Workshop, reply).
 
@@ -2270,6 +2331,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 cr.label(text="Turn {:d} -- Coworker:".format(turn_num), icon=_AGENT_ICON)
                 op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
                 op.message_index = _hist_index(history, conclusion_msg)
+                op.archived = archived
                 _draw_multiline(tb, conclusion_msg.get("content", ""))
             return
         has_proc = bool(process_msgs)
@@ -2290,6 +2352,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         sub.label(text="Turn {:d}".format(turn_num))
         op = hr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
         op.message_index = _hist_index(history, user_msg)
+        op.archived = archived
 
         # --- User message (always visible) ---
         # Labelled so every turn clearly shows what the user typed, mirroring
@@ -2338,6 +2401,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                             is_thinking=False,
                             thinking_dots=0,
                             message_index=_hist_index(history, pm),
+                            archived=archived,
                         )
                     elif pr == "tool":
                         tn = pm.get("name", "")
@@ -2352,6 +2416,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                         _draw_tool_inline(
                             work_box, tn, d, ie,
                             message_index=_hist_index(history, pm),
+                            archived=archived,
                         )
                     elif pr == "user":
                         work_box.label(text="Agent Context", icon="INFO")
@@ -2388,6 +2453,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             cr.label(text="* Coworker:", icon=_AGENT_ICON)
             op = cr.operator("bfacw.copy_message", text="", icon="COPYDOWN")
             op.message_index = _hist_index(history, conclusion_msg)
+            op.archived = archived
             _render_markdown(turn_box, conclusion_msg.get("content", ""))
 
 
@@ -2687,7 +2753,15 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
 
         # Conversation summary -- latest message first.
         history = state.conversation_history
-        display_history = [m for m in history if m.get("role") != "system"]
+        # Prefix retired turns so the count reflects the WHOLE conversation;
+        # the last-10 preview still draws from the tail.  Mirrors the main
+        # panel's "Archived context" so nothing appears to vanish.
+        try:
+            from . import session_memory as _sm
+            _combined = list(_sm.store.retired_history) + list(history)
+        except Exception:  # pylint: disable=broad-exception-caught
+            _combined = list(history)
+        display_history = [m for m in _combined if m.get("role") != "system"]
         if display_history:
             box = layout.box()
             box.label(text="History ({:d} messages)".format(len(display_history)), icon='TEXT')
@@ -2925,6 +2999,7 @@ class BFACW_OT_session_compact_now(Operator):  # type: ignore[misc]
                 keep_recent=_MANUAL_COMPACT_KEEP_RECENT)
             st.memory_block = memory_block
             st.append_archive(retired)
+            st.append_retired(retired)
             history[:] = kept
         _save_chat_history()
         self.report({"INFO"}, "Compacted: {:d} messages retired".format(len(retired)))

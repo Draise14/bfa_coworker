@@ -1463,7 +1463,7 @@ class AgentState:
     conversation_history: list[dict[str, Any]] = field(default_factory=list)
     streaming_text: str = ""
     reasoning_text: str = ""  # Chain-of-thought from reasoning models
-    thinking_dots: int = 0  # Animated spinner state (0-3)
+    thinking_dots: int = 0  # Monotonic tick; UI wraps it modulo the spinner frames
     # Pre-first-token activity phase so the UI can say "reading" / "warming up"
     # instead of showing "Thinking (0s)", which reads as frozen while a local
     # model loads/warms.  Values: "" (idle) | "reading" | "warming" | "thinking".
@@ -5048,7 +5048,13 @@ def _maybe_compact_session(
     # early -- on the first turn it fired with two messages and, because there
     # was nothing old enough to retire, produced a no-op "Compacting..." status
     # and an empty checkpoint.
-    estimated = _estimate_messages_tokens(history) + tools_tokens
+    # The prompt estimate must reflect what is actually SENT.  ``reasoning``
+    # (chain-of-thought) messages are stripped before every request, so a long
+    # CoT would otherwise over-inflate the estimate and trip the compaction
+    # trigger far too early (the meter then lies about real occupancy).
+    estimated = _estimate_messages_tokens(
+        [m for m in history if m.get("role") != "reasoning"]
+    ) + tools_tokens
     _boundary = session_memory.find_retire_boundary(history)
     _can_retire = _boundary < len(history)
     _over_window = (
@@ -5082,6 +5088,7 @@ def _maybe_compact_session(
         st.memory_block = memory_block
         st.memory_updated_turn = _session_turn_count
         st.append_archive(retired)
+        st.append_retired(retired)
         history[:] = kept
     # Reasoning entries exist for the chat panel while a turn is young, but
     # once they fall outside the verbatim window they are dead weight: they
@@ -5127,24 +5134,38 @@ def _force_compact_session(
     """
     global _session_turn_count
     st = session_memory.store
+    # Find what can be retired while ALWAYS keeping the current turn: when the
+    # recent window is a long single-turn agent/reasoning run with no user
+    # boundary, fall back to the last user message.  If even that yields
+    # nothing, do nothing -- never reduce the conversation to the system prompt.
+    _pre_boundary = session_memory.find_retire_boundary(
+        history, _FORCE_COMPACT_KEEP_RECENT, fallback_to_last_user=True)
+    if _pre_boundary >= len(history):
+        print("[Coworker] _force_compact_session: nothing retirable -- skipping "
+              "(history left intact)")
+        return 0
     if on_status:
         on_status("Compacting conversation...")
-    # Snapshot the PRE-compaction state (only when something will retire).
-    _pre_boundary = session_memory.find_retire_boundary(history, _FORCE_COMPACT_KEEP_RECENT)
-    if _pre_boundary < len(history):
-        with session_memory.store_lock:
-            st.snapshot(history, reason="overflow", turn_index=_session_turn_count)
+    # compact_history computes the new lists WITHOUT mutating *history*, so the
+    # commit below can still snapshot the true pre-compaction state.
     kept, memory_block, retired = session_memory.compact_history(
         history,
         prior_memory=st.memory_block,
         memory_writer=memory_writer,
         keep_recent=_FORCE_COMPACT_KEEP_RECENT,
         updated_turn=_session_turn_count,
+        fallback_to_last_user=True,
     )
+    if not retired:
+        # Nothing actually retirable (e.g. only ui_only messages): leave the
+        # history untouched rather than mutating it to a near-empty state.
+        return 0
     with session_memory.store_lock:
+        st.snapshot(history, reason="overflow", turn_index=_session_turn_count)
         st.memory_block = memory_block
         st.memory_updated_turn = _session_turn_count
         st.append_archive(retired)
+        st.append_retired(retired)
         history[:] = kept
     # Same reasoning-entry prune as the threshold path: once outside the
     # verbatim window they are UI-only dead weight that is stripped before

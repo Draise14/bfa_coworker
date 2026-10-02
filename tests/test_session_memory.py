@@ -101,6 +101,29 @@ class TestFindRetireBoundary(unittest.TestCase):
                 self.assertEqual(prev.get("role"), "assistant")
                 self.assertTrue(prev.get("tool_calls"))
 
+    def test_fallback_to_last_user_keeps_current_turn(self):
+        """A long single-turn run has no user boundary in the recent window.
+
+        The default boundary is ``len(history)`` (nothing retirable).  With
+        ``fallback_to_last_user`` the boundary lands on the LAST user message,
+        so earlier turns retire while the current turn is always kept.
+        """
+        history = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "turn 1 request"},
+            {"role": "assistant", "content": "turn 1 reply"},
+            {"role": "user", "content": "turn 2 request"},
+        ] + [
+            {"role": "assistant", "content": "step {:d}".format(i)}
+            for i in range(10)
+        ]
+        self.assertEqual(
+            _sm.find_retire_boundary(history, keep_recent=3), len(history))
+        boundary = _sm.find_retire_boundary(
+            history, keep_recent=3, fallback_to_last_user=True)
+        self.assertEqual(history[boundary]["role"], "user")
+        self.assertEqual(history[boundary]["content"], "turn 2 request")
+
 
 class TestBuildMemoryBlock(unittest.TestCase):
 
@@ -261,6 +284,34 @@ class TestCompactHistory(unittest.TestCase):
         _sm.compact_history(history, keep_recent=5)
         self.assertEqual(len(history), len(snapshot))
 
+    def test_compact_noop_when_nothing_retirable(self):
+        """The wipe guard: with no user boundary past the window, return the
+        history UNCHANGED -- never reduce it to just the system prompt."""
+        history = _mk_history(3)  # 7 messages, within keep_recent=8
+        kept, memory, retired = _sm.compact_history(history, keep_recent=8)
+        self.assertEqual(retired, [])
+        self.assertEqual(len(kept), len(history))
+        self.assertEqual(kept[0].get("role"), "system")
+
+    def test_compact_fallback_retires_earlier_turns_only(self):
+        """With fallback, a long single-turn tail still retires older turns
+        while keeping the current (last user) turn verbatim."""
+        history = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "turn 1 request"},
+            {"role": "assistant", "content": "turn 1 reply"},
+            {"role": "user", "content": "turn 2 request"},
+        ] + [
+            {"role": "assistant", "content": "step {:d}".format(i)}
+            for i in range(10)
+        ]
+        kept, memory, retired = _sm.compact_history(
+            history, keep_recent=3, fallback_to_last_user=True)
+        self.assertEqual([m["content"] for m in retired],
+                         ["turn 1 request", "turn 1 reply"])
+        self.assertEqual(kept[0].get("role"), "system")
+        self.assertEqual(kept[1]["content"], "turn 2 request")
+
 
 class TestCheckpointStore(unittest.TestCase):
 
@@ -372,6 +423,50 @@ class TestCheckpointStore(unittest.TestCase):
         other.load_payload("not a dict")
         other.load_payload({"checkpoints": ["nope", {"reason": "ok"}]})
         self.assertEqual(other.checkpoints, [{"reason": "ok"}])
+
+    def test_append_retired_accumulates_and_bounds(self):
+        st = _sm.CheckpointStore()
+        st.append_retired([{"role": "user", "content": "a"}])
+        st.append_retired([{"role": "assistant", "content": "b"}])
+        self.assertEqual(len(st.retired_history), 2)
+        old = _sm.MAX_ARCHIVE_MESSAGES
+        try:
+            _sm.MAX_ARCHIVE_MESSAGES = 3
+            st.append_retired([{"role": "user", "content": "c"},
+                               {"role": "assistant", "content": "d"}])
+            self.assertEqual(len(st.retired_history), 3)
+            self.assertEqual(st.retired_history[-1]["content"], "d")
+        finally:
+            _sm.MAX_ARCHIVE_MESSAGES = old
+
+    def test_append_retired_skips_empty(self):
+        st = _sm.CheckpointStore()
+        st.append_retired([])
+        self.assertEqual(st.retired_history, [])
+
+    def test_retired_history_payload_roundtrip(self):
+        st = _sm.CheckpointStore()
+        st.append_retired([{"role": "user", "content": "old"}])
+        blob = json.dumps(st.to_payload())
+        other = _sm.CheckpointStore()
+        other.load_payload(json.loads(blob))
+        self.assertEqual(other.retired_history,
+                         [{"role": "user", "content": "old"}])
+
+    def test_reset_clears_retired_history(self):
+        st = _sm.CheckpointStore()
+        st.append_retired([{"role": "user", "content": "old"}])
+        st.reset()
+        self.assertEqual(st.retired_history, [])
+
+    def test_restore_clears_retired_history(self):
+        """A restore rewinds past compaction, so the restored turns are live
+        again -- the display aggregate is cleared to avoid duplicates."""
+        st = _sm.CheckpointStore()
+        st.snapshot(_mk_history(3), reason="compaction")
+        st.append_retired([{"role": "user", "content": "retired"}])
+        st.restore(0, _mk_history(1))
+        self.assertEqual(st.retired_history, [])
 
 
 class TestMemoryWriterPrompt(unittest.TestCase):

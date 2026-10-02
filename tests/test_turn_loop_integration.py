@@ -1757,6 +1757,65 @@ class TestCoWorkUserEditAndScopedUndo(_TurnLoopTestBase):
         self.assertIn("Sphere", self.server.scene_objects)
 
 
+class TestForceCompactSafety(_TurnLoopTestBase):
+    """Forced compaction (context-overflow recovery) must never wipe the chat.
+
+    A long single-turn agent/reasoning run has no ``user`` boundary in the
+    recent verbatim window.  Before the fix, ``_force_compact_session`` retired
+    EVERYTHING except the system prompt and took no checkpoint, so the sidebar
+    looked empty ("the chat nuked itself").  These pin the wipe fix AND the
+    retired-history accumulation the sidebar shows as "Archived context".
+    """
+
+    def _long_single_turn(self):
+        history = [
+            {"role": "system", "content": "You are a helpful agent."},
+            {"role": "user", "content": "make a lighthouse"},
+        ]
+        for i in range(40):
+            history.append({"role": "assistant",
+                            "content": "step {:d}".format(i)})
+        return history
+
+    def test_force_compact_single_turn_never_wipes(self):
+        history = self._long_single_turn()
+        before_len = len(history)
+        self.state.conversation_history = history
+
+        retired = self.ac._force_compact_session(history, None, 4096)
+
+        self.assertEqual(retired, 0, "nothing retirable -> no change")
+        self.assertEqual(len(history), before_len, "history must be intact")
+        self.assertEqual(history[0].get("role"), "system")
+        self.assertTrue(any(m.get("role") == "user" for m in history),
+                        "the user turn must survive")
+        self.assertEqual(self.sm.store.retired_history, [])
+
+    def test_force_compact_retires_old_turns_and_keeps_current(self):
+        # Two complete turns, then an assistant-only tail (turn 2 in flight).
+        history = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "turn 1 request"},
+            {"role": "assistant", "content": "turn 1 reply"},
+            {"role": "user", "content": "turn 2 request"},
+        ] + [{"role": "assistant", "content": "step {:d}".format(i)}
+             for i in range(20)]
+        self.state.conversation_history = history
+
+        retired = self.ac._force_compact_session(history, None, 4096)
+
+        self.assertGreater(retired, 0)
+        # The current (turn 2) user message is preserved verbatim...
+        self.assertTrue(any(
+            m.get("role") == "user" and m.get("content") == "turn 2 request"
+            for m in history), "current turn must be kept")
+        # ...and the retired turns are kept for the cumulative display.
+        retired_contents = [m.get("content")
+                            for m in self.sm.store.retired_history]
+        self.assertIn("turn 1 request", retired_contents)
+        self.assertIn("turn 1 reply", retired_contents)
+
+
 if __name__ == "__main__":
     unittest.main()
 

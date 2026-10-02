@@ -478,14 +478,18 @@ class TestCheckpointStore(unittest.TestCase):
         st = _sm.CheckpointStore()
         st.append_retired([{"role": "user", "content": "a"}])
         st.append_retired([{"role": "assistant", "content": "b"}])
-        self.assertEqual(len(st.retired_history), 2)
+        # Each call adds the retired turn(s) PLUS a compaction marker.
+        self.assertEqual(len(st.retired_history), 4)
+        self.assertEqual(st.retired_history[-1]["role"], "compaction")
         old = _sm.MAX_ARCHIVE_MESSAGES
         try:
             _sm.MAX_ARCHIVE_MESSAGES = 3
             st.append_retired([{"role": "user", "content": "c"},
                                {"role": "assistant", "content": "d"}])
             self.assertEqual(len(st.retired_history), 3)
-            self.assertEqual(st.retired_history[-1]["content"], "d")
+            # Newest-N keeps the marker (last entry) and the tail turns.
+            self.assertEqual(st.retired_history[-1]["role"], "compaction")
+            self.assertEqual(st.retired_history[-2]["content"], "d")
         finally:
             _sm.MAX_ARCHIVE_MESSAGES = old
 
@@ -494,14 +498,39 @@ class TestCheckpointStore(unittest.TestCase):
         st.append_retired([])
         self.assertEqual(st.retired_history, [])
 
+    def test_append_retired_emits_compaction_marker(self):
+        """Retiring turns records an 'Archive' timeline marker (display-only)
+        carrying the fresh memory summary and the retired count."""
+        st = _sm.CheckpointStore()
+        st.memory_block = "Goal: build a lighthouse"
+        st.memory_updated_turn = 4
+        st.append_retired([{"role": "user", "content": "old"}])
+        self.assertEqual(len(st.retired_history), 2)
+        marker = st.retired_history[-1]
+        self.assertEqual(marker["role"], "compaction")
+        self.assertEqual(marker["retired"], 1)
+        self.assertEqual(marker["turn"], 4)
+        self.assertIn("lighthouse", marker["content"])
+
+    def test_compaction_marker_roundtrips(self):
+        st = _sm.CheckpointStore()
+        st.memory_block = "note"
+        st.append_retired([{"role": "user", "content": "old"}])
+        blob = json.dumps(st.to_payload())
+        other = _sm.CheckpointStore()
+        other.load_payload(json.loads(blob))
+        self.assertEqual(other.retired_history[-1]["role"], "compaction")
+
     def test_retired_history_payload_roundtrip(self):
         st = _sm.CheckpointStore()
         st.append_retired([{"role": "user", "content": "old"}])
         blob = json.dumps(st.to_payload())
         other = _sm.CheckpointStore()
         other.load_payload(json.loads(blob))
-        self.assertEqual(other.retired_history,
-                         [{"role": "user", "content": "old"}])
+        # The retired turn is preserved and the marker is re-added.
+        self.assertEqual(other.retired_history[0],
+                         {"role": "user", "content": "old"})
+        self.assertEqual(other.retired_history[-1]["role"], "compaction")
 
     def test_reset_clears_retired_history(self):
         st = _sm.CheckpointStore()

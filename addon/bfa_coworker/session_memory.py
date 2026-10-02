@@ -25,6 +25,7 @@ __all__ = (
     "MAX_WINDOW_TURNS",
     "MEMORY_TARGET_TOKENS",
     "COMPACTION_TRIGGER_RATIO",
+    "COMPACTION_ROLE",
     "CheckpointStore",
     "store",
     "build_memory_block",
@@ -84,6 +85,13 @@ MAX_ARCHIVE_MESSAGES = 5000
 # into a memory block they become false memories that confuse the model in
 # a later turn or thread, so they are excluded from memory building.
 _SYSTEM_NOTE_PREFIX = "[System:"
+
+# Synthetic role stamped on the timeline marker recorded in
+# ``retired_history`` when a compaction retires turns.  It is display-only:
+# the chat panel renders it as an "Archive" node in the Workshop timeline so
+# the user can audit exactly where their context was compressed.  It is never
+# sent to the model.
+COMPACTION_ROLE = "compaction"
 
 
 def is_system_note(message: dict[str, Any]) -> bool:
@@ -475,6 +483,16 @@ class CheckpointStore:
         if not retired:
             return
         self.retired_history.extend(retired)
+        # Record a timeline marker at the compaction boundary so the chat panel
+        # can show WHEN the context was compressed (inside the Workshop).  The
+        # marker carries the fresh memory summary; it is display-only and never
+        # re-sent to the model.
+        self.retired_history.append({
+            "role": COMPACTION_ROLE,
+            "content": self.memory_block,
+            "retired": len(retired),
+            "turn": self.memory_updated_turn,
+        })
         if len(self.retired_history) > MAX_ARCHIVE_MESSAGES:
             self.retired_history = self.retired_history[-MAX_ARCHIVE_MESSAGES:]
 

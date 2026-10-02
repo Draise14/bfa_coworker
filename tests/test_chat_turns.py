@@ -150,6 +150,23 @@ class TestGroupTurns(unittest.TestCase):
         contents = [m.get("content") for m in turns[0]]
         self.assertIn("Done -- lighthouse built.", contents)
 
+    def test_compaction_marker_is_workshop_timeline_not_turn_anchor(self):
+        """The display-only 'compaction' marker (context was compressed here)
+        must render INSIDE the Workshop timeline -- never as a turn anchor and
+        never mistaken for the user's question or the conclusion."""
+        turn = [
+            _user("make a lighthouse"),
+            {"role": "assistant", "content": "done"},
+            {"role": "compaction", "content": "Goal: lighthouse",
+             "retired": 3},
+        ]
+        turns = _group_turns(turn)
+        self.assertEqual(len(turns), 1)
+        user_msg, process, conclusion = _split_turn(turn)
+        self.assertEqual(user_msg["content"], "make a lighthouse")
+        self.assertEqual(conclusion["content"], "done")
+        self.assertTrue(any(m.get("role") == "compaction" for m in process))
+
 
 class TestHistIndex(unittest.TestCase):
     """_hist_index must never raise when a message has left the history.

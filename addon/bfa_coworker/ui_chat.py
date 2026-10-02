@@ -166,7 +166,7 @@ def _group_turns(history: list) -> list[list[dict]]:
             if current_turn:
                 turns.append(current_turn)
             current_turn = [msg]
-        elif role in ("assistant", "tool", "reasoning", "user"):
+        elif role in ("assistant", "tool", "reasoning", "user", "compaction"):
             current_turn.append(msg)
     if current_turn:
         turns.append(current_turn)
@@ -182,7 +182,7 @@ def _split_turn(turn: list[dict]) -> tuple[dict | None, list[dict], dict | None]
         role = msg.get("role", "")
         if role == "user" and not _is_system_note_msg(msg):
             user_msg = msg
-        elif role in ("reasoning", "tool", "user") or _is_system_note_msg(msg):
+        elif role in ("reasoning", "tool", "user", "compaction") or _is_system_note_msg(msg):
             process_msgs.append(msg)
         elif role == "assistant":
             if not msg.get("tool_calls"):
@@ -766,6 +766,29 @@ def _draw_tool_summary(layout: bpy.types.UILayout, content: str, summary: str) -
         # Show the full raw content -- the user asked to see it all, and the
         # panel scrolls.
         _draw_multiline(detail_box, content, width=_WRAP_WIDTH)
+
+
+def _draw_archive_node(
+    layout: bpy.types.UILayout,
+    retired_count: int,
+    summary: str,
+) -> None:
+    """Draw an 'Archive' node in the Workshop timeline.
+
+    Marks where a compaction retired older turns out of the model's context, so
+    the user can see exactly where their history was compressed.  The summary
+    is the memory block written at that point.  Display-only -- never sent to
+    the model.
+    """
+    box = layout.box()
+    row = box.row()
+    row.label(
+        text="Archive \u2014 {:d} turn(s) compacted".format(retired_count),
+        icon='FILE_ARCHIVE',
+    )
+    body = str(summary or "").strip()
+    if body:
+        _draw_multiline(box, body)
 
 
 def _draw_tool_inline(
@@ -2457,6 +2480,13 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                             message_index=_pm_idx,
                             archived=_pm_arch,
                         )
+                    elif pr == "compaction":
+                        # Timeline marker: context was compressed here.
+                        try:
+                            _retired_n = int(pm.get("retired", 0) or 0)
+                        except (TypeError, ValueError):
+                            _retired_n = 0
+                        _draw_archive_node(work_box, _retired_n, pc)
                     elif pr == "user":
                         work_box.label(text="Agent Context", icon="INFO")
                         _draw_multiline(work_box, pc)
@@ -2812,6 +2842,12 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
                 elif role == "tool":
                     display = summary if summary else (content or "")
                     preview = display[:80] + "..." if display and len(display) > 80 else (display or "")
+                elif role == "compaction":
+                    try:
+                        _rn = int(msg.get("retired", 0) or 0)
+                    except (TypeError, ValueError):
+                        _rn = 0
+                    preview = "compacted {:d} turn(s)".format(_rn)
                 else:
                     preview = content if content else ""
                 _draw_multiline(box, "[{:s}] {:s}".format(role, preview))

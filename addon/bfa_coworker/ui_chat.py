@@ -2631,7 +2631,13 @@ class BFACW_PT_chat_session(Panel):  # type: ignore[misc]
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        return not bpy.app.background
+        # Hidden in External Harness mode: session memory, compaction, and
+        # checkpoints are part of the in-Blender chat, which is handled
+        # entirely by the external MCP client in that mode.
+        if bpy.app.background:
+            return False
+        prefs = context.preferences.addons[__package__].preferences
+        return prefs.operating_mode != "EXTERNAL_HARNESS"
 
     def draw(self, context: bpy.types.Context) -> None:
         layout = self.layout

@@ -311,5 +311,23 @@ class TestUnifiedHistoryRender(unittest.TestCase):
         self.assertNotIn("_hist_index(history", body)
 
 
+class TestSessionPanelHidesInHarness(unittest.TestCase):
+    """The Session panel must hide in External Harness mode (like Queue/chat).
+
+    Session memory, compaction, and checkpoints belong to the in-Blender chat,
+    which is handled entirely by the external MCP client in that mode.
+    """
+
+    def test_session_panel_poll_guards_harness(self):
+        src = _load_source()
+        start = src.find("\nclass BFACW_PT_chat_session")
+        self.assertGreaterEqual(start, 0)
+        end = src.find("\nclass BFACW_PT_chat_queue", start)
+        self.assertGreater(end, start)
+        body = src[start:end]
+        self.assertIn("EXTERNAL_HARNESS", body)
+        self.assertIn("def poll(", body)
+
+
 if __name__ == "__main__":
     unittest.main()

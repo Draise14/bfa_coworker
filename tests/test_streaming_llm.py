@@ -46,6 +46,7 @@ import io
 import json
 import os
 import re
+import socket
 import time
 import types
 import typing
@@ -151,6 +152,12 @@ _openai_chat_completions_stream = _extract_func(
         "_DEFAULT_TEMPERATURE_PROSE": 0.7,
         "_CHAT_SAMPLING": {},
         "_STREAM_TIMEOUT": 600.0,
+        # Streaming liveness watchdogs (module constants in llm_transport).
+        "_STREAM_FIRST_TOKEN_TIMEOUT": 120.0,
+        "_STREAM_STALL_TIMEOUT": 90.0,
+        # Best-effort socket-timeout lowering; no-op on a fake response.
+        "_set_stream_socket_timeout": lambda resp, seconds: True,
+        "socket": socket,
         "time": time,
         "_parse_sse_chunk": _parse_sse_chunk,
         "_assemble_stream_result": _assemble_stream_result,
@@ -584,6 +591,64 @@ class TestStreamRequest(unittest.TestCase):
             )
         self.assertEqual(result["choices"][0]["message"]["content"], "so far")
 
+    def test_first_token_timeout_returns_none(self):
+        """A stall before any token (the 'sat there forever' case) returns
+        ``None`` so the caller fails fast instead of blocking on the ceiling."""
+        def _timeout(req, timeout=None):
+            raise socket.timeout("timed out")
+
+        with mock.patch("urllib.request.urlopen", _timeout):
+            result = _openai_chat_completions_stream(
+                "http://x/v1/chat/completions", [{"role": "user", "content": "hi"}],
+                [],
+            )
+        self.assertIsNone(result)
+
+    def test_stall_mid_stream_returns_partial(self):
+        """A silence AFTER the first token keeps the partial answer."""
+        class _StallAfterFirst:
+            status = 200
+
+            def __init__(self):
+                self._n = 0
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                self._n += 1
+                if self._n == 1:
+                    return b'data: {"choices": [{"delta": {"content": "partial"}}]}\n\n'
+                raise socket.timeout("read timed out")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with mock.patch("urllib.request.urlopen",
+                        lambda req, timeout=None: _StallAfterFirst()):
+            result = _openai_chat_completions_stream(
+                "http://x/v1/chat/completions", [{"role": "user", "content": "hi"}],
+                [],
+            )
+        self.assertIsNotNone(result)
+        self.assertEqual(result["choices"][0]["message"]["content"], "partial")
+
+    def test_wrapped_connect_timeout_returns_none(self):
+        """urllib wraps a socket.timeout as ``URLError(reason=timeout)``; it
+        must be classified as a timeout too (fail fast, not retry)."""
+        def _wrapped(req, timeout=None):
+            raise urllib.error.URLError(socket.timeout("connect timed out"))
+
+        with mock.patch("urllib.request.urlopen", _wrapped):
+            result = _openai_chat_completions_stream(
+                "http://x/v1/chat/completions", [{"role": "user", "content": "hi"}],
+                [],
+            )
+        self.assertIsNone(result)
+
     def test_stream_error_inside_200_body_returns_none(self):
         body = _sse([{"error": {"message": "quota exceeded"}}])
         with mock.patch("urllib.request.urlopen", _urlopen_returning(body)):
@@ -768,6 +833,11 @@ class TestTurnLoopUsesStreamingWrapper(unittest.TestCase):
             "_DEFAULT_TEMPERATURE_PROSE": 0.7,
             "_CHAT_SAMPLING": {},
             "_STREAM_TIMEOUT": 600.0,
+            # Streaming liveness watchdogs + socket-timeout helper.
+            "_STREAM_FIRST_TOKEN_TIMEOUT": 120.0,
+            "_STREAM_STALL_TIMEOUT": 90.0,
+            "_set_stream_socket_timeout": lambda resp, seconds: True,
+            "socket": socket,
             "time": time,
             "_parse_sse_chunk": _parse_sse_chunk,
             "_assemble_stream_result": _assemble_stream_result,

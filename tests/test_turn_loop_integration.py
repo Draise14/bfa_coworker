@@ -40,6 +40,7 @@ import json
 import os
 import sys
 import threading
+import time
 import types
 import unittest
 import urllib.request
@@ -1755,6 +1756,129 @@ class TestCoWorkUserEditAndScopedUndo(_TurnLoopTestBase):
             "the foreign edit detected at failure must re-sync the model")
         # The turn recovered.
         self.assertIn("Sphere", self.server.scene_objects)
+
+
+class TestForceCompactSafety(_TurnLoopTestBase):
+    """Forced compaction (context-overflow recovery) must never wipe the chat.
+
+    A long single-turn agent/reasoning run has no ``user`` boundary in the
+    recent verbatim window.  Before the fix, ``_force_compact_session`` retired
+    EVERYTHING except the system prompt and took no checkpoint, so the sidebar
+    looked empty ("the chat nuked itself").  These pin the wipe fix AND the
+    retired-history accumulation the sidebar shows as "Archived context".
+    """
+
+    def _long_single_turn(self):
+        history = [
+            {"role": "system", "content": "You are a helpful agent."},
+            {"role": "user", "content": "make a lighthouse"},
+        ]
+        for i in range(40):
+            history.append({"role": "assistant",
+                            "content": "step {:d}".format(i)})
+        return history
+
+    def test_force_compact_single_turn_never_wipes(self):
+        history = self._long_single_turn()
+        before_len = len(history)
+        self.state.conversation_history = history
+
+        retired = self.ac._force_compact_session(history, None, 4096)
+
+        self.assertEqual(retired, 0, "nothing retirable -> no change")
+        self.assertEqual(len(history), before_len, "history must be intact")
+        self.assertEqual(history[0].get("role"), "system")
+        self.assertTrue(any(m.get("role") == "user" for m in history),
+                        "the user turn must survive")
+        self.assertEqual(self.sm.store.retired_history, [])
+
+    def test_force_compact_retires_old_turns_and_keeps_current(self):
+        # Two complete turns, then an assistant-only tail (turn 2 in flight).
+        history = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "turn 1 request"},
+            {"role": "assistant", "content": "turn 1 reply"},
+            {"role": "user", "content": "turn 2 request"},
+        ] + [{"role": "assistant", "content": "step {:d}".format(i)}
+             for i in range(20)]
+        self.state.conversation_history = history
+
+        retired = self.ac._force_compact_session(history, None, 4096)
+
+        self.assertGreater(retired, 0)
+        # The current (turn 2) user message is preserved verbatim...
+        self.assertTrue(any(
+            m.get("role") == "user" and m.get("content") == "turn 2 request"
+            for m in history), "current turn must be kept")
+        # ...and the retired turns are kept for the cumulative display.
+        retired_contents = [m.get("content")
+                            for m in self.sm.store.retired_history]
+        self.assertIn("turn 1 request", retired_contents)
+        self.assertIn("turn 1 reply", retired_contents)
+
+
+class TestWorkerThreadBpySafety(_TurnLoopTestBase):
+    """The turn worker must not touch bpy; it records plain Python state.
+
+    Writing a bpy property (or reading bpy.app / bpy.context) from the turn
+    worker thread races Blender's single global Python context counter and
+    spams "ERROR: Python context internal state bug. this should not happen!".
+    """
+
+    def test_agent_state_has_worker_safe_fields(self):
+        st = self.ac.AgentState()
+        self.assertTrue(hasattr(st, "ui_status"))
+        self.assertTrue(hasattr(st, "prefetched_system_prompt"))
+        self.assertTrue(hasattr(st, "prefetched_polyhaven_resolution"))
+
+    def test_prefetch_helper_exists(self):
+        self.assertTrue(callable(
+            getattr(self.ac, "prefetch_main_thread_context", None)))
+
+    def test_worker_status_does_not_write_bpy_property(self):
+        ui_path = os.path.join(_REPO, "addon", "bfa_coworker", "ui_chat.py")
+        with open(ui_path, "r", encoding="utf-8") as fh:
+            source = fh.read()
+        # The worker-side status callback records plain Python state ...
+        self.assertIn("agent_controller._agent_state.ui_status = text", source)
+        # ... and never writes the bpy property from the worker path.
+        self.assertNotIn("props.chat_status = text", source)
+
+
+class TestTurnDurationStamp(_TurnLoopTestBase):
+    """Each finished turn records its wall time on its last message."""
+
+    def test_stamp_helper_exists(self):
+        self.assertTrue(callable(
+            getattr(self.ac, "_stamp_turn_duration", None)))
+
+    def test_stamp_sets_turn_seconds(self):
+        hist = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "done"},
+        ]
+        self.state.conversation_history = hist
+        # Pretend the turn started 90s ago.
+        self.state.last_turn_cost = {"requests": 1, "start": time.time() - 90}
+        self.ac._stamp_turn_duration()
+        self.assertIn("turn_seconds", hist[-1])
+        self.assertGreaterEqual(hist[-1]["turn_seconds"], 89)
+
+    def test_stamp_without_start_is_noop(self):
+        hist = [{"role": "user", "content": "hi"}]
+        self.state.conversation_history = hist
+        self.state.last_turn_cost = {}
+        self.ac._stamp_turn_duration()
+        self.assertNotIn("turn_seconds", hist[-1])
+
+    def test_finished_turn_is_stamped(self):
+        """A real turn through the loop leaves ``turn_seconds`` on its tail."""
+        history = self.ac.AgentState().conversation_history
+        self.state.conversation_history = history
+        out, _texts, _statuses = self._run_turn("hello")
+        self.assertTrue(out)
+        self.assertIn("turn_seconds", out[-1])
 
 
 if __name__ == "__main__":

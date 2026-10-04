@@ -57,6 +57,7 @@ _group_turns = _extract_func(
 _split_turn = _extract_func(
     "_split_turn", {"_is_system_note_msg": _is_system_note_msg})
 _hist_index = _extract_func("_hist_index")
+_fmt_duration = _extract_func("_fmt_duration")
 _draw_multiline = _extract_func(
     "_draw_multiline",
     {
@@ -130,6 +131,42 @@ class TestGroupTurns(unittest.TestCase):
         turns = _group_turns(history)
         self.assertEqual(len(turns), 1, turns)
         self.assertEqual(turns[0][0]["content"], "real request")
+
+    def test_combined_retired_and_live_recombines_split_turn(self):
+        """Rendering ``retired + live`` as one list recombines a turn whose
+        prompt was retired while its reply stayed live (an earlier compaction
+        could split a single turn across the archive and the live window).
+        The user's prompt must appear in the SAME bubble as its reply.
+        """
+        retired = [
+            _user("make a lighthouse"),
+        ]
+        live = [
+            {"role": "assistant", "content": "Working on it..."},
+            {"role": "assistant", "content": "Done -- lighthouse built."},
+        ]
+        turns = _group_turns(retired + live)
+        self.assertEqual(len(turns), 1, turns)
+        self.assertEqual(turns[0][0]["content"], "make a lighthouse")
+        contents = [m.get("content") for m in turns[0]]
+        self.assertIn("Done -- lighthouse built.", contents)
+
+    def test_compaction_marker_is_workshop_timeline_not_turn_anchor(self):
+        """The display-only 'compaction' marker (context was compressed here)
+        must render INSIDE the Workshop timeline -- never as a turn anchor and
+        never mistaken for the user's question or the conclusion."""
+        turn = [
+            _user("make a lighthouse"),
+            {"role": "assistant", "content": "done"},
+            {"role": "compaction", "content": "Goal: lighthouse",
+             "retired": 3},
+        ]
+        turns = _group_turns(turn)
+        self.assertEqual(len(turns), 1)
+        user_msg, process, conclusion = _split_turn(turn)
+        self.assertEqual(user_msg["content"], "make a lighthouse")
+        self.assertEqual(conclusion["content"], "done")
+        self.assertTrue(any(m.get("role") == "compaction" for m in process))
 
 
 class TestHistIndex(unittest.TestCase):
@@ -215,6 +252,81 @@ class TestDrawMultiline(unittest.TestCase):
         lo = _FakeLayout()
         _draw_multiline(lo, "", icon='INFO')
         self.assertEqual(lo.calls, [])
+
+
+class TestFmtDuration(unittest.TestCase):
+    """Durations roll up into minutes/hours instead of raw seconds."""
+
+    def test_seconds(self):
+        self.assertEqual(_fmt_duration(0), "0s")
+        self.assertEqual(_fmt_duration(45), "45s")
+        self.assertEqual(_fmt_duration(59), "59s")
+
+    def test_minutes(self):
+        self.assertEqual(_fmt_duration(60), "1m")
+        self.assertEqual(_fmt_duration(125), "2m 05s")
+        self.assertEqual(_fmt_duration(742), "12m 22s")
+
+    def test_hours(self):
+        self.assertEqual(_fmt_duration(3600), "1h 00m")
+        self.assertEqual(_fmt_duration(3900), "1h 05m")
+
+    def test_bad_input_is_safe(self):
+        self.assertEqual(_fmt_duration(None), "")
+        self.assertEqual(_fmt_duration("nope"), "")
+        self.assertEqual(_fmt_duration(-5), "0s")
+
+
+class TestUnifiedHistoryRender(unittest.TestCase):
+    """The chat panel renders retired + live turns as ONE conversation.
+
+    Source-level pin: ``_draw_chat_history`` must build the display from the
+    combined list (``archived + live``) and render it with the ordinary turn
+    drawer.  The earlier separate "Archived context" collapsible section (which
+    split a turn across two boxes) must be gone.
+    """
+
+    def test_renders_combined_and_drops_archive_section(self):
+        src = _load_source()
+        # Find the _draw_chat_history body up to the next method.
+        start = src.find("\n    def _draw_chat_history(")
+        self.assertGreaterEqual(start, 0)
+        end = src.find("\n    def _draw_turn(", start)
+        self.assertGreater(end, start)
+        body = src[start:end]
+        self.assertIn("combined = archived + live", body)
+        self.assertIn("_group_turns(combined)", body)
+        self.assertNotIn("archived_context", body)
+        self.assertNotIn("Archived context", body)
+
+    def test_draw_turn_resolves_copy_source_per_message(self):
+        src = _load_source()
+        start = src.find("\n    def _draw_turn(")
+        end = src.find("\nclass BFACW_PT_chat_session", start)
+        body = src[start:end]
+        # Per-message source resolution for copy actions.
+        self.assertIn("def _idx(", body)
+        self.assertIn("id(msg) in archived_ids", body)
+        # No stale whole-turn source flag / combined-list index lookups.
+        self.assertNotIn("_hist_index(history", body)
+
+
+class TestSessionPanelHidesInHarness(unittest.TestCase):
+    """The Session panel must hide in External Harness mode (like Queue/chat).
+
+    Session memory, compaction, and checkpoints belong to the in-Blender chat,
+    which is handled entirely by the external MCP client in that mode.
+    """
+
+    def test_session_panel_poll_guards_harness(self):
+        src = _load_source()
+        start = src.find("\nclass BFACW_PT_chat_session")
+        self.assertGreaterEqual(start, 0)
+        end = src.find("\nclass BFACW_PT_chat_queue", start)
+        self.assertGreater(end, start)
+        body = src[start:end]
+        self.assertIn("EXTERNAL_HARNESS", body)
+        self.assertIn("def poll(", body)
 
 
 if __name__ == "__main__":

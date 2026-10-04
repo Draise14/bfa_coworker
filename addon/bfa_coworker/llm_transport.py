@@ -31,6 +31,8 @@ __all__ = (
     "_DEFAULT_TEMPERATURE_CODE",
     "_DEFAULT_TEMPERATURE_PROSE",
     "_STREAM_TIMEOUT",
+    "_STREAM_FIRST_TOKEN_TIMEOUT",
+    "_STREAM_STALL_TIMEOUT",
     "bind",
     "classify_llm_500",
     "is_context_overflow",
@@ -43,6 +45,7 @@ __all__ = (
 
 import json
 import re
+import socket
 import threading
 import time
 import typing
@@ -71,6 +74,16 @@ _DEFAULT_MAX_TOKENS = 1024
 
 # Socket timeout (seconds) for streaming and non-streaming LLM requests.
 _STREAM_TIMEOUT = 600.0
+
+# Streaming liveness watchdogs.  ``_STREAM_TIMEOUT`` is the hard per-read
+# socket ceiling that only exists to bound an otherwise-infinite read; these
+# are tighter *liveness* bounds that catch a stalled server (or an extremely
+# slow prefill) so a turn cannot "sit there forever" with no visible progress.
+# If the server sends no data for that long the read raises ``socket.timeout``
+# (an ``OSError``); before the first token that falls back to the non-streaming
+# request, after it the partial reply is kept.
+_STREAM_FIRST_TOKEN_TIMEOUT = 120.0
+_STREAM_STALL_TIMEOUT = 90.0
 
 # -- Shared state, injected by agent_controller at import time ------
 # The transport needs to flag non-fatal notices (mid-stream drops,
@@ -417,6 +430,15 @@ def openai_chat_completions(
     # real server reason (``ex.read()`` returns empty on a second call).
     _last_error_body = ""
     for attempt in range(max_retries + max_503_retries):
+        # Honour Stop between attempts.  The streaming path checks
+        # ``_stop_requested()`` mid-stream; without this the non-streaming
+        # fallback ignored Stop entirely and blocked on the 600s read (across
+        # up to 17 retries), leaving the turn "frozen" and new messages queued.
+        # Returning None here lets the turn loop take its normal abort path.
+        if _stop_requested():
+            print("[Coworker] _openai_chat_completions: stop requested -- "
+                  "aborting non-streaming request")
+            return None
         try:
             with urllib.request.urlopen(req, timeout=_STREAM_TIMEOUT) as resp:
                 raw = resp.read().decode()
@@ -982,6 +1004,23 @@ def _assemble_stream_result(acc: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _set_stream_socket_timeout(resp: Any, seconds: float) -> bool:
+    """Best-effort: lower the read timeout on an open streaming response.
+
+    ``urllib`` exposes the live socket only through implementation internals
+    (``HTTPResponse.fp.raw._sock``).  This is best-effort: it returns ``False``
+    (and the original timeout stays in force for the whole stream) when that
+    access is unavailable on the running Python, which is harmless -- the
+    first-token timeout is the same order of magnitude.
+    """
+    try:
+        sock = resp.fp.raw._sock  # type: ignore[attr-defined]
+        sock.settimeout(seconds)
+        return True
+    except Exception:  # pylint: disable=broad-exception-caught
+        return False
+
+
 def openai_chat_completions_stream(
     url: str,
     messages: list[dict[str, Any]],
@@ -1062,7 +1101,13 @@ def openai_chat_completions_stream(
     _content_seen = False
     _reasoning_since: float | None = None
     try:
-        with urllib.request.urlopen(req, timeout=_STREAM_TIMEOUT) as resp:
+        # First-token watchdog: urlopen covers connect + response headers, and
+        # the first read below covers the wait for the first SSE chunk (i.e.
+        # the server's prompt prefill).  A tighter timeout here means a stalled
+        # or unreachable server aborts in ~2 min instead of the 10-min hard
+        # ceiling.  Once the first token arrives the socket timeout is lowered
+        # to the (shorter) inter-token stall value.
+        with urllib.request.urlopen(req, timeout=_STREAM_FIRST_TOKEN_TIMEOUT) as resp:
             if resp.status != 200:
                 raise urllib.error.URLError("HTTP {:d}".format(resp.status))
             for raw_line in resp:
@@ -1091,6 +1136,10 @@ def openai_chat_completions_stream(
                     raise urllib.error.URLError("stream error: {:s}".format(_err_msg))
                 if not got_first_token:
                     got_first_token = True
+                    # First token arrived -- tighten the socket read timeout to
+                    # the inter-token stall bound so a mid-stream silence is
+                    # caught quickly rather than waiting the full window.
+                    _set_stream_socket_timeout(resp, _STREAM_STALL_TIMEOUT)
                     if on_status:
                         on_status("Generating...")
                 _parse_sse_chunk(chunk, acc)
@@ -1118,6 +1167,28 @@ def openai_chat_completions_stream(
                     on_stream_reasoning(acc["reasoning"])
                 if on_stream_text and acc["content"]:
                     on_stream_text(acc["content"])
+    except socket.timeout as ex:
+        # Liveness watchdog fired: the server sent no data for the first-token
+        # or inter-token window.  This is the "sat there forever" case -- fail
+        # fast (or keep the partial) instead of blocking on the hard ceiling.
+        _elapsed = time.monotonic() - _request_start
+        if got_first_token:
+            print("[Coworker] _openai_chat_completions_stream: stalled mid-stream "
+                  "({:.0f}s with no data) -- returning partial".format(_elapsed))
+            _agent_state.warning = (
+                "The model stalled mid-response; the reply may be incomplete."
+            )
+            return _assemble_stream_result(acc)
+        print("[Coworker] _openai_chat_completions_stream: no first token within "
+              "{:.0f}s ({:.0f}s elapsed) -- falling back to non-streaming".format(
+                  _STREAM_FIRST_TOKEN_TIMEOUT, _elapsed))
+        if _agent_state is not None:
+            _agent_state.error_kind = "stream_timeout"
+            _agent_state.error_full = (
+                "No response from the model within {:.0f}s (server may be busy "
+                "or the model may still be loading).".format(_STREAM_FIRST_TOKEN_TIMEOUT)
+            )
+        return None
     except (urllib.error.HTTPError, urllib.error.URLError, OSError) as ex:
         if got_first_token:
             # Mid-stream drop: keep whatever arrived as a partial answer so
@@ -1128,6 +1199,22 @@ def openai_chat_completions_stream(
                 "The response stream was interrupted; the reply may be incomplete."
             )
             return _assemble_stream_result(acc)
+        # A connect/header timeout is wrapped by urllib as ``URLError(reason)``
+        # where the reason is the ``socket.timeout`` -- classify it the same as
+        # a direct read timeout so the caller fails fast instead of retrying
+        # non-streaming against the same unresponsive server.
+        _is_timeout = isinstance(ex, socket.timeout) or isinstance(
+            getattr(ex, "reason", None), socket.timeout)
+        if _is_timeout and _agent_state is not None:
+            _agent_state.error_kind = "stream_timeout"
+            _agent_state.error_full = (
+                "No response from the model within {:.0f}s (server may be busy "
+                "or the model may still be loading).".format(_STREAM_FIRST_TOKEN_TIMEOUT)
+            )
+            print("[Coworker] _openai_chat_completions_stream: no first token "
+                  "within {:.0f}s -- falling back to non-streaming".format(
+                      _STREAM_FIRST_TOKEN_TIMEOUT))
+            return None
         print("[Coworker] _openai_chat_completions_stream: failed before first "
               "token ({:s}) -- falling back to non-streaming".format(str(ex)))
         # Record the reason so a caller that does not retry non-streaming can

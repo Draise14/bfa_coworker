@@ -943,6 +943,60 @@ class TestToolLoopIntegration(_TurnLoopTestBase):
         self.assertEqual(self.sm.store.memory_block, "")
         self.assertNotIn("Session memory", history[0]["content"])
 
+    def test_forced_summary_never_sends_reasoning_in_remote_mode(self):
+        """Regression: the forced-summary request must not leak ``reasoning``.
+
+        The forced-summary request is fired when the tool-iteration cap is
+        reached and re-sends the whole history for a wrap-up.  In Remote API
+        mode ``prompt_budget == 0``, so the old code skipped its only
+        strip/trim branch and POSTed the RAW history -- including the UI-only
+        ``reasoning`` (chain-of-thought) entries collected during the turn.
+        Strict providers (OpenRouter's Relace, etc.) rejected the whole
+        request with HTTP 400 ``messages[N].role: unknown variant
+        `reasoning``` and the turn died.  The summary path must strip and
+        sanitize exactly like the main and auto-continue paths.
+        """
+        self._mk_server([
+            _tool_call_msg("call_1", "print('one')"),
+            _tool_call_msg("call_2", "print('two')"),
+            {"content": "all done"},
+        ])
+        # A stored chain-of-thought entry from earlier in the session.  It is
+        # UI-only and must never be serialized into any request.
+        self.state.conversation_history = [
+            {"role": "system", "content": "You are a helpful agent."},
+            {"role": "reasoning", "content": "earlier chain of thought"},
+        ]
+        # Shrink the remote iteration cap so the forced-summary fires after
+        # two tool rounds instead of eight.
+        _saved_cap = self.ac._REMOTE_MAX_TOOL_ITERATIONS
+        self.ac._REMOTE_MAX_TOOL_ITERATIONS = 2
+        # An explicit URL skips config resolution, leaving ``llm_port_local``
+        # None -- the REMOTE path (prompt_budget == 0) that used to send the
+        # raw history.
+        _url = "http://127.0.0.1:{:d}/v1/chat/completions".format(self.port)
+        self._pin_fake_bpy()
+        try:
+            self.ac.run_conversation_turn(
+                "run the loop", chat_mode="AGENT",
+                llm_url=_url, model="fake-model", mcp_port=self.port)
+        finally:
+            self._unpin_fake_bpy()
+            self.ac._REMOTE_MAX_TOOL_ITERATIONS = _saved_cap
+
+        # Two tool rounds + the forced-summary request.
+        main = self._main_requests()
+        self.assertGreaterEqual(len(main), 3)
+        summary_roles = [m.get("role") for m in main[-1]["messages"]]
+        self.assertIn("user", summary_roles)  # the wrap-up prompt reached the model
+        # No request -- the summary included -- ever carried the non-standard
+        # ``reasoning`` role.
+        for req in main:
+            roles = [m.get("role") for m in req["messages"]]
+            self.assertNotIn(
+                "reasoning", roles,
+                "reasoning role must never reach the provider")
+
     def test_narrated_action_is_nudged_to_execute(self):
         """A model that narrates an action without a tool call is nudged.
 

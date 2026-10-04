@@ -130,6 +130,11 @@ _parse_sse_chunk = _extract_func(
     },
 )
 _assemble_stream_result = _extract_func(_SOURCE, "_assemble_stream_result")
+_STANDARD_MESSAGE_ROLES = frozenset({"system", "user", "assistant", "tool"})
+_safe_request_messages = _extract_func(
+    _SOURCE, "_safe_request_messages",
+    {"_STANDARD_MESSAGE_ROLES": _STANDARD_MESSAGE_ROLES},
+)
 _stop_event = __import__("threading").Event()
 
 
@@ -161,6 +166,7 @@ _openai_chat_completions_stream = _extract_func(
         "time": time,
         "_parse_sse_chunk": _parse_sse_chunk,
         "_assemble_stream_result": _assemble_stream_result,
+        "_safe_request_messages": _safe_request_messages,
         "_stop_requested": _stop_event.is_set,
         "_clear_stale_errors": lambda: None,
         "_agent_state": types.SimpleNamespace(warning=""),
@@ -841,6 +847,7 @@ class TestTurnLoopUsesStreamingWrapper(unittest.TestCase):
             "time": time,
             "_parse_sse_chunk": _parse_sse_chunk,
             "_assemble_stream_result": _assemble_stream_result,
+            "_safe_request_messages": _safe_request_messages,
             "_stop_requested": lambda: False,
             "_clear_stale_errors": lambda: None,
             "_agent_state": state,

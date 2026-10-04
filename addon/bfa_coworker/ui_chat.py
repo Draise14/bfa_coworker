@@ -1805,6 +1805,22 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
 
+        # Local mode: never let llama-server trigger an implicit multi-GB
+        # download.  If the configured model is not on disk (and not cached),
+        # stall the launch and ask the user to confirm the download first.
+        _prefs = context.preferences.addons[__package__].preferences
+        if _prefs.operating_mode == "LOCAL_LLM" and not llm_manager.get_state().is_running:
+            _sync_prefs_to_config(_prefs)
+            _existing = _prefs.existing_model_path
+            _ready, _info = llm_manager.check_local_model_ready(
+                _existing if _existing and os.path.isfile(_existing) else None)
+            if not _ready:
+                llm_manager.set_pending_model_download(_info)
+                props.chat_status = "Waiting for download confirmation..."
+                _redraw_areas(context)
+                _result = bpy.ops.bfacw.confirm_model_download('INVOKE_DEFAULT')
+                return {"CANCELLED"} if _result == {"CANCELLED"} else {"FINISHED"}
+
         # Warm the main-thread bpy-derived cache (system prompt, prefs) now, on
         # the main thread, so the first turn worker never reads bpy itself.
         agent_controller.prefetch_main_thread_context()

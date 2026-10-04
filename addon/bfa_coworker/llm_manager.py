@@ -31,6 +31,11 @@ __all__ = (
     "remove_llama_server",
     "start_local_llama",
     "stop_local_llama",
+    "check_local_model_ready",
+    "set_pending_model_download",
+    "clear_pending_model_download",
+    "get_pending_model_download",
+    "clear_error",
     "get_llama_process",
     "get_llama_server_log_tail",
     "health_check",
@@ -69,7 +74,7 @@ import urllib.request
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 
 # ---------------------------------------------------------------------------
@@ -664,6 +669,14 @@ class LLMState:
     download_progress_pct: float = 0.0  # 0.0 to 100.0
     download_active: bool = False  # True while a model download is in progress
     download_kind: str = ""  # "model" | "llama_server" | ""
+    # Set when the configured local model is neither on disk nor in the HF
+    # cache, so llama-server would have to download it.  Launching is stalled
+    # until the user confirms the download (see start_local_llama).
+    model_download_required: bool = False
+    pending_model_repo: str = ""
+    pending_model_filename: str = ""
+    pending_model_dest: str = ""
+    pending_model_disk_hint: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -2315,6 +2328,9 @@ def download_model(
     # Clear stale state before starting.
     _clear_download_state()
     _set_download_kind("model")
+    # The user (or the confirmation dialog) has committed to the download --
+    # drop the "download required" prompt state.
+    clear_pending_model_download()
     _download_cancel_event.clear()
 
     # Check if already downloaded.
@@ -2370,7 +2386,7 @@ def download_model(
             with _lock:
                 _state.error = ""
 
-            proc = start_local_llama(port=server_port)
+            proc = start_local_llama(port=server_port, allow_download=True)
             if proc is None:
                 error = get_state().error or "llama-server failed to start"
                 _set_error(error)
@@ -2473,6 +2489,94 @@ def _find_model_in_hf_cache(repo_id: str, filename: str) -> str | None:
 
     print("[Coworker] _find_model_in_hf_cache: {:s} not found in cache".format(filename))
     return None
+
+
+def _preset_disk_hint(repo_id: str, filename: str) -> str:
+    """Return a curated preset's disk-size hint (e.g. "~16 GB"), or "".
+
+    Purely informational: shown in the download-confirmation dialog so the
+    user sees roughly how large the transfer is before committing.  Reads the
+    curated preset metadata (no network).
+    """
+    for preset in PRESET_MODELS:
+        if preset.repo_id == repo_id and preset.filename == filename:
+            return preset.disk_gb
+    for preset in PRESET_MODELS:
+        if filename and preset.filename == filename:
+            return preset.disk_gb
+    return ""
+
+
+def check_local_model_ready(
+    model_path: Path | str | None = None,
+) -> tuple[bool, dict[str, Any]]:
+    """Return whether a local GGUF can be launched WITHOUT downloading.
+
+    A model is ready when it exists as a local file, or is already present in
+    the HuggingFace cache -- either way ``llama-server`` starts with no
+    network transfer.  When it is not ready, the second element describes the
+    download that would be required (repo, filename, destination, and a
+    human-readable size hint); it is ``{}`` when ready.
+
+    Only inspects the filesystem/cache -- never the network -- so it is cheap
+    enough to call on the main thread.
+    """
+    with _lock:
+        repo_id = _config.model_repo_id
+        filename = _config.model_filename
+
+    resolved: Path | str | None = model_path
+    if resolved is None and filename:
+        resolved = _get_models_dir() / filename
+
+    if resolved and os.path.isfile(str(resolved)):
+        return True, {}
+    if repo_id and filename and _find_model_in_hf_cache(repo_id, filename):
+        return True, {}
+
+    return False, {
+        "repo_id": repo_id,
+        "filename": filename,
+        "dest": str(resolved) if resolved else "",
+        "disk_hint": _preset_disk_hint(repo_id, filename),
+    }
+
+
+def set_pending_model_download(info: dict[str, Any]) -> None:
+    """Record that the configured model still needs an explicit download.
+
+    ``start_local_llama`` calls this instead of launching (and instead of
+    letting llama-server fetch the file) so the UI can ask the user first.
+    """
+    with _lock:
+        _state.model_download_required = True
+        _state.pending_model_repo = str(info.get("repo_id") or "")
+        _state.pending_model_filename = str(info.get("filename") or "")
+        _state.pending_model_dest = str(info.get("dest") or "")
+        _state.pending_model_disk_hint = str(info.get("disk_hint") or "")
+
+
+def clear_pending_model_download() -> None:
+    """Forget a pending download (confirmed, cancelled, or already satisfied)."""
+    with _lock:
+        _state.model_download_required = False
+        _state.pending_model_repo = ""
+        _state.pending_model_filename = ""
+        _state.pending_model_dest = ""
+        _state.pending_model_disk_hint = ""
+
+
+def get_pending_model_download() -> dict[str, Any] | None:
+    """Return info about a model that still needs downloading, or ``None``."""
+    with _lock:
+        if not _state.model_download_required:
+            return None
+        return {
+            "repo_id": _state.pending_model_repo,
+            "filename": _state.pending_model_filename,
+            "dest": _state.pending_model_dest,
+            "disk_hint": _state.pending_model_disk_hint,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -2831,14 +2935,19 @@ def get_llama_process() -> "subprocess.Popen | None":
 def start_local_llama(
     model_path: Path | str | None = None,
     port: int | None = None,
+    allow_download: bool = False,
 ) -> "subprocess.Popen | None":
     """
     Launch ``llama-server`` as a subprocess.
 
-    *model_path* -- if ``None``, uses the configured model.  If the local
-      file does NOT exist, passes ``--hf-repo``/``--hf-file`` to
-      ``llama-server`` so it auto-downloads via HuggingFace.
+    *model_path* -- if ``None``, uses the configured model.
     *port* -- if ``None``, uses the configured local port.
+    *allow_download* -- when the model is neither on disk nor in the HF cache,
+      ``llama-server`` would have to download it.  That is refused (the launch
+      is stalled and a pending-download state is recorded for the UI to
+      confirm) unless *allow_download* is set.  Only the EXPLICIT download flow
+      (``download_model``) passes ``True``; starting the agent never downloads
+      implicitly.
     Returns the ``Popen`` handle, or ``None`` on failure.
     """
     global _llama_process
@@ -2903,12 +3012,32 @@ def start_local_llama(
             model_path = Path(hf_cached)
             _last_launched_model_path = Path(hf_cached)
             print("[Coworker] start_local_llama: using HF cached model at {:s}".format(hf_cached))
-        else:
-            # Not in cache either -- try --hf-repo/--hf-file as last resort.
-            print("[Coworker] start_local_llama: not in HF cache either, will use --hf-repo/--hf-file")
+        elif allow_download:
+            # Explicit download flow only (see ``download_model``): let
+            # llama-server fetch the file via --hf-repo/--hf-file.
+            print("[Coworker] start_local_llama: download allowed -- will use --hf-repo/--hf-file")
             hf_repo = repo
             hf_file = fname
             use_hf = True
+        else:
+            # Not on disk and not in the HF cache.  NEVER download implicitly
+            # just because llama-server was asked to start -- the model can be
+            # many GB.  Stall the launch, record what a download would fetch,
+            # and let the caller ask the user to confirm.
+            print("[Coworker] start_local_llama: model not available locally -- "
+                  "stalling launch pending user-confirmed download")
+            _ready, _info = check_local_model_ready(model_path)
+            if _info:
+                set_pending_model_download(_info)
+            _set_error(
+                "Model not downloaded yet -- confirm the download, or point to "
+                "an existing .gguf in Preferences \u2192 Local LLM."
+            )
+            return None
+
+    # A real local path (or a cache hit) was found -- nothing is pending.
+    if not use_hf:
+        clear_pending_model_download()
 
     if port is None:
         with _lock:
@@ -3633,6 +3762,12 @@ def _download_mmproj_if_needed(
 def _set_error(msg: str) -> None:
     with _lock:
         _state.error = msg
+
+
+def clear_error() -> None:
+    """Clear the last error message (e.g. after the user cancels a download)."""
+    with _lock:
+        _state.error = ""
 
 
 # ---------------------------------------------------------------------------

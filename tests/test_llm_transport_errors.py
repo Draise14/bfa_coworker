@@ -83,8 +83,8 @@ class _ResponseHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 (stdlib name)
         length = int(self.headers.get("Content-Length", 0) or 0)
-        if length:
-            self.rfile.read(length)
+        raw = self.rfile.read(length) if length else b""
+        self.server.last_body = raw  # type: ignore[attr-defined]
         self.server.request_count += 1  # type: ignore[attr-defined]
         responses = self.server.responses  # type: ignore[attr-defined]
         status, body = responses.pop(0) if responses else (200, "{}")
@@ -106,6 +106,7 @@ class _ServerCase(unittest.TestCase):
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), _ResponseHandler)
         self.server.responses = []  # type: ignore[attr-defined]
         self.server.request_count = 0  # type: ignore[attr-defined]
+        self.server.last_body = b""  # type: ignore[attr-defined]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         host, port = self.server.server_address
@@ -188,6 +189,57 @@ class TestSuccess(_ServerCase):
         result = self._post()
         self.assertIsNotNone(result)
         self.assertEqual(self.state.error_kind, "")
+
+
+class TestNonStandardRolesAreSanitized(_ServerCase):
+    """The transport never POSTs a message role a strict provider rejects.
+
+    Regression: in Remote API mode the forced-summary request re-sent the RAW
+    history (``prompt_budget == 0`` skipped every strip/trim branch), including
+    the UI-only ``reasoning`` (chain-of-thought) entries.  OpenRouter providers
+    rejected the whole request with HTTP 400
+    ``messages[2].role: unknown variant `reasoning```.  The transport is the
+    single HTTP choke point, so it drops ``reasoning`` and maps any other
+    non-standard role to ``user`` before serializing.
+    """
+
+    def _sent_messages(self):
+        raw = self.server.last_body  # type: ignore[attr-defined]
+        return json.loads(raw.decode("utf-8"))["messages"]
+
+    def test_reasoning_dropped_and_unknown_role_mapped_to_user(self):
+        self._queue((200, json.dumps({
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+        })))
+        _lt.openai_chat_completions(
+            self.url,
+            [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "hi"},
+                {"role": "reasoning", "content": "chain of thought"},
+                {"role": "assistant", "content": "reply"},
+                {"role": "developer", "content": "non-standard here"},
+            ],
+            [], api_key=None, model=None, max_tokens=64,
+        )
+        sent = self._sent_messages()
+        self.assertEqual([m["role"] for m in sent],
+                         ["system", "user", "assistant", "user"])
+        # The chain-of-thought content is dropped, not re-roled.
+        self.assertNotIn("chain of thought",
+                         [m.get("content") for m in sent])
+
+    def test_callers_message_list_is_not_mutated(self):
+        self._queue((200, json.dumps({
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+        })))
+        original = [
+            {"role": "user", "content": "hi"},
+            {"role": "reasoning", "content": "cot"},
+        ]
+        _lt.openai_chat_completions(
+            self.url, original, [], api_key=None, model=None, max_tokens=64)
+        self.assertEqual([m["role"] for m in original], ["user", "reasoning"])
 
 
 if __name__ == "__main__":

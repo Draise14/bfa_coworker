@@ -25,6 +25,7 @@ from .operators_server import (
 from .operators_llm import (
     _BFACW_OT_download_model,
     _BFACW_OT_cancel_download,
+    _BFACW_OT_confirm_model_download,
     _BFACW_OT_start_llm,
     _BFACW_OT_stop_llm,
     _BFACW_OT_download_llama_server,
@@ -80,6 +81,7 @@ _classes = (
     _BFACW_OT_server_stop,
     _BFACW_OT_download_model,
     _BFACW_OT_cancel_download,
+    _BFACW_OT_confirm_model_download,
     _BFACW_OT_start_llm,
     _BFACW_OT_stop_llm,
     _BFACW_OT_download_llama_server,
@@ -266,10 +268,21 @@ def _autostart_agent_timer() -> None:
         if not llm_state.is_running:
             # If an existing model path is set, use it directly.
             existing_path = prefs.existing_model_path
-            if existing_path and os.path.isfile(existing_path):
-                _llm.start_local_llama(model_path=existing_path)
+            _probe = existing_path if existing_path and os.path.isfile(existing_path) else None
+            # Never download implicitly at startup -- there is no UI here to
+            # confirm a multi-GB transfer.  Record it so starting the agent
+            # prompts instead.
+            _ready, _info = _llm.check_local_model_ready(_probe)
+            if _ready:
+                if _probe:
+                    _llm.start_local_llama(model_path=_probe)
+                else:
+                    _llm.start_local_llama()
             else:
-                _llm.start_local_llama()
+                _llm.set_pending_model_download(_info)
+                print("[Coworker][WARN] Agent auto-start: local model not "
+                      "downloaded -- start the Coworker agent to confirm the "
+                      "download, or configure a model in Preferences")
     elif prefs.operating_mode == "REMOTE_API":
         # Remote mode -- sync remote prefs to config so chat_send finds them.
         _llm = get_llm_manager()

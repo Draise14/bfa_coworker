@@ -9,6 +9,7 @@ Operators for local LLM management: download, start/stop, scan, select.
 __all__ = (
     "_BFACW_OT_download_model",
     "_BFACW_OT_cancel_download",
+    "_BFACW_OT_confirm_model_download",
     "_BFACW_OT_start_llm",
     "_BFACW_OT_stop_llm",
     "_BFACW_OT_download_llama_server",
@@ -183,6 +184,174 @@ class _BFACW_OT_cancel_download(bpy.types.Operator):  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
+# Confirm Model Download
+
+def _redraw_preferences() -> None:
+    """Tag every PREFERENCES area for redraw (download progress lives there)."""
+    for wm in bpy.data.window_managers:
+        for win in wm.windows:
+            for area in win.screen.areas:
+                if area.type == 'PREFERENCES':
+                    area.tag_redraw()
+
+
+def _make_confirm_download_poll(op):
+    """Timer poll: flip ``op._done`` once the model download finishes."""
+    def _poll() -> float | None:
+        state = get_llm_manager().get_state()
+        if state.download_active:
+            _redraw_preferences()
+            return 0.5
+        op._done = True
+        op._error = state.error
+        return None
+    return _poll
+
+
+def _continue_agent_start_after_download() -> None:
+    """Continue a stalled agent start once the model download finished.
+
+    Runs from a main-thread timer after llama-server is healthy.  Falls back to
+    a status message if the operator cannot be invoked from this context.
+    """
+    try:
+        props = bpy.context.window_manager.bfacw_chat_props  # type: ignore[attr-defined]
+    except Exception:  # pylint: disable=broad-exception-caught
+        props = None
+    for wm in bpy.data.window_managers:
+        for win in wm.windows:
+            try:
+                with bpy.context.temp_override(window=win):
+                    bpy.ops.bfacw.agent_start()
+                return None
+            except Exception:  # pylint: disable=broad-exception-caught
+                continue
+    if props is not None:
+        props.chat_status = "Model ready -- press 'Start Coworker' to connect."
+    return None
+
+
+class _BFACW_OT_confirm_model_download(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "bfacw.confirm_model_download"
+    bl_label = "Download Model?"
+    bl_description = (
+        "The selected model is not on disk yet. Confirm to download it from "
+        "HuggingFace before llama-server starts, or cancel to configure a "
+        "model manually"
+    )
+
+    _timer: float | None = None
+    _done: bool = False
+    _error: str = ""
+    _model_dest: str = ""
+
+    def invoke(self, context: bpy.types.Context, event: bpy.types.Event) -> set[str]:
+        del event
+        info = get_llm_manager().get_pending_model_download() or {}
+        if not info.get("filename"):
+            self.report(
+                {"ERROR"},
+                "No model is configured -- pick one in Preferences \u2192 Local LLM",
+            )
+            return {"CANCELLED"}
+        return context.window_manager.invoke_props_dialog(self, width=460)
+
+    def draw(self, context: bpy.types.Context) -> None:
+        del context
+        info = get_llm_manager().get_pending_model_download() or {}
+        layout = self.layout
+        layout.label(text="This model has not been downloaded yet.", icon='INFO')
+        layout.label(text="Model: {:s}".format(info.get("filename") or "(unknown)"))
+        disk = info.get("disk_hint") or ""
+        if disk:
+            layout.label(text="Download size: about {:s}".format(disk))
+        else:
+            layout.label(text="Download size: several GB (exact size unknown)")
+        dest = info.get("dest") or ""
+        if dest:
+            layout.label(text="Destination: {:s}".format(dest))
+        layout.separator()
+        layout.label(text="It will be downloaded from HuggingFace, which can")
+        layout.label(text="take several minutes on a slow connection.")
+        layout.label(text="Cancel to choose a different model or to point at an")
+        layout.label(text="existing .gguf file in Preferences.")
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        llm = get_llm_manager()
+        info = llm.get_pending_model_download() or {}
+        self._model_dest = info.get("dest") or ""
+        self._done = False
+        self._error = ""
+        # Async download; progress is shown in Preferences.
+        llm.download_model(progress_callback=None)
+        self._timer = bpy.app.timers.register(
+            _make_confirm_download_poll(self), first_interval=0.5, persistent=True)
+        context.window_manager.modal_handler_add(self)
+        self.report({"INFO"}, "Downloading model -- see Preferences for progress")
+        return {'RUNNING_MODAL'}
+
+    def modal(self, context: bpy.types.Context, event: bpy.types.Event) -> set[str]:
+        del event
+        if not self._done:
+            _redraw_preferences()
+            return {'PASS_THROUGH'}
+
+        if self._timer is not None:
+            try:
+                bpy.app.timers.unregister(self._timer)
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+            self._timer = None
+
+        props = context.window_manager.bfacw_chat_props  # type: ignore[attr-defined]
+        llm = get_llm_manager()
+        model_ok = bool(self._model_dest) and Path(self._model_dest).exists()
+        if not model_ok:
+            err = llm.get_state().error or "Model download failed"
+            props.chat_status = "Error: " + err
+            self.report({"ERROR"}, err)
+            return {"CANCELLED"}
+
+        # Download succeeded -- bring the server up, then continue the start.
+        props.chat_status = "Model downloaded -- starting llama-server..."
+
+        def _bring_up_server() -> None:
+            proc = llm.start_local_llama()
+            if proc is None:
+                err = llm.get_state().error or "llama-server failed to start"
+                bpy.app.timers.register(
+                    lambda e=err: setattr(props, "chat_status", "Error: " + e))
+                return
+            if not llm.wait_until_ready(timeout=300.0, proc=proc):
+                err = llm.get_state().error or "llama-server did not become ready"
+                bpy.app.timers.register(
+                    lambda e=err: setattr(props, "chat_status", "Error: " + e))
+                return
+            bpy.app.timers.register(
+                _continue_agent_start_after_download, first_interval=0.1)
+
+        threading.Thread(target=_bring_up_server, daemon=True).start()
+        self.report({"INFO"}, "Model downloaded -- starting llama-server...")
+        return {"FINISHED"}
+
+    def cancel(self, context: bpy.types.Context) -> set[str]:
+        del context
+        llm = get_llm_manager()
+        llm.clear_pending_model_download()
+        llm.clear_error()
+        try:
+            props = bpy.context.window_manager.bfacw_chat_props  # type: ignore[attr-defined]
+            props.chat_status = (
+                "Model download cancelled -- pick a smaller model, or set an "
+                "existing .gguf in Preferences \u2192 Local LLM, then Start Coworker."
+            )
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+        self.report({"INFO"}, "Model download cancelled")
+        return {"CANCELLED"}
+
+
+# ---------------------------------------------------------------------------
 # Start Local LLM
 
 class _BFACW_OT_start_llm(bpy.types.Operator):  # type: ignore[misc]
@@ -204,6 +373,18 @@ class _BFACW_OT_start_llm(bpy.types.Operator):  # type: ignore[misc]
         _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
         cfg.local_port = _llm_port
         llm.set_config(cfg)
+
+        # Never let llama-server trigger an implicit multi-GB download: if the
+        # model is not on disk (and not cached), stall the launch and ask the
+        # user to confirm the download first.
+        if not llm.get_state().is_running:
+            _existing = prefs.existing_model_path
+            _ready, _info = llm.check_local_model_ready(
+                _existing if _existing and os.path.isfile(_existing) else None)
+            if not _ready:
+                llm.set_pending_model_download(_info)
+                _result = bpy.ops.bfacw.confirm_model_download('INVOKE_DEFAULT')
+                return {"CANCELLED"} if _result == {"CANCELLED"} else {"FINISHED"}
 
         def _do_start():
             # If an existing model path is set, use it directly.

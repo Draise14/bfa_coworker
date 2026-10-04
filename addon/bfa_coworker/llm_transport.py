@@ -346,6 +346,35 @@ def server_fault_message(error_body: str) -> str:
     return "\n\n".join(parts)
 
 
+_STANDARD_MESSAGE_ROLES = frozenset({"system", "user", "assistant", "tool"})
+
+
+def _safe_request_messages(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return a copy of *messages* whose roles any OpenAI-compatible API accepts.
+
+    ``reasoning`` (chain-of-thought) entries are UI-only and never valid in an
+    API payload, so they are dropped; any other non-standard role is mapped to
+    ``"user"``.  This is the last line of defence at the single HTTP choke
+    point, so no request path -- present or future -- can leak a role that a
+    strict provider rejects with 400 "unknown variant `reasoning`".  The
+    caller's list and its dicts are never mutated.
+    """
+    safe: list[dict[str, Any]] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            safe.append(message)
+            continue
+        role = message.get("role")
+        if role == "reasoning":
+            continue
+        if role not in _STANDARD_MESSAGE_ROLES:
+            message = {**message, "role": "user"}
+        safe.append(message)
+    return safe
+
+
 def openai_chat_completions(
     url: str,
     messages: list[dict[str, Any]],
@@ -370,6 +399,7 @@ def openai_chat_completions(
     # from a previous call is never mistaken for the current failure.
     if _agent_state is not None:
         _agent_state.error_kind = ""
+    messages = _safe_request_messages(messages)
     temperature = _DEFAULT_TEMPERATURE_CODE if chat_mode == "AGENT" else _DEFAULT_TEMPERATURE_PROSE
     body: dict[str, Any] = {
         "messages": messages,
@@ -1051,6 +1081,7 @@ def openai_chat_completions_stream(
     # non-streaming helper) so a stale overflow is never misattributed.
     if _agent_state is not None:
         _agent_state.error_kind = ""
+    messages = _safe_request_messages(messages)
     temperature = _DEFAULT_TEMPERATURE_CODE if chat_mode == "AGENT" else _DEFAULT_TEMPERATURE_PROSE
     body: dict[str, Any] = {
         "messages": messages,

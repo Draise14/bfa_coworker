@@ -30,8 +30,12 @@ The turn tests reuse the fake llama-server + MCP bridge harness from
 
 import json
 import os
+import re
+import sys
+import tempfile
 import types
 import unittest
+from unittest import mock
 
 from tests.test_turn_loop_integration import (
     _EXECUTE_CODE_TOOL,
@@ -269,6 +273,18 @@ def _ui_source() -> str:
         return fh.read()
 
 
+def _ui_constants(*names):
+    """Read numeric module constants straight out of ui_chat.py."""
+    src = _ui_source()
+    out = {}
+    for name in names:
+        match = re.search(r"^{:s} = ([0-9.]+)$".format(re.escape(name)), src, re.M)
+        if match is None:
+            raise AssertionError("{:s} not found in ui_chat.py".format(name))
+        out[name] = float(match.group(1))
+    return out
+
+
 def _extract_ui_func(name, extra=None):
     """Exec one ui_chat module-level function with stubbed globals."""
     src = _ui_source()
@@ -322,7 +338,6 @@ class TestChatAttachmentUI(unittest.TestCase):
     """Registration, drawing, and send-path wiring (no Blender needed)."""
 
     _NEW_CLASSES = (
-        "BFACW_OT_chat_image_attach",
         "BFACW_OT_chat_capture_render",
         "BFACW_OT_chat_capture_screen",
         "BFACW_OT_chat_image_drop",
@@ -355,8 +370,95 @@ class TestChatAttachmentUI(unittest.TestCase):
         self.assertIn('bl_import_operator = "bfacw.chat_image_drop"', src)
         expected = ";".join(ca.SUPPORTED_EXTENSIONS)
         self.assertIn('bl_file_extensions = "{:s}"'.format(expected), src)
-        self.assertIn('context.area.type in {"VIEW_3D", "TEXT_EDITOR"}', src,
-                      "poll_drop must accept VIEW_3D and TEXT_EDITOR")
+        # The drop operator accepts the whole file list Blender hands it.
+        self.assertIn("directory: bpy.props.StringProperty", src)
+        self.assertIn("files: bpy.props.CollectionProperty", src)
+
+    def test_drop_handler_is_scoped_to_the_chat_panels(self):
+        src = _ui_source()
+        fh_start = src.index("class BFACW_FH_chat_drop(")
+        fh_end = src.index("\nclass ", fh_start + 1)
+        body = src[fh_start:fh_end]
+        self.assertIn('if area.type == "TEXT_EDITOR":', body,
+                      "the Text Editor panel must accept the drop")
+        self.assertIn("return _is_coworker_panel_region(context)", body,
+                      "the 3D Viewport drop must be scoped to our panel")
+        self.assertIn('bl_label = "Attach Image to Coworker Chat"', body)
+
+    def test_is_coworker_panel_region_scopes_the_drop(self):
+        is_region = _extract_ui_func(
+            "_is_coworker_panel_region", {"_CHAT_PANEL_CATEGORY": "Coworker"})
+
+        def _ctx(area_type, region_type, category):
+            area = None if area_type is None else types.SimpleNamespace(
+                type=area_type)
+            region = None if region_type is None else types.SimpleNamespace(
+                type=region_type, active_panel_category=category)
+            return types.SimpleNamespace(area=area, region=region)
+
+        self.assertTrue(is_region(_ctx("VIEW_3D", "UI", "Coworker")))
+        self.assertFalse(is_region(_ctx("VIEW_3D", "UI", "Item")),
+                         "another sidebar tab must keep Blender's behaviour")
+        self.assertFalse(is_region(_ctx("VIEW_3D", "WINDOW", "Coworker")),
+                         "the viewport itself must not be claimed")
+        self.assertFalse(is_region(_ctx("VIEW_3D", "UI", "")))
+        self.assertFalse(is_region(_ctx("IMAGE_EDITOR", "UI", "Coworker")))
+        self.assertFalse(is_region(_ctx(None, None, "")))
+
+    def test_builtin_viewport_drops_are_suppressed_and_restored(self):
+        class _BuiltinEmpty:
+            @classmethod
+            def poll_drop(cls, context):
+                return True
+
+        class _BuiltinCameraBg:
+            @classmethod
+            def poll_drop(cls, context):
+                return True
+
+        fake_view3d = types.ModuleType("bl_operators.view3d")
+        fake_view3d.VIEW3D_FH_empty_image = _BuiltinEmpty
+        fake_view3d.VIEW3D_FH_camera_background_image = _BuiltinCameraBg
+        fake_pkg = types.ModuleType("bl_operators")
+        fake_pkg.view3d = fake_view3d
+        sys.modules["bl_operators"] = fake_pkg
+        sys.modules["bl_operators.view3d"] = fake_view3d
+        self.addCleanup(sys.modules.pop, "bl_operators.view3d", None)
+        self.addCleanup(sys.modules.pop, "bl_operators", None)
+
+        patches = []
+
+        def _in_panel(context):
+            return bool(getattr(context, "in_panel", False))
+
+        common = {"_builtin_drop_patches": patches,
+                  "_is_coworker_panel_region": _in_panel}
+        suppress = _extract_ui_func(
+            "_suppress_builtin_viewport_drops", dict(common))
+        restore = _extract_ui_func(
+            "_restore_builtin_viewport_drops", dict(common))
+        original_empty = _BuiltinEmpty.__dict__["poll_drop"]
+        original_camera_bg = _BuiltinCameraBg.__dict__["poll_drop"]
+
+        suppress()
+        self.assertEqual(len(patches), 2, "both built-in handlers are patched")
+        for cls in (_BuiltinEmpty, _BuiltinCameraBg):
+            self.assertFalse(
+                cls.poll_drop(types.SimpleNamespace(in_panel=True)),
+                "our panel must not offer Blender's own image drop")
+            self.assertTrue(
+                cls.poll_drop(types.SimpleNamespace(in_panel=False)),
+                "everywhere else keeps Blender's behaviour")
+        suppress()
+        self.assertEqual(len(patches), 2, "suppression must be idempotent")
+
+        restore()
+        self.assertEqual(patches, [])
+        self.assertIs(_BuiltinEmpty.__dict__["poll_drop"], original_empty,
+                      "unregister must hand the handler back to Blender")
+        self.assertIs(_BuiltinCameraBg.__dict__["poll_drop"],
+                      original_camera_bg,
+                      "unregister must hand the handler back to Blender")
 
     def test_capture_encodes_on_main_thread_and_send_once(self):
         fake = types.SimpleNamespace(
@@ -391,11 +493,12 @@ class TestChatAttachmentUI(unittest.TestCase):
         draw = _extract_ui_func(
             "_draw_attachment_row",
             {"_draw_attachment_preview":
-                lambda layout, img: preview_calls.append(img)})
+                lambda layout, img, context: preview_calls.append((img, context))})
         log = []
         props = types.SimpleNamespace(chat_image=object(),
                                       chat_image_send_once=True)
-        draw(_FakeLayout(log), props)
+        context = object()
+        draw(_FakeLayout(log), props, context)
 
         tpl = [c for c in log if c[0] == "template_ID"]
         self.assertEqual(len(tpl), 1, "the socket must be drawn once")
@@ -403,25 +506,31 @@ class TestChatAttachmentUI(unittest.TestCase):
         self.assertEqual(tpl[0][2],
                          {"open": "image.open", "new": "image.new"})
         ops = [c[1][0] for c in log if c[0] == "operator"]
-        for op_id in ("bfacw.chat_image_attach",
-                      "bfacw.chat_capture_render",
+        # The redundant File button is gone; the socket's own "open"
+        # (image.open) is the file-browser path now.
+        self.assertNotIn("bfacw.chat_image_attach", ops)
+        for op_id in ("bfacw.chat_capture_render",
                       "bfacw.chat_capture_screen"):
             self.assertIn(op_id, ops)
         toggles = [c for c in log if c[0] == "prop"
                    and c[1][1] == "chat_image_send_once"]
         self.assertEqual(len(toggles), 1, "send-once toggle must be drawn")
-        # The row hands the socketed datablock to the preview helper.
-        self.assertEqual(preview_calls, [props.chat_image],
+        # The row hands the socketed datablock (and the context) to the
+        # preview helper so it can size itself to the panel width.
+        self.assertEqual(preview_calls, [(props.chat_image, context)],
                          "the attached image must be previewed")
 
     def test_attachment_preview_draws_thumbnail_and_degrades_gracefully(self):
+        scales = []
         draw = _extract_ui_func(
             "_draw_attachment_preview",
-            {"_ATTACHMENT_PREVIEW_SCALE": 8.0})
+            {"_attachment_preview_scale":
+                lambda img, context: scales.append((img, context)) or 7.5})
+        context = object()
 
         # Nothing attached -> nothing drawn.
         log = []
-        draw(_FakeLayout(log), None)
+        draw(_FakeLayout(log), None, context)
         self.assertEqual(log, [])
 
         class _NoPreview:
@@ -431,7 +540,7 @@ class TestChatAttachmentUI(unittest.TestCase):
                 raise RuntimeError("no preview")
 
         log = []
-        draw(_FakeLayout(log), _NoPreview())
+        draw(_FakeLayout(log), _NoPreview(), context)
         self.assertEqual(log, [], "a failed preview must not raise or draw")
 
         class _EmptyPreview:
@@ -442,7 +551,7 @@ class TestChatAttachmentUI(unittest.TestCase):
                 return _EmptyPreview()
 
         log = []
-        draw(_FakeLayout(log), _NoIcon())
+        draw(_FakeLayout(log), _NoIcon(), context)
         self.assertEqual(log, [], "icon_id 0 means no preview to show")
 
         class _Preview:
@@ -453,11 +562,47 @@ class TestChatAttachmentUI(unittest.TestCase):
                 return _Preview()
 
         log = []
-        draw(_FakeLayout(log), _WithPreview())
+        img = _WithPreview()
+        draw(_FakeLayout(log), img, context)
         icons = [c for c in log if c[0] == "template_icon"]
         self.assertEqual(len(icons), 1, "the thumbnail must be drawn once")
         self.assertEqual(icons[0][2]["icon_value"], 4242)
-        self.assertEqual(icons[0][2]["scale"], 8.0)
+        self.assertEqual(icons[0][2]["scale"], 7.5)
+        self.assertEqual(scales, [(img, context)],
+                         "the thumbnail must be sized from the context")
+
+    def test_attachment_preview_scale_is_responsive_to_the_panel(self):
+        scale = _extract_ui_func("_attachment_preview_scale", _ui_constants(
+            "_UI_UNIT_BASE_PX", "_ATTACHMENT_PREVIEW_MARGIN_PX",
+            "_ATTACHMENT_PREVIEW_MIN_PX", "_ATTACHMENT_PREVIEW_MAX_RATIO",
+            "_ATTACHMENT_PREVIEW_MIN_SCALE", "_ATTACHMENT_PREVIEW_MAX_SCALE"))
+
+        def _ctx(width, ui_scale=1.0):
+            return types.SimpleNamespace(
+                region=types.SimpleNamespace(width=width),
+                preferences=types.SimpleNamespace(
+                    system=types.SimpleNamespace(ui_scale=ui_scale)))
+
+        def _img(width, height):
+            return types.SimpleNamespace(size=(width, height))
+
+        # A small image must still fill the panel (Blender's preview draw
+        # scales it up), and a wider panel must give a bigger thumbnail.
+        narrow = scale(_img(64, 64), _ctx(200))
+        wide = scale(_img(64, 64), _ctx(600))
+        self.assertGreater(narrow, 1.0, "a small image must not stay tiny")
+        self.assertGreater(wide, narrow, "a wider panel must grow the preview")
+
+        # A tall image gets a taller square so its width still fills the
+        # panel width; an extremely tall one is capped.
+        self.assertGreater(scale(_img(100, 400), _ctx(600)),
+                           scale(_img(100, 100), _ctx(600)))
+
+        # Clamped to the documented range, and never divides by zero.
+        self.assertLessEqual(scale(_img(1, 1), _ctx(100000)), 32.0)
+        self.assertGreaterEqual(scale(_img(0, 0), _ctx(0)), 1.0)
+        # No usable context still yields a usable default.
+        self.assertGreaterEqual(scale(_img(10, 10), None), 1.0)
 
     def test_ensure_attachment_preview_is_best_effort(self):
         ensure = _extract_ui_func("_ensure_attachment_preview")
@@ -513,7 +658,7 @@ class TestChatAttachmentUI(unittest.TestCase):
             start = src.index(start_marker)
             end = src.find(end_marker, start + 1)
             body = src[start:] if end < 0 else src[start:end]
-            row_at = body.index("_draw_attachment_row(layout, props)")
+            row_at = body.index("_draw_attachment_row(layout, props, context)")
             input_at = body.index('layout.textbox(props, "chat_input")')
             self.assertLess(
                 row_at, input_at,
@@ -537,5 +682,379 @@ class TestChatAttachmentUI(unittest.TestCase):
         src = _ui_source()
         # Definition + the two panel call sites.
         self.assertEqual(
-            src.count("_draw_attachment_row(layout, props)"), 3,
+            src.count("_draw_attachment_row(layout, props, context)"), 3,
             "both chat panels must draw the attachment row")
+
+    def test_send_paths_warn_when_the_attachment_cannot_be_encoded(self):
+        src = _ui_source()
+        self.assertEqual(
+            src.count("_warn_failed_attachment(self, props)"), 2,
+            "both send operators must report a failed attachment encode")
+        self.assertEqual(
+            src.count("if attachments is None:"), 2,
+            "the warning must be gated on the capture returning nothing")
+
+    def test_warn_failed_attachment_only_fires_for_a_set_socket(self):
+        reported = []
+        warn = _extract_ui_func("_warn_failed_attachment")
+        op = types.SimpleNamespace(
+            report=lambda level, message: reported.append((level, message)))
+
+        warn(op, types.SimpleNamespace(chat_image=None))
+        self.assertEqual(reported, [],
+                         "an empty socket must stay silent (plain-text send)")
+
+        warn(op, types.SimpleNamespace(chat_image=object()))
+        self.assertEqual(len(reported), 1)
+        level, message = reported[0]
+        self.assertEqual(level, {"WARNING"})
+        self.assertIn("Could not prepare the attached image", message)
+
+
+# ---------------------------------------------------------------------------
+# Encoder internals -- fake imbuf, no Blender.
+
+_CA_PATH = os.path.join(_REPO, "addon", "bfa_coworker", "chat_attachments.py")
+
+
+def _load_chat_attachments():
+    """Import chat_attachments.py with stdlib-only globals (no Blender)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "chat_attachments_encoder_under_test", _CA_PATH)
+    ca = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ca)
+    return ca
+
+
+class _FakeImBuf:
+    """Minimal ImBuf: ``size`` + ``file_type``, copy/resize/free."""
+
+    def __init__(self, size=(2048, 1024), file_type="BMP"):
+        self.size = size
+        self.file_type = file_type
+        self.filepath = "src.bmp"
+
+    def copy(self):
+        return _FakeImBuf(self.size, self.file_type)
+
+    def resize(self, size, method="FAST"):
+        self.size = size
+
+    def free(self):
+        pass
+
+
+class _FakeImbufModule:
+    """Records the ``file_type`` of every write, like Blender's imbuf."""
+
+    def __init__(self, raise_on_write=False):
+        self.raise_on_write = raise_on_write
+        self.writes = []  # (file_type, size)
+
+    def load(self, filepath):
+        return _FakeImBuf()
+
+    def write(self, buf, *, filepath=None):
+        self.writes.append((buf.file_type, tuple(buf.size)))
+        if self.raise_on_write:
+            raise OSError("Unable to write image file (No error)")
+        # Bigger for bigger buffers so the divisor walk really shrinks.
+        with open(filepath, "wb") as fh:
+            fh.write(b"x" * (buf.size[0] * buf.size[1] // 1000))
+
+
+class TestAttachmentEncoder(unittest.TestCase):
+    """Regression tests for the BMP-written-as-PNG bug (#88 follow-up)."""
+
+    def setUp(self):
+        self.ca = _load_chat_attachments()
+        self._prev_imbuf = sys.modules.get("imbuf")
+        self.addCleanup(self._restore_imbuf)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.src = os.path.join(self._tmp.name, "in.bmp")
+        with open(self.src, "wb") as fh:
+            fh.write(b"BM-original-bytes")
+
+    def _restore_imbuf(self):
+        if self._prev_imbuf is None:
+            sys.modules.pop("imbuf", None)
+        else:
+            sys.modules["imbuf"] = self._prev_imbuf
+
+    def _install(self, fake):
+        sys.modules["imbuf"] = fake
+        return fake
+
+    def test_downscale_pins_the_buffer_to_png(self):
+        """imbuf.write uses the buffer's own format, so it must be PNG."""
+        fake = self._install(_FakeImbufModule())
+        data, mime = self.ca._downscale_to_limit(
+            self._tmp.name, self.src, 1_000_000)
+        self.assertEqual(fake.writes, [("PNG", (2048, 1024))])
+        self.assertEqual(mime, "image/png")
+        self.assertTrue(data.startswith(b"x"))
+
+    def test_resized_copies_are_png_too(self):
+        fake = self._install(_FakeImbufModule())
+        _, mime = self.ca._downscale_to_limit(self._tmp.name, self.src, 1000)
+        self.assertEqual(mime, "image/png")
+        self.assertGreaterEqual(len(fake.writes), 2)
+        for file_type, _size in fake.writes:
+            self.assertEqual(file_type, "PNG")
+
+    def test_downscale_falls_back_to_raw_when_every_write_fails(self):
+        self._install(_FakeImbufModule(raise_on_write=True))
+        data, mime = self.ca._downscale_to_limit(
+            self._tmp.name, self.src, 1_000_000)
+        self.assertEqual(data, b"BM-original-bytes")
+        self.assertEqual(mime, "image/bmp")
+
+    def test_encode_file_is_total_when_the_write_fails(self):
+        self._install(_FakeImbufModule(raise_on_write=True))
+        data, mime = self.ca._encode_file(self.src, 1_000_000)
+        self.assertEqual(data, b"BM-original-bytes")
+        self.assertEqual(mime, "image/bmp")
+
+    def test_image_to_data_uri_survives_a_failing_encoder(self):
+        img = types.SimpleNamespace(filepath=self.src, is_dirty=False)
+        with mock.patch.object(self.ca, "_encode_file",
+                               side_effect=OSError("disk full")):
+            self.assertIsNone(self.ca.image_to_data_uri(img))
+
+    def test_image_to_data_uri_encodes_normally(self):
+        self._install(_FakeImbufModule())
+        img = types.SimpleNamespace(filepath=self.src, is_dirty=False)
+        uri = self.ca.image_to_data_uri(img, limit=1_000_000)
+        self.assertTrue(uri.startswith("data:image/png;base64,"))
+# ---------------------------------------------------------------------------
+# Render-from-view -- non-destructive to the user's scene.
+
+
+class _FakeSceneCollectionObjects:
+    def __init__(self, log):
+        self._log = log
+
+    def link(self, obj):
+        self._log.append(("link", obj))
+
+
+class _FakeSceneCollection:
+    def __init__(self, log):
+        self.objects = _FakeSceneCollectionObjects(log)
+
+
+class _FakeScene:
+    def __init__(self, log, camera=None):
+        self.camera = camera
+        self.collection = _FakeSceneCollection(log)
+        self.render = types.SimpleNamespace(
+            resolution_x=1920, resolution_y=1080, resolution_percentage=100)
+        self.cycles = types.SimpleNamespace(samples=128, time_limit=0.0)
+
+
+class _FakeTempOverride:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class TestRenderFromView(unittest.TestCase):
+    """capture_render_from_view renders the view through a temp camera."""
+
+    def setUp(self):
+        self.ca = _load_chat_attachments()
+        self._prev_bpy = sys.modules.get("bpy")
+        self.addCleanup(self._restore_bpy)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+
+    def _restore_bpy(self):
+        if self._prev_bpy is None:
+            sys.modules.pop("bpy", None)
+        else:
+            sys.modules["bpy"] = self._prev_bpy
+
+    def _install_bpy(self, area_type="VIEW_3D", previous_camera=None,
+                     fail_render=False):
+        log = []
+
+        render_result = types.SimpleNamespace(size=(4, 4))
+
+        def _save_render(path):
+            with open(path, "wb") as fh:
+                fh.write(b"png")
+
+        render_result.save_render = _save_render
+
+        class _CamData:
+            lens = 0.0
+
+        class _CamObject:
+            matrix_world = None
+
+        class _Cameras:
+            def new(self, name):
+                return _CamData()
+
+            def remove(self, data):
+                log.append(("cameras.remove", data))
+
+        class _Objects:
+            def new(self, name, data):
+                return _CamObject()
+
+            def remove(self, obj, do_unlink=False):
+                log.append(("objects.remove", obj, do_unlink))
+
+        class _OpsView3D:
+            def camera_to_view(self):
+                log.append(("camera_to_view",))
+
+        class _OpsRender:
+            def render(self, *args, **kwargs):
+                log.append(("render", args, kwargs))
+                log.append(("at_render",
+                            scene.render.resolution_x,
+                            scene.render.resolution_y,
+                            scene.render.resolution_percentage,
+                            scene.cycles.samples,
+                            scene.cycles.time_limit))
+                if fail_render:
+                    raise RuntimeError("render failed")
+
+        class _Ops:
+            view3d = _OpsView3D()
+            render = _OpsRender()
+
+        region = types.SimpleNamespace(type="WINDOW")
+        space = types.SimpleNamespace(
+            lens=35.0,
+            region_3d=types.SimpleNamespace(
+                            view_matrix=types.SimpleNamespace(inverted=lambda: None)))
+        area = types.SimpleNamespace(
+            type=area_type, width=800, height=600,
+            regions=[region], spaces=[space])
+        scene = _FakeScene(log, camera=previous_camera)
+
+        class _Images:
+            def get(self, name):
+                return render_result
+
+        class _Data:
+            cameras = _Cameras()
+            objects = _Objects()
+            images = _Images()
+
+        fake = types.ModuleType("bpy")
+        fake.context = types.SimpleNamespace(
+            window=types.SimpleNamespace(
+                screen=types.SimpleNamespace(areas=[area])),
+            area=None, scene=scene,
+            temp_override=lambda **kw: _FakeTempOverride(**kw))
+        fake.data = _Data()
+        fake.ops = _Ops()
+        fake.app = types.SimpleNamespace(tempdir=self._tmp.name, background=True)
+        fake.utils = types.SimpleNamespace(
+            user_resource=lambda kind: self._tmp.name)
+        sys.modules["bpy"] = fake
+        return log, scene, render_result
+
+    def test_renders_through_a_temp_camera_and_restores_the_scene(self):
+        sentinel = object()
+        log, scene, _ = self._install_bpy(previous_camera=sentinel)
+
+        path = self.ca.capture_render_from_view()
+
+        self.assertTrue(path and os.path.isfile(path))
+        self.assertIn(("camera_to_view",), log)
+        self.assertIn(("render", (), {}), log)
+        self.assertIs(scene.camera, sentinel,
+                      "the user's camera must be restored")
+        self.assertEqual([c[0] for c in log].count("objects.remove"), 1,
+                         "the temporary camera must be removed")
+        self.assertEqual([c[0] for c in log].count("cameras.remove"), 1)
+
+    def test_restores_the_scene_even_when_the_render_fails(self):
+        sentinel = object()
+        log, scene, _ = self._install_bpy(previous_camera=sentinel,
+                                          fail_render=True)
+
+        self.assertIsNone(self.ca.capture_render_from_view())
+        self.assertIs(scene.camera, sentinel)
+        self.assertEqual([c[0] for c in log].count("objects.remove"), 1)
+        self.assertEqual([c[0] for c in log].count("cameras.remove"), 1)
+
+    def test_no_viewport_means_no_render(self):
+        log, scene, _ = self._install_bpy(area_type="TEXT_EDITOR")
+        self.assertIsNone(self.ca.capture_render_from_view())
+        self.assertEqual(log, [], "nothing may be touched without a viewport")
+        self.assertIsNone(scene.camera)
+
+    def test_renders_although_the_render_result_reports_zero_size(self):
+        # Blender 5.2 reports ``Render Result.size`` as (0, 0) even after
+        # a render that did produce pixels, so the save must not be
+        # gated on the datablock's reported size.
+        _log, _, render_result = self._install_bpy()
+        render_result.size = (0, 0)
+
+        path = self.ca.capture_render_from_view()
+
+        self.assertTrue(path and os.path.isfile(path),
+                        "a zero reported size must not block the save")
+        self.assertGreater(os.path.getsize(path), 0)
+
+    def test_nothing_rendered_yet_is_a_clean_none(self):
+        # Saving a Render Result with no image data raises RuntimeError;
+        # that must yield None rather than a bogus attachment.
+        _log, _, render_result = self._install_bpy()
+
+        def _raise(path):
+            raise RuntimeError(
+                "Error: Image 'Render Result' does not have any image data")
+
+        render_result.save_render = _raise
+        self.assertIsNone(self.ca.capture_render())
+
+    def test_an_empty_write_is_rejected_and_cleaned_up(self):
+        _log, _, render_result = self._install_bpy()
+
+        def _write_nothing(path):
+            with open(path, "wb"):
+                pass
+
+        render_result.save_render = _write_nothing
+        self.assertIsNone(self.ca.capture_render())
+        left = [name for name in os.listdir(self.ca.attachments_dir())
+                if name.startswith("render")]
+        self.assertEqual(left, [], "an empty write must not be kept")
+
+    def test_capture_renders_cheaply_and_restores_the_render_settings(self):
+        log, scene, _ = self._install_bpy()
+        before = (scene.render.resolution_x, scene.render.resolution_y,
+                  scene.render.resolution_percentage, scene.cycles.samples,
+                  scene.cycles.time_limit)
+
+        self.ca.capture_render_from_view()
+
+        at_render = [c for c in log if c[0] == "at_render"]
+        self.assertEqual(len(at_render), 1, "the view must be rendered once")
+        _, rx, ry, _pct, samples, time_limit = at_render[0]
+        self.assertLessEqual(max(rx, ry), self.ca._RENDER_MAX_EDGE,
+                             "the captured image must be downscaled")
+        self.assertLessEqual(samples, self.ca._RENDER_MAX_SAMPLES,
+                             "the capture must not run the full sample count")
+        self.assertEqual(time_limit, self.ca._RENDER_TIME_LIMIT_S,
+                         "a Cycles time limit must backstop the capture")
+
+        after = (scene.render.resolution_x, scene.render.resolution_y,
+                 scene.render.resolution_percentage, scene.cycles.samples,
+                 scene.cycles.time_limit)
+        self.assertEqual(after, before,
+                         "the user's own render settings must be restored")

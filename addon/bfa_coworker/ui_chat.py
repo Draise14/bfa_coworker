@@ -22,6 +22,11 @@ __all__ = (
     "BFACW_OT_chat_clear",
     "BFACW_OT_chat_stop",
     "BFACW_OT_chat_queue_send",
+    "BFACW_OT_chat_image_attach",
+    "BFACW_OT_chat_capture_render",
+    "BFACW_OT_chat_capture_screen",
+    "BFACW_OT_chat_image_drop",
+    "BFACW_FH_chat_drop",
     "BFACW_OT_export_session_log",
     "BFACW_OT_copy_session_log",
     "BFACW_OT_copy_status_error",
@@ -46,6 +51,7 @@ from bpy.props import (  # pylint: disable=import-error
     BoolProperty,
     EnumProperty,
     IntProperty,
+    PointerProperty,
     StringProperty,
 )
 from bpy.types import (  # pylint: disable=import-error
@@ -57,6 +63,7 @@ from bpy.types import (  # pylint: disable=import-error
 import textwrap
 
 from . import agent_controller
+from . import chat_attachments
 from . import llm_manager
 from . import mcp_to_blender_server
 from .shared import effective_ports, CHAT_MODE_ITEMS
@@ -949,6 +956,26 @@ class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
         default="",
     )
 
+    # -- Image socket (issue #88, Tier 3k) --------------------------
+    # One Blender-standard socket that every attach source feeds:
+    # file attach, render/screen capture, drag-and-drop, and the
+    # template_ID datablock browser below.  Encoded to a data URI on
+    # the MAIN thread at send time (see chat_attachments).
+    chat_image: PointerProperty(  # type: ignore[valid-type]
+        name="Image",
+        description="Image attached to the chat (drag-and-drop, attach, capture, or pick a datablock)",
+        type=bpy.types.Image,
+    )
+
+    chat_image_send_once: BoolProperty(  # type: ignore[valid-type]
+        name="Send Once",
+        description=(
+            "Send the attached image with the next message only, then "
+            "detach it (off = sticky: re-sent every turn until cleared)"
+        ),
+        default=False,
+    )
+
 
 def _load_chat_history() -> list[dict]:
     """Load conversation history from disk."""
@@ -1054,6 +1081,41 @@ def _prune_old_sessions(base_dir) -> None:
 # ---------------------------------------------------------------------------
 # Operators
 
+
+def _capture_chat_attachment(props) -> tuple[list[str] | None, list[str] | None]:
+    """Encode the image socket for a send -- MAIN THREAD ONLY.
+
+    Returns ``(attachments, attachment_names)`` ready for
+    ``run_conversation_turn`` / ``enqueue_message``, or ``(None, None)``
+    for a plain-text send (empty socket, or an image that cannot be
+    encoded).  Called by the send operators BEFORE any worker thread
+    starts: encoding reads bpy image pixels, which the turn worker must
+    never touch.  A successful capture consumes the socket when
+    "Send Once" is ticked; the default sticky socket keeps the image
+    for every following send.
+    """
+    img = props.chat_image
+    if img is None:
+        return None, None
+    uri = chat_attachments.image_to_data_uri(img)
+    if not uri:
+        # Oversized or broken: keep the socket (so the user can fix it)
+        # and send this message as plain text.
+        return None, None
+    name = chat_attachments.attachment_name(img)
+    if props.chat_image_send_once:
+        props.chat_image = None
+    return [uri], [name]
+
+
+def _attach_to_socket(context, op, img) -> None:
+    """Store *img* in the chat socket and confirm on *op* (main thread)."""
+    props = context.window_manager.bfacw_chat_props  # type: ignore[attr-defined]
+    props.chat_image = img
+    op.report({"INFO"},
+              f"Attached {chat_attachments.attachment_name(img)}")
+
+
 class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
     """Send the current input to the Coworker agent (or queue if busy)."""
     bl_idname = "bfacw.chat_send"
@@ -1088,6 +1150,11 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
         actual_mcp = agent_controller._agent_state.mcp_port_actual
         send_mcp_port = actual_mcp if actual_mcp else _mcp_port
 
+        # Encode the image socket HERE, on the main thread, before any
+        # worker thread starts (Tier 3k): the turn worker never touches
+        # bpy, and both the queued and direct paths below need the payload.
+        attachments, attachment_names = _capture_chat_attachment(props)
+
         # If a turn is already active, queue the message -- UNLESS the user has
         # pressed Stop.  After a Stop the old worker may still be unwinding
         # (a blocking read or tool call cannot be interrupted instantly); if we
@@ -1104,6 +1171,8 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
                 api_key=api_key or None,
                 model=model,
                 mcp_port=send_mcp_port,
+                attachments=attachments,
+                attachment_names=attachment_names,
             )
             props.chat_input = ""
             self.report({"INFO"}, "Message queued (position {:d})".format(pos))
@@ -1135,6 +1204,8 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
                     chat_mode=props.chat_mode,
                     on_stream_text=lambda t: _update_streaming(t),
                     on_stream_reasoning=lambda r: _update_streaming(r),
+                    attachments=attachments,
+                    attachment_names=attachment_names,
                 )
             except Exception as ex:  # pylint: disable=broad-exception-caught
                 agent_controller._agent_state.error = str(ex)
@@ -1172,6 +1243,8 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
                     chat_mode=item.get("chat_mode", "AGENT"),
                     on_stream_text=lambda t: _update_streaming(t),
                     on_stream_reasoning=lambda r: _update_streaming(r),
+                    attachments=item.get("attachments"),
+                    attachment_names=item.get("attachment_names"),
                 )
             except Exception as ex:  # pylint: disable=broad-exception-caught
                 agent_controller._agent_state.error = str(ex)
@@ -1368,6 +1441,10 @@ class BFACW_OT_chat_queue_send(Operator):  # type: ignore[misc]
         actual_mcp = agent_controller._agent_state.mcp_port_actual
         send_mcp_port = actual_mcp if actual_mcp else _mcp_port
 
+        # Main-thread capture of the image socket (Tier 3k), same as the
+        # direct send path -- the encoded payload travels with the queue item.
+        attachments, attachment_names = _capture_chat_attachment(props)
+
         pos = agent_controller.enqueue_message(
             message=message,
             chat_mode=props.chat_mode,
@@ -1375,11 +1452,118 @@ class BFACW_OT_chat_queue_send(Operator):  # type: ignore[misc]
             api_key=api_key or None,
             model=model,
             mcp_port=send_mcp_port,
+            attachments=attachments,
+            attachment_names=attachment_names,
         )
         props.chat_input = ""
         self.report({"INFO"}, "Queued (position {:d})".format(pos))
         _redraw_areas(context)
         return {"FINISHED"}
+
+
+class BFACW_OT_chat_image_attach(Operator):  # type: ignore[misc]
+    """Pick an image file for the chat socket in the file browser."""
+    bl_idname = "bfacw.chat_image_attach"
+    bl_label = "Attach Image"
+    bl_description = "Attach an image file (png/jpg/webp/bmp/tiff) to the chat"
+
+    filepath: bpy.props.StringProperty(  # type: ignore[valid-type]
+        subtype='FILE_PATH', options={'SKIP_SAVE'})
+    filter_glob: bpy.props.StringProperty(  # type: ignore[valid-type]
+        default="*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.tif;*.tiff",
+        options={'HIDDEN'})
+
+    def invoke(self, context: bpy.types.Context, event):
+        # Called with no path (button press): show the file browser.
+        if self.filepath:
+            return self.execute(context)
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        img = chat_attachments.load_image_file(self.filepath)
+        if img is None:
+            self.report({"WARNING"}, "Not a supported image file")
+            return {"CANCELLED"}
+        _attach_to_socket(context, self, img)
+        return {"FINISHED"}
+
+
+class BFACW_OT_chat_capture_render(Operator):  # type: ignore[misc]
+    """Attach the Render Result to the chat socket (main thread only)."""
+    bl_idname = "bfacw.chat_capture_render"
+    bl_label = "Capture Render"
+    bl_description = "Save the Render Result and attach it to the chat"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        path = chat_attachments.capture_render()
+        if not path:
+            self.report({"WARNING"}, "No render yet -- render the scene first")
+            return {"CANCELLED"}
+        img = chat_attachments.load_image_file(path)
+        if img is None:
+            self.report({"ERROR"}, "Could not load the rendered image")
+            return {"CANCELLED"}
+        _attach_to_socket(context, self, img)
+        return {"FINISHED"}
+
+
+class BFACW_OT_chat_capture_screen(Operator):  # type: ignore[misc]
+    """Attach a screenshot to the chat socket (main thread only)."""
+    bl_idname = "bfacw.chat_capture_screen"
+    bl_label = "Capture Screen"
+    bl_description = "Screenshot the 3D Viewport (or whole window) and attach it"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        # Prefer the 3D Viewport (what the model needs to see); fall
+        # back to the whole window when no viewport exists.  Operators
+        # always run on the main thread, which these captures require.
+        path = chat_attachments.capture_screen(target="VIEW_3D")
+        if not path:
+            path = chat_attachments.capture_screen(target="WINDOW")
+        if not path:
+            self.report({"WARNING"}, "Screenshot unavailable (background mode?)")
+            return {"CANCELLED"}
+        img = chat_attachments.load_image_file(path)
+        if img is None:
+            self.report({"ERROR"}, "Could not load the screenshot")
+            return {"CANCELLED"}
+        _attach_to_socket(context, self, img)
+        return {"FINISHED"}
+
+
+class BFACW_OT_chat_image_drop(Operator):  # type: ignore[misc]
+    """Receive an image file dragged onto the 3D Viewport or Text Editor."""
+    bl_idname = "bfacw.chat_image_drop"
+    bl_label = "Attach Dropped Image"
+    bl_description = "Attach the dropped image file to the chat"
+
+    # Set by BFACW_FH_chat_drop before it invokes this operator.
+    filepath: bpy.props.StringProperty(  # type: ignore[valid-type]
+        subtype='FILE_PATH', options={'SKIP_SAVE'})
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        img = chat_attachments.load_image_file(self.filepath)
+        if img is None:
+            self.report({"WARNING"}, "Not a supported image file")
+            return {"CANCELLED"}
+        _attach_to_socket(context, self, img)
+        return {"FINISHED"}
+
+
+class BFACW_FH_chat_drop(bpy.types.FileHandler):  # type: ignore[misc]
+    """Drag-and-drop image files onto the chat socket."""
+    bl_idname = "BFACW_FH_chat_drop"
+    bl_label = "Drop an Image into the Chat"
+    bl_import_operator = "bfacw.chat_image_drop"
+    # Semicolon-separated per bpy.types.FileHandler.bl_file_extensions;
+    # mirrors chat_attachments.SUPPORTED_EXTENSIONS.
+    bl_file_extensions = ".png;.jpg;.jpeg;.webp;.bmp;.tif;.tiff"
+
+    @classmethod
+    def poll_drop(cls, context) -> bool:
+        return (context.area is not None
+                and context.area.type in {"VIEW_3D", "TEXT_EDITOR"})
 
 
 class BFACW_OT_copy_message(Operator):  # type: ignore[misc]
@@ -2312,6 +2496,9 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         row = layout.row(align=True)
         row.operator("bfacw.mention_search", icon="OUTLINER_OB_MESH", text="@ Mention")
 
+        # -- Image attachment socket (issue #88 / Tier 3k) ----------
+        _draw_attachment_row(layout, props)
+
         # -- Action buttons --
         if state.is_thinking:
             # During thinking: Stop + Queue side by side.
@@ -2908,6 +3095,9 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
             # Input (multi-line textbox).
             layout.textbox(props, "chat_input")
 
+            # -- Image attachment socket (issue #88 / Tier 3k) ------
+            _draw_attachment_row(layout, props)
+
             row = layout.row(align=True)
             row.scale_y = 1.5
             if state.is_thinking:
@@ -2958,6 +3148,28 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
 
 # ---------------------------------------------------------------------------
 # Helpers
+
+
+def _draw_attachment_row(layout, props) -> None:
+    """Draw the chat image socket + capture buttons (issue #88 / Tier 3k).
+
+    Shared by the 3D Viewport chat panel and the Text Editor panel:
+    one Blender-standard socket (``template_ID``: browse / open / new)
+    fed by every attach source -- file browser, render capture, screen
+    capture, and drag-and-drop -- plus the Send Once toggle.  The
+    socket is encoded on the main thread at send time
+    (``_capture_chat_attachment``), never during drawing.
+    """
+    box = layout.box()
+    head = box.row(align=True)
+    head.label(text="Image", icon='IMAGE_DATA')
+    head.prop(props, "chat_image_send_once", text="Send once")
+    box.template_ID(props, "chat_image", open="image.open", new="image.new")
+    row = box.row(align=True)
+    row.operator("bfacw.chat_image_attach", icon='FILEBROWSER', text="File")
+    row.operator("bfacw.chat_capture_render", icon='RENDER_STILL', text="Render")
+    row.operator("bfacw.chat_capture_screen", icon='FULLSCREEN_ENTER', text="Screen")
+
 
 def _redraw_areas(context: bpy.types.Context | None) -> None:
     """Force redraw of all panels."""
@@ -3194,6 +3406,11 @@ _classes = (
     BFACW_OT_chat_clear,
     BFACW_OT_chat_stop,
     BFACW_OT_chat_queue_send,
+    BFACW_OT_chat_image_attach,
+    BFACW_OT_chat_capture_render,
+    BFACW_OT_chat_capture_screen,
+    BFACW_OT_chat_image_drop,
+    BFACW_FH_chat_drop,
     BFACW_OT_export_session_log,
     BFACW_OT_copy_session_log,
     BFACW_OT_copy_status_error,

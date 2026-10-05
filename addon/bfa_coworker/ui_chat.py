@@ -98,6 +98,9 @@ def _sync_prefs_to_config(prefs: bpy.types.AddonPreferences) -> None:
 
 _WRAP_WIDTH = 60
 
+# Thumbnail scale for the attached-image preview (UILayout.template_icon).
+_ATTACHMENT_PREVIEW_SCALE = 8.0
+
 
 # -- Brand detection: Bforartists has a View menu in the 3D viewport header,
 #    vanilla Blender does not.  Cache the result once at import time.
@@ -1112,6 +1115,10 @@ def _attach_to_socket(context, op, img) -> None:
     """Store *img* in the chat socket and confirm on *op* (main thread)."""
     props = context.window_manager.bfacw_chat_props  # type: ignore[attr-defined]
     props.chat_image = img
+    # Warm the preview now so the panel can draw the thumbnail on its
+    # first redraw instead of one frame later (the pixels are filled by
+    # Blender's preview thread after ``preview_ensure()``).
+    _ensure_attachment_preview(img)
     op.report({"INFO"},
               f"Attached {chat_attachments.attachment_name(img)}")
 
@@ -2489,15 +2496,17 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
 
         layout.separator()
 
+        # -- Image attachment socket (issue #88 / Tier 3k) ----------
+        # Above the chat input: set the image BEFORE typing, so what is
+        # attached is visible right next to the message it will ride with.
+        _draw_attachment_row(layout, props)
+
         # -- Input area --
         layout.textbox(props, "chat_input")
 
         # @mention button.
         row = layout.row(align=True)
         row.operator("bfacw.mention_search", icon="OUTLINER_OB_MESH", text="@ Mention")
-
-        # -- Image attachment socket (issue #88 / Tier 3k) ----------
-        _draw_attachment_row(layout, props)
 
         # -- Action buttons --
         if state.is_thinking:
@@ -3092,11 +3101,12 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
 
             layout.separator()
 
+            # -- Image attachment socket (issue #88 / Tier 3k) ------
+            # Above the chat input (same order as the Viewport panel).
+            _draw_attachment_row(layout, props)
+
             # Input (multi-line textbox).
             layout.textbox(props, "chat_input")
-
-            # -- Image attachment socket (issue #88 / Tier 3k) ------
-            _draw_attachment_row(layout, props)
 
             row = layout.row(align=True)
             row.scale_y = 1.5
@@ -3156,19 +3166,63 @@ def _draw_attachment_row(layout, props) -> None:
     Shared by the 3D Viewport chat panel and the Text Editor panel:
     one Blender-standard socket (``template_ID``: browse / open / new)
     fed by every attach source -- file browser, render capture, screen
-    capture, and drag-and-drop -- plus the Send Once toggle.  The
-    socket is encoded on the main thread at send time
-    (``_capture_chat_attachment``), never during drawing.
+    capture, and drag-and-drop -- plus the Send Once toggle and a
+    thumbnail preview of what is attached.  The socket is encoded on
+    the main thread at send time (``_capture_chat_attachment``), never
+    during drawing.
     """
     box = layout.box()
     head = box.row(align=True)
     head.label(text="Image", icon='IMAGE_DATA')
     head.prop(props, "chat_image_send_once", text="Send once")
     box.template_ID(props, "chat_image", open="image.open", new="image.new")
+    _draw_attachment_preview(box, props.chat_image)
     row = box.row(align=True)
     row.operator("bfacw.chat_image_attach", icon='FILEBROWSER', text="File")
     row.operator("bfacw.chat_capture_render", icon='RENDER_STILL', text="Render")
     row.operator("bfacw.chat_capture_screen", icon='FULLSCREEN_ENTER', text="Screen")
+
+
+def _ensure_attachment_preview(img) -> None:
+    """Start generating *img*'s preview so the thumbnail can be drawn.
+
+    ``preview_ensure()`` only *creates* the preview; its pixels are
+    filled by Blender's preview thread a moment later, which is why
+    this is called when the image is ATTACHED rather than only from the
+    panel draw -- by the first redraw the thumbnail is usually ready.
+    Best-effort: an image without pixels must not break attaching, and
+    in ``--background`` mode no preview icon is produced at all (the
+    draw helper simply draws nothing).
+    """
+    if img is None:
+        return
+    try:
+        img.preview_ensure()
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+        return
+
+
+def _draw_attachment_preview(layout, img) -> None:
+    """Draw a thumbnail of the attached image (issue #88 / Tier 3k).
+
+    A filename alone is easy to misread, so the user can see WHAT is
+    attached before sending.  Uses the datablock's own preview icon;
+    the whole thing is best-effort because a datablock with no pixels
+    (or a stub image in tests) has no preview to make, and a panel
+    draw must never raise.
+    """
+    if img is None:
+        return
+    try:
+        preview = img.preview_ensure()
+        icon = int(getattr(preview, "icon_id", 0) or 0)
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+        return
+    if not icon:
+        return
+    row = layout.row()
+    row.alignment = 'CENTER'
+    row.template_icon(icon_value=icon, scale=_ATTACHMENT_PREVIEW_SCALE)
 
 
 def _redraw_areas(context: bpy.types.Context | None) -> None:

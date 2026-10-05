@@ -314,6 +314,9 @@ class _FakeLayout:
     def template_ID(self, *args, **kwargs):
         self._log.append(("template_ID", args, kwargs))
 
+    def template_icon(self, *args, **kwargs):
+        self._log.append(("template_icon", args, kwargs))
+
 
 class TestChatAttachmentUI(unittest.TestCase):
     """Registration, drawing, and send-path wiring (no Blender needed)."""
@@ -384,7 +387,11 @@ class TestChatAttachmentUI(unittest.TestCase):
             "a failed encode must not consume the socket")
 
     def test_draw_attachment_row_layout(self):
-        draw = _extract_ui_func("_draw_attachment_row")
+        preview_calls = []
+        draw = _extract_ui_func(
+            "_draw_attachment_row",
+            {"_draw_attachment_preview":
+                lambda layout, img: preview_calls.append(img)})
         log = []
         props = types.SimpleNamespace(chat_image=object(),
                                       chat_image_send_once=True)
@@ -403,6 +410,114 @@ class TestChatAttachmentUI(unittest.TestCase):
         toggles = [c for c in log if c[0] == "prop"
                    and c[1][1] == "chat_image_send_once"]
         self.assertEqual(len(toggles), 1, "send-once toggle must be drawn")
+        # The row hands the socketed datablock to the preview helper.
+        self.assertEqual(preview_calls, [props.chat_image],
+                         "the attached image must be previewed")
+
+    def test_attachment_preview_draws_thumbnail_and_degrades_gracefully(self):
+        draw = _extract_ui_func(
+            "_draw_attachment_preview",
+            {"_ATTACHMENT_PREVIEW_SCALE": 8.0})
+
+        # Nothing attached -> nothing drawn.
+        log = []
+        draw(_FakeLayout(log), None)
+        self.assertEqual(log, [])
+
+        class _NoPreview:
+            """Datablock whose preview cannot be generated."""
+
+            def preview_ensure(self):
+                raise RuntimeError("no preview")
+
+        log = []
+        draw(_FakeLayout(log), _NoPreview())
+        self.assertEqual(log, [], "a failed preview must not raise or draw")
+
+        class _EmptyPreview:
+            icon_id = 0
+
+        class _NoIcon:
+            def preview_ensure(self):
+                return _EmptyPreview()
+
+        log = []
+        draw(_FakeLayout(log), _NoIcon())
+        self.assertEqual(log, [], "icon_id 0 means no preview to show")
+
+        class _Preview:
+            icon_id = 4242
+
+        class _WithPreview:
+            def preview_ensure(self):
+                return _Preview()
+
+        log = []
+        draw(_FakeLayout(log), _WithPreview())
+        icons = [c for c in log if c[0] == "template_icon"]
+        self.assertEqual(len(icons), 1, "the thumbnail must be drawn once")
+        self.assertEqual(icons[0][2]["icon_value"], 4242)
+        self.assertEqual(icons[0][2]["scale"], 8.0)
+
+    def test_ensure_attachment_preview_is_best_effort(self):
+        ensure = _extract_ui_func("_ensure_attachment_preview")
+        ensure(None)  # no image -> no-op
+
+        class _Broken:
+            def preview_ensure(self):
+                raise RuntimeError("no preview data")
+
+        ensure(_Broken())  # must swallow: attaching must never raise
+
+        class _Good:
+            def __init__(self):
+                self.calls = 0
+
+            def preview_ensure(self):
+                self.calls += 1
+
+        img = _Good()
+        ensure(img)
+        self.assertEqual(img.calls, 1, "the preview must be requested once")
+
+    def test_attach_to_socket_sets_image_and_warms_preview(self):
+        warmed = []
+        reported = []
+        img = object()
+        props = types.SimpleNamespace(chat_image=None)
+        attach = _extract_ui_func(
+            "_attach_to_socket",
+            {"chat_attachments": types.SimpleNamespace(
+                attachment_name=lambda i: "shot.png"),
+             "_ensure_attachment_preview": lambda i: warmed.append(i)})
+        context = types.SimpleNamespace(
+            window_manager=types.SimpleNamespace(bfacw_chat_props=props))
+        op = types.SimpleNamespace(
+            report=lambda level, message: reported.append(message))
+
+        attach(context, op, img)
+
+        self.assertIs(props.chat_image, img, "the socket must hold the image")
+        self.assertEqual(warmed, [img],
+                         "the thumbnail preview must be warmed on attach")
+        self.assertTrue(reported and "shot.png" in reported[0],
+                        "the attach must be reported to the user")
+
+    def test_attachment_row_sits_above_the_chat_input(self):
+        src = _ui_source()
+        panels = (
+            ("class BFACW_PT_chat_panel(", "\nclass BFACW_PT_chat_session("),
+            ("class BFACW_PT_chat_text_editor(", "\n# ---"),
+        )
+        for start_marker, end_marker in panels:
+            start = src.index(start_marker)
+            end = src.find(end_marker, start + 1)
+            body = src[start:] if end < 0 else src[start:end]
+            row_at = body.index("_draw_attachment_row(layout, props)")
+            input_at = body.index('layout.textbox(props, "chat_input")')
+            self.assertLess(
+                row_at, input_at,
+                f"{start_marker} must draw the image row ABOVE the chat input")
 
     def test_send_paths_pass_encoded_attachments(self):
         src = _ui_source()

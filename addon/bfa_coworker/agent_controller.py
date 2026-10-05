@@ -6854,9 +6854,25 @@ def _run_conversation_turn_inner(
             "content": "[System: All tool calls are complete. Please summarize what was done in 1-2 sentences.]",
         })
         # Budget the forced-summary request too: it sends the full history.
-        _summary_send: list[dict[str, Any]] | None = history
+        # Strip UI-only entries and non-standard ``reasoning`` messages and
+        # sanitize roles FIRST.  In REMOTE mode ``prompt_budget`` is 0, so the
+        # budgeting branch below is skipped and the raw history -- which
+        # carries ``reasoning`` entries appended during the turn -- would
+        # otherwise be POSTed verbatim, and strict providers reject the
+        # non-standard role with 400 "unknown variant `reasoning`".  The
+        # strip/sanitize must therefore run unconditionally, matching the main
+        # and auto-continue request paths.
+        _summary_send: list[dict[str, Any]] | None = _sanitize_message_roles(
+            _trim_history_tool_results(
+                _strip_ui_only_from_history(
+                    _strip_reasoning_from_history(
+                        _repair_tool_call_pairs(history)
+                    )
+                )
+            )
+        )
         if prompt_budget > 0:
-            _summary_send = _fit_history_to_budget(history, prompt_budget)
+            _summary_send = _fit_history_to_budget(_summary_send, prompt_budget)
             _summary_send = _repair_tool_call_pairs(_summary_send)
             _summary_send, _sum_err = _prompt_preflight(
                 _summary_send, openai_tools, prompt_budget)

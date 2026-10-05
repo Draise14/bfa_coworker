@@ -7,6 +7,7 @@
 import importlib.util
 import io
 import json
+import shutil
 import struct
 import sys
 import tempfile
@@ -745,6 +746,67 @@ class TestLaunchFlagSafety(unittest.TestCase):
         # When the console is shown the server must still write the log file
         # (via --log-file) so the failure tail still works.
         self.assertIn("--log-file", self.source)
+
+
+class TestModelDownloadGate(unittest.TestCase):
+    """The local server must never start an implicit multi-GB download.
+
+    ``start_local_llama`` used to pass ``--hf-repo``/``--hf-file`` whenever the
+    model was not on disk, so simply starting the agent could silently pull a
+    multi-GB model.  It must now stall the launch and record a pending download
+    for the UI to confirm.
+    """
+
+    def setUp(self) -> None:
+        self.llm = load_llm_manager_module()
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+        cfg = self.llm.LLMConfig()
+        cfg.mode = "local"
+        cfg.model_repo_id = "example/repo"
+        cfg.model_filename = "missing-model.gguf"
+        cfg.downloaded_models_dir = self.tmp
+        cfg.local_ctx_size = 8192
+        self.llm.set_config(cfg)
+
+    def test_ready_when_file_on_disk(self):
+        (Path(self.tmp) / "missing-model.gguf").write_bytes(b"GGUF")
+        ready, info = self.llm.check_local_model_ready()
+        self.assertTrue(ready)
+        self.assertEqual(info, {})
+
+    def test_not_ready_reports_download_metadata(self):
+        ready, info = self.llm.check_local_model_ready()
+        self.assertFalse(ready)
+        self.assertEqual(info["filename"], "missing-model.gguf")
+        self.assertTrue(info["dest"].endswith("missing-model.gguf"))
+
+    def test_pending_state_round_trip(self):
+        self.assertIsNone(self.llm.get_pending_model_download())
+        self.llm.set_pending_model_download({
+            "repo_id": "example/repo",
+            "filename": "missing-model.gguf",
+            "dest": str(Path(self.tmp) / "missing-model.gguf"),
+            "disk_hint": "~16 GB",
+        })
+        info = self.llm.get_pending_model_download()
+        self.assertIsNotNone(info)
+        self.assertEqual(info["disk_hint"], "~16 GB")
+        self.llm.clear_pending_model_download()
+        self.assertIsNone(self.llm.get_pending_model_download())
+
+    def test_start_refuses_implicit_download(self):
+        # A server binary that "exists" plus a model that does not: the launch
+        # must stop and record a pending download instead of letting
+        # llama-server fetch the file itself.
+        self.llm.find_llama_server = lambda: "llama-server"
+        self.llm._llama_server_version = lambda _exe: "test"
+        self.llm._find_model_in_hf_cache = lambda _repo, _fname: None
+        proc = self.llm.start_local_llama()
+        self.assertIsNone(proc)
+        self.assertIsNotNone(self.llm.get_pending_model_download())
+        self.assertIn("not downloaded", self.llm.get_state().error.lower())
+        self.assertIsNone(self.llm.get_llama_process())
 
 
 if __name__ == "__main__":

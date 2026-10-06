@@ -52,6 +52,7 @@ from typing import Any
 from . import llm_transport as _transport
 from . import session_memory
 from . import co_work_guard
+from . import chat_attachments
 from .llm_transport import (
     _CHAT_SAMPLING,
     _DEFAULT_MAX_TOKENS,
@@ -1607,6 +1608,19 @@ class AgentState:
 
     # -- Vision pipeline --------------------------------------------
     _pending_image: str | None = None  # Base64 data URI of last screenshot
+    # -- User image attachments (issue #88 / Tier 3k) ---------------
+    # Data URIs + display names captured on the MAIN thread at send
+    # time (the turn worker never touches bpy), passed via
+    # run_conversation_turn(attachments=...) and installed at turn
+    # start, then injected into the turn's user message at request-
+    # build time -- on EVERY request of the turn, never cleared after
+    # use.  The turn-start reset of ``_pending_image`` deliberately
+    # does NOT touch these fields; socket stickiness lives in the UI
+    # (``ui_chat.ChatHistoryProperties.chat_image``), which re-passes
+    # them on each send.  Stored history keeps plain text only --
+    # base64 never reaches the saved chat JSON.
+    user_attachments: list[str] = field(default_factory=list)
+    user_attachment_names: list[str] = field(default_factory=list)
 
     # -- Auto port-shuffle tracking ---------------------------------
     # When a port is in use, the start functions try subsequent ports
@@ -1644,8 +1658,15 @@ class MessageQueue:
         api_key: str | None = None,
         model: str | None = None,
         mcp_port: int = 0,
+        attachments: list[str] | None = None,
+        attachment_names: list[str] | None = None,
     ) -> int:
-        """Add a message to the queue. Returns the queue position (1-indexed)."""
+        """Add a message to the queue. Returns the queue position (1-indexed).
+
+        *attachments* / *attachment_names* (Tier 3k) are snapshotted at
+        ENQUEUE time -- copied so a later mutation of the caller's lists
+        cannot change a message already waiting in the queue.
+        """
         with self._lock:
             item = {
                 "message": message,
@@ -1654,6 +1675,9 @@ class MessageQueue:
                 "api_key": api_key,
                 "model": model,
                 "mcp_port": mcp_port,
+                "attachments": list(attachments) if attachments else None,
+                "attachment_names": (
+                    list(attachment_names) if attachment_names else None),
                 "queued_at": time.time(),
             }
             self._queue.append(item)
@@ -1705,10 +1729,13 @@ def enqueue_message(
     api_key: str | None = None,
     model: str | None = None,
     mcp_port: int = 0,
+    attachments: list[str] | None = None,
+    attachment_names: list[str] | None = None,
 ) -> int:
     """Enqueue a user message for processing. Returns queue position."""
     return _message_queue.enqueue(
         message, chat_mode, llm_url, api_key, model, mcp_port,
+        attachments, attachment_names,
     )
 
 
@@ -4997,6 +5024,8 @@ def run_conversation_turn(
     on_stream_text: Callable[[str], None] | None = None,
     on_stream_reasoning: Callable[[str], None] | None = None,
     allow_action_nudge: bool = True,
+    attachments: list[str] | None = None,
+    attachment_names: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Run a full conversation turn.
@@ -5012,6 +5041,12 @@ def run_conversation_turn(
     When *allow_action_nudge* is False the end-of-turn "you did not act"
     nudge is suppressed -- used by benchmark steps whose correct response is
     to ask or decline (never to act).
+
+    When *attachments* is given (base64 data URIs captured on the main
+    thread by the send path, with matching *attachment_names*), the turn's
+    user message carries one ``image_url`` block per attachment in EVERY
+    request of the turn; the stored history keeps only the plain
+    ``[attached: ...]`` marker -- base64 never enters the saved chat JSON.
 
     This is a BLOCKING call -- run it via ``schedule_coro`` or in a thread.
     """
@@ -5034,6 +5069,7 @@ def run_conversation_turn(
             user_message, on_text, on_status, on_reasoning,
             llm_url, api_key, model, mcp_port, chat_mode,
             on_stream_text, on_stream_reasoning, allow_action_nudge,
+            attachments, attachment_names,
         )
     finally:
         # Only the turn that still owns the guard may clear it and release the
@@ -5283,6 +5319,8 @@ def _run_conversation_turn_inner(
     on_stream_text: Callable[[str], None] | None = None,
     on_stream_reasoning: Callable[[str], None] | None = None,
     allow_action_nudge: bool = True,
+    attachments: list[str] | None = None,
+    attachment_names: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Inner body of ``run_conversation_turn`` -- wrapped by the re-entrancy guard.
@@ -5320,8 +5358,21 @@ def _run_conversation_turn_inner(
         print("[Coworker] run_conversation_turn: inserted system prompt ({:d} chars)".format(
             len(system_text)))
 
+    # Install this turn's user image attachments (issue #88 / Tier 3k).
+    # Captured and encoded on the MAIN thread by the send path before the
+    # worker started -- the worker only receives plain data URIs and never
+    # touches bpy.  Installed BEFORE the ``_pending_image`` reset below so
+    # the two stay independent: that reset clears the previous turn's MCP
+    # screenshot and must NOT clear these, and this block REPLACES (never
+    # merges) the previous turn's attachments so images cannot leak across
+    # turns.  Not cleared after injection either: every request of the turn
+    # re-injects them from here.
+    _agent_state.user_attachments = list(attachments or [])
+    _agent_state.user_attachment_names = list(attachment_names or [])
+
     # Clear any pending screenshot image from a previous turn -- the user
-    # is starting fresh, so the old screenshot is stale.
+    # is starting fresh, so the old screenshot is stale.  Deliberately
+    # does NOT touch ``user_attachments`` (Tier 3k; see above).
     _agent_state._pending_image = None
 
     # -- Pre-flight empty-scene check ----------------------------------
@@ -5362,8 +5413,19 @@ def _run_conversation_turn_inner(
     if chat_mode == "ASK" and _ASK_MODE_PROMPT_ADDENDUM not in history[0]["content"]:
         history[0]["content"] += _ASK_MODE_PROMPT_ADDENDUM
 
-    # Append the user message.
-    history.append({"role": "user", "content": user_message, "turn_start": True})
+    # Append the user message.  Image attachments appear here as a
+    # plain-text marker only: the data URIs live on the agent state for
+    # the request build (see ``_build_send_messages``) and must never
+    # enter the history that ``ui_chat._save_chat_history`` writes.
+    _stored_content = user_message
+    _attach_marker = chat_attachments.attachment_marker(
+        getattr(_agent_state, "user_attachment_names", None))
+    if _attach_marker:
+        _stored_content = (
+            f"{user_message}\n{_attach_marker}"
+            if user_message else _attach_marker
+        )
+    history.append({"role": "user", "content": _stored_content, "turn_start": True})
 
     # -- Smart undo tracking (per-turn) --------------------------------
     # Tracks the last execute_blender_code call to detect iteration and
@@ -5775,6 +5837,48 @@ def _run_conversation_turn_inner(
                     msgs[0] = _cand
                 else:
                     _domain_skills_text = ""  # Safety net; reserve should prevent this.
+
+        # -- Inject this turn's user attachments into the turn's user
+        # message (issue #88 / Tier 3k).  Like the pending screenshot
+        # below, but sticky for the WHOLE turn: every request (each
+        # tool-loop iteration) re-injects them and ``user_attachments``
+        # is never cleared after use -- only the next turn's own
+        # attachments replace it.  Done BEFORE budgeting so each image
+        # is counted at its fixed token cost, and on a dict COPY so the
+        # stored history keeps its plain-text content (with the
+        # ``[attached: ...]`` marker) and never accumulates payloads.
+        _attachments = list(
+            getattr(_agent_state, "user_attachments", None) or [])
+        if _attachments and msgs:
+            # Target: the CURRENT turn's user message.  Older turns'
+            # messages keep their ``turn_start`` flag too, so scan
+            # backwards for the LAST flagged user message; fall back to
+            # the last user message if the flag was ever stripped.
+            _tgt_i = None
+            for _ti in range(len(msgs) - 1, -1, -1):
+                if (msgs[_ti].get("role") == "user"
+                        and msgs[_ti].get("turn_start")):
+                    _tgt_i = _ti
+                    break
+            if _tgt_i is None:
+                for _ti in range(len(msgs) - 1, -1, -1):
+                    if msgs[_ti].get("role") == "user":
+                        _tgt_i = _ti
+                        break
+            if _tgt_i is not None:
+                _img_msg = dict(msgs[_tgt_i])
+                _img_blocks = [
+                    {"type": "image_url", "image_url": {"url": _uri}}
+                    for _uri in _attachments
+                ]
+                _img_prev = _img_msg.get("content")
+                if isinstance(_img_prev, list):
+                    _img_msg["content"] = _img_blocks + list(_img_prev)
+                else:
+                    _img_msg["content"] = _img_blocks + [
+                        {"type": "text", "text": str(_img_prev or "")},
+                    ]
+                msgs[_tgt_i] = _img_msg
 
         # -- Inject a pending screenshot into the last user message --
         # Done BEFORE budgeting so the image is counted against the window

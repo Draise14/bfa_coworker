@@ -190,7 +190,7 @@ class TestBuildMemoryBlock(unittest.TestCase):
             {"role": "tool", "content": "error: NameError boom"},
         ]
         block = _sm.build_memory_block(turns)
-        self.assertIn("Goal: Build a lighthouse", block)
+        self.assertIn("Earlier request: Build a lighthouse", block)
         self.assertIn("NameError", block)
         self.assertIn("[Session memory]", block)
 
@@ -198,7 +198,7 @@ class TestBuildMemoryBlock(unittest.TestCase):
         turns = [{"role": "user", "content": "hi"}]
         block = _sm.build_memory_block(turns, summary="Goal: X\nPending: none",
                                        updated_turn=3)
-        self.assertTrue(block.startswith("Goal: X"))
+        self.assertTrue(block.startswith("[Session memory]\nGoal: X"))
         self.assertIn("Last updated: turn 3", block)
 
     def test_prior_memory_carried_without_summary(self):
@@ -226,7 +226,7 @@ class TestBuildMemoryBlock(unittest.TestCase):
              "response to the user based on these results.]"},
         ]
         block = _sm.build_memory_block(turns)
-        self.assertIn("Goal: Build a ground slab", block,
+        self.assertIn("Earlier request: Build a ground slab", block,
                       "the real user goal must still be extracted")
         self.assertNotIn("already created", block)
         self.assertNotIn("this turn", block,
@@ -314,7 +314,7 @@ class TestCompactHistory(unittest.TestCase):
 
         _, memory, _ = _sm.compact_history(history, memory_writer=writer,
                                            keep_recent=5)
-        self.assertIn("Goal:", memory)
+        self.assertIn("Earlier request:", memory)
 
     def test_writer_receives_prior_memory(self):
         history = _mk_history(20)
@@ -553,7 +553,7 @@ class TestMemoryWriterPrompt(unittest.TestCase):
     def test_memory_writer_prompt_structure(self):
         msgs = _sm.memory_writer_prompt("convo text", "prior note")
         self.assertEqual(msgs[0]["role"], "system")
-        self.assertIn("Goal / Decisions", msgs[0]["content"])
+        self.assertIn("Done / Decisions", msgs[0]["content"])
         self.assertIn("prior note", msgs[1]["content"])
         self.assertIn("convo text", msgs[1]["content"])
 

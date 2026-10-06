@@ -62,11 +62,11 @@ addon/bfa_coworker/           # Blender add-on package
 
 Handles LLM lifecycle with thread-safe state:
 
-| Responsibility | Detail |
-|---|---|
-| **Local mode** | Detect `llama-server.exe`, download GGUF models via direct HTTP streaming, start/stop `llama-server` subprocess, health-check. |
-| **Remote mode** | Store API key + base URL, validate connectivity. Provider presets (OpenRouter) auto-fill the API URL. |
-| **State** | Thread-safe `LLMConfig` / `LLMState` dataclasses protected by `threading.Lock`. |
+| Responsibility  | Detail                                                                                                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| **Local mode**  | Detect `llama-server.exe`, download GGUF models via direct HTTP streaming, start/stop `llama-server` subprocess, health-check. |
+| **Remote mode** | Store API key + base URL, validate connectivity. Provider presets (OpenRouter) auto-fill the API URL.                          |
+| **State**       | Thread-safe `LLMConfig` / `LLMState` dataclasses protected by `threading.Lock`.                                                |
 
 **Key functions:**
 
@@ -116,6 +116,7 @@ def set_config(cfg: LLMConfig) -> None:
 ```
 
 **Model Presets:** 14 curated GGUF models organized into three categories:
+
 - **Flagship** (24 GB+ VRAM): DeepSeek R1 Distill 32B, Qwen 2.5 Coder 32B, Gemma 4 26B Q8
 - **Mid-Range** (12-20 GB VRAM): Mistral Small 3.1 24B (default), Gemma 4 26B, Gemma 3 27B, Qwen3.6 35B A3B, GPT-OSS 20B, Phi-4 14B
 - **Lightweight** (≤ 8 GB VRAM): Llama 3.1 8B, Gemma 3 12B Vision, Qwen3.5 9B Heretic, Qwen3 8B, Phi-4 14B Q3
@@ -123,6 +124,7 @@ def set_config(cfg: LLMConfig) -> None:
 Each preset carries `context_window` and `max_tokens` metadata. Selecting a preset auto-configures both `--ctx-size` and `max_tokens`.
 
 **Download Strategy:**
+
 1. **Primary**: `_download_gguf_direct()` — streams from HuggingFace in 64 KB chunks via `urllib.request`. Real-time progress (percentage, speed, ETA, progress bar). Pre-fetches file size via HEAD request.
 2. **Fallback**: If direct download fails for non-auth reasons, falls back to `llama-server --hf-repo/--hf-file` with 15-minute timeout.
 3. **HF_TOKEN**: Checked in order: config field → `HF_TOKEN` env → `HUGGINGFACE_TOKEN` env.
@@ -133,13 +135,13 @@ Each preset carries `context_window` and `max_tokens` metadata. Selecting a pres
 
 Orchestrates the conversation loop inside Blender:
 
-| Responsibility | Detail |
-|---|---|
+| Responsibility            | Detail                                                             |
+| ------------------------- | ------------------------------------------------------------------ |
 | **MCP Server subprocess** | Launch `bfa-coworker-mcp` with `--transport http` as a subprocess. |
-| **LLM API calls** | Send conversation history + tool definitions to LLM backend. |
-| **Tool execution** | Parse LLM tool_calls, invoke via MCP over HTTP, return results. |
-| **Streaming** | Stream text responses to Blender chat UI via callback. |
-| **Port management** | Port conflict detection, orphan cleanup, availability checks. |
+| **LLM API calls**         | Send conversation history + tool definitions to LLM backend.       |
+| **Tool execution**        | Parse LLM tool_calls, invoke via MCP over HTTP, return results.    |
+| **Streaming**             | Stream text responses to Blender chat UI via callback.             |
+| **Port management**       | Port conflict detection, orphan cleanup, availability checks.      |
 
 **Key functions:**
 
@@ -178,6 +180,7 @@ def clear_stop() -> None:
 ```
 
 **Additional features:**
+
 - **Orphaned tool message cleanup**: `_drop_orphaned_tool_messages()` removes tool-role messages without preceding assistant `tool_calls`, preventing Jinja template errors.
 - **Auto-continue on truncation**: If `finish_reason=length`, sends "Continue." and concatenates results (max 2 attempts).
 - **Reasoning content logging**: Full chain-of-thought from reasoning models logged to console.
@@ -230,15 +233,16 @@ class BFACW_PT_chat_text_editor(bpy.types.Panel):
 
 **Operators:**
 
-| Operator ID | Action |
-|---|---|
-| `bfacw.chat_send` | Send the current input to the LLM agent. |
-| `bfacw.chat_clear` | Clear conversation history. |
-| `bfacw.chat_stop` | Stop the current generation. |
-| `bfacw.agent_start` | Start the agent (LLM + MCP server). |
-| `bfacw.agent_stop` | Stop the agent and cleanup subprocesses. |
+| Operator ID         | Action                                   |
+| ------------------- | ---------------------------------------- |
+| `bfacw.chat_send`   | Send the current input to the LLM agent. |
+| `bfacw.chat_clear`  | Clear conversation history.              |
+| `bfacw.chat_stop`   | Stop the current generation.             |
+| `bfacw.agent_start` | Start the agent (LLM + MCP server).      |
+| `bfacw.agent_stop`  | Stop the agent and cleanup subprocesses. |
 
 **Storage:** Chat history is persistent to disk — survives Blender restarts:
+
 - **File location**: `<SCRIPTS>/bfa_coworker_chat_history/<blend_filename>/history.json`
 - **In-memory**: `ChatHistoryProperties` PropertyGroup with `chat_input`, `chat_status`, `chat_streaming_text`.
 - **Auto-save**: After each completed turn, write history to disk.
@@ -247,35 +251,36 @@ class BFACW_PT_chat_text_editor(bpy.types.Panel):
 
 The `_BFACW_Preferences` class (extends `bpy.types.AddonPreferences`) contains all configuration:
 
-| Property | Type | Purpose |
-|---|---|---|
-| `llm_mode` | Enum | Local (llama.cpp) or Remote API |
-| `llama_path` | String | Path to `llama-server.exe` |
-| `model_repo_id` | String | HuggingFace repo ID |
-| `model_filename` | String | GGUF filename |
-| `downloaded_models_dir` | String | Directory for downloaded models |
-| `model_preset` | Enum | Curated model preset selector |
-| `model_preset_info` | String | Read-only preset metadata display |
-| `existing_model_path` | String | Absolute path to an existing .gguf file |
-| `local_ctx_size` | Int | Context window size (4096–262144) |
-| `local_max_tokens` | Int | Max output tokens (512–131072) |
-| `hf_token` | String | HuggingFace token for gated models (password-masked) |
-| `remote_api_url` | String | Remote API base URL |
-| `remote_api_key` | String | API key (password-masked) |
-| `remote_model` | String | Remote model ID |
-| `remote_provider` | Enum | Provider preset (OpenRouter / Custom) |
-| `remote_models_count` | Int | Live model count from API |
-| `agent_autostart` | Bool | Auto-start agent with Blender |
-| `port_offset` | Int | Global port offset (0–100) |
-| `bridge_port` | Int | Bridge port override (0 = default + offset) |
-| `mcp_port` | Int | MCP port override |
-| `llm_port` | Int | LLM port override |
-| `timer_interval_active` | Float | Polling rate while active (0.05–5.0s) |
-| `timer_interval_idle` | Float | Polling rate while idle (0.1–10.0s) |
-| `timer_interval_idle_delay` | Float | Idle delay (1.0–60.0s) |
-| `use_log` | Bool | Toggle tool request/response logging |
+| Property                    | Type   | Purpose                                              |
+| --------------------------- | ------ | ---------------------------------------------------- |
+| `llm_mode`                  | Enum   | Local (llama.cpp) or Remote API                      |
+| `llama_path`                | String | Path to `llama-server.exe`                           |
+| `model_repo_id`             | String | HuggingFace repo ID                                  |
+| `model_filename`            | String | GGUF filename                                        |
+| `downloaded_models_dir`     | String | Directory for downloaded models                      |
+| `model_preset`              | Enum   | Curated model preset selector                        |
+| `model_preset_info`         | String | Read-only preset metadata display                    |
+| `existing_model_path`       | String | Absolute path to an existing .gguf file              |
+| `local_ctx_size`            | Int    | Context window size (4096–262144)                    |
+| `local_max_tokens`          | Int    | Max output tokens (512–131072)                       |
+| `hf_token`                  | String | HuggingFace token for gated models (password-masked) |
+| `remote_api_url`            | String | Remote API base URL                                  |
+| `remote_api_key`            | String | API key (password-masked)                            |
+| `remote_model`              | String | Remote model ID                                      |
+| `remote_provider`           | Enum   | Provider preset (OpenRouter / Custom)                |
+| `remote_models_count`       | Int    | Live model count from API                            |
+| `agent_autostart`           | Bool   | Auto-start agent with Blender                        |
+| `port_offset`               | Int    | Global port offset (0–100)                           |
+| `bridge_port`               | Int    | Bridge port override (0 = default + offset)          |
+| `mcp_port`                  | Int    | MCP port override                                    |
+| `llm_port`                  | Int    | LLM port override                                    |
+| `timer_interval_active`     | Float  | Polling rate while active (0.05–5.0s)                |
+| `timer_interval_idle`       | Float  | Polling rate while idle (0.1–10.0s)                  |
+| `timer_interval_idle_delay` | Float  | Idle delay (1.0–60.0s)                               |
+| `use_log`                   | Bool   | Toggle tool request/response logging                 |
 
 The `draw()` method renders a categorized UI:
+
 1. **LLM Configuration** box with mode toggle
 2. **Local mode**: llama-server status + download button, categorized model presets (Flagship/Mid/Lightweight), custom model dropdown, download button with progress bar, existing model scanner, advanced settings expander
 3. **Remote mode**: provider dropdown, API URL, API key, model name, refresh/browse/test buttons
@@ -325,37 +330,38 @@ The following guidelines help maintain merge compatibility.
 
 These files should have **minimal fork changes** to simplify merging upstream updates:
 
-| File | Notes |
-|---|---|
+| File                          | Notes                                                                                        |
+| ----------------------------- | -------------------------------------------------------------------------------------------- |
 | `mcp/blmcp/` (entire package) | The `blmcp` Python package name was **intentionally kept** — do NOT rename to `bfa_coworker` |
-| `mcp/blmcp/tools/*.py` | Auto-discovered at startup — upstream additions merge directly |
-| `mcp/blmcp/data/prompts.yml` | System prompt — review carefully when merging (affects agent behavior) |
-| `mcp_to_blender_server.py` | TCP socket bridge — minimal fork changes |
-| `execute_blocking.py` | Background mode execution |
-| `execute_interactive.py` | Interactive mode execution |
-| `deferred_tool.py` | Background job handling |
-| `weak_sandbox.py` | LLM code safety sandbox |
-| `capture_output.py` | stdout/stderr capture |
-| `cli.py` | CLI entry point |
+| `mcp/blmcp/tools/*.py`        | Auto-discovered at startup — upstream additions merge directly                               |
+| `mcp/blmcp/data/prompts.yml`  | System prompt — review carefully when merging (affects agent behavior)                       |
+| `mcp_to_blender_server.py`    | TCP socket bridge — minimal fork changes                                                     |
+| `execute_blocking.py`         | Background mode execution                                                                    |
+| `execute_interactive.py`      | Interactive mode execution                                                                   |
+| `deferred_tool.py`            | Background job handling                                                                      |
+| `weak_sandbox.py`             | LLM code safety sandbox                                                                      |
+| `capture_output.py`           | stdout/stderr capture                                                                        |
+| `cli.py`                      | CLI entry point                                                                              |
 
 ### Fork-Specific Files (safe from upstream conflicts)
 
 These files have **no upstream equivalent** — no merge conflicts expected:
 
-| File | Purpose |
-|---|---|
-| `llm_manager.py` | LLM lifecycle (download, start/stop, presets) |
-| `agent_controller.py` | Conversation orchestrator |
-| `ui_chat.py` | Chat panel |
-| `preferences.py` | Preferences (was part of upstream `__init__.py`) |
-| `shared.py` | Shared constants and helpers |
-| `log.py` | Logging infrastructure |
-| `build_addon.py` | Build script |
-| `vendor/` | Vendored deps |
+| File                  | Purpose                                          |
+| --------------------- | ------------------------------------------------ |
+| `llm_manager.py`      | LLM lifecycle (download, start/stop, presets)    |
+| `agent_controller.py` | Conversation orchestrator                        |
+| `ui_chat.py`          | Chat panel                                       |
+| `preferences.py`      | Preferences (was part of upstream `__init__.py`) |
+| `shared.py`           | Shared constants and helpers                     |
+| `log.py`              | Logging infrastructure                           |
+| `build_addon.py`      | Build script                                     |
+| `vendor/`             | Vendored deps                                    |
 
 ### Merge Strategy
 
 1. **Upstream `__init__.py` changes**: The upstream `__init__.py` has a completely different structure (monolithic). When merging, port changes to the **correct operator module**:
+
    - Server-related changes → `operators_server.py`
    - LLM-related changes → `operators_llm.py`
    - Agent-related changes → `operators_agent.py`
@@ -374,6 +380,7 @@ These files have **no upstream equivalent** — no merge conflicts expected:
 ### Phase 1: LLM Manager Module
 
 1. Create `addon/bfa_coworker/llm_manager.py`:
+
    - `find_llama_server()` — search PATH, Program Files, LOCALAPPDATA, user-configured path.
    - `download_model()` — direct HTTP download from HuggingFace with progress streaming.
    - `cancel_download()` — threading.Event-based cancellation.
@@ -390,6 +397,7 @@ These files have **no upstream equivalent** — no merge conflicts expected:
    - `ModelPreset` dataclass: identifier, name, repo_id, filename, category, ram_gb, disk_gb, capability, context_window, max_tokens, description.
 
 2. Create operators in `operators_llm.py`:
+
    - `_BFACW_OT_download_model` — modal operator with progress polling
    - `_BFACW_OT_cancel_download` — triggers cancel event
    - `_BFACW_OT_start_llm` — starts llama-server
@@ -403,6 +411,7 @@ These files have **no upstream equivalent** — no merge conflicts expected:
 ### Phase 2: Agent Controller Module
 
 1. Create `addon/bfa_coworker/agent_controller.py`:
+
    - `start_mcp_server()` — spawn `bfa-coworker-mcp` as subprocess.
    - `stop_mcp_server()` — terminate subprocess.
    - `list_mcp_tools()` — HTTP endpoint or mcp client library.
@@ -425,6 +434,7 @@ These files have **no upstream equivalent** — no merge conflicts expected:
    - `_get_system_prompt()` — load prompts.yml from dev or deployed layout.
 
 2. Create operators in `operators_agent.py`:
+
    - `_BFACW_OT_test_remote_api` — test remote API connection
    - `_BFACW_OT_refresh_remote_models` — fetch model count
    - `_BFACW_OT_open_model_browser` — open openrouter.ai/models
@@ -435,6 +445,7 @@ These files have **no upstream equivalent** — no merge conflicts expected:
 ### Phase 3: Chat UI Panel
 
 1. Create `addon/bfa_coworker/ui_chat.py`:
+
    - `BFACW_PT_chat_panel` — VIEW_3D sidebar panel.
    - `BFACW_PT_chat_text_editor` — TEXT_EDITOR sidebar panel.
    - `BFACW_OT_chat_send` — send input to agent.
@@ -444,6 +455,7 @@ These files have **no upstream equivalent** — no merge conflicts expected:
    - `ChatHistoryProperties` PropertyGroup for persistence.
 
 2. Drawing approach:
+
    - Use `layout.box()` for message bubbles.
    - Use `row.label()` with text wrapping for content.
    - Use `row.operator()` with icon for tool call entries.
@@ -452,11 +464,13 @@ These files have **no upstream equivalent** — no merge conflicts expected:
 ### Phase 4: Integration with Add-on Registration
 
 1. `addon/bfa_coworker/__init__.py` is a thin registration hub:
+
    - Imports all classes from operator modules.
    - Registers/unregisters all classes.
    - No business logic — all in the split modules.
 
 2. `addon/bfa_coworker/shared.py` contains:
+
    - Port constants and `effective_ports()` helper.
    - `MODEL_PRESET_ITEMS` and `REMOTE_PROVIDER_ITEMS` static lists.
    - Lazy import wrappers (`get_llm_manager()`, `get_agent_controller()`).
@@ -468,6 +482,7 @@ The old approach bundled `mcp/.venv` (created by `uv`) into `vendor/python_env/`
 This was not portable because `pyvenv.cfg` hardcodes a machine-specific base Python path.
 
 **Current approach:**
+
 - `vendor/deps/` — pip-installed pure-Python deps via `pip install --target`
 - `vendor/blmcp/` — blmcp source package copied from `mcp/blmcp/`
 - At runtime, use Blender's own Python with `vendor/deps/` and `vendor/` on `PYTHONPATH`
@@ -509,40 +524,40 @@ Auto-start enabled?
 
 ## Quality Checks
 
-| Check | Criteria |
-|---|---|
-| **Subprocess lifecycle** | `llama-server` and `bfa-coworker-mcp` started/stopped cleanly. No zombie processes. |
-| **Health check timeout** | Startup waits max 30s for `llama-server`. Clear error if not ready. |
-| **Chat input/output** | Multi-line text input works. Long responses scroll. Tool calls visible. |
-| **Streaming** | Text appears incrementally, not all at once. |
-| **Thread safety** | Async loop on daemon thread. UI updates via `bpy.app.timers`. No direct `bpy` from background thread. |
-| **Error handling** | LLM disconnects, MCP crashes show clear error, not a hang. |
-| **Stop mid-generation** | Stop button cancels current Future. |
-| **Preferences persistence** | All prefs survive Blender restart. |
-| **Remote API** | API key stored (masked). Connection test works. Clear error if invalid. |
-| **Download progress** | Progress bar updates in real-time. Speed, ETA, percentage shown. |
-| **Cancel download** | Partial file cleaned up. State resets correctly. |
-| **Disk space check** | Pre-flight check prevents download if insufficient space. |
-| **HF_TOKEN** | Gated models accessible with token. Clear error on 401/403. |
-| **Port conflicts** | Port killer cleans up orphans. Availability check before start. |
-| **Vendor deps** | Auto-install fallback works for source installs. |
-| **No external client needed** | Everything starts from the add-on. |
+| Check                         | Criteria                                                                                              |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------- |
+| **Subprocess lifecycle**      | `llama-server` and `bfa-coworker-mcp` started/stopped cleanly. No zombie processes.                   |
+| **Health check timeout**      | Startup waits max 30s for `llama-server`. Clear error if not ready.                                   |
+| **Chat input/output**         | Multi-line text input works. Long responses scroll. Tool calls visible.                               |
+| **Streaming**                 | Text appears incrementally, not all at once.                                                          |
+| **Thread safety**             | Async loop on daemon thread. UI updates via `bpy.app.timers`. No direct `bpy` from background thread. |
+| **Error handling**            | LLM disconnects, MCP crashes show clear error, not a hang.                                            |
+| **Stop mid-generation**       | Stop button cancels current Future.                                                                   |
+| **Preferences persistence**   | All prefs survive Blender restart.                                                                    |
+| **Remote API**                | API key stored (masked). Connection test works. Clear error if invalid.                               |
+| **Download progress**         | Progress bar updates in real-time. Speed, ETA, percentage shown.                                      |
+| **Cancel download**           | Partial file cleaned up. State resets correctly.                                                      |
+| **Disk space check**          | Pre-flight check prevents download if insufficient space.                                             |
+| **HF_TOKEN**                  | Gated models accessible with token. Clear error on 401/403.                                           |
+| **Port conflicts**            | Port killer cleans up orphans. Availability check before start.                                       |
+| **Vendor deps**               | Auto-install fallback works for source installs.                                                      |
+| **No external client needed** | Everything starts from the add-on.                                                                    |
 
 ## Edge Cases
 
-| Situation | Handling |
-|---|---|
-| `llama-server` not on PATH | Show download button. Auto-search common locations. |
-| Model download interrupted | Partial file cleaned up. User can retry. |
-| 401 from HuggingFace | Suggest setting HF_TOKEN. |
-| 403 from HuggingFace | Suggest granting access at huggingface.co. |
-| 404 from HuggingFace | Suggest checking repo/file name. |
-| Insufficient disk space | Pre-flight check prevents download. Actionable error message. |
+| Situation                        | Handling                                                       |
+| -------------------------------- | -------------------------------------------------------------- |
+| `llama-server` not on PATH       | Show download button. Auto-search common locations.            |
+| Model download interrupted       | Partial file cleaned up. User can retry.                       |
+| 401 from HuggingFace             | Suggest setting HF_TOKEN.                                      |
+| 403 from HuggingFace             | Suggest granting access at huggingface.co.                     |
+| 404 from HuggingFace             | Suggest checking repo/file name.                               |
+| Insufficient disk space          | Pre-flight check prevents download. Actionable error message.  |
 | Blender closes while LLM running | `unregister()` kills subprocesses. Port killer cleans orphans. |
-| Multiple Blender instances | Each has configurable ports. LLM backend is shared. |
-| Low VRAM / OOM | Recommend lightweight presets (Q4_K_M, 3B-8B params). |
-| Remote API rate limit | Show error, suggest retry. Store last error in state. |
-| Port conflicts | Port killer + availability check. Effective ports shown in UI. |
+| Multiple Blender instances       | Each has configurable ports. LLM backend is shared.            |
+| Low VRAM / OOM                   | Recommend lightweight presets (Q4_K_M, 3B-8B params).          |
+| Remote API rate limit            | Show error, suggest retry. Store last error in state.          |
+| Port conflicts                   | Port killer + availability check. Effective ports shown in UI. |
 
 ## Plan Documents & Lifecycle
 
@@ -554,13 +569,13 @@ status so the folder listing shows at a glance what is open and what is done.
 
 Every plan carries a status line with an emoji:
 
-| Emoji | Status | Meaning |
-|---|---|---|
-| 📝 | Draft | Being written, not yet approved |
-| 🚧 | In progress | Approved; implementation under way. **Name the completed phases** and the deferred ones (and why) |
-| ✅ | Done | Fully implemented, tested, and audited |
-| ⏸️ | Paused | Deliberately stopped, superseded, or blocked |
-| ❌ | Rejected | Decided against (record the reason) |
+| Emoji | Status      | Meaning                                                                                           |
+| ----- | ----------- | ------------------------------------------------------------------------------------------------- |
+| 📝    | Draft       | Being written, not yet approved                                                                   |
+| 🚧     | In progress | Approved; implementation under way. **Name the completed phases** and the deferred ones (and why) |
+| ✅     | Done        | Fully implemented, tested, and audited                                                            |
+| ⏸️     | Paused      | Deliberately stopped, superseded, or blocked                                                      |
+| ❌     | Rejected    | Decided against (record the reason)                                                               |
 
 A partially-done plan must say **which phases are complete** and which are
 deferred.
@@ -588,3 +603,12 @@ anything the plan claims but the code does not contain.
 | `finish_reason=length` truncation | Auto-continue with concatenation (max 2 attempts). |
 | System prompt not loading | Searches both dev and deployed paths. |
 | Bundled .venv not portable | Replaced with vendor/deps/ + vendor/blmcp/ layout. |
+
+
+
+# Gitflow Guidlines
+
+1. Always work in branches
+2. Only do pull requests, never approve them
+3. Have clear, pregnant commit messages and pull request information
+4. Periodically merge in the main to branches and automatically resolve conflicts

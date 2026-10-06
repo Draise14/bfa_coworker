@@ -76,6 +76,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+try:  # Package import (inside Blender / the addon package).
+    from . import process_guard as _process_guard  # type: ignore[import-not-found]
+except ImportError:  # Standalone import (unit tests load this file directly).
+    import importlib.util as _pg_ilu
+    _pg_spec = _pg_ilu.spec_from_file_location(
+        "process_guard", Path(__file__).with_name("process_guard.py"))
+    _process_guard = _pg_ilu.module_from_spec(_pg_spec)  # type: ignore[arg-type]
+    _pg_spec.loader.exec_module(_process_guard)  # type: ignore[union-attr]
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -646,10 +655,14 @@ class LLMConfig:
     hf_token: str = ""  # HuggingFace token for gated models
     llama_backend: str = "auto"  # "auto" | "cpu" | "cuda" | "vulkan"
     local_kv_cache_quant: bool = False  # Quantize KV cache to q8_0 (GPU backends only)
+    local_server_verbose: bool = False  # Pass --verbose to llama-server (debug logging)
     # Soft co-work lock: while a turn runs, make the coworker's own objects
     # un-selectable in the UI so the user cannot re-target them mid-turn.
     # Restored when the turn ends.
     lock_scene_while_working: bool = True
+    # Long-request auto-continue: extra rounds a turn may run when it used
+    # its tool-iteration budget while still making progress (all modes).
+    auto_continue_rounds: int = 3
     # Remote mode
     remote_api_url: str = ""
     remote_api_key: str = ""
@@ -1275,7 +1288,9 @@ def set_config(cfg: LLMConfig) -> None:
         _config.hf_token = cfg.hf_token
         _config.llama_backend = cfg.llama_backend
         _config.local_kv_cache_quant = cfg.local_kv_cache_quant
+        _config.local_server_verbose = cfg.local_server_verbose
         _config.lock_scene_while_working = cfg.lock_scene_while_working
+        _config.auto_continue_rounds = cfg.auto_continue_rounds
         _config.remote_api_url = cfg.remote_api_url
         _config.remote_api_key = cfg.remote_api_key
         _config.remote_model = cfg.remote_model
@@ -1298,7 +1313,9 @@ def get_config() -> LLMConfig:
             hf_token=_config.hf_token,
             llama_backend=_config.llama_backend,
             local_kv_cache_quant=_config.local_kv_cache_quant,
+            local_server_verbose=_config.local_server_verbose,
             lock_scene_while_working=_config.lock_scene_while_working,
+            auto_continue_rounds=_config.auto_continue_rounds,
             remote_api_url=_config.remote_api_url,
             remote_api_key=_config.remote_api_key,
             remote_model=_config.remote_model,
@@ -2963,6 +2980,11 @@ def start_local_llama(
             _set_error("llama-server is already running")
             return None
 
+    # A crashed Blender session may have left its llama-server running (it
+    # still holds the port and VRAM).  Kill orphans whose Blender is gone
+    # before launching, so two servers never fight over the hardware.
+    _process_guard.reap_orphans()
+
     server_exe = find_llama_server()
     if not server_exe:
         # Re-search once in case the user installed llama-server since the
@@ -3121,12 +3143,17 @@ def start_local_llama(
         args = [
             server_exe,
             '--jinja',
-            '--verbose',
             '--host', '127.0.0.1',
             '--port', str(port),
             '--ctx-size', str(ctx_size),
             '--n-gpu-layers', str(ngpu_layers),
         ]
+        # --verbose logs every prompt and token to the server log: steady disk
+        # I/O and a fast-growing file on every request.  Startup errors are
+        # logged without it, so it is a debug opt-in only.
+        with _lock:
+            if getattr(_config, "local_server_verbose", False):
+                args.append('--verbose')
         # Model-specific extra flags (e.g. Qwen3 knobs), version-guarded
         # against the pinned llama-server build so an unknown flag never
         # crashes startup on an older binary.
@@ -3291,16 +3318,21 @@ def start_local_llama(
                 env=env,
             )
         else:
-            # Linux / macOS: detach from the parent process group so the
-            # server survives Blender exiting.
+            # Linux / macOS: own session (terminal signals do not reach
+            # it), but on Linux the kernel still SIGTERMs it when Blender
+            # dies (process_guard parent-death signal).
             proc = subprocess.Popen(
                 args,
                 stdin=subprocess.DEVNULL,
                 stdout=stdio_target,
                 stderr=stdio_target,
                 start_new_session=True,
+                preexec_fn=_process_guard.linux_preexec(),
             )
         print("[Coworker] start_local_llama:   Popen returned pid={:d}".format(proc.pid))
+        # Tie the server's lifetime to Blender's: on Windows a kill-on-close
+        # job object ends it even when Blender CRASHES (no Python runs then).
+        _process_guard.bind_to_parent(proc, "llama-server", int(port or 0))
 
     except FileNotFoundError:
         print("[Coworker] start_local_llama: FileNotFoundError -- binary not found")
@@ -3354,6 +3386,8 @@ def stop_local_llama() -> None:
             print("[Coworker] stop_local_llama:   exception during terminate: {:s}".format(str(ex)))
 
     _llama_process = None
+    if proc is not None:
+        _process_guard.forget(getattr(proc, "pid", None))
 
     # Fallback: kill any remaining llama-server processes by image name.
     # This catches orphaned processes from previous sessions that may

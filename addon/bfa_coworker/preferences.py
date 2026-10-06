@@ -156,6 +156,22 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         max=100,
     )
 
+    # -- Long requests (auto-continue) -----------------------------
+
+    auto_continue_rounds: IntProperty(  # type: ignore[valid-type]
+        name="Auto-Continue Rounds",
+        description=(
+            "Long requests: when the Coworker uses up its step budget for a "
+            "turn while still making progress on its plan, it continues "
+            "automatically for up to this many extra rounds (older turns are "
+            "summarized between rounds). 0 = stop and report progress. Stop "
+            "and the 20-minute turn limit always apply"
+        ),
+        default=3,
+        min=0,
+        max=6,
+    )
+
     # -- Debug Mode --------------------------------------------------
 
     def _update_debug_mode(self, _context: bpy.types.Context) -> None:
@@ -279,6 +295,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         cfg.local_max_tokens = self.local_max_tokens
         cfg.thinking_budget_tokens = self.thinking_budget_tokens
         cfg.local_kv_cache_quant = self.local_kv_cache_quant
+        cfg.local_server_verbose = self.local_server_verbose
         cfg.lock_scene_while_working = getattr(self, "lock_scene_while_working", True)
         llm.set_config(cfg)
         # If switching to remote, stop any running local LLM.
@@ -693,6 +710,16 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default=False,
     )
 
+    local_server_verbose: BoolProperty(  # type: ignore[valid-type]
+        name="Verbose Server Log",
+        description=(
+            "Log every prompt and token in the llama-server log. For "
+            "troubleshooting only -- it slows requests and the log grows "
+            "quickly. Applies on next server start."
+        ),
+        default=False,
+    )
+
     lock_scene_while_working: BoolProperty(  # type: ignore[valid-type]
         name="Lock Scene While Working",
         description=(
@@ -987,7 +1014,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         import json as _json
         try:
             return _json.loads(self.saved_providers_json)
-        except (json.JSONDecodeError, TypeError):
+        except (_json.JSONDecodeError, TypeError):
             return []
 
     def _set_saved_providers(self, providers: list[dict]) -> None:
@@ -1020,6 +1047,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             icon='CONSOLE',
             text="Open Log",
         )
+        diag_box.prop(self, "local_server_verbose")
         row = diag_box.row()
         row.operator("bfacw.check_ports", icon="FILE_REFRESH", text="Check Ports")
         row.operator("bfacw.ping_agent", icon="FILE_REFRESH", text="Diagnose")
@@ -1641,7 +1669,20 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             text="Context Window (how much the model remembers per reply)",
             icon='MEMORY',
         )
+        # The window (and the KV-cache quantization) is fixed when
+        # llama-server loads the model; changing it while the model runs
+        # would silently disagree with the server.  Lock the controls while
+        # it runs and offer the one action that applies a change.
+        _model_loaded = bool(getattr(llm_state, "is_running", False))
+        if _model_loaded:
+            lock_row = ctx_box.row(align=True)
+            lock_row.label(
+                text="Fixed while the model is loaded -- stop it to change",
+                icon='LOCKED',
+            )
+            lock_row.operator("bfacw.stop_llm", text="Stop Model", icon='PAUSE')
         row = ctx_box.row(align=True)
+        row.enabled = not _model_loaded
         active_ctx = self.local_ctx_size
         is_custom = (self.local_ctx_preset == "custom") or (
             active_ctx not in llm.ctx_preset_sizes)
@@ -1659,7 +1700,9 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         )
         op.value = 0
         if is_custom:
-            ctx_box.prop(self, "local_ctx_size")
+            _custom_row = ctx_box.row()
+            _custom_row.enabled = not _model_loaded
+            _custom_row.prop(self, "local_ctx_size")
         model_gb = self._current_model_gb(llm.get_preset_by_id(self.model_preset))
         ctx_box.label(
             text=llm.hardware_context_hint(model_gb, self.llama_backend),
@@ -1675,7 +1718,9 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 ctx_box.label(text=_wline, icon='BLANK1')
         # KV-cache quantization -- pairs with the context size choice.
         if self.llama_backend != "cpu":
-            ctx_box.prop(self, "local_kv_cache_quant")
+            _kv_row = ctx_box.row()
+            _kv_row.enabled = not _model_loaded
+            _kv_row.prop(self, "local_kv_cache_quant")
 
         # -- Reasoning Effort (next to the Context Window row) -------
         ctx_box.separator()
@@ -1684,8 +1729,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             icon='SOLO_ON',
         )
         ctx_box.label(
-            text="Same setting the numeric row used to show -- each level maps to a "
-                 "~ token budget. Hover the buttons for the exact count.",
+            text="Sent with every request -- change it any time (also in the "
+                 "chat panel); it applies from your next message.",
             icon='INFO',
         )
         row = ctx_box.row(align=True)
@@ -2169,6 +2214,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         chat_box.prop(self, "chat_max_visible_turns")
         chat_box.label(
             text="0 = show all turns. Higher values limit history shown.",
+            icon='INFO',
+        )
+        chat_box.prop(self, "auto_continue_rounds")
+        chat_box.label(
+            text="Long requests keep going in rounds while the plan makes progress.",
             icon='INFO',
         )
 

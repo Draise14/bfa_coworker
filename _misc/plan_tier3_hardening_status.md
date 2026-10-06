@@ -192,7 +192,9 @@ guidance. Two changes:
   tool guide, naming). A file is never truncated. On 16K this keeps ~6.3k tokens
   (all drift files + best practices + naming); on 32K it keeps everything.
   `_get_system_prompt_with_rules` sets the budget to ~40% of the configured
-  window.
+  window. *(Later tightened for prefill latency: 15% of the window, clamped
+  to 1,024-4,500 tokens -- `_SKILLS_LOAD_RATIO` / `_SKILLS_LOAD_MIN` /
+  `_SKILLS_LOAD_MAX` in `agent_controller.py`.)*
 - `LLMConfig.local_ctx_size` default raised **16384 -> 32768** (the Preferences
   default was already 32768, so this aligns the two, and matches the "hardware
   unknown" recommendation).
@@ -279,5 +281,24 @@ include a live run. After compiling:
 
 - A live-Blender cross-session checkpoint restore test (issue-#74 K2).
 - A dedicated `check_namespace.py` cleanup pass (pre-existing `__all__` noise).
-- Co-work plan Phases 5 (user-edit detection) and 6 (scoped auto-undo) remain deferred —
-  they mutate the destructive global-undo path and need a live Blender to verify.
+- ~~Co-work plan Phases 5 and 6 deferred~~ -- implemented and tested through the real turn
+  loop (see "Co-work Phases 5 & 6" in section 3); only the live-Blender sign-off remains,
+  tracked in the co-work plan's manual checklist.
+
+---
+
+## 6. Release check for 1.1.37 (2026-10-06)
+
+Re-audited all Tier 3 plans against the code before the 1.1.37 release:
+
+| Check | Result |
+|---|---|
+| Unit suite (Python 3.11, `pytest tests`) | 729+ pass; only failures are environment-only (`mcp.server` missing: `test_rst_search`, `test_rst_parse`, `test_mcp_server`, `test_harness_config`, `test_tool_listing`) |
+| `python _misc/check_ascii.py` | exit 0 (fixed a regression of 7 glyphs in `ui_chat.py`; the checker now skips local `.venv` dirs and cannot crash on a cp1252 console) |
+| SPDX (`check_license.py`) | only the known `autofix.py` / `blender_templates.py` misses |
+| `-W error::SyntaxWarning` parse of non-vendor source | clean |
+| ruff vs `main` | ~80 new findings, all in categories the repo already carries (UP032, BLE001, S110); the one B023 is a false positive (closure called in the same iteration) |
+| Fixed in this pass | `process_guard.linux_preexec` loaded libc inside the forked child (dlopen after fork in multi-threaded Blender can deadlock) -- now loaded in the parent |
+
+Still open before tagging: the manual in-Blender checklists of each Tier 3 plan, and
+regenerating the wiki (`_misc/generate_wiki.py`) once the UI is final.

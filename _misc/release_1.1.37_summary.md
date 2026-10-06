@@ -7,6 +7,21 @@ This release brings **major UX improvements**, **power-user tools**, and **perfo
 ---
 
 ## ✨ Highlight Features
+### 📌 **Reliable Long Requests on Small Local Models** (Tier 3k)
+- **Pinned Goal & Plan** — your goal and a short step plan are sent with every request and never summarized away; steps **tick off live** in the chat panel while the turn runs; edit them as `Coworker Plan.md` in the Text Editor
+- **Knows when to stop** — stops once the plan is done, keeps going in rounds only while it makes real progress, winds up when it starts re-checking or repeating itself, and ends with **one suggested next step** as a question
+- **No more "chat talking to itself"** — the coworker's notes to itself live in the Workshop, never as your messages, and no longer cut off its real reply
+- **Fits a 16K window** — your request is never trimmed away mid-turn, long turns shed their own old tool output, and the prompt size self-calibrates from the server's real token counts (no more `exceeds the available context size`)
+- **Simpler Session panel** — Context and Memory & Checkpoints sub-panels, memory in plain words, checkpoints titled by your request (*Checkpoint 3: fix the floating parts…*) with one-click restore
+- **Thinking selector in the chat**; context window locked while the model runs
+
+### 🖼️ **Attach Images to the Chat** (#88)
+- Blender-standard image socket: pick, open, capture render/screen, or drag-and-drop
+- Sticky by default (or **Send once**); attached images now survive undo and save/reopen
+
+### 🧯 **No Orphaned Servers After a Crash**
+- llama-server and the MCP server close with Bforartists, even on a crash (Windows job object / Linux parent-death signal), and leftovers from earlier crashes are cleaned up on the next start
+
 ### 🔒 **Download Safety** (Tier 3f)
 - SHA-256 verification for every model download
 - HTTP Range resume via .part files — interrupted downloads resume where they left off
@@ -58,6 +73,8 @@ Mention anything in your scene! Objects, materials, collections, node groups, wo
 - ⚠️ Stop-during-thinking guard
 
 ### ⚡ **Performance & UX**
+- 🚀 Long local turns re-use llama-server's prompt cache (no full re-prefill every request)
+- 🖥️ The chat no longer redraws the 3D Viewport; llama-server no longer logs every token
 - 🎠 Thinking spinner animation
 - 📉 Model loading progress bar
 - 🛡️ Graceful shutdown with health indicators
@@ -103,6 +120,10 @@ python build_addon.py
 - 💾 Versioned session history (keeps last 10)
 - 🛡️ Readonly detection for collection tools
 - ⚠️ Stop-during-thinking guard prevents accidental stops
+- 🧩 Add-on failed to enable after the drag-and-drop fix (stale `_suppress_builtin_viewport_drops` call)
+- 🖼️ Images attached to the add-on's own note instead of your request
+- 🏷️ Bogus "you already created texts: Coworker_006" warnings
+- ⚙️ Corrupt saved-provider JSON crashed the preferences panel
 
 ---
 
@@ -111,6 +132,7 @@ python build_addon.py
 - 📖 Updated skills documentation for asset browser
 - 🎯 Collection color tag usage examples
 - 💡 Mention system category guide
+- 📌 Wiki: Goal & Plan, stopping rules, Session panel, image attachments, Auto-Continue Rounds
 
 ---
 

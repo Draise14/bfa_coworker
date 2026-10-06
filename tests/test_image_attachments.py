@@ -427,7 +427,9 @@ class TestChatAttachmentUI(unittest.TestCase):
             attachment_name=lambda img: "a.png",
         )
         capture = _extract_ui_func(
-            "_capture_chat_attachment", {"chat_attachments": fake})
+            "_capture_chat_attachment",
+            {"chat_attachments": fake, "_sticky_attachment": {},
+             "_restore_attachment": lambda p: p.chat_image})
         props = types.SimpleNamespace(chat_image=None,
                                       chat_image_send_once=False)
         self.assertEqual(capture(props), (None, None))
@@ -1252,3 +1254,109 @@ class TestRenderFromView(unittest.TestCase):
                  scene.cycles.time_limit)
         self.assertEqual(after, before,
                          "the user's own render settings must be restored")
+
+
+class TestStickyAttachment(unittest.TestCase):
+    """The socket must not lose its image when Blender frees it behind us.
+
+    Reported: "the image gets cleared sometimes".  The socket is an ID
+    pointer on the WindowManager; the agent's own auto-undo and orphan
+    cleanup can free the image without any RNA update, leaving the pointer
+    empty.  The add-on pins it (fake user + file on disk + remembered) and
+    re-links it -- unless the USER cleared the socket.
+    """
+
+    def setUp(self):
+        src = _ui_source()
+        block = src[src.index("# Sticky attachment (survives undo"):
+                    src.index("class ChatHistoryProperties(")]
+        self.images = {}
+        self.loaded = []
+        test = self
+
+        class _Img:
+            def __init__(self, name):
+                self.name = name
+                self.use_fake_user = False
+
+        class _Images:
+            def get(self, name):
+                return test.images.get(name)
+
+        self._Img = _Img
+        self.bpy = types.SimpleNamespace(
+            data=types.SimpleNamespace(images=_Images(), filepath="C:/proj/a.blend"))
+
+        def _load(path):
+            if not path:
+                return None
+            img = _Img("reloaded.png")
+            test.images[img.name] = img
+            test.loaded.append(path)
+            return img
+
+        self.ca = types.SimpleNamespace(
+            persist_image=lambda img: "C:/attach/attached_1.png",
+            attachment_name=lambda img: img.name,
+            load_image_file=_load,
+            image_to_data_uri=lambda img: "data:image/png;base64,QQ==",
+        )
+        self.ns = {"bpy": self.bpy, "chat_attachments": self.ca}
+        exec(compile("# ---\n" + block, _UI_PATH, "exec"), self.ns)  # noqa: S102
+        self.props = types.SimpleNamespace(chat_image=None, chat_image_send_once=False)
+
+    def _set(self, img):
+        """Simulate the user setting the socket (RNA update fires)."""
+        self.props.chat_image = img
+        self.ns["_on_chat_image_update"](self.props, None)
+
+    def test_attach_pins_with_fake_user_and_file(self):
+        img = self._Img("ref.jpg")
+        self.images[img.name] = img
+        self._set(img)
+        self.assertTrue(img.use_fake_user, "the image must survive orphan cleanup")
+        self.assertEqual(self.ns["_sticky_attachment"]["path"], "C:/attach/attached_1.png")
+
+    def test_silent_clear_is_relinked(self):
+        img = self._Img("ref.jpg")
+        self.images[img.name] = img
+        self._set(img)
+        self.props.chat_image = None          # undo freed it: NO update callback
+        self.assertIs(self.ns["_restore_attachment"](self.props), img)
+        self.assertIs(self.props.chat_image, img)
+
+    def test_freed_image_is_reloaded_from_disk(self):
+        img = self._Img("render.png")
+        self.images[img.name] = img
+        self._set(img)
+        del self.images["render.png"]          # datablock gone entirely
+        self.props.chat_image = None
+        got = self.ns["_restore_attachment"](self.props)
+        self.assertIsNotNone(got)
+        self.assertEqual(self.loaded, ["C:/attach/attached_1.png"])
+
+    def test_user_clear_is_respected(self):
+        img = self._Img("ref.jpg")
+        self.images[img.name] = img
+        self._set(img)
+        self._set(None)                        # the socket's X: update fires
+        self.assertFalse(img.use_fake_user, "our fake user is removed again")
+        self.assertIsNone(self.ns["_restore_attachment"](self.props))
+        self.assertIsNone(self.props.chat_image)
+
+    def test_never_crosses_files(self):
+        img = self._Img("ref.jpg")
+        self.images[img.name] = img
+        self._set(img)
+        self.bpy.data.filepath = "C:/proj/other.blend"
+        self.props.chat_image = None
+        self.assertIsNone(self.ns["_restore_attachment"](self.props))
+
+    def test_send_reuses_last_encoded_copy_when_relink_fails(self):
+        capture = _extract_ui_func(
+            "_capture_chat_attachment",
+            {"chat_attachments": self.ca,
+             "_sticky_attachment": {"uri": "data:image/png;base64,Qg==", "name": "ref.jpg"},
+             "_restore_attachment": lambda p: None})
+        self.assertEqual(capture(self.props),
+                         (["data:image/png;base64,Qg=="], ["ref.jpg"]))

@@ -90,6 +90,7 @@ def _sync_prefs_to_config(prefs: bpy.types.AddonPreferences) -> None:
     # _BFACW_Preferences class registered (e.g. before a restart after an
     # addon update) must not crash agent start over a newer preference.
     llm_cfg.lock_scene_while_working = getattr(prefs, "lock_scene_while_working", True)
+    llm_cfg.auto_continue_rounds = int(getattr(prefs, "auto_continue_rounds", 3))
     llm_cfg.remote_api_url = prefs.remote_api_url
     llm_cfg.remote_api_key = prefs.remote_api_key
     llm_cfg.remote_model = prefs.remote_model
@@ -259,12 +260,152 @@ def _fmt_duration(seconds: float) -> str:
 
 
 def _is_system_note_msg(msg: dict) -> bool:
-    """True for an agent-injected user message (begins with ``[System:``)."""
-    return (
-        msg.get("role") == "user"
-        and isinstance(msg.get("content"), str)
-        and msg.get("content", "").startswith("[System:")
-    )
+    """True for an agent-injected user-role note (never a real user turn).
+
+    Mirrors ``session_memory.is_system_note`` (kept self-contained so the
+    draw path never imports): the structured ``system_note`` flag first,
+    then the ``[System:`` prefix, then the known legacy prompt -- the
+    unprefixed "Continue." older builds could leave in the history, which
+    rendered as a NEW user turn written by the agent itself.
+    """
+    if msg.get("role") != "user":
+        return False
+    if msg.get("system_note"):
+        return True
+    content = msg.get("content")
+    if isinstance(content, list):
+        content = " ".join(
+            str(b.get("text", "")) for b in content if isinstance(b, dict))
+    text = str(content or "").lstrip()
+    return (text.startswith("[System:")
+            or text.startswith("Continue. Keep this next step small"))
+
+
+# Friendly Workshop titles for injected notes, keyed by ``system_note`` kind.
+_NOTE_TITLES = {
+    "followup": ("Coworker \u2192 itself: keep going", 'FORWARD'),
+    "continue": ("Continued after the output limit", 'TRIA_RIGHT'),
+    "nudge": ("Nudge: act, don't just describe", 'PLAY'),
+    "entity": ("Scene context", 'OUTLINER_OB_MESH'),
+    "scene_change": ("You changed the scene mid-turn", 'VIEW_PAN'),
+    "spiral": ("Repeated-error guidance", 'ERROR'),
+    "malformed": ("Re-emit a broken tool call", 'ERROR'),
+    "wrapup": ("Step budget reached -- progress report", 'TIME'),
+}
+
+
+# ---------------------------------------------------------------------------
+# Human-readable display helpers (chat + Session panel)
+
+# ``[attached: a.png, b.jpg]`` -- the plain-text marker stored with a user
+# message (chat_attachments.attachment_marker).  The model needs it; the chat
+# shows an image icon instead.
+_ATTACH_MARKER_RE = re.compile(r"\s*\[attached:\s*([^\]]*)\]")
+
+
+def _split_attachment_marker(text: str) -> tuple[str, list[str]]:
+    """Return ``(text without the marker, attached image names)``."""
+    text = str(text or "")
+    names: list[str] = []
+    for m in _ATTACH_MARKER_RE.finditer(text):
+        names.extend(n.strip() for n in m.group(1).split(",") if n.strip())
+    return _ATTACH_MARKER_RE.sub("", text).strip(), names
+
+
+def _draw_user_text(layout, text: str) -> None:
+    """Draw a user message: its words, then one image icon per attachment."""
+    clean, names = _split_attachment_marker(text)
+    if clean:
+        _draw_multiline(layout, clean)
+    if names:
+        row = layout.row(align=True)
+        for _n in names[:6]:
+            row.label(text="", icon='IMAGE_DATA')
+        if len(names) > 6:
+            row.label(text="+{:d}".format(len(names) - 6))
+
+
+def _short_words(text: str, limit: int = 46) -> str:
+    """First words of *text*, cut on a word boundary with an ellipsis."""
+    text = " ".join(str(text or "").split())
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0] or text[:limit]
+    return cut.rstrip(" ,.;:-") + "\u2026"
+
+
+def _humanize_memory(block: str, max_lines: int = 10) -> list[str]:
+    """Turn the stored memory note into short plain-language lines.
+
+    The stored note is written for the model (a ``[Session memory]`` header,
+    ``Last updated: turn N`` stamps, ``- user:`` / ``- assistant:`` bullets).
+    The panel shows the same facts the way a person would say them.
+    """
+    out: list[str] = []
+    for raw in str(block or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("[Session memory]") or line.startswith("Last updated"):
+            continue
+        low = line.lower()
+        if low.rstrip(":") in ("recent context", "decisions", "pending", "done",
+                               "errors seen", "objects & files touched", "goal"):
+            heading = {"recent context": "Recently", "errors seen": "Problems hit",
+                       "objects & files touched": "Touched",
+                       "pending": "Still to do"}.get(low.rstrip(":"), line.rstrip(":"))
+            out.append(heading + ":")
+            continue
+        line = line.lstrip("-*\u2022 ").strip()
+        if line.lower().startswith("user:"):
+            line = "You: " + line[5:].strip()
+        elif line.lower().startswith("assistant:"):
+            line = "Coworker: " + line[10:].strip()
+        elif line.startswith("Earlier request:"):
+            line = "Earlier you asked: " + line[len("Earlier request:"):].strip()
+        line, _imgs = _split_attachment_marker(line)
+        if line:
+            out.append(("  " if not line.endswith(":") else "") + _short_words(line, 110))
+    # Drop a trailing heading with nothing under it.
+    while out and out[-1].endswith(":"):
+        out.pop()
+    if len(out) > max_lines:
+        out = out[:max_lines] + ["  \u2026"]
+    return out
+
+
+_CHECKPOINT_REASONS = {
+    "compaction": "auto",
+    "overflow": "auto",
+    "manual-compaction": "manual",
+    "pre-restore": "before restore",
+}
+
+
+def _checkpoint_title(cp: dict, number: int) -> tuple[str, str]:
+    """``("Checkpoint 3: fix the floating parts...", "10:42 | 24 msgs | ~4.1k tokens | auto")``."""
+    words = ""
+    for m in reversed(cp.get("history") or []):
+        if m.get("role") != "user" or _is_system_note_msg(m):
+            continue
+        content = m.get("content")
+        if isinstance(content, list):
+            content = " ".join(str(b.get("text", "")) for b in content if isinstance(b, dict))
+        words, _imgs = _split_attachment_marker(str(content or ""))
+        if words:
+            break
+    title = "Checkpoint {:d}: {:s}".format(number, _short_words(words) if words else "(start)")
+    ts = str(cp.get("timestamp", ""))
+    ts_short = ts.split(" ", 1)[1][:5] if " " in ts else ts
+    try:
+        size_chars = len(json.dumps(cp.get("history") or [], default=str))
+    except (TypeError, ValueError):
+        size_chars = 0
+    tokens = size_chars / 3.5
+    size = ("~{:.1f}k tokens".format(tokens / 1000.0) if tokens >= 1000
+            else "~{:d} tokens".format(int(tokens)))
+    parts = [p for p in (ts_short, "{:d} msgs".format(int(cp.get("message_count", 0) or 0)),
+                         size, _CHECKPOINT_REASONS.get(str(cp.get("reason", "")), ""))
+             if p]
+    return title, " \u00b7 ".join(parts)
 
 
 def _group_turns(history: list) -> list[list[dict]]:
@@ -894,18 +1035,18 @@ def _draw_archive_node(
     retired_count: int,
     summary: str,
 ) -> None:
-    """Draw an 'Archive' node in the Workshop timeline.
+    """Draw a 'Checkpoint' node in the Workshop timeline.
 
-    Marks where a compaction retired older turns out of the model's context, so
-    the user can see exactly where their history was compressed.  The summary
-    is the memory block written at that point.  Display-only -- never sent to
-    the model.
+    Marks where older messages were summarized out of the model's context
+    (a checkpoint is saved first, so it can be restored from the Session
+    panel).  The summary is the memory note written at that point.
+    Display-only -- never sent to the model.
     """
     box = layout.box()
     row = box.row()
     row.label(
-        text="Archive \u2014 {:d} turn(s) compacted".format(retired_count),
-        icon='FILE_ARCHIVE',
+        text="Checkpoint \u2014 {:d} earlier message(s) summarized".format(retired_count),
+        icon='BOOKMARKS',
     )
     body = str(summary or "").strip()
     if body:
@@ -952,6 +1093,110 @@ def _chat_history_path() -> Path:
     return _chat_history_dir() / "{:s}.json".format(session_name)
 
 
+# ---------------------------------------------------------------------------
+# Sticky attachment (survives undo / orphan cleanup)
+#
+# The socket is an ID pointer on the WindowManager.  Blender can free the
+# image behind it without the add-on hearing about it -- the agent's own
+# auto-undo restores a scene state from before the image was loaded, and an
+# image nobody else uses is dropped when the file is saved and reopened --
+# and the pointer then silently goes empty: "the image got cleared".  So the
+# attached image is (1) given a fake user, so Blender keeps it and saves it
+# with the .blend, (2) written to disk when it has no file of its own, and
+# (3) remembered here, so the socket is re-linked whenever it empties
+# WITHOUT the user clearing it.  Only the user's own clear (the socket's X,
+# or "Send once") forgets it.
+
+_sticky_attachment: dict = {}
+# True while the add-on itself sets the socket (re-link), so the update
+# callback does not treat it as a user action.
+_sticky_relinking = False
+
+
+def _remember_attachment(img) -> None:
+    """Pin *img* for the session: fake user + file on disk + remembered."""
+    if img is None:
+        return
+    had_fake = bool(getattr(img, "use_fake_user", False))
+    try:
+        img.use_fake_user = True
+    except (AttributeError, RuntimeError):
+        pass
+    try:
+        path = chat_attachments.persist_image(img)
+    except Exception:  # pylint: disable=broad-exception-caught
+        path = ""
+    previous_uri = (_sticky_attachment.get("uri")
+                    if _sticky_attachment.get("image_name") == img.name else "")
+    _sticky_attachment.clear()
+    _sticky_attachment.update({
+        "image_name": img.name,
+        "path": path,
+        "name": chat_attachments.attachment_name(img),
+        "blend": bpy.data.filepath,
+        "uri": previous_uri or "",
+        "we_set_fake_user": not had_fake,
+    })
+
+
+def _forget_attachment() -> None:
+    """The user cleared the socket: drop the pin (and our fake user)."""
+    name = _sticky_attachment.get("image_name")
+    if name and _sticky_attachment.get("we_set_fake_user"):
+        img = bpy.data.images.get(name)
+        if img is not None:
+            try:
+                img.use_fake_user = False
+            except (AttributeError, RuntimeError):
+                pass
+    _sticky_attachment.clear()
+
+
+def _restore_attachment(props):
+    """Re-link the socket if Blender emptied it behind the user's back.
+
+    Returns the (re-linked) image, or ``None``.  Never crosses files: an
+    attachment remembered for another .blend is forgotten instead.
+    """
+    global _sticky_relinking
+    if props.chat_image is not None:
+        return props.chat_image
+    if not _sticky_attachment:
+        return None
+    if _sticky_attachment.get("blend") != bpy.data.filepath:
+        _sticky_attachment.clear()
+        return None
+    img = bpy.data.images.get(_sticky_attachment.get("image_name") or "")
+    if img is None:
+        img = chat_attachments.load_image_file(_sticky_attachment.get("path") or "")
+    if img is None:
+        return None
+    _sticky_relinking = True
+    try:
+        props.chat_image = img
+    finally:
+        _sticky_relinking = False
+    try:
+        img.use_fake_user = True
+    except (AttributeError, RuntimeError):
+        pass
+    _sticky_attachment["image_name"] = img.name
+    return img
+
+
+def _on_chat_image_update(self, _context) -> None:
+    """RNA update for the socket: remember a new image, forget a user clear."""
+    if _sticky_relinking:
+        return
+    try:
+        if self.chat_image is None:
+            _forget_attachment()
+        else:
+            _remember_attachment(self.chat_image)
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] attachment pin skipped -- {:s}".format(str(ex)))
+
+
 class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
     """Persistent chat history properties stored on the WindowManager."""
 
@@ -993,6 +1238,12 @@ class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
         min=0,
     )
 
+    session_show_memory_editor: BoolProperty(  # type: ignore[valid-type]
+        name="Edit Memory",
+        description="Show the raw memory note the Coworker reads, to edit it",
+        default=False,
+    )
+
     session_memory_edit: StringProperty(  # type: ignore[valid-type]
         name="Session Memory",
         description="Editable session memory block (empty = unchanged)",
@@ -1008,6 +1259,7 @@ class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
         name="Image",
         description="Image attached to the chat (drag-and-drop, attach, capture, or pick a datablock)",
         type=bpy.types.Image,
+        update=_on_chat_image_update,
     )
 
     chat_image_send_once: BoolProperty(  # type: ignore[valid-type]
@@ -1148,6 +1400,13 @@ def _capture_chat_attachment(props) -> tuple[list[str] | None, list[str] | None]
     """
     img = props.chat_image
     if img is None:
+        # Emptied behind the user's back (undo, orphan cleanup)?  Re-link
+        # the pinned image; failing that, re-send its last encoded copy.
+        img = _restore_attachment(props)
+    if img is None:
+        _cached = _sticky_attachment.get("uri") if _sticky_attachment else ""
+        if _cached:
+            return [_cached], [_sticky_attachment.get("name") or "image"]
         return None, None
     uri = chat_attachments.image_to_data_uri(img)
     if not uri:
@@ -1155,6 +1414,8 @@ def _capture_chat_attachment(props) -> tuple[list[str] | None, list[str] | None]
         # and send this message as plain text.
         return None, None
     name = chat_attachments.attachment_name(img)
+    if _sticky_attachment.get("image_name") == getattr(img, "name", None):
+        _sticky_attachment["uri"] = uri
     if props.chat_image_send_once:
         props.chat_image = None
     return [uri], [name]
@@ -2423,6 +2684,14 @@ _mention_popup_open = False
 # start/stop operators on the main thread).
 _last_applied_ui_status = ""
 
+# Snapshot of the panel-visible agent state from the previous timer tick, and
+# when the sidebar was last redrawn.  While idle the timer only redraws when
+# the snapshot changes (a turn ended, an error arrived, the bridge stopped...)
+# or the slow heartbeat elapses -- never every tick.
+_last_ui_signature: tuple = ()
+_last_idle_redraw = 0.0
+_IDLE_REDRAW_INTERVAL = 2.0
+
 
 def chat_timer_update() -> float | None:
     """
@@ -2434,6 +2703,8 @@ def chat_timer_update() -> float | None:
     """
     global _mention_popup_open
     global _last_applied_ui_status
+    global _last_ui_signature
+    global _last_idle_redraw
     from . import agent_controller as _ac
 
     # Animate thinking dots.
@@ -2477,17 +2748,77 @@ def chat_timer_update() -> float | None:
     except Exception:
         pass
 
-    # Redraw all chat panels.
-    for wm in bpy.data.window_managers:
-        for win in wm.windows:
-            for area in win.screen.areas:
-                if area.type == 'VIEW_3D':
-                    area.tag_redraw()
-                if area.type == 'TEXT_EDITOR':
-                    area.tag_redraw()
+    # Re-link a pinned image the scene dropped (agent undo, orphan cleanup).
+    if _sticky_attachment:
+        try:
+            for wm in bpy.data.window_managers:
+                _p = getattr(wm, "bfacw_chat_props", None)
+                if _p is not None and _p.chat_image is None:
+                    if _restore_attachment(_p) is not None:
+                        print("[Coworker] attachment: re-linked the pinned image")
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+
+    # Mirror the pinned goal & plan to/from its editable text block.
+    try:
+        _sync_plan_text()
+    except Exception as _plan_ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] plan text sync skipped -- {:s}".format(str(_plan_ex)))
+
+    # Redraw the chat panels -- only when something they show may have changed.
+    _st = _ac._agent_state
+    _sig = _ui_signature(_st)
+    _now = time.monotonic()
+    if (_st.is_thinking or _sig != _last_ui_signature
+            or _now - _last_idle_redraw >= _IDLE_REDRAW_INTERVAL):
+        _last_ui_signature = _sig
+        _last_idle_redraw = _now
+        _tag_chat_regions_redraw()
     # Tick faster while a turn is running so the spinner reads as motion;
     # otherwise keep the light idle cadence.
     return 0.1 if _ac._agent_state.is_thinking else 0.5
+
+
+def _ui_signature(state) -> tuple:
+    """Cheap snapshot of the agent state the chat panels display.
+
+    The worker thread mutates this state without tagging a redraw, so the
+    timer compares snapshots to notice changes (turn finished, history grew,
+    error/warning set, server or bridge stopped) while idle.
+    """
+    from . import session_memory as _sm
+    try:
+        from . import co_work_guard as _cwg
+        locked = _cwg.is_locked()
+    except Exception:  # pylint: disable=broad-exception-caught
+        locked = False
+    return (
+        state.is_thinking,
+        state.mcp_server_running,
+        mcp_to_blender_server.is_running(),
+        state.ui_status,
+        state.error,
+        state.warning,
+        len(state.conversation_history),
+        len(_sm.store.retired_history),
+        locked,
+    )
+
+
+def _tag_chat_regions_redraw() -> None:
+    """Redraw the sidebar (UI) regions that host the chat panels.
+
+    Tags the region, not the area: ``area.tag_redraw()`` also redraws the
+    3D viewport itself, which made the scene re-render on every timer tick.
+    """
+    for wm in bpy.data.window_managers:
+        for win in wm.windows:
+            for area in win.screen.areas:
+                if area.type not in {'VIEW_3D', 'TEXT_EDITOR'}:
+                    continue
+                for region in area.regions:
+                    if region.type == 'UI':
+                        region.tag_redraw()
 
 
 def _open_mention_for_at(text: str) -> float | None:
@@ -2639,6 +2970,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         # -- Mode toggle --
         row = layout.row(align=True)
         row.prop(props, "chat_mode", expand=True)
+        _draw_reasoning_effort_row(layout, prefs)
 
         layout.separator()
 
@@ -2667,6 +2999,12 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             btn_row.scale_y = 1.5
             btn_row.operator("bfacw.chat_send", icon="PLAY", text="Send")
             btn_row.operator("bfacw.chat_clear", icon="X", text="New Thread")
+
+        # -- Goal & Plan (collapsible, only once there is a goal) -------
+        # Lives with the chat (it is about the conversation), between the
+        # buttons and the history.  Read live from the store, so steps tick
+        # off while the turn is still running.
+        _draw_goal_plan_inline(layout)
 
         layout.separator()
 
@@ -2705,7 +3043,11 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         from . import session_memory as _sm
         archived = list(_sm.store.retired_history)
         combined = archived + live
-        archived_ids = {id(m) for m in archived}
+        # id -> index maps, built once per draw: every copy button and
+        # Workshop entry needs its message's index, and a linear scan per
+        # lookup made a long chat's draw quadratic (at up to 10 draws/sec).
+        archived_index = {id(m): i for i, m in enumerate(archived)}
+        live_index = {id(m): i for i, m in enumerate(live)}
 
         if combined:
             # Display order toggle + message count.
@@ -2747,14 +3089,16 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 else visible_turns
             )
 
+            # Absolute turn number by IDENTITY (not list.index, which
+            # compares by value and could collide on equal turns).
+            turn_numbers = {id(t): i + 1 for i, t in enumerate(turns)}
+
             for _display_idx, turn in enumerate(turn_iter):
-                # Absolute turn number by IDENTITY (not list.index, which
-                # compares by value and could collide on equal turns).
-                _turn_num = next(
-                    (i + 1 for i, t in enumerate(turns) if t is turn), 0)
+                _turn_num = turn_numbers.get(id(turn), 0)
                 try:
                     self._draw_turn(
-                        hist_box, archived, live, archived_ids, turn,
+                        hist_box, archived, live,
+                        archived_index, live_index, turn,
                         _turn_num, _display_idx, len(visible_turns),
                         props, state,
                     )
@@ -2777,7 +3121,8 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         hist_box,
         archived: list,
         live: list,
-        archived_ids: set,
+        archived_index: dict,
+        live_index: dict,
         turn: list,
         turn_num: int,
         display_idx: int,
@@ -2798,8 +3143,12 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         """
         def _idx(msg: dict) -> tuple[int, bool]:
             """(index, archived) for *msg* from whichever list holds it."""
-            if id(msg) in archived_ids:
-                return _hist_index(archived, msg), True
+            if id(msg) in archived_index:
+                return archived_index[id(msg)], True
+            if id(msg) in live_index:
+                return live_index[id(msg)], False
+            # Not in either snapshot by identity: fall back to the
+            # equality match (-1 when gone).
             return _hist_index(live, msg), False
 
         def _copy(op, msg: dict) -> None:
@@ -2864,7 +3213,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         # the "* Coworker:" label on the reply below.
         urow = turn_box.row()
         urow.label(text="You:", icon='USER')
-        _draw_multiline(turn_box, user_msg.get("content", ""))
+        _draw_user_text(turn_box, user_msg.get("content", ""))
 
         # --- Workshop (collapsible: only the internals collapse) ---
         if has_proc:
@@ -2883,15 +3232,20 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 for pm in process_msgs:
                     pr = pm.get("role", "")
                     pc = pm.get("content", "")
-                    is_sm = (
-                        pr == "user"
-                        and isinstance(pc, str)
-                        and pc.startswith("[System:")
-                    )
+                    is_sm = _is_system_note_msg(pm)
                     if is_sm:
+                        # Agent-to-itself guidance: a compact, titled note --
+                        # never a user bubble.
+                        _title, _icon = _NOTE_TITLES.get(
+                            str(pm.get("system_note") or ""),
+                            ("System context", 'INFO'))
                         sb = work_box.box()
-                        sb.label(text="System Context", icon="INFO")
-                        _draw_multiline(sb, pc)
+                        sb.scale_y = 0.85
+                        sb.label(text=_title, icon=_icon)
+                        _body = pc if isinstance(pc, str) else ""
+                        if _body.startswith("[System:") and _body.endswith("]"):
+                            _body = _body[len("[System:"):-1].strip()
+                        _draw_multiline(sb, _body)
                     elif pr == "reasoning":
                         _pm_idx, _pm_arch = _idx(pm)
                         _draw_reasoning(
@@ -2987,6 +3341,46 @@ class BFACW_PT_chat_session(Panel):  # type: ignore[misc]
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
         state = agent_controller._agent_state
         _draw_session_section(layout, context, props, state)
+
+
+class BFACW_PT_chat_session_context(Panel):  # type: ignore[misc]
+    """Session > Context -- how full the model's context window is."""
+    bl_label = "Context"
+    bl_idname = "BFACW_PT_chat_session_context"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = _CHAT_PANEL_CATEGORY
+    bl_parent_id = "BFACW_PT_chat_session"
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return BFACW_PT_chat_session.poll(context)
+
+    def draw_header(self, context: bpy.types.Context) -> None:
+        self.layout.label(text="", icon='MEMORY')
+
+    def draw(self, context: bpy.types.Context) -> None:
+        _draw_context_section(self.layout, agent_controller._agent_state)
+
+
+class BFACW_PT_chat_session_memory(Panel):  # type: ignore[misc]
+    """Session > Memory & Checkpoints -- summarized turns and restore points."""
+    bl_label = "Memory & Checkpoints"
+    bl_idname = "BFACW_PT_chat_session_memory"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = _CHAT_PANEL_CATEGORY
+    bl_parent_id = "BFACW_PT_chat_session"
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return BFACW_PT_chat_session.poll(context)
+
+    def draw_header(self, context: bpy.types.Context) -> None:
+        self.layout.label(text="", icon='BOOKMARKS')
+
+    def draw(self, context: bpy.types.Context) -> None:
+        _draw_memory_section(self.layout, context.window_manager.bfacw_chat_props)  # type: ignore[attr-defined]
 
 
 class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
@@ -3240,6 +3634,7 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
             # Agent/Ask mode toggle (Tier 1).
             row = layout.row(align=True)
             row.prop(props, "chat_mode", expand=True)
+            _draw_reasoning_effort_row(layout, prefs)
 
             # Project Rules button (Tier 2).
             row = layout.row(align=True)
@@ -3294,7 +3689,7 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
                         _rn = int(msg.get("retired", 0) or 0)
                     except (TypeError, ValueError):
                         _rn = 0
-                    preview = "compacted {:d} turn(s)".format(_rn)
+                    preview = "checkpoint: {:d} message(s) summarized".format(_rn)
                 else:
                     preview = content if content else ""
                 _draw_multiline(box, "[{:s}] {:s}".format(role, preview))
@@ -3669,95 +4064,91 @@ def _redraw_areas_safe() -> None:
 # Session memory & checkpoint operators (Tier 3 Phase 5)
 
 def _draw_session_section(layout, context, props, state) -> None:
-    """Draw the Session panel: context usage, memory preview, checkpoints.
+    """Session panel header: one plain summary line.
 
-    Shown in the dedicated ``BFACW_PT_chat_session`` panel, separate from the
-    chat panel (which holds the message history, input and controls).
+    The details live in the sub-panels (Context, Memory & Checkpoints) so
+    the user opens only what they care about.  Goal & Plan lives in the
+    chat panel.
     """
     from . import session_memory as _sm
-    st = _sm.store
-
-    # -- Context usage ----------------------------------------------
-    # Use the LATEST request's prompt tokens (current occupancy), not the
-    # cumulative session sum -- a running sum only grows, so the bar could
-    # never fall after compaction and would pin at 100%.
     ctx_size = getattr(state, "ctx_size_used", 0) or 0
     last_prompt = getattr(state, "last_prompt_tokens", 0) or 0
-    ctx_box = layout.box()
-    ctx_box.label(text="Context Window", icon='MEMORY')
+    parts = []
+    if ctx_size > 0 and last_prompt > 0:
+        parts.append("Context {:d}%".format(min(int(last_prompt * 100 / ctx_size), 100)))
+    with _sm.store_lock:
+        n_cp = len(_sm.store.checkpoints)
+    if n_cp:
+        parts.append("{:d} checkpoint{:s}".format(n_cp, "" if n_cp == 1 else "s"))
+    layout.label(text="  \u00b7  ".join(parts) if parts else "New session", icon='INFO')
+
+
+def _draw_context_section(layout, state) -> None:
+    """Session > Context: how full the model's working memory is."""
+    from . import session_memory as _sm
+    # The LATEST request's prompt tokens (current occupancy), not a running
+    # sum -- a sum only grows and would pin the bar at 100%.
+    ctx_size = getattr(state, "ctx_size_used", 0) or 0
+    last_prompt = getattr(state, "last_prompt_tokens", 0) or 0
     if ctx_size > 0 and last_prompt > 0:
         pct = min(int(last_prompt * 100 / ctx_size), 100)
-        row = ctx_box.row(align=True)
-        row.label(text="{:d}% used".format(pct))
-        row.progress(factor=pct / 100.0, type='BAR')
+        row = layout.row(align=True)
+        row.progress(factor=pct / 100.0, type='BAR',
+                     text="{:d}% of {:d}k tokens".format(pct, max(1, ctx_size // 1024)))
         if pct >= int(_sm.COMPACTION_TRIGGER_RATIO * 100):
-            ctx_box.label(
-                text="Approaching limit -- old turns will be compacted",
-                icon='INFO')
+            _draw_multiline(layout, "Getting full -- older turns will be summarized "
+                                    "into memory automatically.", icon='INFO')
     else:
-        ctx_box.label(text="No usage recorded yet", icon='INFO')
+        layout.label(text="Fills up as you chat", icon='INFO')
 
-    # -- Memory note (compaction summary) ---------------------------
-    mem_box = layout.box()
-    mem_box.label(text="Memory", icon='BOOKMARKS')
-    if st.memory_block:
-        mem_lines = st.memory_block.splitlines()
-        _draw_multiline(mem_box, mem_lines[0] if mem_lines else "")
+
+def _draw_memory_section(layout, props) -> None:
+    """Session > Memory & Checkpoints: what was summarized, and restore points."""
+    from . import session_memory as _sm
+    st = _sm.store
+    with _sm.store_lock:
+        memory_block = st.memory_block
+        checkpoints = st.list_checkpoints()
+
+    # -- What the coworker remembers from summarized turns ------------
+    lines = _humanize_memory(memory_block)
+    if lines:
+        box = layout.box()
+        for ln in lines:
+            if ln.endswith(":"):
+                box.label(text=ln)
+            else:
+                _draw_multiline(box, ln.strip())
     else:
-        mem_box.label(text="Nothing remembered yet", icon='INFO')
-    # Bound multiline editor: the textbox shows and edits the memory block;
-    # the Apply button writes it back (an empty box reloads the current one).
-    # Initialise the editor from the store while it is untouched so the user
-    # can see what is remembered.
-    if not props.session_memory_edit and st.memory_block:
-        props.session_memory_edit = st.memory_block
-    mem_box.textbox(props, "session_memory_edit",
-                    placeholder="Session memory (empty = reload current)")
-    row = mem_box.row(align=True)
-    row.operator("bfacw.session_memory_view_edit", icon='TEXT', text="Apply Memory")
-    row.operator("bfacw.session_compact_now", icon='FILE_REFRESH', text="Compact Now")
+        _draw_multiline(layout, "Nothing summarized yet. When the context fills "
+                                "up, older turns are summarized here and a "
+                                "checkpoint is saved.", icon='INFO')
 
-    # -- Checkpoints (Restore / Branch) -----------------------------
-    cp_box = layout.box()
-    checkpoints = st.list_checkpoints()
-    row = cp_box.row(align=True)
-    row.prop(props, "session_show_checkpoints",
-             icon='TRIA_DOWN' if props.session_show_checkpoints else 'TRIA_RIGHT',
-             text="Checkpoints ({:d})".format(len(checkpoints)))
-    if props.session_show_checkpoints and checkpoints:
-        # Default the selection to the newest checkpoint.
-        if props.session_checkpoint_index >= len(checkpoints):
-            props.session_checkpoint_index = len(checkpoints) - 1
-        # Make clear what the radio index selects -- without this the number
-        # reads as an unexplained "0".
-        _sel = props.session_checkpoint_index
-        if 0 <= _sel < len(checkpoints):
-            cp_box.label(text="Restore target: #{:d}  {:s}".format(
-                _sel, checkpoints[_sel].get("reason", "?")))
+    row = layout.row(align=True)
+    row.operator("bfacw.session_compact_now", icon='BOOKMARKS', text="Checkpoint Now")
+    row.prop(props, "session_show_memory_editor", text="", icon='GREASEPENCIL',
+             toggle=True)
+    if props.session_show_memory_editor:
+        # Raw note, for power users: what the model actually reads.
+        if not props.session_memory_edit and memory_block:
+            props.session_memory_edit = memory_block
+        layout.textbox(props, "session_memory_edit",
+                       placeholder="Memory note (empty = reload current)")
+        layout.operator("bfacw.session_memory_view_edit", icon='CHECKMARK',
+                        text="Apply Memory")
+
+    # -- Restore points (newest first) ---------------------------------
+    if checkpoints:
+        cbox = layout.box()
         for i in range(len(checkpoints) - 1, -1, -1):
-            cp = checkpoints[i]
-            ts = cp.get("timestamp", "?")
-            # The timestamp is a full date+time; only the time-of-day is
-            # shown in the compact list (the full stamp is too long and
-            # pushed the reason out of the row).
-            ts_short = ts.split(" ", 1)[1] if " " in ts else ts
-            # Primary row: a radio button (not a bare index number) so it is
-            # obvious at a glance which checkpoint is the restore target.
-            row = cp_box.row(align=True)
-            row.operator(
-                "bfacw.session_checkpoint_select",
-                text="",
-                icon='RADIOBUT_ON' if i == _sel else 'RADIOBUT_OFF',
-                emboss=False,
-            ).index = i
-            row.label(text="#{:d}  {:s}".format(i, cp.get("reason", "?")))
-            # Detail row: smaller, indented timestamp + message count.
-            detail = cp_box.row()
-            detail.scale_y = 0.8
-            detail.label(text="       {:s}, {:d} messages".format(
-                ts_short, cp.get("message_count", 0)))
-        row = cp_box.row(align=True)
-        row.operator("bfacw.session_checkpoint_restore", icon='LOOP_BACK', text="Restore")
+            title, detail = _checkpoint_title(checkpoints[i], i + 1)
+            row = cbox.row(align=True)
+            row.label(text=title, icon='BOOKMARKS')
+            row.operator("bfacw.session_checkpoint_restore", text="",
+                         icon='LOOP_BACK').index = i
+            sub = cbox.row()
+            sub.scale_y = 0.7
+            sub.label(text="      " + detail)
 
 
 class BFACW_OT_session_checkpoint_restore(Operator):  # type: ignore[misc]
@@ -3765,14 +4156,20 @@ class BFACW_OT_session_checkpoint_restore(Operator):  # type: ignore[misc]
     bl_idname = "bfacw.session_checkpoint_restore"
     bl_label = "Restore"
     bl_description = (
-        "Restore this checkpoint. The current conversation is saved as a "
-        "checkpoint first, so nothing is lost."
+        "Go back to this checkpoint. The current conversation is saved as a "
+        "checkpoint first, so nothing is lost"
     )
+
+    index: IntProperty(default=-1, min=-1)  # type: ignore[valid-type]
+
+    def invoke(self, context: bpy.types.Context, event) -> set[str]:
+        return context.window_manager.invoke_confirm(self, event)
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         from . import session_memory as _sm
         st = _sm.store
-        index = context.window_manager.bfacw_chat_props.session_checkpoint_index  # type: ignore[attr-defined]
+        index = self.index if self.index >= 0 else \
+            context.window_manager.bfacw_chat_props.session_checkpoint_index  # type: ignore[attr-defined]
         try:
             with _sm.store_lock:
                 restored = st.restore(
@@ -3784,7 +4181,7 @@ class BFACW_OT_session_checkpoint_restore(Operator):  # type: ignore[misc]
             self.report({"WARNING"}, "Checkpoint no longer exists")
             return {"CANCELLED"}
         _save_chat_history()
-        self.report({"INFO"}, "Checkpoint restored (current session was saved as 'pre-restore')")
+        self.report({"INFO"}, "Checkpoint restored -- the previous state was saved as a checkpoint too")
         return {"FINISHED"}
 
 
@@ -3831,12 +4228,14 @@ _MANUAL_COMPACT_KEEP_RECENT = 8
 
 
 class BFACW_OT_session_compact_now(Operator):  # type: ignore[misc]
-    """Compact the conversation now: retire old turns and rebuild the memory block"""
+    """Checkpoint now: save the session, then summarize older turns into memory"""
     bl_idname = "bfacw.session_compact_now"
-    bl_label = "Compact Now"
+    bl_label = "Checkpoint Now"
     bl_description = (
-        "Retire the oldest conversation turns into the session memory and "
-        "archive. The pre-compaction state is saved as a checkpoint first."
+        "Save a checkpoint of the whole session, then summarize the oldest "
+        "turns into the session memory to free context. The goal and plan "
+        "are pinned and never summarized away. Restore the checkpoint from "
+        "the list below at any time."
     )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
@@ -3863,7 +4262,200 @@ class BFACW_OT_session_compact_now(Operator):  # type: ignore[misc]
             st.append_retired(retired)
             history[:] = kept
         _save_chat_history()
-        self.report({"INFO"}, "Compacted: {:d} messages retired".format(len(retired)))
+        self.report({"INFO"}, "Checkpoint saved -- {:d} older messages summarized".format(len(retired)))
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# Goal & plan (Tier 3 hardening)
+
+def _draw_reasoning_effort_row(layout, prefs) -> None:
+    """Compact Reasoning Effort selector for the chat panels (local mode).
+
+    The thinking budget is sent with every request, so it is safe to change
+    at any time -- including mid-session; it applies from the next message.
+    Remote providers ignore it, so the row is shown for the local model only.
+    """
+    if getattr(prefs, "operating_mode", "") != "LOCAL_LLM":
+        return
+    if not hasattr(prefs, "reasoning_effort"):
+        return
+    row = layout.row(align=True)
+    row.scale_y = 0.9
+    row.label(text="Thinking", icon='SOLO_ON')
+    row.prop(prefs, "reasoning_effort", text="")
+
+
+def _draw_goal_plan_section(layout) -> None:
+    """Draw the pinned goal and plan (body of the chat panel's Goal & Plan section)."""
+    from . import session_memory as _sm
+    with _sm.store_lock:
+        g = _sm.store.goal
+        session_goal = g.session_goal
+        turn_goal = g.turn_goal
+        steps = [dict(s) for s in g.steps]
+        notes = g.user_notes
+        done, total = g.progress()
+    if not (session_goal or turn_goal or steps or notes):
+        _draw_multiline(
+            layout,
+            "Set automatically from your first request. It is pinned to every "
+            "request, so it survives checkpoints and long turns.",
+            icon='INFO')
+    else:
+        box = layout.box()
+        box.label(text="Session goal", icon='PINNED')
+        _draw_user_text(box, session_goal or "(none)")
+        # Same request (the goal is just clipped longer) -> show it once.
+        if turn_goal and turn_goal != session_goal and turn_goal != \
+                _sm.goal_plan._clip(session_goal, _sm.goal_plan._TURN_GOAL_CHARS):
+            box.label(text="Current request", icon='USER')
+            _draw_user_text(box, turn_goal)
+        if steps:
+            pbox = layout.box()
+            row = pbox.row()
+            row.label(text="Plan  {:d}/{:d} done".format(done, total), icon='PRESET')
+            if total:
+                row.progress(factor=done / float(total), type='BAR', text="")
+            _icons = {"done": 'CHECKBOX_HLT', "doing": 'PLAY', "todo": 'CHECKBOX_DEHLT'}
+            for i, s in enumerate(steps, 1):
+                srow = pbox.row()
+                srow.label(text="", icon=_icons.get(s.get("status"), 'CHECKBOX_DEHLT'))
+                _draw_multiline(srow, "{:d}. {:s}".format(i, s.get("text", "")))
+        if notes:
+            nbox = layout.box()
+            nbox.label(text="Your notes", icon='TEXT')
+            _draw_multiline(nbox, notes)
+    row = layout.row(align=True)
+    row.operator("bfacw.plan_open", icon='TEXT', text="Edit in Text Editor")
+    row.operator("bfacw.plan_clear", icon='X', text="Clear Plan")
+
+
+def _draw_goal_plan_inline(layout) -> None:
+    """Collapsible Goal & Plan section inside the chat panel.
+
+    Hidden until there is a goal (no clutter on a fresh chat).  The header
+    carries the progress so it is useful even collapsed.
+    """
+    from . import session_memory as _sm
+    with _sm.store_lock:
+        g = _sm.store.goal
+        empty = g.is_empty()
+        done, total = g.progress()
+    if empty:
+        return
+    try:
+        header, body = layout.panel("bfacw_goal_plan", default_closed=False)
+    except Exception:  # pylint: disable=broad-exception-caught
+        header, body = layout.box(), layout  # builds without layout panels
+    hrow = header.row(align=True)
+    hrow.label(text="Goal & Plan", icon='PINNED')
+    if total:
+        sub = hrow.row()
+        sub.scale_x = 0.9
+        sub.progress(factor=done / float(total), type='BAR',
+                     text="{:d}/{:d}".format(done, total))
+    if body:
+        _draw_goal_plan_section(body)
+
+
+# Last text written to (or adopted from) the plan text block.  A difference
+# means the USER edited it -> parse back into the store.  ``None`` until the
+# block is first seen this session.
+_plan_last_written: str | None = None
+
+
+def _sync_plan_text() -> None:
+    """Keep the ``Coworker Plan.md`` text block and the pinned plan in sync.
+
+    Main thread only (called from the chat timer).  The block exists only
+    after the user opened it once ("Edit in Text Editor"), so the add-on
+    never adds a datablock to the user's file uninvited.  User edits win:
+    when the text differs from what we last wrote, it is parsed into the
+    store; otherwise store changes (new goal, plan progress) are written out.
+    """
+    global _plan_last_written
+    from . import session_memory as _sm
+    name = _sm.goal_plan.PLAN_TEXT_NAME
+    text = bpy.data.texts.get(name)
+    if text is None:
+        _plan_last_written = None
+        return
+    current = text.as_string()
+    with _sm.store_lock:
+        if _plan_last_written is not None and current != _plan_last_written:
+            # The user edited the file: adopt it.
+            if _sm.store.goal.parse_markdown(current):
+                print("[Coworker] plan: applied your edits from '{:s}'".format(name))
+            _plan_last_written = current
+            return
+        rendered = _sm.store.goal.render_markdown()
+    if rendered != current:
+        text.clear()
+        text.write(rendered)
+        current = rendered
+    _plan_last_written = current
+
+
+class BFACW_OT_plan_open(Operator):  # type: ignore[misc]
+    """Open the goal & plan in the Text Editor to read or edit it"""
+    bl_idname = "bfacw.plan_open"
+    bl_label = "Edit Plan"
+    bl_description = (
+        "Open the pinned goal & plan as an editable text ('Coworker Plan.md'). "
+        "Edit the goal, steps ([ ] / [>] / [x]) or notes -- your changes are "
+        "sent to the Coworker with its next request"
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        global _plan_last_written
+        from . import session_memory as _sm
+        name = _sm.goal_plan.PLAN_TEXT_NAME
+        text = bpy.data.texts.get(name) or bpy.data.texts.new(name)
+        with _sm.store_lock:
+            rendered = _sm.store.goal.render_markdown()
+        text.clear()
+        text.write(rendered)
+        _plan_last_written = rendered
+        # Show it: reuse an open Text Editor, else open one in a new window.
+        for win in context.window_manager.windows:
+            for area in win.screen.areas:
+                if area.type == 'TEXT_EDITOR':
+                    area.spaces.active.text = text
+                    area.tag_redraw()
+                    self.report({"INFO"}, "Plan opened in the Text Editor")
+                    return {"FINISHED"}
+        try:
+            bpy.ops.wm.window_new()
+            new_win = context.window_manager.windows[-1]
+            area = new_win.screen.areas[0]
+            area.ui_type = 'TEXT_EDITOR'
+            area.spaces.active.text = text
+            self.report({"INFO"}, "Plan opened in a new Text Editor window")
+        except Exception:  # pylint: disable=broad-exception-caught
+            self.report({"INFO"}, "Plan saved as text '{:s}' -- open it in any "
+                                  "Text Editor".format(name))
+        return {"FINISHED"}
+
+
+class BFACW_OT_plan_clear(Operator):  # type: ignore[misc]
+    """Clear the step plan (the goals are kept)"""
+    bl_idname = "bfacw.plan_clear"
+    bl_label = "Clear Plan"
+    bl_description = (
+        "Remove the current step plan and your notes. The session goal and "
+        "current request stay pinned"
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        from . import session_memory as _sm
+        with _sm.store_lock:
+            g = _sm.store.goal
+            g.steps = []
+            g.user_notes = ""
+            g.revision += 1
+        _save_chat_history()
+        self.report({"INFO"}, "Plan cleared")
         return {"FINISHED"}
 
 
@@ -3876,6 +4468,8 @@ _classes = (
     BFACW_OT_session_checkpoint_restore,
     BFACW_OT_session_memory_view_edit,
     BFACW_OT_session_compact_now,
+    BFACW_OT_plan_open,
+    BFACW_OT_plan_clear,
     BFACW_OT_chat_send,
     BFACW_OT_chat_clear,
     BFACW_OT_chat_stop,
@@ -3902,6 +4496,8 @@ _classes = (
     BFACW_PT_chat_queue,
     BFACW_PT_chat_panel,
     BFACW_PT_chat_session,
+    BFACW_PT_chat_session_context,
+    BFACW_PT_chat_session_memory,
     BFACW_PT_chat_status,
     BFACW_PT_chat_text_editor,
 )
@@ -3915,10 +4511,6 @@ def register() -> None:
     for cls in _classes:
         bpy.utils.register_class(cls)
     bpy.types.WindowManager.bfacw_chat_props = bpy.props.PointerProperty(type=ChatHistoryProperties)  # type: ignore[attr-defined]
-
-    # Let the Coworker panel own image drops in its own region, so a drop
-    # attaches directly instead of opening Blender's file-handler menu.
-    _suppress_builtin_viewport_drops()
 
     # Register the chat UI update timer.
     if not bpy.app.background:

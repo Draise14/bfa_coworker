@@ -53,6 +53,7 @@ from . import llm_transport as _transport
 from . import session_memory
 from . import co_work_guard
 from . import chat_attachments
+from . import process_guard as _process_guard
 from .llm_transport import (
     _CHAT_SAMPLING,
     _DEFAULT_MAX_TOKENS,
@@ -87,6 +88,15 @@ _REMOTE_MAX_TOOL_ITERATIONS = 8
 # turn (a stalled single request is caught far sooner by the stream watchdog
 # in llm_transport).  Set to 0 to disable.
 _TURN_WALL_BUDGET_SECONDS = 1200.0
+
+# -- Long-request auto-continue (Tier 3 hardening) ------------------
+# When a request uses up its tool-iteration budget while the pinned plan
+# still has open steps (or the round made real progress), the turn compacts
+# and continues in a fresh ROUND instead of forcing a "summarize in 1-2
+# sentences" ending.  Bounded by this many extra rounds AND the wall-clock
+# budget above; Stop always works.  Rounds never start on a round that made
+# no progress, so a stuck model cannot burn the whole budget.
+_MAX_AUTO_ROUNDS = 3
 
 # -- End-of-turn execution guarantee ---------------------------------
 # How many times the loop will nudge a model that *narrates* an action but
@@ -130,10 +140,27 @@ _PERMISSION_ASK_RE = re.compile(
     r"(?:proceed|continue|go|start|do|now)"
     r"|\bshall i go ahead\b"
     r"|\bready when you are\b"
-    r"|\blet me know (?:how|whether)\b"
     r")",
     re.IGNORECASE,
 )
+
+# A closing OFFER ("If you'd like, I'll add more trees", "Let me know if you
+# want me to...") is how a FINISHED turn typically ends; matching it as an
+# unfinished promise turned real conclusions into another forced round (the
+# "self-prompt cancels the live conclusion" report).  A sentence carrying one
+# of these markers is never treated as a promise.
+_CLOSING_OFFER_RE = re.compile(
+    r"\b(?:if you(?:'d| would)? (?:like|want|prefer)|if needed|"
+    r"let me know|feel free|happy to|i can also|you can (?:now|also)|"
+    r"want me to|would you like)\b",
+    re.IGNORECASE,
+)
+
+
+def _last_sentences(text: str, count: int = 1) -> str:
+    """Return the final *count* sentences of *text* (best effort)."""
+    parts = re.split(r"(?<=[.!?])\s+", text.strip())
+    return " ".join(parts[-count:]) if parts else text
 
 
 def _looks_like_unfinished_action(content: str) -> bool:
@@ -156,10 +183,17 @@ def _looks_like_unfinished_action(content: str) -> bool:
     # but nothing was emitted.
     if tail.endswith("...") or tail.endswith("\u2026") or tail.endswith(":"):
         return True
-    if _ACTION_PROMISE_RE.search(tail[-250:]):
+    last = _last_sentences(tail, 1)
+    if _CLOSING_OFFER_RE.search(last) and not _PERMISSION_ASK_RE.search(last):
+        # A conditional offer after finished work -- not a stall.
+        return False
+    # Only a promise near the END counts (the last two sentences): an early
+    # "I'll add X" followed by a report of the finished work is a complete
+    # narrative, not a stall.
+    if _ACTION_PROMISE_RE.search(_last_sentences(tail, 2)[-250:]):
         return True
     # Asking the user for permission mid-task is a stall in Agent mode.
-    return bool(_PERMISSION_ASK_RE.search(tail[-200:]))
+    return bool(_PERMISSION_ASK_RE.search(last))
 
 
 # Sampling parameters tuned for MoE local models.
@@ -186,6 +220,13 @@ _STREAM_TIMEOUT = 600.0
 # Maximum conversation history messages to send per turn.
 # Huge history balloons the prompt and makes small models loop.
 _MAX_HISTORY_MESSAGES = 20
+# Over the cap, drop the oldest messages in blocks of this size instead of one
+# per request.  A one-message slide changes the prompt right after the system
+# prompt on EVERY request of a long turn, so llama-server re-processes the
+# whole prompt each time; a block cut keeps the same start for several
+# requests and its KV cache stays reusable.  The window then holds between
+# _MAX_HISTORY_MESSAGES - _HISTORY_DROP_STEP and _MAX_HISTORY_MESSAGES messages.
+_HISTORY_DROP_STEP = 8
 
 # ---------------------------------------------------------------------------
 # System prompt (loaded lazily, cached per variant)
@@ -644,27 +685,105 @@ def _fit_history_to_budget(
     dropped oldest-first in whole tool-call exchanges, so the result never
     contains a half-finished exchange (see :func:`_repair_tool_call_pairs`).
 
-    The **last user message is also always kept**.  Trimming it away leaves
-    the model with no question to answer, and it then invents one -- the
-    reported "hallucinated task" bug.  A prompt with no user turn is never
-    useful, so the budget is allowed to overflow rather than produce one.
+    The **current request is also always kept** -- the last REAL user
+    message, not an injected ``[System: ...]`` note.  Pinning merely the last
+    ``user``-role message used to pin the latest tool-result note and trim
+    the actual request away mid-turn, so a long turn on a small window lost
+    its goal and the model answered the note instead.  Trimming the request
+    away leaves the model with no question to answer, and it then invents
+    one -- the reported "hallucinated task" bug.
+
+    When even the pinned turn overflows (one long agent turn on a small
+    window -- nothing older is left to drop), the turn's OWN oldest tool
+    results are shed to one-line placeholders, then older injected notes
+    and old tool-call code, oldest first.  The request, the most recent tool
+    exchange and everything after it are never shed.  This works on the SENT
+    copy only: the stored history (and the chat panel) keep every result.
 
     Returns the original list unchanged when it already fits.
     """
     if budget_tokens <= 0 or _estimate_messages_tokens(messages) <= budget_tokens:
         return messages
 
+    def _is_note(m: dict) -> bool:
+        if m.get("role") != "user":
+            return False
+        if m.get("system_note"):
+            return True
+        c = m.get("content")
+        if isinstance(c, list):
+            c = " ".join(str(b.get("text", "")) for b in c if isinstance(b, dict))
+        c = str(c or "").lstrip()
+        return c.startswith("[System:") or c.startswith("Continue. Keep this next step small")
+
+    def _shed_pinned(head_msgs: list, pinned_msgs: list) -> list:
+        """Shed the pinned turn's own oldest bulk until it fits."""
+        out = list(pinned_msgs)
+        # Protect the most recent tool exchange (what the model is working
+        # on right now) and everything after it.
+        protect_from = len(out)
+        for j in range(len(out) - 1, 0, -1):
+            if out[j].get("role") == "assistant" and out[j].get("tool_calls"):
+                protect_from = j
+                break
+
+        def _fits() -> bool:
+            return _estimate_messages_tokens(head_msgs + out) <= budget_tokens
+
+        # 1. Older tool results -> placeholders.
+        for j in range(1, protect_from):
+            if _fits():
+                return out
+            m = out[j]
+            if m.get("role") == "tool":
+                body = str(m.get("content") or "")
+                note = ("[Earlier {:s} result omitted to fit the context "
+                        "window -- its outcome is reflected in later steps.]"
+                        ).format(str(m.get("name") or "tool"))
+                if len(note) < len(body):
+                    out[j] = {**m, "content": note}
+        # 2. Older injected notes (stale guidance) are dropped outright.
+        if not _fits():
+            out = [m for j, m in enumerate(out)
+                   if j == 0 or j >= protect_from or not _is_note(m)]
+            protect_from = len(out)
+            for j in range(len(out) - 1, 0, -1):
+                if out[j].get("role") == "assistant" and out[j].get("tool_calls"):
+                    protect_from = j
+                    break
+        # 3. Older tool-call code -> stub (arguments must stay valid JSON).
+        for j in range(1, protect_from):
+            if _fits():
+                return out
+            m = out[j]
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                calls = []
+                for tc in m.get("tool_calls") or []:
+                    fn = dict((tc or {}).get("function") or {})
+                    if len(str(fn.get("arguments") or "")) > 200:
+                        fn["arguments"] = json.dumps(
+                            {"code": "# (earlier step -- code omitted to save context)"})
+                    calls.append({**tc, "function": fn})
+                out[j] = {**m, "tool_calls": calls}
+        return out
+
     has_system = bool(messages) and messages[0].get("role") == "system"
     head = messages[:1] if has_system else []
     tail = messages[1:] if has_system else list(messages)
 
-    # Locate the last user message -- the current request.  It must survive
-    # trimming, so it is pinned and only the messages before it are dropped.
+    # Locate the current request -- the last REAL user message.  It must
+    # survive trimming, so it is pinned and only the messages before it are
+    # dropped.  Falls back to the last user-role message of any kind.
     last_user_index = -1
     for index in range(len(tail) - 1, -1, -1):
-        if tail[index].get("role") == "user":
+        if tail[index].get("role") == "user" and not _is_note(tail[index]):
             last_user_index = index
             break
+    if last_user_index < 0:
+        for index in range(len(tail) - 1, -1, -1):
+            if tail[index].get("role") == "user":
+                last_user_index = index
+                break
 
     if last_user_index < 0:
         # No user turn at all (e.g. the forced-summary path).  Fall back to
@@ -687,10 +806,12 @@ def _fit_history_to_budget(
             return candidate
         trimmable = trimmable[1:]
 
-    # Even with all older history dropped the prompt overflows.  Return the
-    # system prompt plus the pinned turn rather than an empty prompt -- the
-    # model must always see the user's question.
-    return head + pinned
+    # Even with all older history dropped the prompt overflows: shed the
+    # pinned turn's own oldest bulk.  If that still is not enough, return the
+    # system prompt plus the (shed) pinned turn rather than an empty prompt --
+    # the model must always see the user's question; the caller's preflight
+    # decides what happens next.
+    return head + _shed_pinned(head, pinned)
 
 
 def _estimate_tools_tokens(tools: list[dict[str, Any]] | None) -> int:
@@ -792,7 +913,7 @@ def _prompt_preflight(
     if _estimate_messages_tokens(fitted) > headroom:
         return fitted, (
             "This conversation no longer fits the local context window -- "
-            "compacting conversation... Use 'Compact Now' in the Session panel "
+            "saving a checkpoint and summarizing older turns... Use 'Checkpoint Now' in the Session panel "
             "or start a new chat. "
             "(messages ~{:d} + tools ~{:d} tokens vs a {:d}-token prompt "
             "budget -- increase the context window if this is a fresh chat.)".format(
@@ -857,6 +978,14 @@ def _sanitize_loaded_history(messages: list[dict[str, Any]]) -> list[dict[str, A
         # Strip the marker key so it never reaches the API payload.
         if "ui_only" in m:
             m = {k: v for k, v in m.items() if k != "ui_only"}
+        # Older builds stored injected notes unflagged (and one without the
+        # ``[System:`` prefix); flag them so they can never anchor a turn,
+        # become the goal, or render as the user speaking.
+        if m.get("role") == "user" and not m.get("system_note"):
+            _c = m.get("content")
+            _c = _c if isinstance(_c, str) else ""
+            if _c.lstrip().startswith(("[System:", "Continue. Keep this next step small")):
+                m = {**m, "system_note": "legacy"}
         cleaned.append(m)
 
     # A conversation must not begin with an assistant message.
@@ -940,6 +1069,24 @@ def _strip_ui_only_from_history(messages: list[dict[str, Any]]) -> list[dict[str
 
 
 _STANDARD_ROLES = frozenset({"system", "user", "assistant", "tool"})
+
+# Keys an OpenAI-compatible message may carry.  Everything else in a stored
+# history entry is addon bookkeeping (turn_start, summary, system_note,
+# turn_seconds, ...) that strict providers may reject; it is dropped from
+# the SENT copy only.
+_WIRE_MESSAGE_KEYS = frozenset({
+    "role", "content", "tool_calls", "tool_call_id", "name",
+})
+
+
+def _strip_internal_keys(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return copies of *messages* without addon-internal keys."""
+    out: list[dict[str, Any]] = []
+    for m in messages:
+        if any(k not in _WIRE_MESSAGE_KEYS for k in m):
+            m = {k: v for k, v in m.items() if k in _WIRE_MESSAGE_KEYS}
+        out.append(m)
+    return out
 
 
 def _sanitize_message_roles(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1286,6 +1433,164 @@ _LOAD_TOOLS_SCHEMA: dict[str, Any] = {
     },
 }
 
+# ---------------------------------------------------------------------------
+# Pinned goal & plan, prompt-size calibration (Tier 3 hardening)
+
+# Local ``update_plan`` meta-tool (pinned goal & plan memory).  Like
+# ``load_tools`` it is intercepted by the turn loop and never forwarded to the
+# MCP server; offered in Agent mode only.
+_PLAN_TOOL_NAME = session_memory.goal_plan.PLAN_TOOL_NAME
+_PLAN_TOOL_SCHEMA: dict[str, Any] = session_memory.goal_plan.PLAN_TOOL_SCHEMA
+
+
+# -- Prompt-size calibration (Tier 3 hardening) -----------------------
+# The chars/token estimator is a heuristic.  JSON-heavy tool results (object
+# dumps full of short numbers) and vision inputs tokenize far denser than
+# prose, so the estimate ran ~15-20% low and a request the client thought
+# fit was rejected by the server (the 16483 > 16384 log).  Every local
+# response reports the REAL prompt size; this factor learns the ratio and
+# shrinks the effective budget accordingly.  Rises immediately, decays
+# slowly, clamped to [1.0, _CALIBRATION_MAX].
+_prompt_calibration: float = 1.0
+_CALIBRATION_MAX = 2.5
+
+
+def _update_prompt_calibration(estimated: int, actual: int) -> float:
+    """Fold one (estimated, actual) prompt-size observation in.  Returns it."""
+    global _prompt_calibration
+    if estimated <= 0 or actual <= 0:
+        return _prompt_calibration
+    ratio = float(actual) / float(estimated)
+    if ratio > _prompt_calibration:
+        # Under-estimate: adopt it at once (+3% margin) -- the next request
+        # must not overflow.
+        _prompt_calibration = min(_CALIBRATION_MAX, ratio * 1.03)
+    else:
+        # Over-estimate: relax slowly so one small prompt does not undo it.
+        _prompt_calibration = max(1.0, _prompt_calibration * 0.85 + ratio * 0.15)
+    return _prompt_calibration
+
+
+_N_PROMPT_RE = re.compile(r'"n_prompt_tokens"\s*:\s*(\d+)')
+
+
+def _overflow_prompt_tokens(error_text: str) -> int:
+    """Extract the server-reported prompt size from a context-overflow 400."""
+    m = _N_PROMPT_RE.search(error_text or "")
+    if m:
+        return int(m.group(1))
+    m = re.search(r"request \((\d+) tokens\) exceeds", error_text or "")
+    return int(m.group(1)) if m else 0
+
+
+def _drop_stale_notes(history: list[dict[str, Any]], kind: str) -> None:
+    """Remove earlier injected notes of *kind* from the CURRENT turn.
+
+    Repeated guidance notes (the per-iteration "tool results are above"
+    follow-up) used to pile up -- each one a user-role message the model
+    re-read, and two in a row formed a consecutive user/user pair.  Only the
+    newest is useful, so older ones in the current turn are dropped before a
+    new one is appended.  Never touches anything before the turn's request.
+    """
+    start = 0
+    for i in range(len(history) - 1, -1, -1):
+        m = history[i]
+        if m.get("role") == "user" and not session_memory.is_system_note(m):
+            start = i + 1
+            break
+    history[start:] = [
+        m for m in history[start:]
+        if not (m.get("system_note") == kind)
+    ]
+
+
+# Tools that only LOOK at the scene.  A round of nothing but these is not
+# progress: re-inspecting forever is how a "done" turn kept running.
+_READONLY_TOOL_PREFIXES = (
+    "get_", "search_", "list_", "jump_to_", "find_", "inspect", "describe",
+    "check_", "read_", "render_viewport", "load_tools", "update_plan",
+)
+
+# Stop rules (Tier 3 hardening, 1.1.37): consecutive tool batches with no real
+# progress before the turn is wound up; the bar is higher before ANY progress
+# (a task legitimately starts by inspecting).  The same exact call repeated
+# this many times is also a loop.
+_IDLE_BATCHES_BEFORE_PROGRESS = 6
+_IDLE_BATCHES_AFTER_PROGRESS = 4
+_MAX_IDENTICAL_CALLS = 3
+# Tool batches the model may still run after every plan step is done.
+_BATCHES_AFTER_PLAN_DONE = 1
+
+# Closing instruction shared by every wrap-up: stop, report, prod the user.
+_NEXT_STEP_ASK = ("then suggest ONE sensible next step as a short question "
+                  "(e.g. \"Want me to add the chimney next?\").")
+
+
+# Code that CHANGES the scene: operators, datablock create/remove/link,
+# keyframes, or an assignment to an attribute path (``obj.location.z = 1``,
+# ``node.inputs[0].default_value = ...``).  Stricter than _code_is_readonly
+# (which treats a list ``.append`` as a mutation, so pure dump scripts looked
+# like work) and broader (it catches moving/rotating objects, the commonest
+# fix-up, which _code_is_readonly misses).
+_SCENE_MUTATION_RE = re.compile(
+    r"bpy\.ops\.|\.new\(|\.remove\(|\.link\(|\.unlink\(|keyframe_insert|"
+    r"\.load\(|\.transform\(|\.select_set\(|"
+    r"\b[A-Za-z_]\w*(?:\[[^\]\n]*\])*\.\w+(?:\.\w+|\[[^\]\n]*\])*\s*(?:=|\+=|-=|\*=|/=)(?!=)"
+)
+
+
+def _code_changes_scene(code: str) -> bool:
+    """True when *code* plausibly changes the Blender scene."""
+    # Ignore comments and the conventional ``result = {...}`` report dict.
+    lines = [ln.split("#", 1)[0] for ln in str(code or "").splitlines()]
+    return bool(_SCENE_MUTATION_RE.search("\n".join(lines)))
+
+
+def _tool_makes_progress(tool_name: str, args: dict[str, Any], result_text: str) -> bool:
+    """True when a tool call plausibly CHANGED something (not a look/repeat)."""
+    if '"status": "error"' in (result_text or "")[:600]:
+        return False
+    name = str(tool_name or "")
+    if "screenshot" in name or name.startswith(_READONLY_TOOL_PREFIXES):
+        return False
+    if name == "execute_blender_code":
+        return _code_changes_scene(str((args or {}).get("code", "") or ""))
+    return True
+
+
+def _goal_followup_note(goal: Any) -> dict[str, Any]:
+    """The per-iteration follow-up note, reinforced with the pinned goal.
+
+    Replaces "Please provide a helpful response to the user based on these
+    results", which told a mid-task model to STOP and summarize after every
+    tool round -- the main reason long requests ended early.  The new note
+    keeps the model on the current request and the next plan step, and only
+    asks for the user reply once the work is done.
+    """
+    if goal is not None and getattr(goal, "steps", None) and not goal.pending_steps():
+        # Rule 1: the plan is complete -- say so, and ask for the reply.
+        return session_memory.make_system_note(
+            "Tool results are above. All {:d} plan steps are complete. Do NOT "
+            "start new work or call more tools. Reply to the user now: briefly "
+            "what you did, {:s}".format(len(goal.steps), _NEXT_STEP_ASK),
+            kind="followup")
+    parts = ["Tool results are above. Keep working on the user's request"]
+    req = str(getattr(goal, "turn_goal", "") or "")
+    if req:
+        parts[0] += ": \"{:s}\"".format(req[:240])
+    parts[0] += "."
+    nxt = goal.next_step() if goal is not None else None
+    if nxt:
+        try:
+            _num = goal.steps.index(nxt) + 1
+        except ValueError:
+            _num = 0
+        parts.append("Current plan step {:d}: {:s} -- when it is finished, mark it "
+                     "with update_plan(done=[{:d}]) in the same reply.".format(
+                         _num, nxt.get("text", ""), _num))
+    parts.append("When everything is done, reply to the user with a short summary.")
+    return session_memory.make_system_note(" ".join(parts), kind="followup")
+
 
 def _detect_domains(prompt: str) -> set[str]:
     """Heuristic: detect ALL Blender domains referenced by a user prompt.
@@ -1390,8 +1695,9 @@ def _build_tool_set(
         t for t in all_openai_tools
         if t.get("function", {}).get("name") in allowed
     ]
-    # Always include the load_tools meta-tool.
+    # Always include the load_tools and update_plan meta-tools.
     filtered.append(_LOAD_TOOLS_SCHEMA)
+    filtered.append(_PLAN_TOOL_SCHEMA)
     # Sort by name: a stable, deterministic tool order keeps the provider's
     # prompt-cache prefix valid across turns (only the tool SET changes, never
     # their order).
@@ -2591,6 +2897,7 @@ def start_mcp_server(
         time.sleep(0.5)
 
     # Kill any stale process occupying the port (from addon reinstall or crash).
+    _process_guard.reap_orphans()
     _kill_process_on_port(port)
     import time
     time.sleep(0.5)  # Let OS release the port.
@@ -2630,6 +2937,7 @@ def start_mcp_server(
                 stderr=subprocess.PIPE,
                 env=env,
                 creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                preexec_fn=_process_guard.linux_preexec(),
             )
         else:
             proc = subprocess.Popen(
@@ -2638,6 +2946,7 @@ def start_mcp_server(
                 stderr=subprocess.PIPE,
                 env=env,
                 creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                preexec_fn=_process_guard.linux_preexec(),
             )
     except FileNotFoundError as ex:
         _agent_state.error = "Failed to launch MCP server: {:s}".format(str(ex))
@@ -2647,6 +2956,9 @@ def start_mcp_server(
         return None
 
     _mcp_server_process = proc
+    # Dies with Blender, even on a crash (Windows job object / Linux
+    # parent-death signal); recorded for the next-start orphan reaper.
+    _process_guard.bind_to_parent(proc, "mcp-server", int(port or 0))
     _agent_state.mcp_server_running = True
     _agent_state.error = ""
     _agent_state.error_full = ""
@@ -2768,6 +3080,7 @@ def stop_mcp_server() -> None:
             proc.wait(timeout=5)
         except Exception:  # pylint: disable=broad-exception-caught
             pass
+        _process_guard.forget(getattr(proc, "pid", None))
 
         _mcp_server_process = None
         _agent_state.mcp_server_running = False
@@ -2814,6 +3127,7 @@ def start_mcp_server_network(
         time.sleep(0.5)
 
     # Kill any stale process on the port.
+    _process_guard.reap_orphans()
     _kill_process_on_port(port)
     import time
     time.sleep(0.5)
@@ -2849,6 +3163,7 @@ def start_mcp_server_network(
                 stderr=subprocess.PIPE,
                 env=env,
                 creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                preexec_fn=_process_guard.linux_preexec(),
             )
         else:
             proc = subprocess.Popen(
@@ -2858,12 +3173,16 @@ def start_mcp_server_network(
                 stderr=subprocess.PIPE,
                 env=env,
                 creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                preexec_fn=_process_guard.linux_preexec(),
             )
     except (FileNotFoundError, OSError) as ex:
         _agent_state.error = "Failed to launch MCP server: {:s}".format(str(ex))
         return None
 
     _mcp_server_process = proc
+    # Dies with Blender, even on a crash (Windows job object / Linux
+    # parent-death signal); recorded for the next-start orphan reaper.
+    _process_guard.bind_to_parent(proc, "mcp-server", int(port or 0))
     _agent_state.mcp_server_running = True
     _agent_state.error = ""
     _agent_state.error_full = ""
@@ -4290,6 +4609,13 @@ def _diff_snapshots(
         prev_set = getattr(prev, field_name)
         curr_set = getattr(current, field_name)
         new_items = curr_set - prev_set
+        if field_name == "text_names":
+            # The addon's OWN text blocks (saved code history ``Coworker_NNN``
+            # and the editable plan) are not the agent's scene work; counting
+            # them produced bogus "you already created texts: Coworker_006"
+            # warnings mid-turn.
+            new_items = {n for n in new_items
+                         if not str(n).startswith(("Coworker_", "Coworker Plan"))}
         getattr(diff, field_name).update(new_items)
     return diff
 
@@ -5107,6 +5433,31 @@ def _reset_session_domains() -> None:
     _session_loaded_domains = set()
 
 
+def _progress_report_text(tools_executed: int) -> str:
+    """A conclusion synthesized from the pinned plan (no LLM call).
+
+    Used when a long turn ends without a usable final reply (the wrap-up
+    request failed or returned nothing), so the chat always shows where the
+    work stands instead of an empty turn.
+    """
+    try:
+        with session_memory.store_lock:
+            goal = session_memory.store.goal
+            done, total = goal.progress()
+            pending = [s.get("text", "") for s in goal.pending_steps()]
+    except Exception:  # pylint: disable=broad-exception-caught
+        done, total, pending = 0, 0, []
+    lines = ["I paused this request because it reached its step budget."]
+    if total:
+        lines.append("Progress: {:d} of {:d} plan steps done.".format(done, total))
+        if pending:
+            lines.append("Still to do: " + "; ".join(pending[:5]) + ".")
+    elif tools_executed:
+        lines.append("I ran {:d} step(s) so far.".format(tools_executed))
+    lines.append('Say "continue" and I will pick up from here.')
+    return " ".join(lines)
+
+
 def _memory_writer_factory(llm_url: str, api_key: str, model: str, max_tokens: int):
     """Return a memory_writer callback using a small dedicated LLM call."""
     def _writer(retired_text: str, prior_memory: str) -> str | None:
@@ -5194,7 +5545,7 @@ def _maybe_compact_session(
     if not trigger:
         return
     if on_status:
-        on_status("Compacting conversation...")
+        on_status("Checkpoint: summarizing older turns...")
     print("[Coworker] _maybe_compact_session: estimated {:d} / budget {:d} tokens "
           "-- compacting".format(estimated, prompt_budget))
     # Automatic checkpoint of the PRE-compaction state so restore can rewind
@@ -5269,7 +5620,7 @@ def _force_compact_session(
               "(history left intact)")
         return 0
     if on_status:
-        on_status("Compacting conversation...")
+        on_status("Checkpoint: summarizing older turns...")
     # compact_history computes the new lists WITHOUT mutating *history*, so the
     # commit below can still snapshot the true pre-compaction state.
     kept, memory_block, retired = session_memory.compact_history(
@@ -5427,6 +5778,18 @@ def _run_conversation_turn_inner(
         )
     history.append({"role": "user", "content": _stored_content, "turn_start": True})
 
+    # -- Pinned goal capture (Tier 3 hardening) -------------------------
+    # The first request of the thread becomes the session goal; every
+    # request becomes the turn goal.  Both live outside the compactable
+    # conversation and are re-sent with every request, so no trim,
+    # compaction or memory-writer failure can lose them.
+    try:
+        with session_memory.store_lock:
+            session_memory.store.goal.set_request(_stored_content)
+    except Exception as _goal_ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] run_conversation_turn: goal capture skipped -- {:s}".format(
+            str(_goal_ex)))
+
     # -- Smart undo tracking (per-turn) --------------------------------
     # Tracks the last execute_blender_code call to detect iteration and
     # auto-undo duplicates. Reset at the start of each turn.
@@ -5543,6 +5906,11 @@ def _run_conversation_turn_inner(
             if getattr(_agent_state, "error_kind", "") == "stream_timeout":
                 print("[Coworker] _llm_request: stream timed out before any token "
                       "-- not retrying non-streaming (server is not responding)")
+            elif getattr(_agent_state, "error_kind", "") == "context_overflow":
+                # The identical payload would be rejected again; let the
+                # caller shrink it (calibrate + shed) and retry instead.
+                print("[Coworker] _llm_request: context overflow on stream -- "
+                      "not re-sending the same payload non-streaming")
             else:
                 response = openai_chat_completions(
                     llm_url, send_messages, send_tools, api_key, model,
@@ -5703,6 +6071,16 @@ def _run_conversation_turn_inner(
             _agent_state.prompt_budget = prompt_budget
         except Exception:  # pylint: disable=broad-exception-caught
             pass
+        # Scale the memory note to the window (richer notes on big windows,
+        # lean ones on small windows).
+        try:
+            session_memory.set_memory_budget(_ctx_size)
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+
+    # Uncalibrated budget; the per-iteration effective budget divides it by
+    # the learned estimate->real prompt ratio (see _update_prompt_calibration).
+    _base_prompt_budget = prompt_budget
 
     # -- Tool domain system (hybrid: pre-detect + on-demand) ------------
     # Pre-detect the domain from the user's prompt AND from the current
@@ -5742,11 +6120,26 @@ def _run_conversation_turn_inner(
         # system prompt (index 0) if present.  Must preserve tool-call pairs:
         # each "tool" role message MUST follow an "assistant" with tool_calls.
         if len(history) > _MAX_HISTORY_MESSAGES:
-            keep = min(_MAX_HISTORY_MESSAGES, len(history))
-            if history[0].get("role") == "system":
-                msgs = [history[0]] + history[-(keep - 1):]
-            else:
-                msgs = list(history[-keep:])
+            _has_sys = history[0].get("role") == "system"
+            _body_start = 1 if _has_sys else 0
+            _over = len(history) - _MAX_HISTORY_MESSAGES
+            # Round the cut up to a whole block: the cut index (and so the
+            # prompt prefix) only moves every _HISTORY_DROP_STEP messages.
+            _drop = -(-_over // _HISTORY_DROP_STEP) * _HISTORY_DROP_STEP
+            _cut = _body_start + _drop
+            msgs = ([history[0]] if _has_sys else []) + history[_cut:]
+            # The current request must survive the message-count slice.  A
+            # long single agent turn easily exceeds 20 messages, and the
+            # blunt slice then dropped the user's actual request -- the
+            # model was left answering injected notes with no goal at all.
+            _req = None
+            for _m in reversed(history):
+                if _m.get("role") == "user" and not session_memory.is_system_note(_m):
+                    _req = _m
+                    break
+            if _req is not None and not any(_m is _req for _m in msgs):
+                _at = 1 if msgs and msgs[0].get("role") == "system" else 0
+                msgs.insert(_at, _req)
         else:
             msgs = list(history)
 
@@ -5784,6 +6177,25 @@ def _run_conversation_turn_inner(
                 _sys0 = dict(_sys0)
                 _sys0["content"] = _base.rstrip() + "\n\n" + _mem_block
                 msgs[0] = _sys0
+
+        # -- Inject the pinned goal & plan block ----------------------
+        # Appended after the memory note and never trimmed: it is what keeps
+        # a long or compacted turn on task.
+        # Bounded to ~4% of the window (local) or a flat cap (remote).
+        try:
+            with session_memory.store_lock:
+                _goal_text = session_memory.store.goal.render_block(
+                    max_chars=(
+                        max(900, min(2400, int(prompt_budget * 0.04 * _CHARS_PER_TOKEN)))
+                        if prompt_budget > 0 else 2400),
+                    with_tool_hint=bool(openai_tools) and chat_mode != "ASK",
+                )
+        except Exception:  # pylint: disable=broad-exception-caught
+            _goal_text = ""
+        if _goal_text and msgs and msgs[0].get("role") == "system":
+            _sys0 = dict(msgs[0])
+            _sys0["content"] = str(_sys0.get("content") or "").rstrip() + "\n\n" + _goal_text
+            msgs[0] = _sys0
 
         # -- Inject domain-skill reference (send copy, self-tuning) ----
         # Appended to the system copy like the memory block (Qwen's Jinja
@@ -5861,8 +6273,11 @@ def _run_conversation_turn_inner(
                     _tgt_i = _ti
                     break
             if _tgt_i is None:
+                # Never an injected ``[System: ...]`` note: the image belongs
+                # to the user's own request, not to the latest follow-up.
                 for _ti in range(len(msgs) - 1, -1, -1):
-                    if msgs[_ti].get("role") == "user":
+                    if (msgs[_ti].get("role") == "user"
+                            and not session_memory.is_system_note(msgs[_ti])):
                         _tgt_i = _ti
                         break
             if _tgt_i is not None:
@@ -5942,6 +6357,7 @@ def _run_conversation_turn_inner(
                     if t.get("function", {}).get("name") in _SURFACE_TOOLS
                 ]
                 _minimal_tools.append(_LOAD_TOOLS_SCHEMA)
+                _minimal_tools.append(_PLAN_TOOL_SCHEMA)
                 _minimal_tools.sort(
                     key=lambda t: t.get("function", {}).get("name", ""))
                 _msgs_min, _err_min = _prompt_preflight(
@@ -5968,8 +6384,10 @@ def _run_conversation_turn_inner(
                     _err = None
                     print("[Coworker] run_conversation_turn: dropped built-in "
                           "skills to fit the context window")
-            return msgs, _err
-        return msgs, None
+            # Drop addon bookkeeping keys (turn_start, system_note, ...)
+            # from the wire copy LAST -- the steps above key on them.
+            return _strip_internal_keys(msgs), _err
+        return _strip_internal_keys(msgs), None
 
     iterations = 0
     # Mode-aware iteration budget: local models get more repair rounds.
@@ -5977,8 +6395,88 @@ def _run_conversation_turn_inner(
         _LOCAL_MAX_TOOL_ITERATIONS if llm_port_local is not None
         else _REMOTE_MAX_TOOL_ITERATIONS
     )
-    while iterations < _max_iterations:
+    # -- Long-request rounds (Tier 3 hardening) -------------------------
+    _tools_executed = 0      # MCP tool calls run this turn (not meta-tools)
+    _round_progress = 0      # successful tool calls in the current round
+    _auto_round = 0          # extra rounds started so far
+    _finished = False        # True once the model gave its final reply
+    _turn_progress = 0       # real (scene-changing) tool calls this turn
+    _idle_batches = 0        # consecutive tool batches with no progress
+    _batches_after_plan_done = 0
+    _call_counts: dict[str, int] = {}  # identical-call loop detection
+    _stop_reason = ""        # "" | "plan_done" | "idle" -> wrap up early
+    with session_memory.store_lock:
+        _plan_done_seen = session_memory.store.goal.progress()[0]
+    try:
+        _max_auto_rounds = int(getattr(_llm_cfg, "auto_continue_rounds", _MAX_AUTO_ROUNDS))
+    except (TypeError, ValueError):
+        _max_auto_rounds = _MAX_AUTO_ROUNDS
+    with session_memory.store_lock:
+        _plan_done_at_round = session_memory.store.goal.progress()[0]
+
+    def _try_start_round() -> bool:
+        """Start another round when the iteration budget ran out mid-work.
+
+        Called only when ``iterations`` hit the cap.  A new round resets the
+        iteration counter instead of forcing a wrap-up, provided the work is
+        plainly still going: Agent mode with tools, rounds left, no Stop,
+        the round made progress (a tool succeeded or a plan step finished),
+        and the plan -- when there is one -- still has open steps.
+        """
+        nonlocal iterations, _round_progress, _auto_round, _plan_done_at_round
+        if _finished or _stop_reason or _stop_event.is_set():
+            return False
+        if chat_mode == "ASK" or not openai_tools or _auto_round >= _max_auto_rounds:
+            return False
+        with session_memory.store_lock:
+            _goal = session_memory.store.goal
+            _done_now = _goal.progress()[0]
+            _has_plan = bool(_goal.steps)
+            _pending = len(_goal.pending_steps())
+            _next = _goal.next_step()
+        # Rule 2: only REAL progress (a scene change or a ticked plan step)
+        # earns another round -- inspecting alone does not.
+        _made_progress = _round_progress > 0 or _done_now > _plan_done_at_round
+        if not _made_progress or (_has_plan and _pending == 0):
+            return False
+        # Rule 3: without a plan there is no definition of done -- allow a
+        # single extra round (asked to make a plan), never an open-ended run.
+        if not _has_plan and _auto_round >= 1:
+            return False
+        _auto_round += 1
+        iterations = 0
+        _round_progress = 0
+        _plan_done_at_round = _done_now
+        _agent_state.bump_turn_cost("rounds")
+        print("[Coworker] run_conversation_turn: iteration budget used -- "
+              "auto-continuing (round {:d}/{:d})".format(_auto_round + 1, _max_auto_rounds + 1))
+        if on_status:
+            on_status("Long request -- continuing (round {:d} of {:d})".format(
+                _auto_round + 1, _max_auto_rounds + 1))
+        _drop_stale_notes(history, "followup")
+        _note = ("This request is long, so you are continuing in a new round. "
+                 "Pick up exactly where you are; do not redo finished work.")
+        if _next:
+            _note += " Next plan step: {:s}.".format(_next.get("text", ""))
+        elif not _has_plan:
+            _note += (" If several steps remain, call update_plan first so "
+                      "progress survives context compaction.")
+        if history and session_memory.is_system_note(history[-1]):
+            history[-1] = {**history[-1], "content": "{:s}\n{:s}".format(
+                str(history[-1].get("content") or ""),
+                session_memory.make_system_note(_note)["content"])}
+        else:
+            history.append(session_memory.make_system_note(_note, kind="followup"))
+        return True
+
+    while iterations < _max_iterations or _try_start_round():
         iterations += 1
+
+        # Effective budget: the base budget shrunk by the learned
+        # estimate->real ratio, so a tokenizer that counts denser than the
+        # heuristic (JSON dumps, images) can no longer overflow the server.
+        if _base_prompt_budget > 0:
+            prompt_budget = max(1024, int(_base_prompt_budget / _prompt_calibration))
 
         # Abort early if the user pressed Stop.
         if _stop_event.is_set():
@@ -6009,6 +6507,14 @@ def _run_conversation_turn_inner(
                 _agent_state.turn_phase = ""
                 if on_status:
                     on_status("Stopped (time budget reached)")
+                # Close the turn with a conclusion built from the plan so the
+                # chat never shows a turn that just stops mid-air.
+                _synth = _progress_report_text(_tools_executed).replace(
+                    "reached its step budget", "ran out of time")
+                _drop_stale_notes(history, "followup")
+                history.append({"role": "assistant", "content": _synth,
+                                "synthesized": True})
+                _finished = True
                 break
 
         # -- Session memory compaction check (Tier 3 Phase 4) -----------
@@ -6080,6 +6586,20 @@ def _run_conversation_turn_inner(
         if response is None and getattr(_agent_state, "error_kind", "") == "context_overflow":
             print("[Coworker] run_conversation_turn: context overflow -- forcing "
                   "compaction and retrying once")
+            # Learn from the server's real count so the retry (and every
+            # later request) budgets with the right ratio; the rebuilt
+            # payload then sheds this turn's oldest bulk to fit.
+            _real = _overflow_prompt_tokens(
+                "{:s} {:s}".format(str(_agent_state.error_full or ""),
+                                   str(_agent_state.error or "")))
+            if _real and _base_prompt_budget > 0:
+                _est_sent = (_estimate_messages_tokens(history_to_send)
+                             + _estimate_tools_tokens(openai_tools))
+                _cal = _update_prompt_calibration(_est_sent, _real)
+                prompt_budget = max(1024, int(_base_prompt_budget / _cal))
+                print("[Coworker] run_conversation_turn: server counted {:d} prompt "
+                      "tokens vs ~{:d} estimated -- calibration now {:.2f}, "
+                      "budget {:d}".format(_real, _est_sent, _cal, prompt_budget))
             try:
                 _force_compact_session(
                     history, openai_tools, prompt_budget, on_status=on_status,
@@ -6151,6 +6671,17 @@ def _run_conversation_turn_inner(
                     on_status("Error: No response from LLM")
             return history
 
+        # Learn the real prompt size (local mode budgets only).
+        if _base_prompt_budget > 0:
+            try:
+                _usage_pt = int((response.get("usage") or {}).get("prompt_tokens") or 0)
+                if _usage_pt > 0:
+                    _update_prompt_calibration(
+                        _estimate_messages_tokens(history_to_send)
+                        + _estimate_tools_tokens(openai_tools), _usage_pt)
+            except (TypeError, ValueError, AttributeError):
+                pass
+
         # A successful request clears any error the recovery path recorded
         # (e.g. a context-overflow 400 that was compacted away and retried).
         # Without this the stale message would be shown even though the turn
@@ -6213,14 +6744,24 @@ def _run_conversation_turn_inner(
             # the next step: a bare "Continue." invites the model to dump the
             # whole remaining plan into one tool call, which then truncates
             # mid-string and fails to parse (HTTP 500).
-            history.append({
-                "role": "user",
-                "content": (
-                    "Continue. Keep this next step small -- if there is a lot "
-                    "left to do, do one short piece now and the rest in "
-                    "follow-up calls."
-                ),
-            })
+            # Flagged as a system note: it is NOT the user speaking.  The
+            # unflagged "Continue." used to survive a failed continuation and
+            # show up in the chat as a new user turn ("the chat talked to
+            # itself"), splitting the real turn and hiding its conclusion.
+            history.append(session_memory.make_system_note(
+                "Your previous reply was cut off by the output limit. Continue "
+                "exactly where you stopped. Keep this next step small -- if "
+                "there is a lot left to do, do one short piece now and the "
+                "rest in follow-up calls.",
+                kind="continue",
+            ))
+
+            def _undo_continue_scaffold() -> None:
+                """Remove the partial + note appended above (failure path)."""
+                if history and history[-1].get("system_note") == "continue":
+                    history.pop()
+                if history and history[-1] is partial_msg:
+                    history.pop()
 
             # Re-request with the same max_tokens.
             # Send a *sanitized* copy, not the raw history: the live history
@@ -6231,6 +6772,7 @@ def _run_conversation_turn_inner(
             _cont_send = _strip_reasoning_from_history(history)
             _cont_send = _strip_ui_only_from_history(_cont_send)
             _cont_send = _sanitize_message_roles(_cont_send)
+            _cont_send = _strip_internal_keys(_cont_send)
             # Budget the continuation request too: it re-sends the full
             # history (plus the appended partial + "Continue." turn), so it
             # can exceed the window even when the trimmed request before it
@@ -6244,6 +6786,7 @@ def _run_conversation_turn_inner(
                 if _cont_err:
                     print("[Coworker] run_conversation_turn: continuation cannot fit "
                           "the context window -- stopping auto-continue")
+                    _undo_continue_scaffold()
                     break
             # Forward the thinking budget.  Without it the continuation can
             # spend the entire max_tokens on chain-of-thought and leave
@@ -6251,7 +6794,11 @@ def _run_conversation_turn_inner(
             # fails to parse (HTTP 500) -- the exact failure this path exists
             # to recover from.
             continue_response = _llm_request(_cont_send, openai_tools, thinking_budget)
-            if continue_response is None:
+            if continue_response is None or _stop_event.is_set():
+                # Never leave the scaffold behind: a stray continuation note
+                # would render as a user turn and the partial would be
+                # duplicated when the turn appends its final message.
+                _undo_continue_scaffold()
                 break
 
             # Pop the "Continue." user message so it doesn't pollute history.
@@ -6314,6 +6861,18 @@ def _run_conversation_turn_inner(
             if on_text:
                 on_text(content)
             _agent_state.streaming_text = content
+            # Live plan progress: tick off steps the model reports finished
+            # in its own words ("Step 2 is done", "[x] Fix the roof") -- it
+            # does not wait for the turn to end or for an update_plan call.
+            if chat_mode != "ASK":
+                try:
+                    with session_memory.store_lock:
+                        _ticked = session_memory.store.goal.note_progress_from_text(content)
+                    if _ticked:
+                        print("[Coworker] run_conversation_turn: plan -- {:d} step(s) "
+                              "reported done".format(_ticked))
+                except Exception:  # pylint: disable=broad-exception-caught
+                    pass
 
         # Check for tool calls.
         raw_tool_calls = msg.get("tool_calls")
@@ -6382,6 +6941,15 @@ def _run_conversation_turn_inner(
         if raw_tool_calls and finish_reason != "length":
             # Add assistant message with tool calls to history.
             history.append({"role": "assistant", "content": content, "tool_calls": raw_tool_calls})
+            # Notes raised while processing this batch are appended AFTER
+            # all of its tool results (a user-role note between an assistant
+            # tool_calls message and its results breaks the pairing).
+            _deferred_notes: list[dict[str, Any]] = []
+            _batch_progress = 0
+            _batch_repeat = False
+            with session_memory.store_lock:
+                _plan_was_done = bool(session_memory.store.goal.steps) and \
+                    not session_memory.store.goal.pending_steps()
 
             # Process each tool call.
             for tc in raw_tool_calls:
@@ -6402,6 +6970,30 @@ def _run_conversation_turn_inner(
                 tool_name = fn.get("name", "")
                 tool_id = tc.get("id", "")
 
+                # -- update_plan meta-tool (pinned goal & plan) -----------
+                # Handled locally: the plan lives in the session store and is
+                # re-sent with every request, so it survives compaction.
+                if tool_name == _PLAN_TOOL_NAME:
+                    try:
+                        with session_memory.store_lock:
+                            _plan_result = session_memory.store.goal.apply_update(args)
+                            _plan_summary = session_memory.store.goal.status_line()
+                    except Exception as _plan_ex:  # pylint: disable=broad-exception-caught
+                        _plan_result = "Plan update failed: {:s}".format(str(_plan_ex))
+                        _plan_summary = ""
+                    print("[Coworker] run_conversation_turn: update_plan -- {:s}".format(
+                        _plan_summary or _plan_result[:80]))
+                    if on_status:
+                        on_status("Updating the plan...")
+                    history.append({
+                        "role": "tool",
+                        "tool_call_id": tool_id,
+                        "name": _PLAN_TOOL_NAME,
+                        "content": _plan_result,
+                        "summary": _plan_summary or "Plan updated",
+                    })
+                    continue  # Skip MCP call -- handled locally.
+
                 # -- load_tools meta-tool (on-demand domain loading) ----
                 # Intercepted here -- not sent to the MCP server.  Handled in
                 # every mode (the tool is offered locally AND to remote
@@ -6420,6 +7012,7 @@ def _run_conversation_turn_inner(
                             if t.get("function", {}).get("name") in _combined
                         ]
                         openai_tools.append(_LOAD_TOOLS_SCHEMA)
+                        openai_tools.append(_PLAN_TOOL_SCHEMA)
                         openai_tools.sort(
                             key=lambda t: t.get("function", {}).get("name", ""))
                         print("[Coworker] run_conversation_turn: load_tools '{:s}' -- now {:d} tools".format(
@@ -6501,14 +7094,13 @@ def _run_conversation_turn_inner(
                                         _undo_safe = False
                                         _undo_safe_here = False
                                         print("[Coworker] run_conversation_turn: foreign edit at failure -- {:s}".format(_foreign_fail))
-                                        history.append({
-                                            "role": "user",
-                                            "content": (
-                                                "[System: The user changed the scene while you were working -- {:s}. "
-                                                "Re-fetch references by name (bpy.data.objects.get) and re-select explicitly "
-                                                "before acting. Do not assume your previous selection still holds.]"
-                                            ).format(_foreign_fail),
-                                        })
+                                        # Deferred: a note between an assistant tool_calls message
+                                        # and its tool results breaks the pairing strict templates need.
+                                        _deferred_notes.append(session_memory.make_system_note(
+                                            "The user changed the scene while you were working -- {:s}. "
+                                            "Re-fetch references by name (bpy.data.objects.get) and re-select explicitly "
+                                            "before acting. Do not assume your previous selection still holds.".format(_foreign_fail),
+                                            kind="scene_change"))
                         except (json.JSONDecodeError, TypeError):
                             pass
                         if _undo_safe_here and _undo_pushed:
@@ -6658,14 +7250,13 @@ def _run_conversation_turn_inner(
                                     if _foreign:
                                         _undo_safe = False
                                         print("[Coworker] run_conversation_turn: foreign scene edit detected -- {:s}".format(_foreign))
-                                        history.append({
-                                            "role": "user",
-                                            "content": (
-                                                "[System: The user changed the scene while you were working -- {:s}. "
-                                                "Re-fetch references by name (bpy.data.objects.get) and re-select explicitly "
-                                                "before acting. Do not assume your previous selection still holds.]"
-                                            ).format(_foreign),
-                                        })
+                                        # Deferred: a note between an assistant tool_calls message
+                                        # and its tool results breaks the pairing strict templates need.
+                                        _deferred_notes.append(session_memory.make_system_note(
+                                            "The user changed the scene while you were working -- {:s}. "
+                                            "Re-fetch references by name (bpy.data.objects.get) and re-select explicitly "
+                                            "before acting. Do not assume your previous selection still holds.".format(_foreign),
+                                            kind="scene_change"))
                                     if not step_diff.is_empty():
                                         _turn_entities.merge(step_diff)
                                         _turn_snapshot = current_snap
@@ -6725,6 +7316,29 @@ def _run_conversation_turn_inner(
                     "content": _stored_result,
                     "summary": result_summary,
                 })
+                # Progress accounting for the end-of-turn guarantee and the
+                # long-request auto-continue decision.
+                _tools_executed += 1
+                # Identical call (same tool + same arguments) seen again?
+                try:
+                    _sig = "{:s}:{:s}".format(tool_name, json.dumps(args, sort_keys=True, default=str))
+                except (TypeError, ValueError):
+                    _sig = tool_name
+                _call_counts[_sig] = _call_counts.get(_sig, 0) + 1
+                if _call_counts[_sig] >= _MAX_IDENTICAL_CALLS:
+                    _batch_repeat = True
+                if _tool_makes_progress(tool_name, args, result_text):
+                    _round_progress += 1
+                    _turn_progress += 1
+                    _batch_progress += 1
+                if '"status": "error"' not in result_text[:600]:
+                    # Real work happened: make sure the plan shows an
+                    # active step (the panel updates live mid-turn).
+                    try:
+                        with session_memory.store_lock:
+                            session_memory.store.goal.mark_active_if_idle()
+                    except Exception:  # pylint: disable=broad-exception-caught
+                        pass
 
                 # Inject entity context AFTER tool result so the model
                 # sees the successful result first, then gets context.
@@ -6733,7 +7347,8 @@ def _run_conversation_turn_inner(
                     if ctx:
                         print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: entity context injected \u2014 {:s}".format(
                             _turn_entities.summary()))
-                        history.append({"role": "user", "content": ctx})
+                        _deferred_notes.append(
+                            session_memory.make_system_note(ctx, kind="entity"))
                         _entity_context_injected = True
 
                 # -- Extract screenshot image for vision-capable models -
@@ -6785,7 +7400,8 @@ def _run_conversation_turn_inner(
                                     removed += 1
                             print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: truncated {:d} failed attempt(s) from history".format(removed))
                             corrective = _spiral_corrective_message(error_sig)
-                            history.append({"role": "user", "content": corrective})
+                            history.append(session_memory.make_system_note(
+                                corrective, kind="spiral"))
                             _consecutive_errors.clear()
                     else:
                         _consecutive_errors.clear()
@@ -6796,15 +7412,49 @@ def _run_conversation_turn_inner(
             # inside <think> blocks with empty content.  Without a user message
             # after tool results, llama-server's Jinja template may fail with
             # "No user query found in messages."
+            # -- Stop rules (1 and 4): wind the turn up early -----------
+            with session_memory.store_lock:
+                _g = session_memory.store.goal
+                _plan_done_now = bool(_g.steps) and not _g.pending_steps()
+                _done_count = _g.progress()[0]
+            if _done_count > _plan_done_seen:
+                # A plan step was ticked (tool or narration): that is progress.
+                _batch_progress += 1
+                _turn_progress += 1
+            _plan_done_seen = _done_count
+            _idle_batches = 0 if _batch_progress else _idle_batches + 1
+            _idle_limit = (_IDLE_BATCHES_AFTER_PROGRESS if _turn_progress
+                           else _IDLE_BATCHES_BEFORE_PROGRESS)
+            if _plan_done_now and _plan_was_done:
+                # A whole batch of work started AFTER every step was done.
+                _batches_after_plan_done += 1
+            if _plan_done_now and _batches_after_plan_done > _BATCHES_AFTER_PLAN_DONE:
+                _stop_reason = "plan_done"
+            elif _batch_repeat or _idle_batches >= _idle_limit:
+                _stop_reason = "idle"
+            if _stop_reason:
+                print("[Coworker] run_conversation_turn: stopping early ({:s}) -- "
+                      "asking for the reply".format(_stop_reason))
+                iterations = _max_iterations
+
+            if _deferred_notes:
+                history.extend(_deferred_notes)
             if not content or not content.strip():
-                history.append({
-                    "role": "user",
-                    "content": (
-                        "[System: The tool results are above. "
-                        "Please provide a helpful response to the user based "
-                        "on these results.]"
-                    ),
-                })
+                # Goal-reinforced follow-up; older follow-ups of this turn
+                # are dropped so they never pile up as consecutive notes.
+                _drop_stale_notes(history, "followup")
+                try:
+                    with session_memory.store_lock:
+                        _fu = _goal_followup_note(session_memory.store.goal)
+                except Exception:  # pylint: disable=broad-exception-caught
+                    _fu = _goal_followup_note(None)
+                if history and session_memory.is_system_note(history[-1]):
+                    # A deferred note already ends the history -- fold the
+                    # follow-up into it (no user/user pair).
+                    history[-1] = {**history[-1], "content": "{:s}\n{:s}".format(
+                        str(history[-1].get("content") or ""), _fu["content"])}
+                else:
+                    history.append(_fu)
             continue
 
         # -- End-of-turn execution guarantee (Agent mode) --------------
@@ -6814,45 +7464,77 @@ def _run_conversation_turn_inner(
         # final message and nudge the model to actually perform it.  Bounded
         # so a genuinely-finished turn cannot loop; Ask mode is informational
         # only and is never nudged.
+        with session_memory.store_lock:
+            _plan_all_done = bool(session_memory.store.goal.steps) and not \
+                session_memory.store.goal.pending_steps()
         if (
             chat_mode != "ASK"
             and openai_tools
             and allow_action_nudge
             and _action_nudges < _MAX_ACTION_NUDGES
             and (not content.strip() or _looks_like_unfinished_action(content))
+            # A reply after every plan step is done is the conclusion, even
+            # if it ends with a forward-looking phrase.
+            and not (_plan_all_done and content.strip())
+            # Rule 5: after real work, a reply ending in a question ("Want me
+            # to add the chimney next?") is the hand-back to the user.
+            and not (_turn_progress > 0 and content.rstrip().endswith("?"))
         ):
             _action_nudges += 1
             _agent_state.bump_turn_cost("nudges")
             print("[Coworker] run_conversation_turn: assistant promised an "
                   "action but called no tool -- nudging to execute "
                   "(attempt {:d}/{:d})".format(_action_nudges, _MAX_ACTION_NUDGES))
+            _drop_stale_notes(history, "followup")
             history.append({"role": "assistant", "content": content})
-            history.append({
-                "role": "user",
-                "content": (
-                    "[System: You described your next step but did not call "
-                    "any tool, so NOTHING was executed. In Agent mode you must "
-                    "carry the work out yourself: do NOT describe the step -- "
-                    "emit the actual tool call (execute_blender_code) in your "
-                    "VERY NEXT reply, now. Keep each call small (one short "
-                    "script). Only if the task is genuinely finished, reply "
-                    "with the final result and no tool call.]"
-                ),
-            })
+            history.append(session_memory.make_system_note(
+                "You described your next step but did not call "
+                "any tool, so NOTHING was executed. In Agent mode you must "
+                "carry the work out yourself: do NOT describe the step -- "
+                "emit the actual tool call (execute_blender_code) in your "
+                "VERY NEXT reply, now. Keep each call small (one short "
+                "script). Only if the task is genuinely finished, reply "
+                "with the final result and no tool call.",
+                kind="nudge",
+            ))
             continue
 
         # No more tool calls -- add the final assistant message and we're done.
         history.append({"role": "assistant", "content": content})
+        _finished = True
         break
 
-    # If we hit the iteration limit, the LLM kept calling tools.
-    # Add an explicit instruction to summarize and make one final call.
-    if iterations >= _max_iterations:
-        print("[Coworker] run_conversation_turn: hit max iterations, forcing summary")
-        history.append({
-            "role": "user",
-            "content": "[System: All tool calls are complete. Please summarize what was done in 1-2 sentences.]",
-        })
+    # If we hit the iteration limit (and no further round could start), the
+    # LLM kept calling tools.  Ask for a progress report -- what is done,
+    # what remains -- instead of the old "summarize in 1-2 sentences", which
+    # replaced the real ending with a vague line that often PROMISED work it
+    # would never do.  Skipped when the model already gave its final reply
+    # on the very last iteration (that reply IS the conclusion).
+    if iterations >= _max_iterations and not _finished and not _stop_event.is_set():
+        print("[Coworker] run_conversation_turn: hit max iterations, asking for a "
+              "progress report")
+        _drop_stale_notes(history, "followup")
+        if _stop_reason == "plan_done":
+            _wrap_text = ("Every plan step is complete, so stop here. Do NOT call "
+                          "any tools. Reply to the user in a few short lines: what "
+                          "you did, " + _NEXT_STEP_ASK)
+        elif _stop_reason == "idle":
+            _wrap_text = ("The last steps only re-checked or repeated work without "
+                          "changing anything, so stop here. Do NOT call any tools. "
+                          "Reply to the user in a few short lines: what is done, "
+                          "what is unclear or blocking, and ask ONE short question "
+                          "about how they want to proceed.")
+        else:
+            _wrap_text = ("The step budget for this request is used up, so stop "
+                          "here. Do NOT call any tools. Reply to the user in a few "
+                          "short lines: what is done, what remains (from the plan, "
+                          "if any), and that they can say \"continue\" to resume.")
+        _wrap_note = session_memory.make_system_note(_wrap_text, kind="wrapup")
+        if history and session_memory.is_system_note(history[-1]):
+            history[-1] = {**history[-1], "content": "{:s}\n{:s}".format(
+                str(history[-1].get("content") or ""), _wrap_note["content"])}
+        else:
+            history.append(_wrap_note)
         # Budget the forced-summary request too: it sends the full history.
         # Strip UI-only entries and non-standard ``reasoning`` messages and
         # sanitize roles FIRST.  In REMOTE mode ``prompt_budget`` is 0, so the
@@ -6862,7 +7544,7 @@ def _run_conversation_turn_inner(
         # non-standard role with 400 "unknown variant `reasoning`".  The
         # strip/sanitize must therefore run unconditionally, matching the main
         # and auto-continue request paths.
-        _summary_send: list[dict[str, Any]] | None = _sanitize_message_roles(
+        _summary_send: list[dict[str, Any]] | None = _strip_internal_keys(_sanitize_message_roles(
             _trim_history_tool_results(
                 _strip_ui_only_from_history(
                     _strip_reasoning_from_history(
@@ -6870,7 +7552,7 @@ def _run_conversation_turn_inner(
                     )
                 )
             )
-        )
+        ))
         if prompt_budget > 0:
             _summary_send = _fit_history_to_budget(_summary_send, prompt_budget)
             _summary_send = _repair_tool_call_pairs(_summary_send)
@@ -6893,6 +7575,15 @@ def _run_conversation_turn_inner(
                     on_text(final_content)
                 _agent_state.streaming_text = final_content
                 history.append({"role": "assistant", "content": final_content})
+                _finished = True
+        if not _finished:
+            # The report request failed or came back empty: never end a long
+            # turn without a conclusion -- synthesize one from the plan.
+            _synth = _progress_report_text(_tools_executed)
+            if on_text:
+                on_text(_synth)
+            _agent_state.streaming_text = _synth
+            history.append({"role": "assistant", "content": _synth, "synthesized": True})
 
     _agent_state.is_thinking = False
     _agent_state.thinking_start_time = 0.0

@@ -266,8 +266,8 @@ def context_overflow_message(error_body: str) -> str:
     parts = [
         "The conversation grew larger than the local context window, so the "
         "model server rejected the request (HTTP 400).",
-        "Coworker is compacting the conversation and retrying automatically. "
-        "If this keeps happening, use 'Compact Now' in the Session panel or "
+        "Coworker is shrinking the request (checkpoint + summary) and retrying automatically. "
+        "If this keeps happening, use 'Checkpoint Now' in the Session panel or "
         "start a new chat to reset the working window.",
     ]
     if error_body:

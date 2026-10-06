@@ -383,6 +383,31 @@ def image_to_data_uri(img, limit: int = ATTACHMENT_LIMIT_BYTES) -> str | None:
     return "data:{:s};base64,{:s}".format(mime, base64.b64encode(data).decode("ascii"))
 
 
+def persist_image(img) -> str:
+    """Make sure *img*'s pixels exist as a file on disk; return that path.
+
+    An image that already comes from an unmodified file on disk keeps it.
+    Anything else -- a render, a generated or edited image, a packed one --
+    is saved as a PNG copy in the attachments folder, so the attachment can
+    always be reloaded even if Blender frees the datablock (undo, orphan
+    cleanup on save).  Returns ``""`` when nothing could be written.
+    Main thread only.
+    """
+    if img is None:
+        return ""
+    path = _image_filepath(img)
+    if path and os.path.isfile(path) and not bool(getattr(img, "is_dirty", False)):
+        return path
+    try:
+        out = _unique_path(attachments_dir(), "attached")
+        img.save_render(str(out))
+        if out.is_file():
+            return str(out)
+    except (AttributeError, RuntimeError, OSError, ValueError):
+        pass
+    return ""
+
+
 def prune_attachments(directory=None, keep: int = _KEEP_ATTACHMENTS) -> None:
     """Keep only the *keep* newest files in the attachments directory.
 

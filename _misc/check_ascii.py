@@ -30,6 +30,13 @@ _SKIP_DIRS = (
     os.path.join("addon", "bfa_coworker", "vendor"),
 )
 
+# Directory names skipped at any depth: local virtualenvs (``mcp/.venv``, a
+# vendored ``.venv``) hold third-party packages, never this project's source.
+_SKIP_DIR_NAMES = (
+    ".venv",
+    "__pycache__",
+)
+
 # File extensions to check.
 _EXTENSIONS = (
     ".py",
@@ -43,7 +50,8 @@ def main() -> int:
     fail = 0
     for scan_dir in _SCAN_DIRS:
         scan_dir_abs = os.path.join(repo_root, scan_dir)
-        for dirpath, _dirnames, filenames in os.walk(scan_dir_abs):
+        for dirpath, dirnames, filenames in os.walk(scan_dir_abs):
+            dirnames[:] = [d for d in dirnames if d not in _SKIP_DIR_NAMES]
             dirpath_rel = os.path.relpath(dirpath, repo_root)
             if any(dirpath_rel == d or dirpath_rel.startswith(d + os.sep) for d in _SKIP_DIRS):
                 continue
@@ -57,8 +65,12 @@ def main() -> int:
                         try:
                             line.decode("ascii")
                         except UnicodeDecodeError:
+                            # Escaped, so a non-UTF-8 console (Windows cp1252)
+                            # cannot crash the report on the very glyph it flags.
+                            text = line.decode("utf-8", errors="replace").rstrip()
                             print("{:s}:{:d}:{:s}".format(
-                                filepath_rel, line_number, line.decode("utf-8", errors="replace").rstrip(),
+                                filepath_rel, line_number,
+                                text.encode("ascii", errors="backslashreplace").decode("ascii"),
                             ))
                             fail = 1
 

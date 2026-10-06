@@ -306,7 +306,7 @@ class TestUnifiedHistoryRender(unittest.TestCase):
         body = src[start:end]
         # Per-message source resolution for copy actions.
         self.assertIn("def _idx(", body)
-        self.assertIn("id(msg) in archived_ids", body)
+        self.assertIn("id(msg) in archived_index", body)
         # No stale whole-turn source flag / combined-list index lookups.
         self.assertNotIn("_hist_index(history", body)
 

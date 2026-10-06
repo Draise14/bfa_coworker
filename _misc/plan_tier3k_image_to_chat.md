@@ -1,20 +1,23 @@
 # 🖼️ BFA Coworker - Tier 3k: Image Attachments to Chat
 
 **📅 Date**: 2026-10-04
-**🚦 Status**: ✅ IMPLEMENTED - code + tests complete **and committed** (`d24d21d`).
-Remaining: 🔲 in-Blender manual verification, 🔲 lint sweep (ruff/mypy/pylint/
-vulture - available locally in `.lintvenv`, **not** CI-only), 🔲 PR.
-**➕ Follow-up (uncommitted)**: the image row moved **above the chat input** and
+**🚦 Status**: ✅ IMPLEMENTED and merged (PR #90 `f273c21`, drag-and-drop crash
+fix #91 `b9c6394`); all follow-ups below are committed, and the lint sweep ran
+(see 6.1). Remaining: 🔲 in-Blender manual verification (6.2).
+**➕ Follow-up**: the image row moved **above the chat input** and
 gained a **drawn thumbnail preview** (`_draw_attachment_preview` +
 `_ensure_attachment_preview`); tests 13 → 17.
-**🐞 Bug fix (uncommitted, see 6.3)**: attaching a **BMP/JPEG/TIFF** file (any
+**📌 Follow-up (`feccc8f`)**: a sticky image is pinned (fake user + PNG copy) and
+re-linked when undo or save/reopen silently empties the socket; only the user's
+clear or *Send once* forgets it (`TestStickyAttachment`).
+**🐞 Bug fix (see 6.3)**: attaching a **BMP/JPEG/TIFF** file (any
 non-PNG source) wrote the *source* format into `downscaled.png` - `imbuf.write`
 uses the buffer's own `file_type`, not the file name - producing an oversized
 scratch file, an `OSError` on a full scratch drive, and a traceback that killed
 the send. Fixed by pinning the buffer to PNG, making encoding total, preferring
 `bpy.app.tempdir`, and warning instead of failing silently; tests 17 → 25.
 **🎫 Issue**: Draise14/bfa_coworker #88 - "Feat: Allow attaching/adding an image to chat"
-**🌿 Branch**: `freebuff/i-need-to-do-this-for-the-chat-baa63f94-fc72-45af-b620-2f3185ddc275`
+**🌿 Branch**: merged to `main` (originally a Freebuff worktree branch)
 **🧩 Depends on**: the MCP screenshot tool code (imbuf downscale pattern), a
 vision-capable model (local llama-server mmproj or a remote vision model)
 **🔗 Related**: Tier 3i (`_SCREENSHOT_TOKENS` fixed image cost in the token ledger),

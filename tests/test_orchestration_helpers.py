@@ -220,6 +220,8 @@ _looks_like_unfinished_action = _extract_func(
     {
         "_ACTION_PROMISE_RE": _ACTION_NS["_ACTION_PROMISE_RE"],
         "_PERMISSION_ASK_RE": _ACTION_NS["_PERMISSION_ASK_RE"],
+        "_CLOSING_OFFER_RE": _ACTION_NS["_CLOSING_OFFER_RE"],
+        "_last_sentences": _ACTION_NS["_last_sentences"],
     },
 )
 
@@ -1685,8 +1687,10 @@ class TestModeAwareIterationBudget(unittest.TestCase):
         self.assertIn("_REMOTE_MAX_TOOL_ITERATIONS = 8", src)
         # The budget must be resolved per turn, not a single hard cap.
         self.assertIn("_max_iterations = (", src)
-        self.assertIn("while iterations < _max_iterations:", src)
-        self.assertIn("if iterations >= _max_iterations:", src)
+        # Rounds: the cap starts a new round when work is still progressing
+        # (long-request auto-continue) instead of always forcing a wrap-up.
+        self.assertIn("while iterations < _max_iterations or _try_start_round():", src)
+        self.assertIn("if iterations >= _max_iterations and not _finished", src)
 
 
 class TestMalformedToolCallFilter(unittest.TestCase):
@@ -1811,8 +1815,18 @@ class TestEndOfTurnExecutionGuarantee(unittest.TestCase):
             "Let me know if you'd like changes.",
             "Would you like me to adjust the size or radius?",
             "The scene is ready. Want me to tweak the lighting values?",
+            # Closing offers that USED to trip the promise regex and turned a
+            # finished conclusion into another forced round (log 2026-10-05).
+            "All four walls are aligned. If you'd like, I'll add a chimney next.",
+            "Roof and posts now sit on the foundation. I can also add trim -- just let me know.",
+            "Done. Let me know whether the proportions look right.",
         ):
             self.assertFalse(_looks_like_unfinished_action(msg), msg)
+
+    def test_promise_after_report_in_last_sentences_still_detected(self):
+        msg = ("I checked the scene: 28 objects, the roof is floating. "
+               "Now I'll move the roof down onto the posts.")
+        self.assertTrue(_looks_like_unfinished_action(msg))
 
     def test_nudge_fires_on_empty_content(self):
         # The nudge condition must also cover an EMPTY final message (a

@@ -354,7 +354,7 @@ class TestPromptPreflight(unittest.TestCase):
         out, err = _prompt_preflight(history, [], 1024)
         self.assertIsNotNone(err)
         self.assertIn("context window", err)
-        self.assertIn("compact", err.lower())
+        self.assertIn("checkpoint", err.lower())
 
     def test_no_error_after_trim_when_pinned_fits(self):
         history = _mk_history(30)

@@ -230,7 +230,8 @@ class _FakeLLMHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/props"):
             body = json.dumps({
-                "default_generation_settings": {"n_ctx": 8192},
+                "default_generation_settings": {
+                    "n_ctx": int(getattr(self.server, "n_ctx", 8192))},
             }).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -351,6 +352,16 @@ class _FakeLLMHandler(BaseHTTPRequestHandler):
                             {"status": "error",
                              "message": "RuntimeError: scene busy"}),
                     }]}
+                elif "dump_all" in code:
+                    # A LARGE result (object dump full of short numbers) --
+                    # the shape that overflowed a 16K window in the field.
+                    result = {"content": [{
+                        "type": "text",
+                        "text": json.dumps({"status": "ok", "result": {
+                            "objects": [{"name": "Obj{:d}".format(i),
+                                         "loc": [1.25, 0.5, i * 0.1]}
+                                        for i in range(220)]}}),
+                    }]}
                 else:
                     result = {"content": [{
                         "type": "text",
@@ -437,6 +448,10 @@ class _FakeLLMHandler(BaseHTTPRequestHandler):
                     "finish_reason": response_msg.get("finish_reason", "stop"),
                 }],
             }
+            _usage_fn = getattr(server, "usage_fn", None)
+            if _usage_fn is not None:
+                chunk["usage"] = {"prompt_tokens": int(_usage_fn(body)),
+                                  "completion_tokens": 5, "total_tokens": 0}
             payload = (
                 b"data: " + json.dumps(chunk).encode() + b"\n\n"
                 b"data: [DONE]\n\n"
@@ -1402,7 +1417,7 @@ class TestToolLoopIntegration(_TurnLoopTestBase):
             self._unpin_fake_bpy()
         self.assertIn("no longer fits the local context window",
                       self.state.error)
-        self.assertIn("Compact Now", self.state.error)
+        self.assertIn("Checkpoint Now", self.state.error)
         # No LLM request went out.
         self.assertEqual(len(self._main_requests()), 0)
         self.assertIs(history, self.state.conversation_history)

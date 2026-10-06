@@ -83,6 +83,7 @@ def _sync_prefs_to_config(prefs: bpy.types.AddonPreferences) -> None:
     # _BFACW_Preferences class registered (e.g. before a restart after an
     # addon update) must not crash agent start over a newer preference.
     llm_cfg.lock_scene_while_working = getattr(prefs, "lock_scene_while_working", True)
+    llm_cfg.auto_continue_rounds = int(getattr(prefs, "auto_continue_rounds", 3))
     llm_cfg.remote_api_url = prefs.remote_api_url
     llm_cfg.remote_api_key = prefs.remote_api_key
     llm_cfg.remote_model = prefs.remote_model
@@ -209,12 +210,38 @@ def _fmt_duration(seconds: float) -> str:
 
 
 def _is_system_note_msg(msg: dict) -> bool:
-    """True for an agent-injected user message (begins with ``[System:``)."""
-    return (
-        msg.get("role") == "user"
-        and isinstance(msg.get("content"), str)
-        and msg.get("content", "").startswith("[System:")
-    )
+    """True for an agent-injected user-role note (never a real user turn).
+
+    Mirrors ``session_memory.is_system_note`` (kept self-contained so the
+    draw path never imports): the structured ``system_note`` flag first,
+    then the ``[System:`` prefix, then the known legacy prompt -- the
+    unprefixed "Continue." older builds could leave in the history, which
+    rendered as a NEW user turn written by the agent itself.
+    """
+    if msg.get("role") != "user":
+        return False
+    if msg.get("system_note"):
+        return True
+    content = msg.get("content")
+    if isinstance(content, list):
+        content = " ".join(
+            str(b.get("text", "")) for b in content if isinstance(b, dict))
+    text = str(content or "").lstrip()
+    return (text.startswith("[System:")
+            or text.startswith("Continue. Keep this next step small"))
+
+
+# Friendly Workshop titles for injected notes, keyed by ``system_note`` kind.
+_NOTE_TITLES = {
+    "followup": ("Coworker → itself: keep going", 'FORWARD'),
+    "continue": ("Continued after the output limit", 'TRIA_RIGHT'),
+    "nudge": ("Nudge: act, don't just describe", 'PLAY'),
+    "entity": ("Scene context", 'OUTLINER_OB_MESH'),
+    "scene_change": ("You changed the scene mid-turn", 'VIEW_PAN'),
+    "spiral": ("Repeated-error guidance", 'ERROR'),
+    "malformed": ("Re-emit a broken tool call", 'ERROR'),
+    "wrapup": ("Step budget reached -- progress report", 'TIME'),
+}
 
 
 def _group_turns(history: list) -> list[list[dict]]:
@@ -844,18 +871,18 @@ def _draw_archive_node(
     retired_count: int,
     summary: str,
 ) -> None:
-    """Draw an 'Archive' node in the Workshop timeline.
+    """Draw a 'Checkpoint' node in the Workshop timeline.
 
-    Marks where a compaction retired older turns out of the model's context, so
-    the user can see exactly where their history was compressed.  The summary
-    is the memory block written at that point.  Display-only -- never sent to
-    the model.
+    Marks where older messages were summarized out of the model's context
+    (a checkpoint is saved first, so it can be restored from the Session
+    panel).  The summary is the memory note written at that point.
+    Display-only -- never sent to the model.
     """
     box = layout.box()
     row = box.row()
     row.label(
-        text="Archive \u2014 {:d} turn(s) compacted".format(retired_count),
-        icon='FILE_ARCHIVE',
+        text="Checkpoint \u2014 {:d} earlier message(s) summarized".format(retired_count),
+        icon='BOOKMARKS',
     )
     body = str(summary or "").strip()
     if body:
@@ -2156,6 +2183,12 @@ def chat_timer_update() -> float | None:
     except Exception:
         pass
 
+    # Mirror the pinned goal & plan to/from its editable text block.
+    try:
+        _sync_plan_text()
+    except Exception as _plan_ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] plan text sync skipped -- {:s}".format(str(_plan_ex)))
+
     # Redraw all chat panels.
     for wm in bpy.data.window_managers:
         for win in wm.windows:
@@ -2318,6 +2351,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         # -- Mode toggle --
         row = layout.row(align=True)
         row.prop(props, "chat_mode", expand=True)
+        _draw_reasoning_effort_row(layout, prefs)
 
         layout.separator()
 
@@ -2557,15 +2591,20 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 for pm in process_msgs:
                     pr = pm.get("role", "")
                     pc = pm.get("content", "")
-                    is_sm = (
-                        pr == "user"
-                        and isinstance(pc, str)
-                        and pc.startswith("[System:")
-                    )
+                    is_sm = _is_system_note_msg(pm)
                     if is_sm:
+                        # Agent-to-itself guidance: a compact, titled note --
+                        # never a user bubble.
+                        _title, _icon = _NOTE_TITLES.get(
+                            str(pm.get("system_note") or ""),
+                            ("System context", 'INFO'))
                         sb = work_box.box()
-                        sb.label(text="System Context", icon="INFO")
-                        _draw_multiline(sb, pc)
+                        sb.scale_y = 0.85
+                        sb.label(text=_title, icon=_icon)
+                        _body = pc if isinstance(pc, str) else ""
+                        if _body.startswith("[System:") and _body.endswith("]"):
+                            _body = _body[len("[System:"):-1].strip()
+                        _draw_multiline(sb, _body)
                     elif pr == "reasoning":
                         _pm_idx, _pm_arch = _idx(pm)
                         _draw_reasoning(
@@ -2661,6 +2700,26 @@ class BFACW_PT_chat_session(Panel):  # type: ignore[misc]
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
         state = agent_controller._agent_state
         _draw_session_section(layout, context, props, state)
+
+
+class BFACW_PT_chat_session_goal(Panel):  # type: ignore[misc]
+    """Session > Goal & Plan -- the pinned goal and step plan."""
+    bl_label = "Goal & Plan"
+    bl_idname = "BFACW_PT_chat_session_goal"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Coworker"
+    bl_parent_id = "BFACW_PT_chat_session"
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return BFACW_PT_chat_session.poll(context)
+
+    def draw_header(self, context: bpy.types.Context) -> None:
+        self.layout.label(text="", icon='PINNED')
+
+    def draw(self, context: bpy.types.Context) -> None:
+        _draw_goal_plan_section(self.layout)
 
 
 class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
@@ -2914,6 +2973,7 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
             # Agent/Ask mode toggle (Tier 1).
             row = layout.row(align=True)
             row.prop(props, "chat_mode", expand=True)
+            _draw_reasoning_effort_row(layout, prefs)
 
             # Project Rules button (Tier 2).
             row = layout.row(align=True)
@@ -2964,7 +3024,7 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
                         _rn = int(msg.get("retired", 0) or 0)
                     except (TypeError, ValueError):
                         _rn = 0
-                    preview = "compacted {:d} turn(s)".format(_rn)
+                    preview = "checkpoint: {:d} message(s) summarized".format(_rn)
                 else:
                     preview = content if content else ""
                 _draw_multiline(box, "[{:s}] {:s}".format(role, preview))
@@ -3022,7 +3082,7 @@ def _draw_session_section(layout, context, props, state) -> None:
         row.progress(factor=pct / 100.0, type='BAR')
         if pct >= int(_sm.COMPACTION_TRIGGER_RATIO * 100):
             ctx_box.label(
-                text="Approaching limit -- old turns will be compacted",
+                text="Near the limit -- older turns will be summarized (checkpoint)",
                 icon='INFO')
     else:
         ctx_box.label(text="No usage recorded yet", icon='INFO')
@@ -3045,7 +3105,7 @@ def _draw_session_section(layout, context, props, state) -> None:
                     placeholder="Session memory (empty = reload current)")
     row = mem_box.row(align=True)
     row.operator("bfacw.session_memory_view_edit", icon='TEXT', text="Apply Memory")
-    row.operator("bfacw.session_compact_now", icon='FILE_REFRESH', text="Compact Now")
+    row.operator("bfacw.session_compact_now", icon='BOOKMARKS', text="Checkpoint Now")
 
     # -- Checkpoints (Restore / Branch) -----------------------------
     cp_box = layout.box()
@@ -3161,12 +3221,14 @@ _MANUAL_COMPACT_KEEP_RECENT = 8
 
 
 class BFACW_OT_session_compact_now(Operator):  # type: ignore[misc]
-    """Compact the conversation now: retire old turns and rebuild the memory block"""
+    """Checkpoint now: save the session, then summarize older turns into memory"""
     bl_idname = "bfacw.session_compact_now"
-    bl_label = "Compact Now"
+    bl_label = "Checkpoint Now"
     bl_description = (
-        "Retire the oldest conversation turns into the session memory and "
-        "archive. The pre-compaction state is saved as a checkpoint first."
+        "Save a checkpoint of the whole session, then summarize the oldest "
+        "turns into the session memory to free context. The goal and plan "
+        "are pinned and never summarized away. Restore the checkpoint from "
+        "the list below at any time."
     )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
@@ -3193,7 +3255,170 @@ class BFACW_OT_session_compact_now(Operator):  # type: ignore[misc]
             st.append_retired(retired)
             history[:] = kept
         _save_chat_history()
-        self.report({"INFO"}, "Compacted: {:d} messages retired".format(len(retired)))
+        self.report({"INFO"}, "Checkpoint saved -- {:d} older messages summarized".format(len(retired)))
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# Goal & plan (Tier 3 hardening)
+
+def _draw_reasoning_effort_row(layout, prefs) -> None:
+    """Compact Reasoning Effort selector for the chat panels (local mode).
+
+    The thinking budget is sent with every request, so it is safe to change
+    at any time -- including mid-session; it applies from the next message.
+    Remote providers ignore it, so the row is shown for the local model only.
+    """
+    if getattr(prefs, "operating_mode", "") != "LOCAL_LLM":
+        return
+    if not hasattr(prefs, "reasoning_effort"):
+        return
+    row = layout.row(align=True)
+    row.scale_y = 0.9
+    row.label(text="Thinking", icon='SOLO_ON')
+    row.prop(prefs, "reasoning_effort", text="")
+
+
+def _draw_goal_plan_section(layout) -> None:
+    """Draw the pinned goal and plan (Session > Goal & Plan sub-panel)."""
+    from . import session_memory as _sm
+    with _sm.store_lock:
+        g = _sm.store.goal
+        session_goal = g.session_goal
+        turn_goal = g.turn_goal
+        steps = [dict(s) for s in g.steps]
+        notes = g.user_notes
+        done, total = g.progress()
+    if not (session_goal or turn_goal or steps or notes):
+        _draw_multiline(
+            layout,
+            "Set automatically from your first request. It is pinned to every "
+            "request, so it survives checkpoints and long turns.",
+            icon='INFO')
+    else:
+        box = layout.box()
+        box.label(text="Session goal", icon='PINNED')
+        _draw_multiline(box, session_goal or "(none)")
+        if turn_goal and turn_goal != session_goal:
+            box.label(text="Current request", icon='USER')
+            _draw_multiline(box, turn_goal)
+        if steps:
+            pbox = layout.box()
+            row = pbox.row()
+            row.label(text="Plan  {:d}/{:d} done".format(done, total), icon='PRESET')
+            if total:
+                row.progress(factor=done / float(total), type='BAR', text="")
+            _icons = {"done": 'CHECKBOX_HLT', "doing": 'PLAY', "todo": 'CHECKBOX_DEHLT'}
+            for i, s in enumerate(steps, 1):
+                srow = pbox.row()
+                srow.label(text="", icon=_icons.get(s.get("status"), 'CHECKBOX_DEHLT'))
+                _draw_multiline(srow, "{:d}. {:s}".format(i, s.get("text", "")))
+        if notes:
+            nbox = layout.box()
+            nbox.label(text="Your notes", icon='TEXT')
+            _draw_multiline(nbox, notes)
+    row = layout.row(align=True)
+    row.operator("bfacw.plan_open", icon='TEXT', text="Edit in Text Editor")
+    row.operator("bfacw.plan_clear", icon='X', text="Clear Plan")
+
+
+# Last text written to (or adopted from) the plan text block.  A difference
+# means the USER edited it -> parse back into the store.  ``None`` until the
+# block is first seen this session.
+_plan_last_written: str | None = None
+
+
+def _sync_plan_text() -> None:
+    """Keep the ``Coworker Plan.md`` text block and the pinned plan in sync.
+
+    Main thread only (called from the chat timer).  The block exists only
+    after the user opened it once ("Edit in Text Editor"), so the add-on
+    never adds a datablock to the user's file uninvited.  User edits win:
+    when the text differs from what we last wrote, it is parsed into the
+    store; otherwise store changes (new goal, plan progress) are written out.
+    """
+    global _plan_last_written
+    from . import session_memory as _sm
+    name = _sm.goal_plan.PLAN_TEXT_NAME
+    text = bpy.data.texts.get(name)
+    if text is None:
+        _plan_last_written = None
+        return
+    current = text.as_string()
+    with _sm.store_lock:
+        if _plan_last_written is not None and current != _plan_last_written:
+            # The user edited the file: adopt it.
+            if _sm.store.goal.parse_markdown(current):
+                print("[Coworker] plan: applied your edits from '{:s}'".format(name))
+            _plan_last_written = current
+            return
+        rendered = _sm.store.goal.render_markdown()
+    if rendered != current:
+        text.clear()
+        text.write(rendered)
+        current = rendered
+    _plan_last_written = current
+
+
+class BFACW_OT_plan_open(Operator):  # type: ignore[misc]
+    """Open the goal & plan in the Text Editor to read or edit it"""
+    bl_idname = "bfacw.plan_open"
+    bl_label = "Edit Plan"
+    bl_description = (
+        "Open the pinned goal & plan as an editable text ('Coworker Plan.md'). "
+        "Edit the goal, steps ([ ] / [>] / [x]) or notes -- your changes are "
+        "sent to the Coworker with its next request"
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        global _plan_last_written
+        from . import session_memory as _sm
+        name = _sm.goal_plan.PLAN_TEXT_NAME
+        text = bpy.data.texts.get(name) or bpy.data.texts.new(name)
+        with _sm.store_lock:
+            rendered = _sm.store.goal.render_markdown()
+        text.clear()
+        text.write(rendered)
+        _plan_last_written = rendered
+        # Show it: reuse an open Text Editor, else open one in a new window.
+        for win in context.window_manager.windows:
+            for area in win.screen.areas:
+                if area.type == 'TEXT_EDITOR':
+                    area.spaces.active.text = text
+                    area.tag_redraw()
+                    self.report({"INFO"}, "Plan opened in the Text Editor")
+                    return {"FINISHED"}
+        try:
+            bpy.ops.wm.window_new()
+            new_win = context.window_manager.windows[-1]
+            area = new_win.screen.areas[0]
+            area.ui_type = 'TEXT_EDITOR'
+            area.spaces.active.text = text
+            self.report({"INFO"}, "Plan opened in a new Text Editor window")
+        except Exception:  # pylint: disable=broad-exception-caught
+            self.report({"INFO"}, "Plan saved as text '{:s}' -- open it in any "
+                                  "Text Editor".format(name))
+        return {"FINISHED"}
+
+
+class BFACW_OT_plan_clear(Operator):  # type: ignore[misc]
+    """Clear the step plan (the goals are kept)"""
+    bl_idname = "bfacw.plan_clear"
+    bl_label = "Clear Plan"
+    bl_description = (
+        "Remove the current step plan and your notes. The session goal and "
+        "current request stay pinned"
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        from . import session_memory as _sm
+        with _sm.store_lock:
+            g = _sm.store.goal
+            g.steps = []
+            g.user_notes = ""
+            g.revision += 1
+        _save_chat_history()
+        self.report({"INFO"}, "Plan cleared")
         return {"FINISHED"}
 
 
@@ -3206,6 +3431,8 @@ _classes = (
     BFACW_OT_session_checkpoint_restore,
     BFACW_OT_session_memory_view_edit,
     BFACW_OT_session_compact_now,
+    BFACW_OT_plan_open,
+    BFACW_OT_plan_clear,
     BFACW_OT_chat_send,
     BFACW_OT_chat_clear,
     BFACW_OT_chat_stop,
@@ -3228,6 +3455,7 @@ _classes = (
     BFACW_PT_chat_queue,
     BFACW_PT_chat_panel,
     BFACW_PT_chat_session,
+    BFACW_PT_chat_session_goal,
     BFACW_PT_chat_status,
     BFACW_PT_chat_text_editor,
 )

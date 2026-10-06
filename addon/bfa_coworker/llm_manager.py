@@ -650,6 +650,9 @@ class LLMConfig:
     # un-selectable in the UI so the user cannot re-target them mid-turn.
     # Restored when the turn ends.
     lock_scene_while_working: bool = True
+    # Long-request auto-continue: extra rounds a turn may run when it used
+    # its tool-iteration budget while still making progress (all modes).
+    auto_continue_rounds: int = 3
     # Remote mode
     remote_api_url: str = ""
     remote_api_key: str = ""
@@ -1276,6 +1279,7 @@ def set_config(cfg: LLMConfig) -> None:
         _config.llama_backend = cfg.llama_backend
         _config.local_kv_cache_quant = cfg.local_kv_cache_quant
         _config.lock_scene_while_working = cfg.lock_scene_while_working
+        _config.auto_continue_rounds = cfg.auto_continue_rounds
         _config.remote_api_url = cfg.remote_api_url
         _config.remote_api_key = cfg.remote_api_key
         _config.remote_model = cfg.remote_model
@@ -1299,6 +1303,7 @@ def get_config() -> LLMConfig:
             llama_backend=_config.llama_backend,
             local_kv_cache_quant=_config.local_kv_cache_quant,
             lock_scene_while_working=_config.lock_scene_while_working,
+            auto_continue_rounds=_config.auto_continue_rounds,
             remote_api_url=_config.remote_api_url,
             remote_api_key=_config.remote_api_key,
             remote_model=_config.remote_model,

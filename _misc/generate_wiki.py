@@ -1090,7 +1090,7 @@ The sidebar is split into four stacked panels, in order:
 | Panel | Purpose |
 |-------|---------|
 | **Coworker** | Mode, Start/Stop, status line, input, and the conversation history |
-| **Session** | Context usage, session memory, compaction, and checkpoints |
+| **Session** | A one-line summary, with **Context** and **Memory & Checkpoints** sub-panels |
 | **Queue** | Messages queued while the agent is busy |
 | **Status & Diagnostics** | Health dots, model info, token/speed readouts, logs |
 
@@ -1118,17 +1118,20 @@ The main panel holds everything you need to hold a conversation:
   - a non-fatal **warning** line (e.g. a tool-calling downgrade) when there is no error
 - **Scene protection notice** — while the coworker works, the objects it created are briefly un-selectable (see [Co-work Scene Lock](#-co-work-scene-lock)); this row tells you how many are locked.
 - **Mode toggle** — **Agent** or **Ask** (see [Chat Modes](#-chat-modes)).
+- **Thinking** — the reasoning-effort selector (Local LLM mode). It is sent with every request, so you can change it any time; it applies from your next message.
+- **Image** — attach a reference image for vision models (see [Attaching an Image](#-attaching-an-image)).
 - **Input** — a multi-line text box, with an **@ Mention** button below it.
 - **Action buttons** — **Send** + **New Thread** when idle; **Queue** + **Stop** while a turn is running.
-- **Conversation history** — drawn directly under the input so the chat reads as one continuous thread (see below).
+- **Goal & Plan** — a collapsible section under the buttons, shown once a conversation has a goal (see [Goal & Plan](#-goal--plan)).
+- **Conversation history** — drawn under the input so the chat reads as one continuous thread (see below).
 
 ### 💭 Conversation History
 
 Messages are grouped into **turns** — one real user send is one turn. Each turn is a box containing:
 
 - **Turn header** — `Turn N` with a status icon (✓ when the turn concluded) and a copy button.
-- **`You:`** — your message, always visible.
-- **Workshop** — a collapsible section holding the turn's internals: reasoning, tool calls and their results, injected system context, and self-prompts. It is collapsed by default; only the internals collapse, so the turn header and your message stay visible.
+- **`You:`** — your message, always visible. An attached image shows as an image icon.
+- **Workshop** — a collapsible section holding the turn's internals: reasoning, tool calls and their results, and the coworker's notes to itself (titled, e.g. *Coworker → itself: keep going*, *Continued after the output limit*, *Step budget reached*). It is collapsed by default; only the internals collapse, so the turn header and your message stay visible. Notes to itself are never shown as your messages.
 - **`* Coworker:`** — the final reply, rendered as markdown.
 
 While a turn is still running, the **active turn** shows a live readout (`Coworker (live)` with a spinner) that streams the answer as it forms; it is replaced by the final message only when the turn ends. A **Newest First** toggle flips the display order, and the number of visible turns is capped by the **Max Visible Turns** preference.
@@ -1139,15 +1142,36 @@ While a turn is still running, the **active turn** shows a live readout (`Cowork
 > - **State:** A completed turn with the Workshop expanded, showing reasoning and a tool result box
 > - **Callouts:** 1. Turn header, 2. You: message, 3. Workshop (expanded), 4. Tool result, 5. Coworker reply
 
+### 📌 Goal & Plan
+
+Long requests stay on track because the coworker keeps a **pinned goal and plan** that is sent with every request and survives checkpoints:
+
+- **Session goal** — your first request of the thread; **Current request** — your latest one.
+- **Plan** — a short step list the coworker creates for multi-step work. Steps **tick off live while the turn runs** — when the coworker marks them, or says so in its reply ("Step 2 is done").
+- **Edit in Text Editor** — opens the goal and plan as `Coworker Plan.md`; edit the goal, the steps (`[ ]` todo, `[>]` doing, `[x]` done) or add notes, and the coworker uses your edits on its next request. **Clear Plan** removes the steps and notes.
+
+### 🛑 Knowing When to Stop
+
+- When every plan step is done, the coworker is told to stop and reply instead of polishing on.
+- **Long requests** continue automatically in rounds (**Auto-Continue Rounds** preference, default 3) — but only while they make real progress (a scene change or a ticked step), and at most one extra round without a plan.
+- A run of steps that only re-check the scene or repeat the same call ends the turn.
+- Every wrap-up ends with **one suggested next step as a question**, e.g. *"Want me to add the chimney next?"*
+
 ### 🗃️ Session Panel
 
-The **Session** panel is where long conversations are managed. It shows:
+The **Session** panel shows a one-line summary (e.g. *Context 42% · 3 checkpoints*) with two sub-panels:
 
-- **Context Window** — a live usage bar (percent of the context window currently occupied) with a warning once old turns are about to be compacted.
-- **Memory** — the compact session-memory note, with a multiline editor, an **Apply Memory** button, and a **Compact Now** button.
-- **Checkpoints** — a collapsible list of automatic snapshots, each with a radio button to pick the restore target and a **Restore** button.
+- **Context** — one bar: how full the model's context window is (e.g. *42% of 16k tokens*).
+- **Memory & Checkpoints** — what was summarized from older turns, in plain words; a **Checkpoint Now** button; and the restore points, each titled with the first words of your request at that time (*Checkpoint 3: Looks like there are a lot of floating parts…*), its time, size, and a restore button. The raw note the model reads can be edited behind the pencil toggle.
 
 See the [[User-Documentation/Session-Memory|Session Memory & Checkpoints]] page for the full story.
+
+### 🖼️ Attaching an Image
+
+The image row (collapsible) holds a Blender-standard image socket: pick a loaded image, open a file, capture the **Render** or the **Screen**, or drag an image onto the panel. The image is sent with your message to a vision-capable model.
+
+- **Sticky by default** — it is re-sent with every message until you clear it. Tick **Send once** to send it with the next message only.
+- The image is **kept safe**: it is saved with your `.blend` (and copied to disk when it has no file of its own), and re-linked automatically if Blender drops it — only your own clear removes it.
 
 ### 📥 Queue Panel
 
@@ -1257,101 +1281,73 @@ def generate_session_memory() -> str:
 
 ## 🧠 Why Session Memory Exists
 
-A local model has a fixed **context window** — the maximum number of tokens it can read at once. A long conversation eventually fills it. Instead of failing, the coworker **compacts**: it retires the oldest turns, summarizes them into a compact **memory block**, and keeps going. The memory block is injected into the system prompt, so the agent still knows the goal, the decisions, and what is pending.
+A local model has a fixed **context window** — the maximum number of tokens it can read at once. A long conversation eventually fills it. Instead of failing, the coworker saves a **checkpoint**, summarizes the oldest turns into a compact **memory note**, and keeps going. Your **goal and plan** are pinned separately, so a summary can never lose what you asked for.
 
-Everything is visible and controllable from the **Session** panel in the 3D Viewport sidebar.
+Everything is visible from the **Session** panel (3D Viewport sidebar → Coworker tab).
 
 """ + _screenshot(
-    "Session panel showing the context usage bar, memory editor, and checkpoint list",
+    "Session panel with its Context and Memory & Checkpoints sub-panels",
     "3D Viewport → Sidebar → Coworker tab → Session panel",
-    "Session panel visible with a partially-filled context bar, a memory note, and checkpoints expanded",
-    "1. Context Window bar, 2. Memory editor, 3. Apply Memory / Compact Now, 4. Checkpoints list, 5. Restore"
+    "A long conversation: the summary line, a partly filled Context bar, a plain-language memory, and two checkpoints",
+    "1. Summary line, 2. Context bar, 3. Memory (plain words), 4. Checkpoint Now, 5. Checkpoint rows with restore buttons"
 ) + """
 
 ---
 
-## 📊 Context Window
+## 📊 Context
 
-The **Context Window** box shows how full the window is:
-
-- A percentage and a progress bar for the **latest request's** prompt tokens (current occupancy — not a running total, so the bar falls again after a compaction).
-- A note — *"Approaching limit — old turns will be compacted"* — once usage reaches the compaction trigger.
+The **Context** sub-panel shows one bar: how much of the context window the latest request used (e.g. *42% of 16k tokens*). It falls again after a checkpoint. When it gets full, a note says older turns will be summarized automatically.
 
 ---
 
-## 🗜️ Automatic Compaction
+## 🔖 Automatic Checkpoints
 
-Compaction runs automatically when the estimated prompt reaches **60%** of the safe prompt budget (`COMPACTION_TRIGGER_RATIO`). It can also fire on an **overflow** — when a request would exceed the window — and the turn then retries once with the reduced history.
+When the prompt approaches the window (or a request would overflow it), the coworker:
 
-When it runs:
+1. Saves a **checkpoint** of the whole session first.
+2. Moves the oldest turns out of the model's context (they stay visible in the chat and on disk).
+3. Rewrites the **memory note** with a small dedicated request (with a simple fallback summary if that fails).
 
-1. The oldest turns are **retired** from the live history (the most recent ~20 messages stay verbatim).
-2. The retired turns are appended to a disk **archive** (`archive.jsonl`).
-3. A dedicated, small LLM call rewrites the **memory block** (with a heuristic fallback if that call fails).
-4. An automatic **checkpoint** snapshots the *pre-compaction* state.
-
-The system prompt is never retired or archived — it is a live instruction, not conversation.
+During one very long turn it also shortens its own older tool results in what it sends, so the request always fits — the chat keeps everything. The prompt-size estimate calibrates itself from the server's real token counts.
 
 ---
 
-## 📝 The Memory Block
+## 📝 Memory
 
-The memory block is a compact, structured note kept under ~600 tokens, with fixed headings:
+The **Memory & Checkpoints** sub-panel shows the memory note in plain words — *"Earlier you asked: …"*, *"You: …"*, *"Coworker: …"*, *"Problems hit: …"*. Its size grows with your context window, and when it is full the **oldest** lines go first.
 
-```
-[Session memory]
-Goal: …
-Decisions: …
-Objects & files touched: …
-Pending: …
-Errors seen: …
-Last updated: turn N
-```
-
-- It is injected into the **sent** system prompt on every request (the stored prompt is untouched).
-- Turn-scoped `[System: …]` context messages are **excluded** from memory building, so a warning that was only true for one turn never becomes a false memory.
-- You can edit it by hand: type in the **Memory** box and click **Apply Memory**. Leaving the box empty reloads the current note.
+The exact note the model reads can be edited: click the **pencil** toggle, edit it, and press **Apply Memory**.
 
 ---
 
-## 🖐️ Compact Now
+## 🖐️ Checkpoint Now
 
-The **Compact Now** button compacts on demand:
-
-- It keeps a smaller recent window (8 messages) than the automatic path.
-- It refuses to run when there is nothing genuinely retirable — a young conversation is never reduced to the system prompt.
-- It snapshots the pre-compaction state first, so the action is **reversible** via a checkpoint.
+**Checkpoint Now** saves a checkpoint and summarizes older turns on demand. It does nothing when the conversation is still too young to summarize.
 
 ---
 
-## 🚩 Checkpoints
+## 🚩 Restore Points
 
-Checkpoints are automatic snapshots of the session (memory block + history + message count). They are created at each compaction and at other key moments, and are labelled by **reason**:
+Each checkpoint reads like a history entry:
 
-| Reason | Created when |
-|--------|--------------|
-| `compaction` | The automatic 60% trigger fires |
-| `overflow` | A request would exceed the window |
-| `manual-compaction` | You press **Compact Now** |
-| `pre-restore` | You restore a checkpoint (the current state is saved first) |
+> **Checkpoint 3: Looks like there are a lot of floating parts…**
+> 10:42 · 24 msgs · ~4.1k tokens · auto
 
-The list keeps the newest **10** checkpoints. Each row shows its reason, time, and message count, with a radio button to pick the **restore target**.
+*auto* = saved automatically, *manual* = **Checkpoint Now**, *before restore* = the state saved when you restored another one. The newest **10** are kept.
 
-### ♻️ Restore
-
-**Restore** rewinds the conversation to the selected checkpoint. It is **non-destructive**: the current session is snapshotted as a `pre-restore` checkpoint first, so nothing is lost.
+Click a row's **restore** button (you are asked to confirm) to go back to it. Restoring is **non-destructive** — the current state is saved as a checkpoint first — and it also restores the goal & plan as they were.
 
 ---
 
-## 🗄️ The Archive
+## 📌 Goal & Plan
 
-Retired turns are appended to `archive.jsonl` next to the chat-history JSON. The archive is a continuity/debugging fallback, not the active conversation, so it is capped (newest-N rotation) and cannot grow without bound.
+The goal and plan live in the **chat panel** (under the buttons), not in the summarized memory. See [[User-Documentation/Chat-Interface|Chat Interface]] → *Goal & Plan*.
 
 ---
 
 ## 🧹 New Thread
 
-**New Thread** clears the conversation *and* resets all session state — the memory block, the checkpoints, the turn counter, and the loaded tool domains — so a fresh thread never inherits stale context.
+**New Thread** clears the conversation *and* resets all session state — memory, checkpoints, goal & plan, the turn counter, and the loaded tool domains.
 
 ---
 
@@ -1360,16 +1356,17 @@ Retired turns are appended to `archive.jsonl` next to the chat-history JSON. The
 | File | Contents |
 |------|----------|
 | `scripts/bfa_coworker_chat_history/<blend>.json` | The live conversation history |
-| `scripts/bfa_coworker_chat_history/default_session_memory.json` | Memory block + checkpoints (sidecar) |
-| `scripts/bfa_coworker_chat_history/archive.jsonl` | Retired turns (capped) |
+| `scripts/bfa_coworker_chat_history/default_session_memory.json` | Memory, checkpoints, goal & plan (sidecar) |
+| `scripts/bfa_coworker_chat_history/archive.jsonl` | Summarized turns (capped) |
+| Text block `Coworker Plan.md` | The editable goal & plan (only after you open it) |
 
 ---
 
 ## 🔗 Related
 
 - [[User-Documentation/Chat-Interface|Chat Interface]] — the panels these controls live in
-- [[User-Documentation/Configuration|Configuration]] — context window and reasoning settings
-- [[API-Glossary/Glossary|Glossary]] — Compaction, Checkpoint, Memory Block
+- [[User-Documentation/Configuration|Configuration]] — context window, reasoning, auto-continue rounds
+- [[API-Glossary/Glossary|Glossary]] — Checkpoint, Memory Block, Goal & Plan
 """
 
 
@@ -3751,8 +3748,11 @@ An automatic snapshot of the session (memory block + history + message count), c
 ### CLI (Command Line Interface)
 The `bfa_coworker` CLI command for running the bridge server in background mode: `blender --background file.blend --command bfa_coworker`.
 
+### Goal & Plan
+The pinned session goal, current request and step plan. Sent with every request and kept out of summarization, so long turns and checkpoints never lose what you asked for; steps tick off live as the coworker reports them done. See [[User-Documentation/Chat-Interface|Chat Interface]].
+
 ### Compaction
-Retiring the oldest conversation turns into the session memory and archive when the prompt approaches the context limit, so a long conversation keeps going instead of failing. See [[User-Documentation/Session-Memory|Session Memory & Checkpoints]].
+Shown as **Checkpoint** in the UI. Retiring the oldest conversation turns into the session memory and archive when the prompt approaches the context limit, so a long conversation keeps going instead of failing. See [[User-Documentation/Session-Memory|Session Memory & Checkpoints]].
 
 ### Context Window
 The maximum number of tokens the LLM can process at once. Larger values allow longer conversations but use more RAM.

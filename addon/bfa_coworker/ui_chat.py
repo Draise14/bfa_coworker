@@ -1093,6 +1093,110 @@ def _chat_history_path() -> Path:
     return _chat_history_dir() / "{:s}.json".format(session_name)
 
 
+# ---------------------------------------------------------------------------
+# Sticky attachment (survives undo / orphan cleanup)
+#
+# The socket is an ID pointer on the WindowManager.  Blender can free the
+# image behind it without the add-on hearing about it -- the agent's own
+# auto-undo restores a scene state from before the image was loaded, and an
+# image nobody else uses is dropped when the file is saved and reopened --
+# and the pointer then silently goes empty: "the image got cleared".  So the
+# attached image is (1) given a fake user, so Blender keeps it and saves it
+# with the .blend, (2) written to disk when it has no file of its own, and
+# (3) remembered here, so the socket is re-linked whenever it empties
+# WITHOUT the user clearing it.  Only the user's own clear (the socket's X,
+# or "Send once") forgets it.
+
+_sticky_attachment: dict = {}
+# True while the add-on itself sets the socket (re-link), so the update
+# callback does not treat it as a user action.
+_sticky_relinking = False
+
+
+def _remember_attachment(img) -> None:
+    """Pin *img* for the session: fake user + file on disk + remembered."""
+    if img is None:
+        return
+    had_fake = bool(getattr(img, "use_fake_user", False))
+    try:
+        img.use_fake_user = True
+    except (AttributeError, RuntimeError):
+        pass
+    try:
+        path = chat_attachments.persist_image(img)
+    except Exception:  # pylint: disable=broad-exception-caught
+        path = ""
+    previous_uri = (_sticky_attachment.get("uri")
+                    if _sticky_attachment.get("image_name") == img.name else "")
+    _sticky_attachment.clear()
+    _sticky_attachment.update({
+        "image_name": img.name,
+        "path": path,
+        "name": chat_attachments.attachment_name(img),
+        "blend": bpy.data.filepath,
+        "uri": previous_uri or "",
+        "we_set_fake_user": not had_fake,
+    })
+
+
+def _forget_attachment() -> None:
+    """The user cleared the socket: drop the pin (and our fake user)."""
+    name = _sticky_attachment.get("image_name")
+    if name and _sticky_attachment.get("we_set_fake_user"):
+        img = bpy.data.images.get(name)
+        if img is not None:
+            try:
+                img.use_fake_user = False
+            except (AttributeError, RuntimeError):
+                pass
+    _sticky_attachment.clear()
+
+
+def _restore_attachment(props):
+    """Re-link the socket if Blender emptied it behind the user's back.
+
+    Returns the (re-linked) image, or ``None``.  Never crosses files: an
+    attachment remembered for another .blend is forgotten instead.
+    """
+    global _sticky_relinking
+    if props.chat_image is not None:
+        return props.chat_image
+    if not _sticky_attachment:
+        return None
+    if _sticky_attachment.get("blend") != bpy.data.filepath:
+        _sticky_attachment.clear()
+        return None
+    img = bpy.data.images.get(_sticky_attachment.get("image_name") or "")
+    if img is None:
+        img = chat_attachments.load_image_file(_sticky_attachment.get("path") or "")
+    if img is None:
+        return None
+    _sticky_relinking = True
+    try:
+        props.chat_image = img
+    finally:
+        _sticky_relinking = False
+    try:
+        img.use_fake_user = True
+    except (AttributeError, RuntimeError):
+        pass
+    _sticky_attachment["image_name"] = img.name
+    return img
+
+
+def _on_chat_image_update(self, _context) -> None:
+    """RNA update for the socket: remember a new image, forget a user clear."""
+    if _sticky_relinking:
+        return
+    try:
+        if self.chat_image is None:
+            _forget_attachment()
+        else:
+            _remember_attachment(self.chat_image)
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] attachment pin skipped -- {:s}".format(str(ex)))
+
+
 class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
     """Persistent chat history properties stored on the WindowManager."""
 
@@ -1155,6 +1259,7 @@ class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
         name="Image",
         description="Image attached to the chat (drag-and-drop, attach, capture, or pick a datablock)",
         type=bpy.types.Image,
+        update=_on_chat_image_update,
     )
 
     chat_image_send_once: BoolProperty(  # type: ignore[valid-type]
@@ -1295,6 +1400,13 @@ def _capture_chat_attachment(props) -> tuple[list[str] | None, list[str] | None]
     """
     img = props.chat_image
     if img is None:
+        # Emptied behind the user's back (undo, orphan cleanup)?  Re-link
+        # the pinned image; failing that, re-send its last encoded copy.
+        img = _restore_attachment(props)
+    if img is None:
+        _cached = _sticky_attachment.get("uri") if _sticky_attachment else ""
+        if _cached:
+            return [_cached], [_sticky_attachment.get("name") or "image"]
         return None, None
     uri = chat_attachments.image_to_data_uri(img)
     if not uri:
@@ -1302,6 +1414,8 @@ def _capture_chat_attachment(props) -> tuple[list[str] | None, list[str] | None]
         # and send this message as plain text.
         return None, None
     name = chat_attachments.attachment_name(img)
+    if _sticky_attachment.get("image_name") == getattr(img, "name", None):
+        _sticky_attachment["uri"] = uri
     if props.chat_image_send_once:
         props.chat_image = None
     return [uri], [name]
@@ -2633,6 +2747,17 @@ def chat_timer_update() -> float | None:
                 _mention_popup_open = False
     except Exception:
         pass
+
+    # Re-link a pinned image the scene dropped (agent undo, orphan cleanup).
+    if _sticky_attachment:
+        try:
+            for wm in bpy.data.window_managers:
+                _p = getattr(wm, "bfacw_chat_props", None)
+                if _p is not None and _p.chat_image is None:
+                    if _restore_attachment(_p) is not None:
+                        print("[Coworker] attachment: re-linked the pinned image")
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
 
     # Mirror the pinned goal & plan to/from its editable text block.
     try:

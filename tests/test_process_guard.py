@@ -87,5 +87,43 @@ class TestProcessGuard(unittest.TestCase):
         self.assertFalse(self.pg.bind_to_parent(None))
 
 
+class TestLinuxPreexec(unittest.TestCase):
+    """The parent-death hook must not load libc inside the forked child."""
+
+    def setUp(self):
+        self.pg = _load()
+        self.loads = []
+        self.calls = []
+        test = self
+
+        class _Libc:
+            def prctl(self, option, sig):
+                test.calls.append((option, sig))
+
+        def _cdll(name, use_errno=False):
+            test.loads.append(name)
+            return _Libc()
+
+        self._saved = (self.pg.sys.platform, self.pg.ctypes.CDLL)
+        self.pg.sys.platform = "linux"
+        self.pg.ctypes.CDLL = _cdll
+
+    def tearDown(self):
+        self.pg.sys.platform, self.pg.ctypes.CDLL = self._saved
+
+    def test_libc_loaded_in_parent_child_only_calls_prctl(self):
+        hook = self.pg.linux_preexec()
+        self.assertEqual(self.loads, ["libc.so.6"], "libc loads when the hook is built")
+        hook()
+        self.assertEqual(self.loads, ["libc.so.6"], "the child must not dlopen")
+        self.assertEqual(self.calls, [(1, 15)])
+
+    def test_missing_libc_returns_none(self):
+        def _missing(name, use_errno=False):
+            raise OSError("no libc")
+        self.pg.ctypes.CDLL = _missing
+        self.assertIsNone(self.pg.linux_preexec())
+
+
 if __name__ == "__main__":
     unittest.main()

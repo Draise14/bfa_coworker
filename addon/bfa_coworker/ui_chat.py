@@ -283,7 +283,7 @@ def _is_system_note_msg(msg: dict) -> bool:
 
 # Friendly Workshop titles for injected notes, keyed by ``system_note`` kind.
 _NOTE_TITLES = {
-    "followup": ("Coworker → itself: keep going", 'FORWARD'),
+    "followup": ("Coworker \u2192 itself: keep going", 'FORWARD'),
     "continue": ("Continued after the output limit", 'TRIA_RIGHT'),
     "nudge": ("Nudge: act, don't just describe", 'PLAY'),
     "entity": ("Scene context", 'OUTLINER_OB_MESH'),
@@ -331,7 +331,7 @@ def _short_words(text: str, limit: int = 46) -> str:
     if len(text) <= limit:
         return text
     cut = text[:limit].rsplit(" ", 1)[0] or text[:limit]
-    return cut.rstrip(" ,.;:-") + "…"
+    return cut.rstrip(" ,.;:-") + "\u2026"
 
 
 def _humanize_memory(block: str, max_lines: int = 10) -> list[str]:
@@ -354,7 +354,7 @@ def _humanize_memory(block: str, max_lines: int = 10) -> list[str]:
                        "pending": "Still to do"}.get(low.rstrip(":"), line.rstrip(":"))
             out.append(heading + ":")
             continue
-        line = line.lstrip("-*• ").strip()
+        line = line.lstrip("-*\u2022 ").strip()
         if line.lower().startswith("user:"):
             line = "You: " + line[5:].strip()
         elif line.lower().startswith("assistant:"):
@@ -368,7 +368,7 @@ def _humanize_memory(block: str, max_lines: int = 10) -> list[str]:
     while out and out[-1].endswith(":"):
         out.pop()
     if len(out) > max_lines:
-        out = out[:max_lines] + ["  …"]
+        out = out[:max_lines] + ["  \u2026"]
     return out
 
 
@@ -381,7 +381,7 @@ _CHECKPOINT_REASONS = {
 
 
 def _checkpoint_title(cp: dict, number: int) -> tuple[str, str]:
-    """``("Checkpoint 3: fix the floating parts…", "10:42 · 24 msgs · ~4.1k tokens · auto")``."""
+    """``("Checkpoint 3: fix the floating parts...", "10:42 | 24 msgs | ~4.1k tokens | auto")``."""
     words = ""
     for m in reversed(cp.get("history") or []):
         if m.get("role") != "user" or _is_system_note_msg(m):
@@ -405,7 +405,7 @@ def _checkpoint_title(cp: dict, number: int) -> tuple[str, str]:
     parts = [p for p in (ts_short, "{:d} msgs".format(int(cp.get("message_count", 0) or 0)),
                          size, _CHECKPOINT_REASONS.get(str(cp.get("reason", "")), ""))
              if p]
-    return title, " · ".join(parts)
+    return title, " \u00b7 ".join(parts)
 
 
 def _group_turns(history: list) -> list[list[dict]]:
@@ -4080,7 +4080,7 @@ def _draw_session_section(layout, context, props, state) -> None:
         n_cp = len(_sm.store.checkpoints)
     if n_cp:
         parts.append("{:d} checkpoint{:s}".format(n_cp, "" if n_cp == 1 else "s"))
-    layout.label(text="  ·  ".join(parts) if parts else "New session", icon='INFO')
+    layout.label(text="  \u00b7  ".join(parts) if parts else "New session", icon='INFO')
 
 
 def _draw_context_section(layout, state) -> None:

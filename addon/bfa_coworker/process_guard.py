@@ -182,9 +182,17 @@ def linux_preexec() -> "Callable[[], None] | None":
     if not sys.platform.startswith("linux"):
         return None
 
+    # Load libc HERE, in the parent.  ``preexec_fn`` runs in the forked child
+    # of a multi-threaded Blender, where only async-signal-safe work is safe:
+    # a ``dlopen`` there can deadlock on a loader/malloc lock another thread
+    # held at fork time.  The child then only makes the ``prctl`` call.
+    try:
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+    except OSError:
+        return None
+
     def _set_pdeathsig() -> None:
         try:
-            libc = ctypes.CDLL("libc.so.6", use_errno=True)
             libc.prctl(1, 15)  # PR_SET_PDEATHSIG = 1, SIGTERM = 15
         except Exception:  # pylint: disable=broad-exception-caught
             pass

@@ -284,6 +284,11 @@ class _HardeningBase(_TurnLoopTestBase):
                 and not _sm.is_system_note(m)]
 
 
+def _move(i):
+    """A scripted step that really CHANGES the scene (counts as progress)."""
+    return "bpy.data.objects['Part{:d}'].location.z = {:d}".format(i, i)
+
+
 def _plan_call(call_id, **args):
     return {"content": "", "tool_calls": [{
         "id": call_id, "type": "function",
@@ -333,7 +338,7 @@ class TestConclusionProtection(_HardeningBase):
         self.assertIn("chimney", hist[-1]["content"])
 
     def test_final_reply_on_last_iteration_is_not_replaced(self):
-        script = [_tool_call_msg("c{:d}".format(i), "print({:d})".format(i)) for i in range(11)]
+        script = [_tool_call_msg("c{:d}".format(i), _move(i)) for i in range(11)]
         script.append({"content": "Finished: every piece is placed."})
         self._mk_server(script, rounds=0)
         hist, _texts, _st = self._agent_turn("place every piece")
@@ -342,7 +347,7 @@ class TestConclusionProtection(_HardeningBase):
         self.assertNotIn("1-2 sentences", json.dumps(hist))
 
     def test_budget_exhausted_asks_for_progress_report(self):
-        script = [_tool_call_msg("c{:d}".format(i), "print({:d})".format(i)) for i in range(12)]
+        script = [_tool_call_msg("c{:d}".format(i), _move(i)) for i in range(12)]
         script.append({"content": "Done: 12 steps. Remaining: the roof. Say continue."})
         self._mk_server(script, rounds=0)
         hist, _texts, _st = self._agent_turn("build everything")
@@ -358,7 +363,7 @@ class TestConclusionProtection(_HardeningBase):
 class TestLongRequests(_HardeningBase):
 
     def test_rounds_continue_while_progressing_and_keep_the_request(self):
-        script = [_tool_call_msg("c{:d}".format(i), "print({:d})".format(i)) for i in range(16)]
+        script = [_tool_call_msg("c{:d}".format(i), _move(i)) for i in range(16)]
         script.append({"content": "All 16 steps are done."})
         self._mk_server(script, rounds=3)
         hist, _texts, statuses = self._agent_turn("do the sixteen-step job")
@@ -426,7 +431,7 @@ class TestLivePlanProgress(_HardeningBase):
 class TestSmallWindowFit(_HardeningBase):
 
     def test_long_turn_with_big_dumps_fits_16k_and_keeps_request(self):
-        script = [_tool_call_msg("c{:d}".format(i), "dump_all()") for i in range(9)]
+        script = [_tool_call_msg("c{:d}".format(i), "dump_all()\n" + _move(i)) for i in range(9)]
         script.append({"content": "Diagnosed: 3 parts float."})
         self._mk_server(script, ctx=16384)
         # The server tokenizes denser than the heuristic (JSON numbers).
@@ -468,3 +473,98 @@ class TestEntityTextFilter(_HardeningBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# 1.1.37 stop rules: know when to stop, and hand back to the user
+# ---------------------------------------------------------------------------
+
+def _load_ac_funcs():
+    import re as _re
+    src = open(os.path.join(_ADDON, "agent_controller.py"), encoding="utf-8").read()
+    s = src[src.index("_SCENE_MUTATION_RE = re.compile("):src.index("def _tool_makes_progress")]
+    ns = {"re": _re}
+    exec(s, ns)  # noqa: S102
+    return ns
+
+
+class TestSceneChangeDetector(unittest.TestCase):
+
+    def test_moves_count_dumps_do_not(self):
+        f = _load_ac_funcs()["_code_changes_scene"]
+        self.assertTrue(f("o = bpy.data.objects.get('Roof')\no.location.z = 2.1"))
+        self.assertTrue(f("o.rotation_euler[2] += 0.5"))
+        self.assertTrue(f("bpy.ops.mesh.primitive_cube_add(size=1)"))
+        self.assertTrue(f("n.inputs[0].default_value = (1, 0, 0, 1)"))
+        self.assertFalse(f("out = []\nfor o in bpy.data.objects:\n    out.append(o.name)\n"
+                           "result = {'objects': out}"))
+        self.assertFalse(f("if o.location.z == 1:\n    pass  # o.location.z = 3"))
+
+
+class TestStopRules(_HardeningBase):
+
+    def test_plan_done_stops_extra_tool_calls_and_asks_next_step(self):
+        # The model keeps "polishing" after every step is done.
+        self._mk_server([
+            _plan_call("p1", steps=["move roof", "move posts"]),
+            _tool_call_msg("c1", _move(1)),
+            _plan_call("p2", done=[1, 2]),
+            _tool_call_msg("c2", _move(2)),       # 1 batch after done: allowed
+            _tool_call_msg("c3", _move(3)),       # 2nd: the turn winds up
+            {"content": "Roof and posts are grounded. Want me to add a chimney next?"},
+        ])
+        hist, _texts, _st = self._agent_turn("ground the roof and posts")
+        wraps = [m for m in hist if m.get("system_note") == "wrapup"]
+        self.assertEqual(len(wraps), 1)
+        self.assertIn("Every plan step is complete", wraps[0]["content"])
+        self.assertIn("next step", wraps[0]["content"])
+        with self.server.lock:
+            ran = [r for r in self.server.mcp_requests
+                   if "Part9" in json.dumps(r)]
+        self.assertEqual(ran, [], "no more work after the plan is done")
+        self.assertTrue(hist[-1]["content"].endswith("?"))
+
+    def test_plan_done_followup_tells_the_model_to_reply(self):
+        g = self.sm.store.goal
+        g.apply_update({"steps": ["a", "b"], "done": [1, 2]})
+        note = self.ac._goal_followup_note(g)
+        self.assertIn("All 2 plan steps are complete", note["content"])
+        self.assertIn("Do NOT", note["content"])
+
+    def test_only_inspecting_winds_up_with_a_question(self):
+        looks = [_tool_call_msg("c{:d}".format(i),
+                                "result = {{'n': len(bpy.data.objects), 'i': {:d}}}".format(i))
+                 for i in range(12)]
+        self._mk_server(looks + [{"content": "I checked the scene. Which part should I fix first?"}])
+        hist, _texts, statuses = self._agent_turn("look around")
+        wraps = [m for m in hist if m.get("system_note") == "wrapup"]
+        self.assertEqual(len(wraps), 1)
+        self.assertIn("ask ONE short question", wraps[0]["content"])
+        self.assertLessEqual(len([m for m in hist if m.get("role") == "tool"]), 6,
+                             "stops after a few idle steps, not the whole budget")
+        self.assertFalse(any("continuing (round" in s for s in statuses))
+
+    def test_identical_calls_are_a_loop(self):
+        same = _tool_call_msg("c", _move(7))
+        self._mk_server([same, same, same, same, same,
+                         {"content": "Part 7 is placed. Anything else to adjust?"}])
+        hist, _texts, _st = self._agent_turn("place part 7")
+        self.assertLessEqual(len([m for m in hist if m.get("role") == "tool"]), 3)
+        self.assertTrue(any(m.get("system_note") == "wrapup" for m in hist))
+
+    def test_no_plan_gets_only_one_extra_round(self):
+        script = [_tool_call_msg("c{:d}".format(i), _move(i)) for i in range(40)]
+        script.append({"content": "done"})
+        self._mk_server(script, rounds=3)
+        hist, _texts, statuses = self._agent_turn("do lots of things")
+        self.assertTrue(any("continuing (round 2" in s for s in statuses))
+        self.assertFalse(any("continuing (round 3" in s for s in statuses))
+
+    def test_closing_question_after_work_is_not_nudged(self):
+        self._mk_server([
+            _tool_call_msg("c1", _move(1)),
+            {"content": "The roof now sits on the posts. Should I add the chimney next?"},
+        ])
+        hist, _texts, _st = self._agent_turn("fix the roof")
+        self.assertEqual(len(self._main_requests()), 2, "the question ends the turn")
+        self.assertFalse(any(m.get("system_note") == "nudge" for m in hist))

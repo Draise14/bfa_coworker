@@ -387,7 +387,9 @@ class GoalPlan:
             "short steps. As soon as a step's work succeeds, mark it in "
             "the SAME reply: update_plan(done=[n]) -- the user watches "
             "the plan tick off live. Stay on the current request; reply "
-            "to the user when it is done."
+            "to the user when it is done: briefly what you did, then ONE "
+            "suggested next step as a short question -- do not keep "
+            "polishing once the request is met."
         ) if with_tool_hint else ""
         notes = _clip(self.user_notes, _NOTES_CHARS) if self.user_notes else ""
 

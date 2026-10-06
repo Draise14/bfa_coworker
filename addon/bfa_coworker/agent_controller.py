@@ -1504,6 +1504,60 @@ def _drop_stale_notes(history: list[dict[str, Any]], kind: str) -> None:
     ]
 
 
+# Tools that only LOOK at the scene.  A round of nothing but these is not
+# progress: re-inspecting forever is how a "done" turn kept running.
+_READONLY_TOOL_PREFIXES = (
+    "get_", "search_", "list_", "jump_to_", "find_", "inspect", "describe",
+    "check_", "read_", "render_viewport", "load_tools", "update_plan",
+)
+
+# Stop rules (Tier 3 hardening, 1.1.37): consecutive tool batches with no real
+# progress before the turn is wound up; the bar is higher before ANY progress
+# (a task legitimately starts by inspecting).  The same exact call repeated
+# this many times is also a loop.
+_IDLE_BATCHES_BEFORE_PROGRESS = 6
+_IDLE_BATCHES_AFTER_PROGRESS = 4
+_MAX_IDENTICAL_CALLS = 3
+# Tool batches the model may still run after every plan step is done.
+_BATCHES_AFTER_PLAN_DONE = 1
+
+# Closing instruction shared by every wrap-up: stop, report, prod the user.
+_NEXT_STEP_ASK = ("then suggest ONE sensible next step as a short question "
+                  "(e.g. \"Want me to add the chimney next?\").")
+
+
+# Code that CHANGES the scene: operators, datablock create/remove/link,
+# keyframes, or an assignment to an attribute path (``obj.location.z = 1``,
+# ``node.inputs[0].default_value = ...``).  Stricter than _code_is_readonly
+# (which treats a list ``.append`` as a mutation, so pure dump scripts looked
+# like work) and broader (it catches moving/rotating objects, the commonest
+# fix-up, which _code_is_readonly misses).
+_SCENE_MUTATION_RE = re.compile(
+    r"bpy\.ops\.|\.new\(|\.remove\(|\.link\(|\.unlink\(|keyframe_insert|"
+    r"\.load\(|\.transform\(|\.select_set\(|"
+    r"\b[A-Za-z_]\w*(?:\[[^\]\n]*\])*\.\w+(?:\.\w+|\[[^\]\n]*\])*\s*(?:=|\+=|-=|\*=|/=)(?!=)"
+)
+
+
+def _code_changes_scene(code: str) -> bool:
+    """True when *code* plausibly changes the Blender scene."""
+    # Ignore comments and the conventional ``result = {...}`` report dict.
+    lines = [ln.split("#", 1)[0] for ln in str(code or "").splitlines()]
+    return bool(_SCENE_MUTATION_RE.search("\n".join(lines)))
+
+
+def _tool_makes_progress(tool_name: str, args: dict[str, Any], result_text: str) -> bool:
+    """True when a tool call plausibly CHANGED something (not a look/repeat)."""
+    if '"status": "error"' in (result_text or "")[:600]:
+        return False
+    name = str(tool_name or "")
+    if "screenshot" in name or name.startswith(_READONLY_TOOL_PREFIXES):
+        return False
+    if name == "execute_blender_code":
+        return _code_changes_scene(str((args or {}).get("code", "") or ""))
+    return True
+
+
 def _goal_followup_note(goal: Any) -> dict[str, Any]:
     """The per-iteration follow-up note, reinforced with the pinned goal.
 
@@ -1513,6 +1567,13 @@ def _goal_followup_note(goal: Any) -> dict[str, Any]:
     keeps the model on the current request and the next plan step, and only
     asks for the user reply once the work is done.
     """
+    if goal is not None and getattr(goal, "steps", None) and not goal.pending_steps():
+        # Rule 1: the plan is complete -- say so, and ask for the reply.
+        return session_memory.make_system_note(
+            "Tool results are above. All {:d} plan steps are complete. Do NOT "
+            "start new work or call more tools. Reply to the user now: briefly "
+            "what you did, {:s}".format(len(goal.steps), _NEXT_STEP_ASK),
+            kind="followup")
     parts = ["Tool results are above. Keep working on the user's request"]
     req = str(getattr(goal, "turn_goal", "") or "")
     if req:
@@ -6339,6 +6400,13 @@ def _run_conversation_turn_inner(
     _round_progress = 0      # successful tool calls in the current round
     _auto_round = 0          # extra rounds started so far
     _finished = False        # True once the model gave its final reply
+    _turn_progress = 0       # real (scene-changing) tool calls this turn
+    _idle_batches = 0        # consecutive tool batches with no progress
+    _batches_after_plan_done = 0
+    _call_counts: dict[str, int] = {}  # identical-call loop detection
+    _stop_reason = ""        # "" | "plan_done" | "idle" -> wrap up early
+    with session_memory.store_lock:
+        _plan_done_seen = session_memory.store.goal.progress()[0]
     try:
         _max_auto_rounds = int(getattr(_llm_cfg, "auto_continue_rounds", _MAX_AUTO_ROUNDS))
     except (TypeError, ValueError):
@@ -6356,7 +6424,7 @@ def _run_conversation_turn_inner(
         and the plan -- when there is one -- still has open steps.
         """
         nonlocal iterations, _round_progress, _auto_round, _plan_done_at_round
-        if _finished or _stop_event.is_set():
+        if _finished or _stop_reason or _stop_event.is_set():
             return False
         if chat_mode == "ASK" or not openai_tools or _auto_round >= _max_auto_rounds:
             return False
@@ -6366,8 +6434,14 @@ def _run_conversation_turn_inner(
             _has_plan = bool(_goal.steps)
             _pending = len(_goal.pending_steps())
             _next = _goal.next_step()
+        # Rule 2: only REAL progress (a scene change or a ticked plan step)
+        # earns another round -- inspecting alone does not.
         _made_progress = _round_progress > 0 or _done_now > _plan_done_at_round
         if not _made_progress or (_has_plan and _pending == 0):
+            return False
+        # Rule 3: without a plan there is no definition of done -- allow a
+        # single extra round (asked to make a plan), never an open-ended run.
+        if not _has_plan and _auto_round >= 1:
             return False
         _auto_round += 1
         iterations = 0
@@ -6871,6 +6945,11 @@ def _run_conversation_turn_inner(
             # all of its tool results (a user-role note between an assistant
             # tool_calls message and its results breaks the pairing).
             _deferred_notes: list[dict[str, Any]] = []
+            _batch_progress = 0
+            _batch_repeat = False
+            with session_memory.store_lock:
+                _plan_was_done = bool(session_memory.store.goal.steps) and \
+                    not session_memory.store.goal.pending_steps()
 
             # Process each tool call.
             for tc in raw_tool_calls:
@@ -7240,8 +7319,19 @@ def _run_conversation_turn_inner(
                 # Progress accounting for the end-of-turn guarantee and the
                 # long-request auto-continue decision.
                 _tools_executed += 1
-                if '"status": "error"' not in result_text[:600]:
+                # Identical call (same tool + same arguments) seen again?
+                try:
+                    _sig = "{:s}:{:s}".format(tool_name, json.dumps(args, sort_keys=True, default=str))
+                except (TypeError, ValueError):
+                    _sig = tool_name
+                _call_counts[_sig] = _call_counts.get(_sig, 0) + 1
+                if _call_counts[_sig] >= _MAX_IDENTICAL_CALLS:
+                    _batch_repeat = True
+                if _tool_makes_progress(tool_name, args, result_text):
                     _round_progress += 1
+                    _turn_progress += 1
+                    _batch_progress += 1
+                if '"status": "error"' not in result_text[:600]:
                     # Real work happened: make sure the plan shows an
                     # active step (the panel updates live mid-turn).
                     try:
@@ -7322,6 +7412,31 @@ def _run_conversation_turn_inner(
             # inside <think> blocks with empty content.  Without a user message
             # after tool results, llama-server's Jinja template may fail with
             # "No user query found in messages."
+            # -- Stop rules (1 and 4): wind the turn up early -----------
+            with session_memory.store_lock:
+                _g = session_memory.store.goal
+                _plan_done_now = bool(_g.steps) and not _g.pending_steps()
+                _done_count = _g.progress()[0]
+            if _done_count > _plan_done_seen:
+                # A plan step was ticked (tool or narration): that is progress.
+                _batch_progress += 1
+                _turn_progress += 1
+            _plan_done_seen = _done_count
+            _idle_batches = 0 if _batch_progress else _idle_batches + 1
+            _idle_limit = (_IDLE_BATCHES_AFTER_PROGRESS if _turn_progress
+                           else _IDLE_BATCHES_BEFORE_PROGRESS)
+            if _plan_done_now and _plan_was_done:
+                # A whole batch of work started AFTER every step was done.
+                _batches_after_plan_done += 1
+            if _plan_done_now and _batches_after_plan_done > _BATCHES_AFTER_PLAN_DONE:
+                _stop_reason = "plan_done"
+            elif _batch_repeat or _idle_batches >= _idle_limit:
+                _stop_reason = "idle"
+            if _stop_reason:
+                print("[Coworker] run_conversation_turn: stopping early ({:s}) -- "
+                      "asking for the reply".format(_stop_reason))
+                iterations = _max_iterations
+
             if _deferred_notes:
                 history.extend(_deferred_notes)
             if not content or not content.strip():
@@ -7361,6 +7476,9 @@ def _run_conversation_turn_inner(
             # A reply after every plan step is done is the conclusion, even
             # if it ends with a forward-looking phrase.
             and not (_plan_all_done and content.strip())
+            # Rule 5: after real work, a reply ending in a question ("Want me
+            # to add the chimney next?") is the hand-back to the user.
+            and not (_turn_progress > 0 and content.rstrip().endswith("?"))
         ):
             _action_nudges += 1
             _agent_state.bump_turn_cost("nudges")
@@ -7396,13 +7514,22 @@ def _run_conversation_turn_inner(
         print("[Coworker] run_conversation_turn: hit max iterations, asking for a "
               "progress report")
         _drop_stale_notes(history, "followup")
-        _wrap_note = session_memory.make_system_note(
-            "The step budget for this request is used up, so stop here. Do "
-            "NOT call any tools. Reply to the user in a few short lines: what "
-            "is done, what remains (from the plan, if any), and that they can "
-            "say \"continue\" to resume.",
-            kind="wrapup",
-        )
+        if _stop_reason == "plan_done":
+            _wrap_text = ("Every plan step is complete, so stop here. Do NOT call "
+                          "any tools. Reply to the user in a few short lines: what "
+                          "you did, " + _NEXT_STEP_ASK)
+        elif _stop_reason == "idle":
+            _wrap_text = ("The last steps only re-checked or repeated work without "
+                          "changing anything, so stop here. Do NOT call any tools. "
+                          "Reply to the user in a few short lines: what is done, "
+                          "what is unclear or blocking, and ask ONE short question "
+                          "about how they want to proceed.")
+        else:
+            _wrap_text = ("The step budget for this request is used up, so stop "
+                          "here. Do NOT call any tools. Reply to the user in a few "
+                          "short lines: what is done, what remains (from the plan, "
+                          "if any), and that they can say \"continue\" to resume.")
+        _wrap_note = session_memory.make_system_note(_wrap_text, kind="wrapup")
         if history and session_memory.is_system_note(history[-1]):
             history[-1] = {**history[-1], "content": "{:s}\n{:s}".format(
                 str(history[-1].get("content") or ""), _wrap_note["content"])}

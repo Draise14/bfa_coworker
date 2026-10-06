@@ -22,6 +22,10 @@ __all__ = (
     "BFACW_OT_chat_clear",
     "BFACW_OT_chat_stop",
     "BFACW_OT_chat_queue_send",
+    "BFACW_OT_chat_capture_render",
+    "BFACW_OT_chat_capture_screen",
+    "BFACW_OT_chat_image_drop",
+    "BFACW_FH_chat_drop",
     "BFACW_OT_export_session_log",
     "BFACW_OT_copy_session_log",
     "BFACW_OT_copy_status_error",
@@ -46,6 +50,7 @@ from bpy.props import (  # pylint: disable=import-error
     BoolProperty,
     EnumProperty,
     IntProperty,
+    PointerProperty,
     StringProperty,
 )
 from bpy.types import (  # pylint: disable=import-error
@@ -57,6 +62,7 @@ from bpy.types import (  # pylint: disable=import-error
 import textwrap
 
 from . import agent_controller
+from . import chat_attachments
 from . import llm_manager
 from . import mcp_to_blender_server
 from .shared import effective_ports, CHAT_MODE_ITEMS
@@ -91,6 +97,24 @@ def _sync_prefs_to_config(prefs: bpy.types.AddonPreferences) -> None:
 
 
 _WRAP_WIDTH = 60
+
+# Panel category both chat panels live under.  The drag-and-drop handler
+# uses it to tell "over the Coworker panel" from "somewhere else in the
+# sidebar" (a FileHandler poll gets no mouse position, only the region).
+_CHAT_PANEL_CATEGORY = "Coworker"
+
+# Thumbnail sizing for the attached-image preview (UILayout.template_icon).
+# The icon button is square and Blender fits the image inside it (centred,
+# aspect preserved -- see interface_icons.cc icon_draw_rect), so the button
+# side alone decides the thumbnail size.  The side is derived from the live
+# panel width and the image's own aspect, so the preview stays responsive
+# and even a small screenshot/render is scaled up rather than left tiny.
+_UI_UNIT_BASE_PX = 20.0
+_ATTACHMENT_PREVIEW_MARGIN_PX = 40
+_ATTACHMENT_PREVIEW_MIN_PX = 80
+_ATTACHMENT_PREVIEW_MAX_RATIO = 2.0
+_ATTACHMENT_PREVIEW_MIN_SCALE = 1.0
+_ATTACHMENT_PREVIEW_MAX_SCALE = 32.0
 
 
 # -- Brand detection: Bforartists has a View menu in the 3D viewport header,
@@ -976,6 +1000,26 @@ class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
         default="",
     )
 
+    # -- Image socket (issue #88, Tier 3k) --------------------------
+    # One Blender-standard socket that every attach source feeds:
+    # file attach, render/screen capture, drag-and-drop, and the
+    # template_ID datablock browser below.  Encoded to a data URI on
+    # the MAIN thread at send time (see chat_attachments).
+    chat_image: PointerProperty(  # type: ignore[valid-type]
+        name="Image",
+        description="Image attached to the chat (drag-and-drop, attach, capture, or pick a datablock)",
+        type=bpy.types.Image,
+    )
+
+    chat_image_send_once: BoolProperty(  # type: ignore[valid-type]
+        name="Send Once",
+        description=(
+            "Send the attached image with the next message only, then "
+            "detach it (off = sticky: re-sent every turn until cleared)"
+        ),
+        default=False,
+    )
+
 
 def _load_chat_history() -> list[dict]:
     """Load conversation history from disk."""
@@ -1081,6 +1125,63 @@ def _prune_old_sessions(base_dir) -> None:
 # ---------------------------------------------------------------------------
 # Operators
 
+
+def _capture_chat_attachment(props) -> tuple[list[str] | None, list[str] | None]:
+    """Encode the image socket for a send -- MAIN THREAD ONLY.
+
+    Returns ``(attachments, attachment_names)`` ready for
+    ``run_conversation_turn`` / ``enqueue_message``, or ``(None, None)``
+    for a plain-text send (empty socket, or an image that cannot be
+    encoded).  Called by the send operators BEFORE any worker thread
+    starts: encoding reads bpy image pixels, which the turn worker must
+    never touch.  A successful capture consumes the socket when
+    "Send Once" is ticked; the default sticky socket keeps the image
+    for every following send.
+    """
+    img = props.chat_image
+    if img is None:
+        return None, None
+    uri = chat_attachments.image_to_data_uri(img)
+    if not uri:
+        # Oversized or broken: keep the socket (so the user can fix it)
+        # and send this message as plain text.
+        return None, None
+    name = chat_attachments.attachment_name(img)
+    if props.chat_image_send_once:
+        props.chat_image = None
+    return [uri], [name]
+
+
+def _warn_failed_attachment(op, props) -> None:
+    """Warn when the socket holds an image that could not be encoded.
+
+    ``_capture_chat_attachment`` returns no attachments for both an
+    empty socket and a failed encode, and deliberately keeps the socket
+    on failure so the user can retry -- so a set socket plus an empty
+    result means the encode failed and the send is silently plain text.
+    Say so instead.
+    """
+    if props.chat_image is None:
+        return
+    op.report(
+        {"WARNING"},
+        "Could not prepare the attached image; sending without it. "
+        "Free space in the temp folder, or save/pack the image, then retry.",
+    )
+
+
+def _attach_to_socket(context, op, img) -> None:
+    """Store *img* in the chat socket and confirm on *op* (main thread)."""
+    props = context.window_manager.bfacw_chat_props  # type: ignore[attr-defined]
+    props.chat_image = img
+    # Warm the preview now so the panel can draw the thumbnail on its
+    # first redraw instead of one frame later (the pixels are filled by
+    # Blender's preview thread after ``preview_ensure()``).
+    _ensure_attachment_preview(img)
+    op.report({"INFO"},
+              f"Attached {chat_attachments.attachment_name(img)}")
+
+
 class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
     """Send the current input to the Coworker agent (or queue if busy)."""
     bl_idname = "bfacw.chat_send"
@@ -1115,6 +1216,13 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
         actual_mcp = agent_controller._agent_state.mcp_port_actual
         send_mcp_port = actual_mcp if actual_mcp else _mcp_port
 
+        # Encode the image socket HERE, on the main thread, before any
+        # worker thread starts (Tier 3k): the turn worker never touches
+        # bpy, and both the queued and direct paths below need the payload.
+        attachments, attachment_names = _capture_chat_attachment(props)
+        if attachments is None:
+            _warn_failed_attachment(self, props)
+
         # If a turn is already active, queue the message -- UNLESS the user has
         # pressed Stop.  After a Stop the old worker may still be unwinding
         # (a blocking read or tool call cannot be interrupted instantly); if we
@@ -1131,6 +1239,8 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
                 api_key=api_key or None,
                 model=model,
                 mcp_port=send_mcp_port,
+                attachments=attachments,
+                attachment_names=attachment_names,
             )
             props.chat_input = ""
             self.report({"INFO"}, "Message queued (position {:d})".format(pos))
@@ -1162,6 +1272,8 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
                     chat_mode=props.chat_mode,
                     on_stream_text=lambda t: _update_streaming(t),
                     on_stream_reasoning=lambda r: _update_streaming(r),
+                    attachments=attachments,
+                    attachment_names=attachment_names,
                 )
             except Exception as ex:  # pylint: disable=broad-exception-caught
                 agent_controller._agent_state.error = str(ex)
@@ -1199,6 +1311,8 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
                     chat_mode=item.get("chat_mode", "AGENT"),
                     on_stream_text=lambda t: _update_streaming(t),
                     on_stream_reasoning=lambda r: _update_streaming(r),
+                    attachments=item.get("attachments"),
+                    attachment_names=item.get("attachment_names"),
                 )
             except Exception as ex:  # pylint: disable=broad-exception-caught
                 agent_controller._agent_state.error = str(ex)
@@ -1395,6 +1509,12 @@ class BFACW_OT_chat_queue_send(Operator):  # type: ignore[misc]
         actual_mcp = agent_controller._agent_state.mcp_port_actual
         send_mcp_port = actual_mcp if actual_mcp else _mcp_port
 
+        # Main-thread capture of the image socket (Tier 3k), same as the
+        # direct send path -- the encoded payload travels with the queue item.
+        attachments, attachment_names = _capture_chat_attachment(props)
+        if attachments is None:
+            _warn_failed_attachment(self, props)
+
         pos = agent_controller.enqueue_message(
             message=message,
             chat_mode=props.chat_mode,
@@ -1402,11 +1522,189 @@ class BFACW_OT_chat_queue_send(Operator):  # type: ignore[misc]
             api_key=api_key or None,
             model=model,
             mcp_port=send_mcp_port,
+            attachments=attachments,
+            attachment_names=attachment_names,
         )
         props.chat_input = ""
         self.report({"INFO"}, "Queued (position {:d})".format(pos))
         _redraw_areas(context)
         return {"FINISHED"}
+
+
+class BFACW_OT_chat_capture_render(Operator):  # type: ignore[misc]
+    """Render the current view and attach the result (main thread only)."""
+    bl_idname = "bfacw.chat_capture_render"
+    bl_label = "Render View"
+    bl_description = (
+        "Render the current 3D Viewport view through a temporary camera "
+        "(your own camera is never moved) and attach the result"
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        # Render the current view.  A throwaway camera is aligned to the
+        # viewport and removed again, so the scene is left untouched.
+        path = chat_attachments.capture_render_from_view()
+        if not path:
+            # No 3D Viewport to render from (e.g. a Text-Editor-only
+            # layout): fall back to the last Render Result, if any.
+            path = chat_attachments.capture_render()
+        if not path:
+            self.report({"WARNING"}, "Nothing to render -- open a 3D Viewport")
+            return {"CANCELLED"}
+        img = chat_attachments.load_image_file(path)
+        if img is None:
+            self.report({"ERROR"}, "Could not load the rendered image")
+            return {"CANCELLED"}
+        _attach_to_socket(context, self, img)
+        return {"FINISHED"}
+
+
+class BFACW_OT_chat_capture_screen(Operator):  # type: ignore[misc]
+    """Attach a screenshot to the chat socket (main thread only)."""
+    bl_idname = "bfacw.chat_capture_screen"
+    bl_label = "Capture Screen"
+    bl_description = "Screenshot the 3D Viewport (or whole window) and attach it"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        # Prefer the 3D Viewport (what the model needs to see); fall
+        # back to the whole window when no viewport exists.  Operators
+        # always run on the main thread, which these captures require.
+        path = chat_attachments.capture_screen(target="VIEW_3D")
+        if not path:
+            path = chat_attachments.capture_screen(target="WINDOW")
+        if not path:
+            self.report({"WARNING"}, "Screenshot unavailable (background mode?)")
+            return {"CANCELLED"}
+        img = chat_attachments.load_image_file(path)
+        if img is None:
+            self.report({"ERROR"}, "Could not load the screenshot")
+            return {"CANCELLED"}
+        _attach_to_socket(context, self, img)
+        return {"FINISHED"}
+
+
+class BFACW_OT_chat_image_drop(Operator):  # type: ignore[misc]
+    """Receive an image file dragged onto the Coworker chat panel."""
+    bl_idname = "bfacw.chat_image_drop"
+    bl_label = "Attach Image to Coworker Chat"
+    bl_description = "Attach the dropped image file to the chat"
+
+    # Blender's file-handler drop writes these onto the import operator:
+    # ``filepath`` is the first supported path, while ``directory`` +
+    # ``files`` describe the whole drop (multi-file drops included).
+    filepath: bpy.props.StringProperty(  # type: ignore[valid-type]
+        subtype='FILE_PATH', options={'SKIP_SAVE'})
+    directory: bpy.props.StringProperty(  # type: ignore[valid-type]
+        subtype='DIR_PATH', options={'SKIP_SAVE'})
+    files: bpy.props.CollectionProperty(  # type: ignore[valid-type]
+        type=bpy.types.OperatorFileListElement, options={'SKIP_SAVE'})
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        img = chat_attachments.load_image_file(self.filepath)
+        if img is None:
+            self.report({"WARNING"}, "Not a supported image file")
+            return {"CANCELLED"}
+        _attach_to_socket(context, self, img)
+        return {"FINISHED"}
+
+
+class BFACW_FH_chat_drop(bpy.types.FileHandler):  # type: ignore[misc]
+    """Drag-and-drop image files onto the Coworker chat panel.
+
+    ``poll_drop`` gets no mouse position, so the drop is scoped by region
+    + panel category: the Text Editor chat panel, or the 3D Viewport
+    sidebar while the "Coworker" tab is active.  Blender's own image drop
+    handlers are made to yield in that one place (see
+    ``_suppress_builtin_viewport_drops``), so a drop there attaches
+    directly instead of opening Blender's "multiple file handlers" menu;
+    everywhere else Blender's stock drop behaviour is untouched.
+    """
+    bl_idname = "BFACW_FH_chat_drop"
+    bl_label = "Attach Image to Coworker Chat"
+    bl_import_operator = "bfacw.chat_image_drop"
+    # Semicolon-separated per bpy.types.FileHandler.bl_file_extensions;
+    # mirrors chat_attachments.SUPPORTED_EXTENSIONS.
+    bl_file_extensions = ".png;.jpg;.jpeg;.webp;.bmp;.tif;.tiff"
+
+    @classmethod
+    def poll_drop(cls, context) -> bool:
+        area = context.area
+        if area is None:
+            return False
+        if area.type == "TEXT_EDITOR":
+            return True
+        return _is_coworker_panel_region(context)
+
+
+def _is_coworker_panel_region(context) -> bool:
+    """True for the 3D Viewport sidebar while the Coworker tab is active."""
+    area = context.area
+    region = context.region
+    return (area is not None
+            and area.type == "VIEW_3D"
+            and region is not None
+            and region.type == "UI"
+            and getattr(region, "active_panel_category", "") == _CHAT_PANEL_CATEGORY)
+
+
+# Blender's built-in image FileHandlers (VIEW3D_FH_empty_image and
+# VIEW3D_FH_camera_background_image, from scripts/startup/bl_operators/
+# view3d.py) also match image extensions in a 3D Viewport -- including the
+# sidebar.  When more than one handler matches, WM_OT_drop_import_file shows
+# a "multiple file handlers" menu instead of importing, which is what made
+# dropping onto the chat panel look like it did nothing.  We make those two
+# handlers yield *only* in the Coworker panel region by wrapping their
+# ``poll_drop``; the viewport, other sidebar tabs and every other editor keep
+# Blender's stock behaviour, and the originals are restored on unregister.
+_builtin_drop_patches: list = []
+
+
+def _suppress_builtin_viewport_drops() -> None:
+    """Make Blender's built-in image drop handlers yield in our panel.
+
+    Best-effort and idempotent: if the startup module or the classes move
+    in a future Blender, the patch is simply skipped and Blender's chooser
+    menu remains as the fallback.
+    """
+    if _builtin_drop_patches:
+        return
+    try:
+        from bl_operators import view3d as _view3d  # type: ignore[import-not-found]
+    except ImportError:
+        return
+    for name in ("VIEW3D_FH_empty_image", "VIEW3D_FH_camera_background_image"):
+        cls = getattr(_view3d, name, None)
+        if cls is None:
+            continue
+        raw = cls.__dict__.get("poll_drop")
+        if raw is None:
+            continue
+        # ``poll_drop`` is a classmethod in Blender; unwrap defensively so a
+        # future plain function or staticmethod still yields correctly.
+        unwrapped = getattr(raw, "__func__", raw)
+        if getattr(unwrapped, "_bfacw_suppressed", False):
+            continue
+        takes_cls = isinstance(raw, classmethod)
+
+        def _poll(cls_, context, _fn=unwrapped, _takes_cls=takes_cls):
+            if _is_coworker_panel_region(context):
+                return False
+            if _takes_cls:
+                return _fn(cls_, context)
+            return _fn(context)
+
+        _poll._bfacw_suppressed = True  # type: ignore[attr-defined]
+        cls.poll_drop = classmethod(_poll)
+        _builtin_drop_patches.append((cls, raw))
+
+
+def _restore_builtin_viewport_drops() -> None:
+    """Undo :func:`_suppress_builtin_viewport_drops` (only our own patch)."""
+    while _builtin_drop_patches:
+        cls, original = _builtin_drop_patches.pop()
+        current = cls.__dict__.get("poll_drop")
+        if getattr(getattr(current, "__func__", None), "_bfacw_suppressed", False):
+            cls.poll_drop = original
 
 
 class BFACW_OT_copy_message(Operator):  # type: ignore[misc]
@@ -2227,7 +2525,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
     bl_idname = "BFACW_PT_chat_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Coworker"
+    bl_category = _CHAT_PANEL_CATEGORY
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -2354,6 +2652,11 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         _draw_reasoning_effort_row(layout, prefs)
 
         layout.separator()
+
+        # -- Image attachment socket (issue #88 / Tier 3k) ----------
+        # Above the chat input: set the image BEFORE typing, so what is
+        # attached is visible right next to the message it will ride with.
+        _draw_attachment_row(layout, props, context)
 
         # -- Input area --
         layout.textbox(props, "chat_input")
@@ -2681,7 +2984,7 @@ class BFACW_PT_chat_session(Panel):  # type: ignore[misc]
     bl_idname = "BFACW_PT_chat_session"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Coworker"
+    bl_category = _CHAT_PANEL_CATEGORY
     bl_order = 1
 
     @classmethod
@@ -2728,7 +3031,7 @@ class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
     bl_idname = "BFACW_PT_chat_queue"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Coworker"
+    bl_category = _CHAT_PANEL_CATEGORY
     bl_order = 2
 
     @classmethod
@@ -2775,7 +3078,7 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
     bl_idname = "BFACW_PT_chat_status"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Coworker"
+    bl_category = _CHAT_PANEL_CATEGORY
     bl_options = {'DEFAULT_CLOSED'}
     bl_order = 3
 
@@ -2935,7 +3238,7 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
     bl_idname = "BFACW_PT_chat_text_editor"
     bl_space_type = 'TEXT_EDITOR'
     bl_region_type = 'UI'
-    bl_category = "Coworker"
+    bl_category = _CHAT_PANEL_CATEGORY
     bl_options = {'DEFAULT_CLOSED'}
 
     @classmethod
@@ -2980,6 +3283,10 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
             row.operator("bfacw.edit_rules", icon="TEXT", text="Edit Rules")
 
             layout.separator()
+
+            # -- Image attachment socket (issue #88 / Tier 3k) ------
+            # Above the chat input (same order as the Viewport panel).
+            _draw_attachment_row(layout, props, context)
 
             # Input (multi-line textbox).
             layout.textbox(props, "chat_input")
@@ -3034,6 +3341,110 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
 
 # ---------------------------------------------------------------------------
 # Helpers
+
+
+def _draw_attachment_row(layout, props, context) -> None:
+    """Draw the chat image socket + capture buttons (issue #88 / Tier 3k).
+
+    Shared by the 3D Viewport chat panel and the Text Editor panel:
+    one Blender-standard socket (``template_ID``: browse / open / new)
+    fed by every attach source -- the socket's own file browser, render
+    capture, screen capture, and drag-and-drop -- plus the Send Once
+    toggle and a thumbnail preview of what is attached.  The socket is
+    encoded on the main thread at send time (``_capture_chat_attachment``),
+    never during drawing.
+    """
+    box = layout.box()
+    head = box.row(align=True)
+    head.label(text="Image", icon='IMAGE_DATA')
+    head.prop(props, "chat_image_send_once", text="Send once")
+    box.template_ID(props, "chat_image", open="image.open", new="image.new")
+    _draw_attachment_preview(box, props.chat_image, context)
+    row = box.row(align=True)
+    row.operator("bfacw.chat_capture_render", icon='RENDER_STILL', text="Render")
+    row.operator("bfacw.chat_capture_screen", icon='FULLSCREEN_ENTER', text="Screen")
+
+
+def _ensure_attachment_preview(img) -> None:
+    """Start generating *img*'s preview so the thumbnail can be drawn.
+
+    ``preview_ensure()`` only *creates* the preview; its pixels are
+    filled by Blender's preview thread a moment later, which is why
+    this is called when the image is ATTACHED rather than only from the
+    panel draw -- by the first redraw the thumbnail is usually ready.
+    Best-effort: an image without pixels must not break attaching, and
+    in ``--background`` mode no preview icon is produced at all (the
+    draw helper simply draws nothing).
+    """
+    if img is None:
+        return
+    try:
+        img.preview_ensure()
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+        return
+
+
+def _attachment_preview_scale(img, context) -> float:
+    """Icon scale for the attachment thumbnail, sized to the panel width.
+
+    ``template_icon`` builds a square icon button of ``UI_UNIT_X * scale``
+    pixels, and Blender fits the image inside it (centred, aspect
+    preserved), so the button side alone decides the thumbnail size.
+    Sizing that square so the *image's width* spans the available panel
+    width keeps the preview responsive for every image -- including small
+    screenshots and renders -- instead of the fixed scale used before.
+    Falls back to a sane default when the context or the image's pixel
+    size is unavailable.
+    """
+    try:
+        region_width = int(getattr(context.region, "width", 0) or 0)
+    except (AttributeError, TypeError, ValueError):
+        region_width = 0
+    available = max(region_width - _ATTACHMENT_PREVIEW_MARGIN_PX,
+                    _ATTACHMENT_PREVIEW_MIN_PX)
+    try:
+        width, height = int(img.size[0]), int(img.size[1])
+    except (AttributeError, IndexError, TypeError, ValueError):
+        width, height = 0, 0
+    aspect = (width / height) if width > 0 and height > 0 else 1.0
+    # A tall image gets a taller square so its width still fills the panel.
+    side = available / min(1.0, aspect)
+    side = min(side, available * _ATTACHMENT_PREVIEW_MAX_RATIO)
+    try:
+        ui_scale = float(context.preferences.system.ui_scale) or 1.0
+    except (AttributeError, TypeError, ValueError):
+        ui_scale = 1.0
+    scale = side / (_UI_UNIT_BASE_PX * ui_scale)
+    return max(_ATTACHMENT_PREVIEW_MIN_SCALE,
+               min(scale, _ATTACHMENT_PREVIEW_MAX_SCALE))
+
+
+def _draw_attachment_preview(layout, img, context=None) -> None:
+    """Draw a thumbnail of the attached image (issue #88 / Tier 3k).
+
+    A filename alone is easy to misread, so the user can see WHAT is
+    attached before sending.  The thumbnail is sized to the panel width
+    (see :func:`_attachment_preview_scale`) so it stays responsive, and
+    because Blender draws preview icons by fitting the image inside the
+    icon button -- preserving its aspect ratio -- a small screenshot or
+    render is scaled up rather than left tiny.  The whole thing is
+    best-effort: a datablock with no pixels (or a stub image in tests)
+    has no preview to make, and a panel draw must never raise.
+    """
+    if img is None:
+        return
+    try:
+        preview = img.preview_ensure()
+        icon = int(getattr(preview, "icon_id", 0) or 0)
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+        return
+    if not icon:
+        return
+    row = layout.row()
+    row.alignment = 'CENTER'
+    row.template_icon(icon_value=icon,
+                      scale=_attachment_preview_scale(img, context))
+
 
 def _redraw_areas(context: bpy.types.Context | None) -> None:
     """Force redraw of all panels."""
@@ -3437,6 +3848,10 @@ _classes = (
     BFACW_OT_chat_clear,
     BFACW_OT_chat_stop,
     BFACW_OT_chat_queue_send,
+    BFACW_OT_chat_capture_render,
+    BFACW_OT_chat_capture_screen,
+    BFACW_OT_chat_image_drop,
+    BFACW_FH_chat_drop,
     BFACW_OT_export_session_log,
     BFACW_OT_copy_session_log,
     BFACW_OT_copy_status_error,
@@ -3470,6 +3885,10 @@ def register() -> None:
         bpy.utils.register_class(cls)
     bpy.types.WindowManager.bfacw_chat_props = bpy.props.PointerProperty(type=ChatHistoryProperties)  # type: ignore[attr-defined]
 
+    # Let the Coworker panel own image drops in its own region, so a drop
+    # attaches directly instead of opening Blender's file-handler menu.
+    _suppress_builtin_viewport_drops()
+
     # Register the chat UI update timer.
     if not bpy.app.background:
         bpy.app.timers.register(chat_timer_update, first_interval=1.0, persistent=True)
@@ -3478,6 +3897,9 @@ def register() -> None:
 def unregister() -> None:
     # Save history.
     _save_chat_history()
+
+    # Give Blender's own image drop handlers back before tearing down.
+    _restore_builtin_viewport_drops()
 
     if bpy.app.timers.is_registered(chat_timer_update):
         bpy.app.timers.unregister(chat_timer_update)

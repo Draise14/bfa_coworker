@@ -52,6 +52,8 @@ from typing import Any
 from . import llm_transport as _transport
 from . import session_memory
 from . import co_work_guard
+from . import chat_attachments
+from . import process_guard as _process_guard
 from .llm_transport import (
     _CHAT_SAMPLING,
     _DEFAULT_MAX_TOKENS,
@@ -1838,6 +1840,19 @@ class AgentState:
 
     # -- Vision pipeline --------------------------------------------
     _pending_image: str | None = None  # Base64 data URI of last screenshot
+    # -- User image attachments (issue #88 / Tier 3k) ---------------
+    # Data URIs + display names captured on the MAIN thread at send
+    # time (the turn worker never touches bpy), passed via
+    # run_conversation_turn(attachments=...) and installed at turn
+    # start, then injected into the turn's user message at request-
+    # build time -- on EVERY request of the turn, never cleared after
+    # use.  The turn-start reset of ``_pending_image`` deliberately
+    # does NOT touch these fields; socket stickiness lives in the UI
+    # (``ui_chat.ChatHistoryProperties.chat_image``), which re-passes
+    # them on each send.  Stored history keeps plain text only --
+    # base64 never reaches the saved chat JSON.
+    user_attachments: list[str] = field(default_factory=list)
+    user_attachment_names: list[str] = field(default_factory=list)
 
     # -- Auto port-shuffle tracking ---------------------------------
     # When a port is in use, the start functions try subsequent ports
@@ -1875,8 +1890,15 @@ class MessageQueue:
         api_key: str | None = None,
         model: str | None = None,
         mcp_port: int = 0,
+        attachments: list[str] | None = None,
+        attachment_names: list[str] | None = None,
     ) -> int:
-        """Add a message to the queue. Returns the queue position (1-indexed)."""
+        """Add a message to the queue. Returns the queue position (1-indexed).
+
+        *attachments* / *attachment_names* (Tier 3k) are snapshotted at
+        ENQUEUE time -- copied so a later mutation of the caller's lists
+        cannot change a message already waiting in the queue.
+        """
         with self._lock:
             item = {
                 "message": message,
@@ -1885,6 +1907,9 @@ class MessageQueue:
                 "api_key": api_key,
                 "model": model,
                 "mcp_port": mcp_port,
+                "attachments": list(attachments) if attachments else None,
+                "attachment_names": (
+                    list(attachment_names) if attachment_names else None),
                 "queued_at": time.time(),
             }
             self._queue.append(item)
@@ -1936,10 +1961,13 @@ def enqueue_message(
     api_key: str | None = None,
     model: str | None = None,
     mcp_port: int = 0,
+    attachments: list[str] | None = None,
+    attachment_names: list[str] | None = None,
 ) -> int:
     """Enqueue a user message for processing. Returns queue position."""
     return _message_queue.enqueue(
         message, chat_mode, llm_url, api_key, model, mcp_port,
+        attachments, attachment_names,
     )
 
 
@@ -2795,6 +2823,7 @@ def start_mcp_server(
         time.sleep(0.5)
 
     # Kill any stale process occupying the port (from addon reinstall or crash).
+    _process_guard.reap_orphans()
     _kill_process_on_port(port)
     import time
     time.sleep(0.5)  # Let OS release the port.
@@ -2834,6 +2863,7 @@ def start_mcp_server(
                 stderr=subprocess.PIPE,
                 env=env,
                 creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                preexec_fn=_process_guard.linux_preexec(),
             )
         else:
             proc = subprocess.Popen(
@@ -2842,6 +2872,7 @@ def start_mcp_server(
                 stderr=subprocess.PIPE,
                 env=env,
                 creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                preexec_fn=_process_guard.linux_preexec(),
             )
     except FileNotFoundError as ex:
         _agent_state.error = "Failed to launch MCP server: {:s}".format(str(ex))
@@ -2851,6 +2882,9 @@ def start_mcp_server(
         return None
 
     _mcp_server_process = proc
+    # Dies with Blender, even on a crash (Windows job object / Linux
+    # parent-death signal); recorded for the next-start orphan reaper.
+    _process_guard.bind_to_parent(proc, "mcp-server", int(port or 0))
     _agent_state.mcp_server_running = True
     _agent_state.error = ""
     _agent_state.error_full = ""
@@ -2972,6 +3006,7 @@ def stop_mcp_server() -> None:
             proc.wait(timeout=5)
         except Exception:  # pylint: disable=broad-exception-caught
             pass
+        _process_guard.forget(getattr(proc, "pid", None))
 
         _mcp_server_process = None
         _agent_state.mcp_server_running = False
@@ -3018,6 +3053,7 @@ def start_mcp_server_network(
         time.sleep(0.5)
 
     # Kill any stale process on the port.
+    _process_guard.reap_orphans()
     _kill_process_on_port(port)
     import time
     time.sleep(0.5)
@@ -3053,6 +3089,7 @@ def start_mcp_server_network(
                 stderr=subprocess.PIPE,
                 env=env,
                 creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                preexec_fn=_process_guard.linux_preexec(),
             )
         else:
             proc = subprocess.Popen(
@@ -3062,12 +3099,16 @@ def start_mcp_server_network(
                 stderr=subprocess.PIPE,
                 env=env,
                 creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                preexec_fn=_process_guard.linux_preexec(),
             )
     except (FileNotFoundError, OSError) as ex:
         _agent_state.error = "Failed to launch MCP server: {:s}".format(str(ex))
         return None
 
     _mcp_server_process = proc
+    # Dies with Blender, even on a crash (Windows job object / Linux
+    # parent-death signal); recorded for the next-start orphan reaper.
+    _process_guard.bind_to_parent(proc, "mcp-server", int(port or 0))
     _agent_state.mcp_server_running = True
     _agent_state.error = ""
     _agent_state.error_full = ""
@@ -5235,6 +5276,8 @@ def run_conversation_turn(
     on_stream_text: Callable[[str], None] | None = None,
     on_stream_reasoning: Callable[[str], None] | None = None,
     allow_action_nudge: bool = True,
+    attachments: list[str] | None = None,
+    attachment_names: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Run a full conversation turn.
@@ -5250,6 +5293,12 @@ def run_conversation_turn(
     When *allow_action_nudge* is False the end-of-turn "you did not act"
     nudge is suppressed -- used by benchmark steps whose correct response is
     to ask or decline (never to act).
+
+    When *attachments* is given (base64 data URIs captured on the main
+    thread by the send path, with matching *attachment_names*), the turn's
+    user message carries one ``image_url`` block per attachment in EVERY
+    request of the turn; the stored history keeps only the plain
+    ``[attached: ...]`` marker -- base64 never enters the saved chat JSON.
 
     This is a BLOCKING call -- run it via ``schedule_coro`` or in a thread.
     """
@@ -5272,6 +5321,7 @@ def run_conversation_turn(
             user_message, on_text, on_status, on_reasoning,
             llm_url, api_key, model, mcp_port, chat_mode,
             on_stream_text, on_stream_reasoning, allow_action_nudge,
+            attachments, attachment_names,
         )
     finally:
         # Only the turn that still owns the guard may clear it and release the
@@ -5546,6 +5596,8 @@ def _run_conversation_turn_inner(
     on_stream_text: Callable[[str], None] | None = None,
     on_stream_reasoning: Callable[[str], None] | None = None,
     allow_action_nudge: bool = True,
+    attachments: list[str] | None = None,
+    attachment_names: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Inner body of ``run_conversation_turn`` -- wrapped by the re-entrancy guard.
@@ -5583,8 +5635,21 @@ def _run_conversation_turn_inner(
         print("[Coworker] run_conversation_turn: inserted system prompt ({:d} chars)".format(
             len(system_text)))
 
+    # Install this turn's user image attachments (issue #88 / Tier 3k).
+    # Captured and encoded on the MAIN thread by the send path before the
+    # worker started -- the worker only receives plain data URIs and never
+    # touches bpy.  Installed BEFORE the ``_pending_image`` reset below so
+    # the two stay independent: that reset clears the previous turn's MCP
+    # screenshot and must NOT clear these, and this block REPLACES (never
+    # merges) the previous turn's attachments so images cannot leak across
+    # turns.  Not cleared after injection either: every request of the turn
+    # re-injects them from here.
+    _agent_state.user_attachments = list(attachments or [])
+    _agent_state.user_attachment_names = list(attachment_names or [])
+
     # Clear any pending screenshot image from a previous turn -- the user
-    # is starting fresh, so the old screenshot is stale.
+    # is starting fresh, so the old screenshot is stale.  Deliberately
+    # does NOT touch ``user_attachments`` (Tier 3k; see above).
     _agent_state._pending_image = None
 
     # -- Pre-flight empty-scene check ----------------------------------
@@ -5625,8 +5690,19 @@ def _run_conversation_turn_inner(
     if chat_mode == "ASK" and _ASK_MODE_PROMPT_ADDENDUM not in history[0]["content"]:
         history[0]["content"] += _ASK_MODE_PROMPT_ADDENDUM
 
-    # Append the user message.
-    history.append({"role": "user", "content": user_message, "turn_start": True})
+    # Append the user message.  Image attachments appear here as a
+    # plain-text marker only: the data URIs live on the agent state for
+    # the request build (see ``_build_send_messages``) and must never
+    # enter the history that ``ui_chat._save_chat_history`` writes.
+    _stored_content = user_message
+    _attach_marker = chat_attachments.attachment_marker(
+        getattr(_agent_state, "user_attachment_names", None))
+    if _attach_marker:
+        _stored_content = (
+            f"{user_message}\n{_attach_marker}"
+            if user_message else _attach_marker
+        )
+    history.append({"role": "user", "content": _stored_content, "turn_start": True})
 
     # -- Pinned goal capture (Tier 3 hardening) -------------------------
     # The first request of the thread becomes the session goal; every
@@ -5635,7 +5711,7 @@ def _run_conversation_turn_inner(
     # compaction or memory-writer failure can lose them.
     try:
         with session_memory.store_lock:
-            session_memory.store.goal.set_request(user_message)
+            session_memory.store.goal.set_request(_stored_content)
     except Exception as _goal_ex:  # pylint: disable=broad-exception-caught
         print("[Coworker] run_conversation_turn: goal capture skipped -- {:s}".format(
             str(_goal_ex)))
@@ -6007,8 +6083,6 @@ def _run_conversation_turn_inner(
 
         # Sanitize any remaining non-standard roles to "user".
         msgs = _sanitize_message_roles(msgs)
-        # Drop addon bookkeeping keys from the wire copy.
-        msgs = _strip_internal_keys(msgs)
 
         # -- Inject the session memory block into the system prompt --
         # The block is small (bounded) and carries retired context; Qwen's
@@ -6099,6 +6173,51 @@ def _run_conversation_turn_inner(
                 else:
                     _domain_skills_text = ""  # Safety net; reserve should prevent this.
 
+        # -- Inject this turn's user attachments into the turn's user
+        # message (issue #88 / Tier 3k).  Like the pending screenshot
+        # below, but sticky for the WHOLE turn: every request (each
+        # tool-loop iteration) re-injects them and ``user_attachments``
+        # is never cleared after use -- only the next turn's own
+        # attachments replace it.  Done BEFORE budgeting so each image
+        # is counted at its fixed token cost, and on a dict COPY so the
+        # stored history keeps its plain-text content (with the
+        # ``[attached: ...]`` marker) and never accumulates payloads.
+        _attachments = list(
+            getattr(_agent_state, "user_attachments", None) or [])
+        if _attachments and msgs:
+            # Target: the CURRENT turn's user message.  Older turns'
+            # messages keep their ``turn_start`` flag too, so scan
+            # backwards for the LAST flagged user message; fall back to
+            # the last user message if the flag was ever stripped.
+            _tgt_i = None
+            for _ti in range(len(msgs) - 1, -1, -1):
+                if (msgs[_ti].get("role") == "user"
+                        and msgs[_ti].get("turn_start")):
+                    _tgt_i = _ti
+                    break
+            if _tgt_i is None:
+                # Never an injected ``[System: ...]`` note: the image belongs
+                # to the user's own request, not to the latest follow-up.
+                for _ti in range(len(msgs) - 1, -1, -1):
+                    if (msgs[_ti].get("role") == "user"
+                            and not session_memory.is_system_note(msgs[_ti])):
+                        _tgt_i = _ti
+                        break
+            if _tgt_i is not None:
+                _img_msg = dict(msgs[_tgt_i])
+                _img_blocks = [
+                    {"type": "image_url", "image_url": {"url": _uri}}
+                    for _uri in _attachments
+                ]
+                _img_prev = _img_msg.get("content")
+                if isinstance(_img_prev, list):
+                    _img_msg["content"] = _img_blocks + list(_img_prev)
+                else:
+                    _img_msg["content"] = _img_blocks + [
+                        {"type": "text", "text": str(_img_prev or "")},
+                    ]
+                msgs[_tgt_i] = _img_msg
+
         # -- Inject a pending screenshot into the last user message --
         # Done BEFORE budgeting so the image is counted against the window
         # (a pending screenshot used to be appended after the preflight and
@@ -6188,8 +6307,10 @@ def _run_conversation_turn_inner(
                     _err = None
                     print("[Coworker] run_conversation_turn: dropped built-in "
                           "skills to fit the context window")
-            return msgs, _err
-        return msgs, None
+            # Drop addon bookkeeping keys (turn_start, system_note, ...)
+            # from the wire copy LAST -- the steps above key on them.
+            return _strip_internal_keys(msgs), _err
+        return _strip_internal_keys(msgs), None
 
     iterations = 0
     # Mode-aware iteration budget: local models get more repair rounds.

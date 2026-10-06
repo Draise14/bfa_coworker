@@ -76,6 +76,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+try:  # Package import (inside Blender / the addon package).
+    from . import process_guard as _process_guard  # type: ignore[import-not-found]
+except ImportError:  # Standalone import (unit tests load this file directly).
+    import importlib.util as _pg_ilu
+    _pg_spec = _pg_ilu.spec_from_file_location(
+        "process_guard", Path(__file__).with_name("process_guard.py"))
+    _process_guard = _pg_ilu.module_from_spec(_pg_spec)  # type: ignore[arg-type]
+    _pg_spec.loader.exec_module(_process_guard)  # type: ignore[union-attr]
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -2968,6 +2977,11 @@ def start_local_llama(
             _set_error("llama-server is already running")
             return None
 
+    # A crashed Blender session may have left its llama-server running (it
+    # still holds the port and VRAM).  Kill orphans whose Blender is gone
+    # before launching, so two servers never fight over the hardware.
+    _process_guard.reap_orphans()
+
     server_exe = find_llama_server()
     if not server_exe:
         # Re-search once in case the user installed llama-server since the
@@ -3296,16 +3310,21 @@ def start_local_llama(
                 env=env,
             )
         else:
-            # Linux / macOS: detach from the parent process group so the
-            # server survives Blender exiting.
+            # Linux / macOS: own session (terminal signals do not reach
+            # it), but on Linux the kernel still SIGTERMs it when Blender
+            # dies (process_guard parent-death signal).
             proc = subprocess.Popen(
                 args,
                 stdin=subprocess.DEVNULL,
                 stdout=stdio_target,
                 stderr=stdio_target,
                 start_new_session=True,
+                preexec_fn=_process_guard.linux_preexec(),
             )
         print("[Coworker] start_local_llama:   Popen returned pid={:d}".format(proc.pid))
+        # Tie the server's lifetime to Blender's: on Windows a kill-on-close
+        # job object ends it even when Blender CRASHES (no Python runs then).
+        _process_guard.bind_to_parent(proc, "llama-server", int(port or 0))
 
     except FileNotFoundError:
         print("[Coworker] start_local_llama: FileNotFoundError -- binary not found")
@@ -3359,6 +3378,8 @@ def stop_local_llama() -> None:
             print("[Coworker] stop_local_llama:   exception during terminate: {:s}".format(str(ex)))
 
     _llama_process = None
+    if proc is not None:
+        _process_guard.forget(getattr(proc, "pid", None))
 
     # Fallback: kill any remaining llama-server processes by image name.
     # This catches orphaned processes from previous sessions that may

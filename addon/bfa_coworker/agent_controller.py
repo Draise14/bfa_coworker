@@ -220,6 +220,13 @@ _STREAM_TIMEOUT = 600.0
 # Maximum conversation history messages to send per turn.
 # Huge history balloons the prompt and makes small models loop.
 _MAX_HISTORY_MESSAGES = 20
+# Over the cap, drop the oldest messages in blocks of this size instead of one
+# per request.  A one-message slide changes the prompt right after the system
+# prompt on EVERY request of a long turn, so llama-server re-processes the
+# whole prompt each time; a block cut keeps the same start for several
+# requests and its KV cache stays reusable.  The window then holds between
+# _MAX_HISTORY_MESSAGES - _HISTORY_DROP_STEP and _MAX_HISTORY_MESSAGES messages.
+_HISTORY_DROP_STEP = 8
 
 # ---------------------------------------------------------------------------
 # System prompt (loaded lazily, cached per variant)
@@ -6052,11 +6059,14 @@ def _run_conversation_turn_inner(
         # system prompt (index 0) if present.  Must preserve tool-call pairs:
         # each "tool" role message MUST follow an "assistant" with tool_calls.
         if len(history) > _MAX_HISTORY_MESSAGES:
-            keep = min(_MAX_HISTORY_MESSAGES, len(history))
-            if history[0].get("role") == "system":
-                msgs = [history[0]] + history[-(keep - 1):]
-            else:
-                msgs = list(history[-keep:])
+            _has_sys = history[0].get("role") == "system"
+            _body_start = 1 if _has_sys else 0
+            _over = len(history) - _MAX_HISTORY_MESSAGES
+            # Round the cut up to a whole block: the cut index (and so the
+            # prompt prefix) only moves every _HISTORY_DROP_STEP messages.
+            _drop = -(-_over // _HISTORY_DROP_STEP) * _HISTORY_DROP_STEP
+            _cut = _body_start + _drop
+            msgs = ([history[0]] if _has_sys else []) + history[_cut:]
             # The current request must survive the message-count slice.  A
             # long single agent turn easily exceeds 20 messages, and the
             # blunt slice then dropped the user's actual request -- the

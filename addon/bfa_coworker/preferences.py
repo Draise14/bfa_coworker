@@ -295,6 +295,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         cfg.local_max_tokens = self.local_max_tokens
         cfg.thinking_budget_tokens = self.thinking_budget_tokens
         cfg.local_kv_cache_quant = self.local_kv_cache_quant
+        cfg.local_server_verbose = self.local_server_verbose
         cfg.lock_scene_while_working = getattr(self, "lock_scene_while_working", True)
         llm.set_config(cfg)
         # If switching to remote, stop any running local LLM.
@@ -709,6 +710,16 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default=False,
     )
 
+    local_server_verbose: BoolProperty(  # type: ignore[valid-type]
+        name="Verbose Server Log",
+        description=(
+            "Log every prompt and token in the llama-server log. For "
+            "troubleshooting only -- it slows requests and the log grows "
+            "quickly. Applies on next server start."
+        ),
+        default=False,
+    )
+
     lock_scene_while_working: BoolProperty(  # type: ignore[valid-type]
         name="Lock Scene While Working",
         description=(
@@ -1036,6 +1047,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             icon='CONSOLE',
             text="Open Log",
         )
+        diag_box.prop(self, "local_server_verbose")
         row = diag_box.row()
         row.operator("bfacw.check_ports", icon="FILE_REFRESH", text="Check Ports")
         row.operator("bfacw.ping_agent", icon="FILE_REFRESH", text="Diagnose")

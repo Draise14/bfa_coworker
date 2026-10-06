@@ -655,6 +655,7 @@ class LLMConfig:
     hf_token: str = ""  # HuggingFace token for gated models
     llama_backend: str = "auto"  # "auto" | "cpu" | "cuda" | "vulkan"
     local_kv_cache_quant: bool = False  # Quantize KV cache to q8_0 (GPU backends only)
+    local_server_verbose: bool = False  # Pass --verbose to llama-server (debug logging)
     # Soft co-work lock: while a turn runs, make the coworker's own objects
     # un-selectable in the UI so the user cannot re-target them mid-turn.
     # Restored when the turn ends.
@@ -1287,6 +1288,7 @@ def set_config(cfg: LLMConfig) -> None:
         _config.hf_token = cfg.hf_token
         _config.llama_backend = cfg.llama_backend
         _config.local_kv_cache_quant = cfg.local_kv_cache_quant
+        _config.local_server_verbose = cfg.local_server_verbose
         _config.lock_scene_while_working = cfg.lock_scene_while_working
         _config.auto_continue_rounds = cfg.auto_continue_rounds
         _config.remote_api_url = cfg.remote_api_url
@@ -1311,6 +1313,7 @@ def get_config() -> LLMConfig:
             hf_token=_config.hf_token,
             llama_backend=_config.llama_backend,
             local_kv_cache_quant=_config.local_kv_cache_quant,
+            local_server_verbose=_config.local_server_verbose,
             lock_scene_while_working=_config.lock_scene_while_working,
             auto_continue_rounds=_config.auto_continue_rounds,
             remote_api_url=_config.remote_api_url,
@@ -3140,12 +3143,17 @@ def start_local_llama(
         args = [
             server_exe,
             '--jinja',
-            '--verbose',
             '--host', '127.0.0.1',
             '--port', str(port),
             '--ctx-size', str(ctx_size),
             '--n-gpu-layers', str(ngpu_layers),
         ]
+        # --verbose logs every prompt and token to the server log: steady disk
+        # I/O and a fast-growing file on every request.  Startup errors are
+        # logged without it, so it is a debug opt-in only.
+        with _lock:
+            if getattr(_config, "local_server_verbose", False):
+                args.append('--verbose')
         # Model-specific extra flags (e.g. Qwen3 knobs), version-guarded
         # against the pinned llama-server build so an unknown flag never
         # crashes startup on an older binary.

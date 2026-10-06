@@ -1112,7 +1112,7 @@ The main panel holds everything you need to hold a conversation:
 - **Mode row** — shows the active operating mode (Local LLM / Remote API / External MCP) and a **Settings** button that jumps to the add-on preferences. The model name is deliberately *not* shown here — it lives in **Status & Diagnostics**.
 - **Start / Stop** — starts or stops the agent (or the bridge, in External Harness mode).
 - **Status line** — a one-line state readout with an icon:
-  - `Reading your message` / `Warming up the model` / `Thinking` while a turn runs, with a spinner and elapsed seconds
+  - `Reading your message` / `Dreaming, one moment` / `Thinking` while a turn runs, with a spinner and elapsed seconds
   - `Offline` when the agent is stopped
   - `Error: …` with a **Copy Error** button when something fails
   - a non-fatal **warning** line (e.g. a tool-calling downgrade) when there is no error

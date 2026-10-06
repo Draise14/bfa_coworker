@@ -5916,7 +5916,7 @@ def _run_conversation_turn_inner(
         # letting the status look stuck.
         _agent_state.turn_phase = "warming"
         if on_status:
-            on_status("Warming up the model...")
+            on_status("Dreaming, one moment...")
         print("[Coworker] run_conversation_turn: waiting for LLM on 127.0.0.1:{:d}...".format(llm_port_local))
         from . import llm_manager as _llm_mgr
         if not _wait_for_port(

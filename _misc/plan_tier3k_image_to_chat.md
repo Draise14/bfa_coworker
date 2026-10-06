@@ -160,12 +160,17 @@ standalone; the imbuf downscaler is a slimmed copy of the MCP screenshot helper)
   (icons verified against the `icon_items` enum dump: `IMAGE_DATA`,
   `FILEBROWSER`, `RENDER_STILL`, `FULLSCREEN_ENTER` - there is no
   `SCREENSHOT` icon).
-- 🖼️ `_draw_attachment_preview(layout, img)` - draws the attached datablock's
-  own preview icon (`ID.preview_ensure()` -> `UILayout.template_icon`,
-  `_ATTACHMENT_PREVIEW_SCALE = 8.0`), centred under the socket, so the user
-  can see WHAT is attached instead of trusting a filename.  Best-effort:
-  nothing attached, no preview, or a datablock without pixels all draw
-  nothing and a panel draw never raises.
+- 🖼️ `_draw_attachment_preview(layout, img, context)` - draws a thumbnail of the
+  attached image (`_attachment_preview_icon` -> `UILayout.template_icon`) so
+  the user can see WHAT is attached instead of trusting a filename.  The
+  pixels are our own resample of the image at exactly the size the widget is
+  drawn at, written into the datablock's own preview (`img.preview_ensure()`)
+  because `template_icon` otherwise draws Blender's stock 32px icon and the
+  thumbnail is very pixely.  The widget is sized from the panel's live width,
+  so a landscape image gets a wide, SHORT thumbnail instead of a square button
+  with large empty margins above and below it.  Best-effort: nothing attached,
+  no preview, or a datablock without pixels all draw nothing (or fall back to
+  the stock icon) and a panel draw never raises.
 - 🔥 `_ensure_attachment_preview(img)` - called when an image is ATTACHED
   (`_attach_to_socket`), not only from the draw.  `preview_ensure()` only
   *creates* the preview; Blender's preview thread fills its pixels a moment
@@ -367,19 +372,72 @@ Four user-reported caveats, plus two bugs that only a real-Blender pass exposed.
    puts the user's own values back in the same `finally` - so a heavy scene can
    never block Blender (and the chat) for minutes, and a later F12 render is
    unaffected.  A 1920x1080 / 4096-sample scene captures in under two seconds.
-3. **Drag-and-drop lands on the panel.**  Blender's built-in
-   `VIEW3D_FH_empty_image` / `VIEW3D_FH_camera_background_image` also match image
-   extensions in a 3D Viewport - the sidebar included - so a drop there opened
-   Blender's "multiple file handlers" chooser instead of attaching.
-   `_suppress_builtin_viewport_drops()` wraps both `poll_drop`s to return False
-   **only** inside the Coworker panel (matched on `Region.active_panel_category`),
-   and `_restore_builtin_viewport_drops()` hands the originals back on unregister.
-   Everywhere else Blender's stock drop behaviour is untouched.
-4. **The preview is responsive.**  `_attachment_preview_scale()` derives the
-   thumbnail's scale from the panel's own width (`context.region.width`), clamped
-   top and bottom, so widening the sidebar grows the thumbnail.  Blender's
-   `icon_draw_rect` keeps the image's aspect ratio and upscales small previews, so
-   screenshots and renders fill the panel too instead of staying a fixed stamp.
+3. **Drag-and-drop lands on the panel** - without touching Blender's classes.
+   Blender's built-in `VIEW3D_FH_empty_image` / `VIEW3D_FH_camera_background_image`
+   also match image extensions in a 3D Viewport - the sidebar included - so a drop
+   there opened Blender's "multiple file handlers" chooser instead of attaching.
+   The first attempt wrapped both `poll_drop`s to return False **only** inside the
+   Coworker panel (matched on `Region.active_panel_category`) and to hand the
+   originals back on unregister.  A drag on Bforartists 5.3 then died with
+   `EXCEPTION_ACCESS_VIOLATION` inside `bpy_class_call` -> `file_handler_poll_drop`,
+   on every drag and whether or not the socket held an image.  Replacing a method
+   on a class Blender registers from a *startup* module is not a mechanism we can
+   keep, so the wrapper was **removed**: we now register only our own
+   `BFACW_FH_chat_drop`, which claims the Text Editor and the Coworker panel
+   region (`_is_coworker_panel_region()`), and Blender's handler classes are
+   exactly as Blender registered them.  The 3D Viewport therefore keeps its stock
+   "multiple file handlers" menu - with our entry in it - while the Text Editor
+   attaches directly.  `poll_drop` and `_is_coworker_panel_region()` are
+   additionally wrapped so that a drop poll can never raise.  The crash could
+   **not** be reproduced on Blender 5.2 (the poll path was driven directly, with
+   and without the wrapper, across a simulated add-on reload); the wrapper is
+   removed regardless.
+4. **The preview is responsive, sharp, and has no empty bands.**  Blender draws
+   a preview icon into a SQUARE: `template_icon()` marks its button
+   `BUT_ICON_PREVIEW`, so `widget_draw_preview_icon()` (interface_widgets.cc)
+   takes `min(button_w, button_h) - PREVIEW_PAD` and calls
+   `icon_draw_preview(..., aspect=1.0f, size)`, and `icon_draw_size()` builds
+   `w = h = size / aspect` before `icon_draw_rect()` fits the image inside it.
+   A wide image is therefore never drawn wider than the button is tall, and
+   `UILayout.scale_x/scale_y` only makes the thumbnail smaller - measured, a
+   4:1 image in a short button draws a 38x9 blob inside a 176x44 bar - so it
+   cannot produce a rectangle filled by the image.  A preview built from
+   several square tiles would follow the image's shape (a row for a wide
+   image), but every Python-reachable icon button carries a 6px preview
+   padding: `BUT_NO_PREVIEW_PADDING` is only set by `uiDefIconPreviewBut`,
+   which only the File Browser uses.
+   So the buffer is a panel-wide SQUARE and `_attachment_thumbnail_pixels()`
+   composes it - the whole image fitted at full width over a dimmed, blurred,
+   cover-scaled copy of itself - which keeps the thumbnail panel-wide,
+   aspect-correct and borderless.  `_attachment_preview_px()` quantises the
+   side to 16px and clamps it; the pixels are read with `foreach_get` into an
+   `array('f')`, copied into a scratch image and resampled there, and the
+   result is written to a private `bpy.utils.previews` collection because
+   Blender regenerates an image datablock's own preview from the file.
+   Measured in a real Bforartists 5.3 GUI on a 400x100px attachment in a 220px
+   sidebar: a 176x176 buffer drawn as a 162x162 square whose sharp band is
+   160x42 (the source's 4:1 aspect, centred) with the muted backdrop filling
+   the rest - a tinted/bright pixel ratio of 4.08 against the 4.0 the geometry
+   predicts.
+
+   That run also uncovered two bugs worth recording: `Image.copy()` returns an
+   all-black buffer for a generated image (the copy is regenerated, not
+   duplicated), so the earlier "sharp" resample was never what the panel drew -
+   it had been showing the datablock's 32px stock preview, which is both the
+   "very pixely" look and the reason a private-collection buffer seemed not to
+   draw at all.
+
+5. **The image row collapses from its own header.**  `_draw_attachment_row()` draws
+   a `chat_image_expanded` toggle (a `BoolProperty` on `ChatHistoryProperties`,
+   so the state is per window and the collapse is discoverable) using the
+   `DOWNARROW_HLT` / `TRIA_RIGHT` pair - the highlighted arrows Blender's own
+   sub-panels use - and returns early when collapsed, so the socket, thumbnail
+   and capture buttons cost no panel height.  While collapsed the header shows
+   the attached datablock's name, so what will be sent stays visible; the drop
+   handler targets the panel region rather than the row, so dragging still
+   attaches with the row closed.  Verified in a real Bforartists 5.3 GUI: the
+   property registers, the thumbnail's magenta pixels are 5396 while expanded
+   and 0 while collapsed.
 
 Two bugs found by running the code in a real Blender 5.2 GUI:
 
@@ -393,12 +451,15 @@ Two bugs found by running the code in a real Blender 5.2 GUI:
   had been written to match the bug - which is exactly why only the Blender run
   caught it.  The fake now uses `spaces`, so the tests guard the real name.
 
-Verification: a real-Blender 5.2 GUI pass ran 27 checks, all passing - the
-built-ins yield only in our panel, keep stock behaviour in the viewport and in
-other sidebar tabs, and are restored on unregister; the render writes a real PNG
-at the scene resolution, follows the viewport view, restores `scene.camera` and
-the user's own render settings, and leaves no object or camera datablock behind -
-a 1920x1080 / 4096-sample scene is captured at 1024x576 in under two seconds.
+Verification: a real-Blender 5.2 GUI pass ran 27 checks, all passing - our own
+handler claims the Coworker panel and the Text Editor while Blender's classes are
+left untouched, so stock drop behaviour elsewhere is unchanged; the render writes
+a real PNG at the scene resolution, follows the viewport view, restores
+`scene.camera` and the user's own render settings, and leaves no object or camera
+datablock behind - a 1920x1080 / 4096-sample scene is captured at 1024x576 in
+under two seconds.  (The three checks that asserted the built-in handlers were
+wrapped were retired with the wrapper; on Blender 5.2 they passed either way,
+which is part of why the crash is not reproducible here.)
 Unit tests: the new regression tests cover the zero-reported-size, empty-write and
 settings-restore cases.
 

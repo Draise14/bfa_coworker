@@ -1003,7 +1003,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         import json as _json
         try:
             return _json.loads(self.saved_providers_json)
-        except (json.JSONDecodeError, TypeError):
+        except (_json.JSONDecodeError, TypeError):
             return []
 
     def _set_saved_providers(self, providers: list[dict]) -> None:

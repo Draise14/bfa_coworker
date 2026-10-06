@@ -3916,6 +3916,10 @@ def register() -> None:
         bpy.utils.register_class(cls)
     bpy.types.WindowManager.bfacw_chat_props = bpy.props.PointerProperty(type=ChatHistoryProperties)  # type: ignore[attr-defined]
 
+    # Let the Coworker panel own image drops in its own region, so a drop
+    # attaches directly instead of opening Blender's file-handler menu.
+    _suppress_builtin_viewport_drops()
+
     # Register the chat UI update timer.
     if not bpy.app.background:
         bpy.app.timers.register(chat_timer_update, first_interval=1.0, persistent=True)

@@ -1,7 +1,9 @@
 # Tier 3k — Goal & Plan Memory, Reliable Checkpoints, Long Requests
 
-**Status**: 🚧 In progress — Phases 1-6 implemented and unit/integration-tested
-(2026-10-05); **in-Blender verification pending** (see §6). Move to
+**Status**: 🚧 In progress — Phases 1-6 implemented (2026-10-05); follow-ups
+2026-10-06 (Session sub-panels, live plan ticking, Goal & Plan in the chat,
+sticky image pin, stop rules, crash-safe servers) implemented and tested;
+**final in-Blender verification pending** (see §6 and §7). Move to
 `Plans History/` with an Audit section once verified in Bforartists.
 **Branch**: `fix/goal-memory-checkpoint-hardening`
 **Scope**: local mode first (small windows), and therefore remote mode too.
@@ -75,3 +77,19 @@ Two field logs from 2026-10-05 (local, 16K window) plus quick user tests:
 3. *Edit in Text Editor*: edit a step / add a note; next request reflects it.
 4. Preferences with the model running: Context Window greyed + *Stop Model*; Thinking selector in the chat changes the next request's budget (console: `thinking_budget_tokens=`).
 5. Restart Bforartists: goal, plan and checkpoints restored.
+
+## 7. Follow-ups (2026-10-06)
+
+| Item | Where |
+| --- | --- |
+| Session panel: summary + Context / Memory & Checkpoints sub-panels; plain-language memory; checkpoint titles + one-click restore | `ui_chat.py` `_draw_session_section`, `_draw_context_section`, `_draw_memory_section`, `_checkpoint_title`, `_humanize_memory` |
+| Image marker shown as an icon | `ui_chat.py` `_split_attachment_marker`, `_draw_user_text` |
+| Plan ticks live mid-turn (narration parsing, resend keeps progress, text refs, active step) | `goal_plan.py` `note_progress_from_text`, `mark_active_if_idle`, `_step_index`; hooks in `agent_controller.py` |
+| Goal & Plan moved into the chat panel | `ui_chat.py` `_draw_goal_plan_inline` |
+| Sticky image pin / re-link | `ui_chat.py` `_remember_attachment`, `_restore_attachment`; `chat_attachments.persist_image` |
+| Stop rules 1-5 (plan done, real progress only, one no-plan round, idle/loop guard, next-step question) | `agent_controller.py` `_try_start_round`, `_tool_makes_progress`, `_code_changes_scene`, stop block after each tool batch, wrap-up reasons |
+| Crash-safe servers | `process_guard.py` |
+
+Additional in-Blender checks: steps tick while a turn runs; a finished request
+ends with a next-step question instead of polishing; undo during a turn does not
+clear a sticky image; killing `bforartists.exe` also ends `llama-server.exe`.

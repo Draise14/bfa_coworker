@@ -294,6 +294,120 @@ _NOTE_TITLES = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Human-readable display helpers (chat + Session panel)
+
+# ``[attached: a.png, b.jpg]`` -- the plain-text marker stored with a user
+# message (chat_attachments.attachment_marker).  The model needs it; the chat
+# shows an image icon instead.
+_ATTACH_MARKER_RE = re.compile(r"\s*\[attached:\s*([^\]]*)\]")
+
+
+def _split_attachment_marker(text: str) -> tuple[str, list[str]]:
+    """Return ``(text without the marker, attached image names)``."""
+    text = str(text or "")
+    names: list[str] = []
+    for m in _ATTACH_MARKER_RE.finditer(text):
+        names.extend(n.strip() for n in m.group(1).split(",") if n.strip())
+    return _ATTACH_MARKER_RE.sub("", text).strip(), names
+
+
+def _draw_user_text(layout, text: str) -> None:
+    """Draw a user message: its words, then one image icon per attachment."""
+    clean, names = _split_attachment_marker(text)
+    if clean:
+        _draw_multiline(layout, clean)
+    if names:
+        row = layout.row(align=True)
+        for _n in names[:6]:
+            row.label(text="", icon='IMAGE_DATA')
+        if len(names) > 6:
+            row.label(text="+{:d}".format(len(names) - 6))
+
+
+def _short_words(text: str, limit: int = 46) -> str:
+    """First words of *text*, cut on a word boundary with an ellipsis."""
+    text = " ".join(str(text or "").split())
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0] or text[:limit]
+    return cut.rstrip(" ,.;:-") + "…"
+
+
+def _humanize_memory(block: str, max_lines: int = 10) -> list[str]:
+    """Turn the stored memory note into short plain-language lines.
+
+    The stored note is written for the model (a ``[Session memory]`` header,
+    ``Last updated: turn N`` stamps, ``- user:`` / ``- assistant:`` bullets).
+    The panel shows the same facts the way a person would say them.
+    """
+    out: list[str] = []
+    for raw in str(block or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("[Session memory]") or line.startswith("Last updated"):
+            continue
+        low = line.lower()
+        if low.rstrip(":") in ("recent context", "decisions", "pending", "done",
+                               "errors seen", "objects & files touched", "goal"):
+            heading = {"recent context": "Recently", "errors seen": "Problems hit",
+                       "objects & files touched": "Touched",
+                       "pending": "Still to do"}.get(low.rstrip(":"), line.rstrip(":"))
+            out.append(heading + ":")
+            continue
+        line = line.lstrip("-*• ").strip()
+        if line.lower().startswith("user:"):
+            line = "You: " + line[5:].strip()
+        elif line.lower().startswith("assistant:"):
+            line = "Coworker: " + line[10:].strip()
+        elif line.startswith("Earlier request:"):
+            line = "Earlier you asked: " + line[len("Earlier request:"):].strip()
+        line, _imgs = _split_attachment_marker(line)
+        if line:
+            out.append(("  " if not line.endswith(":") else "") + _short_words(line, 110))
+    # Drop a trailing heading with nothing under it.
+    while out and out[-1].endswith(":"):
+        out.pop()
+    if len(out) > max_lines:
+        out = out[:max_lines] + ["  …"]
+    return out
+
+
+_CHECKPOINT_REASONS = {
+    "compaction": "auto",
+    "overflow": "auto",
+    "manual-compaction": "manual",
+    "pre-restore": "before restore",
+}
+
+
+def _checkpoint_title(cp: dict, number: int) -> tuple[str, str]:
+    """``("Checkpoint 3: fix the floating parts…", "10:42 · 24 msgs · ~4.1k tokens · auto")``."""
+    words = ""
+    for m in reversed(cp.get("history") or []):
+        if m.get("role") != "user" or _is_system_note_msg(m):
+            continue
+        content = m.get("content")
+        if isinstance(content, list):
+            content = " ".join(str(b.get("text", "")) for b in content if isinstance(b, dict))
+        words, _imgs = _split_attachment_marker(str(content or ""))
+        if words:
+            break
+    title = "Checkpoint {:d}: {:s}".format(number, _short_words(words) if words else "(start)")
+    ts = str(cp.get("timestamp", ""))
+    ts_short = ts.split(" ", 1)[1][:5] if " " in ts else ts
+    try:
+        size_chars = len(json.dumps(cp.get("history") or [], default=str))
+    except (TypeError, ValueError):
+        size_chars = 0
+    tokens = size_chars / 3.5
+    size = ("~{:.1f}k tokens".format(tokens / 1000.0) if tokens >= 1000
+            else "~{:d} tokens".format(int(tokens)))
+    parts = [p for p in (ts_short, "{:d} msgs".format(int(cp.get("message_count", 0) or 0)),
+                         size, _CHECKPOINT_REASONS.get(str(cp.get("reason", "")), ""))
+             if p]
+    return title, " · ".join(parts)
+
+
 def _group_turns(history: list) -> list[list[dict]]:
     """Group conversation history into turns (one real user send = one turn).
 
@@ -1018,6 +1132,12 @@ class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
         description="Index of the selected checkpoint",
         default=0,
         min=0,
+    )
+
+    session_show_memory_editor: BoolProperty(  # type: ignore[valid-type]
+        name="Edit Memory",
+        description="Show the raw memory note the Coworker reads, to edit it",
+        default=False,
     )
 
     session_memory_edit: StringProperty(  # type: ignore[valid-type]
@@ -2898,7 +3018,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         # the "* Coworker:" label on the reply below.
         urow = turn_box.row()
         urow.label(text="You:", icon='USER')
-        _draw_multiline(turn_box, user_msg.get("content", ""))
+        _draw_user_text(turn_box, user_msg.get("content", ""))
 
         # --- Workshop (collapsible: only the internals collapse) ---
         if has_proc:
@@ -3028,13 +3148,53 @@ class BFACW_PT_chat_session(Panel):  # type: ignore[misc]
         _draw_session_section(layout, context, props, state)
 
 
+class BFACW_PT_chat_session_context(Panel):  # type: ignore[misc]
+    """Session > Context -- how full the model's context window is."""
+    bl_label = "Context"
+    bl_idname = "BFACW_PT_chat_session_context"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = _CHAT_PANEL_CATEGORY
+    bl_parent_id = "BFACW_PT_chat_session"
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return BFACW_PT_chat_session.poll(context)
+
+    def draw_header(self, context: bpy.types.Context) -> None:
+        self.layout.label(text="", icon='MEMORY')
+
+    def draw(self, context: bpy.types.Context) -> None:
+        _draw_context_section(self.layout, agent_controller._agent_state)
+
+
+class BFACW_PT_chat_session_memory(Panel):  # type: ignore[misc]
+    """Session > Memory & Checkpoints -- summarized turns and restore points."""
+    bl_label = "Memory & Checkpoints"
+    bl_idname = "BFACW_PT_chat_session_memory"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = _CHAT_PANEL_CATEGORY
+    bl_parent_id = "BFACW_PT_chat_session"
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return BFACW_PT_chat_session.poll(context)
+
+    def draw_header(self, context: bpy.types.Context) -> None:
+        self.layout.label(text="", icon='BOOKMARKS')
+
+    def draw(self, context: bpy.types.Context) -> None:
+        _draw_memory_section(self.layout, context.window_manager.bfacw_chat_props)  # type: ignore[attr-defined]
+
+
 class BFACW_PT_chat_session_goal(Panel):  # type: ignore[misc]
     """Session > Goal & Plan -- the pinned goal and step plan."""
     bl_label = "Goal & Plan"
     bl_idname = "BFACW_PT_chat_session_goal"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Coworker"
+    bl_category = _CHAT_PANEL_CATEGORY
     bl_parent_id = "BFACW_PT_chat_session"
 
     @classmethod
@@ -3729,95 +3889,93 @@ def _redraw_areas_safe() -> None:
 # Session memory & checkpoint operators (Tier 3 Phase 5)
 
 def _draw_session_section(layout, context, props, state) -> None:
-    """Draw the Session panel: context usage, memory preview, checkpoints.
+    """Session panel header: one plain summary line.
 
-    Shown in the dedicated ``BFACW_PT_chat_session`` panel, separate from the
-    chat panel (which holds the message history, input and controls).
+    The details live in the sub-panels (Context, Memory & Checkpoints,
+    Goal & Plan) so the user opens only what they care about.
     """
     from . import session_memory as _sm
-    st = _sm.store
-
-    # -- Context usage ----------------------------------------------
-    # Use the LATEST request's prompt tokens (current occupancy), not the
-    # cumulative session sum -- a running sum only grows, so the bar could
-    # never fall after compaction and would pin at 100%.
     ctx_size = getattr(state, "ctx_size_used", 0) or 0
     last_prompt = getattr(state, "last_prompt_tokens", 0) or 0
-    ctx_box = layout.box()
-    ctx_box.label(text="Context Window", icon='MEMORY')
+    parts = []
+    if ctx_size > 0 and last_prompt > 0:
+        parts.append("Context {:d}%".format(min(int(last_prompt * 100 / ctx_size), 100)))
+    with _sm.store_lock:
+        n_cp = len(_sm.store.checkpoints)
+        plan = _sm.store.goal.status_line()
+    if n_cp:
+        parts.append("{:d} checkpoint{:s}".format(n_cp, "" if n_cp == 1 else "s"))
+    if plan:
+        parts.append(plan.split(" -- ")[0])
+    layout.label(text="  ·  ".join(parts) if parts else "New session", icon='INFO')
+
+
+def _draw_context_section(layout, state) -> None:
+    """Session > Context: how full the model's working memory is."""
+    from . import session_memory as _sm
+    # The LATEST request's prompt tokens (current occupancy), not a running
+    # sum -- a sum only grows and would pin the bar at 100%.
+    ctx_size = getattr(state, "ctx_size_used", 0) or 0
+    last_prompt = getattr(state, "last_prompt_tokens", 0) or 0
     if ctx_size > 0 and last_prompt > 0:
         pct = min(int(last_prompt * 100 / ctx_size), 100)
-        row = ctx_box.row(align=True)
-        row.label(text="{:d}% used".format(pct))
-        row.progress(factor=pct / 100.0, type='BAR')
+        row = layout.row(align=True)
+        row.progress(factor=pct / 100.0, type='BAR',
+                     text="{:d}% of {:d}k tokens".format(pct, max(1, ctx_size // 1024)))
         if pct >= int(_sm.COMPACTION_TRIGGER_RATIO * 100):
-            ctx_box.label(
-                text="Near the limit -- older turns will be summarized (checkpoint)",
-                icon='INFO')
+            _draw_multiline(layout, "Getting full -- older turns will be summarized "
+                                    "into memory automatically.", icon='INFO')
     else:
-        ctx_box.label(text="No usage recorded yet", icon='INFO')
+        layout.label(text="Fills up as you chat", icon='INFO')
 
-    # -- Memory note (compaction summary) ---------------------------
-    mem_box = layout.box()
-    mem_box.label(text="Memory", icon='BOOKMARKS')
-    if st.memory_block:
-        mem_lines = st.memory_block.splitlines()
-        _draw_multiline(mem_box, mem_lines[0] if mem_lines else "")
+
+def _draw_memory_section(layout, props) -> None:
+    """Session > Memory & Checkpoints: what was summarized, and restore points."""
+    from . import session_memory as _sm
+    st = _sm.store
+    with _sm.store_lock:
+        memory_block = st.memory_block
+        checkpoints = st.list_checkpoints()
+
+    # -- What the coworker remembers from summarized turns ------------
+    lines = _humanize_memory(memory_block)
+    if lines:
+        box = layout.box()
+        for ln in lines:
+            if ln.endswith(":"):
+                box.label(text=ln)
+            else:
+                _draw_multiline(box, ln.strip())
     else:
-        mem_box.label(text="Nothing remembered yet", icon='INFO')
-    # Bound multiline editor: the textbox shows and edits the memory block;
-    # the Apply button writes it back (an empty box reloads the current one).
-    # Initialise the editor from the store while it is untouched so the user
-    # can see what is remembered.
-    if not props.session_memory_edit and st.memory_block:
-        props.session_memory_edit = st.memory_block
-    mem_box.textbox(props, "session_memory_edit",
-                    placeholder="Session memory (empty = reload current)")
-    row = mem_box.row(align=True)
-    row.operator("bfacw.session_memory_view_edit", icon='TEXT', text="Apply Memory")
+        _draw_multiline(layout, "Nothing summarized yet. When the context fills "
+                                "up, older turns are summarized here and a "
+                                "checkpoint is saved.", icon='INFO')
+
+    row = layout.row(align=True)
     row.operator("bfacw.session_compact_now", icon='BOOKMARKS', text="Checkpoint Now")
+    row.prop(props, "session_show_memory_editor", text="", icon='GREASEPENCIL',
+             toggle=True)
+    if props.session_show_memory_editor:
+        # Raw note, for power users: what the model actually reads.
+        if not props.session_memory_edit and memory_block:
+            props.session_memory_edit = memory_block
+        layout.textbox(props, "session_memory_edit",
+                       placeholder="Memory note (empty = reload current)")
+        layout.operator("bfacw.session_memory_view_edit", icon='CHECKMARK',
+                        text="Apply Memory")
 
-    # -- Checkpoints (Restore / Branch) -----------------------------
-    cp_box = layout.box()
-    checkpoints = st.list_checkpoints()
-    row = cp_box.row(align=True)
-    row.prop(props, "session_show_checkpoints",
-             icon='TRIA_DOWN' if props.session_show_checkpoints else 'TRIA_RIGHT',
-             text="Checkpoints ({:d})".format(len(checkpoints)))
-    if props.session_show_checkpoints and checkpoints:
-        # Default the selection to the newest checkpoint.
-        if props.session_checkpoint_index >= len(checkpoints):
-            props.session_checkpoint_index = len(checkpoints) - 1
-        # Make clear what the radio index selects -- without this the number
-        # reads as an unexplained "0".
-        _sel = props.session_checkpoint_index
-        if 0 <= _sel < len(checkpoints):
-            cp_box.label(text="Restore target: #{:d}  {:s}".format(
-                _sel, checkpoints[_sel].get("reason", "?")))
+    # -- Restore points (newest first) ---------------------------------
+    if checkpoints:
+        cbox = layout.box()
         for i in range(len(checkpoints) - 1, -1, -1):
-            cp = checkpoints[i]
-            ts = cp.get("timestamp", "?")
-            # The timestamp is a full date+time; only the time-of-day is
-            # shown in the compact list (the full stamp is too long and
-            # pushed the reason out of the row).
-            ts_short = ts.split(" ", 1)[1] if " " in ts else ts
-            # Primary row: a radio button (not a bare index number) so it is
-            # obvious at a glance which checkpoint is the restore target.
-            row = cp_box.row(align=True)
-            row.operator(
-                "bfacw.session_checkpoint_select",
-                text="",
-                icon='RADIOBUT_ON' if i == _sel else 'RADIOBUT_OFF',
-                emboss=False,
-            ).index = i
-            row.label(text="#{:d}  {:s}".format(i, cp.get("reason", "?")))
-            # Detail row: smaller, indented timestamp + message count.
-            detail = cp_box.row()
-            detail.scale_y = 0.8
-            detail.label(text="       {:s}, {:d} messages".format(
-                ts_short, cp.get("message_count", 0)))
-        row = cp_box.row(align=True)
-        row.operator("bfacw.session_checkpoint_restore", icon='LOOP_BACK', text="Restore")
+            title, detail = _checkpoint_title(checkpoints[i], i + 1)
+            row = cbox.row(align=True)
+            row.label(text=title, icon='BOOKMARKS')
+            row.operator("bfacw.session_checkpoint_restore", text="",
+                         icon='LOOP_BACK').index = i
+            sub = cbox.row()
+            sub.scale_y = 0.7
+            sub.label(text="      " + detail)
 
 
 class BFACW_OT_session_checkpoint_restore(Operator):  # type: ignore[misc]
@@ -3825,14 +3983,20 @@ class BFACW_OT_session_checkpoint_restore(Operator):  # type: ignore[misc]
     bl_idname = "bfacw.session_checkpoint_restore"
     bl_label = "Restore"
     bl_description = (
-        "Restore this checkpoint. The current conversation is saved as a "
-        "checkpoint first, so nothing is lost."
+        "Go back to this checkpoint. The current conversation is saved as a "
+        "checkpoint first, so nothing is lost"
     )
+
+    index: IntProperty(default=-1, min=-1)  # type: ignore[valid-type]
+
+    def invoke(self, context: bpy.types.Context, event) -> set[str]:
+        return context.window_manager.invoke_confirm(self, event)
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         from . import session_memory as _sm
         st = _sm.store
-        index = context.window_manager.bfacw_chat_props.session_checkpoint_index  # type: ignore[attr-defined]
+        index = self.index if self.index >= 0 else \
+            context.window_manager.bfacw_chat_props.session_checkpoint_index  # type: ignore[attr-defined]
         try:
             with _sm.store_lock:
                 restored = st.restore(
@@ -3844,7 +4008,7 @@ class BFACW_OT_session_checkpoint_restore(Operator):  # type: ignore[misc]
             self.report({"WARNING"}, "Checkpoint no longer exists")
             return {"CANCELLED"}
         _save_chat_history()
-        self.report({"INFO"}, "Checkpoint restored (current session was saved as 'pre-restore')")
+        self.report({"INFO"}, "Checkpoint restored -- the previous state was saved as a checkpoint too")
         return {"FINISHED"}
 
 
@@ -3968,10 +4132,12 @@ def _draw_goal_plan_section(layout) -> None:
     else:
         box = layout.box()
         box.label(text="Session goal", icon='PINNED')
-        _draw_multiline(box, session_goal or "(none)")
-        if turn_goal and turn_goal != session_goal:
+        _draw_user_text(box, session_goal or "(none)")
+        # Same request (the goal is just clipped longer) -> show it once.
+        if turn_goal and turn_goal != session_goal and turn_goal != \
+                _sm.goal_plan._clip(session_goal, _sm.goal_plan._TURN_GOAL_CHARS):
             box.label(text="Current request", icon='USER')
-            _draw_multiline(box, turn_goal)
+            _draw_user_text(box, turn_goal)
         if steps:
             pbox = layout.box()
             row = pbox.row()
@@ -4129,6 +4295,8 @@ _classes = (
     BFACW_PT_chat_queue,
     BFACW_PT_chat_panel,
     BFACW_PT_chat_session,
+    BFACW_PT_chat_session_context,
+    BFACW_PT_chat_session_memory,
     BFACW_PT_chat_session_goal,
     BFACW_PT_chat_status,
     BFACW_PT_chat_text_editor,

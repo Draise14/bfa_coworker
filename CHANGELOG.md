@@ -44,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The Session panel is now three simple sub-panels** with a one-line summary on top (e.g. *Context 42% · 3 checkpoints · Plan 2/5*): **Context** (one bar: "42% of 16k tokens"), **Memory & Checkpoints** (what was summarized, in plain words -- "Earlier you asked...", "You: ...", "Coworker: ..." -- plus *Checkpoint Now* and the restore points; the raw note the model reads is behind a pencil toggle), and **Goal & Plan**.
+- **Checkpoints read like a history, not a log.** Each one shows *Checkpoint 3: the first words of your request...* with the time, message count, approximate size and whether it was automatic or manual, and has its own restore button (with a confirmation) instead of a separate radio list and Restore button.
+- **Attached images show as an image icon in the chat** (and in the goal) instead of the `[attached: file.png]` text the model reads.
 - **"Compaction" is now called a *Checkpoint* in the UI** -- *Checkpoint Now* in the Session panel and *Checkpoint -- N earlier message(s) summarized* markers in the Workshop.
 - **Context Window and KV-cache settings are locked while the local model is running** (they are fixed when llama-server loads the model); a *Stop Model* button sits next to the notice. Reasoning effort stays editable.
 

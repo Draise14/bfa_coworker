@@ -73,6 +73,8 @@ Mention anything in your scene! Objects, materials, collections, node groups, wo
 - ⚠️ Stop-during-thinking guard
 
 ### ⚡ **Performance & UX**
+- 🚀 Long local turns re-use llama-server's prompt cache (no full re-prefill every request)
+- 🖥️ The chat no longer redraws the 3D Viewport; llama-server no longer logs every token
 - 🎠 Thinking spinner animation
 - 📉 Model loading progress bar
 - 🛡️ Graceful shutdown with health indicators

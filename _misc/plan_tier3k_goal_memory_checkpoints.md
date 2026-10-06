@@ -46,7 +46,7 @@ Two field logs from 2026-10-05 (local, 16K window) plus quick user tests:
 * A final reply on the last iteration is kept (`_finished` flag).
 
 ### 2.4 Reliable fitting & compaction on small windows
-* Message-count slice always keeps the current request.
+* Message-count slice always keeps the current request. Over the 20-message cap it drops the oldest messages in blocks of 8 (`_HISTORY_DROP_STEP`), not one per request, so the prompt prefix -- and llama-server's KV cache -- stays reusable across several requests of a long turn.
 * `_fit_history_to_budget` pins the last **real** request and, if the pinned turn still overflows, sheds that turn's own older tool results -> stale notes -> old tool-call code (send copy only; the panel keeps everything). Replaces the freebuff worktree's in-history shedding.
 * Prompt-size **calibration**: every local response's `usage.prompt_tokens` is compared with the estimate; the effective budget is `base / calibration` (rises immediately, decays slowly, max 2.5). A context-overflow 400 feeds `n_prompt_tokens` into it before the retry, and the doomed payload is no longer re-sent non-streaming.
 * Memory note scales with the window (`set_memory_budget`: 4% of ctx, 400-1500 tokens); trimming drops the **oldest** lines; writer output is validated (chatty/empty replies fall back to the heuristic); the writer reads the **newest** retired text and no longer restates the goal.

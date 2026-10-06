@@ -2570,6 +2570,14 @@ _mention_popup_open = False
 # start/stop operators on the main thread).
 _last_applied_ui_status = ""
 
+# Snapshot of the panel-visible agent state from the previous timer tick, and
+# when the sidebar was last redrawn.  While idle the timer only redraws when
+# the snapshot changes (a turn ended, an error arrived, the bridge stopped...)
+# or the slow heartbeat elapses -- never every tick.
+_last_ui_signature: tuple = ()
+_last_idle_redraw = 0.0
+_IDLE_REDRAW_INTERVAL = 2.0
+
 
 def chat_timer_update() -> float | None:
     """
@@ -2581,6 +2589,8 @@ def chat_timer_update() -> float | None:
     """
     global _mention_popup_open
     global _last_applied_ui_status
+    global _last_ui_signature
+    global _last_idle_redraw
     from . import agent_controller as _ac
 
     # Animate thinking dots.
@@ -2630,17 +2640,60 @@ def chat_timer_update() -> float | None:
     except Exception as _plan_ex:  # pylint: disable=broad-exception-caught
         print("[Coworker] plan text sync skipped -- {:s}".format(str(_plan_ex)))
 
-    # Redraw all chat panels.
-    for wm in bpy.data.window_managers:
-        for win in wm.windows:
-            for area in win.screen.areas:
-                if area.type == 'VIEW_3D':
-                    area.tag_redraw()
-                if area.type == 'TEXT_EDITOR':
-                    area.tag_redraw()
+    # Redraw the chat panels -- only when something they show may have changed.
+    _st = _ac._agent_state
+    _sig = _ui_signature(_st)
+    _now = time.monotonic()
+    if (_st.is_thinking or _sig != _last_ui_signature
+            or _now - _last_idle_redraw >= _IDLE_REDRAW_INTERVAL):
+        _last_ui_signature = _sig
+        _last_idle_redraw = _now
+        _tag_chat_regions_redraw()
     # Tick faster while a turn is running so the spinner reads as motion;
     # otherwise keep the light idle cadence.
     return 0.1 if _ac._agent_state.is_thinking else 0.5
+
+
+def _ui_signature(state) -> tuple:
+    """Cheap snapshot of the agent state the chat panels display.
+
+    The worker thread mutates this state without tagging a redraw, so the
+    timer compares snapshots to notice changes (turn finished, history grew,
+    error/warning set, server or bridge stopped) while idle.
+    """
+    from . import session_memory as _sm
+    try:
+        from . import co_work_guard as _cwg
+        locked = _cwg.is_locked()
+    except Exception:  # pylint: disable=broad-exception-caught
+        locked = False
+    return (
+        state.is_thinking,
+        state.mcp_server_running,
+        mcp_to_blender_server.is_running(),
+        state.ui_status,
+        state.error,
+        state.warning,
+        len(state.conversation_history),
+        len(_sm.store.retired_history),
+        locked,
+    )
+
+
+def _tag_chat_regions_redraw() -> None:
+    """Redraw the sidebar (UI) regions that host the chat panels.
+
+    Tags the region, not the area: ``area.tag_redraw()`` also redraws the
+    3D viewport itself, which made the scene re-render on every timer tick.
+    """
+    for wm in bpy.data.window_managers:
+        for win in wm.windows:
+            for area in win.screen.areas:
+                if area.type not in {'VIEW_3D', 'TEXT_EDITOR'}:
+                    continue
+                for region in area.regions:
+                    if region.type == 'UI':
+                        region.tag_redraw()
 
 
 def _open_mention_for_at(text: str) -> float | None:
@@ -2859,7 +2912,11 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         from . import session_memory as _sm
         archived = list(_sm.store.retired_history)
         combined = archived + live
-        archived_ids = {id(m) for m in archived}
+        # id -> index maps, built once per draw: every copy button and
+        # Workshop entry needs its message's index, and a linear scan per
+        # lookup made a long chat's draw quadratic (at up to 10 draws/sec).
+        archived_index = {id(m): i for i, m in enumerate(archived)}
+        live_index = {id(m): i for i, m in enumerate(live)}
 
         if combined:
             # Display order toggle + message count.
@@ -2901,14 +2958,16 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 else visible_turns
             )
 
+            # Absolute turn number by IDENTITY (not list.index, which
+            # compares by value and could collide on equal turns).
+            turn_numbers = {id(t): i + 1 for i, t in enumerate(turns)}
+
             for _display_idx, turn in enumerate(turn_iter):
-                # Absolute turn number by IDENTITY (not list.index, which
-                # compares by value and could collide on equal turns).
-                _turn_num = next(
-                    (i + 1 for i, t in enumerate(turns) if t is turn), 0)
+                _turn_num = turn_numbers.get(id(turn), 0)
                 try:
                     self._draw_turn(
-                        hist_box, archived, live, archived_ids, turn,
+                        hist_box, archived, live,
+                        archived_index, live_index, turn,
                         _turn_num, _display_idx, len(visible_turns),
                         props, state,
                     )
@@ -2931,7 +2990,8 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         hist_box,
         archived: list,
         live: list,
-        archived_ids: set,
+        archived_index: dict,
+        live_index: dict,
         turn: list,
         turn_num: int,
         display_idx: int,
@@ -2952,8 +3012,12 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         """
         def _idx(msg: dict) -> tuple[int, bool]:
             """(index, archived) for *msg* from whichever list holds it."""
-            if id(msg) in archived_ids:
-                return _hist_index(archived, msg), True
+            if id(msg) in archived_index:
+                return archived_index[id(msg)], True
+            if id(msg) in live_index:
+                return live_index[id(msg)], False
+            # Not in either snapshot by identity: fall back to the
+            # equality match (-1 when gone).
             return _hist_index(live, msg), False
 
         def _copy(op, msg: dict) -> None:

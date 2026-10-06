@@ -405,60 +405,21 @@ class TestChatAttachmentUI(unittest.TestCase):
         self.assertFalse(is_region(_ctx("IMAGE_EDITOR", "UI", "Coworker")))
         self.assertFalse(is_region(_ctx(None, None, "")))
 
-    def test_builtin_viewport_drops_are_suppressed_and_restored(self):
-        class _BuiltinEmpty:
-            @classmethod
-            def poll_drop(cls, context):
-                return True
-
-        class _BuiltinCameraBg:
-            @classmethod
-            def poll_drop(cls, context):
-                return True
-
-        fake_view3d = types.ModuleType("bl_operators.view3d")
-        fake_view3d.VIEW3D_FH_empty_image = _BuiltinEmpty
-        fake_view3d.VIEW3D_FH_camera_background_image = _BuiltinCameraBg
-        fake_pkg = types.ModuleType("bl_operators")
-        fake_pkg.view3d = fake_view3d
-        sys.modules["bl_operators"] = fake_pkg
-        sys.modules["bl_operators.view3d"] = fake_view3d
-        self.addCleanup(sys.modules.pop, "bl_operators.view3d", None)
-        self.addCleanup(sys.modules.pop, "bl_operators", None)
-
-        patches = []
-
-        def _in_panel(context):
-            return bool(getattr(context, "in_panel", False))
-
-        common = {"_builtin_drop_patches": patches,
-                  "_is_coworker_panel_region": _in_panel}
-        suppress = _extract_ui_func(
-            "_suppress_builtin_viewport_drops", dict(common))
-        restore = _extract_ui_func(
-            "_restore_builtin_viewport_drops", dict(common))
-        original_empty = _BuiltinEmpty.__dict__["poll_drop"]
-        original_camera_bg = _BuiltinCameraBg.__dict__["poll_drop"]
-
-        suppress()
-        self.assertEqual(len(patches), 2, "both built-in handlers are patched")
-        for cls in (_BuiltinEmpty, _BuiltinCameraBg):
-            self.assertFalse(
-                cls.poll_drop(types.SimpleNamespace(in_panel=True)),
-                "our panel must not offer Blender's own image drop")
-            self.assertTrue(
-                cls.poll_drop(types.SimpleNamespace(in_panel=False)),
-                "everywhere else keeps Blender's behaviour")
-        suppress()
-        self.assertEqual(len(patches), 2, "suppression must be idempotent")
-
-        restore()
-        self.assertEqual(patches, [])
-        self.assertIs(_BuiltinEmpty.__dict__["poll_drop"], original_empty,
-                      "unregister must hand the handler back to Blender")
-        self.assertIs(_BuiltinCameraBg.__dict__["poll_drop"],
-                      original_camera_bg,
-                      "unregister must hand the handler back to Blender")
+    def test_the_addon_never_patches_blenders_own_drop_handlers(self):
+        # We used to wrap poll_drop on Blender's own image FileHandlers
+        # (VIEW3D_FH_empty_image / VIEW3D_FH_camera_background_image) so
+        # they would yield inside our panel.  That replaced a method on
+        # classes Blender registers from a *startup* module, and on
+        # Bforartists 5.3 a drag segfaulted inside bpy_class_call
+        # (EXCEPTION_ACCESS_VIOLATION via file_handler_poll_drop).  The
+        # add-on must not touch those classes at all.
+        src = _ui_source()
+        for banned in ("_suppress_builtin_viewport_drops",
+                       "_restore_builtin_viewport_drops",
+                       "_builtin_drop_patches",
+                       "bl_operators"):
+            self.assertNotIn(banned, src,
+                             "the add-on must not patch Blender's handlers")
 
     def test_capture_encodes_on_main_thread_and_send_once(self):
         fake = types.SimpleNamespace(
@@ -520,89 +481,322 @@ class TestChatAttachmentUI(unittest.TestCase):
         self.assertEqual(preview_calls, [(props.chat_image, context)],
                          "the attached image must be previewed")
 
+    def test_the_image_row_collapses_from_its_header(self):
+        calls = []
+        draw = _extract_ui_func(
+            "_draw_attachment_row",
+            {"_draw_attachment_preview":
+                lambda layout, img, context: calls.append(img)})
+
+        # Collapsed: the header toggle is drawn with the closed sub-panel
+        # arrow, the attached name stays readable, and nothing else is
+        # drawn -- so the panel gives the chat its room back.
+        img = types.SimpleNamespace(name="shot.png")
+        props = types.SimpleNamespace(chat_image=img,
+                                      chat_image_send_once=True,
+                                      chat_image_expanded=False)
+        log = []
+        draw(_FakeLayout(log), props, None)
+        toggles = [c for c in log if c[0] == "prop"]
+        self.assertEqual(len(toggles), 1,
+                         "collapsed draws only the collapse toggle")
+        self.assertEqual(toggles[0][1][1], "chat_image_expanded")
+        self.assertEqual(toggles[0][2]["icon"], 'TRIA_RIGHT',
+                         "collapsed uses the closed sub-panel arrow")
+        self.assertIn("shot.png", [c[2].get("text") for c in log if c[0] == "label"],
+                      "what is attached stays visible while collapsed")
+        self.assertEqual([c for c in log if c[0] == "template_ID"], [])
+        self.assertEqual([c for c in log if c[0] == "operator"], [])
+        self.assertEqual(calls, [], "no thumbnail while collapsed")
+
+        # Expanded: the open arrow and the whole row come back.
+        props.chat_image_expanded = True
+        log = []
+        draw(_FakeLayout(log), props, None)
+        opened = [c for c in log if c[0] == "prop"
+                  and c[1][1] == "chat_image_expanded"]
+        self.assertEqual(opened[0][2]["icon"], 'DOWNARROW_HLT',
+                         "expanded uses the open sub-panel arrow")
+        self.assertEqual(len([c for c in log if c[0] == "template_ID"]), 1)
+        self.assertEqual(len([c for c in log if c[0] == "operator"]), 2)
+        self.assertEqual(calls, [img])
+
+        # Nothing attached: the header shows no name to fall back to.
+        props.chat_image = None
+        log = []
+        draw(_FakeLayout(log), props, None)
+        self.assertEqual([c for c in log if c[0] == "label"], [])
+
+        # A stub without the property (older callers, tests) stays expanded.
+        plain = types.SimpleNamespace(chat_image=None,
+                                      chat_image_send_once=False)
+        log = []
+        draw(_FakeLayout(log), plain, None)
+        self.assertEqual(len([c for c in log if c[0] == "template_ID"]), 1,
+                         "missing property must not collapse the row")
+
     def test_attachment_preview_draws_thumbnail_and_degrades_gracefully(self):
-        scales = []
+        calls = []
+        icons = {"value": (4242, 176, 44)}
         draw = _extract_ui_func(
             "_draw_attachment_preview",
-            {"_attachment_preview_scale":
-                lambda img, context: scales.append((img, context)) or 7.5})
-        context = object()
+            {"_attachment_preview_icon":
+                lambda img, context: (calls.append((img, context)),
+                                      icons["value"])[1],
+             "_UI_UNIT_BASE_PX": 20.0})
+
+        def _ctx(ui_scale=1.0):
+            return types.SimpleNamespace(
+                preferences=types.SimpleNamespace(
+                    system=types.SimpleNamespace(ui_scale=ui_scale)))
+
+        context = _ctx()
 
         # Nothing attached -> nothing drawn.
         log = []
         draw(_FakeLayout(log), None, context)
         self.assertEqual(log, [])
+        self.assertEqual(calls, [], "no image means no preview work")
 
-        class _NoPreview:
-            """Datablock whose preview cannot be generated."""
+        img = types.SimpleNamespace()
+        for icon_value, width, height, why in (
+                (0, 176, 44, "no icon means no preview to show"),
+                (4242, 0, 0, "no size means no preview to show")):
+            icons["value"] = (icon_value, width, height)
+            log = []
+            draw(_FakeLayout(log), img, context)
+            self.assertEqual(log, [], why)
 
-            def preview_ensure(self):
-                raise RuntimeError("no preview")
-
+        # The happy path: one icon button, sized by scale so it spans
+        # the panel width measured by _attachment_preview_px.
+        icons["value"] = (4242, 176, 44)
         log = []
-        draw(_FakeLayout(log), _NoPreview(), context)
-        self.assertEqual(log, [], "a failed preview must not raise or draw")
-
-        class _EmptyPreview:
-            icon_id = 0
-
-        class _NoIcon:
-            def preview_ensure(self):
-                return _EmptyPreview()
-
-        log = []
-        draw(_FakeLayout(log), _NoIcon(), context)
-        self.assertEqual(log, [], "icon_id 0 means no preview to show")
-
-        class _Preview:
-            icon_id = 4242
-
-        class _WithPreview:
-            def preview_ensure(self):
-                return _Preview()
-
-        log = []
-        img = _WithPreview()
         draw(_FakeLayout(log), img, context)
-        icons = [c for c in log if c[0] == "template_icon"]
-        self.assertEqual(len(icons), 1, "the thumbnail must be drawn once")
-        self.assertEqual(icons[0][2]["icon_value"], 4242)
-        self.assertEqual(icons[0][2]["scale"], 7.5)
-        self.assertEqual(scales, [(img, context)],
-                         "the thumbnail must be sized from the context")
+        drawn = [c for c in log if c[0] == "template_icon"]
+        self.assertEqual(len(drawn), 1, "the thumbnail must be drawn once")
+        self.assertEqual(drawn[0][2]["icon_value"], 4242)
+        self.assertAlmostEqual(drawn[0][2]["scale"], 8.8, delta=0.01)
+        self.assertEqual(len(calls), 3,
+                         "the preview must be sized from the context")
+        self.assertTrue(all(call[0] is img and call[1] is context
+                            for call in calls))
 
-    def test_attachment_preview_scale_is_responsive_to_the_panel(self):
-        scale = _extract_ui_func("_attachment_preview_scale", _ui_constants(
-            "_UI_UNIT_BASE_PX", "_ATTACHMENT_PREVIEW_MARGIN_PX",
-            "_ATTACHMENT_PREVIEW_MIN_PX", "_ATTACHMENT_PREVIEW_MAX_RATIO",
-            "_ATTACHMENT_PREVIEW_MIN_SCALE", "_ATTACHMENT_PREVIEW_MAX_SCALE"))
+        # ui_scale is honoured, and a context without preferences still
+        # draws (never raising: this runs from a panel draw).
+        log = []
+        draw(_FakeLayout(log), img, _ctx(2.0))
+        self.assertAlmostEqual(
+            next(c for c in log if c[0] == "template_icon")[2]["scale"], 4.4,
+            delta=0.01)
+        log = []
+        draw(_FakeLayout(log), img, None)
+        self.assertEqual(len([c for c in log if c[0] == "template_icon"]), 1)
 
-        def _ctx(width, ui_scale=1.0):
+    def test_attachment_preview_px_is_a_panel_wide_square(self):
+        px = _extract_ui_func("_attachment_preview_px", _ui_constants(
+            "_ATTACHMENT_PREVIEW_MARGIN_PX", "_ATTACHMENT_PREVIEW_MIN_PX",
+            "_ATTACHMENT_PREVIEW_MAX_PX", "_ATTACHMENT_PREVIEW_QUANTUM_PX"))
+
+        def _ctx(width):
             return types.SimpleNamespace(
-                region=types.SimpleNamespace(width=width),
-                preferences=types.SimpleNamespace(
-                    system=types.SimpleNamespace(ui_scale=ui_scale)))
+                region=types.SimpleNamespace(width=width))
 
         def _img(width, height):
             return types.SimpleNamespace(size=(width, height))
 
-        # A small image must still fill the panel (Blender's preview draw
-        # scales it up), and a wider panel must give a bigger thumbnail.
-        narrow = scale(_img(64, 64), _ctx(200))
-        wide = scale(_img(64, 64), _ctx(600))
-        self.assertGreater(narrow, 1.0, "a small image must not stay tiny")
-        self.assertGreater(wide, narrow, "a wider panel must grow the preview")
+        # A SQUARE buffer, whatever the image's shape: Blender draws a
+        # preview icon into a square rect (widget_draw_preview_icon ->
+        # icon_draw_size), so a wide image could not span the panel
+        # without empty bands unless those bands are composed in
+        # (measured as a 176 x 176 buffer drawn as a 162 x 162 square in
+        # a real session).
+        self.assertEqual(px(_img(400, 100), _ctx(220)), (176, 176))
+        self.assertEqual(px(_img(100, 400), _ctx(220)), (176, 176))
+        self.assertEqual(px(_img(100, 100), _ctx(220)), (176, 176))
 
-        # A tall image gets a taller square so its width still fills the
-        # panel width; an extremely tall one is capped.
-        self.assertGreater(scale(_img(100, 400), _ctx(600)),
-                           scale(_img(100, 100), _ctx(600)))
+        # A wider panel grows the thumbnail, quantised to 16px so that
+        # dragging the sidebar does not resample on every pixel of width.
+        self.assertEqual(px(_img(400, 100), _ctx(400)), (352, 352))
+        self.assertEqual(px(_img(400, 100), _ctx(305)), (272, 272))
 
-        # Clamped to the documented range, and never divides by zero.
-        self.assertLessEqual(scale(_img(1, 1), _ctx(100000)), 32.0)
-        self.assertGreaterEqual(scale(_img(0, 0), _ctx(0)), 1.0)
-        # No usable context still yields a usable default.
-        self.assertGreaterEqual(scale(_img(10, 10), None), 1.0)
+        # Clamped to the documented range.
+        self.assertEqual(px(_img(400, 100), _ctx(100000)), (512, 512))
+        self.assertEqual(px(_img(400, 100), _ctx(0)), (64, 64))
+
+        # Degenerate input never divides by zero or returns nonsense.
+        self.assertEqual(px(_img(0, 0), _ctx(220)), (0, 0))
+        self.assertEqual(px(None, _ctx(220)), (0, 0))
+        self.assertEqual(px(_img(400, 100), None), (64, 64))
+
+    def test_attachment_fit_and_cover_sizes_keep_the_aspect(self):
+        fit = _extract_ui_func("_attachment_fit_size")
+        cover = _extract_ui_func("_attachment_cover_size")
+
+        # Landscape: the fit version is short (the sharp band) while the
+        # cover version overflows sideways (the muted backdrop).
+        self.assertEqual(fit(400, 100, 176), (176, 44))
+        self.assertEqual(cover(400, 100, 176), (704, 176))
+        # Portrait is the mirror image of that.
+        self.assertEqual(fit(100, 400, 176), (44, 176))
+        self.assertEqual(cover(100, 400, 176), (176, 704))
+        # Square images fit and cover exactly.
+        self.assertEqual(fit(100, 100, 176), (176, 176))
+        self.assertEqual(cover(100, 100, 176), (176, 176))
+        # Extreme shapes never collapse to zero pixels.
+        self.assertEqual(fit(4000, 1, 176), (176, 1))
+        self.assertEqual(cover(4000, 1, 176), (704000, 176))
+
+    def test_attachment_source_floats_refuses_huge_images(self):
+        source = _extract_ui_func(
+            "_attachment_source_floats",
+            {"_ATTACHMENT_THUMBNAIL_MAX_SOURCE_PX": 1000000,
+             "array": __import__("array")})
+
+        class _Img:
+            def __init__(self, size, pixels=None):
+                self.size = size
+                self.pixels = pixels
+
+        class _Pixels:
+            def __init__(self, count):
+                self.count = count
+                self.read = None
+
+            def foreach_get(self, buf):
+                self.read = len(buf)
+
+        # Over the cap: refused without reading a single pixel.
+        pixels = _Pixels(4 * 2000 * 2000)
+        self.assertIsNone(source(_Img((2000, 2000), pixels)))
+        self.assertIsNone(pixels.read, "a huge image must not be read")
+
+        # Within the cap the pixels come back as a byte-packed float array.
+        pixels = _Pixels(16)
+        buf, width, height = source(_Img((2, 2), pixels))
+        self.assertEqual((width, height), (2, 2))
+        self.assertEqual(len(buf), 16)
+        self.assertEqual(pixels.read, 16)
+
+        # No size, no pixels, or a failing read: None, never an exception.
+        self.assertIsNone(source(_Img((0, 0))))
+        self.assertIsNone(source(types.SimpleNamespace()))
+
+        class _Broken:
+            size = (2, 2)
+            pixels = types.SimpleNamespace(
+                foreach_get=lambda buf: (_ for _ in ()).throw(OSError()))
+
+        self.assertIsNone(source(_Broken()))
+
+    def test_attachment_thumbnail_pixels_composes_fit_over_cover(self):
+        # An 8x8 buffer from a 4:1 source: fit (8, 2) centred on cover
+        # (32, 8), so two rows are the sharp band and the rest is the
+        # muted backdrop.
+        side = 8
+        cover = [float(i) for i in range(32 * 8 * 4)]
+        front = [100.0 + i for i in range(8 * 2 * 4)]
+        thumb = _extract_ui_func("_attachment_thumbnail_pixels", {
+            "_attachment_fit_size": lambda w, h, s: (8, 2),
+            "_attachment_cover_size": lambda w, h, s: (32, 8),
+            "_attachment_scale_pixels":
+                lambda img, w, h, **kw: cover if w == 32 else front,
+            "_ATTACHMENT_THUMBNAIL_DIM": 0.4,
+        })
+
+        class _Img:
+            size = (400, 100)
+
+        out = thumb(_Img(), side)
+        self.assertIsNotNone(out)
+        self.assertEqual(len(out), side * side * 4)
+        # Rows 3 and 4 are the sharp band, at x-offset 0 (full width).
+        self.assertEqual(out[3 * 32:4 * 32], front[0:32])
+        self.assertEqual(out[4 * 32:5 * 32], front[32:64])
+        # A row outside the band is the backdrop, cropped to the middle
+        # 8 columns of the 32-wide cover.
+        expected = cover[12 * 4:12 * 4 + 32]
+        self.assertEqual(out[0:32], expected)
+
+        # A portrait source has the band in every row, inset sideways.
+        portrait = _extract_ui_func("_attachment_thumbnail_pixels", {
+            "_attachment_fit_size": lambda w, h, s: (2, 8),
+            "_attachment_cover_size": lambda w, h, s: (8, 32),
+            "_attachment_scale_pixels":
+                lambda img, w, h, **kw: cover if w == 8 else front,
+            "_ATTACHMENT_THUMBNAIL_DIM": 0.4,
+        })
+        out = portrait(_Img(), side)
+        self.assertEqual(len(out), side * side * 4)
+        self.assertEqual(out[3 * 4:5 * 4], front[0:8],
+                         "the sharp band is inset and centred")
+
+        # An image with no usable size composes nothing.
+        self.assertIsNone(thumb(types.SimpleNamespace(size=(0, 0)), side))
+
+    def test_attachment_preview_icon_composes_into_a_private_preview(self):
+        class _Sink(list):
+            """Stands in for the dynamic pixels array."""
+
+        class _Preview:
+            def __init__(self):
+                self.image_size = (0, 0)
+                self.icon_size = (0, 0)
+                self.image_pixels_float = _Sink()
+                self.icon_pixels_float = _Sink()
+                self.icon_id = 777
+
+        class _Collection:
+            def __init__(self):
+                self.created = []
+
+            def new(self, name):
+                preview = _Preview()
+                self.created.append(preview)
+                return preview
+
+        class _Image:
+            name = "a.png"
+            size = (400, 100)
+
+        state = {"pixels": [0.25] * (176 * 176 * 4),
+                 "collection": _Collection()}
+        icon = _extract_ui_func("_attachment_preview_icon", {
+            "_attachment_preview_px": lambda img, context: (176, 176),
+            "_attachment_thumbnail_pixels": lambda img, side: state["pixels"],
+            "_attachment_datablock_icon": lambda img: 999,
+            "_thumbnail_collection": lambda: state["collection"],
+            "_ATTACHMENT_THUMB": {"collection": None, "preview": None,
+                                  "key": None, "icon": 0},
+        })
+
+        img = _Image()
+        self.assertEqual(icon(img, None), (777, 176, 176))
+        preview = state["collection"].created[0]
+        # Both buffers get the composite: template_icon asks for
+        # ICON_SIZE_ICON and only falls back to the big preview buffer
+        # when the small one is missing, so filling both keeps it sharp.
+        self.assertEqual(preview.image_size, (176, 176))
+        self.assertEqual(preview.icon_size, (176, 176))
+        self.assertEqual(len(preview.image_pixels_float), 176 * 176 * 4)
+        self.assertEqual(preview.icon_pixels_float,
+                         preview.image_pixels_float)
+
+        # Cached for the same image and size: one preview, no recompose.
+        self.assertEqual(icon(img, None), (777, 176, 176))
+        self.assertEqual(len(state["collection"].created), 1)
+
+        # A datablock whose pixels cannot be read falls back to its own
+        # (small but always valid) icon rather than drawing nothing.
+        state["pixels"] = None
+        other = _Image()
+        other.name = "b.png"
+        self.assertEqual(icon(other, None), (999, 176, 176))
+
+    def test_the_preview_cache_is_released_on_unregister(self):
+        src = _ui_source()
+        unregister = src[src.index("def unregister("):]
+        self.assertIn("free_attachment_thumbnail()", unregister,
+                      "the cached thumbnail must be released on unregister")
 
     def test_ensure_attachment_preview_is_best_effort(self):
         ensure = _extract_ui_func("_ensure_attachment_preview")

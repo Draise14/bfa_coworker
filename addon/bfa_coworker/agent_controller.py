@@ -1513,7 +1513,13 @@ def _goal_followup_note(goal: Any) -> dict[str, Any]:
     parts[0] += "."
     nxt = goal.next_step() if goal is not None else None
     if nxt:
-        parts.append("Next plan step: {:s}.".format(nxt.get("text", "")))
+        try:
+            _num = goal.steps.index(nxt) + 1
+        except ValueError:
+            _num = 0
+        parts.append("Current plan step {:d}: {:s} -- when it is finished, mark it "
+                     "with update_plan(done=[{:d}]) in the same reply.".format(
+                         _num, nxt.get("text", ""), _num))
     parts.append("When everything is done, reply to the user with a short summary.")
     return session_memory.make_system_note(" ".join(parts), kind="followup")
 
@@ -6771,6 +6777,18 @@ def _run_conversation_turn_inner(
             if on_text:
                 on_text(content)
             _agent_state.streaming_text = content
+            # Live plan progress: tick off steps the model reports finished
+            # in its own words ("Step 2 is done", "[x] Fix the roof") -- it
+            # does not wait for the turn to end or for an update_plan call.
+            if chat_mode != "ASK":
+                try:
+                    with session_memory.store_lock:
+                        _ticked = session_memory.store.goal.note_progress_from_text(content)
+                    if _ticked:
+                        print("[Coworker] run_conversation_turn: plan -- {:d} step(s) "
+                              "reported done".format(_ticked))
+                except Exception:  # pylint: disable=broad-exception-caught
+                    pass
 
         # Check for tool calls.
         raw_tool_calls = msg.get("tool_calls")
@@ -7214,6 +7232,13 @@ def _run_conversation_turn_inner(
                 _tools_executed += 1
                 if '"status": "error"' not in result_text[:600]:
                     _round_progress += 1
+                    # Real work happened: make sure the plan shows an
+                    # active step (the panel updates live mid-turn).
+                    try:
+                        with session_memory.store_lock:
+                            session_memory.store.goal.mark_active_if_idle()
+                    except Exception:  # pylint: disable=broad-exception-caught
+                        pass
 
                 # Inject entity context AFTER tool result so the model
                 # sees the successful result first, then gets context.

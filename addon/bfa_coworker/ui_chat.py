@@ -2875,6 +2875,12 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             btn_row.operator("bfacw.chat_send", icon="PLAY", text="Send")
             btn_row.operator("bfacw.chat_clear", icon="X", text="New Thread")
 
+        # -- Goal & Plan (collapsible, only once there is a goal) -------
+        # Lives with the chat (it is about the conversation), between the
+        # buttons and the history.  Read live from the store, so steps tick
+        # off while the turn is still running.
+        _draw_goal_plan_inline(layout)
+
         layout.separator()
 
         # -- Conversation history --------------------------------------
@@ -3250,26 +3256,6 @@ class BFACW_PT_chat_session_memory(Panel):  # type: ignore[misc]
 
     def draw(self, context: bpy.types.Context) -> None:
         _draw_memory_section(self.layout, context.window_manager.bfacw_chat_props)  # type: ignore[attr-defined]
-
-
-class BFACW_PT_chat_session_goal(Panel):  # type: ignore[misc]
-    """Session > Goal & Plan -- the pinned goal and step plan."""
-    bl_label = "Goal & Plan"
-    bl_idname = "BFACW_PT_chat_session_goal"
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'UI'
-    bl_category = _CHAT_PANEL_CATEGORY
-    bl_parent_id = "BFACW_PT_chat_session"
-
-    @classmethod
-    def poll(cls, context: bpy.types.Context) -> bool:
-        return BFACW_PT_chat_session.poll(context)
-
-    def draw_header(self, context: bpy.types.Context) -> None:
-        self.layout.label(text="", icon='PINNED')
-
-    def draw(self, context: bpy.types.Context) -> None:
-        _draw_goal_plan_section(self.layout)
 
 
 class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
@@ -3955,8 +3941,9 @@ def _redraw_areas_safe() -> None:
 def _draw_session_section(layout, context, props, state) -> None:
     """Session panel header: one plain summary line.
 
-    The details live in the sub-panels (Context, Memory & Checkpoints,
-    Goal & Plan) so the user opens only what they care about.
+    The details live in the sub-panels (Context, Memory & Checkpoints) so
+    the user opens only what they care about.  Goal & Plan lives in the
+    chat panel.
     """
     from . import session_memory as _sm
     ctx_size = getattr(state, "ctx_size_used", 0) or 0
@@ -3966,11 +3953,8 @@ def _draw_session_section(layout, context, props, state) -> None:
         parts.append("Context {:d}%".format(min(int(last_prompt * 100 / ctx_size), 100)))
     with _sm.store_lock:
         n_cp = len(_sm.store.checkpoints)
-        plan = _sm.store.goal.status_line()
     if n_cp:
         parts.append("{:d} checkpoint{:s}".format(n_cp, "" if n_cp == 1 else "s"))
-    if plan:
-        parts.append(plan.split(" -- ")[0])
     layout.label(text="  ·  ".join(parts) if parts else "New session", icon='INFO')
 
 
@@ -4178,7 +4162,7 @@ def _draw_reasoning_effort_row(layout, prefs) -> None:
 
 
 def _draw_goal_plan_section(layout) -> None:
-    """Draw the pinned goal and plan (Session > Goal & Plan sub-panel)."""
+    """Draw the pinned goal and plan (body of the chat panel's Goal & Plan section)."""
     from . import session_memory as _sm
     with _sm.store_lock:
         g = _sm.store.goal
@@ -4220,6 +4204,34 @@ def _draw_goal_plan_section(layout) -> None:
     row = layout.row(align=True)
     row.operator("bfacw.plan_open", icon='TEXT', text="Edit in Text Editor")
     row.operator("bfacw.plan_clear", icon='X', text="Clear Plan")
+
+
+def _draw_goal_plan_inline(layout) -> None:
+    """Collapsible Goal & Plan section inside the chat panel.
+
+    Hidden until there is a goal (no clutter on a fresh chat).  The header
+    carries the progress so it is useful even collapsed.
+    """
+    from . import session_memory as _sm
+    with _sm.store_lock:
+        g = _sm.store.goal
+        empty = g.is_empty()
+        done, total = g.progress()
+    if empty:
+        return
+    try:
+        header, body = layout.panel("bfacw_goal_plan", default_closed=False)
+    except Exception:  # pylint: disable=broad-exception-caught
+        header, body = layout.box(), layout  # builds without layout panels
+    hrow = header.row(align=True)
+    hrow.label(text="Goal & Plan", icon='PINNED')
+    if total:
+        sub = hrow.row()
+        sub.scale_x = 0.9
+        sub.progress(factor=done / float(total), type='BAR',
+                     text="{:d}/{:d}".format(done, total))
+    if body:
+        _draw_goal_plan_section(body)
 
 
 # Last text written to (or adopted from) the plan text block.  A difference
@@ -4361,7 +4373,6 @@ _classes = (
     BFACW_PT_chat_session,
     BFACW_PT_chat_session_context,
     BFACW_PT_chat_session_memory,
-    BFACW_PT_chat_session_goal,
     BFACW_PT_chat_status,
     BFACW_PT_chat_text_editor,
 )

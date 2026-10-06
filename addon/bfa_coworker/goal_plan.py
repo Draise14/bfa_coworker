@@ -119,6 +119,11 @@ def request_text(content: Any) -> str:
     return str(content or "").strip()
 
 
+def _norm(text: str) -> str:
+    """Normalize step text for matching (case, punctuation, spacing)."""
+    return " ".join(re.sub(r"[^\w\s]", " ", str(text or "").lower()).split())
+
+
 def _clip(text: str, limit: int) -> str:
     text = " ".join(str(text or "").split())
     if len(text) <= limit:
@@ -199,8 +204,13 @@ class GoalPlan:
             raw_steps = [ln for ln in raw_steps.splitlines() if ln.strip()]
         if isinstance(raw_steps, list) and raw_steps:
             new_steps: list[dict[str, str]] = []
+            # Re-sending the same plan must not undo progress: a step whose
+            # text matches an existing one keeps its status unless the new
+            # item states one explicitly (small models often re-send the
+            # whole list as their way of "updating" it).
+            _known = {_norm(s["text"]): s["status"] for s in self.steps}
             for item in raw_steps[:_MAX_STEPS]:
-                status = "todo"
+                status = ""
                 if isinstance(item, dict):
                     text = str(item.get("text") or item.get("step")
                                or item.get("title") or "")
@@ -219,6 +229,8 @@ class GoalPlan:
                     text = re.sub(r"^\s*(?:[-*]\s*)?\d+[.)]\s*", "", text)
                 text = _clip(text, _STEP_CHARS)
                 if text:
+                    if not status:
+                        status = _known.get(_norm(text), "todo")
                     new_steps.append({"text": text, "status": status})
             if new_steps:
                 self.steps = new_steps
@@ -228,26 +240,32 @@ class GoalPlan:
             done = [done]
         if isinstance(done, list):
             for n in done:
-                try:
-                    i = int(n) - 1
-                except (TypeError, ValueError):
-                    continue
-                if 0 <= i < len(self.steps) and self.steps[i]["status"] != "done":
+                i = self._step_index(n)
+                if i is not None and self.steps[i]["status"] != "done":
                     self.steps[i]["status"] = "done"
                     self.done_this_request += 1
                     changed = True
         current = args.get("current")
         if current is not None:
-            try:
-                ci = int(current) - 1
-            except (TypeError, ValueError):
-                ci = -1
-            if 0 <= ci < len(self.steps) and self.steps[ci]["status"] != "done":
-                for s in self.steps:
+            ci = self._step_index(current)
+            if ci is not None and self.steps[ci]["status"] != "done":
+                for j, s in enumerate(self.steps):
                     if s["status"] == "doing":
-                        s["status"] = "todo"
+                        # Moving on to a LATER step means the earlier one is
+                        # finished; jumping back just pauses it.
+                        if j < ci:
+                            s["status"] = "done"
+                            self.done_this_request += 1
+                        else:
+                            s["status"] = "todo"
                 self.steps[ci]["status"] = "doing"
                 changed = True
+        if changed and self.steps and not any(
+                s["status"] == "doing" for s in self.steps):
+            # Always show which step is being worked on.
+            nxt = next((s for s in self.steps if s["status"] == "todo"), None)
+            if nxt is not None:
+                nxt["status"] = "doing"
         if changed:
             self._touch()
         if not self.steps:
@@ -255,6 +273,81 @@ class GoalPlan:
                     "ordered list) to create one.")
         d, t = self.progress()
         return "Plan updated ({:d}/{:d} done):\n{:s}".format(d, t, self._steps_text())
+
+    def _step_index(self, ref: Any) -> int | None:
+        """Resolve a step reference: a 1-based number, or (part of) its text."""
+        try:
+            i = int(str(ref).strip().rstrip(".")) - 1
+            return i if 0 <= i < len(self.steps) else None
+        except (TypeError, ValueError):
+            pass
+        key = _norm(str(ref or ""))
+        if not key:
+            return None
+        for i, s in enumerate(self.steps):
+            if _norm(s["text"]) == key:
+                return i
+        for i, s in enumerate(self.steps):
+            nt = _norm(s["text"])
+            if key in nt or nt in key:
+                return i
+        # Every word of the reference appears in the step ("ground posts"
+        # -> "Ground the posts").
+        words = set(key.split())
+        for i, s in enumerate(self.steps):
+            if words and words <= set(_norm(s["text"]).split()):
+                return i
+        return None
+
+    # Progress the model REPORTS in its own words -- "Step 2 is done",
+    # "Completed step 3", "\u2713 4", "[x] Fix the roof", "All steps are done".
+    # Small models narrate progress far more reliably than they call a
+    # bookkeeping tool, so the plan ticks off from the narration too.
+    _DONE_PATTERNS = (
+        re.compile(r"\bsteps?\s*#?(\d+)(?:\s*(?:,|and|&)\s*#?(\d+))*\s*(?:is|are|has been|have been|now)?\s*"
+                   r"(?:done|complete[d]?|finished)\b", re.IGNORECASE),
+        re.compile(r"\b(?:completed|finished|done with)\s+step\s*#?(\d+)", re.IGNORECASE),
+        re.compile(r"[\u2713\u2714\u2705]\s*(?:step\s*)?#?(\d+)\b", re.IGNORECASE),
+    )
+    _ALL_DONE_RE = re.compile(
+        r"\ball (?:\w+ )?(?:steps|plan steps|of the steps)\s+(?:are|have been)\s+"
+        r"(?:done|complete[d]?|finished)\b", re.IGNORECASE)
+    _CHECKED_RE = re.compile(r"^\s*(?:[-*]\s*)?\[[xX]\]\s*(.+)$", re.MULTILINE)
+
+    def note_progress_from_text(self, text: str) -> int:
+        """Tick off steps the model reported finished in *text*.  Returns count."""
+        if not self.steps or not text:
+            return 0
+        hits: set[int] = set()
+        for pat in self._DONE_PATTERNS:
+            for m in pat.finditer(text):
+                for g in m.groups():
+                    if g:
+                        i = self._step_index(g)
+                        if i is not None:
+                            hits.add(i)
+        for m in self._CHECKED_RE.finditer(text):
+            i = self._step_index(m.group(1))
+            if i is not None:
+                hits.add(i)
+        if self._ALL_DONE_RE.search(text):
+            hits.update(range(len(self.steps)))
+        newly = [i for i in sorted(hits) if self.steps[i]["status"] != "done"]
+        if not newly:
+            return 0
+        self.apply_update({"done": [i + 1 for i in newly]})
+        return len(newly)
+
+    def mark_active_if_idle(self) -> bool:
+        """After real work happened, make sure some open step shows as active."""
+        if not self.steps or any(s["status"] == "doing" for s in self.steps):
+            return False
+        nxt = next((s for s in self.steps if s["status"] == "todo"), None)
+        if nxt is None:
+            return False
+        nxt["status"] = "doing"
+        self._touch()
+        return True
 
     def _steps_text(self, collapse_done: bool = False) -> str:
         lines: list[str] = []
@@ -291,8 +384,10 @@ class GoalPlan:
             request = ""  # same request -- show it once
         hint = (
             "For multi-step work (3+ steps) call update_plan first with "
-            "short steps, then mark steps done as you finish them. Stay "
-            "on the current request; reply to the user when it is done."
+            "short steps. As soon as a step's work succeeds, mark it in "
+            "the SAME reply: update_plan(done=[n]) -- the user watches "
+            "the plan tick off live. Stay on the current request; reply "
+            "to the user when it is done."
         ) if with_tool_hint else ""
         notes = _clip(self.user_notes, _NOTES_CHARS) if self.user_notes else ""
 

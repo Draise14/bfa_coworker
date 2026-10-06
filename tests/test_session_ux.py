@@ -70,10 +70,18 @@ class TestMemoryAndCheckpoints(unittest.TestCase):
         self.assertIn("auto", detail)
 
     def test_session_is_split_into_subpanels(self):
-        for pid in ("BFACW_PT_chat_session_context", "BFACW_PT_chat_session_memory",
-                    "BFACW_PT_chat_session_goal"):
+        for pid in ("BFACW_PT_chat_session_context", "BFACW_PT_chat_session_memory"):
             self.assertIn('bl_idname = "{:s}"'.format(pid), _SRC)
-        self.assertEqual(_SRC.count('bl_parent_id = "BFACW_PT_chat_session"'), 3)
+        self.assertEqual(_SRC.count('bl_parent_id = "BFACW_PT_chat_session"'), 2)
+
+    def test_goal_and_plan_live_in_the_chat_between_buttons_and_history(self):
+        self.assertNotIn('bl_idname = "BFACW_PT_chat_session_goal"', _SRC)
+        draw = _SRC[_SRC.index("class BFACW_PT_chat_panel("):]
+        i_buttons = draw.index('"bfacw.chat_send"')
+        i_goal = draw.index("_draw_goal_plan_inline(layout)")
+        i_hist = draw.index("self._draw_chat_history(context)")
+        self.assertLess(i_buttons, i_goal)
+        self.assertLess(i_goal, i_hist)
 
 
 if __name__ == "__main__":

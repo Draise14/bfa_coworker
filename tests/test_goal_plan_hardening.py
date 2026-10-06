@@ -86,6 +86,34 @@ class TestGoalPlan(unittest.TestCase):
         g2.apply_update({"steps": "a\nb\nc", "current": 2})
         self.assertEqual(g2.next_step()["text"], "b")
 
+    def test_resending_the_plan_keeps_progress(self):
+        g = _gp.GoalPlan()
+        g.apply_update({"steps": ["Inspect the scene", "Fix the roof", "Ground the posts"]})
+        self.assertEqual(g.steps[0]["status"], "doing", "an active step is always shown")
+        g.apply_update({"done": [1]})
+        g.apply_update({"steps": ["Inspect the scene", "Fix the roof", "Ground the posts"]})
+        self.assertEqual([s["status"] for s in g.steps], ["done", "doing", "todo"])
+
+    def test_done_by_text_and_current_advances(self):
+        g = _gp.GoalPlan()
+        g.apply_update({"steps": ["Inspect the scene", "Fix the roof", "Ground the posts"]})
+        g.apply_update({"done": ["ground posts"]})
+        self.assertEqual(g.steps[2]["status"], "done")
+        g.apply_update({"current": 2})
+        self.assertEqual([s["status"] for s in g.steps], ["done", "doing", "done"],
+                         "moving to a later step finishes the earlier active one")
+
+    def test_progress_ticks_from_the_models_own_words(self):
+        g = _gp.GoalPlan()
+        g.apply_update({"steps": ["walls", "roof", "door", "paint"]})
+        self.assertEqual(g.note_progress_from_text("Walls are up. Step 1 is done."), 1)
+        self.assertEqual(g.note_progress_from_text("- [x] roof\n- [ ] door"), 1)
+        self.assertEqual(g.note_progress_from_text("Next I will do step 3."), 0,
+                         "a plan to do a step is not a finished step")
+        self.assertEqual(g.note_progress_from_text("\u2713 3"), 1)
+        self.assertEqual(g.note_progress_from_text("All steps are done."), 1)
+        self.assertEqual(g.pending_steps(), [])
+
     def test_new_request_clears_finished_plan_keeps_unfinished(self):
         g = _gp.GoalPlan()
         g.set_request("build a house")
@@ -115,7 +143,9 @@ class TestGoalPlan(unittest.TestCase):
         g2 = _gp.GoalPlan()
         self.assertTrue(g2.parse_markdown(md))
         self.assertEqual(g2.to_dict(), g.to_dict())
-        edited = md.replace("- [ ] blades", "- [>] blades\n- [ ] paint it red").replace(
+        # After step 1 is done, step 2 shows as active ("[>]") automatically.
+        self.assertIn("- [>] blades", md)
+        edited = md.replace("- [>] blades", "- [>] blades\n- [ ] paint it red").replace(
             "## Notes\n", "## Notes\nKeep it low-poly\n")
         self.assertTrue(g.parse_markdown(edited))
         self.assertEqual([s["text"] for s in g.steps], ["base", "blades", "paint it red"])
@@ -368,6 +398,29 @@ class TestLongRequests(_HardeningBase):
         self.assertIn("[x] 3. fix posts", last_sys)
         tools = [t["function"]["name"] for t in self._main_requests()[0].get("tools", [])]
         self.assertIn("update_plan", tools)
+
+
+class TestLivePlanProgress(_HardeningBase):
+
+    def test_steps_tick_off_during_the_turn(self):
+        self._mk_server([
+            _plan_call("p1", steps=["build walls", "add roof", "add door"]),
+            dict(_tool_call_msg("c1", "print('walls')"), content="Step 1 is done."),
+            dict(_tool_call_msg("c2", "print('roof')"), content="Roof added -- step 2 done."),
+            {"content": "Door added. All steps are done."},
+        ])
+        seen = []
+        self._pin_fake_bpy()
+        try:
+            self.ac.run_conversation_turn(
+                "build a small hut", on_text=lambda t: None,
+                on_status=lambda s: seen.append(self.sm.store.goal.progress()[0]),
+                chat_mode="AGENT", llm_url=None, model="fake-model", mcp_port=self.port)
+        finally:
+            self._unpin_fake_bpy()
+        self.assertIn(1, seen, "step 1 ticked while the turn was still running")
+        self.assertIn(2, seen, "step 2 ticked while the turn was still running")
+        self.assertEqual(self.sm.store.goal.progress(), (3, 3))
 
 
 class TestSmallWindowFit(_HardeningBase):

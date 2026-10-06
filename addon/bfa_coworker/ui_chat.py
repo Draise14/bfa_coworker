@@ -37,12 +37,13 @@ __all__ = (
     "unregister",
 )
 
+import array
 import json
-import re
 import os
 import random
-import time
+import re
 import threading
+import time
 from pathlib import Path
 
 import bpy  # pylint: disable=import-error
@@ -102,18 +103,43 @@ _WRAP_WIDTH = 60
 # sidebar" (a FileHandler poll gets no mouse position, only the region).
 _CHAT_PANEL_CATEGORY = "Coworker"
 
-# Thumbnail sizing for the attached-image preview (UILayout.template_icon).
-# The icon button is square and Blender fits the image inside it (centred,
-# aspect preserved -- see interface_icons.cc icon_draw_rect), so the button
-# side alone decides the thumbnail size.  The side is derived from the live
-# panel width and the image's own aspect, so the preview stays responsive
-# and even a small screenshot/render is scaled up rather than left tiny.
+# Thumbnail sizing for the attached-image preview.
+# Everything here follows from one fact in the C code: a preview icon is
+# drawn into a SQUARE.  template_icon() marks its button BUT_ICON_PREVIEW,
+# so widget_draw_preview_icon() (interface_widgets.cc) takes
+# min(button_w, button_h), subtracts PREVIEW_PAD and calls
+# icon_draw_preview(..., aspect=1.0f, size) -> icon_draw_size() builds
+# w = h = size/aspect -> icon_draw_rect() fits the image inside that
+# square, centred, aspect preserved.  A wide image is therefore never
+# drawn wider than the button is tall, and shrinking the button only
+# shrinks the thumbnail with it (a short button draws the image as wide
+# as the button is tall).
+#
+# So the thumbnail buffer is made SQUARE and the letterbox bands are
+# filled with a dimmed, blurred, cover-scaled copy of the same image
+# (_attachment_thumbnail_pixels).  That keeps the thumbnail panel-wide,
+# aspect-correct and borderless -- no empty band above or below it --
+# which a square draw rect cannot do on its own.
+#
+# The size is quantised so dragging the sidebar does not resample on
+# every single pixel of width, and the pixels come from our own buffer
+# resampled to exactly the size Blender will draw them at, because a
+# plain template_icon draws the datablock's 32px icon buffer
+# (interface_icons.cc icon_create_rect) and looks very pixely once the
+# thumbnail is panel-wide.
 _UI_UNIT_BASE_PX = 20.0
 _ATTACHMENT_PREVIEW_MARGIN_PX = 40
-_ATTACHMENT_PREVIEW_MIN_PX = 80
-_ATTACHMENT_PREVIEW_MAX_RATIO = 2.0
-_ATTACHMENT_PREVIEW_MIN_SCALE = 1.0
-_ATTACHMENT_PREVIEW_MAX_SCALE = 32.0
+_ATTACHMENT_PREVIEW_MIN_PX = 64
+_ATTACHMENT_PREVIEW_MAX_PX = 512
+_ATTACHMENT_PREVIEW_QUANTUM_PX = 16
+# How much the cover-scaled backdrop is darkened (see
+# _attachment_thumbnail_pixels): low enough to read as a backdrop for the
+# sharp image in the middle, high enough that it is not a black box.
+_ATTACHMENT_THUMBNAIL_DIM = 0.4
+# Images bigger than this are left to Blender's own (small) preview icon:
+# the thumbnail resample copies the pixels into a float buffer, so a huge
+# source would cost two buffers of 16 bytes per pixel for a thumb.
+_ATTACHMENT_THUMBNAIL_MAX_SOURCE_PX = 12000000
 
 
 # -- Brand detection: Bforartists has a View menu in the 3D viewport header,
@@ -198,14 +224,14 @@ def _phase_text(state) -> str:
     """Human label for the pre-first-token activity phase.
 
     So a send does not read as "frozen": "Reading your message" while the
-    prompt is assembled, "Warming up the model" while a local server loads,
+    prompt is assembled, "Dreaming, one moment" while a local server loads,
     then "Thinking" once tokens arrive.
     """
     phase = str(getattr(state, "turn_phase", "") or "")
     if phase == "reading":
         return "Reading your message"
     if phase == "warming":
-        return "Warming up the model"
+        return "Dreaming, one moment"
     return "Thinking"
 
 
@@ -993,6 +1019,15 @@ class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
         default=False,
     )
 
+    chat_image_expanded: BoolProperty(  # type: ignore[valid-type]
+        name="Show Image Panel",
+        description=(
+            "Expand the image socket, thumbnail and capture buttons; "
+            "collapse them to give the chat the panel back"
+        ),
+        default=True,
+    )
+
 
 def _load_chat_history() -> list[dict]:
     """Load conversation history from disk."""
@@ -1581,16 +1616,40 @@ class BFACW_OT_chat_image_drop(Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
+def _image_data_icon_value() -> int:
+    """``FileHandler.bl_icon`` for the image icon (a Bforartists addition).
+
+    Bforartists gives FileHandler a plain INT ``bl_icon`` ("Icon to
+    display for the file handler", rna_ui.cc) and passes it to the entry
+    it adds to its "multiple file handlers" drop menu, so the icon has to
+    be looked up as the enum's integer value.  Returns 0 ("no icon") when
+    the build has no such property or the enum cannot be read: stock
+    Blender simply ignores the attribute.
+    """
+    try:
+        items = bpy.types.UILayout.bl_rna.functions["label"].parameters[
+            "icon"].enum_items
+        return int(items["IMAGE_DATA"].value)
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+        return 0
+
+
+_IMAGE_DATA_ICON = _image_data_icon_value()
+
+
 class BFACW_FH_chat_drop(bpy.types.FileHandler):  # type: ignore[misc]
     """Drag-and-drop image files onto the Coworker chat panel.
 
     ``poll_drop`` gets no mouse position, so the drop is scoped by region
     + panel category: the Text Editor chat panel, or the 3D Viewport
-    sidebar while the "Coworker" tab is active.  Blender's own image drop
-    handlers are made to yield in that one place (see
-    ``_suppress_builtin_viewport_drops``), so a drop there attaches
-    directly instead of opening Blender's "multiple file handlers" menu;
-    everywhere else Blender's stock drop behaviour is untouched.
+    sidebar while the "Coworker" tab is active.
+
+    In the 3D Viewport Blender's own image drop handlers match the same
+    extensions, so several handlers match and Blender lists them -- our
+    entry is "Attach Image to Coworker Chat".  In the Text Editor ours is
+    the only match, so the drop attaches directly.  We deliberately do not
+    patch Blender's handlers (see the note above
+    ``BFACW_OT_copy_message``).
     """
     bl_idname = "BFACW_FH_chat_drop"
     bl_label = "Attach Image to Coworker Chat"
@@ -1598,21 +1657,32 @@ class BFACW_FH_chat_drop(bpy.types.FileHandler):  # type: ignore[misc]
     # Semicolon-separated per bpy.types.FileHandler.bl_file_extensions;
     # mirrors chat_attachments.SUPPORTED_EXTENSIONS.
     bl_file_extensions = ".png;.jpg;.jpeg;.webp;.bmp;.tif;.tiff"
+    # Bforartists shows this icon on our entry in its "multiple file
+    # handlers" drop menu (see _image_data_icon_value).
+    bl_icon = _IMAGE_DATA_ICON
 
     @classmethod
     def poll_drop(cls, context) -> bool:
-        area = context.area
-        if area is None:
+        # Blender calls this mid-drag from C, so it must never raise or
+        # return a non-bool: anything unexpected means "not ours".
+        try:
+            area = context.area
+            if area is None:
+                return False
+            if area.type == "TEXT_EDITOR":
+                return True
+            return _is_coworker_panel_region(context)
+        except (AttributeError, ReferenceError, TypeError, ValueError):
             return False
-        if area.type == "TEXT_EDITOR":
-            return True
-        return _is_coworker_panel_region(context)
 
 
 def _is_coworker_panel_region(context) -> bool:
     """True for the 3D Viewport sidebar while the Coworker tab is active."""
-    area = context.area
-    region = context.region
+    try:
+        area = context.area
+        region = context.region
+    except AttributeError:
+        return False
     return (area is not None
             and area.type == "VIEW_3D"
             and region is not None
@@ -1620,64 +1690,17 @@ def _is_coworker_panel_region(context) -> bool:
             and getattr(region, "active_panel_category", "") == _CHAT_PANEL_CATEGORY)
 
 
-# Blender's built-in image FileHandlers (VIEW3D_FH_empty_image and
-# VIEW3D_FH_camera_background_image, from scripts/startup/bl_operators/
-# view3d.py) also match image extensions in a 3D Viewport -- including the
-# sidebar.  When more than one handler matches, WM_OT_drop_import_file shows
-# a "multiple file handlers" menu instead of importing, which is what made
-# dropping onto the chat panel look like it did nothing.  We make those two
-# handlers yield *only* in the Coworker panel region by wrapping their
-# ``poll_drop``; the viewport, other sidebar tabs and every other editor keep
-# Blender's stock behaviour, and the originals are restored on unregister.
-_builtin_drop_patches: list = []
-
-
-def _suppress_builtin_viewport_drops() -> None:
-    """Make Blender's built-in image drop handlers yield in our panel.
-
-    Best-effort and idempotent: if the startup module or the classes move
-    in a future Blender, the patch is simply skipped and Blender's chooser
-    menu remains as the fallback.
-    """
-    if _builtin_drop_patches:
-        return
-    try:
-        from bl_operators import view3d as _view3d  # type: ignore[import-not-found]
-    except ImportError:
-        return
-    for name in ("VIEW3D_FH_empty_image", "VIEW3D_FH_camera_background_image"):
-        cls = getattr(_view3d, name, None)
-        if cls is None:
-            continue
-        raw = cls.__dict__.get("poll_drop")
-        if raw is None:
-            continue
-        # ``poll_drop`` is a classmethod in Blender; unwrap defensively so a
-        # future plain function or staticmethod still yields correctly.
-        unwrapped = getattr(raw, "__func__", raw)
-        if getattr(unwrapped, "_bfacw_suppressed", False):
-            continue
-        takes_cls = isinstance(raw, classmethod)
-
-        def _poll(cls_, context, _fn=unwrapped, _takes_cls=takes_cls):
-            if _is_coworker_panel_region(context):
-                return False
-            if _takes_cls:
-                return _fn(cls_, context)
-            return _fn(context)
-
-        _poll._bfacw_suppressed = True  # type: ignore[attr-defined]
-        cls.poll_drop = classmethod(_poll)
-        _builtin_drop_patches.append((cls, raw))
-
-
-def _restore_builtin_viewport_drops() -> None:
-    """Undo :func:`_suppress_builtin_viewport_drops` (only our own patch)."""
-    while _builtin_drop_patches:
-        cls, original = _builtin_drop_patches.pop()
-        current = cls.__dict__.get("poll_drop")
-        if getattr(getattr(current, "__func__", None), "_bfacw_suppressed", False):
-            cls.poll_drop = original
+# NOTE: we deliberately do NOT monkey-patch Blender's own image FileHandlers
+# (VIEW3D_FH_empty_image / VIEW3D_FH_camera_background_image) to make them
+# yield inside our panel.  Doing so replaced ``poll_drop`` on classes that
+# Blender registers from a startup module, and a wrapper left behind by an
+# add-on reload segfaulted Blender inside ``bpy_class_call`` on the next drag
+# (EXCEPTION_ACCESS_VIOLATION via file_handler_poll_drop).  The trade-off is
+# that a drop in the 3D Viewport matches several handlers, so Blender shows
+# its usual "multiple file handlers" menu -- with our "Attach Image to
+# Coworker Chat" entry in it.  That is stock, safe behaviour: the Text Editor
+# chat panel still attaches directly, and the socket, the two capture buttons
+# and the menu entry cover the rest.
 
 
 class BFACW_OT_copy_message(Operator):  # type: ignore[misc]
@@ -2919,7 +2942,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             turn_box.separator()
             if not state.streaming_text and getattr(state, "turn_phase", ""):
                 # Pre-first-token: show the activity phase ("Reading your
-                # message" / "Warming up the model") in the turn just sent.
+                # message" / "Dreaming, one moment") in the turn just sent.
                 turn_box.label(
                     text="{:s} {:s}".format(_phase_text(state), _spinner_char(state)),
                     icon=_AGENT_ICON)
@@ -3293,13 +3316,27 @@ def _draw_attachment_row(layout, props, context) -> None:
     toggle and a thumbnail preview of what is attached.  The socket is
     encoded on the main thread at send time (``_capture_chat_attachment``),
     never during drawing.
+
+    The section collapses from its own header with the same
+    ``DOWNARROW_HLT`` / ``TRIA_RIGHT`` arrow pair Blender uses for its
+    sub-panels, so the image can be tucked away while you read the chat.
+    Collapsed, the header still names the attached datablock, so what will
+    be sent stays visible.
     """
+    expanded = getattr(props, "chat_image_expanded", True)
+    img = props.chat_image
     box = layout.box()
     head = box.row(align=True)
-    head.label(text="Image", icon='IMAGE_DATA')
+    head.prop(props, "chat_image_expanded",
+              icon='DOWNARROW_HLT' if expanded else 'TRIA_RIGHT',
+              text="Image")
+    if img is not None and not expanded:
+        head.label(text=img.name, icon='IMAGE_DATA')
+    if not expanded:
+        return
     head.prop(props, "chat_image_send_once", text="Send once")
     box.template_ID(props, "chat_image", open="image.open", new="image.new")
-    _draw_attachment_preview(box, props.chat_image, context)
+    _draw_attachment_preview(box, img, context)
     row = box.row(align=True)
     row.operator("bfacw.chat_capture_render", icon='RENDER_STILL', text="Render")
     row.operator("bfacw.chat_capture_screen", icon='FULLSCREEN_ENTER', text="Screen")
@@ -3324,66 +3361,288 @@ def _ensure_attachment_preview(img) -> None:
         return
 
 
-def _attachment_preview_scale(img, context) -> float:
-    """Icon scale for the attachment thumbnail, sized to the panel width.
+# Our own preview buffer for the attachment thumbnail.  Module-level
+# because a preview collection has to outlive a single panel draw; the
+# pixels are only recomposed when the target size (or image) changes.
+#
+# A private bpy.utils.previews collection is used rather than the
+# datablock's own preview: Blender regenerates an image's preview from
+# the file (128 x 128) and would throw our composite away, and writing to
+# the datablock also perturbs every other UI that shows its icon.
+_ATTACHMENT_THUMB = {"collection": None, "preview": None, "key": None,
+                     "icon": 0}
 
-    ``template_icon`` builds a square icon button of ``UI_UNIT_X * scale``
-    pixels, and Blender fits the image inside it (centred, aspect
-    preserved), so the button side alone decides the thumbnail size.
-    Sizing that square so the *image's width* spans the available panel
-    width keeps the preview responsive for every image -- including small
-    screenshots and renders -- instead of the fixed scale used before.
-    Falls back to a sane default when the context or the image's pixel
-    size is unavailable.
+
+def _thumbnail_collection():
+    """Lazily create the private ``bpy.utils.previews`` collection."""
+    if _ATTACHMENT_THUMB["collection"] is None:
+        try:
+            from bpy.utils import previews as _previews
+            _ATTACHMENT_THUMB["collection"] = _previews.new()
+        except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+            _ATTACHMENT_THUMB["collection"] = None
+    return _ATTACHMENT_THUMB["collection"]
+
+
+def free_attachment_thumbnail() -> None:
+    """Release the private preview buffer (called from unregister)."""
+    state = _ATTACHMENT_THUMB
+    collection = state["collection"]
+    state.update({"collection": None, "preview": None, "key": None, "icon": 0})
+    if collection is None:
+        return
+    try:
+        from bpy.utils import previews as _previews
+        _previews.remove(collection)
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+        pass
+
+
+def _attachment_preview_px(img, context) -> tuple[int, int]:
+    """Edge length of the square thumbnail buffer, as ``(side, side)``.
+
+    Sized from the panel's live width so the thumbnail spans it (see the
+    sizing note near ``_ATTACHMENT_PREVIEW_MARGIN_PX`` for why the buffer
+    is square rather than the image's own shape).  Falls back to
+    ``(0, 0)`` when the image has no usable pixel size.
     """
+    try:
+        src_w, src_h = int(img.size[0]), int(img.size[1])
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return 0, 0
+    if src_w <= 0 or src_h <= 0:
+        return 0, 0
     try:
         region_width = int(getattr(context.region, "width", 0) or 0)
     except (AttributeError, TypeError, ValueError):
         region_width = 0
     available = max(region_width - _ATTACHMENT_PREVIEW_MARGIN_PX,
                     _ATTACHMENT_PREVIEW_MIN_PX)
+    side = min(available, _ATTACHMENT_PREVIEW_MAX_PX)
+    quantum = _ATTACHMENT_PREVIEW_QUANTUM_PX
+    if quantum > 1:
+        side = max(_ATTACHMENT_PREVIEW_MIN_PX,
+                   round(float(side) / quantum) * quantum)
+    return side, side
+
+
+def _attachment_fit_size(src_w, src_h, side) -> tuple[int, int]:
+    """Pixel size that FITS an image into a ``side`` square (aspect kept)."""
+    if src_w >= src_h:
+        return side, max(1, round(side * src_h / src_w))
+    return max(1, round(side * src_w / src_h)), side
+
+
+def _attachment_cover_size(src_w, src_h, side) -> tuple[int, int]:
+    """Pixel size that COVERS a ``side`` square (the other axis overflows)."""
+    if src_w >= src_h:
+        return max(side, round(side * src_w / src_h)), side
+    return side, max(side, round(side * src_h / src_w))
+
+
+def _attachment_source_floats(img):
+    """``(floats, width, height)`` for *img*'s pixels, or None.
+
+    Read through ``foreach_get`` into a byte-packed ``array('f')`` so a
+    large image does not become millions of Python float objects.
+    Images above ``_ATTACHMENT_THUMBNAIL_MAX_SOURCE_PX`` are refused: the
+    copy needs two float buffers, and a thumbnail is not worth hundreds
+    of megabytes (those fall back to Blender's own small preview icon).
+    """
     try:
-        width, height = int(img.size[0]), int(img.size[1])
+        src_w, src_h = int(img.size[0]), int(img.size[1])
     except (AttributeError, IndexError, TypeError, ValueError):
-        width, height = 0, 0
-    aspect = (width / height) if width > 0 and height > 0 else 1.0
-    # A tall image gets a taller square so its width still fills the panel.
-    side = available / min(1.0, aspect)
-    side = min(side, available * _ATTACHMENT_PREVIEW_MAX_RATIO)
+        return None
+    if src_w <= 0 or src_h <= 0:
+        return None
+    if src_w * src_h > _ATTACHMENT_THUMBNAIL_MAX_SOURCE_PX:
+        return None
     try:
-        ui_scale = float(context.preferences.system.ui_scale) or 1.0
-    except (AttributeError, TypeError, ValueError):
-        ui_scale = 1.0
-    scale = side / (_UI_UNIT_BASE_PX * ui_scale)
-    return max(_ATTACHMENT_PREVIEW_MIN_SCALE,
-               min(scale, _ATTACHMENT_PREVIEW_MAX_SCALE))
+        buf = array.array("f", [0.0]) * (src_w * src_h * 4)
+        img.pixels.foreach_get(buf)
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+        return None
+    return buf, src_w, src_h
+
+
+def _attachment_scale_pixels(img, width, height, *, blur=False, dim=None):
+    """*img* resampled to ``width`` x ``height``; its RGBA floats or None.
+
+    The source pixels are copied INTO a scratch image and resampled
+    there.  The copy is explicit -- ``Image.copy()`` comes back all black
+    for a generated image, because the copy is regenerated rather than
+    duplicated -- and the user's datablock is never modified.  ``blur``
+    softens the result with a down/up resample round trip and ``dim``
+    multiplies the colour channels and forces the copy opaque; together
+    they make the muted backdrop of ``_attachment_thumbnail_pixels``.
+    Returns ``None``, never raising (this runs from a panel draw), when
+    the pixels cannot be read.
+    """
+    source = _attachment_source_floats(img)
+    if source is None:
+        return None
+    buf, src_w, src_h = source
+    scratch = None
+    try:
+        scratch = bpy.data.images.new("bfacw_thumbnail_scratch", src_w, src_h,
+                                      alpha=True)
+        scratch.pixels.foreach_set(buf)
+        del buf
+        scratch.scale(width, height)
+        if blur and width > 8 and height > 8:
+            scratch.scale(max(1, width // 8), max(1, height // 8))
+            scratch.scale(width, height)
+        pixels = list(scratch.pixels)
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+        return None
+    finally:
+        if scratch is not None:
+            try:
+                bpy.data.images.remove(scratch)
+            except Exception:  # noqa: BLE001
+                pass
+    needed = width * height * 4
+    if len(pixels) < needed:
+        return None
+    pixels = pixels[:needed]
+    if dim is not None:
+        for channel in (0, 1, 2):
+            pixels[channel::4] = [value * dim for value in pixels[channel::4]]
+        pixels[3::4] = [1.0] * (width * height)
+    return pixels
+
+
+def _attachment_thumbnail_pixels(img, side):
+    """A ``side`` x ``side`` RGBA thumbnail of *img*, or None if unreadable.
+
+    The whole image is fitted into the middle of the square, over a
+    dimmed, blurred, cover-scaled copy of itself.  Blender draws a preview
+    icon into a square rect, so a wide image fitted on its own would leave
+    empty bands above and below it; filling them with a muted version of
+    the same image keeps the thumbnail panel-wide and borderless while
+    still showing the whole image.
+    """
+    try:
+        src_w, src_h = int(img.size[0]), int(img.size[1])
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return None
+    if src_w <= 0 or src_h <= 0 or side <= 0:
+        return None
+    cover_w, cover_h = _attachment_cover_size(src_w, src_h, side)
+    fit_w, fit_h = _attachment_fit_size(src_w, src_h, side)
+    backdrop = _attachment_scale_pixels(
+        img, cover_w, cover_h, blur=True, dim=_ATTACHMENT_THUMBNAIL_DIM)
+    front = _attachment_scale_pixels(img, fit_w, fit_h)
+    if backdrop is None or front is None:
+        return None
+    x_off = (cover_w - side) // 2
+    y_off = (cover_h - side) // 2
+    fit_y0 = (side - fit_h) // 2
+    fit_x0 = (side - fit_w) // 2
+    row_floats = side * 4
+    out = []
+    for y in range(side):
+        start = ((y + y_off) * cover_w + x_off) * 4
+        row = backdrop[start:start + row_floats]
+        if fit_y0 <= y < fit_y0 + fit_h:
+            fy = y - fit_y0
+            row = list(row)
+            row[fit_x0 * 4:(fit_x0 + fit_w) * 4] = \
+                front[fy * fit_w * 4:(fy + 1) * fit_w * 4]
+        out.extend(row)
+    return out
+
+
+def _attachment_datablock_icon(img) -> int:
+    """The image datablock's own preview icon (small, but always valid)."""
+    try:
+        preview = img.preview_ensure()
+        return int(getattr(preview, "icon_id", 0) or 0)
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+        return 0
+
+
+def _attachment_preview_icon(img, context) -> tuple[int, int, int]:
+    """``(icon_value, width, height)`` for the attachment thumbnail.
+
+    Prefers a buffer we compose ourselves -- the image at full width over
+    a muted backdrop, so the thumbnail is panel-wide and has no empty band
+    above or below it -- because the datablock's stock icon is only 32px
+    and looks very pixely once the thumbnail spans the panel.  Falls back
+    to that stock icon, which Blender then scales, when the buffer cannot
+    be built, and to ``(0, 0, 0)`` when there is nothing to draw.
+    """
+    width, height = _attachment_preview_px(img, context)
+    if width <= 0 or height <= 0:
+        return 0, 0, 0
+
+    preview_state = _ATTACHMENT_THUMB
+    key = None
+    try:
+        key = (img.name, width, height, tuple(img.size))
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+        key = None
+    if key is not None and preview_state["key"] == key and preview_state["icon"]:
+        return preview_state["icon"], width, height
+
+    collection = _thumbnail_collection()
+    if collection is not None:
+        try:
+            preview = preview_state["preview"]
+            if preview is None:
+                preview = collection.new("attachment")
+                preview_state["preview"] = preview
+            pixels = _attachment_thumbnail_pixels(img, width)
+            if pixels is not None:
+                # Size first: clearing a buffer is what lets the dynamic
+                # pixel array take our new dimensions.  Both buffers get
+                # the same pixels because template_icon asks for
+                # ICON_SIZE_ICON and only falls back to the big preview
+                # when the small buffer is missing (interface_icons.cc
+                # icon_draw_size) -- filling both means the thumbnail is
+                # sharp whichever buffer Blender reaches for.
+                preview.image_size = (width, height)
+                preview.image_pixels_float[:] = pixels
+                preview.icon_size = (width, height)
+                preview.icon_pixels_float[:] = pixels
+                icon = int(getattr(preview, "icon_id", 0) or 0)
+                if icon:
+                    preview_state.update({"key": key, "icon": icon})
+                    return icon, width, height
+        except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+            pass
+
+    return _attachment_datablock_icon(img), width, height
 
 
 def _draw_attachment_preview(layout, img, context=None) -> None:
     """Draw a thumbnail of the attached image (issue #88 / Tier 3k).
 
     A filename alone is easy to misread, so the user can see WHAT is
-    attached before sending.  The thumbnail is sized to the panel width
-    (see :func:`_attachment_preview_scale`) so it stays responsive, and
-    because Blender draws preview icons by fitting the image inside the
-    icon button -- preserving its aspect ratio -- a small screenshot or
-    render is scaled up rather than left tiny.  The whole thing is
-    best-effort: a datablock with no pixels (or a stub image in tests)
-    has no preview to make, and a panel draw must never raise.
+    attached before sending.  The button is sized from the panel's live
+    width so the thumbnail spans it (see the sizing note near
+    ``_ATTACHMENT_PREVIEW_MARGIN_PX``), and the pixels are our own
+    resample of the image at exactly the size Blender draws them --
+    without that, a template_icon shows the datablock's 32px icon and the
+    thumbnail is very pixely.  Best-effort: a datablock with no pixels
+    (or a stub image in tests) has no preview to make, and a panel draw
+    must never raise.
     """
     if img is None:
         return
+    icon, width, height = _attachment_preview_icon(img, context)
+    if not icon or width <= 0 or height <= 0:
+        return
     try:
-        preview = img.preview_ensure()
-        icon = int(getattr(preview, "icon_id", 0) or 0)
-    except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
-        return
-    if not icon:
-        return
-    row = layout.row()
-    row.alignment = 'CENTER'
-    row.template_icon(icon_value=icon,
-                      scale=_attachment_preview_scale(img, context))
+        ui_scale = float(context.preferences.system.ui_scale) or 1.0
+    except (AttributeError, TypeError, ValueError):
+        ui_scale = 1.0
+    unit = _UI_UNIT_BASE_PX * ui_scale
+    # Drawn straight onto the panel layout, not inside a layout.row():
+    # a row wrapper made the (deliberately large) icon button vanish --
+    # measured in a real session, where the same call without the row
+    # drew a 162x40 thumbnail and with it drew nothing at all.
+    layout.template_icon(icon_value=icon, scale=max(1.0, width / unit))
 
 
 def _redraw_areas(context: bpy.types.Context | None) -> None:
@@ -3670,8 +3929,8 @@ def unregister() -> None:
     # Save history.
     _save_chat_history()
 
-    # Give Blender's own image drop handlers back before tearing down.
-    _restore_builtin_viewport_drops()
+    # Drop the thumbnail's private preview buffer.
+    free_attachment_thumbnail()
 
     if bpy.app.timers.is_registered(chat_timer_update):
         bpy.app.timers.unregister(chat_timer_update)

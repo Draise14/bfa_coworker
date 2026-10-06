@@ -920,7 +920,9 @@ Curated model presets organized by hardware capability (10 entries incl. Custom)
 - Model Filename
 - **Context Window Preset** — one-click sizes (4K / 8K / 16K / 32K / 64K / 128K / Custom); the recommended size for your hardware is suggested when you pick a model
 - Context Window Size (4096–262144 tokens)
-- **Reasoning Effort** — Off / Low / Medium / High / Custom (maps to a per-reply thinking budget of 0 / 512 / 1024 / 2048 tokens; local path only)
+- **Reasoning Effort** — Off / Low / Medium / High / Custom (maps to a per-reply thinking budget of 0 / 512 / 1024 / 2048 tokens; local path only). Also in the chat panel as **Thinking**; it can be changed any time and applies from your next message
+- The **context window** and **KV-cache quantization** are fixed when the model loads, so they are locked while the local model is running (a **Stop Model** button sits next to the notice)
+- **Auto-Continue Rounds** (Chat Display) — how many extra rounds a long request may run while it still makes real progress (default 3; 0 = stop and report)
 - **Quantize KV Cache (q8_0)** — store the KV cache in 8-bit to roughly halve its memory and fit a larger context on the same VRAM (slight quality cost; GPU backends only; applies on next server start)
 - Max Output Tokens (512–131072)
 - HuggingFace Token (for gated models)

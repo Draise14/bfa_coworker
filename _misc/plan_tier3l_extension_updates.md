@@ -58,7 +58,7 @@ Zips live on GitHub Releases (`archive_url` is absolute). Stable channel only.
   the installer from the list leaves Coworker in place -- documented.
 
 ## 4. Tests
-`tests/test_extension_updates.py` (22):
+`tests/test_extension_updates.py` (23):
 * listing entries, flat vs folder zips, one version per id, drag link, committed
   listing valid, repo URL identical in all three places, installer bundles the zip
   with the matching version;

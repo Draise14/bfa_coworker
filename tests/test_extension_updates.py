@@ -528,6 +528,13 @@ class TestWithBlenderExtensionClient(unittest.TestCase):
                   "--blender-version", "5.1.0", "--python-version", "3.13.0")
         self.assertEqual(self._installed_version(repo_dir), "1.1.38")
 
+    def test_blender_validates_the_installer_and_coworker_manifests(self):
+        # Blender rejects e.g. permission texts over 64 characters at install time.
+        z = _make_ext_zip(os.path.join(self.tmp, "bfa_coworker-1.1.37.zip"), "1.1.37")
+        inst_zip = extension_repo.build_installer(z, self.tmp)
+        self._cli("validate", inst_zip)
+        self._cli("validate", os.path.join(_REPO, "addon", "bfa_coworker"))
+
     def test_installer_zip_and_its_payload_install(self):
         z = _make_ext_zip(os.path.join(self.tmp, "bfa_coworker-1.1.37.zip"), "1.1.37")
         inst_zip = extension_repo.build_installer(z, self.tmp)

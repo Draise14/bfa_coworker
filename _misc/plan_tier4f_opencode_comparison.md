@@ -5,6 +5,13 @@
 **Reference**: [anomalyco/opencode](https://github.com/anomalyco/opencode) (MIT, TypeScript/Bun, v1.18.31)
 **Purpose**: Extract the transferable architecture from a mature open-source coding agent and map it onto BFA Coworker's local-first Blender agent.
 
+> **Audit 2026-10-16**: research record, still valid for the patterns. §4 "Current
+> State" and the §5 gap matrix are pre-Tier-3k: compaction, checkpoints, usage readout,
+> KV quant, flash-attn and cache-reuse have since shipped (see the 4f audit banner).
+> OpenCode is also the **first ACP test target** for Tier 4h (`opencode acp`). Its
+> session loop is what runs when a user picks it in External Agent mode, so we don't
+> need to copy those patterns into our loop for that path.
+
 ---
 
 ## Table of Contents

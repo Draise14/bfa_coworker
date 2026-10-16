@@ -8,6 +8,15 @@
 
 **Reference Implementation**: [jer-nc/blender_deepseek_ai](https://github.com/jer-nc/blender_deepseek_ai) — DeepSeek AI Autocomplete for Blender Text Editor
 
+> **Audit 2026-10-16 (task board lane C)**: scope unchanged, order after the **G2 text
+> tools**. Changes: streaming is shipped, so C2 streams through the **engine event
+> stream (4i.1)** and works on Local, Remote and External Agent. Run/Fix shares code
+> with **4b B5**. New **C4 Recipes UI**: the Text Editor sidebar exposes a script's
+> parameter block so the artist (or agent) can rerun with new numbers instead of
+> regenerating code. The idea comes from the "I Just Wanted to Fish" case study.
+> **White room**: the DeepSeek addon is a behaviour reference only; don't port its
+> code. Line references in §1.2 are stale (re-anchor at implementation).
+
 ---
 
 ## Table of Contents

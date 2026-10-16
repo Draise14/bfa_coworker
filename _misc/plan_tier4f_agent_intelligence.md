@@ -7,6 +7,12 @@
 **Comparison**: `plan_tier4f_opencode_comparison.md`
 **Purpose**: Adopt the transferable orchestration, context, and safety architecture from OpenCode, and go beyond it on GGUF-level inference tuning that OpenCode cannot reach.
 
+> **Audit 2026-10-16 (master §2, task board lane F)**: this plan predates Tier 3k.
+> - **Already shipped**: 4f.1.1 KV-cache quant, flash-attn, batch/ubatch, cache-reuse (build-aware flag filter in `llm_manager.start_local_llama`); 4f.2.2 compaction + checkpoints (`session_memory.py`); 4f.2.3 usage readout (issue #69). Tool-result trim is now 2000 chars, not 500.
+> - **Moved**: 4f.2.1 managed tool output files → **Tier 4i.7** (server-side, so every engine benefits). Permission "ask" prompts render through the shared approval row (**4i.3**).
+> - **Remaining scope**: **F1** permissions + doom-loop (4f.3), **F2** on-demand skills (4f.2.4, server-side `skill` tool), **F3** `--metrics`, `--parallel`, auto-tune (rest of 4f.1), **X1** agent teams (4f.4).
+> - Tables in §1.1 and the comparison doc's §4 describe the pre-3k state; read them as history.
+
 ---
 
 ## Table of Contents

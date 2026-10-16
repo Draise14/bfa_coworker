@@ -4,6 +4,12 @@
 **Depends on**: Tier 3 domain system, existing toolcode pattern
 **Purpose**: Quick-win domain tooling that completes the matrix for the three most common artist-adjacent workflows that today still require raw `bpy` from the LLM.
 
+> **Audit 2026-10-16 (task board lane E)**: **4e.3 Smart Save moved to lane G (G4)**, as
+> a quick win that also needs the prepare/apply approval (Tier 4i.3) for save-as/export.
+> `batch_keyframe_insert` (4e.2 §3.1) **already exists**, so E2 has 4 new tools. Rigging
+> (E1) and Animation (E2) follow once the G-lane tool pattern and progressive loading
+> (4i.4) are settled. Kimodo stays "companion addon" (Option A).
+
 ---
 ## Table of Contents
 1. [Why These Three Domains](#1-why-these-three-domains)

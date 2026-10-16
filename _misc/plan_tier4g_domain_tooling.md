@@ -6,6 +6,13 @@
 **Depends on**: Existing MCP tool infrastructure (toolcode pattern, auto-discovery, bridge server)
 **Sibling**: `plan_tier4f_agent_intelligence.md` — the agent *runtime* (inference, context, permissions, orchestration). Orthogonal to this plan but mutually reinforcing; see §Relationship to Tier 4f below.
 
+> **Audit 2026-10-16 (master §3 lane 2, task board lane G)**: runs **in parallel with
+> lane 1 (ACP + parity)**. Tools help all three engines immediately.
+> - Tasks: **G1** VSE · **G2** Text tools + **recipe convention** (scripts with a parameter block, rerun instead of regenerate; from the "I Just Wanted to Fish" case study) · **G3** Node tools. The "4 remaining" in 4g.4 is **5** tools · **G4** Smart Save (moved here from 4e.3, uses prepare/apply approvals) · **G5** `render_review_sheet` (multi-angle contact sheet for vision checks) · **G6** long jobs in the background.
+> - 4g.5 prompt chapters are no longer a separate phase: each domain task ships its own chapter and registers its domain for **server-side progressive loading (Tier 4i.4)**.
+> - 4g.6.3 External Client Config is **done** (harness presets + Copy/Test MCP Config); ACP removes the need for most users.
+> - Tool count is now ~45 (not 22). Check names against `mcp/blmcp/tools/` before writing a new tool.
+
 ---
 
 ## Skills System (Implemented 2026-08-11)

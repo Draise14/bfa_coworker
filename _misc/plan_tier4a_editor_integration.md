@@ -4,6 +4,19 @@
 **Status**: Implementation Plan — Fusion (GPU Takeover + Hybrid, BOTH)
 **Depends on**: Tier 1-3 features (chat UI, agent controller, MCP tools)
 
+> **Audit 2026-10-16 (task board lane A)**: **spike A0 before any build.** The
+> "clone the Preferences editor" center rests on panels with a custom
+> `bl_context="chat"`. The Preferences main region lays out panels filtered by the
+> **active Preferences section** (a fixed enum), so a custom context may never match.
+> Panels with *no* context would draw in **every** section of the user's real
+> Preferences, and the active section is **global** (`U.space_data.section_active`),
+> not per area. A0 must show a Coworker-only center (e.g. area-scoped `poll`) or pick an
+> alternative: Properties editor, or a wide sidebar in an Image/Text editor area.
+> Also resolve the internal contradiction: the Editor Type Catalog still names the
+> Text Editor (GPU takeover) as the dedicated-editor target.
+> Order: A1 (`draw_chat_interface`) builds on **Tier 4i.2** components; A4 viewport
+> overlay reads the engine event stream (4i.1). Moodboard (Pillar 3) is Tier 5.
+
 ---
 
 ## Overview

@@ -160,7 +160,7 @@ python build_addon.py --repo-tag v1.1.37   # Coworker zip + installer zip + exte
 
 ## 🙏 Credits
 
-Thank you to all contributors and testers who helped shape this release!
+Thank you to the testers for pointing things out, and also to Claude and Deepseek, and also Freebuff for some of the heavy lifting.
 
 ---
 

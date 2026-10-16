@@ -24,7 +24,8 @@ points at a zip attached to a GitHub release.
    python build_addon.py --repo-tag v1.1.38
    ```
 
-   This writes `releases/bfa_coworker-1.1.38.zip`, `releases/bfa_coworker_installer-1.1.38.zip`
+   This writes `releases/bfa_coworker-1.1.38.zip`, `releases/bfa_coworker_installer.zip`
+   (no version in the installer's name; its manifest carries 1.1.38)
    and updates `extensions/index.json` to point at
    `https://github.com/Draise14/bfa_coworker/releases/download/v1.1.38/bfa_coworker-1.1.38.zip`.
    (Already built? `python extension_repo.py add releases/bfa_coworker-1.1.38.zip --tag v1.1.38`.)
@@ -40,8 +41,9 @@ To pull a broken version: point the entry back at the previous release
 
 ## Installing (for users)
 
-- **Easiest:** download `bfa_coworker_installer-<version>.zip` from the releases
-  page and drag it into Blender. It adds this repository and installs Coworker into it.
+- **Easiest:** download `bfa_coworker_installer.zip` -- always the newest at
+  https://github.com/Draise14/bfa_coworker/releases/latest/download/bfa_coworker_installer.zip --
+  and drag it into Blender. It adds this repository and installs Coworker into it.
 - **Manually:** Preferences > Get Extensions > Repositories > Add Remote Repository,
   paste the URL above, enable *Check for Updates on Startup*, then install Coworker
   from Get Extensions.

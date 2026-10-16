@@ -15,7 +15,7 @@ Step2 - Usage:
     python build_addon.py --install --enable  # Build, install, and enable
     python build_addon.py --repo-tag v1.1.38  # Build + installer + list in extensions/index.json
 
-Every build also writes the Coworker Installer zip (bfa_coworker_installer-<version>.zip)
+Every build also writes the Coworker Installer zip (bfa_coworker_installer.zip, no version in the name)
 next to the Coworker zip; pass --no-installer to skip it.  See extension_repo.py.
 
 The environment will persist, or use this command with the path to the Blender executable, example:

@@ -140,14 +140,14 @@ class TestListing(unittest.TestCase):
     def test_installer_bundles_the_coworker_zip_with_matching_version(self):
         z = _make_ext_zip(os.path.join(self.tmp, "bfa_coworker-1.1.37.zip"), "1.1.37")
         out = extension_repo.build_installer(z, self.tmp)
-        self.assertTrue(out.endswith("bfa_coworker_installer-1.1.37.zip"))
+        self.assertEqual(os.path.basename(out), "bfa_coworker_installer.zip")  # no version in the name
         with zipfile.ZipFile(out) as zf:
             names = zf.namelist()
             self.assertIn("bfa_coworker_installer/__init__.py", names)
-            self.assertIn("bfa_coworker_installer/payload/bfa_coworker-1.1.37.zip", names)
+            self.assertIn("bfa_coworker_installer/payload/bfa_coworker.zip", names)
             self.assertIn('version = "1.1.37"', zf.read("bfa_coworker_installer/blender_manifest.toml").decode())
             with open(z, "rb") as fh:
-                self.assertEqual(zf.read("bfa_coworker_installer/payload/bfa_coworker-1.1.37.zip"), fh.read())
+                self.assertEqual(zf.read("bfa_coworker_installer/payload/bfa_coworker.zip"), fh.read())
         self.assertEqual(extension_repo.manifest_from_zip(out)["id"], "bfa_coworker_installer")
 
 
@@ -368,8 +368,7 @@ class _FakeBlender:
         pkg_dir = os.path.join(self.root, "installer_pkg", "bfa_coworker_installer")
         shutil.copytree(src, pkg_dir, dirs_exist_ok=True)
         os.makedirs(os.path.join(pkg_dir, "payload"), exist_ok=True)
-        _make_ext_zip(os.path.join(pkg_dir, "payload", "bfa_coworker-{:s}.zip".format(payload_version)),
-                      payload_version)
+        _make_ext_zip(os.path.join(pkg_dir, "payload", "bfa_coworker.zip"), payload_version)
         spec = importlib.util.spec_from_file_location(
             "bl_ext.user_default.bfa_coworker_installer", os.path.join(pkg_dir, "__init__.py"),
             submodule_search_locations=[pkg_dir])
@@ -404,6 +403,11 @@ class TestInstaller(unittest.TestCase):
 
     def _versions(self, inst):
         return sorted((c["repo"].module, c["version"]) for c in inst.installed_copies())
+
+    def test_bundled_version_comes_from_the_payload_manifest(self):
+        inst = self.fake.load_installer(payload_version="1.1.39")
+        self.assertEqual(os.path.basename(inst.payload_zip()), "bfa_coworker.zip")
+        self.assertEqual(inst.payload_version(), "1.1.39")
 
     def test_fresh_install_adds_repo_and_installs_bundled_copy(self):
         inst = self.fake.load_installer()
@@ -574,7 +578,7 @@ class TestWithBlenderExtensionClient(unittest.TestCase):
         os.makedirs(user_default)
         self._cli("install-files", inst_zip, "--local-dir", user_default,
                   "--blender-version", "5.1.0", "--python-version", "3.13.0")
-        payload = os.path.join(user_default, "bfa_coworker_installer", "payload", "bfa_coworker-1.1.37.zip")
+        payload = os.path.join(user_default, "bfa_coworker_installer", "payload", "bfa_coworker.zip")
         self.assertTrue(os.path.isfile(payload))
         repo_dir = os.path.join(self.tmp, "remote_repo")
         os.makedirs(repo_dir)

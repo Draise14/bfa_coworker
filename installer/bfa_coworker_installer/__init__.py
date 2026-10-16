@@ -92,15 +92,33 @@ def _read_manifest_version(directory: str) -> str:
 
 
 def payload_zip() -> str:
-    """The Coworker zip bundled inside this installer ('' if missing)."""
-    found = sorted(glob.glob(os.path.join(PAYLOAD_DIR, PKG_ID + "-*.zip")),
-                   key=lambda p: _version_tuple(os.path.basename(p)[len(PKG_ID) + 1:-4]))
+    """The Coworker zip bundled inside this installer ('' if missing).
+
+    The file name carries no version (``payload/bfa_coworker.zip``); the
+    version is read from the zip's own manifest.  Older versioned names
+    (``bfa_coworker-<version>.zip``) are still found.
+    """
+    found = sorted(glob.glob(os.path.join(PAYLOAD_DIR, PKG_ID + "*.zip")),
+                   key=lambda p: _version_tuple(_zip_manifest_version(p)))
     return found[-1] if found else ""
+
+
+def _zip_manifest_version(path: str) -> str:
+    try:
+        import tomllib
+        import zipfile
+        with zipfile.ZipFile(path) as zf:
+            names = [n for n in zf.namelist() if n.endswith("blender_manifest.toml") and n.count("/") <= 1]
+            if not names:
+                return ""
+            return str(tomllib.loads(zf.read(sorted(names, key=len)[0]).decode("utf-8")).get("version", ""))
+    except Exception:  # pylint: disable=broad-exception-caught
+        return ""
 
 
 def payload_version() -> str:
     path = payload_zip()
-    return os.path.basename(path)[len(PKG_ID) + 1:-4] if path else ""
+    return _zip_manifest_version(path) if path else ""
 
 
 def _repos() -> Any:

@@ -77,7 +77,7 @@ See `extensions/README.md`: build with `--repo-tag`, attach both zips to the
 release unchanged, publish, then merge the `index.json` PR.
 
 ## 6. In-Bforartists verification still needed
-1. Drag `bfa_coworker_installer-1.1.37.zip` into Bforartists with 1.1.36 installed from
+1. Drag `bfa_coworker_installer.zip` (1.1.37) into Bforartists with 1.1.36 installed from
    a zip: repository added, 1.1.37 installed into it, API key / model settings kept.
 2. Get Extensions lists Coworker under *Bforartists Coworker*; Preferences > Coworker >
    Advanced > Updates says "Automatic".

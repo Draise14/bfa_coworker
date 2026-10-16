@@ -310,16 +310,29 @@ class _FakeBlender:
         self.calls.append(("install", repo, os.path.basename(filepath)))
         return {'FINISHED'}
 
-    def uninstall(self, repo_index, pkg_id):
-        repo = self.repos[repo_index]
+    def _resolve(self, repo_index=-1, repo_directory=""):
+        """Like Blender's _repo_dir_and_index_get: index counts ENABLED repos only."""
+        if repo_index != -1:
+            enabled = [r for r in self.repos if r.enabled and r.directory]
+            if repo_index >= len(enabled):
+                raise RuntimeError("Repository not set")
+            return enabled[repo_index]
+        for r in self.repos:
+            if r.directory == repo_directory:
+                return r
+        raise RuntimeError("Repository not set")
+
+    def uninstall(self, pkg_id, repo_index=-1, repo_directory=""):
+        repo = self._resolve(repo_index, repo_directory)
         shutil.rmtree(os.path.join(repo.directory, pkg_id), ignore_errors=True)
         self.addons.pop("bl_ext.{:s}.{:s}".format(repo.module, pkg_id), None)
         self.calls.append(("uninstall", repo.module, pkg_id))
         return {'FINISHED'}
 
-    def sync(self, repo_index):
-        os.makedirs(self.repos[repo_index].directory, exist_ok=True)
-        self.calls.append(("sync", self.repos[repo_index].module))
+    def sync(self, repo_index=-1, repo_directory=""):
+        repo = self._resolve(repo_index, repo_directory)
+        os.makedirs(repo.directory, exist_ok=True)
+        self.calls.append(("sync", repo.module))
         return {'FINISHED'}
 
     # -- module ------------------------------------------------------------
@@ -450,6 +463,22 @@ class TestInstaller(unittest.TestCase):
         self.assertEqual(self._versions(inst), [("Bforartists_Coworker", "1.1.37")])
         self.assertFalse(any(c[0] == "sync" for c in self.fake.calls))
         self.assertTrue(any("Online access is off" in m for m in msgs))
+
+    def test_a_disabled_repository_earlier_in_the_list_is_harmless(self):
+        # Blender's repo_index skips disabled repositories; addressing by
+        # position would hit the wrong one (or none).
+        disabled = _Repo("Old Disabled", "old_disabled", os.path.join(self.root, "old_disabled"))
+        disabled.enabled = False
+        self.fake.repos.insert(0, disabled)
+        inst = self.fake.load_installer()
+        inst.setup()
+        _i, repo = inst.find_repo()
+        _make_ext_zip(os.path.join(self.root, "u.zip"), "1.1.40")
+        with zipfile.ZipFile(os.path.join(self.root, "u.zip")) as zf:
+            zf.extractall(repo.directory)
+        inst.setup(reinstall=True)
+        self.assertEqual(self._versions(inst), [("Bforartists_Coworker", "1.1.37")])
+        self.assertIn(("sync", "Bforartists_Coworker"), self.fake.calls)
 
     def test_uninstall_everything_removes_coworker_repo_and_installer(self):
         inst = self.fake.load_installer()

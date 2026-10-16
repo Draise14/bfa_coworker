@@ -115,13 +115,6 @@ def find_repo() -> tuple[int, Any]:
     return -1, None
 
 
-def _repo_index(repo: Any) -> int:
-    for i, item in enumerate(_repos()):
-        if item.module == repo.module:
-            return i
-    return -1
-
-
 def installed_copies() -> list[dict[str, Any]]:
     """Every installed Coworker: {index, repo, version, module, enabled}."""
     out = []
@@ -215,16 +208,26 @@ def install_bundled(repo: Any) -> None:
         raise RuntimeError("Installing the bundled Coworker failed ({:s})".format(str(result)))
 
 
+# NOTE: the extensions operators' ``repo_index`` counts only ENABLED
+# repositories (``extension_repos_read_index``), not the position in
+# ``preferences.extensions.repos`` -- a disabled repository earlier in the list
+# would make an index point at the wrong one.  Address repositories by their
+# directory instead (``repo_index`` left at its default of -1).
+
+
 def uninstall_copy(copy: dict[str, Any]) -> None:
-    bpy.ops.extensions.package_uninstall(repo_index=copy["index"], pkg_id=PKG_ID)
+    result = bpy.ops.extensions.package_uninstall(repo_directory=copy["repo"].directory, pkg_id=PKG_ID)
+    if "FINISHED" not in result:
+        raise RuntimeError("Uninstalling Coworker {:s} failed ({:s})".format(copy["version"], str(result)))
 
 
-def sync_repo(index: int) -> bool:
+def sync_repo(repo: Any) -> bool:
     """Fetch the listing so newer versions show up now (needs online access)."""
-    if not getattr(bpy.app, "online_access", False) or index < 0:
+    if repo is None or not getattr(bpy.app, "online_access", False):
         return False
     try:
-        bpy.ops.extensions.repo_sync(repo_index=index)
+        os.makedirs(repo.directory, exist_ok=True)
+        bpy.ops.extensions.repo_sync(repo_directory=repo.directory)
         return True
     except Exception:  # pylint: disable=broad-exception-caught
         return False
@@ -255,7 +258,7 @@ def setup(reinstall: bool = False) -> list[str]:
         if newer and not reinstall:
             msgs.append("A newer Coworker {:s} is installed from a file (a development build?) -- "
                         "left as is; Reinstall Bundled replaces it".format(newer[0]["version"]))
-            sync_repo(index)
+            sync_repo(repo)
             return msgs
         for copy in others:
             if copy["enabled"]:
@@ -266,7 +269,7 @@ def setup(reinstall: bool = False) -> list[str]:
             uninstall_copy(ours[0])
         install_bundled(repo)
         msgs.append("Installed Coworker {:s}".format(bundled))
-    if sync_repo(_repo_index(repo)):
+    if sync_repo(repo):
         msgs.append("Checked for updates")
     elif not getattr(bpy.app, "online_access", False):
         msgs.append("Online access is off: allow it in Preferences > System to get updates")
@@ -370,10 +373,14 @@ class BFACWI_OT_uninstall_coworker(bpy.types.Operator):  # type: ignore[misc]
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         copies = installed_copies()
-        for copy in copies:
-            if copy["enabled"]:
-                backup_settings(copy["module"])
-            uninstall_copy(copy)
+        try:
+            for copy in copies:
+                if copy["enabled"]:
+                    backup_settings(copy["module"])
+                uninstall_copy(copy)
+        except Exception as ex:  # pylint: disable=broad-exception-caught
+            self.report({'ERROR'}, str(ex))
+            return {'CANCELLED'}
         self.report({'INFO'}, "Uninstalled {:d} Coworker cop{:s}".format(
             len(copies), "y" if len(copies) == 1 else "ies"))
         return {'FINISHED'}
@@ -390,9 +397,9 @@ def _uninstall_everything() -> None:
         bpy.ops.preferences.extension_repo_remove(index=index, remove_files=True)
     parts = (__package__ or "").split(".")
     if len(parts) == 3 and parts[0] == "bl_ext":
-        for i, repo in enumerate(_repos()):
+        for repo in _repos():
             if repo.module == parts[1]:
-                bpy.ops.extensions.package_uninstall(repo_index=i, pkg_id=parts[2])
+                bpy.ops.extensions.package_uninstall(repo_directory=repo.directory, pkg_id=parts[2])
                 break
     print("[Coworker Installer] Coworker, its repository and the installer were removed")
 

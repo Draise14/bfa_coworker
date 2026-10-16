@@ -7,6 +7,19 @@ This release brings **major UX improvements**, **power-user tools**, and **perfo
 ---
 
 ## ✨ Highlight Features
+### 🔄 **Automatic Updates + One-Download Installer** (#86)
+- **Download `bfa_coworker_installer.zip`, drag it into Bforartists / Blender -- done.** The Coworker Installer adds the *Bforartists Coworker* extension repository and installs Coworker into it (offline: the add-on is bundled inside)
+- From now on **new versions show up in Preferences → Get Extensions** and update in place, no restart -- Blender's own extension system, no custom updater
+- Coming from a zip install? The installer **keeps your settings** (API key, model, ports) and replaces the old copy
+- **Reinstall Bundled** rolls back; **Uninstall Coworker** / **Uninstall Everything** clean up
+- No helper add-on wanted? Add `https://raw.githubusercontent.com/Draise14/bfa_coworker/main/extensions/index.json` as a remote repository in Get Extensions
+
+### 🪟 **Several Blender Windows, No Mix-Ups** (#85)
+- The Coworker always drives the window you started it in -- before, a second window could chat in one window while editing the other one's scene
+- Each window gets its own ports and session id; a request meant for another window is refused instead of run
+- Starting a second window no longer stops the first window's servers, and stopping the model no longer kills every llama-server on the machine
+- **Status & Diagnostics** shows *Linked to this window* (app, file, ports) and lists other open Coworker windows
+
 ### 📌 **Reliable Long Requests on Small Local Models** (Tier 3k)
 - **Pinned Goal & Plan** — your goal and a short step plan are sent with every request and never summarized away; steps **tick off live** in the chat panel while the turn runs; edit them as `Coworker Plan.md` in the Text Editor
 - **Knows when to stop** — stops once the plan is done, keeps going in rounds only while it makes real progress, winds up when it starts re-checking or repeating itself, and ends with **one suggested next step** as a question
@@ -98,18 +111,26 @@ Mention anything in your scene! Objects, materials, collections, node groups, wo
 
 ## 📦 Installation
 
-### From Extension Platform
-1. Open Blender → Edit → Preferences → Add-ons
-2. Search for "Coworker"
-3. Click "Install from Disk"
-4. Select the `.zip` file
+### ⭐ Recommended: the Coworker Installer (one download, auto-updates)
+1. Download **`bfa_coworker_installer.zip`** below (later on, [this link](https://github.com/Draise14/bfa_coworker/releases/latest/download/bfa_coworker_installer.zip) always gets the newest)
+2. **Drag it into Bforartists / Blender** (or Edit → Preferences → Add-ons → ▼ → Install from Disk) and enable **Coworker Installer**
+3. Coworker is installed and enabled into the *Bforartists Coworker* repository -- future versions arrive through **Get Extensions**
 
-### From Source
+Updating from 1.1.36? Same steps: the installer replaces the old copy and keeps your settings.
+
+### 🔗 Or add the repository yourself
+Edit → Preferences → **Get Extensions** → Repositories → **Add Remote Repository**:
+`https://raw.githubusercontent.com/Draise14/bfa_coworker/main/extensions/index.json` (turn on *Check for Updates on Startup*), then install **Coworker** from Get Extensions.
+
+### 📁 Plain zip
+`bfa_coworker-1.1.37.zip` still installs from disk, but a copy installed that way does **not** update itself.
+
+### 🔨 From Source
 ```bash
-cd addon/bfa_coworker
-python build_addon.py
-# Install the generated .zip from Blender Preferences
+python build_addon.py --repo-tag v1.1.37   # Coworker zip + installer zip + extensions/index.json entry
 ```
+
+> ℹ️ The bundled dependencies are Windows builds (as in 1.1.36); on macOS/Linux the add-on reinstalls them for your Python on first start.
 
 ---
 
@@ -124,6 +145,8 @@ python build_addon.py
 - 🖼️ Images attached to the add-on's own note instead of your request
 - 🏷️ Bogus "you already created texts: Coworker_006" warnings
 - ⚙️ Corrupt saved-provider JSON crashed the preferences panel
+- 🪟 A second Blender window's Coworker edited the first window's scene; starting it stopped the first window's servers (#85)
+- 🧯 Stopping the local model killed every llama-server on the machine, including other windows' and your own
 
 ---
 
@@ -133,6 +156,7 @@ python build_addon.py
 - 🎯 Collection color tag usage examples
 - 💡 Mention system category guide
 - 📌 Wiki: Goal & Plan, stopping rules, Session panel, image attachments, Auto-Continue Rounds
+- 📥 Wiki: Installation rewritten -- installer, repository, updating, rollback, uninstalling
 
 ---
 
@@ -144,10 +168,9 @@ Thank you to all contributors and testers who helped shape this release!
 
 ## 🔗 Links
 
-- 📖 [Documentation](https://github.com/bforartists/bfa_coworker/wiki)
-- 🐛 [Report Issues](https://github.com/bforartists/bfa_coworker/issues)
-- 💬 [Discussions](https://github.com/bforartists/bfa_coworker/discussions)
+- 📖 [Documentation](https://github.com/Draise14/bfa_coworker/wiki)
+- 🐛 [Report Issues](https://github.com/Draise14/bfa_coworker/issues)
 
 ---
 
-**Full Changelog**: https://github.com/bforartists/bfa_coworker/compare/v1.1.36...v1.1.37
+**Full Changelog**: https://github.com/Draise14/bfa_coworker/compare/v1.1.36...v1.1.37

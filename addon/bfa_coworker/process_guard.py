@@ -62,6 +62,9 @@ _job_handle: Any = None  # Windows job handle, kept open for Blender's lifetime
 # Executable-name fragments that identify each kind of server we launch; the
 # reaper only kills a recorded pid whose image/cmdline still matches (a pid
 # can be reused by an unrelated process after a reboot).
+# Too generic to identify one of our servers on their own (see may_kill).
+_GENERIC_MARKERS = ("python",)
+
 _KIND_MARKERS = {
     "llama-server": ("llama-server",),
     "mcp-server": ("python", "blmcp", "bfa-coworker-mcp", "bfa_coworker"),
@@ -307,15 +310,20 @@ def may_kill(pid: int, kind: str) -> bool:
     """
     if pid <= 0 or pid == os.getpid():
         return False
-    owner = owner_of(pid)
-    if owner:
-        if owner == os.getpid():
-            return True
-        return _process_image(owner) is None
     image = _process_image(pid)
     if image is None:
         return False
-    markers = _KIND_MARKERS.get(kind, ())
+    owner = owner_of(pid)
+    if owner == os.getpid():
+        return True
+    if owner and _process_image(owner) is not None:
+        return False  # another live Blender window owns it
+    # Orphan or unrecorded: only if it still looks like OUR server.  Generic
+    # names ("python") are not enough -- on Windows only the image name is
+    # known (python.exe), and the listener may be an unrecorded child of a
+    # launcher that another window started.  Unsure -> leave it; the caller
+    # moves to the next free port instead.
+    markers = [m for m in _KIND_MARKERS.get(kind, ()) if m not in _GENERIC_MARKERS]
     return bool(markers) and any(m in image for m in markers)
 
 

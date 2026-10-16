@@ -10,6 +10,7 @@ __all__ = (
     "_State",
     "_BFACW_Preferences",
     "BFACW_OT_pref_tab_select",
+    "BFACW_OT_copy_update_url",
 )
 
 import bpy  # pylint: disable=import-error
@@ -108,6 +109,15 @@ class _State:
 
 class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
     bl_idname = __package__
+
+    # Issue #86: True once this install restored the settings backup (or found
+    # none).  A fresh install -- e.g. Coworker moved into the update repository
+    # by the Coworker Installer -- starts False and restores once.
+    settings_restored: BoolProperty(  # type: ignore[valid-type]
+        name="Settings Restored",
+        default=False,
+        options={'HIDDEN'},
+    )
 
     host: StringProperty(  # type: ignore[valid-type]
         name="Host",
@@ -1922,6 +1932,31 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
     # -- Tab: Advanced --------------------------------------------------
 
+    def _draw_updates(self, layout: bpy.types.UILayout) -> None:
+        """Where updates come from: the Coworker extension repository (#86)."""
+        from .shared import UPDATE_REPO_URL, update_repo_of_this_install
+        from . import addon_version
+        box = layout.box()
+        box.label(text="Updates -- Coworker {:s}".format(addon_version() or ""), icon='FILE_REFRESH')
+        repo = update_repo_of_this_install()
+        col = box.column(align=True)
+        if repo is not None:
+            col.label(text="Automatic: installed from the \"{:s}\" repository".format(repo.name), icon='CHECKMARK')
+            sub = col.column(align=True)
+            sub.scale_y = 0.8
+            sub.label(text="New versions show up in Get Extensions; use Check for Updates there.")
+            if not repo.use_sync_on_startup:
+                sub.label(text="Tip: enable \"Check for Updates on Startup\" for that repository.", icon='INFO')
+        else:
+            col.label(text="Off: this copy was installed from a file", icon='INFO')
+            sub = col.column(align=True)
+            sub.scale_y = 0.8
+            sub.label(text="Install the Coworker Installer (one download from the Releases page),")
+            sub.label(text="or add this repository in Get Extensions > Repositories > Add Remote:")
+            row = box.row(align=True)
+            row.label(text=UPDATE_REPO_URL)
+            row.operator("bfacw.copy_update_url", text="", icon='COPYDOWN')
+
     def _draw_tab_advanced(self, context: bpy.types.Context) -> None:
         del context
         layout = self.layout
@@ -1937,6 +1972,9 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             hint_row = layout.row()
             hint_row.label(text=hint, icon='INFO')
             hint_row.scale_y = 0.6
+
+        # -- Updates (issue #86) ---------------------------------------
+        self._draw_updates(layout)
 
         # -- Bridge Server (always visible) ----------------------------
         bridge_box = layout.box()
@@ -2234,6 +2272,18 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
 # ---------------------------------------------------------------------------
 # Preferences Tab Selector Operator
+
+class BFACW_OT_copy_update_url(bpy.types.Operator):  # type: ignore[misc]
+    """Copy the Coworker extension repository URL (for Get Extensions > Repositories)"""
+    bl_idname = "bfacw.copy_update_url"
+    bl_label = "Copy Repository URL"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        from .shared import UPDATE_REPO_URL
+        context.window_manager.clipboard = UPDATE_REPO_URL
+        self.report({'INFO'}, "Copied: {:s}".format(UPDATE_REPO_URL))
+        return {'FINISHED'}
+
 
 class BFACW_OT_pref_tab_select(bpy.types.Operator):  # type: ignore[misc]
     """Switch to a different preferences tab."""

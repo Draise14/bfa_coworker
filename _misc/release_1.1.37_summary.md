@@ -8,7 +8,7 @@ This release brings **major UX improvements**, **power-user tools**, and **perfo
 
 ## ✨ Highlight Features
 ### 🔄 **Automatic Updates + One-Download Installer** (#86)
-- **Download `bfa_coworker_installer-1.1.37.zip`, drag it into Bforartists / Blender -- done.** The Coworker Installer adds the *Bforartists Coworker* extension repository and installs Coworker into it (offline: the add-on is bundled inside)
+- **Download `bfa_coworker_installer.zip`, drag it into Bforartists / Blender -- done.** The Coworker Installer adds the *Bforartists Coworker* extension repository and installs Coworker into it (offline: the add-on is bundled inside)
 - From now on **new versions show up in Preferences → Get Extensions** and update in place, no restart -- Blender's own extension system, no custom updater
 - Coming from a zip install? The installer **keeps your settings** (API key, model, ports) and replaces the old copy
 - **Reinstall Bundled** rolls back; **Uninstall Coworker** / **Uninstall Everything** clean up
@@ -112,7 +112,7 @@ Mention anything in your scene! Objects, materials, collections, node groups, wo
 ## 📦 Installation
 
 ### ⭐ Recommended: the Coworker Installer (one download, auto-updates)
-1. Download **`bfa_coworker_installer-1.1.37.zip`** below
+1. Download **`bfa_coworker_installer.zip`** below (later on, [this link](https://github.com/Draise14/bfa_coworker/releases/latest/download/bfa_coworker_installer.zip) always gets the newest)
 2. **Drag it into Bforartists / Blender** (or Edit → Preferences → Add-ons → ▼ → Install from Disk) and enable **Coworker Installer**
 3. Coworker is installed and enabled into the *Bforartists Coworker* repository -- future versions arrive through **Get Extensions**
 

@@ -13,6 +13,10 @@ Step2 - Usage:
     python build_addon.py                  # Build the addon
     python build_addon.py --install        # Build and install
     python build_addon.py --install --enable  # Build, install, and enable
+    python build_addon.py --repo-tag v1.1.38  # Build + installer + list in extensions/index.json
+
+Every build also writes the Coworker Installer zip (bfa_coworker_installer-<version>.zip)
+next to the Coworker zip; pass --no-installer to skip it.  See extension_repo.py.
 
 The environment will persist, or use this command with the path to the Blender executable, example:
     python build_addon.py --blender "C:\3D_Stuff\Devbuild\bforartists.exe"
@@ -239,6 +243,11 @@ def main() -> int:
     parser.add_argument("--enable", action="store_true", help="Enable after install")
     parser.add_argument("--blender", default=find_blender(), help="Blender executable path")
     parser.add_argument("--output-dir", default=DIST_DIR, help="Output directory for the .zip")
+    parser.add_argument("--no-installer", action="store_true",
+                        help="Skip building the Coworker Installer zip (bundles the Coworker zip)")
+    parser.add_argument("--repo-tag", default="",
+                        help="Release tag (e.g. v1.1.38): also list the built zip in extensions/index.json "
+                             "at that release's download URL (issue #86)")
     args = parser.parse_args()
 
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -321,6 +330,24 @@ def main() -> int:
             os.remove(zip_path)
         os.rename(repacked_path, zip_path)
     print("Repacked: {:s} (top-level folder: {:s}/)".format(zip_path, ext_id))
+
+    # Step 1b (issue #86): the Coworker Installer -- one download that adds
+    # the update repository and installs this zip into it.
+    sys.path.insert(0, SCRIPT_DIR)
+    import extension_repo
+    if not args.no_installer:
+        installer_path = extension_repo.build_installer(zip_path, args.output_dir)
+        print("Installer: {:s}".format(installer_path))
+
+    # Step 1c (issue #86): list the zip in the extension repository.  Commit
+    # extensions/index.json AFTER the release with this tag is published --
+    # Blender downloads the zip from that release.
+    if args.repo_tag:
+        entry = extension_repo.index_entry(zip_path, extension_repo.RELEASE_ASSET_URL.format(
+            tag=args.repo_tag, filename=os.path.basename(zip_path)))
+        extension_repo.save_index(extension_repo.upsert(extension_repo.load_index(), entry))
+        print("Listed in extensions/index.json: {:s} {:s}".format(entry["id"], entry["version"]))
+        print("Drag-to-install link: {:s}".format(extension_repo.drag_install_url(entry)))
 
     # Step 2: Install (optional).
     if args.install:

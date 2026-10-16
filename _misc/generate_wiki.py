@@ -648,17 +648,15 @@ def generate_quick_start(manifest: dict) -> str:
 
 ## 📥 Step 1: Install the Add-on
 
-1. Download the latest release (`bfa_coworker-{version}.zip`) from the [releases page](https://github.com/bforartists/bfa_coworker/releases).
-2. Open Blender / Bforartists → **Edit** → **Preferences** → **Add-ons**.
-3. Click the **▼** dropdown and choose **Install from Disk...**.
-4. Select the downloaded `.zip` file.
-5. Enable the add-on by checking the checkbox next to **"Coworker"**.
+1. Download **`bfa_coworker_installer-{version}.zip`** from the [releases page](https://github.com/Draise14/bfa_coworker/releases) -- one download, Coworker is inside.
+2. **Drag the zip into Blender / Bforartists** (or Edit → Preferences → Add-ons → **▼** → **Install from Disk...**) and enable **Coworker Installer**.
+3. The installer adds the **Bforartists Coworker** update repository, installs Coworker into it and enables it. That's it: new versions now show up in **Preferences → Get Extensions** like any other extension.
 
 {_screenshot(
-    "Blender Preferences with Add-ons tab open, showing the Install from Disk dropdown",
-    "Edit → Preferences → Add-ons → ▼ → Install from Disk...",
-    "Preferences window open, Add-ons tab selected, dropdown expanded showing Install option",
-    "1. Install from Disk button, 2. Search bar, 3. Add-on list"
+    "Blender Preferences, Add-ons tab, Coworker Installer and Coworker both enabled",
+    "Edit → Preferences → Add-ons",
+    "Coworker Installer expanded, showing the repository and the installed Coworker version",
+    "1. Coworker Installer status, 2. Coworker entry, 3. Get Extensions tab with the Bforartists Coworker repository"
 )}
 
 ---
@@ -777,42 +775,39 @@ def generate_installation(manifest: dict) -> str:
 
 ---
 
-## 📦 Download
+## 📦 Download & Install (recommended: the Coworker Installer)
 
-### ⬇️ Option 1: GitHub Releases (Recommended)
-
-1. Go to the [releases page](https://github.com/bforartists/bfa_coworker/releases).
-2. Download the latest `bfa_coworker-{version}.zip`.
-3. Do **not** extract the zip — Blender installs it directly.
-
-### 🔨 Option 2: Build from Source
-
-```bash
-git clone https://github.com/bforartists/bfa_coworker.git
-cd bfa_coworker
-python build_addon.py
-```
-
-The built `.zip` will be in the `dist/` directory.
-
----
-
-## 🔌 Install in Blender / Bforartists
-
-1. Open Blender or Bforartists.
-2. Go to **Edit** → **Preferences** → **Add-ons**.
-3. Click the **▼** button at the top of the Add-ons list.
-4. Select **Install from Disk...**.
-5. Navigate to the downloaded `.zip` file and select it.
-6. Find **"Coworker"** in the add-ons list (search for "coworker").
-7. Check the checkbox to enable the add-on.
+1. Go to the [releases page](https://github.com/Draise14/bfa_coworker/releases) and download **`bfa_coworker_installer-{version}.zip`**. Do **not** extract it.
+2. **Drag the zip into Blender / Bforartists**, or use **Edit → Preferences → Add-ons → ▼ → Install from Disk...**, and enable **Coworker Installer**.
+3. A second later the installer:
+   - adds the **Bforartists Coworker** online repository (with *Check for Updates on Startup* on),
+   - installs the Coworker copy bundled inside the zip into it -- nothing is downloaded -- and enables it,
+   - if you had an older Coworker installed from a zip, saves its settings (API key, model paths, ports...), replaces it, and the new copy picks the settings up.
 
 {_screenshot(
-    "Blender Preferences with Add-ons tab, Coworker add-on found and checkbox visible",
-    "Edit → Preferences → Add-ons → search 'coworker'",
-    "Preferences window, Add-ons tab, search bar showing 'coworker', add-on listed with checkbox unchecked",
-    "1. Search bar, 2. Coworker add-on entry, 3. Enable checkbox, 4. Expand arrow for settings"
+    "Coworker Installer preferences after the first run",
+    "Edit → Preferences → Add-ons → Coworker Installer",
+    "Status rows: repository added, Coworker version updating automatically, bundled copy version; four buttons below",
+    "1. Repository status, 2. Installed Coworker, 3. Bundled copy, 4. Repair / rollback / uninstall buttons"
 )}
+
+### 🔗 Without the installer: add the repository yourself
+
+Prefer not to install a helper add-on? Add the repository once and install Coworker from it:
+
+1. **Edit → Preferences → Get Extensions → Repositories (▼ menu) → + → Add Remote Repository**.
+2. URL: `https://raw.githubusercontent.com/Draise14/bfa_coworker/main/extensions/index.json` -- turn on **Check for Updates on Startup**.
+3. Search **Coworker** in Get Extensions and click **Install**.
+
+Requires **Allow Online Access** (Preferences → System). The plain `bfa_coworker-{version}.zip` on the releases page still installs from disk too, but a copy installed that way does **not** update itself.
+
+### 🔨 Build from Source
+
+```bash
+git clone https://github.com/Draise14/bfa_coworker.git
+cd bfa_coworker
+python build_addon.py                    # writes releases/bfa_coworker-<v>.zip and bfa_coworker_installer-<v>.zip
+```
 
 ---
 
@@ -839,20 +834,26 @@ After enabling the add-on:
 
 ## 🔄 Updating
 
-1. Download the new `.zip` from the releases page.
-2. In Blender Preferences → Add-ons, expand the Coworker entry.
-3. Click **Remove** to uninstall the old version.
-4. Install the new `.zip` following the steps above.
-5. Your preferences are preserved in Blender's config.
+Installed through the **Coworker Installer** or the repository, Coworker updates like any Blender extension:
+
+- On startup Blender checks the repository; a new version shows an update badge in **Preferences → Get Extensions**.
+- Click **Update** (or **Check for Updates** in the repositories menu). Blender upgrades it in place -- no restart, settings kept. The Coworker servers are stopped and restarted with the add-on.
+- **Preferences → Coworker → Advanced → Updates** shows where your copy updates from (or how to turn updates on for a copy installed from a zip).
+
+**Rolling back:** *Coworker Installer → Reinstall Bundled* puts back the version the installer shipped with. Any older release can also be installed from its zip (that copy then stops updating until you reinstall through the installer).
 
 ---
 
 ## 🗑️ Uninstalling
 
-1. Go to **Edit** → **Preferences** → **Add-ons**.
-2. Find **Coworker** in the list.
-3. Uncheck the checkbox to disable, or expand and click **Remove** to uninstall.
-4. Optionally delete the models directory (`~/bfa_coworker_models/`) to free disk space.
+Blender gives add-ons no "on uninstall" hook, so removing the installer from the add-on list leaves Coworker and its repository in place. Use the installer's buttons instead:
+
+| Button | Removes |
+|---|---|
+| **Uninstall Coworker** | Coworker only (the repository stays; settings are kept for a later reinstall) |
+| **Uninstall Everything** | Coworker, the Bforartists Coworker repository, then the installer itself |
+
+Installed without the installer? **Get Extensions → Coworker → ▼ → Uninstall**, then remove the repository from the repositories list. Optionally delete the models directory (`~/bfa_coworker_models/`) to free disk space.
 """
 
 

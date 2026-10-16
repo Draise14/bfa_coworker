@@ -287,7 +287,7 @@ class _FakeBlender:
         module = name.replace(" ", "_")
         repo = _Repo(name, module, os.path.join(self.root, module), remote_url)
         repo.use_sync_on_startup = use_sync_on_startup
-        os.makedirs(repo.directory, exist_ok=True)
+        # Like Blender: the folder only appears with the first sync.
         self.repos.append(repo)
         self.calls.append(("repo_add", name))
         return {'FINISHED'}
@@ -301,6 +301,8 @@ class _FakeBlender:
 
     def install_files(self, filepath, repo, enable_on_install):
         target = next(r for r in self.repos if r.module == repo)
+        if not os.path.isdir(target.directory):  # blender_ext.py install-files refuses this
+            raise RuntimeError('destination directory "{:s}" does not exist'.format(target.directory))
         with zipfile.ZipFile(filepath) as zf:
             zf.extractall(target.directory)
         if enable_on_install:
@@ -316,6 +318,7 @@ class _FakeBlender:
         return {'FINISHED'}
 
     def sync(self, repo_index):
+        os.makedirs(self.repos[repo_index].directory, exist_ok=True)
         self.calls.append(("sync", self.repos[repo_index].module))
         return {'FINISHED'}
 

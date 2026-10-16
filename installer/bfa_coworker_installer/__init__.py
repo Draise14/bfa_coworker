@@ -204,6 +204,11 @@ def install_bundled(repo: Any) -> None:
     path = payload_zip()
     if not path:
         raise RuntimeError("This installer has no bundled Coworker zip")
+    # A freshly added remote repository has no folder until its first sync
+    # (never, while online access is off) and Blender's installer refuses a
+    # missing destination -- create it.
+    if repo.directory:
+        os.makedirs(repo.directory, exist_ok=True)
     result = bpy.ops.extensions.package_install_files(
         filepath=path, repo=repo.module, enable_on_install=True)
     if "FINISHED" not in result:

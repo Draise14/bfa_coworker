@@ -55,6 +55,7 @@ __all__ = (
     "save_index",
     "drag_install_url",
     "build_installer",
+    "LATEST_INSTALLER_URL",
     "GITHUB_REPO",
     "SCRIPT_DIR",
     "DEFAULT_INDEX",
@@ -65,6 +66,9 @@ __all__ = (
 
 GITHUB_REPO = "Draise14/bfa_coworker"
 REPO_INDEX_URL = "https://raw.githubusercontent.com/{:s}/main/extensions/index.json".format(GITHUB_REPO)
+# Always the newest release's installer (its file name carries no version).
+LATEST_INSTALLER_URL = "https://github.com/{:s}/releases/latest/download/bfa_coworker_installer.zip".format(
+    GITHUB_REPO)
 RELEASE_ASSET_URL = "https://github.com/{:s}/releases/download/{{tag}}/{{filename}}".format(GITHUB_REPO)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -170,7 +174,12 @@ def build_installer(coworker_zip: str, output_dir: str) -> str:
         bfa_coworker_installer/
             blender_manifest.toml     (version = the bundled Coworker's)
             __init__.py
-            payload/bfa_coworker-<version>.zip
+            payload/bfa_coworker.zip  (the version lives in its manifest)
+
+    The installer zip's file NAME carries no version either
+    (``bfa_coworker_installer.zip``), so the newest one is always at
+    ``releases/latest/download/bfa_coworker_installer.zip``; its manifest
+    version follows the bundled Coworker automatically.
 
     Returns the path of the written zip.
     """
@@ -179,7 +188,7 @@ def build_installer(coworker_zip: str, output_dir: str) -> str:
     with open(os.path.join(INSTALLER_SRC, "blender_manifest.toml"), "r", encoding="utf-8") as fh:
         lines = fh.read().splitlines()
     lines = ['version = "{:s}"'.format(version) if ln.startswith("version ") else ln for ln in lines]
-    out = os.path.join(output_dir, "{:s}-{:s}.zip".format(INSTALLER_ID, version))
+    out = os.path.join(output_dir, INSTALLER_ID + ".zip")
     os.makedirs(output_dir, exist_ok=True)
     with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(INSTALLER_ID + "/blender_manifest.toml", "\n".join(lines) + "\n")
@@ -189,7 +198,7 @@ def build_installer(coworker_zip: str, output_dir: str) -> str:
                 continue
             zf.write(path, "{:s}/{:s}".format(INSTALLER_ID, name))
         # Already compressed: store as-is.
-        zf.write(coworker_zip, "{:s}/payload/bfa_coworker-{:s}.zip".format(INSTALLER_ID, version),
+        zf.write(coworker_zip, "{:s}/payload/bfa_coworker.zip".format(INSTALLER_ID),
                  compress_type=zipfile.ZIP_STORED)
     return out
 

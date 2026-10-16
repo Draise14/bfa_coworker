@@ -648,7 +648,7 @@ def generate_quick_start(manifest: dict) -> str:
 
 ## 📥 Step 1: Install the Add-on
 
-1. Download **`bfa_coworker_installer-{version}.zip`** from the [releases page](https://github.com/Draise14/bfa_coworker/releases) -- one download, Coworker is inside.
+1. Download **[`bfa_coworker_installer.zip`](https://github.com/Draise14/bfa_coworker/releases/latest/download/bfa_coworker_installer.zip)** (always the latest release) -- one download, Coworker is inside.
 2. **Drag the zip into Blender / Bforartists** (or Edit → Preferences → Add-ons → **▼** → **Install from Disk...**) and enable **Coworker Installer**.
 3. The installer adds the **Bforartists Coworker** update repository, installs Coworker into it and enables it. That's it: new versions now show up in **Preferences → Get Extensions** like any other extension.
 
@@ -777,7 +777,7 @@ def generate_installation(manifest: dict) -> str:
 
 ## 📦 Download & Install (recommended: the Coworker Installer)
 
-1. Go to the [releases page](https://github.com/Draise14/bfa_coworker/releases) and download **`bfa_coworker_installer-{version}.zip`**. Do **not** extract it.
+1. Download **[`bfa_coworker_installer.zip`](https://github.com/Draise14/bfa_coworker/releases/latest/download/bfa_coworker_installer.zip)** -- this link always gets the latest release (or pick one on the [releases page](https://github.com/Draise14/bfa_coworker/releases)). Do **not** extract it.
 2. **Drag the zip into Blender / Bforartists**, or use **Edit → Preferences → Add-ons → ▼ → Install from Disk...**, and enable **Coworker Installer**.
 3. A second later the installer:
    - adds the **Bforartists Coworker** online repository (with *Check for Updates on Startup* on),
@@ -806,7 +806,7 @@ Requires **Allow Online Access** (Preferences → System). The plain `bfa_cowork
 ```bash
 git clone https://github.com/Draise14/bfa_coworker.git
 cd bfa_coworker
-python build_addon.py                    # writes releases/bfa_coworker-<v>.zip and bfa_coworker_installer-<v>.zip
+python build_addon.py                    # writes releases/bfa_coworker-<v>.zip and bfa_coworker_installer.zip
 ```
 
 ---

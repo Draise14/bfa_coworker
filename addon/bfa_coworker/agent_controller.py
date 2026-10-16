@@ -2975,8 +2975,8 @@ def start_mcp_server(
     _agent_state.error_full = ""
     print("[Coworker] start_mcp_server: launched pid={:d}".format(proc.pid))
     print("[Coworker] start_mcp_server: command = {:s}".format(str(mcp_exe or "python -m blmcp")))
-    print("[Coworker] start_mcp_server: BFACW_HOST={:s} BFACW_PORT={:d}".format(
-        blender_host, blender_port))
+    print("[Coworker] start_mcp_server: BFACW_HOST={:s} BFACW_PORT={:s} session={:s}".format(
+        blender_host, env.get("BFACW_PORT", ""), env.get(_session_identity.ENV_VAR, "")))
 
     # Spawn background threads to drain stdout/stderr pipes.
     # Without this, PIPE buffers fill and the child process deadlocks.

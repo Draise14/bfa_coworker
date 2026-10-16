@@ -233,7 +233,7 @@ class TestKillGuard(unittest.TestCase):
 
     def test_own_and_orphaned_servers_may_be_freed(self):
         own = self._spawn()
-        orphan = self._spawn()
+        orphan = self._spawn("import time; time.sleep(60)  # blmcp server")  # still looks like ours
         gone = subprocess.Popen([sys.executable, "-c", "pass"])
         gone.wait()
         self.pg._save([
@@ -242,6 +242,20 @@ class TestKillGuard(unittest.TestCase):
         ])
         self.assertTrue(self.pg.may_kill(own.pid, "mcp-server"))
         self.assertTrue(self.pg.may_kill(orphan.pid, "mcp-server"))
+
+    def test_unrecorded_python_is_never_killed_by_name_alone(self):
+        # On Windows only "python.exe" is known; it could be another window's
+        # MCP server started through a launcher (unrecorded child).
+        p = self._spawn()
+        self.assertFalse(self.pg.may_kill(p.pid, "mcp-server"))
+
+    def test_reused_pid_of_a_dead_owner_is_left_alone(self):
+        gone = subprocess.Popen([sys.executable, "-c", "pass"])
+        gone.wait()
+        reused = subprocess.Popen(["sleep", "60"])
+        self.procs.append(reused)
+        self.pg._save([{"pid": reused.pid, "kind": "llama-server", "port": 8081, "owner": gone.pid}])
+        self.assertFalse(self.pg.may_kill(reused.pid, "llama-server"))
 
     def test_unrecorded_foreign_program_is_left_alone(self):
         foreign = subprocess.Popen(["sleep", "60"])

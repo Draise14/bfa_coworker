@@ -1,0 +1,20 @@
+schema_version = "1.0.0"
+
+id = "bfa_coworker_installer"
+version = "1.1.37"
+name = "Coworker Installer"
+tagline = "Installs Coworker and keeps it up to date"
+maintainer = "Bforartists"
+type = "add-on"
+website = "https://github.com/Draise14/bfa_coworker"
+blender_version_min = "5.1.0"
+
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
+
+tags = ["Development"]
+
+[permissions]
+files = "Installs the bundled Coworker into its update repository"
+network = "Adds the Coworker update repository and checks for updates"

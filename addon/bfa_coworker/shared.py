@@ -25,6 +25,8 @@ __all__ = (
     "DEFAULT_LLM_PORT",
     "is_debug_mode",
     "effective_ports",
+    "UPDATE_REPO_URL",
+    "update_repo_of_this_install",
     "get_llm_manager",
     "get_agent_controller",
     "get_gen_controller",
@@ -111,6 +113,32 @@ def effective_ports(prefs) -> tuple[int, int, int]:
     except Exception:  # pylint: disable=broad-exception-caught
         pass
     return (bridge, mcp, llm)
+
+
+# -- Updates (issue #86) ----------------------------------------------------
+
+# The Coworker extension repository (Blender's "v1" static listing).  Keep in
+# sync with extension_repo.py and installer/bfa_coworker_installer.
+UPDATE_REPO_URL = "https://raw.githubusercontent.com/Draise14/bfa_coworker/main/extensions/index.json"
+
+
+def update_repo_of_this_install():
+    """The extension repository this copy is installed in, if it is the
+    Coworker update repository; else ``None`` (installed from a file)."""
+    try:
+        import bpy  # pylint: disable=import-error
+        parts = (__package__ or "").split(".")
+        if len(parts) < 3 or parts[0] != "bl_ext":
+            return None
+        module = parts[1]
+        for repo in bpy.context.preferences.extensions.repos:
+            if repo.module == module:
+                if repo.use_remote_url and repo.remote_url.rstrip("/") == UPDATE_REPO_URL:
+                    return repo
+                return None
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return None
 
 
 # -- Lazy Import Helpers (avoids circular imports) ------------------------

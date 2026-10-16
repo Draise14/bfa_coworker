@@ -9,13 +9,14 @@ Bforartists Coworker add-on that provides an MCP socket bridge-server.
 __all__ = (
     "register",
     "unregister",
+    "addon_version",
 )
 
 import bpy  # pylint: disable=import-error
 import os
 
 from . import mcp_to_blender_server
-from .preferences import _State, _BFACW_Preferences, BFACW_OT_pref_tab_select
+from .preferences import _State, _BFACW_Preferences, BFACW_OT_pref_tab_select, BFACW_OT_copy_update_url
 from .operators_server import (
     _BFACW_OT_server_start,
     _BFACW_OT_server_stop,
@@ -77,6 +78,7 @@ _cli_commands: list[object] = []
 _classes = (
     _BFACW_Preferences,
     BFACW_OT_pref_tab_select,
+    BFACW_OT_copy_update_url,
     _BFACW_OT_server_start,
     _BFACW_OT_server_stop,
     _BFACW_OT_download_model,
@@ -198,6 +200,11 @@ def register() -> None:
     except Exception as ex:
         print("[Coworker] gen_plugins: discovery skipped -- {:s}".format(str(ex)))
 
+    # Issue #86: a fresh install (e.g. moved into the update repository by the
+    # Coworker Installer) restores the previous install's settings once --
+    # before auto-start reads them.
+    _restore_settings_backup()
+
     # Defer auto-start so the server does not slow down Blender's startup.
     if not bpy.app.background:
         if not _State.startup_online_ok_or_error():
@@ -297,9 +304,54 @@ def _autostart_agent_timer() -> None:
         _bridge_port, _mcp_port, _llm_port))
 
 
+def addon_version() -> str:
+    """This install's version, read from its blender_manifest.toml."""
+    try:
+        import tomllib
+        path = os.path.join(os.path.dirname(__file__), "blender_manifest.toml")
+        with open(path, "rb") as fh:
+            return str(tomllib.load(fh).get("version", ""))
+    except Exception:  # pylint: disable=broad-exception-caught
+        return ""
+
+
+def _settings_config_dir() -> str:
+    return os.path.join(bpy.utils.user_resource('CONFIG'), "bfa_coworker")
+
+
+def _save_settings_backup() -> None:
+    """Issue #86: keep a copy of the preferences outside the add-on's module path."""
+    try:
+        from . import settings_transfer
+        addon = bpy.context.preferences.addons.get(__package__)
+        if addon is not None and addon.preferences is not None:
+            version = addon_version()
+            settings_transfer.save(addon.preferences, _settings_config_dir(), version)
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] settings backup skipped: {:s}".format(str(ex)))
+
+
+def _restore_settings_backup() -> None:
+    """Issue #86: a fresh install picks up the settings of the copy it replaced."""
+    try:
+        from . import settings_transfer
+        addon = bpy.context.preferences.addons.get(__package__)
+        if addon is None or addon.preferences is None:
+            return None
+        applied = settings_transfer.restore_once(addon.preferences, _settings_config_dir())
+        if applied:
+            print("[Coworker] restored {:d} setting(s) from the previous install".format(len(applied)))
+            bpy.context.preferences.is_dirty = True
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] settings restore skipped: {:s}".format(str(ex)))
+    return None
+
+
 def unregister() -> None:
     from . import execute_interactive
     from . import ui_chat
+
+    _save_settings_backup()
 
     # Clean up subprocesses.
     get_llm_manager().cleanup()

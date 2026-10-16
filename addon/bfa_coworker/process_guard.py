@@ -50,6 +50,10 @@ __all__ = (
     "forget",
     "reap_orphans",
     "registry_path",
+    "owner_of",
+    "may_kill",
+    "pids_listening",
+    "kill_own",
 )
 
 _lock = threading.Lock()
@@ -279,6 +283,89 @@ def _kill(pid: int) -> None:
             os.kill(pid, 15)
     except Exception:  # pylint: disable=broad-exception-caught
         pass
+
+
+def owner_of(pid: int) -> int:
+    """Owning Blender pid recorded for server *pid*, or 0 if unrecorded."""
+    try:
+        for e in _load():
+            if int(e.get("pid", -1)) == int(pid):
+                return int(e.get("owner", 0) or 0)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return 0
+
+
+def may_kill(pid: int, kind: str) -> bool:
+    """May THIS window kill server *pid* (e.g. to free a port)?  (#85)
+
+    * launched by this Blender process            -> yes
+    * launched by ANOTHER live Blender window     -> never
+    * launched by a Blender that is gone (orphan) -> yes
+    * unrecorded (older build, crash before the registry existed) -> only if
+      it still looks like a *kind* server we would launch.
+    """
+    if pid <= 0 or pid == os.getpid():
+        return False
+    owner = owner_of(pid)
+    if owner:
+        if owner == os.getpid():
+            return True
+        return _process_image(owner) is None
+    image = _process_image(pid)
+    if image is None:
+        return False
+    markers = _KIND_MARKERS.get(kind, ())
+    return bool(markers) and any(m in image for m in markers)
+
+
+def pids_listening(port: int) -> list[int]:
+    """Pids with a socket LISTENING on localhost *port* (best effort)."""
+    pids: list[int] = []
+    try:
+        if sys.platform == "win32":
+            out = subprocess.run(
+                ["netstat", "-ano", "-p", "TCP"], capture_output=True, timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            ).stdout.decode(errors="replace")
+            for line in out.splitlines():
+                parts = line.split()
+                # The state word is localized ("LISTENING", "ABHOEREN", ...);
+                # a listening socket's foreign address is always *:0.
+                if len(parts) >= 5 and parts[2] in ("0.0.0.0:0", "[::]:0") \
+                        and parts[1].rsplit(":", 1)[-1] == str(port) \
+                        and parts[4].isdigit():
+                    pids.append(int(parts[4]))
+        else:
+            res = subprocess.run(["fuser", "{:d}/tcp".format(port)],
+                                 capture_output=True, timeout=10)
+            for tok in res.stdout.decode(errors="replace").split():
+                if tok.isdigit():
+                    pids.append(int(tok))
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return sorted(set(pids))
+
+
+def kill_own(kind: str) -> int:
+    """Kill servers of *kind* recorded as launched by THIS Blender process."""
+    killed = 0
+    try:
+        with _lock:
+            entries = _load()
+            keep = []
+            for e in entries:
+                if str(e.get("kind")) == kind and int(e.get("owner", -1)) == os.getpid():
+                    pid = int(e.get("pid", -1))
+                    if _process_image(pid) is not None:
+                        _kill(pid)
+                        killed += 1
+                    continue
+                keep.append(e)
+            _save(keep)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return killed
 
 
 def reap_orphans() -> int:

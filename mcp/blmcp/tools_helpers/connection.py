@@ -43,11 +43,18 @@ def send_code(code: str, strict_json: bool) -> dict[str, object]:
     returns an invalid response.
     """
     host, port = get_connection_params()
-    request = json.dumps({
+    payload: dict[str, object] = {
         "type": "execute",
         "code": code,
         "strict_json": strict_json,
-    }) + "\0"
+    }
+    # Fork (#85): when launched by a Coworker window, stamp the request with
+    # that window's id so the bridge can refuse it if another window owns the
+    # port.  External clients don't set this and are unaffected.
+    session = os.environ.get("BFACW_SESSION_ID", "")
+    if session:
+        payload["session"] = session
+    request = json.dumps(payload) + "\0"
 
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:

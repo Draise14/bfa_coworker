@@ -54,6 +54,7 @@ from . import session_memory
 from . import co_work_guard
 from . import chat_attachments
 from . import process_guard as _process_guard
+from . import session_identity as _session_identity
 from .llm_transport import (
     _CHAT_SAMPLING,
     _DEFAULT_MAX_TOKENS,
@@ -2634,34 +2635,23 @@ def _start_pipe_drainer(proc: subprocess.Popen) -> tuple[list[threading.Thread],
     return threads, stdout_lines, stderr_lines
 
 
-def _kill_process_on_port(port: int) -> None:
-    """Kill any process listening on *port* (platform-independent)."""
-    if sys.platform == "win32":
-        try:
-            result = subprocess.run(
-                ["netstat", "-ano"],
-                capture_output=True, text=True, timeout=10,
-            )
-            for line in result.stdout.splitlines():
-                if ":{} ".format(port) in line and "LISTENING" in line:
-                    parts = line.strip().split()
-                    pid = parts[-1]
-                    subprocess.run(
-                        ["taskkill", "/f", "/pid", pid],
-                        capture_output=True, timeout=5,
-                    )
-                    print("[Coworker] _kill_process_on_port: killed PID {:s} on port {:d}".format(pid, port))
-                    break
-        except Exception:  # pylint: disable=broad-exception-caught
-            pass
-    else:
-        try:
-            subprocess.run(
-                ["fuser", "-k", "{:d}/tcp".format(port)],
-                capture_output=True, timeout=10,
-            )
-        except Exception:  # pylint: disable=broad-exception-caught
-            pass
+def _kill_process_on_port(port: int, kind: str = "mcp-server") -> None:
+    """Free *port* for this window -- without touching other windows (#85).
+
+    Only a stale server is killed: one this window launched, an orphan whose
+    Blender is gone, or an unrecorded process that looks like our *kind* of
+    server.  A server owned by ANOTHER live Blender window is left alone; the
+    caller then moves to the next free port.
+    """
+    for pid in _process_guard.pids_listening(port):
+        if _process_guard.may_kill(pid, kind):
+            _process_guard._kill(pid)  # pylint: disable=protected-access
+            _process_guard.forget(pid)
+            print("[Coworker] _kill_process_on_port: stopped stale {:s} PID {:d} on port {:d}".format(
+                kind, pid, port))
+        else:
+            print("[Coworker] _kill_process_on_port: port {:d} is used by PID {:d} "
+                  "(another Blender window or another program) -- leaving it alone".format(port, pid))
 
 
 def _wait_for_port(
@@ -2837,8 +2827,22 @@ def _build_mcp_env(
     with vendor directories when using Blender's Python.
     """
     env = os.environ.copy()
+    # Issue #85: the bridge may have moved to a free port because another
+    # Blender window holds the configured one.  The MCP server must talk to
+    # THIS window's bridge, so the actually-bound port always wins.
+    try:
+        from . import mcp_to_blender_server as _mbs
+        if _mbs.is_running() and _mbs.get_actual_port():
+            if int(_mbs.get_actual_port()) != int(blender_port):
+                print("[Coworker] MCP server -> this window's bridge on port {:d} "
+                      "(configured {:d} belongs to another window)".format(
+                          int(_mbs.get_actual_port()), int(blender_port)))
+            blender_port = int(_mbs.get_actual_port())
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
     env["BFACW_HOST"] = blender_host
     env["BFACW_PORT"] = str(blender_port)
+    env[_session_identity.ENV_VAR] = _session_identity.SESSION_ID
 
     # Build PYTHONPATH from vendor directories.
     vendor_pythonpath = _find_vendor_pythonpath()
@@ -2915,6 +2919,13 @@ def start_mcp_server(
         print("[Coworker] start_mcp_server: port {:d} in use, shuffled to {:d}".format(port, shuffled_port))
         port = shuffled_port
     _agent_state.mcp_port_actual = port
+    try:
+        from . import mcp_to_blender_server as _mbs_live
+        _session_identity.register_live(
+            bridge_port=_mbs_live.get_actual_port() if _mbs_live.is_running() else blender_port,
+            mcp_port=port)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
 
     env = _build_mcp_env(blender_host=blender_host, blender_port=blender_port)
 
@@ -2964,8 +2975,8 @@ def start_mcp_server(
     _agent_state.error_full = ""
     print("[Coworker] start_mcp_server: launched pid={:d}".format(proc.pid))
     print("[Coworker] start_mcp_server: command = {:s}".format(str(mcp_exe or "python -m blmcp")))
-    print("[Coworker] start_mcp_server: BFACW_HOST={:s} BFACW_PORT={:d}".format(
-        blender_host, blender_port))
+    print("[Coworker] start_mcp_server: BFACW_HOST={:s} BFACW_PORT={:s} session={:s}".format(
+        blender_host, env.get("BFACW_PORT", ""), env.get(_session_identity.ENV_VAR, "")))
 
     # Spawn background threads to drain stdout/stderr pipes.
     # Without this, PIPE buffers fill and the child process deadlocks.
@@ -3144,6 +3155,13 @@ def start_mcp_server_network(
         print("[Coworker] start_mcp_server_network: port {:d} in use, shuffled to {:d}".format(port, shuffled_port))
         port = shuffled_port
     _agent_state.mcp_port_actual = port
+    try:
+        from . import mcp_to_blender_server as _mbs_live
+        _session_identity.register_live(
+            bridge_port=_mbs_live.get_actual_port() if _mbs_live.is_running() else blender_port,
+            mcp_port=port)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
 
     env = _build_mcp_env(blender_host=blender_host, blender_port=blender_port)
 
@@ -7615,6 +7633,32 @@ def cleanup() -> None:
 # ---------------------------------------------------------------------------
 # Connectivity diagnostics
 
+
+def identify_bridge(port: int, host: str = "127.0.0.1", timeout: float = 3.0) -> dict[str, Any]:
+    """Ask the bridge on *port* which Blender window it belongs to (#85).
+
+    Returns the bridge's ``session_identity.describe()`` dict, or ``{}`` when
+    the port does not answer or runs an older bridge without ``identify``.
+    NOTE: must not be called on Blender's main thread for THIS window's own
+    bridge -- the bridge answers from a main-thread timer, so the call would
+    only time out.  Use it from worker threads (ping, health checks).
+    """
+    import socket as _socket_mod
+    try:
+        with _socket_mod.create_connection((host, int(port)), timeout=timeout) as s:
+            s.sendall(json.dumps({"type": "identify"}).encode("utf-8") + b"\0")
+            buf = bytearray()
+            while b"\0" not in buf:
+                chunk = s.recv(65536)
+                if not chunk:
+                    break
+                buf.extend(chunk)
+        resp = json.loads(bytes(buf).partition(b"\0")[0].decode("utf-8") or "{}")
+        res = resp.get("result") if isinstance(resp, dict) else None
+        return res if isinstance(res, dict) and resp.get("status") == "ok" else {}
+    except Exception:  # pylint: disable=broad-exception-caught
+        return {}
+
 def ping_agent(
     mcp_port: int = _MCP_SERVER_DEFAULT_PORT,
     llm_port: int = 8081,
@@ -7654,6 +7698,26 @@ def ping_agent(
         s.connect(("127.0.0.1", bridge_port))
         s.close()
         result["bridge_server"] = "OK"
+        # Issue #85: the port answering is not proof it is THIS window.
+        # Our own bridge needs no question (it answers from the main thread,
+        # which may be the one waiting on this ping).
+        _ident: dict[str, Any] = {}
+        try:
+            from . import mcp_to_blender_server as _mbs_ping
+            _own = _mbs_ping.is_running() and int(_mbs_ping.get_actual_port()) == int(bridge_port)
+        except Exception:  # pylint: disable=broad-exception-caught
+            _own = False
+        if _own:
+            result["bridge_server"] = "OK (this window)"
+        else:
+            _ident = identify_bridge(bridge_port)
+        if _ident and _ident.get("session") and _ident.get("session") != _session_identity.SESSION_ID:
+            result["bridge_server"] = (
+                "FAIL: port {:d} belongs to another window ({:s}, {:s}, PID {:d})".format(
+                    bridge_port, str(_ident.get("app", "")), str(_ident.get("file", "")),
+                    int(_ident.get("pid", 0) or 0)))
+        elif _ident:
+            result["bridge_server"] = "OK (this window)"
     except Exception as ex:
         result["bridge_server"] = "FAIL: {:s}".format(str(ex))
 

@@ -1206,6 +1206,19 @@ def _execute_code_from_request(
     # Any error should be rare, the "default" exception path is fine.
     request = json.loads(data)
 
+    # Fork (#85): every window has its own session id.  "identify" lets a
+    # client confirm which window owns this port; a request stamped with
+    # another window's id is refused instead of editing the wrong scene.
+    from . import session_identity
+    if request.get("type") == "identify":
+        return _ExecResult({
+            "status": "ok",
+            "result": session_identity.describe(bridge_port=_actual_port),
+        }), False
+    _wrong_window = session_identity.check_request(request)
+    if _wrong_window:
+        return _ExecResult({"status": "error", "message": _wrong_window}), False
+
     if request.get("type") != "execute":
         return _ExecResult({
             "status": "error",
@@ -1535,6 +1548,13 @@ def start(host: str, port: int) -> None:
 
     _state.sock = sock
 
+    # Fork (#85): list this window as live so others can tell it apart.
+    try:
+        from . import session_identity
+        session_identity.register_live(bridge_port=port)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+
 
 def stop() -> None:
     """
@@ -1558,6 +1578,12 @@ def stop() -> None:
     _state.clients.clear()
 
     deferred_tool.close_all()
+
+    try:
+        from . import session_identity
+        session_identity.unregister_live()
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
 
 
 def is_running() -> bool:

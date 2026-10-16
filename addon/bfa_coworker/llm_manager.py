@@ -3389,30 +3389,18 @@ def stop_local_llama() -> None:
     if proc is not None:
         _process_guard.forget(getattr(proc, "pid", None))
 
-    # Fallback: kill any remaining llama-server processes by image name.
-    # This catches orphaned processes from previous sessions that may
-    # still be holding the port.
+    # Fallback: stop any OTHER llama-server this window launched, plus orphans
+    # left by a Blender that is gone.  Issue #85: never kill by image name --
+    # that also killed the llama-server of every other open Blender window
+    # (and any llama-server the user runs themselves).
     try:
-        if sys.platform == "win32":
-            print("[Coworker] stop_local_llama:   running taskkill /f /im llama-server.exe")
-            result = subprocess.run(
-                ["taskkill", "/f", "/im", "llama-server.exe"],
-                capture_output=True,
-                timeout=5,
-            )
-            print("[Coworker] stop_local_llama:   taskkill stdout = {:s}".format(result.stdout.decode().strip()))
-            print("[Coworker] stop_local_llama:   taskkill stderr = {:s}".format(result.stderr.decode().strip()))
-        else:
-            print("[Coworker] stop_local_llama:   running pkill -f llama-server")
-            result = subprocess.run(
-                ["pkill", "-f", "llama-server"],
-                capture_output=True,
-                timeout=5,
-            )
-            print("[Coworker] stop_local_llama:   pkill stdout = {:s}".format(result.stdout.decode().strip()))
-            print("[Coworker] stop_local_llama:   pkill stderr = {:s}".format(result.stderr.decode().strip()))
+        own = _process_guard.kill_own("llama-server")
+        orphans = _process_guard.reap_orphans()
+        if own or orphans:
+            print("[Coworker] stop_local_llama:   stopped {:d} leftover + {:d} orphaned llama-server(s)".format(
+                own, orphans))
     except Exception as ex:  # pylint: disable=broad-exception-caught
-        print("[Coworker] stop_local_llama:   fallback kill exception: {:s}".format(str(ex)))
+        print("[Coworker] stop_local_llama:   fallback cleanup exception: {:s}".format(str(ex)))
 
     with _lock:
         _state.is_running = False

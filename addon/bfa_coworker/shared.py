@@ -93,6 +93,23 @@ def effective_ports(prefs) -> tuple[int, int, int]:
         if hasattr(prefs, 'llm_port') and prefs.llm_port > 0
         else DEFAULT_LLM_PORT + offset
     )
+    # Issue #85: once THIS window's servers are running they may have moved
+    # to a free port (another Blender window held the configured one).  Every
+    # caller -- MCP launch, health checks, harness configs, the UI -- must use
+    # the port this window actually owns, never the configured one.
+    try:
+        from . import mcp_to_blender_server as _mbs
+        if _mbs.is_running() and _mbs.get_actual_port():
+            bridge = int(_mbs.get_actual_port())
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    try:
+        from . import agent_controller as _ac
+        _st = _ac._agent_state
+        if getattr(_st, "mcp_server_running", False) and getattr(_st, "mcp_port_actual", 0):
+            mcp = int(_st.mcp_port_actual)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
     return (bridge, mcp, llm)
 
 

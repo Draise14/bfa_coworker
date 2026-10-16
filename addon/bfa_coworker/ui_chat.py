@@ -2427,7 +2427,11 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
                 persistent=True,
             )
             actual_bridge = mcp_to_blender_server.get_actual_port()
-            if actual_bridge:
+            if actual_bridge and actual_bridge != _bridge_port:
+                # Issue #85: say plainly that this window got its own port.
+                self.report({"INFO"}, "Another Blender window uses port {:d} -- this window's "
+                            "Coworker is linked to port {:d}".format(_bridge_port, actual_bridge))
+            elif actual_bridge:
                 self.report({"INFO"}, "Bridge server started on port {:d}".format(actual_bridge))
             else:
                 self.report({"INFO"}, "Bridge server started")
@@ -3430,6 +3434,48 @@ class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
         row.operator("bfacw.queue_clear", icon="TRASH", text="Clear Queue")
 
 
+def _draw_window_link(layout: bpy.types.UILayout, prefs: "bpy.types.AddonPreferences") -> None:
+    """Which Blender window this Coworker drives (issue #85).
+
+    Several Blender / Bforartists windows can run Coworker at once; each one
+    only ever drives its own scene.  Show that plainly, plus the ports this
+    window really owns (they move when another window holds the defaults).
+    """
+    if not mcp_to_blender_server.is_running():
+        return
+    from . import session_identity
+    from .shared import DEFAULT_BRIDGE_PORT
+    me = session_identity.describe()
+    bridge, mcp, _llm = effective_ports(prefs)
+    box = layout.box()
+    col = box.column(align=True)
+    col.label(text="Linked to this window", icon='LINKED')
+    col.label(text="{:s} - {:s}".format(me["app"], me["file"] or "unsaved file"))
+    ports = "Bridge {:d}".format(bridge)
+    if agent_controller._agent_state.mcp_server_running:
+        ports += " - MCP {:d}".format(mcp)
+    col.label(text=ports)
+    configured = (prefs.bridge_port if getattr(prefs, "bridge_port", 0) > 0
+                  else DEFAULT_BRIDGE_PORT + getattr(prefs, "port_offset", 0))
+    if bridge != configured:
+        sub = col.column(align=True)
+        sub.scale_y = 0.8
+        sub.label(text="Port {:d} is used by another window,".format(configured), icon='INFO')
+        sub.label(text="so this window moved to {:d}.".format(bridge))
+    others = session_identity.other_live_sessions()
+    if others:
+        sub = col.column(align=True)
+        sub.scale_y = 0.8
+        sub.label(
+            text="{:d} other Coworker window{:s} open".format(len(others), "" if len(others) == 1 else "s"),
+            icon='WINDOW')
+        for other in others[:3]:
+            sub.label(text="  {:s} - {:s} (bridge {:d})".format(
+                str(other.get("app", "")), str(other.get("file", "") or "unsaved file"),
+                int(other.get("bridge_port", 0) or 0)))
+        sub.label(text="Each window only edits its own scene.")
+
+
 class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
     """Status sub-panel -- health dots, model info, tools, advanced diagnostics."""
     bl_label = "Status & Diagnostics"
@@ -3451,6 +3497,9 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
         state = agent_controller._agent_state
         prefs = context.preferences.addons[__package__].preferences
         is_harness = (prefs.operating_mode == "EXTERNAL_HARNESS")
+
+        # -- Which window this Coworker drives (#85) --
+        _draw_window_link(layout, prefs)
 
         # -- Liveness dots --
         if not is_harness and state.mcp_server_running:

@@ -104,10 +104,8 @@ design and a clean provenance record. These rules apply to every Tier 4 task:
    in `mcp/blmcp/data`), the ACP / MCP specifications.
 4. **Record it**: each borrowed idea appears in §5 below as *need → our design*, and
    PR descriptions state "no third-party code consulted while implementing".
-5. **Open provenance item**: the 1.1.37 release notes say markdown rendering was
-   *"Ported from Blender Buddy reference implementation"*. Check Blender Buddy's licence
-   and either add attribution in the file header or rewrite the module from the spec
-   (task B0). Also reword the release note.
+5. **Prefer native Blender APIs** over our own copies of common UI. With 5.3 as the
+   minimum, chat text uses Blender's own `layout.label_markdown()` (B0).
 
 ---
 
@@ -200,10 +198,27 @@ Each item: the **need**, **our design**, how it behaves on each **engine**, and 
 - **Done when**: "make this smoother" in the Shader Editor vs. Edit Mode gets different
   correct tools.
 
-### B0 — Housekeeping
+### B0 — Native markdown, minimum version 5.3
 
-- Provenance check (see §4), plus doc-drift records for the version skills and the
-  wiki pages this lane touches (`sources`, `reviewed_revision`) with a small checker.
+- **Need**: replies that look like the rest of Blender, with less code for us to maintain.
+- **Design**: set the minimum to Blender/Bforartists **5.3** and draw all chat text
+  (replies, Workshop, Explain answers) with `layout.label_markdown(text=...)` (PR
+  #163254: headers, paragraphs, bold/italic/monospace, links, code blocks, inline code,
+  lists). Delete our own renderer and the pre-5.3 fallbacks. Three thin layers fill
+  the native gaps:
+  1. **Segmenter**: split a reply at fenced code blocks so each block is drawn natively
+     *and* keeps its Copy (later Run, B5) button row.
+  2. **Tables**: the native API has none, so convert them to an aligned monospace block.
+  3. **Math**: keep the LaTeX→Unicode pre-pass.
+- **Engines**: identical (pure UI).
+- **Done when**: Blender 5.3 and Bforartists 5.3 show native-drawn replies with working
+  Copy rows and readable tables, and the old renderer is gone.
+
+### B7 — Doc-drift records
+
+- `sources` + `reviewed_revision` for the version skills and the wiki pages this lane
+  touches, plus a small checker. With 5.3 as the minimum, review whether the pre-5.3
+  version skills are still needed.
 
 ---
 
@@ -223,7 +238,7 @@ SC Scenario).
 | Live streaming + thinking display | BB | ✅ | ✅ | — |
 | Attach images / screen captures | BB, MP | ✅ | ✅ (+ review sheets) | G5 |
 | **Understand** | | | | |
-| Readable answers (markdown) | BB | ✅ | ✅ (native `label_markdown` in T5) | — |
+| Readable answers (markdown) | BB | ✅ own renderer | ✅ native `label_markdown` (5.3 minimum) | B0 |
 | Right-click "explain this", docs-grounded | CC, BA | ❌ | ✅ | B1 |
 | Translate a label | — | ❌ | ✅ | B1 |
 | Knows which editor/mode I'm in | BA | 🟡 scene snapshot only | ✅ live context chip | B6 |
@@ -261,7 +276,8 @@ cross-DCC bridge → out of scope · batch prompts → T5.
 ## 7. Build order and dependencies
 
 ```
-B0 provenance ──────────────────────────────────────────────── (anytime, tiny)
+B0 native markdown + 5.3 minimum ─────────────────────────────── (first; B5 Run rows build on its segmenter)
+B7 doc drift ── after B0
 4i engine seam (shared events + approval row) ──► B2, B4-external, B3-external
 B1 Explain/Translate ── independent (uses existing doc tools)
 B2 ask_user ── needs MCP deferred-tool path (exists) + chat button row
@@ -271,7 +287,7 @@ B5 Run/Fix ── reuses server preflight
 B6 Context chip ── independent
 ```
 
-Recommended order: **B0 → B1 → B2 → B4 → B3 → B6 → B5**. B1 and B2 give the biggest
+Recommended order: **B0 → B1 → B2 → B4 → B3 → B6 → B5 → B7**. B1 and B2 give the biggest
 visible gain for the least work. B2 and B4 also prove the engine-neutral design that
 Tier 4h needs. B5 goes last because Agent mode already executes code itself.
 

@@ -401,9 +401,16 @@ Agent loop:
 
 ---
 
-## Native Markdown Rendering — Adopt in Tier 5 (2026-09-01)
+## Native Markdown Rendering — ⏩ Moved to Tier 4 (task B0)
 
-> **Update:** Blender PR
+> **2026-10-16:** pulled forward. The PR merged for Blender 5.3, and the minimum version
+> becomes **5.3**, so Tier 4 task B0 (`plan_tier4_task_board.md`) uses
+> `label_markdown()` everywhere with **no feature detection and no fallback**. Our
+> renderer is deleted. The native API has no tables, syntax highlighting or LaTeX; B0 adds
+> a code-fence segmenter (Copy/Run rows), a table→monospace converter and the
+> LaTeX→Unicode pre-pass. The text below is the original Tier 5 plan, kept for history.
+
+> **Update (2026-09-01):** Blender PR
 > [#163254](https://projects.blender.org/blender/blender/pulls/163254) adds a
 > native `layout.label_markdown()` API (MD4C parser, MIT-licensed `extern/md4c`).
 > It supports **bold, italic, inline code, fenced code blocks, lists, headings,

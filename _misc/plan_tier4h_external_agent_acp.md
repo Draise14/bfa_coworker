@@ -21,7 +21,10 @@ Copilot CLI and others that speak the Agent Client Protocol (ACP). Blender is th
 
 **User flow (the whole UX):**
 
-1. Mode selector: **Local · Remote API · External Agent · External Client (MCP only)**.
+1. Mode selector: **Local LLM · Remote API · External Agent · External Harness**. The
+   names stay; tooltips explain them in plain words. *External Agent*: "Chat here in
+   Bforartists; your own Claude / ChatGPT / Gemini / OpenCode does the work".
+   *External Harness*: "Chat in another app; it uses Bforartists' tools".
 2. External Agent → pick a preset (e.g. *Claude Code*). Coworker checks: installed?
    version? logged in? and shows one install/login hint line if not.
 3. **Start**: bridge + MCP server start, the agent launches, and our MCP server is
@@ -158,7 +161,7 @@ search) show as plain rows with the agent's status only.
 
 - **MCP session token** (4i.6): the MCP HTTP endpoint and the bridge accept a per-start
   random token, which ACP agents receive via `env`. Copy MCP Config includes it for
-  External Client mode. This closes "any local process can drive Blender".
+  External Harness mode. This closes "any local process can drive Blender".
 - Code execution is gated by the shared permission setting (4f.3): default **Ask** for
   `execute_blender_code` on External Agent? → open question 2.
 - Pressing Send counts as approval for the read-only tools in that turn. Write tools follow
@@ -197,18 +200,16 @@ Total: roughly 3–4 weeks of focused work, of which 4h.1 (the seam) is the risk
 | Two sources of truth for the plan (agent `plan` vs our `update_plan`) | Last writer wins, shown in the plan panel with a source label |
 | Usage/cost not reported by all agents | Show "usage not reported by this agent" instead of zeros |
 
-**Open questions for review**
+**Review decisions (2026-10-16)**
 
-1. Mode naming: "External Agent" (ACP, chat in Blender) vs "External Client" (MCP only,
-   chat elsewhere). Rename the current "External Harness" to **External Client**?
-   *Recommendation: yes.*
-2. Default code-execution policy for External Agent: Allow (as today) or Ask?
-   *Recommendation: Allow, with the co-work guard and the turn-start scene checkpoint
-   (Revert turn, 4b B4). Frontier agents run a lot of code, and asking every time
-   would get in the user's way.*
-3. "Only Coworker tools" on by default? *Recommendation: on. It saves tokens and keeps
-   behaviour predictable, and users can turn it off.*
-4. Test matrix beyond OpenCode + Claude Code: is Freebuff an ACP agent? (verify in 4h.0).
+1. Mode naming: ✅ **keep "External Harness"** (MCP only, chat elsewhere) and add
+   **"External Agent"** (ACP, chat in Blender). No rename; tooltips explain both (§1).
+2. Code execution on External Agent: ✅ **Allow**, backed by the co-work guard and the
+   turn-start scene checkpoint (Revert turn, 4b B4).
+3. "Only Coworker tools": ✅ **on by default**, user can turn it off.
+4. Session token: ✅ **on by default** (4i.6).
+5. Still open: test matrix beyond OpenCode + Claude Code. Is Freebuff an ACP agent?
+   (verify in 4h.0).
 
 ---
 

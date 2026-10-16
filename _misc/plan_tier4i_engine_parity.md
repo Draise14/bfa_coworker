@@ -156,7 +156,7 @@ node-tree dump arrives as a ≤ 2 KB preview plus a handle on every engine.
 
 ## 5. Capability table (what each engine shows)
 
-| Control / feature | Local | Remote | External Agent | External Client |
+| Control / feature | Local | Remote | External Agent | External Harness |
 |---|---|---|---|---|
 | Chat panel, Workshop, Stop, Queue, images | ✅ | ✅ | ✅ | — (chat elsewhere) |
 | Goal & Plan panel | ✅ | ✅ | ✅ (ACP plan + `update_plan`) | ✅ via `update_plan` (panel visible) |
@@ -173,4 +173,4 @@ node-tree dump arrives as a ≤ 2 KB preview plus a handle on every engine.
 ## 6. Order
 
 `4i.1 → (4h.2–4h.4 in parallel with 4i.2) → 4i.3 → 4i.5 → 4i.4 → 4i.6 → 4i.7`.
-4i.6 can also go first if the External Client mode ships widely before ACP.
+4i.6 can also go first if External Harness use grows before ACP ships.

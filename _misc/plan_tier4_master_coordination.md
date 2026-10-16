@@ -62,7 +62,7 @@ per finished task**.
 | **4g** | Node tools list says "4 remaining" but names 5 | 5 tools (get_node_detail, create_node, connect_nodes, set_node_input_value, mute_node) |
 | **4c** | Line references (`agent_controller.py:2764` etc.) are stale (file is now ~7,900 lines) | Re-anchor at implementation; no plan change |
 | **Security** | MCP HTTP + bridge accept any local process | 4i.6 session token (before ACP ships) |
-| **Provenance** | 1.1.37 notes say markdown was "ported from Blender Buddy" | 4b task B0: verify licence + attribution or rewrite |
+| **Markdown** | Blender PR #163254 (`layout.label_markdown`) merged to `main` 2026-09-11 → ships in 5.3. It has no tables, syntax highlighting, LaTeX or images | **Minimum version becomes 5.3**; task B0 switches the chat to the native API and fills those gaps; the hand-written renderer is removed |
 
 ---
 
@@ -159,23 +159,29 @@ requirement: tool calls in the event stream (4i.1) carry name + args + result st
 a session can be turned into a macro later. **Recipes** (4g G2) cover the most common
 case, "rerun this pipeline with new numbers", already in Tier 4.
 
-### 6.6 Native markdown (Tier 5)
-Adopt Blender's `layout.label_markdown()` (PR #163254) with feature detection and the
-Tier 3 renderer as fallback.
+### 6.6 Native markdown, minimum version 5.3 (Tier 4, task B0)
+Blender's `layout.label_markdown(text=...)` (PR #163254, merged for 5.3) draws headers,
+paragraphs, bold/italic/monospace, links, code blocks, inline code and lists, with
+native theming and layout caching. With **Blender/Bforartists 5.3 as the minimum**
+we use it everywhere and delete our own renderer, with no feature detection or fallback.
+We keep three thin layers on top: (1) split replies at fenced code blocks so each block
+keeps a Copy (later Run) row, (2) convert tables to an aligned monospace block, since the
+native API has no tables, (3) keep the LaTeX→Unicode pre-pass. Moved from Tier 5 into Tier 4.
 
 ---
 
-## 7. Decisions needed from review
+## 7. Review decisions
 
-| # | Decision | Recommendation |
+| # | Decision | Outcome (2026-10-16) |
 |---|---|---|
-| 1 | Promote ACP (4h) + parity (4i) to lane 1, domain tools (4g) in parallel | **Yes** |
-| 2 | Rename "External Harness" → **External Client**; add **External Agent** | Yes |
-| 3 | Default code-execution policy on External Agent | Allow + turn checkpoint + Revert (4h §7 Q2) |
-| 4 | "Only Coworker tools" default on for ACP agents | Yes |
-| 5 | Session token on by default (breaks hand-written MCP configs once) | Yes. Copy MCP Config includes it; show a one-time notice |
-| 6 | 4a dedicated editor: decide after A0 spike | Spike first |
-| 7 | Smart Save tools move from lane E to lane G (quick win, needed by prepare/apply) | Yes |
+| 1 | Promote ACP (4h) + parity (4i) to lane 1, domain tools (4g) in parallel | ✅ Accepted |
+| 2 | Mode naming | ✅ **Keep "External Harness"** (MCP only, chat elsewhere); add **"External Agent"** (ACP, chat in Blender). No rename; plain-language **tooltips** explain both, since "harness" and "client" are both technical words an artist may not know |
+| 3 | Default code-execution policy on External Agent | ✅ Allow, backed by the turn checkpoint + Revert (4h §7 Q2) |
+| 4 | "Only Coworker tools" default on for ACP agents | ✅ Accepted |
+| 5 | Session token on by default | ✅ Accepted. Copy MCP Config includes it; one-time notice for hand-written configs |
+| 6 | Minimum version | ✅ **Blender/Bforartists 5.3**, native `label_markdown()` (§6.6, task B0) |
+| 7 | 4a dedicated editor | ⏳ Decide after the A0 spike |
+| 8 | Smart Save tools move from lane E to lane G | ⏳ Not answered yet. The board assumes yes (G4) |
 
 ---
 
@@ -186,3 +192,4 @@ Tier 3 renderer as fallback.
 - 2026-10-01: Tier 3i/3j latency + tool discovery items deferred into 4f/4g.
 - 2026-10-06: ACP research (4h draft).
 - **2026-10-16: Full audit. ACP + new Tier 4i engine parity become lane 1; 4b rewritten; task board created; fishing case study and Scenario added to the comparison.**
+- **2026-10-16 (review)**: "External Harness" name kept (tooltips instead of a rename); defaults for code execution, Coworker-only tools and session token accepted; minimum version 5.3 with native `label_markdown()` replacing our renderer (moved from Tier 5 to task B0); the Blender Buddy provenance item dropped.

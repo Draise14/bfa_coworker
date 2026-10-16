@@ -2,6 +2,7 @@
 
 **Created**: 2026-10-16 · **Source of truth for order**: `plan_tier4_master_coordination.md` §3
 **Status**: ⏸ Waiting for plan review. Nothing is branched yet.
+**Review decisions applied (2026-10-16)**: ACP + parity is lane 1 · "External Harness" keeps its name (tooltips explain it), "External Agent" is added · code runs without asking on External Agent, backed by a turn checkpoint and Revert · "Only Coworker tools" on by default · session token on by default · **minimum Blender/Bforartists 5.3**, chat drawn with native `label_markdown()` (B0).
 
 **How to use**: one branch per row-group (the **Branch** column). Branch from `main` and
 open a PR when the row's *Done when* holds. Tick the box and add the PR number. Sizes:
@@ -23,7 +24,7 @@ Plans: `plan_tier4h_external_agent_acp.md`, `plan_tier4i_engine_parity.md`
 | ☐ | I2 | `ui_components.py` parity set (tool row, reasoning, plan, approval, question, engine chip) + brand detection → `shared.py` | `feat/4i-engine-seam` | I1 | S | No engine branches in turn rendering |
 | ☐ | H2 | `acp_client.py` (stdlib JSON-RPC over stdio, reader thread, cancel, crash handling) + `tests/fake_acp_agent.py` | `feat/4h-acp-client` | H0, I1 | M | Fake-agent conversation incl. cancel, permission, crash passes |
 | ☐ | H3 | Agent presets + detection + install/login hints + Generic preset; Windows `.cmd` shim handling | `feat/4h-acp-client` | H2 | S | Correct status per preset on a machine without the agent |
-| ☐ | H4 | `ExternalAgentEngine`: prompt (text, images, context chip), streaming, Workshop rows (dedupe vs bridge), plan updates, Stop, Queue, engine chip; mode selector entries (rename to External Client) | `feat/4h-acp-engine` | H2, I2 | M | 4h §1 done-when with OpenCode, then Claude Code |
+| ☐ | H4 | `ExternalAgentEngine`: prompt (text, images, context chip), streaming, Workshop rows (dedupe vs bridge), plan updates, Stop, Queue, engine chip; mode selector adds **External Agent** next to **External Harness** (names kept). Plain-language tooltips: *External Agent: chat here, your own Claude/ChatGPT/Gemini/OpenCode does the work*; *External Harness: chat in another app, it uses Blender's tools* | `feat/4h-acp-engine` | H2, I2 | M | 4h §1 done-when with OpenCode, then Claude Code |
 | ☐ | I3 | `ApprovalRequest` model + inline row; "always" per session | `feat/4h-acp-engine` | I2 | S | ACP permission answered inline; timeout → reject |
 | ☐ | H5 | Wire ACP `session/request_permission` → I3 | `feat/4h-acp-engine` | H4, I3 | S | Allow once/always/deny each behave correctly |
 | ☐ | I6 | MCP + bridge session token; included in Copy MCP Config; passed to ACP via env | `feat/4i-session-token` | — | S | Tokenless request refused; all engines + config copy work |
@@ -59,7 +60,8 @@ Plan: `plan_tier4b_competitor_ux_analysis.md`
 
 | ☐ | ID | Task | Branch | Depends | Size | Done when |
 |---|---|---|---|---|---|---|
-| ☐ | B0 | Provenance: Blender Buddy licence check for the markdown renderer → attribution header or rewrite; reword 1.1.37 note. Plus doc-drift records (`sources`, `reviewed_revision`) for `skills/blender_5x.md` and touched wiki pages, with a small checker script in `_misc/` | `chore/4b-provenance` | — | S | Header/notice in place or module rewritten; checker lists drifted docs |
+| ☐ | B0 | **Native markdown + Blender 5.3 minimum**: set `blender_version_min = "5.3.0"`. Replace `_render_markdown` with `layout.label_markdown(text=...)` (PR #163254: headers, paragraphs, bold/italic/monospace, links, code blocks, inline code, lists). Fill the gaps the native API leaves: split replies at fenced code blocks so each block keeps its Copy (later Run) row; convert tables to an aligned monospace block (no native tables); keep the LaTeX→Unicode pre-pass. Delete the old renderer and the `_can_multiline()` / pre-5.3 fallbacks. Update README, wiki, extension listing | `feat/4b-native-markdown` | — | M | Chat, Workshop and Explain answers draw through `label_markdown` on Blender 5.3 + Bforartists 5.3; old renderer removed; tables readable; unit tests for the segmenter/table converter |
+| ☐ | B7 | Doc-drift records (`sources`, `reviewed_revision`) for `skills/blender_5x.md` and the wiki pages Tier 4 touches, with a small checker in `_misc/`. Review whether the pre-5.3 version skills are still needed with the 5.3 minimum | `chore/4b-doc-drift` | B0 | S | Checker lists drifted docs; version skills trimmed or justified |
 | ☐ | B1 | Explain this + Translate: context-menu operators, target card, docs-grounded Ask turn, `/explain` | `feat/4b-explain` | — | M | Property, node, object each give a cited answer on all engines |
 | ☐ | B6 | Live context chip (editor · mode · selection), toggleable | `feat/4b-context-chip` | — | S | Same prompt in two editors picks different correct tools |
 | ☐ | B2 | `ask_user` button row + next-step [Do it] [Something else] | `feat/4b-ask-user` | I5 | S | Click resumes the same turn on all engines |

@@ -32,7 +32,7 @@ from `main`, no stacked PRs. Only one open PR at a time on `agent_controller.py`
 | 🔍 In review | Engine 2: Local & Remote run through the engine | #114 (issue #113) |
 | ⏭ Next (hot files, after #114) | Engine 3: the chat draws from engine events | |
 | ⏭ Next (parallel, new files) | Agent 2: ACP client | |
-| 🔍 In review | Editors 1: Coworker editor spike (#26). Decision: a custom "Coworker" node-editor type | (this PR) |
+| ⏭ Next (parallel, prototypes only) | Editors 1: Coworker editor spike (#26) | |
 | ⛔ Blocked | Chat 1: native markdown. `UILayout.label_markdown` is **not in** the Bforartists 5.3 dev build of 2026-10-08 yet (probed) | |
 | ❓ Waiting on you | Agent 1, part 2: record one Claude Code session (uses your Claude login) | |
 

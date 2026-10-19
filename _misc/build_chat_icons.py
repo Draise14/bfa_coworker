@@ -44,6 +44,24 @@ def _image_icons() -> tuple[str, ...]:
     raise SystemExit("IMAGE_ICONS not found in " + _ICONS_PY)
 
 
+def _normalized(svg: str) -> str:
+    """A copy of *svg* with bare hex colours fixed (``fill="fff"`` -> ``fill="#fff"``).
+
+    Blender reads the bare form (e.g. the white Outliner collection icon), but
+    Inkscape renders it black.  Returns the original path when nothing changes.
+    """
+    import re
+    import tempfile
+    text = open(svg, encoding="utf-8").read()
+    fixed = re.sub(r'((?:fill|stroke)=")([0-9a-fA-F]{3}|[0-9a-fA-F]{6})"', r'\1#\2"', text)
+    if fixed == text:
+        return svg
+    out = os.path.join(tempfile.gettempdir(), "bfacw_icon_" + os.path.basename(svg))
+    with open(out, "w", encoding="utf-8") as fh:
+        fh.write(fixed)
+    return out
+
+
 def _inkscape(given: str | None) -> str:
     for candidate in (given, shutil.which("inkscape"), r"C:\Program Files\Inkscape\bin\inkscape.exe"):
         if candidate and os.path.isfile(candidate):
@@ -68,6 +86,7 @@ def main() -> int:
         if not os.path.isfile(svg):
             missing.append(name)
             continue
+        svg = _normalized(svg)
         for size in _SIZES:
             png = os.path.join(_OUT, "{:s}_{:d}.png".format(name.lower(), size))
             subprocess.run([inkscape, svg, "--export-type=png", "--export-filename=" + png,

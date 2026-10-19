@@ -259,6 +259,7 @@ def _sync_box(surface: ChatSurface, props: Any, busy: bool, running: bool, harne
     _SYNCED[id(surface)] = box.model.text
     image = getattr(props, "chat_image", None)
     box.attachment = image.name if image is not None else ""
+    surface.attachment_pinned = not getattr(props, "chat_image_send_once", True)
     box.busy = busy
     box.placeholder = ("Ask Coworker..." if running else
                        "Start Coworker to chat (Start, above)" if not harness else "")
@@ -587,6 +588,10 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
         ops.open_coworker_editor()
     elif action == "open_image":
         _open_image(value)
+    elif action == "attachment_pin" and props is not None:
+        props.chat_image_send_once = not props.chat_image_send_once
+    elif action == "attachment_remove" and props is not None:
+        props.chat_image = None
     elif action == "chat_mode" and props is not None:
         props.chat_mode = value
     elif action == "native_edit" and surface is not None:
@@ -1067,6 +1072,7 @@ def _take_over(ours: set[str]) -> None:
             original(self, context)
 
     header.draw = draw
+    _quiet_other_drop_handlers()
     panels = _node_panels(ours)
     without = []
     for cls in panels:
@@ -1095,7 +1101,48 @@ def _take_over(ours: set[str]) -> None:
             print("[Coworker] editor: could not re-register {:s}: {:s}".format(cls.__name__, str(ex)))
 
 
+def _over_chat(context: Any) -> bool:
+    """A file drag is over a Coworker chat (the editor, or the sidebar chat tab)."""
+    try:
+        if _is_coworker(context):
+            return True
+        from . import ui_chat
+        return _compact_enabled(context) and ui_chat._is_coworker_panel_region(context)
+    except (AttributeError, ReferenceError):
+        return False
+
+
+_WRAPPED_DROPS: list[tuple[type, Any]] = []
+
+
+def _drop_outside_chat(fn: Any) -> Any:
+    # A closure: Blender calls poll_drop(cls, context) and dislikes extra default args.
+    def poll_drop(cls, context):
+        if _over_chat(context):
+            return False
+        return fn(cls, context)
+    return poll_drop
+
+
+def _quiet_other_drop_handlers() -> None:
+    """Over the chat only "attach" makes sense: other file handlers (the node
+    editor's Image node, the viewport's image empty / camera background) say
+    no there, so the drop attaches without a "which one?" menu."""
+    for cls in _all_subclasses(bpy.types.FileHandler):
+        if cls.__name__ == "BFACW_FH_chat_drop" or not getattr(cls, "is_registered", False):
+            continue
+        old = cls.__dict__.get("poll_drop")
+        if old is None:
+            continue
+
+        _WRAPPED_DROPS.append((cls, old))
+        cls.poll_drop = classmethod(_drop_outside_chat(old.__func__))
+
+
 def _give_back() -> None:
+    for cls, old in _WRAPPED_DROPS:
+        cls.poll_drop = old
+    _WRAPPED_DROPS.clear()
     if "header" in _ORIGINAL:
         bpy.types.NODE_HT_header.draw = _ORIGINAL.pop("header")
     for cls, old in _WRAPPED_POLLS:

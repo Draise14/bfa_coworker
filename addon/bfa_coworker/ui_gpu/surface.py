@@ -91,6 +91,7 @@ class ChatSurface:
     # Called with the wanted height (pixels) while the bottom grip is dragged.
     on_resize: Any = None
     drop_hover: bool = False     # an image is being dragged over: show the drop target
+    attachment_pinned: bool = False   # the attached image stays for every message
 
     # -- mouse (region pixels) ------------------------------------------------------
     def hit(self, x: float, y: float) -> str | None:
@@ -180,6 +181,8 @@ class ChatSurface:
         box_h = self.box.height(canvas, inner.w) if show_input else 0.0
         input_rect = Rect(inner.x, inner.y, inner.w, box_h)
         chat_y = input_rect.top + pad if show_input else rect.y
+        if show_input and self.box.attachment:      # the image tray, above the input
+            chat_y = self._draw_tray(canvas, Rect(inner.x, chat_y, inner.w, 0), actions) + pad
         chat = Rect(rect.x, chat_y, rect.w, max(0.0, top_edge - chat_y - pad))
         self._chat_rect = chat
         if notice is not None:
@@ -252,6 +255,46 @@ class ChatSurface:
                     actions.append(("chat_mode", mode_id))
             bottom = mrow.y - pad * 0.5
         return bottom
+
+    def _draw_tray(self, canvas: Canvas, anchor: Rect, actions: list[tuple[str, str]]) -> float:
+        """The image waiting to be sent, in its own box above the input: a thumbnail,
+        its name, a pin (keep it for every message) and remove.  Returns its top."""
+        style = canvas.style
+        u, pad = style.unit, style.pad * 0.6
+        thumb = u * (1.8 if self.compact else 2.6)
+        tray = Rect(anchor.x, anchor.y, anchor.w, thumb + 2 * pad)
+        canvas.box(tray, colors=style.box)
+        name = self.box.attachment
+        picture = Rect(tray.x + pad, tray.y + pad, thumb * 1.5, thumb)
+        canvas.fill(picture, style.text_field.inner, style.radius(style.text_field))
+        canvas.image(picture.inset(1.0), name)
+        canvas.hit_areas.append((picture, "img:" + name))
+        if canvas.state.clicked == "img:" + name:
+            actions.append(("open_image", name))
+        bw = u * 1.15
+        remove = Rect(tray.right - pad - bw, tray.y + (tray.h - u) / 2, bw, u)
+        pin = Rect(remove.x - pad * 0.5 - bw, remove.y, bw, u)
+        if canvas.button(pin, "attach_pin", "", active=self.attachment_pinned,
+                         icon="PINNED" if self.attachment_pinned else "UNPINNED"):
+            actions.append(("attachment_pin", ""))
+        if canvas.button(remove, "attach_remove", "", icon="X"):
+            actions.append(("attachment_remove", ""))
+        side = canvas.icon_size()
+        tx = picture.right + pad
+        room = pin.x - pad - tx - side - pad * 0.5
+        label = name if canvas.measure(name, "ui", style.font_size) <= room else name
+        while label and canvas.measure(label + "\u2026", "ui", style.font_size) > room:
+            label = label[:-1]
+        if label != name:
+            label = label + "\u2026" if label else ""
+        mid = tray.y + tray.h / 2
+        canvas.icon(Rect(tx, mid + style.line_height * 0.05, side, side), "IMAGE_DATA", style.box.text)
+        canvas.label(Rect(tx + side + pad * 0.5, mid, room, style.line_height), label, style.box.text)
+        status = _fit(canvas, "Kept for every message" if self.attachment_pinned else "Sent with the next message",
+                      room + side)
+        canvas.label(Rect(tx, mid - style.line_height, room + side, style.line_height), status,
+                     _soft(style.box.text, 0.35))
+        return tray.top
 
     def _draw_drop_target(self, canvas: Canvas, rect: Rect) -> None:
         """Dragging an image file over the chat: a highlight that says what a drop does."""

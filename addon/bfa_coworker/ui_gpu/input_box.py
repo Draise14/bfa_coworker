@@ -399,9 +399,8 @@ class InputBox:
         """Height the box needs at *width*: text lines (2 to 6), then the button row."""
         style = canvas.style
         visible = max(_MIN_VISIBLE_LINES, min(len(self._lines(canvas, width)), _MAX_VISIBLE_LINES))
-        chip = style.unit * 1.9 if self.attachment else 0.0
         margin, _gap, button_h = self._button_metrics(canvas)
-        return style.pad + chip + visible * style.line_height + style.pad * 0.5 + button_h + margin
+        return style.pad + visible * style.line_height + style.pad * 0.5 + button_h + margin
 
     # -- buttons -----------------------------------------------------------------------
     def _button_metrics(self, canvas: Canvas) -> tuple[float, float, float]:
@@ -493,20 +492,6 @@ class InputBox:
         if hint:
             canvas.label(Rect(box.x + pad, box.y + margin, right - box.x - pad, button_h), hint, hint_color)
         top = box.top - pad
-        if self.attachment:
-            # The image waiting to be sent: a small thumbnail and its name (cut to fit).
-            thumb = u * 1.6
-            side = canvas.icon_size()
-            name_room = min(box.w * 0.7, u * 14) - thumb - side - pad * 1.6
-            name = self._fit(canvas, self.attachment, name_room)
-            chip_w = thumb + side + pad * 1.6 + canvas.measure(name, "ui", style.font_size) + pad
-            chip = Rect(box.x + pad, top - thumb - u * 0.1, chip_w, thumb)
-            canvas.box(chip, colors=style.button, outline=False)
-            canvas.image(Rect(chip.x + 2, chip.y + 2, thumb - 4, thumb - 4), self.attachment)
-            canvas.icon(Rect(chip.x + thumb + pad * 0.4, chip.y + (thumb - side) / 2, side, side),
-                        "IMAGE_DATA", style.button.text)
-            canvas.label(Rect(chip.x + thumb + side + pad * 0.8, chip.y, chip.w, thumb), name, style.button.text)
-            top -= u * 1.9
         text_color = style.text_field.text_sel if self.focused else style.text_field.text
         lines = self._lines(canvas, rect.w)
         text_area = Rect(box.x + pad * 0.25, box.y + margin + button_h, box.w - pad * 0.5,

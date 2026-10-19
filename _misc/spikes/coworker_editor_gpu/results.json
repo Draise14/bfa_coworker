@@ -1,5 +1,9 @@
 {
   "editor_in_menu": true,
+  "drop_over_editor": {
+    "coworker": true,
+    "node_image": false
+  },
   "surfaces": [
     false,
     true

@@ -235,10 +235,12 @@ def _text(cmd: DrawCmd) -> None:
     blf.size(fid, cmd.size)
     blf.color(fid, *cmd.color)
     assert cmd.rect is not None
-    blf.position(fid, cmd.rect.x, cmd.rect.y, 0)
+    # Whole pixels: text on a half pixel is blurred into two, which reads faded.
+    x, y = round(cmd.rect.x), round(cmd.rect.y)
+    blf.position(fid, x, y, 0)
     blf.draw(fid, cmd.text)
     if cmd.bold:
-        blf.position(fid, cmd.rect.x + max(0.6, cmd.size / 18.0), cmd.rect.y, 0)
+        blf.position(fid, x + max(1, round(cmd.size / 16.0)), y, 0)
         blf.draw(fid, cmd.text)
 
 

@@ -35,7 +35,7 @@ a compact sidebar chat) plus groundwork for the External Agent mode.
   - **Toolshelf:** new thread, @ mention, attach a render or the screen, thumbnail size, plan, rules, session log.
   - **Sidebar:** the same panels as the 3D View's Coworker tab -- controls and image socket, Session (Context, Memory & Checkpoints), Queue, Status & Diagnostics.
   - Replies render markdown (headings, lists, tables, code with **Copy**); the Workshop folds the tool steps away; replies have a Copy button.
-  - **Attached images show as thumbnails** in your message (click one to open it in an Image Editor); the image waiting to be sent shows in the input box. View > Thumbnails sets the size (Small / Medium / Large).
+  - **Attached images show as thumbnails** in your message (click one to open it in an Image Editor). The image waiting to be sent sits in a tray above the input with a pin (keep it for every message) and remove; by default it goes with the next message only. **Drag an image file onto the chat** to attach it -- no "which handler?" menu over the chat. The header's S / M / L buttons set the thumbnail size.
   - Type in another script with **Edit** (a native text field, for Chinese, Japanese or Korean input).
 - **Compact sidebar chat.** The 3D View's Coworker tab shows the same chat in a small form, with a top bar for status, Start / Stop, chat mode, settings and the editor. *Preferences > Coworker > Chat Display > Sidebar Chat* switches back to the **Classic Panels**.
 - In **External Harness** mode both show a card (the chat runs in your MCP client) with Start / Stop Bridge, Copy Config and Configure.

@@ -222,13 +222,19 @@ class TestPolish(unittest.TestCase):
         self.assertTrue(box.handle_key(ib.Key("Q", unicode="@", ctrl=True, alt=True)))   # ...or Ctrl+Alt elsewhere
         self.assertEqual(box.model.text, "@@")
 
-    def test_long_attachment_names_are_cut(self):
-        box = ib.InputBox(focused=True, attachment="a_really_long_image_name_" * 6 + ".png")
-        canvas = lay.Canvas(st.Style(), lay.fixed_measure(0.55))
-        box.draw(canvas, lay.Rect(0, 0, 300, 300))
-        names = [c.text for c in canvas.commands if c.kind == "text" and "really" in c.text]
-        self.assertTrue(names and names[0].endswith("\u2026"))
-        self.assertLess(canvas.measure(names[0], "ui", 11), 300)
+    def test_attachment_tray_above_the_input(self):
+        surface = sf.ChatSurface()
+        surface.box.attachment = "a_really_long_image_name_" * 6 + ".png"
+        canvas, _ = _draw(surface)
+        names = [c for c in canvas.commands if c.kind == "text" and "really" in c.text]
+        self.assertTrue(names and names[0].text.endswith("…"))          # cut to fit
+        self.assertGreater(names[0].rect.y, surface.box.rect.top)            # above the input box
+        self.assertIn(surface.box.attachment, [c.text for c in canvas.commands if c.kind == "image"])
+        self.assertEqual(_click(surface, "attach_pin"), [("attachment_pin", "")])
+        self.assertEqual(_click(surface, "attach_remove"), [("attachment_remove", "")])
+        surface.attachment_pinned = True
+        canvas, _ = _draw(surface)
+        self.assertIn("Kept for every message", [c.text for c in canvas.commands if c.kind == "text"])
 
     def test_box_starts_multi_line_with_buttons_below(self):
         box = ib.InputBox(focused=True)

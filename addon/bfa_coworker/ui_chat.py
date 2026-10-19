@@ -1121,9 +1121,10 @@ class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
         name="Send Once",
         description=(
             "Send the attached image with the next message only, then "
-            "detach it (off = sticky: re-sent every turn until cleared)"
+            "detach it (off = sticky: re-sent every turn until cleared; the "
+            "chat's pin button toggles this)"
         ),
-        default=False,
+        default=True,
     )
 
     # The compact chat panel's height (Tier 4, GPU 5; see chat_editor._find_chat_rect).

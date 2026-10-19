@@ -202,8 +202,8 @@ class TestDrawing(unittest.TestCase):
         box.busy, box.attachment = True, "shot.png"
         c = self.canvas(clicked="stop")
         self.assertEqual(box.draw(c, lay.Rect(0, 0, 400, 200)), [("stop", "")])
-        self.assertIn("shot.png", self.texts(c))
-        self.assertIn("shot.png", [cmd.text for cmd in c.commands if cmd.kind == "image"])   # thumbnail
+        # The attached image is drawn by the surface's tray now (test_gpu_surface).
+        self.assertNotIn("shot.png", self.texts(c))
 
     def test_send_button_and_click_to_place_cursor(self):
         box = ib.InputBox(focused=True)

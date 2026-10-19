@@ -181,6 +181,12 @@ def _tick():
             return 1.0
         if step == 2:
             _shoot("1_editor_and_compact_sidebar")
+            # Over the chat only Coworker's drop handler accepts an image: no "which one?" menu.
+            area = _editor_area()
+            with bpy.context.temp_override(area=area, region=_region(area, "WINDOW")):
+                RESULT["drop_over_editor"] = {
+                    "coworker": bool(bpy.types.BFACW_FH_chat_drop.poll_drop(bpy.context)),
+                    "node_image": bool(bpy.types.NODE_FH_image_node.poll_drop(bpy.context))}
             ce = CTX["ce"]
             RESULT["surfaces"] = sorted(s.compact for s, _r in ce._SURFACES.values())
             area = _editor_area()

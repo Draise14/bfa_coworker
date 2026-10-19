@@ -93,21 +93,74 @@ def _load_reset_func(bpy_mod):
 
 
 class TestRefusalSteps(unittest.TestCase):
-    """The error_handling prompts must be marked refusal-expected."""
+    """The judgement prompts must be marked refusal-expected."""
 
-    def test_error_handling_steps_marked(self):
+    def test_judgement_steps_marked(self):
         marked = _load_refusal_steps()
-        self.assertIn(("error_handling", 1), marked)
-        self.assertIn(("error_handling", 2), marked)
-        self.assertIn(("error_handling", 3), marked)
+        self.assertIn(("quick_judgement", 1), marked)
+        self.assertIn(("quick_judgement", 2), marked)
+        self.assertIn(("quick_judgement", 3), marked)
 
     def test_unrelated_steps_not_marked(self):
         marked = _load_refusal_steps()
         for key in (
-            ("scene_build", 1), ("animation", 1), ("baseline", 1),
-            ("vision_camera", 2),
+            ("scene", 1), ("animation", 1), ("quick_sanity", 1),
+            ("vision", 2),
         ):
             self.assertNotIn(key, marked)
+
+    def test_marked_steps_exist(self):
+        suites = _load_test_suites()
+        for suite, step in _load_refusal_steps():
+            self.assertIn(step, [s[0] for s in suites[suite]])
+
+
+def _load_test_suites() -> dict:
+    """Exec the ``_TEST_SUITES`` dict literal from the source."""
+    with open(_OA_PATH, encoding="utf-8") as fh:
+        src = fh.read()
+    start = src.index("_TEST_SUITES: dict")
+    end = src.index("\n}\n", start) + 3
+    ns: dict = {}
+    exec(compile(src[start:end], _OA_PATH, "exec"), ns)  # noqa: S102
+    return ns["_TEST_SUITES"]
+
+
+class TestSuiteLayout(unittest.TestCase):
+    """Six core benchmarks plus three quick challenges (#104)."""
+
+    CORE = ("scene", "animation", "modeling", "nodes", "assets", "vision")
+    QUICK = ("quick_2d", "quick_sanity", "quick_judgement")
+
+    def test_exactly_core_and_quick(self):
+        self.assertEqual(set(_load_test_suites()), set(self.CORE + self.QUICK))
+
+    def test_sizes(self):
+        suites = _load_test_suites()
+        for key in self.CORE:
+            self.assertIn(len(suites[key]), (4, 5), key)
+        for key in self.QUICK:
+            self.assertLessEqual(len(suites[key]), 3, key)
+        self.assertLessEqual(sum(len(v) for v in suites.values()), 35)
+
+    def test_steps_numbered_from_one(self):
+        for key, steps in _load_test_suites().items():
+            self.assertEqual([s[0] for s in steps], list(range(1, len(steps) + 1)), key)
+
+    def test_ui_lists_every_suite(self):
+        prefs = os.path.join(os.path.dirname(_OA_PATH), "preferences.py")
+        with open(prefs, encoding="utf-8") as fh:
+            src = fh.read()
+        for key in self.CORE + self.QUICK:
+            self.assertIn('("{:s}",'.format(key), src)
+
+    def test_coverage_kept(self):
+        """Each capability an old suite tested still has a prompt."""
+        text = " ".join(p for steps in _load_test_suites().values() for _n, _l, p in steps).lower()
+        for needle in ("collection", "keyframe", "squash", "array modifier", "remesh",
+                       "geometry nodes", "compositor", "poly haven", "hdri", "asset browser",
+                       "screenshot", "sequencer", "image", "make it nicer"):
+            self.assertIn(needle, text)
 
 
 class TestResetSceneToBefore(unittest.TestCase):

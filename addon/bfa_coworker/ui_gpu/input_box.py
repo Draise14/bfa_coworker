@@ -203,7 +203,9 @@ class Suggestion:
 
     label: str
     insert: str
-    kind: str = ""          # e.g. "object", "material" (for an icon later)
+    kind: str = ""          # category, e.g. "object", "material" (the list's filter)
+    icon: str = ""          # Blender icon name, e.g. "OUTLINER_OB_CAMERA"
+    detail: str = ""        # shown dimmed on the right, e.g. "Camera"
 
 
 # provider(query) -> suggestions; the host supplies one that searches the scene.
@@ -226,6 +228,10 @@ class InputBox:
     actions: list[tuple[str, str]] = field(default_factory=list)
     suggestions: list[Suggestion] = field(default_factory=list)
     suggestion_index: int = 0
+    # The @ list's filter row, like the native mention popup: (id, label, icon).
+    categories: tuple[tuple[str, str, str], ...] = ()
+    category: str = ""                     # "" = all
+    match_count: int = 0
     _mention_start: int | None = None      # offset of the "@" being completed
     blink_phase: bool = True               # the host toggles this for the caret blink
     rect: Rect | None = None               # where the box was last drawn (for clicks)
@@ -252,8 +258,16 @@ class InputBox:
         if query is None:
             self.suggestions, self._mention_start = [], None
             return
-        self.suggestions = list(self.provider(query))[:_MAX_SUGGESTIONS]
+        matches = [m for m in self.provider(query) if not self.category or m.kind == self.category]
+        self.match_count = len(matches)
+        self.suggestions = matches[:_MAX_SUGGESTIONS]
         self.suggestion_index = min(self.suggestion_index, max(0, len(self.suggestions) - 1))
+
+    def set_category(self, category: str) -> None:
+        """Filter the @ list to one category ("" = all)."""
+        self.category = category
+        self.suggestion_index = 0
+        self._refresh_suggestions()
 
     def accept_suggestion(self, index: int | None = None) -> None:
         if not self.suggestions or self._mention_start is None:
@@ -377,12 +391,12 @@ class InputBox:
         style = canvas.style
         lines = self._lines(canvas, width)
         visible = min(len(lines), _MAX_VISIBLE_LINES)
-        chip = style.unit if self.attachment else 0.0
+        chip = style.unit * 1.9 if self.attachment else 0.0
         return max(visible * style.line_height + 2 * style.pad, style.unit + style.pad) + chip
 
     def _text_width(self, canvas: Canvas, width: float) -> float:
         style = canvas.style
-        return width - 2 * style.pad - style.unit * 4.2   # room for Send/Stop + native-edit buttons
+        return width - 2 * style.pad - style.unit * (8.0 if self.busy else 5.2)   # room for the buttons
 
     def _lines(self, canvas: Canvas, width: float) -> list[tuple[int, str]]:
         """Visual lines as (start offset, text), wrapping by words like the view."""
@@ -415,30 +429,48 @@ class InputBox:
         self.rect, self._measure, self._size, self._drawn = box, canvas.measure, style.font_size, []
         canvas.box(box, colors=style.text_field, selected=self.focused)
         canvas.hit_areas.append((box, "input"))
-        # Buttons on the right: Send / Stop and "edit in a native box".
-        bw = u * 2.0
+        # Buttons on the right, like the panel chat: Send, or Stop (+ Queue when
+        # there is text) while a turn runs; and "edit in a native box".
+        bw = u * 2.8
+        has_text = bool(self.model.text.strip())
         primary = Rect(box.right - bw - pad * 0.5, box.y + pad * 0.5, bw, u)
-        if canvas.button(primary, "stop" if self.busy else "send", "Stop" if self.busy else "Send",
-                         active=not self.busy and bool(self.model.text.strip())):
-            if self.busy:
+        if self.busy:
+            if canvas.button(primary, "stop", "Stop", icon="PAUSE"):
                 self.actions.append(("stop", ""))
-            else:
-                self.send()
-        native = Rect(primary.x - bw - pad * 0.25, primary.y, bw, u)
+        elif canvas.button(primary, "send", "Send", active=has_text, icon="PLAY"):
+            self.send()
+        left = primary.x
+        if self.busy and has_text:
+            queue = Rect(left - bw - pad * 0.25, primary.y, bw, u)
+            if canvas.button(queue, "queue", "Queue", icon="ADD"):
+                self.send()          # the host queues a send while a turn runs
+            left = queue.x
+        native = Rect(left - bw * 0.75 - pad * 0.25, primary.y, bw * 0.75, u)
         if canvas.button(native, "native_edit", "Edit"):
             self.actions.append(("native_edit", self.model.text))
         top = box.top - pad
         if self.attachment:
-            chip = Rect(box.x + pad, top - u * 0.85, min(box.w * 0.6, u * 8), u * 0.8)
+            # The image waiting to be sent: a small thumbnail and its name.
+            thumb = u * 1.6
+            chip = Rect(box.x + pad, top - thumb - u * 0.1, min(box.w * 0.6, u * 9), thumb)
             canvas.box(chip, colors=style.button, outline=False)
-            canvas.label(chip.inset(pad * 0.5, 0), "Image: " + self.attachment, style.button.text)
-            top -= u
+            canvas.image(Rect(chip.x + 2, chip.y + 2, thumb - 4, thumb - 4), self.attachment)
+            side = canvas.icon_size()
+            canvas.icon(Rect(chip.x + thumb + pad * 0.4, chip.y + (thumb - side) / 2, side, side),
+                        "IMAGE_DATA", style.button.text)
+            canvas.label(Rect(chip.x + thumb + side + pad * 0.8, chip.y, chip.w, thumb), self.attachment,
+                         style.button.text)
+            top -= u * 1.9
         text_color = style.text_field.text_sel if self.focused else style.text_field.text
         lines = self._lines(canvas, rect.w)
         canvas.push_clip(box.inset(pad * 0.25))
         if not self.model.text:
+            hint = self.placeholder
+            room = self._text_width(canvas, rect.w)
+            while hint and canvas.measure(hint, "ui", style.font_size) > room:
+                hint = hint[:-2].rstrip() + "\u2026" if len(hint) > 2 else ""
             canvas.label(Rect(box.x + pad, top - style.line_height, box.w, style.line_height),
-                         self.placeholder, (text_color[0], text_color[1], text_color[2], 0.5))
+                         hint, (text_color[0], text_color[1], text_color[2], 0.5))
             lines = []
         # Keep the cursor's line visible when the text is taller than the box.
         cur_line = max((i for i, (start, _) in enumerate(lines) if start <= self.model.cursor), default=0)
@@ -469,22 +501,58 @@ class InputBox:
         return self.actions[before:]
 
     def _draw_suggestions(self, canvas: Canvas, anchor: Rect) -> None:
+        """The @ list above the box: a filter row (All + one icon per category),
+        the match count, then one row per match led by its type icon."""
         style = canvas.style
-        row_h = style.unit
-        h = row_h * len(self.suggestions) + style.pad
-        panel = Rect(anchor.x, anchor.y + style.pad * 0.5, anchor.w, h)
+        u, pad = style.unit, style.pad
+        row_h = u
+        header = 2 if self.categories else 0
+        rows = len(self.suggestions) or 1
+        h = row_h * (rows + header) + pad
+        panel = Rect(anchor.x, anchor.y + pad * 0.5, anchor.w, h)
         canvas.box(panel, colors=style.tooltip)
+        side = canvas.icon_size()
+        top = panel.top - pad * 0.5
+        soft = (style.tooltip.text[0], style.tooltip.text[1], style.tooltip.text[2], 0.6)
+        if self.categories:
+            frow = Rect(panel.x + pad * 0.5, top - row_h, panel.w - pad, row_h)
+            canvas.icon(Rect(frow.x, frow.y + (row_h - side) / 2, side, side), "VIEWZOOM", soft)
+            bx = frow.x + side + pad * 0.5
+            all_w = u * 1.8
+            if canvas.button(Rect(bx, frow.y, all_w, row_h), "mcat:", "All", active=not self.category):
+                self.set_category("")
+            bx += all_w
+            for cat_id, label, icon in self.categories:
+                if bx + u * 1.15 > frow.right:
+                    break
+                if canvas.button(Rect(bx, frow.y, u * 1.15, row_h), "mcat:" + cat_id, "", icon=icon,
+                                 active=self.category == cat_id):
+                    self.set_category(cat_id)
+                bx += u * 1.15
+            top -= row_h
+            count = Rect(panel.x + pad * 0.5, top - row_h, panel.w - pad, row_h)
+            canvas.icon(Rect(count.x, count.y + (row_h - side) / 2, side, side), "SORTBYEXT", soft)
+            canvas.label(Rect(count.x + side + pad * 0.5, count.y, count.w, row_h),
+                         "{:d} match{:s}".format(self.match_count, "" if self.match_count == 1 else "es"), soft)
+            top -= row_h
+        if not self.suggestions:
+            canvas.label(Rect(panel.x + pad, top - row_h, panel.w - 2 * pad, row_h), "Nothing matches", soft)
         for i, sug in enumerate(self.suggestions):
-            r = Rect(panel.x + style.pad * 0.25, panel.top - style.pad * 0.5 - (i + 1) * row_h,
-                     panel.w - style.pad * 0.5, row_h)
+            r = Rect(panel.x + pad * 0.25, top - (i + 1) * row_h, panel.w - pad * 0.5, row_h)
             widget_id = "suggest:{:d}".format(i)
             current = i == self.suggestion_index
             if current or canvas.state.hovered(r):
                 canvas.fill(r, style.button.inner_sel if current else style.tooltip.inner_sel,
                             style.radius(style.button))
             text = style.button.text_sel if current else style.tooltip.text
-            label = sug.label + ("   " + sug.kind if sug.kind else "")
-            canvas.label(r.inset(style.pad * 0.5, 0), label, text)
+            x = r.x + pad * 0.5
+            if sug.icon:
+                canvas.icon(Rect(x, r.y + (row_h - side) / 2, side, side), sug.icon, text)
+                x += side + pad * 0.5
+            canvas.label(Rect(x, r.y, r.right - x, row_h), sug.label, text)
+            if sug.detail:
+                canvas.label(Rect(r.x, r.y, r.w - pad * 0.5, row_h), sug.detail,
+                             (text[0], text[1], text[2], 0.55), align="right")
             canvas.hit_areas.append((r, widget_id))
             if canvas.state.clicked == widget_id:
                 self.accept_suggestion(i)

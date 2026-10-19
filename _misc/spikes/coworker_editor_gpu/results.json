@@ -1,0 +1,26 @@
+{
+  "editor_in_menu": true,
+  "surfaces": [
+    false,
+    true
+  ],
+  "focused_by_click": true,
+  "suggestions": [
+    "Camera"
+  ],
+  "draft_shared": "move @Ca",
+  "keys_seen": [
+    "TAB:PRESS:1",
+    "TAB:RELEASE:1",
+    "RET:PRESS:1",
+    "RET:RELEASE:1"
+  ],
+  "box_after_tab": "move @Camera ",
+  "after_tab": "move @Camera ",
+  "compact_shows_same_draft": "move @Camera ",
+  "ctrl_wheel_zoomed": true,
+  "sent_reached_history": true,
+  "draft_cleared_after_send": true,
+  "header_patched": true,
+  "disabled_cleanly": true
+}

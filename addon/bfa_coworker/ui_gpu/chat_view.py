@@ -32,7 +32,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from ..chat_status import fmt_duration, phase_text, spinner_char
 from ..chat_turns import NOTE_TITLES, group_turns, is_system_note_msg, split_turn
@@ -50,6 +50,20 @@ _ERROR = (0.92, 0.40, 0.33, 1.0)   # failed tool rows (themes have no error colo
 _HEADING_SCALE = {1: 1.6, 2: 1.4, 3: 1.2, 4: 1.05}
 # Heading markers, as in the native chat: keyframe shapes that shrink with the level.
 _HEADING_ICON = {1: "KEYTYPE_EXTREME_VEC", 2: "KEYTYPE_MOVING_HOLD_VEC", 3: "KEYTYPE_JITTER_VEC"}
+
+
+# "[attached: a.png, b.jpg]" -- the marker a user message carries for its images.
+_ATTACHED = re.compile(r"\s*\[attached:\s*([^\]]*)\]")
+# Thumbnail heights (in widget units) for the S / M / L sizes.
+THUMB_SIZES = {"S": 2.5, "M": 4.0, "L": 7.0}
+
+
+def split_attachments(text: str) -> tuple[str, list[str]]:
+    """(text without the marker, attached image names)."""
+    names: list[str] = []
+    for m in _ATTACHED.finditer(text):
+        names += [n.strip() for n in m.group(1).split(",") if n.strip()]
+    return _ATTACHED.sub("", text).strip(), names
 
 
 def message_text(content: Any) -> str:
@@ -81,6 +95,9 @@ class ChatView:
     scroll: float = 0.0
     expanded: set[str] = field(default_factory=set)
     agent_icon: str = "WIZARD"          # the host passes "GHOST_ENABLED" in Blender
+    thumb_size: str = "M"               # attachment thumbnails: S, M or L
+    # The host's lookup of an image's pixel size by name (None: not loaded).
+    image_size: Callable[[str], "tuple[int, int] | None"] | None = None
     content_height: float = 0.0
     _heights: dict[tuple, float] = field(default_factory=dict)
     _drag_y: float | None = None        # mouse y while the scrollbar handle is dragged
@@ -138,7 +155,7 @@ class ChatView:
         key = None
         if not active:
             key = (idx, len(turn), sum(len(message_text(m.get("content"))) for m in turn),
-                   round(width), canvas.style.scale, f"t{idx}" in self.expanded, compact)
+                   round(width), canvas.style.scale, f"t{idx}" in self.expanded, compact, self.thumb_size)
             cached = self._heights.get(key)
             if cached is not None:
                 return cached
@@ -161,15 +178,20 @@ class ChatView:
         user, process, conclusion = split_turn(turn)
         if user is not None:
             indent = 0.0 if compact else style.unit * 2
-            text = message_text(user.get("content"))
+            text, images = split_attachments(message_text(user.get("content")))
             side, gap = canvas.icon_size(), pad * 0.6
             inner_w = width - indent - 2 * pad - side - gap
-            h = canvas.text_height(text, inner_w) + 2 * pad
+            thumbs = self._layout_thumbs(canvas, images, inner_w, compact)
+            thumbs_h = (max(r.top for _n, r, _ok in thumbs) + pad) if thumbs else 0.0
+            h = (canvas.text_height(text, inner_w) if text else 0.0) + thumbs_h + 2 * pad
             box = Rect(x + indent, top - h, width - indent, h)
             canvas.box(box, colors=style.button, selected=True, outline=False)
             canvas.icon(self._first_line_icon(canvas, box.x + pad, box.top - pad, style.line_height),
                         "USER", style.button.text_sel)
-            canvas.wrapped(box.x + pad + side + gap, box.top - pad, inner_w, text, style.button.text_sel)
+            text_top = box.top - pad
+            if text:
+                text_top = canvas.wrapped(box.x + pad + side + gap, text_top, inner_w, text, style.button.text_sel)
+            self._draw_thumbs(canvas, thumbs, box.x + pad + side + gap, text_top - pad, actions)
             top = box.y - pad
         # The same spinner and words as the panel chat (chat_status), driven by
         # the state's thinking_dots tick.
@@ -200,9 +222,64 @@ class ChatView:
             done = canvas.icon_size()
             canvas.icon(self._first_line_icon(canvas, x + width - done, row_top, style.line_height),
                         "CHECKMARK", _soft(style.text, 0.2))
-            top = self._draw_markdown(canvas, parse(message_text(conclusion.get("content"))),
-                                      idx, x, top, width, actions)
+            # Copy the whole reply, like the panel chat's copy button.
+            reply = message_text(conclusion.get("content"))
+            bw = style.line_height
+            copy = Rect(x + width - done - style.pad - bw, row_top - style.line_height, bw, style.line_height)
+            if canvas.button(copy, "copymsg:{:d}".format(idx), "", icon="COPYDOWN"):
+                actions.append(("copy", reply))
+            top = self._draw_markdown(canvas, parse(reply), idx, x, top, width, actions)
         return top
+
+    # -- attachment thumbnails --------------------------------------------------------
+    def _layout_thumbs(self, canvas: Canvas, names: list[str], width: float,
+                       compact: bool) -> list[tuple[str, Rect, bool]]:
+        """(name, rect, loaded) per image, wrapped in rows; rects grow down from y=0."""
+        style = canvas.style
+        units = THUMB_SIZES.get(self.thumb_size, 4.0)
+        if compact:
+            units = min(units, THUMB_SIZES["S"])
+        height = style.unit * units
+        out: list[tuple[str, Rect, bool]] = []
+        x = y = 0.0
+        for name in names:
+            size = self.image_size(name) if self.image_size is not None else None
+            if size and size[0] > 0 and size[1] > 0:
+                w, h, loaded = min(width, height * size[0] / size[1]), height, True
+            else:   # not in this file: a chip with the name
+                w = min(width, canvas.measure(name, "ui", style.font_size) + canvas.icon_size() + 2 * style.pad)
+                h, loaded = style.unit, False
+            if x > 0 and x + w > width:
+                x, y = 0.0, max(r.top for _n, r, _ok in out) + style.pad * 0.5
+            out.append((name, Rect(x, y, w, h), loaded))
+            x += w + style.pad * 0.5
+        return out
+
+    def _draw_thumbs(self, canvas: Canvas, thumbs: list[tuple[str, Rect, bool]], x: float, top: float,
+                     actions: list[tuple[str, str]]) -> None:
+        style = canvas.style
+        row_tops: dict[float, float] = {}
+        for _name, r, _ok in thumbs:     # each row's height, so rows hang from *top*
+            row_tops[r.y] = max(row_tops.get(r.y, 0.0), r.h)
+        for name, r, loaded in thumbs:
+            row_h = row_tops[r.y]
+            rect = Rect(x + r.x, top - r.y - row_h + (row_h - r.h), r.w, r.h)
+            widget_id = "img:" + name
+            if loaded:
+                canvas.fill(rect, style.text_field.inner, style.radius(style.text_field))
+                canvas.image(rect.inset(1.0), name)
+                hovered = canvas.state.hovered(rect)
+                canvas.stroke(rect, style.cursor if hovered else style.text_field.outline,
+                              style.radius(style.text_field))
+            else:
+                canvas.box(rect, colors=style.box)
+                side = canvas.icon_size()
+                canvas.icon(Rect(rect.x + style.pad * 0.5, rect.y + (rect.h - side) / 2, side, side),
+                            "IMAGE_DATA", style.box.text)
+                canvas.label(Rect(rect.x + side + style.pad, rect.y, rect.w, rect.h), name, style.box.text)
+            canvas.hit_areas.append((rect, widget_id))
+            if loaded and canvas.state.clicked == widget_id:
+                actions.append(("open_image", name))
 
     # -- icons -------------------------------------------------------------------------
     @staticmethod

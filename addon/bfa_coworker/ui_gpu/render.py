@@ -165,6 +165,37 @@ def _image(x: int, y: int, side: int, texture: Any, alpha: float) -> None:
     gpu.state.blend_set("ALPHA")
 
 
+def _picture(cmd: DrawCmd) -> None:
+    """A Blender image (an attachment thumbnail), fitted into the command's rect."""
+    import bpy  # pylint: disable=import-error
+    image = bpy.data.images.get(cmd.text)
+    if image is None or cmd.rect is None:
+        return
+    width, height = image.size[:]
+    if width <= 0 or height <= 0:
+        return
+    try:
+        texture = gpu.texture.from_image(image)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return
+    r = cmd.rect
+    scale = min(r.w / width, r.h / height)
+    w, h = width * scale, height * scale
+    x, y = round(r.x + (r.w - w) / 2), round(r.y + (r.h - h) / 2)
+    # Image textures are scene-linear: convert for the display like Blender's own previews.
+    try:
+        shader = _shader("IMAGE_SCENE_LINEAR_TO_REC709_SRGB")
+    except (ValueError, SystemError):
+        shader = _shader("IMAGE")
+    batch = batch_for_shader(shader, "TRIS", {
+        "pos": [(x, y), (x + w, y), (x + w, y + h), (x, y), (x + w, y + h), (x, y + h)],
+        "texCoord": [(0, 0), (1, 0), (1, 1), (0, 0), (1, 1), (0, 1)],
+    })
+    shader.bind()
+    shader.uniform_sampler("image", texture)
+    batch.draw(shader)
+
+
 def _icon(cmd: DrawCmd, style: Any) -> None:
     assert cmd.rect is not None
     # One texel per screen pixel: whole-pixel size and position keep icons crisp.
@@ -219,6 +250,8 @@ def render(commands: list[DrawCmd], style: Any = None) -> None:
                 _text(cmd)
             elif cmd.kind == "icon" and cmd.rect is not None:
                 _icon(cmd, style)
+            elif cmd.kind == "image":
+                _picture(cmd)
             elif cmd.kind == "clip" and cmd.rect is not None:
                 r = cmd.rect
                 gpu.state.scissor_test_set(True)

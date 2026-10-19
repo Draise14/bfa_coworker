@@ -105,9 +105,10 @@ def wrap_text(text: str, width: float, measure: Measure, font: str = "ui",
 
 @dataclass(frozen=True)
 class DrawCmd:
-    """One thing to draw.  *kind*: rect, outline, text, icon, clip, unclip.
+    """One thing to draw.  *kind*: rect, outline, text, icon, image, clip, unclip.
 
-    An ``icon`` command keeps the icon's name in *text* (see :mod:`.icons`).
+    An ``icon`` command keeps the icon's name in *text* (see :mod:`.icons`); an
+    ``image`` command keeps a Blender image's name, drawn aspect-fitted into *rect*.
     """
 
     kind: str
@@ -211,6 +212,10 @@ class Canvas:
     def icon(self, rect: Rect, name: str, color: RGBA | None = None) -> None:
         """Icon *name* (a Blender icon name, see :mod:`.icons`) in the square *rect*."""
         self.commands.append(DrawCmd("icon", rect, color or self.style.text, text=name))
+
+    def image(self, rect: Rect, name: str) -> None:
+        """The Blender image *name*, fitted into *rect* (keeps its aspect)."""
+        self.commands.append(DrawCmd("image", rect, text=name))
 
     def icon_size(self) -> float:
         """Side of an inline icon: about the height of capital letters plus a little."""

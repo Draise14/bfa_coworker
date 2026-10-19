@@ -25,8 +25,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased - v1.1.40]
 
-Tier 4 has started (issue #97). Most of the work so far is groundwork for the External
-Agent mode and the new Coworker editor; these are the changes you can notice.
+Tier 4 has started (issue #97). This release brings the new chat (the Coworker editor and
+a compact sidebar chat) plus groundwork for the External Agent mode.
+
+### Added
+
+- **The Coworker editor (#26).** Pick *Coworker* in any area's Editor Type menu (next to the node editors), or click the "open the Coworker editor" button in the sidebar chat. It is a full-size chat that follows the usual chat-app layout: the newest message at the bottom with the input pinned under it, **Enter sends, Shift+Enter adds a line**, and an inline **@ list** with the same filters and icons as the mention popup (Objects, Materials, Collections, Node Groups, Worlds, Actions). It is drawn in your theme's colours, fonts and roundness with Bforartists' own full-colour icons, and Ctrl+wheel zooms it.
+  - **Header:** Chat and View menus, chat mode, status, Start / Stop, settings.
+  - **Toolshelf:** new thread, @ mention, attach a render or the screen, thumbnail size, plan, rules, session log.
+  - **Sidebar:** the same panels as the 3D View's Coworker tab -- controls and image socket, Session (Context, Memory & Checkpoints), Queue, Status & Diagnostics.
+  - Replies render markdown (headings, lists, tables, code with **Copy**); the Workshop folds the tool steps away; replies have a Copy button.
+  - **Attached images show as thumbnails** in your message (click one to open it in an Image Editor); the image waiting to be sent shows in the input box. View > Thumbnails sets the size (Small / Medium / Large).
+  - Type in another script with **Edit** (a native text field, for Chinese, Japanese or Korean input).
+- **Compact sidebar chat.** The 3D View's Coworker tab shows the same chat in a small form, with a top bar for status, Start / Stop, chat mode, settings and the editor. *Preferences > Coworker > Chat Display > Sidebar Chat* switches back to the **Classic Panels**.
+- In **External Harness** mode both show a card (the chat runs in your MCP client) with Start / Stop Bridge, Copy Config and Configure.
 
 ### Security
 
@@ -34,6 +46,7 @@ Agent mode and the new Coworker editor; these are the changes you can notice.
 
 ### Fixed
 
+- Switching the operating mode while Coworker is running is refused again (it should be -- stop first). The check read a missing value and the mode changed half-way.
 - **Node tools work with the compositor on 5.x.** `get_active_node_tree`, `wire_node_group`, `load_asset_in_context` and the usage summary read `scene.node_tree`, which no longer exists; they now use the scene's compositor node group. A read never creates or enables a node tree any more.
 - **`list_blender_templates` works.** It crashed in every setup; the templates now live with the MCP server.
 - Skills and generated code no longer set the deprecated `use_nodes = True`; new materials and worlds always have a node tree.

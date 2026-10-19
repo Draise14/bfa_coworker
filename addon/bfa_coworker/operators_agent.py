@@ -207,321 +207,165 @@ class _BFACW_OT_ping_agent(bpy.types.Operator):  # type: ignore[misc]
 # you're asking a colleague to do something.
 
 _TEST_SUITES: dict[str, list[tuple[int, str, str]]] = {
-    # -- Scene Building Workflow --------------------------------------
-    # Tests object creation, collections, materials, lighting, camera
-    "scene_build": [
-        (1, "Ground",
-         "I'm setting up a scene to render. First, create a rounded corner ground mesh -- "
-         "like a large stage floor or backdrop. "
-         "Name it \"Ground\"."),
-        (2, "Props",
-         "Now scatter some random cartoon objects on the ground, like rocks, bushes, trees."
-         "Arrange them in a loose circle like toys"
-         "around the center. Vary their, viewport colors, sizes and shapes so they look interesting."),
+    # == Core benchmarks (#104) =========================================
+    # Six multi-purpose workflows, 4-5 steps each.  Together they cover
+    # everything the 15 older suites did, in about half the steps.
+
+    # -- Scene: objects, collections, materials, lights, camera, render ---
+    # (was Baseline + Scene Build)
+    "scene": [
+        (1, "Stone Ring",
+         "Let's build a little stonehenge. Make a wide, flat grass ground "
+         "disc named \"Ground\", then a ring of 8 tall rough-hewn standing "
+         "stones evenly spaced around the center, named \"Pillar_1\" through "
+         "\"Pillar_8\"."),
+        (2, "Lintels & Props",
+         "Lay a stone lintel across the tops of each pair of neighbouring "
+         "pillars (\"Lintel_1\" to \"Lintel_8\"), resting on them. Then "
+         "scatter a few small rocks and bushes around the outside of the "
+         "ring, varying their size and viewport color."),
         (3, "Collections",
-         "Organize everything into collections. Create three collections "
-         "with color tags: \"Props\" (blue), \"Ground\" (green), and "
-         "\"Lighting\" (yellow). Move the ground into Ground, "
-         "all the scattered objects into Props."),
+         "Organize the scene into collections with color tags: \"Stones\" "
+         "(blue) for pillars and lintels, \"Props\" (green) for the rocks "
+         "and bushes, \"Ground\" (red) for the ground, and an empty "
+         "\"Lighting\" (yellow)."),
         (4, "Materials",
-         "Give each object in the Props collection a material. Use a "
-         "mix: some metallic (gold/copper), some rough (stone/concrete), "
-         "and one glass. Name each material after the object."),
-        (5, "Lighting",
-         "Now light the scene. Add a Sun lamp angled from above-right "
-         "for key light, and a warm-colored Point light near the center "
-         "for fill. Put both in the Lighting collection."),
-        (6, "Camera",
-         "Place the camera to frame the whole scene from a slight "
-         "high angle -- like a long shot. Use a nice portrait "
-         "focal length. Render at a decent HD resolution with EEVEE."),
+         "Give the stones a rough warm-gray stone material with a noise "
+         "texture for surface variation, the ground a grassy green, and the "
+         "props one metallic copper and one glass material."),
+        (5, "Light & Camera",
+         "Light it like sunrise: a low warm-orange sun from the east and a "
+         "faint blue fill from the opposite side, both in Lighting. Add a "
+         "low-angle camera looking up at the stones with a wide lens, set "
+         "EEVEE at 1080x1080, and render a frame."),
     ],
-    # -- Animation Workflow ------------------------------------------
-    # Tests keyframes, timeline, motion paths
+    # -- Animation: material, keyframes, squash & stretch, tracked camera --
     "animation": [
-        (1, "Ball",
-         "Create a sphere at the origin, name it \"Bouncing Ball\". "
-         "Give it a shiny red rubber material with smooth shading and a bit of SSS."),
-        (2, "Floor",
-         "Add floor below the ball -- position it "
-         "just under the ball and scale it wide enoguh for the animation. "
-         "Give it a simple tiled floor material (like a gym floor) and name it \"Floor\"."),
-        (3, "Bounce Keys",
-         "Animate the ball bouncing up and down. "
-         "It starts on the floor, jumps up high, comes back down, "
-         "then does a few smaller bounces that settle back to the "
-         "floor. Make the whole animation about 4 seconds long at "
-         "30 fps. Try make the hit on the ground feel solid and the bounces feel natural."),
-        (4, "Squash & Stretch",
-         "Add squash and stretch to the bounce. When the ball hits "
-         "the floor it should flatten (squash), and when it's in the "
-         "air it should elongate slightly (stretch). Keyframe the "
-         "scale to match the motion."),
-        (5, "Camera Move",
-         "Add a camera that slowly moves around the ball. "
-         "Keep the camera tracked a little towards the ball the whole time "
-         "so the viewer sees the bounce but follow it. "
-         "Make sure the framing covers the full arc."),
+        (1, "Ball & Floor",
+         "Create a sphere named \"Bouncing Ball\" with smooth shading and a "
+         "shiny red rubber material with a little subsurface scattering, and "
+         "a wide floor named \"Floor\" just under it with a tiled gym-floor "
+         "material."),
+        (2, "Bounce Keys",
+         "Animate the ball bouncing: it starts on the floor, jumps high, "
+         "then a few smaller bounces that settle. About 4 seconds at 30 fps; "
+         "make the floor contacts feel solid."),
+        (3, "Squash & Stretch",
+         "Add squash and stretch: flatten the ball on each floor contact "
+         "and stretch it slightly in the air, keyframing the scale to match "
+         "the motion."),
+        (4, "Camera Move",
+         "Add a camera that slowly orbits the ball while staying aimed at "
+         "it, framing the full bounce arc. Report the keyframe count on the "
+         "ball."),
     ],
-    # -- Modifier Chain Workflow -----------------------------------------
-    # Tests modifier stacking, applying, and remeshing on a torus.
-    # Goal: build a detailed mechanical part from a torus base.
-    "modifiers": [
-        (1, "Torus Base",
-         "Create a torus mesh named 'Gear_Base'. "
-         "Major radius 1.0, minor radius 0.3, "
-         "major segments 48, minor segments 16. "
-         "Position it at the origin, centered."),
-        (2, "Array & Bevel",
-         "Add an Array modifier (count 3, offset on X axis by 2.5) "
-         "to create a row of three rings. "
-         "Then add a Bevel modifier (width 0.05, segments 2) to round all edges. "
-         "Do NOT apply yet."),
-        (3, "Apply Array",
-         "Apply the Array modifier so the three rings become real geometry. "
-         "Then check how many vertices the object has and report the count."),
-        (4, "Remesh",
-         "Add a Remesh modifier (mode: Voxel, voxel size 0.1) to unify "
-         "the merged geometry into a single clean mesh. "
-         "Apply the Remesh modifier."),
-        (5, "Solidify & Smooth",
-         "Add a Solidify modifier (thickness 0.02) to give the mesh wall thickness. "
-         "Then add a Smooth modifier (factor 0.5, iterations 3) to soften edges. "
-         "Apply both modifiers."),
-        (6, "Subdivide & Final",
-         "Add a Subdivision Surface modifier (viewport levels 2) for a polished look. "
-         "Do NOT apply it yet. "
-         "Then rename the object to 'Mechanical_Part' and "
-         "report the final vertex count and modifier stack."),
+    # -- Modeling: modifier stack, apply, remesh, measurements -------------
+    "modeling": [
+        (1, "Torus & Stack",
+         "Create a torus named \"Gear_Base\" at the origin (major radius "
+         "1.0, minor 0.3, 48 x 16 segments). Add an Array modifier (count 3, "
+         "offset 2.5 on X) and a Bevel modifier (width 0.05, 2 segments). "
+         "Don't apply them yet."),
+        (2, "Apply & Measure",
+         "Apply the Array modifier, then report the vertex count."),
+        (3, "Remesh & Thicken",
+         "Add a voxel Remesh (voxel size 0.1), a Solidify (thickness 0.02) "
+         "and a Smooth modifier (factor 0.5, 3 iterations), and apply all "
+         "three."),
+        (4, "Finish",
+         "Add a Subdivision Surface (viewport level 2) without applying it, "
+         "rename the object to \"Mechanical_Part\", and report the final "
+         "vertex count and modifier stack."),
+    ],
+    # -- Nodes: shader, geometry nodes, compositor, screenshot check -------
+    # (was Shader Nodes + Geometry Nodes + Compositor + Multi-Editor)
+    "nodes": [
+        (1, "Shader",
+         "Create a plane with a material named \"Procedural_Grass\" built "
+         "from Noise Texture -> Color Ramp (two greens) -> Principled BSDF."),
+        (2, "Geo Nodes",
+         "Add a grid with a Geometry Nodes modifier: Distribute Points on "
+         "Faces -> Instance on Points (Ico Sphere) -> Set Shade Smooth, with "
+         "a Random Value node scaling the instances between 0.5 and 2.0."),
+        (3, "Compositor",
+         "Enable the compositor and build Render Layers -> Blur (Gaussian, "
+         "10 px) -> Composite/Viewer."),
+        (4, "Verify",
+         "Take a screenshot of the 3D viewport and tell me whether the "
+         "scattered spheres and the grass material look right."),
+    ],
+    # -- Assets: Poly Haven texture/model/HDRI, Asset Browser ---------------
+    # (was Asset Browser + Poly Haven)
+    "assets": [
+        (1, "PBR Texture",
+         "Search Poly Haven for a brick texture, make a PBR material from "
+         "it, and apply it to a new cube."),
+        (2, "Model",
+         "Search Poly Haven for a chair model, download it and import it "
+         "next to the cube, with its textures."),
+        (3, "HDRI",
+         "Create a new scene named \"Studio\" and give it a Poly Haven "
+         "sunset HDRI as its world. Leave the first scene's world exactly as "
+         "it was."),
+        (4, "Asset Browser",
+         "Back in the first scene, search the asset browser: assign a "
+         "material asset to the cube, load a node group asset into its "
+         "material, and load a collection asset into the scene. Say what "
+         "you used, or what was missing."),
+    ],
+    # -- Vision: screenshot-checked placement and framing ------------------
+    # (was Vision: Camera + Vision: Place) -- for vision-capable models.
+    "vision": [
+        (1, "Table & Cup",
+         "Build a simple table (2 x 1.2 m top, 0.1 m thick, at 0.9 m on four "
+         "thin legs) with a wood material, named \"Table\". Put a red cup "
+         "(0.25 m cylinder) named \"Cup\" resting exactly on the table top, "
+         "centered. Take a screenshot with get_screenshot_of_area_as_image, "
+         "look at it, and fix any floating or sinking."),
+        (2, "Stack & Touch",
+         "Balance a green marble (0.08 m radius) named \"Marble\" on the "
+         "cup's rim, and place a 0.4 m cube named \"Neighbor\" on the table "
+         "so its side touches the cup's side with no gap or overlap. "
+         "Screenshot, look, and adjust until both are right; say how you "
+         "verified it."),
+        (3, "Product Shot",
+         "Add a camera for a 3/4 product shot from the front-left, slightly "
+         "elevated, with everything on the table in frame and a little "
+         "margin. Screenshot, look, and re-aim until the framing is good."),
+        (4, "Camera Check",
+         "Switch the viewport to camera view, take a final screenshot, and "
+         "confirm nothing is clipped and the shot is balanced. Report the "
+         "camera location, rotation and focal length."),
     ],
 
-    # -- Asset Browser Workflow -------------------------------------
-    # Tests asset browser search, material assignment, node groups
-    "assets_browser": [
-        (1, "Search",
-         "Search the asset browser for any available materials. "
-         "List what you find."),
-        (2, "Assign",
-         "Create a cube and assign a material asset from the asset browser to it."),
-        (3, "Node Group",
-         "Load a node group asset from the asset browser into the active material."),
-        (4, "Collection",
-         "Load a collection asset from the asset browser into the scene."),
-        (5, "Mesh",
-         "Load a mesh asset from the asset browser into the scene."),
-        (6, "World",
-         "Load a world asset from the asset browser and set it as the scene world."),
+    # == Quick challenges (#104) ========================================
+    # Short sanity checks: run these first, or when a full pass isn't needed.
+
+    # -- Quick: 2D editors (was Sequencer + Image Editor) ------------------
+    "quick_2d": [
+        (1, "Sequencer",
+         "In the Video Sequencer, add a blue color strip and a text strip "
+         "reading \"BFA Coworker Test\" above it, and set the frame range to "
+         "1-100."),
+        (2, "Image",
+         "Create a 512x512 image named \"Test_Pattern\", fill its center "
+         "half with red, and save it as test_pattern.png."),
     ],
-    # -- Poly Haven Workflow ---------------------------------------
-    # Tests Poly Haven integration, PBR materials, model import
-    "polyhaven": [
-        (1, "Texture",
-         "Search Poly Haven for a brick texture, download and create a PBR material."),
-        (2, "Model",
-         "Search Poly Haven for a chair model, download and import it into the scene."),
-        (3, "HDRI",
-         "Search Poly Haven for a sunset HDRI, download and set it as the world environment."),
-        (4, "Apply",
-         "Create a cube and apply the brick PBR material to it."),
-        (5, "Render",
-         "Add camera and lighting, render the scene with the imported assets."),
+    # -- Quick: one-prompt latency check -----------------------------------
+    "quick_sanity": [
+        (1, "Suzanne",
+         "Add a Suzanne monkey head with a Subdivision Surface modifier "
+         "(level 2), smooth shading and a gold metallic material."),
     ],
-    # -- Shader Nodes Workflow -------------------------------------
-    # Tests material creation, node tree building
-    "shader_nodes": [
-        (1, "Material",
-         "Create a new material named \"Procedural_Grass\"."),
-        (2, "Node Tree",
-         "Build a node tree: Noise Texture -> ColorRamp -> Principled BSDF. "
-         "Use green colors for the grass look."),
-        (3, "Assign",
-         "Create a plane and assign the Procedural_Grass material to it."),
-        (4, "Preview",
-         "Take a screenshot of the 3D viewport to preview the shader."),
-    ],
-    # -- Geometry Nodes Workflow -----------------------------------
-    # Tests GN modifier, node tree building
-    "geometry_nodes": [
-        (1, "GN Modifier",
-         "Create a Geometry Nodes modifier on a new grid object."),
-        (2, "Node Tree",
-         "Build a GN node tree: Distribute Points on Faces -> Instance on Points "
-         "(using an Ico Sphere) -> Set Shade Smooth."),
-        (3, "Random Scale",
-         "Add a Random Value node to vary the instance scale between 0.5 and 2.0."),
-        (4, "Verify",
-         "Take a screenshot of the 3D viewport to verify the geometry nodes result."),
-    ],
-    # -- Sequencer Workflow ----------------------------------------
-    # Tests video sequence editor operations
-    "sequencer": [
-        (1, "Color Strip",
-         "Create a color strip in the Video Sequence Editor with a blue background."),
-        (2, "Transform",
-         "Add a transform effect strip on top of the color strip."),
-        (3, "Text",
-         "Add a text overlay strip with the text \"BFA Coworker Test\"."),
-        (4, "Range",
-         "Set the render frame range from 1 to 100 for the sequencer output."),
-    ],
-    # -- Image Editor Workflow -------------------------------------
-    # Tests image creation, pixel manipulation
-    "image_editor": [
-        (1, "New Image",
-         "Create a new 512x512 image named \"Test_Pattern\" in the Image Editor."),
-        (2, "Draw",
-         "Draw a colored rectangle on the image -- fill the center half with red."),
-        (3, "Save",
-         "Save the image to disk as test_pattern.png."),
-    ],
-    # -- Compositor Workflow ---------------------------------------
-    # Tests compositor node setup
-    "compositor": [
-        (1, "Enable",
-         "Enable the compositor and set it to use nodes."),
-        (2, "Node Tree",
-         "Add Render Layers -> Blur -> Viewer node chain in the compositor."),
-        (3, "Settings",
-         "Set the blur to use Gaussian with 10px size."),
-        (4, "Render",
-         "Render a frame and verify the compositor output."),
-    ],
-    # -- Multi-Editor Cross-Context --------------------------------
-    # Tests agent ability to work across multiple editors
-    "multi_editor_cross": [
-        (1, "Mesh",
-         "Create a monkey head mesh object (Suzanne)."),
-        (2, "GN Modifier",
-         "Add a Geometry Nodes modifier to the monkey and build a simple node tree."),
-        (3, "Material",
-         "Create a material for the monkey with a Principled BSDF."),
-        (4, "Render",
-         "Render a frame of the monkey with the GN modifier and material applied."),
-    ],
-    # -- Baseline Latency (quick sanity -- fun scene) -----------------
-    "baseline": [
-        (1, "Stone Ring",
-         "Can you make a stonehenge? First, create a ring of stone "
-         "pillars -- tall, rough-hewn blocks arranged in a circle "
-         "around the center, evenly spaced. Make them look like "
-         "standing stones. Name them \"Pillar_1\" through \"Pillar_8\"."),
-        (2, "Lintels",
-         "Now add lintels on top of the pillars. For each pair of "
-         "adjacent pillars, create a horizontal beam resting on top. "
-         "Make each one thick enough to look like a solid stone "
-         "crossbeam. Name them \"Lintel_1\" through \"Lintel_8\"."),
-        (3, "Ground",
-         "Add a large flat ground plane beneath the circle -- a wide "
-         "flat disc. Give it a grassy green material."),
-        (4, "Material",
-         "Give all the stone pillars and lintels a rough stone "
-         "material: high roughness, low specular, a warm gray color. "
-         "Use a noise texture to add some surface variation."),
-        (5, "Lighting",
-         "Add dramatic lighting: a sun lamp angled low from the east "
-         "(like sunrise) with warm orange tint, and a faint blue fill "
-         "light from the opposite side for contrast."),
-        (6, "Camera",
-         "Place the camera at a low angle looking up at the stones, "
-         "framing the circle with the sun behind the pillars. "
-         "Use a wide focal length for a dramatic shot. "
-         "Frame and render at square resolution."),
-    ],
-    # -- Error Handling (ambiguous prompts) --------------------------
-    "error_handling": [
+    # -- Quick: judgement on vague / impossible / contradictory asks -------
+    # (was Error Handling) -- the right answer is to ask or decline.
+    "quick_judgement": [
         (1, "Vague",
          "Make it nicer."),
         (2, "Impossible",
          "Render a 16K IMAX movie with 10 million polygons."),
         (3, "Contradiction",
          "Delete everything but keep all objects."),
-    ],
-    # -- Vision: Camera Placement ------------------------------------
-    # For vision-capable models. Tests whether the model can SEE the
-    # viewport via get_screenshot_of_area_as_image and use what it sees
-    # to place, reframe, and verify a camera.
-    "vision_camera": [
-        (1, "Stage",
-         "I'm testing camera framing, so build me a small product stage: "
-         "a round ground disc with a light gray material, and three distinct "
-         "objects on it -- a red cube, a blue cylinder, and a green sphere. "
-         "Place them asymmetrically (not in a line, not all at the center) "
-         "at different distances from the center so the composition is "
-         "interesting. Name them \"Cube_A\", \"Cylinder_B\", \"Sphere_C\". "
-         "Do NOT add a camera yet."),
-        (2, "Frame It",
-         "Add a camera for a classic product shot: a 3/4 view from the "
-         "front-left, slightly elevated, aiming at the middle of the three "
-         "objects, with all three fully in frame and a little margin around "
-         "them. Now take a screenshot of the 3D viewport with the "
-         "get_screenshot_of_area_as_image tool and LOOK at the image. "
-         "Check the framing: if any object is clipped, too small, or off- "
-         "center, move or re-aim the camera and re-screenshot until the "
-         "shot frames all three objects nicely. Tell me what you saw in "
-         "the screenshot and the final camera placement."),
-        (3, "Hero Angle",
-         "Reframe the same camera as a dramatic low-angle hero shot: "
-         "camera near the ground, looking up at the objects from the front, "
-         "like a product advertisement. Take a screenshot of the viewport "
-         "with get_screenshot_of_area_as_image and LOOK at it. Adjust the "
-         "camera position, angle, and target until the composition looks "
-         "intentional -- all three objects visible and balanced, the ground "
-         "disc framing the bottom of the shot. Iterate with more screenshots "
-         "until it looks good, then report the camera location, rotation, "
-         "and what the final screenshot showed."),
-        (4, "Final Check",
-         "Now switch the 3D viewport to camera view so a screenshot shows "
-         "exactly what the camera sees, and take a final screenshot with "
-         "get_screenshot_of_area_as_image. Verify the composition from the "
-         "camera's perspective: all three objects fully in frame, the shot "
-         "balanced, and a pleasant low-angle composition. If anything is "
-         "clipped or off, adjust the camera and re-check. Report the final "
-         "camera location, rotation, and focal length, and what the final "
-         "screenshot looks like."),
-    ],
-    # -- Vision: Relative Placement ----------------------------------
-    # For vision-capable models. Tests whether the model can SEE one
-    # object in relation to another and position new objects correctly
-    # (on top, centered, touching) -- verified via screenshots.
-    "vision_relative": [
-        (1, "Table",
-         "I'm testing how well you can judge object placement visually. "
-         "Create a simple pedestal table: a rectangular top (about 2m x "
-         "1.2m, 0.1m thick) at 0.9m height with four thin legs. Give it a "
-         "warm brown wood material and name it \"Table\". Take a screenshot "
-         "of the 3D viewport with get_screenshot_of_area_as_image and confirm "
-         "it reads as a table before moving on."),
-        (2, "Cup on Table",
-         "Create a bright red cup (a cylinder, about 0.25m tall) and place "
-         "it so it rests exactly ON TOP of the table: the cup's bottom must "
-         "touch the table's top face, and the cup should be centered on the "
-         "table. Name it \"Cup\". Now take a screenshot of the viewport with "
-         "get_screenshot_of_area_as_image and LOOK at it: if the cup floats "
-         "above the table or sinks into it, fix the position and re-screenshot. "
-         "Keep adjusting until the screenshot clearly shows the cup resting "
-         "on the table surface."),
-        (3, "Stack",
-         "Place a small green sphere (a marble, 0.08m radius) on top of the "
-         "cup's rim, balanced on the opening. Take a screenshot with "
-         "get_screenshot_of_area_as_image and LOOK at it: the marble must sit "
-         "centered on the cup's opening -- not floating above it, not half- "
-         "buried inside. Adjust the marble's position and re-screenshot until "
-         "the screenshot shows it balanced on top. Name it \"Marble\"."),
-        (4, "Centered Cone",
-         "Create a cylinder pedestal (0.6m radius, 0.4m tall) sitting on the "
-         "table next to the cup, and a cone (0.3m radius, 0.5m tall). Place "
-         "the cone exactly centered on the cylinder's top face. Take a "
-         "screenshot with get_screenshot_of_area_as_image, look at it, and "
-         "adjust the cone's X/Y position until it is visually dead-center on "
-         "the cylinder -- neither leaning nor off to the side. Name them "
-         "\"Pedestal\" and \"Cone\"."),
-        (5, "Touch",
-         "Create one more cube (0.4m) and place it NEXT TO the pedestal: "
-         "the new cube's side must touch the pedestal's side exactly, both "
-         "sitting on the table top -- no gap and no overlap. Take a screenshot "
-         "with get_screenshot_of_area_as_image, look at it, and adjust the "
-         "cube's position until the two objects are flush. Name it "
-         "\"Neighbor\" and report how you verified the contact."),
     ],
 }
 
@@ -546,9 +390,9 @@ _test_suite_errors: dict[tuple[str, int], str] = {}
 # the contradictory "delete everything but keep all objects" prompt, forcing
 # action could nudge a destructive mistake.  Keyed by (suite, step_number).
 _REFUSAL_STEPS: set[tuple[str, int]] = {
-    ("error_handling", 1),
-    ("error_handling", 2),
-    ("error_handling", 3),
+    ("quick_judgement", 1),
+    ("quick_judgement", 2),
+    ("quick_judgement", 3),
 }
 # Path to persist benchmark results.
 import os as _os

@@ -1075,96 +1075,96 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         # Reset-on-failure keeps one bad step from corrupting the next.
         diag_box.prop(self, "reset_scene_on_failure", icon='TRASH')
 
-        _SUITE_META = [
-            ("scene_build",   "Scene Build",   'MESH_CUBE',           6),
-            ("animation",     "Animation",     'ANIM',                5),
-            ("modifiers",     "Modifiers",     'MODIFIER',            6),
-            ("assets_browser", "Asset Browser", 'ASSET_MANAGER',       6),
-            ("polyhaven",     "Poly Haven",    'WORLD',               5),
-            ("baseline",      "Baseline",      'CONSOLE',             6),
-            ("error_handling","Errors",        'ERROR',               3),
-            ("vision_camera", "Vision: Camera", 'CAMERA_DATA',         4),
-            ("vision_relative", "Vision: Place", 'SNAP_ON',            5),
-            ("shader_nodes",  "Shader Nodes",  'MATERIAL',            4),
-            ("geometry_nodes", "Geo Nodes",    'GEOMETRY_NODES',      4),
-            ("sequencer",     "Sequencer",     'SEQUENCE',            4),
-            ("image_editor",  "Image Editor",  'IMAGE_DATA',          3),
-            ("compositor",    "Compositor",    'NODE_COMPOSITING',         4),
-            ("multi_editor_cross", "Multi-Editor", 'WINDOW',           4),
-        ]
+        # Six core benchmarks plus three quick challenges (#104).
+        _SUITE_GROUPS = (
+            ("Core benchmarks", [
+                ("scene",      "Scene",      'MESH_CUBE'),
+                ("animation",  "Animation",  'ANIM'),
+                ("modeling",   "Modeling",   'MODIFIER'),
+                ("nodes",      "Nodes",      'NODETREE'),
+                ("assets",     "Assets",     'ASSET_MANAGER'),
+                ("vision",     "Vision",     'CAMERA_DATA'),
+            ]),
+            ("Quick challenges", [
+                ("quick_2d",        "2D Editors", 'SEQUENCE'),
+                ("quick_sanity",    "Sanity",     'CONSOLE'),
+                ("quick_judgement", "Judgement",  'ERROR'),
+            ]),
+        )
 
         from . import operators_agent as _oa_suite
 
-        # Grid layout: 3 columns.
-        grid = diag_box.grid_flow(row_major=True, columns=3, even_columns=True, even_rows=True)
+        for group_label, group_suites in _SUITE_GROUPS:
+            diag_box.label(text=group_label, icon='DISCLOSURE_TRI_RIGHT')
+            # Grid layout: 3 columns.
+            grid = diag_box.grid_flow(row_major=True, columns=3, even_columns=True, even_rows=True)
+            for suite_key, suite_label, suite_icon in group_suites:
+                suite_box = grid.box()
+                suite_header = suite_box.row()
+                suite_header.label(text=suite_label, icon=suite_icon)
 
-        for suite_key, suite_label, suite_icon, _total_steps in _SUITE_META:
-            suite_box = grid.box()
-            suite_header = suite_box.row()
-            suite_header.label(text=suite_label, icon=suite_icon)
-
-            # Show progress using actual suite length.
-            suite = _oa_suite._TEST_SUITES.get(suite_key, [])
-            total_steps = len(suite)
-            step_idx = _oa_suite._test_suite_progress.get(suite_key, 0)
-            suite_header.label(
-                text="Step {:d}/{:d}".format(step_idx, total_steps),
-                icon='INFO',
-            )
-            # Surface failures at the suite level so a broken run is obvious
-            # at a glance instead of looking like a fast, successful one.
-            _failed = _oa_suite._suite_failure_count(suite_key)
-            if _failed:
+                # Show progress using actual suite length.
+                suite = _oa_suite._TEST_SUITES.get(suite_key, [])
+                total_steps = len(suite)
+                step_idx = _oa_suite._test_suite_progress.get(suite_key, 0)
                 suite_header.label(
-                    text="{:d} failed".format(_failed),
-                    icon='ERROR',
+                    text="Step {:d}/{:d}".format(step_idx, total_steps),
+                    icon='INFO',
                 )
-
-            # Step buttons in a column.
-            for step_i, (s_num, s_label, _) in enumerate(suite):
-                step_row = suite_box.row(align=True)
-                is_done = step_i < step_idx
-                is_current = step_i == step_idx
-                _status = _oa_suite._test_suite_status.get((suite_key, s_num))
-                if _status == "failed":
-                    step_icon = 'CANCEL'
-                elif is_done:
-                    step_icon = 'CHECKBOX_HLT'
-                elif is_current:
-                    step_icon = 'RADIOBUT_ON'
-                else:
-                    step_icon = 'RADIOBUT_OFF'
-                op = step_row.operator(
-                    "bfacw.test_step",
-                    text="{:d}. {:s}".format(s_num, s_label),
-                    icon=step_icon,
-                )
-                op.suite = suite_key
-                # Show elapsed time for completed steps.
-                elapsed = _oa_suite._test_suite_timings.get((suite_key, s_num))
-                if elapsed is not None:
-                    step_row.label(text="{:.1f}s".format(elapsed))
-
-                # Show the failure reason inline.  Without this the error was
-                # only written to _agent_state.error, which this panel never
-                # displayed -- so a failed step showed nothing but a timing.
-                _err = _oa_suite._test_suite_errors.get((suite_key, s_num))
-                if _err:
-                    _err_row = suite_box.row()
-                    _err_row.scale_y = 0.8
-                    _err_row.label(
-                        text="\u26a0 {:s}".format(_err.split("\n")[0][:90]),
+                # Surface failures at the suite level so a broken run is obvious
+                # at a glance instead of looking like a fast, successful one.
+                _failed = _oa_suite._suite_failure_count(suite_key)
+                if _failed:
+                    suite_header.label(
+                        text="{:d} failed".format(_failed),
                         icon='ERROR',
                     )
 
-            # Reset button at the bottom of each suite.
-            reset_row = suite_box.row(align=True)
-            reset_op = reset_row.operator(
-                "bfacw.test_step_reset",
-                icon='LOOP_BACK',
-                text="Reset",
-            )
-            reset_op.suite = suite_key
+                # Step buttons in a column.
+                for step_i, (s_num, s_label, _) in enumerate(suite):
+                    step_row = suite_box.row(align=True)
+                    is_done = step_i < step_idx
+                    is_current = step_i == step_idx
+                    _status = _oa_suite._test_suite_status.get((suite_key, s_num))
+                    if _status == "failed":
+                        step_icon = 'CANCEL'
+                    elif is_done:
+                        step_icon = 'CHECKBOX_HLT'
+                    elif is_current:
+                        step_icon = 'RADIOBUT_ON'
+                    else:
+                        step_icon = 'RADIOBUT_OFF'
+                    op = step_row.operator(
+                        "bfacw.test_step",
+                        text="{:d}. {:s}".format(s_num, s_label),
+                        icon=step_icon,
+                    )
+                    op.suite = suite_key
+                    # Show elapsed time for completed steps.
+                    elapsed = _oa_suite._test_suite_timings.get((suite_key, s_num))
+                    if elapsed is not None:
+                        step_row.label(text="{:.1f}s".format(elapsed))
+
+                    # Show the failure reason inline.  Without this the error was
+                    # only written to _agent_state.error, which this panel never
+                    # displayed -- so a failed step showed nothing but a timing.
+                    _err = _oa_suite._test_suite_errors.get((suite_key, s_num))
+                    if _err:
+                        _err_row = suite_box.row()
+                        _err_row.scale_y = 0.8
+                        _err_row.label(
+                            text="\u26a0 {:s}".format(_err.split("\n")[0][:90]),
+                            icon='ERROR',
+                        )
+
+                # Reset button at the bottom of each suite.
+                reset_row = suite_box.row(align=True)
+                reset_op = reset_row.operator(
+                    "bfacw.test_step_reset",
+                    icon='LOOP_BACK',
+                    text="Reset",
+                )
+                reset_op.suite = suite_key
 
         from . import asset_selftests as _ast
 

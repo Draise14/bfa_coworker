@@ -3357,22 +3357,16 @@ def _get_blender_python_for_config() -> tuple[str, str]:
     return ("python", "")
 
 
-def generate_mcp_client_config(
-    client_type: str = "claude",
+def build_mcp_server_entry(
     blender_host: str = "localhost",
     blender_port: int = 9876,
     use_blender_python: bool = True,
-) -> str:
-    """Generate MCP client configuration JSON for external tools.
+) -> dict[str, Any]:
+    """Return the stdio server block (``command`` / ``args`` / ``env``) every preset wraps.
 
-    *client_type*: one of the harness preset identifiers (e.g. ``"claude_desktop"``,
-    ``"codex"``, ``"cursor"``, ``"generic"``).
-
-    When *use_blender_python* is True (default), the config emits the full
+    When *use_blender_python* is True (default), the block uses the full
     path to Blender's bundled Python with ``PYTHONPATH`` set to the vendor
     directories -- no pip install needed.
-
-    Returns a JSON string suitable for the client's config file.
     """
     # Resolve the python command and PYTHONPATH.
     if use_blender_python:
@@ -3397,14 +3391,44 @@ def generate_mcp_client_config(
     except Exception:
         pass  # Outside Blender - the client must set BLENDER_PATH itself.
 
-    # Base command block shared by all presets.
-    base_cmd = {
+    return {
         "command": py_cmd,
         "args": ["-m", "blmcp", "--transport", "stdio"],
         "env": env,
     }
 
-    if client_type in ("claude_desktop", "claude_code", "freebuff"):
+
+def generate_mcp_client_config(
+    client_type: str = "claude",
+    blender_host: str = "localhost",
+    blender_port: int = 9876,
+    use_blender_python: bool = True,
+) -> str:
+    """Generate MCP client configuration JSON for external tools.
+
+    *client_type*: one of the harness preset identifiers (e.g. ``"claude_desktop"``,
+    ``"codex"``, ``"cursor"``, ``"generic"``).
+
+    See :func:`build_mcp_server_entry` for the server block itself.
+
+    Returns a JSON string suitable for the client's config file.
+    """
+    base_cmd = build_mcp_server_entry(
+        blender_host=blender_host,
+        blender_port=blender_port,
+        use_blender_python=use_blender_python,
+    )
+
+    if client_type == "claude_code":
+        # Claude Code does NOT read claude_desktop_config.json.  This shape is
+        # a valid project ``.mcp.json`` and matches the user-scope entry that
+        # :func:`register_claude_code_mcp_server` writes to ``~/.claude.json``.
+        config = {
+            "mcpServers": {
+                "bfa-coworker": {"type": "stdio", **base_cmd},
+            }
+        }
+    elif client_type in ("claude_desktop", "freebuff"):
         config = {
             "mcpServers": {
                 "bfa-coworker": dict(base_cmd),
@@ -3436,6 +3460,66 @@ def generate_mcp_client_config(
         config = dict(base_cmd)
 
     return json.dumps(config, indent=2)
+
+
+def claude_code_user_config_path() -> Path:
+    """Return the file Claude Code (CLI and IDE extensions) reads user-scope MCP servers from."""
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    if config_dir:
+        return Path(config_dir) / ".claude.json"
+    return Path.home() / ".claude.json"
+
+
+def register_claude_code_mcp_server(
+    blender_host: str = "localhost",
+    blender_port: int = 9876,
+    use_blender_python: bool = True,
+    config_path: Path | None = None,
+) -> Path:
+    """Add (or replace) the ``bfa-coworker`` user-scope server in Claude Code's config.
+
+    Equivalent to ``claude mcp add --scope user``, but works when only the
+    VS Code / JetBrains extension is installed and there is no ``claude`` CLI
+    on PATH.  Every other key in the file is preserved; the previous file is
+    copied to ``.claude.json.bfacw.bak`` first and the new one is written
+    atomically.
+
+    Raises ``ValueError`` when the existing file is not a JSON object -- it is
+    never overwritten in that case.  Returns the path written.
+    """
+    path = config_path if config_path is not None else claude_code_user_config_path()
+    data: dict[str, Any] = {}
+    if path.is_file():
+        raw = path.read_text(encoding="utf-8")
+        if raw.strip():
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError as ex:
+                raise ValueError(
+                    "{:s} is not valid JSON ({:s}) -- not touching it".format(str(path), str(ex))
+                ) from ex
+            if not isinstance(data, dict):
+                raise ValueError("{:s} is not a JSON object -- not touching it".format(str(path)))
+        shutil.copy2(str(path), str(path) + ".bfacw.bak")
+
+    servers = data.get("mcpServers")
+    if not isinstance(servers, dict):
+        servers = {}
+        data["mcpServers"] = servers
+    servers["bfa-coworker"] = {
+        "type": "stdio",
+        **build_mcp_server_entry(
+            blender_host=blender_host,
+            blender_port=blender_port,
+            use_blender_python=use_blender_python,
+        ),
+    }
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".bfacw.tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(str(tmp), str(path))
+    return path
 
 
 def validate_mcp_client_config(

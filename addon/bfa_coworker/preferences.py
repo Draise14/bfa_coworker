@@ -2019,6 +2019,12 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 op = row.operator("bfacw.copy_mcp_config", icon="COPYDOWN", text="Copy to Clipboard")
                 op.client_type = self.harness_preset
                 row.operator("bfacw.test_mcp_config", icon="CHECKMARK", text="Test Config")
+                if self.harness_preset == "claude_code":
+                    step2.operator("bfacw.register_claude_code", icon="IMPORT")
+                    step2.label(
+                        text="Add to Claude Code writes ~/.claude.json directly -- no copy/paste needed.",
+                        icon='BLANK1',
+                    )
                 step2.label(
                     text="This copies the connection settings for your selected client.",
                     icon='BLANK1',
@@ -2077,7 +2083,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     icon='BLANK1',
                 )
                 step3.label(
-                    text="Paste the copied config into the harness chat (e.g. /mcp in Claude Code),",
+                    text="Paste the copied config into the harness chat,",
                     icon='BLANK1',
                 )
                 step3.label(

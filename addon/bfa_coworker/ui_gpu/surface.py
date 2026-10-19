@@ -168,6 +168,7 @@ class ChatSurface:
         self._style = style
         actions: list[tuple[str, str]] = []
         pad = style.pad * (0.7 if self.compact else 1.0)
+        canvas.push_clip(rect)      # never paint outside the chat's room (other panels)
         canvas.fill(rect, style.back)
         if self.compact and self.on_resize is not None:
             rect = self._draw_grip(canvas, rect)
@@ -198,6 +199,7 @@ class ChatSurface:
             self.box.focused = False
         if self.drop_hover:
             self._draw_drop_target(canvas, rect)
+        canvas.pop_clip()
         self._hits = list(canvas.hit_areas)
         self._clicked = None
         # The view's own actions that only change the view are done here.
@@ -228,6 +230,8 @@ class ChatSurface:
             x -= pad * 0.5
         start_label = "Stop" if top.running else top.start_label
         start_w = canvas.icon_size() + canvas.measure(start_label, "ui", style.font_size) + 3.0 * style.pad
+        if x - start_w - row.x < u * 4:      # narrow: Start / Stop as an icon
+            start_label, start_w = "", bw
         x -= start_w
         running_id = "stop_agent" if top.running else "start"
         if canvas.button(Rect(x, row.y, start_w, u), running_id, start_label,
@@ -261,11 +265,12 @@ class ChatSurface:
         its name, a pin (keep it for every message) and remove.  Returns its top."""
         style = canvas.style
         u, pad = style.unit, style.pad * 0.6
-        thumb = u * (1.8 if self.compact else 2.6)
+        narrow = anchor.w < u * 9
+        thumb = u * (1.4 if narrow else 1.8 if self.compact else 2.6)
         tray = Rect(anchor.x, anchor.y, anchor.w, thumb + 2 * pad)
         canvas.box(tray, colors=style.box)
         name = self.box.attachment
-        picture = Rect(tray.x + pad, tray.y + pad, thumb * 1.5, thumb)
+        picture = Rect(tray.x + pad, tray.y + pad, thumb * (1.0 if narrow else 1.5), thumb)
         canvas.fill(picture, style.text_field.inner, style.radius(style.text_field))
         canvas.image(picture.inset(1.0), name)
         canvas.hit_areas.append((picture, "img:" + name))
@@ -288,6 +293,8 @@ class ChatSurface:
         if label != name:
             label = label + "\u2026" if label else ""
         mid = tray.y + tray.h / 2
+        if room < u * 1.5:                  # no room for words: the picture and buttons say it
+            return tray.top
         canvas.icon(Rect(tx, mid + style.line_height * 0.05, side, side), "IMAGE_DATA", style.box.text)
         canvas.label(Rect(tx + side + pad * 0.5, mid, room, style.line_height), label, style.box.text)
         status = _fit(canvas, "Kept for every message" if self.attachment_pinned else "Sent with the next message",

@@ -29,6 +29,7 @@
   "sidebar_chat_found": true,
   "collapsed_hides_chat": true,
   "reopened_shows_chat": true,
+  "sidebar_scrolled_room_kept_height": true,
   "header_patched": true,
   "disabled_cleanly": true
 }

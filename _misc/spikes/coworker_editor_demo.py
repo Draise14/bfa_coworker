@@ -309,6 +309,22 @@ def _tick():
             compact = next(s for s, r in CTX["ce"]._SURFACES.values() if s.compact)
             RESULT["reopened_shows_chat"] = compact.bounds is not None
             _shoot("8_sidebar_chat_reopened")
+            # Scroll the sidebar with the wheel over the panels under the chat.
+            compact, region = next((s, r) for s, r in CTX["ce"]._SURFACES.values() if s.compact)
+            if compact.bounds is not None:
+                wx = int(region.x + compact.bounds.x + compact.bounds.w * 0.5)
+                wy = int(region.y + max(10, compact.bounds.y - 40))
+                _sim("MOUSEMOVE", "NOTHING", x=wx, y=wy)
+                for _ in range(12):
+                    _sim("WHEELDOWNMOUSE", "PRESS", x=wx, y=wy)
+                CTX["room_top_before"] = compact.bounds.top
+            _STEP["n"] = 66
+            return 1.0
+        if step == 66:
+            compact = next(s for s, r in CTX["ce"]._SURFACES.values() if s.compact)
+            RESULT["sidebar_scrolled_room_kept_height"] = (
+                compact.bounds is None or compact.bounds.top != CTX.get("room_top_before"))
+            _shoot("9_sidebar_scrolled")
             # A normal node editor must look like itself.
             _editor_area().ui_type = "ShaderNodeTree"
             _STEP["n"] = 7

@@ -450,8 +450,14 @@ def _runs(values: list[bool]) -> list[tuple[int, int]]:
     return out
 
 
-def _find_chat_rect(region: Any, expected_h: float, tabs_px: float) -> Any:
-    """The panel's room in region pixels, or None when it isn't (fully) known this frame."""
+# The room's full height (region pixels per zoom unit), learnt while both markers
+# are on screen, so a half-scrolled panel keeps its layout and just scrolls.
+_ROOM_H: dict[int, float] = {}
+
+
+def _find_chat_rect(region: Any, expected_h: float, tabs_px: float, zoom: float = 1.0) -> Any:
+    """The panel's whole room in region pixels (it may reach past the region's edges
+    when scrolled; the region clips it, like any panel), or None this frame."""
     import gpu  # pylint: disable=import-error
     top_rgb, bottom_rgb = marker_colors()
     fb = gpu.state.active_framebuffer_get()
@@ -463,18 +469,22 @@ def _find_chat_rect(region: Any, expected_h: float, tabs_px: float) -> Any:
     strip = fb.read_color(x0, 0, strip_w, height, 4, 0, "UBYTE").to_list()
     top_rows = [y for y in range(height) if any(_near(px, top_rgb) for px in strip[y])]
     bottom_rows = [y for y in range(height) if any(_near(px, bottom_rgb) for px in strip[y])]
+    key = region.as_pointer()
+    known = _ROOM_H.get(key)
+    room_h = known * zoom if known else expected_h
     if top_rows and bottom_rows:
         top, bottom = max(top_rows) + 1, min(bottom_rows)
+        _ROOM_H[key] = (top - bottom) / max(zoom, 1e-6)
     elif top_rows:          # bottom unseen: scrolled off the region, or clipped mid-animation
         top = max(top_rows) + 1
-        if top - expected_h > 2:
+        bottom = top - room_h
+        if bottom > 2:
             return None     # it should be on screen: the panel is animating, skip this frame
-        bottom = 0
-    elif bottom_rows:
+    elif bottom_rows:       # top scrolled away above the region
         bottom = min(bottom_rows)
-        if bottom + expected_h < height - 2:
+        top = bottom + room_h
+        if top < height - 2:
             return None
-        top = height
     else:
         return None
     probe_y, rgb = (top_rows[-1], top_rgb) if top_rows else (bottom_rows[0], bottom_rgb)
@@ -495,7 +505,7 @@ def _draw_sidebar() -> None:
     zoom = _view_zoom(region)
     unit = 20.0 * context.preferences.system.ui_scale * zoom
     tabs = _TAB_STRIP_PX * context.preferences.view.ui_scale
-    rect = _find_chat_rect(region, (getattr(props, "chat_panel_rows", 22.0)) * unit, tabs)
+    rect = _find_chat_rect(region, (getattr(props, "chat_panel_rows", 22.0)) * unit, tabs, zoom)
     if rect is None:
         entry = _SURFACES.get(region.as_pointer())
         if entry is not None:
@@ -513,6 +523,7 @@ def _resize_panel(height_px: float, unit_px: float) -> None:
         rows = max(6.0, min(80.0, height_px / unit_px))
         if abs(rows - props.chat_panel_rows) > 0.05:
             props.chat_panel_rows = rows
+            _ROOM_H.clear()     # learn the new height when both markers show again
 
 
 def _router(context: Any, event: Any) -> tuple[ChatSurface, Any, Any] | None:

@@ -236,6 +236,7 @@ class InputBox:
     _mention_start: int | None = None      # offset of the "@" being completed
     blink_phase: bool = True               # the host toggles this for the caret blink
     big_buttons: bool = False              # double-height buttons (the editor's full chat)
+    _narrow: bool = False                  # set by draw(): the box is too thin for labelled buttons
     rect: Rect | None = None               # where the box was last drawn (for clicks)
     # Last drawn lines: (top, bottom, x0, start offset, text) and the measure used.
     _drawn: list[tuple[float, float, float, int, str]] = field(default_factory=list)
@@ -421,6 +422,9 @@ class InputBox:
             specs = [("send", "Send", "PLAY", has_text)]
         out = []
         for widget_id, label, icon, active in specs:
+            if self._narrow:                 # a thin sidebar: icon buttons
+                out.append((widget_id, "", icon, active, style.unit * 1.3))
+                continue
             content = canvas.measure(label, "ui", style.font_size)
             if icon:
                 content += canvas.icon_size() + style.pad * 0.5
@@ -466,6 +470,7 @@ class InputBox:
         style = canvas.style
         pad, u = style.pad, style.unit
         before = len(self.actions)
+        self._narrow = rect.w < u * 8
         h = min(rect.h, self.height(canvas, rect.w))
         box = Rect(rect.x, rect.y, rect.w, h)
         self.rect, self._measure, self._size, self._drawn = box, canvas.measure, style.font_size, []

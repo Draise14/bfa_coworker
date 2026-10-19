@@ -23,7 +23,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [ ] **Add Model Generator** locally, Ultrashape, Hunyuan, similar to here: https://github.com/ahujasid/blender-mcp
 - [x] **Add CC0 resource downloader** from Polyhaven, AmbientC00, Sketchfab, etc — Polyhaven tools implemented in v1.1.37.
 
-## [Unreleased - v1.1.39]
+## [Unreleased - v1.1.40]
+
+Tier 4 has started (issue #97). Most of the work so far is groundwork for the External
+Agent mode and the new Coworker editor; these are the changes you can notice.
+
+### Security
+
+- **Web pages can no longer run code in Blender (#123).** Coworker's local servers only listen on your own computer, but your browser can reach them too, and the MCP server's HTTP mode accepted requests from any web page. Every request now has to carry a private session token, a small file only your own programs can read (`%LOCALAPPDATA%\bfa_coworker\session_token` on Windows, `~/.cache/bfa_coworker/session_token` elsewhere). Coworker, its MCP server and the External Harness launcher send it automatically, so existing client configs keep working. *Settings > Advanced > Bridge Server > Require Session Token* (on by default) turns the check off for a tool of your own that can't send it.
+
+### Fixed
+
+- **Node tools work with the compositor on 5.x.** `get_active_node_tree`, `wire_node_group`, `load_asset_in_context` and the usage summary read `scene.node_tree`, which no longer exists; they now use the scene's compositor node group. A read never creates or enables a node tree any more.
+- **`list_blender_templates` works.** It crashed in every setup; the templates now live with the MCP server.
+- Skills and generated code no longer set the deprecated `use_nodes = True`; new materials and worlds always have a node tree.
+
+### Changed
+
+- Send, Queue and Stop in the chat run through a new engine layer (no visible change), so an external agent can use the same buttons later.
+
+## [v1.1.39] - 2026-10-18
 
 ### Fixed
 

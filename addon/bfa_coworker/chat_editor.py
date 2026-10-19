@@ -116,6 +116,20 @@ def _status(context: Any) -> TopBar:
                       status="Bridge Running" if running else "Bridge Offline",
                       status_icon="CHECKMARK" if running else "CANCEL",
                       running=running, start_label="Start Bridge")
+    if prefs is not None and prefs.operating_mode == "EXTERNAL_AGENT":
+        engine = ui_chat._acp
+        running = bool(engine is not None and engine.connected)
+        status = (engine.status if engine is not None else "Not connected")
+        if state.is_thinking:
+            elapsed = time.time() - state.thinking_start_time if state.thinking_start_time else 0.0
+            status = "{:s} {:s} ({:s})".format(ui_chat._phase_text(state), ui_chat._spinner_char(state),
+                                               ui_chat._fmt_duration(elapsed))
+        icon = ("SORTTIME" if state.is_thinking else "CHECKMARK" if running
+                else "TIME" if engine is not None and engine.connecting else "CANCEL")
+        return TopBar(mode_label="External Agent", mode_icon="LINKED", status=status, status_icon=icon,
+                      running=running, start_label="Connect",
+                      chat_modes=tuple((item[0], item[1]) for item in CHAT_MODE_ITEMS),
+                      chat_mode=getattr(props, "chat_mode", ""))
     local = prefs is not None and prefs.operating_mode == "LOCAL_LLM"
     status = getattr(props, "chat_status", "") or ""
     if state.is_thinking:
@@ -856,7 +870,7 @@ def _draw_header(self: Any, context: Any) -> None:
     if info.error:
         status.operator("bfacw.copy_status_error", text="", icon="COPYDOWN")
     if info.running:
-        layout.operator("bfacw.agent_stop", text="Stop Bridge" if info.start_label != "Start" else "Stop",
+        layout.operator("bfacw.agent_stop", text="Stop Bridge" if info.start_label == "Start Bridge" else "Stop",
                         icon="X")
     else:
         layout.operator("bfacw.agent_start", text=info.start_label, icon="PLAY")

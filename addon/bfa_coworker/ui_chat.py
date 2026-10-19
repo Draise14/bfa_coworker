@@ -76,9 +76,71 @@ from .shared import effective_ports, CHAT_MODE_ITEMS
 _engine: LoopEngine | None = None
 
 
-def _loop_engine(mode: str | None = None) -> LoopEngine:
-    """The chat's loop engine; *mode* ("local"/"remote") updates its label."""
+_acp = None   # the External Agent engine (engine_acp.AcpEngine), made on first use
+
+
+def _is_external_agent(context: bpy.types.Context | None = None) -> bool:
+    try:
+        prefs = (context or bpy.context).preferences.addons[__package__].preferences
+    except (KeyError, AttributeError):
+        return False
+    return prefs.operating_mode == "EXTERNAL_AGENT"
+
+
+def _acp_engine():
+    """The External Agent engine (Tier 4, Agent 4): chat here, the agent app works."""
+    global _acp
+    if _acp is None:
+        from .engine_acp import AcpEngine
+        _acp = AcpEngine(agent_controller._agent_state)
+
+        def changed() -> None:
+            # Any thread.  The chat shows "running" and the status like the other modes.
+            state = agent_controller._agent_state
+            state.mcp_server_running = bool(_acp.connected)
+            if not state.is_thinking:
+                state.ui_status = _acp.status
+
+            def redraw() -> None:     # every chat: editors, sidebars, headers
+                from . import chat_editor as _ce
+                _ce._tag_chat_regions()
+                _tag_chat_regions_redraw()
+            bpy.app.timers.register(redraw, first_interval=0.0)
+        _acp.on_change = changed
+    return _acp
+
+
+def _agent_workspace() -> Path:
+    """Where the external agent runs (its working folder): user-private, not the .blend's."""
+    local = os.environ.get("LOCALAPPDATA")
+    base = Path(local) / "bfa_coworker" if os.name == "nt" and local else Path.home() / ".cache" / "bfa_coworker"
+    return base / "agent_workspace"
+
+
+def _scene_context_line(context: bpy.types.Context) -> str:
+    """One short line about where the user is, sent with each External Agent message."""
+    try:
+        scene = context.scene
+        active = context.view_layer.objects.active if context.view_layer else None
+        selected = [o.name for o in context.selected_objects][:5] if hasattr(context, "selected_objects") else []
+        parts = ["{:s} {:s}".format(bpy.app.version_string, "Bforartists" if _is_bfa else "Blender"),
+                 "scene '{:s}' ({:d} objects)".format(scene.name, len(scene.objects)),
+                 "mode {:s}".format(context.mode)]
+        if active is not None:
+            parts.append("active '{:s}'".format(active.name))
+        if selected:
+            parts.append("selected: " + ", ".join(selected))
+        return "; ".join(parts) + ". Use the bfa-coworker tools to inspect and change the scene."
+    except Exception:  # pylint: disable=broad-exception-caught
+        return ""
+
+
+def _loop_engine(mode: str | None = None):
+    """The chat's engine: our turn loop, or the External Agent in that mode.
+    *mode* ("local"/"remote") updates the loop engine's label."""
     global _engine
+    if _is_external_agent():
+        return _acp_engine()
     if _engine is None:
         _engine = LoopEngine(agent_controller)
         _engine.on_redraw = lambda: _redraw_areas_safe()
@@ -1361,6 +1423,7 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             images=list(attachments or []),
             image_names=list(attachment_names or []),
             chat_mode=props.chat_mode,
+            context=_scene_context_line(context) if _is_external_agent(context) else "",
         )
         config = LoopConfig(llm_url=llm_url or None, api_key=api_key or None,
                             model=model, mcp_port=send_mcp_port)
@@ -2118,8 +2181,53 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         # In External Harness mode, only start the bridge server.
         if prefs.operating_mode == "EXTERNAL_HARNESS":
             return self._start_bridge_only(context)
+        if prefs.operating_mode == "EXTERNAL_AGENT":
+            return self._start_external_agent(context)
 
         return self._start_full_agent(context)
+
+    def _start_external_agent(self, context: bpy.types.Context) -> set[str]:
+        """External Agent mode: the bridge, then the agent app with our MCP server."""
+        import threading as _threading
+        from . import acp_presets
+        prefs = context.preferences.addons[__package__].preferences
+        engine = _acp_engine()
+        if engine.connected or engine.connecting:
+            return {"FINISHED"}
+        if not mcp_to_blender_server.is_running():
+            if self._start_bridge_only(context) != {"FINISHED"}:
+                return {"CANCELLED"}
+        try:
+            preset = (acp_presets.generic_preset(prefs.external_agent_command)
+                      if prefs.external_agent_preset == "custom"
+                      else acp_presets.preset_by_id(prefs.external_agent_preset))
+        except ValueError:
+            preset = None
+        if preset is None:
+            self.report({"WARNING"}, "Pick an agent, or type its command (Custom Command)")
+            return {"CANCELLED"}
+        bridge_port, _, _ = effective_ports(prefs)
+        entry = agent_controller.build_mcp_server_entry(
+            blender_host=prefs.host, blender_port=bridge_port,
+            use_blender_python=getattr(prefs, "use_blender_python_for_harness", True))
+        env = acp_presets.launch_env(preset)
+        cwd = str(_agent_workspace())
+        engine.connecting = True
+        engine.status = "Looking for {:s}...".format(preset.name)
+        engine.on_change and engine.on_change()
+
+        def work() -> None:
+            found = acp_presets.detect(preset)
+            engine.connecting = False
+            if not found.ready:
+                engine.status = "{:s} {:s}".format(found.problem, found.hint).strip()
+                engine.on_change and engine.on_change()
+                return
+            engine.connect(found.argv, entry, cwd, env, label=preset.name, wait=True)
+        _threading.Thread(target=work, daemon=True, name="acp-start").start()
+        context.window_manager.bfacw_chat_props.chat_status = "Starting {:s}...".format(preset.name)
+        _redraw_areas(context)
+        return {"FINISHED"}
 
     def _start_bridge_only(self, context: bpy.types.Context) -> set[str]:
         """Start only the bridge server (External Harness mode)."""
@@ -2381,6 +2489,10 @@ class BFACW_OT_agent_stop(Operator):  # type: ignore[misc]
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
 
+        # External Agent: close the agent app's session.
+        if _acp is not None and (_acp.connected or _acp.connecting):
+            _acp.disconnect()
+
         # Stop LLM.
         llm_manager.stop_local_llama()
 
@@ -2502,6 +2614,12 @@ def chat_timer_update() -> float | None:
             _engine.drain()
         except Exception as _drain_ex:  # pylint: disable=broad-exception-caught
             print("[Coworker] engine drain failed: {}".format(_drain_ex))
+    if _acp is not None:
+        try:
+            if _acp.drain():
+                _save_chat_history() if not _ac._agent_state.is_thinking else None
+        except Exception as _drain_ex:  # pylint: disable=broad-exception-caught
+            print("[Coworker] external agent drain failed: {}".format(_drain_ex))
 
     # Mirror the turn worker's status into the UI property.  The worker must
     # not touch a bpy property itself (that races Blender's context counter);
@@ -2617,7 +2735,7 @@ def _tag_chat_regions_redraw() -> None:
             for area in win.screen.areas:
                 if area.type == 'NODE_EDITOR' and _ce.is_coworker_space(area.spaces.active):
                     for region in area.regions:
-                        if region.type in {'WINDOW', 'HEADER'}:
+                        if region.type in {'WINDOW', 'HEADER', 'UI'}:
                             region.tag_redraw()
                     continue
                 if area.type not in {'VIEW_3D', 'TEXT_EDITOR'}:
@@ -2666,6 +2784,8 @@ def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool 
     mode_row.scale_y = 0.9
     if is_harness:
         mode_row.label(text="External MCP", icon='WORLD')
+    elif prefs.operating_mode == "EXTERNAL_AGENT":
+        mode_row.label(text="External Agent", icon='LINKED')
     elif prefs.operating_mode == "LOCAL_LLM":
         mode_row.label(text="Local LLM", icon='CONSOLE')
     else:
@@ -2676,6 +2796,14 @@ def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool 
     if show_prefs:     # the Coworker editor has its settings button in the header
         mode_row.separator(factor=0.3)
         mode_row.operator("bfacw.open_addon_prefs", icon="PREFERENCES", text="")
+
+    # -- External Agent: which agent app does the work --
+    if prefs.operating_mode == "EXTERNAL_AGENT":
+        pick = layout.row(align=True)
+        pick.enabled = not state.mcp_server_running
+        pick.prop(prefs, "external_agent_preset", text="")
+        if prefs.external_agent_preset == "custom":
+            layout.prop(prefs, "external_agent_command", text="")
 
     # -- Agent control buttons (compact) --
     row = layout.row(align=True)
@@ -2699,12 +2827,14 @@ def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool 
         is_ok = mcp_to_blender_server.is_running()
     else:
         status = props.chat_status
-        if state.is_thinking:
+        if prefs.operating_mode == "EXTERNAL_AGENT" and _acp is not None and not state.is_thinking:
+            status = _acp.status
+        elif state.is_thinking:
             elapsed = time.time() - state.thinking_start_time if state.thinking_start_time else 0.0
             status = "{:s} {:s} ({:s})".format(
                 _phase_text(state), _spinner_char(state),
                 _fmt_duration(elapsed))
-        elif not state.mcp_server_running:
+        elif not state.mcp_server_running and prefs.operating_mode != "EXTERNAL_AGENT":
             status = "Offline"
         elif state.error:
             status = "Error: {:s}".format(state.error)

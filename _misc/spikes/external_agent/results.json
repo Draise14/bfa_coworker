@@ -1,0 +1,13 @@
+{
+  "connected": true,
+  "status": "Connected to OpenCode 1.19.3",
+  "running_flag": true,
+  "user_message": "look up primitive cube add",
+  "tool_rows": [
+    "search_api_docs",
+    "search_api_docs"
+  ],
+  "reply": "The `primitive_cube_add` operator accepts optional parameters including `size`, `calc_uvs`, `enter_editmode`, `align`, `",
+  "scene_line_sent": true,
+  "disconnected": true
+}

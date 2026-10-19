@@ -96,6 +96,11 @@ reject_always], source, expires_s)`, rendered by one inline row. Fed by:
 
 ### 4i.4 — Progressive tool loading in the server (token economy for every client)
 
+> **Measured (4h.0, 2026-10-18):** an ACP agent pays **~13.9K tokens per request** for our
+> MCP server today (20,666 tokens with it vs 6,789 without, same trivial prompt, OpenCode
+> 1.19.3). That's two thirds of its context, so 4i.4 and compact instructions come first
+> among the token work.
+
 Today `load_tools` is intercepted by the local loop. Move the mechanism into the MCP server:
 
 - The server lists the **surface set** (inspection, docs, screenshots, `execute_blender_code`,

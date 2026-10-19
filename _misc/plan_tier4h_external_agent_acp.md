@@ -73,9 +73,33 @@ ACP is JSON-RPC 2.0 over the agent's stdin/stdout. Coworker is the client.
 | `session/cancel` | → agent (notification) | Stop button. Pending permission requests are answered `cancelled`. |
 | `session/set_mode`, model selection | → agent | Optional selectors (phase 2), shown only if the agent advertises them. |
 
-> Method and field names follow the ACP spec as of 2026-10. The **4h.0 spike records real
-> transcripts** from OpenCode and the Claude adapter as test fixtures; implementation
-> follows the fixtures, not this table, wherever they differ.
+> Method and field names follow the ACP spec as of 2026-10. Where the recorded fixtures
+> (§3.1) differ from this table, the fixtures win.
+
+### 3.1 Spike findings (4h.0, 2026-10-18, OpenCode 1.19.3 on Windows)
+
+Recorded with `_misc/acp_record.py` against a local Ollama model (no account used);
+fixtures in `tests/fixtures/acp/`, checked by `tests/test_acp_fixtures.py`.
+
+| Question | Finding | Consequence |
+|---|---|---|
+| Does our MCP server work as an ACP stdio server? | **Yes.** `{name, command, args, env:[{name,value}]}` launched `python -m blmcp --transport stdio`; the agent called `search_api_docs` and got results | No HTTP needed; stdio is the default |
+| `initialize` | `loadSession`, `promptCapabilities.image`, `mcpCapabilities.{http,sse}`, `sessionCapabilities.{close,fork,list,resume}`, `authMethods` (a CLI login hint) | Resume and images are available on OpenCode |
+| Model choice | `session/new` returns **`configOptions`** (`id: "model"`, `type: select`, options + `currentValue`) | Model selector reads `configOptions` (H8), not a separate method |
+| Usage | `session/prompt` result carries `usage {inputTokens, outputTokens, totalTokens, cachedReadTokens}` | Usage readout works on External Agent |
+| Tool rows | `tool_call` then `tool_call_update` (`pending → in_progress → completed/failed`); our tools are titled **`bfa-coworker_<tool>`**, args in `rawInput`, errors as text `content` | Strip the prefix; match bridge calls by name + `rawInput` (§5.4) |
+| Thoughts / text | `agent_thought_chunk` and `agent_message_chunk`, token-sized chunks (hundreds per turn) | The drain must batch chunks per redraw |
+| Permission | `session/request_permission` with options `once/always/reject` (kinds `allow_once/allow_always/reject_once`); answer `{"outcome":{"outcome":"selected","optionId":"once"}}` | Maps 1:1 onto `ApprovalRequest` (4i.3) |
+| Plan | **No `plan` updates.** The todo list arrives as a `todowrite` tool call with `rawInput.todos[{content,status,priority}]` | Per-preset mapping `todowrite → GoalPlan`, plus our `update_plan` tool (4i.5) |
+| Cancel | `session/cancel` notification → prompt result `stopReason: "cancelled"` | Stop works as designed |
+| **Isolation** | OpenCode loads the user's own installed skills (25 commands on the test machine, advertised in `available_commands_update`). With `OPENCODE_DISABLE_CLAUDE_CODE=1` + `OPENCODE_DISABLE_EXTERNAL_SKILLS=1`: **3 commands, ~26.7K → ~21.6K total tokens per turn** | "Only Coworker tools" sets per-preset env switches; it protects the user's privacy as well as tokens |
+| **Our tool cost** | Same trivial prompt: **20,666 tokens with our MCP server, 6,789 without** → our ~45 schemas + 14 KB instructions cost **~13.9K tokens per request** | **4i.4 progressive tools + compact instructions is the largest token win** for External Agent *and* External Harness |
+| Windows launch | npm's `opencode.cmd` only wraps `node_modules/opencode-ai/bin/opencode.exe` | Resolve the shim to the native exe; never pass arguments through `cmd.exe` |
+
+Not recorded yet: **Claude Code** via its ACP adapter. It uses the maintainer's Claude
+login, so it will be recorded with the maintainer's go-ahead. The npm packages
+`@zed-industries/claude-code-acp` (0.16.x) and `@agentclientprotocol/claude-agent-acp`
+both exist; the spike picks the maintained one.
 
 ---
 
@@ -119,7 +143,7 @@ supports: {image, loadSession, http}, maturity: supported|preview)`.
 
 | Preset | Launch (verify in 4h.0) | Notes |
 |---|---|---|
-| OpenCode | `opencode acp` | Native ACP; **first test target** (maintainer has it) |
+| OpenCode | `opencode acp` (resolve npm shim → `opencode-ai/bin/opencode.exe`) | Native ACP, **verified 1.19.3**; isolation env `OPENCODE_DISABLE_CLAUDE_CODE=1`, `OPENCODE_DISABLE_EXTERNAL_SKILLS=1`; plan via `todowrite` |
 | Claude Code | `claude-agent-acp` adapter (npm) → uses the user's Claude login | Needs Node; Claude Desktop is *not* an ACP agent |
 | Codex CLI | `codex-acp` adapter | Check maintainer/maturity |
 | Gemini CLI | `gemini --experimental-acp` | Flag may graduate |
@@ -145,7 +169,9 @@ auth error, show the preset's `login_hint`.
   `execute_blender_code`, ask with `ask_user` when a choice matters, keep the plan
   updated with `update_plan`. The MCP server `instructions` carry the same text for
   agents that ignore files.
-- Option **"Only Coworker tools"** (default on): where the agent supports it, start it
+- Option **"Only Coworker tools"** (default on): per-preset environment switches keep the
+  user's other skills, commands and MCP servers out of the agent (verified for OpenCode,
+  §3.1: −5K tokens/turn and no leak of the user's skill list). Where the agent supports it, start it
   with only our MCP server (like claude-in-blender's strict MCP config), so other MCP
   servers don't inflate its context. Document per preset what is possible.
 

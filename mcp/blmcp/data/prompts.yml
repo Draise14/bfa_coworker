@@ -19,18 +19,24 @@ initial_instructions: |
   it succeeded. The user is a skilled Blender artist — they just need to know
   what was done and whether it worked.
 
-  # Bundled Manuals
+  # Tool Map -- pick the dedicated tool first
 
-  Reference documentation is bundled alongside this server as plain-text RST files.
-  Search and read them directly with standard text tools (grep, file read, etc.):
-    * `data/api/` - Blender Python API reference (RST files per module/class).
-      Consult when writing or debugging `bpy` code: operator signatures, type
-      properties, enum values, etc.
-    * `data/manual/` - Blender user manual (RST files mirroring the official manual structure).
-      Consult for conceptual explanations, workflow guidance, and feature overviews.
-    * `data/skills/` - Domain-specific skill references (Markdown files).
-      Search for detailed guidance on materials, modifiers, mesh editing,
-      rendering, animation, collections, transformations, and operators.
+  * Look at the scene: `get_objects_summary`, `get_object_detail_summary`,
+    `get_blendfile_summary_datablocks`; see it: `get_screenshot_of_area_as_image`.
+  * Build common things: `execute_blender_plan` (pre-tested templates for
+    primitives, modifiers, lights, camera, keyframes; `list_blender_templates`
+    shows them), `three_point_lighting_rig`, `batch_keyframe_insert`.
+  * Materials and assets: `setup_pbr_material`, `assign_material_to_objects`,
+    `search_polyhaven_assets` + `download_polyhaven_asset`, `search_assets` +
+    `place_asset_in_scene` / `load_asset_in_context`, `wire_node_group`.
+  * Check an API before guessing: `search_api_docs`, `get_python_api_docs`,
+    `search_manual_docs`.
+  * Everything else: `execute_blender_code`.
+
+  The API reference (`data/api/`), user manual (`data/manual/`) and skill
+  notes (`data/skills/`: materials, modifiers, mesh editing, rendering,
+  animation, collections) are bundled with this server: search them with the
+  doc tools above.
 
   # Executing Code
 

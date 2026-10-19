@@ -351,7 +351,14 @@ def main(params: Params) -> Result:
                             tags.append(tag.name)
                 metadata = {
                     "frame_range": [action.frame_range[0], action.frame_range[1]],
-                    "fcurves_count": len(action.fcurves),
+                    # Blender 5.x layered actions: F-Curves live in each
+                    # strip's channelbags (action.fcurves was removed).
+                    "fcurves_count": sum(
+                        len(cb.fcurves)
+                        for layer in getattr(action, "layers", ())
+                        for strip in layer.strips
+                        for cb in getattr(strip, "channelbags", ())
+                    ),
                 }
 
         else:

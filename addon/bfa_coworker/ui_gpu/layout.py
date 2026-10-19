@@ -205,7 +205,8 @@ class Canvas:
         """Height :meth:`wrapped` will use for *text* at *width*."""
         return len(wrap_text(text, width, self.measure, font, self.style.font_size)) * self.style.line_height
 
-    def button(self, rect: Rect, widget_id: str, label: str, active: bool = False) -> bool:
+    def button(self, rect: Rect, widget_id: str, label: str, active: bool = False,
+               align: str = "center") -> bool:
         """A themed button (``wcol_regular``); returns True on the frame it was clicked."""
         colors = self.style.button
         hovered = self.state.hovered(rect)
@@ -216,7 +217,8 @@ class Canvas:
         radius = self.style.radius(colors)
         self.fill(rect, inner, radius)
         self.stroke(rect, colors.outline, radius)
-        self.label(rect, label, colors.text_sel if (active or pressed) else colors.text, align="center")
+        text_rect = rect.inset(self.style.pad, 0) if align != "center" else rect
+        self.label(text_rect, label, colors.text_sel if (active or pressed) else colors.text, align=align)
         self.hit_areas.append((rect, widget_id))
         return self.state.clicked == widget_id
 

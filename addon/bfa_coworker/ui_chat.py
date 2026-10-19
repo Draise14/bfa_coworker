@@ -281,26 +281,13 @@ def _fmt_duration(seconds: float) -> str:
     return "{:d}h {:02d}m".format(hours, mins)
 
 
-def _is_system_note_msg(msg: dict) -> bool:
-    """True for an agent-injected user-role note (never a real user turn).
-
-    Mirrors ``session_memory.is_system_note`` (kept self-contained so the
-    draw path never imports): the structured ``system_note`` flag first,
-    then the ``[System:`` prefix, then the known legacy prompt -- the
-    unprefixed "Continue." older builds could leave in the history, which
-    rendered as a NEW user turn written by the agent itself.
-    """
-    if msg.get("role") != "user":
-        return False
-    if msg.get("system_note"):
-        return True
-    content = msg.get("content")
-    if isinstance(content, list):
-        content = " ".join(
-            str(b.get("text", "")) for b in content if isinstance(b, dict))
-    text = str(content or "").lstrip()
-    return (text.startswith("[System:")
-            or text.startswith("Continue. Keep this next step small"))
+# ---------------------------------------------------------------------------
+# Turn grouping lives in chat_turns.py, shared with the GPU chat (Tier 4, GPU 2).
+from .chat_turns import (  # noqa: E402
+    group_turns as _group_turns,
+    is_system_note_msg as _is_system_note_msg,
+    split_turn as _split_turn,
+)
 
 
 # Friendly Workshop titles for injected notes, keyed by ``system_note`` kind.
@@ -430,49 +417,8 @@ def _checkpoint_title(cp: dict, number: int) -> tuple[str, str]:
     return title, " \u00b7 ".join(parts)
 
 
-def _group_turns(history: list) -> list[list[dict]]:
-    """Group conversation history into turns (one real user send = one turn).
-
-    A real user message always starts a turn; agent-injected messages begin
-    with ``[System:`` and are excluded.  This deliberately does NOT rely on
-    the ``turn_start`` flag: that flag can be lost when the history is sliced,
-    compacted, or reloaded, and its loss dropped the user's own message into
-    the collapsed Workshop (so it looked like it had disappeared).  UI-only
-    greetings never anchor a turn -- otherwise the welcome created a phantom
-    "Turn 1" with no user message.
-    """
-    turns: list[list[dict]] = []
-    current_turn: list[dict] = []
-    for msg in history:
-        if msg.get("ui_only"):
-            continue
-        role = msg.get("role", "")
-        if role == "user" and not _is_system_note_msg(msg):
-            if current_turn:
-                turns.append(current_turn)
-            current_turn = [msg]
-        elif role in ("assistant", "tool", "reasoning", "user", "compaction"):
-            current_turn.append(msg)
-    if current_turn:
-        turns.append(current_turn)
-    return turns
 
 
-def _split_turn(turn: list[dict]) -> tuple[dict | None, list[dict], dict | None]:
-    """Split a turn into (user message, process messages, conclusion message)."""
-    user_msg: dict | None = None
-    process_msgs: list[dict] = []
-    conclusion_msg: dict | None = None
-    for msg in turn:
-        role = msg.get("role", "")
-        if role == "user" and not _is_system_note_msg(msg):
-            user_msg = msg
-        elif role in ("reasoning", "tool", "user", "compaction") or _is_system_note_msg(msg):
-            process_msgs.append(msg)
-        elif role == "assistant":
-            if not msg.get("tool_calls"):
-                conclusion_msg = msg
-    return user_msg, process_msgs, conclusion_msg
 
 
 def _hist_index(history: list, msg: dict) -> int:

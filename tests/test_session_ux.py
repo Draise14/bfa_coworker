@@ -16,8 +16,13 @@ _UI = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
 def _load():
     src = open(_UI, encoding="utf-8").read()
     ns = {"re": re, "json": json, "_draw_multiline": lambda *a, **k: None}
-    exec(src[src.index("def _is_system_note_msg"):src.index("# Friendly Workshop titles")], ns)
-    exec(src[src.index("# Human-readable display helpers"):src.index("def _group_turns(")], ns)
+    # Turn grouping (incl. the system-note check) lives in chat_turns.py since GPU 2.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("chat_turns_ux", os.path.join(os.path.dirname(_UI), "chat_turns.py"))
+    turns = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(turns)
+    ns["_is_system_note_msg"] = turns.is_system_note_msg
+    exec(src[src.index("# Human-readable display helpers"):src.index("def _hist_index(")], ns)
     return ns, src
 
 

@@ -23,7 +23,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [ ] **Add Model Generator** locally, Ultrashape, Hunyuan, similar to here: https://github.com/ahujasid/blender-mcp
 - [x] **Add CC0 resource downloader** from Polyhaven, AmbientC00, Sketchfab, etc — Polyhaven tools implemented in v1.1.37.
 
-## [Unreleased - v1.1.38]
+## [Unreleased - v1.1.39]
+
+### Fixed
+
+- **Every External Harness preset now gives a config its client can read (issue #100).** Checked against each client's documentation: Cursor, Windsurf and Cline were given a `servers` key (VS Code's format) instead of `mcpServers`, Codex got JSON instead of TOML in `~/.codex/config.toml`, and OpenCode got the wrong file and schema -- those clients silently never showed the server. Each preset now emits its client's documented format, with verified file locations, steps and docs links; a **VS Code (Copilot)** preset is added, and Freebuff is marked unverified (no public docs).
+- **Harness configs survive Coworker moving or updating.** Configs used to name the extension folder in `PYTHONPATH`, so moving Coworker (the Coworker Installer moves it out of `user_default`) broke a working Claude Desktop config. Configs now run a small launcher at `~/.cache/bfa_coworker/harness/run_blmcp.py`, and Coworker points it at the current install every time it starts.
+- **Bridge no longer refuses working code.** `bpy.context.active_object` was blocked with an out-of-date reason (bridge code runs on Blender's main thread, where it is available). Style checks -- existence guards, unguarded indexes, operators in loops, missing output -- no longer block: the code runs and the advice comes back as `preflight_notes`. Checks for code that is certain to fail still block.
+- **Auto-fix no longer breaks code.** It rewrote `action.fcurves` into `keyframe_insert` (a NameError), `use_auto_smooth` into `auto_smooth_angle` (both removed in 4.1) and `["Use Nodes"] = True` into a SyntaxError. The guidance now shows how to read F-Curves on 5.x (`anim_utils.action_get_channelbag_for_slot`) and smooth by angle (`shade_auto_smooth`).
+- **Templates work from MCP clients.** `execute_blender_plan` and `list_blender_templates` always failed ("Template system unavailable"): they imported the add-on package, which the MCP server process can't see. They now load the templates directly.
+- **Poly Haven (issue #101):** an HDRI gives the active scene its own world instead of clearing another scene's (a new scene has no world, and the tool fell back to scene 1's); ARM texture maps use `Separate Color` (the old `Separate RGB` node is gone in 5.x); glTF models download their `.bin` and textures, so they import with geometry and materials.
+- `get_asset_tags` counts an action's F-Curves on Blender 5.x.
+
+### Added
+
+- **Add to \<client\>** writes the server straight into Claude Desktop (every config it finds, including the `Claude-Data` layout), Claude Code, Codex, Cursor, Windsurf or OpenCode -- other settings kept, a `.bfacw.bak` backup made, and a file that can't be parsed is never overwritten. Replaces 1.1.38's Claude Code-only button.
+- **Test Config checks the installed entry** the client will actually launch: missing entry, folders that no longer exist, a missing launcher or interpreter, or a port that isn't this window's bridge.
+- MCP server instructions start with a short **tool map**, and `execute_blender_code`'s description says when a dedicated tool fits better.
+
+### Changed
+
+- **Lighter benchmarks (issue #104):** 15 LLM suites (~70 steps) become 6 core benchmarks (Scene, Animation, Modeling, Nodes, Assets, Vision) and 3 quick challenges (2D Editors, Sanity, Judgement) -- 31 steps covering the same capabilities.
+
+## [v1.1.38] - 2026-10-19
 
 ### Fixed
 

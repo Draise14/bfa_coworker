@@ -234,6 +234,7 @@ class InputBox:
     match_count: int = 0
     _mention_start: int | None = None      # offset of the "@" being completed
     blink_phase: bool = True               # the host toggles this for the caret blink
+    big_buttons: bool = False              # double-height buttons (the editor's full chat)
     rect: Rect | None = None               # where the box was last drawn (for clicks)
     # Last drawn lines: (top, bottom, x0, start offset, text) and the measure used.
     _drawn: list[tuple[float, float, float, int, str]] = field(default_factory=list)
@@ -392,11 +393,40 @@ class InputBox:
         lines = self._lines(canvas, width)
         visible = min(len(lines), _MAX_VISIBLE_LINES)
         chip = style.unit * 1.9 if self.attachment else 0.0
-        return max(visible * style.line_height + 2 * style.pad, style.unit + style.pad) + chip
+        _margin, _gap, button_h = self._button_metrics(canvas)
+        return max(visible * style.line_height + 2 * style.pad, button_h + 2 * _margin) + chip
+
+    # -- buttons -----------------------------------------------------------------------
+    def _button_metrics(self, canvas: Canvas) -> tuple[float, float, float]:
+        """(edge margin, gap between buttons, button height)."""
+        style = canvas.style
+        return style.pad * 0.75, style.pad * 0.5, style.unit * (2.0 if self.big_buttons else 1.0)
+
+    def _buttons(self, canvas: Canvas) -> list[tuple[str, str, str, bool, float]]:
+        """(id, label, icon, active, width), right to left, like the panel chat:
+        Send, or Stop (+ Queue when there is text) while a turn runs; then Edit."""
+        style = canvas.style
+        has_text = bool(self.model.text.strip())
+        if self.busy:
+            specs = [("stop", "Stop", "PAUSE", False)]
+            if has_text:
+                specs.append(("queue", "Queue", "ADD", False))
+        else:
+            specs = [("send", "Send", "PLAY", has_text)]
+        specs.append(("native_edit", "Edit", "", False))
+        out = []
+        for widget_id, label, icon, active in specs:
+            content = canvas.measure(label, "ui", style.font_size)
+            if icon:
+                content += canvas.icon_size() + style.pad * 0.5
+            out.append((widget_id, label, icon, active, max(style.unit * 2.4, content + style.pad * 2.5)))
+        return out
 
     def _text_width(self, canvas: Canvas, width: float) -> float:
         style = canvas.style
-        return width - 2 * style.pad - style.unit * (8.0 if self.busy else 5.2)   # room for the buttons
+        margin, gap, _h = self._button_metrics(canvas)
+        buttons = sum(spec[4] for spec in self._buttons(canvas)) + gap * len(self._buttons(canvas))
+        return width - 2 * style.pad - buttons - margin   # room for the buttons
 
     def _lines(self, canvas: Canvas, width: float) -> list[tuple[int, str]]:
         """Visual lines as (start offset, text), wrapping by words like the view."""
@@ -429,25 +459,19 @@ class InputBox:
         self.rect, self._measure, self._size, self._drawn = box, canvas.measure, style.font_size, []
         canvas.box(box, colors=style.text_field, selected=self.focused)
         canvas.hit_areas.append((box, "input"))
-        # Buttons on the right, like the panel chat: Send, or Stop (+ Queue when
-        # there is text) while a turn runs; and "edit in a native box".
-        bw = u * 2.8
-        has_text = bool(self.model.text.strip())
-        primary = Rect(box.right - bw - pad * 0.5, box.y + pad * 0.5, bw, u)
-        if self.busy:
-            if canvas.button(primary, "stop", "Stop", icon="PAUSE"):
-                self.actions.append(("stop", ""))
-        elif canvas.button(primary, "send", "Send", active=has_text, icon="PLAY"):
-            self.send()
-        left = primary.x
-        if self.busy and has_text:
-            queue = Rect(left - bw - pad * 0.25, primary.y, bw, u)
-            if canvas.button(queue, "queue", "Queue", icon="ADD"):
-                self.send()          # the host queues a send while a turn runs
-            left = queue.x
-        native = Rect(left - bw * 0.75 - pad * 0.25, primary.y, bw * 0.75, u)
-        if canvas.button(native, "native_edit", "Edit"):
-            self.actions.append(("native_edit", self.model.text))
+        # Buttons on the right, sized to their labels with room around them.
+        margin, gap, button_h = self._button_metrics(canvas)
+        right = box.right - margin
+        for widget_id, label, icon, active, button_w in self._buttons(canvas):
+            button = Rect(right - button_w, box.y + margin, button_w, button_h)
+            if canvas.button(button, widget_id, label, active=active, icon=icon):
+                if widget_id == "stop":
+                    self.actions.append(("stop", ""))
+                elif widget_id == "native_edit":
+                    self.actions.append(("native_edit", self.model.text))
+                else:
+                    self.send()      # Send, or Queue (the host queues a send while a turn runs)
+            right = button.x - gap
         top = box.top - pad
         if self.attachment:
             # The image waiting to be sent: a small thumbnail and its name.

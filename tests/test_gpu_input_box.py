@@ -186,7 +186,7 @@ class TestDrawing(unittest.TestCase):
         three = box.height(c, 400)
         box.model.insert("\n" * 20)
         self.assertGreater(three, one)
-        self.assertAlmostEqual(box.height(c, 400), one + (ib._MAX_VISIBLE_LINES - 1) * c.style.line_height)
+        self.assertAlmostEqual(box.height(c, 400), ib._MAX_VISIBLE_LINES * c.style.line_height + 2 * c.style.pad)
 
     def test_placeholder_caret_and_buttons(self):
         box = ib.InputBox(focused=True)

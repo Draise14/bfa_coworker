@@ -166,6 +166,7 @@ class ChatSurface:
         inner = Rect(rect.x + pad, rect.y + pad, rect.w - 2 * pad, rect.h)
         # A notice (External Harness) replaces the chat: nothing to type into.
         show_input = notice is None
+        self.box.big_buttons = not self.compact
         box_h = self.box.height(canvas, inner.w) if show_input else 0.0
         input_rect = Rect(inner.x, inner.y, inner.w, box_h)
         chat_y = input_rect.top + pad if show_input else rect.y
@@ -209,9 +210,9 @@ class ChatSurface:
             x -= bw
             if canvas.button(Rect(x, row.y, bw, u), widget_id, label, icon=icon):
                 actions.append((widget_id, ""))
-            x -= pad * 0.3
+            x -= pad * 0.5
         start_label = "Stop" if top.running else top.start_label
-        start_w = canvas.icon_size() + canvas.measure(start_label, "ui", style.font_size) + 2.2 * style.pad
+        start_w = canvas.icon_size() + canvas.measure(start_label, "ui", style.font_size) + 3.0 * style.pad
         x -= start_w
         running_id = "stop_agent" if top.running else "start"
         if canvas.button(Rect(x, row.y, start_w, u), running_id, start_label,
@@ -247,9 +248,9 @@ class ChatSurface:
         x, width = rect.x + pad, rect.w - 2 * pad
         lines_h = sum(canvas.text_height(line, width - 2 * pad) for line in notice.lines)
         # Buttons side by side when they fit, else one per row (narrow sidebars).
-        needs = [canvas.icon_size() + canvas.measure(label, "ui", style.font_size) + 2.5 * pad
+        needs = [canvas.icon_size() + canvas.measure(label, "ui", style.font_size) + 3.0 * pad
                  for _id, label, _icon in notice.buttons]
-        side_by_side = sum(needs) + pad * 0.3 * len(needs) <= width - 2 * pad
+        side_by_side = sum(needs) + pad * 0.5 * len(needs) <= width - 2 * pad
         rows = 1 if side_by_side else len(notice.buttons)
         h = u + lines_h + (rows * u * 1.25 if notice.buttons else 0.0) + 3 * pad
         card = Rect(x, max(rect.y, rect.top - pad - h), width, h)
@@ -268,7 +269,7 @@ class ChatSurface:
                 if canvas.button(Rect(bx, by, bw, u * 1.1), "notice:" + widget_id, label, icon=icon):
                     actions.append(("notice", widget_id))
                 if side_by_side:
-                    bx += bw + pad * 0.3
+                    bx += bw + pad * 0.5
                 else:
                     by -= u * 1.25
 

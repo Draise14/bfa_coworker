@@ -318,15 +318,14 @@ class ChatView:
         header = Rect(x, top - style.unit, width, style.unit)
         if canvas.button(header, "ws:" + key, "", align="left"):
             actions.append(("toggle", key))
-        side, gap = canvas.icon_size(), style.pad * 0.4
+        side, gap = canvas.icon_size(), style.pad * 0.5
         iy = header.y + (header.h - side) / 2
         text_color = style.button.text
-        canvas.icon(Rect(header.x + style.pad * 0.5, iy, side, side), "TRIA_DOWN" if is_open else "TRIA_RIGHT",
-                    _soft(text_color, 0.3))
-        canvas.icon(Rect(header.x + style.pad * 0.5 + side + gap, iy, side, side),
+        lead = header.x + style.pad
+        canvas.icon(Rect(lead, iy, side, side), "TRIA_DOWN" if is_open else "TRIA_RIGHT", _soft(text_color, 0.3))
+        canvas.icon(Rect(lead + side + gap, iy, side, side),
                     "WARNING" if failed else "PACKAGE", _ERROR if failed else text_color)
-        canvas.label(Rect(header.x + style.pad * 0.5 + 2 * (side + gap), header.y, header.w, header.h),
-                     "  |  ".join(parts), text_color)
+        canvas.label(Rect(lead + 2 * (side + gap), header.y, header.w, header.h), "  |  ".join(parts), text_color)
         top = header.y
         if not is_open:
             return top
@@ -376,10 +375,9 @@ class ChatView:
                     canvas.icon(Rect(strip.x + pad, strip.y + (head - side) / 2, side, side), "SCRIPT", soft)
                     canvas.label(Rect(strip.x + pad + side + pad * 0.5, strip.y, strip.w, head),
                                  block.lang or "code", soft)
-                    bw = style.unit * 3.6
-                    copy = Rect(box.right - bw - pad * 0.5, strip.y + (head - style.unit * 0.9) / 2,
-                                bw, style.unit * 0.9)
-                    if canvas.button(copy, "copy:{:d}:{:d}".format(idx, code_n), "Copy", icon="COPYDOWN"):
+                    bw = style.unit * 0.9    # a square icon button
+                    copy = Rect(box.right - bw - pad * 0.75, strip.y + (head - bw) / 2, bw, bw)
+                    if canvas.button(copy, "copy:{:d}:{:d}".format(idx, code_n), "", icon="COPYDOWN"):
                         actions.append(("copy", text))
                     code_n += 1
                 canvas.wrapped(box.x + pad, box.top - head - pad, inner_w, text, style.text_field.text,

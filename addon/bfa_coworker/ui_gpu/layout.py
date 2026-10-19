@@ -236,7 +236,7 @@ class Canvas:
         radius = self.style.radius(colors)
         self.fill(rect, inner, radius)
         self.stroke(rect, colors.outline, radius)
-        text_rect = rect.inset(self.style.pad, 0) if align != "center" else rect
+        text_rect = rect.inset(self.style.pad * 1.25, 0) if align != "center" else rect
         color = colors.text_sel if (active or pressed) else colors.text
         if icon:
             side = min(self.icon_size(), rect.h * 0.8)

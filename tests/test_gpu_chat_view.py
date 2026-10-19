@@ -43,10 +43,10 @@ def _load():
         sys.modules[name] = pkg
     mods = [importlib.import_module(name + ".ui_gpu." + m)
             for m in ("markdown", "chat_view", "layout", "style", "icons", "png")]
-    return mods
+    return mods + [importlib.import_module(name + ".chat_status")]
 
 
-md, cv, lay, st, ic, png = _load()
+md, cv, lay, st, ic, png, cs = _load()
 
 
 def _png(width, height, channels, rows):
@@ -72,6 +72,22 @@ class TestIcons(unittest.TestCase):
         user = png.read_rgba(Path(ic.image_path("USER", 32)).read_bytes())[2]
         centre = user[(16 * 32 + 16) * 4:(16 * 32 + 16) * 4 + 3]
         self.assertGreater(max(centre) - min(centre), 40)               # full colour, not grey
+
+    def test_icon_pixels_premultiplied_exact_size(self):
+        # 2x2 icon: opaque red, transparent pixel hiding grey, two half-alpha green.
+        src = bytes([255, 0, 0, 255, 48, 48, 48, 0, 0, 255, 0, 128, 0, 255, 0, 128])
+        same = ic.icon_pixels(src, 2, 2)
+        self.assertEqual(same[4:8], bytes([0, 0, 0, 0]))               # the hidden grey is gone
+        self.assertEqual(same[8:12], bytes([0, 128, 0, 128]))          # premultiplied
+        one = ic.icon_pixels(src, 2, 1)                                # area average to 1x1
+        self.assertEqual(one, bytes([64, 64, 0, round(255 * (1 + 128 / 255 * 2) / 4)]))
+        grey = ic.icon_pixels(src, 2, 2, saturation=0.0)
+        self.assertEqual(grey[0], grey[1])                             # theme Icon Saturation 0
+        bordered = ic.icon_pixels(src, 2, 2, border=1.0)
+        self.assertEqual(bordered[4:8], bytes([0, 0, 0, 255]))         # dark outline next to the shape
+        real = ic.icon_pixels(png.read_rgba(Path(ic.image_path("WIZARD", 16)).read_bytes())[2], 16, 13)
+        self.assertEqual(len(real), 13 * 13 * 4)
+        self.assertTrue(all(real[i] <= real[i + 3] for i in range(0, len(real), 4)))  # rgb <= alpha
 
     def test_png_filters(self):
         # 2x2 RGBA; row 0 "Sub" (filter 1), row 1 "Paeth" (filter 4) over row 0.
@@ -268,7 +284,61 @@ class TestChatView(unittest.TestCase):
         cv.ChatView().draw(c, lay.Rect(0, 0, 600, 2000), hist, live=_Live())
         texts = [cmd.text for cmd in self.texts(c)]
         self.assertIn("it", texts)                                   # streamed markdown
-        self.assertTrue(any(t.startswith("Coworker is thinking") for t in texts))
+        glyph = cs.spinner_char(_Live())                             # the panel chat's spinner
+        self.assertTrue(any(t.startswith("Thinking " + glyph) for t in texts))
+
+    def test_thinking_animation_matches_the_panel_chat(self):
+        live = _Live()
+        live.turn_phase, live.reasoning_text, live.thinking_start_time = "reading", "Planning the logs", 1.0
+        hist = [{"role": "user", "content": "go"}, {"role": "tool", "name": "execute_blender_code", "content": "ok"}]
+        frames = []
+        for tick in (0, 1, 2):
+            live.thinking_dots = tick
+            c = self.canvas()
+            cv.ChatView().draw(c, lay.Rect(0, 0, 600, 2000), hist, live=live)
+            texts = [cmd.text for cmd in self.texts(c)]
+            glyph = cs.spinner_glyph(tick)
+            self.assertTrue(any(t.startswith("Reading your message " + glyph + "  |  ") for t in texts))
+            self.assertTrue(any(t.startswith("Workshop " + glyph) for t in texts))     # header spins too
+            self.assertTrue(any(t.startswith("Thinking " + glyph) for t in texts))      # live reasoning
+            frames.append(glyph)
+        self.assertEqual(len(set(frames)), 3)                                          # it animates
+
+    def test_scrollbar_like_blender(self):
+        long = [m for i in range(30) for m in (
+            {"role": "user", "content": "question {:d}".format(i)},
+            {"role": "assistant", "content": "answer {:d} with some more words to wrap".format(i)})]
+        rect = lay.Rect(0, 0, 400, 300)
+        view = cv.ChatView()
+        view.draw(self.canvas(), rect, long)
+        style = st.Style()
+        scroll_cmds = lambda c: [cmd for cmd in c.commands if cmd.kind == "rect" and cmd.rect.x > 380]
+        far = self.canvas(mouse=(10, 150))                     # mouse far away: hidden
+        view.draw(far, rect, long)
+        self.assertEqual(scroll_cmds(far), [])
+        self.assertIn("scroll_handle", [wid for _, wid in far.hit_areas])
+        thin, full = cv.ChatView._bar_widths(style)
+        near = self.canvas(mouse=(300, 150))                   # near: fades in, thin
+        view.draw(near, rect, long)
+        track = scroll_cmds(near)[0]
+        self.assertAlmostEqual(track.rect.w, thin)
+        self.assertEqual(track.color[:3], style.scroll.inner[:3])            # theme wcol_scroll
+        over = self.canvas(mouse=(rect.right - 4, 150))        # over the bar: full width, item colour
+        view.draw(over, rect, long)
+        handle = scroll_cmds(over)[1]
+        self.assertAlmostEqual(handle.rect.w, full)
+        _track, bar, _ratio = view._bar_geometry(style, rect)
+        # Drag the handle up 20 px: scrolls back in time by 20 px x content/travel.
+        before = view.scroll
+        x = rect.right - 4
+        view.draw(self.canvas(mouse=(x, bar.y + 5), pressed="scroll_handle"), rect, long)
+        view.draw(self.canvas(mouse=(x, bar.y + 25), pressed="scroll_handle"), rect, long)
+        self.assertGreater(view.scroll, before)
+        # Click the track below the handle: page towards the newest.
+        view.scroll = view.content_height - rect.h
+        top = view.scroll
+        view.draw(self.canvas(mouse=(x, 4), clicked="scroll_track"), rect, long)
+        self.assertAlmostEqual(view.scroll, top - rect.h * 0.9)
 
     def test_heights_cached_for_finished_turns(self):
         view = cv.ChatView()

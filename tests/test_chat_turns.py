@@ -66,7 +66,17 @@ _is_system_note_msg = _chat_turns.is_system_note_msg
 _group_turns = _chat_turns.group_turns
 _split_turn = _chat_turns.split_turn
 _hist_index = _extract_func("_hist_index")
-_fmt_duration = _extract_func("_fmt_duration")
+def _load_chat_status():
+    """The spinner, phase text and durations live in chat_status.py since Tier 4 GPU 2."""
+    import importlib.util
+    path = os.path.join(_REPO, "addon", "bfa_coworker", "chat_status.py")
+    spec = importlib.util.spec_from_file_location("chat_status_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_fmt_duration = _load_chat_status().fmt_duration
 _draw_multiline = _extract_func(
     "_draw_multiline",
     {

@@ -82,17 +82,23 @@ def _conversation():
 
 STATE = _conversation()
 VIEWS = {"full": chat_view.ChatView(), "compact": chat_view.ChatView()}
+# Stand-ins for the input layer (GPU 4): mouse position per view, zoom, theme overrides.
+MOUSE: dict = {}
+LOOK = {"zoom": 1.0, "icon_border": None}
 
 
 def _draw(kind):
     region = bpy.context.region
-    style = style_mod.style_from_preferences(bpy.context.preferences)
-    canvas = layout.Canvas(style, render.measure)
+    style = style_mod.style_from_preferences(bpy.context.preferences, zoom=LOOK["zoom"])
+    if LOOK["icon_border"] is not None:
+        import dataclasses
+        style = dataclasses.replace(style, icon_border=LOOK["icon_border"])
+    canvas = layout.Canvas(style, render.measure, layout.InteractionState(mouse=MOUSE.get(kind)))
     width = region.width - (24 * style.ui_scale if kind == "compact" else 0)
     canvas.fill(layout.Rect(0, 0, width, region.height), style.back)
     VIEWS[kind].draw(canvas, layout.Rect(0, 0, width, region.height), STATE.conversation_history,
                      live=STATE, compact=(kind == "compact"))
-    render.render(canvas.commands)
+    render.render(canvas.commands, canvas.style)
 
 
 def _draw_center():
@@ -182,12 +188,29 @@ def _tick():
         if step == 4:
             _shoot("2_workshops_open")
             VIEWS["full"].scroll = 260.0
+            area = max(_areas(), key=lambda a: a.width * a.height)
+            region = next(r for r in area.regions if r.type == "WINDOW")
+            MOUSE["full"] = (region.width - 6, region.height * 0.5)   # over the scrollbar
+            STATE.thinking_dots = 7                                    # a later spinner frame
+            LOOK["zoom"] = 1.5                                         # taller than the area: scrolls
             _redraw()
             return 0.8
         if step == 5:
             _shoot("3_scrolled_jump_button")
             RESULT["full_content_height"] = round(VIEWS["full"].content_height)
             RESULT["cached_turn_heights"] = len(VIEWS["full"]._heights)
+            MOUSE.clear()
+            VIEWS["full"].scroll = 0.0
+            LOOK["zoom"] = 2.5                                         # icon edges up close
+            _redraw()
+            return 0.8
+        if step == 6:
+            _shoot("4_zoomed_icons")
+            LOOK["icon_border"] = 0.5                                  # the theme's Icon Border on
+            _redraw()
+            return 0.8
+        if step == 7:
+            _shoot("5_zoomed_icon_border")
     except Exception:  # pylint: disable=broad-exception-caught
         import traceback
         RESULT.setdefault("errors", []).append(traceback.format_exc()[-900:])

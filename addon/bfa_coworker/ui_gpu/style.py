@@ -42,6 +42,13 @@ def _rgba(value: Any, fallback: RGBA, alpha: float = 1.0) -> RGBA:
     return fallback
 
 
+def _float(value: Any, fallback: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
 @dataclass(frozen=True)
 class WidgetColors:
     """One theme widget style (``wcol_*``)."""
@@ -52,6 +59,7 @@ class WidgetColors:
     text: RGBA
     text_sel: RGBA
     roundness: float
+    item: RGBA = (0.5, 0.5, 0.5, 1.0)     # sliders: the scrollbar handle, progress fill
 
     @staticmethod
     def read(wcol: Any, fallback: "WidgetColors") -> "WidgetColors":
@@ -64,6 +72,7 @@ class WidgetColors:
             text=_rgba(getattr(wcol, "text", None), fallback.text),
             text_sel=_rgba(getattr(wcol, "text_sel", None), fallback.text_sel),
             roundness=float(getattr(wcol, "roundness", fallback.roundness)),
+            item=_rgba(getattr(wcol, "item", None), fallback.item),
         )
 
 
@@ -73,6 +82,8 @@ _DARK_BUTTON = WidgetColors((0.33, 0.33, 0.33, 1.0), (0.33, 0.50, 0.76, 1.0), (0
                             (0.90, 0.90, 0.90, 1.0), (1.0, 1.0, 1.0, 1.0), 0.3)
 _DARK_FIELD = WidgetColors((0.12, 0.12, 0.12, 1.0), (0.20, 0.20, 0.20, 1.0), (0.10, 0.10, 0.10, 1.0),
                            (0.85, 0.85, 0.85, 1.0), (1.0, 1.0, 1.0, 1.0), 0.2)
+_DARK_SCROLL = WidgetColors((0.31, 0.31, 0.31, 0.5), (0.39, 0.39, 0.39, 0.5), (0.20, 0.20, 0.20, 1.0),
+                            (0.90, 0.90, 0.90, 1.0), (1.0, 1.0, 1.0, 1.0), 0.5, (0.50, 0.50, 0.50, 1.0))
 _DARK_TOOLTIP = WidgetColors((0.10, 0.10, 0.10, 1.0), (0.20, 0.20, 0.20, 1.0), (0.0, 0.0, 0.0, 1.0),
                              (0.90, 0.90, 0.90, 1.0), (1.0, 1.0, 1.0, 1.0), 0.2)
 
@@ -91,6 +102,7 @@ class Style:
     button: WidgetColors = _DARK_BUTTON           # buttons; inner_sel = your messages / active
     text_field: WidgetColors = _DARK_FIELD        # input field, code blocks
     tooltip: WidgetColors = _DARK_TOOLTIP
+    scroll: WidgetColors = _DARK_SCROLL           # scrollbars (wcol_scroll: inner = track, item = handle)
     cursor: RGBA = (0.27, 0.6, 1.0, 1.0)          # text cursor
     link: RGBA = (0.4, 0.7, 1.0, 1.0)             # hyperlinks
     # Keyframe colours (extreme, moving hold, jitter, breakdown) and their border:
@@ -98,6 +110,10 @@ class Style:
     keyframes: tuple[RGBA, RGBA, RGBA, RGBA] = (
         (0.79, 0.47, 0.41, 1.0), (0.62, 0.59, 0.58, 1.0), (0.41, 0.60, 0.34, 1.0), (0.36, 0.55, 0.66, 1.0))
     keyframe_border: RGBA = (0.0, 0.0, 0.0, 1.0)
+    # The theme's icon settings (Interface > Icons): alpha, saturation, border.
+    icon_alpha: float = 1.0
+    icon_saturation: float = 1.0
+    icon_border: float = 0.0
     font_points: float = 11.0                     # UI style "widget" points
     ui_scale: float = 1.0                         # Blender's UI scale x pixel size
     zoom: float = 1.0                             # the chat's own zoom (Ctrl+wheel)
@@ -174,10 +190,14 @@ def style_from_preferences(prefs: Any, zoom: float = 1.0) -> Style:
         button=WidgetColors.read(getattr(ui, "wcol_regular", None), base.button),
         text_field=WidgetColors.read(getattr(ui, "wcol_text", None), base.text_field),
         tooltip=WidgetColors.read(getattr(ui, "wcol_tooltip", None), base.tooltip),
+        scroll=WidgetColors.read(getattr(ui, "wcol_scroll", None), base.scroll),
         cursor=_rgba(getattr(ui, "widget_text_cursor", None), base.cursor),
         link=_rgba(getattr(ui, "link", None), base.link),
         keyframes=keyframes,  # type: ignore[arg-type]
         keyframe_border=border,
+        icon_alpha=_float(getattr(ui, "icon_alpha", None), base.icon_alpha),
+        icon_saturation=_float(getattr(ui, "icon_saturation", None), base.icon_saturation),
+        icon_border=_float(getattr(ui, "icon_border_intensity", None), base.icon_border),
         font_points=points,
         ui_scale=scale,
         zoom=max(0.5, min(3.0, zoom)),

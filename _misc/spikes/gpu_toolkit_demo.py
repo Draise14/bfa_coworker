@@ -78,7 +78,7 @@ def _draw():
             RESULTS["run_button_center"] = (br.x + br.w / 2, br.y + br.h / 2)
     top -= u + pad
     canvas.label(layout.Rect(page.x + pad, top - u, page.w, u), "A link in the theme's link colour", style.link)
-    render.render(canvas.commands)
+    render.render(canvas.commands, canvas.style)
 
 
 def _shoot(name):

@@ -30,9 +30,11 @@ the input layer to carry out: ``("copy", text)``, ``("toggle", turn_key)``,
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..chat_status import fmt_duration, phase_text, spinner_char
 from ..chat_turns import NOTE_TITLES, group_turns, is_system_note_msg, split_turn
 from .layout import Canvas, InteractionState, Rect
 from .markdown import Block, Span, parse
@@ -50,11 +52,6 @@ _HEADING_SCALE = {1: 1.6, 2: 1.4, 3: 1.2, 4: 1.05}
 _HEADING_ICON = {1: "KEYTYPE_EXTREME_VEC", 2: "KEYTYPE_MOVING_HOLD_VEC", 3: "KEYTYPE_JITTER_VEC"}
 
 
-def _duration(seconds: float) -> str:
-    seconds = int(round(seconds))
-    return "{:d}s".format(seconds) if seconds < 60 else "{:d}m {:02d}s".format(seconds // 60, seconds % 60)
-
-
 def message_text(content: Any) -> str:
     """Plain text of a message's content (string or a list of blocks)."""
     if isinstance(content, str):
@@ -66,6 +63,10 @@ def message_text(content: Any) -> str:
 
 def _soft(color: RGBA, amount: float = 0.35) -> RGBA:
     return (color[0], color[1], color[2], color[3] * (1.0 - amount))
+
+
+def _lighten(color: RGBA, amount: float) -> RGBA:
+    return (min(1.0, color[0] + amount), min(1.0, color[1] + amount), min(1.0, color[2] + amount), color[3])
 
 
 def _tool_failed(msg: dict) -> bool:
@@ -82,6 +83,7 @@ class ChatView:
     agent_icon: str = "WIZARD"          # the host passes "GHOST_ENABLED" in Blender
     content_height: float = 0.0
     _heights: dict[tuple, float] = field(default_factory=dict)
+    _drag_y: float | None = None        # mouse y while the scrollbar handle is dragged
 
     # -- public ----------------------------------------------------------------
     def scroll_by(self, dy: float, visible_height: float) -> None:
@@ -95,7 +97,8 @@ class ChatView:
         style = canvas.style
         pad = style.pad * (0.7 if compact else 1.0)
         gap = pad
-        width = rect.w - 2 * pad - (style.unit * 0.35)   # leave room for the scrollbar
+        width = rect.w - 2 * pad - self._bar_widths(style)[1]   # leave room for the scrollbar
+        self._scrollbar_input(canvas, rect)
         turns = group_turns([m for m in history if m.get("role") != "system"])
         active = len(turns) - 1 if (live is not None and getattr(live, "is_thinking", False)) else -1
         if not turns:
@@ -124,8 +127,8 @@ class ChatView:
         self._draw_scrollbar(canvas, rect)
         if self.scroll > style.unit:
             size = style.unit * 1.2
-            jump = Rect(rect.right - size - pad - style.unit * 0.35, rect.y + pad, size, size)
-            if canvas.button(jump, "jump", "v"):
+            jump = Rect(rect.right - size - pad - self._bar_widths(style)[1], rect.y + pad, size, size)
+            if canvas.button(jump, "jump", "", icon="TRIA_DOWN"):
                 actions.append(("jump", ""))
         return actions
 
@@ -168,20 +171,30 @@ class ChatView:
                         "USER", style.button.text_sel)
             canvas.wrapped(box.x + pad + side + gap, box.top - pad, inner_w, text, style.button.text_sel)
             top = box.y - pad
+        # The same spinner and words as the panel chat (chat_status), driven by
+        # the state's thinking_dots tick.
+        spinner = spinner_char(live) if active else ""
         if process:
-            top = self._draw_workshop(canvas, process, idx, x, top, width, active, compact, actions) - pad
+            top = self._draw_workshop(canvas, process, idx, x, top, width, active, compact, actions,
+                                      spinner) - pad
         if active:
-            phase = getattr(live, "turn_phase", "") or "thinking"
-            dots = "." * (1 + int(getattr(live, "thinking_dots", 0)) % 3)
+            reasoning = " ".join(str(getattr(live, "reasoning_text", "") or "").split())
+            if reasoning:   # live thinking, newest words last
+                top = self._icon_line(canvas, x, top - pad * 0.5, self.agent_icon,
+                                      "Thinking {:s}: {:s}".format(spinner, reasoning[-400:]),
+                                      _soft(style.text), width) - pad * 0.5
             streaming = getattr(live, "streaming_text", "") or ""
             if streaming:
                 top = self._draw_markdown(canvas, parse(streaming), idx, x, top, width, actions)
-            label = "Coworker is {:s}{:s}".format("reading your message" if phase == "reading" else phase, dots)
+            label = "{:s} {:s}".format(phase_text(live), spinner)
+            started = float(getattr(live, "thinking_start_time", 0.0) or 0.0)
+            if started:
+                label += "  |  " + fmt_duration(time.time() - started)
             top = self._icon_line(canvas, x, top, self.agent_icon, label, _soft(style.text))
         elif conclusion is not None:
             seconds = next((m["turn_seconds"] for m in reversed(turn)
                             if isinstance(m.get("turn_seconds"), (int, float))), None)
-            label = "Coworker" + ("  |  " + _duration(seconds) if seconds is not None and seconds >= 1 else "")
+            label = "Coworker" + ("  |  " + fmt_duration(seconds) if seconds is not None and seconds >= 1 else "")
             row_top = top
             top = self._icon_line(canvas, x, top, self.agent_icon, label, _soft(style.text, 0.2))
             done = canvas.icon_size()
@@ -213,17 +226,17 @@ class ChatView:
 
     def _draw_workshop(self, canvas: Canvas, process: list[dict], idx: int, x: float, top: float,
                        width: float, active: bool, compact: bool,
-                       actions: list[tuple[str, str]]) -> float:
+                       actions: list[tuple[str, str]], spinner: str = "") -> float:
         style = canvas.style
         pad = style.pad * (0.7 if compact else 1.0)
         key = f"t{idx}"
         tools = [m for m in process if m.get("role") == "tool"]
         failed = sum(1 for m in tools if _tool_failed(m))
-        parts = ["Workshop", "{:d} step{:s}".format(len(tools), "" if len(tools) == 1 else "s")]
+        # "Workshop <spinner>" while the turn runs, like the panel chat.
+        parts = ["Workshop " + spinner if active else "Workshop",
+                 "{:d} step{:s}".format(len(tools), "" if len(tools) == 1 else "s")]
         if failed:
             parts.append("{:d} failed".format(failed))
-        if active:
-            parts.append("working")
         is_open = key in self.expanded
         header = Rect(x, top - style.unit, width, style.unit)
         if canvas.button(header, "ws:" + key, "", align="left"):
@@ -378,14 +391,83 @@ class ChatView:
                 cx += w
         return top
 
+    # -- scrollbar: like Blender's region scrollbars (View2D) ---------------------------
+    @staticmethod
+    def _bar_widths(style: Style) -> tuple[float, float]:
+        """(thin, full) widths: V2D_SCROLL_MIN_WIDTH and V2D_SCROLL_WIDTH."""
+        px = style.scale
+        return 5.0 * px + 2.0 * px, 0.45 * style.unit + 2.0 * px
+
+    def _bar_geometry(self, style: Style, rect: Rect) -> tuple[Rect, Rect, float] | None:
+        """(track, handle, scroll per handle pixel) at full width, or None when all fits."""
+        max_scroll = self.content_height - rect.h
+        if max_scroll <= 0:
+            return None
+        _thin, full = self._bar_widths(style)
+        margin = 2.0 * style.scale
+        track = Rect(rect.right - full - margin, rect.y + margin, full, rect.h - 2 * margin)
+        handle_h = min(track.h, max(style.unit, track.h * rect.h / self.content_height))
+        travel = track.h - handle_h
+        y = track.y + (self.scroll / max_scroll) * travel
+        return track, Rect(track.x, y, full, handle_h), (max_scroll / travel if travel > 0 else 0.0)
+
+    def _scrollbar_input(self, canvas: Canvas, rect: Rect) -> None:
+        """Drag the handle; click the track to page (uses last frame's geometry)."""
+        state = canvas.state
+        geometry = self._bar_geometry(canvas.style, rect)
+        if geometry is None or state.mouse is None:
+            self._drag_y = None
+            return
+        _track, handle, ratio = geometry
+        if state.pressed == "scroll_handle":
+            if self._drag_y is not None:
+                self.scroll_by((state.mouse[1] - self._drag_y) * ratio, rect.h)
+            self._drag_y = state.mouse[1]
+            return
+        self._drag_y = None
+        if state.clicked == "scroll_track":
+            page = rect.h * 0.9
+            self.scroll_by(page if state.mouse[1] > handle.top else -page, rect.h)
+
     def _draw_scrollbar(self, canvas: Canvas, rect: Rect) -> None:
-        if self.content_height <= rect.h:
+        geometry = self._bar_geometry(canvas.style, rect)
+        if geometry is None:
             return
         style = canvas.style
-        track_w = max(2.0, style.unit * 0.15)
-        frac = rect.h / self.content_height
-        thumb_h = max(style.unit, rect.h * frac)
-        travel = rect.h - thumb_h
-        max_scroll = self.content_height - rect.h
-        y = rect.y + (self.scroll / max_scroll) * travel if max_scroll > 0 else rect.y
-        canvas.fill(Rect(rect.right - track_w - 2, y, track_w, thumb_h), _soft(style.text, 0.6), track_w / 2)
+        track, handle, _ratio = geometry
+        colors = style.scroll
+        state = canvas.state
+        dragging = state.pressed == "scroll_handle"
+        over = state.mouse is not None and track.contains(*state.mouse)
+        # Fade in as the mouse comes near (AZONEFADEOUT .. AZONEFADEIN), like Blender.
+        alpha = 0.0
+        if dragging:
+            alpha = 1.0
+        elif state.mouse is not None:
+            mx, my = state.mouse
+            dx = max(track.x - mx, 0.0, mx - track.right)
+            dy = max(track.y - my, 0.0, my - track.top)
+            dist = (dx * dx + dy * dy) ** 0.5
+            fade_in, fade_out = 5.0 * style.unit, 6.5 * style.unit
+            alpha = 1.0 if dist <= fade_in else max(0.0, 1.0 - (dist - fade_in) / (fade_out - fade_in))
+        canvas.hit_areas.append((track, "scroll_track"))
+        canvas.hit_areas.append((handle, "scroll_handle"))
+        if alpha <= 0.0:
+            return
+        thin, full = self._bar_widths(style)
+        width = full if (over or dragging) else thin
+        x = track.right - width
+
+        def faded(color: RGBA) -> RGBA:
+            return (color[0], color[1], color[2], color[3] * alpha)
+
+        radius = colors.roundness * width / 2
+        canvas.fill(Rect(x, track.y, width, track.h), faded(colors.inner), radius)
+        canvas.stroke(Rect(x, track.y, width, track.h), faded(colors.outline), radius)
+        item = colors.item
+        if dragging:
+            item = _lighten(item, 0.2)
+        elif over and handle.contains(*state.mouse):
+            item = _lighten(item, 0.1)
+        canvas.fill(Rect(x, handle.y, width, handle.h), faded(item), radius)
+        canvas.stroke(Rect(x, handle.y, width, handle.h), faded(colors.outline), radius)

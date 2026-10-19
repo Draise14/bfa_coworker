@@ -34,6 +34,7 @@ from .layout import Rect
 __all__ = (
     "IMAGE_ICONS",
     "NAMES",
+    "icon_pixels",
     "image_path",
     "triangles",
 )
@@ -256,6 +257,61 @@ def image_path(name: str, pixels: float) -> str | None:
             if os.path.isfile(path):
                 return path
     return None
+
+
+def _resample(values: list[float], size: int, side: int, channels: int) -> list[float]:
+    """Area-average *values* (a size x size image) down or up to side x side."""
+    def axis(src: list[float], n_in: int, n_out: int, stride_out: int, rows: int, horizontal: bool) -> list[float]:
+        out = [0.0] * (n_out * rows * channels)
+        scale = n_in / n_out
+        for o in range(n_out):
+            start, end = o * scale, (o + 1) * scale
+            i = int(start)
+            while i < end and i < n_in:
+                weight = (min(end, i + 1) - max(start, i)) / scale
+                for r in range(rows):
+                    si = ((r * n_in + i) if horizontal else (i * rows + r)) * channels
+                    di = ((r * n_out + o) if horizontal else (o * rows + r)) * channels
+                    for c in range(channels):
+                        out[di + c] += src[si + c] * weight
+                i += 1
+        return out
+    if side == size:
+        return values
+    rows_done = axis(values, size, side, side, size, True)        # size rows x side columns
+    return axis(rows_done, size, side, side, side, False)          # side rows x side columns
+
+
+def icon_pixels(rgba: bytes, size: int, side: int, saturation: float = 1.0, border: float = 0.0) -> bytes:
+    """Prepare a size x size straight-alpha icon for drawing at exactly side x side pixels.
+
+    Returns **premultiplied** RGBA (draw with premultiplied blending), so the
+    soft edge pixels never pick up the colour hidden in transparent pixels; the
+    image is area-averaged to its drawn size, like Blender rasterising its
+    icons at the exact size.  *saturation* and *border* are the theme's Icon
+    Saturation and Icon Border: a soft dark outline around the icon's shape.
+    """
+    values: list[float] = []
+    for i in range(0, size * size * 4, 4):
+        a = rgba[i + 3] / 255.0
+        values += [rgba[i] / 255.0 * a, rgba[i + 1] / 255.0 * a, rgba[i + 2] / 255.0 * a, a]
+    values = _resample(values, size, side, 4)
+    if saturation != 1.0:
+        for i in range(0, len(values), 4):
+            r, g, b = values[i:i + 3]
+            lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+            values[i:i + 3] = [lum + (r - lum) * saturation, lum + (g - lum) * saturation,
+                               lum + (b - lum) * saturation]
+    if border > 0.0:
+        alpha = values[3::4]
+        for y in range(side):
+            for x in range(side):
+                near = max(alpha[yy * side + xx]
+                           for yy in range(max(0, y - 1), min(side, y + 2))
+                           for xx in range(max(0, x - 1), min(side, x + 2)))
+                i = (y * side + x) * 4
+                values[i + 3] += near * min(1.0, border) * (1.0 - values[i + 3])   # black under the icon
+    return bytes(max(0, min(255, round(v * 255))) for v in values)
 
 
 def triangles(name: str, rect: Rect) -> list[Point]:

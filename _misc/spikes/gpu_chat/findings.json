@@ -1,0 +1,20 @@
+{
+  "version": "5.3.0 Alpha",
+  "event_simulate": true,
+  "mono_font": "DejaVuSansMono.woff2",
+  "center_area_px": [
+    1597,
+    893
+  ],
+  "compact_area_px": [
+    316,
+    695
+  ],
+  "node_sidebar_width": 280,
+  "modal_started": true,
+  "avg_draw_ms_200_messages": 1.33,
+  "modal_events": 29,
+  "modal_consumed": 27,
+  "modal_alive_after_file_load": false,
+  "note": "Typing, Enter / Shift+Enter, the blocked N shortcut, scroll and zoom are read from the screenshots: simulated events are processed after the step that sends them."
+}

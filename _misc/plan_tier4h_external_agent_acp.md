@@ -144,10 +144,10 @@ supports: {image, loadSession, http}, maturity: supported|preview)`.
 | Preset | Launch (verify in 4h.0) | Notes |
 |---|---|---|
 | OpenCode | `opencode acp` (resolve npm shim → `opencode-ai/bin/opencode.exe`) | Native ACP, **verified 1.19.3**; isolation env `OPENCODE_DISABLE_CLAUDE_CODE=1`, `OPENCODE_DISABLE_EXTERNAL_SKILLS=1`; plan via `todowrite` |
-| Claude Code | `claude-agent-acp` adapter (npm) → uses the user's Claude login | Needs Node; Claude Desktop is *not* an ACP agent |
-| Codex CLI | `codex-acp` adapter | Check maintainer/maturity |
-| Gemini CLI | `gemini --experimental-acp` | Flag may graduate |
-| GitHub Copilot CLI | ACP mode (preview) | Preview badge |
+| Claude Code | `claude-agent-acp` from **`@agentclientprotocol/claude-agent-acp`** (npm, checked 2026-10-19; the old `@zed-industries/claude-code-acp` is deprecated) → uses the user's Claude login | Needs Node; Claude Desktop is *not* an ACP agent |
+| Codex CLI | `codex-acp` from **`@agentclientprotocol/codex-acp`** (replaces `@zed-industries/codex-acp`) | Needs Node |
+| Gemini CLI | `gemini` + its ACP flag, **read from `gemini --help`** (`--acp` or `--experimental-acp`); `@google/gemini-cli` | Its README doesn't document the flag, so detection asks the CLI |
+| GitHub Copilot CLI | `copilot --acp` if `copilot --help` lists it; `@github/copilot` | Preview badge; refused with a clear message if the option isn't there |
 | Generic | user-supplied command + args | Escape hatch; also covers Goose, Kiro, Qwen Code, Cline, Mistral Vibe, Freebuff if they speak ACP |
 
 Detection: `shutil.which` (PATHEXT-aware), then `--version` with a 5 s timeout. Results

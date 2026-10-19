@@ -104,7 +104,11 @@ design and a clean provenance record. These rules apply to every Tier 4 task:
    in `mcp/blmcp/data`), the ACP / MCP specifications.
 4. **Record it**: each borrowed idea appears in §5 below as *need → our design*, and
    PR descriptions state "no third-party code consulted while implementing".
-5. **Prefer native Blender APIs** over our own copies of common UI. With 5.3 as the
+5. **Reader / implementer split** for skill and prompt text taken from a reference
+   (see `plan_tier4s_skills_cleanroom.md` §2): the reader writes a needs list only;
+   the implementer never sees the reference, sources every claim (API docs or a live
+   probe) and a mechanical overlap check runs before merge.
+6. **Prefer native Blender APIs** over our own copies of common UI. With 5.3 as the
    minimum, chat text uses Blender's own `layout.label_markdown()` (B0).
 
 ---

@@ -9,7 +9,7 @@ open a PR when the row's *Done when* holds. Tick the box and add the PR number. 
 **S** ≤ 2 days · **M** ≤ 1 week · **L** > 1 week. IDs match the plan documents.
 
 Every PR: tests for bpy-free code · cost-ledger before/after if prompts or tools change ·
-white-room line in the PR body · wiki/docs if user-facing. A PR that touches the turn
+white-room line in the PR body · skill/tool text claims backed by a probe (S3) · wiki/docs if user-facing. A PR that touches the turn
 loop, prompts or tools also runs the **quick benchmark set** (`baseline`, `scene_build`,
 `error_handling`) on Local.
 
@@ -21,7 +21,7 @@ Defined in master §3.3. Tick a gate when its runs are saved and its rating shee
 
 | ☐ | Gate | When | Benchmarks (modes) | You test by hand |
 |---|---|---|---|---|
-| ☐ | **T0 Baseline** | **Now, before the first branch**, on Blender/Bforartists 5.3 | All 15 suites: Local (small + medium model), Remote (cheap + frontier) | External Harness smoke with Claude Desktop or OpenCode (harness guide); fill the rating sheet for every mode |
+| ☐ | **T0 Baseline** | **Now, before the first branch** (after S0 + S1, so the baseline doesn't measure two broken tools), on Blender/Bforartists 5.3 | All 15 suites: Local (small + medium model), Remote (cheap + frontier) | External Harness smoke with Claude Desktop or OpenCode (harness guide); fill the rating sheet for every mode |
 | ☐ | **T1 Seam regression** | After I1 + B0 merge | Full suites Local + Remote; must match T0 (± noise) | Chat looks right with native markdown (tables, code Copy rows) |
 | ☐ | **T2 = M1 "Bring your own agent"** | After H5 + I6 + I8 + H10 | Full suites on **External Agent** (OpenCode, Claude Code) for the first time; Local/Remote quick set | Artist script A (§3.3); External Harness via the new activity view |
 | ☐ | **T3 = M2 "Same Coworker everywhere"** | After I4 + I5 + B1/B2/B4 + G1–G3 | All suites, all engines; first-request tokens with progressive tools vs T0 | Artist script B: explain, ask_user, Revert, plan on each engine |
@@ -81,7 +81,7 @@ Plan: `plan_tier4b_competitor_ux_analysis.md`
 | ☐ | ID | Task | Branch | Depends | Size | Done when |
 |---|---|---|---|---|---|---|
 | ☐ | B0 | **Native markdown + Blender 5.3 minimum**: set `blender_version_min = "5.3.0"`. Replace `_render_markdown` with `layout.label_markdown(text=...)` (PR #163254: headers, paragraphs, bold/italic/monospace, links, code blocks, inline code, lists). Fill the gaps the native API leaves: split replies at fenced code blocks so each block keeps its Copy (later Run) row; convert tables to an aligned monospace block (no native tables); keep the LaTeX→Unicode pre-pass. Delete the old renderer and the `_can_multiline()` / pre-5.3 fallbacks. Update README, wiki, extension listing | `feat/4b-native-markdown` | — | M | Chat, Workshop and Explain answers draw through `label_markdown` on Blender 5.3 + Bforartists 5.3; old renderer removed; tables readable; unit tests for the segmenter/table converter |
-| ☐ | B7 | Doc-drift records (`sources`, `reviewed_revision`) for `skills/blender_5x.md` and the wiki pages Tier 4 touches, with a small checker in `_misc/`. Review whether the pre-5.3 version skills are still needed with the 5.3 minimum | `chore/4b-doc-drift` | B0 | S | Checker lists drifted docs; version skills trimmed or justified |
+| ☐ | B7 | Doc-drift records (`sources`, `reviewed_revision`) for `skills/blender_5x.md` and the wiki pages Tier 4 touches, with a small checker in `_misc/`. Review whether the pre-5.3 version skills are still needed with the 5.3 minimum. Use S3 probes as the drift signal for API claims | `chore/4b-doc-drift` | B0, S3 | S | Checker lists drifted docs; version skills trimmed or justified; API drift shows as a failing probe |
 | ☐ | B1 | Explain this + Translate: context-menu operators, target card, docs-grounded Ask turn, `/explain` | `feat/4b-explain` | — | M | Property, node, object each give a cited answer on all engines |
 | ☐ | B6 | Live context chip (editor · mode · selection), toggleable | `feat/4b-context-chip` | — | S | Same prompt in two editors picks different correct tools |
 | ☐ | B2 | `ask_user` button row + next-step [Do it] [Something else] | `feat/4b-ask-user` | I5 | S | Click resumes the same turn on all engines |
@@ -98,7 +98,7 @@ Plan: `plan_tier4f_agent_intelligence.md` (see its audit banner for what already
 | ☐ | ID | Task | Branch | Depends | Size | Done when |
 |---|---|---|---|---|---|---|
 | ☐ | F1 | Permissions (Trusted / Safe / Strict, glob rules, external-directory guard) + doom-loop guard (3× identical call, any tool) → shared approval row | `feat/4f-permissions` | I3 | M | Safe mode asks before `execute_blender_code`; 3× repeat escalates |
-| ☐ | F2 | On-demand skills: name+description index in the prompt, `skill` tool (server-side so External benefits), keep version skills always-on | `feat/4f-skills-on-demand` | I4 helpful | S | System prompt shrinks measurably; skill loads when needed |
+| ☐ | F2 | On-demand skills: name+description index in the prompt, `skill` tool (server-side so External benefits), keep version skills always-on | `feat/4f-skills-on-demand` | S4; I4 helpful | S | System prompt shrinks measurably (first-request tokens on Local 16K, before/after); skill loads when needed; External Harness gets the `skill` tool |
 | ☐ | F3 | llama-server `--metrics`, `--parallel` readiness, hardware auto-tune of KV type/layers | `feat/4f-inference-tuning` | — | M | `/metrics` tok/s in Status; benchmark shows no regression |
 
 ---
@@ -140,6 +140,24 @@ Plan: `plan_tier4e_nice_to_haves.md` (Save moved to G4)
 |---|---|---|---|---|---|---|
 | ☐ | E1 | Rigging (6): armature, bone, constraint, IK chain, mirror pose, bake | `feat/4e-rigging-tools` | G pattern | M | "Rig this 3-bone arm with IK" works on Local |
 | ☐ | E2 | Animation (4 new; `batch_keyframe_insert` exists): interpolation, F-curve modifier, NLA track, bake to NLA | `feat/4e-animation-tools` | G pattern | M | Bounce with ease-out + noise modifier via tools only |
+
+---
+
+## Lane S — Skills uplift, clean room · *S0/S1 in 1.1.39*
+
+Plan: `plan_tier4s_skills_cleanroom.md` (method §2, needs list §3, notes on other tasks §5).
+Every S task follows the two-role clean-room method: implementer works from first sources only.
+
+| ☐ | ID | Task | Branch | Depends | Size | Done when |
+|---|---|---|---|---|---|---|
+| ☐ | S0 | **Bug**: template registry moved into the server (`blmcp`); `execute_blender_plan` / `list_blender_templates` work in every mode (today they fail everywhere: the MCP process imports the add-on package). Hide both from the surface list until fixed | `fix/4s-templates-server-side` | — | S | Both tools work on Local and External Harness (live); bpy-free test imports the registry without the add-on |
+| ☐ | S1 | **Bug**: `get_active_node_tree` uses `scene.compositing_node_group` (5.x) and never edits the scene; drop `use_nodes = True` advice (skills, Poly Haven world) | `fix/4s-node-tree-5x` | — | S | Compositor read works on 5.3; a read on a scene without a compositor changes nothing |
+| ☑ | S2 | Needs list written by the reader role (plan §3) | — | — | S | Done in the plan |
+| ☐ | S3 | API-claims probes: `_misc/api_probes.py` (live/headless) + `tests/test_api_claims.py` (every skill claim has a probe) | `feat/4s-api-probes` | — | S | Probes pass on 5.3; a removed property makes a probe fail |
+| ☐ | S4 | Skill format + `_misc/check_skills.py`: front matter (`name`, `description` ≤ 400 chars, `sources`, `reviewed_revision`), body budget, on-demand `references/` | `feat/4s-skill-format` | S3 | S | Checker green on all skills; F2 can build its index |
+| ☐ | S5 | New chapters from first sources: 5.x changes list, data-over-operators + context, freed data, evaluated geometry, localized node lookup, compositor / bone collections / render method / output format / background GPU / bulk mesh access; "finish with evidence" rules | `feat/4s-skill-chapters` | S3, S4 | M | Each claim has a probe; overlap check reports incidental only; quick benchmark set no worse |
+| ☐ | S6 | `check_mesh_quality(objects)` tool: overlapping faces, loose parts, open edges, flipped normals, unapplied scale; compact JSON | `feat/4s-mesh-quality` | — | S | Detects each seeded fault in a test scene; reused by X2 |
+| ☐ | S7 | Docs: tool-name stability + using other skill packs with External Harness | `docs/4s-skill-packs` | — | S | Wiki page reviewed |
 
 ---
 

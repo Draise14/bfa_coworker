@@ -2019,10 +2019,14 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 op = row.operator("bfacw.copy_mcp_config", icon="COPYDOWN", text="Copy to Clipboard")
                 op.client_type = self.harness_preset
                 row.operator("bfacw.test_mcp_config", icon="CHECKMARK", text="Test Config")
-                if self.harness_preset == "claude_code":
-                    step2.operator("bfacw.register_claude_code", icon="IMPORT")
+                from . import harness_clients
+                if preset is not None and harness_clients.can_install(self.harness_preset):
+                    op = step2.operator(
+                        "bfacw.install_client_config", icon="IMPORT",
+                        text="Add to {:s}".format(preset.name))
+                    op.client_type = self.harness_preset
                     step2.label(
-                        text="Add to Claude Code writes ~/.claude.json directly -- no copy/paste needed.",
+                        text="Writes the client's config file directly (backup kept) -- no copy/paste needed.",
                         icon='BLANK1',
                     )
                 step2.label(
@@ -2055,6 +2059,14 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     )
                     if not _cfg_check.get("ok") and _cfg_check.get("hint"):
                         _draw_multiline(step2, _cfg_check["hint"])
+                    _installed = _cfg_check.get("installed") or {}
+                    if _installed.get("summary"):
+                        step2.label(
+                            text=_installed["summary"],
+                            icon='ERROR' if _installed.get("problems") else 'CHECKMARK',
+                        )
+                        for _problem in _installed.get("problems", [])[1:]:
+                            _draw_multiline(step2, _problem)
                     if _cfg_check.get("stderr_tail"):
                         _tail_box = step2.box()
                         _tail_box.label(text="Server output (last lines):", icon='CONSOLE')
@@ -2065,7 +2077,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
                 # -- Step 3: Configure your client ---------------------------
                 step3 = mcp_box.box()
-                step3.label(text="Step 3: Configure your client (settings UI, harness chat, or config file)", icon='FILE_TEXT')
+                step3.label(text="Step 3: Configure your client (Add to client, settings UI, or config file)", icon='FILE_TEXT')
                 step3.label(
                     text="Config file locations can vary per system and client version.",
                     icon='BLANK1',
@@ -2079,31 +2091,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                         icon='INFO',
                     )
                 step3.label(
-                    text="Alternative: most clients can be configured without editing files.",
-                    icon='BLANK1',
-                )
-                step3.label(
-                    text="Paste the copied config into the harness chat,",
-                    icon='BLANK1',
-                )
-                step3.label(
-                    text="or add it in the client's agent/MCP settings UI (Cursor, Cline, Windsurf,",
-                    icon='BLANK1',
-                )
-                step3.label(
-                    text="Freebuff). Whichever flow your client offers is often easier and more",
-                    icon='BLANK1',
-                )
-                step3.label(
-                    text="reliable than hunting for a config file that varies per system.",
-                    icon='BLANK1',
-                )
-                step3.label(
-                    text="If you do edit the file: it is JSON - paste the copied text inside",
+                    text="If you edit the file yourself, merge the copied entry into the existing",
                     icon='INFO',
                 )
                 step3.label(
-                    text="the top-level { } braces.",
+                    text="servers section -- don't replace the whole file.",
                     icon='BLANK1',
                 )
 

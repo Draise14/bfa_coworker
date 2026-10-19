@@ -220,7 +220,11 @@ def _surface(region: Any, compact: bool) -> ChatSurface:
 
 
 def draft_from_gpu(text: str) -> bool:
-    """True when *text* (the shared draft) is what a GPU chat box holds."""
+    """True when *text* (the shared draft) belongs to a GPU chat: a GPU box has
+    the keyboard, or holds this text.  The panel chat's own @ popup then stays
+    closed -- the GPU chat has its inline @ list."""
+    if any(s.box.focused for s, _r in _SURFACES.values()):
+        return True
     return bool(text) and any(s.box.model.text == text for s, _r in _SURFACES.values())
 
 
@@ -289,8 +293,14 @@ def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0) -> None:
     canvas = gpu_layout.Canvas(style, render.measure, surface.interaction())
     surface.bounds = rect
     surface.drop_hover = drop_hover()
+    typed_before = surface.box.model.text
     actions = surface.draw(canvas, rect, _history(), live=state, top=_status(context) if compact else None,
                            notice=_harness_notice(prefs) if harness else None)
+    if surface.box.model.text != typed_before:
+        # Changed by a click while drawing (an @ suggestion): share the draft now,
+        # or the panel chat's own @ popup would see the old half-typed "@Ca".
+        actions.append(("draft", surface.box.model.text))
+        _SYNCED[id(surface)] = surface.box.model.text
     render.render(canvas.commands, style)
     if actions:
         _PENDING.extend((action, value, region.as_pointer()) for action, value in actions)
@@ -597,6 +607,10 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
         ops.open_addon_prefs()
     elif action == "open_editor":
         ops.open_coworker_editor()
+    elif action == "draft" and props is not None:
+        if props.chat_input != value:
+            props.chat_input = value
+            _tag_chat_regions()         # the other chats show the new draft at once
     elif action == "open_image":
         _open_image(value)
     elif action == "attachment_pin" and props is not None:

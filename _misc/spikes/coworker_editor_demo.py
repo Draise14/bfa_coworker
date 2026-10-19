@@ -145,7 +145,7 @@ CTX = {}
 
 def _tick():
     step = _STEP["n"]
-    _STEP["n"] = {6: 61, 61: 62}.get(step, step + 1)
+    _STEP["n"] = {3: 31, 31: 32, 32: 4, 6: 61, 61: 62}.get(step, step + 1)
     try:
         if step == 0:
             CTX["addon"] = _enable()
@@ -218,7 +218,27 @@ def _tick():
             _sim("TAB", "PRESS", x=x, y=y)
             _sim("TAB", "RELEASE", x=x, y=y)
             return 0.8
+        if step == 31:                     # @ again, then pick with the MOUSE this time
+            x, y = CTX["xy"]
+            _type("and @Li", x, y)
+            return 0.8
+        if step == 32:
+            ce = CTX["ce"]
+            surface = next(s for s, r in ce._SURFACES.values() if not s.compact)
+            region = next(r for s, r in ce._SURFACES.values() if not s.compact)
+            hit = next((r for r, w in surface._hits if w == "suggest:0"), None)
+            RESULT["mouse_suggestions"] = [s.label for s in surface.box.suggestions]
+            if hit is not None:
+                mx, my = int(region.x + hit.x + hit.w / 2), int(region.y + hit.y + hit.h / 2)
+                _sim("MOUSEMOVE", "NOTHING", x=mx, y=my)
+                _sim("LEFTMOUSE", "PRESS", x=mx, y=my)
+                _sim("LEFTMOUSE", "RELEASE", x=mx, y=my)
+            return 1.0
         if step == 4:
+            from bfa_coworker import ui_chat  # pylint: disable=import-error
+            draft = bpy.context.window_manager.bfacw_chat_props.chat_input
+            RESULT["mouse_pick_updates_draft"] = draft.endswith("@Light ")
+            RESULT["native_popup_stayed_closed"] = not ui_chat._mention_popup_open
             ce = CTX["ce"]
             surface = next(s for s, r in ce._SURFACES.values() if not s.compact)
             RESULT["box_after_tab"] = surface.box.model.text

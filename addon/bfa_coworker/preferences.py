@@ -154,6 +154,21 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
     # -- Chat Display ---------------------------------------------
 
+    chat_sidebar_style: EnumProperty(  # type: ignore[valid-type]
+        name="Sidebar Chat",
+        description=(
+            "How the Coworker tab in the 3D View sidebar shows the chat. Compact: the "
+            "new chat, newest message at the bottom with the input pinned under it, "
+            "Enter to send (the same chat as the Coworker editor). Classic: the "
+            "previous panel layout"
+        ),
+        items=[
+            ("COMPACT", "Compact Chat", "The new chat: newest at the bottom, input pinned, Enter sends"),
+            ("CLASSIC", "Classic Panels", "The previous panel layout"),
+        ],
+        default="COMPACT",
+    )
+
     chat_max_visible_turns: IntProperty(  # type: ignore[valid-type]
         name="Max Visible Turns",
         description=(
@@ -352,16 +367,17 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         """
         from . import agent_controller as _ac
         if _ac._agent_state.mcp_server_running:
-            # Revert to the previous mode.
-            _prev = _ac._agent_state.current_mode or "off"
+            # Revert to the previous mode.  agent_mode / llm_mode still hold
+            # it: they are only synced below, after this guard.
             print("[Coworker] operating_mode change rejected -- agent is running. Stop the agent first.")
-            # Force revert by resetting to the current active mode.
-            if _prev == "local":
-                self["operating_mode"] = "LOCAL_LLM"
-            elif _prev == "remote":
-                self["operating_mode"] = "REMOTE_API"
+            if self.agent_mode == "EXTERNAL_HARNESS":
+                previous = "EXTERNAL_HARNESS"
+            elif self.llm_mode == "remote":
+                previous = "REMOTE_API"
             else:
-                self["operating_mode"] = "LOCAL_LLM"  # safe default
+                previous = "LOCAL_LLM"
+            # The raw property holds the item's number; writing it skips this update.
+            self["operating_mode"] = next(item[4] for item in OPERATING_MODE_ITEMS if item[0] == previous)
             return
 
         if self.operating_mode == "LOCAL_LLM":
@@ -2267,6 +2283,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         # -- Chat Display -----------------------------------------------
         chat_box = layout.box()
         chat_box.label(text="Chat Display", icon='SORTTIME')
+        chat_box.prop(self, "chat_sidebar_style")
         chat_box.prop(self, "chat_max_visible_turns")
         chat_box.label(
             text="0 = show all turns. Higher values limit history shown.",

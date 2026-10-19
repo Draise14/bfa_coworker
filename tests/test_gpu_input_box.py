@@ -186,7 +186,7 @@ class TestDrawing(unittest.TestCase):
         three = box.height(c, 400)
         box.model.insert("\n" * 20)
         self.assertGreater(three, one)
-        self.assertAlmostEqual(box.height(c, 400), one + (ib._MAX_VISIBLE_LINES - 1) * c.style.line_height)
+        self.assertAlmostEqual(box.height(c, 400), one + (ib._MAX_VISIBLE_LINES - ib._MIN_VISIBLE_LINES) * c.style.line_height)
 
     def test_placeholder_caret_and_buttons(self):
         box = ib.InputBox(focused=True)
@@ -202,7 +202,8 @@ class TestDrawing(unittest.TestCase):
         box.busy, box.attachment = True, "shot.png"
         c = self.canvas(clicked="stop")
         self.assertEqual(box.draw(c, lay.Rect(0, 0, 400, 200)), [("stop", "")])
-        self.assertIn("Image: shot.png", self.texts(c))
+        # The attached image is drawn by the surface's tray now (test_gpu_surface).
+        self.assertNotIn("shot.png", self.texts(c))
 
     def test_send_button_and_click_to_place_cursor(self):
         box = ib.InputBox(focused=True)

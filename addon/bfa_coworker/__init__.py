@@ -195,6 +195,9 @@ def register() -> None:
     # Register the chat UI modules.
     from . import ui_chat
     ui_chat.register()
+    # The Coworker editor and the compact sidebar chat (Tier 4, GPU 4 + 5).
+    from . import chat_editor
+    chat_editor.register()
 
     # Discover generative plugins (Tier 5).
     # This scans gen_plugins/ and populates the registry.
@@ -370,7 +373,9 @@ def unregister() -> None:
     except Exception:
         pass
 
-    # Unregister chat UI.
+    # Unregister chat UI (the Coworker editor first: it builds on ui_chat's panels).
+    from . import chat_editor
+    chat_editor.unregister()
     ui_chat.unregister()
 
     for cmd in _cli_commands:

@@ -116,6 +116,7 @@ class Style:
     icon_border: float = 0.0
     font_points: float = 11.0                     # UI style "widget" points
     ui_scale: float = 1.0                         # Blender's UI scale x pixel size
+    line_width: float = 1.0                       # outline width in pixels (Interface > Line Width)
     zoom: float = 1.0                             # the chat's own zoom (Ctrl+wheel)
     extra: dict[str, Any] = field(default_factory=dict, compare=False)
 
@@ -200,5 +201,6 @@ def style_from_preferences(prefs: Any, zoom: float = 1.0) -> Style:
         icon_border=_float(getattr(ui, "icon_border_intensity", None), base.icon_border),
         font_points=points,
         ui_scale=scale,
+        line_width=max(1.0, float(getattr(system, "pixel_size", 1.0) or 1.0)),
         zoom=max(0.5, min(3.0, zoom)),
     )

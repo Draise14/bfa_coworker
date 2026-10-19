@@ -25,6 +25,7 @@ Run with::
 __all__ = ()
 
 import importlib
+import json
 import struct
 import sys
 import types
@@ -300,9 +301,41 @@ class TestChatView(unittest.TestCase):
             glyph = cs.spinner_glyph(tick)
             self.assertTrue(any(t.startswith("Reading your message " + glyph + "  |  ") for t in texts))
             self.assertTrue(any(t.startswith("Workshop " + glyph) for t in texts))     # header spins too
-            self.assertTrue(any(t.startswith("Thinking " + glyph) for t in texts))      # live reasoning
+            self.assertIn("Planning the logs", texts)                                    # live reasoning
             frames.append(glyph)
         self.assertEqual(len(set(frames)), 3)                                          # it animates
+
+    def test_live_turn_does_not_jitter(self):
+        hist = [{"role": "user", "content": "go"}, {"role": "tool", "name": "execute_blender_code", "content": "ok"}]
+
+        def turn_height(reasoning, streaming, view):
+            live = _Live()
+            live.reasoning_text, live.streaming_text = reasoning, streaming
+            return view._turn_height(self.canvas(), cv.group_turns(hist)[0], 0, 600, True, live, False)
+
+        view = cv.ChatView()
+        short = turn_height("one line", "", view)
+        long = turn_height(" ".join("word" for _ in range(400)), "", view)
+        self.assertAlmostEqual(short, long)               # the thinking window has a fixed height
+        grown = turn_height("x", "line one\n\nline two\n\nline three", view)
+        shrunk = turn_height("x", "line one", view)        # a partial line made it shorter
+        self.assertAlmostEqual(grown, shrunk)              # ...but the live turn never shrinks
+
+    def test_executed_code_in_its_own_frame(self):
+        hist = [{"role": "user", "content": "go"},
+                {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "function": {
+                    "name": "execute_blender_code", "arguments": json.dumps({"code": "import bpy\nbpy.ops.mesh.primitive_cube_add()"})}}]},
+                {"role": "tool", "name": "execute_blender_code", "tool_call_id": "c1", "content": "{\"status\": \"ok\"}"},
+                {"role": "assistant", "content": "Done."}]
+        view = cv.ChatView()
+        view.expanded.add("t0")
+        c = self.canvas()
+        view.draw(c, lay.Rect(0, 0, 600, 2000), hist)
+        mono = [cmd.text for cmd in c.commands if cmd.kind == "text" and cmd.font == "mono"]
+        self.assertIn("bpy.ops.mesh.primitive_cube_add()", mono)       # the code that ran
+        ids = [w for _r, w in c.hit_areas]
+        for prefix in ("copycode:", "copyres:", "copyuser:", "copymsg:"):  # Copy on everything
+            self.assertTrue(any(w.startswith(prefix) for w in ids), prefix)
 
     def test_scrollbar_like_blender(self):
         long = [m for i in range(30) for m in (

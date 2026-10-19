@@ -49,6 +49,7 @@ import bpy  # pylint: disable=import-error
 from bpy.props import (  # pylint: disable=import-error
     BoolProperty,
     EnumProperty,
+    FloatProperty,
     IntProperty,
     PointerProperty,
     StringProperty,
@@ -1120,9 +1121,17 @@ class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
         name="Send Once",
         description=(
             "Send the attached image with the next message only, then "
-            "detach it (off = sticky: re-sent every turn until cleared)"
+            "detach it (off = sticky: re-sent every turn until cleared; the "
+            "chat's pin button toggles this)"
         ),
-        default=False,
+        default=True,
+    )
+
+    # The compact chat panel's height (Tier 4, GPU 5; see chat_editor._find_chat_rect).
+    chat_panel_rows: FloatProperty(  # type: ignore[valid-type]
+        name="Chat Height",
+        description="Height of the sidebar chat (drag its bottom edge to change it)",
+        default=22.0, min=6.0, max=80.0,
     )
 
     chat_image_expanded: BoolProperty(  # type: ignore[valid-type]
@@ -1697,7 +1706,14 @@ class BFACW_FH_chat_drop(bpy.types.FileHandler):  # type: ignore[misc]
                 return False
             if area.type == "TEXT_EDITOR":
                 return True
-            return _is_coworker_panel_region(context)
+            from . import chat_editor as _ce
+            if area.type == "NODE_EDITOR" and _ce.is_coworker_space(area.spaces.active):
+                _ce.note_drop_hover()          # the GPU chat highlights the drop target
+                return True
+            if _is_coworker_panel_region(context):
+                _ce.note_drop_hover()
+                return True
+            return False
         except (AttributeError, ReferenceError, TypeError, ValueError):
             return False
 
@@ -2507,6 +2523,11 @@ def chat_timer_update() -> float | None:
             if props is None:
                 continue
             text = props.chat_input or ""
+            # Typed in the GPU chat (editor / compact sidebar)?  It has its
+            # own inline @ list -- a native popup would steal its keys.
+            from . import chat_editor as _ce
+            if _ce.draft_from_gpu(text):
+                continue
             if "@" in text and not _ac._agent_state.is_thinking:
                 last_at = text.rfind("@")
                 after = text[last_at + 1:]
@@ -2578,6 +2599,9 @@ def _ui_signature(state) -> tuple:
         len(state.conversation_history),
         len(_sm.store.retired_history),
         locked,
+        # The attached image (the GPU chats show it in the input box).
+        tuple(getattr(getattr(wm, "bfacw_chat_props", None), "chat_image", None) is not None
+              and wm.bfacw_chat_props.chat_image.name or "" for wm in bpy.data.window_managers),
     )
 
 
@@ -2587,9 +2611,15 @@ def _tag_chat_regions_redraw() -> None:
     Tags the region, not the area: ``area.tag_redraw()`` also redraws the
     3D viewport itself, which made the scene re-render on every timer tick.
     """
+    from . import chat_editor as _ce
     for wm in bpy.data.window_managers:
         for win in wm.windows:
             for area in win.screen.areas:
+                if area.type == 'NODE_EDITOR' and _ce.is_coworker_space(area.spaces.active):
+                    for region in area.regions:
+                        if region.type in {'WINDOW', 'HEADER'}:
+                            region.tag_redraw()
+                    continue
                 if area.type not in {'VIEW_3D', 'TEXT_EDITOR'}:
                     continue
                 for region in area.regions:
@@ -2616,6 +2646,192 @@ def _open_mention_for_at(text: str) -> float | None:
 # ---------------------------------------------------------------------------
 # Panels
 
+def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool = True,
+                       show_prefs: bool = True) -> bool:
+    """The chat's controls: mode, Start / Stop, status, scene protection,
+    External Harness setup, chat mode, reasoning effort and the image socket.
+
+    Shared by the 3D View chat panel and the Coworker editor's sidebar (Tier 4,
+    GPU 4).  Returns False in External Harness mode, where the chat itself
+    runs in the external client (nothing else to draw).
+    """
+    wm = context.window_manager
+    props = wm.bfacw_chat_props  # type: ignore[attr-defined]
+    state = agent_controller._agent_state
+    prefs = context.preferences.addons[__package__].preferences
+    is_harness = (prefs.operating_mode == "EXTERNAL_HARNESS")
+
+    # -- Mode info + Settings button --
+    mode_row = layout.row(align=True)
+    mode_row.scale_y = 0.9
+    if is_harness:
+        mode_row.label(text="External MCP", icon='WORLD')
+    elif prefs.operating_mode == "LOCAL_LLM":
+        mode_row.label(text="Local LLM", icon='CONSOLE')
+    else:
+        mode_row.label(text="Remote API", icon='URL')
+    # NOTE: The model name is intentionally NOT shown here (issue #70).
+    # It lives only in the Status & Diagnostics panel, which shows the
+    # mode-correct model (local llama-server model or remote API model).
+    if show_prefs:     # the Coworker editor has its settings button in the header
+        mode_row.separator(factor=0.3)
+        mode_row.operator("bfacw.open_addon_prefs", icon="PREFERENCES", text="")
+
+    # -- Agent control buttons (compact) --
+    row = layout.row(align=True)
+    row.scale_y = 1.8
+    if is_harness:
+        if mcp_to_blender_server.is_running():
+            actual = mcp_to_blender_server.get_actual_port()
+            tip = "Bridge running on port {:d}".format(actual) if actual else "Stop Bridge"
+            row.operator("bfacw.agent_stop", icon="X", text="Stop Bridge")
+        else:
+            row.operator("bfacw.agent_start", icon="PLAY", text="Start Bridge")
+    else:
+        if state.mcp_server_running:
+            row.operator("bfacw.agent_stop", icon="X", text="Stop")
+        else:
+            row.operator("bfacw.agent_start", icon="PLAY", text="Start")
+
+    # -- Compact status line --
+    if is_harness:
+        status = "Bridge Running" if mcp_to_blender_server.is_running() else "Bridge Offline"
+        is_ok = mcp_to_blender_server.is_running()
+    else:
+        status = props.chat_status
+        if state.is_thinking:
+            elapsed = time.time() - state.thinking_start_time if state.thinking_start_time else 0.0
+            status = "{:s} {:s} ({:s})".format(
+                _phase_text(state), _spinner_char(state),
+                _fmt_duration(elapsed))
+        elif not state.mcp_server_running:
+            status = "Offline"
+        elif state.error:
+            status = "Error: {:s}".format(state.error)
+        is_ok = state.mcp_server_running
+
+    status_icon = (
+        'CHECKMARK' if is_ok and not state.is_thinking and not state.error else
+        'SORTTIME' if state.is_thinking else
+        'ERROR' if state.error else 'CANCEL'
+    )
+    status_row = layout.row()
+    status_row.label(text="", icon=status_icon)
+    _draw_multiline(status_row, status)
+    if state.error:
+        err_row = layout.row(align=True)
+        err_row.scale_y = 0.8
+        err_row.operator(
+            "bfacw.copy_status_error",
+            icon="COPYDOWN",
+            text="Copy Error",
+        )
+    elif state.warning:
+        # Non-fatal notice (e.g. tool-calling downgrade).  Shown when
+        # there is no error, so it never masks a real failure.
+        warn_row = layout.row()
+        warn_row.scale_y = 0.9
+        warn_row.label(text="", icon='INFO')
+        _draw_multiline(warn_row, state.warning)
+
+    # -- Co-work scene protection notice (scene safety Phase 1) -----
+    # While the coworker works it briefly makes the objects it created
+    # un-selectable (the soft lock), so the user cannot re-target them
+    # mid-turn.  Say so -- otherwise the "I can't click this" moment
+    # looks like a bug.  Everything is released when the turn ends.
+    if not is_harness:
+        try:
+            from . import co_work_guard as _cwg
+            if _cwg.is_locked():
+                _lo, _lc = _cwg.managed_names()
+                lock_row = layout.row()
+                lock_row.scale_y = 0.8
+                lock_row.label(
+                    text="Scene protection: {:d} object(s) temporarily "
+                         "unselectable while working".format(len(_lo) + len(_lc)),
+                    icon='LOCKED',
+                )
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+
+    # -- External Harness mode --
+    if is_harness:
+        if mcp_to_blender_server.is_running():
+            box = layout.box()
+            box.label(text="External MCP Client", icon='WORLD')
+            row = box.row(align=True)
+            row.scale_y = 1.2
+            row.operator("bfacw.open_harness_prefs", icon="PREFERENCES", text="Configure")
+            row = box.row(align=True)
+            row.prop(prefs, "harness_preset", text="")
+            op = row.operator("bfacw.copy_mcp_config", icon="COPYDOWN", text="Copy")
+            op.client_type = prefs.harness_preset
+        layout.label(text="Chat handled by external client.", icon='INFO')
+        return False
+
+    # -- Mode toggle --
+    if show_chat_mode:
+        row = layout.row(align=True)
+        row.prop(props, "chat_mode", expand=True)
+    _draw_reasoning_effort_row(layout, prefs)
+
+    layout.separator()
+
+    # -- Image attachment socket (issue #88 / Tier 3k) ----------
+    # Above the chat input: set the image BEFORE typing, so what is
+    # attached is visible right next to the message it will ride with.
+    _draw_attachment_row(layout, props, context)
+    return True
+
+
+def _compact_sidebar(context: bpy.types.Context) -> bool:
+    """True when the 3D View's Coworker tab shows the compact GPU chat.
+
+    Then the classic chat panel steps aside for BFACW_PT_chat_compact (the GPU
+    chat in a panel); Session, Queue and Status stay below it.
+    """
+    if getattr(getattr(context, "space_data", None), "type", "") != 'VIEW_3D':
+        return False
+    try:
+        prefs = context.preferences.addons[__package__].preferences
+    except (KeyError, AttributeError):
+        return False
+    return getattr(prefs, "chat_sidebar_style", "CLASSIC") == "COMPACT"
+
+
+class BFACW_PT_chat_compact(Panel):  # type: ignore[misc]
+    """The compact chat, as a real panel: collapse, drag and pin it like any other.
+
+    The panel only reserves room; the GPU chat (chat_editor.py) paints it.
+    Invisible marker images at the room's top and bottom let the chat find it in
+    the drawn region, so it follows the panel wherever Blender puts it
+    (dragged, pinned to another tab, scrolled, Ctrl+MMB zoomed).
+    """
+    bl_label = "Coworker Chat"
+    bl_idname = "BFACW_PT_chat_compact"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = _CHAT_PANEL_CATEGORY
+    bl_order = 0
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return not bpy.app.background and _compact_sidebar(context)
+
+    def draw_header(self, _context: bpy.types.Context) -> None:
+        self.layout.label(text="", icon=_AGENT_ICON)
+
+    def draw(self, context: bpy.types.Context) -> None:
+        from . import chat_editor as _ce
+        props = context.window_manager.bfacw_chat_props  # type: ignore[attr-defined]
+        col = self.layout.column(align=True)
+        _ce.draw_marker_row(col, "top")
+        room = col.column()
+        room.scale_y = max(1.0, props.chat_panel_rows - 1.0)
+        room.label(text="")
+        _ce.draw_marker_row(col, "bottom")
+
+
 class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
     """Main chat panel in the 3D Viewport sidebar -- input and messages."""
     bl_label = "Coworker"
@@ -2626,134 +2842,16 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        return not bpy.app.background
+        return not bpy.app.background and not _compact_sidebar(context)
 
     def draw(self, context: bpy.types.Context) -> None:
         layout = self.layout
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
         state = agent_controller._agent_state
-        prefs = context.preferences.addons[__package__].preferences
-        is_harness = (prefs.operating_mode == "EXTERNAL_HARNESS")
 
-        # -- Mode info + Settings button --
-        mode_row = layout.row(align=True)
-        mode_row.scale_y = 0.9
-        if is_harness:
-            mode_row.label(text="External MCP", icon='WORLD')
-        elif prefs.operating_mode == "LOCAL_LLM":
-            mode_row.label(text="Local LLM", icon='CONSOLE')
-        else:
-            mode_row.label(text="Remote API", icon='URL')
-        # NOTE: The model name is intentionally NOT shown here (issue #70).
-        # It lives only in the Status & Diagnostics panel, which shows the
-        # mode-correct model (local llama-server model or remote API model).
-        mode_row.separator(factor=0.3)
-        mode_row.operator("bfacw.open_addon_prefs", icon="PREFERENCES", text="")
-
-        # -- Agent control buttons (compact) --
-        row = layout.row(align=True)
-        row.scale_y = 1.8
-        if is_harness:
-            if mcp_to_blender_server.is_running():
-                actual = mcp_to_blender_server.get_actual_port()
-                tip = "Bridge running on port {:d}".format(actual) if actual else "Stop Bridge"
-                row.operator("bfacw.agent_stop", icon="X", text="Stop Bridge")
-            else:
-                row.operator("bfacw.agent_start", icon="PLAY", text="Start Bridge")
-        else:
-            if state.mcp_server_running:
-                row.operator("bfacw.agent_stop", icon="X", text="Stop")
-            else:
-                row.operator("bfacw.agent_start", icon="PLAY", text="Start")
-
-        # -- Compact status line --
-        if is_harness:
-            status = "Bridge Running" if mcp_to_blender_server.is_running() else "Bridge Offline"
-            is_ok = mcp_to_blender_server.is_running()
-        else:
-            status = props.chat_status
-            if state.is_thinking:
-                elapsed = time.time() - state.thinking_start_time if state.thinking_start_time else 0.0
-                status = "{:s} {:s} ({:s})".format(
-                    _phase_text(state), _spinner_char(state),
-                    _fmt_duration(elapsed))
-            elif not state.mcp_server_running:
-                status = "Offline"
-            elif state.error:
-                status = "Error: {:s}".format(state.error)
-            is_ok = state.mcp_server_running
-
-        status_icon = (
-            'CHECKMARK' if is_ok and not state.is_thinking and not state.error else
-            'SORTTIME' if state.is_thinking else
-            'ERROR' if state.error else 'CANCEL'
-        )
-        status_row = layout.row()
-        status_row.label(text="", icon=status_icon)
-        _draw_multiline(status_row, status)
-        if state.error:
-            err_row = layout.row(align=True)
-            err_row.scale_y = 0.8
-            err_row.operator(
-                "bfacw.copy_status_error",
-                icon="COPYDOWN",
-                text="Copy Error",
-            )
-        elif state.warning:
-            # Non-fatal notice (e.g. tool-calling downgrade).  Shown when
-            # there is no error, so it never masks a real failure.
-            warn_row = layout.row()
-            warn_row.scale_y = 0.9
-            warn_row.label(text="", icon='INFO')
-            _draw_multiline(warn_row, state.warning)
-
-        # -- Co-work scene protection notice (scene safety Phase 1) -----
-        # While the coworker works it briefly makes the objects it created
-        # un-selectable (the soft lock), so the user cannot re-target them
-        # mid-turn.  Say so -- otherwise the "I can't click this" moment
-        # looks like a bug.  Everything is released when the turn ends.
-        if not is_harness:
-            try:
-                from . import co_work_guard as _cwg
-                if _cwg.is_locked():
-                    _lo, _lc = _cwg.managed_names()
-                    lock_row = layout.row()
-                    lock_row.scale_y = 0.8
-                    lock_row.label(
-                        text="Scene protection: {:d} object(s) temporarily "
-                             "unselectable while working".format(len(_lo) + len(_lc)),
-                        icon='LOCKED',
-                    )
-            except Exception:  # pylint: disable=broad-exception-caught
-                pass
-
-        # -- External Harness mode --
-        if is_harness:
-            if mcp_to_blender_server.is_running():
-                box = layout.box()
-                box.label(text="External MCP Client", icon='WORLD')
-                row = box.row(align=True)
-                row.scale_y = 1.2
-                row.operator("bfacw.open_harness_prefs", icon="PREFERENCES", text="Configure")
-                row = box.row(align=True)
-                row.prop(prefs, "harness_preset", text="")
-                op = row.operator("bfacw.copy_mcp_config", icon="COPYDOWN", text="Copy")
-                op.client_type = prefs.harness_preset
-            layout.label(text="Chat handled by external client.", icon='INFO')
+        if not draw_chat_controls(layout, context):
             return
-
-        # -- Mode toggle --
-        row = layout.row(align=True)
-        row.prop(props, "chat_mode", expand=True)
-        _draw_reasoning_effort_row(layout, prefs)
-
-        layout.separator()
-
-        # -- Image attachment socket (issue #88 / Tier 3k) ----------
-        # Above the chat input: set the image BEFORE typing, so what is
-        # attached is visible right next to the message it will ride with.
-        _draw_attachment_row(layout, props, context)
 
         # -- Input area --
         layout.textbox(props, "chat_input")
@@ -4315,6 +4413,7 @@ _classes = (
     BFACW_OT_copy_code_block,
 
     BFACW_PT_chat_queue,
+    BFACW_PT_chat_compact,
     BFACW_PT_chat_panel,
     BFACW_PT_chat_session,
     BFACW_PT_chat_session_context,

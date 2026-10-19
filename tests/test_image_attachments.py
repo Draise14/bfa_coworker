@@ -381,8 +381,10 @@ class TestChatAttachmentUI(unittest.TestCase):
         body = src[fh_start:fh_end]
         self.assertIn('if area.type == "TEXT_EDITOR":', body,
                       "the Text Editor panel must accept the drop")
-        self.assertIn("return _is_coworker_panel_region(context)", body,
+        self.assertIn("if _is_coworker_panel_region(context):", body,
                       "the 3D Viewport drop must be scoped to our panel")
+        self.assertIn("_ce.is_coworker_space(area.spaces.active)", body,
+                      "the Coworker editor accepts image drops too")
         self.assertIn('bl_label = "Attach Image to Coworker Chat"', body)
 
     def test_is_coworker_panel_region_scopes_the_drop(self):
@@ -850,11 +852,17 @@ class TestChatAttachmentUI(unittest.TestCase):
             ("class BFACW_PT_chat_panel(", "\nclass BFACW_PT_chat_session("),
             ("class BFACW_PT_chat_text_editor(", "\n# ---"),
         )
+        # The 3D View panel draws its controls (image row included) through
+        # draw_chat_controls(), shared with the Coworker editor's sidebar.
+        controls = src[src.index("\ndef draw_chat_controls("):src.index("\nclass BFACW_PT_chat_compact(")]
+        self.assertIn("_draw_attachment_row(layout, props, context)", controls)
         for start_marker, end_marker in panels:
             start = src.index(start_marker)
             end = src.find(end_marker, start + 1)
             body = src[start:] if end < 0 else src[start:end]
-            row_at = body.index("_draw_attachment_row(layout, props, context)")
+            row_at = body.find("_draw_attachment_row(layout, props, context)")
+            if row_at < 0:
+                row_at = body.index("draw_chat_controls(layout, context)")
             input_at = body.index('layout.textbox(props, "chat_input")')
             self.assertLess(
                 row_at, input_at,

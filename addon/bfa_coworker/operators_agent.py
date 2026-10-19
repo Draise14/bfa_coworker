@@ -17,6 +17,7 @@ __all__ = (
     "_BFACW_OT_asset_selftest_run",
     "_BFACW_OT_asset_selftest_reset",
     "BFACW_OT_copy_mcp_config",
+    "BFACW_OT_register_claude_code",
     "BFACW_OT_test_mcp_config",
     "BFACW_OT_mcp_server_start",
     "BFACW_OT_mcp_server_stop",
@@ -983,6 +984,35 @@ class BFACW_OT_copy_mcp_config(bpy.types.Operator):  # type: ignore[misc]
             )
         else:
             self.report({"INFO"}, "MCP config copied to clipboard (validated)")
+        return {"FINISHED"}
+
+
+class BFACW_OT_register_claude_code(bpy.types.Operator):  # type: ignore[misc]
+    """Add the bfa-coworker MCP server to Claude Code's user config."""
+    bl_idname = "bfacw.register_claude_code"
+    bl_label = "Add to Claude Code"
+    bl_description = (
+        "Write the bfa-coworker server into ~/.claude.json (user scope, all projects). "
+        "Works for the Claude Code CLI and the VS Code / JetBrains extensions. "
+        "The previous file is backed up as .claude.json.bfacw.bak"
+    )
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        _bridge_port, _, _ = effective_ports(prefs)
+        try:
+            path = _ac_mod.register_claude_code_mcp_server(
+                blender_host=prefs.host,
+                blender_port=_bridge_port,
+                use_blender_python=getattr(prefs, "use_blender_python_for_harness", True),
+            )
+        except (OSError, ValueError) as ex:
+            self.report({"ERROR"}, "Could not update Claude Code config: {:s}".format(str(ex)))
+            return {"CANCELLED"}
+        self.report(
+            {"INFO"},
+            "Added bfa-coworker to {:s} -- restart Claude Code, then check /mcp".format(str(path)),
+        )
         return {"FINISHED"}
 
 

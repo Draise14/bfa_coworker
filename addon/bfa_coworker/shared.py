@@ -375,17 +375,18 @@ _HARNESS_PRESETS: list[HarnessPreset] = [
         icon="CONSOLE",
         is_open_source=False,
         config_path_help=(
-            "CLAUDE.md project file or ~/.claude/claude_desktop_config.json"
+            "User scope (all projects): ~/.claude.json  (Windows: %USERPROFILE%\\.claude.json)\n"
+            "Project scope: .mcp.json in the folder you open with Claude Code"
         ),
         setup_steps=[
-            "Install Claude Code: npm install -g @anthropic/claude-code",
-            "Create or edit ~/.claude/claude_desktop_config.json",
-            "Paste the config into the mcpServers section",
-            "Run claude in your terminal -- tools will auto-discover",
+            "Click 'Add to Claude Code' -- it writes the server into ~/.claude.json (a backup is kept)",
+            "Or: save the copied config as .mcp.json in your project folder",
+            "Restart Claude Code (CLI: exit and re-run claude; VS Code: reload the window)",
+            "Run /mcp in Claude Code -- bfa-coworker should show as connected",
         ],
-        docs_url="https://docs.anthropic.com/en/docs/claude-code/overview",
-        notes="Claude Code reads MCP config from the same claude_desktop_config.json as Claude Desktop.",
-        chat_paste_hint="Claude Code: run /mcp in the chat to add the server interactively, or use `claude mcp add --transport stdio` in a terminal.",
+        docs_url="https://docs.anthropic.com/en/docs/claude-code/mcp",
+        notes="Claude Code does NOT read claude_desktop_config.json -- a server set up for Claude Desktop is invisible to it.",
+        chat_paste_hint="Claude Code: /mcp only lists servers that are already configured -- use 'Add to Claude Code' or a .mcp.json file to add one.",
     ),
     HarnessPreset(
         identifier="codex",

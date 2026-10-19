@@ -147,8 +147,8 @@ Plan: `plan_tier4a_editor_integration.md`
 |---|---|---|---|---|---|---|---|
 | ☑ | **Editors 1**: Coworker editor spike | A0 | Three throwaway prototypes. Your preference order: (1) Preferences-editor clone with Python panels in the center, if it can't leak into your real Preferences; (2) Text / Node editor clone with the chat in native panels; a custom node-tree type gets its own Editor Type entry; (3) GPU drawing last | — | S | Screenshots + recommendation on #26 | |
 | ☐ | **Editors 2**: One chat component | A1 | `draw_chat_interface()` that every panel uses | Engine 4 | M | Existing panels use it; no visual change | |
-| ☐ | **Editors 3**: Chat in every sidebar | A2 | Node, VSE, Image, Graph… sidebars + per-editor quick prompts | Editors 2 | S | Chat in five more editors | |
-| ☐ | **Editors 4**: The Coworker editor | A3 | Build the spike's winner + a setup button | Editors 1, 2 | M | One click turns an area into the Coworker editor | |
+| ☐ | **Editors 3**: Chat in every sidebar | A2 | *Moved to **GPU 5** (compact sidebars), 2026-10-19* | — | — | — | |
+| ☐ | **Editors 4**: The Coworker editor | A3 | *Moved to **GPU 4** (the editor around the GPU chat), 2026-10-19* | — | — | — | |
 | ☐ | **Editors 5**: Viewport status | A4 | Status dot + focus highlight in theme colours (toggle) | Engine 3 | S | Overlay follows the agent | |
 | ☐ | **Editors 6**: Floating chat window *(optional)* | A5 | A separate chat window | Editors 4 | S | Opens once; second click focuses it | |
 
@@ -183,3 +183,25 @@ Plan: `plan_tier4s_skills_cleanroom.md`
 | ☐ | **Teams 1**: Agent teams | X1 | Planner → specialists → validator, one undo for the whole mission | Runtime 1, Engine 9, Engine 6 | L | Campfire scene built by a team | |
 | ☐ | **Teams 2**: Scene co-pilot | X2 | Background scan for common problems with safe one-click fixes | Teams 1, Skills 7 | M | Issues listed with fixes | |
 | ☐ | **Teams 3**: Render critic | X3 | Render → critique → fix loop, using review sheets | Tools 5, Teams 1 | M | Score improves within 5 rounds, or it stops | |
+
+## Coworker chat — one GPU module, full editor + compact sidebars (#26)
+
+Decision: `_misc/spikes/gpu_chat/DECISION.md` (spike **GPU 0**). The chat is drawn by our
+own module in your theme's colours, bevels, fonts and UI scale, because Python panels
+can't pin the input to the bottom, send on Enter, or show `@` suggestions while typing. It
+comes in **two sizes**: *full* in the center of the Coworker editor (a custom "Coworker"
+node-editor type, see Editors 1), and *compact* in the "Coworker" tab of an editor's
+sidebar. Both read the same chat data (Engine 3), so every engine and both sizes always
+show the same conversation. Replaces Editors 3 and 4, and the planned sidebar quick fixes
+(`@`, reading order).
+
+| ☐ | Task | Ref | What | Needs | Size | Done when | PR |
+|---|---|---|---|---|---|---|---|
+| ☑ | **GPU 0**: Spike | — | Prototype both sizes in Bforartists 5.3 with simulated typing | — | S | Go/no-go + screenshots | (this PR) |
+| ☐ | **GPU 1**: Toolkit | — | `ui_gpu/`: theme reader (colours, roundness, UI scale × zoom), fonts (UI + mono), text measuring and wrapping, boxes, buttons, hover/press, hit areas. Layout bpy-free and unit-tested; thin `gpu`/`blf` layer | — | M | A test page draws buttons and wrapped text in the default and a light theme | |
+| ☐ | **GPU 2**: Chat view | — | Turns from the chat state (your message, Workshop collapsible, tool rows, reply), our own markdown subset (bold, italic, code, lists, headings, links), code blocks with Copy (Run later), live streaming, follow the newest, scroll | GPU 1, Engine 3 | M | A recorded turn draws like the panel does today, in both sizes | |
+| ☐ | **GPU 3**: Input box | — | Click to focus / Esc to leave, multi-line, **Enter sends, Shift+Enter new line**, cursor + selection, copy/paste, undo, **`@` suggestions** while typing, attachment chip, Send/Stop, "edit in a native box" for IME, restart after opening a file | GPU 1 | M | Type, edit, `@` and send without the mouse; node/viewport shortcuts never fire while focused | |
+| ☐ | **GPU 4**: The Coworker editor | A3 | Register the "Coworker" editor type; one-click setup; full chat in the center; toolshelf icon actions (templates, explain, wizards); sidebar panels (session, model, plan); header | GPU 2, 3, Editors 1 | M | Pick "Coworker" in the Editor Type menu and chat | |
+| ☐ | **GPU 5**: Compact sidebars | A2 | The 3D View "Coworker" tab draws the compact chat (replaces today's sidebar drawing), then Node, VSE and Text editors; native scrolling list as fallback where painting misbehaves | GPU 2, 3 | M | Same conversation, same look in the editor and in four sidebars | |
+| ☐ | **GPU 6**: Guided flows | — | The same toolkit for question buttons (Chat 5), Explain answers (Chat 2) and step-by-step wizards in the chat | GPU 4 | M | A three-step wizard runs inside the chat | |
+

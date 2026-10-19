@@ -33,7 +33,7 @@ from `main`, no stacked PRs. Only one open PR at a time on `agent_controller.py`
 | 🔍 In review | Engine 3: events become chat messages | #120 (issue #119) |
 | 🔍 In review | Agent 2: ACP client (checked live with OpenCode) | #118 |
 | ⏭ Next (parallel, prototypes only) | Editors 1: Coworker editor spike (#26) | |
-| ⛔ Blocked | Chat 1: native markdown. `UILayout.label_markdown` is **not in** the Bforartists 5.3 dev build of 2026-10-08 yet (probed) | |
+| ✅ Unblocked | Chat 1: native markdown. `UILayout.label_markdown` **is** in the 5.3 dev builds; the earlier probe was wrong (`hasattr` on the class can't see RNA functions; `bl_rna.functions` can) | |
 | ❓ Waiting on you | Agent 1, part 2: record one Claude Code session (uses your Claude login) | |
 
 ---
@@ -107,7 +107,7 @@ Plan: `plan_tier4b_competitor_ux_analysis.md`
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
-| ☐ | **Chat 1**: Native markdown, 5.3 minimum | B0 | Draw chat text with Blender's `label_markdown()`; keep Copy rows per code block, tables as aligned text, math; delete our renderer; minimum 5.3. **Blocked**: not in the 5.3 dev build yet | Engine 3 | M | Replies draw natively on Blender + Bforartists 5.3 | |
+| ☐ | **Chat 1**: Native markdown, 5.3 minimum | B0 | Minimum 5.3; use Blender's `label_markdown()` wherever chat text is still drawn by **panels** (native list fallback, panel answers) and delete our old panel renderer. The GPU chat draws its own markdown (GPU 2), since `label_markdown` only works inside panels | Engine 3 | S | Panel-drawn replies use `label_markdown` on Blender + Bforartists 5.3 | |
 | ☐ | **Chat 2**: Explain this | B1 | Right-click a property, node or object → a short answer from the bundled docs, with the source; `/explain` | — | M | Property, node, object each give a cited answer on all engines | |
 | ☐ | **Chat 3**: Translate text in the scene (#42) | B1 | Right-click a text field, 3D text or text strip → **Translate with Coworker…** → language (remembered) → one small model call → confirm → written back as one undo step. Fast on light models; no full agent turn | — | S | A 3D text, a strip and a node label translate and undo cleanly | |
 | ☐ | **Chat 4**: "Where am I" chip | B6 | A line above the input (editor · mode · selection), read live at send time | — | S | Same prompt in two editors picks different correct tools | |
@@ -199,7 +199,7 @@ show the same conversation. Replaces Editors 3 and 4, and the planned sidebar qu
 |---|---|---|---|---|---|---|---|
 | ☑ | **GPU 0**: Spike | — | Prototype both sizes in Bforartists 5.3 with simulated typing | — | S | Go/no-go + screenshots | (this PR) |
 | ☑ | **GPU 1**: Toolkit | — | `ui_gpu/`: theme reader (colours, roundness, UI scale × zoom), fonts (UI + mono), text measuring and wrapping, boxes, buttons, hover/press, hit areas. Layout bpy-free and unit-tested; thin `gpu`/`blf` layer | — | M | A test page draws buttons and wrapped text in the default and a light theme | |
-| ☐ | **GPU 2**: Chat view | — | Turns from the chat state (your message, Workshop collapsible, tool rows, reply), our own markdown subset (bold, italic, code, lists, headings, links), code blocks with Copy (Run later), live streaming, follow the newest, scroll | GPU 1, Engine 3 | M | A recorded turn draws like the panel does today, in both sizes | |
+| ☑ | **GPU 2**: Chat view | — | Turns from the chat state (your message, Workshop collapsible, tool rows, reply), our own markdown subset (bold, italic, code, lists, headings, links), code blocks with Copy (Run later), **icons first** (the native chat's icon vocabulary, full-colour Bforartists icons exported from its SVGs; keyframe-coloured heading markers), headings sized like 5.3's label_markdown, live streaming, follow the newest, scroll | GPU 1, Engine 3 | M | A recorded turn draws like the panel does today, in both sizes | |
 | ☐ | **GPU 3**: Input box | — | Click to focus / Esc to leave, multi-line, **Enter sends, Shift+Enter new line**, cursor + selection, copy/paste, undo, **`@` suggestions** while typing, attachment chip, Send/Stop, "edit in a native box" for IME, restart after opening a file | GPU 1 | M | Type, edit, `@` and send without the mouse; node/viewport shortcuts never fire while focused | |
 | ☐ | **GPU 4**: The Coworker editor | A3 | Register the "Coworker" editor type; one-click setup; full chat in the center; toolshelf icon actions (templates, explain, wizards); sidebar panels (session, model, plan); header | GPU 2, 3, Editors 1 | M | Pick "Coworker" in the Editor Type menu and chat | |
 | ☐ | **GPU 5**: Compact sidebars | A2 | The 3D View "Coworker" tab draws the compact chat (replaces today's sidebar drawing), then Node, VSE and Text editors; native scrolling list as fallback where painting misbehaves | GPU 2, 3 | M | Same conversation, same look in the editor and in four sidebars | |

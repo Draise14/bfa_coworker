@@ -12,6 +12,11 @@ task "GPU 1").  The only part of ``ui_gpu`` that needs a GPU context: call
 * Text uses the UI font (font id 0) or Bforartists' bundled DejaVuSansMono
   for code.  ``blf`` has no font-weight control, so bold is drawn twice with
   a small offset.
+* Icons are the full-colour Bforartists PNGs from :mod:`.icons` as textures
+  (read with :mod:`.png`, never through ``bpy.data``): resampled on the CPU
+  to the exact drawn size, premultiplied (clean soft edges), with the theme's
+  Icon Saturation / Border / Alpha, drawn 1:1 at whole pixels and dimmed only
+  by the command's alpha.  Names without an image are flat triangles.
 * Clipping uses the GPU scissor, which also clips text.
 """
 
@@ -25,7 +30,11 @@ import blf  # pylint: disable=import-error
 import gpu  # pylint: disable=import-error
 from gpu_extras.batch import batch_for_shader  # pylint: disable=import-error
 
+from .icons import icon_pixels as _icon_pixels
+from .icons import image_path as _icon_image_path
+from .icons import triangles as _icon_triangles
 from .layout import DrawCmd, Rect
+from .png import read_rgba
 
 __all__ = (
     "font_id",
@@ -35,6 +44,9 @@ __all__ = (
 
 _FONTS: dict[str, int] = {"ui": 0}
 _SHADERS: dict[str, Any] = {}
+# (PNG path, side, saturation, border) -> GPUTexture, or None when it can't be read.
+_TEXTURES: dict[tuple, Any] = {}
+_SOURCES: dict[str, tuple[int, bytes] | None] = {}   # PNG path -> (size, straight RGBA)
 _CORNER_STEPS = 6
 
 
@@ -109,6 +121,74 @@ def _stroke(rect: Rect, color: tuple, radius: float, width: float = 1.0) -> None
     batch.draw(shader)
 
 
+def _source(path: str) -> tuple[int, bytes] | None:
+    if path not in _SOURCES:
+        try:
+            with open(path, "rb") as fh:
+                width, height, rgba = read_rgba(fh.read())
+            _SOURCES[path] = (width, rgba) if width == height else None
+        except (OSError, ValueError):
+            _SOURCES[path] = None
+    return _SOURCES[path]
+
+
+def _texture(path: str, side: int, saturation: float, border: float) -> Any:
+    key = (path, side, round(saturation, 3), round(border, 3))
+    if key in _TEXTURES:
+        return _TEXTURES[key]
+    texture = None
+    source = _source(path)
+    if source is not None:
+        rgba = _icon_pixels(source[1], source[0], side, saturation, border)
+        row = side * 4   # rows run top-down, GPU textures bottom-up
+        flipped = b"".join(rgba[(side - 1 - y) * row:(side - y) * row] for y in range(side))
+        buffer = gpu.types.Buffer("FLOAT", side * side * 4, [b / 255.0 for b in flipped])
+        texture = gpu.types.GPUTexture((side, side), format="RGBA8", data=buffer)
+    if len(_TEXTURES) > 512:   # zooming through many sizes
+        _TEXTURES.clear()
+    _TEXTURES[key] = texture
+    return texture
+
+
+def _image(x: int, y: int, side: int, texture: Any, alpha: float) -> None:
+    r, t = x + side, y + side
+    shader = _shader("IMAGE_COLOR")
+    batch = batch_for_shader(shader, "TRIS", {
+        "pos": [(x, y), (r, y), (r, t), (x, y), (r, t), (x, t)],
+        "texCoord": [(0, 0), (1, 0), (1, 1), (0, 0), (1, 1), (0, 1)],
+    })
+    gpu.state.blend_set("ALPHA_PREMULT")
+    shader.bind()
+    shader.uniform_sampler("image", texture)
+    shader.uniform_float("color", (alpha, alpha, alpha, alpha))   # premultiplied dimming
+    batch.draw(shader)
+    gpu.state.blend_set("ALPHA")
+
+
+def _icon(cmd: DrawCmd, style: Any) -> None:
+    assert cmd.rect is not None
+    # One texel per screen pixel: whole-pixel size and position keep icons crisp.
+    side = max(1, round(min(cmd.rect.w, cmd.rect.h)))
+    path = _icon_image_path(cmd.text, side)
+    if path:
+        saturation = getattr(style, "icon_saturation", 1.0)
+        border = getattr(style, "icon_border", 0.0)
+        texture = _texture(path, side, saturation, border)
+        if texture is not None:
+            x = round(cmd.rect.x + (cmd.rect.w - side) / 2)
+            y = round(cmd.rect.y + (cmd.rect.h - side) / 2)
+            _image(x, y, side, texture, cmd.color[3] * getattr(style, "icon_alpha", 1.0))
+            return
+    tris = _icon_triangles(cmd.text, cmd.rect)
+    if not tris:
+        return
+    shader = _shader("UNIFORM_COLOR")
+    batch = batch_for_shader(shader, "TRIS", {"pos": tris})
+    shader.bind()
+    shader.uniform_float("color", cmd.color)
+    batch.draw(shader)
+
+
 def _text(cmd: DrawCmd) -> None:
     fid = font_id(cmd.font)
     blf.size(fid, cmd.size)
@@ -121,8 +201,12 @@ def _text(cmd: DrawCmd) -> None:
         blf.draw(fid, cmd.text)
 
 
-def render(commands: list[DrawCmd]) -> None:
-    """Execute *commands* (call inside a POST_PIXEL draw callback)."""
+def render(commands: list[DrawCmd], style: Any = None) -> None:
+    """Execute *commands* (call inside a POST_PIXEL draw callback).
+
+    *style* (the canvas's :class:`style.Style`) supplies the theme's icon
+    settings; without it icons draw at full alpha and saturation, no border.
+    """
     gpu.state.blend_set("ALPHA")
     clipped = False
     try:
@@ -133,6 +217,8 @@ def render(commands: list[DrawCmd]) -> None:
                 _stroke(cmd.rect, cmd.color, cmd.radius)
             elif cmd.kind == "text":
                 _text(cmd)
+            elif cmd.kind == "icon" and cmd.rect is not None:
+                _icon(cmd, style)
             elif cmd.kind == "clip" and cmd.rect is not None:
                 r = cmd.rect
                 gpu.state.scissor_test_set(True)

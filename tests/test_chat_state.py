@@ -6,8 +6,8 @@
 Tests for ChatStateApplier (chat_state.py, Tier 4i "Engine 3").
 
 Events are applied to a stand-in ``AgentState`` and the resulting history is
-split with the chat panel's OWN ``_group_turns`` / ``_split_turn`` (lifted
-from ui_chat.py with ``ast``, since that module needs bpy), so the tests
+split with the chat panel's OWN turn grouping (``chat_turns.py``, which
+ui_chat imports), so the tests
 check what the panel will actually draw:
 
 1. an external-agent turn shaped like the recorded OpenCode session
@@ -26,7 +26,6 @@ Run with::
 
 __all__ = ()
 
-import ast
 import importlib
 import sys
 import types
@@ -50,17 +49,9 @@ cs, eng = _load()
 
 
 def _panel_functions():
-    """``_group_turns`` / ``_split_turn`` exactly as ui_chat.py defines them."""
-    source = (_ADDON / "ui_chat.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    wanted = {"_is_system_note_msg", "_group_turns", "_split_turn"}
-    nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
-    consts = [n for n in tree.body if isinstance(n, ast.Assign)
-              and any(getattr(t, "id", "").startswith("_LEGACY") for t in n.targets)]
-    module = ast.Module(body=consts + nodes, type_ignores=[])
-    namespace: dict = {}
-    exec(compile(module, "ui_chat_subset", "exec"), namespace)  # noqa: S102
-    return namespace["_group_turns"], namespace["_split_turn"]
+    """The panel's turn grouping (shared chat_turns.py, imported by ui_chat)."""
+    turns = importlib.import_module("bfacw_chat_state_pkg.chat_turns")
+    return turns.group_turns, turns.split_turn
 
 
 _group_turns, _split_turn = _panel_functions()

@@ -105,7 +105,10 @@ def wrap_text(text: str, width: float, measure: Measure, font: str = "ui",
 
 @dataclass(frozen=True)
 class DrawCmd:
-    """One thing to draw.  *kind*: rect, outline, text, clip, unclip."""
+    """One thing to draw.  *kind*: rect, outline, text, icon, clip, unclip.
+
+    An ``icon`` command keeps the icon's name in *text* (see :mod:`.icons`).
+    """
 
     kind: str
     rect: Rect | None = None
@@ -205,8 +208,20 @@ class Canvas:
         """Height :meth:`wrapped` will use for *text* at *width*."""
         return len(wrap_text(text, width, self.measure, font, self.style.font_size)) * self.style.line_height
 
-    def button(self, rect: Rect, widget_id: str, label: str, active: bool = False) -> bool:
-        """A themed button (``wcol_regular``); returns True on the frame it was clicked."""
+    def icon(self, rect: Rect, name: str, color: RGBA | None = None) -> None:
+        """Icon *name* (a Blender icon name, see :mod:`.icons`) in the square *rect*."""
+        self.commands.append(DrawCmd("icon", rect, color or self.style.text, text=name))
+
+    def icon_size(self) -> float:
+        """Side of an inline icon: about the height of capital letters plus a little."""
+        return self.style.font_size * 1.15
+
+    def button(self, rect: Rect, widget_id: str, label: str, active: bool = False,
+               align: str = "center", icon: str = "") -> bool:
+        """A themed button (``wcol_regular``); returns True on the frame it was clicked.
+
+        With *icon*, the icon sits before the label (or alone when *label* is empty).
+        """
         colors = self.style.button
         hovered = self.state.hovered(rect)
         pressed = self.state.pressed == widget_id
@@ -216,7 +231,20 @@ class Canvas:
         radius = self.style.radius(colors)
         self.fill(rect, inner, radius)
         self.stroke(rect, colors.outline, radius)
-        self.label(rect, label, colors.text_sel if (active or pressed) else colors.text, align="center")
+        text_rect = rect.inset(self.style.pad, 0) if align != "center" else rect
+        color = colors.text_sel if (active or pressed) else colors.text
+        if icon:
+            side = min(self.icon_size(), rect.h * 0.8)
+            gap = self.style.pad * 0.5 if label else 0.0
+            if align == "center":
+                x = rect.x + (rect.w - side - gap - self.measure(label, "ui", self.style.font_size)) / 2
+            else:
+                x = text_rect.x
+            self.icon(Rect(x, rect.y + (rect.h - side) / 2, side, side), icon, color)
+            text_rect = Rect(x + side + gap, rect.y, max(0.0, rect.right - x - side - gap), rect.h)
+            align = "left"
+        if label:
+            self.label(text_rect, label, color, align=align)
         self.hit_areas.append((rect, widget_id))
         return self.state.clicked == widget_id
 

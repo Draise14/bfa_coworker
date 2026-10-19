@@ -40,7 +40,6 @@ __all__ = (
 import array
 import json
 import os
-import random
 import re
 import threading
 import time
@@ -170,150 +169,24 @@ _ATTACHMENT_THUMBNAIL_MAX_SOURCE_PX = 12000000
 _is_bfa: bool = hasattr(bpy.types, "VIEW3D_MT_view")
 _AGENT_ICON: str = "WIZARD" if _is_bfa else "GHOST_ENABLED"
 
-# Animated "thinking" spinner frames, assembled from named phase groups: a
-# braille dot grows into a full cell and shrinks back (diagonal and bar
-# variants), the classic multi-dot "wormy" orbit, a travelling "wavy" ripple,
-# and a "block" gap rotating through a full cell.  Rather than replaying the
-# same order every loop, the groups are shuffled per cycle (see
-# _ordered_phases) so a long wait keeps looking new.  Written as \u escapes so
-# the source stays ASCII; rendered as glyphs by Blender's UI.
-_EXPAND: tuple[str, ...] = (
-    "\u2801", "\u2803", "\u2807", "\u280f", "\u281f", "\u283f",
+# The thinking spinner, phase wording and durations live in chat_status.py,
+# shared with the GPU chat (Tier 4, GPU 2).
+from .chat_status import (  # noqa: E402
+    fmt_duration as _fmt_duration,
+    phase_text as _phase_text,
+    spinner_char as _spinner_char,
+    spinner_glyph as _spinner_glyph,
 )
-_CONTRACT: tuple[str, ...] = (
-    "\u281f", "\u280f", "\u2807", "\u2803", "\u2801",
+
+
+# ---------------------------------------------------------------------------
+# Turn grouping lives in chat_turns.py, shared with the GPU chat (Tier 4, GPU 2).
+from .chat_turns import (  # noqa: E402
+    NOTE_TITLES as _NOTE_TITLES,
+    group_turns as _group_turns,
+    is_system_note_msg as _is_system_note_msg,
+    split_turn as _split_turn,
 )
-# "Wormy": the classic multi-dot braille orbit -- dots chase each other around.
-_WORMY: tuple[str, ...] = (
-    "\u280b", "\u2819", "\u2839", "\u2838", "\u283c",
-    "\u2834", "\u2826", "\u2827", "\u2807", "\u280f",
-)
-# "Wavy": a ripple travelling along the braille columns.
-_WAVY: tuple[str, ...] = (
-    "\u2809", "\u280b", "\u2819", "\u281a", "\u2812", "\u2802", "\u2802",
-    "\u2812", "\u2832", "\u2834", "\u2826", "\u2816", "\u2812", "\u2810",
-)
-# "Growing bar": fills the left column top-to-bottom, then the right column
-# bottom-to-top, then unwinds -- a bar that grows out and collapses back.
-_GROW: tuple[str, ...] = (
-    "\u2801", "\u2803", "\u2807", "\u2827", "\u2837",
-    "\u283f", "\u2837", "\u2827", "\u2807", "\u2803",
-)
-# "Block": a full cell with a gap that rotates around it.
-_BLOCK: tuple[str, ...] = (
-    "\u28ff", "\u28f7", "\u28ef", "\u28df", "\u287f",
-    "\u28bf", "\u28fb", "\u28fd", "\u28fe", "\u28ff",
-)
-# "Sweep": a diagonal blade that grows corner-to-corner, then melts away.
-_SWEEP: tuple[str, ...] = (
-    "\u2800", "\u2840", "\u28c0", "\u28c4", "\u28e4", "\u28e6",
-    "\u28f6", "\u28f7", "\u28ff", "\u28bf", "\u283f", "\u283b",
-    "\u281b", "\u2819", "\u2809", "\u2808", "\u2800",
-)
-_PHASES: tuple[tuple[str, ...], ...] = (
-    _EXPAND, _CONTRACT, _WORMY, _WAVY, _GROW, _BLOCK, _SWEEP,
-)
-_PHASE_TOTAL = sum(len(_phase) for _phase in _PHASES)
-
-
-def _ordered_phases(cycle: int) -> list[tuple[str, ...]]:
-    """Phase play order for cycle number *cycle*, deterministically shuffled.
-
-    Seeding on the cycle number gives every widget drawn in the same frame the
-    same order, and a fresh shuffle each loop -- variety with no shared mutable
-    state and no mid-frame flicker.
-    """
-    order = list(_PHASES)
-    random.Random(cycle * 2654435761 & 0xFFFFFFFF).shuffle(order)
-    return order
-
-
-def _spinner_glyph(tick: int) -> str:
-    """Return the spinner glyph for monotonic *tick* (wraps across all phases)."""
-    cycle, pos = divmod(tick, _PHASE_TOTAL)
-    for phase in _ordered_phases(cycle):
-        if pos < len(phase):
-            return phase[pos]
-        pos -= len(phase)
-    return _PHASES[0][0]  # Unreachable: pos < _PHASE_TOTAL always resolves.
-
-
-def _spinner_char(state) -> str:
-    """Return the current animated spinner glyph for *state*."""
-    return _spinner_glyph(int(getattr(state, "thinking_dots", 0) or 0))
-
-
-def _phase_text(state) -> str:
-    """Human label for the pre-first-token activity phase.
-
-    So a send does not read as "frozen": "Reading your message" while the
-    prompt is assembled, "Dreaming, one moment" while a local server loads,
-    then "Thinking" once tokens arrive.
-    """
-    phase = str(getattr(state, "turn_phase", "") or "")
-    if phase == "reading":
-        return "Reading your message"
-    if phase == "warming":
-        return "Dreaming, one moment"
-    return "Thinking"
-
-
-def _fmt_duration(seconds: float) -> str:
-    """Format a duration for display, rolling up into minutes and hours.
-
-    Long local turns run into the minutes, so raw seconds ("742s") read badly.
-    Examples: ``45s``, ``2m 05s``, ``18m``, ``1h 02m``.  Sub-second values
-    render as ``0s``; negatives are clamped to ``0s``.
-    """
-    try:
-        total = int(seconds)
-    except (TypeError, ValueError):
-        return ""
-    if total < 0:
-        total = 0
-    if total < 60:
-        return "{:d}s".format(total)
-    if total < 3600:
-        mins, secs = divmod(total, 60)
-        return "{:d}m {:02d}s".format(mins, secs) if secs else "{:d}m".format(mins)
-    hours, rem = divmod(total, 3600)
-    mins = rem // 60
-    return "{:d}h {:02d}m".format(hours, mins)
-
-
-def _is_system_note_msg(msg: dict) -> bool:
-    """True for an agent-injected user-role note (never a real user turn).
-
-    Mirrors ``session_memory.is_system_note`` (kept self-contained so the
-    draw path never imports): the structured ``system_note`` flag first,
-    then the ``[System:`` prefix, then the known legacy prompt -- the
-    unprefixed "Continue." older builds could leave in the history, which
-    rendered as a NEW user turn written by the agent itself.
-    """
-    if msg.get("role") != "user":
-        return False
-    if msg.get("system_note"):
-        return True
-    content = msg.get("content")
-    if isinstance(content, list):
-        content = " ".join(
-            str(b.get("text", "")) for b in content if isinstance(b, dict))
-    text = str(content or "").lstrip()
-    return (text.startswith("[System:")
-            or text.startswith("Continue. Keep this next step small"))
-
-
-# Friendly Workshop titles for injected notes, keyed by ``system_note`` kind.
-_NOTE_TITLES = {
-    "followup": ("Coworker \u2192 itself: keep going", 'FORWARD'),
-    "continue": ("Continued after the output limit", 'TRIA_RIGHT'),
-    "nudge": ("Nudge: act, don't just describe", 'PLAY'),
-    "entity": ("Scene context", 'OUTLINER_OB_MESH'),
-    "scene_change": ("You changed the scene mid-turn", 'VIEW_PAN'),
-    "spiral": ("Repeated-error guidance", 'ERROR'),
-    "malformed": ("Re-emit a broken tool call", 'ERROR'),
-    "wrapup": ("Step budget reached -- progress report", 'TIME'),
-}
 
 
 # ---------------------------------------------------------------------------
@@ -430,49 +303,8 @@ def _checkpoint_title(cp: dict, number: int) -> tuple[str, str]:
     return title, " \u00b7 ".join(parts)
 
 
-def _group_turns(history: list) -> list[list[dict]]:
-    """Group conversation history into turns (one real user send = one turn).
-
-    A real user message always starts a turn; agent-injected messages begin
-    with ``[System:`` and are excluded.  This deliberately does NOT rely on
-    the ``turn_start`` flag: that flag can be lost when the history is sliced,
-    compacted, or reloaded, and its loss dropped the user's own message into
-    the collapsed Workshop (so it looked like it had disappeared).  UI-only
-    greetings never anchor a turn -- otherwise the welcome created a phantom
-    "Turn 1" with no user message.
-    """
-    turns: list[list[dict]] = []
-    current_turn: list[dict] = []
-    for msg in history:
-        if msg.get("ui_only"):
-            continue
-        role = msg.get("role", "")
-        if role == "user" and not _is_system_note_msg(msg):
-            if current_turn:
-                turns.append(current_turn)
-            current_turn = [msg]
-        elif role in ("assistant", "tool", "reasoning", "user", "compaction"):
-            current_turn.append(msg)
-    if current_turn:
-        turns.append(current_turn)
-    return turns
 
 
-def _split_turn(turn: list[dict]) -> tuple[dict | None, list[dict], dict | None]:
-    """Split a turn into (user message, process messages, conclusion message)."""
-    user_msg: dict | None = None
-    process_msgs: list[dict] = []
-    conclusion_msg: dict | None = None
-    for msg in turn:
-        role = msg.get("role", "")
-        if role == "user" and not _is_system_note_msg(msg):
-            user_msg = msg
-        elif role in ("reasoning", "tool", "user", "compaction") or _is_system_note_msg(msg):
-            process_msgs.append(msg)
-        elif role == "assistant":
-            if not msg.get("tool_calls"):
-                conclusion_msg = msg
-    return user_msg, process_msgs, conclusion_msg
 
 
 def _hist_index(history: list, msg: dict) -> int:

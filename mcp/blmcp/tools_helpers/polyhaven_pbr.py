@@ -329,7 +329,6 @@ def build_pbr_material_code(
         "",
         "# -- Create material --",
         f"mat = bpy.data.materials.new(name='{material_name}')",
-        "mat.use_nodes = True",
         "nodes = mat.node_tree.nodes",
         "links = mat.node_tree.links",
         "nodes.clear()",

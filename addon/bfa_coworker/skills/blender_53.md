@@ -102,9 +102,9 @@ will raise `AttributeError: 'Mesh' object has no attribute 'use_auto_smooth'`.
 
 ### Material Nodes — Default Nodes Already Exist
 
-When you create a new material and set `mat.use_nodes = True`, Blender
-automatically creates a Principled BSDF node and a Material Output node
-already connected.  Do NOT try to create them manually with
+A new material already has a node tree with a Principled BSDF node and a
+Material Output node connected (since 5.0; do not set the deprecated
+`mat.use_nodes`).  Do NOT try to create them manually with
 `nodes.new('BSDF_PRINCIPLED')` or `nodes.new('OUTPUT_MATERIAL')` — these
 node type identifiers may not work in Bforartists 5.3.
 
@@ -112,7 +112,6 @@ Instead, find the existing nodes by iterating:
 
 ```python
 mat = bpy.data.materials.new(name="MyMat")
-mat.use_nodes = True
 nodes = mat.node_tree.nodes
 principled = None
 for node in nodes:

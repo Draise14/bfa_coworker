@@ -148,8 +148,10 @@ def _resolve_by_type(tree_type: str):
         mat = obj.active_material if obj and obj.active_material else None
         if mat is None:
             return None, "No active object with a material"
-        if not mat.use_nodes or mat.node_tree is None:
-            mat.use_nodes = True
+        # A read tool never edits the scene: report a missing tree instead of
+        # creating one.  Since 5.0 every new material already has a tree.
+        if mat.node_tree is None:
+            return None, "Material '{:s}' has no node tree".format(mat.name)
         return mat.node_tree, "Shader Editor"
 
     if tree_type == "GeometryNodeTree":
@@ -163,9 +165,15 @@ def _resolve_by_type(tree_type: str):
 
     if tree_type == "CompositorNodeTree":
         scene = bpy.context.scene
-        if not scene.use_nodes or scene.node_tree is None:
-            scene.use_nodes = True
-        return scene.node_tree, "Compositor"
+        # 5.x: the compositor is a node group on the scene; ``Scene.node_tree``
+        # no longer exists.  Read only -- never enable or create a tree.
+        tree = getattr(scene, "compositing_node_group", None)
+        if tree is None:
+            return None, (
+                "Scene '{:s}' has no compositor node tree (create one in the "
+                "Compositor first)".format(scene.name)
+            )
+        return tree, "Compositor"
 
     return None, "Unknown tree type '{:s}'".format(tree_type)
 

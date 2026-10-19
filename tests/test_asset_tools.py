@@ -362,23 +362,23 @@ class _Collection:
 
 
 class _Scene:
-    """Scene whose `use_nodes` auto-creates the compositor tree (like Blender)."""
+    """5.x scene: the compositor is a node group (no ``Scene.node_tree``)."""
 
-    def __init__(self):
+    def __init__(self, compositor=False):
+        self.name = "Scene"
         self.collection = _Collection()
         self.world = None
-        self._use_nodes = False
-        self.node_tree = None
+        self.compositing_node_group = (
+            _NodeTree("Compositing Nodetree", "CompositorNodeTree") if compositor else None)
 
-    @property
-    def use_nodes(self):
-        return self._use_nodes
 
-    @use_nodes.setter
-    def use_nodes(self, value):
-        self._use_nodes = bool(value)
-        if value and self.node_tree is None:
-            self.node_tree = _NodeTree("Compositor", "CompositorNodeTree")
+class _NodeGroups(dict):
+    """``bpy.data.node_groups`` stand-in with ``new()``."""
+
+    def new(self, name, type=None):
+        tree = _NodeTree(name, type)
+        self[name] = tree
+        return tree
 
 
 class _MeshData:
@@ -441,7 +441,7 @@ def _make_bpy():
     """Build a fresh synthetic `bpy` module."""
     bpy = types.ModuleType("bpy")
     bpy.data = types.SimpleNamespace(
-        node_groups={},
+        node_groups=_NodeGroups(),
         materials={},
         libraries=_Libraries({}),
     )
@@ -711,12 +711,23 @@ class TestLoadAssetInContext(unittest.TestCase):
     def test_compositor_node_group(self):
         _register_asset(self.bpy, self._blend, "node_groups", "CompGrade",
                         tree_type="CompositorNodeTree")
+        scene = _Scene(compositor=True)
+        existing = scene.compositing_node_group
+        self.bpy.context.scene = scene
+        result = self._load("CompGrade", asset_type="NODETREE")
+        self.assertEqual(result["status"], "ok")
+        self.assertIs(scene.compositing_node_group, existing)
+        self.assertEqual(existing.nodes[0].bl_idname, "CompositorNodeGroup")
+
+    def test_compositor_node_group_creates_missing_tree(self):
+        _register_asset(self.bpy, self._blend, "node_groups", "CompGrade",
+                        tree_type="CompositorNodeTree")
         scene = _Scene()
         self.bpy.context.scene = scene
         result = self._load("CompGrade", asset_type="NODETREE")
         self.assertEqual(result["status"], "ok")
-        self.assertEqual(scene.use_nodes, True)
-        self.assertEqual(scene.node_tree.nodes[0].bl_idname, "CompositorNodeGroup")
+        self.assertIsNotNone(scene.compositing_node_group)
+        self.assertEqual(scene.compositing_node_group.nodes[0].bl_idname, "CompositorNodeGroup")
 
     def test_collection_append_and_position(self):
         _register_asset(self.bpy, self._blend, "collections", "BrickWall")

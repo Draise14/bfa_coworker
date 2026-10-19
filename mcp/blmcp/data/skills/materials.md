@@ -32,8 +32,7 @@ Blender uses the Principled BSDF shader for physically-based rendering:
 ## Creating Materials
 
 ```python
-mat = bpy.data.materials.new(name="MAT_MyMaterial")
-mat.use_nodes = True
+mat = bpy.data.materials.new(name="MAT_MyMaterial")  # has a node tree already (5.0+)
 nodes = mat.node_tree.nodes
 links = mat.node_tree.links
 nodes.clear()  # Remove default nodes if starting fresh
@@ -57,7 +56,6 @@ Use `nodes.new(type=...)` with these bl_idname values:
 ### Emission Material (no lighting needed)
 ```python
 mat = bpy.data.materials.new(name="MAT_Emit")
-mat.use_nodes = True
 nodes = mat.node_tree.nodes
 links = mat.node_tree.links
 nodes.clear()

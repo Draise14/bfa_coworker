@@ -42,8 +42,10 @@ def register(mcp: FastMCP) -> None:
         - ``"ShaderNodeTree"`` - the active object's active material.
         - ``"GeometryNodeTree"`` - the active object's active Geometry
           Nodes modifier.
-        - ``"CompositorNodeTree"`` - the scene's compositor tree
-          (enables ``use_nodes`` if needed).
+        - ``"CompositorNodeTree"`` - the scene's compositor node group
+          (``scene.compositing_node_group``).
+
+        Read only: a missing tree is reported, never created.
         - ``node_tree_name`` - overrides resolution and reads that exact
           tree from ``bpy.data.node_groups``.
 

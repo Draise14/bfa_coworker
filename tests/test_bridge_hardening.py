@@ -21,10 +21,13 @@ __all__ = ()
 import importlib.util
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import types
 import unittest
+import unittest.mock
 from pathlib import Path
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -186,7 +189,7 @@ class TestGltfIncludes(unittest.TestCase):
 
 
 class TestTemplatesLoad(unittest.TestCase):
-    """The MCP process can't import the add-on package; load by file path."""
+    """The template registry is part of the server package (#97 S0)."""
 
     def test_templates_found_from_checkout(self):
         module = ebc._load_blender_templates()
@@ -198,6 +201,57 @@ class TestTemplatesLoad(unittest.TestCase):
     def test_no_package_import_left(self):
         source = Path(ebc.__file__).read_text(encoding="utf-8")
         self.assertIsNone(re.search(r"^\s*from bfa_coworker\.blender_templates import", source, re.M))
+
+    def test_list_and_plan_tools(self):
+        tools = _registered_tools()
+        listing = tools["list_blender_templates"]()
+        self.assertEqual(listing["status"], "ok")
+        self.assertEqual(listing["count"], 18)
+        cube = listing["templates"]["create_cube"]
+        self.assertEqual(cube["params"], ["name", "size", "x", "y", "z"])
+        self.assertNotIn("?", cube["defaults"].values())
+        sent = []
+        def fake_send(code, strict_json=False):
+            del strict_json
+            sent.append(code)
+            return {"status": "ok"}
+        with unittest.mock.patch.object(ebc, "send_code", fake_send):
+            result = tools["execute_blender_plan"]([{"template": "create_cube", "params": {"size": 3}}])
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("primitive_cube_add(size=3)", sent[0])
+
+    def test_build_layout(self):
+        """``<addon>/vendor/blmcp`` alone (no add-on source next to it) lists templates."""
+        script = "; ".join((
+            "import sys",
+            "sys.path.insert(0, sys.argv[1])",
+            "import blmcp.tools.execute_blender_code as ebc",
+            "m = ebc._load_blender_templates()",
+            "print(len(m._TEMPLATES), m.template_params('create_cube'))",
+        ))
+        with tempfile.TemporaryDirectory() as tmp:
+            vendor = Path(tmp) / "addon" / "vendor"
+            shutil.copytree(Path(ebc.__file__).resolve().parents[1], vendor / "blmcp",
+                            ignore=shutil.ignore_patterns("__pycache__", "data"))
+            out = subprocess.run([sys.executable, "-c", script, str(vendor)],
+                                 capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("18 ['name', 'size', 'x', 'y', 'z']", out.stdout)
+
+
+def _registered_tools():
+    """Register execute_blender_code's tools on a stand-in FastMCP."""
+    tools = {}
+
+    class _MCP:  # pylint: disable=too-few-public-methods
+        def tool(self, **_kw):
+            def deco(fn):
+                tools[fn.__name__] = fn
+                return fn
+            return deco
+
+    ebc.register(_MCP())
+    return tools
 
 
 if __name__ == "__main__":

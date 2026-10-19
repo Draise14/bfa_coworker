@@ -16,36 +16,15 @@ from mcp.types import ToolAnnotations  # pylint: disable=import-error,no-name-in
 
 
 def _load_blender_templates():  # type: ignore[no-untyped-def]
-    """Load the add-on's ``blender_templates.py`` by file path, or return None.
+    """Return the template registry (``blmcp.templates``).
 
-    This MCP server runs in its own Python process where the add-on package
-    (``bl_ext.<repo>.bfa_coworker``) is not importable, so the old
-    ``from bfa_coworker.blender_templates import ...`` always failed and
-    execute_blender_plan / list_blender_templates never worked (#101).
-    The module is plain Python; find it next to this package instead:
-    ``<addon>/vendor/blmcp`` in a build, ``<repo>/mcp/blmcp`` in a checkout.
+    The registry is part of this server package (bpy-free), so it imports
+    the same way in a checkout, in a build (``<addon>/vendor/blmcp``) and
+    through the External Harness launcher.  It used to live in the add-on,
+    which this process can't import (#101).
     """
-    import importlib.util
-    import sys
-    from pathlib import Path
-
-    cached = sys.modules.get("_bfacw_blender_templates")
-    if cached is not None:
-        return cached
-    here = Path(__file__).resolve().parent.parent  # .../blmcp
-    for candidate in (
-            here.parent.parent / "blender_templates.py",
-            here.parent.parent / "addon" / "bfa_coworker" / "blender_templates.py",
-    ):
-        if candidate.is_file():
-            spec = importlib.util.spec_from_file_location("_bfacw_blender_templates", candidate)
-            if spec is None or spec.loader is None:
-                continue
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            sys.modules["_bfacw_blender_templates"] = module
-            return module
-    return None
+    from blmcp import templates
+    return templates
 
 
 def register(mcp: FastMCP) -> None:
@@ -144,12 +123,12 @@ def register(mcp: FastMCP) -> None:
         module = _load_blender_templates()
         if module is None:
             return {"status": "error", "message": "Template registry not available"}
-        _TEMPLATE_DEFAULTS = module._TEMPLATE_DEFAULTS
+        defaults_all = module._TEMPLATE_DEFAULTS
         templates = {}
-        for name, tmpl in module._TEMPLATES.items():
-            # Extract parameter names from the template string.
-            import re
-            params = list(set(re.findall(r"\{(\w+)\}", tmpl)))
-            defaults = {k: _TEMPLATE_DEFAULTS.get(k, "?") for k in params}
-            templates[name] = {"params": params, "defaults": defaults}
+        for name in sorted(module._TEMPLATES):
+            params = module.template_params(name)
+            templates[name] = {
+                "params": params,
+                "defaults": {k: defaults_all.get(k, "?") for k in params},
+            }
         return {"status": "ok", "templates": templates, "count": len(templates)}

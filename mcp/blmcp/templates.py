@@ -1,5 +1,23 @@
-# Tested Blender code templates for common operations.
-# Each template is pre-validated for Blender 5.3.
+# SPDX-FileCopyrightText: 2026 Blender Authors
+# (Bforartists-maintained fork)
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+"""
+Tested Blender code templates for common operations (bpy-free).
+
+Used by the ``execute_blender_plan`` and ``list_blender_templates`` MCP
+tools.  The MCP server renders a plan here and sends the code over the
+bridge, so the registry lives with the server, not the add-on.
+Each template is pre-validated for Blender 5.3.
+"""
+
+__all__ = (
+    "get_templates_for_editor",
+    "template_params",
+)
+
+import string
 
 
 def _tmpl_create_torus(params=None):
@@ -75,7 +93,6 @@ def _tmpl_add_material(params=None):
         'import bpy\n'
         'obj = bpy.context.view_layer.objects.active\n'
         'mat = bpy.data.materials.new(name="{mat_name}")\n'
-        'mat.use_nodes = True\n'
         'principled = mat.node_tree.nodes.get("Principled BSDF")\n'
         'if principled:\n'
         '    principled.inputs["Base Color"].default_value = ({r}, {g}, {b}, 1.0)\n'
@@ -330,6 +347,23 @@ def get_templates_for_editor(editor: str, mode: str = "OBJECT") -> list[str]:
         if meta.get("editor") == editor and (not mode or meta.get("mode") == mode):
             result.append(name)
     return sorted(result)
+
+
+def template_params(name: str) -> list[str]:
+    """Return the sorted parameter names template *name* uses.
+
+    Every template formats one string literal, so the names are read from
+    that literal's replacement fields -- nothing is rendered.  Unknown
+    names return an empty list.
+    """
+    fn = _TEMPLATES.get(name)
+    if fn is None:
+        return []
+    fields: set[str] = set()
+    for const in fn.__code__.co_consts:
+        if isinstance(const, str) and "{" in const:
+            fields.update(f for _, f, _, _ in string.Formatter().parse(const) if f)
+    return sorted(fields)
 
 
 def _render_template(name, params=None):

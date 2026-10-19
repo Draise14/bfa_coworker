@@ -1905,12 +1905,17 @@ class TestWorkerThreadBpySafety(_TurnLoopTestBase):
             getattr(self.ac, "prefetch_main_thread_context", None)))
 
     def test_worker_status_does_not_write_bpy_property(self):
+        # The turn worker lives in engine_loop.py (Tier 4i.1b).  Its status
+        # callback records plain Python state, and the module has no bpy.
+        loop_path = os.path.join(_REPO, "addon", "bfa_coworker", "engine_loop.py")
+        with open(loop_path, "r", encoding="utf-8") as fh:
+            loop_source = fh.read()
+        self.assertIn("state.ui_status = value", loop_source)
+        self.assertNotIn("import bpy", loop_source)
         ui_path = os.path.join(_REPO, "addon", "bfa_coworker", "ui_chat.py")
         with open(ui_path, "r", encoding="utf-8") as fh:
             source = fh.read()
-        # The worker-side status callback records plain Python state ...
-        self.assertIn("agent_controller._agent_state.ui_status = text", source)
-        # ... and never writes the bpy property from the worker path.
+        # ... and the UI never writes the bpy property from a worker path.
         self.assertNotIn("props.chat_status = text", source)
 
 

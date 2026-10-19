@@ -66,7 +66,29 @@ from . import agent_controller
 from . import chat_attachments
 from . import llm_manager
 from . import mcp_to_blender_server
+from .engine import EngineCaps, Prompt
+from .engine_loop import LoopConfig, LoopEngine
 from .shared import effective_ports, CHAT_MODE_ITEMS
+
+
+# The engine behind the chat for Local LLM / Remote API (Tier 4i.1b).  Created
+# on first use; its worker hooks are module functions defined further down.
+_engine: LoopEngine | None = None
+
+
+def _loop_engine(mode: str | None = None) -> LoopEngine:
+    """The chat's loop engine; *mode* ("local"/"remote") updates its label."""
+    global _engine
+    if _engine is None:
+        _engine = LoopEngine(agent_controller)
+        _engine.on_redraw = lambda: _redraw_areas_safe()
+        _engine.on_turn_finished = lambda: _save_chat_history()
+    if mode is not None:
+        label = "Remote" if mode == "remote" else "Local"
+        if _engine.caps.label != label:
+            _engine.name = label
+            _engine.caps = EngineCaps(label=label, images=True, usage=True)
+    return _engine
 
 
 def _sync_prefs_to_config(prefs: bpy.types.AddonPreferences) -> None:
@@ -1492,25 +1514,20 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
         if attachments is None:
             _warn_failed_attachment(self, props)
 
-        # If a turn is already active, queue the message -- UNLESS the user has
-        # pressed Stop.  After a Stop the old worker may still be unwinding
-        # (a blocking read or tool call cannot be interrupted instantly); if we
-        # queued here, the message would sit behind a worker that may not drain
-        # the queue for a while ("frozen").  Instead we start a new turn, which
-        # clears the stale guard (see run_conversation_turn) and supersedes the
-        # old worker via the turn token.
-        if (agent_controller._agent_state.turn_active
-                and not agent_controller._stop_event.is_set()):
-            pos = agent_controller.enqueue_message(
-                message=message,
-                chat_mode=props.chat_mode,
-                llm_url=llm_url or None,
-                api_key=api_key or None,
-                model=model,
-                mcp_port=send_mcp_port,
-                attachments=attachments,
-                attachment_names=attachment_names,
-            )
+        engine = _loop_engine(llm_cfg.mode)
+        prompt = Prompt(
+            text=message,
+            images=list(attachments or []),
+            image_names=list(attachment_names or []),
+            chat_mode=props.chat_mode,
+        )
+        config = LoopConfig(llm_url=llm_url or None, api_key=api_key or None,
+                            model=model, mcp_port=send_mcp_port)
+
+        # A running turn queues the message, unless the user pressed Stop
+        # (see LoopEngine.submit).  Only the started path shows "reading".
+        if engine.is_busy() and not agent_controller._stop_event.is_set():
+            pos = engine.enqueue(prompt, config)
             props.chat_input = ""
             self.report({"INFO"}, "Message queued (position {:d})".format(pos))
             _redraw_areas(context)
@@ -1527,87 +1544,7 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
         # bpy read races Blender's context counter and spams the console.
         agent_controller.prefetch_main_thread_context()
 
-        def _do_turn():
-            try:
-                agent_controller.run_conversation_turn(
-                    user_message=message,
-                    on_text=None,
-                    on_reasoning=lambda r: _update_streaming(r),
-                    on_status=lambda s: _update_status(s),
-                    llm_url=llm_url or None,
-                    api_key=api_key or None,
-                    model=model,
-                    mcp_port=send_mcp_port,
-                    chat_mode=props.chat_mode,
-                    on_stream_text=lambda t: _update_streaming(t),
-                    on_stream_reasoning=lambda r: _update_streaming(r),
-                    attachments=attachments,
-                    attachment_names=attachment_names,
-                )
-            except Exception as ex:  # pylint: disable=broad-exception-caught
-                agent_controller._agent_state.error = str(ex)
-            finally:
-                _save_chat_history()
-                # Auto-dequeue next message if queue is not empty.
-                _try_dequeue_next()
-                _update_status("Idle")
-                _redraw_areas_safe()
-
-        def _try_dequeue_next():
-            """Try to process the next queued message."""
-            next_msg = agent_controller.dequeue_message()
-            if next_msg:
-                # Runs on the turn worker thread: record the status as plain
-                # Python state; the main-thread timer mirrors it to the UI.
-                agent_controller._agent_state.ui_status = "Processing queued message..."
-                _redraw_areas_safe()
-                # Start processing the next message in a new thread.
-                import threading as _threading
-                _threading.Thread(target=_do_turn_from_queue, args=(next_msg,), daemon=True).start()
-
-        def _do_turn_from_queue(item: dict):
-            """Process a message from the queue."""
-            try:
-                agent_controller.run_conversation_turn(
-                    user_message=item["message"],
-                    on_text=None,
-                    on_reasoning=lambda r: _update_streaming(r),
-                    on_status=lambda s: _update_status(s),
-                    llm_url=item.get("llm_url"),
-                    api_key=item.get("api_key"),
-                    model=item.get("model"),
-                    mcp_port=item.get("mcp_port", 0),
-                    chat_mode=item.get("chat_mode", "AGENT"),
-                    on_stream_text=lambda t: _update_streaming(t),
-                    on_stream_reasoning=lambda r: _update_streaming(r),
-                    attachments=item.get("attachments"),
-                    attachment_names=item.get("attachment_names"),
-                )
-            except Exception as ex:  # pylint: disable=broad-exception-caught
-                agent_controller._agent_state.error = str(ex)
-            finally:
-                _save_chat_history()
-                _try_dequeue_next()
-                _update_status("Idle")
-                _redraw_areas_safe()
-
-        def _update_status(text: str) -> None:
-            # Called from the turn WORKER thread.  Do NOT write the bpy chat
-            # property here: an off-main RNA write races Blender's global
-            # Python context counter and spams "Python context internal state
-            # bug".  Record plain Python state; the main-thread timer mirrors
-            # it into props.chat_status.
-            agent_controller._agent_state.ui_status = text
-            _redraw_areas_safe()
-
-        def _update_streaming(text: str) -> None:
-            """Called when reasoning or streaming text arrives -- refresh UI."""
-            _redraw_areas_safe()
-
-        import threading
-        thread = threading.Thread(target=_do_turn, daemon=True)
-        thread.start()
-
+        engine.submit(prompt, config)
         return {"FINISHED"}
 
 
@@ -1740,7 +1677,7 @@ class BFACW_OT_chat_stop(Operator):  # type: ignore[misc]
     bl_description = "Stop the current generation"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        agent_controller.request_stop()
+        _loop_engine().cancel()
         agent_controller._agent_state.status_text = "Stopped"
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
@@ -1784,15 +1721,11 @@ class BFACW_OT_chat_queue_send(Operator):  # type: ignore[misc]
         if attachments is None:
             _warn_failed_attachment(self, props)
 
-        pos = agent_controller.enqueue_message(
-            message=message,
-            chat_mode=props.chat_mode,
-            llm_url=llm_url or None,
-            api_key=api_key or None,
-            model=model,
-            mcp_port=send_mcp_port,
-            attachments=attachments,
-            attachment_names=attachment_names,
+        pos = _loop_engine(llm_cfg.mode).enqueue(
+            Prompt(text=message, images=list(attachments or []),
+                   image_names=list(attachment_names or []), chat_mode=props.chat_mode),
+            LoopConfig(llm_url=llm_url or None, api_key=api_key or None,
+                       model=model, mcp_port=send_mcp_port),
         )
         props.chat_input = ""
         self.report({"INFO"}, "Queued (position {:d})".format(pos))
@@ -2714,6 +2647,13 @@ def chat_timer_update() -> float | None:
     # Animate thinking dots.
     if _ac._agent_state.is_thinking:
         _ac._agent_state.thinking_dots += 1
+
+    # Fold the engine's events into its turn records (main thread only).
+    if _engine is not None:
+        try:
+            _engine.drain()
+        except Exception as _drain_ex:  # pylint: disable=broad-exception-caught
+            print("[Coworker] engine drain failed: {}".format(_drain_ex))
 
     # Mirror the turn worker's status into the UI property.  The worker must
     # not touch a bpy property itself (that races Blender's context counter);

@@ -93,6 +93,13 @@ def main() -> int:
 
         def _app_with_cors() -> Starlette:
             app = _orig()
+            # Engine 8: require the session token when one was provided.
+            # Added BEFORE the CORS middleware, so CORS stays the outermost
+            # layer (preflights are answered and a 401 carries CORS headers).
+            _token = os.environ.get("BFACW_TOKEN", "")
+            if _token:
+                from blmcp.tools_helpers.http_auth import TokenGateMiddleware
+                app.add_middleware(TokenGateMiddleware, token=_token)
             app.add_middleware(
                 CORSMiddleware,
                 allow_origins=["*"],

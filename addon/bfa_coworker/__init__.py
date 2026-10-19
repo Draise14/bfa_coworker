@@ -155,8 +155,10 @@ def register() -> None:
         prefs = bpy.context.preferences.addons.get(__package__)
         if prefs is not None:
             log.set_suppress_console(not prefs.preferences.debug_mode)
+            from . import session_identity as _si
+            _si.set_token_required(prefs.preferences.require_session_token)
     except Exception:  # pylint: disable=broad-exception-caught
-        pass  # Preferences not yet available; default (suppress ON) is fine.
+        pass  # Preferences not yet available; defaults (suppress ON, token ON) are fine.
 
     # Migrate vendor/deps/ out of the addon tree BEFORE Blender's sandbox
     # scans it.  Physical presence of top-level package dirs (rich/, click/,

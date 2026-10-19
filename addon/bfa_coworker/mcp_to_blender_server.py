@@ -1238,6 +1238,12 @@ def _execute_code_from_request(
     _wrong_window = session_identity.check_request(request)
     if _wrong_window:
         return _ExecResult({"status": "error", "message": _wrong_window}), False
+    # Engine 8: code only runs for clients that know the user's session token
+    # (a web page in the browser can reach localhost, but can't read it).
+    _bad_token = session_identity.check_token(request)
+    if _bad_token:
+        print("[Coworker] bridge: refused a request without the session token")
+        return _ExecResult({"status": "error", "message": _bad_token}), False
 
     if request.get("type") != "execute":
         return _ExecResult({

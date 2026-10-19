@@ -84,11 +84,19 @@ sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 sock.settimeout(5)
 sock.connect(("localhost", 9876))
 
+# The bridge only runs requests that carry your session token, a small file:
+# %LOCALAPPDATA%\bfa_coworker\session_token on Windows,
+# ~/.cache/bfa_coworker/session_token elsewhere.
+import os, pathlib
+base = pathlib.Path(os.environ["LOCALAPPDATA"]) if os.name == "nt" else pathlib.Path.home() / ".cache"
+token = (base / "bfa_coworker" / "session_token").read_text().strip()
+
 # Send a simple code execution request
 request = json.dumps({
     "type": "execute",
     "code": "import bpy; print('Hello from Blender:', bpy.app.version_string)",
-    "strict_json": False
+    "strict_json": False,
+    "token": token,
 }) + "\0"
 
 sock.sendall(request.encode("utf-8"))

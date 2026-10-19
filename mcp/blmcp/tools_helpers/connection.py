@@ -54,6 +54,11 @@ def send_code(code: str, strict_json: bool) -> dict[str, object]:
     session = os.environ.get("BFACW_SESSION_ID", "")
     if session:
         payload["session"] = session
+    # Engine 8: the bridge refuses requests without the user's session token.
+    # The add-on and the External Harness launcher set it for this process.
+    token = os.environ.get("BFACW_TOKEN", "")
+    if token:
+        payload["token"] = token
     request = json.dumps(payload) + "\0"
 
     try:

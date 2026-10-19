@@ -198,6 +198,25 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         update=_update_debug_mode,
     )
 
+    # -- Session token (Engine 8) ------------------------------------
+
+    def _update_require_token(self, _context: bpy.types.Context) -> None:
+        from . import session_identity
+        session_identity.set_token_required(self.require_session_token)
+
+    require_session_token: BoolProperty(  # type: ignore[valid-type]
+        name="Require Session Token",
+        description=(
+            "Only run requests that carry your private session token. Keeps web "
+            "pages in your browser (which can reach this computer's local ports) "
+            "from running code in Blender. Coworker and its External Harness "
+            "launcher send the token for you; turn off only if a tool of your "
+            "own can't. Restart Coworker after changing it"
+        ),
+        default=True,
+        update=_update_require_token,
+    )
+
     # -- Log Level ---------------------------------------------------
 
     def _update_log_level(self, _context: bpy.types.Context) -> None:
@@ -1990,6 +2009,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             )
         else:
             bridge_box.label(text="Status: Stopped", icon='X')
+        bridge_box.prop(self, "require_session_token")
 
         # -- MCP Server (External Harness mode only) ----------------
         if self.operating_mode == "EXTERNAL_HARNESS":

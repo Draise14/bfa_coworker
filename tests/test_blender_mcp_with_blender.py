@@ -110,6 +110,8 @@ def _blender_env(tmpdir: str) -> dict[str, str]:
     """
     env = os.environ.copy()
     env["HOME"] = tmpdir
+    # Blender and the MCP server share one session token (Engine 8).
+    env["BFACW_TOKEN"] = "integration-test-session-token"
     env["ASAN_OPTIONS"] = ":".join(filter(None, [
         env.get("ASAN_OPTIONS", ""),
         "alloc_dealloc_mismatch=0",

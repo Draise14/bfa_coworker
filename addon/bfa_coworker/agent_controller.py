@@ -2843,6 +2843,12 @@ def _build_mcp_env(
     env["BFACW_HOST"] = blender_host
     env["BFACW_PORT"] = str(blender_port)
     env[_session_identity.ENV_VAR] = _session_identity.SESSION_ID
+    # Engine 8: the server sends the session token to the bridge and, over
+    # HTTP, requires it from its clients.
+    if _session_identity.token_required():
+        env[_session_identity.TOKEN_ENV_VAR] = _session_identity.session_token()
+    else:
+        env.pop(_session_identity.TOKEN_ENV_VAR, None)
 
     # Build PYTHONPATH from vendor directories.
     vendor_pythonpath = _find_vendor_pythonpath()
@@ -3397,6 +3403,8 @@ for _d in _info.get("dll_dirs", []):
             os.add_dll_directory(_d)
 if _info.get("blender_path") and not os.environ.get("BLENDER_PATH"):
     os.environ["BLENDER_PATH"] = _info["blender_path"]
+if _info.get("token") and not os.environ.get("BFACW_TOKEN"):
+    os.environ["BFACW_TOKEN"] = _info["token"]
 
 sys.argv[0] = "blmcp"
 runpy.run_module("blmcp", run_name="__main__", alter_sys=True)
@@ -3421,6 +3429,10 @@ def ensure_harness_launcher(pythonpath: str | None = None) -> Path:
         "blender_path": "",
         "addon_dir": str(Path(__file__).resolve().parent),
     }
+    # Engine 8: external clients get the session token through the launcher,
+    # so their configs never need to change.
+    if _session_identity.token_required():
+        info["token"] = _session_identity.session_token()
     if sys.platform == "win32":
         # pywin32's DLLs: a .pth normally adds them, but .pth files are
         # ignored for sys.path / PYTHONPATH entries.
@@ -3804,6 +3816,17 @@ def _check_liveness() -> None:
 # ---------------------------------------------------------------------------
 # MCP tool listing
 
+def _mcp_headers() -> dict[str, str]:
+    """Headers for our MCP server's HTTP endpoint (incl. the session token)."""
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    if _session_identity.token_required():
+        headers["Authorization"] = "Bearer " + _session_identity.session_token()
+    return headers
+
+
 async def list_mcp_tools(port: int = _MCP_SERVER_DEFAULT_PORT) -> list[dict[str, Any]]:
     """
     Return the list of tools from the MCP server via HTTP.
@@ -3821,10 +3844,7 @@ async def list_mcp_tools(port: int = _MCP_SERVER_DEFAULT_PORT) -> list[dict[str,
         req = urllib.request.Request(
             url,
             data=data_bytes,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/event-stream",
-            },
+            headers=_mcp_headers(),
             method="POST",
         )
         print("[Coworker] list_mcp_tools: urllib POST {:s}".format(url))
@@ -4082,10 +4102,7 @@ def _call_mcp_tool_sync(
     req = urllib.request.Request(
         url,
         data=data_bytes,
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
-        },
+        headers=_mcp_headers(),
         method="POST",
     )
     print("[Coworker] _call_mcp_tool_sync: {:s} args={:s}".format(

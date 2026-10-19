@@ -27,8 +27,10 @@ accepted unchanged.  Deliberately free of ``bpy`` at import time; never raises.
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
+import secrets
 import sys
 import threading
 import time
@@ -39,8 +41,13 @@ from typing import Any
 __all__ = (
     "SESSION_ID",
     "ENV_VAR",
+    "TOKEN_ENV_VAR",
     "describe",
     "check_request",
+    "check_token",
+    "session_token",
+    "set_token_required",
+    "token_required",
     "pid_alive",
     "register_live",
     "unregister_live",
@@ -128,6 +135,93 @@ def describe(bridge_port: int = 0, mcp_port: int = 0) -> dict[str, Any]:
         "bridge_port": int(bridge_port or 0),
         "mcp_port": int(mcp_port or 0),
     }
+
+
+# ---------------------------------------------------------------------------
+# Session token (Tier 4i "Engine 8")
+#
+# The bridge and the MCP server's HTTP endpoint only listen on localhost, but
+# a web page open in the user's browser can still send requests to
+# 127.0.0.1, and the HTTP endpoint allows any origin so browser-based MCP
+# clients work.  Without a secret, any such page could call
+# execute_blender_code.  Every request therefore carries a token that only
+# processes able to read the user's own files know.
+#
+# One token per USER (a small file next to the live-session list), not per
+# Blender process: several Coworker windows and the External Harness launcher
+# then share it, and client configs keep working across restarts.
+
+TOKEN_ENV_VAR = "BFACW_TOKEN"
+
+_token_required = True
+_token_cache: dict[str, str] = {}
+
+
+def _token_path() -> Path:
+    """A user-private location (never the shared temp folder)."""
+    local = os.environ.get("LOCALAPPDATA")
+    if os.name == "nt" and local:
+        return Path(local) / "bfa_coworker" / "session_token"
+    return Path.home() / ".cache" / "bfa_coworker" / "session_token"
+
+
+def session_token() -> str:
+    """The user's token; created (and kept) on first use."""
+    cached = _token_cache.get("token")
+    if cached:
+        return cached
+    # Automation (tests, scripted setups): a token given in the environment
+    # is used as-is, so Blender and the MCP server it launches share it.
+    given = os.environ.get(TOKEN_ENV_VAR, "").strip()
+    if len(given) >= 20:
+        _token_cache["token"] = given
+        return given
+    path = _token_path()
+    token = ""
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    if len(token) < 20:
+        token = secrets.token_urlsafe(24)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(token, encoding="utf-8")
+            try:
+                os.chmod(tmp, 0o600)  # owner only (best effort on Windows)
+            except OSError:
+                pass
+            os.replace(str(tmp), str(path))
+        except OSError:
+            pass  # still protects this session; the file is retried next start
+    _token_cache["token"] = token
+    return token
+
+
+def set_token_required(required: bool) -> None:
+    """Preference switch: refuse bridge requests without the token."""
+    global _token_required
+    _token_required = bool(required)
+
+
+def token_required() -> bool:
+    return _token_required
+
+
+def check_token(request: dict[str, Any]) -> str:
+    """Return an error message unless *request* carries the session token."""
+    if not _token_required:
+        return ""
+    given = request.get("token")
+    if isinstance(given, str) and given and hmac.compare_digest(given, session_token()):
+        return ""
+    return (
+        "Coworker refused a request without the right session token. "
+        "If this is your own MCP client, copy the MCP config again (Coworker "
+        "settings > External Harness) or restart the client so it picks up "
+        "the token. You can turn the check off in Coworker settings > Advanced."
+    )
 
 
 def check_request(request: dict[str, Any]) -> str:

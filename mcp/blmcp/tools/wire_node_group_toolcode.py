@@ -237,15 +237,12 @@ def _resolve_tree(params: Params, tree_type: str, bpy) -> Any:
         mat = obj.active_material if obj and obj.active_material else None
         if mat is None:
             return None
-        if not mat.use_nodes or mat.node_tree is None:
-            mat.use_nodes = True
+        # Since 5.0 every material has a node tree; never toggle use_nodes.
         return mat.node_tree
 
     if tree_type == "CompositorNodeTree":
-        scene = bpy.context.scene
-        if not scene.use_nodes or scene.node_tree is None:
-            scene.use_nodes = True
-        return scene.node_tree
+        # 5.x: the compositor is a node group on the scene (no Scene.node_tree).
+        return getattr(bpy.context.scene, "compositing_node_group", None)
 
     if tree_type == "GeometryNodeTree":
         obj = bpy.context.object if bpy.context.object else None

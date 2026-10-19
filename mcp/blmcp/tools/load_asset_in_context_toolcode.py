@@ -224,8 +224,13 @@ def main(params: Params) -> Result:
             # --- Compositor -> add to compositor node tree ---
             elif ng_type == "CompositorNodeTree":
                 scene = _resolve_scene(bpy, params)
-                scene.use_nodes = True
-                comp_tree = scene.node_tree
+                # 5.x: the compositor is a node group on the scene.  Create
+                # one when missing, as the Compositor's "New" button does.
+                comp_tree = getattr(scene, "compositing_node_group", None)
+                if comp_tree is None:
+                    comp_tree = bpy.data.node_groups.new(
+                        "Compositing Nodetree", "CompositorNodeTree")
+                    scene.compositing_node_group = comp_tree
                 if comp_tree:
                     node = comp_tree.nodes.new(type="CompositorNodeGroup")
                     node.node_tree = ng
@@ -458,8 +463,6 @@ def _resolve_shader_tree(bpy, params: Params):
     if params.tree_name:
         mat = bpy.data.materials.get(params.tree_name)
         if mat is not None:
-            if not mat.use_nodes or mat.node_tree is None:
-                mat.use_nodes = True
             return mat.node_tree
         ng = bpy.data.node_groups.get(params.tree_name)
         if ng is not None and _tree_type_name(ng.type) == "ShaderNodeTree":
@@ -468,8 +471,6 @@ def _resolve_shader_tree(bpy, params: Params):
     mat = obj.active_material if obj and obj.active_material else None
     if mat is None:
         return None
-    if not mat.use_nodes or mat.node_tree is None:
-        mat.use_nodes = True
     return mat.node_tree
 
 

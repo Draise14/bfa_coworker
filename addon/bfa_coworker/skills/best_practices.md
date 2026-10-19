@@ -218,7 +218,6 @@ dictionary using the socket name:
 ```python
 # CORRECT — use inputs dictionary:
 mat = bpy.data.materials.new("MyMat")
-mat.use_nodes = True
 nodes = mat.node_tree.nodes
 principled = nodes.new('ShaderNodeBsdfPrincipled')
 principled.inputs['Base Color'].default_value = (0.8, 0.2, 0.2, 1.0)

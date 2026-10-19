@@ -161,10 +161,11 @@ def _usage_probability_for_compositing(data: Any, scene: Any) -> tuple[str, dict
     """
     del data
     signals: list[tuple[float, float]] = []
-    # Enabling `use_nodes` creates `Render Layers` and `Composite` nodes by default.
-    node_tree = getattr(scene, "node_tree", None)
+    # 5.x: the compositor is a node group on the scene.  A default tree has
+    # `Render Layers` + `Composite`; more nodes means real compositing work.
+    node_tree = getattr(scene, "compositing_node_group", None)
     signals.append((
-        float(bool(node_tree and scene.use_nodes and len(node_tree.nodes) > 2)),
+        float(bool(node_tree and len(node_tree.nodes) > 2)),
         1.0,
     ))
     return _summarize_as_dict("Compositing", signals)

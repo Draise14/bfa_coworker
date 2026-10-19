@@ -75,7 +75,6 @@ def _tmpl_add_material(params=None):
         'import bpy\n'
         'obj = bpy.context.view_layer.objects.active\n'
         'mat = bpy.data.materials.new(name="{mat_name}")\n'
-        'mat.use_nodes = True\n'
         'principled = mat.node_tree.nodes.get("Principled BSDF")\n'
         'if principled:\n'
         '    principled.inputs["Base Color"].default_value = ({r}, {g}, {b}, 1.0)\n'

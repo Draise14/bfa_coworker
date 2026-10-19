@@ -52,7 +52,7 @@ scene.cycles.device = 'GPU'
 
 ```python
 world = bpy.context.scene.world
-world.use_nodes = True
+nodes = world.node_tree.nodes  # worlds always have a node tree (5.0+)
 # Add Environment Texture node connected to Background node
 ```
 

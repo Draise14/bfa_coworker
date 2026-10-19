@@ -699,12 +699,13 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
             ))
             break
 
-    # 22. Wrong world property access (world["Use Nodes"] -> world.use_nodes).
+    # 22. Wrong world property access (world["Use Nodes"] does not exist).
     if re.search(r'\["Use Nodes"\]', code) or re.search(r"\['Use Nodes'\]", code):
         issues.append((
             "wrong_world_property",
             'world["Use Nodes"] does not exist. '
-            "Use world.use_nodes = True instead (it's a boolean attribute).",
+            "Worlds and materials always have a node tree since 5.0: "
+            "edit world.node_tree.nodes directly.",
         ))
 
     # 23. Passing INVALID transform kwargs to primitive add operators.

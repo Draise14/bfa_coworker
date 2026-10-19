@@ -9,7 +9,25 @@ open a PR when the row's *Done when* holds. Tick the box and add the PR number. 
 **S** ≤ 2 days · **M** ≤ 1 week · **L** > 1 week. IDs match the plan documents.
 
 Every PR: tests for bpy-free code · cost-ledger before/after if prompts or tools change ·
-white-room line in the PR body · wiki/docs if user-facing.
+white-room line in the PR body · wiki/docs if user-facing. A PR that touches the turn
+loop, prompts or tools also runs the **quick benchmark set** (`baseline`, `scene_build`,
+`error_handling`) on Local.
+
+---
+
+## Test gates (user testing + benchmarks)
+
+Defined in master §3.3. Tick a gate when its runs are saved and its rating sheet is filled.
+
+| ☐ | Gate | When | Benchmarks (modes) | You test by hand |
+|---|---|---|---|---|
+| ☐ | **T0 Baseline** | **Now, before the first branch**, on Blender/Bforartists 5.3 | All 15 suites: Local (small + medium model), Remote (cheap + frontier) | External Harness smoke with Claude Desktop or OpenCode (harness guide); fill the rating sheet for every mode |
+| ☐ | **T1 Seam regression** | After I1 + B0 merge | Full suites Local + Remote; must match T0 (± noise) | Chat looks right with native markdown (tables, code Copy rows) |
+| ☐ | **T2 = M1 "Bring your own agent"** | After H5 + I6 + I8 + H10 | Full suites on **External Agent** (OpenCode, Claude Code) for the first time; Local/Remote quick set | Artist script A (§3.3); External Harness via the new activity view |
+| ☐ | **T3 = M2 "Same Coworker everywhere"** | After I4 + I5 + B1/B2/B4 + G1–G3 | All suites, all engines; first-request tokens with progressive tools vs T0 | Artist script B: explain, ask_user, Revert, plan on each engine |
+| ☐ | **T4 = M3 "Deeper tools"** | After G4–G6, B3, F1–F3, C1–C4 | Domain suites (sequencer, shader/geometry nodes, image, compositor + new text/VSE steps), all engines | Recipes in the Text Editor; sessions browser; Safe mode |
+| ☐ | **T5 = M4 "Everywhere in the UI"** | After A1–A4 | Quick set, all engines (regression only) | Artist script C: Coworker editor (#26) + sidebars in five editors |
+| ☐ | **T6 = M5 Capstone** | After X1–X3 | Full suites + a new multi-step "campfire" suite, all engines | Agent teams, co-pilot, critic |
 
 ---
 
@@ -33,6 +51,8 @@ Plans: `plan_tier4h_external_agent_acp.md`, `plan_tier4i_engine_parity.md`
 | ☐ | I4 | Server-side progressive tools: surface listing, `load_tools` as MCP tool + `tools/list_changed`, fallback to full list; local loop uses it | `feat/4i-progressive-tools` | I5 | M | ACP first request = surface schemas only (measured); VSE loads on demand |
 | ☐ | H7 | Hardening: kill agent mid-turn, kill Blender, bad command, no login, stderr surfacing, process_guard | `feat/4h-acp-hardening` | H4–H6 | S | Adversarial checklist passes |
 | ☐ | H8 | Polish: mode/model selectors, slash commands, maturity badges; wiki page + `harness_testing_guide.md` update | `feat/4h-acp-polish` | H7 | S | Docs reviewed |
+| ☐ | I8 | **Benchmarks through the engine seam**: the test-suite runner sends steps via `Engine.send` instead of `run_conversation_turn`, so the same 15 suites run on Local, Remote and External Agent. Each result records mode, engine, model, pass/fail, wall time, prompt/completion tokens (or "not reported"), iterations, approvals asked. Compare Benchmarks groups by mode | `feat/4i-benchmarks-all-modes` | I1, H4 | S | One suite runs on all three engines; Compare Benchmarks shows them side by side |
+| ☐ | H10 | **External Harness activity view**: a read-only live Workshop for External Harness mode, fed by the bridge (tool name, short args, duration, ok/error, result preview, screenshot thumbnails), plus "Copy session log" and an "Open log" shortcut. This is the debug view for external clients | `feat/4h-harness-activity` | I1 | S | Claude Desktop/OpenCode calls appear live in the Coworker panel; a failing call shows its error |
 | ☐ | I7 | Bounded tool outputs + `read_tool_output` in the server (from 4f.2.1) | `feat/4i-bounded-outputs` | — | S | 50 KB node dump → ≤ 2 KB preview + handle on every engine |
 | ☐ | H9 | *(only if needed)* Claude headless / OpenCode serve fallback | `feat/4h-fallbacks` | H7 | M | Only if a key agent's ACP is unusable |
 
@@ -103,7 +123,7 @@ Plan: `plan_tier4a_editor_integration.md`
 
 | ☐ | ID | Task | Branch | Depends | Size | Done when |
 |---|---|---|---|---|---|---|
-| ☐ | A0 | **Spike**: can a Python panel own the Preferences-editor center *without* appearing in the user's real Preferences (fixed sections, global section state)? Compare: USERPREF + area-scoped poll · Properties editor · wide sidebar in an Image/Text editor | `spike/4a-coworker-editor` | — | S | Written decision with screenshots in the 4a banner |
+| ☐ | A0 | **Spike for issue #26 (Coworker chat editor)**: build three throwaway prototypes and pick one. (1) **Custom `NodeTree` type "Coworker"**: gets its own entry + icon in the Editor Type menu, can be placed in any area; chat in the sidebar, center canvas free for status/plan (and the Tier 5 moodboard). (2) **Text Editor host** (the issue's idea): chat in the sidebar; center shows a live transcript text block or stays empty; no own menu entry. (3) **Preferences-editor center panels**: check for leaking into the real Preferences and for the global section state. Criteria: own menu entry, native text input, usable center, native theme, no leaks, Blender + Bforartists 5.3 | `spike/4a-coworker-editor` | — | S | Decision + screenshots in the 4a banner, posted on #26 |
 | ☐ | A1 | `draw_chat_interface(layout, ctx, editor_type)` extraction | `feat/4a-chat-component` | I2 | M | Existing panels delegate; no visual change |
 | ☐ | A2 | Sidebar chat in all editor types (factory) + per-editor templates | `feat/4a-sidebars` | A1 | S | Chat in Node, VSE, Image, Graph… sidebars |
 | ☐ | A3 | Coworker editor per A0 decision + setup operator | `feat/4a-coworker-editor` | A0, A1 | M | One click turns an area into the Coworker editor |

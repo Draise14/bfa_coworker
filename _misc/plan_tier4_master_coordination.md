@@ -98,11 +98,52 @@ per finished task**.
 
 | Milestone | Contents | Exit criteria |
 |---|---|---|
-| **M1 — "Bring your own agent" preview** | 4h.0–4h.5, 4i.1–4i.3, 4i.6, B0 | OpenCode + Claude Code chat in the panel on Windows, approvals inline, Stop works; Local/Remote unchanged (tests + benchmark) |
+| **M1 — "Bring your own agent" preview** | 4h.0–4h.5, 4i.1–4i.3, 4i.6, B0, **I8** (benchmarks on every engine), **H10** (External Harness activity view) | OpenCode + Claude Code chat in the panel on Windows, approvals inline, Stop works; External Harness calls visible live; Local/Remote unchanged (tests + benchmark) |
 | **M2 — Same Coworker everywhere** | 4h.6–4h.8, 4i.4, 4i.5, B1, B2, B4, G1–G3 | Explain, ask_user, Revert and plan work on all three engines; surface-only first request measured |
 | **M3 — Deeper tools** | G4–G6, 4i.7, B3, B6, F1–F3, C1–C4 | Recipes in the Text Editor; sessions browser; permissions; review sheets |
 | **M4 — Everywhere in the UI** | A1–A5, B5, E1–E2 | Sidebars in all editors; Coworker editor per A0 decision; viewport status |
 | **M5 — Capstone** | 4f.4, 4g.6.1/.2 | Planner → specialists → validator; co-pilot; critic loop |
+
+### 3.3 User testing and benchmark gates
+
+Tier 4 succeeds if, compared with the T0 baseline, every mode **looks better, feels
+better, is more integrated, smarter, and more contextual to the editor you're in**.
+Each gate measures all five, the first four by benchmark and all five by hand. The gate
+list (T0–T6) and when to run it is in the task board.
+
+**Benchmark setup (same every gate, so runs compare):**
+
+| Mode | Configurations | How |
+|---|---|---|
+| Local | One small model at 16K, one medium model at 32K (keep the same two all tier) | Benchmark suites in Status & Diagnostics |
+| Remote | One cheap model, one frontier model (OpenRouter) | Same |
+| External Agent | OpenCode, Claude Code (from T2, needs I8) | Same suites through the engine seam |
+| External Harness | Claude Desktop or OpenCode as MCP client | Manual (an external client can't be scripted from Blender); watch the activity view (H10, from T2) |
+
+Record per run: pass/fail per step, wall time, prompt/completion tokens, iterations,
+approvals asked. Save with Compare Benchmarks and keep the T0 file as the reference.
+**Quick set** = `baseline`, `scene_build`, `error_handling`; **full** = all 15 suites.
+
+**Rating sheet (by hand, per mode, 1–5):**
+
+| Criterion | What to look for |
+|---|---|
+| Looks | Text, code and tables read cleanly; nothing clipped; theme matches |
+| Feels | First text appears fast; Stop is instant; no frozen UI; approvals don't nag |
+| Integrated | You never leave the panel/editor to finish the task; right-click and sidebars work where you are |
+| Smart | Fewer retries and spirals, right tool first time, asks only when it matters |
+| Contextual | Answers fit the editor and selection (VSE vs Shader vs Edit Mode) without you explaining |
+
+**Artist scripts (5 minutes each, same wording every time):**
+
+- **A (T2)**: in External Agent mode: "make a low-poly campfire on a ground plane". Approve
+  one action, Stop once mid-turn, then continue. Repeat the prompt in External Harness
+  and watch the activity view.
+- **B (T3)**: right-click the Subdivision modifier's *Levels*, then Explain. Ask "give my
+  campfire a material", answer its question by button, Revert the turn, check the scene.
+  Run it once on each engine.
+- **C (T5)**: open the Coworker editor (#26) in a new area; chat from the Node Editor, VSE
+  and Text Editor sidebars; check the viewport status overlay.
 
 ---
 

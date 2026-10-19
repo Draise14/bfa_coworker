@@ -16,6 +16,16 @@
 > Text Editor (GPU takeover) as the dedicated-editor target.
 > Order: A1 (`draw_chat_interface`) builds on **Tier 4i.2** components; A4 viewport
 > overlay reads the engine event stream (4i.1). Moodboard (Pillar 3) is Tier 5.
+>
+> **Issue #26 (2026-10-16)** asks for a global Coworker chat *editor* the user can place
+> anywhere, with its own entry in the editor list (the issue suggests a rebuilt Text
+> Editor). A0 now compares three prototypes. One is new: a **custom `NodeTree`
+> type**. Python can't add a space type, but a registered NodeTree type gets its **own
+> entry and icon in the Editor Type menu** (as Sverchok's does), so "Coworker" becomes
+> selectable in any area. Chat sits in its sidebar, and the center canvas is free for
+> status/plan now and the Tier 5 moodboard later. To verify in A0: Bforartists' editor
+> menu, hiding native node sidebar tabs, sidebar width, and that no node tree datablock
+> needs to exist.
 
 ---
 

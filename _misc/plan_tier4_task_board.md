@@ -29,9 +29,9 @@ from `main`, no stacked PRs. Only one open PR at a time on `agent_controller.py`
 | ✅ Done | Skills 1 + 2: template tools work everywhere; node tools read the 5.x compositor | #109 (#110) |
 | ✅ Done | Agent 1: real ACP sessions recorded with OpenCode | #111 |
 | ✅ Done | Engine 1: the engine's building blocks | #112 |
-| 🔍 In review | Engine 2: Local & Remote run through the engine | #114 (issue #113) |
-| ⏭ Next (hot files, after #114) | Engine 3: the chat draws from engine events | |
-| ⏭ Next (parallel, new files) | Agent 2: ACP client | |
+| ✅ Done | Engine 2: Local & Remote run through the engine | #114 |
+| 🔍 In review | Engine 3: events become chat messages | #120 (issue #119) |
+| 🔍 In review | Agent 2: ACP client (checked live with OpenCode) | #118 |
 | ⏭ Next (parallel, prototypes only) | Editors 1: Coworker editor spike (#26) | |
 | ⛔ Blocked | Chat 1: native markdown. `UILayout.label_markdown` is **not in** the Bforartists 5.3 dev build of 2026-10-08 yet (probed) | |
 | ❓ Waiting on you | Agent 1, part 2: record one Claude Code session (uses your Claude login) | |
@@ -78,8 +78,8 @@ Plan: `plan_tier4i_engine_parity.md`
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
 | ☑ | **Engine 1**: Building blocks | I1a | `engine.py`: events, event bus (merges stream chunks), turn record, fake engine | — | S | Tests for order, merging, cancel | #112 |
-| ☐ | **Engine 2**: Local & Remote through the engine | I1b | Send / Queue / Stop go through `LoopEngine`; turns also reported as events | Engine 1 | M | No visible change; unit tests + quick challenges as before | #114 |
-| ☐ | **Engine 3**: The chat draws from events | I1c | Turn drawing reads the turn records, not loop internals; tool events from the loop; engine chip | Engine 2 | S | No loop internals read while drawing a turn; screenshots match | |
+| ☑ | **Engine 2**: Local & Remote through the engine | I1b | Send / Queue / Stop go through `LoopEngine`; turns also reported as events | Engine 1 | M | No visible change; unit tests + quick challenges as before | #114 |
+| ☐ | **Engine 3**: Events become chat messages | I1c | *Revised 2026-10-19:* instead of rewriting the panel's drawing, `chat_state.py` writes engine events into the same chat state and message shapes our loop writes, so an external agent's turn draws exactly like a local one and the panel code is untouched. The engine chip moves to Engine 4 | Engine 2 | S | A turn applied from events splits into user / Workshop / reply with the panel's own code | |
 | ☐ | **Engine 4**: Shared UI pieces | I2 | `ui_components.py`: tool row, reasoning, plan, approval, question, engine chip; brand detection → `shared.py` | Engine 3 | S | No per-engine branches in turn drawing | |
 | ☐ | **Engine 5**: Approval row | I3 | One approval model + inline row; "always" per session; prepare → apply for risky tools | Engine 4 | S | Same row for agent permissions, Safe mode and risky tools | |
 | ☐ | **Engine 6**: Shared tools in the server | I5 | MCP tools `update_plan`, `ask_user`, scene checkpoint (auto at turn start), `get_scene_digest(since)` | Engine 2 | M | An external agent updates the plan, asks with buttons; digest says `unchanged` on repeat | |

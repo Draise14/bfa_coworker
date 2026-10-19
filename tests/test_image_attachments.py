@@ -866,13 +866,18 @@ class TestChatAttachmentUI(unittest.TestCase):
         self.assertEqual(
             src.count("= _capture_chat_attachment(props)"), 2,
             "chat_send and chat_queue_send must both capture the socket")
-        # ...and hand the payload to the queue (x2) and the direct turn.
-        self.assertEqual(src.count("attachments=attachments,"), 3)
-        self.assertEqual(src.count("attachment_names=attachment_names,"), 3)
-        # The queued consumer forwards the item's payload to the turn.
-        self.assertEqual(src.count('attachments=item.get("attachments")'), 1)
-        self.assertEqual(
-            src.count('attachment_names=item.get("attachment_names")'), 1)
+        # ...and put the payload on the Prompt both paths hand the engine.
+        self.assertEqual(src.count("images=list(attachments or [])"), 2)
+        self.assertEqual(src.count("image_names=list(attachment_names or [])"), 2)
+        # The loop engine forwards it to the turn and to the queue (Tier
+        # 4i.1b), and a dequeued item's payload becomes the next Prompt.
+        with open(os.path.join(_REPO, "addon", "bfa_coworker", "engine_loop.py"),
+                  "r", encoding="utf-8") as fh:
+            loop_src = fh.read()
+        self.assertEqual(loop_src.count("attachments=prompt.images or None,"), 2)
+        self.assertEqual(loop_src.count("attachment_names=prompt.image_names or None,"), 2)
+        self.assertEqual(loop_src.count('images=list(item.get("attachments") or [])'), 1)
+        self.assertEqual(loop_src.count('image_names=list(item.get("attachment_names") or [])'), 1)
 
     def test_panels_draw_the_attachment_row(self):
         src = _ui_source()

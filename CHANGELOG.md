@@ -23,7 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [ ] **Add Model Generator** locally, Ultrashape, Hunyuan, similar to here: https://github.com/ahujasid/blender-mcp
 - [x] **Add CC0 resource downloader** from Polyhaven, AmbientC00, Sketchfab, etc — Polyhaven tools implemented in v1.1.37.
 
-## [Unreleased - v1.1.37]
+## [Unreleased - v1.1.38]
+
+### Fixed
+
+- **Claude Code can connect in External Harness mode (issue #98).** The Claude Code preset said Claude Code reads `claude_desktop_config.json` and that `/mcp` adds a server; neither is true, so a server set up that way stayed invisible to Claude Code while Claude Desktop worked. New **Add to Claude Code** button (Preferences > Advanced > MCP Server, Claude Code preset) writes the `bfa-coworker` server into `~/.claude.json` -- the user-scope config read by the Claude Code CLI and the VS Code / JetBrains extensions, no `claude` CLI needed. Other keys are kept, the previous file is saved as `.claude.json.bfacw.bak`, and a file that isn't valid JSON is never overwritten. The copied Claude Code config is also a valid project `.mcp.json`. Preset text, steps, install package name (`@anthropic-ai/claude-code`) and docs link corrected.
+- **The extension repository lists a version again.** `extensions/index.json` on `main` had an empty `data` list, so Blender's updater found nothing; it now lists 1.1.38.
+
+## [v1.1.37] - 2026-10-16
 
 ### Added
 

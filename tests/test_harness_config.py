@@ -27,19 +27,20 @@ _AC_PATH = os.path.join(_ADDON_DIR, "bfa_coworker", "agent_controller.py")
 
 
 def _load_agent_controller():
-    """Load ``agent_controller.py`` as a standalone module.
+    """Load ``agent_controller.py`` without running the package ``__init__``.
 
     The package ``__init__.py`` imports ``bpy``, so ``from bfa_coworker import
-    agent_controller`` fails outside Blender.  ``agent_controller`` itself is
-    stdlib-only, so load it directly from its file path.
+    agent_controller`` fails outside Blender.  ``agent_controller`` uses
+    relative imports of bpy-free siblings, so register a bare stub package
+    pointing at the add-on directory and import the module through it.
     """
-    spec = importlib.util.spec_from_file_location("_ac_under_test", _AC_PATH)
-    if spec is None or spec.loader is None:
-        raise ImportError("cannot load {:s}".format(_AC_PATH))
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["_ac_under_test"] = module
-    spec.loader.exec_module(module)
-    return module
+    import types
+    pkg_name = "_bfacw_pkg_under_test"
+    if pkg_name not in sys.modules:
+        pkg = types.ModuleType(pkg_name)
+        pkg.__path__ = [os.path.dirname(_AC_PATH)]
+        sys.modules[pkg_name] = pkg
+    return importlib.import_module(pkg_name + ".agent_controller")
 
 
 ac = _load_agent_controller()
@@ -441,6 +442,60 @@ class TestGenerateMcpClientConfig(unittest.TestCase):
         parsed = json.loads(raw)
         args = parsed["mcpServers"]["bfa-coworker"]["args"]
         self.assertEqual(args, ["-m", "blmcp", "--transport", "stdio"])
+
+
+class TestClaudeCodeConfig(unittest.TestCase):
+    """Claude Code reads ~/.claude.json / .mcp.json, never claude_desktop_config.json."""
+
+    def test_claude_code_config_is_mcp_json_shape(self):
+        import json
+        parsed = json.loads(ac.generate_mcp_client_config(client_type="claude_code"))
+        server = parsed["mcpServers"]["bfa-coworker"]
+        self.assertEqual(server["type"], "stdio")
+        self.assertEqual(server["args"], ["-m", "blmcp", "--transport", "stdio"])
+
+    def test_register_creates_file(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".claude.json"
+            ac.register_claude_code_mcp_server(blender_port=9999, config_path=path)
+            data = json.loads(path.read_text(encoding="utf-8"))
+            server = data["mcpServers"]["bfa-coworker"]
+            self.assertEqual(server["type"], "stdio")
+            self.assertEqual(server["env"]["BFACW_PORT"], "9999")
+
+    def test_register_preserves_other_keys_and_backs_up(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".claude.json"
+            original = {
+                "numStartups": 42,
+                "projects": {"D:/x": {"mcpServers": {}}},
+                "mcpServers": {"other": {"command": "foo"}},
+            }
+            path.write_text(json.dumps(original), encoding="utf-8")
+            ac.register_claude_code_mcp_server(config_path=path)
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(data["numStartups"], 42)
+            self.assertIn("projects", data)
+            self.assertIn("other", data["mcpServers"])
+            self.assertIn("bfa-coworker", data["mcpServers"])
+            backup = json.loads((Path(tmp) / ".claude.json.bfacw.bak").read_text(encoding="utf-8"))
+            self.assertEqual(backup, original)
+
+    def test_register_refuses_invalid_json(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".claude.json"
+            path.write_text("{not json", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                ac.register_claude_code_mcp_server(config_path=path)
+            self.assertEqual(path.read_text(encoding="utf-8"), "{not json")
 
 
 class TestPingAgentHarnessMode(unittest.TestCase):

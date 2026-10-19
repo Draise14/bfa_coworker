@@ -260,11 +260,21 @@ def _sync_box(surface: ChatSurface, props: Any, busy: bool, running: bool, harne
     image = getattr(props, "chat_image", None)
     box.attachment = image.name if image is not None else ""
     box.busy = busy
-    box.placeholder = ("Ask Coworker...  (Enter to send, Shift+Enter for a new line)" if running else
+    box.placeholder = ("Ask Coworker..." if running else
                        "Start Coworker to chat (Start, above)" if not harness else "")
 
 
-def _draw(region: Any, width: float, compact: bool) -> None:
+def _view_zoom(region: Any) -> float:
+    """Pixels per view unit: the region's own zoom (Ctrl+MMB in a sidebar)."""
+    try:
+        v2d = region.view2d
+        per_pixel = v2d.region_to_view(1.0, 0.0)[0] - v2d.region_to_view(0.0, 0.0)[0]
+        return 1.0 / per_pixel if per_pixel > 0 else 1.0
+    except (AttributeError, ZeroDivisionError):
+        return 1.0
+
+
+def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0) -> None:
     context = bpy.context
     prefs = _prefs(context)
     props = _props()
@@ -274,10 +284,11 @@ def _draw(region: Any, width: float, compact: bool) -> None:
     state = agent_controller._agent_state
     harness = _is_harness(prefs)
     _sync_box(surface, props, state.is_thinking, state.mcp_server_running, harness)
-    style = gpu_style.style_from_preferences(context.preferences, zoom=surface.zoom)
+    style = gpu_style.style_from_preferences(context.preferences, zoom=surface.zoom * zoom)
     canvas = gpu_layout.Canvas(style, render.measure, surface.interaction())
-    actions = surface.draw(canvas, gpu_layout.Rect(0.0, 0.0, width, float(region.height)), _history(),
-                           live=state, top=_status(context) if compact else None,
+    surface.bounds = rect
+    surface.drop_hover = drop_hover()
+    actions = surface.draw(canvas, rect, _history(), live=state, top=_status(context) if compact else None,
                            notice=_harness_notice(prefs) if harness else None)
     render.render(canvas.commands, style)
     if actions:
@@ -286,10 +297,61 @@ def _draw(region: Any, width: float, compact: bool) -> None:
             bpy.app.timers.register(_flush, first_interval=0.0)
 
 
+_DROP: dict[str, float] = {"until": 0.0}
+_SHOWN_SIDEBAR: set[int] = set()
+
+
+def note_drop_hover() -> None:
+    """An image is being dragged over a chat (FileHandler.poll_drop): highlight it."""
+    first = _DROP["until"] < time.time()
+    _DROP["until"] = time.time() + 0.35
+    if first:
+        _tag_chat_regions()
+        bpy.app.timers.register(_end_drop_hover, first_interval=0.4)
+
+
+def _end_drop_hover() -> float | None:
+    if _DROP["until"] > time.time():
+        return 0.2
+    _tag_chat_regions()
+    return None
+
+
+def drop_hover() -> bool:
+    return _DROP["until"] > time.time()
+
+
+def _tag_chat_regions() -> None:
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type in {"NODE_EDITOR", "VIEW_3D"}:
+                for region in area.regions:
+                    if region.type in {"WINDOW", "UI", "HEADER"}:
+                        region.tag_redraw()
+
+
+def _show_sidebar_once(space: Any) -> None:
+    """A new Coworker editor opens with its sidebar (the chat's panels) showing."""
+    key = space.as_pointer()
+    if key in _SHOWN_SIDEBAR:
+        return
+    _SHOWN_SIDEBAR.add(key)
+
+    def show() -> None:
+        try:
+            space.show_region_ui = True
+        except (ReferenceError, AttributeError):
+            pass
+        return None
+    bpy.app.timers.register(show, first_interval=0.0)
+
+
 def _draw_editor() -> None:
     context = bpy.context
     if _is_coworker(context) and context.region is not None:
-        _draw(context.region, float(context.region.width), compact=False)
+        _show_sidebar_once(context.space_data)
+        region = context.region
+        _draw(region, gpu_layout.Rect(0.0, 0.0, float(region.width), float(region.height)), compact=False)
 
 
 def _sidebar_tab_active(region: Any) -> bool:
@@ -299,13 +361,83 @@ def _sidebar_tab_active(region: Any) -> bool:
         return False
 
 
+# -- The sidebar chat panel: find its room on screen ----------------------------------
+# BFACW_PT_chat_compact draws two magenta swatches (top and bottom of the room it
+# reserves).  Reading one pixel column (and one row) back from the region finds
+# them wherever the panel is: dragged, pinned to another tab, scrolled or zoomed.
+_MARKER_MIN, _MARKER_MAX = 225, 40
+
+
+def _is_marker(px: Any) -> bool:
+    return px[0] >= _MARKER_MIN and px[1] <= _MARKER_MAX and px[2] >= _MARKER_MIN
+
+
+def _runs(values: list[bool]) -> list[tuple[int, int]]:
+    out, start = [], None
+    for i, on in enumerate(values + [False]):
+        if on and start is None:
+            start = i
+        elif not on and start is not None:
+            out.append((start, i - 1))
+            start = None
+    return out
+
+
+def _find_chat_rect(region: Any, expected_h: float) -> Any:
+    """The panel's room in region pixels, or None when the panel isn't on screen."""
+    import gpu  # pylint: disable=import-error
+    fb = gpu.state.active_framebuffer_get()
+    height = int(region.height)
+    probe_x = int(region.width * 0.45)
+    column = fb.read_color(probe_x, 0, 1, height, 4, 0, "UBYTE").to_list()
+    runs = _runs([_is_marker(column[y][0]) for y in range(height)])
+    if not runs:
+        return None
+    if len(runs) >= 2:
+        bottom, top = runs[0][0], runs[-1][1] + 1
+    else:   # one swatch on screen: which one?
+        lo, hi = runs[0]
+        if lo - expected_h < -2:          # the room runs off the bottom: this is the top swatch
+            bottom, top = 0, hi + 1
+        else:                             # the room starts above the region: the bottom swatch
+            bottom, top = lo, height
+    probe_y = runs[-1][0] if len(runs) >= 2 or top == runs[0][1] + 1 else runs[0][0]
+    row = fb.read_color(0, probe_y, int(region.width), 1, 4, 0, "UBYTE").to_list()[0]
+    across = _runs([_is_marker(px) for px in row])
+    if not across:
+        return None
+    x0, x1 = max(across, key=lambda r: r[1] - r[0])
+    # Cover the swatches' own outline and rounded corners too.
+    edge = 3.0 * max(1.0, bpy.context.preferences.system.pixel_size)
+    return gpu_layout.Rect(x0 - edge, bottom - edge, x1 - x0 + 1 + 2 * edge, top - bottom + 2 * edge)
+
+
 def _draw_sidebar() -> None:
     context = bpy.context
     region = context.region
-    if region is None or not _compact_enabled(context) or not _sidebar_tab_active(region):
+    if region is None or region.type != "UI" or not _compact_enabled(context):
         return
-    tabs = _TAB_STRIP_PX * context.preferences.view.ui_scale
-    _draw(region, max(1.0, region.width - tabs), compact=True)
+    props = _props()
+    zoom = _view_zoom(region)
+    unit = 20.0 * context.preferences.system.ui_scale * zoom
+    rect = _find_chat_rect(region, (getattr(props, "chat_panel_rows", 22.0)) * unit)
+    if rect is None:
+        entry = _SURFACES.get(region.as_pointer())
+        if entry is not None:
+            entry[0].bounds = None        # collapsed / scrolled away: no clicks go to it
+        return
+    surface = _surface(region, compact=True)
+    surface.on_resize = lambda new_h, _unit=unit: _resize_panel(new_h, _unit)
+    _draw(region, rect, compact=True, zoom=zoom)
+
+
+def _resize_panel(height_px: float, unit_px: float) -> None:
+    """The chat panel's bottom edge was dragged (called from the input modal)."""
+    props = _props()
+    if props is not None and unit_px > 0:
+        rows = max(6.0, min(80.0, height_px / unit_px))
+        if abs(rows - props.chat_panel_rows) > 0.05:
+            props.chat_panel_rows = rows
 
 
 def _router(context: Any, event: Any) -> tuple[ChatSurface, Any, Any] | None:
@@ -324,10 +456,16 @@ def _router(context: Any, event: Any) -> tuple[ChatSurface, Any, Any] | None:
             if not (region.x <= event.mouse_x < region.x + region.width
                     and region.y <= event.mouse_y < region.y + region.height):
                 continue
-            if coworker and region.type == "WINDOW" or not coworker and _sidebar_tab_active(region):
+            if coworker and region.type == "WINDOW" or not coworker and region.type == "UI":
                 entry = _SURFACES.get(region.as_pointer())
-                if entry is not None:
-                    return entry[0], area, region
+                if entry is None:
+                    return None
+                surface = entry[0]
+                bounds = surface.bounds
+                inside = bounds is not None and bounds.contains(event.mouse_x - region.x, event.mouse_y - region.y)
+                if inside or surface.pressed is not None or surface.box.focused:
+                    return surface, area, region
+                return None
         return None
     return None
 
@@ -442,6 +580,8 @@ class BFACW_OT_open_coworker_editor(bpy.types.Operator):
         window = context.window_manager.windows[-1]
         area = max(window.screen.areas, key=lambda a: a.width * a.height)
         area.ui_type = TREE
+        area.spaces.active.show_region_ui = True
+        area.spaces.active.show_region_toolbar = True
         return {"FINISHED"}
 
 
@@ -495,6 +635,47 @@ class BFACW_OT_editor_thumbs(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class BFACW_OT_chat_attach_image(bpy.types.Operator):
+    """Pick an image file to send with the next message"""
+
+    bl_idname = "bfacw.chat_attach_image"
+    bl_label = "Attach Image"
+
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH", options={"SKIP_SAVE"})  # type: ignore[valid-type]
+    filter_image: bpy.props.BoolProperty(default=True, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore[valid-type]
+    filter_folder: bpy.props.BoolProperty(default=True, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore[valid-type]
+
+    def invoke(self, context, _event):
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        from . import chat_attachments, ui_chat
+        image = chat_attachments.load_image_file(self.filepath)
+        if image is None:
+            self.report({"WARNING"}, "Not a supported image file")
+            return {"CANCELLED"}
+        ui_chat._attach_to_socket(context, self, image)
+        _tag_chat_regions()
+        return {"FINISHED"}
+
+
+class BFACW_OT_editor_native_edit(bpy.types.Operator):
+    """Edit the message in a native text field (for Chinese, Japanese or Korean input)"""
+
+    bl_idname = "bfacw.editor_native_edit"
+    bl_label = "Edit in Text Field"
+
+    def invoke(self, context, _event):
+        area = context.area
+        for region in (area.regions if area else ()):
+            entry = _SURFACES.get(region.as_pointer())
+            if entry is not None and not entry[0].compact:
+                input_capture.focus(entry[0].box, region)
+                return bpy.ops.bfacw.gpu_input_native("INVOKE_DEFAULT")
+        return {"CANCELLED"}
+
+
 class BFACW_OT_editor_jump(bpy.types.Operator):
     """Scroll the chat to the newest message"""
 
@@ -524,6 +705,9 @@ class BFACW_MT_editor_chat(bpy.types.Menu):
         layout.operator("bfacw.chat_stop", text="Stop", icon="PAUSE")
         layout.separator()
         layout.operator("bfacw.mention_search", text="@ Mention", icon="OUTLINER_OB_MESH")
+        layout.operator("bfacw.editor_native_edit", text="Edit in Text Field (IME)", icon="GREASEPENCIL")
+        layout.separator()
+        layout.operator("bfacw.chat_attach_image", text="Attach Image...", icon="FILE_IMAGE")
         layout.operator("bfacw.chat_capture_render", text="Attach Render", icon="RENDER_STILL")
         layout.operator("bfacw.chat_capture_screen", text="Attach Screen", icon="FULLSCREEN_ENTER")
         layout.separator()
@@ -556,6 +740,14 @@ class BFACW_MT_editor_view(bpy.types.Menu):
             layout.menu("INFO_MT_area")
 
 
+def _area_view_setting(area: Any, name: str, default: Any) -> Any:
+    for region in (area.regions if area else ()):
+        entry = _SURFACES.get(region.as_pointer())
+        if entry is not None:
+            return getattr(entry[0].view, name, default)
+    return default
+
+
 def _draw_header(self: Any, context: Any) -> None:
     layout = self.layout
     layout.template_header()
@@ -579,6 +771,13 @@ def _draw_header(self: Any, context: Any) -> None:
     else:
         layout.operator("bfacw.agent_start", text=info.start_label, icon="PLAY")
     layout.separator_spacer()
+    # Thumbnail size, like the File Browser's display size.
+    current = _area_view_setting(context.area, "thumb_size", "M")
+    sizes = layout.row(align=True)
+    for size, tip_icon in (("S", "IMAGE_DATA"), ("M", "IMAGE_DATA"), ("L", "IMAGE_DATA")):
+        sizes.operator("bfacw.editor_thumbs", text=size, icon=tip_icon if size == "S" else "NONE",
+                       depress=current == size).size = size
+    layout.separator()
     layout.operator("bfacw.open_addon_prefs", text="", icon="PREFERENCES")
 
 
@@ -646,33 +845,53 @@ def _draw_tool_entries(layout: Any, context: Any, entries: list) -> None:
         index = (index + 1) % columns
 
 
-class BFACW_PT_editor_tools(_CoworkerPanel, bpy.types.Panel):
-    """Coworker actions; icons that snap into columns, with text when the shelf is wide"""
-
-    bl_label = "Coworker"
-    bl_idname = "BFACW_PT_editor_tools"
+class _ToolPanel(_CoworkerPanel):
     bl_region_type = "TOOLS"
-    bl_options = {"HIDE_HEADER"}
+
+    def entries(self, context) -> list:
+        return []
 
     def draw(self, context):
-        state = agent_controller._agent_state
-        entries = [
-            ("bfacw.chat_clear", "New Thread", "ADD", {}),
-            ("bfacw.mention_search", "@ Mention", "OUTLINER_OB_MESH", {}),
-            _SEPARATOR,
-            ("bfacw.chat_capture_render", "Attach Render", "RENDER_STILL", {}),
-            ("bfacw.chat_capture_screen", "Attach Screen", "FULLSCREEN_ENTER", {}),
-            ("bfacw.editor_thumbs", "Thumbnail Size", "IMAGE_DATA", {"size": "NEXT"}),
-            _SEPARATOR,
-        ]
-        if state.is_thinking:
-            entries.append(("bfacw.chat_stop", "Stop", "PAUSE", {}))
-        entries += [
-            ("bfacw.plan_open", "Goal & Plan", "CHECKBOX_HLT", {}),
-            ("bfacw.edit_rules", "Project Rules", "TEXT", {}),
-            ("bfacw.copy_session_log", "Copy Session Log", "COPYDOWN", {}),
-        ]
-        _draw_tool_entries(self.layout, context, entries)
+        _draw_tool_entries(self.layout, context, self.entries(context))
+
+
+class BFACW_PT_editor_tools_chat(_ToolPanel, bpy.types.Panel):
+    """Start over, mention, stop"""
+
+    bl_label = "Chat"
+    bl_idname = "BFACW_PT_editor_tools_chat"
+
+    def entries(self, context):
+        out = [("bfacw.chat_clear", "New Thread", "ADD", {}),
+               ("bfacw.mention_search", "@ Mention", "OUTLINER_OB_MESH", {})]
+        if agent_controller._agent_state.is_thinking:
+            out.append(("bfacw.chat_stop", "Stop", "PAUSE", {}))
+        return out
+
+
+class BFACW_PT_editor_tools_attach(_ToolPanel, bpy.types.Panel):
+    """Attach an image to the next message"""
+
+    bl_label = "Attach"
+    bl_idname = "BFACW_PT_editor_tools_attach"
+
+    def entries(self, context):
+        return [("bfacw.chat_attach_image", "Attach Image...", "FILE_IMAGE", {}),
+                ("bfacw.chat_capture_render", "Attach Render", "RENDER_STILL", {}),
+                ("bfacw.chat_capture_screen", "Attach Screen", "FULLSCREEN_ENTER", {})]
+
+
+class BFACW_PT_editor_tools_session(_ToolPanel, bpy.types.Panel):
+    """The plan, project rules and the session log"""
+
+    bl_label = "Session"
+    bl_idname = "BFACW_PT_editor_tools_session"
+
+    def entries(self, context):
+        return [("bfacw.plan_open", "Goal & Plan", "CHECKBOX_HLT", {}),
+                ("bfacw.edit_rules", "Project Rules", "TEXT", {}),
+                ("bfacw.copy_session_log", "Copy Session Log", "COPYDOWN", {}),
+                ("bfacw.export_session_log", "Export Session Log", "EXPORT", {})]
 
 
 class BFACW_PT_editor_chat(_CoworkerPanel, bpy.types.Panel):
@@ -685,7 +904,7 @@ class BFACW_PT_editor_chat(_CoworkerPanel, bpy.types.Panel):
 
     def draw(self, context):
         from . import ui_chat
-        if ui_chat.draw_chat_controls(self.layout, context, show_chat_mode=False):
+        if ui_chat.draw_chat_controls(self.layout, context, show_chat_mode=False, show_prefs=False):
             ui_chat._draw_goal_plan_inline(self.layout)
 
 
@@ -830,7 +1049,9 @@ def _give_back() -> None:
 _HANDLERS: list[tuple[Any, Any, str]] = []
 _CLASSES = (BFACW_CoworkerTree, BFACW_OT_open_coworker_editor, BFACW_OT_editor_zoom, BFACW_OT_editor_jump,
             BFACW_OT_editor_thumbs,
-            BFACW_MT_editor_chat, BFACW_MT_editor_view, BFACW_PT_editor_tools, BFACW_PT_editor_chat)
+            BFACW_MT_editor_chat, BFACW_MT_editor_view, BFACW_PT_editor_tools_chat,
+            BFACW_PT_editor_tools_attach, BFACW_PT_editor_tools_session, BFACW_PT_editor_chat,
+            BFACW_OT_chat_attach_image, BFACW_OT_editor_native_edit)
 _COPIES: list[type] = []
 
 

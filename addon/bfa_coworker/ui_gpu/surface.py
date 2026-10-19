@@ -86,6 +86,11 @@ class ChatSurface:
     _hits: list[tuple[Rect, str]] = field(default_factory=list)
     _chat_rect: Rect | None = None
     _style: Style | None = None
+    # Where the host drew the surface last (region pixels); None = not on screen.
+    bounds: Rect | None = None
+    # Called with the wanted height (pixels) while the bottom grip is dragged.
+    on_resize: Any = None
+    drop_hover: bool = False     # an image is being dragged over: show the drop target
 
     # -- mouse (region pixels) ------------------------------------------------------
     def hit(self, x: float, y: float) -> str | None:
@@ -99,6 +104,9 @@ class ChatSurface:
         """Track the mouse; True when the surface should redraw (hover changed)."""
         before = self.hit(*self.mouse) if self.mouse is not None else None
         self.mouse = (x, y)
+        if self.pressed == "resize" and self.on_resize is not None and self.bounds is not None:
+            self.on_resize(max(0.0, self.bounds.top - y))
+            return True
         return self.pressed is not None or before != self.hit(x, y) or self._near_scrollbar(x)
 
     def on_leave(self) -> bool:
@@ -125,8 +133,8 @@ class ChatSurface:
         """A left release; a press and release on the same widget is a click."""
         if self.pressed is None:
             return False
-        if self.hit(x, y) == self.pressed or self.pressed == "scroll_handle":
-            self._clicked = self.pressed if self.pressed != "scroll_handle" else None
+        if self.hit(x, y) == self.pressed or self.pressed in ("scroll_handle", "resize"):
+            self._clicked = self.pressed if self.pressed not in ("scroll_handle", "resize") else None
         self.pressed = None
         self.mouse = (x, y)
         return True
@@ -160,6 +168,8 @@ class ChatSurface:
         actions: list[tuple[str, str]] = []
         pad = style.pad * (0.7 if self.compact else 1.0)
         canvas.fill(rect, style.back)
+        if self.compact and self.on_resize is not None:
+            rect = self._draw_grip(canvas, rect)
         top_edge = rect.top
         if top is not None:
             top_edge = self._draw_top_bar(canvas, Rect(rect.x, rect.y, rect.w, rect.h), top, actions)
@@ -183,6 +193,8 @@ class ChatSurface:
             del self.box.actions[before:]
         elif self.box.focused:
             self.box.focused = False
+        if self.drop_hover:
+            self._draw_drop_target(canvas, rect)
         self._hits = list(canvas.hit_areas)
         self._clicked = None
         # The view's own actions that only change the view are done here.
@@ -239,8 +251,37 @@ class ChatSurface:
                                  active=mode_id == top.chat_mode):
                     actions.append(("chat_mode", mode_id))
             bottom = mrow.y - pad * 0.5
-        canvas.fill(Rect(rect.x, bottom, rect.w, max(1.0, style.scale)), style.outline)
         return bottom
+
+    def _draw_drop_target(self, canvas: Canvas, rect: Rect) -> None:
+        """Dragging an image file over the chat: a highlight that says what a drop does."""
+        style = canvas.style
+        tint = (style.cursor[0], style.cursor[1], style.cursor[2], 0.12)
+        inner = rect.inset(style.pad * 0.5)
+        canvas.fill(inner, tint, style.radius(style.box))
+        canvas.stroke(inner, style.cursor, style.radius(style.box))
+        label = "Drop to attach the image"
+        side = canvas.icon_size()
+        w = side + style.pad * 0.6 + canvas.measure(label, "ui", style.font_size) + 2 * style.pad
+        chip = Rect(inner.x + (inner.w - w) / 2, inner.y + inner.h / 2 - style.unit * 0.6, w, style.unit * 1.2)
+        canvas.box(chip, colors=style.tooltip)
+        canvas.icon(Rect(chip.x + style.pad, chip.y + (chip.h - side) / 2, side, side), "IMAGE_DATA",
+                    style.tooltip.text)
+        canvas.label(Rect(chip.x + style.pad + side + style.pad * 0.6, chip.y, w, chip.h), label, style.tooltip.text)
+
+    def _draw_grip(self, canvas: Canvas, rect: Rect) -> Rect:
+        """A resize grip along the bottom edge (drag to change the panel's height)."""
+        style = canvas.style
+        h = max(6.0, style.pad * 0.9)
+        grip = Rect(rect.x, rect.y, rect.w, h)
+        hovered = canvas.state.hovered(grip) or self.pressed == "resize"
+        dots = style.cursor if hovered else _soft(style.text, 0.55)
+        cx, cy = grip.x + grip.w / 2, grip.y + grip.h / 2
+        for i in range(-2, 3):
+            canvas.fill(Rect(cx + i * 4 * style.scale - style.scale, cy - style.scale, 2 * style.scale,
+                             2 * style.scale), dots, style.scale)
+        canvas.hit_areas.append((grip, "resize"))
+        return Rect(rect.x, rect.y + h, rect.w, rect.h - h)
 
     def _draw_notice(self, canvas: Canvas, rect: Rect, notice: Notice, actions: list[tuple[str, str]]) -> None:
         style = canvas.style

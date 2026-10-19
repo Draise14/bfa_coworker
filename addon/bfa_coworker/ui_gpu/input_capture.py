@@ -56,7 +56,7 @@ _HOST: dict[str, Any] = {"router": None, "on_action": None, "after_key": None}
 # The focused box and its region; the surface being dragged / hovered; running windows.
 _FOCUS: dict[str, Any] = {"box": None, "region": None}
 _DRAG: dict[str, Any] = {"hit": None}
-_HOVER: dict[str, Any] = {"hit": None}
+_HOVER: dict[str, Any] = {"hit": None, "text_cursor": False}
 _RUNNING: set[int] = set()
 
 _IGNORED = frozenset({"TIMER", "TIMER_REPORT", "TIMERREGION", "WINDOW_DEACTIVATE", "NONE"})
@@ -187,8 +187,18 @@ class BFACW_OT_gpu_input(bpy.types.Operator):
                 if hover[0].on_leave():
                     _tag(hover[2])
             _HOVER["hit"] = hit if hit is not None and hasattr(hit[0], "on_move") else None
-            if _HOVER["hit"] is not None and hit[0].on_move(*_local(event, hit[2])):
-                _tag(hit[2])
+            over_text = False
+            if _HOVER["hit"] is not None:
+                x, y = _local(event, hit[2])
+                if hit[0].on_move(x, y):
+                    _tag(hit[2])
+                over_text = hit[0].hit(x, y) == "input"
+            if over_text != _HOVER["text_cursor"]:    # an I-beam over the text, like a text field
+                _HOVER["text_cursor"] = over_text
+                try:
+                    context.window.cursor_set("TEXT" if over_text else "DEFAULT")
+                except (AttributeError, TypeError, ValueError):
+                    pass
             return {"PASS_THROUGH"}
 
         if event.type == "LEFTMOUSE" and event.value == "RELEASE" and drag is not None:

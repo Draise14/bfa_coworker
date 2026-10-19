@@ -381,8 +381,10 @@ class TestChatAttachmentUI(unittest.TestCase):
         body = src[fh_start:fh_end]
         self.assertIn('if area.type == "TEXT_EDITOR":', body,
                       "the Text Editor panel must accept the drop")
-        self.assertIn("return _is_coworker_panel_region(context)", body,
+        self.assertIn("if _is_coworker_panel_region(context):", body,
                       "the 3D Viewport drop must be scoped to our panel")
+        self.assertIn("_ce.is_coworker_space(area.spaces.active)", body,
+                      "the Coworker editor accepts image drops too")
         self.assertIn('bl_label = "Attach Image to Coworker Chat"', body)
 
     def test_is_coworker_panel_region_scopes_the_drop(self):

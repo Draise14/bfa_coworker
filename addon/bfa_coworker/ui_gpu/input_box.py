@@ -38,6 +38,7 @@ __all__ = (
 
 _MAX_UNDO = 200
 _MAX_VISIBLE_LINES = 6
+_MIN_VISIBLE_LINES = 2
 _MAX_SUGGESTIONS = 8
 
 
@@ -221,7 +222,7 @@ class InputBox:
 
     model: TextModel = field(default_factory=TextModel)
     provider: Provider | None = None
-    placeholder: str = "Ask Coworker...  (Enter to send, Shift+Enter for a new line)"
+    placeholder: str = "Ask Coworker..."
     focused: bool = False
     busy: bool = False                     # a turn is running: show Stop
     attachment: str = ""                   # attached image name, if any
@@ -344,6 +345,11 @@ class InputBox:
             self.focused = False
             self.actions.append(("blur", ""))
             return True
+        # AltGr (Ctrl+Alt on Windows) types characters like @ on Spanish / German keyboards.
+        if key.ctrl and key.alt and key.unicode and key.unicode.isprintable():
+            m.insert(key.unicode)
+            self._refresh_suggestions()
+            return True
         if ctrl and key.type in ("A", "C", "X", "V", "Z", "Y"):
             if key.type == "A":
                 m.select_all()
@@ -388,23 +394,22 @@ class InputBox:
 
     # -- drawing ------------------------------------------------------------------------
     def height(self, canvas: Canvas, width: float) -> float:
-        """Height the box needs at *width* (grows with its lines, up to a limit)."""
+        """Height the box needs at *width*: text lines (2 to 6), then the button row."""
         style = canvas.style
-        lines = self._lines(canvas, width)
-        visible = min(len(lines), _MAX_VISIBLE_LINES)
+        visible = max(_MIN_VISIBLE_LINES, min(len(self._lines(canvas, width)), _MAX_VISIBLE_LINES))
         chip = style.unit * 1.9 if self.attachment else 0.0
-        _margin, _gap, button_h = self._button_metrics(canvas)
-        return max(visible * style.line_height + 2 * style.pad, button_h + 2 * _margin) + chip
+        margin, _gap, button_h = self._button_metrics(canvas)
+        return style.pad + chip + visible * style.line_height + style.pad * 0.5 + button_h + margin
 
     # -- buttons -----------------------------------------------------------------------
     def _button_metrics(self, canvas: Canvas) -> tuple[float, float, float]:
         """(edge margin, gap between buttons, button height)."""
         style = canvas.style
-        return style.pad * 0.75, style.pad * 0.5, style.unit * (2.0 if self.big_buttons else 1.0)
+        return style.pad * 0.75, style.pad * 0.5, style.unit * (1.6 if self.big_buttons else 1.0)
 
     def _buttons(self, canvas: Canvas) -> list[tuple[str, str, str, bool, float]]:
         """(id, label, icon, active, width), right to left, like the panel chat:
-        Send, or Stop (+ Queue when there is text) while a turn runs; then Edit."""
+        Send, or Stop (+ Queue when there is text) while a turn runs."""
         style = canvas.style
         has_text = bool(self.model.text.strip())
         if self.busy:
@@ -413,7 +418,6 @@ class InputBox:
                 specs.append(("queue", "Queue", "ADD", False))
         else:
             specs = [("send", "Send", "PLAY", has_text)]
-        specs.append(("native_edit", "Edit", "", False))
         out = []
         for widget_id, label, icon, active in specs:
             content = canvas.measure(label, "ui", style.font_size)
@@ -423,10 +427,7 @@ class InputBox:
         return out
 
     def _text_width(self, canvas: Canvas, width: float) -> float:
-        style = canvas.style
-        margin, gap, _h = self._button_metrics(canvas)
-        buttons = sum(spec[4] for spec in self._buttons(canvas)) + gap * len(self._buttons(canvas))
-        return width - 2 * style.pad - buttons - margin   # room for the buttons
+        return width - 2 * canvas.style.pad
 
     def _lines(self, canvas: Canvas, width: float) -> list[tuple[int, str]]:
         """Visual lines as (start offset, text), wrapping by words like the view."""
@@ -445,6 +446,16 @@ class InputBox:
             offset += len(para) + 1
         return out or [(0, "")]
 
+    @staticmethod
+    def _fit(canvas: Canvas, text: str, width: float) -> str:
+        """*text* cut with an ellipsis to fit *width*."""
+        size = canvas.style.font_size
+        if canvas.measure(text, "ui", size) <= width:
+            return text
+        while text and canvas.measure(text + "\u2026", "ui", size) > width:
+            text = text[:-1]
+        return text + "\u2026" if text else ""
+
     def draw(self, canvas: Canvas, rect: Rect) -> list[tuple[str, str]]:
         """Draw the box into *rect* (its bottom part is used).
 
@@ -457,9 +468,13 @@ class InputBox:
         h = min(rect.h, self.height(canvas, rect.w))
         box = Rect(rect.x, rect.y, rect.w, h)
         self.rect, self._measure, self._size, self._drawn = box, canvas.measure, style.font_size, []
+        hovered = canvas.state.hovered(box)
         canvas.box(box, colors=style.text_field, selected=self.focused)
+        if self.focused or hovered:          # ready to type: the theme's text-cursor colour
+            ring = style.cursor if self.focused else (style.cursor[0], style.cursor[1], style.cursor[2], 0.45)
+            canvas.stroke(box, ring, style.radius(style.text_field))
         canvas.hit_areas.append((box, "input"))
-        # Buttons on the right, sized to their labels with room around them.
+        # The button row along the bottom: a shortcut hint on the left, buttons on the right.
         margin, gap, button_h = self._button_metrics(canvas)
         right = box.right - margin
         for widget_id, label, icon, active, button_w in self._buttons(canvas):
@@ -467,40 +482,48 @@ class InputBox:
             if canvas.button(button, widget_id, label, active=active, icon=icon):
                 if widget_id == "stop":
                     self.actions.append(("stop", ""))
-                elif widget_id == "native_edit":
-                    self.actions.append(("native_edit", self.model.text))
                 else:
                     self.send()      # Send, or Queue (the host queues a send while a turn runs)
             right = button.x - gap
+        hint_color = (style.text_field.text[0], style.text_field.text[1], style.text_field.text[2], 0.45)
+        hint = self._fit(canvas, "Enter to send  \u00b7  Shift+Enter: new line  \u00b7  @ to mention",
+                         right - box.x - 2 * pad)
+        if hint:
+            canvas.label(Rect(box.x + pad, box.y + margin, right - box.x - pad, button_h), hint, hint_color)
         top = box.top - pad
         if self.attachment:
-            # The image waiting to be sent: a small thumbnail and its name.
+            # The image waiting to be sent: a small thumbnail and its name (cut to fit).
             thumb = u * 1.6
-            chip = Rect(box.x + pad, top - thumb - u * 0.1, min(box.w * 0.6, u * 9), thumb)
+            side = canvas.icon_size()
+            name_room = min(box.w * 0.7, u * 14) - thumb - side - pad * 1.6
+            name = self._fit(canvas, self.attachment, name_room)
+            chip_w = thumb + side + pad * 1.6 + canvas.measure(name, "ui", style.font_size) + pad
+            chip = Rect(box.x + pad, top - thumb - u * 0.1, chip_w, thumb)
             canvas.box(chip, colors=style.button, outline=False)
             canvas.image(Rect(chip.x + 2, chip.y + 2, thumb - 4, thumb - 4), self.attachment)
-            side = canvas.icon_size()
             canvas.icon(Rect(chip.x + thumb + pad * 0.4, chip.y + (thumb - side) / 2, side, side),
                         "IMAGE_DATA", style.button.text)
-            canvas.label(Rect(chip.x + thumb + side + pad * 0.8, chip.y, chip.w, thumb), self.attachment,
-                         style.button.text)
+            canvas.label(Rect(chip.x + thumb + side + pad * 0.8, chip.y, chip.w, thumb), name, style.button.text)
             top -= u * 1.9
         text_color = style.text_field.text_sel if self.focused else style.text_field.text
         lines = self._lines(canvas, rect.w)
-        canvas.push_clip(box.inset(pad * 0.25))
+        text_area = Rect(box.x + pad * 0.25, box.y + margin + button_h, box.w - pad * 0.5,
+                         max(0.0, top - box.y - margin - button_h + pad * 0.75))
+        canvas.push_clip(text_area)
+        size = style.font_size
         if not self.model.text:
-            hint = self.placeholder
-            room = self._text_width(canvas, rect.w)
-            while hint and canvas.measure(hint, "ui", style.font_size) > room:
-                hint = hint[:-2].rstrip() + "\u2026" if len(hint) > 2 else ""
+            hint_text = self._fit(canvas, self.placeholder, self._text_width(canvas, rect.w))
             canvas.label(Rect(box.x + pad, top - style.line_height, box.w, style.line_height),
-                         hint, (text_color[0], text_color[1], text_color[2], 0.5))
+                         hint_text, (text_color[0], text_color[1], text_color[2], 0.5))
+            if self.focused and self.blink_phase:     # the caret, ready at the start
+                canvas.fill(Rect(box.x + pad, top - style.line_height * 0.9,
+                                 max(1.0, style.scale * 1.5), style.line_height * 0.8), style.cursor)
+            self._drawn.append((top, top - style.line_height, box.x + pad, 0, ""))
             lines = []
         # Keep the cursor's line visible when the text is taller than the box.
         cur_line = max((i for i, (start, _) in enumerate(lines) if start <= self.model.cursor), default=0)
         first = max(0, min(cur_line - _MAX_VISIBLE_LINES + 1, len(lines) - _MAX_VISIBLE_LINES))
         sel = self.model.selection
-        size = style.font_size
         for row, (start, piece) in enumerate(lines[first:first + _MAX_VISIBLE_LINES]):
             line_top = top - row * style.line_height
             base = line_top - style.line_height + (style.line_height - size) / 2 + size * 0.2

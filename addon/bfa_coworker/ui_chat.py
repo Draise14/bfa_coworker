@@ -49,6 +49,8 @@ import bpy  # pylint: disable=import-error
 from bpy.props import (  # pylint: disable=import-error
     BoolProperty,
     EnumProperty,
+    FloatProperty,
+    FloatVectorProperty,
     IntProperty,
     PointerProperty,
     StringProperty,
@@ -1125,6 +1127,18 @@ class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
         default=False,
     )
 
+    # The compact chat panel (Tier 4, GPU 5): two marker swatches the GPU chat
+    # finds on screen (see chat_editor._find_chat_rect), and its height.
+    chat_marker: FloatVectorProperty(  # type: ignore[valid-type]
+        name="Chat Marker", subtype='COLOR_GAMMA', size=3, min=0.0, max=1.0,
+        default=(1.0, 0.0, 1.0), options={'SKIP_SAVE'},
+    )
+    chat_panel_rows: FloatProperty(  # type: ignore[valid-type]
+        name="Chat Height",
+        description="Height of the sidebar chat (drag its bottom edge to change it)",
+        default=22.0, min=6.0, max=80.0,
+    )
+
     chat_image_expanded: BoolProperty(  # type: ignore[valid-type]
         name="Show Image Panel",
         description=(
@@ -1697,7 +1711,14 @@ class BFACW_FH_chat_drop(bpy.types.FileHandler):  # type: ignore[misc]
                 return False
             if area.type == "TEXT_EDITOR":
                 return True
-            return _is_coworker_panel_region(context)
+            from . import chat_editor as _ce
+            if area.type == "NODE_EDITOR" and _ce.is_coworker_space(area.spaces.active):
+                _ce.note_drop_hover()          # the GPU chat highlights the drop target
+                return True
+            if _is_coworker_panel_region(context):
+                _ce.note_drop_hover()
+                return True
+            return False
         except (AttributeError, ReferenceError, TypeError, ValueError):
             return False
 
@@ -2583,6 +2604,9 @@ def _ui_signature(state) -> tuple:
         len(state.conversation_history),
         len(_sm.store.retired_history),
         locked,
+        # The attached image (the GPU chats show it in the input box).
+        tuple(getattr(getattr(wm, "bfacw_chat_props", None), "chat_image", None) is not None
+              and wm.bfacw_chat_props.chat_image.name or "" for wm in bpy.data.window_managers),
     )
 
 
@@ -2627,7 +2651,8 @@ def _open_mention_for_at(text: str) -> float | None:
 # ---------------------------------------------------------------------------
 # Panels
 
-def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool = True) -> bool:
+def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool = True,
+                       show_prefs: bool = True) -> bool:
     """The chat's controls: mode, Start / Stop, status, scene protection,
     External Harness setup, chat mode, reasoning effort and the image socket.
 
@@ -2653,8 +2678,9 @@ def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool 
     # NOTE: The model name is intentionally NOT shown here (issue #70).
     # It lives only in the Status & Diagnostics panel, which shows the
     # mode-correct model (local llama-server model or remote API model).
-    mode_row.separator(factor=0.3)
-    mode_row.operator("bfacw.open_addon_prefs", icon="PREFERENCES", text="")
+    if show_prefs:     # the Coworker editor has its settings button in the header
+        mode_row.separator(factor=0.3)
+        mode_row.operator("bfacw.open_addon_prefs", icon="PREFERENCES", text="")
 
     # -- Agent control buttons (compact) --
     row = layout.row(align=True)
@@ -2766,9 +2792,8 @@ def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool 
 def _compact_sidebar(context: bpy.types.Context) -> bool:
     """True when the 3D View's Coworker tab shows the compact GPU chat.
 
-    Then the panels below step aside (the GPU chat paints the region, see
-    chat_editor.py) and only BFACW_PT_chat_compact keeps the tab.  The
-    Coworker editor's sidebar always shows them.
+    Then the classic chat panel steps aside for BFACW_PT_chat_compact (the GPU
+    chat in a panel); Session, Queue and Status stay below it.
     """
     if getattr(getattr(context, "space_data", None), "type", "") != 'VIEW_3D':
         return False
@@ -2780,20 +2805,35 @@ def _compact_sidebar(context: bpy.types.Context) -> bool:
 
 
 class BFACW_PT_chat_compact(Panel):  # type: ignore[misc]
-    """Keeps the Coworker tab while the compact GPU chat paints the sidebar."""
-    bl_label = "Coworker"
+    """The compact chat, as a real panel: collapse, drag and pin it like any other.
+
+    The panel only reserves room; the GPU chat (chat_editor.py) paints it.  Two
+    magenta swatches mark the room's top and bottom: the chat finds them in
+    the drawn region, so it follows the panel wherever Blender puts it
+    (dragged, pinned to another tab, scrolled, Ctrl+MMB zoomed).
+    """
+    bl_label = "Coworker Chat"
     bl_idname = "BFACW_PT_chat_compact"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = _CHAT_PANEL_CATEGORY
-    bl_options = {'HIDE_HEADER'}
+    bl_order = 0
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
         return not bpy.app.background and _compact_sidebar(context)
 
-    def draw(self, _context: bpy.types.Context) -> None:
-        self.layout.label(text="")
+    def draw_header(self, _context: bpy.types.Context) -> None:
+        self.layout.label(text="", icon=_AGENT_ICON)
+
+    def draw(self, context: bpy.types.Context) -> None:
+        props = context.window_manager.bfacw_chat_props  # type: ignore[attr-defined]
+        col = self.layout.column(align=True)
+        col.prop(props, "chat_marker", text="")
+        room = col.column()
+        room.scale_y = max(1.0, props.chat_panel_rows - 2.0)
+        room.label(text="")
+        col.prop(props, "chat_marker", text="")
 
 
 class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
@@ -3168,7 +3208,7 @@ class BFACW_PT_chat_session(Panel):  # type: ignore[misc]
         # Hidden in External Harness mode: session memory, compaction, and
         # checkpoints are part of the in-Blender chat, which is handled
         # entirely by the external MCP client in that mode.
-        if bpy.app.background or _compact_sidebar(context):
+        if bpy.app.background:
             return False
         prefs = context.preferences.addons[__package__].preferences
         return prefs.operating_mode != "EXTERNAL_HARNESS"
@@ -3234,7 +3274,7 @@ class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
     def poll(cls, context: bpy.types.Context) -> bool:
         # Hidden in External Harness mode: chat (and thus the message
         # queue) is handled entirely by the external MCP client.
-        if bpy.app.background or _compact_sidebar(context):
+        if bpy.app.background:
             return False
         prefs = context.preferences.addons[__package__].preferences
         return prefs.operating_mode != "EXTERNAL_HARNESS"
@@ -3322,7 +3362,7 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        return not bpy.app.background and not _compact_sidebar(context)
+        return not bpy.app.background
 
     def draw(self, context: bpy.types.Context) -> None:
         layout = self.layout

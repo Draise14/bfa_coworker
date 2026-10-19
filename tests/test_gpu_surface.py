@@ -212,3 +212,44 @@ class TestMentions(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPolish(unittest.TestCase):
+
+    def test_altgr_types_the_at_sign(self):
+        box = ib.InputBox(focused=True)
+        self.assertTrue(box.handle_key(ib.Key("TWO", unicode="@", ctrl=True, alt=True)))   # AltGr+2 (Spanish)
+        self.assertEqual(box.model.text, "@")
+
+    def test_long_attachment_names_are_cut(self):
+        box = ib.InputBox(focused=True, attachment="a_really_long_image_name_" * 6 + ".png")
+        canvas = lay.Canvas(st.Style(), lay.fixed_measure(0.55))
+        box.draw(canvas, lay.Rect(0, 0, 300, 300))
+        names = [c.text for c in canvas.commands if c.kind == "text" and "really" in c.text]
+        self.assertTrue(names and names[0].endswith("\u2026"))
+        self.assertLess(canvas.measure(names[0], "ui", 11), 300)
+
+    def test_box_starts_multi_line_with_buttons_below(self):
+        box = ib.InputBox(focused=True)
+        canvas = lay.Canvas(st.Style(), lay.fixed_measure(0.55))
+        box.draw(canvas, lay.Rect(0, 0, 400, 300))
+        send = next(r for r, w in canvas.hit_areas if w == "send")
+        self.assertGreaterEqual(box.rect.h, 2 * canvas.style.line_height + send.h)   # 2 lines + the button row
+        caret = [c for c in canvas.commands if c.kind == "rect" and c.color == canvas.style.cursor]
+        self.assertTrue(caret)                                    # caret shows even with nothing typed
+        self.assertNotIn("native_edit", [w for _r, w in canvas.hit_areas])   # Edit moved to the Chat menu
+
+    def test_resize_grip_and_drop_target(self):
+        heights = []
+        surface = sf.ChatSurface(compact=True)
+        surface.on_resize = heights.append
+        surface.bounds = RECT
+        canvas, _ = _draw(surface, top=sf.TopBar())
+        x, y = _centre(surface, "resize")
+        surface.on_press(x, y)
+        surface.on_move(x, y - 40)
+        self.assertTrue(heights and heights[-1] > RECT.h)          # dragged down: taller
+        surface.on_release(x, y - 40)
+        surface.drop_hover = True
+        canvas, _ = _draw(surface, top=sf.TopBar())
+        self.assertIn("Drop to attach the image", [c.text for c in canvas.commands if c.kind == "text"])

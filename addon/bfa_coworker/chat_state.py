@@ -151,6 +151,8 @@ class ChatStateApplier:
         self._flush_preamble()
         name = str(data.get("name") or data.get("title") or "tool")
         row = {"role": "tool", "name": name, "tool_call_id": tool_id, "content": "(running)"}
+        if isinstance(data.get("args"), dict) and data["args"]:
+            row["args"] = dict(data["args"])     # the call's input (code, query...) for the chat
         self._tools[tool_id] = row
         self._history.append(row)
         self.state.ui_status = "Using {:s}...".format(name)

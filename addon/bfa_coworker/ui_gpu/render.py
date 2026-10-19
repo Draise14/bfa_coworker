@@ -81,9 +81,9 @@ def _shader(name: str) -> Any:
     return shader
 
 
-def _outline_points(rect: Rect, radius: float) -> list[tuple[float, float]]:
+def _outline_points(rect: Rect, radius: float, rounded: bool | None = None) -> list[tuple[float, float]]:
     r = max(0.0, min(radius, rect.w / 2, rect.h / 2))
-    if r < 0.5:
+    if not (r >= 0.5 if rounded is None else rounded):
         return [(rect.x, rect.y), (rect.right, rect.y), (rect.right, rect.top), (rect.x, rect.top)]
     pts = []
     corners = ((rect.right - r, rect.y + r, 270), (rect.right - r, rect.top - r, 0),
@@ -109,14 +109,23 @@ def _fill(rect: Rect, color: tuple, radius: float) -> None:
 
 
 def _stroke(rect: Rect, color: tuple, radius: float, width: float = 1.0) -> None:
-    # Inset half a pixel so the line sits on the box edge, like Blender's widgets.
-    pts = _outline_points(rect.inset(0.5), max(0.0, radius - 0.5))
-    pts.append(pts[0])
-    shader = _shader("POLYLINE_UNIFORM_COLOR")
-    batch = batch_for_shader(shader, "LINE_STRIP", {"pos": pts})
+    """An outline exactly *width* pixels wide (Blender's line width), on whole pixels.
+
+    Drawn as a filled ring, not a smoothed line: a 1-pixel smooth line spreads
+    over two pixels and reads thicker than the rest of the interface.
+    """
+    outer = Rect(round(rect.x), round(rect.y), round(rect.w), round(rect.h))
+    w = max(1.0, round(width))
+    rounded = min(radius, outer.w / 2, outer.h / 2) >= 0.5
+    a = _outline_points(outer, radius, rounded)
+    b = _outline_points(outer.inset(w), max(0.0, radius - w), rounded)
+    tris = []
+    for i in range(len(a)):
+        j = (i + 1) % len(a)
+        tris += [a[i], a[j], b[j], a[i], b[j], b[i]]
+    shader = _shader("UNIFORM_COLOR")
+    batch = batch_for_shader(shader, "TRIS", {"pos": tris})
     shader.bind()
-    shader.uniform_float("viewportSize", gpu.state.viewport_get()[2:])
-    shader.uniform_float("lineWidth", width)
     shader.uniform_float("color", color)
     batch.draw(shader)
 
@@ -208,7 +217,8 @@ def _icon(cmd: DrawCmd, style: Any) -> None:
         if texture is not None:
             x = round(cmd.rect.x + (cmd.rect.w - side) / 2)
             y = round(cmd.rect.y + (cmd.rect.h - side) / 2)
-            _image(x, y, side, texture, cmd.color[3] * getattr(style, "icon_alpha", 1.0))
+            # Full colour, like Blender's icons (only the theme's Icon Alpha dims them).
+            _image(x, y, side, texture, getattr(style, "icon_alpha", 1.0))
             return
     tris = _icon_triangles(cmd.text, cmd.rect)
     if not tris:
@@ -245,7 +255,7 @@ def render(commands: list[DrawCmd], style: Any = None) -> None:
             if cmd.kind == "rect" and cmd.rect is not None:
                 _fill(cmd.rect, cmd.color, cmd.radius)
             elif cmd.kind == "outline" and cmd.rect is not None:
-                _stroke(cmd.rect, cmd.color, cmd.radius)
+                _stroke(cmd.rect, cmd.color, cmd.radius, getattr(style, "line_width", 1.0))
             elif cmd.kind == "text":
                 _text(cmd)
             elif cmd.kind == "icon" and cmd.rect is not None:

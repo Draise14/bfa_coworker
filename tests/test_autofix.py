@@ -57,13 +57,10 @@ class TestAutofixRules(unittest.TestCase):
         ('render.engine = "EEVEE"', '"BLENDER_EEVEE"', "EEVEE -> BLENDER_EEVEE"),
         ("bpy.context.scene.render.eevee.taa_samples = 8",
          "scene.eevee.taa_samples", "render.eevee -> scene.eevee"),
-        ("obj.data.use_auto_smooth = True", "obj.data.auto_smooth_angle", "auto_smooth"),
-        ("for fc in action.fcurves: fc.keyframe_points", "keyframe_insert", "fcurves"),
         ("bpy.data.node_groups.new('N', 'ShaderNodeEnvironment')",
          "ShaderNodeTexEnvironment", "ShaderNodeEnvironment"),
         ("bpy.data.node_groups.new('N', 'ShaderNodeWorldOutput')",
          "ShaderNodeOutputWorld", "ShaderNodeWorldOutput"),
-        ('mat.node_tree.nodes["Principled BSDF"]["Use Nodes"]', "use_nodes = True", "Use Nodes"),
         ("mod.subdivisions = 3", "mod.levels = 3", "subdivisions -> levels"),
         ("mat.node_tree.nodes['P'].base_color = (1, 0, 0)",
          "inputs['Base Color'].default_value", "base_color"),
@@ -82,11 +79,24 @@ class TestAutofixRules(unittest.TestCase):
                                 "expected fix description {!r} in {!r}".format(desc, fixes))
 
     def test_multiple_rules_apply(self):
-        raw = "bpy.data.lamps['Key'].use_auto_smooth = True"
+        raw = "bpy.data.lamps['Key'].data\nmod.subdivisions = 2"
         fixed, fixes = _autofix_code(raw)
         self.assertIn("bpy.data.lights", fixed)
-        self.assertIn("auto_smooth_angle", fixed)
+        self.assertIn("mod.levels = 2", fixed)
         self.assertEqual(len(fixes), 2)
+
+    def test_meaning_changing_rewrites_are_gone(self):
+        """These rewrites produced NameError/SyntaxError code (#101); preflight
+        explains them instead, so autofix must leave them untouched."""
+        for raw in (
+            "for fc in action.fcurves:\n    print(fc.data_path)",
+            "obj.data.use_auto_smooth = True",
+            'world["Use Nodes"] = True',
+        ):
+            with self.subTest(raw=raw):
+                fixed, fixes = _autofix_code(raw)
+                self.assertEqual(fixed, raw)
+                self.assertEqual(fixes, [])
 
     def test_no_side_effects_on_clean(self):
         """Clean code passes through byte-identical."""

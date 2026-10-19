@@ -412,6 +412,24 @@ def _code_uses_bpy(code: str) -> bool:
     return bool(_BPY_MODULE_REF_RE.search(code))
 
 
+# Preflight checks that are style advice or heuristics: the code may well be
+# correct, so it runs and the guidance is attached to the result as
+# ``preflight_notes`` instead of refusing it (issue #101).  Every other check
+# flags code that is certain to fail (removed API, missing import, crash).
+_ADVISORY_PREFLIGHT = frozenset((
+    "no_existence_check",
+    "unguarded_list_index",
+    "ops_in_loop",
+    "no_output",
+    "op_requires_selection",
+    "op_requires_active_object",
+    "wrong_material_access",
+    "wrong_mode_set",
+    "bmesh_editmode_mismatch",
+    "vector_arithmetic",
+))
+
+
 def _preflight_check(code: str) -> list[tuple[str, str]]:
     """Validate *code* for common LLM-generated mistakes before execution.
 
@@ -464,16 +482,23 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
     if "use_auto_smooth" in code:
         issues.append((
             "wrong_auto_smooth",
-            "mesh.use_auto_smooth was removed in Blender 5.3. "
-            "Use mesh.auto_smooth_angle instead.",
+            "mesh.use_auto_smooth and mesh.auto_smooth_angle were removed in "
+            "Blender 4.1. Smooth by angle with the operator instead: select the "
+            "object, then bpy.ops.object.shade_auto_smooth(angle=math.radians(30)).",
         ))
 
     # 7. Accessing action.fcurves (removed in Blender 5.0+).
-    if re.search(r"action\.fcurves", code):
+    # `action.fcurves`, `ad.action.fcurves`, `bpy.data.actions[0].fcurves` --
+    # but not `channelbag.fcurves`, the 5.x way to read them.
+    if re.search(r"(?:\baction|\bactions\[[^\]]*\])\.fcurves", code):
         issues.append((
             "wrong_fcurves",
-            "action.fcurves was removed in Blender 5.0+. "
-            "Use keyframe_insert() for keyframe creation.",
+            "action.fcurves was removed in Blender 5.0 (layered actions). "
+            "Create keys with obj.keyframe_insert(data_path, frame=...). Read "
+            "F-Curves through the action slot: `from bpy_extras import "
+            "anim_utils; ad = obj.animation_data; cb = "
+            "anim_utils.action_get_channelbag_for_slot(ad.action, ad.action_slot); "
+            "for fc in cb.fcurves: ...` (cb is None when the slot has no keys).",
         ))
 
     # 7a. GN modifier socket membership (removed in Blender 5.2+).
@@ -568,20 +593,6 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
             "Use bpy.context.view_layer.objects.active or bpy.context.selected_objects instead.",
         ))
 
-    # 14b. bpy.context.active_object is NOT available inside the MCP bridge -
-    #      LLM code runs in a worker thread where Blender's context is
-    #      thread-local and omits active_object entirely.
-    if "bpy.context.active_object" in code:
-        issues.append((
-            "context_active_object_thread",
-            "`bpy.context.active_object` is NOT available inside the MCP "
-            "bridge (LLM code runs in a worker thread, and Blender's "
-            "thread-local context omits active_object there). "
-            "Use `bpy.context.view_layer.objects.active` instead, or "
-            "`bpy.data.objects.get('Name')`."
-        ))
-
-
     # 15. Creating objects in a loop without checking what exists first.
     #     Loops over primitive_* operators are fine -- Blender
     #     auto-uniquifies names (Torus, Torus.001, ...), and one-shot
@@ -648,7 +659,7 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
             "mesh.data.material_slots does not exist. "
             "Use obj.material_slots (on Object) instead of obj.data.material_slots.",
         ))
-    if re.search(r"\.materials", code) and "obj.data.materials" not in code and "mesh.materials" not in code:
+    if re.search(r"\.materials\b", code) and "obj.data.materials" not in code and "mesh.materials" not in code:
         # Check if it's on an Object (wrong) vs Mesh data (correct)
         if re.search(r"\w+\.materials\[", code) and "data.materials" not in code:
             issues.append((
@@ -860,6 +871,8 @@ def _execute_code(
         "json": json,
         "re": re,
     }
+    # Advisory preflight guidance, attached to whatever the code returns.
+    preflight_notes: list[str] = []
     with CaptureOutput() as captured, WeakSandboxForLLM():
         try:
             # NOTE: We intentionally do NOT sync the depsgraph before
@@ -892,9 +905,11 @@ def _execute_code(
                 preflight_issues = []
             else:
                 preflight_issues = _preflight_check(code)
-            if preflight_issues:
-                hint_lines = ["[Preflight] Found {:d} issue(s):".format(len(preflight_issues))]
-                for _name, guidance in preflight_issues:
+            preflight_notes[:] = [g for n, g in preflight_issues if n in _ADVISORY_PREFLIGHT]
+            preflight_blocking = [(n, g) for n, g in preflight_issues if n not in _ADVISORY_PREFLIGHT]
+            if preflight_blocking:
+                hint_lines = ["[Preflight] Found {:d} issue(s):".format(len(preflight_blocking))]
+                for _name, guidance in preflight_blocking:
                     hint_lines.append("  - {:s}".format(guidance))
                 hint_lines.append("")
                 hint_lines.append("Fix these issues and retry. Do NOT retry the same code.")
@@ -1126,6 +1141,8 @@ def _execute_code(
                     "in Blender 4.0. Use scene.eevee.use_ssr etc."
                 )
             response: dict[str, object] = {"status": "error", "message": tb_str}
+            if preflight_notes:
+                response["preflight_notes"] = list(preflight_notes)
             if captured.stdout:
                 response["stdout"] = captured.stdout
             if captured.stderr:
@@ -1171,6 +1188,8 @@ def _execute_code(
             # (e.g. Blender ID types) appear as their string representation.
             result = json.loads(json.dumps(result, default=repr))
             response = {"status": "ok", "result": result}
+    if preflight_notes:
+        response["preflight_notes"] = list(preflight_notes)
     if captured.stdout:
         response["stdout"] = captured.stdout
     if captured.stderr:

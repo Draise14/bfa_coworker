@@ -524,27 +524,29 @@ bpy.ops.mesh.primitive_cube_add(size=2.0)
         names = [name for name, _ in issues]
         self.assertNotIn("prim_transform_kwarg", names)
 
-    def test_context_active_object_caught(self):
-        """bpy.context.active_object is flagged (unavailable in bridge thread)."""
+    def test_context_active_object_allowed(self):
+        """bpy.context.active_object is allowed (#101).
+
+        Bridge code that uses bpy runs inline on Blender's main thread, where
+        the context has the window, its scene and active_object -- the old
+        "worker thread" block refused working code.
+        """
         code = """
 import bpy
 bpy.ops.mesh.primitive_cube_add()
 obj = bpy.context.active_object
+print(obj.name)
 """
-        issues = _preflight_check(code)
-        names = [name for name, _ in issues]
-        self.assertIn("context_active_object_thread", names)
+        self.assertEqual(_preflight_check(code), [])
 
-    def test_view_layer_active_not_caught(self):
-        """bpy.context.view_layer.objects.active is NOT flagged."""
+    def test_fcurves_guidance_shows_read_path(self):
         code = """
 import bpy
-bpy.ops.mesh.primitive_cube_add()
-obj = bpy.context.view_layer.objects.active
+for fc in bpy.data.actions[0].fcurves:
+    print(fc)
 """
-        issues = _preflight_check(code)
-        names = [name for name, _ in issues]
-        self.assertNotIn("context_active_object_thread", names)
+        guidance = dict(_preflight_check(code))["wrong_fcurves"]
+        self.assertIn("action_get_channelbag_for_slot", guidance)
 
 
     # ── Tests for checks 24-27: bmesh, vector, update_edit_mesh ──────────

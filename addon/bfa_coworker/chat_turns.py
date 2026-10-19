@@ -15,10 +15,25 @@ old private names.  Free of ``bpy``.
 from __future__ import annotations
 
 __all__ = (
+    "NOTE_TITLES",
     "group_turns",
     "is_system_note_msg",
     "split_turn",
 )
+
+
+# Friendly Workshop titles for injected notes, keyed by ``system_note`` kind
+# (the icon is a Blender icon name; the GPU chat draws its own glyph for it).
+NOTE_TITLES = {
+    "followup": ("Coworker \u2192 itself: keep going", 'FORWARD'),
+    "continue": ("Continued after the output limit", 'TRIA_RIGHT'),
+    "nudge": ("Nudge: act, don't just describe", 'PLAY'),
+    "entity": ("Scene context", 'OUTLINER_OB_MESH'),
+    "scene_change": ("You changed the scene mid-turn", 'VIEW_PAN'),
+    "spiral": ("Repeated-error guidance", 'ERROR'),
+    "malformed": ("Re-emit a broken tool call", 'ERROR'),
+    "wrapup": ("Step budget reached -- progress report", 'TIME'),
+}
 
 
 def is_system_note_msg(msg: dict) -> bool:

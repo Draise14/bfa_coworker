@@ -9,10 +9,13 @@ ui_gpu/chat_view.py, task "GPU 2") with a fixed-width stand-in font.
 1. Markdown: headings, paragraphs, nested bullet / numbered items, quotes,
    fenced code (also unclosed while streaming), hr, tables as aligned rows,
    inline bold / italic / code / links.
-2. Chat view: newest turn at the bottom, scroll clamped to the content,
+2. Icons: every glyph is triangles inside its square; icon buttons.
+3. Chat view: newest turn at the bottom, scroll clamped to the content,
    Workshop collapsed by default and listing failed tools when open, Copy /
    link / jump clicks returned as actions, live text for the running turn,
-   cached heights for finished turns, an empty-chat hint.
+   cached heights for finished turns, an empty-chat hint; icons on your
+   messages, Coworker, finished turns, Workshop, tool rows, notes, code,
+   Copy and headings; heading sizes.
 
 Run with::
 
@@ -36,11 +39,32 @@ def _load():
         pkg = types.ModuleType(name)
         pkg.__path__ = [str(_ADDON)]
         sys.modules[name] = pkg
-    mods = [importlib.import_module(name + ".ui_gpu." + m) for m in ("markdown", "chat_view", "layout", "style")]
+    mods = [importlib.import_module(name + ".ui_gpu." + m)
+            for m in ("markdown", "chat_view", "layout", "style", "icons")]
     return mods
 
 
-md, cv, lay, st = _load()
+md, cv, lay, st, ic = _load()
+
+
+class TestIcons(unittest.TestCase):
+
+    def test_every_icon_is_triangles_inside_its_square(self):
+        rect = lay.Rect(10, 20, 16, 16)
+        for name in sorted(ic.NAMES) + ["NOT_AN_ICON"]:
+            tris = ic.triangles(name, rect)
+            self.assertTrue(tris and len(tris) % 3 == 0, name)
+            for x, y in tris:
+                self.assertTrue(rect.x - 2 <= x <= rect.right + 2 and rect.y - 2 <= y <= rect.top + 2, name)
+
+    def test_icon_buttons(self):
+        c = lay.Canvas(st.Style(), lay.fixed_measure(0.55))
+        c.button(lay.Rect(0, 0, 80, 20), "copy", "Copy", icon="COPYDOWN")
+        kinds = [(cmd.kind, cmd.text) for cmd in c.commands if cmd.kind in ("icon", "text")]
+        self.assertEqual(kinds, [("icon", "COPYDOWN"), ("text", "Copy")])
+        icon = next(cmd for cmd in c.commands if cmd.kind == "icon")
+        text = next(cmd for cmd in c.commands if cmd.kind == "text")
+        self.assertLess(icon.rect.right, text.rect.x + 0.01)          # icon before the label
 
 
 class TestMarkdown(unittest.TestCase):
@@ -102,6 +126,41 @@ class TestChatView(unittest.TestCase):
     def texts(self, canvas):
         return [c for c in canvas.commands if c.kind == "text"]
 
+    def icons(self, canvas):
+        return [c.text for c in canvas.commands if c.kind == "icon"]
+
+    def test_icons_read_before_words(self):
+        c = self.canvas()
+        view = cv.ChatView(agent_icon="GHOST_ENABLED")
+        hist = _history() + [{"role": "assistant", "content": "# Big\n## Mid\n### Small"}]
+        hist[-1]["turn_seconds"] = 75
+        view.draw(c, lay.Rect(0, 0, 600, 2000), hist)
+        names = self.icons(c)
+        self.assertEqual(names.count("USER"), 2)                      # one per message you sent
+        self.assertIn("GHOST_ENABLED", names)                         # the host's agent icon
+        self.assertIn("CHECKMARK", names)                             # finished turn
+        self.assertIn("SCRIPT", names)                                # code block header
+        self.assertIn("COPYDOWN", names)                              # Copy button
+        for marker in ("KEYTYPE_EXTREME_VEC", "KEYTYPE_MOVING_HOLD_VEC", "KEYTYPE_JITTER_VEC"):
+            self.assertIn(marker, names)
+        self.assertIn("Coworker  |  1m 15s", [t.text for t in self.texts(c)])
+        sizes = {cmd.text: cmd.size for cmd in self.texts(c) if cmd.text in ("Big", "Mid", "Small")}
+        body = c.style.font_size
+        self.assertAlmostEqual(sizes["Big"], body * 1.6)
+        self.assertGreater(sizes["Big"], sizes["Mid"])
+        self.assertGreater(sizes["Mid"], sizes["Small"])
+
+    def test_note_titles_and_icons(self):
+        c = self.canvas()
+        view = cv.ChatView()
+        view.expanded.add("t0")
+        hist = [{"role": "user", "content": "go"},
+                {"role": "user", "content": "[System: keep going]", "system_note": "followup"},
+                {"role": "assistant", "content": "ok"}]
+        view.draw(c, lay.Rect(0, 0, 600, 2000), hist)
+        self.assertIn("FORWARD", self.icons(c))
+        self.assertTrue(any(t.text.startswith("Coworker → itself") for t in self.texts(c)))
+
     def test_newest_turn_at_the_bottom(self):
         c = self.canvas()
         cv.ChatView().draw(c, lay.Rect(0, 0, 600, 2000), _history())
@@ -115,14 +174,20 @@ class TestChatView(unittest.TestCase):
         view = cv.ChatView()
         c = self.canvas()
         view.draw(c, lay.Rect(0, 0, 600, 2000), _history())
-        header = [cmd.text for cmd in self.texts(c) if cmd.text.startswith(">")]
+        header = [cmd.text for cmd in self.texts(c) if cmd.text.startswith("Workshop")]
         self.assertTrue(any("2 steps" in h and "1 failed" in h for h in header))
+        self.assertIn("TRIA_RIGHT", self.icons(c))
+        self.assertIn("WARNING", self.icons(c))                     # a step failed: warning, not package
         self.assertFalse(any("NameError" in cmd.text for cmd in self.texts(c)))
         view.expanded.add("t0")
         c2 = self.canvas()
         view.draw(c2, lay.Rect(0, 0, 600, 2000), _history())
         failed = [cmd for cmd in self.texts(c2) if "NameError" in cmd.text]
         self.assertTrue(failed and failed[0].color == cv._ERROR)
+        names = self.icons(c2)
+        names = names[names.index("TRIA_DOWN"):]
+        self.assertEqual([n for n in names if n in ("ERROR", "CHECKMARK", "TRIA_DOWN")][:3],
+                         ["TRIA_DOWN", "ERROR", "CHECKMARK"])          # open arrow, then one icon per tool row
 
     def test_click_actions(self):
         view = cv.ChatView()

@@ -16,6 +16,11 @@ Draws a conversation, in the chat panel's own message shapes (see
   input, ``scroll`` counts pixels up from the bottom (0 = follow the newest),
   and a "jump to newest" button appears when you've scrolled away.
 
+Icons come first, like in the native chat, so a row reads before its words:
+you, Coworker (the add-on's agent icon), a finished turn, the Workshop (a
+warning when a step failed), each tool row, notes, code and Copy, and
+keyframe markers on headings.  See :mod:`.icons`.
+
 The same code draws the full editor and the compact sidebar (``compact``).
 Clicks come back from :meth:`ChatView.draw` as ``(action, value)`` pairs for
 the input layer to carry out: ``("copy", text)``, ``("toggle", turn_key)``,
@@ -28,7 +33,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..chat_turns import group_turns, is_system_note_msg, split_turn
+from ..chat_turns import NOTE_TITLES, group_turns, is_system_note_msg, split_turn
 from .layout import Canvas, InteractionState, Rect
 from .markdown import Block, Span, parse
 from .style import RGBA, Style
@@ -39,7 +44,15 @@ __all__ = (
 )
 
 _ERROR = (0.92, 0.40, 0.33, 1.0)   # failed tool rows (themes have no error colour)
-_HEADING_SCALE = {1: 1.3, 2: 1.18, 3: 1.08}
+# Heading sizes relative to body text, close to Blender 5.3's label_markdown.
+_HEADING_SCALE = {1: 1.6, 2: 1.4, 3: 1.2, 4: 1.05}
+# Heading markers, as in the native chat: keyframe shapes that shrink with the level.
+_HEADING_ICON = {1: "KEYTYPE_EXTREME_VEC", 2: "KEYTYPE_MOVING_HOLD_VEC", 3: "KEYTYPE_JITTER_VEC"}
+
+
+def _duration(seconds: float) -> str:
+    seconds = int(round(seconds))
+    return "{:d}s".format(seconds) if seconds < 60 else "{:d}m {:02d}s".format(seconds // 60, seconds % 60)
 
 
 def message_text(content: Any) -> str:
@@ -66,6 +79,7 @@ class ChatView:
 
     scroll: float = 0.0
     expanded: set[str] = field(default_factory=set)
+    agent_icon: str = "WIZARD"          # the host passes "GHOST_ENABLED" in Blender
     content_height: float = 0.0
     _heights: dict[tuple, float] = field(default_factory=dict)
 
@@ -145,11 +159,14 @@ class ChatView:
         if user is not None:
             indent = 0.0 if compact else style.unit * 2
             text = message_text(user.get("content"))
-            inner_w = width - indent - 2 * pad
+            side, gap = canvas.icon_size(), pad * 0.6
+            inner_w = width - indent - 2 * pad - side - gap
             h = canvas.text_height(text, inner_w) + 2 * pad
             box = Rect(x + indent, top - h, width - indent, h)
             canvas.box(box, colors=style.button, selected=True, outline=False)
-            canvas.wrapped(box.x + pad, box.top - pad, inner_w, text, style.button.text_sel)
+            canvas.icon(self._first_line_icon(canvas, box.x + pad, box.top - pad, style.line_height),
+                        "USER", style.button.text_sel)
+            canvas.wrapped(box.x + pad + side + gap, box.top - pad, inner_w, text, style.button.text_sel)
             top = box.y - pad
         if process:
             top = self._draw_workshop(canvas, process, idx, x, top, width, active, compact, actions) - pad
@@ -160,12 +177,39 @@ class ChatView:
             if streaming:
                 top = self._draw_markdown(canvas, parse(streaming), idx, x, top, width, actions)
             label = "Coworker is {:s}{:s}".format("reading your message" if phase == "reading" else phase, dots)
-            top -= style.line_height
-            canvas.text(x, top + style.line_height * 0.3, label, _soft(style.text))
+            top = self._icon_line(canvas, x, top, self.agent_icon, label, _soft(style.text))
         elif conclusion is not None:
+            seconds = next((m["turn_seconds"] for m in reversed(turn)
+                            if isinstance(m.get("turn_seconds"), (int, float))), None)
+            label = "Coworker" + ("  |  " + _duration(seconds) if seconds is not None and seconds >= 1 else "")
+            row_top = top
+            top = self._icon_line(canvas, x, top, self.agent_icon, label, _soft(style.text, 0.2))
+            done = canvas.icon_size()
+            canvas.icon(self._first_line_icon(canvas, x + width - done, row_top, style.line_height),
+                        "CHECKMARK", _soft(style.text, 0.2))
             top = self._draw_markdown(canvas, parse(message_text(conclusion.get("content"))),
                                       idx, x, top, width, actions)
         return top
+
+    # -- icons -------------------------------------------------------------------------
+    @staticmethod
+    def _first_line_icon(canvas: Canvas, x: float, top: float, line_h: float) -> Rect:
+        """The square for an icon at *x*, centred on the line that starts at *top*."""
+        side = canvas.icon_size()
+        return Rect(x, top - line_h + (line_h - side) / 2, side, side)
+
+    def _icon_line(self, canvas: Canvas, x: float, top: float, icon: str, text: str,
+                   color: RGBA, width: float | None = None, font: str = "ui") -> float:
+        """An icon, then *text* (wrapped to *width* when given); return the new top."""
+        style = canvas.style
+        side, gap = canvas.icon_size(), style.pad * 0.6
+        canvas.icon(self._first_line_icon(canvas, x, top, style.line_height), icon, color)
+        if width is None:
+            top -= style.line_height
+            canvas.text(x + side + gap, top + (style.line_height - style.font_size) / 2 + style.font_size * 0.2,
+                        text, color, font)
+            return top
+        return canvas.wrapped(x + side + gap, top, width - side - gap, text, color, font=font)
 
     def _draw_workshop(self, canvas: Canvas, process: list[dict], idx: int, x: float, top: float,
                        width: float, active: bool, compact: bool,
@@ -182,8 +226,17 @@ class ChatView:
             parts.append("working")
         is_open = key in self.expanded
         header = Rect(x, top - style.unit, width, style.unit)
-        if canvas.button(header, "ws:" + key, ("v  " if is_open else ">  ") + "  |  ".join(parts), align="left"):
+        if canvas.button(header, "ws:" + key, "", align="left"):
             actions.append(("toggle", key))
+        side, gap = canvas.icon_size(), style.pad * 0.4
+        iy = header.y + (header.h - side) / 2
+        text_color = style.button.text
+        canvas.icon(Rect(header.x + style.pad * 0.5, iy, side, side), "TRIA_DOWN" if is_open else "TRIA_RIGHT",
+                    _soft(text_color, 0.3))
+        canvas.icon(Rect(header.x + style.pad * 0.5 + side + gap, iy, side, side),
+                    "WARNING" if failed else "PACKAGE", _ERROR if failed else text_color)
+        canvas.label(Rect(header.x + style.pad * 0.5 + 2 * (side + gap), header.y, header.w, header.h),
+                     "  |  ".join(parts), text_color)
         top = header.y
         if not is_open:
             return top
@@ -193,18 +246,20 @@ class ChatView:
             if role == "tool":
                 bad = _tool_failed(msg)
                 first = " ".join(text.split())[:200]   # one-line preview (JSON spans lines)
-                line = "{:s}  {:s}  {:s}".format("x" if bad else "ok", str(msg.get("name", "tool")), first)
-                top = canvas.wrapped(x + pad, top - pad * 0.5, width - 2 * pad, line,
-                                     _ERROR if bad else style.text, font="mono")
+                line = "{:s}  {:s}".format(str(msg.get("name", "tool")), first)
+                top = self._icon_line(canvas, x + pad, top - pad * 0.5, "ERROR" if bad else "CHECKMARK", line,
+                                      _ERROR if bad else style.text, width - 2 * pad, font="mono")
             elif role == "reasoning":
                 label = str(msg.get("label") or "Thinking")
                 body = " ".join(text.split())[:400]
-                top = canvas.wrapped(x + pad, top - pad * 0.5, width - 2 * pad,
-                                     "{:s}: {:s}".format(label, body), _soft(style.text))
+                top = self._icon_line(canvas, x + pad, top - pad * 0.5, self.agent_icon,
+                                      "{:s}: {:s}".format(label, body), _soft(style.text), width - 2 * pad)
             elif is_system_note_msg(msg):
                 body = text[len("[System:"):-1].strip() if text.startswith("[System:") and text.endswith("]") else text
-                top = canvas.wrapped(x + pad, top - pad * 0.5, width - 2 * pad,
-                                     "Note: " + " ".join(body.split())[:300], _soft(style.text, 0.5))
+                title, icon = NOTE_TITLES.get(str(msg.get("system_note") or ""), ("Note", "INFO"))
+                top = self._icon_line(canvas, x + pad, top - pad * 0.5, icon,
+                                      "{:s}: {:s}".format(title, " ".join(body.split())[:300]),
+                                      _soft(style.text, 0.5), width - 2 * pad)
         return top
 
     # -- markdown --------------------------------------------------------------------
@@ -226,11 +281,15 @@ class ChatView:
                 canvas.box(box, colors=style.text_field)
                 if block.kind == "code":
                     strip = Rect(box.x, box.top - head, box.w, head)
-                    canvas.label(strip.inset(pad, 0), block.lang or "code", _soft(style.text_field.text, 0.4))
-                    bw = style.unit * 3.2
+                    soft = _soft(style.text_field.text, 0.4)
+                    side = canvas.icon_size()
+                    canvas.icon(Rect(strip.x + pad, strip.y + (head - side) / 2, side, side), "SCRIPT", soft)
+                    canvas.label(Rect(strip.x + pad + side + pad * 0.5, strip.y, strip.w, head),
+                                 block.lang or "code", soft)
+                    bw = style.unit * 3.6
                     copy = Rect(box.right - bw - pad * 0.5, strip.y + (head - style.unit * 0.9) / 2,
                                 bw, style.unit * 0.9)
-                    if canvas.button(copy, "copy:{:d}:{:d}".format(idx, code_n), "Copy"):
+                    if canvas.button(copy, "copy:{:d}:{:d}".format(idx, code_n), "Copy", icon="COPYDOWN"):
                         actions.append(("copy", text))
                     code_n += 1
                 canvas.wrapped(box.x + pad, box.top - head - pad, inner_w, text, style.text_field.text,
@@ -242,11 +301,16 @@ class ChatView:
                 top -= pad
             elif block.kind == "heading":
                 size = style.font_size * _HEADING_SCALE.get(block.level, 1.0)
-                top = self._flow(canvas, block.spans, x, top - pad * 0.5, width, actions,
-                                 size=size, bold=True, color=style.title)
+                top -= pad * (1.2 if block.level <= 2 else 0.8)
+                icon = _HEADING_ICON.get(block.level, "KEYTYPE_BREAKDOWN_VEC")
+                side = size * 0.8
+                canvas.icon(Rect(x, top - size * 1.45 + (size * 1.45 - side) / 2, side, side), icon,
+                            _soft(style.title, 0.25))
+                top = self._flow(canvas, block.spans, x + side + pad * 0.6, top, width - side - pad * 0.6,
+                                 actions, size=size, bold=True, color=style.title) - pad * 0.4
             elif block.kind == "item":
                 indent = style.unit * (0.6 + block.level)
-                marker = "*" if block.marker == "-" else block.marker
+                marker = ("•" if block.level == 0 else "◦") if block.marker == "-" else block.marker
                 canvas.text(x + indent - style.unit * 0.5, top - style.line_height + style.line_height * 0.3,
                             marker, style.text)
                 top = self._flow(canvas, block.spans, x + indent, top, width - indent, actions)
@@ -295,7 +359,8 @@ class ChatView:
             cx = x
             for token, span, w in line:
                 if span.style == "code":
-                    canvas.fill(Rect(cx - 1, top + line_h * 0.12, w + 2, line_h * 0.76), style.text_field.inner, 2.0)
+                    canvas.fill(Rect(cx - 2, top + line_h * 0.1, w + 4, line_h * 0.8), style.text_field.inner,
+                                line_h * 0.3)
                     canvas.text(cx, baseline, token, style.text_field.text, font="mono", size=size)
                 elif span.style == "link":
                     canvas.text(cx, baseline, token, style.link, size=size, bold=bold)

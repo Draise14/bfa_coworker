@@ -12,6 +12,7 @@ task "GPU 1").  The only part of ``ui_gpu`` that needs a GPU context: call
 * Text uses the UI font (font id 0) or Bforartists' bundled DejaVuSansMono
   for code.  ``blf`` has no font-weight control, so bold is drawn twice with
   a small offset.
+* Icons are flat triangles from :mod:`.icons`, in the colour they're given.
 * Clipping uses the GPU scissor, which also clips text.
 """
 
@@ -25,6 +26,7 @@ import blf  # pylint: disable=import-error
 import gpu  # pylint: disable=import-error
 from gpu_extras.batch import batch_for_shader  # pylint: disable=import-error
 
+from .icons import triangles as _icon_triangles
 from .layout import DrawCmd, Rect
 
 __all__ = (
@@ -109,6 +111,18 @@ def _stroke(rect: Rect, color: tuple, radius: float, width: float = 1.0) -> None
     batch.draw(shader)
 
 
+def _icon(cmd: DrawCmd) -> None:
+    assert cmd.rect is not None
+    tris = _icon_triangles(cmd.text, cmd.rect)
+    if not tris:
+        return
+    shader = _shader("UNIFORM_COLOR")
+    batch = batch_for_shader(shader, "TRIS", {"pos": tris})
+    shader.bind()
+    shader.uniform_float("color", cmd.color)
+    batch.draw(shader)
+
+
 def _text(cmd: DrawCmd) -> None:
     fid = font_id(cmd.font)
     blf.size(fid, cmd.size)
@@ -133,6 +147,8 @@ def render(commands: list[DrawCmd]) -> None:
                 _stroke(cmd.rect, cmd.color, cmd.radius)
             elif cmd.kind == "text":
                 _text(cmd)
+            elif cmd.kind == "icon" and cmd.rect is not None:
+                _icon(cmd)
             elif cmd.kind == "clip" and cmd.rect is not None:
                 r = cmd.rect
                 gpu.state.scissor_test_set(True)

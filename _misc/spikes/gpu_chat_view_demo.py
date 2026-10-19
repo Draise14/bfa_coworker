@@ -66,11 +66,12 @@ def _conversation():
         {"role": "user", "content": "Make a low-poly campfire on a ground plane."},
         {"role": "tool", "name": "execute_blender_code", "content": "{\"status\": \"ok\", \"result\": {\"logs\": 5}}"},
         {"role": "assistant", "content": (
-            "## Campfire ready\n\nI added a **ground plane**, five *slightly rotated* logs and a warm "
-            "light. You can tune the light with this:\n\n"
+            "# Campfire ready\n\n## What I added\n\nI added a **ground plane**, five *slightly rotated* "
+            "logs and a warm light.\n\n### Tune the light\n\nUse `light.energy` and the colour:\n\n"
             "```python\nlight = bpy.data.lights[\"Fire\"]\nlight.energy = 800\nlight.color = (1.0, 0.55, 0.2)\n```\n\n"
             "| Object | Count |\n|---|---|\n| Log | 5 |\n| Light | 1 |\n\n"
-            "- Next: add embers\n- Or: render a preview with `render_viewport_to_path`")},
+            "- Next: add embers\n- Or: render a preview with `render_viewport_to_path`"),
+         "turn_seconds": 42},
         {"role": "user", "content": "Great. Now make the logs a bit darker."},
     ]
     state.is_thinking = True

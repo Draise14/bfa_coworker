@@ -593,8 +593,61 @@ class _CoworkerPanel:
         return _is_coworker(context)
 
 
+# The toolshelf snaps like Bforartists' tabbed toolshelves: 1 / 2 / 3 columns of
+# icon buttons as it widens, then icon + text.  Bforartists' own helpers
+# (bl_ui.space_toolsystem_common) are used when present; Blender gets the same
+# logic here.
+_SEPARATOR = object()
+
+
+def _column_count(region: Any) -> int:
+    """1-3 icon columns, or 4 = wide enough for text (Bforartists' thresholds)."""
+    try:
+        from bl_ui.space_toolsystem_common import toolsystem_column_count  # pylint: disable=import-error
+        return toolsystem_column_count(region)
+    except ImportError:
+        pass
+    view2d = region.view2d
+    scale = view2d.region_to_view(1.0, 0.0)[0] - view2d.region_to_view(0.0, 0.0)[0]
+    width = region.width * scale / bpy.context.preferences.system.ui_scale
+    return 4 if width > 200.0 else 3 if width > 160.0 else 2 if width > 120.0 else 1
+
+
+def _draw_tool_entries(layout: Any, context: Any, entries: list) -> None:
+    """*entries*: (operator, text, icon, props) tuples or _SEPARATOR."""
+    columns = _column_count(context.region)
+    if columns == 4:                                 # wide: big buttons with text
+        col = layout.column(align=True)
+        col.scale_y = 2.0
+        for entry in entries:
+            if entry is _SEPARATOR:
+                col.separator(factor=0.5)
+                continue
+            operator, text, icon, props = entry
+            op = col.operator(operator, text=text, icon=icon)
+            for key, value in props.items():
+                setattr(op, key, value)
+        return
+    col = layout.column(align=True)                  # narrow: rows of square icons
+    row, index = None, 0
+    for entry in entries:
+        if entry is _SEPARATOR:
+            col = layout.column(align=True)
+            row, index = None, 0
+            continue
+        if index == 0:
+            row = col.row(align=True)
+            row.scale_x = row.scale_y = 2.0
+            row.alignment = "LEFT"
+        operator, text, icon, props = entry
+        op = row.operator(operator, text="", icon=icon)
+        for key, value in props.items():
+            setattr(op, key, value)
+        index = (index + 1) % columns
+
+
 class BFACW_PT_editor_tools(_CoworkerPanel, bpy.types.Panel):
-    """Coworker actions as icon buttons (the toolshelf is a narrow strip)"""
+    """Coworker actions; icons that snap into columns, with text when the shelf is wide"""
 
     bl_label = "Coworker"
     bl_idname = "BFACW_PT_editor_tools"
@@ -602,21 +655,24 @@ class BFACW_PT_editor_tools(_CoworkerPanel, bpy.types.Panel):
     bl_options = {"HIDE_HEADER"}
 
     def draw(self, context):
-        col = self.layout.column(align=True)
-        col.scale_y = 1.4
         state = agent_controller._agent_state
-        col.operator("bfacw.chat_clear", text="", icon="ADD")
-        col.operator("bfacw.mention_search", text="", icon="OUTLINER_OB_MESH")
-        col.separator()
-        col.operator("bfacw.chat_capture_render", text="", icon="RENDER_STILL")
-        col.operator("bfacw.chat_capture_screen", text="", icon="FULLSCREEN_ENTER")
-        col.operator("bfacw.editor_thumbs", text="", icon="IMAGE_DATA").size = "NEXT"
-        col.separator()
+        entries = [
+            ("bfacw.chat_clear", "New Thread", "ADD", {}),
+            ("bfacw.mention_search", "@ Mention", "OUTLINER_OB_MESH", {}),
+            _SEPARATOR,
+            ("bfacw.chat_capture_render", "Attach Render", "RENDER_STILL", {}),
+            ("bfacw.chat_capture_screen", "Attach Screen", "FULLSCREEN_ENTER", {}),
+            ("bfacw.editor_thumbs", "Thumbnail Size", "IMAGE_DATA", {"size": "NEXT"}),
+            _SEPARATOR,
+        ]
         if state.is_thinking:
-            col.operator("bfacw.chat_stop", text="", icon="PAUSE")
-        col.operator("bfacw.plan_open", text="", icon="CHECKBOX_HLT")
-        col.operator("bfacw.edit_rules", text="", icon="TEXT")
-        col.operator("bfacw.copy_session_log", text="", icon="COPYDOWN")
+            entries.append(("bfacw.chat_stop", "Stop", "PAUSE", {}))
+        entries += [
+            ("bfacw.plan_open", "Goal & Plan", "CHECKBOX_HLT", {}),
+            ("bfacw.edit_rules", "Project Rules", "TEXT", {}),
+            ("bfacw.copy_session_log", "Copy Session Log", "COPYDOWN", {}),
+        ]
+        _draw_tool_entries(self.layout, context, entries)
 
 
 class BFACW_PT_editor_chat(_CoworkerPanel, bpy.types.Panel):

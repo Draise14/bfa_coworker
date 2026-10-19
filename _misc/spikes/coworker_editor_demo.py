@@ -121,6 +121,19 @@ def _type(text, x, y):
         _sim(etype, "RELEASE", x=x, y=y, **kw)
 
 
+def _drag_tools(width):
+    """Drag the Coworker editor's toolshelf edge so the shelf is *width* pixels wide."""
+    region = _region(_editor_area(), "TOOLS")
+    y = int(region.y + region.height * 0.6)
+    edge = int(region.x + region.width)
+    for dx in (-12, -6, -2, 0):                   # hover in, so Blender sees the resize zone
+        _sim("MOUSEMOVE", "NOTHING", x=edge + dx, y=y)
+    _sim("LEFTMOUSE", "PRESS", x=edge, y=y)
+    for step in range(1, 9):
+        _sim("MOUSEMOVE", "NOTHING", x=int(edge + (region.x + width - edge) * step / 8), y=y)
+    _sim("LEFTMOUSE", "RELEASE", x=int(region.x + width), y=y)
+
+
 def _save():
     with open(os.path.join(OUT_DIR, "results.json"), "w", encoding="utf-8") as fh:
         json.dump(RESULT, fh, indent=2)
@@ -132,7 +145,7 @@ CTX = {}
 
 def _tick():
     step = _STEP["n"]
-    _STEP["n"] += 1
+    _STEP["n"] = {6: 61, 61: 62}.get(step, step + 1)
     try:
         if step == 0:
             CTX["addon"] = _enable()
@@ -239,8 +252,20 @@ def _tick():
             _shoot("3_external_harness")
             prefs = bpy.context.preferences.addons["bfa_coworker"].preferences
             prefs.operating_mode = CTX["mode"]
+            RESULT["toolshelf_width_start"] = _region(_editor_area(), "TOOLS").width
+            _drag_tools(150)                          # two icon columns
+            return 1.0
+        if step == 61:
+            RESULT["toolshelf_width_two_columns"] = _region(_editor_area(), "TOOLS").width
+            _shoot("5_toolshelf_two_columns")
+            _drag_tools(260)                          # wide: icon + text
+            return 1.0
+        if step == 62:
+            RESULT["toolshelf_width_text"] = _region(_editor_area(), "TOOLS").width
+            _shoot("6_toolshelf_text")
             # A normal node editor must look like itself.
             _editor_area().ui_type = "ShaderNodeTree"
+            _STEP["n"] = 7
             return 1.0
         if step == 7:
             _shoot("4_shader_editor_untouched")

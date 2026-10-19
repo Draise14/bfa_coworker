@@ -1,5 +1,5 @@
 """
-Tests for the template system in addon/bfa_coworker/blender_templates.py.
+Tests for the template system in mcp/blmcp/templates.py.
 
 Covers:
 - All 18 registered templates render valid Python (compile() passes).
@@ -19,12 +19,12 @@ import types
 import unittest
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_ADDON_DIR = os.path.join(_REPO, "addon")
+_MCP_DIR = os.path.join(_REPO, "mcp")
 
 
 def _load_templates():
-    """Load blender_templates.py standalone (the package __init__ needs bpy)."""
-    src_path = os.path.join(_ADDON_DIR, "bfa_coworker", "blender_templates.py")
+    """Load blmcp/templates.py standalone (no MCP dependencies needed)."""
+    src_path = os.path.join(_MCP_DIR, "blmcp", "templates.py")
     with open(src_path, "r", encoding="utf-8") as fh:
         source = fh.read()
     mod = types.ModuleType("templates_under_test")

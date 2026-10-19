@@ -2477,7 +2477,6 @@ addon/bfa_coworker/
 ├── gen_controller.py        # Generative AI controller
 ├── autofix.py               # Automatic code-fix helpers for failed tool code
 ├── asset_selftests.py       # Deterministic asset-tool self-tests (no LLM)
-├── blender_templates.py     # Blender text-datablock templates
 ├── gen_plugins/             # Generative plugin system
 │   ├── __init__.py          # Plugin auto-discovery & registry
 │   ├── base.py              # GenPlugin base class

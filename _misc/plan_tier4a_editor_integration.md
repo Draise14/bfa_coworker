@@ -4,6 +4,8 @@
 **Status**: Implementation Plan — Fusion (GPU Takeover + Hybrid, BOTH)
 **Depends on**: Tier 1-3 features (chat UI, agent controller, MCP tools)
 
+> **Decision 2026-10-19 (spike done, `_misc/spikes/coworker_editor/DECISION.md`)**: the Coworker editor is a **custom node-tree editor type "Coworker"**: its own Editor Type menu entry and icon, chat in native sidebar panels, header hidden. The Preferences-editor clone was tried and rejected, because Blender's own Preferences panels draw in the same center. The audit note below is kept as history.
+>
 > **Audit 2026-10-16 (task board lane A)**: **spike A0 before any build.** The
 > "clone the Preferences editor" center rests on panels with a custom
 > `bl_context="chat"`. The Preferences main region lays out panels filtered by the

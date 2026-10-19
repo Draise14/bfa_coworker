@@ -145,7 +145,7 @@ Plan: `plan_tier4a_editor_integration.md`
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
-| ☐ | **Editors 1**: Coworker editor spike | A0 | Three throwaway prototypes. Your preference order: (1) Preferences-editor clone with Python panels in the center, if it can't leak into your real Preferences; (2) Text / Node editor clone with the chat in native panels; a custom node-tree type gets its own Editor Type entry; (3) GPU drawing last | — | S | Screenshots + recommendation on #26 | |
+| ☑ | **Editors 1**: Coworker editor spike | A0 | Three throwaway prototypes. Your preference order: (1) Preferences-editor clone with Python panels in the center, if it can't leak into your real Preferences; (2) Text / Node editor clone with the chat in native panels; a custom node-tree type gets its own Editor Type entry; (3) GPU drawing last | — | S | Screenshots + recommendation on #26 | |
 | ☐ | **Editors 2**: One chat component | A1 | `draw_chat_interface()` that every panel uses | Engine 4 | M | Existing panels use it; no visual change | |
 | ☐ | **Editors 3**: Chat in every sidebar | A2 | Node, VSE, Image, Graph… sidebars + per-editor quick prompts | Editors 2 | S | Chat in five more editors | |
 | ☐ | **Editors 4**: The Coworker editor | A3 | Build the spike's winner + a setup button | Editors 1, 2 | M | One click turns an area into the Coworker editor | |

@@ -72,6 +72,7 @@ per finished task**.
 |---|---|---|---|---|
 | **1** | **H + I — External Agent (ACP) + engine parity** | `plan_tier4h_external_agent_acp.md`, `plan_tier4i_engine_parity.md` | User priority; largest UX gap; the seam every later UI lane builds on | Now (4h.0 spike) |
 | **2** | **G — Domain tooling** (VSE, Text, Node, Save, review sheets) | `plan_tier4g_domain_tooling.md` (+ 4e.3 Save) | Independent of UI; immediately helps all three engines | Now, in parallel with lane 1 |
+| **2b** | **S — Skills uplift, clean room** | `plan_tier4s_skills_cleanroom.md` | S0/S1 are live-confirmed bugs (templates broken in every mode; compositor read broken on 5.x) -- fix in 1.1.39, before the T0 baseline; S3–S5 feed F2 and B7 | Now |
 | **3** | **B — Chat UX** (explain, ask_user, revert, sessions, context chip, run/fix) | `plan_tier4b_competitor_ux_analysis.md` | Visible wins; B2/B4 depend on 4i.1/4i.5 | B0/B1/B6 now; B2+ after 4i.1 |
 | **4** | **F — Agent runtime** (permissions, doom-loop, on-demand skills, metrics) | `plan_tier4f_agent_intelligence.md` | Permissions feed the shared approval row; skills cut local tokens | After 4i.3 (F1); F2/F3 anytime |
 | **5** | **C — Text Editor IDE** | `plan_tier4c_text_editor_ide_agent.md` | Needs 4g.2 text tools + B5 run/fix | After G2 |

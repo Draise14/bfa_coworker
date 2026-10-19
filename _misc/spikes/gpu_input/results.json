@@ -1,0 +1,19 @@
+{
+  "event_simulate": true,
+  "operator_running": true,
+  "focused_by_click": true,
+  "suggestions": [
+    "Camera"
+  ],
+  "text_before_send": "move @Camera up\nand fire",
+  "sent": [
+    "move @Camera up\nand fire"
+  ],
+  "box_empty_after_send": true,
+  "clipboard": "hello",
+  "blurred_by_esc": true,
+  "keys_ignored_when_not_focused": true,
+  "operator_restarted_after_file_load": true,
+  "typing_after_file_load": "after load",
+  "unregistered": true
+}

@@ -74,6 +74,14 @@ class TestEventBus(unittest.TestCase):
             ("text", "t2", "other turn"),
         ])
 
+    def test_segments_are_not_merged(self):
+        bus = eng.EventBus()
+        bus.emit("text", "t1", delta="I'll add", segment="m1")
+        bus.emit("text", "t1", delta=" a cube.", segment="m1")
+        bus.emit("text", "t1", delta="Done.", segment="m2")
+        self.assertEqual([(e.data["segment"], e.data["delta"]) for e in bus.drain()],
+                         [("m1", "I'll add a cube."), ("m2", "Done.")])
+
     def test_max_events_leaves_rest_queued(self):
         bus = eng.EventBus()
         for i in range(5):
@@ -141,6 +149,16 @@ class TestTurnRecord(unittest.TestCase):
         self.assertEqual(rec.text, "Added a cube.")
         self.assertTrue(rec.finished)
         self.assertEqual(rec.status, "")
+
+    def test_text_segments(self):
+        rec = self._fold([
+            ("text", {"delta": "I'll add a cube.", "segment": "m1"}),
+            ("tool_start", {"tool_id": "c1", "name": "execute_blender_code"}),
+            ("text", {"delta": "Done: ", "segment": "m2"}),
+            ("text", {"delta": "cube added.", "segment": "m2"}),
+        ])
+        self.assertEqual(rec.last_text, "Done: cube added.")
+        self.assertEqual(rec.text, "I'll add a cube.\n\nDone: cube added.")
 
     def test_tool_rows_and_final_status_sticks(self):
         rec = self._fold([

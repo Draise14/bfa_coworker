@@ -50,8 +50,10 @@ __all__ = (
 # Every kind an engine may emit.  ``data`` keys per kind:
 #   turn_start   text (the user's request), mode
 #   status       text (one line, e.g. "Reading your message...")
-#   text         delta (reply text to append)
-#   thought      delta (reasoning text to append)
+#   text         delta (reply text to append), segment? (message id)
+#   thought      delta (reasoning text to append), segment?
+#                A turn can hold several assistant messages (preamble, tool
+#                round, final reply); each has its own *segment* id.
 #   tool_start   tool_id, name, title, args
 #   tool_update  tool_id, status ("pending"|"in_progress"), title?, args?, result?
 #   tool_end     tool_id, status ("completed"|"failed"), result?, error?
@@ -190,7 +192,8 @@ def _merge_stream_chunks(events: Iterable[AgentEvent]) -> list[AgentEvent]:
     for event in events:
         prev = out[-1] if out else None
         if (prev is not None and event.kind in _STREAM_KINDS and prev.kind == event.kind
-                and prev.turn_id == event.turn_id):
+                and prev.turn_id == event.turn_id
+                and prev.data.get("segment", "") == event.data.get("segment", "")):
             merged = dict(prev.data)
             merged["delta"] = str(prev.data.get("delta", "")) + str(event.data.get("delta", ""))
             out[-1] = AgentEvent(prev.kind, prev.turn_id, merged, prev.seq)
@@ -219,7 +222,8 @@ class TurnRecord:
     turn_id: str
     request: str = ""
     status: str = ""
-    text: str = ""
+    # Ordered (segment id, text) pairs: one per assistant message of the turn.
+    text_segments: list[list[str]] = field(default_factory=list)
     thought: str = ""
     tools: list[ToolRow] = field(default_factory=list)
     plan: list[dict[str, str]] = field(default_factory=list)
@@ -232,6 +236,25 @@ class TurnRecord:
     @property
     def finished(self) -> bool:
         return bool(self.stop_reason)
+
+    @property
+    def text(self) -> str:
+        """All reply text of the turn, one paragraph per message."""
+        return "\n\n".join(t for _, t in self.text_segments if t)
+
+    @property
+    def last_text(self) -> str:
+        """The most recent message's text (the final reply once finished)."""
+        for _, text in reversed(self.text_segments):
+            if text:
+                return text
+        return ""
+
+    def _append_text(self, segment: str, delta: str) -> None:
+        if self.text_segments and self.text_segments[-1][0] == segment:
+            self.text_segments[-1][1] += delta
+        else:
+            self.text_segments.append([segment, delta])
 
     def _tool(self, tool_id: str) -> ToolRow:
         for row in self.tools:
@@ -251,7 +274,7 @@ class TurnRecord:
         elif kind == "status":
             self.status = str(data.get("text", ""))
         elif kind == "text":
-            self.text += str(data.get("delta", ""))
+            self._append_text(str(data.get("segment", "")), str(data.get("delta", "")))
         elif kind == "thought":
             self.thought += str(data.get("delta", ""))
         elif kind in ("tool_start", "tool_update", "tool_end"):

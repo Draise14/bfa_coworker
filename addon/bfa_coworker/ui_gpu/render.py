@@ -12,7 +12,9 @@ task "GPU 1").  The only part of ``ui_gpu`` that needs a GPU context: call
 * Text uses the UI font (font id 0) or Bforartists' bundled DejaVuSansMono
   for code.  ``blf`` has no font-weight control, so bold is drawn twice with
   a small offset.
-* Icons are flat triangles from :mod:`.icons`, in the colour they're given.
+* Icons are the full-colour Bforartists PNGs from :mod:`.icons` as textures
+  (read with :mod:`.png`, never through ``bpy.data``), dimmed only by the
+  command's alpha; names without an image are flat triangles in its colour.
 * Clipping uses the GPU scissor, which also clips text.
 """
 
@@ -26,8 +28,10 @@ import blf  # pylint: disable=import-error
 import gpu  # pylint: disable=import-error
 from gpu_extras.batch import batch_for_shader  # pylint: disable=import-error
 
+from .icons import image_path as _icon_image_path
 from .icons import triangles as _icon_triangles
 from .layout import DrawCmd, Rect
+from .png import read_rgba
 
 __all__ = (
     "font_id",
@@ -37,6 +41,7 @@ __all__ = (
 
 _FONTS: dict[str, int] = {"ui": 0}
 _SHADERS: dict[str, Any] = {}
+_TEXTURES: dict[str, Any] = {}     # PNG path -> GPUTexture (None when it can't be read)
 _CORNER_STEPS = 6
 
 
@@ -111,8 +116,45 @@ def _stroke(rect: Rect, color: tuple, radius: float, width: float = 1.0) -> None
     batch.draw(shader)
 
 
+def _texture(path: str) -> Any:
+    if path in _TEXTURES:
+        return _TEXTURES[path]
+    texture = None
+    try:
+        with open(path, "rb") as fh:
+            width, height, rgba = read_rgba(fh.read())
+        row = width * 4   # PNG rows run top-down, GPU textures bottom-up
+        flipped = b"".join(rgba[(height - 1 - y) * row:(height - y) * row] for y in range(height))
+        buffer = gpu.types.Buffer("FLOAT", width * height * 4, [b / 255.0 for b in flipped])
+        texture = gpu.types.GPUTexture((width, height), format="RGBA8", data=buffer)
+    except (OSError, ValueError):
+        texture = None
+    _TEXTURES[path] = texture
+    return texture
+
+
+def _image(rect: Rect, texture: Any, alpha: float) -> None:
+    # Whole pixels keep small icons crisp.
+    x, y = round(rect.x), round(rect.y)
+    r, t = x + round(rect.w), y + round(rect.h)
+    shader = _shader("IMAGE_COLOR")
+    batch = batch_for_shader(shader, "TRIS", {
+        "pos": [(x, y), (r, y), (r, t), (x, y), (r, t), (x, t)],
+        "texCoord": [(0, 0), (1, 0), (1, 1), (0, 0), (1, 1), (0, 1)],
+    })
+    shader.bind()
+    shader.uniform_sampler("image", texture)
+    shader.uniform_float("color", (1.0, 1.0, 1.0, alpha))
+    batch.draw(shader)
+
+
 def _icon(cmd: DrawCmd) -> None:
     assert cmd.rect is not None
+    path = _icon_image_path(cmd.text, cmd.rect.w)
+    texture = _texture(path) if path else None
+    if texture is not None:
+        _image(cmd.rect, texture, cmd.color[3])
+        return
     tris = _icon_triangles(cmd.text, cmd.rect)
     if not tris:
         return

@@ -19,7 +19,7 @@ Draws a conversation, in the chat panel's own message shapes (see
 Icons come first, like in the native chat, so a row reads before its words:
 you, Coworker (the add-on's agent icon), a finished turn, the Workshop (a
 warning when a step failed), each tool row, notes, code and Copy, and
-keyframe markers on headings.  See :mod:`.icons`.
+keyframe markers on headings -- full-colour Bforartists icons, see :mod:`.icons`.
 
 The same code draws the full editor and the compact sidebar (``compact``).
 Clicks come back from :meth:`ChatView.draw` as ``(action, value)`` pairs for
@@ -304,8 +304,12 @@ class ChatView:
                 top -= pad * (1.2 if block.level <= 2 else 0.8)
                 icon = _HEADING_ICON.get(block.level, "KEYTYPE_BREAKDOWN_VEC")
                 side = size * 0.8
-                canvas.icon(Rect(x, top - size * 1.45 + (size * 1.45 - side) / 2, side, side), icon,
-                            _soft(style.title, 0.25))
+                # Keyframe colours with their dark border, like the Dope Sheet.
+                mark = Rect(x, top - size * 1.45 + (size * 1.45 - side) / 2, side, side)
+                edge = max(1.0, style.scale * 1.5)
+                canvas.icon(Rect(mark.x - edge, mark.y - edge, side + 2 * edge, side + 2 * edge), icon,
+                            style.keyframe_border)
+                canvas.icon(mark, icon, style.keyframes[min(block.level, 4) - 1])
                 top = self._flow(canvas, block.spans, x + side + pad * 0.6, top, width - side - pad * 0.6,
                                  actions, size=size, bold=True, color=style.title) - pad * 0.4
             elif block.kind == "item":

@@ -93,6 +93,11 @@ class Style:
     tooltip: WidgetColors = _DARK_TOOLTIP
     cursor: RGBA = (0.27, 0.6, 1.0, 1.0)          # text cursor
     link: RGBA = (0.4, 0.7, 1.0, 1.0)             # hyperlinks
+    # Keyframe colours (extreme, moving hold, jitter, breakdown) and their border:
+    # heading markers use them, like the native chat's keyframe icons.
+    keyframes: tuple[RGBA, RGBA, RGBA, RGBA] = (
+        (0.79, 0.47, 0.41, 1.0), (0.62, 0.59, 0.58, 1.0), (0.41, 0.60, 0.34, 1.0), (0.36, 0.55, 0.66, 1.0))
+    keyframe_border: RGBA = (0.0, 0.0, 0.0, 1.0)
     font_points: float = 11.0                     # UI style "widget" points
     ui_scale: float = 1.0                         # Blender's UI scale x pixel size
     zoom: float = 1.0                             # the chat's own zoom (Ctrl+wheel)
@@ -140,6 +145,19 @@ def style_from_preferences(prefs: Any, zoom: float = 1.0) -> Style:
     scale = float(getattr(system, "ui_scale", 0.0) or 0.0)
     if scale <= 0.0:  # 0 in background mode (no window)
         scale = float(getattr(view, "ui_scale", 1.0) or 1.0) * float(getattr(system, "pixel_size", 1.0) or 1.0)
+    keyframes = base.keyframes
+    try:
+        anim = prefs.themes[0].common.anim
+        keyframes = tuple(_rgba(getattr(anim, "keyframe_" + kind, None), fallback)
+                          for kind, fallback in zip(("extreme", "moving_hold", "jitter", "breakdown"),
+                                                    base.keyframes))
+    except (AttributeError, IndexError, TypeError):
+        pass
+    border = base.keyframe_border
+    try:
+        border = _rgba(prefs.themes[0].dopesheet_editor.keyframe_border, base.keyframe_border)
+    except (AttributeError, IndexError, TypeError):
+        pass
     points = base.font_points
     try:
         points = float(prefs.ui_styles[0].widget.points)
@@ -158,6 +176,8 @@ def style_from_preferences(prefs: Any, zoom: float = 1.0) -> Style:
         tooltip=WidgetColors.read(getattr(ui, "wcol_tooltip", None), base.tooltip),
         cursor=_rgba(getattr(ui, "widget_text_cursor", None), base.cursor),
         link=_rgba(getattr(ui, "link", None), base.link),
+        keyframes=keyframes,  # type: ignore[arg-type]
+        keyframe_border=border,
         font_points=points,
         ui_scale=scale,
         zoom=max(0.5, min(3.0, zoom)),

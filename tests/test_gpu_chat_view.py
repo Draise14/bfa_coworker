@@ -25,9 +25,11 @@ Run with::
 __all__ = ()
 
 import importlib
+import struct
 import sys
 import types
 import unittest
+import zlib
 from pathlib import Path
 
 _ADDON = Path(__file__).resolve().parents[1] / "addon" / "bfa_coworker"
@@ -40,14 +42,57 @@ def _load():
         pkg.__path__ = [str(_ADDON)]
         sys.modules[name] = pkg
     mods = [importlib.import_module(name + ".ui_gpu." + m)
-            for m in ("markdown", "chat_view", "layout", "style", "icons")]
+            for m in ("markdown", "chat_view", "layout", "style", "icons", "png")]
     return mods
 
 
-md, cv, lay, st, ic = _load()
+md, cv, lay, st, ic, png = _load()
+
+
+def _png(width, height, channels, rows):
+    """Encode *rows* (bytes per row) as a PNG, each row with its own filter byte first."""
+    ctype = {4: 6, 3: 2, 1: 0}[channels]
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, ctype, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(b"".join(rows)))
+            + chunk(b"IEND", b""))
 
 
 class TestIcons(unittest.TestCase):
+
+    def test_bforartists_images_exist_for_every_image_icon(self):
+        for name in ic.IMAGE_ICONS:
+            small, big = ic.image_path(name, 14), ic.image_path(name, 40)
+            self.assertTrue(small and small.endswith(name.lower() + "_16.png"), name)
+            self.assertTrue(big and big.endswith(name.lower() + "_48.png"), name)
+            w, h, rgba = png.read_rgba(Path(small).read_bytes())
+            self.assertEqual((w, h, len(rgba)), (16, 16, 16 * 16 * 4))
+        self.assertIsNone(ic.image_path("KEYTYPE_EXTREME_VEC", 16))     # drawn, in keyframe colours
+        user = png.read_rgba(Path(ic.image_path("USER", 32)).read_bytes())[2]
+        centre = user[(16 * 32 + 16) * 4:(16 * 32 + 16) * 4 + 3]
+        self.assertGreater(max(centre) - min(centre), 40)               # full colour, not grey
+
+    def test_png_filters(self):
+        # 2x2 RGBA; row 0 "Sub" (filter 1), row 1 "Paeth" (filter 4) over row 0.
+        row0 = bytes([1, 10, 20, 30, 255, 5, 5, 5, 0])
+        row1 = bytes([4, 1, 1, 1, 1, 2, 2, 2, 2])
+        w, h, rgba = png.read_rgba(_png(2, 2, 4, [row0, row1]))
+        self.assertEqual((w, h), (2, 2))
+        self.assertEqual(rgba[:8], bytes([10, 20, 30, 255, 15, 25, 35, 255]))
+        self.assertEqual(rgba[8:12], bytes([11, 21, 31, 0]))            # Paeth picks "up" at x=0
+        grey = png.read_rgba(_png(1, 1, 1, [bytes([0, 200])]))[2]
+        self.assertEqual(grey, bytes([200, 200, 200, 255]))
+        with self.assertRaises(ValueError):
+            png.read_rgba(b"not a png")
+
+    def test_heading_markers_use_keyframe_colours(self):
+        c = lay.Canvas(st.Style(), lay.fixed_measure(0.55))
+        cv.ChatView().draw(c, lay.Rect(0, 0, 600, 2000), [
+            {"role": "user", "content": "hi"}, {"role": "assistant", "content": "# One\n## Two"}])
+        marks = [cmd for cmd in c.commands if cmd.kind == "icon" and cmd.text.startswith("KEYTYPE")]
+        self.assertEqual([m.color for m in marks],
+                         [c.style.keyframe_border, c.style.keyframes[0], c.style.keyframe_border, c.style.keyframes[1]])
 
     def test_every_icon_is_triangles_inside_its_square(self):
         rect = lay.Rect(10, 20, 16, 16)

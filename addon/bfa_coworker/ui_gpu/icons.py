@@ -3,31 +3,49 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Icons for the GPU chat, drawn as shapes (Tier 4, task "GPU 2").
+Icons for the GPU chat (Tier 4, task "GPU 2").
 
 The native chat leans on icons so a row reads before its words do (you,
-Coworker, a finished turn, the Workshop, a warning, a note).  Python can't
-draw Blender's built-in icons from ``gpu`` code -- they are compiled into the
-program -- so this module draws its own simple glyphs, **named by the Blender
-icon they stand for** (``"USER"``, ``"CHECKMARK"``, ``"PACKAGE"``, ...).  Both
-chats speak the same icon vocabulary, glyphs take the theme colour they are
-given, and they stay sharp at any zoom.
+Coworker, a finished turn, the Workshop, a warning, a note).  Icons are
+**named by the Blender icon they stand for** (``"USER"``, ``"CHECKMARK"``,
+``"PACKAGE"``, ...), so both chats speak the same icon vocabulary.
 
-:func:`triangles` turns a name and a square into flat triangles (x, y points,
-three per triangle) for ``render``; unknown names get a dot.  Free of ``bpy``.
+* **Full-colour Bforartists icons** for the names in :data:`IMAGE_ICONS`:
+  Python can't draw built-in icons from ``gpu`` code and Blender can't read
+  SVG at runtime, so ``_misc/build_chat_icons.py`` renders those SVGs from the
+  Bforartists icon set (GPL-3.0-or-later, like this add-on) to PNGs in
+  ``ui_gpu/icons/``; :func:`image_path` finds the right size.
+* **Drawn shapes** for everything else and as a fallback: :func:`triangles`
+  turns a name and a square into flat triangles (x, y points, three per
+  triangle) in one colour; the heading markers use the theme's keyframe
+  colours.  Unknown names get a dot.
+
+Free of ``bpy``.
 """
 
 from __future__ import annotations
 
 import math
+import os
 from typing import Callable
 
 from .layout import Rect
 
 __all__ = (
+    "IMAGE_ICONS",
     "NAMES",
+    "image_path",
     "triangles",
 )
+
+# Icons exported from the Bforartists icon set by _misc/build_chat_icons.py.
+IMAGE_ICONS = (
+    "USER", "WIZARD", "GHOST_ENABLED", "CHECKMARK", "PACKAGE", "WARNING", "ERROR", "CANCEL", "X",
+    "INFO", "COPYDOWN", "TIME", "SORTTIME", "TRIA_RIGHT", "TRIA_DOWN", "PLAY", "FORWARD",
+    "OUTLINER_OB_MESH", "VIEW_PAN", "SCRIPT", "CONSOLE", "IMAGE_DATA", "PAUSE", "URL",
+)
+_IMAGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
+_IMAGE_SIZES = (16, 24, 32, 48, 64)
 
 Point = tuple[float, float]
 
@@ -225,6 +243,19 @@ _GLYPHS: dict[str, Callable[[], list[Point]]] = {
 
 NAMES = frozenset(_GLYPHS)
 _CACHE: dict[str, list[Point]] = {}
+
+
+def image_path(name: str, pixels: float) -> str | None:
+    """The exported PNG for *name* drawn *pixels* wide (the smallest size that's
+    at least that big), or None when there is no image for it."""
+    if name not in IMAGE_ICONS:
+        return None
+    for size in _IMAGE_SIZES:
+        if size >= pixels or size == _IMAGE_SIZES[-1]:
+            path = os.path.join(_IMAGE_DIR, "{:s}_{:d}.png".format(name.lower(), size))
+            if os.path.isfile(path):
+                return path
+    return None
 
 
 def triangles(name: str, rect: Rect) -> list[Point]:

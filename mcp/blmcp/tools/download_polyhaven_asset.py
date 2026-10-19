@@ -34,22 +34,29 @@ _VALID_RESOLUTIONS = ("512", "1k", "2k", "4k", "8k")
 
 
 def _import_hdri_code(filepath: str) -> str:
-    """Return Blender Python code to set up an HDRI world environment."""
+    """Return Blender Python code that gives the active scene an HDRI world.
+
+    Non-destructive (#101): the scene gets its own world named after the HDRI
+    instead of having its current world's nodes cleared -- that world may be
+    shared with another scene (a new scene has no world at all, and the old
+    fallback grabbed ``bpy.data.worlds["World"]``, another scene's world).
+    Re-applying the same HDRI reuses its world.  A world left without users
+    gets a fake user so it is not lost on save.
+    """
     safe_path = filepath.replace("\\", "\\\\")
-    name = Path(filepath).stem
+    world_name = "HDRI " + Path(filepath).stem
     return (
         "import bpy\n"
         "\n"
-        "# Ensure world exists.\n"
-        "if not bpy.data.worlds:\n"
-        '    world = bpy.data.worlds.new("World")\n'
-        "    bpy.context.scene.world = world\n"
-        "else:\n"
-        "    world = bpy.context.scene.world\n"
-        '    if world is None:\n'
-        '        world = bpy.data.worlds["World"]\n'
+        "scene = bpy.context.scene\n"
+        "previous = scene.world\n"
+        f"world = bpy.data.worlds.get({world_name!r})\n"
+        "if world is None:\n"
+        f"    world = bpy.data.worlds.new({world_name!r})\n"
+        "scene.world = world\n"
+        "if previous is not None and previous != world and previous.users == 0:\n"
+        "    previous.use_fake_user = True\n"
         "\n"
-        "# Clear existing nodes.\n"
         "world.use_nodes = True\n"
         "nodes = world.node_tree.nodes\n"
         "links = world.node_tree.links\n"
@@ -63,7 +70,7 @@ def _import_hdri_code(filepath: str) -> str:
         'output = nodes.new("ShaderNodeOutputWorld")\n'
         "\n"
         "# Set filepath.\n"
-        f"env_tex.image = bpy.data.images.load('{safe_path}')\n"
+        f"env_tex.image = bpy.data.images.load('{safe_path}', check_existing=True)\n"
         "\n"
         "# Connect nodes.\n"
         'links.new(tex_coord.outputs["Generated"], mapping.inputs["Vector"])\n'
@@ -71,8 +78,26 @@ def _import_hdri_code(filepath: str) -> str:
         'links.new(env_tex.outputs["Color"], bg.inputs["Color"])\n'
         'links.new(bg.outputs["Background"], output.inputs["Surface"])\n'
         "\n"
-        "result = {'status': 'ok', 'message': 'HDRI applied to world'}\n"
+        "kept = '' if previous is None or previous == world else ' (previous world ' + repr(previous.name) + ' kept)'\n"
+        "result = {'status': 'ok', 'message': 'HDRI world ' + repr(world.name) + ' set on scene ' + repr(scene.name) + kept}\n"
     )
+
+
+def _download_includes(resolved: dict, model_dir: Path) -> list[str]:
+    """Download a model's ``include`` files (``.bin``, textures) next to it.
+
+    Saved at the relative path the model file names, e.g.
+    ``textures/rock_diff_1k.jpg``.  Returns error messages (empty on success).
+    """
+    errors: list[str] = []
+    for _rel, (url, rel_path) in (resolved.get("include") or {}).items():
+        dest = model_dir / rel_path
+        if dest.exists():
+            continue
+        err = _download_with_progress(url, dest)
+        if err:
+            errors.append(f"{rel_path}: {err}")
+    return errors
 
 
 def _import_model_code(filepath: str) -> str:
@@ -181,9 +206,10 @@ def register(mcp: FastMCP) -> None:
             result = send_code(code, strict_json=True)
             status = result.get("status", "error")
             if status == "ok":
+                detail = (result.get("result") or {}).get("message", "")
                 return (
-                    f"Downloaded and applied HDRI '{asset_id}' ({resolution}) "
-                    f"as world environment."
+                    f"Downloaded and applied HDRI '{asset_id}' ({resolution}): "
+                    f"{detail or 'set as world environment'}."
                 )
             return (
                 f"Downloaded '{asset_id}' but import failed: "
@@ -239,15 +265,8 @@ def register(mcp: FastMCP) -> None:
                     # Fall through to glTF/FBX import.
                     blend_info = None
                 else:
-                    # Download included textures into relative subdirectory.
-                    tex_data = resolved.get("textures")
-                    if tex_data and isinstance(tex_data, dict):
-                        tex_dir = dest.parent / "textures"
-                        tex_dir.mkdir(parents=True, exist_ok=True)
-                        for _key, (tex_url, tex_fname) in tex_data.items():
-                            tex_dest = tex_dir / tex_fname
-                            if not tex_dest.exists():
-                                _download_with_progress(tex_url, tex_dest)
+                    # Included textures, at the paths the .blend refers to.
+                    _download_includes(resolved, dest.parent)
 
                     code = build_blend_import_code(str(dest), asset_id)
                     result = send_code(code, strict_json=True)
@@ -273,6 +292,14 @@ def register(mcp: FastMCP) -> None:
                     err = _download_with_progress(url, dest)
                     if err:
                         return f"Download failed for {fmt_key}: {err}"
+                # A .gltf only references its geometry (.bin) and textures;
+                # without them the import is empty or untextured (#101).
+                include_errors = _download_includes(resolved, dest.parent)
+                if include_errors:
+                    return (
+                        f"Downloaded '{asset_id}' but not all of its files: "
+                        + "; ".join(include_errors)
+                    )
 
                 code = _import_model_code(str(dest))
                 result = send_code(code, strict_json=True)

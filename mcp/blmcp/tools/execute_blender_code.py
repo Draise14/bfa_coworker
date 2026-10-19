@@ -15,6 +15,39 @@ from mcp.server.fastmcp import FastMCP  # pylint: disable=import-error,no-name-i
 from mcp.types import ToolAnnotations  # pylint: disable=import-error,no-name-in-module
 
 
+def _load_blender_templates():  # type: ignore[no-untyped-def]
+    """Load the add-on's ``blender_templates.py`` by file path, or return None.
+
+    This MCP server runs in its own Python process where the add-on package
+    (``bl_ext.<repo>.bfa_coworker``) is not importable, so the old
+    ``from bfa_coworker.blender_templates import ...`` always failed and
+    execute_blender_plan / list_blender_templates never worked (#101).
+    The module is plain Python; find it next to this package instead:
+    ``<addon>/vendor/blmcp`` in a build, ``<repo>/mcp/blmcp`` in a checkout.
+    """
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    cached = sys.modules.get("_bfacw_blender_templates")
+    if cached is not None:
+        return cached
+    here = Path(__file__).resolve().parent.parent  # .../blmcp
+    for candidate in (
+            here.parent.parent / "blender_templates.py",
+            here.parent.parent / "addon" / "bfa_coworker" / "blender_templates.py",
+    ):
+        if candidate.is_file():
+            spec = importlib.util.spec_from_file_location("_bfacw_blender_templates", candidate)
+            if spec is None or spec.loader is None:
+                continue
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            sys.modules["_bfacw_blender_templates"] = module
+            return module
+    return None
+
+
 def register(mcp: FastMCP) -> None:
     @mcp.tool(
         annotations=ToolAnnotations(
@@ -26,8 +59,19 @@ def register(mcp: FastMCP) -> None:
         """
         Execute Python code in the connected Blender instance.
 
-        The code runs in Blender's Python environment with full access to ``bpy``.
-        To return data, assign a JSON-serialisable dict to a variable named ``result``.
+        Use it for what the dedicated tools don't cover: creating and editing
+        objects, modifiers, materials, animation.  Check first whether one of
+        these fits -- they are faster and pre-tested on Blender 5.x:
+        get_objects_summary / get_object_detail_summary (inspect the scene),
+        execute_blender_plan (primitives, modifiers, lights, camera, keys),
+        setup_pbr_material, download_polyhaven_asset, three_point_lighting_rig,
+        search_api_docs (when unsure of an API).
+
+        The code runs with full access to ``bpy`` on Blender's main thread
+        (``bpy.context`` has the window, scene and active object).  Keep
+        scripts short (about 40 lines).  To return data, assign a
+        JSON-serialisable dict to ``result``.  An ``error`` lists the fix;
+        ``preflight_notes`` in a successful result are advice, not failures.
         Deferred completion via ``check_is_finished`` is only supported by the
         interactive addon server, and is rejected in background mode.
         """
@@ -77,13 +121,10 @@ def register(mcp: FastMCP) -> None:
         Templates are pre-tested for Blender 5.3 and auto-correct common
         mistakes.  Use this instead of execute_blender_code when possible.
         """
-        # Import the plan-to-code converter from the addon's
-        # blender_templates module.
-        try:
-            from bfa_coworker.blender_templates import _plan_to_code, _render_template, _TEMPLATES
-        except ImportError:
+        templates = _load_blender_templates()
+        if templates is None:
             return {"status": "error", "message": "Template system unavailable in the connected Blender addon."}
-        code = _plan_to_code(steps)
+        code = templates._plan_to_code(steps)
         return send_code(code, strict_json=False)
 
     @mcp.tool(
@@ -100,12 +141,12 @@ def register(mcp: FastMCP) -> None:
         Each template is pre-tested for Blender 5.3 and handles common
         API pitfalls automatically.
         """
-        try:
-            from bfa_coworker.blender_templates import _TEMPLATES, _TEMPLATE_DEFAULTS
-        except ImportError:
+        module = _load_blender_templates()
+        if module is None:
             return {"status": "error", "message": "Template registry not available"}
+        _TEMPLATE_DEFAULTS = module._TEMPLATE_DEFAULTS
         templates = {}
-        for name, tmpl in _TEMPLATES.items():
+        for name, tmpl in module._TEMPLATES.items():
             # Extract parameter names from the template string.
             import re
             params = list(set(re.findall(r"\{(\w+)\}", tmpl)))

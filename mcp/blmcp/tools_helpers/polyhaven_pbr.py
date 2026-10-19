@@ -193,11 +193,36 @@ def resolve_polyhaven_files(
                             result["textures"] = _collect_include_textures(
                                 fmt_val["include"]
                             )
+                            # Same files keyed by the path the model file
+                            # refers to (``rock.bin``, ``textures/rock_diff.jpg``).
+                            result["include"] = _collect_include_files(
+                                fmt_val["include"]
+                            )
                         break
         if model_key in result:
             break
 
     return result
+
+
+def _collect_include_files(
+    include: dict,
+) -> dict[str, tuple[str, str]]:
+    """Map each ``include`` entry's relative path to ``(url, relative_path)``.
+
+    A glTF names its ``.bin`` and textures by these relative paths, so they
+    must be saved at exactly that place next to the model file.  Entries that
+    would escape the model's folder are skipped.
+    """
+    files: dict[str, tuple[str, str]] = {}
+    for rel_path, info in include.items():
+        if not (isinstance(info, dict) and "url" in info):
+            continue
+        rel = Path(rel_path)
+        if rel.is_absolute() or ".." in rel.parts:
+            continue
+        files[rel_path] = (info["url"], rel.as_posix())
+    return files
 
 
 def _collect_include_textures(
@@ -410,13 +435,13 @@ def build_pbr_material_code(
             "_arm_tex = nodes.new('ShaderNodeTexImage')",
             "_arm_tex.image = _arm_img",
             "_arm_tex.location = (-800, -700)",
-            "_arm_sep = nodes.new('ShaderNodeSeparateRGB')",
+            "_arm_sep = nodes.new('ShaderNodeSeparateColor')  # SeparateRGB was removed in 5.x",
             "_arm_sep.location = (-500, -700)",
-            "links.new(_arm_tex.outputs['Color'], _arm_sep.inputs['Image'])",
-            "links.new(_arm_sep.outputs['G'], bsdf.inputs['Roughness'])",
+            "links.new(_arm_tex.outputs['Color'], _arm_sep.inputs['Color'])",
+            "links.new(_arm_sep.outputs['Green'], bsdf.inputs['Roughness'])",
             "",
             "# Extract Metallic from ARM (Blue channel).",
-            "links.new(_arm_sep.outputs['B'], bsdf.inputs['Metallic'])",
+            "links.new(_arm_sep.outputs['Blue'], bsdf.inputs['Metallic'])",
             "",
         ]
     else:

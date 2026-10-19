@@ -1,7 +1,7 @@
 # Tier 4 — Task Board
 
 **Created**: 2026-10-16 · **Source of truth for order**: `plan_tier4_master_coordination.md` §3
-**Status**: ⏸ Waiting for plan review. Nothing is branched yet.
+**Status**: 🚧 **Tier 4 started 2026-10-18** (tracking issue #97). T0 baseline run by the maintainer; work proceeds one PR at a time in the order of the *This week* list below.
 **Review decisions applied (2026-10-16)**: ACP + parity is lane 1 · "External Harness" keeps its name (tooltips explain it), "External Agent" is added · code runs without asking on External Agent, backed by a turn checkpoint and Revert · "Only Coworker tools" on by default · session token on by default · **minimum Blender/Bforartists 5.3**, chat drawn with native `label_markdown()` (B0).
 
 **How to use**: one branch per row-group (the **Branch** column). Branch from `main` and
@@ -10,8 +10,29 @@ open a PR when the row's *Done when* holds. Tick the box and add the PR number. 
 
 Every PR: tests for bpy-free code · cost-ledger before/after if prompts or tools change ·
 white-room line in the PR body · skill/tool text claims backed by a probe (S3) · wiki/docs if user-facing. A PR that touches the turn
-loop, prompts or tools also runs the **quick benchmark set** (`baseline`, `scene_build`,
-`error_handling`) on Local.
+loop, prompts or tools also runs the **quick challenges** (`quick_sanity`, `quick_judgement`,
+`quick_2d`) on Local.
+
+---
+
+## This week (2026-10-18 →): PR order
+
+One PR open at a time on the hot files (`agent_controller.py`, `ui_chat.py`), so no PR
+needs a rebase across another's conflicts. PRs that only touch `mcp/blmcp/` or new
+files can be reviewed in parallel.
+
+| # | Branch | Task | Hot files? |
+|---|---|---|---|
+| 1 | `chore/4-green-baseline` | Green unit-test baseline (stale tool listing, ASCII instructions, FastMCP assertion) + board kickoff | no |
+| 2 | `fix/4s-node-tree-5x` | S1 | no (`mcp/` + skills) |
+| 3 | `fix/4s-templates-server-side` | S0 | no (`mcp/` + registry move) |
+| 4 | `spike/4h-acp-transcripts` | H0: fixtures + corrected 4h tables | no |
+| 5 | `feat/4i-engine-types` | I1a | no (new file) |
+| 6 | `feat/4i-engine-local` | I1b | **yes** |
+| 7 | `feat/4i-session-token` | I6 | bridge + `mcp/` |
+| 8 | `spike/4a-coworker-editor` | A0 | no (throwaway prototypes, decision doc) |
+| 9 | `feat/4i-engine-ui` | I1c | **yes** |
+| 10 | `feat/4b-native-markdown` | B0 | **yes** (after I1c) |
 
 ---
 
@@ -21,7 +42,7 @@ Defined in master §3.3. Tick a gate when its runs are saved and its rating shee
 
 | ☐ | Gate | When | Benchmarks (modes) | You test by hand |
 |---|---|---|---|---|
-| ☐ | **T0 Baseline** | **Now, before the first branch** (after S0 + S1, so the baseline doesn't measure two broken tools), on Blender/Bforartists 5.3 | All 15 suites: Local (small + medium model), Remote (cheap + frontier) | External Harness smoke with Claude Desktop or OpenCode (harness guide); fill the rating sheet for every mode |
+| ☑ | **T0 Baseline** | Done 2026-10-18 (before S0 + S1: rerun `nodes` after S1 so the compositor read isn't counted as a model failure) | 6 core + 3 quick: Local (small + medium model), Remote (cheap + frontier) | External Harness smoke with Claude Desktop or OpenCode (harness guide); fill the rating sheet for every mode |
 | ☐ | **T1 Seam regression** | After I1 + B0 merge | Full suites Local + Remote; must match T0 (± noise) | Chat looks right with native markdown (tables, code Copy rows) |
 | ☐ | **T2 = M1 "Bring your own agent"** | After H5 + I6 + I8 + H10 | Full suites on **External Agent** (OpenCode, Claude Code) for the first time; Local/Remote quick set | Artist script A (§3.3); External Harness via the new activity view |
 | ☐ | **T3 = M2 "Same Coworker everywhere"** | After I4 + I5 + B1/B2/B4 + G1–G3 | All suites, all engines; first-request tokens with progressive tools vs T0 | Artist script B: explain, ask_user, Revert, plan on each engine |
@@ -38,7 +59,10 @@ Plans: `plan_tier4h_external_agent_acp.md`, `plan_tier4i_engine_parity.md`
 | ☐ | ID | Task | Branch | Depends | Size | Done when |
 |---|---|---|---|---|---|---|
 | ☐ | H0 | Spike: drive `opencode acp` + Claude ACP adapter from a Python script on Windows; record fixtures; confirm stdio `mcpServers` → `blmcp`; verify preset commands; check whether Freebuff speaks ACP | `spike/4h-acp-transcripts` | — | S | `tests/fixtures/acp/*.jsonl` committed; 4h §3/§5.2 corrected |
-| ☐ | I1 | `AgentEvent` + `Engine` seam; wrap Local/Remote with no behaviour change; event drain on main thread; fake engine for UI tests | `feat/4i-engine-seam` | H0 (event shape) | M | Full test suite + benchmark green; turn rendering reads events only |
+| ☐ | I1 | `AgentEvent` + `Engine` seam; wrap Local/Remote with no behaviour change; event drain on main thread; fake engine for UI tests. **Split into three PRs:** | | H0 (event shape) | M | Full test suite + benchmark green; turn rendering reads events only |
+| ☐ | I1a | `engine.py` (bpy-free): `AgentEvent`, `EngineCaps`, `Engine` protocol, thread-safe event queue + main-thread drain helper, `FakeEngine`; unit tests. No wiring | `feat/4i-engine-types` | — | S | Tests for event ordering, drain, cancel; nothing else changes |
+| ☐ | I1b | `LocalEngine` / `RemoteEngine` adapters over `run_conversation_turn` callbacks; chat send/stop/queue go through `Engine`; `AgentState` updated only by the drain | `feat/4i-engine-local` | I1a | M | All unit tests + quick challenges unchanged vs T0 |
+| ☐ | I1c | Turn rendering reads event-fed state only; remove direct loop reads from `ui_chat.py`; engine chip | `feat/4i-engine-ui` | I1b | S | No `agent_controller` internals read in turn drawing; screenshots match |
 | ☐ | I2 | `ui_components.py` parity set (tool row, reasoning, plan, approval, question, engine chip) + brand detection → `shared.py` | `feat/4i-engine-seam` | I1 | S | No engine branches in turn rendering |
 | ☐ | H2 | `acp_client.py` (stdlib JSON-RPC over stdio, reader thread, cancel, crash handling) + `tests/fake_acp_agent.py` | `feat/4h-acp-client` | H0, I1 | M | Fake-agent conversation incl. cancel, permission, crash passes |
 | ☐ | H3 | Agent presets + detection + install/login hints + Generic preset; Windows `.cmd` shim handling | `feat/4h-acp-client` | H2 | S | Correct status per preset on a machine without the agent |
@@ -51,7 +75,7 @@ Plans: `plan_tier4h_external_agent_acp.md`, `plan_tier4i_engine_parity.md`
 | ☐ | I4 | Server-side progressive tools: surface listing, `load_tools` as MCP tool + `tools/list_changed`, fallback to full list; local loop uses it | `feat/4i-progressive-tools` | I5 | M | ACP first request = surface schemas only (measured); VSE loads on demand |
 | ☐ | H7 | Hardening: kill agent mid-turn, kill Blender, bad command, no login, stderr surfacing, process_guard | `feat/4h-acp-hardening` | H4–H6 | S | Adversarial checklist passes |
 | ☐ | H8 | Polish: mode/model selectors, slash commands, maturity badges; wiki page + `harness_testing_guide.md` update | `feat/4h-acp-polish` | H7 | S | Docs reviewed |
-| ☐ | I8 | **Benchmarks through the engine seam**: the test-suite runner sends steps via `Engine.send` instead of `run_conversation_turn`, so the same 15 suites run on Local, Remote and External Agent. Each result records mode, engine, model, pass/fail, wall time, prompt/completion tokens (or "not reported"), iterations, approvals asked. Compare Benchmarks groups by mode | `feat/4i-benchmarks-all-modes` | I1, H4 | S | One suite runs on all three engines; Compare Benchmarks shows them side by side |
+| ☐ | I8 | **Benchmarks through the engine seam**: the test-suite runner sends steps via `Engine.send` instead of `run_conversation_turn`, so the same 6 core + 3 quick benchmarks run on Local, Remote and External Agent. Each result records mode, engine, model, pass/fail, wall time, prompt/completion tokens (or "not reported"), iterations, approvals asked. Compare Benchmarks groups by mode | `feat/4i-benchmarks-all-modes` | I1, H4 | S | One suite runs on all three engines; Compare Benchmarks shows them side by side |
 | ☐ | H10 | **External Harness activity view**: a read-only live Workshop for External Harness mode, fed by the bridge (tool name, short args, duration, ok/error, result preview, screenshot thumbnails), plus "Copy session log" and an "Open log" shortcut. This is the debug view for external clients | `feat/4h-harness-activity` | I1 | S | Claude Desktop/OpenCode calls appear live in the Coworker panel; a failing call shows its error |
 | ☐ | I7 | Bounded tool outputs + `read_tool_output` in the server (from 4f.2.1) | `feat/4i-bounded-outputs` | — | S | 50 KB node dump → ≤ 2 KB preview + handle on every engine |
 | ☐ | H9 | *(only if needed)* Claude headless / OpenCode serve fallback | `feat/4h-fallbacks` | H7 | M | Only if a key agent's ACP is unusable |
@@ -123,7 +147,7 @@ Plan: `plan_tier4a_editor_integration.md`
 
 | ☐ | ID | Task | Branch | Depends | Size | Done when |
 |---|---|---|---|---|---|---|
-| ☐ | A0 | **Spike for issue #26 (Coworker chat editor)**: build three throwaway prototypes and pick one. (1) **Custom `NodeTree` type "Coworker"**: gets its own entry + icon in the Editor Type menu, can be placed in any area; chat in the sidebar, center canvas free for status/plan (and the Tier 5 moodboard). (2) **Text Editor host** (the issue's idea): chat in the sidebar; center shows a live transcript text block or stays empty; no own menu entry. (3) **Preferences-editor center panels**: check for leaking into the real Preferences and for the global section state. Criteria: own menu entry, native text input, usable center, native theme, no leaks, Blender + Bforartists 5.3 | `spike/4a-coworker-editor` | — | S | Decision + screenshots in the 4a banner, posted on #26 |
+| ☐ | A0 | **Spike for issue #26 (Coworker chat editor)**: build three throwaway prototypes and pick one. (1) **Custom `NodeTree` type "Coworker"**: gets its own entry + icon in the Editor Type menu, can be placed in any area; chat in the sidebar, center canvas free for status/plan (and the Tier 5 moodboard). (2) **Text Editor host** (the issue's idea): chat in the sidebar; center shows a live transcript text block or stays empty; no own menu entry. (3) **Preferences-editor center panels**: check for leaking into the real Preferences and for the global section state. Criteria: own menu entry, native text input, usable center, native theme, no leaks, Blender + Bforartists 5.3. **Maintainer preference (2026-10-18)**: a center drawn by **Python panels** (Preferences-editor style) first, then a Text/Node editor clone with the chat in native panels, and **GPU drawing only as a last resort** | `spike/4a-coworker-editor` | — | S | Decision + screenshots in the 4a banner, posted on #26 |
 | ☐ | A1 | `draw_chat_interface(layout, ctx, editor_type)` extraction | `feat/4a-chat-component` | I2 | M | Existing panels delegate; no visual change |
 | ☐ | A2 | Sidebar chat in all editor types (factory) + per-editor templates | `feat/4a-sidebars` | A1 | S | Chat in Node, VSE, Image, Graph… sidebars |
 | ☐ | A3 | Coworker editor per A0 decision + setup operator | `feat/4a-coworker-editor` | A0, A1 | M | One click turns an area into the Coworker editor |

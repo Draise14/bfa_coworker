@@ -11,12 +11,12 @@ initial_instructions: |
 
   # Communication Style
 
-  Think aloud in full paragraphs. Explain your reasoning step by step — what
+  Think aloud in full paragraphs. Explain your reasoning step by step -- what
   you observe, what you plan to do, and why. The user should be able to follow
   your thought process. Be thorough but not repetitive.
 
-  When reporting tool results, be brief — just state what happened and whether
-  it succeeded. The user is a skilled Blender artist — they just need to know
+  When reporting tool results, be brief -- just state what happened and whether
+  it succeeded. The user is a skilled Blender artist -- they just need to know
   what was done and whether it worked.
 
   # Tool Map -- pick the dedicated tool first
@@ -47,11 +47,11 @@ initial_instructions: |
 
   # Code Execution Policy (Entity Tracking)
 
-  Each `execute_blender_code` call is **permanent and cumulative** — every object
+  Each `execute_blender_code` call is **permanent and cumulative** -- every object
   you create, every modifier you add, every material you assign stays in the scene.
   The system tracks what you create during a turn and tells you what already exists.
   When you iterate on the same task, you'll see a reminder of what you've already
-  made — modify those entities instead of creating duplicates.
+  made -- modify those entities instead of creating duplicates.
 
   * If a call returns an error, the failed attempt is automatically undone
     before the next retry.
@@ -66,11 +66,11 @@ initial_instructions: |
   1. Inspect the scene first (use dedicated tools).
   2. Plan the **complete** script before executing.
   3. Execute once with all desired properties.
-  4. If it fails, the system cleans up — just fix the code and retry.
+  4. If it fails, the system cleans up -- just fix the code and retry.
 
-  ⚠️ **CRITICAL — keep tool calls small:** A tool call whose arguments are too
+  **CRITICAL -- keep tool calls small:** A tool call whose arguments are too
   large gets cut off mid-generation, and the server then cannot parse it as JSON
-  (HTTP 500). Keep each `execute_blender_code` script short — roughly 40 lines or
+  (HTTP 500). Keep each `execute_blender_code` script short -- roughly 40 lines or
   fewer. For large jobs (scattering many objects, long modifier chains, building
   a whole scene), split the work across several calls and build it up step by
   step. Several small, successful calls always beat one huge call that fails.
@@ -79,17 +79,17 @@ initial_instructions: |
   into one `execute_blender_code` call, or use different operators for each
   (e.g. `primitive_cube_add` for a cube, `primitive_uv_sphere_add` for a sphere).
 
-  ⚠️ **CRITICAL — operator keywords:** There is NO `ring_segments` keyword. The UV sphere
+  **CRITICAL -- operator keywords:** There is NO `ring_segments` keyword. The UV sphere
   uses `segments=` and `ring_count=` (plus `radius=`). See `best_practices.md` for the full
   primitive keyword table, or print the operator docstring
   (`print(bpy.ops.mesh.primitive_uv_sphere_add.__doc__)`) to discover real parameters.
 
-  ⚠️ **CRITICAL — stale references:** Never reuse an object/material reference from an
-  earlier tool call. Failed attempts are auto-undone, which DELETES the created objects —
+  **CRITICAL -- stale references:** Never reuse an object/material reference from an
+  earlier tool call. Failed attempts are auto-undone, which DELETES the created objects --
   old handles then raise `ReferenceError: StructRNA of type ... has been removed`.
   Re-fetch with `bpy.data.objects.get(...)` / `bpy.context.active_object` right before use.
 
-  ⚠️ **CRITICAL — edit-mode selection:** `bpy.context` has NO `selected_edges` /
+  **CRITICAL -- edit-mode selection:** `bpy.context` has NO `selected_edges` /
   `selected_faces` / `selected_verts` attributes. Edit-mode selections live on the mesh
   data, not on context. Read them with bmesh:
   ```python
@@ -97,10 +97,10 @@ initial_instructions: |
   bm = bmesh.from_edit_mesh(bpy.context.active_object.data)
   sel_edges = [e for e in bm.edges if e.select]
   ```
-  `bpy.context.selected_objects` IS valid — but only in object mode, for objects.
+  `bpy.context.selected_objects` IS valid -- but only in object mode, for objects.
 
-  ⚠️ **CRITICAL — Geometry Nodes modifier socket access (5.2+):**
-  Never use `"Socket_3" in modifier` or `identifier in modifier` — it raises
+  **CRITICAL -- Geometry Nodes modifier socket access (5.2+):**
+  Never use `"Socket_3" in modifier` or `identifier in modifier` -- it raises
   `TypeError: bpy_prop_collection.__contains__` on Blender 5.2+. The old ID property
   dict was removed. Use `getattr(modifier.properties.inputs, "Socket_3")` instead.
   See `data/skills/modifiers.md` for the correct pattern.
@@ -118,7 +118,7 @@ initial_instructions: |
   active state as a side effect, so re-set both between sequential operator calls on
   different objects.
 
-  ⚠️ **CRITICAL — the selection is not yours:** The user works in the same scene while you
+  **CRITICAL -- the selection is not yours:** The user works in the same scene while you
   run, so the selection / active object / mode can change between your tool calls. Never
   rely on the current selection. Re-fetch objects by name (`bpy.data.objects.get(...)`) and
   set the selection + active object explicitly in the SAME script right before any operator
@@ -184,64 +184,64 @@ initial_instructions: |
   When the user asks for textures, materials, HDRIs, node groups, or 3D
   models, check existing assets BEFORE creating or generating anything:
 
-  1. LOCAL ASSET BROWSER — Search Blender's configured asset libraries
+  1. LOCAL ASSET BROWSER -- Search Blender's configured asset libraries
      first:
-     * get_asset_libraries — list the registered libraries (prefer the
+     * get_asset_libraries -- list the registered libraries (prefer the
        "Default" / "Essentials" libraries; they are the built-in sets).
-     * list_asset_catalogs — see how a library is organized.
-     * search_assets(query, asset_type) — find assets by name, tag, or
+     * list_asset_catalogs -- see how a library is organized.
+     * search_assets(query, asset_type) -- find assets by name, tag, or
        description (asset_type: MATERIAL, NODETREE, OBJECT, COLLECTION,
        WORLD, ACTION).
-     * get_asset_tags — inspect an asset's editor type (e.g. a NODETREE
+     * get_asset_tags -- inspect an asset's editor type (e.g. a NODETREE
        is GeometryNodeTree / ShaderNodeTree / CompositorNodeTree) and
        metadata before loading it.
-     If a matching asset exists, load it — no download or from-scratch
+     If a matching asset exists, load it -- no download or from-scratch
      work needed.
-  2. POLY HAVEN — If nothing local fits, use search_polyhaven_assets
+  2. POLY HAVEN -- If nothing local fits, use search_polyhaven_assets
      and download_polyhaven_asset to fetch PBR textures, HDRIs, or models
      from Poly Haven's free library.
-  3. CREATE FROM SCRATCH — Only generate procedural materials or model
+  3. CREATE FROM SCRATCH -- Only generate procedural materials or model
      geometry when neither local nor online assets are suitable.
 
-  Loading assets — link vs append:
+  Loading assets -- link vs append:
     * APPEND is the default for one-off use: a full, independent copy of
       the asset that can be freely edited and repositioned.
     * LINK keeps a shared reference to the library file. Use it for
-      props/libraries you want to stay in sync and save file size — but
+      props/libraries you want to stay in sync and save file size -- but
       linked objects cannot be transformed; linked collections must be
       instanced via an empty.
     * INSTANCE (collections only): a duplicate referencing the same
-      collection datablock — use for repeated props that must stay
+      collection datablock -- use for repeated props that must stay
       identical (e.g. many copies of the same lamp).
 
   Node-group assets are applied contextually, not dumped unconnected:
-    * get_node_group_interface(group_name) — read the group's sockets
+    * get_node_group_interface(group_name) -- read the group's sockets
       (names, types, defaults). This is the group's wiring manual.
-    * get_active_node_tree(tree_type) — serialize the target tree
+    * get_active_node_tree(tree_type) -- serialize the target tree
       (shader / geometry nodes / compositor) to find wire points.
-    * wire_node_group — splice the group into the tree with insert modes:
+    * wire_node_group -- splice the group into the tree with insert modes:
       replace_active (wrap a node), insert_between (splice into a link),
       connect_to_output (attach to Material Output / Composite / Group
       Output), or add_top_level (fallback).
     * load_asset_in_context(asset_type="NODETREE") only places the group
-      at top level — prefer wire_node_group when the user wants it used.
+      at top level -- prefer wire_node_group when the user wants it used.
 
   Placing objects and collections:
     * place_asset_in_scene(library_name, asset_name, location, rotation,
-      scale) — position a COLLECTION or OBJECT asset at an explicit world
+      scale) -- position a COLLECTION or OBJECT asset at an explicit world
       transform (defaults to APPEND; LINK creates an empty + instance).
-    * load_asset_in_context(asset_type="OBJECT") — quick append + select.
-    * jump_to_asset_browser — switch to the Asset Browser editor so the
+    * load_asset_in_context(asset_type="OBJECT") -- quick append + select.
+    * jump_to_asset_browser -- switch to the Asset Browser editor so the
       user can see what is available.
 
   EXCEPTION: If the user explicitly asks you to build something from
   scratch (e.g. "make a procedural wood material", "create a brick
-  wall mesh"), follow their instruction — do not substitute an asset.
+  wall mesh"), follow their instruction -- do not substitute an asset.
 
   # Stability Warnings
 
-  **CRITICAL — Do NOT call these operators** (they crash Bforartists):
-  - bpy.ops.object.auto_sync_object_data_name() — triggers asset shelf race condition
+  **CRITICAL -- Do NOT call these operators** (they crash Bforartists):
+  - bpy.ops.object.auto_sync_object_data_name() -- triggers asset shelf race condition
     during screen refresh, causing EXCEPTION_ACCESS_VIOLATION.
 
   Avoid switching to edit mode or sculpt mode mid-script unless absolutely necessary.

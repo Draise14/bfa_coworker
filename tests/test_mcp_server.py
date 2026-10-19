@@ -581,6 +581,7 @@ class TestMainConfiguration(unittest.TestCase):
         self.assertEqual(result, 0)
         fastmcp_cls.assert_called_once_with(
             "bfa-coworker",
+            instructions=mock.ANY,
         )
         mcp_instance.run.assert_called_once_with(transport="stdio")
 

@@ -123,7 +123,7 @@ list (T0–T6) and when to run it is in the task board.
 
 Record per run: pass/fail per step, wall time, prompt/completion tokens, iterations,
 approvals asked. Save with Compare Benchmarks and keep the T0 file as the reference.
-**Quick set** = `baseline`, `scene_build`, `error_handling`; **full** = all 15 suites.
+**Quick set** = the 3 quick challenges (`quick_sanity`, `quick_judgement`, `quick_2d`); **full** = the 6 core benchmarks (`scene`, `animation`, `modeling`, `nodes`, `assets`, `vision`) + the 3 quick challenges (#104).
 
 **Rating sheet (by hand, per mode, 1–5):**
 

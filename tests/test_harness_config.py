@@ -44,6 +44,13 @@ def _load_agent_controller():
 
 
 ac = _load_agent_controller()
+hc = importlib.import_module("_bfacw_pkg_under_test.harness_clients")
+
+# Never touch the real ~/.cache/bfa_coworker/harness launcher from tests.
+import tempfile as _tempfile
+from pathlib import Path as _Path
+_HARNESS_TMP = _tempfile.TemporaryDirectory()
+ac._HARNESS_DIR = _Path(_HARNESS_TMP.name) / "harness"
 
 
 # The exact traceback shape reported by the user in External Harness mode.
@@ -385,7 +392,7 @@ class TestValidateMcpClientConfig(unittest.TestCase):
 
 
 class TestGenerateMcpClientConfig(unittest.TestCase):
-    """The emitted config must carry a usable PYTHONPATH."""
+    """The emitted config runs the stable launcher with the right transport."""
 
     def test_config_is_valid_json(self):
         import json
@@ -393,20 +400,6 @@ class TestGenerateMcpClientConfig(unittest.TestCase):
         parsed = json.loads(raw)
         self.assertIn("mcpServers", parsed)
         self.assertIn("bfa-coworker", parsed["mcpServers"])
-
-    def test_cursor_uses_servers_key(self):
-        import json
-        raw = ac.generate_mcp_client_config(client_type="cursor")
-        parsed = json.loads(raw)
-        self.assertIn("servers", parsed)
-        self.assertEqual(parsed["servers"]["bfa-coworker"]["type"], "stdio")
-
-    def test_generic_is_raw_command_block(self):
-        import json
-        raw = ac.generate_mcp_client_config(client_type="generic")
-        parsed = json.loads(raw)
-        self.assertIn("command", parsed)
-        self.assertIn("args", parsed)
 
     def test_env_has_bridge_host_and_port(self):
         import json
@@ -416,86 +409,255 @@ class TestGenerateMcpClientConfig(unittest.TestCase):
         env = parsed["mcpServers"]["bfa-coworker"]["env"]
         self.assertEqual(env["BFACW_HOST"], "localhost")
         self.assertEqual(env["BFACW_PORT"], "9876")
+        # The launcher carries the paths, so a move can't leave them stale.
+        self.assertNotIn("PYTHONPATH", env)
 
-    def test_pythonpath_points_at_vendor_parent(self):
-        """PYTHONPATH must contain the *parent* of vendor/blmcp, not blmcp itself.
+    def test_args_run_launcher_with_stdio_transport(self):
+        import json
+        import unittest.mock as mock
+        with mock.patch.object(ac, "_get_blender_python_for_config",
+                               return_value=(sys.executable, "")):
+            raw = ac.generate_mcp_client_config(client_type="claude_desktop")
+        args = json.loads(raw)["mcpServers"]["bfa-coworker"]["args"]
+        self.assertEqual(args, [str(ac.harness_launcher_path()), "--transport", "stdio"])
+        self.assertTrue(os.path.isfile(args[0]))
+
+    def test_launcher_install_json_points_at_vendor_parent(self):
+        """install.json must list the *parent* of vendor/blmcp, not blmcp itself.
 
         This is the exact mistake that produces ``No module named 'blmcp'``:
         ``import blmcp`` resolves from the directory *containing* the package.
         """
         import json
-        import unittest.mock as mock
         vendor_dir = os.path.join(_ADDON_DIR, "bfa_coworker", "vendor")
-        with mock.patch.object(ac, "_get_blender_python_for_config",
-                               return_value=(sys.executable, vendor_dir)):
-            raw = ac.generate_mcp_client_config(
-                client_type="claude_desktop", use_blender_python=True)
-        parsed = json.loads(raw)
-        env = parsed["mcpServers"]["bfa-coworker"]["env"]
-        self.assertEqual(env["PYTHONPATH"], vendor_dir)
-        # The parent of vendor/blmcp is vendor/ — not vendor/blmcp.
-        self.assertFalse(env["PYTHONPATH"].endswith(os.path.join("vendor", "blmcp")))
+        ac.ensure_harness_launcher(vendor_dir)
+        info = json.loads((ac._HARNESS_DIR / "install.json").read_text(encoding="utf-8"))
+        self.assertEqual(info["pythonpath"], [vendor_dir])
+        self.assertFalse(info["pythonpath"][0].endswith(os.path.join("vendor", "blmcp")))
 
-    def test_args_use_stdio_transport(self):
+    def test_pip_mode_uses_module(self):
         import json
-        raw = ac.generate_mcp_client_config(client_type="claude_desktop")
-        parsed = json.loads(raw)
-        args = parsed["mcpServers"]["bfa-coworker"]["args"]
-        self.assertEqual(args, ["-m", "blmcp", "--transport", "stdio"])
-
-
-class TestClaudeCodeConfig(unittest.TestCase):
-    """Claude Code reads ~/.claude.json / .mcp.json, never claude_desktop_config.json."""
-
-    def test_claude_code_config_is_mcp_json_shape(self):
-        import json
-        parsed = json.loads(ac.generate_mcp_client_config(client_type="claude_code"))
-        server = parsed["mcpServers"]["bfa-coworker"]
-        self.assertEqual(server["type"], "stdio")
+        raw = ac.generate_mcp_client_config(client_type="claude_desktop", use_blender_python=False)
+        server = json.loads(raw)["mcpServers"]["bfa-coworker"]
+        self.assertEqual(server["command"], "python")
         self.assertEqual(server["args"], ["-m", "blmcp", "--transport", "stdio"])
 
-    def test_register_creates_file(self):
-        import json
-        import tempfile
-        from pathlib import Path
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / ".claude.json"
-            ac.register_claude_code_mcp_server(blender_port=9999, config_path=path)
-            data = json.loads(path.read_text(encoding="utf-8"))
-            server = data["mcpServers"]["bfa-coworker"]
-            self.assertEqual(server["type"], "stdio")
-            self.assertEqual(server["env"]["BFACW_PORT"], "9999")
 
-    def test_register_preserves_other_keys_and_backs_up(self):
-        import json
-        import tempfile
-        from pathlib import Path
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / ".claude.json"
-            original = {
-                "numStartups": 42,
-                "projects": {"D:/x": {"mcpServers": {}}},
-                "mcpServers": {"other": {"command": "foo"}},
-            }
-            path.write_text(json.dumps(original), encoding="utf-8")
-            ac.register_claude_code_mcp_server(config_path=path)
-            data = json.loads(path.read_text(encoding="utf-8"))
-            self.assertEqual(data["numStartups"], 42)
-            self.assertIn("projects", data)
-            self.assertIn("other", data["mcpServers"])
-            self.assertIn("bfa-coworker", data["mcpServers"])
-            backup = json.loads((Path(tmp) / ".claude.json.bfacw.bak").read_text(encoding="utf-8"))
-            self.assertEqual(backup, original)
+class TestLauncherEndToEnd(unittest.TestCase):
+    """The launcher really starts blmcp from the paths in install.json."""
 
-    def test_register_refuses_invalid_json(self):
+    def test_launcher_runs_blmcp_help(self):
+        import subprocess
+        venv_py = os.path.join(_REPO, "mcp", ".venv", "Scripts" if sys.platform == "win32" else "bin",
+                               "python.exe" if sys.platform == "win32" else "python")
+        if not os.path.isfile(venv_py):
+            self.skipTest("mcp/.venv not set up")
+        launcher = ac.ensure_harness_launcher(os.path.join(_REPO, "mcp"))
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        proc = subprocess.run([venv_py, str(launcher), "--help"], capture_output=True,
+                              text=True, timeout=60, env=env, cwd=os.path.dirname(str(launcher)))
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        self.assertIn("--transport", proc.stdout)
+
+
+_ENTRY = {
+    "command": "C:\\Blender\\python\\bin\\python.exe",
+    "args": ["C:\\Users\\me\\.cache\\bfa_coworker\\harness\\run_blmcp.py", "--transport", "stdio"],
+    "env": {"BFACW_HOST": "localhost", "BFACW_PORT": "9876"},
+}
+
+
+class TestClientFormats(unittest.TestCase):
+    """Each preset emits the schema its client documents (issue #100)."""
+
+    def _json(self, client):
+        import json
+        return json.loads(hc.format_config(client, _ENTRY))
+
+    def test_mcpservers_clients(self):
+        for client in ("claude_desktop", "claude_code", "cursor", "windsurf", "cline", "freebuff", "generic"):
+            with self.subTest(client=client):
+                server = self._json(client)["mcpServers"]["bfa-coworker"]
+                self.assertEqual(server["command"], _ENTRY["command"])
+                self.assertEqual(server["args"], _ENTRY["args"])
+                self.assertEqual(server["env"], _ENTRY["env"])
+
+    def test_type_stdio_where_documented(self):
+        self.assertEqual(self._json("claude_code")["mcpServers"]["bfa-coworker"]["type"], "stdio")
+        self.assertEqual(self._json("cursor")["mcpServers"]["bfa-coworker"]["type"], "stdio")
+        self.assertNotIn("type", self._json("cline")["mcpServers"]["bfa-coworker"])
+
+    def test_vscode_uses_servers(self):
+        parsed = self._json("vscode")
+        self.assertNotIn("mcpServers", parsed)
+        self.assertEqual(parsed["servers"]["bfa-coworker"]["type"], "stdio")
+
+    def test_opencode_schema(self):
+        parsed = self._json("opencode")
+        server = parsed["mcp"]["bfa-coworker"]
+        self.assertEqual(server["type"], "local")
+        self.assertEqual(server["command"], [_ENTRY["command"], *_ENTRY["args"]])
+        self.assertEqual(server["environment"], _ENTRY["env"])
+        self.assertTrue(server["enabled"])
+
+    def test_codex_is_toml(self):
+        import tomllib
+        data = tomllib.loads(hc.format_config("codex", _ENTRY))
+        server = data["mcp_servers"]["bfa-coworker"]
+        self.assertEqual(server["command"], _ENTRY["command"])
+        self.assertEqual(server["args"], _ENTRY["args"])
+        self.assertEqual(server["env"], _ENTRY["env"])
+
+    def test_installable_clients(self):
+        for client in ("claude_desktop", "claude_code", "codex", "cursor", "windsurf", "opencode"):
+            self.assertTrue(hc.can_install(client), client)
+        for client in ("cline", "vscode", "freebuff", "generic"):
+            self.assertFalse(hc.can_install(client), client)
+            self.assertEqual(hc.config_paths(client), [])
+
+
+class TestClientWriters(unittest.TestCase):
+    """Writers keep other settings, back up, and never break a file."""
+
+    def setUp(self):
         import tempfile
         from pathlib import Path
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / ".claude.json"
-            path.write_text("{not json", encoding="utf-8")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_claude_code_creates_file(self):
+        import json
+        path = self.tmp / ".claude.json"
+        ac.install_mcp_client_config("claude_code", blender_port=9999, paths=[path])
+        server = json.loads(path.read_text(encoding="utf-8"))["mcpServers"]["bfa-coworker"]
+        self.assertEqual(server["type"], "stdio")
+        self.assertEqual(server["env"]["BFACW_PORT"], "9999")
+
+    def test_json_merge_preserves_other_keys_and_backs_up(self):
+        import json
+        path = self.tmp / ".claude.json"
+        original = {
+            "numStartups": 42,
+            "projects": {"D:/x": {"mcpServers": {}}},
+            "mcpServers": {"other": {"command": "foo"}},
+        }
+        path.write_text(json.dumps(original), encoding="utf-8")
+        hc.install("claude_code", _ENTRY, paths=[path])
+        data = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(data["numStartups"], 42)
+        self.assertIn("projects", data)
+        self.assertIn("other", data["mcpServers"])
+        self.assertIn("bfa-coworker", data["mcpServers"])
+        backup = json.loads((self.tmp / ".claude.json.bfacw.bak").read_text(encoding="utf-8"))
+        self.assertEqual(backup, original)
+
+    def test_refuses_invalid_json(self):
+        path = self.tmp / "mcp.json"
+        path.write_text("{not json", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            hc.install("cursor", _ENTRY, paths=[path])
+        self.assertEqual(path.read_text(encoding="utf-8"), "{not json")
+
+    def test_opencode_merge(self):
+        import json
+        path = self.tmp / "opencode.json"
+        path.write_text(json.dumps({"model": "x", "mcp": {"other": {"type": "local", "command": ["a"]}}}),
+                        encoding="utf-8")
+        hc.install("opencode", _ENTRY, paths=[path])
+        data = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(data["model"], "x")
+        self.assertIn("other", data["mcp"])
+        self.assertEqual(data["mcp"]["bfa-coworker"]["type"], "local")
+
+    def test_codex_replaces_only_our_tables(self):
+        import tomllib
+        path = self.tmp / "config.toml"
+        path.write_text(
+            'model = "o4"\n\n'
+            '[mcp_servers.bfa-coworker]\ncommand = "old"\nargs = []\n\n'
+            '[mcp_servers.bfa-coworker.env]\nBFACW_PORT = "1"\n\n'
+            '[mcp_servers.context7]\ncommand = "npx"\n',
+            encoding="utf-8")
+        hc.install("codex", _ENTRY, paths=[path])
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(data["model"], "o4")
+        self.assertEqual(data["mcp_servers"]["context7"]["command"], "npx")
+        self.assertEqual(data["mcp_servers"]["bfa-coworker"]["command"], _ENTRY["command"])
+        self.assertEqual(data["mcp_servers"]["bfa-coworker"]["env"]["BFACW_PORT"], "9876")
+
+    def test_codex_refuses_invalid_toml(self):
+        path = self.tmp / "config.toml"
+        path.write_text("[[[", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            hc.install("codex", _ENTRY, paths=[path])
+        self.assertEqual(path.read_text(encoding="utf-8"), "[[[")
+
+    def test_uninstallable_client_raises(self):
+        with self.assertRaises(ValueError):
+            hc.install("cline", _ENTRY)
+
+    def test_windsurf_without_file_asks_to_create_it(self):
+        import unittest.mock as mock
+        with mock.patch.object(hc, "config_paths", return_value=[self.tmp / "a.json", self.tmp / "b.json"]):
             with self.assertRaises(ValueError):
-                ac.register_claude_code_mcp_server(config_path=path)
-            self.assertEqual(path.read_text(encoding="utf-8"), "{not json")
+                hc.install("windsurf", _ENTRY)
+
+
+class TestInspectInstalledConfig(unittest.TestCase):
+    """Test Config checks the entry the client really launches."""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _inspect(self, data, port=9876):
+        import json
+        import unittest.mock as mock
+        path = self.tmp / "claude_desktop_config.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        with mock.patch.object(hc, "config_paths", return_value=[path]):
+            return ac.inspect_installed_client_config("claude_desktop", blender_port=port)
+
+    def test_stale_pythonpath_is_reported(self):
+        """The exact break from the installer moving Coworker out of user_default."""
+        gone = str(self.tmp / "extensions" / "user_default" / "bfa_coworker" / "vendor")
+        result = self._inspect({"mcpServers": {"bfa-coworker": {
+            "command": sys.executable, "args": ["-m", "blmcp", "--transport", "stdio"],
+            "env": {"BFACW_PORT": "9876", "PYTHONPATH": gone}}}})
+        self.assertTrue(result["found"])
+        self.assertTrue(any(gone in p for p in result["problems"]), result["problems"])
+
+    def test_port_mismatch_is_reported(self):
+        launcher = ac.ensure_harness_launcher("")
+        result = self._inspect({"mcpServers": {"bfa-coworker": {
+            "command": sys.executable, "args": [str(launcher), "--transport", "stdio"],
+            "env": {"BFACW_PORT": "9876"}}}}, port=9877)
+        self.assertTrue(any("9877" in p for p in result["problems"]), result["problems"])
+
+    def test_launcher_entry_is_ok(self):
+        launcher = ac.ensure_harness_launcher("")
+        result = self._inspect({"mcpServers": {"bfa-coworker": {
+            "command": sys.executable, "args": [str(launcher), "--transport", "stdio"],
+            "env": {"BFACW_PORT": "9876"}}}})
+        self.assertEqual(result["problems"], [])
+        self.assertTrue(result["summary"].startswith("Installed config OK"))
+
+    def test_missing_entry_is_reported(self):
+        result = self._inspect({"mcpServers": {"other": {"command": "x"}}})
+        self.assertFalse(result["found"])
+        self.assertTrue(result["problems"])
+
+    def test_undocumented_client_is_not_checked(self):
+        result = ac.inspect_installed_client_config("cline")
+        self.assertFalse(result["checked"])
 
 
 class TestPingAgentHarnessMode(unittest.TestCase):

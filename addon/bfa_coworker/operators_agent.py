@@ -17,7 +17,7 @@ __all__ = (
     "_BFACW_OT_asset_selftest_run",
     "_BFACW_OT_asset_selftest_reset",
     "BFACW_OT_copy_mcp_config",
-    "BFACW_OT_register_claude_code",
+    "BFACW_OT_install_client_config",
     "BFACW_OT_test_mcp_config",
     "BFACW_OT_mcp_server_start",
     "BFACW_OT_mcp_server_stop",
@@ -987,31 +987,43 @@ class BFACW_OT_copy_mcp_config(bpy.types.Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
-class BFACW_OT_register_claude_code(bpy.types.Operator):  # type: ignore[misc]
-    """Add the bfa-coworker MCP server to Claude Code's user config."""
-    bl_idname = "bfacw.register_claude_code"
-    bl_label = "Add to Claude Code"
+class BFACW_OT_install_client_config(bpy.types.Operator):  # type: ignore[misc]
+    """Add the bfa-coworker MCP server to the selected client's config file."""
+    bl_idname = "bfacw.install_client_config"
+    bl_label = "Add to Client"
     bl_description = (
-        "Write the bfa-coworker server into ~/.claude.json (user scope, all projects). "
-        "Works for the Claude Code CLI and the VS Code / JetBrains extensions. "
-        "The previous file is backed up as .claude.json.bfacw.bak"
+        "Write the bfa-coworker server into the selected client's config file. "
+        "Other settings are kept and the previous file is backed up as <name>.bfacw.bak"
+    )
+
+    client_type: bpy.props.EnumProperty(  # type: ignore[valid-type]
+        name="Client",
+        items=HARNESS_PRESET_ITEMS,
+        default="claude_code",
     )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         prefs = context.preferences.addons[__package__].preferences
         _bridge_port, _, _ = effective_ports(prefs)
         try:
-            path = _ac_mod.register_claude_code_mcp_server(
+            paths = _ac_mod.install_mcp_client_config(
+                self.client_type,
                 blender_host=prefs.host,
                 blender_port=_bridge_port,
                 use_blender_python=getattr(prefs, "use_blender_python_for_harness", True),
             )
         except (OSError, ValueError) as ex:
-            self.report({"ERROR"}, "Could not update Claude Code config: {:s}".format(str(ex)))
+            self.report({"ERROR"}, "Could not update the config: {:s}".format(str(ex)))
             return {"CANCELLED"}
+        BFACW_OT_test_mcp_config._result = {}
+        restart = (
+            "quit it fully (File > Exit) and reopen it"
+            if self.client_type == "claude_desktop" else "restart it"
+        )
         self.report(
             {"INFO"},
-            "Added bfa-coworker to {:s} -- restart Claude Code, then check /mcp".format(str(path)),
+            "Added bfa-coworker to {:s} -- {:s}".format(
+                ", ".join(str(p) for p in paths), restart),
         )
         return {"FINISHED"}
 
@@ -1034,12 +1046,16 @@ class BFACW_OT_test_mcp_config(bpy.types.Operator):  # type: ignore[misc]
         client_type = getattr(prefs, "harness_preset", "claude_desktop")
 
         def _do_check() -> None:
-            BFACW_OT_test_mcp_config._result = _ac_mod.validate_mcp_client_config(
+            check = _ac_mod.validate_mcp_client_config(
                 client_type=client_type,
                 blender_host=prefs.host,
                 blender_port=_bridge_port,
                 use_blender_python=use_blender_py,
             )
+            # Also check the entry the client will actually launch (#100).
+            check["installed"] = _ac_mod.inspect_installed_client_config(
+                client_type, blender_port=_bridge_port)
+            BFACW_OT_test_mcp_config._result = check
 
         thread = threading.Thread(target=_do_check, daemon=True)
         thread.start()
@@ -1050,8 +1066,12 @@ class BFACW_OT_test_mcp_config(bpy.types.Operator):  # type: ignore[misc]
             self.report({"ERROR"}, "Config check timed out")
             return {"CANCELLED"}
 
+        installed = result.get("installed") or {}
         if result.get("ok"):
-            self.report({"INFO"}, result.get("summary", "Config OK"))
+            if installed.get("problems"):
+                self.report({"WARNING"}, installed.get("summary", ""))
+            else:
+                self.report({"INFO"}, result.get("summary", "Config OK"))
             return {"FINISHED"}
 
         self.report(

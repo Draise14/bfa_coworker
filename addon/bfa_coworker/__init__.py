@@ -50,7 +50,7 @@ from .operators_agent import (
     _BFACW_OT_asset_selftest_run,
     _BFACW_OT_asset_selftest_reset,
     BFACW_OT_copy_mcp_config,
-    BFACW_OT_register_claude_code,
+    BFACW_OT_install_client_config,
     BFACW_OT_test_mcp_config,
     BFACW_OT_mcp_server_start,
     BFACW_OT_mcp_server_stop,
@@ -104,7 +104,7 @@ _classes = (
     _BFACW_OT_asset_selftest_run,
     _BFACW_OT_asset_selftest_reset,
     BFACW_OT_copy_mcp_config,
-    BFACW_OT_register_claude_code,
+    BFACW_OT_install_client_config,
     BFACW_OT_test_mcp_config,
     BFACW_OT_mcp_server_start,
     BFACW_OT_mcp_server_stop,
@@ -165,6 +165,9 @@ def register() -> None:
     # the scan entirely.
     from . import agent_controller
     agent_controller.migrate_vendor_deps()
+    # External Harness configs run a launcher at a fixed path; point it at
+    # this install so configs survive Coworker moving or updating (#100).
+    agent_controller.sync_harness_launcher()
 
     # Clear stale CLI command handles from a previous registration.
     _cli_commands.clear()

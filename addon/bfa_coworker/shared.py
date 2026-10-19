@@ -343,35 +343,33 @@ class HarnessPreset:
 
 
 # -- Harness Presets ------------------------------------------------------
-# All presets are MCP-compatible and appear in >=2 of the 3 major "top 10"
-# harness rankings (The Tool Nerd, explainx.ai, CellCog) as of Aug 2026.
-
+# Config formats, paths and steps below were checked against each client's
+# own documentation (issue #100); formats live in harness_clients.py.
 _HARNESS_PRESETS: list[HarnessPreset] = [
     HarnessPreset(
         identifier="claude_desktop",
         name="Claude Desktop",
-        description="Anthropic's desktop app -- the original MCP client. Free desktop app for Windows, macOS, Linux.",
+        description="Anthropic's desktop app for Windows and macOS.",
         icon="URL",
         is_open_source=False,
         config_path_help=(
             "Windows: %APPDATA%\\Claude\\claude_desktop_config.json\n"
-            "macOS: ~/Library/Application Support/Claude/claude_desktop_config.json\n"
-            "Linux: ~/.config/Claude/claude_desktop_config.json"
+            "  (some installs: %LOCALAPPDATA%\\Claude-Data\\claude_<id>\\claude_desktop_config.json)\n"
+            "macOS: ~/Library/Application Support/Claude/claude_desktop_config.json"
         ),
         setup_steps=[
-            "Open Claude Desktop -> Settings -> Developer -> Edit Config",
-            "Paste the config into the JSON editor and save",
-            "Restart Claude Desktop completely (File -> Exit, then re-open)",
-            "You should see a hammer icon in the chat input -- tools are ready",
+            "Quit Claude Desktop fully (File -> Exit) -- it rewrites its config while running",
+            "Click 'Add to Claude Desktop', or open Settings -> Developer -> Edit Config and merge the copied entry",
+            "Reopen Claude Desktop",
+            "Check the server under the + menu -> Connectors",
         ],
-        docs_url="https://modelcontextprotocol.io/quickstart/user",
-        notes="Claude Desktop must be fully restarted after config changes. A window close is not enough on some OS versions.",
-        chat_paste_hint="Claude Desktop has no chat-paste flow - paste into the config file (Edit Config) instead.",
+        docs_url="https://modelcontextprotocol.io/docs/develop/connect-local-servers",
+        notes="Claude Desktop must be fully quit and reopened after config changes.",
     ),
     HarnessPreset(
         identifier="claude_code",
         name="Claude Code",
-        description="Anthropic's terminal harness -- #1 in every 2026 ranking. Richest hook/delegation surface.",
+        description="Anthropic's coding agent: terminal CLI, plus VS Code and JetBrains extensions.",
         icon="CONSOLE",
         is_open_source=False,
         config_path_help=(
@@ -379,148 +377,154 @@ _HARNESS_PRESETS: list[HarnessPreset] = [
             "Project scope: .mcp.json in the folder you open with Claude Code"
         ),
         setup_steps=[
-            "Click 'Add to Claude Code' -- it writes the server into ~/.claude.json (a backup is kept)",
+            "Click 'Add to Claude Code' -- it writes the server into ~/.claude.json",
             "Or: save the copied config as .mcp.json in your project folder",
             "Restart Claude Code (CLI: exit and re-run claude; VS Code: reload the window)",
             "Run /mcp in Claude Code -- bfa-coworker should show as connected",
         ],
-        docs_url="https://docs.anthropic.com/en/docs/claude-code/mcp",
+        docs_url="https://code.claude.com/docs/en/mcp",
         notes="Claude Code does NOT read claude_desktop_config.json -- a server set up for Claude Desktop is invisible to it.",
         chat_paste_hint="Claude Code: /mcp only lists servers that are already configured -- use 'Add to Claude Code' or a .mcp.json file to add one.",
     ),
     HarnessPreset(
         identifier="codex",
         name="Codex CLI",
-        description="OpenAI's open-source coding agent (Apache 2.0, 92K+ stars). Terminal-first with desktop app.",
+        description="OpenAI's open-source coding agent for the terminal.",
         icon="CONSOLE",
         is_open_source=True,
         config_path_help=(
-            "~/.codex/config.json  (or project-level codex.json)"
+            "~/.codex/config.toml  (or .codex/config.toml in a trusted project) -- TOML, not JSON"
         ),
         setup_steps=[
-            "Install Codex CLI: pip install codex-cli  (or npm install -g @openai/codex)",
-            "Create ~/.codex/config.json with the config below",
-            "Run codex in your terminal",
-            "Verify tools: ask Codex to list available MCP tools",
+            "Click 'Add to Codex CLI', or paste the copied TOML into ~/.codex/config.toml",
+            "Or run: codex mcp add bfa-coworker --env BFACW_PORT=<port> -- <command> <args>",
+            "Start codex in your terminal",
+            "Run codex mcp list to confirm bfa-coworker is listed",
         ],
-        docs_url="https://github.com/openai/codex",
-        notes="Codex uses the OpenAI Agents SDK. The python command must have blmcp and its deps available.",
-        chat_paste_hint="Codex: use `codex mcp add` in a terminal - there is no chat-paste flow.",
+        docs_url="https://learn.chatgpt.com/docs/extend/mcp?surface=cli",
+        notes="Codex reads TOML: each server is a [mcp_servers.<name>] table.",
     ),
     HarnessPreset(
         identifier="cursor",
         name="Cursor",
-        description="Most popular IDE harness. VS Code fork with native agent mode and MCP support.",
+        description="AI code editor (VS Code fork) with agent mode and MCP support.",
         icon="FILE_TEXT",
         is_open_source=False,
         config_path_help=(
-            "~/.cursor/mcp.json  (or .cursor/mcp.json in project root)"
+            "Global: ~/.cursor/mcp.json   Project: .cursor/mcp.json"
         ),
         setup_steps=[
-            "Open Cursor -> Settings -> Features -> MCP Servers",
-            "Click 'Add New MCP Server' and paste the config",
-            "Or manually edit ~/.cursor/mcp.json",
-            "Restart Cursor -- the agent will auto-discover Blender tools",
+            "Click 'Add to Cursor', or merge the copied entry into ~/.cursor/mcp.json",
+            "Restart Cursor",
+            "Open Customize in the sidebar and check that bfa-coworker is enabled",
         ],
-        docs_url="https://docs.cursor.com/advanced/mcp",
-        notes="Cursor's MCP config format uses 'servers' key (not 'mcpServers'). The config below uses the correct format.",
-        chat_paste_hint="Cursor: paste the config into Settings > Features > MCP Servers (Add New MCP Server accepts the JSON directly), or edit the file below.",
+        docs_url="https://cursor.com/docs/context/mcp",
+        notes="Cursor uses the mcpServers key with type: stdio.",
     ),
     HarnessPreset(
         identifier="windsurf",
         name="Windsurf",
-        description="IDE-native harness with Cascade agent flow. MCP support for external tools.",
+        description="IDE with the Cascade agent (now documented as Devin Desktop).",
         icon="FILE_TEXT",
         is_open_source=False,
         config_path_help=(
-            "~/.codeium/windsurf/mcp_config.json"
+            "Current: %APPDATA%\\devin\\mcp_config.json (Windows), ~/.config/devin/mcp_config.json\n"
+            "Older Windsurf: ~/.codeium/windsurf/mcp_config.json"
         ),
         setup_steps=[
-            "Create ~/.codeium/windsurf/mcp_config.json",
-            "Paste the config below into the file",
-            "Restart Windsurf completely",
-            "The Cascade agent will have access to Blender tools",
+            "In Cascade, open ... -> MCPs -> Open MCP config file once (creates it)",
+            "Click 'Add to Windsurf', or merge the copied entry into that file",
+            "Restart Windsurf / Devin Desktop",
         ],
-        docs_url="https://docs.windsurf.com/mcp",
-        notes="Windsurf uses the same MCP config format as VS Code. Config file is auto-created on first launch.",
-        chat_paste_hint="Windsurf: paste the config into the Cascade chat - it adds the MCP server automatically.",
+        docs_url="https://docs.devin.ai/desktop/cascade/mcp",
+        notes="Cascade servers are added by editing mcp_config.json; there is no chat-paste or one-click install.",
     ),
     HarnessPreset(
         identifier="cline",
         name="Cline",
-        description="Open-source VS Code extension (Apache 2.0, 63K+ stars). Deep MCP integration, 8M+ developers.",
+        description="Open-source coding agent extension for VS Code and JetBrains.",
         icon="EXTENSION",
         is_open_source=True,
         config_path_help=(
-            "~/.vscode/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json"
+            "IDE: MCP Servers icon -> Configure -> 'Configure MCP Servers' opens cline_mcp_settings.json\n"
+            "CLI: ~/.cline/data/settings/cline_mcp_settings.json"
         ),
         setup_steps=[
-            "Install Cline from VS Code Marketplace",
-            "Open Cline settings -> MCP Servers -> Add Server",
-            "Paste the config into the JSON editor",
-            "Restart VS Code -- Cline will connect to Blender's bridge",
+            "Click the MCP Servers icon in Cline's toolbar",
+            "Open the Configure tab and click 'Configure MCP Servers'",
+            "Merge the copied entry into mcpServers and save",
         ],
-        docs_url="https://github.com/cline/cline",
-        notes="Cline has a permission-gated tool model -- you approve each Blender operation by default.",
-        chat_paste_hint="Cline: use Paste Configuration in the MCP Servers settings (VS Code extension panel).",
+        docs_url="https://docs.cline.bot/mcp/configuring-mcp-servers",
+        notes="Cline asks you to approve each tool call unless you add it to autoApprove.",
     ),
     HarnessPreset(
         identifier="opencode",
         name="OpenCode",
-        description="#1 open-source harness (MIT, 176K+ stars). Terminal TUI, desktop app, or IDE-embedded.",
+        description="Open-source coding agent: terminal TUI, desktop app, or IDE.",
         icon="CONSOLE",
         is_open_source=True,
         config_path_help=(
-            "~/.config/opencode/mcp.json  (or project-level opencode.json)"
+            "Global: ~/.config/opencode/opencode.json   Project: opencode.json"
         ),
         setup_steps=[
-            "Install OpenCode: pip install opencode  (or npm install -g opencode)",
-            "Create ~/.config/opencode/mcp.json with the config below",
-            "Run opencode in your terminal",
-            "OpenCode auto-discovers MCP tools on startup",
+            "Install: npm install -g opencode-ai  (or see the install docs)",
+            "Click 'Add to OpenCode', or merge the copied mcp entry into opencode.json",
+            "Start opencode",
+            "Run opencode mcp list to confirm bfa-coworker is listed",
         ],
-        docs_url="https://github.com/sst/opencode",
-        notes="OpenCode supports 75+ LLM providers. Point it at any OpenAI-compatible endpoint.",
-        chat_paste_hint="OpenCode: paste the config into the OpenCode TUI - it configures the MCP server automatically (or use `opencode mcp add` in a terminal).",
+        docs_url="https://opencode.ai/docs/mcp-servers/",
+        notes="OpenCode uses its own schema: mcp -> {type: local, command: [...], environment}.",
+    ),
+    HarnessPreset(
+        identifier="vscode",
+        name="VS Code (Copilot)",
+        description="VS Code's built-in MCP support for agent mode.",
+        icon="FILE_TEXT",
+        is_open_source=False,
+        config_path_help=(
+            "Workspace: .vscode/mcp.json   User: run 'MCP: Open User Configuration'"
+        ),
+        setup_steps=[
+            "Run 'MCP: Open User Configuration' from the Command Palette (or create .vscode/mcp.json)",
+            "Merge the copied entry into the servers section and save",
+            "Start the server from the MCP list (MCP: List Servers)",
+        ],
+        docs_url="https://code.visualstudio.com/docs/copilot/customization/mcp-servers",
+        notes="VS Code uses the servers key (not mcpServers).",
     ),
     HarnessPreset(
         identifier="freebuff",
-        name="Freebuff",
-        description="Freebuff agent client - configure via its MCP settings UI or harness chat; no config-file hunting needed.",
+        name="Freebuff (unverified)",
+        description="Freebuff agent client -- no public MCP docs found; format unverified.",
         icon="URL",
         is_open_source=True,
         config_path_help=(
-            "Location varies by Freebuff version and install - the MCP/agent settings UI"
-
-            "or harness chat flow is the recommended way to add the server."
+            "Unknown -- use Freebuff's MCP / tools settings."
         ),
         setup_steps=[
-            "Open Freebuff settings and find the MCP / tools / agent servers section",
-            "Add a new MCP server and paste the config below",
-            "Or paste the config into the Freebuff harness chat and confirm the setup",
-            "Restart or reload Freebuff so the new tools are picked up",
+            "Open Freebuff's MCP / tools settings",
+            "Add a new stdio server using the copied command, args and env",
+            "Restart Freebuff",
         ],
         docs_url="",
-        notes="Freebuff accepts the Claude Desktop format (mcpServers key). Prefer the settings UI or chat flow - file locations vary per system.",
-        chat_paste_hint="Freebuff: paste the config into the harness chat or the MCP settings UI - it registers the server for you.",
+        notes="The copied config uses the common mcpServers format; we couldn't confirm Freebuff reads it.",
     ),
     HarnessPreset(
         identifier="generic",
         name="Generic STDIO",
-        description="Fallback config for any MCP-compatible client not listed above.",
+        description="Common mcpServers format for any MCP client not listed above.",
         icon="SETTINGS",
         is_open_source=False,
         config_path_help=(
-            "Varies by client -- check your harness documentation for MCP stdio config format."
+            "Varies by client -- check its documentation for MCP stdio servers."
         ),
         setup_steps=[
-            "Find where your MCP client stores its config file",
-            "Paste the generic config below into the mcpServers section",
+            "Find where your MCP client stores its servers",
+            "Merge the copied bfa-coworker entry into it (rename the top key if your client uses another one)",
             "Restart your MCP client",
-            "If tools don't appear, check the troubleshooting guide",
         ],
         docs_url="",
-        notes="The generic config uses the Claude Desktop format (mcpServers key). Adjust the key name if your client uses a different schema.",
+        notes="The command, args and env are what every stdio client needs, whatever its key names.",
     ),
 ]
 

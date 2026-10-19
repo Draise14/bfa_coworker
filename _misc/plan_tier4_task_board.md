@@ -1,194 +1,185 @@
 # Tier 4 — Task Board
 
-**Created**: 2026-10-16 · **Source of truth for order**: `plan_tier4_master_coordination.md` §3
-**Status**: 🚧 **Tier 4 started 2026-10-18** (tracking issue #97). T0 baseline run by the maintainer; work proceeds one PR at a time in the order of the *This week* list below.
-**Review decisions applied (2026-10-16)**: ACP + parity is lane 1 · "External Harness" keeps its name (tooltips explain it), "External Agent" is added · code runs without asking on External Agent, backed by a turn checkpoint and Revert · "Only Coworker tools" on by default · session token on by default · **minimum Blender/Bforartists 5.3**, chat drawn with native `label_markdown()` (B0).
+Tracking issue **#97** · Order and reasons: `plan_tier4_master_coordination.md` §3.
 
-**How to use**: one branch per row-group (the **Branch** column). Branch from `main` and
-open a PR when the row's *Done when* holds. Tick the box and add the PR number. Sizes:
-**S** ≤ 2 days · **M** ≤ 1 week · **L** > 1 week. IDs match the plan documents.
+**How to read this board.** Tasks are named *group + step number* ("Engine 2", "Chat 3").
+The small **Ref** column holds the short code the plan documents use (e.g. `I1b`), so
+you can look a task up there. Each PR gets its own easy-to-read tracking issue, and its
+first line says **"Merge: anytime"** or **"Merge after #N"**.
 
-Every PR: tests for bpy-free code · cost-ledger before/after if prompts or tools change ·
-white-room line in the PR body · skill/tool text claims backed by a probe (S3) · wiki/docs if user-facing. A PR that touches the turn
-loop, prompts or tools also runs the **quick challenges** (`quick_sanity`, `quick_judgement`,
-`quick_2d`) on Local.
+**Decisions in force (2026-10-16):** ACP + one engine for all modes come first ·
+"External Harness" keeps its name and a tooltip explains it; "External Agent" is added ·
+code runs without asking on External Agent, backed by a turn checkpoint and Revert ·
+"Only Coworker tools" on by default · session token on by default · minimum
+Blender/Bforartists 5.3, chat drawn with Blender's own `label_markdown()`.
 
----
-
-## This week (2026-10-18 →): PR order
-
-One PR open at a time on the hot files (`agent_controller.py`, `ui_chat.py`), so no PR
-needs a rebase across another's conflicts. PRs that only touch `mcp/blmcp/` or new
-files can be reviewed in parallel.
-
-| # | Branch | Task | Hot files? |
-|---|---|---|---|
-| 1 | `chore/4-green-baseline` | Green unit-test baseline (stale tool listing, ASCII instructions, FastMCP assertion) + board kickoff | no |
-| 2 | `fix/4s-node-tree-5x` | S1 | no (`mcp/` + skills) |
-| 3 | `fix/4s-templates-server-side` | S0 | no (`mcp/` + registry move) |
-| 4 | `spike/4h-acp-transcripts` | H0: fixtures + corrected 4h tables | no |
-| 5 | `feat/4i-engine-types` | I1a | no (new file) |
-| 6 | `feat/4i-engine-local` | I1b | **yes** |
-| 7 | `feat/4i-session-token` | I6 | bridge + `mcp/` |
-| 8 | `spike/4a-coworker-editor` | A0 | no (throwaway prototypes, decision doc) |
-| 9 | `feat/4i-engine-ui` | I1c | **yes** |
-| 10 | `feat/4b-native-markdown` | B0 | **yes** (after I1c) |
+**Every PR:** tests for bpy-free code · token cost before/after if prompts or tools
+change · a white-room line · skill/tool claims backed by a probe · docs if user-facing ·
+the 3 quick challenges on Local if it touches the turn loop, prompts or tools. Branch
+from `main`, no stacked PRs. Only one open PR at a time on `agent_controller.py` /
+`ui_chat.py`. Sizes: **S** ≤ 2 days · **M** ≤ 1 week · **L** more.
 
 ---
 
-## Test gates (user testing + benchmarks)
+## Where we are
 
-Defined in master §3.3. Tick a gate when its runs are saved and its rating sheet is filled.
+| Status | Task | PR |
+|---|---|---|
+| ✅ Done | Green test baseline + kickoff | #108 |
+| ✅ Done | Skills 1 + 2: template tools work everywhere; node tools read the 5.x compositor | #109 (#110) |
+| ✅ Done | Agent 1: real ACP sessions recorded with OpenCode | #111 |
+| ✅ Done | Engine 1: the engine's building blocks | #112 |
+| 🔍 In review | Engine 2: Local & Remote run through the engine | #114 (issue #113) |
+| ⏭ Next (hot files, after #114) | Engine 3: the chat draws from engine events | |
+| ⏭ Next (parallel, new files) | Agent 2: ACP client | |
+| ⏭ Next (parallel, prototypes only) | Editors 1: Coworker editor spike (#26) | |
+| ⛔ Blocked | Chat 1: native markdown. `UILayout.label_markdown` is **not in** the Bforartists 5.3 dev build of 2026-10-08 yet (probed) | |
+| ❓ Waiting on you | Agent 1, part 2: record one Claude Code session (uses your Claude login) | |
 
-| ☐ | Gate | When | Benchmarks (modes) | You test by hand |
+---
+
+## Test gates (you test, with benchmarks)
+
+Method in master §3.3. Benchmarks: the 6 core + 3 quick challenges.
+
+| ☐ | Gate | When | Benchmarks | You test by hand |
 |---|---|---|---|---|
-| ☑ | **T0 Baseline** | Done 2026-10-18 (before S0 + S1: rerun `nodes` after S1 so the compositor read isn't counted as a model failure) | 6 core + 3 quick: Local (small + medium model), Remote (cheap + frontier) | External Harness smoke with Claude Desktop or OpenCode (harness guide); fill the rating sheet for every mode |
-| ☐ | **T1 Seam regression** | After I1 + B0 merge | Full suites Local + Remote; must match T0 (± noise) | Chat looks right with native markdown (tables, code Copy rows) |
-| ☐ | **T2 = M1 "Bring your own agent"** | After H5 + I6 + I8 + H10 | Full suites on **External Agent** (OpenCode, Claude Code) for the first time; Local/Remote quick set | Artist script A (§3.3); External Harness via the new activity view |
-| ☐ | **T3 = M2 "Same Coworker everywhere"** | After I4 + I5 + B1/B2/B4 + G1–G3 | All suites, all engines; first-request tokens with progressive tools vs T0 | Artist script B: explain, ask_user, Revert, plan on each engine |
-| ☐ | **T4 = M3 "Deeper tools"** | After G4–G6, B3, F1–F3, C1–C4 | Domain suites (sequencer, shader/geometry nodes, image, compositor + new text/VSE steps), all engines | Recipes in the Text Editor; sessions browser; Safe mode |
-| ☐ | **T5 = M4 "Everywhere in the UI"** | After A1–A4 | Quick set, all engines (regression only) | Artist script C: Coworker editor (#26) + sidebars in five editors |
-| ☐ | **T6 = M5 Capstone** | After X1–X3 | Full suites + a new multi-step "campfire" suite, all engines | Agent teams, co-pilot, critic |
+| ☑ | **Test 0: Baseline** | Done 2026-10-18 | Local (small + medium), Remote (cheap + frontier) | External Harness smoke; rating sheet. *Rerun `nodes`: Skills 2 fixed the compositor read* |
+| ☐ | **Test 1: Nothing broke** | After Engine 3 + Chat 1 | Full set, Local + Remote; must match Test 0 | The chat looks right (native markdown, tables, Copy rows) |
+| ☐ | **Test 2: Bring your own agent** | After Agent 5, Engine 8, Engine 10, Agent 9 | Full set on **External Agent** (OpenCode, Claude Code) for the first time | Artist script A; External Harness with the activity view |
+| ☐ | **Test 3: Same Coworker everywhere** | After Engine 6–7, Chat 2–6, Tools 1–3 | All engines; first-request tokens vs Test 0 | Artist script B: explain, translate, questions, Revert, plan |
+| ☐ | **Test 4: Deeper tools** | After Tools 4–6, Chat 7, Runtime 1–3, Text Editor 1–4 | Domain suites, all engines | Recipes, sessions browser, Safe mode |
+| ☐ | **Test 5: Everywhere in the UI** | After Editors 2–5 | Quick set, all engines | Artist script C: Coworker editor + sidebars |
+| ☐ | **Test 6: Agent teams** | After Teams 1–3 | Full set + a new "campfire" suite | Teams, co-pilot, critic |
 
 ---
 
-## Lane H + I — External Agent (ACP) + Engine Parity  · *priority*
+## External Agent — chat here, your own agent does the work (#93)
 
-Plans: `plan_tier4h_external_agent_acp.md`, `plan_tier4i_engine_parity.md`
+Plan: `plan_tier4h_external_agent_acp.md`
 
-| ☐ | ID | Task | Branch | Depends | Size | Done when |
-|---|---|---|---|---|---|---|
-| ☐ | H0 | Spike: drive `opencode acp` + Claude ACP adapter from a Python script on Windows; record fixtures; confirm stdio `mcpServers` → `blmcp`; verify preset commands; check whether Freebuff speaks ACP | `spike/4h-acp-transcripts` | — | S | `tests/fixtures/acp/*.jsonl` committed; 4h §3/§5.2 corrected |
-| ☐ | I1 | `AgentEvent` + `Engine` seam; wrap Local/Remote with no behaviour change; event drain on main thread; fake engine for UI tests. **Split into three PRs:** | | H0 (event shape) | M | Full test suite + benchmark green; turn rendering reads events only |
-| ☐ | I1a | `engine.py` (bpy-free): `AgentEvent`, `EngineCaps`, `Engine` protocol, thread-safe event queue + main-thread drain helper, `FakeEngine`; unit tests. No wiring | `feat/4i-engine-types` | — | S | Tests for event ordering, drain, cancel; nothing else changes |
-| ☐ | I1b | `LocalEngine` / `RemoteEngine` adapters over `run_conversation_turn` callbacks; chat send/stop/queue go through `Engine`; `AgentState` updated only by the drain | `feat/4i-engine-local` | I1a | M | All unit tests + quick challenges unchanged vs T0 |
-| ☐ | I1c | Turn rendering reads event-fed state only; remove direct loop reads from `ui_chat.py`; engine chip | `feat/4i-engine-ui` | I1b | S | No `agent_controller` internals read in turn drawing; screenshots match |
-| ☐ | I2 | `ui_components.py` parity set (tool row, reasoning, plan, approval, question, engine chip) + brand detection → `shared.py` | `feat/4i-engine-seam` | I1 | S | No engine branches in turn rendering |
-| ☐ | H2 | `acp_client.py` (stdlib JSON-RPC over stdio, reader thread, cancel, crash handling) + `tests/fake_acp_agent.py` | `feat/4h-acp-client` | H0, I1 | M | Fake-agent conversation incl. cancel, permission, crash passes |
-| ☐ | H3 | Agent presets + detection + install/login hints + Generic preset; Windows `.cmd` shim handling | `feat/4h-acp-client` | H2 | S | Correct status per preset on a machine without the agent |
-| ☐ | H4 | `ExternalAgentEngine`: prompt (text, images, context chip), streaming, Workshop rows (dedupe vs bridge), plan updates, Stop, Queue, engine chip; mode selector adds **External Agent** next to **External Harness** (names kept). Plain-language tooltips: *External Agent: chat here, your own Claude/ChatGPT/Gemini/OpenCode does the work*; *External Harness: chat in another app, it uses Blender's tools* | `feat/4h-acp-engine` | H2, I2 | M | 4h §1 done-when with OpenCode, then Claude Code |
-| ☐ | I3 | `ApprovalRequest` model + inline row; "always" per session | `feat/4h-acp-engine` | I2 | S | ACP permission answered inline; timeout → reject |
-| ☐ | H5 | Wire ACP `session/request_permission` → I3 | `feat/4h-acp-engine` | H4, I3 | S | Allow once/always/deny each behave correctly |
-| ☐ | I6 | MCP + bridge session token; included in Copy MCP Config; passed to ACP via env | `feat/4i-session-token` | — | S | Tokenless request refused; all engines + config copy work |
-| ☐ | H6 | Project cwd + `.coworker/AGENTS.md` from `prompts_compact.yml`; "Only Coworker tools"; `session/load` or resume brief; session index entry | `feat/4h-acp-sessions` | H4 | S | Restart Blender → continue the same work |
-| ☐ | I5 | MCP tools `update_plan`, `ask_user` (deferred), `scene_checkpoint` + turn-start auto checkpoint, `get_scene_digest(since_hash)`; switch local loop's plan to `update_plan` | `feat/4i-shared-tools` | I1 | M | ACP agent updates plan, asks with buttons; digest returns `unchanged` on repeat |
-| ☐ | I4 | Server-side progressive tools: surface listing, `load_tools` as MCP tool + `tools/list_changed`, fallback to full list; local loop uses it | `feat/4i-progressive-tools` | I5 | M | ACP first request = surface schemas only (measured); VSE loads on demand |
-| ☐ | H7 | Hardening: kill agent mid-turn, kill Blender, bad command, no login, stderr surfacing, process_guard | `feat/4h-acp-hardening` | H4–H6 | S | Adversarial checklist passes |
-| ☐ | H8 | Polish: mode/model selectors, slash commands, maturity badges; wiki page + `harness_testing_guide.md` update | `feat/4h-acp-polish` | H7 | S | Docs reviewed |
-| ☐ | I8 | **Benchmarks through the engine seam**: the test-suite runner sends steps via `Engine.send` instead of `run_conversation_turn`, so the same 6 core + 3 quick benchmarks run on Local, Remote and External Agent. Each result records mode, engine, model, pass/fail, wall time, prompt/completion tokens (or "not reported"), iterations, approvals asked. Compare Benchmarks groups by mode | `feat/4i-benchmarks-all-modes` | I1, H4 | S | One suite runs on all three engines; Compare Benchmarks shows them side by side |
-| ☐ | H10 | **External Harness activity view**: a read-only live Workshop for External Harness mode, fed by the bridge (tool name, short args, duration, ok/error, result preview, screenshot thumbnails), plus "Copy session log" and an "Open log" shortcut. This is the debug view for external clients | `feat/4h-harness-activity` | I1 | S | Claude Desktop/OpenCode calls appear live in the Coworker panel; a failing call shows its error |
-| ☐ | I7 | Bounded tool outputs + `read_tool_output` in the server (from 4f.2.1) | `feat/4i-bounded-outputs` | — | S | 50 KB node dump → ≤ 2 KB preview + handle on every engine |
-| ☐ | H9 | *(only if needed)* Claude headless / OpenCode serve fallback | `feat/4h-fallbacks` | H7 | M | Only if a key agent's ACP is unusable |
+| ☐ | Task | Ref | What | Needs | Size | Done when | PR |
+|---|---|---|---|---|---|---|---|
+| ☑ | **Agent 1**: Record real sessions | H0 | Drive `opencode acp` from a script, record fixtures, correct the plan. *Claude Code part waits for your go-ahead* | — | S | Fixtures + findings in 4h §3.1 | #111 |
+| ☐ | **Agent 2**: ACP client | H2 | `acp_client.py` (stdlib JSON-RPC over stdio, reader thread, cancel, crash handling), tested by replaying the recorded fixtures | Engine 1 | M | Replay of every fixture passes, incl. cancel, permission, crash | |
+| ☐ | **Agent 3**: Agent presets | H3 | Presets + "is it installed / logged in" + install hints + Generic preset; resolve npm `.cmd` shims to the real exe; per-preset isolation switches | Agent 2 | S | Correct status per preset on a machine without the agent | |
+| ☐ | **Agent 4**: External Agent in the chat | H4 | The mode in the selector next to External Harness (plain tooltips). Text, images, context chip, streaming, Workshop rows (no duplicates), plan (incl. OpenCode's `todowrite`), Stop, Queue | Agent 2, Engine 4 | M | Campfire flow works with OpenCode, then Claude Code | |
+| ☐ | **Agent 5**: Approvals from the agent | H5 | The agent's permission requests use the inline approval row | Agent 4, Engine 5 | S | Allow once / always / deny each behave | |
+| ☐ | **Agent 6**: Project folder & resume | H6 | Project folder, compact `.coworker/AGENTS.md`, "Only Coworker tools", resume after a restart, session list entry | Agent 4 | S | Restart Bforartists → continue the same work | |
+| ☐ | **Agent 7**: Hardening | H7 | Kill the agent mid-turn, kill Bforartists, bad command, no login, error output shown | Agents 4–6 | S | Checklist passes | |
+| ☐ | **Agent 8**: Polish & docs | H8 | Model/mode pickers (from the agent's `configOptions`), slash commands, "supported/preview" badges, wiki page | Agent 7 | S | Docs reviewed | |
+| ☐ | **Agent 9**: External Harness activity view | H10 | Read-only live Workshop for External Harness (tool, args, time, ok/error, preview), Copy log / Open log. The debug view for external clients | Engine 2 | S | Claude Desktop / OpenCode calls appear live; a failing call shows its error | |
+| ☐ | **Agent 10**: Fallbacks *(only if needed)* | H9 | Claude headless / OpenCode server, if a key agent's ACP is unusable | Agent 7 | M | — | |
 
----
+## One engine for all modes — the shared seam (#93)
 
-## Lane G — Domain Tooling (parallel with lane 1)
+Plan: `plan_tier4i_engine_parity.md`
 
-Plan: `plan_tier4g_domain_tooling.md` (+ 4e.3). Each task includes its domain chapter in
-`prompts.yml` / skills (4g.5) and registers its domain for progressive loading (I4).
+| ☐ | Task | Ref | What | Needs | Size | Done when | PR |
+|---|---|---|---|---|---|---|---|
+| ☑ | **Engine 1**: Building blocks | I1a | `engine.py`: events, event bus (merges stream chunks), turn record, fake engine | — | S | Tests for order, merging, cancel | #112 |
+| ☐ | **Engine 2**: Local & Remote through the engine | I1b | Send / Queue / Stop go through `LoopEngine`; turns also reported as events | Engine 1 | M | No visible change; unit tests + quick challenges as before | #114 |
+| ☐ | **Engine 3**: The chat draws from events | I1c | Turn drawing reads the turn records, not loop internals; tool events from the loop; engine chip | Engine 2 | S | No loop internals read while drawing a turn; screenshots match | |
+| ☐ | **Engine 4**: Shared UI pieces | I2 | `ui_components.py`: tool row, reasoning, plan, approval, question, engine chip; brand detection → `shared.py` | Engine 3 | S | No per-engine branches in turn drawing | |
+| ☐ | **Engine 5**: Approval row | I3 | One approval model + inline row; "always" per session; prepare → apply for risky tools | Engine 4 | S | Same row for agent permissions, Safe mode and risky tools | |
+| ☐ | **Engine 6**: Shared tools in the server | I5 | MCP tools `update_plan`, `ask_user`, scene checkpoint (auto at turn start), `get_scene_digest(since)` | Engine 2 | M | An external agent updates the plan, asks with buttons; digest says `unchanged` on repeat | |
+| ☐ | **Engine 7**: Load tools only when needed | I4 | Surface tools listed, domains loaded on demand (`tools/list_changed`), full list as fallback. **Saves up to ~14K tokens per request** for external agents | Engine 6 | M | First request carries surface tools only (measured) | |
+| ☐ | **Engine 8**: Session token | I6 | MCP + bridge require a per-start token; Copy MCP Config includes it | — | S | Tokenless request refused; every mode still works | |
+| ☐ | **Engine 9**: Short tool results | I7 | Big results become a short preview + `read_tool_output` handle | — | S | 50 KB node dump → ≤ 2 KB preview on every engine | |
+| ☐ | **Engine 10**: Benchmarks on every engine | I8 | Benchmark steps go through the engine, so the same set runs on Local, Remote, External Agent; Compare groups by mode | Engine 2, Agent 4 | S | One suite side by side on three engines | |
 
-| ☐ | ID | Task | Branch | Depends | Size | Done when |
-|---|---|---|---|---|---|---|
-| ☐ | G1 | VSE tools (5): strips summary, strip detail, timeline overview, set frame range, render preview (deferred) + `vse` domain chapter + screenshot JSON enrichment | `feat/4g-vse-tools` | — | M | Tool listing shows 5; "move the title strip to 50" works on Local |
-| ☐ | G2 | Text tools (5): list, read range, set range, search, run (stdout/stderr) + **recipe convention** (parameter block at top of a text block; skill text explaining "edit numbers, rerun") | `feat/4g-text-tools` | — | M | Agent edits lines 40–45 of a script and reruns it; recipe rerun with a changed number |
-| ☐ | G3 | Node tools (5): get_node_detail, create_node, connect_nodes (socket fuzzy match, returns available names on miss), set_node_input_value, mute_node | `feat/4g-node-tools` | — | M | Noise → Roughness flow from 4g plan works on Local |
-| ☐ | G4 | Smart save tools (5, from 4e.3): save, check unsaved, pack, export selection, incremental save. File-writing ones use prepare/apply (I3) | `feat/4g-save-tools` | I3 for approvals (ship read-only `check_unsaved_changes` first) | M | Export asks for approval; incremental save versions correctly |
-| ☐ | G5 | `render_review_sheet(objects?, views[front,back,below,camera,45° steps], size)`: one tiled image for vision review | `feat/4g-review-sheet` | — | S | One image with labelled views; tokens ≈ one image |
-| ☐ | G6 | Long jobs: document deferred-tool limits; background-process option for long bakes/renders with progress | `feat/4g-long-jobs` | — | S | A 10-minute bake does not time out the agent |
+## Domain tools — the agent picks a tool instead of writing `bpy`
 
----
+Plan: `plan_tier4g_domain_tooling.md`. Each task ships its prompt chapter and registers its domain for Engine 7.
 
-## Lane B — Chat UX
+| ☐ | Task | Ref | What | Needs | Size | Done when | PR |
+|---|---|---|---|---|---|---|---|
+| ☐ | **Tools 1**: Video Sequencer | G1 | 5 tools: strips, strip detail, timeline, move/trim, preview frame | — | M | "Move the title strip to frame 50" works on Local | |
+| ☐ | **Tools 2**: Text Editor + recipes | G2 | 5 tools: list, read lines, edit lines, search, run. Plus **recipes**: scripts with a parameter block, rerun instead of regenerate | — | M | Agent edits lines 40–45 and reruns; a recipe reruns with a new number | |
+| ☐ | **Tools 3**: Nodes | G3 | 5 tools: node detail, add, connect (fuzzy socket names), set value, mute | — | M | Noise → Roughness flow works on Local | |
+| ☐ | **Tools 4**: Saving & export | G4 | Save, unsaved check, pack, export selection, incremental save; risky ones ask first | Engine 5 (ship the read-only check first) | M | Export asks; incremental save versions correctly | |
+| ☐ | **Tools 5**: Review sheet | G5 | One tiled image of several views (front, back, below, camera) for vision checks | — | S | One labelled image; costs about one image | |
+| ☐ | **Tools 6**: Long jobs | G6 | Long bakes/renders run in the background with progress | — | S | A 10-minute bake doesn't time out the agent | |
+
+## Chat features — explain, translate, ask, undo, sessions
 
 Plan: `plan_tier4b_competitor_ux_analysis.md`
 
-| ☐ | ID | Task | Branch | Depends | Size | Done when |
-|---|---|---|---|---|---|---|
-| ☐ | B0 | **Native markdown + Blender 5.3 minimum**: set `blender_version_min = "5.3.0"`. Replace `_render_markdown` with `layout.label_markdown(text=...)` (PR #163254: headers, paragraphs, bold/italic/monospace, links, code blocks, inline code, lists). Fill the gaps the native API leaves: split replies at fenced code blocks so each block keeps its Copy (later Run) row; convert tables to an aligned monospace block (no native tables); keep the LaTeX→Unicode pre-pass. Delete the old renderer and the `_can_multiline()` / pre-5.3 fallbacks. Update README, wiki, extension listing | `feat/4b-native-markdown` | — | M | Chat, Workshop and Explain answers draw through `label_markdown` on Blender 5.3 + Bforartists 5.3; old renderer removed; tables readable; unit tests for the segmenter/table converter |
-| ☐ | B7 | Doc-drift records (`sources`, `reviewed_revision`) for `skills/blender_5x.md` and the wiki pages Tier 4 touches, with a small checker in `_misc/`. Review whether the pre-5.3 version skills are still needed with the 5.3 minimum. Use S3 probes as the drift signal for API claims | `chore/4b-doc-drift` | B0, S3 | S | Checker lists drifted docs; version skills trimmed or justified; API drift shows as a failing probe |
-| ☐ | B1 | Explain this + Translate: context-menu operators, target card, docs-grounded Ask turn, `/explain` | `feat/4b-explain` | — | M | Property, node, object each give a cited answer on all engines |
-| ☐ | B6 | Live context chip (editor · mode · selection), toggleable | `feat/4b-context-chip` | — | S | Same prompt in two editors picks different correct tools |
-| ☐ | B2 | `ask_user` button row + next-step [Do it] [Something else] | `feat/4b-ask-user` | I5 | S | Click resumes the same turn on all engines |
-| ☐ | B4 | Revert turn (history + scene checkpoint), Edit & resend, Retry | `feat/4b-message-actions` | I5 (checkpoint) | M | Revert restores chat+scene (Local), scene+note (External) |
-| ☐ | B3 | Session browser (search, rename, delete, pin, engine chip), resume brief, optional project plan file | `feat/4b-sessions` | H6 for ACP part | M | Yesterday's session continues on each engine |
-| ☐ | B5 | Run / safety scan / undo / Fix for code blocks (Ask mode) reusing server preflight | `feat/4b-run-fix` | — | M | Broken snippet → Run → Fix → Run succeeds |
+| ☐ | Task | Ref | What | Needs | Size | Done when | PR |
+|---|---|---|---|---|---|---|---|
+| ☐ | **Chat 1**: Native markdown, 5.3 minimum | B0 | Draw chat text with Blender's `label_markdown()`; keep Copy rows per code block, tables as aligned text, math; delete our renderer; minimum 5.3. **Blocked**: not in the 5.3 dev build yet | Engine 3 | M | Replies draw natively on Blender + Bforartists 5.3 | |
+| ☐ | **Chat 2**: Explain this | B1 | Right-click a property, node or object → a short answer from the bundled docs, with the source; `/explain` | — | M | Property, node, object each give a cited answer on all engines | |
+| ☐ | **Chat 3**: Translate text in the scene (#42) | B1 | Right-click a text field, 3D text or text strip → **Translate with Coworker…** → language (remembered) → one small model call → confirm → written back as one undo step. Fast on light models; no full agent turn | — | S | A 3D text, a strip and a node label translate and undo cleanly | |
+| ☐ | **Chat 4**: "Where am I" chip | B6 | A line above the input (editor · mode · selection), read live at send time | — | S | Same prompt in two editors picks different correct tools | |
+| ☐ | **Chat 5**: Questions as buttons | B2 | `ask_user` choices as buttons; the suggested next step as [Do it] [Something else] | Engine 6 | S | A click resumes the same turn on all engines | |
+| ☐ | **Chat 6**: Undo the agent's turn | B4 | Revert turn (chat + scene), Edit & resend, Retry | Engine 6 | M | Revert restores chat + scene (Local), scene + note (External) | |
+| ☐ | **Chat 7**: Sessions browser | B3 | Search, rename, delete, pin; resume brief; optional plan file next to the `.blend` | Agent 6 for External | M | Yesterday's session continues on each engine | |
+| ☐ | **Chat 8**: Run & fix shown code | B5 | Run button on code blocks (Ask mode) with a safety scan, undo, and Fix | — | M | Broken snippet → Run → Fix → Run works | |
+| ☐ | **Chat 9**: Keep docs honest | B7 | Docs and skills record their sources; a checker flags drift; review the pre-5.3 skills | Chat 1, Skills 4 | S | Drifted docs listed; old version skills trimmed or justified | |
 
----
+## Agent runtime — safety, skills, speed
 
-## Lane F — Agent Runtime (remaining 4f)
+Plan: `plan_tier4f_agent_intelligence.md`
 
-Plan: `plan_tier4f_agent_intelligence.md` (see its audit banner for what already shipped)
+| ☐ | Task | Ref | What | Needs | Size | Done when | PR |
+|---|---|---|---|---|---|---|---|
+| ☐ | **Runtime 1**: Safe mode & loop guard | F1 | Trusted / Safe / Strict, path guard, stop the same call repeating 3× | Engine 5 | M | Safe mode asks before running code; 3× repeat escalates | |
+| ☐ | **Runtime 2**: Skills on demand | F2 | Only skill names + descriptions in the prompt, bodies loaded when needed (also for external clients) | Skills 5 | S | Prompt shrinks measurably on Local 16K | |
+| ☐ | **Runtime 3**: Local speed | F3 | llama-server metrics, parallel slots, auto-tune | — | M | tok/s in Status; no benchmark regression | |
 
-| ☐ | ID | Task | Branch | Depends | Size | Done when |
-|---|---|---|---|---|---|---|
-| ☐ | F1 | Permissions (Trusted / Safe / Strict, glob rules, external-directory guard) + doom-loop guard (3× identical call, any tool) → shared approval row | `feat/4f-permissions` | I3 | M | Safe mode asks before `execute_blender_code`; 3× repeat escalates |
-| ☐ | F2 | On-demand skills: name+description index in the prompt, `skill` tool (server-side so External benefits), keep version skills always-on | `feat/4f-skills-on-demand` | S4; I4 helpful | S | System prompt shrinks measurably (first-request tokens on Local 16K, before/after); skill loads when needed; External Harness gets the `skill` tool |
-| ☐ | F3 | llama-server `--metrics`, `--parallel` readiness, hardware auto-tune of KV type/layers | `feat/4f-inference-tuning` | — | M | `/metrics` tok/s in Status; benchmark shows no regression |
-
----
-
-## Lane C — Text Editor IDE
+## Text Editor coding agent (#52)
 
 Plan: `plan_tier4c_text_editor_ide_agent.md`
 
-| ☐ | ID | Task | Branch | Depends | Size | Done when |
-|---|---|---|---|---|---|---|
-| ☐ | C1 | Text Editor sidebar becomes a code control panel (active text, cursor, Generate/Fix/Explain/Edit, templates) | `feat/4c-text-panel` | G2, I2 | S | Panel shows file info; actions present |
-| ☐ | C2 | Generate at cursor / Edit selection, streaming via events into the text block, single undo step | `feat/4c-generate-edit` | C1 | M | Selection rewritten in place; Ctrl+Z restores |
-| ☐ | C3 | Run → error → Fix in the Text Editor (shares B5 code) | `feat/4c-run-fix` | B5 | S | Error jumps to line; Fix applies a patch to the range |
-| ☐ | C4 | Recipes UI: detect parameter block, "Rerun with…" fields in the sidebar | `feat/4c-recipes` | G2 | S | Change a number in the sidebar → script reruns |
-| ☐ | C5 | Prompt templates (file-based, per editor) | `feat/4c-templates` | C1 | S | User template appears and works |
+| ☐ | Task | Ref | What | Needs | Size | Done when | PR |
+|---|---|---|---|---|---|---|---|
+| ☐ | **Text Editor 1**: Code control panel | C1 | Sidebar shows the active text, cursor, selection; Generate / Fix / Explain / Edit | Tools 2, Engine 4 | S | Panel shows file info; actions work | |
+| ☐ | **Text Editor 2**: Edit with Coworker | C2 | Right-click → rewrite the selection in place, streamed, one undo step | Text Editor 1 | M | Selection rewritten; Ctrl+Z restores | |
+| ☐ | **Text Editor 3**: Run → fix | C3 | Run the script, jump to the error, fix the range | Chat 8 | S | Error line found; fix applied | |
+| ☐ | **Text Editor 4**: Recipes panel | C4 | The script's parameter block as fields; "Rerun with…" | Tools 2 | S | Change a number → script reruns | |
+| ☐ | **Text Editor 5**: Prompt templates | C5 | File-based templates per editor | Text Editor 1 | S | A user template appears and works | |
 
----
-
-## Lane A — Editors Everywhere
+## Editors everywhere — Coworker editor and sidebars (#26)
 
 Plan: `plan_tier4a_editor_integration.md`
 
-| ☐ | ID | Task | Branch | Depends | Size | Done when |
-|---|---|---|---|---|---|---|
-| ☐ | A0 | **Spike for issue #26 (Coworker chat editor)**: build three throwaway prototypes and pick one. (1) **Custom `NodeTree` type "Coworker"**: gets its own entry + icon in the Editor Type menu, can be placed in any area; chat in the sidebar, center canvas free for status/plan (and the Tier 5 moodboard). (2) **Text Editor host** (the issue's idea): chat in the sidebar; center shows a live transcript text block or stays empty; no own menu entry. (3) **Preferences-editor center panels**: check for leaking into the real Preferences and for the global section state. Criteria: own menu entry, native text input, usable center, native theme, no leaks, Blender + Bforartists 5.3. **Maintainer preference (2026-10-18)**: a center drawn by **Python panels** (Preferences-editor style) first, then a Text/Node editor clone with the chat in native panels, and **GPU drawing only as a last resort** | `spike/4a-coworker-editor` | — | S | Decision + screenshots in the 4a banner, posted on #26 |
-| ☐ | A1 | `draw_chat_interface(layout, ctx, editor_type)` extraction | `feat/4a-chat-component` | I2 | M | Existing panels delegate; no visual change |
-| ☐ | A2 | Sidebar chat in all editor types (factory) + per-editor templates | `feat/4a-sidebars` | A1 | S | Chat in Node, VSE, Image, Graph… sidebars |
-| ☐ | A3 | Coworker editor per A0 decision + setup operator | `feat/4a-coworker-editor` | A0, A1 | M | One click turns an area into the Coworker editor |
-| ☐ | A4 | Viewport status dot + agent focus highlight (theme colours, toggle) | `feat/4a-viewport-overlay` | I1 | S | Overlay follows agent state; off by default? (decide) |
-| ☐ | A5 | *(optional)* Floating chat window | `feat/4a-floating-window` | A3 | S | Window opens once; second click focuses it |
+| ☐ | Task | Ref | What | Needs | Size | Done when | PR |
+|---|---|---|---|---|---|---|---|
+| ☐ | **Editors 1**: Coworker editor spike | A0 | Three throwaway prototypes. Your preference order: (1) Preferences-editor clone with Python panels in the center, if it can't leak into your real Preferences; (2) Text / Node editor clone with the chat in native panels; a custom node-tree type gets its own Editor Type entry; (3) GPU drawing last | — | S | Screenshots + recommendation on #26 | |
+| ☐ | **Editors 2**: One chat component | A1 | `draw_chat_interface()` that every panel uses | Engine 4 | M | Existing panels use it; no visual change | |
+| ☐ | **Editors 3**: Chat in every sidebar | A2 | Node, VSE, Image, Graph… sidebars + per-editor quick prompts | Editors 2 | S | Chat in five more editors | |
+| ☐ | **Editors 4**: The Coworker editor | A3 | Build the spike's winner + a setup button | Editors 1, 2 | M | One click turns an area into the Coworker editor | |
+| ☐ | **Editors 5**: Viewport status | A4 | Status dot + focus highlight in theme colours (toggle) | Engine 3 | S | Overlay follows the agent | |
+| ☐ | **Editors 6**: Floating chat window *(optional)* | A5 | A separate chat window | Editors 4 | S | Opens once; second click focuses it | |
 
----
+## Rigging & animation tools
 
-## Lane E — Rigging & Animation Tools
+Plan: `plan_tier4e_nice_to_haves.md`
 
-Plan: `plan_tier4e_nice_to_haves.md` (Save moved to G4)
+| ☐ | Task | Ref | What | Needs | Size | Done when | PR |
+|---|---|---|---|---|---|---|---|
+| ☐ | **Rig 1**: Rigging tools | E1 | Armature, bone, constraint, IK chain, mirror pose, bake | Tools pattern | M | "Rig this 3-bone arm with IK" works on Local | |
+| ☐ | **Rig 2**: Animation tools | E2 | Interpolation, F-curve modifier, NLA track, bake to NLA (keyframing tool exists) | Tools pattern | M | Bounce with ease-out + noise via tools only | |
 
-| ☐ | ID | Task | Branch | Depends | Size | Done when |
-|---|---|---|---|---|---|---|
-| ☐ | E1 | Rigging (6): armature, bone, constraint, IK chain, mirror pose, bake | `feat/4e-rigging-tools` | G pattern | M | "Rig this 3-bone arm with IK" works on Local |
-| ☐ | E2 | Animation (4 new; `batch_keyframe_insert` exists): interpolation, F-curve modifier, NLA track, bake to NLA | `feat/4e-animation-tools` | G pattern | M | Bounce with ease-out + noise modifier via tools only |
+## Skills cleanup — clean room
 
----
+Plan: `plan_tier4s_skills_cleanroom.md`
 
-## Lane S — Skills uplift, clean room · *S0/S1 in 1.1.39*
+| ☐ | Task | Ref | What | Needs | Size | Done when | PR |
+|---|---|---|---|---|---|---|---|
+| ☑ | **Skills 1**: Template tools work everywhere | S0 | Registry moved into the server; `list_blender_templates` crash fixed | — | S | Both tools work in a build and a checkout | #109 (#110) |
+| ☑ | **Skills 2**: Nodes on 5.x | S1 | Compositor via `compositing_node_group` in four tools; reads never edit; no `use_nodes` advice | — | S | Live on 5.3: read works, a read without a compositor changes nothing | #109 |
+| ☑ | **Skills 3**: Needs list | S2 | Written in the plan | — | S | Done | — |
+| ☐ | **Skills 4**: API probes | S3 | Every skill claim gets a probe that runs inside Bforartists | — | S | Probes pass on 5.3; a removed property fails a probe | |
+| ☐ | **Skills 5**: Skill format | S4 | Front matter, size budget, references on request; a checker | Skills 4 | S | Checker green; Runtime 2 can build its index | |
+| ☐ | **Skills 6**: New chapters | S5 | 5.x changes, data over operators, compositor, bone collections, render settings, bulk mesh access, "finish with evidence" | Skills 4, 5 | M | Every claim has a probe; quick challenges no worse | |
+| ☐ | **Skills 7**: Mesh quality check | S6 | `check_mesh_quality`: overlaps, loose parts, open edges, flipped normals, unapplied scale | — | S | Finds each seeded fault | |
+| ☐ | **Skills 8**: Docs for skill packs | S7 | Tool-name stability; using other skill packs with External Harness | — | S | Wiki page reviewed | |
 
-Plan: `plan_tier4s_skills_cleanroom.md` (method §2, needs list §3, notes on other tasks §5).
-Every S task follows the two-role clean-room method: implementer works from first sources only.
+## Agent teams & critics — orchestration layer (#71)
 
-| ☐ | ID | Task | Branch | Depends | Size | Done when |
-|---|---|---|---|---|---|---|
-| ☐ | S0 | **Bug**: template registry moved into the server (`blmcp`); `execute_blender_plan` / `list_blender_templates` work in every mode (today they fail everywhere: the MCP process imports the add-on package). Hide both from the surface list until fixed | `fix/4s-templates-server-side` | — | S | Both tools work on Local and External Harness (live); bpy-free test imports the registry without the add-on |
-| ☐ | S1 | **Bug**: `get_active_node_tree` uses `scene.compositing_node_group` (5.x) and never edits the scene; drop `use_nodes = True` advice (skills, Poly Haven world) | `fix/4s-node-tree-5x` | — | S | Compositor read works on 5.3; a read on a scene without a compositor changes nothing |
-| ☑ | S2 | Needs list written by the reader role (plan §3) | — | — | S | Done in the plan |
-| ☐ | S3 | API-claims probes: `_misc/api_probes.py` (live/headless) + `tests/test_api_claims.py` (every skill claim has a probe) | `feat/4s-api-probes` | — | S | Probes pass on 5.3; a removed property makes a probe fail |
-| ☐ | S4 | Skill format + `_misc/check_skills.py`: front matter (`name`, `description` ≤ 400 chars, `sources`, `reviewed_revision`), body budget, on-demand `references/` | `feat/4s-skill-format` | S3 | S | Checker green on all skills; F2 can build its index |
-| ☐ | S5 | New chapters from first sources: 5.x changes list, data-over-operators + context, freed data, evaluated geometry, localized node lookup, compositor / bone collections / render method / output format / background GPU / bulk mesh access; "finish with evidence" rules | `feat/4s-skill-chapters` | S3, S4 | M | Each claim has a probe; overlap check reports incidental only; quick benchmark set no worse |
-| ☐ | S6 | `check_mesh_quality(objects)` tool: overlapping faces, loose parts, open edges, flipped normals, unapplied scale; compact JSON | `feat/4s-mesh-quality` | — | S | Detects each seeded fault in a test scene; reused by X2 |
-| ☐ | S7 | Docs: tool-name stability + using other skill packs with External Harness | `docs/4s-skill-packs` | — | S | Wiki page reviewed |
-
----
-
-## Capstone
-
-| ☐ | ID | Task | Branch | Depends | Size | Done when |
-|---|---|---|---|---|---|---|
-| ☐ | X1 | Agent teams: Task tool, specialists, validator, one undo (4f.4) | `feat/4f-agent-teams` | F1, I7, I5 | L | Campfire scene via plan → specialists → validator |
-| ☐ | X2 | Scene co-pilot (4g.6.1) | `feat/4g-scene-copilot` | X1 detectors | M | Issues listed with safe one-click fixes |
-| ☐ | X3 | Render critic loop (4g.6.2) using review sheets | `feat/4g-render-critic` | G5, X1 | M | Score improves over ≤ 5 iterations or stops |
+| ☐ | Task | Ref | What | Needs | Size | Done when | PR |
+|---|---|---|---|---|---|---|---|
+| ☐ | **Teams 1**: Agent teams | X1 | Planner → specialists → validator, one undo for the whole mission | Runtime 1, Engine 9, Engine 6 | L | Campfire scene built by a team | |
+| ☐ | **Teams 2**: Scene co-pilot | X2 | Background scan for common problems with safe one-click fixes | Teams 1, Skills 7 | M | Issues listed with fixes | |
+| ☐ | **Teams 3**: Render critic | X3 | Render → critique → fix loop, using review sheets | Tools 5, Teams 1 | M | Score improves within 5 rounds, or it stops | |

@@ -1,0 +1,30 @@
+{
+  "version": "5.3.0 Alpha",
+  "areas_before": [
+    "PROPERTIES",
+    "OUTLINER",
+    "DOPESHEET_EDITOR",
+    "VIEW_3D"
+  ],
+  "node_area_ui_type": "SPIKE_CoworkerTree",
+  "areas_after": [
+    "SPIKE_CoworkerTree",
+    "TEXT_EDITOR",
+    "TIMELINE",
+    "PREFERENCES"
+  ],
+  "big_area": "PREFERENCES",
+  "editor_menu_label": "Coworker",
+  "editor_menu_icon": 552,
+  "new_window_areas": [
+    "SPIKE_CoworkerTree",
+    "TEXT_EDITOR",
+    "TIMELINE",
+    "PREFERENCES"
+  ],
+  "sidebar_tab_set": true,
+  "sidebar_width_px": 280,
+  "shot_node_sidebar": "spike_editor\\2_coworker_tab_no_splash.png",
+  "header_hidden": true,
+  "shot_no_header": "spike_editor\\3_coworker_no_header.png"
+}

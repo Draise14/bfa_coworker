@@ -21,9 +21,10 @@
   "ctrl_wheel_zoomed": true,
   "sent_reached_history": true,
   "draft_cleared_after_send": true,
-  "toolshelf_width_start": 92,
-  "toolshelf_width_two_columns": 92,
-  "toolshelf_width_text": 92,
+  "ctrl_mmb_zoomed": true,
+  "sidebar_chat_found": true,
+  "collapsed_hides_chat": true,
+  "reopened_shows_chat": true,
   "header_patched": true,
   "disabled_cleanly": true
 }

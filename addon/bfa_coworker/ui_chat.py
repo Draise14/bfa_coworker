@@ -50,7 +50,6 @@ from bpy.props import (  # pylint: disable=import-error
     BoolProperty,
     EnumProperty,
     FloatProperty,
-    FloatVectorProperty,
     IntProperty,
     PointerProperty,
     StringProperty,
@@ -1127,12 +1126,7 @@ class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
         default=False,
     )
 
-    # The compact chat panel (Tier 4, GPU 5): two marker swatches the GPU chat
-    # finds on screen (see chat_editor._find_chat_rect), and its height.
-    chat_marker: FloatVectorProperty(  # type: ignore[valid-type]
-        name="Chat Marker", subtype='COLOR_GAMMA', size=3, min=0.0, max=1.0,
-        default=(1.0, 0.0, 1.0), options={'SKIP_SAVE'},
-    )
+    # The compact chat panel's height (Tier 4, GPU 5; see chat_editor._find_chat_rect).
     chat_panel_rows: FloatProperty(  # type: ignore[valid-type]
         name="Chat Height",
         description="Height of the sidebar chat (drag its bottom edge to change it)",
@@ -2807,8 +2801,8 @@ def _compact_sidebar(context: bpy.types.Context) -> bool:
 class BFACW_PT_chat_compact(Panel):  # type: ignore[misc]
     """The compact chat, as a real panel: collapse, drag and pin it like any other.
 
-    The panel only reserves room; the GPU chat (chat_editor.py) paints it.  Two
-    magenta swatches mark the room's top and bottom: the chat finds them in
+    The panel only reserves room; the GPU chat (chat_editor.py) paints it.
+    Invisible marker images at the room's top and bottom let the chat find it in
     the drawn region, so it follows the panel wherever Blender puts it
     (dragged, pinned to another tab, scrolled, Ctrl+MMB zoomed).
     """
@@ -2827,13 +2821,14 @@ class BFACW_PT_chat_compact(Panel):  # type: ignore[misc]
         self.layout.label(text="", icon=_AGENT_ICON)
 
     def draw(self, context: bpy.types.Context) -> None:
+        from . import chat_editor as _ce
         props = context.window_manager.bfacw_chat_props  # type: ignore[attr-defined]
         col = self.layout.column(align=True)
-        col.prop(props, "chat_marker", text="")
+        _ce.draw_marker_row(col, "top")
         room = col.column()
-        room.scale_y = max(1.0, props.chat_panel_rows - 2.0)
+        room.scale_y = max(1.0, props.chat_panel_rows - 1.0)
         room.label(text="")
-        col.prop(props, "chat_marker", text="")
+        _ce.draw_marker_row(col, "bottom")
 
 
 class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]

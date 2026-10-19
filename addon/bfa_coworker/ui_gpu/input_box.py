@@ -345,7 +345,7 @@ class InputBox:
             self.focused = False
             self.actions.append(("blur", ""))
             return True
-        # AltGr (Ctrl+Alt on Windows) types characters like @ on Spanish / German keyboards.
+        # AltGr reported as Ctrl+Alt (other platforms / layouts) types characters too.
         if key.ctrl and key.alt and key.unicode and key.unicode.isprintable():
             m.insert(key.unicode)
             self._refresh_suggestions()
@@ -385,7 +385,9 @@ class InputBox:
             m.delete(forward=True, word=ctrl)
             self._refresh_suggestions()
             return True
-        if key.unicode and not ctrl and not key.alt and key.unicode.isprintable():
+        # Typed characters, like Blender's text fields: Alt is fine (Blender reports
+        # AltGr as Alt on Windows, so @ on a Spanish keyboard is Alt + "@"); Ctrl isn't.
+        if key.unicode and not ctrl and key.unicode.isprintable():
             m.insert(key.unicode)
             self._refresh_suggestions()
             return True

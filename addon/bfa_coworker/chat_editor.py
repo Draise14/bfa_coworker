@@ -362,14 +362,80 @@ def _sidebar_tab_active(region: Any) -> bool:
 
 
 # -- The sidebar chat panel: find its room on screen ----------------------------------
-# BFACW_PT_chat_compact draws two magenta swatches (top and bottom of the room it
-# reserves).  Reading one pixel column (and one row) back from the region finds
-# them wherever the panel is: dragged, pinned to another tab, scrolled or zoomed.
-_MARKER_MIN, _MARKER_MAX = 225, 40
+# BFACW_PT_chat_compact marks the top and bottom of the room it reserves with
+# small preview images (left, centre, right).  Reading a thin pixel strip (and
+# one row) back from the drawn region finds them wherever the panel is: dragged,
+# pinned to another tab, scrolled or zoomed.  The markers are the theme's panel
+# colour nudged by a few steps -- invisible, but exact -- and previews never
+# highlight on hover.  Top and bottom differ, so a marker clipped away during
+# the panel's open / close animation is never mistaken for the other one.
+_MARKERS: dict[str, Any] = {"previews": None, "colors": None}
+_NUDGE = 3
 
 
-def _is_marker(px: Any) -> bool:
-    return px[0] >= _MARKER_MIN and px[1] <= _MARKER_MAX and px[2] >= _MARKER_MIN
+def _panel_back_bytes() -> tuple[int, int, int]:
+    try:
+        back = bpy.context.preferences.themes[0].user_interface.panel_back
+        return tuple(int(round(min(1.0, max(0.0, c)) * 255)) for c in back[:3])  # type: ignore[return-value]
+    except (AttributeError, IndexError):
+        return (66, 66, 66)
+
+
+def marker_colors() -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    """(top, bottom) marker colours: the panel colour, nudged in blue / green."""
+    r, g, b = _panel_back_bytes()
+    top = (r, g, b + _NUDGE if b + _NUDGE <= 255 else b - _NUDGE)
+    bottom = (r, g + _NUDGE if g + _NUDGE <= 255 else g - _NUDGE, b)
+    return top, bottom
+
+
+def marker_icons() -> tuple[int, int]:
+    """Icon ids for the top and bottom marker previews (rebuilt when the theme changes)."""
+    colors = marker_colors()
+    previews = _MARKERS["previews"]
+    if previews is None or _MARKERS["colors"] != colors:
+        import bpy.utils.previews  # pylint: disable=import-error
+        if previews is not None:
+            bpy.utils.previews.remove(previews)
+        previews = bpy.utils.previews.new()
+        for name, rgb in zip(("top", "bottom"), colors):
+            preview = previews.new(name)
+            pixels = [rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0, 1.0] * (16 * 16)
+            preview.icon_size = (16, 16)
+            preview.icon_pixels_float = pixels
+            preview.image_size = (16, 16)
+            preview.image_pixels_float = pixels
+        _MARKERS["previews"], _MARKERS["colors"] = previews, colors
+    return previews["top"].icon_id, previews["bottom"].icon_id
+
+
+def draw_marker_row(layout: Any, which: str) -> None:
+    """One marker row (left, centre, right), drawn by the chat panel."""
+    icon = marker_icons()[0 if which == "top" else 1]
+    row = layout.row()
+    row.scale_y = 0.5
+    split = row.split(factor=1.0 / 3.0)
+    left = split.row()
+    left.alignment = "LEFT"
+    left.template_icon(icon_value=icon, scale=0.5)
+    rest = split.split(factor=0.5)
+    middle = rest.row()
+    middle.alignment = "CENTER"
+    middle.template_icon(icon_value=icon, scale=0.5)
+    right = rest.row()
+    right.alignment = "RIGHT"
+    right.template_icon(icon_value=icon, scale=0.5)
+
+
+def _free_markers() -> None:
+    if _MARKERS["previews"] is not None:
+        import bpy.utils.previews  # pylint: disable=import-error
+        bpy.utils.previews.remove(_MARKERS["previews"])
+    _MARKERS["previews"] = _MARKERS["colors"] = None
+
+
+def _near(px: Any, rgb: tuple[int, int, int]) -> bool:
+    return abs(px[0] - rgb[0]) <= 1 and abs(px[1] - rgb[1]) <= 1 and abs(px[2] - rgb[2]) <= 1
 
 
 def _runs(values: list[bool]) -> list[tuple[int, int]]:
@@ -383,33 +449,40 @@ def _runs(values: list[bool]) -> list[tuple[int, int]]:
     return out
 
 
-def _find_chat_rect(region: Any, expected_h: float) -> Any:
-    """The panel's room in region pixels, or None when the panel isn't on screen."""
+def _find_chat_rect(region: Any, expected_h: float, tabs_px: float) -> Any:
+    """The panel's room in region pixels, or None when it isn't (fully) known this frame."""
     import gpu  # pylint: disable=import-error
+    top_rgb, bottom_rgb = marker_colors()
     fb = gpu.state.active_framebuffer_get()
-    height = int(region.height)
-    probe_x = int(region.width * 0.45)
-    column = fb.read_color(probe_x, 0, 1, height, 4, 0, "UBYTE").to_list()
-    runs = _runs([_is_marker(column[y][0]) for y in range(height)])
-    if not runs:
+    height, width = int(region.height), int(region.width)
+    # A thin strip around the panel's centre, where the centre markers sit.
+    centre = int((width - tabs_px) / 2)
+    strip_w = 24
+    x0 = max(0, min(width - strip_w, centre - strip_w // 2))
+    strip = fb.read_color(x0, 0, strip_w, height, 4, 0, "UBYTE").to_list()
+    top_rows = [y for y in range(height) if any(_near(px, top_rgb) for px in strip[y])]
+    bottom_rows = [y for y in range(height) if any(_near(px, bottom_rgb) for px in strip[y])]
+    if top_rows and bottom_rows:
+        top, bottom = max(top_rows) + 1, min(bottom_rows)
+    elif top_rows:          # bottom unseen: scrolled off the region, or clipped mid-animation
+        top = max(top_rows) + 1
+        if top - expected_h > 2:
+            return None     # it should be on screen: the panel is animating, skip this frame
+        bottom = 0
+    elif bottom_rows:
+        bottom = min(bottom_rows)
+        if bottom + expected_h < height - 2:
+            return None
+        top = height
+    else:
         return None
-    if len(runs) >= 2:
-        bottom, top = runs[0][0], runs[-1][1] + 1
-    else:   # one swatch on screen: which one?
-        lo, hi = runs[0]
-        if lo - expected_h < -2:          # the room runs off the bottom: this is the top swatch
-            bottom, top = 0, hi + 1
-        else:                             # the room starts above the region: the bottom swatch
-            bottom, top = lo, height
-    probe_y = runs[-1][0] if len(runs) >= 2 or top == runs[0][1] + 1 else runs[0][0]
-    row = fb.read_color(0, probe_y, int(region.width), 1, 4, 0, "UBYTE").to_list()[0]
-    across = _runs([_is_marker(px) for px in row])
-    if not across:
+    probe_y, rgb = (top_rows[-1], top_rgb) if top_rows else (bottom_rows[0], bottom_rgb)
+    row = fb.read_color(0, probe_y, width, 1, 4, 0, "UBYTE").to_list()[0]
+    across = _runs([_near(px, rgb) for px in row])
+    if len(across) < 2:
         return None
-    x0, x1 = max(across, key=lambda r: r[1] - r[0])
-    # Cover the swatches' own outline and rounded corners too.
-    edge = 3.0 * max(1.0, bpy.context.preferences.system.pixel_size)
-    return gpu_layout.Rect(x0 - edge, bottom - edge, x1 - x0 + 1 + 2 * edge, top - bottom + 2 * edge)
+    left, right = across[0][0], across[-1][1] + 1
+    return gpu_layout.Rect(float(left), float(bottom), float(right - left), float(top - bottom))
 
 
 def _draw_sidebar() -> None:
@@ -420,7 +493,8 @@ def _draw_sidebar() -> None:
     props = _props()
     zoom = _view_zoom(region)
     unit = 20.0 * context.preferences.system.ui_scale * zoom
-    rect = _find_chat_rect(region, (getattr(props, "chat_panel_rows", 22.0)) * unit)
+    tabs = _TAB_STRIP_PX * context.preferences.view.ui_scale
+    rect = _find_chat_rect(region, (getattr(props, "chat_panel_rows", 22.0)) * unit, tabs)
     if rect is None:
         entry = _SURFACES.get(region.as_pointer())
         if entry is not None:
@@ -1101,3 +1175,4 @@ def unregister() -> None:
     _SURFACES.clear()
     _SYNCED.clear()
     _PENDING.clear()
+    _free_markers()

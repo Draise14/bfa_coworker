@@ -218,8 +218,9 @@ class TestPolish(unittest.TestCase):
 
     def test_altgr_types_the_at_sign(self):
         box = ib.InputBox(focused=True)
-        self.assertTrue(box.handle_key(ib.Key("TWO", unicode="@", ctrl=True, alt=True)))   # AltGr+2 (Spanish)
-        self.assertEqual(box.model.text, "@")
+        self.assertTrue(box.handle_key(ib.Key("TWO", unicode="@", alt=True)))   # Blender: AltGr is Alt on Windows
+        self.assertTrue(box.handle_key(ib.Key("Q", unicode="@", ctrl=True, alt=True)))   # ...or Ctrl+Alt elsewhere
+        self.assertEqual(box.model.text, "@@")
 
     def test_long_attachment_names_are_cut(self):
         box = ib.InputBox(focused=True, attachment="a_really_long_image_name_" * 6 + ".png")

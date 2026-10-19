@@ -252,17 +252,57 @@ def _tick():
             _shoot("3_external_harness")
             prefs = bpy.context.preferences.addons["bfa_coworker"].preferences
             prefs.operating_mode = CTX["mode"]
-            RESULT["toolshelf_width_start"] = _region(_editor_area(), "TOOLS").width
-            _drag_tools(150)                          # two icon columns
+            # Ctrl+MMB drag up over the editor's chat zooms it.
+            ce = CTX["ce"]
+            surface = next(s for s, r in ce._SURFACES.values() if not s.compact)
+            CTX["zoom_before_mmb"] = surface.zoom
+            chat = surface._chat_rect
+            x, y = _at(_editor_area(), chat.x + chat.w * 0.5, chat.y + chat.h * 0.4)
+            _sim("MOUSEMOVE", "NOTHING", x=x, y=y)
+            _sim("MIDDLEMOUSE", "PRESS", x=x, y=y, ctrl=True)
+            for dy in range(10, 70, 10):
+                _sim("MOUSEMOVE", "NOTHING", x=x, y=y + dy, ctrl=True)
+            _sim("MIDDLEMOUSE", "RELEASE", x=x, y=y + 60, ctrl=True)
             return 1.0
         if step == 61:
-            RESULT["toolshelf_width_two_columns"] = _region(_editor_area(), "TOOLS").width
-            _shoot("5_toolshelf_two_columns")
-            _drag_tools(260)                          # wide: icon + text
+            ce = CTX["ce"]
+            surface = next(s for s, r in ce._SURFACES.values() if not s.compact)
+            RESULT["ctrl_mmb_zoomed"] = surface.zoom > CTX["zoom_before_mmb"]
+            # Rest the mouse on the sidebar chat (the marker used to turn pink on hover).
+            compact = next((s, r) for s, r in ce._SURFACES.values() if s.compact)
+            bounds = compact[0].bounds
+            region = compact[1]
+            RESULT["sidebar_chat_found"] = bounds is not None
+            if bounds is not None:
+                hx, hy = int(region.x + bounds.x + bounds.w * 0.5), int(region.y + bounds.top - 4)
+                _sim("MOUSEMOVE", "NOTHING", x=hx, y=hy)
+                CTX["header_xy"] = (int(region.x + bounds.x + 40), int(region.y + bounds.top + 14))
             return 1.0
         if step == 62:
-            RESULT["toolshelf_width_text"] = _region(_editor_area(), "TOOLS").width
-            _shoot("6_toolshelf_text")
+            _shoot("5_sidebar_hover_and_zoomed_editor")
+            hx, hy = CTX.get("header_xy", (0, 0))     # click the panel header: collapse
+            _sim("MOUSEMOVE", "NOTHING", x=hx, y=hy)
+            _sim("LEFTMOUSE", "PRESS", x=hx, y=hy)
+            _sim("LEFTMOUSE", "RELEASE", x=hx, y=hy)
+            _STEP["n"] = 63
+            return 1.0
+        if step == 63:
+            _shoot("6_sidebar_chat_collapsed")
+            compact = next(s for s, r in CTX["ce"]._SURFACES.values() if s.compact)
+            RESULT["collapsed_hides_chat"] = compact.bounds is None
+            hx, hy = CTX.get("header_xy", (0, 0))     # and open it again
+            _sim("LEFTMOUSE", "PRESS", x=hx, y=hy)
+            _sim("LEFTMOUSE", "RELEASE", x=hx, y=hy)
+            _STEP["n"] = 64
+            return 0.08
+        if step == 64:
+            _shoot("7_sidebar_chat_opening")             # mid-animation
+            _STEP["n"] = 65
+            return 1.0
+        if step == 65:
+            compact = next(s for s, r in CTX["ce"]._SURFACES.values() if s.compact)
+            RESULT["reopened_shows_chat"] = compact.bounds is not None
+            _shoot("8_sidebar_chat_reopened")
             # A normal node editor must look like itself.
             _editor_area().ui_type = "ShaderNodeTree"
             _STEP["n"] = 7

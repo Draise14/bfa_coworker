@@ -56,6 +56,8 @@ _HOST: dict[str, Any] = {"router": None, "on_action": None, "after_key": None}
 # The focused box and its region; the surface being dragged / hovered; running windows.
 _FOCUS: dict[str, Any] = {"box": None, "region": None}
 _DRAG: dict[str, Any] = {"hit": None}
+# Ctrl+MMB drag zoom over a full-size chat: (hit, start mouse y, start zoom).
+_ZOOM_DRAG: dict[str, Any] = {"hit": None, "y": 0.0, "zoom": 1.0}
 _HOVER: dict[str, Any] = {"hit": None, "text_cursor": False}
 _RUNNING: set[int] = set()
 
@@ -175,6 +177,22 @@ class BFACW_OT_gpu_input(bpy.types.Operator):
 
     def _handle(self, context, event, router):
         drag = _DRAG["hit"]
+        zoom = _ZOOM_DRAG["hit"]
+        if zoom is not None:                           # Ctrl+MMB drag: up zooms in, like Blender's views
+            if event.type in _MOVES:
+                surface, _area, region = zoom
+                surface.zoom = max(0.6, min(2.5, _ZOOM_DRAG["zoom"] + (event.mouse_y - _ZOOM_DRAG["y"]) * 0.005))
+                _tag(region)
+                return {"RUNNING_MODAL"}
+            if event.type == "MIDDLEMOUSE" and event.value == "RELEASE":
+                _ZOOM_DRAG["hit"] = None
+                return {"RUNNING_MODAL"}
+        if event.type == "MIDDLEMOUSE" and event.value == "PRESS" and event.ctrl:
+            hit = router(context, event)
+            # Full-size chats only: in a sidebar, Ctrl+MMB zooms the whole sidebar (and the chat with it).
+            if hit is not None and hasattr(hit[0], "zoom") and not getattr(hit[0], "compact", True):
+                _ZOOM_DRAG.update(hit=hit, y=float(event.mouse_y), zoom=hit[0].zoom)
+                return {"RUNNING_MODAL"}
         if event.type in _MOVES:
             if drag is not None:                       # dragging: keep feeding, even outside
                 surface, _area, region = drag
@@ -317,7 +335,7 @@ def _on_load_pre(*_args) -> None:
     # Opening a file ends every modal operator and frees every area.
     _RUNNING.clear()
     _FOCUS["box"] = _FOCUS["region"] = None
-    _DRAG["hit"] = _HOVER["hit"] = None
+    _DRAG["hit"] = _HOVER["hit"] = _ZOOM_DRAG["hit"] = None
 
 
 _CLASSES = (BFACW_OT_gpu_input, BFACW_OT_gpu_input_native)

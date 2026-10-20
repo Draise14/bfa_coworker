@@ -224,7 +224,7 @@ def _draw_agent_pickers(layout) -> None:
     col = layout.column(align=True)
     for picker in _acp.pickers():
         prop = _OPTION_PROPS.get(picker["category"])
-        if prop is None:
+        if prop is None or (picker["category"] == "mode" and _modes_cover_agent_mode(picker)):
             continue
         row = _option_row(col, _OPTION_LABELS[picker["category"]], _PICKER_ICONS.get(picker["category"], 'DOT'))
         if len(picker["choices"]) <= _EXPAND_UP_TO:
@@ -257,6 +257,66 @@ def _draw_engine_options(layout, context, prefs) -> None:
         row.operator("bfacw.refresh_remote_models", text="", icon='FILE_REFRESH')
 
 
+# -- Coworker / Ask / Plan drive the agent's own mode (#221) ---------------------------
+_AGENT_MODE: dict[str, str] = {"normal": "", "syncing": ""}
+
+
+def _is_plan_choice(value: str, name: str) -> bool:
+    return "plan" in value.lower() or "plan" in name.lower()
+
+
+def agent_mode_for(chat_mode: str, choices: list, current: str, normal: str = "") -> str | None:
+    """The agent mode that matches *chat_mode*, or None to keep *current*.
+
+    Plan -> the agent's plan mode (when it has one); Coworker / Ask -> out of plan
+    mode, back to *normal* (the last normal mode you used) or its first one.
+    """
+    plans = [v for v, n, _d in choices if _is_plan_choice(v, n)]
+    others = [v for v, n, _d in choices if not _is_plan_choice(v, n)]
+    if chat_mode == "PLAN":
+        return plans[0] if plans and current not in plans else None
+    if current in plans and others:
+        return normal if normal in others else others[0]
+    return None
+
+
+def _modes_cover_agent_mode(picker: dict) -> bool:
+    """The agent offers just "normal" and "plan": Coworker | Ask | Plan says it all."""
+    choices = picker["choices"]
+    return len(choices) <= 2 and any(_is_plan_choice(v, n) for v, n, _d in choices)
+
+
+def _sync_agent_mode(chat_mode: str, wait: bool = False) -> None:
+    picker = _picker_for("mode")
+    if picker is None:
+        return
+    value = agent_mode_for(chat_mode, picker["choices"], picker["current"], _AGENT_MODE["normal"])
+    if value is not None and value != picker["current"]:
+        _acp.set_option(picker["id"], value, wait=wait)
+
+
+def _chat_follows_agent_mode(value: str) -> None:
+    """You picked the agent's mode yourself: the chat's mode follows (its Plan = our Plan)."""
+    picker = _picker_for("mode")
+    name = next((n for v, n, _d in (picker["choices"] if picker else ()) if v == value), "")
+    props = bpy.context.window_manager.bfacw_chat_props
+    plan = _is_plan_choice(value, name)
+    if not plan:
+        _AGENT_MODE["normal"] = value
+    wanted = "PLAN" if plan else ("AGENT" if props.chat_mode == "PLAN" else props.chat_mode)
+    if props.chat_mode != wanted:
+        _AGENT_MODE["syncing"] = "1"
+        try:
+            props.chat_mode = wanted
+        finally:
+            _AGENT_MODE["syncing"] = ""
+
+
+def _on_chat_mode(self, _context) -> None:
+    if not _AGENT_MODE["syncing"]:
+        _sync_agent_mode(self.chat_mode)
+
+
 def _picker_for(category: str) -> dict | None:
     if _acp is None or not _acp.connected:
         return None
@@ -284,7 +344,10 @@ def _make_option_prop(category: str):
     def set_(_self, index):
         picker = _picker_for(category)
         if picker is not None and 0 <= index < len(picker["choices"]):
-            _acp.set_option(picker["id"], picker["choices"][index][0])
+            value = picker["choices"][index][0]
+            _acp.set_option(picker["id"], value)
+            if category == "mode":
+                _chat_follows_agent_mode(value)
 
     what = {"mode": "How the agent works (some ask before changes; Plan only plans)",
             "model": "Which model the agent uses (from your own subscription)",
@@ -499,6 +562,9 @@ Coworker remembers your pick for the next time this agent starts"""
         if _acp is None or not self.value:
             return {"CANCELLED"}
         _acp.set_option(self.option_id, self.value)
+        picker = _picker_for("mode")
+        if picker is not None and picker["id"] == self.option_id:
+            _chat_follows_agent_mode(self.value)          # #221
         _redraw_areas(context)
         return {"FINISHED"}
 
@@ -1665,6 +1731,7 @@ class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
                     "Plan: it makes a step plan to carry out later, with any engine",
         items=CHAT_MODE_ITEMS,
         default="AGENT",
+        update=_on_chat_mode,      # External Agent: its own mode follows (#221)
     )
 
     chat_newest_first: BoolProperty(  # type: ignore[valid-type]
@@ -1992,6 +2059,8 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             _warn_failed_attachment(self, props)
 
         engine = _loop_engine(llm_cfg.mode)
+        if _is_external_agent(context):
+            _sync_agent_mode(props.chat_mode, wait=True)     # in case it connected after you picked (#221)
         prompt = Prompt(
             text=message,
             images=list(attachments or []),

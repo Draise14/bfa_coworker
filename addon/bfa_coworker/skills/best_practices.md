@@ -192,6 +192,19 @@ defaults, then read ``bpy.context.view_layer.objects.active`` to inspect/set dim
 or print the operator docstring: ``print(bpy.ops.mesh.primitive_uv_sphere_add.__doc__)``
 to see its real parameters.
 
+## Size, Scale and Placement
+
+The most common sizing bug is a box that comes out half or double size:
+
+- Default primitives are **2 m across** (cube `size=2`, sphere / cylinder `radius=1`), and
+  `scale` **multiplies** that: `scale=(4, 2, 1)` on a default cube is an 8 x 4 x 2 m box.
+- For a W x D x H box: `primitive_cube_add(size=1)` then `obj.scale = (W, D, H)`, or set
+  `obj.dimensions = (W, D, H)` (dimensions are metres, scale is a factor).
+- `location` is the origin, at the centre: a box H tall standing on the floor sits at z = H / 2.
+- Put one thing on / next to / inside another by **world-space bounds**
+  (`[obj.matrix_world @ Vector(c) for c in obj.bound_box]`), not location + scale.
+- Read `obj.dimensions` back after building and compare it with what was asked.
+
 ## Stale References ("StructRNA has been removed")
 
 Never reuse a reference to an object/material/mesh captured in an **earlier tool

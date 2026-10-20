@@ -134,7 +134,16 @@ class AcpEngine:
 
     def enqueue(self, prompt: Prompt, _config: Any = None) -> int:
         self._queue.append(prompt)
+        self._changed()
         return len(self._queue)
+
+    def queue_items(self) -> list[dict[str, Any]]:
+        """The queued messages, in the turn loop's queue shape (for the Queue panel)."""
+        return [{"message": p.text, "chat_mode": p.chat_mode} for p in list(self._queue)]
+
+    def clear_queue(self) -> None:
+        self._queue.clear()
+        self._changed()
 
     def cancel(self) -> None:
         self._queue.clear()
@@ -153,7 +162,11 @@ class AcpEngine:
         turn_id = new_turn_id()
         with self._lock:
             self._turn_id = turn_id
-        self.bus.emit("turn_start", turn_id, text=prompt.text, mode=prompt.chat_mode)
+        # Like a local turn, the message in the chat keeps an "[attached: ...]"
+        # marker for its images, which the chat draws as thumbnails.
+        names = [n for n in prompt.image_names if n]
+        shown = prompt.text + ("\n[attached: {:s}]".format(", ".join(names)) if names and prompt.images else "")
+        self.bus.emit("turn_start", turn_id, text=shown, mode=prompt.chat_mode)
         threading.Thread(target=self._run, args=(turn_id, prompt), daemon=True, name="acp-turn").start()
         return turn_id
 

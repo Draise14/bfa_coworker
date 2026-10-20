@@ -121,6 +121,23 @@ class TestTurns(unittest.TestCase):
         engine.cancel()                                   # Stop also drops the queue
         self.assertEqual(len(engine._queue), 0)
 
+    def test_attached_image_shows_in_the_chat(self):
+        engine = ea.AcpEngine(_state())
+        engine._run = lambda turn_id, prompt: None        # no agent: just the chat side
+        engine.submit(eng.Prompt(text="build a pagoda", images=["data:image/png;base64,AA=="],
+                                 image_names=["FB_IMG_1467.jpg"]))
+        engine.drain()
+        user = engine.state.conversation_history[1]
+        self.assertEqual(user["content"], "build a pagoda\n[attached: FB_IMG_1467.jpg]")   # thumbnail marker
+
+    def test_queue_is_visible_and_clearable(self):
+        engine = ea.AcpEngine(_state())
+        engine._turn_id = "running"
+        engine.submit(eng.Prompt(text="next one", chat_mode="ASK"))
+        self.assertEqual(engine.queue_items(), [{"message": "next one", "chat_mode": "ASK"}])
+        engine.clear_queue()
+        self.assertEqual(engine.queue_items(), [])
+
     def test_crash_mid_turn_ends_the_turn_with_an_error(self):
         engine = _engine("opencode_mcp_tool_call.jsonl", "--exit-after", "6")
         try:

@@ -120,6 +120,17 @@ class TestLayout(unittest.TestCase):
         self.assertIn("attach_menu", ids)
         self.assertNotIn("attach_screen", ids)          # a thin box keeps just the picker
 
+    def test_tool_column_beside_the_messages(self):
+        # #214: icon buttons on the left; the messages move right of them.
+        surface = sf.ChatSurface(compact=True)
+        surface.tools = (("new_thread", "ADD"), ("", ""), ("attach_menu", "IMAGE_DATA"))
+        canvas, _ = _draw(surface)
+        rects = {w: r for r, w in canvas.hit_areas}
+        self.assertIn("tool:new_thread", rects)
+        self.assertGreater(rects["tool:new_thread"].y, rects["tool:attach_menu"].y)    # top to bottom
+        self.assertGreaterEqual(surface._chat_rect.x, rects["tool:new_thread"].right)
+        self.assertEqual(_click(surface, "tool:attach_menu"), [("attach_menu", "")])
+
     def test_notice_shows_the_attached_image(self):
         # External Harness (#199): a dropped image shows under the notice, with its own note.
         surface = sf.ChatSurface()

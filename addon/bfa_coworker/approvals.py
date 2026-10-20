@@ -45,7 +45,7 @@ def _detail(args: Any) -> str:
         args = next(iter(args.values()))
     text = args if isinstance(args, str) else json.dumps(args, ensure_ascii=False, default=str)
     text = " ".join(text.split())
-    return text if len(text) <= _DETAIL_CHARS else text[:_DETAIL_CHARS - 1] + "…"
+    return text if len(text) <= _DETAIL_CHARS else text[:_DETAIL_CHARS - 3] + "..."
 
 
 @dataclass

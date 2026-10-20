@@ -55,7 +55,7 @@ on_change: Callable[[], None] | None = None     # redraw hook
 def _short(value: Any, limit: int = _PREVIEW) -> str:
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
     text = " ".join(text.split())
-    return text if len(text) <= limit else text[:limit - 1] + "…"
+    return text if len(text) <= limit else text[:limit - 3] + "..."
 
 
 def record(tool: str, args: Any, response: dict[str, Any] | None, seconds: float,

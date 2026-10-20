@@ -245,6 +245,19 @@ class TestPermissionsAndPrompt(unittest.TestCase):
         self.assertEqual(answers, [None])
         self.assertIsNone(engine.approvals.current())
 
+    def test_slash_command_goes_as_typed(self):
+        engine = ea.AcpEngine(_state())
+        engine.client = types.SimpleNamespace(commands=[{"name": "compact", "description": "Shrink"},
+                                                        {"name": "review", "description": "Review",
+                                                         "input": {"hint": "what to review"}}])
+        engine.connected = True
+        self.assertEqual([c["name"] for c in engine.commands()], ["compact", "review"])
+        self.assertEqual(engine.commands()[1]["hint"], "what to review")
+        blocks = engine._blocks(eng.Prompt(text="/compact keep the plan", context="2 objects", chat_mode="ASK"))
+        self.assertEqual(blocks, [{"type": "text", "text": "/compact keep the plan"}])
+        normal = engine._blocks(eng.Prompt(text="/tmp is a folder", context="2 objects"))
+        self.assertIn("[Blender: 2 objects]", normal[0]["text"])      # not a command: as before
+
     def test_prompt_blocks(self):
         engine = ea.AcpEngine(_state())
         engine.caps = eng.EngineCaps(label="x", images=True)

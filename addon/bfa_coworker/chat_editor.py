@@ -220,6 +220,19 @@ def _mentions(query: str) -> list[Suggestion]:
     return out
 
 
+def _commands(query: str) -> list[Suggestion]:
+    """The External Agent's own slash commands for "/" in the chat (Agent 8b)."""
+    from . import ui_chat
+    engine = ui_chat._acp
+    if engine is None or not engine.connected:
+        return []
+    q = query.lower()
+    found = [c for c in engine.commands() if q in c["name"].lower() or q in c["description"].lower()]
+    found.sort(key=lambda c: (not c["name"].lower().startswith(q), c["name"]))
+    return [Suggestion("/" + c["name"], "/" + c["name"], "command", "CONSOLE",
+                       (c["hint"] or c["description"])[:60]) for c in found]
+
+
 # -- Surfaces: one per region ----------------------------------------------------------
 
 _SURFACES: dict[int, tuple[ChatSurface, Any]] = {}   # region pointer -> (surface, region)
@@ -232,7 +245,8 @@ def _surface(region: Any, compact: bool) -> ChatSurface:
     entry = _SURFACES.get(key)
     if entry is None or entry[0].compact != compact:
         surface = ChatSurface(compact=compact,
-                              box=InputBox(provider=_mentions, categories=_mention_categories()))
+                              box=InputBox(provider=_mentions, categories=_mention_categories(),
+                                           command_provider=_commands))
         surface.view.agent_icon = AGENT_ICON
         surface.view.image_size = _image_size
         _SURFACES[key] = (surface, region)

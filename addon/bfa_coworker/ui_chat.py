@@ -202,17 +202,113 @@ _PICKER_ICONS = {"mode": 'TOOL_SETTINGS', "model": 'EXPERIMENTAL', "thought_leve
 _PICKER_ITEMS: list[tuple[str, str, str]] = []
 
 
+# The options block (#195): one look for every engine -- a label with its icon, then
+# a row of buttons (few choices) or a dropdown (many).
+_OPTION_LABELS = {"mode": "Mode", "model": "Model", "thought_level": "Effort"}
+_OPTION_PROPS = {"mode": "bfacw_agent_mode", "model": "bfacw_agent_model", "thought_level": "bfacw_agent_effort"}
+_EXPAND_UP_TO = 4
+
+
+def _option_row(layout, label: str, icon: str):
+    """A row: the label (with its icon) on the left, the control's room on the right."""
+    split = layout.split(factor=0.32, align=True)
+    split.label(text=label, icon=icon)
+    return split.row(align=True)
+
+
 def _draw_agent_pickers(layout) -> None:
-    """The running agent's own options (mode, model, effort) as dropdowns."""
+    """The running agent's own options: Agent Mode, Model, Effort (#195)."""
     if _acp is None or not _acp.connected:
         return
+    wm = bpy.context.window_manager
     col = layout.column(align=True)
     for picker in _acp.pickers():
-        row = col.row(align=True)
-        split = row.split(factor=0.35, align=True)
-        split.label(text=picker["name"], icon=_PICKER_ICONS.get(picker["category"], 'DOT'))
-        op = split.operator("bfacw.agent_option", text=picker["current_name"])
-        op.option_id = picker["id"]
+        prop = _OPTION_PROPS.get(picker["category"])
+        if prop is None:
+            continue
+        row = _option_row(col, _OPTION_LABELS[picker["category"]], _PICKER_ICONS.get(picker["category"], 'DOT'))
+        if len(picker["choices"]) <= _EXPAND_UP_TO:
+            row.prop(wm, prop, expand=True)          # a button per choice, named
+        else:
+            row.prop(wm, prop, text="")
+
+
+def _draw_engine_options(layout, context, prefs) -> None:
+    """Local and Remote get the same block as External Agent (#195): Model, Effort."""
+    mode = prefs.operating_mode
+    if mode not in ("LOCAL_LLM", "REMOTE_API"):
+        return
+    running = agent_controller._agent_state.mcp_server_running
+    col = layout.column(align=True)
+    if mode == "LOCAL_LLM":
+        row = _option_row(col, "Model", _PICKER_ICONS["model"])
+        row.enabled = not running                 # a new local model loads at the next Start
+        row.prop(prefs, "model_preset", text="")
+        if hasattr(prefs, "reasoning_effort"):
+            row = _option_row(col, "Effort", _PICKER_ICONS["thought_level"])
+            row.prop(prefs, "reasoning_effort", text="")
+    else:
+        from . import operators_agent as _oa
+        row = _option_row(col, "Model", _PICKER_ICONS["model"])
+        if _oa.REMOTE_MODEL_IDS:
+            row.prop(context.window_manager, "bfacw_remote_model", text="")
+        else:
+            row.prop(prefs, "remote_model", text="")
+        row.operator("bfacw.refresh_remote_models", text="", icon='FILE_REFRESH')
+
+
+def _picker_for(category: str) -> dict | None:
+    if _acp is None or not _acp.connected:
+        return None
+    return next((p for p in _acp.pickers() if p["category"] == category), None)
+
+
+# Enum items must outlive the call that returns them (Blender keeps the strings).
+_OPTION_ITEMS: dict[str, list[tuple[str, str, str]]] = {}
+
+
+def _make_option_prop(category: str):
+    def items(_self, _context):
+        picker = _picker_for(category)
+        _OPTION_ITEMS[category] = ([(v, n, d or n) for v, n, d in picker["choices"]] if picker else
+                                   [("", "(not connected)", "")])
+        return _OPTION_ITEMS[category]
+
+    def get(_self):
+        picker = _picker_for(category)
+        if picker is None:
+            return 0
+        values = [v for v, _n, _d in picker["choices"]]
+        return values.index(picker["current"]) if picker["current"] in values else 0
+
+    def set_(_self, index):
+        picker = _picker_for(category)
+        if picker is not None and 0 <= index < len(picker["choices"]):
+            _acp.set_option(picker["id"], picker["choices"][index][0])
+
+    what = {"mode": "How the agent works (some ask before changes; Plan only plans)",
+            "model": "Which model the agent uses (from your own subscription)",
+            "thought_level": "How hard the agent thinks before it answers (more is slower)"}[category]
+    return bpy.props.EnumProperty(name=_OPTION_LABELS[category], description=what + ". Coworker remembers "
+                                  "your pick for this agent", items=items, get=get, set=set_)
+
+
+def _remote_model_items(_self, _context):
+    from . import operators_agent as _oa
+    _OPTION_ITEMS["remote"] = [(m, m, m) for m in _oa.REMOTE_MODEL_IDS] or [("", "(refresh the list)", "")]
+    return _OPTION_ITEMS["remote"]
+
+
+def _remote_model_get(_self):
+    from . import operators_agent as _oa
+    prefs = bpy.context.preferences.addons[__package__].preferences
+    return _oa.REMOTE_MODEL_IDS.index(prefs.remote_model) if prefs.remote_model in _oa.REMOTE_MODEL_IDS else 0
+
+
+def _remote_model_set(_self, index):
+    from . import operators_agent as _oa
+    if 0 <= index < len(_oa.REMOTE_MODEL_IDS):
+        bpy.context.preferences.addons[__package__].preferences.remote_model = _oa.REMOTE_MODEL_IDS[index]
 
 
 def _installs_file() -> Path:
@@ -3671,6 +3767,7 @@ def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool 
     # -- External Agent: which agent app does the work --
     if prefs.operating_mode == "EXTERNAL_AGENT":
         draw_external_agent_setup(layout, context, compact=True)
+    _draw_engine_options(layout, context, prefs)     # Local / Remote: Model / Effort, like the agent's (#195)
 
     # -- Agent control buttons (compact) --
     row = layout.row(align=True)
@@ -3770,7 +3867,6 @@ def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool 
     if show_chat_mode:
         row = layout.row(align=True)
         row.prop(props, "chat_mode", expand=True)
-    _draw_reasoning_effort_row(layout, prefs)
 
     layout.separator()
 
@@ -5692,6 +5788,12 @@ def register() -> None:
     for cls in _classes:
         bpy.utils.register_class(cls)
     bpy.types.WindowManager.bfacw_chat_props = bpy.props.PointerProperty(type=ChatHistoryProperties)  # type: ignore[attr-defined]
+    # #195: the engines' options as real dropdowns / button rows.
+    for category, prop in _OPTION_PROPS.items():
+        setattr(bpy.types.WindowManager, prop, _make_option_prop(category))
+    bpy.types.WindowManager.bfacw_remote_model = bpy.props.EnumProperty(  # type: ignore[attr-defined]
+        name="Model", description="The remote model to use (refresh to fetch the list from your provider)",
+        items=_remote_model_items, get=_remote_model_get, set=_remote_model_set)
 
     # Register the chat UI update timer.
     if not bpy.app.background:
@@ -5712,6 +5814,9 @@ def unregister() -> None:
 
     if hasattr(bpy.types.WindowManager, "bfacw_chat_props"):
         del bpy.types.WindowManager.bfacw_chat_props  # type: ignore[attr-defined]
+    for prop in (*_OPTION_PROPS.values(), "bfacw_remote_model"):
+        if hasattr(bpy.types.WindowManager, prop):
+            delattr(bpy.types.WindowManager, prop)
     for cls in reversed(_classes):
         try:
             bpy.utils.unregister_class(cls)

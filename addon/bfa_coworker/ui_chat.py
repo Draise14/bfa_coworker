@@ -4350,6 +4350,8 @@ def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool 
     if show_chat_mode:
         row = layout.row(align=True)
         row.prop(props, "chat_mode", expand=True)
+    if not has_header:          # the GPU chats have it on their input row (#240)
+        layout.prop(prefs, "approval_mode", text="Approval")
 
     layout.separator()
 

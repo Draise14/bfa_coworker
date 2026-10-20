@@ -339,7 +339,7 @@ def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0) -> None:
     typed_before = surface.box.model.text
     actions = surface.draw(canvas, rect, _history(), live=state, top=_status(context) if compact else None,
                            notice=_harness_notice(prefs) if harness else None,
-                           approval=None if harness else _approval_card())
+                           approval=_approval_card())     # also in External Harness: a risky step asks (#166)
     if surface.box.model.text != typed_before:
         # Changed by a click while drawing (an @ suggestion): share the draft now,
         # or the panel chat's own @ popup would see the old half-typed "@Ca".

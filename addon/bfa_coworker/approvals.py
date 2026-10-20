@@ -56,6 +56,7 @@ class ApprovalRequest:
     source: str = ""            # who asks, e.g. "Claude Code"
     args: Any = None            # the tool's input, for the detail line
     coworker_tool: bool = False   # one of Coworker's Blender tools
+    reason: str = ""              # a risky step, in plain words (#166): "save over your .blend"
     id: str = ""
 
     def __post_init__(self) -> None:
@@ -65,6 +66,8 @@ class ApprovalRequest:
     @property
     def title(self) -> str:
         who = self.source or "The agent"
+        if self.reason:
+            return "{:s} wants to {:s}".format(who, self.reason)
         return "{:s} wants to run {:s}".format(who, self.tool or "a tool")
 
     @property

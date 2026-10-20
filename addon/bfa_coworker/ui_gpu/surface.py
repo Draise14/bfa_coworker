@@ -207,8 +207,9 @@ class ChatSurface:
         chat_y = input_rect.top + pad if show_input else rect.y
         if show_input and self.box.attachment:      # the image tray, above the input
             chat_y = self._draw_tray(canvas, Rect(inner.x, chat_y, inner.w, 0), actions) + pad
-        if show_input and approval is not None:     # the agent's question, right above
-            chat_y = self._draw_approval(canvas, Rect(inner.x, chat_y, inner.w, 0), approval, actions) + pad
+        if approval is not None:     # the question, right above the input (or at the bottom: #166)
+            anchor_y = chat_y if show_input else rect.y + pad
+            chat_y = self._draw_approval(canvas, Rect(inner.x, anchor_y, inner.w, 0), approval, actions) + pad
         chat = Rect(rect.x, chat_y, rect.w, max(0.0, top_edge - chat_y - pad))
         self._chat_rect = chat
         if notice is not None:

@@ -224,6 +224,17 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         from . import session_identity
         session_identity.set_token_required(self.require_session_token)
 
+    ask_before_risky_steps: BoolProperty(  # type: ignore[valid-type]
+        name="Ask Before Risky Steps",
+        description=(
+            "Before code from any engine (Local, Remote, External Agent, External Harness) saves "
+            "the .blend file, opens or reloads a file, quits, deletes or moves files, exports, or runs "
+            "another program, the chat asks you first (Allow once, Always, Deny). In Auto mode such a "
+            "step is declined instead. Off: it runs, as before"
+        ),
+        default=False,
+    )
+
     require_session_token: BoolProperty(  # type: ignore[valid-type]
         name="Require Session Token",
         description=(
@@ -2106,6 +2117,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         else:
             bridge_box.label(text="Status: Stopped", icon='X')
         bridge_box.prop(self, "require_session_token")
+        bridge_box.prop(self, "ask_before_risky_steps")
 
         # -- MCP Server (External Harness mode only) ----------------
         if self.operating_mode == "EXTERNAL_HARNESS":

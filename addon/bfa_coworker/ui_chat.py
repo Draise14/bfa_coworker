@@ -2277,6 +2277,8 @@ class BFACW_OT_chat_stop(Operator):  # type: ignore[misc]
         coworker_api.cancel_questions()     # a question waiting for you is answered "cancelled"
         if _AUTO["run"] is not None:
             _AUTO["user_stop"] = True       # Auto stops after this turn (#177)
+        from . import risky_steps
+        risky_steps.APPROVALS.cancel_all()  # a risky step waiting for you is declined
         _loop_engine().cancel()
         agent_controller._agent_state.status_text = "Stopped"
         wm = context.window_manager
@@ -2307,7 +2309,9 @@ class BFACW_OT_agent_approve(Operator):  # type: ignore[misc]
                     properties.choice, cls.__doc__)
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        if _acp is None or not _acp.approvals.answer(self.choice):
+        from . import risky_steps
+        answered = _acp is not None and _acp.approvals.current() is not None and _acp.approvals.answer(self.choice)
+        if not answered and not risky_steps.APPROVALS.answer(self.choice):
             return {"CANCELLED"}
         _redraw_areas(context)
         return {"FINISHED"}
@@ -2322,6 +2326,11 @@ def approval_card():
         return Approval(title=request.title, detail=request.detail, waiting=_acp.approvals.count(),
                         note="One of Coworker's Blender tools" if request.coworker_tool
                         else "The agent's own tool, outside Blender")
+    from . import risky_steps
+    risky = risky_steps.APPROVALS.current()
+    if risky is not None:
+        return Approval(title=risky.title, detail=risky.detail, waiting=risky_steps.APPROVALS.count(),
+                        note="Ask Before Risky Steps is on (Settings > Advanced > Bridge Server)", icon="WARNING")
     from . import coworker_api
     open_question = coworker_api.current_question()
     if open_question is None:
@@ -4342,6 +4351,8 @@ def _auto_toggled(props, context) -> None:
         _AUTO.update(run=auto_mode.AutoRun(max_seconds=prefs.auto_max_hours * 3600.0,
                                            max_turns=prefs.auto_max_turns), last="", user_stop=False)
         coworker_api.auto_answer[0] = auto_mode.QUESTION_ANSWER
+        from . import risky_steps
+        risky_steps.auto_declines[0] = True
         if _acp is not None:
             _acp.auto_approve = True
         print("[Coworker] Auto mode on")
@@ -4357,6 +4368,8 @@ def _auto_finish() -> None:
     run = _AUTO["run"]
     _AUTO["run"] = None
     coworker_api.auto_answer[0] = ""
+    from . import risky_steps
+    risky_steps.auto_declines[0] = False
     if _acp is not None:
         _acp.auto_approve = False
     if run is None:

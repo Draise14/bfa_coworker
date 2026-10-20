@@ -20,7 +20,9 @@ with "method not found", since we never advertise them.
 
 Fixtures are **redacted** before they are written: the agent's command list
 (it can include the user's own installed skills) becomes a count, and the
-project, repository and home paths become ``<PROJECT>``, ``<REPO>``, ``<HOME>``.
+project, repository and home paths become ``<PROJECT>``, ``<REPO>``, ``<HOME>``;
+the login an agent reports (Claude Code's ``_auth/status_update``: account,
+e-mail, organization) and any e-mail address become ``<redacted>`` / ``<EMAIL>``.
 Review a fixture before committing it anyway.
 
 Stdlib only.  Not shipped with the add-on.
@@ -32,6 +34,7 @@ import argparse
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -52,6 +55,18 @@ def _default_mcp_server() -> dict:
     }
 
 
+_ACCOUNT_KEYS = {"account", "email", "organization"}
+
+
+def _drop_account(value):
+    """Claude Code reports the login (``_auth/status_update``): keep only its shape."""
+    if isinstance(value, dict):
+        return {k: "<redacted>" if k in _ACCOUNT_KEYS else _drop_account(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_drop_account(v) for v in value]
+    return value
+
+
 def _redact(msg: dict, replacements: list[tuple[str, str]]) -> dict:
     """Strip user-specific data from a message before it is written."""
     update = msg.get("params", {}).get("update", {}) if isinstance(msg.get("params"), dict) else {}
@@ -60,7 +75,9 @@ def _redact(msg: dict, replacements: list[tuple[str, str]]) -> dict:
         commands = msg["params"]["update"].get("availableCommands", [])
         msg["params"]["update"]["availableCommands"] = [
             {"name": "<redacted>", "description": "<{:d} commands redacted>".format(len(commands))}]
-    text = json.dumps(msg, ensure_ascii=True)
+    text = json.dumps(_drop_account(msg), ensure_ascii=True)
+    # Any e-mail address left (in a reply text, say).
+    text = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "<EMAIL>", text)
     for old, new in replacements:
         for variant in {old, old.replace("\\", "/"), json.dumps(old)[1:-1]}:
             text = text.replace(variant, new)

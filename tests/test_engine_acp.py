@@ -10,7 +10,7 @@ the fake ACP agent replaying recorded OpenCode sessions.
    missing agent reports a plain error.
 2. A turn from the chat lands in the chat state like a local turn: your
    message, Workshop tool rows, the reply; the turn ends.
-3. Queue while busy; Stop cancels.
+3. Queue while busy; Stop cancels; the agent's plan fills Goal & Plan.
 4. Permissions: Coworker's tools allowed, anything else refused (with a note).
 5. The prompt carries the Blender context, Ask mode, and images when the
    agent takes them.
@@ -84,6 +84,22 @@ class TestConnect(unittest.TestCase):
             engine.disconnect()
         self.assertFalse(engine.connected)
 
+    def test_claude_code_session(self):
+        # Recorded live with claude-agent-acp 0.94.0: it asks before our tool runs.
+        engine = ea.AcpEngine(_state())
+        engine.connect([sys.executable, str(_FAKE), str(_FIXTURES / "claude_plan_tool_call.jsonl")], _MCP,
+                       tempfile.mkdtemp(prefix="bfacw_acp_"), label="Claude Code", wait=True)
+        try:
+            self.assertTrue(engine.status.startswith("Connected to Claude Code"), engine.status)
+            self.assertTrue(engine.caps.images and engine.caps.load_session)
+            engine.submit(eng.Prompt(text="Look up primitive_cube_add"))
+            _wait(engine)
+        finally:
+            engine.disconnect()
+        history = engine.state.conversation_history
+        self.assertIn("search_api_docs", [m.get("name") for m in history if m["role"] == "tool"])
+        self.assertIn("primitive_cube_add", history[-1]["content"])
+
     def test_missing_agent_says_so(self):
         engine = ea.AcpEngine(_state())
         engine.connect(["definitely-not-an-agent-xyz"], _MCP, tempfile.mkdtemp(), wait=True)
@@ -137,6 +153,21 @@ class TestTurns(unittest.TestCase):
         self.assertEqual(engine.queue_items(), [{"message": "next one", "chat_mode": "ASK"}])
         engine.clear_queue()
         self.assertEqual(engine.queue_items(), [])
+
+    def test_agent_plan_fills_goal_and_plan(self):
+        gp = importlib.import_module("bfacw_engine_acp_pkg.goal_plan")
+        goal = gp.GoalPlan()
+        engine = _engine("opencode_plan.jsonl")
+        engine.on_request = goal.set_request
+        engine.applier.on_plan = lambda steps: goal.apply_update({"steps": steps})
+        try:
+            engine.submit(eng.Prompt(text="Plan a campfire scene"))
+            _wait(engine)
+        finally:
+            engine.disconnect()
+        self.assertEqual(goal.turn_goal, "Plan a campfire scene")
+        self.assertTrue(goal.steps)
+        self.assertTrue(all(s["status"] in ("todo", "doing", "done") for s in goal.steps))
 
     def test_crash_mid_turn_ends_the_turn_with_an_error(self):
         engine = _engine("opencode_mcp_tool_call.jsonl", "--exit-after", "6")

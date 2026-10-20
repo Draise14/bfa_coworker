@@ -107,6 +107,20 @@ def _acp_engine():
                 _tag_chat_regions_redraw()
             bpy.app.timers.register(redraw, first_interval=0.0)
         _acp.on_change = changed
+
+        # Goal & Plan, like a local turn: your message is the goal, and the
+        # agent's plan (or OpenCode's to-do list) fills the steps.
+        from . import session_memory as _sm
+
+        def request(text: str) -> None:
+            with _sm.store_lock:
+                _sm.store.goal.set_request(text)
+
+        def plan(steps: list[dict[str, str]]) -> None:
+            with _sm.store_lock:
+                _sm.store.goal.apply_update({"steps": steps})
+        _acp.on_request = request
+        _acp.applier.on_plan = plan
     return _acp
 
 

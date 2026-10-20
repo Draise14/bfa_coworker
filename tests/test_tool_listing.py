@@ -27,6 +27,63 @@ _REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # BEGIN: EXPECTED_TOOLS
 EXPECTED_TOOLS = [
     {
+        "name": "ask_user",
+        "description": "\n"
+"        Ask the user a short question in Coworker's chat, with buttons; waits for the answer.\n"
+"\n"
+"        Ask when a choice really matters (style, which object, overwrite or keep) - a\n"
+"        question beats a wrong turn. Give 2-5 short ``choices``; with ``allow_text`` the user\n"
+"        may also type an answer.\n"
+"\n"
+"        Args:\n"
+"            question: One short question.\n"
+"            choices: Button labels (2-5 short options).\n"
+"            allow_text: Let the user type an answer instead.\n"
+"            wait_seconds: How long to wait (at most 280).\n"
+"\n"
+"        Returns:\n"
+"            ``status`` (\"ok\", \"no_answer\" or \"cancelled\") and the ``answer`` text.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "question": {
+                    "title": "Question",
+                    "type": "string"
+                },
+                "choices": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Choices"
+                },
+                "allow_text": {
+                    "default": True,
+                    "title": "Allow Text",
+                    "type": "boolean"
+                },
+                "wait_seconds": {
+                    "default": 240.0,
+                    "title": "Wait Seconds",
+                    "type": "number"
+                }
+            },
+            "required": [
+                "question"
+            ],
+            "title": "ask_userArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "assign_material_to_objects",
         "description": "\n"
 "        Assign an existing material to one or more objects by name.\n"
@@ -713,6 +770,34 @@ EXPECTED_TOOLS = [
         }
     },
     {
+        "name": "get_scene_digest",
+        "description": "\n"
+"        A short summary of the scene (counts, active and selected objects, up to 40 objects)\n"
+"        with a ``hash``. Call it first instead of a full listing.\n"
+"\n"
+"        Called again with ``since`` = the hash you got, it answers ``unchanged`` or only\n"
+"        what changed (objects added, removed, changed), so re-checking the scene is cheap.\n"
+"\n"
+"        Args:\n"
+"            since: The ``hash`` from an earlier call (empty = the whole summary).\n"
+"\n"
+"        Returns:\n"
+"            Status and the digest: ``hash``, scene, frame, mode, active, and either\n"
+"            ``unchanged``, ``changes`` or ``objects``.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "since": {
+                    "default": "",
+                    "title": "Since",
+                    "type": "string"
+                }
+            },
+            "title": "get_scene_digestArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "get_screenshot_of_area_as_image",
         "description": "\n"
 "        Take a screenshot of a single Blender area and return it as a PNG image.\n"
@@ -1075,6 +1160,40 @@ EXPECTED_TOOLS = [
         }
     },
     {
+        "name": "load_tools",
+        "description": "\n"
+"        Make a group of specialised tools available when the task needs them. If a tool\n"
+"        you need isn't in your list (materials, nodes, assets, animation, lighting...),\n"
+"        call this first; the tools appear right after.\n"
+"\n"
+"        Domains: animation, material, modeling, lighting, rendering, vse,\n"
+"        geometry_nodes, assets. Load only what the request needs; the basic tools\n"
+"        (scene, code, docs, screenshots, plan, questions) are always there.\n"
+"\n"
+"        Args:\n"
+"            domains: One or more domain names from the list above.\n"
+"\n"
+"        Returns:\n"
+"            The domains loaded and the tools they added (name and what it does).\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "domains": {
+                    "items": {
+                        "type": "string"
+                    },
+                    "title": "Domains",
+                    "type": "array"
+                }
+            },
+            "required": [
+                "domains"
+            ],
+            "title": "load_toolsArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "place_asset_in_scene",
         "description": "\n"
 "        Place a COLLECTION or OBJECT asset at an explicit world transform.\n"
@@ -1183,6 +1302,47 @@ EXPECTED_TOOLS = [
                 "asset_name"
             ],
             "title": "place_asset_in_sceneArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "read_tool_output",
+        "description": "\n"
+"        Read more of a long tool result that was shortened.\n"
+"\n"
+"        A result longer than about 8000 characters arrives as a preview with an\n"
+"        ``output_id``. Call this only when the preview isn't enough, and read\n"
+"        just the part you need.\n"
+"\n"
+"        Args:\n"
+"            output_id: The ``output_id`` from the shortened result.\n"
+"            offset: Character offset to start from (0 = the beginning).\n"
+"            limit: Characters to return (at most 6000).\n"
+"\n"
+"        Returns:\n"
+"            ``text``, its ``offset``, ``next_offset`` (None at the end) and ``total_chars``.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "output_id": {
+                    "title": "Output Id",
+                    "type": "string"
+                },
+                "offset": {
+                    "default": 0,
+                    "title": "Offset",
+                    "type": "integer"
+                },
+                "limit": {
+                    "default": 6000,
+                    "title": "Limit",
+                    "type": "integer"
+                }
+            },
+            "required": [
+                "output_id"
+            ],
+            "title": "read_tool_outputArguments",
             "type": "object"
         }
     },
@@ -1600,6 +1760,72 @@ EXPECTED_TOOLS = [
                 }
             },
             "title": "three_point_lighting_rigArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "update_plan",
+        "description": "\n"
+"        Keep a short step plan for multi-step requests (3+ steps); the user sees it in\n"
+"        Coworker's Goal & Plan panel and watches it tick off.\n"
+"\n"
+"        Call once with ``steps`` to set the plan, then with ``done`` (step numbers) as you\n"
+"        finish steps.\n"
+"\n"
+"        Args:\n"
+"            steps: Full ordered list of short steps (replaces the plan).\n"
+"            done: 1-based numbers of steps that are now finished.\n"
+"            current: 1-based number of the step you are working on now.\n"
+"\n"
+"        Returns:\n"
+"            Status and the plan as it stands.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "steps": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Steps"
+                },
+                "done": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "integer"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Done"
+                },
+                "current": {
+                    "anyOf": [
+                        {
+                            "type": "integer"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Current"
+                }
+            },
+            "title": "update_planArguments",
             "type": "object"
         }
     },

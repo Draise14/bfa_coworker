@@ -160,13 +160,18 @@ class ChatView:
         if active >= 0 and split_turn(turns[active])[1]:
             # Fold / unfold the running turn's Workshop from wherever you are in the chat
             # (#196); the Thinking box always shows -- it lets you feel what's happening.
+            # Icons only (#216): the fold arrow and the Workshop's own icon.
             key = "t{:d}".format(active)
-            label = "Workshop"
-            w = canvas.icon_size() + canvas.measure(label, "ui", style.font_size) + 2.5 * style.pad
+            side = canvas.icon_size()
+            w = 2 * side + 2.0 * style.pad
             pill = Rect(right - w, rect.y + pad, w, size)
-            if canvas.button(pill, "fold_workshop", label,
-                             icon="TRIA_DOWN" if key in self.expanded else "TRIA_RIGHT"):
+            if canvas.button(pill, "fold_workshop", ""):
                 actions.append(("toggle", key))
+            iy = pill.y + (pill.h - side) / 2
+            lead = pill.x + style.pad * 0.75
+            canvas.icon(Rect(lead, iy, side, side), "TRIA_DOWN" if key in self.expanded else "TRIA_RIGHT",
+                        style.button.text)
+            canvas.icon(Rect(lead + side + style.pad * 0.5, iy, side, side), "PACKAGE", style.button.text)
         return actions
 
     # -- measuring -----------------------------------------------------------------

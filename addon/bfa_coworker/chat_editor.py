@@ -1071,8 +1071,9 @@ class BFACW_PT_editor_chat(_CoworkerPanel, bpy.types.Panel):
 
     def draw(self, context):
         from . import ui_chat
-        if ui_chat.draw_chat_controls(self.layout, context, show_chat_mode=False, show_prefs=False):
-            ui_chat._draw_goal_plan_inline(self.layout)
+        # The plan is its own panel (Plan, under Queue), the image a picker (#171).
+        ui_chat.draw_chat_controls(self.layout, context, show_chat_mode=False, show_prefs=False,
+                                   minimal_image=True)
 
 
 # Blender wants poll(cls, context) exactly: closures, not default arguments.
@@ -1096,7 +1097,8 @@ def _editor_copies() -> list[type]:
     """The 3D View's Session / Queue / Status panels, registered again for this editor."""
     from . import ui_chat
     sources = (ui_chat.BFACW_PT_chat_session, ui_chat.BFACW_PT_chat_session_context,
-               ui_chat.BFACW_PT_chat_session_memory, ui_chat.BFACW_PT_chat_queue, ui_chat.BFACW_PT_chat_status)
+               ui_chat.BFACW_PT_chat_session_memory, ui_chat.BFACW_PT_chat_queue, ui_chat.BFACW_PT_chat_plan,
+               ui_chat.BFACW_PT_chat_status)
     ids = {cls.bl_idname: cls.bl_idname.replace("BFACW_PT_chat_", "BFACW_PT_editor_") for cls in sources}
     out = []
     for cls in sources:

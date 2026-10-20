@@ -79,14 +79,22 @@ class TestMemoryAndCheckpoints(unittest.TestCase):
             self.assertIn('bl_idname = "{:s}"'.format(pid), _SRC)
         self.assertEqual(_SRC.count('bl_parent_id = "BFACW_PT_chat_session"'), 2)
 
-    def test_goal_and_plan_live_in_the_chat_between_buttons_and_history(self):
+    def test_goal_and_plan_have_their_own_panel_under_queue(self):
+        """#171: Chat, Queue, Plan (open), then Session and Status (closed)."""
+        import re
         self.assertNotIn('bl_idname = "BFACW_PT_chat_session_goal"', _SRC)
-        draw = _SRC[_SRC.index("class BFACW_PT_chat_panel("):]
-        i_buttons = draw.index('"bfacw.chat_send"')
-        i_goal = draw.index("_draw_goal_plan_inline(layout)")
-        i_hist = draw.index("self._draw_chat_history(context)")
-        self.assertLess(i_buttons, i_goal)
-        self.assertLess(i_goal, i_hist)
+        chat = _SRC[_SRC.index("class BFACW_PT_chat_panel("):_SRC.index("def _draw_chat_history")]
+        self.assertNotIn("_draw_goal_plan_inline(layout)", chat)
+
+        def panel(idname):
+            start = _SRC.index('bl_idname = "{:s}"'.format(idname))
+            block = _SRC[start:_SRC.index("\n\n", start)]
+            order = int(re.search(r"bl_order = (\d+)", block).group(1))
+            return order, "DEFAULT_CLOSED" in block
+        queue, plan = panel("BFACW_PT_chat_queue"), panel("BFACW_PT_chat_plan")
+        session, status = panel("BFACW_PT_chat_session"), panel("BFACW_PT_chat_status")
+        self.assertEqual([queue[0], plan[0], session[0], status[0]], [1, 2, 3, 4])
+        self.assertEqual([queue[1], plan[1], session[1], status[1]], [False, False, True, True])
 
 
 if __name__ == "__main__":

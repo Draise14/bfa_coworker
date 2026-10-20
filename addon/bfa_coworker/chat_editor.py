@@ -293,6 +293,11 @@ def _view_zoom(region: Any) -> float:
         return 1.0
 
 
+def _approval_card() -> Any:
+    from . import ui_chat
+    return ui_chat.approval_card()
+
+
 def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0) -> None:
     context = bpy.context
     prefs = _prefs(context)
@@ -309,7 +314,8 @@ def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0) -> None:
     surface.drop_hover = drop_hover()
     typed_before = surface.box.model.text
     actions = surface.draw(canvas, rect, _history(), live=state, top=_status(context) if compact else None,
-                           notice=_harness_notice(prefs) if harness else None)
+                           notice=_harness_notice(prefs) if harness else None,
+                           approval=None if harness else _approval_card())
     if surface.box.model.text != typed_before:
         # Changed by a click while drawing (an @ suggestion): share the draft now,
         # or the panel chat's own @ popup would see the old half-typed "@Ca".
@@ -633,6 +639,8 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
         props.chat_image = None
     elif action == "chat_mode" and props is not None:
         props.chat_mode = value
+    elif action == "approve":
+        ops.agent_approve(choice=value)
     elif action == "native_edit" and surface is not None:
         input_capture.focus(surface.box, region)
         bpy.ops.bfacw.gpu_input_native("INVOKE_DEFAULT")

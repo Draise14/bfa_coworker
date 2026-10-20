@@ -37,6 +37,7 @@ from .layout import Canvas, InteractionState, Rect
 from .style import Style
 
 __all__ = (
+    "Approval",
     "ChatSurface",
     "Notice",
     "TopBar",
@@ -70,6 +71,16 @@ class Notice:
     icon: str
     lines: tuple[str, ...]
     buttons: tuple[tuple[str, str, str], ...] = ()   # (id, label, icon)
+
+
+@dataclass
+class Approval:
+    """The agent asks before a tool: drawn above the input until you answer."""
+
+    title: str                  # "Claude Code wants to run bash"
+    detail: str = ""            # the tool's input on one line
+    waiting: int = 1            # questions open, this one included
+    note: str = ""              # e.g. "Coworker's Blender tool"
 
 
 @dataclass
@@ -162,7 +173,8 @@ class ChatSurface:
                                 focused="input" if self.box.focused else None)
 
     def draw(self, canvas: Canvas, rect: Rect, history: list[dict], live: Any = None,
-             top: TopBar | None = None, notice: Notice | None = None) -> list[tuple[str, str]]:
+             top: TopBar | None = None, notice: Notice | None = None,
+             approval: Approval | None = None) -> list[tuple[str, str]]:
         """Draw into *rect* (region pixels); return this frame's actions."""
         style = canvas.style
         self._style = style
@@ -184,6 +196,8 @@ class ChatSurface:
         chat_y = input_rect.top + pad if show_input else rect.y
         if show_input and self.box.attachment:      # the image tray, above the input
             chat_y = self._draw_tray(canvas, Rect(inner.x, chat_y, inner.w, 0), actions) + pad
+        if show_input and approval is not None:     # the agent's question, right above
+            chat_y = self._draw_approval(canvas, Rect(inner.x, chat_y, inner.w, 0), approval, actions) + pad
         chat = Rect(rect.x, chat_y, rect.w, max(0.0, top_edge - chat_y - pad))
         self._chat_rect = chat
         if notice is not None:
@@ -302,6 +316,51 @@ class ChatSurface:
         canvas.label(Rect(tx, mid - style.line_height, room + side, style.line_height), status,
                      _soft(style.box.text, 0.35))
         return tray.top
+
+    def _draw_approval(self, canvas: Canvas, anchor: Rect, approval: Approval,
+                       actions: list[tuple[str, str]]) -> float:
+        """Who wants to run what, and Allow once / Always / Deny.  Returns its top."""
+        style = canvas.style
+        u, pad = style.unit, style.pad * 0.7
+        width = anchor.w - 2 * pad
+        side = canvas.icon_size()
+        title = approval.title + ("  (+{:d} more)".format(approval.waiting - 1) if approval.waiting > 1 else "")
+        title_h = canvas.text_height(title, width - side - pad * 0.6)
+        note_h = canvas.text_height(approval.note, width) if approval.note else 0.0
+        detail_h = canvas.text_height(approval.detail, width - pad, "mono") + pad if approval.detail else 0.0
+        buttons = (("once", "Allow once", "CHECKMARK"), ("always", "Always", "PINNED"), ("deny", "Deny", "CANCEL"))
+        needs = [side + canvas.measure(label, "ui", style.font_size) + 3.0 * style.pad for _c, label, _i in buttons]
+        side_by_side = sum(needs) + pad * 0.5 * (len(needs) - 1) <= width
+        rows = 1 if side_by_side else len(buttons)
+        h = title_h + note_h + detail_h + rows * u * 1.25 + 2.5 * pad
+        card = Rect(anchor.x, anchor.y, anchor.w, h)
+        canvas.box(card, colors=style.box)
+        # A thin accent line on the left: this needs you.
+        canvas.fill(Rect(card.x, card.y + style.scale * 2, style.scale * 3, card.h - style.scale * 4),
+                    style.cursor, style.scale)
+        top = card.top - pad
+        canvas.icon(Rect(card.x + pad, top - style.line_height + (style.line_height - side) / 2, side, side),
+                    "LOCKED", style.box.text)
+        top = canvas.wrapped(card.x + pad + side + pad * 0.6, top, width - side - pad * 0.6, title,
+                             style.box.text, bold=True)
+        if approval.note:
+            top = canvas.wrapped(card.x + pad, top, width, approval.note, _soft(style.box.text, 0.35))
+        if approval.detail:
+            frame_h = detail_h - pad * 0.5
+            frame = Rect(card.x + pad, top - pad * 0.25 - frame_h, width, frame_h)
+            canvas.fill(frame, style.text_field.inner, style.radius(style.text_field))
+            canvas.wrapped(frame.x + pad * 0.5, frame.top - pad * 0.25, width - pad, approval.detail,
+                           style.text_field.text, font="mono")
+        bx, by = card.x + pad, card.y + pad + (rows - 1) * u * 1.25
+        for (choice, label, icon), need in zip(buttons, needs):
+            bw = need if side_by_side else width
+            if canvas.button(Rect(bx, by, bw, u * 1.1), "approve:" + choice, label, icon=icon):
+                actions.append(("approve", choice))
+            if side_by_side:
+                bx += bw + pad * 0.5
+            else:
+                by -= u * 1.25
+        return card.top
 
     def _draw_drop_target(self, canvas: Canvas, rect: Rect) -> None:
         """Dragging an image file over the chat: a highlight that says what a drop does."""

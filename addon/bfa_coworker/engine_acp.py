@@ -13,9 +13,11 @@ to its session -- and its turn streams back into the same chat state as a
 local turn (:mod:`chat_state`), so the panel and the GPU chat draw it the same:
 text, thinking, Workshop rows, plan, Stop, Queue.
 
-Permissions: requests for Coworker's own tools are approved (they run in
-Blender with a checkpoint to revert to); everything else the agent asks for
-(its shell, file edits) is refused, so it stays inside Blender.
+Permissions (Agent 5): Coworker's own tools run (in Blender, with a
+checkpoint to revert to) unless *ask_coworker_tools* is on.  The agent's own
+tools (its shell, file edits) are refused while *only_coworker_tools* is on;
+otherwise you're asked in the chat (:mod:`approvals`): Allow once, Always (for
+this session) or Deny.
 
 Threads: the agent's messages arrive on the client's reader thread and are put
 on an :class:`engine.EventBus`; :meth:`drain` applies them on the main thread.
@@ -30,7 +32,8 @@ import threading
 from collections import deque
 from typing import Any, Callable
 
-from .acp_client import MCP_SERVER_NAME, AcpClient, AcpError, stdio_mcp_server, update_to_events
+from .acp_client import MCP_SERVER_NAME, AcpClient, AcpError, _tool_name, stdio_mcp_server, update_to_events
+from .approvals import ApprovalRequest, Approvals
 from .chat_state import ChatStateApplier
 from .engine import EngineCaps, EventBus, Prompt, new_turn_id
 
@@ -49,6 +52,8 @@ class AcpEngine:
         self.caps = EngineCaps(label="External Agent", images=False, cancel=True, own_loop=True)
         self.bus = EventBus()
         self.applier = ChatStateApplier(state)
+        self.approvals = Approvals()            # the agent's "may I?" questions (Agent 5)
+        self.ask_coworker_tools = False         # on: ask before Coworker's tools too
         self.client: AcpClient | None = None
         self.session_id = ""
         self.agent_label = ""
@@ -115,6 +120,7 @@ class AcpEngine:
         client, self.client = self.client, None
         self.connected, self.session_id = False, ""
         self._queue.clear()
+        self.approvals.end_session()
         if client is not None:
             if self._turn_id:
                 client.cancel(self.session_id)
@@ -147,6 +153,7 @@ class AcpEngine:
 
     def cancel(self) -> None:
         self._queue.clear()
+        self.approvals.cancel_all()
         if self.client is not None and self._turn_id:
             self.client.cancel(self.session_id)
 
@@ -203,6 +210,7 @@ class AcpEngine:
                 self.connected = False
                 self.status = "The agent stopped -- press Start to reconnect"
         finally:
+            self.approvals.cancel_all()     # a question left from this turn has no one to answer
             self.bus.emit("turn_end", turn_id, stop_reason=stop_reason)
             with self._lock:
                 self._turn_id = ""
@@ -220,18 +228,38 @@ class AcpEngine:
         self._changed()
 
     def _on_permission(self, params: dict[str, Any], respond: Callable[[str | None], None]) -> None:
-        """Coworker's tools: yes.  Anything else (the agent's shell, file edits): no."""
+        """The agent asks before a tool: answer by the settings, or ask you in the chat."""
         call = params.get("toolCall") or {}
         title = str(call.get("title") or call.get("kind") or "")
         options = params.get("options") or []
+
+        def answer(choice: str) -> None:
+            # Our choice -> the agent's option ids.  Never the agent's own "allow_always":
+            # Claude Code would save it for good (.claude/settings.local.json) and stop
+            # asking; Coworker remembers "Always" itself, for this session only.
+            wanted = {"once": ("allow_once",), "always": ("allow_once",),
+                      "deny": ("reject_once", "reject_always")}.get(choice, ())
+            pick = next((o for kind in wanted for o in options if o.get("kind") == kind), None)
+            respond(str(pick.get("optionId")) if pick else None)
+
         # OpenCode: "bfa-coworker_<tool>"; Claude Code: "mcp__bfa-coworker__<tool>".
-        ours = MCP_SERVER_NAME in title or "blender" in title.lower() or not self.only_coworker_tools
-        wanted = ("allow_always", "allow_once") if ours else ("reject_once", "reject_always")
-        pick = next((o for kind in wanted for o in options if o.get("kind") == kind), None)
-        respond(str(pick.get("optionId")) if pick else None)
-        if not ours and self._turn_id:
-            self.bus.emit("status", self._turn_id,
-                          text="Refused {:s}: the agent can only use Coworker's Blender tools".format(title or "a tool"))
+        ours = MCP_SERVER_NAME in title or "blender" in title.lower()
+        tool = _tool_name(title) if ours else title
+        if not ours and self.only_coworker_tools:
+            answer("deny")
+            if self._turn_id:
+                self.bus.emit("status", self._turn_id, text="Refused {:s}: the agent can only use "
+                              "Coworker's Blender tools".format(title or "a tool"))
+            return
+        if (ours and not self.ask_coworker_tools) or self.approvals.allowed_always(tool):
+            answer("once")
+            return
+        request = ApprovalRequest(tool=tool or "a tool", source=self.agent_label, args=call.get("rawInput"),
+                                  coworker_tool=ours)
+        if self._turn_id:
+            self.bus.emit("status", self._turn_id, text="Waiting for you: allow {:s}?".format(request.tool))
+        self.approvals.ask(request, answer)
+        self._changed()
 
     def _changed(self) -> None:
         if self.on_change is not None:

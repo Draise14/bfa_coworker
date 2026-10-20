@@ -11,7 +11,8 @@ the fake ACP agent replaying recorded OpenCode sessions.
 2. A turn from the chat lands in the chat state like a local turn: your
    message, Workshop tool rows, the reply; the turn ends.
 3. Queue while busy; Stop cancels.
-4. Permissions: Coworker's tools allowed, anything else refused (with a note).
+4. Permissions: Coworker's tools allowed, anything else refused (with a note),
+   or asked in the chat (Agent 5): Allow once / Always / Deny; Stop cancels.
 5. The prompt carries the Blender context, Ask mode, and images when the
    agent takes them.
 6. An agent that crashes mid-turn ends the turn with an error.
@@ -164,7 +165,7 @@ class TestPermissionsAndPrompt(unittest.TestCase):
 
     def test_coworker_tools_allowed_others_refused(self):
         answer, notes = self._ask("bfa-coworker_execute_blender_code")
-        self.assertEqual((answer, notes), ("a2", []))
+        self.assertEqual((answer, notes), ("a1", []))
         answer, notes = self._ask("bash")
         self.assertEqual(answer, "r1")
         self.assertIn("only use Coworker's Blender tools", notes[0].data["text"])
@@ -172,19 +173,46 @@ class TestPermissionsAndPrompt(unittest.TestCase):
     def test_claude_code_tool_names(self):
         # Claude Code titles our tools mcp__bfa-coworker__<tool>.
         answer, notes = self._ask("mcp__bfa-coworker__search_api_docs")
-        self.assertEqual((answer, notes), ("a2", []))
+        self.assertEqual((answer, notes), ("a1", []))
         acp = sys.modules["bfacw_engine_acp_pkg.acp_client"]
         self.assertEqual(acp._tool_name("mcp__bfa-coworker__execute_blender_code"), "execute_blender_code")
         self.assertEqual(acp._tool_name("bfa-coworker_execute_blender_code"), "execute_blender_code")
 
-    def test_own_tools_allowed_when_not_only_coworker(self):
+    def test_own_tools_ask_you_when_not_only_coworker(self):
         engine = ea.AcpEngine(_state())
-        engine._turn_id, engine.only_coworker_tools = "t1", False
+        engine._turn_id, engine.only_coworker_tools, engine.agent_label = "t1", False, "Claude Code"
         answers = []
-        engine._on_permission({"toolCall": {"title": "bash"},
-                               "options": [{"optionId": "a1", "kind": "allow_once"},
-                                           {"optionId": "r1", "kind": "reject_once"}]}, answers.append)
-        self.assertEqual(answers, ["a1"])
+        options = [{"optionId": "a1", "kind": "allow_once"}, {"optionId": "a2", "kind": "allow_always"},
+                   {"optionId": "r1", "kind": "reject_once"}]
+        ask = {"toolCall": {"title": "bash", "rawInput": {"command": "ls"}}, "options": options}
+        engine._on_permission(ask, answers.append)
+        self.assertEqual(answers, [])                              # waits for you
+        request = engine.approvals.current()
+        self.assertEqual((request.title, request.detail), ("Claude Code wants to run bash", "ls"))
+        self.assertFalse(request.coworker_tool)
+        notes = [e for e in engine.bus.drain() if e.kind == "status"]
+        self.assertIn("Waiting for you", notes[0].data["text"])
+        engine.approvals.answer("always")
+        self.assertEqual(answers, ["a1"])          # never the agent's own allow_always (it would keep it)
+        engine._on_permission(ask, answers.append)                 # "Always": no question this time
+        self.assertEqual(answers, ["a1", "a1"])
+        engine._on_permission({"toolCall": {"title": "write"}, "options": options}, answers.append)
+        engine.approvals.answer("deny")
+        self.assertEqual(answers[-1], "r1")
+
+    def test_ask_before_coworker_tools_and_stop(self):
+        engine = ea.AcpEngine(_state())
+        engine._turn_id, engine.ask_coworker_tools = "t1", True
+        answers = []
+        engine._on_permission({"toolCall": {"title": "mcp__bfa-coworker__execute_blender_code",
+                                            "rawInput": {"code": "bpy.ops.mesh.primitive_cube_add()"}},
+                               "options": [{"optionId": "a1", "kind": "allow_once"}]}, answers.append)
+        request = engine.approvals.current()
+        self.assertEqual(request.tool, "execute_blender_code")
+        self.assertTrue(request.coworker_tool)
+        engine.cancel()                                            # Stop answers "cancelled"
+        self.assertEqual(answers, [None])
+        self.assertIsNone(engine.approvals.current())
 
     def test_prompt_blocks(self):
         engine = ea.AcpEngine(_state())

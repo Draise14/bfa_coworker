@@ -1035,8 +1035,17 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         name="Only Coworker Tools",
         description=("The agent may only use Coworker's Blender tools: its own shell and file "
                      "tools are refused, and it doesn't load your other agent setups (skills, "
-                     "rules). Off: it may also use its own tools"),
+                     "rules). Off: it asks you in the chat before using one of its own tools "
+                     "(Allow once, Always, Deny)"),
         default=True,
+    )
+
+    external_agent_ask_coworker_tools: BoolProperty(  # type: ignore[valid-type]
+        name="Ask Before Blender Tools Too",
+        description=("Ask you in the chat before the agent runs one of Coworker's Blender tools "
+                     "as well (they change the scene; Revert undoes a turn). Off: they run "
+                     "straight away, like in Local mode. \"Always\" lasts until you stop the agent"),
+        default=False,
     )
 
     external_agent_command: StringProperty(  # type: ignore[valid-type]

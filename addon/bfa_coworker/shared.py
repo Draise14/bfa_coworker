@@ -242,30 +242,31 @@ OPERATING_MODE_ITEMS: list[tuple[str, str, str, str, int]] = [
     (
         "LOCAL_LLM",
         "Local LLM",
-        "Run a local LLM via llama-server -- everything runs on your machine",
+        "Chat here; a model runs on this computer (llama-server, download one in Settings). "
+        "Private, works offline",
         "CONSOLE",
         0,
     ),
     (
         "REMOTE_API",
         "Remote API",
-        "Use a remote API like OpenAI or OpenRouter -- no local LLM needed",
+        "Chat here; a model from an online service (OpenAI, OpenRouter, ...) with your API key",
         "WORLD",
         1,
     ),
     (
         "EXTERNAL_AGENT",
         "External Agent",
-        "Chat here in Coworker; an agent app on this computer (OpenCode, Claude Code, Codex, "
-        "Gemini, Copilot) does the work with Coworker's Blender tools",
+        "Chat here; an agent app on this computer (Claude Code, OpenCode, Codex, Gemini, Copilot) "
+        "does the work with Coworker's Blender tools, on your own subscription",
         "LINKED",
         3,
     ),
     (
         "EXTERNAL_HARNESS",
         "External Harness",
-        "Bridge-only mode -- connect an external MCP client "
-        "(Claude Desktop, Cursor, VS Code, etc.)",
+        "Chat in another app (Claude Desktop, Cursor, VS Code, ...): it works in Blender through "
+        "Coworker's bridge, and Coworker's own chat is off",
         "NETWORK_DRIVE",
         2,
     ),

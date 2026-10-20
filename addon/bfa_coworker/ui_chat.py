@@ -1406,7 +1406,7 @@ def _blend_key() -> str:
 
 def _chat_index():
     from .chat_history import ChatIndex
-    index = ChatIndex(_chat_history_dir())
+    index = ChatIndex(str(_chat_history_dir()))
     index.ensure()
     return index
 
@@ -3786,7 +3786,10 @@ def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool 
     # -- Image attachment socket (issue #88 / Tier 3k) ----------
     # Above the chat input: set the image BEFORE typing, so what is
     # attached is visible right next to the message it will ride with.
-    _draw_attachment_row(layout, props, context, minimal=minimal_image)
+    if minimal_image:       # the Coworker editor: the picker and the preview (#171)
+        _draw_attachment_row(layout, props, context, minimal=True)
+    else:
+        _draw_attachment_row(layout, props, context)
     return True
 
 

@@ -2225,7 +2225,7 @@ class BFACW_PT_chat_history(Panel):  # type: ignore[misc]
     bl_region_type = 'UI'
     bl_category = _CHAT_PANEL_CATEGORY
     bl_options = {'DEFAULT_CLOSED'}
-    bl_order = 4
+    bl_order = 3
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -4143,7 +4143,7 @@ class BFACW_PT_chat_compact(Panel):  # type: ignore[misc]
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = _CHAT_PANEL_CATEGORY
-    bl_order = 0
+    bl_order = 2          # under Queue and Plan (#212)
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -4163,6 +4163,25 @@ class BFACW_PT_chat_compact(Panel):  # type: ignore[misc]
         _ce.draw_marker_row(col, "bottom")
 
 
+class BFACW_PT_chat_controls(Panel):  # type: ignore[misc]
+    """The chat's controls under the compact sidebar chat: mode tabs, engine, Start (#212)"""
+    bl_label = "Coworker"
+    bl_idname = "BFACW_PT_chat_controls"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = _CHAT_PANEL_CATEGORY
+    bl_options = {'DEFAULT_CLOSED'}
+    bl_order = 5          # last (#212)
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return not bpy.app.background and _compact_sidebar(context)
+
+    def draw(self, context: bpy.types.Context) -> None:
+        # The compact chat's top bar has Coworker / Ask / Plan.
+        draw_chat_controls(self.layout, context, show_chat_mode=False)
+
+
 class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
     """Main chat panel in the 3D Viewport sidebar -- input and messages."""
     bl_label = "Coworker"
@@ -4170,6 +4189,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = _CHAT_PANEL_CATEGORY
+    bl_order = 2          # the classic chat, in the compact chat's place
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -4531,7 +4551,7 @@ class BFACW_PT_chat_session(Panel):  # type: ignore[misc]
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = _CHAT_PANEL_CATEGORY
-    bl_order = 5
+    bl_parent_id = "BFACW_PT_chat_status"
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -4598,7 +4618,8 @@ class BFACW_PT_chat_plan(Panel):  # type: ignore[misc]
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = _CHAT_PANEL_CATEGORY
-    bl_order = 3          # under Queue, open (#171)
+    bl_options = {'DEFAULT_CLOSED'}
+    bl_order = 1          # sidebar: under Queue, closed (#212)
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -4781,54 +4802,6 @@ def _auto_send(prompt: str) -> None:
     return None
 
 
-def _action_groups(context: bpy.types.Context) -> list[list[tuple[str, str, str]]]:
-    """The common Coworker actions, grouped, for the mode at hand (#201)."""
-    prefs = context.preferences.addons[__package__].preferences
-    harness = prefs.operating_mode == "EXTERNAL_HARNESS"
-    chat = [] if harness else [("bfacw.chat_clear", "New Thread", 'ADD'),
-                               ("bfacw.mention_search", "@ Mention", 'OUTLINER_OB_MESH')]
-    if not harness and agent_controller._agent_state.is_thinking:
-        chat.append(("bfacw.chat_stop", "Stop", 'PAUSE'))
-    elif not harness:
-        chat.append(("bfacw.revert_turn", "Revert Turn", 'LOOP_BACK'))
-    if getattr(context.space_data, "type", "") == 'VIEW_3D':
-        chat.append(("bfacw.open_coworker_editor", "Open Editor", 'WINDOW'))
-    attach = [("bfacw.chat_attach_image", "Image...", 'FILE_IMAGE'),
-              ("bfacw.chat_capture_render", "Render", 'RENDER_STILL'),
-              ("bfacw.chat_capture_screen", "Screen", 'FULLSCREEN_ENTER')]
-    session = [("bfacw.plan_open", "Goal & Plan", 'CHECKBOX_HLT'),
-               ("bfacw.edit_rules", "Project Rules", 'TEXT'),
-               ("bfacw.copy_session_log", "Copy Log", 'COPYDOWN'),
-               ("bfacw.export_session_log", "Export Log", 'EXPORT')]
-    return [group for group in (chat, attach, session) if group]
-
-
-class BFACW_PT_chat_actions(Panel):  # type: ignore[misc]
-    """The common Coworker actions as buttons: chat, attach, session (#201)"""
-    bl_label = "Actions"
-    bl_idname = "BFACW_PT_chat_actions"
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'UI'
-    bl_category = _CHAT_PANEL_CATEGORY
-    bl_order = 1          # right under the chat
-
-    @classmethod
-    def poll(cls, context: bpy.types.Context) -> bool:
-        return not bpy.app.background
-
-    def draw(self, context: bpy.types.Context) -> None:
-        layout = self.layout
-        narrow = context.region is not None and context.region.width < 260 * context.preferences.system.ui_scale
-        for index, group in enumerate(_action_groups(context)):
-            if index:
-                layout.separator(factor=0.4)
-            # Flow buttons: as many columns as fit, the same width each.
-            flow = layout.grid_flow(row_major=True, columns=1 if narrow else 0,
-                                    even_columns=True, even_rows=True, align=True)
-            for operator, text, icon in group:
-                flow.operator(operator, text=text, icon=icon)
-
-
 class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
     """Top-level queue panel -- shows pending queued messages."""
     bl_label = "Queue"
@@ -4836,7 +4809,7 @@ class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = _CHAT_PANEL_CATEGORY
-    bl_order = 2          # under Actions (#171, #201)
+    bl_order = 0          # sidebar: first, open (#212)
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -4942,7 +4915,7 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
     bl_region_type = 'UI'
     bl_category = _CHAT_PANEL_CATEGORY
     bl_options = {'DEFAULT_CLOSED'}
-    bl_order = 6
+    bl_order = 4
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -6060,7 +6033,6 @@ _classes = (
     BFACW_OT_copy_message,
     BFACW_OT_copy_code_block,
 
-    BFACW_PT_chat_actions,
     BFACW_PT_chat_queue,
     BFACW_PT_chat_plan,
     BFACW_OT_plan_execute,
@@ -6073,10 +6045,11 @@ _classes = (
     BFACW_OT_chat_delete,
     BFACW_PT_chat_compact,
     BFACW_PT_chat_panel,
+    BFACW_PT_chat_controls,
+    BFACW_PT_chat_status,
     BFACW_PT_chat_session,
     BFACW_PT_chat_session_context,
     BFACW_PT_chat_session_memory,
-    BFACW_PT_chat_status,
     BFACW_PT_chat_text_editor,
 )
 

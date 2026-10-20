@@ -191,6 +191,33 @@ class TestAttachments(unittest.TestCase):
         self.assertEqual(cv.split_attachments("plain"), ("plain", []))
 
 
+class TestApproval(unittest.TestCase):
+
+    def test_card_above_the_input_with_three_answers(self):
+        surface = sf.ChatSurface()
+        card = sf.Approval(title="Claude Code wants to run bash", detail="ls -la", waiting=2,
+                           note="The agent's own tool, outside Blender")
+        canvas, _ = _draw(surface, approval=card)
+        texts = " ".join(c.text for c in canvas.commands if c.kind == "text")
+        self.assertIn("(+1 more)", texts)
+        self.assertIn("ls -la", texts)
+        widgets = [w for _r, w in surface._hits]
+        for choice in ("once", "always", "deny"):
+            self.assertIn("approve:" + choice, widgets)
+        button = next(r for r, w in surface._hits if w == "approve:once")
+        box = next(r for r, w in surface._hits if w == "input")
+        self.assertGreater(button.y, box.top)                      # sits above the input
+        self.assertEqual(_click(surface, "approve:deny", approval=card), [("approve", "deny")])
+
+    def test_narrow_sidebar_stacks_the_buttons(self):
+        surface = sf.ChatSurface(compact=True)
+        canvas = lay.Canvas(st.Style(), lay.fixed_measure(0.55), surface.interaction())
+        surface.draw(canvas, lay.Rect(0, 0, 160, 600), [],
+                     approval=sf.Approval(title="OpenCode wants to run bash"))
+        rects = {w: r for r, w in surface._hits if w.startswith("approve:")}
+        self.assertGreater(rects["approve:once"].y, rects["approve:deny"].y)
+
+
 class TestMentions(unittest.TestCase):
 
     def test_category_filter_row(self):

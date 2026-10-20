@@ -313,6 +313,7 @@ def draw_external_agent_setup(layout, context, compact: bool = False) -> None:
         opt = box.row()
         opt.enabled = not state.mcp_server_running
         opt.prop(prefs, "external_agent_only_coworker_tools")
+        opt.prop(prefs, "external_agent_ask_coworker_tools")
         if preset.docs_url:
             box.operator("wm.url_open", text="{:s} docs".format(preset.name), icon='URL').url = preset.docs_url
 
@@ -1897,6 +1898,66 @@ class BFACW_OT_chat_stop(Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
+class BFACW_OT_agent_approve(Operator):  # type: ignore[misc]
+    """Answer the agent's question: may it run this tool?"""
+    bl_idname = "bfacw.agent_approve"
+    bl_label = "Answer the Agent"
+    bl_options = {'INTERNAL'}
+
+    choice: EnumProperty(  # type: ignore[valid-type]
+        items=(("once", "Allow Once", "Let the agent run this tool this one time"),
+               ("always", "Always", "Let the agent run this tool without asking until you stop the agent"),
+               ("deny", "Deny", "Don't run it: the agent is told no and carries on without it")),
+        options={'SKIP_SAVE'},
+    )
+
+    @classmethod
+    def description(cls, _context, properties) -> str:
+        return {"once": "Let the agent run this tool this one time",
+                "always": "Let the agent run this tool without asking again, until you stop the agent",
+                "deny": "Don't run it: the agent is told no and carries on without it"}.get(
+                    properties.choice, cls.__doc__)
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        if _acp is None or not _acp.approvals.answer(self.choice):
+            return {"CANCELLED"}
+        _redraw_areas(context)
+        return {"FINISHED"}
+
+
+def approval_card():
+    """The agent's open question for the GPU chat, or None."""
+    if _acp is None:
+        return None
+    request = _acp.approvals.current()
+    if request is None:
+        return None
+    from .ui_gpu.surface import Approval
+    return Approval(title=request.title, detail=request.detail, waiting=_acp.approvals.count(),
+                    note="One of Coworker's Blender tools" if request.coworker_tool
+                    else "The agent's own tool, outside Blender")
+
+
+def draw_approval_box(layout: bpy.types.UILayout) -> None:
+    """The agent's open question in a layout panel (the GPU chat draws its own card)."""
+    card = approval_card()
+    if card is None:
+        return
+    box = layout.box()
+    title = card.title + ("  (+{:d} more)".format(card.waiting - 1) if card.waiting > 1 else "")
+    _draw_multiline(box, title, icon='LOCKED')
+    sub = box.column()
+    sub.scale_y = 0.8
+    sub.label(text=card.note)
+    if card.detail:
+        _draw_multiline(sub, card.detail)
+    row = box.row(align=True)
+    row.scale_y = 1.3
+    row.operator("bfacw.agent_approve", text="Allow Once", icon='CHECKMARK').choice = "once"
+    row.operator("bfacw.agent_approve", text="Always", icon='PINNED').choice = "always"
+    row.operator("bfacw.agent_approve", text="Deny", icon='CANCEL').choice = "deny"
+
+
 class BFACW_OT_chat_queue_send(Operator):  # type: ignore[misc]
     """Queue the current input message for later processing."""
     bl_idname = "bfacw.chat_queue_send"
@@ -2520,6 +2581,8 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         only_ours = getattr(prefs, "external_agent_only_coworker_tools", True)
         env = acp_presets.launch_env(preset, only_coworker_tools=only_ours)
         engine.only_coworker_tools = only_ours
+        engine.ask_coworker_tools = getattr(prefs, "external_agent_ask_coworker_tools", False)
+        engine.approvals.on_change = engine.on_change     # a question redraws the chats
         cwd = str(_agent_workspace())
         engine.connecting = True
         engine.status = "Looking for {:s}...".format(preset.name)
@@ -3308,6 +3371,8 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             btn_row.scale_y = 1.5
             btn_row.operator("bfacw.chat_send", icon="PLAY", text="Send")
             btn_row.operator("bfacw.chat_clear", icon="X", text="New Thread")
+
+        draw_approval_box(layout)
 
         # -- Goal & Plan (collapsible, only once there is a goal) -------
         # Lives with the chat (it is about the conversation), between the
@@ -4846,6 +4911,7 @@ _classes = (
     BFACW_OT_external_agent_check,
     BFACW_OT_external_agent_open_folder,
     BFACW_OT_external_agent_npm,
+    BFACW_OT_agent_approve,
     BFACW_OT_agent_restart,
     BFACW_OT_copy_message,
     BFACW_OT_copy_code_block,

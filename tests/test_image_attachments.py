@@ -889,9 +889,9 @@ class TestChatAttachmentUI(unittest.TestCase):
 
     def test_panels_draw_the_attachment_row(self):
         src = _ui_source()
-        # Definition + the two panel call sites.
+        # Definition + the two panel call sites + the Coworker editor's lean one (#171).
         self.assertEqual(
-            src.count("_draw_attachment_row(layout, props, context)"), 3,
+            src.count("_draw_attachment_row(layout, props, context"), 4,
             "both chat panels must draw the attachment row")
 
     def test_send_paths_warn_when_the_attachment_cannot_be_encoded(self):

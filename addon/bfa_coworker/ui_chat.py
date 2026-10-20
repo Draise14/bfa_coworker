@@ -4052,13 +4052,17 @@ def _open_mention_for_at(text: str) -> float | None:
 
 def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool = True,
                        show_prefs: bool = True, minimal_image: bool = False,
-                       show_image: bool = True) -> bool:
+                       show_image: bool = True, has_header: bool = False) -> bool:
     """The chat's controls: mode, Start / Stop, status, scene protection,
     External Harness setup, chat mode, reasoning effort and the image socket.
 
     Shared by the 3D View chat panel and the Coworker editor's sidebar (Tier 4,
     GPU 4).  Returns False in External Harness mode, where the chat itself
     runs in the external client (nothing else to draw).
+
+    *has_header*: the chat above has its own Start / Stop, status and settings (the
+    Coworker editor's header, the sidebar chat's top bar), so they are not drawn
+    again here (#234).
     """
     wm = context.window_manager
     props = wm.bfacw_chat_props  # type: ignore[attr-defined]
@@ -4070,7 +4074,7 @@ def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool 
     narrow = context.region is not None and context.region.width < 320 * context.preferences.system.ui_scale
     mode_row = draw_mode_switcher(layout, prefs, icons_only=narrow)
     mode_row.enabled = not (state.mcp_server_running or mcp_to_blender_server.is_running())
-    if show_prefs:     # the Coworker editor has its settings button in the header
+    if show_prefs and not has_header:     # else the header / top bar has it (#234)
         mode_row.separator(factor=0.3)
         mode_row.operator("bfacw.open_addon_prefs", icon="PREFERENCES", text="")
 
@@ -4080,20 +4084,20 @@ def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool 
     _draw_engine_options(layout, context, prefs)     # Local / Remote: Model / Effort, like the agent's (#195)
 
     # -- Agent control buttons (compact) --
+    # (With a header / top bar, Start / Stop is there: #234.)
     row = layout.row(align=True)
     row.scale_y = 1.8
-    if is_harness:
+    if has_header:
+        pass
+    elif is_harness:
         if mcp_to_blender_server.is_running():
-            actual = mcp_to_blender_server.get_actual_port()
-            tip = "Bridge running on port {:d}".format(actual) if actual else "Stop Bridge"
             row.operator("bfacw.agent_stop", icon="X", text="Stop Bridge")
         else:
             row.operator("bfacw.agent_start", icon="PLAY", text="Start Bridge")
+    elif state.mcp_server_running:
+        row.operator("bfacw.agent_stop", icon="X", text="Stop")
     else:
-        if state.mcp_server_running:
-            row.operator("bfacw.agent_stop", icon="X", text="Stop")
-        else:
-            row.operator("bfacw.agent_start", icon="PLAY", text="Start")
+        row.operator("bfacw.agent_start", icon="PLAY", text="Start")
 
     # -- Compact status line --
     if is_harness:
@@ -4119,9 +4123,10 @@ def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool 
         'SORTTIME' if state.is_thinking else
         'ERROR' if state.error else 'CANCEL'
     )
-    status_row = layout.row()
-    status_row.label(text="", icon=status_icon)
-    _draw_multiline(status_row, status)
+    if not has_header:      # the header / top bar shows the status (#234)
+        status_row = layout.row()
+        status_row.label(text="", icon=status_icon)
+        _draw_multiline(status_row, status)
     if state.error:
         err_row = layout.row(align=True)
         err_row.scale_y = 0.8
@@ -4160,17 +4165,15 @@ def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool 
 
     # -- External Harness mode --
     if is_harness:
-        if mcp_to_blender_server.is_running():
-            box = layout.box()
-            box.label(text="External MCP Client", icon='WORLD')
-            row = box.row(align=True)
-            row.scale_y = 1.2
-            row.operator("bfacw.open_harness_prefs", icon="PREFERENCES", text="Configure")
-            row = box.row(align=True)
-            row.prop(prefs, "harness_preset", text="")
-            op = row.operator("bfacw.copy_mcp_config", icon="COPYDOWN", text="Copy")
-            op.client_type = prefs.harness_preset
-        layout.label(text="Chat handled by external client.", icon='INFO')
+        # Only what is often changed (#234): the client, and its config to paste.
+        # Everything else is in Configure (the card, or here in the classic panel).
+        row = layout.row(align=True)
+        row.prop(prefs, "harness_preset", text="")
+        op = row.operator("bfacw.copy_mcp_config", icon="COPYDOWN", text="Copy Config")
+        op.client_type = prefs.harness_preset
+        if not has_header:
+            layout.operator("bfacw.open_harness_prefs", icon="PREFERENCES", text="Configure")
+            layout.label(text="Chat handled by external client.", icon='INFO')
         return False
 
     # -- Mode toggle --
@@ -4281,7 +4284,7 @@ class BFACW_PT_chat_controls(Panel):  # type: ignore[misc]
 
     def draw(self, context: bpy.types.Context) -> None:
         # The compact chat's top bar has Coworker / Ask / Plan, its input the image (#213).
-        draw_chat_controls(self.layout, context, show_chat_mode=False, show_image=False)
+        draw_chat_controls(self.layout, context, show_chat_mode=False, show_image=False, has_header=True)
 
 
 class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]

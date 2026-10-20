@@ -37,8 +37,10 @@ from `main`, no stacked PRs. Only one open PR at a time on `agent_controller.py`
 | ✅ Done | Editors 1 + GPU 0–5: the Coworker editor and the compact sidebar chat (1.1.40) | #122 #126 #129 #133 #135 #137 #138 |
 | ✅ Done | Agent 4: External Agent in the chat: pick, install / update / remove any agent; images, Queue, the agent's plan in Goal & Plan | #140 #142 #144 #146 (issue #139) |
 | ✅ Done | Agents 5–7: approvals in the chat, resume after a restart, hardening (crash, login, Stop) | #150 #152 #154 |
-| ⏭ Now | **Agent 8: polish & docs** (mode and model pickers, slash commands, wiki page) | #93 |
-| ⏭ Next | **Chat 7: chat history panel**, then Agent 9 (External Harness activity view) | |
+| ✅ Done | Agents 8–9: mode / model / effort pickers, slash commands, the External Agent wiki page; the External Harness activity view | #158 #173 #175 #176 |
+| ✅ Done | Engines 4, 6, 7, 9, 10: who answered; plan, questions, scene digest and Revert turn as tools; tools on demand (~8K tokens saved per request); short tool results; benchmarks on every engine | #167 #168 #170 #172 #174 #179 |
+| ⏭ Now | **You test it** (production-style), then **Chat 7: chat history panel** (#156) | |
+| 📝 Later | GUI hardening: Workshop expand (#169), panel order + Plan panel (#171), Workshop below Thinking + fold button (#178); Auto mode for overnight runs (#177) | |
 | ✅ Unblocked | Chat 1: native markdown. `UILayout.label_markdown` **is** in the 5.3 dev builds; the earlier probe was wrong (`hasattr` on the class can't see RNA functions; `bl_rna.functions` can) | |
 | ✅ Done | Agent 1, part 2: record one Claude Code session (uses your Claude login) | #148 #152 |
 
@@ -73,9 +75,9 @@ Plan: `plan_tier4h_external_agent_acp.md`
 | ✅ | **Agent 5**: Approvals from the agent | H5 | The agent's permission requests use the inline approval row | Agent 4, Engine 5 | S | Allow once / always / deny each behave | #150 |
 | ✅ | **Agent 6**: Project folder & resume | H6 | Resume after a restart (`session/load`), New Thread = fresh agent session, the saved chat comes back. *Left out on purpose:* the .blend folder as working folder (moot with Only Coworker Tools) and a generated AGENTS.md (the MCP instructions carry the rules); the session list entry moves to **Chat 7** | Agent 4 | S | Restart Bforartists → continue the same work | #152 |
 | ✅ | **Agent 7**: Hardening | H7 | Kill the agent mid-turn, kill Bforartists, bad command, no login, error output shown | Agents 4–6 | S | Checklist passes | #154 |
-| ☐ | **Agent 8**: Polish & docs | H8 | Model/mode pickers (from the agent's `configOptions`), slash commands, "supported/preview" badges, wiki page | Agent 7 | S | Docs reviewed | |
-| ☐ | **Agent 9**: External Harness activity view | H10 | Read-only live Workshop for External Harness (tool, args, time, ok/error, preview), Copy log / Open log. The debug view for external clients | Engine 2 | S | Claude Desktop / OpenCode calls appear live; a failing call shows its error | |
-| ☐ | **Agent 10**: Fallbacks *(only if needed)* | H9 | Claude headless / OpenCode server, if a key agent's ACP is unusable | Agent 7 | M | — | |
+| ✅ | **Agent 8**: Polish & docs | H8 | Model/mode pickers (from the agent's `configOptions`), slash commands, "supported/preview" badges, wiki page | Agent 7 | S | Docs reviewed | #158 #175 #176 |
+| ✅ | **Agent 9**: External Harness activity view | H10 | Read-only live Workshop for External Harness (tool, args, time, ok/error, preview), Copy log / Open log. The debug view for external clients | Engine 2 | S | Claude Desktop / OpenCode calls appear live; a failing call shows its error | #173 |
+| ➜ | **Agent 10**: Fallbacks *(only if needed)* | H9 | *Not needed (2026-10-20): Claude Code and OpenCode work well over ACP.* Claude headless / OpenCode server, if a key agent's ACP is unusable | Agent 7 | M | — | |
 
 ## One engine for all modes — the shared seam (#93)
 
@@ -86,13 +88,13 @@ Plan: `plan_tier4i_engine_parity.md`
 | ✅ | **Engine 1**: Building blocks | I1a | `engine.py`: events, event bus (merges stream chunks), turn record, fake engine | — | S | Tests for order, merging, cancel | #112 |
 | ✅ | **Engine 2**: Local & Remote through the engine | I1b | Send / Queue / Stop go through `LoopEngine`; turns also reported as events | Engine 1 | M | No visible change; unit tests + quick challenges as before | #114 |
 | ✅ | **Engine 3**: Events become chat messages | I1c | *Revised 2026-10-19:* instead of rewriting the panel's drawing, `chat_state.py` writes engine events into the same chat state and message shapes our loop writes, so an external agent's turn draws exactly like a local one and the panel code is untouched. The engine chip moves to Engine 4 | Engine 2 | S | A turn applied from events splits into user / Workshop / reply with the panel's own code | |
-| ☐ | **Engine 4**: Shared UI pieces | I2 | `ui_components.py`: tool row, reasoning, plan, approval, question, engine chip; brand detection → `shared.py` | Engine 3 | S | No per-engine branches in turn drawing | |
-| ◐ | **Engine 5**: Approval row | I3 | *Model (`approvals.py`) + the chat's card done in Agent 5 (#150); left: Safe mode and risky tools use it.* One approval model + inline row; "always" per session; prepare → apply for risky tools | Engine 4 | S | Same row for agent permissions, Safe mode and risky tools | |
-| ☐ | **Engine 6**: Shared tools in the server | I5 | MCP tools `update_plan`, `ask_user`, scene checkpoint (auto at turn start), `get_scene_digest(since)` | Engine 2 | M | An external agent updates the plan, asks with buttons; digest says `unchanged` on repeat | |
-| ☐ | **Engine 7**: Load tools only when needed | I4 | Surface tools listed, domains loaded on demand (`tools/list_changed`), full list as fallback. **Saves up to ~14K tokens per request** for external agents | Engine 6 | M | First request carries surface tools only (measured) | |
+| ✅ | **Engine 4**: Shared UI pieces | I2 | `ui_components.py`: tool row, reasoning, plan, approval, question, engine chip; brand detection → `shared.py` | Engine 3 | S | No per-engine branches in turn drawing | #174 |
+| ◐ | **Engine 5**: Approval row | I3 | *Model (`approvals.py`) + the chat's card done in Agent 5 (#150); the card also asks ask_user questions (#168). Left: Coworker's own risky steps (prepare -> apply for Tools 4's save / export, Safe mode in Runtime 1) -- waits on those (#166).* One approval model + inline row; "always" per session; prepare → apply for risky tools | Engine 4 | S | Same row for agent permissions, Safe mode and risky tools | |
+| ✅ | **Engine 6**: Shared tools in the server | I5 | MCP tools `update_plan`, `ask_user`, scene checkpoint (auto at turn start), `get_scene_digest(since)` | Engine 2 | M | An external agent updates the plan, asks with buttons; digest says `unchanged` on repeat | #168 #170 |
+| ✅ | **Engine 7**: Load tools only when needed | I4 | Surface tools listed, domains loaded on demand (`tools/list_changed`), full list as fallback. **Saves up to ~14K tokens per request** for external agents | Engine 6 | M | First request carries surface tools only (measured) | #172 |
 | ✅ | **Engine 8**: Session token | I6 | MCP + bridge require a per-start token; Copy MCP Config includes it | — | S | Tokenless request refused; every mode still works | |
-| ☐ | **Engine 9**: Short tool results | I7 | Big results become a short preview + `read_tool_output` handle | — | S | 50 KB node dump → ≤ 2 KB preview on every engine | |
-| ☐ | **Engine 10**: Benchmarks on every engine | I8 | Benchmark steps go through the engine, so the same set runs on Local, Remote, External Agent; Compare groups by mode | Engine 2, Agent 4 | S | One suite side by side on three engines | |
+| ✅ | **Engine 9**: Short tool results | I7 | Big results become a short preview + `read_tool_output` handle | — | S | 50 KB node dump → ≤ 2 KB preview on every engine | #167 |
+| ✅ | **Engine 10**: Benchmarks on every engine | I8 | Benchmark steps go through the engine, so the same set runs on Local, Remote, External Agent; Compare groups by mode | Engine 2, Agent 4 | S | One suite side by side on three engines | #179 |
 
 ## Domain tools — the agent picks a tool instead of writing `bpy`
 

@@ -220,7 +220,7 @@ class AcpEngine:
         worker = threading.Thread(target=work, daemon=True, name="acp-option")
         worker.start()
         if wait:
-            worker.join()
+            worker.join(timeout=5.0)        # never hang Bforartists on a stuck agent
 
     def _apply_preferred(self, client: AcpClient, session_id: str) -> None:
         """Your earlier picks (model, mode...) again in a new session, where still offered."""

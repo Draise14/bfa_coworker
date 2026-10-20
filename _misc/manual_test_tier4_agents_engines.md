@@ -21,8 +21,8 @@ Your ticked sections A-N stay below as the record.
       panel, **Copy Log / Configure** on the card, **Start Bridge** in the header. (#234)
 - [ ] Hover each mode tab (Local / Remote / Agent / Harness): one line, then what that mode does --
       External Agent included. (#233; was A.1)
-- [ ] Sidebar chat: the mode icon in its top bar opens the mode tabs plus Model / Effort, same short-hand
-      as the Coworker panel. (#235)
+- [ ] Sidebar chat: the mode icon in its top bar (and the editor header's mode label) opens the mode tabs
+      plus Model / Effort, same short-hand as the Coworker panel, and All Settings. (#235)
 
 ## R2. Images
 
@@ -44,7 +44,8 @@ Your ticked sections A-N stay below as the record.
       Every icon-only button is square. (#238)
 - [ ] A reply ending "Shall I ...?" or offering options: **buttons** under it; a click sends it. (#220)
 - [ ] History: the mode's **icon** where the chat ran (name in the tooltip), and **Open** for the chat's
-      .blend. (#239)
+      .blend: Blender asks to save, opens it, and the same chat continues there. (#239)
+- [ ] Queue a message with an image: its card shows the **image icon**, not the word. (#249)
 
 ## R4. External Agent (was B.6, C.1, C.3, D.1)
 
@@ -53,8 +54,10 @@ Your ticked sections A-N stay below as the record.
 - [ ] **Revert** on the last reply undoes the whole turn, also a big one (assets, node wiring); Edit >
       Undo History shows "Before Claude Code's turn (n)". (#242; was D.1)
 - [ ] Plan mode: after the plan, a card: **Start the Plan** / **Keep refining**. (#241; was C.3)
-- [ ] The **approval** toggle in the chat (Ask / Risky only / Auto), on every engine; after **Always**,
-      picking Ask again asks again. (#240; was C.1 and section L)
+- [ ] **Approval** button left of Send (lock Ask / warning Risky / unlocked Auto), on every engine. Ask:
+      Local asks before each scene-changing tool, the agent through its card; a save asks everywhere.
+      Pick Always, then switch modes: it asks again. Auto: nothing asks. (#240; was C.1 and section L --
+      the old "Ask Before Risky Steps" / "Ask Before Blender Tools Too" settings are replaced by this)
 
 ## R5. External Harness
 

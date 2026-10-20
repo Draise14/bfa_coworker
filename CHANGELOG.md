@@ -59,10 +59,12 @@ a compact sidebar chat) plus groundwork for the External Agent mode.
 - **Attach Screen picks a part (#200):** click an editor or drag a rectangle, like the Asset Browser's thumbnail capture (Enter: the same part again, Space: move, Shift: square).
 - **Actions panel (#201):** the common actions as buttons under the chat, in the 3D View and editor sidebars.
 - **Images in External Harness (#199):** drop an image on the Coworker editor and your outside client reads it with the new `get_attached_image` tool. The editor's Attach toolshelf has an image picker.
+- **Polish round (#212-#221):** the panel order you asked for in the editor and the sidebar (Coworker controls at the bottom of the sidebar); image controls on the chat input (a picker popover); a button column beside the sidebar chat; **suggestion buttons** from a reply's closing question or options; Coworker / Ask / Plan drive the External Agent's own mode (one control); the floating Workshop button is icons only.
 
 ### Changed
 
 - **Fixes from your testing:** the floating button folds the Workshop, and Thinking always shows (#196); the sidebar chat no longer blips away while you scroll a tall sidebar (#198); the External Agent tab comes before External Harness (#192).
+- **More fixes:** dropping an image works while the chat input has focus (the floating editor) (#215); Attach Screen's veil only in its own window and visible at once (#217); a long open Workshop draws only what is in view (about 10x faster per frame) (#218); chat buttons in a floating window act there.
 - **Short tool results:** a result over ~8000 characters arrives as a short preview with a handle (`read_tool_output` reads the rest) -- on every engine.
 - **Tools on demand** for the External Agent (*Load Tools When Needed*, on by default): the basic tools first, the specialised ones when it asks. About 8K fewer tokens per request.
 

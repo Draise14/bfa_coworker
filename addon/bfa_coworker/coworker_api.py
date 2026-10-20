@@ -41,6 +41,8 @@ _ids = itertools.count(1)
 # id -> {"question", "choices", "allow_text", "answer" (None = open), "source"}
 _questions: dict[str, dict[str, Any]] = {}
 _MAX_CHOICES = 6
+# Auto mode (#177): while set, a question is answered with this at once.
+auto_answer = [""]
 
 
 def _redraw() -> None:
@@ -69,8 +71,8 @@ def post_question(question: str, choices: list[str] | None = None, allow_text: b
     qid = "q{:d}".format(next(_ids))
     with _lock:
         _questions[qid] = {"question": str(question).strip() or "?", "choices": choices,
-                           "allow_text": bool(allow_text or not choices), "answer": None,
-                           "source": source}
+                           "allow_text": bool(allow_text or not choices),
+                           "answer": auto_answer[0] or None, "source": source}
     _redraw()
     return qid
 

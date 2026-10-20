@@ -1040,6 +1040,18 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default=True,
     )
 
+    auto_max_hours: FloatProperty(  # type: ignore[valid-type]
+        name="Auto: Hours",
+        description="Auto mode stops after this many hours",
+        default=8.0, min=0.25, max=48.0, step=25,
+    )
+
+    auto_max_turns: IntProperty(  # type: ignore[valid-type]
+        name="Auto: Turns",
+        description="Auto mode stops after sending this many turns itself",
+        default=30, min=1, max=500,
+    )
+
     external_agent_tools_on_demand: BoolProperty(  # type: ignore[valid-type]
         name="Load Tools When Needed",
         description=("Give the agent Coworker's basic tools first (scene, code, docs, screenshots, "

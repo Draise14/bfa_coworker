@@ -54,6 +54,15 @@ def send_code(code: str, strict_json: bool) -> dict[str, object]:
     session = os.environ.get("BFACW_SESSION_ID", "")
     if session:
         payload["session"] = session
+    # Agent 9: which tool this is for, so Blender can show it (External Harness activity).
+    from blmcp.tools_helpers.bounded_output import CURRENT_TOOL
+    tool, inputs = CURRENT_TOOL.get()
+    if tool:
+        payload["tool"] = tool
+        try:
+            payload["args"] = json.dumps(inputs, ensure_ascii=False, default=str)[:400]
+        except (TypeError, ValueError):
+            pass
     # Engine 8: the bridge refuses requests without the user's session token.
     # The add-on and the External Harness launcher set it for this process.
     token = os.environ.get("BFACW_TOKEN", "")

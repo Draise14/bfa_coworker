@@ -22,6 +22,7 @@ __all__ = (
     "read",
 )
 
+import contextvars
 import functools
 import inspect
 import json
@@ -147,17 +148,35 @@ def _shorten_fields(result: dict[str, Any], output_id: str, total: int, how: str
     return short
 
 
+# The tool being run and its input (Agent 9: the bridge's activity view shows them).
+CURRENT_TOOL: contextvars.ContextVar[tuple[str, dict[str, Any]]] = contextvars.ContextVar(
+    "bfacw_current_tool", default=("", {}))
+
+
+def _inputs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in kwargs.items() if k != "ctx" and v not in (None, "", [], {})}
+
+
 def bounded(fn: Callable[..., Any]) -> Callable[..., Any]:
-    """Wrap a tool function so its result is :func:`shorten`-ed (keeps its signature)."""
+    """Wrap a tool function so its result is :func:`shorten`-ed (keeps its signature),
+    and the bridge hears which tool it runs for."""
     if inspect.iscoroutinefunction(fn):
         @functools.wraps(fn)
         async def wrapper_async(*args: Any, **kwargs: Any) -> Any:
-            return shorten(await fn(*args, **kwargs), fn.__name__)
+            token = CURRENT_TOOL.set((fn.__name__, _inputs(kwargs)))
+            try:
+                return shorten(await fn(*args, **kwargs), fn.__name__)
+            finally:
+                CURRENT_TOOL.reset(token)
         return wrapper_async
 
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        return shorten(fn(*args, **kwargs), fn.__name__)
+        token = CURRENT_TOOL.set((fn.__name__, _inputs(kwargs)))
+        try:
+            return shorten(fn(*args, **kwargs), fn.__name__)
+        finally:
+            CURRENT_TOOL.reset(token)
     return wrapper
 
 

@@ -71,6 +71,9 @@ class Notice:
     icon: str
     lines: tuple[str, ...]
     buttons: tuple[tuple[str, str, str], ...] = ()   # (id, label, icon)
+    # Agent 9: a live list under the card, newest first: (icon, title, detail).
+    rows: tuple[tuple[str, str, str], ...] = ()
+    rows_title: str = ""
 
 
 @dataclass
@@ -428,6 +431,34 @@ class ChatSurface:
                     bx += bw + pad * 0.5
                 else:
                     by -= u * 1.25
+        if notice.rows_title:
+            self._draw_notice_rows(canvas, Rect(x, rect.y, width, card.y - pad - rect.y), notice)
+
+    def _draw_notice_rows(self, canvas: Canvas, room: Rect, notice: Notice) -> None:
+        """The live list under a notice: a title, then two lines per row while they fit."""
+        style = canvas.style
+        line = style.line_height
+        side = canvas.icon_size()
+        if room.h < line * 2:
+            return
+        top = room.top
+        canvas.label(Rect(room.x, top - line, room.w, line), notice.rows_title, style.title, bold=True)
+        top -= line * 1.2
+        if not notice.rows:
+            canvas.label(Rect(room.x, top - line, room.w, line), "Nothing yet: tool calls show up here as they run.",
+                         _soft(style.text, 0.35))
+            return
+        text_x = room.x + side + style.pad * 0.6
+        for icon, title, detail in notice.rows:
+            if top - line * 2 < room.y:
+                break
+            canvas.icon(Rect(room.x, top - line + (line - side) / 2, side, side), icon,
+                        (0.92, 0.40, 0.33, 1.0) if icon == "ERROR" else style.text)
+            canvas.label(Rect(text_x, top - line, room.right - text_x, line),
+                         _fit(canvas, title, room.right - text_x), style.text)
+            canvas.label(Rect(text_x, top - 2 * line, room.right - text_x, line),
+                         _fit(canvas, detail, room.right - text_x), _soft(style.text, 0.4))
+            top -= line * 2.3
 
 
 def _fit(canvas: Canvas, text: str, width: float) -> str:

@@ -161,11 +161,19 @@ def _harness_notice(prefs: Any) -> Notice:
         else "Start the bridge, then connect your client.",
         "Client: {:s}.  Copy its config and paste it into the client's MCP settings.".format(client),
     )
+    from . import activity
+    rows = tuple(
+        ({"ok": "CHECKMARK", "error": "ERROR"}.get(e.status, "TIME"),
+         "{:s}  {:s}".format(e.tool, e.args),
+         "{:s} ({:.1f} s, {:s})".format(e.preview or e.status, e.seconds,
+                                        time.strftime("%H:%M:%S", time.localtime(e.when))))
+        for e in activity.entries(30))
     return Notice(title="External Harness", icon="WORLD", lines=lines, buttons=(
         ("bridge", "Stop Bridge" if running else "Start Bridge", "X" if running else "PLAY"),
         ("copy_config", "Copy Config", "COPYDOWN"),
+        ("copy_log", "Copy Log", "COPYDOWN"),
         ("configure", "Configure", "PREFERENCES"),
-    ))
+    ), rows=rows, rows_title="What your client did in Blender")
 
 
 def _history() -> list[dict]:
@@ -657,6 +665,9 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
             ops.copy_mcp_config(client_type=prefs.harness_preset)
         elif value == "configure":
             ops.open_harness_prefs()
+        elif value == "copy_log":
+            from . import activity
+            wm.clipboard = activity.log_text()
 
 
 def _flush() -> None:
@@ -1234,6 +1245,8 @@ def register() -> None:
         return
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
+    from . import activity
+    activity.on_change = _tag_chat_regions      # Agent 9: a new tool call shows at once
     _COPIES[:] = _editor_copies()
     for cls in _COPIES:
         bpy.utils.register_class(cls)

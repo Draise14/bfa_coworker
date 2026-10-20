@@ -86,6 +86,46 @@ class TestShorten(unittest.TestCase):
         self.assertIn("couldn't be saved", short)
 
 
+class TestToolName(unittest.TestCase):
+    """Agent 9: the bridge request says which tool it is for."""
+
+    def test_send_code_carries_the_tool(self):
+        from blmcp.tools_helpers import connection
+        sent = {}
+
+        class FakeSocket:
+            def __init__(self, *a):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def settimeout(self, _t):
+                pass
+
+            def connect(self, _addr):
+                pass
+
+            def sendall(self, data):
+                sent.update(json.loads(data.decode("utf-8").rstrip("\0")))
+
+            def recv(self, _n):
+                return b'{"status": "ok", "result": 1}\0'
+
+        @bo.bounded
+        def get_objects_summary(limit: int = 5, name_filter: str = ""):
+            return connection.send_code("result = 1", strict_json=True)
+
+        with mock.patch.object(connection.socket, "socket", FakeSocket):
+            get_objects_summary(limit=7)
+        self.assertEqual(sent["tool"], "get_objects_summary")
+        self.assertEqual(json.loads(sent["args"]), {"limit": 7})
+        self.assertEqual(bo.CURRENT_TOOL.get(), ("", {}))       # reset after the call
+
+
 class TestThroughTheServer(unittest.TestCase):
 
     def test_a_50kb_tool_result_arrives_short(self):

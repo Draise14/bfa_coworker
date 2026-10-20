@@ -111,6 +111,7 @@ class ChatSurface:
     on_resize: Any = None
     drop_hover: bool = False     # an image is being dragged over: show the drop target
     attachment_pinned: bool = False   # the attached image stays for every message
+    attachment_note: str = ""         # the tray's second line instead (External Harness: #199)
 
     # -- mouse (region pixels) ------------------------------------------------------
     def hit(self, x: float, y: float) -> str | None:
@@ -205,8 +206,9 @@ class ChatSurface:
         box_h = self.box.height(canvas, inner.w) if show_input else 0.0
         input_rect = Rect(inner.x, inner.y, inner.w, box_h)
         chat_y = input_rect.top + pad if show_input else rect.y
-        if show_input and self.box.attachment:      # the image tray, above the input
-            chat_y = self._draw_tray(canvas, Rect(inner.x, chat_y, inner.w, 0), actions) + pad
+        if self.box.attachment:      # the image tray, above the input (or the notice: #199)
+            chat_y = self._draw_tray(canvas, Rect(inner.x, chat_y if show_input else rect.y + pad, inner.w, 0),
+                                     actions) + pad
         if approval is not None:     # the question, right above the input (or at the bottom: #166)
             anchor_y = chat_y if show_input else rect.y + pad
             chat_y = self._draw_approval(canvas, Rect(inner.x, anchor_y, inner.w, 0), approval, actions) + pad
@@ -330,8 +332,8 @@ class ChatSurface:
             return tray.top
         canvas.icon(Rect(tx, mid + style.line_height * 0.05, side, side), "IMAGE_DATA", style.box.text)
         canvas.label(Rect(tx + side + pad * 0.5, mid, room, style.line_height), label, style.box.text)
-        status = _fit(canvas, "Kept for every message" if self.attachment_pinned else "Sent with the next message",
-                      room + side)
+        status = _fit(canvas, self.attachment_note or (
+            "Kept for every message" if self.attachment_pinned else "Sent with the next message"), room + side)
         canvas.label(Rect(tx, mid - style.line_height, room + side, style.line_height), status,
                      _soft(style.box.text, 0.35))
         return tray.top

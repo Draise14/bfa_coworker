@@ -440,6 +440,20 @@ EXPECTED_TOOLS = [
         }
     },
     {
+        "name": "get_attached_image",
+        "description": "\n"
+"        The image the user attached in Coworker's chat in Blender (dropped, picked, a render or a screen).\n"
+"\n"
+"        Call it when the user says they attached, dropped or captured an image in Blender\n"
+"        and asks you to look at it.\n"
+"        ",
+        "inputSchema": {
+            "properties": {},
+            "title": "get_attached_imageArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "get_blendfile_summary_datablocks",
         "description": "\n"
 "        Return a summary of the blend file: data-block counts, active workspace, and render engine.\n"

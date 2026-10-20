@@ -22,6 +22,7 @@ from __future__ import annotations
 
 __all__ = (
     "answer_question",
+    "attached_image",
     "cancel_question",
     "cancel_questions",
     "current_question",
@@ -213,6 +214,27 @@ def _fingerprint(ob: Any) -> tuple:
             ob.parent.name if ob.parent else "", data.name if data else "",
             tuple(m.type for m in ob.modifiers), mats, bool(ob.hide_get()) if hasattr(ob, "hide_get") else False,
             len(getattr(data, "vertices", ())) if data is not None else 0)
+
+
+def attached_image() -> dict[str, Any]:
+    """The image waiting in the chat's attach socket, for an external client (#199).
+
+    In External Harness the chat runs in another app: the user drops or picks an
+    image in Coworker and asks the client to look at it.  Main thread only.
+    """
+    import bpy  # pylint: disable=import-error
+    from . import chat_attachments
+    props = getattr(bpy.context.window_manager, "bfacw_chat_props", None)
+    img = getattr(props, "chat_image", None)
+    if img is None:
+        return {"status": "none", "message": "No image is attached in Coworker. Ask the user to drop one "
+                                             "onto the Coworker chat, or use Attach Render / Attach Screen."}
+    uri = chat_attachments.image_to_data_uri(img)
+    if not uri:
+        return {"status": "error", "message": "The attached image could not be read."}
+    head, data = uri.split(",", 1)
+    return {"status": "ok", "name": chat_attachments.attachment_name(img),
+            "mime": head[5:].split(";", 1)[0], "image_base64": data}
 
 
 def scene_digest(since: str = "") -> dict[str, Any]:

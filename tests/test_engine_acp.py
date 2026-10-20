@@ -11,8 +11,7 @@ the fake ACP agent replaying recorded OpenCode sessions.
 2. A turn from the chat lands in the chat state like a local turn: your
    message, Workshop tool rows, the reply; the turn ends.
 3. Queue while busy; Stop cancels.
-4. Permissions: Coworker's tools allowed, anything else refused (with a note),
-   or asked in the chat (Agent 5): Allow once / Always / Deny; Stop cancels.
+4. Permissions: Coworker's tools allowed, anything else refused (with a note).
 5. The prompt carries the Blender context, Ask mode, and images when the
    agent takes them.
 6. An agent that crashes mid-turn ends the turn with an error.
@@ -179,6 +178,7 @@ class TestPermissionsAndPrompt(unittest.TestCase):
         self.assertEqual(acp._tool_name("bfa-coworker_execute_blender_code"), "execute_blender_code")
 
     def test_own_tools_ask_you_when_not_only_coworker(self):
+        """Agent 5: asked in the chat -- Allow once / Always / Deny."""
         engine = ea.AcpEngine(_state())
         engine._turn_id, engine.only_coworker_tools, engine.agent_label = "t1", False, "Claude Code"
         answers = []

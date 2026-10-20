@@ -107,7 +107,6 @@ def _acp_engine():
                 _tag_chat_regions_redraw()
             bpy.app.timers.register(redraw, first_interval=0.0)
         _acp.on_change = changed
-        _acp.approvals.on_change = changed
     return _acp
 
 
@@ -2569,6 +2568,7 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         env = acp_presets.launch_env(preset, only_coworker_tools=only_ours)
         engine.only_coworker_tools = only_ours
         engine.ask_coworker_tools = getattr(prefs, "external_agent_ask_coworker_tools", False)
+        engine.approvals.on_change = engine.on_change     # a question redraws the chats
         cwd = str(_agent_workspace())
         engine.connecting = True
         engine.status = "Looking for {:s}...".format(preset.name)

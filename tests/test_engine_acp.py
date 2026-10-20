@@ -257,5 +257,80 @@ class TestPermissionsAndPrompt(unittest.TestCase):
         self.assertEqual(len(engine._blocks(eng.Prompt(text="x", images=["data:image/png;base64,AA=="]))), 1)
 
 
+class _StubClient:
+    """Just enough of AcpClient for the session calls (Agent 6)."""
+
+    def __init__(self, *args, load_fails=False, **kw):
+        self.calls, self.load_fails, self.alive = [], load_fails, True
+
+    def start(self):
+        pass
+
+    def initialize(self):
+        return types.SimpleNamespace(name="stub", version="", image=False, load_session=True)
+
+    def new_session(self, cwd, servers):
+        self.calls.append("new")
+        return {"sessionId": "s{:d}".format(len(self.calls))}
+
+    def load_session(self, session_id, cwd, servers):
+        self.calls.append("load " + session_id)
+        if self.load_fails:
+            raise ea.AcpError("Resource not found")
+        return {}
+
+    def cancel(self, _session_id):
+        pass
+
+    def close(self):
+        pass
+
+
+class TestResume(unittest.TestCase):
+    """Agent 6: continue the last conversation after a restart; New Thread starts fresh."""
+
+    def test_claude_code_resumes_a_session(self):
+        # Recorded live: session 1 was told "remember: ember"; this one resumes it and asks.
+        sid = "d19cc906-cf6f-4586-8db3-ef184202cbf9"
+        seen = []
+        engine = ea.AcpEngine(_state())
+        engine.on_session = seen.append
+        engine.connect([sys.executable, str(_FAKE), str(_FIXTURES / "claude_resume.jsonl")], _MCP,
+                       tempfile.mkdtemp(prefix="bfacw_acp_"), label="Claude Code", wait=True, resume=sid)
+        try:
+            self.assertTrue(engine.connected, engine.error)
+            self.assertTrue(engine.resumed)
+            self.assertEqual((engine.session_id, seen), (sid, [sid]))
+            engine.submit(eng.Prompt(text="Which word did I ask you to remember?"))
+            _wait(engine)
+        finally:
+            engine.disconnect()
+        history = engine.state.conversation_history
+        self.assertEqual([m["role"] for m in history[1:]], ["user", "assistant"])   # the replay isn't shown twice
+        self.assertEqual(history[-1]["content"].strip(), "ember")
+
+    def _stub_engine(self, **kw):
+        stub = _StubClient(**kw)
+        engine = ea.AcpEngine(_state(), client_factory=lambda *a, **k: stub)
+        return engine, stub
+
+    def test_a_session_that_is_gone_starts_fresh(self):
+        engine, stub = self._stub_engine(load_fails=True)
+        engine.connect(["stub"], _MCP, tempfile.mkdtemp(), wait=True, resume="old")
+        self.assertTrue(engine.connected)
+        self.assertEqual(stub.calls, ["load old", "new"])
+        self.assertTrue(engine.resume_failed)
+        self.assertFalse(engine.resumed)
+
+    def test_no_resume_without_an_id_and_new_thread(self):
+        engine, stub = self._stub_engine()
+        seen = []
+        engine.on_session = seen.append
+        engine.connect(["stub"], _MCP, tempfile.mkdtemp(), wait=True)
+        self.assertEqual((stub.calls, engine.session_id), (["new"], "s1"))
+        engine.new_session(wait=True)                 # New Thread: a fresh session, same agent
+        self.assertEqual((stub.calls, engine.session_id, seen), (["new", "new"], "s2", ["s1", "s2"]))
+
+
 if __name__ == "__main__":
     unittest.main()

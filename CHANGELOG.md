@@ -58,6 +58,12 @@ a compact sidebar chat) plus groundwork for the External Agent mode.
 - **Short tool results:** a result over ~8000 characters arrives as a short preview with a handle (`read_tool_output` reads the rest) -- on every engine.
 - **Tools on demand** for the External Agent (*Load Tools When Needed*, on by default): the basic tools first, the specialised ones when it asks. About 8K fewer tokens per request.
 
+- **Chat history.** A *History* panel lists your chats, not tied to the .blend: open, pin, rename, delete, search. *New Thread* keeps the old chat in the list; opening a chat brings back its messages, plan and memory (and on External Agent, the agent's own conversation). Your old per-.blend chats move in on first start.
+- **Auto mode** (Plan panel): keep going on your own until the plan is done -- e.g. overnight. It stops on plan done, limits (8 h / 30 turns), two turns without progress, errors or Stop, and says why; timeouts are retried.
+- **Ask Before Risky Steps** (Settings > Advanced > Bridge Server, off by default): code from any engine that would save the .blend, open / quit, delete or move files, export or run a program asks you first.
+- **Plan panel** in the sidebar and the editor (goal, steps, progress), under **Queue**; the other panels start closed.
+- The Workshop: *Show all* for long thinking and results; while a turn runs the Workshop sits under the Thinking box, and a floating **Thinking** button folds it.
+
 ### Security
 
 - **Web pages can no longer run code in Blender (#123).** Coworker's local servers only listen on your own computer, but your browser can reach them too, and the MCP server's HTTP mode accepted requests from any web page. Every request now has to carry a private session token, a small file only your own programs can read (`%LOCALAPPDATA%\bfa_coworker\session_token` on Windows, `~/.cache/bfa_coworker/session_token` elsewhere). Coworker, its MCP server and the External Harness launcher send it automatically, so existing client configs keep working. *Settings > Advanced > Bridge Server > Require Session Token* (on by default) turns the check off for a tool of your own that can't send it.
@@ -69,6 +75,7 @@ a compact sidebar chat) plus groundwork for the External Agent mode.
 - **`list_blender_templates` works.** It crashed in every setup; the templates now live with the MCP server.
 - Skills and generated code no longer set the deprecated `use_nodes = True`; new materials and worlds always have a node tree.
 
+- **The sidebar chat no longer draws over its top bar** when the sidebar is shorter than the chat; it fits the space it has.
 - **Quitting no longer wipes the saved chat** (every mode): it was saved after the add-on's cleanup had emptied it.
 - **Benchmark results are saved again:** a finished suite was never written. They now live in your data folder (`%LOCALAPPDATA%/bfa_coworker/benchmark_results.json`).
 

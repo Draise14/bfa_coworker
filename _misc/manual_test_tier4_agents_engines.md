@@ -1,6 +1,6 @@
 # Manual test: External Agent finished, the shared engine tools, and the GUI fixes
 
-About 45 minutes; each section stands on its own. Build from main, install, restart Bforartists.
+About an hour; each section stands on its own. Build from main, install, restart Bforartists.
 You need Claude Code with its ACP adapter (or OpenCode) logged in. Tick each line; anything odd
 → a comment on the issue in brackets, with a screenshot.
 
@@ -82,6 +82,38 @@ You need Claude Code with its ACP adapter (or OpenCode) logged in. Tick each lin
 - [ ] Settings > Diagnostics: run **quick_sanity** on External Agent and on Local; **Compare** prints both
       engines side by side in the console (Window > Toggle System Console). (#165)
 
-## J. After testing
+## J. Chat history (any engine)
+
+- [ ] First start: the **History** panel (sidebar and editor, under Plan, closed) lists your old chats
+      (they moved in from the per-.blend files; nothing lost). (#156)
+- [ ] **New Thread** starts a new chat; the old one stays in History. Click an old one: its messages,
+      Plan and memory come back.
+- [ ] On External Agent: chat A "remember ember", New Thread, chat B "remember frost", open A from
+      History, ask which word: **ember** (the agent continued A's own conversation).
+- [ ] Pin (stays on top), Rename (keeps your name), Delete (asks first), Search.
+- [ ] Open another .blend: it continues the chat you last used in that file.
+
+## K. Auto mode (overnight runs)
+
+- [ ] Ask for a 3-step job that sets a plan; turn on **Auto** in the Plan panel (limits under it:
+      8 h / 30 turns by default, Preferences). (#177)
+- [ ] After your turn ends, Auto sends "[Auto mode] Continue with the plan ..." itself until the plan is
+      done, then the Plan panel says why it stopped.
+- [ ] Press **Stop** during an Auto turn: it stops after that turn, and says so.
+- [ ] (Local) a timeout doesn't end the run: it continues (up to 3 in a row).
+- [ ] While Auto runs, the agent's tool requests and questions don't wait for you (refused tools stay
+      refused).
+
+## L. Ask before risky steps (off by default)
+
+- [ ] Settings > Advanced > Bridge Server > **Ask Before Risky Steps** on. Ask Coworker (any engine) to
+      "save a copy of this file to C:/temp/test.blend": a card asks first; **Allow once** saves it. (#166)
+- [ ] Ask it to delete a file / export an OBJ: the card says so; **Deny** -> the model says you declined
+      and doesn't retry.
+- [ ] In External Harness mode the card shows at the bottom of the chat (under the harness card).
+- [ ] With Auto on, a risky step is declined at once (no waiting overnight).
+- [ ] Decide: should it be on by default?
+
+## M. After testing
 
 - [ ] `make wiki` (once your wiki edits are committed): the new **External Agent** page is there. (#163)

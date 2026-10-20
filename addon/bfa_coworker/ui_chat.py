@@ -3977,7 +3977,8 @@ def _open_mention_for_at(text: str) -> float | None:
 # Panels
 
 def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool = True,
-                       show_prefs: bool = True, minimal_image: bool = False) -> bool:
+                       show_prefs: bool = True, minimal_image: bool = False,
+                       show_image: bool = True) -> bool:
     """The chat's controls: mode, Start / Stop, status, scene protection,
     External Harness setup, chat mode, reasoning effort and the image socket.
 
@@ -4108,6 +4109,8 @@ def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool 
     # -- Image attachment socket (issue #88 / Tier 3k) ----------
     # Above the chat input: set the image BEFORE typing, so what is
     # attached is visible right next to the message it will ride with.
+    if not show_image:      # the GPU chat has it on its input's button row (#213)
+        return True
     if minimal_image:       # the Coworker editor: the picker and the preview (#171)
         _draw_attachment_row(layout, props, context, minimal=True)
     else:
@@ -4163,6 +4166,31 @@ class BFACW_PT_chat_compact(Panel):  # type: ignore[misc]
         _ce.draw_marker_row(col, "bottom")
 
 
+class BFACW_PT_attach_popover(Panel):  # type: ignore[misc]
+    """The image for the next message: pick, open, render or screen (#213)"""
+    bl_label = "Attach"
+    bl_idname = "BFACW_PT_attach_popover"
+    bl_space_type = 'TOPBAR'          # only shown as a popover, from the chat's input
+    bl_region_type = 'HEADER'
+    bl_ui_units_x = 12
+
+    def draw(self, context: bpy.types.Context) -> None:
+        layout = self.layout
+        props = context.window_manager.bfacw_chat_props  # type: ignore[attr-defined]
+        layout.label(text="Image for the next message", icon='IMAGE_DATA')
+        layout.template_ID(props, "chat_image", open="image.open")
+        if props.chat_image is not None:
+            _draw_attachment_preview(layout, props.chat_image, context)
+            layout.prop(props, "chat_image_send_once", text="Send Once")
+        row = layout.row(align=True)
+        row.operator("bfacw.chat_attach_image", text="File...", icon='FILE_IMAGE')
+        row.operator("bfacw.chat_capture_render", text="Render", icon='RENDER_STILL')
+        row.operator("bfacw.chat_capture_screen", text="Screen", icon='FULLSCREEN_ENTER')
+        hint = layout.row()
+        hint.scale_y = 0.75
+        hint.label(text="Or drop an image file onto the chat.")
+
+
 class BFACW_PT_chat_controls(Panel):  # type: ignore[misc]
     """The chat's controls under the compact sidebar chat: mode tabs, engine, Start (#212)"""
     bl_label = "Coworker"
@@ -4178,8 +4206,8 @@ class BFACW_PT_chat_controls(Panel):  # type: ignore[misc]
         return not bpy.app.background and _compact_sidebar(context)
 
     def draw(self, context: bpy.types.Context) -> None:
-        # The compact chat's top bar has Coworker / Ask / Plan.
-        draw_chat_controls(self.layout, context, show_chat_mode=False)
+        # The compact chat's top bar has Coworker / Ask / Plan, its input the image (#213).
+        draw_chat_controls(self.layout, context, show_chat_mode=False, show_image=False)
 
 
 class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
@@ -6046,6 +6074,7 @@ _classes = (
     BFACW_PT_chat_compact,
     BFACW_PT_chat_panel,
     BFACW_PT_chat_controls,
+    BFACW_PT_attach_popover,
     BFACW_PT_chat_status,
     BFACW_PT_chat_session,
     BFACW_PT_chat_session_context,

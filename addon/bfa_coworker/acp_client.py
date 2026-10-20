@@ -340,6 +340,12 @@ class AcpClient:
         return self.request("session/load", {"sessionId": session_id, "cwd": cwd,
                                              "mcpServers": mcp_servers}, timeout=timeout) or {}
 
+    def set_config_option(self, session_id: str, config_id: str, value: str,
+                          timeout: float = 30.0) -> dict[str, Any]:
+        """``session/set_config_option`` (mode, model, effort...); returns the new ``configOptions``."""
+        return self.request("session/set_config_option", {"sessionId": session_id, "configId": config_id,
+                                                           "value": value}, timeout=timeout) or {}
+
     def prompt(self, session_id: str, blocks: list[dict[str, Any]],
                timeout: float | None = None) -> dict[str, Any]:
         """``session/prompt``; blocks until the turn ends.  Call off the main thread."""

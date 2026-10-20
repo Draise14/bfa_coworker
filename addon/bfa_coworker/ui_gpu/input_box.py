@@ -435,8 +435,8 @@ class InputBox:
             specs = [("send", "Send", "PLAY", has_text)]
         out = []
         for widget_id, label, icon, active in specs:
-            if self._narrow:                 # a thin sidebar: icon buttons
-                out.append((widget_id, "", icon, active, style.unit * 1.3))
+            if self._narrow:                 # a thin sidebar: square icon buttons (#238)
+                out.append((widget_id, "", icon, active, self._button_metrics(canvas)[2]))
                 continue
             content = canvas.measure(label, "ui", style.font_size)
             if icon:
@@ -511,7 +511,7 @@ class InputBox:
             if not self._narrow:
                 attach += [("attach_render", "RENDER_STILL"), ("attach_screen", "FULLSCREEN_ENTER")]
             for widget_id, icon in attach:
-                button = Rect(left, box.y + margin, u * 1.3, button_h)
+                button = Rect(left, box.y + margin, button_h, button_h)     # square (#238)
                 if left + button.w > right - gap:
                     break
                 if canvas.button(button, widget_id, "", icon=icon):

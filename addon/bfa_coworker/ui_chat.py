@@ -5311,23 +5311,37 @@ def draw_mode_switcher(layout, prefs, icons_only: bool = False, full_names: bool
     return row
 
 
-class BFACW_MT_operating_mode(bpy.types.Menu):  # type: ignore[misc]
-    """Switch how Coworker works: Local, Remote, External Agent, or External Harness"""
-    bl_idname = "BFACW_MT_operating_mode"
-    bl_label = "Operating Mode"
+class BFACW_PT_mode_popover(Panel):  # type: ignore[misc]
+    """The mode and its model, from the chat's mode button: the Coworker panel's rows (#235)"""
+    bl_label = "Mode"
+    bl_idname = "BFACW_PT_mode_popover"
+    bl_space_type = 'TOPBAR'          # only shown as a popover
+    bl_region_type = 'HEADER'
+    bl_ui_units_x = 14
 
     def draw(self, context: bpy.types.Context) -> None:
         layout = self.layout
         prefs = context.preferences.addons[__package__].preferences
         running = agent_controller._agent_state.mcp_server_running or mcp_to_blender_server.is_running()
-        col = layout.column()
-        col.enabled = not running
-        for ident in _INTEGRATED_MODES:
-            col.prop_enum(prefs, "operating_mode", ident)
-        col.separator()
-        col.prop_enum(prefs, "operating_mode", "EXTERNAL_HARNESS")
+        row = draw_mode_switcher(layout, prefs)
+        row.enabled = not running
         if running:
-            layout.label(text="Stop Coworker to switch modes", icon='INFO')
+            hint = layout.row()
+            hint.scale_y = 0.75
+            hint.label(text="Stop Coworker to switch modes", icon='INFO')
+        mode = prefs.operating_mode
+        if mode == "EXTERNAL_AGENT":
+            if _acp is not None and _acp.connected:
+                _draw_agent_pickers(layout)
+            else:
+                layout.prop(prefs, "external_agent_preset", text="")
+        elif mode == "EXTERNAL_HARNESS":
+            row = layout.row(align=True)
+            row.prop(prefs, "harness_preset", text="")
+            op = row.operator("bfacw.copy_mcp_config", icon="COPYDOWN", text="Copy Config")
+            op.client_type = prefs.harness_preset
+        else:
+            _draw_engine_options(layout, context, prefs)
         layout.separator()
         layout.operator("bfacw.open_addon_prefs", text="All Settings...", icon='PREFERENCES')
 
@@ -6141,7 +6155,7 @@ _classes = (
     BFACW_PT_chat_queue,
     BFACW_PT_chat_plan,
     BFACW_OT_plan_execute,
-    BFACW_MT_operating_mode,
+    BFACW_PT_mode_popover,
     BFACW_PT_chat_history,
     BFACW_OT_chat_open,
     BFACW_OT_chat_new,

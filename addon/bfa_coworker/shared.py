@@ -261,6 +261,14 @@ OPERATING_MODE_ITEMS: list[tuple[str, str, str, str, int]] = [
         "NETWORK_DRIVE",
         2,
     ),
+    (
+        "EXTERNAL_AGENT",
+        "External Agent",
+        "Chat here in Coworker; an agent app on this computer (OpenCode, Claude Code, Codex, "
+        "Gemini, Copilot) does the work with Coworker's Blender tools",
+        "LINKED",
+        3,
+    ),
 ]
 
 # -- MCP Server Mode EnumProperty Items -----------------------------------

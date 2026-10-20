@@ -59,6 +59,11 @@ def _download_status_icon(msg: str) -> str:
     return "INFO"
 
 
+
+# The operating mode last switched to, so a refused switch (while running) can
+# go back to it -- External Agent shares agent_mode / llm_mode with the others.
+_PREVIOUS_MODE: dict[str, str] = {}
+
 class _State:
     """
     Module-level runtime state that is not persisted across sessions.
@@ -370,7 +375,9 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             # Revert to the previous mode.  agent_mode / llm_mode still hold
             # it: they are only synced below, after this guard.
             print("[Coworker] operating_mode change rejected -- agent is running. Stop the agent first.")
-            if self.agent_mode == "EXTERNAL_HARNESS":
+            if _PREVIOUS_MODE.get("mode"):
+                previous = _PREVIOUS_MODE["mode"]
+            elif self.agent_mode == "EXTERNAL_HARNESS":
                 previous = "EXTERNAL_HARNESS"
             elif self.llm_mode == "remote":
                 previous = "REMOTE_API"
@@ -392,6 +399,10 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             self.agent_mode = "EXTERNAL_HARNESS"
             # llm_mode stays as-is (not used in harness mode)
             self.pref_tab = "ADVANCED"
+        elif self.operating_mode == "EXTERNAL_AGENT":
+            # Coworker's own chat; the turn runs in the external agent (Tier 4, Agent 4).
+            self.agent_mode = "SELF_CONTAINED"
+        _PREVIOUS_MODE["mode"] = self.operating_mode
 
     operating_mode: EnumProperty(  # type: ignore[valid-type]
         name="Operating Mode",
@@ -1010,6 +1021,27 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         ),
         default=True,
     )
+
+    external_agent_preset: EnumProperty(  # type: ignore[valid-type]
+        name="Agent",
+        description="The agent app on this computer that does the work in External Agent mode",
+        items=lambda self, _context: self._get_external_agent_items(),
+        default=0,
+    )
+
+    external_agent_command: StringProperty(  # type: ignore[valid-type]
+        name="Command",
+        description=("For a custom agent: the command that starts it in ACP mode "
+                     "(e.g. `myagent --acp`)"),
+        default="",
+    )
+
+    def _get_external_agent_items(self) -> list[tuple[str, str, str]]:
+        from .acp_presets import PRESETS
+        items = [(p.id, p.name + ("" if p.maturity == "supported" else " (preview)"),
+                  p.install_hint or p.name) for p in PRESETS]
+        items.append(("custom", "Custom Command", "Any agent that speaks ACP: give its command"))
+        return items
 
     harness_preset: EnumProperty(  # type: ignore[valid-type]
         name="Harness Preset",

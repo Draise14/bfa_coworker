@@ -39,6 +39,7 @@ a compact sidebar chat) plus groundwork for the External Agent mode.
   - Type in another script with **Edit** (a native text field, for Chinese, Japanese or Korean input).
 - **Compact sidebar chat.** The 3D View's Coworker tab shows the same chat in a small form, with a top bar for status, Start / Stop, chat mode, settings and the editor. *Preferences > Coworker > Chat Display > Sidebar Chat* switches back to the **Classic Panels**.
 - In **External Harness** mode both show a card (the chat runs in your MCP client) with Start / Stop Bridge, Copy Config and Configure.
+- **External Agent mode (preview, #93).** Chat in Coworker while an agent app on your computer does the work with Coworker's Blender tools: **OpenCode** (tested), Claude Code, Codex, Gemini or Copilot (preview), or any ACP agent through *Custom Command*. Pick the agent in the chat's controls and press **Start**; the chat says what's missing if it isn't installed. Send, Queue, Stop, images and Ask mode work as in the other modes, and the agent's thinking, tool steps (with the code it ran) and reply appear in the same chat. The agent may only use Coworker's tools -- its own shell and file edits are refused. Each message carries one line about your scene.
 
 ### Security
 

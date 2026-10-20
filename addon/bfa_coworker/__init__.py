@@ -252,6 +252,10 @@ def _autostart_agent_timer() -> None:
     if prefs.operating_mode == "EXTERNAL_HARNESS":
         print("[Coworker] Agent auto-start: External Harness mode -- bridge only")
         return
+    if prefs.operating_mode == "EXTERNAL_AGENT":
+        # Starting the agent app is the user's call (Start in the chat).
+        print("[Coworker] Agent auto-start: External Agent mode -- press Start to connect")
+        return
 
     print("[Coworker] Agent auto-start: using ports bridge={:d} mcp={:d} llm={:d}".format(
         _bridge_port, _mcp_port, _llm_port))

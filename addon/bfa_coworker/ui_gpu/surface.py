@@ -173,6 +173,10 @@ class ChatSurface:
     # Tooltips (#237): the widget under a resting mouse and since when; *tip_wait* > 0 asks the
     # host to draw again that many seconds later, when the tooltip is due.
     clock: Callable[[], float] = time.monotonic
+    # The notice's live list (#243): rows scrolled past (newest first) and how far it can go.
+    notice_scroll: int = 0
+    _notice_room: Rect | None = None
+    _notice_max: int = 0
     tip_wait: float = 0.0
     _tip: tuple[str, float] | None = None
 
@@ -227,6 +231,10 @@ class ChatSurface:
         """Scroll the chat (Ctrl: zoom the whole surface); True when used."""
         if self._chat_rect is None or not self._chat_rect.contains(x, y):
             return False
+        room = self._notice_room
+        if not ctrl and room is not None and room.contains(x, y):     # the harness list (#243)
+            self.notice_scroll = max(0, min(self._notice_max, self.notice_scroll + (-1 if up else 1)))
+            return True          # used, even at an end (no chat to scroll under it)
         if ctrl:
             self.zoom = max(_ZOOM_MIN, min(_ZOOM_MAX, round(self.zoom + (_ZOOM_STEP if up else -_ZOOM_STEP), 2)))
             return True
@@ -279,6 +287,7 @@ class ChatSurface:
         if self.tools and notice is None and chat.w > style.unit * 6:
             chat = self._draw_tools(canvas, chat, actions)
         self._chat_rect = chat
+        self._notice_room = None
         if notice is not None:
             self._draw_notice(canvas, chat, notice, actions)
         else:
@@ -563,17 +572,27 @@ class ChatSurface:
         style = canvas.style
         line = style.line_height
         side = canvas.icon_size()
+        self._notice_room, self._notice_max = None, 0
         if room.h < line * 2:
             return
         top = room.top
-        canvas.label(Rect(room.x, top - line, room.w, line), notice.rows_title, style.title, bold=True)
+        per_row = line * 2.3
+        fits = max(1, int((room.h - line * 1.2) // per_row))
+        self._notice_room = room
+        self._notice_max = max(0, len(notice.rows) - fits)            # the wheel scrolls it (#243)
+        self.notice_scroll = min(self.notice_scroll, self._notice_max)
+        title = notice.rows_title
+        if self._notice_max:
+            first = self.notice_scroll + 1
+            title += "  ({:d}-{:d} of {:d})".format(first, min(len(notice.rows), first + fits - 1), len(notice.rows))
+        canvas.label(Rect(room.x, top - line, room.w, line), title, style.title, bold=True)
         top -= line * 1.2
         if not notice.rows:
             canvas.label(Rect(room.x, top - line, room.w, line), "Nothing yet: tool calls show up here as they run.",
                          _soft(style.text, 0.35))
             return
         text_x = room.x + side + style.pad * 0.6
-        for icon, title, detail in notice.rows:
+        for icon, title, detail in notice.rows[self.notice_scroll:]:
             if top - line * 2 < room.y:
                 break
             canvas.icon(Rect(room.x, top - line + (line - side) / 2, side, side), icon,

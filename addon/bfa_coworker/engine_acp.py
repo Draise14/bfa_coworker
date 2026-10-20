@@ -52,6 +52,7 @@ class AcpEngine:
         self.client: AcpClient | None = None
         self.session_id = ""
         self.agent_label = ""
+        self._named = False
         self.status = "Not connected"
         self.error = ""
         self.connected = False
@@ -61,6 +62,7 @@ class AcpEngine:
         self._turn_id = ""
         self._queue: deque[Prompt] = deque()
         self.on_change: Callable[[], None] | None = None     # redraw hook (any thread)
+        self.on_request: Callable[[str], None] | None = None  # each turn's message (Goal & Plan)
         self.only_coworker_tools = True      # off: the agent may also use its own tools
 
     # -- connection ----------------------------------------------------------------
@@ -71,6 +73,7 @@ class AcpEngine:
             return
         self.connecting, self.error = True, ""
         self.agent_label = label or (os.path.basename(argv[0]) if argv else "agent")
+        self._named = bool(label)
         self.status = "Starting {:s}...".format(self.agent_label)
         self._changed()
         worker = threading.Thread(target=self._connect, args=(argv, mcp_entry, cwd, env), daemon=True,
@@ -96,7 +99,8 @@ class AcpEngine:
             self.client = client
             self.caps = EngineCaps(label="External Agent", images=info.image, cancel=True,
                                    load_session=info.load_session, own_loop=True)
-            name = info.name or self.agent_label
+            # The preset's name ("Claude Code"), not the adapter's package name.
+            name = self.agent_label if self._named else (info.name or self.agent_label)
             self.status = "Connected to {:s}{:s}".format(name, " " + info.version if info.version else "")
             self.connected = True
         except (AcpError, OSError, KeyError) as ex:
@@ -167,6 +171,8 @@ class AcpEngine:
         names = [n for n in prompt.image_names if n]
         shown = prompt.text + ("\n[attached: {:s}]".format(", ".join(names)) if names and prompt.images else "")
         self.bus.emit("turn_start", turn_id, text=shown, mode=prompt.chat_mode)
+        if self.on_request is not None:
+            self.on_request(prompt.text)
         threading.Thread(target=self._run, args=(turn_id, prompt), daemon=True, name="acp-turn").start()
         return turn_id
 

@@ -266,8 +266,12 @@ def render(commands: list[DrawCmd], style: Any = None) -> None:
                 _picture(cmd)
             elif cmd.kind == "clip" and cmd.rect is not None:
                 r = cmd.rect
+                # Never a negative origin (a panel scrolled past the region's edge):
+                # the GPU may ignore such a scissor, and nothing would be clipped (#182).
+                x0, y0 = max(0, int(r.x)), max(0, int(r.y))
+                x1, y1 = max(x0, int(r.x + r.w)), max(y0, int(r.y + r.h))
                 gpu.state.scissor_test_set(True)
-                gpu.state.scissor_set(int(r.x), int(r.y), max(0, int(r.w)), max(0, int(r.h)))
+                gpu.state.scissor_set(x0, y0, x1 - x0, y1 - y0)
                 clipped = True
             elif cmd.kind == "unclip":
                 gpu.state.scissor_test_set(False)

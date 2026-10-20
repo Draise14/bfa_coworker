@@ -297,9 +297,12 @@ MCP_SERVER_MODE_ITEMS: list[tuple[str, str, str]] = [
 
 # -- Chat Mode EnumProperty Items (Tier 1: Agent/Ask Toggle) --------------
 
-CHAT_MODE_ITEMS: list[tuple[str, str, str]] = [
-    ("AGENT", "Coworker", "The agent can execute tools and modify the scene"),
-    ("ASK", "Ask", "LLM answers questions without modifying anything"),
+CHAT_MODE_ITEMS: list[tuple[str, str, str, str, int]] = [
+    ("AGENT", "Coworker", "Coworker works in the scene: it runs tools and changes things", "GHOST_ENABLED", 0),
+    ("ASK", "Ask", "Ask questions: it answers without changing anything", "QUESTION", 1),
+    ("PLAN", "Plan", "Make a step plan for your request without changing anything. Carry it out later -- "
+                     "with this engine or another (Local, Remote, an agent): the plan stays in this chat",
+     "LINENUMBERS_ON", 2),
 ]
 
 # -- Harness Preset Dataclass ---------------------------------------------

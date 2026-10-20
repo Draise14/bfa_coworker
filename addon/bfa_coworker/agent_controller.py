@@ -206,6 +206,13 @@ def _looks_like_unfinished_action(content: str) -> bool:
 # informational only: the model must answer in prose and never emit tool
 # calls or executable code.  The base prompt describes tool workflows, so
 # without this addendum local models frequently call tools anyway.
+_PLAN_MODE_PROMPT_ADDENDUM = (
+    "\n\n[Plan mode] You are in PLAN mode. Do NOT change the scene or any file and do NOT run "
+    "execute_blender_code. Look at what you need (the scene, the docs), then call update_plan with a "
+    "short step plan (3-8 concrete steps) for the user's request, and reply with a one-paragraph "
+    "summary of the plan. Don't carry it out: the user will run it later, maybe with another model."
+)
+
 _ASK_MODE_PROMPT_ADDENDUM = (
     "\n\n[Ask mode] You are in READ-ONLY Ask mode. Answer the user's "
     "questions with explanations and information in plain text. Do NOT "
@@ -5970,6 +5977,9 @@ def _run_conversation_turn_inner(
     # it is not duplicated on subsequent Ask-mode turns.
     if chat_mode == "ASK" and _ASK_MODE_PROMPT_ADDENDUM not in history[0]["content"]:
         history[0]["content"] += _ASK_MODE_PROMPT_ADDENDUM
+    # Plan mode (#194): look, plan with update_plan, don't change anything.
+    if chat_mode == "PLAN" and _PLAN_MODE_PROMPT_ADDENDUM not in history[0]["content"]:
+        history[0]["content"] += _PLAN_MODE_PROMPT_ADDENDUM
 
     # Append the user message.  Image attachments appear here as a
     # plain-text marker only: the data URIs live on the agent state for
@@ -6040,6 +6050,9 @@ def _run_conversation_turn_inner(
         # Get MCP tools.
         tools = _list_tools_sync(mcp_port)
         openai_tools = _mcp_tools_to_openai(tools) if tools else []
+        if chat_mode == "PLAN":     # #194: only the tools that look (update_plan is the loop's own)
+            from .engine import PLAN_SAFE_TOOLS as _plan_safe
+            openai_tools = [t for t in openai_tools if t.get("function", {}).get("name") in _plan_safe]
 
     # The message has been received; we are assembling the prompt.  This is
     # the very first instant after Send, so show a friendly "reading" state
@@ -6633,7 +6646,7 @@ def _run_conversation_turn_inner(
         nonlocal iterations, _round_progress, _auto_round, _plan_done_at_round
         if _finished or _stop_reason or _stop_event.is_set():
             return False
-        if chat_mode == "ASK" or not openai_tools or _auto_round >= _max_auto_rounds:
+        if chat_mode in ("ASK", "PLAN") or not openai_tools or _auto_round >= _max_auto_rounds:
             return False
         with session_memory.store_lock:
             _goal = session_memory.store.goal
@@ -7071,7 +7084,7 @@ def _run_conversation_turn_inner(
             # Live plan progress: tick off steps the model reports finished
             # in its own words ("Step 2 is done", "[x] Fix the roof") -- it
             # does not wait for the turn to end or for an update_plan call.
-            if chat_mode != "ASK":
+            if chat_mode not in ("ASK", "PLAN"):
                 try:
                     with session_memory.store_lock:
                         _ticked = session_memory.store.goal.note_progress_from_text(content)
@@ -7095,6 +7108,17 @@ def _run_conversation_turn_inner(
             msg["tool_calls"] = []
             raw_tool_calls = None
             finish_reason = "stop"
+        # Plan mode hard guard (#194): only the tools that look, and the plan itself.
+        if chat_mode == "PLAN" and raw_tool_calls:
+            from .engine import PLAN_SAFE_TOOLS as _plan_safe
+            _kept = [c for c in raw_tool_calls if (c.get("function") or {}).get("name") in _plan_safe]
+            if len(_kept) != len(raw_tool_calls):
+                print("[Coworker] run_conversation_turn: PLAN mode -- dropped {:d} tool call(s) that "
+                      "would change the scene".format(len(raw_tool_calls) - len(_kept)))
+                msg["tool_calls"] = _kept
+                raw_tool_calls = _kept or None
+                if not _kept:
+                    finish_reason = "stop"
 
         # -- Drop malformed tool calls (truncated arguments) -----------
         # A call whose arguments are not valid JSON can never run (the tool

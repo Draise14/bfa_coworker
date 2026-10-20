@@ -76,6 +76,23 @@ _STREAM_KINDS = frozenset(("text", "thought"))
 _TOOL_FINAL = frozenset(("completed", "failed"))
 
 
+# Plan mode (#194): the tools a plan may use -- they look, they don't change anything.
+PLAN_SAFE_TOOLS: frozenset[str] = frozenset({
+    "get_objects_summary", "get_object_detail_summary", "get_scene_digest", "get_operation_history",
+    "get_blendfile_summary_datablocks", "get_blendfile_summary_missing_files",
+    "get_blendfile_summary_of_linked_libraries", "get_blendfile_summary_path_info",
+    "get_blendfile_summary_usage_guess", "get_active_node_tree", "get_node_group_interface",
+    "get_asset_libraries", "get_asset_tags", "list_asset_catalogs", "search_assets",
+    "search_polyhaven_assets", "get_polyhaven_status", "get_screenshot_of_window_as_image",
+    "get_screenshot_of_window_as_json", "get_screenshot_of_area_as_image", "search_api_docs",
+    "search_manual_docs", "get_python_api_docs", "read_tool_output", "ask_user", "update_plan", "load_tools",
+    "list_blender_templates",
+})
+PLAN_NOTE = ("[Plan mode] Don't change the Blender scene or any file. Look at what you need (scene, docs), "
+             "then write a short step plan for this request with the update_plan tool (3-8 concrete steps), "
+             "and reply with a one-paragraph summary. Don't carry the plan out: that comes later.")
+
+
 def new_turn_id() -> str:
     """A short unique turn id (``t_`` + 12 hex characters)."""
     return "t_" + uuid.uuid4().hex[:12]
@@ -113,7 +130,7 @@ class Prompt:
     images: list[str] = field(default_factory=list)       # file paths
     image_names: list[str] = field(default_factory=list)  # display names
     context: str = ""          # live context chip (Tier 4b B6)
-    chat_mode: str = "AGENT"   # "AGENT" or "ASK"
+    chat_mode: str = "AGENT"   # "AGENT", "ASK" or "PLAN"
 
 
 class Engine(Protocol):

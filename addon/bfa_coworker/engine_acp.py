@@ -40,7 +40,7 @@ from typing import Any, Callable
 from .acp_client import MCP_SERVER_NAME, AcpClient, AcpError, _tool_name, stdio_mcp_server, update_to_events
 from .approvals import ApprovalRequest, Approvals
 from .chat_state import ChatStateApplier
-from .engine import EngineCaps, EventBus, Prompt, new_turn_id
+from .engine import PLAN_NOTE, PLAN_SAFE_TOOLS, EngineCaps, EventBus, Prompt, new_turn_id
 
 # Words agents use when you aren't logged in (ACP's "auth required" shares its
 # code, -32000, with our "agent exited", so the code alone can't tell).
@@ -79,6 +79,7 @@ class AcpEngine:
         self.connecting = False
         self.login_hint = ""             # the preset's "how to log in", for login errors
         self.auto_approve = False        # Auto mode (#177): allow what the settings allow
+        self._turn_mode = "AGENT"        # the running turn's chat mode (Plan refuses changes)
         self.config_options: list[dict[str, Any]] = []     # the agent's own (mode, model...)
         self.preferred: dict[str, str] = {}                # your picks, re-applied per session
         self.on_option: Callable[[str, str], None] | None = None
@@ -337,6 +338,7 @@ class AcpEngine:
         # marker for its images, which the chat draws as thumbnails.
         names = [n for n in prompt.image_names if n]
         shown = prompt.text + ("\n[attached: {:s}]".format(", ".join(names)) if names and prompt.images else "")
+        self._turn_mode = prompt.chat_mode
         self.bus.emit("turn_start", turn_id, text=shown, mode=prompt.chat_mode)
         if self.on_request is not None:
             self.on_request(prompt.text)
@@ -352,6 +354,8 @@ class AcpEngine:
             text = "{:s}\n\n[Blender: {:s}]".format(text, prompt.context)
         if prompt.chat_mode == "ASK":
             text += "\n\n[Answer only; don't change the Blender scene.]"
+        elif prompt.chat_mode == "PLAN":
+            text += "\n\n" + PLAN_NOTE
         blocks: list[dict[str, Any]] = [{"type": "text", "text": text}]
         if self.caps.images:
             for uri in prompt.images:
@@ -459,6 +463,12 @@ class AcpEngine:
             if self._turn_id:
                 self.bus.emit("status", self._turn_id, text="Refused {:s}: the agent can only use "
                               "Coworker's Blender tools".format(title or "a tool"))
+            return
+        if ours and self._turn_mode == "PLAN" and tool not in PLAN_SAFE_TOOLS:
+            answer("deny")              # Plan mode (#194): looking is fine, changing isn't
+            if self._turn_id:
+                self.bus.emit("status", self._turn_id, text="Plan mode: {:s} not run (it would change "
+                              "the scene)".format(tool))
             return
         if (ours and not self.ask_coworker_tools) or self.approvals.allowed_always(tool):
             answer("once")

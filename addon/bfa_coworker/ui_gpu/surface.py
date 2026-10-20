@@ -59,7 +59,7 @@ class TopBar:
     running: bool = False
     start_label: str = "Start"        # "Start Bridge" in External Harness
     error: bool = False
-    chat_modes: tuple[tuple[str, str], ...] = ()   # (id, label); empty hides the row
+    chat_modes: tuple[tuple[str, ...], ...] = ()   # (id, label[, icon]); empty hides the row
     chat_mode: str = ""
 
 
@@ -284,9 +284,13 @@ class ChatSurface:
         if top.chat_modes:
             mrow = Rect(row.x, bottom - u, row.w, u)
             w = mrow.w / len(top.chat_modes)
-            for i, (mode_id, label) in enumerate(top.chat_modes):
+            for i, item in enumerate(top.chat_modes):
+                mode_id, label = item[0], item[1]
+                icon = item[2] if len(item) > 2 else ""
+                if w < u * 3.2:          # narrow: the icon says it (the tooltip names it)
+                    label = "" if icon else label
                 if canvas.button(Rect(mrow.x + i * w, mrow.y, w, u), "mode:" + mode_id, label,
-                                 active=mode_id == top.chat_mode):
+                                 active=mode_id == top.chat_mode, icon=icon):
                     actions.append(("chat_mode", mode_id))
             bottom = mrow.y - pad * 0.5
         return bottom

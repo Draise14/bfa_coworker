@@ -1269,7 +1269,16 @@ def _execute_code_from_request(
 
     if _should_log_request():
         print("request:\n{:s}".format(code), file=sys.stderr)
+    _started = time.monotonic()
     exec_result = _execute_code(code, strict_json=strict_json)
+    # Agent 9: what ran, for the activity view (External Harness) and Copy Log.
+    try:
+        from . import activity
+        activity.record(str(request.get("tool") or ""), request.get("args") or "",
+                        exec_result.response, time.monotonic() - _started,
+                        deferred=exec_result.check_fn is not None)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
     _is_error = (
         exec_result.response.get("status") == "error"
         if not exec_result.check_fn

@@ -325,6 +325,9 @@ class AcpEngine:
 
     def _blocks(self, prompt: Prompt) -> list[dict[str, Any]]:
         text = prompt.text
+        if self.is_command(text):
+            # The agent's own slash command goes as typed (Agent 8b): nothing appended.
+            return [{"type": "text", "text": text}]
         if prompt.context:
             text = "{:s}\n\n[Blender: {:s}]".format(text, prompt.context)
         if prompt.chat_mode == "ASK":
@@ -382,6 +385,26 @@ class AcpEngine:
         for kind, data in update_to_events(params.get("update") or params):
             self.bus.emit(kind, turn_id, **data)
         self._changed()
+
+    def commands(self) -> list[dict[str, str]]:
+        """The agent's own slash commands (ACP ``available_commands_update``)."""
+        client = self.client
+        if client is None or not self.connected:
+            return []
+        out = []
+        for command in client.commands:
+            name = str(command.get("name", "")).lstrip("/")
+            if name:
+                out.append({"name": name, "description": str(command.get("description", "")),
+                            "hint": str((command.get("input") or {}).get("hint", ""))})
+        return out
+
+    def is_command(self, text: str) -> bool:
+        """*text* starts with one of the agent's slash commands."""
+        if not text.startswith("/"):
+            return False
+        word = text[1:].split(None, 1)[0] if text[1:].strip() else ""
+        return any(c["name"] == word for c in self.commands())
 
     def _explain(self, ex: Exception) -> str:
         """What went wrong, for you: a login hint when it's about logging in; else the

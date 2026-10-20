@@ -151,6 +151,23 @@ class TestSuggestions(unittest.TestCase):
         _type(box, "up")
         self.assertEqual(box.actions, [])                # Enter wasn't used by a list
 
+    def test_slash_commands_at_the_start(self):
+        """Agent 8b: "/" at the start offers the agent's own commands (no category row)."""
+        commands = [ib.Suggestion("/compact", "/compact", "command", "CONSOLE", "Shrink the context"),
+                    ib.Suggestion("/review", "/review", "command", "CONSOLE", "Review changes")]
+        box = ib.InputBox(focused=True, provider=_provider, command_provider=lambda q: [
+            c for c in commands if q in c.label], categories=(("object", "Objects", "OBJECT_DATA"),))
+        _type(box, "/co")
+        self.assertEqual([c.label for c in box.suggestions], ["/compact"])
+        canvas = lay.Canvas(st.Style(), lay.fixed_measure(0.55), lay.InteractionState())
+        box.draw(canvas, lay.Rect(0, 0, 500, 300))
+        self.assertNotIn("All", [c.text for c in canvas.commands if c.kind == "text"])
+        box.handle_key(K("TAB"))
+        self.assertEqual(box.model.text, "/compact ")
+        box.model.clear()
+        _type(box, "say /co")                    # only at the start of the message
+        self.assertEqual(box.suggestions, [])
+
     def test_not_inside_words_and_esc_closes(self):
         box = ib.InputBox(focused=True, provider=_provider)
         _type(box, "mail@c")

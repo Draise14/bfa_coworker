@@ -222,6 +222,8 @@ class InputBox:
 
     model: TextModel = field(default_factory=TextModel)
     provider: Provider | None = None
+    # "/" at the start of the message: the agent's own commands (Agent 8b), or None.
+    command_provider: Provider | None = None
     placeholder: str = "Ask Coworker..."
     focused: bool = False
     busy: bool = False                     # a turn is running: show Stop
@@ -234,6 +236,7 @@ class InputBox:
     category: str = ""                     # "" = all
     match_count: int = 0
     _mention_start: int | None = None      # offset of the "@" being completed
+    _slash: bool = False                   # completing a "/command" rather than an "@"
     blink_phase: bool = True               # the host toggles this for the caret blink
     big_buttons: bool = False              # double-height buttons (the editor's full chat)
     _narrow: bool = False                  # set by draw(): the box is too thin for labelled buttons
@@ -245,8 +248,14 @@ class InputBox:
 
     # -- suggestions -------------------------------------------------------------
     def _mention_query(self) -> str | None:
-        """The text after an "@" the cursor is still in, or None."""
+        """The text after an "@" (or a leading "/") the cursor is still in, or None."""
         text, pos = self.model.text, self.model.cursor
+        self._slash = False
+        if self.command_provider is not None and text.startswith("/") and pos >= 1                 and not any(ch.isspace() for ch in text[1:pos]):
+            self._mention_start, self._slash = 0, True
+            return text[1:pos]
+        if self.provider is None:
+            return None
         at = text.rfind("@", 0, pos)
         if at < 0 or (at > 0 and not text[at - 1].isspace()):
             return None
@@ -257,11 +266,14 @@ class InputBox:
         return query
 
     def _refresh_suggestions(self) -> None:
-        query = self._mention_query() if self.provider is not None else None
+        query = self._mention_query() if (self.provider or self.command_provider) is not None else None
         if query is None:
             self.suggestions, self._mention_start = [], None
             return
-        matches = [m for m in self.provider(query) if not self.category or m.kind == self.category]
+        if self._slash:
+            matches = list(self.command_provider(query))      # type: ignore[misc]
+        else:
+            matches = [m for m in self.provider(query) if not self.category or m.kind == self.category]
         self.match_count = len(matches)
         self.suggestions = matches[:_MAX_SUGGESTIONS]
         self.suggestion_index = min(self.suggestion_index, max(0, len(self.suggestions) - 1))
@@ -539,7 +551,8 @@ class InputBox:
                                  max(1.0, style.scale * 1.5), style.line_height * 0.8), style.cursor)
         canvas.pop_clip()
         if self.suggestions:
-            self._draw_suggestions(canvas, Rect(box.x, box.top, min(box.w, u * 14), 0))
+            # Commands carry a description: give their list more room.
+            self._draw_suggestions(canvas, Rect(box.x, box.top, min(box.w, u * (24 if self._slash else 14)), 0))
         return self.actions[before:]
 
     def _draw_suggestions(self, canvas: Canvas, anchor: Rect) -> None:
@@ -548,7 +561,7 @@ class InputBox:
         style = canvas.style
         u, pad = style.unit, style.pad
         row_h = u
-        header = 2 if self.categories else 0
+        header = 2 if self.categories and not self._slash else 0
         rows = len(self.suggestions) or 1
         h = row_h * (rows + header) + pad
         panel = Rect(anchor.x, anchor.y + pad * 0.5, anchor.w, h)
@@ -556,7 +569,7 @@ class InputBox:
         side = canvas.icon_size()
         top = panel.top - pad * 0.5
         soft = (style.tooltip.text[0], style.tooltip.text[1], style.tooltip.text[2], 0.6)
-        if self.categories:
+        if self.categories and not self._slash:
             frow = Rect(panel.x + pad * 0.5, top - row_h, panel.w - pad, row_h)
             canvas.icon(Rect(frow.x, frow.y + (row_h - side) / 2, side, side), "VIEWZOOM", soft)
             bx = frow.x + side + pad * 0.5
@@ -593,8 +606,16 @@ class InputBox:
                 x += side + pad * 0.5
             canvas.label(Rect(x, r.y, r.right - x, row_h), sug.label, text)
             if sug.detail:
-                canvas.label(Rect(r.x, r.y, r.w - pad * 0.5, row_h), sug.detail,
-                             (text[0], text[1], text[2], 0.55), align="right")
+                # Right-aligned in the room after the name, cut with "..." -- never over it.
+                room = r.right - pad * 1.5 - (x + canvas.measure(sug.label, "ui", style.font_size) + pad)
+                detail = sug.detail
+                while detail and canvas.measure(detail + "...", "ui", style.font_size) > room:
+                    detail = detail[:-1]
+                if detail != sug.detail:
+                    detail = detail.rstrip() + "..." if len(detail) > 2 else ""
+                if detail:
+                    canvas.label(Rect(r.x, r.y, r.w - pad * 0.5, row_h), detail,
+                                 (text[0], text[1], text[2], 0.55), align="right")
             canvas.hit_areas.append((r, widget_id))
             if canvas.state.clicked == widget_id:
                 self.accept_suggestion(i)

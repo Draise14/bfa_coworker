@@ -599,6 +599,7 @@ def generate_sidebar() -> str:
   - 🧠 [Session Memory](https://github.com/Draise14/bfa_coworker/wiki/Session-Memory)
   - 🖥️ [Local LLM Setup](https://github.com/Draise14/bfa_coworker/wiki/Local-LLM-Setup)
   - ☁️ [Remote API Setup](https://github.com/Draise14/bfa_coworker/wiki/Remote-API-Setup)
+  - 🤖 [External Agent](https://github.com/Draise14/bfa_coworker/wiki/External-Agent)
   - 🔌 [External Harness](https://github.com/Draise14/bfa_coworker/wiki/External-Harness)
   - 🎨 [Generative AI](https://github.com/Draise14/bfa_coworker/wiki/Generative-AI)
   - 🔧 [Troubleshooting](https://github.com/Draise14/bfa_coworker/wiki/Troubleshooting)
@@ -1866,6 +1867,104 @@ page for common connection, config, and per-client issues. Highlights:
 
 This wiki page is generated from those presets, so running `make wiki` after the
 change keeps this page in sync automatically.
+"""
+
+
+def generate_external_agent() -> str:
+    """Generate External-Agent.md (Tier 4, task "Agent 8")."""
+    return _header(
+        "External Agent",
+        "Chat in Coworker while your own agent app (Claude Code, Codex, OpenCode, Gemini, "
+        "Copilot) does the work, with your own login and subscription",
+    ) + """
+
+---
+
+## 💡 What it is
+
+**External Agent** is an Operating Mode. You chat in Coworker's own chat (the Coworker
+editor or the sidebar). Behind it, Coworker runs an agent app on your computer and gives
+it Coworker's Blender tools. The agent plans and works in Blender; its replies, thinking
+and tool calls stream into the same chat as a local turn.
+
+It uses **your** account with that agent: your Claude Pro / Max plan, your ChatGPT plan,
+your GitHub Copilot subscription, or an API key you set up in the agent.
+
+| | External Agent | External Harness |
+|---|---|---|
+| Where you chat | In Coworker | In the other app (Claude Desktop, Cursor...) |
+| Who starts the agent | Coworker, when you press Start | You |
+| Protocol | ACP (Agent Client Protocol) | MCP |
+
+---
+
+## 🚀 Set it up
+
+1. **Preferences > Coworker > Operating Mode: External Agent.**
+2. **Pick your agent.** The setup shows whether it's installed, its version and where it is.
+3. **Not installed?** Press **Install** (agents installed with npm; Node.js is needed), or
+   follow the hint shown. **Update** and **Remove** are there later; each asks first and
+   says exactly what it runs.
+4. **Log in once** in the agent's own app, as the hint says (e.g. run `claude` in a
+   terminal).
+5. Press **Start** in the chat. Nothing runs before that.
+
+| Agent | Uses | Needs |
+|---|---|---|
+| Claude Code | Your Claude Pro / Max plan, or an Anthropic API key | Claude Code + the `@agentclientprotocol/claude-agent-acp` adapter |
+| Codex CLI | Your ChatGPT plan, or an OpenAI API key | Codex + the `@agentclientprotocol/codex-acp` adapter |
+| OpenCode | The model you set up in OpenCode (any provider, or a local model) | OpenCode |
+| Gemini CLI | Your Google login, or a Gemini API key | Gemini CLI |
+| GitHub Copilot CLI | Your Copilot subscription | Copilot CLI |
+| Custom command | Any agent that speaks ACP | Its command line |
+
+To stop using it, pick another Operating Mode.
+
+---
+
+## 💬 In the chat
+
+- **Text, images, Queue, Stop** work as in Local mode. Your message carries a short
+  Blender context line (the active object, the selection).
+- **Goal & Plan** fills from the agent's plan (or `update_plan`).
+- **Approvals.** When the agent asks before a tool, a card above the input shows what it
+  wants to run: **Allow once**, **Always** (until you stop the agent) or **Deny**.
+- **Questions.** The agent can ask you with buttons (`ask_user`); click one, or type
+  your answer and press Enter.
+- **Revert.** Every turn is one undo step ("Before Claude Code's turn"). The Undo button on
+  the last reply undoes the whole turn, as long as you haven't changed the scene since.
+- **Mode, Model, Effort.** While the agent runs, its panel shows its own settings as
+  dropdowns. Coworker remembers your pick per agent.
+- **Slash commands.** Type `/` at the start of a message for the agent's own commands.
+- **Resume.** Close Bforartists, open it again, press Start: the chat comes back and the
+  agent continues the same conversation. **New Thread** starts a fresh one.
+
+---
+
+## ⚙️ Options
+
+| Option | Default | What it does |
+|---|---|---|
+| Only Coworker Tools | On | The agent may only use Coworker's Blender tools; its own shell and file tools are refused, and it doesn't load your other agent setups. Off: it asks you before its own tools. |
+| Ask Before Blender Tools Too | Off | Ask before Coworker's tools as well. |
+| Load Tools When Needed | On | The agent gets the basic tools first and the specialised ones (materials, nodes, assets...) when it asks. Saves ~8K tokens per request. |
+
+While **Only Coworker Tools** is on, modes that would stop the agent asking (Claude
+Code's *Accept edits*, *Auto*, *Bypass permissions*) aren't offered.
+
+---
+
+## 🩺 When something goes wrong
+
+| You see | Do this |
+|---|---|
+| *... isn't installed* | Install it from the setup, or follow the hint. |
+| *... isn't logged in* | Log in once in the agent's own app (the hint says how). |
+| *The agent stopped -- press Start to reconnect* | It crashed; its last output is in the chat. Press Start. |
+| *... didn't stop when asked, so Coworker closed it* | It was stuck; press Start to carry on. |
+| *Couldn't continue the last conversation* | The old session is gone; a fresh one started. |
+
+If Bforartists crashes, the agent and everything it started close with it.
 """
 
 
@@ -4042,6 +4141,7 @@ def main() -> int:
         ("User-Documentation/Session-Memory.md", generate_session_memory()),
         ("User-Documentation/Local-LLM-Setup.md", generate_local_llm_setup()),
         ("User-Documentation/Remote-API-Setup.md", generate_remote_api_setup()),
+        ("User-Documentation/External-Agent.md", generate_external_agent()),
         ("User-Documentation/External-Harness.md", generate_external_harness(presets)),
         ("User-Documentation/Harness-Troubleshooting.md", generate_harness_troubleshooting()),
         ("User-Documentation/Generative-AI.md", generate_generative_ai()),

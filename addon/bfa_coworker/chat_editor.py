@@ -357,10 +357,31 @@ def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0) -> None:
         actions.append(("draft", surface.box.model.text))
         _SYNCED[id(surface)] = surface.box.model.text
     render.render(canvas.commands, style)
+    if surface.tip_wait > 0:          # a tooltip is due (#237): draw again then
+        _redraw_later(region, surface.tip_wait + 0.02)
     if actions:
         _PENDING.extend((action, value, region.as_pointer()) for action, value in actions)
         if not bpy.app.timers.is_registered(_flush):
             bpy.app.timers.register(_flush, first_interval=0.0)
+
+
+_TIP_TIMERS: set[int] = set()
+
+
+def _redraw_later(region: Any, seconds: float) -> None:
+    """Tag *region* for a redraw in *seconds* (one timer per region at a time)."""
+    key = region.as_pointer()
+    if key in _TIP_TIMERS:
+        return
+    _TIP_TIMERS.add(key)
+
+    def tag() -> None:
+        _TIP_TIMERS.discard(key)
+        try:
+            region.tag_redraw()
+        except ReferenceError:
+            pass
+    bpy.app.timers.register(tag, first_interval=seconds)
 
 
 _DROP: dict[str, float] = {"until": 0.0}

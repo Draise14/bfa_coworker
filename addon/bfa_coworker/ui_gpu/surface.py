@@ -28,13 +28,69 @@ returns the actions for the host to carry out, e.g. ``("send", text)``,
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, Callable
 
 from .chat_view import ChatView, _soft
 from .input_box import InputBox
 from .layout import Canvas, InteractionState, Rect
 from .style import Style
+
+# Tooltips for the chat's buttons (#237), by widget id (exact, then by prefix).
+TIPS: dict[str, str] = {
+    "revert_turn": "Revert: undo this whole turn in one step (only while you haven't changed the scene since)",
+    "jump": "Jump to the newest message",
+    "fold_workshop": "Fold or unfold the running turn's Workshop (its tool steps)",
+    "attach_menu": "Image for the next message: pick one in the file, open a file, or attach a render / screen",
+    "attach_render": "Attach a render of the scene to the next message",
+    "attach_screen": "Attach part of the screen: click an editor or drag a rectangle",
+    "attach_pin": "Keep this image for every message (pinned), or send it with the next one only",
+    "attach_remove": "Remove the image",
+    "send": "Send (Enter)",
+    "queue": "Queue this message: it goes when the running turn ends",
+    "stop": "Stop the running turn",
+    "start": "Start Coworker",
+    "stop_agent": "Stop Coworker",
+    "prefs": "Coworker settings",
+    "open_editor": "Open the Coworker editor: the full chat in its own window",
+    "mode_menu": "Mode: Local, Remote, Agent or Harness, and its model",
+    "copy_error": "Copy the error",
+    "tool:new_thread": "New Thread: start a fresh chat (the old one stays in History)",
+    "tool:mention": "@ Mention an object, material or collection",
+    "tool:revert_turn": "Revert: undo the last turn in one step",
+    "tool:stop": "Stop the running turn",
+    "tool:open_editor": "Open the Coworker editor: the full chat in its own window",
+    "tool:attach_menu": "Image for the next message: pick one in the file, or open a file",
+    "tool:attach_render": "Attach a render of the scene to the next message",
+    "tool:attach_screen": "Attach part of the screen: click an editor or drag a rectangle",
+    "mode:AGENT": "Coworker: it works in the scene",
+    "mode:ASK": "Ask: it answers and changes nothing",
+    "mode:PLAN": "Plan: it makes a step plan to carry out later, with any engine",
+    "notice:copy_log": "Copy what your client did in Blender",
+    "notice:configure": "External Harness settings",
+}
+TIP_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("copymsg:", "Copy the reply"),
+    ("copyuser:", "Copy your message"),
+    ("copythink:", "Copy this thinking"),
+    ("copycode:", "Copy the code it ran"),
+    ("copyres:", "Copy the result"),
+    ("copy:", "Copy the code"),
+    ("img:", "Open this image in an Image Editor"),
+    ("suggest:", "Send this as your next message"),
+    ("ws:", "Fold or unfold the Workshop: the turn's tool steps"),
+)
+TIP_DELAY = 0.5      # seconds the mouse rests before a tooltip shows, like Blender's
+
+
+def tip_for(widget_id: str | None) -> str:
+    """The tooltip for a chat widget, or "" (#237)."""
+    if not widget_id:
+        return ""
+    if widget_id in TIPS:
+        return TIPS[widget_id]
+    return next((tip for prefix, tip in TIP_PREFIXES if widget_id.startswith(prefix)), "")
 
 __all__ = (
     "Approval",
@@ -114,6 +170,11 @@ class ChatSurface:
     attachment_note: str = ""         # the tray's second line instead (External Harness: #199)
     # A column of icon buttons beside the messages (#214): (action, icon); ("", "") = a gap.
     tools: tuple[tuple[str, str], ...] = ()
+    # Tooltips (#237): the widget under a resting mouse and since when; *tip_wait* > 0 asks the
+    # host to draw again that many seconds later, when the tooltip is due.
+    clock: Callable[[], float] = time.monotonic
+    tip_wait: float = 0.0
+    _tip: tuple[str, float] | None = None
 
     # -- mouse (region pixels) ------------------------------------------------------
     def hit(self, x: float, y: float) -> str | None:
@@ -234,6 +295,7 @@ class ChatSurface:
         canvas.pop_clip()
         self._hits = list(canvas.hit_areas)
         self._clicked = None
+        self._tooltip(canvas, rect)
         # The view's own actions that only change the view are done here.
         out = []
         for action, value in actions:
@@ -244,6 +306,34 @@ class ChatSurface:
             else:
                 out.append((action, value))
         return out
+
+    def _tooltip(self, canvas: Canvas, rect: Rect) -> None:
+        """The tooltip of the button under a resting mouse, after TIP_DELAY (#237)."""
+        self.tip_wait = 0.0
+        widget = self.hit(*self.mouse) if self.mouse is not None and self.pressed is None else None
+        tip = tip_for(widget)
+        if not tip:
+            self._tip = None
+            return
+        now = self.clock()
+        if self._tip is None or self._tip[0] != widget:
+            self._tip = (widget, now)
+        wait = TIP_DELAY - (now - self._tip[1])
+        if wait > 0:
+            self.tip_wait = wait
+            return
+        style = canvas.style
+        pad = style.pad
+        width = min(canvas.measure(tip, "ui", style.font_size) + 2 * pad, rect.w - 2 * pad, style.unit * 16)
+        h = canvas.text_height(tip, width - 2 * pad) + pad
+        mx, my = self.mouse
+        x = max(rect.x + pad, min(mx - width / 2, rect.right - pad - width))
+        y = my - style.unit * 1.1 - h                 # under the mouse, or over it near the bottom
+        if y < rect.y + pad:
+            y = my + style.unit * 0.9
+        box = Rect(x, y, width, h)
+        canvas.box(box, colors=style.tooltip)
+        canvas.wrapped(box.x + pad, box.top - pad * 0.5, width - 2 * pad, tip, style.tooltip.text)
 
     def _draw_top_bar(self, canvas: Canvas, rect: Rect, top: TopBar, actions: list[tuple[str, str]]) -> float:
         """Mode + status + buttons, then the chat-mode row; return the bar's bottom edge."""

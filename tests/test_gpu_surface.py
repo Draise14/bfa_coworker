@@ -120,6 +120,42 @@ class TestLayout(unittest.TestCase):
         self.assertIn("attach_menu", ids)
         self.assertNotIn("attach_screen", ids)          # a thin box keeps just the picker
 
+    def test_tooltip_after_the_mouse_rests(self):
+        # #237: a resting mouse over a button shows its tooltip after TIP_DELAY, not before.
+        now = [100.0]
+        surface = sf.ChatSurface()
+        surface.clock = lambda: now[0]
+        _draw(surface)
+        surface.on_move(*_centre(surface, "attach_menu"))
+        canvas, _ = _draw(surface)
+        tip = sf.TIPS["attach_menu"]
+        self.assertGreater(surface.tip_wait, 0.0)                 # the host draws again then
+        self.assertNotIn(tip, [c.text for c in canvas.commands if c.kind == "text"])
+        now[0] += sf.TIP_DELAY + 0.01
+        canvas, _ = _draw(surface)
+        self.assertIn(tip, " ".join(c.text for c in canvas.commands if c.kind == "text"))
+        self.assertEqual(surface.tip_wait, 0.0)
+        surface.on_leave()
+        canvas, _ = _draw(surface)
+        self.assertNotIn(tip, " ".join(c.text for c in canvas.commands if c.kind == "text"))
+
+    def test_every_button_has_a_tooltip(self):
+        surface = sf.ChatSurface(compact=True)
+        surface.tools = (("new_thread", "ADD"), ("mention", "OUTLINER_OB_MESH"), ("revert_turn", "LOOP_BACK"),
+                         ("open_editor", "WINDOW"), ("", ""), ("attach_menu", "IMAGE_DATA"),
+                         ("attach_render", "RENDER_STILL"), ("attach_screen", "FULLSCREEN_ENTER"))
+        surface.box.attachment = "ref.png"
+        surface.view.revertable = True
+        top = sf.TopBar(mode_label="Local", mode_icon="CONSOLE", status="Ready", status_icon="CHECKMARK",
+                        running=True, chat_modes=(("AGENT", "Coworker", "GHOST_ENABLED"), ("ASK", "Ask", "QUESTION"),
+                                                  ("PLAN", "Plan", "LINENUMBERS_ON")), chat_mode="AGENT")
+        hist = _history() + [{"role": "user", "content": "x", "turn_start": True},
+                             {"role": "assistant", "content": "Done.\n```python\nx=1\n```\nShall I add a roof?"}]
+        canvas = lay.Canvas(st.Style(), lay.fixed_measure(0.55), surface.interaction())
+        surface.draw(canvas, lay.Rect(0, 0, 500, 900), hist, top=top)
+        missing = sorted({w for _r, w in canvas.hit_areas if w != "input" and not sf.tip_for(w)})
+        self.assertEqual(missing, [])
+
     def test_tool_column_beside_the_messages(self):
         # #214: icon buttons on the left; the messages move right of them.
         surface = sf.ChatSurface(compact=True)

@@ -36,9 +36,11 @@ from `main`, no stacked PRs. Only one open PR at a time on `agent_controller.py`
 | ✅ Done | Engine 8: session token | #124 |
 | ✅ Done | Editors 1 + GPU 0–5: the Coworker editor and the compact sidebar chat (1.1.40) | #122 #126 #129 #133 #135 #137 #138 |
 | ✅ Done | Agent 4: External Agent in the chat: pick, install / update / remove any agent; images, Queue, the agent's plan in Goal & Plan | #140 #142 #144 #146 (issue #139) |
-| ⏭ Now | **Agent 5: approvals in the chat**, then Agent 6 (resume) and Agent 7 (hardening) | #93 |
+| ✅ Done | Agents 5–7: approvals in the chat, resume after a restart, hardening (crash, login, Stop) | #150 #152 #154 |
+| ⏭ Now | **Agent 8: polish & docs** (mode and model pickers, slash commands, wiki page) | #93 |
+| ⏭ Next | **Chat 7: chat history panel**, then Agent 9 (External Harness activity view) | |
 | ✅ Unblocked | Chat 1: native markdown. `UILayout.label_markdown` **is** in the 5.3 dev builds; the earlier probe was wrong (`hasattr` on the class can't see RNA functions; `bl_rna.functions` can) | |
-| ✅ Done | Agent 1, part 2: record one Claude Code session (uses your Claude login) | |
+| ✅ Done | Agent 1, part 2: record one Claude Code session (uses your Claude login) | #148 #152 |
 
 ---
 
@@ -67,10 +69,10 @@ Plan: `plan_tier4h_external_agent_acp.md`
 | ✅ | **Agent 1**: Record real sessions | H0 | Drive `opencode acp` from a script, record fixtures, correct the plan. *Claude Code part waits for your go-ahead* | — | S | Fixtures + findings in 4h §3.1 | #111 |
 | ✅ | **Agent 2**: ACP client | H2 | `acp_client.py` (stdlib JSON-RPC over stdio, reader thread, cancel, crash handling), tested by replaying the recorded fixtures | Engine 1 | M | Replay of every fixture passes, incl. cancel, permission, crash | |
 | ✅ | **Agent 3**: Agent presets | H3 | Presets + "is it installed / logged in" + install hints + Generic preset; resolve npm `.cmd` shims to the real exe; per-preset isolation switches | Agent 2 | S | Correct status per preset on a machine without the agent | |
-| ✅ | **Agent 4**: External Agent in the chat | H4 | The mode in the selector next to External Harness (plain tooltips). Text, images, context chip, streaming, Workshop rows (no duplicates), plan (incl. OpenCode's `todowrite`), Stop, Queue | Agent 2, Engine 4 | M | Campfire flow works with OpenCode, then Claude Code | |
-| ☐ | **Agent 5**: Approvals from the agent | H5 | The agent's permission requests use the inline approval row | Agent 4, Engine 5 | S | Allow once / always / deny each behave | |
-| ☐ | **Agent 6**: Project folder & resume | H6 | Project folder, compact `.coworker/AGENTS.md`, "Only Coworker tools", resume after a restart, session list entry | Agent 4 | S | Restart Bforartists → continue the same work | |
-| ☐ | **Agent 7**: Hardening | H7 | Kill the agent mid-turn, kill Bforartists, bad command, no login, error output shown | Agents 4–6 | S | Checklist passes | |
+| ✅ | **Agent 4**: External Agent in the chat | H4 | The mode in the selector next to External Harness (plain tooltips). Text, images, context chip, streaming, Workshop rows (no duplicates), plan (incl. OpenCode's `todowrite`), Stop, Queue | Agent 2, Engine 4 | M | Campfire flow works with OpenCode, then Claude Code | #140 #142 #144 #146 #148 |
+| ✅ | **Agent 5**: Approvals from the agent | H5 | The agent's permission requests use the inline approval row | Agent 4, Engine 5 | S | Allow once / always / deny each behave | #150 |
+| ✅ | **Agent 6**: Project folder & resume | H6 | Resume after a restart (`session/load`), New Thread = fresh agent session, the saved chat comes back. *Left out on purpose:* the .blend folder as working folder (moot with Only Coworker Tools) and a generated AGENTS.md (the MCP instructions carry the rules); the session list entry moves to **Chat 7** | Agent 4 | S | Restart Bforartists → continue the same work | #152 |
+| ✅ | **Agent 7**: Hardening | H7 | Kill the agent mid-turn, kill Bforartists, bad command, no login, error output shown | Agents 4–6 | S | Checklist passes | #154 |
 | ☐ | **Agent 8**: Polish & docs | H8 | Model/mode pickers (from the agent's `configOptions`), slash commands, "supported/preview" badges, wiki page | Agent 7 | S | Docs reviewed | |
 | ☐ | **Agent 9**: External Harness activity view | H10 | Read-only live Workshop for External Harness (tool, args, time, ok/error, preview), Copy log / Open log. The debug view for external clients | Engine 2 | S | Claude Desktop / OpenCode calls appear live; a failing call shows its error | |
 | ☐ | **Agent 10**: Fallbacks *(only if needed)* | H9 | Claude headless / OpenCode server, if a key agent's ACP is unusable | Agent 7 | M | — | |
@@ -85,10 +87,10 @@ Plan: `plan_tier4i_engine_parity.md`
 | ✅ | **Engine 2**: Local & Remote through the engine | I1b | Send / Queue / Stop go through `LoopEngine`; turns also reported as events | Engine 1 | M | No visible change; unit tests + quick challenges as before | #114 |
 | ✅ | **Engine 3**: Events become chat messages | I1c | *Revised 2026-10-19:* instead of rewriting the panel's drawing, `chat_state.py` writes engine events into the same chat state and message shapes our loop writes, so an external agent's turn draws exactly like a local one and the panel code is untouched. The engine chip moves to Engine 4 | Engine 2 | S | A turn applied from events splits into user / Workshop / reply with the panel's own code | |
 | ☐ | **Engine 4**: Shared UI pieces | I2 | `ui_components.py`: tool row, reasoning, plan, approval, question, engine chip; brand detection → `shared.py` | Engine 3 | S | No per-engine branches in turn drawing | |
-| ☐ | **Engine 5**: Approval row | I3 | One approval model + inline row; "always" per session; prepare → apply for risky tools | Engine 4 | S | Same row for agent permissions, Safe mode and risky tools | |
+| ◐ | **Engine 5**: Approval row | I3 | *Model (`approvals.py`) + the chat's card done in Agent 5 (#150); left: Safe mode and risky tools use it.* One approval model + inline row; "always" per session; prepare → apply for risky tools | Engine 4 | S | Same row for agent permissions, Safe mode and risky tools | |
 | ☐ | **Engine 6**: Shared tools in the server | I5 | MCP tools `update_plan`, `ask_user`, scene checkpoint (auto at turn start), `get_scene_digest(since)` | Engine 2 | M | An external agent updates the plan, asks with buttons; digest says `unchanged` on repeat | |
 | ☐ | **Engine 7**: Load tools only when needed | I4 | Surface tools listed, domains loaded on demand (`tools/list_changed`), full list as fallback. **Saves up to ~14K tokens per request** for external agents | Engine 6 | M | First request carries surface tools only (measured) | |
-| ☑ | **Engine 8**: Session token | I6 | MCP + bridge require a per-start token; Copy MCP Config includes it | — | S | Tokenless request refused; every mode still works | |
+| ✅ | **Engine 8**: Session token | I6 | MCP + bridge require a per-start token; Copy MCP Config includes it | — | S | Tokenless request refused; every mode still works | |
 | ☐ | **Engine 9**: Short tool results | I7 | Big results become a short preview + `read_tool_output` handle | — | S | 50 KB node dump → ≤ 2 KB preview on every engine | |
 | ☐ | **Engine 10**: Benchmarks on every engine | I8 | Benchmark steps go through the engine, so the same set runs on Local, Remote, External Agent; Compare groups by mode | Engine 2, Agent 4 | S | One suite side by side on three engines | |
 
@@ -117,7 +119,7 @@ Plan: `plan_tier4b_competitor_ux_analysis.md`
 | ☐ | **Chat 4**: "Where am I" chip | B6 | A line above the input (editor · mode · selection), read live at send time | — | S | Same prompt in two editors picks different correct tools | |
 | ☐ | **Chat 5**: Questions as buttons | B2 | `ask_user` choices as buttons; the suggested next step as [Do it] [Something else] | Engine 6 | S | A click resumes the same turn on all engines | |
 | ☐ | **Chat 6**: Undo the agent's turn | B4 | Revert turn (chat + scene), Edit & resend, Retry | Engine 6 | M | Revert restores chat + scene (Local), scene + note (External) | |
-| ☐ | **Chat 7**: Sessions browser | B3 | Search, rename, delete, pin; resume brief; optional plan file next to the `.blend` | Agent 6 for External | M | Yesterday's session continues on each engine | |
+| ☐ | **Chat 7**: Chat history panel | B3 | Your chats in one list, like VS Code / Claude: **not tied to the .blend**. A collapsible **History** panel (like Queue) in the Coworker editor and the 3D View tab: title (your first message, renamable), when, which engine / agent, the .blend it started in. Click to continue it (External Agent resumes its own session); New Thread keeps the old chat in the list; delete, pin, search. Opening a .blend still shows the chat you last used there. One file per chat + an index (today's per-.blend `default.json` files move in) | Agent 6 | M | Yesterday's chat continues from the list, in another .blend, on each engine | |
 | ☐ | **Chat 8**: Run & fix shown code | B5 | Run button on code blocks (Ask mode) with a safety scan, undo, and Fix | — | M | Broken snippet → Run → Fix → Run works | |
 | ☐ | **Chat 9**: Keep docs honest | B7 | Docs and skills record their sources; a checker flags drift; review the pre-5.3 skills | Chat 1, Skills 4 | S | Drifted docs listed; old version skills trimmed or justified | |
 
@@ -149,7 +151,7 @@ Plan: `plan_tier4a_editor_integration.md`
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
-| ☑ | **Editors 1**: Coworker editor spike | A0 | Three throwaway prototypes. Your preference order: (1) Preferences-editor clone with Python panels in the center, if it can't leak into your real Preferences; (2) Text / Node editor clone with the chat in native panels; a custom node-tree type gets its own Editor Type entry; (3) GPU drawing last | — | S | Screenshots + recommendation on #26 | |
+| ✅ | **Editors 1**: Coworker editor spike | A0 | Three throwaway prototypes. Your preference order: (1) Preferences-editor clone with Python panels in the center, if it can't leak into your real Preferences; (2) Text / Node editor clone with the chat in native panels; a custom node-tree type gets its own Editor Type entry; (3) GPU drawing last | — | S | Screenshots + recommendation on #26 | |
 | ➜ | **Editors 2**: One chat component | A1 | `draw_chat_interface()` that every panel uses | Engine 4 | M | Existing panels use it; no visual change | |
 | ➜ | **Editors 3**: Chat in every sidebar | A2 | *Moved to **GPU 5** (compact sidebars), 2026-10-19* | — | — | — | |
 | ➜ | **Editors 4**: The Coworker editor | A3 | *Moved to **GPU 4** (the editor around the GPU chat), 2026-10-19* | — | — | — | |
@@ -171,9 +173,9 @@ Plan: `plan_tier4s_skills_cleanroom.md`
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
-| ☑ | **Skills 1**: Template tools work everywhere | S0 | Registry moved into the server; `list_blender_templates` crash fixed | — | S | Both tools work in a build and a checkout | #109 (#110) |
-| ☑ | **Skills 2**: Nodes on 5.x | S1 | Compositor via `compositing_node_group` in four tools; reads never edit; no `use_nodes` advice | — | S | Live on 5.3: read works, a read without a compositor changes nothing | #109 |
-| ☑ | **Skills 3**: Needs list | S2 | Written in the plan | — | S | Done | — |
+| ✅ | **Skills 1**: Template tools work everywhere | S0 | Registry moved into the server; `list_blender_templates` crash fixed | — | S | Both tools work in a build and a checkout | #109 (#110) |
+| ✅ | **Skills 2**: Nodes on 5.x | S1 | Compositor via `compositing_node_group` in four tools; reads never edit; no `use_nodes` advice | — | S | Live on 5.3: read works, a read without a compositor changes nothing | #109 |
+| ✅ | **Skills 3**: Needs list | S2 | Written in the plan | — | S | Done | — |
 | ☐ | **Skills 4**: API probes | S3 | Every skill claim gets a probe that runs inside Bforartists | — | S | Probes pass on 5.3; a removed property fails a probe | |
 | ☐ | **Skills 5**: Skill format | S4 | Front matter, size budget, references on request; a checker | Skills 4 | S | Checker green; Runtime 2 can build its index | |
 | ☐ | **Skills 6**: New chapters | S5 | 5.x changes, data over operators, compositor, bone collections, render settings, bulk mesh access, "finish with evidence" | Skills 4, 5 | M | Every claim has a probe; quick challenges no worse | |
@@ -201,11 +203,11 @@ show the same conversation. Replaces Editors 3 and 4, and the planned sidebar qu
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
-| ☑ | **GPU 0**: Spike | — | Prototype both sizes in Bforartists 5.3 with simulated typing | — | S | Go/no-go + screenshots | (this PR) |
-| ☑ | **GPU 1**: Toolkit | — | `ui_gpu/`: theme reader (colours, roundness, UI scale × zoom), fonts (UI + mono), text measuring and wrapping, boxes, buttons, hover/press, hit areas. Layout bpy-free and unit-tested; thin `gpu`/`blf` layer | — | M | A test page draws buttons and wrapped text in the default and a light theme | |
-| ☑ | **GPU 2**: Chat view | — | Turns from the chat state (your message, Workshop collapsible, tool rows, reply), our own markdown subset (bold, italic, code, lists, headings, links), code blocks with Copy (Run later), **icons first** (the native chat's icon vocabulary, full-colour Bforartists icons exported from its SVGs; keyframe-coloured heading markers), headings sized like 5.3's label_markdown, live streaming, follow the newest, scroll | GPU 1, Engine 3 | M | A recorded turn draws like the panel does today, in both sizes | |
-| ☑ | **GPU 3**: Input box | — | Click to focus / Esc to leave, multi-line, **Enter sends, Shift+Enter new line**, cursor + selection, copy/paste, undo, **`@` suggestions** while typing, attachment chip, Send/Stop, "edit in a native box" for IME, restart after opening a file | GPU 1 | M | Type, edit, `@` and send without the mouse; node/viewport shortcuts never fire while focused | |
-| ☑ | **GPU 4**: The Coworker editor | A3 | Register the "Coworker" editor type; one-click setup; full chat in the center; toolshelf icon actions (templates, explain, wizards); sidebar panels (session, model, plan); header | GPU 2, 3, Editors 1 | M | Pick "Coworker" in the Editor Type menu and chat | |
-| ☑ | **GPU 5**: Compact sidebars | A2 | **Done for the 3D View** (1.1.40; Preferences > Sidebar Chat switches back to Classic). The 3D View "Coworker" tab draws the compact chat (replaces today's sidebar drawing), then Node, VSE and Text editors; native scrolling list as fallback where painting misbehaves | GPU 2, 3 | M | Same conversation, same look in the editor and in four sidebars | |
+| ✅ | **GPU 0**: Spike | — | Prototype both sizes in Bforartists 5.3 with simulated typing | — | S | Go/no-go + screenshots | (this PR) |
+| ✅ | **GPU 1**: Toolkit | — | `ui_gpu/`: theme reader (colours, roundness, UI scale × zoom), fonts (UI + mono), text measuring and wrapping, boxes, buttons, hover/press, hit areas. Layout bpy-free and unit-tested; thin `gpu`/`blf` layer | — | M | A test page draws buttons and wrapped text in the default and a light theme | |
+| ✅ | **GPU 2**: Chat view | — | Turns from the chat state (your message, Workshop collapsible, tool rows, reply), our own markdown subset (bold, italic, code, lists, headings, links), code blocks with Copy (Run later), **icons first** (the native chat's icon vocabulary, full-colour Bforartists icons exported from its SVGs; keyframe-coloured heading markers), headings sized like 5.3's label_markdown, live streaming, follow the newest, scroll | GPU 1, Engine 3 | M | A recorded turn draws like the panel does today, in both sizes | |
+| ✅ | **GPU 3**: Input box | — | Click to focus / Esc to leave, multi-line, **Enter sends, Shift+Enter new line**, cursor + selection, copy/paste, undo, **`@` suggestions** while typing, attachment chip, Send/Stop, "edit in a native box" for IME, restart after opening a file | GPU 1 | M | Type, edit, `@` and send without the mouse; node/viewport shortcuts never fire while focused | |
+| ✅ | **GPU 4**: The Coworker editor | A3 | Register the "Coworker" editor type; one-click setup; full chat in the center; toolshelf icon actions (templates, explain, wizards); sidebar panels (session, model, plan); header | GPU 2, 3, Editors 1 | M | Pick "Coworker" in the Editor Type menu and chat | |
+| ✅ | **GPU 5**: Compact sidebars | A2 | **Done for the 3D View** (1.1.40; Preferences > Sidebar Chat switches back to Classic). The 3D View "Coworker" tab draws the compact chat (replaces today's sidebar drawing), then Node, VSE and Text editors; native scrolling list as fallback where painting misbehaves | GPU 2, 3 | M | Same conversation, same look in the editor and in four sidebars | |
 | ☐ | **GPU 6**: Guided flows | — | The same toolkit for question buttons (Chat 5), Explain answers (Chat 2) and step-by-step wizards in the chat | GPU 4 | M | A three-step wizard runs inside the chat | |
 

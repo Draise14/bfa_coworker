@@ -1025,7 +1025,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
     external_agent_preset: EnumProperty(  # type: ignore[valid-type]
         name="Agent",
-        description="The agent app on this computer that does the work in External Agent mode",
+        description=("The agent app on this computer that does the work in External Agent mode. "
+                     "You chat in Coworker; it uses your own login / subscription for that agent"),
         items=lambda self, _context: self._get_external_agent_items(),
         default=0,
     )
@@ -1048,8 +1049,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
     def _get_external_agent_items(self) -> list[tuple[str, str, str]]:
         from .acp_presets import PRESETS
         items = [(p.id, p.name + ("" if p.maturity == "supported" else " (preview)"),
-                  p.install_hint or p.name) for p in PRESETS]
-        items.append(("custom", "Custom Command", "Any agent that speaks ACP: give its command"))
+                  " ".join(x for x in (p.account, ("Needs: " + p.install_hint) if p.install_hint else "")
+                           if x)) for p in PRESETS]
+        items.append(("custom", "Custom Command",
+                      "Any other agent that speaks ACP (Agent Client Protocol): type the command that "
+                      "starts it in ACP mode"))
         return items
 
     harness_preset: EnumProperty(  # type: ignore[valid-type]

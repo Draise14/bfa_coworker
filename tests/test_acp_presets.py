@@ -167,3 +167,11 @@ class TestPresets(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAccounts(unittest.TestCase):
+
+    def test_every_preset_says_whose_account_it_uses(self):
+        for preset in ap.PRESETS:
+            self.assertTrue(preset.account, preset.id)
+            self.assertTrue(preset.account.startswith("Uses "), preset.id)

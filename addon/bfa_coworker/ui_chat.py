@@ -2271,6 +2271,51 @@ class BFACW_PT_chat_history(Panel):  # type: ignore[misc]
 _HISTORY_ROWS = 25
 
 
+class BFACW_OT_queue_item(Operator):  # type: ignore[misc]
+    """A queued message: send it next, edit it, delete it, or send it now"""
+    bl_idname = "bfacw.queue_item"
+    bl_label = "Queued Message"
+    bl_options = {'INTERNAL'}
+
+    action: EnumProperty(  # type: ignore[valid-type]
+        items=(("NEXT", "Next", "Move this message to the front: it goes right after the running turn"),
+               ("EDIT", "Edit", "Take it out of the queue and back into the input box to change it"),
+               ("DELETE", "Delete", "Take this message out of the queue"),
+               ("SEND", "Send Now", "Nothing is running: send this message now")),
+        options={'SKIP_SAVE'},
+    )
+    index: IntProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
+
+    @classmethod
+    def description(cls, _context, properties) -> str:
+        return {"NEXT": "Move this message to the front: it goes right after the running turn",
+                "EDIT": "Take it out of the queue and back into the input box to change it",
+                "DELETE": "Take this message out of the queue",
+                "SEND": "Nothing is running: send the next message now"}.get(properties.action, cls.__doc__)
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        agent = _is_external_agent(context) and _acp is not None
+        props = context.window_manager.bfacw_chat_props
+        if self.action == "NEXT":
+            ok = _acp.queue_to_front(self.index) if agent else agent_controller._message_queue.move_to_front(self.index)
+            if not ok:
+                return {"CANCELLED"}
+        elif self.action in ("EDIT", "DELETE", "SEND"):
+            taken = _acp.remove_queued(self.index) if agent else agent_controller._message_queue.remove(self.index)
+            if taken is None:
+                return {"CANCELLED"}
+            text = taken.text if agent else str(taken.get("message", ""))
+            mode = taken.chat_mode if agent else str(taken.get("chat_mode", "AGENT"))
+            if self.action == "EDIT":
+                props.chat_input = text
+            elif self.action == "SEND":
+                props.chat_mode = mode
+                props.chat_input = text
+                bpy.ops.bfacw.chat_send()
+        _redraw_areas(context)
+        return {"FINISHED"}
+
+
 class BFACW_OT_queue_clear(Operator):  # type: ignore[misc]
     """Clear all queued messages."""
     bl_idname = "bfacw.queue_clear"
@@ -4570,27 +4615,43 @@ class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
         queue_items = _queued_messages(context)
 
         if not queue_items:
-            layout.label(text="Queue empty", icon='CHECKMARK')
+            layout.label(text="Nothing waiting", icon='CHECKMARK')
+            sub = layout.row()
+            sub.scale_y = 0.75
+            sub.label(text="Send while a turn runs to queue the next message.")
             return
 
-        layout.label(
-            text="{:d} message(s) queued".format(len(queue_items)),
-            icon='FORWARD',
-        )
-
+        from .chat_history import relative_time
+        layout.label(text="Waiting to send ({:d})".format(len(queue_items)), icon='FORWARD')
+        hint = layout.column()
+        hint.scale_y = 0.75
+        _draw_multiline(hint, "They go one after another when the turn ends.")
+        modes = {ident: (name, icon) for ident, name, _d, icon, _n in CHAT_MODE_ITEMS}
         for idx, item in enumerate(queue_items):
-            msg = item.get("message", "")
-            mode = item.get("chat_mode", "AGENT")
-            preview = msg[:60] + ("..." if len(msg) > 60 else "")
+            msg = " ".join(str(item.get("message", "")).split())
+            name, icon = modes.get(item.get("chat_mode", "AGENT"), ("Coworker", 'GHOST_ENABLED'))
             box = layout.box()
-            hdr = box.row()
-            hdr.label(text="[{:d}] {:s}".format(idx + 1, mode), icon='SORTTIME')
-            _draw_multiline(box, preview)
+            head = box.row(align=True)
+            meta = "#{:d}  {:s}".format(idx + 1, name)
+            if item.get("queued_at"):
+                meta += "  \u00b7  " + relative_time(float(item["queued_at"]))
+            if item.get("attachments"):
+                meta += "  \u00b7  image"
+            head.label(text=meta, icon=icon)
+            if idx > 0:
+                op = head.operator("bfacw.queue_item", text="", icon='TRIA_UP', emboss=False)
+                op.action, op.index = "NEXT", idx
+            op = head.operator("bfacw.queue_item", text="", icon='GREASEPENCIL', emboss=False)
+            op.action, op.index = "EDIT", idx
+            op = head.operator("bfacw.queue_item", text="", icon='X', emboss=False)
+            op.action, op.index = "DELETE", idx
+            _draw_multiline(box, msg if len(msg) <= 240 else msg[:237] + "...")
 
-        # Clear button.
         row = layout.row(align=True)
-        row.scale_y = 1.0
-        row.operator("bfacw.queue_clear", icon="TRASH", text="Clear Queue")
+        if not state.is_thinking:
+            op = row.operator("bfacw.queue_item", text="Send Next Now", icon='PLAY')
+            op.action, op.index = "SEND", 0
+        row.operator("bfacw.queue_clear", icon="TRASH", text="Clear All")
 
 
 def _draw_window_link(layout: bpy.types.UILayout, prefs: "bpy.types.AddonPreferences") -> None:
@@ -5742,6 +5803,7 @@ _classes = (
     BFACW_OT_copy_session_log,
     BFACW_OT_copy_status_error,
     BFACW_OT_queue_clear,
+    BFACW_OT_queue_item,
     BFACW_OT_queue_show,
     BFACW_OT_mention_search,
     BFACW_OT_mention_insert,

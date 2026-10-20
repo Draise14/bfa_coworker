@@ -16,6 +16,7 @@ import bpy  # pylint: disable=import-error
 import os
 
 from . import mcp_to_blender_server
+from . import coworker_api  # noqa: F401  (Engine 6: the MCP server's plan / question / digest tools)
 from .preferences import _State, _BFACW_Preferences, BFACW_OT_pref_tab_select, BFACW_OT_copy_update_url
 from .operators_server import (
     _BFACW_OT_server_start,

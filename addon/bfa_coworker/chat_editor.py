@@ -641,6 +641,8 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
         props.chat_mode = value
     elif action == "approve":
         ops.agent_approve(choice=value)
+    elif action == "answer":
+        ops.agent_answer(choice=value)
     elif action == "native_edit" and surface is not None:
         input_capture.focus(surface.box, region)
         bpy.ops.bfacw.gpu_input_native("INVOKE_DEFAULT")

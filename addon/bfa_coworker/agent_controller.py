@@ -1287,6 +1287,10 @@ _SURFACE_TOOLS = frozenset({
     "get_objects_summary",
     "get_operation_history",      # Avoid repeating failed operations.
     "read_tool_output",           # Engine 9: the rest of a shortened result.
+    # Engine 6: shared with external agents (update_plan is the loop's own here).
+    "ask_user",                   # A question with buttons in the chat.
+    "get_scene_digest",           # Short scene summary; "unchanged" on repeat.
+    "update_plan",
     # Read-only asset/polyhaven status -- useful for any domain, was previously
     # unreachable because it appeared in no surface/domain set.
     "get_polyhaven_status",
@@ -3913,9 +3917,15 @@ def _list_tools_sync(port: int = _MCP_SERVER_DEFAULT_PORT, operating_mode: str =
 # LLM conversation loop (synchronous, called from timer)
 
 def _mcp_tools_to_openai(mcp_tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Convert MCP tool metadata to OpenAI ``tools`` format."""
+    """Convert MCP tool metadata to OpenAI ``tools`` format.
+
+    The server's ``update_plan`` and ``load_tools`` are for external agents; the
+    turn loop has its own (intercepted, never forwarded), so they're left out
+    here and each name stays unique."""
     result = []
     for t in mcp_tools:
+        if t.get("name") in ("update_plan", "load_tools"):
+            continue
         result.append({
             "type": "function",
             "function": {

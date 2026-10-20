@@ -359,6 +359,9 @@ def draw_external_agent_setup(layout, context, compact: bool = False) -> None:
         opt.enabled = not state.mcp_server_running
         opt.prop(prefs, "external_agent_only_coworker_tools")
         opt.prop(prefs, "external_agent_ask_coworker_tools")
+        tools = box.row()
+        tools.enabled = not state.mcp_server_running
+        tools.prop(prefs, "external_agent_tools_on_demand")
         if preset.docs_url:
             box.operator("wm.url_open", text="{:s} docs".format(preset.name), icon='URL').url = preset.docs_url
 
@@ -2790,6 +2793,9 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         entry = agent_controller.build_mcp_server_entry(
             blender_host=prefs.host, blender_port=bridge_port,
             use_blender_python=getattr(prefs, "use_blender_python_for_harness", True))
+        if getattr(prefs, "external_agent_tools_on_demand", True):
+            # Engine 7: the server lists the basic tools; load_tools adds the rest.
+            entry["env"] = dict(entry.get("env") or {}, BFACW_TOOLS_ON_DEMAND="1")
         only_ours = getattr(prefs, "external_agent_only_coworker_tools", True)
         env = acp_presets.launch_env(preset, only_coworker_tools=only_ours)
         engine.only_coworker_tools = only_ours

@@ -81,6 +81,12 @@ def main() -> int:
         if hasattr(mod, "register"):
             mod.register(mcp)
 
+    # Engine 7: for agents that can follow a changing tool list (Coworker's External
+    # Agent sets this), list the surface tools only; load_tools adds a domain's.
+    if os.environ.get("BFACW_TOOLS_ON_DEMAND") == "1":
+        from blmcp import tool_domains
+        tool_domains.enable_on_demand(mcp)
+
     transport = args.transport
     if _USE_HTTP_SUPPORT and transport == "http":
         # pylint: disable-next=import-error,no-name-in-module

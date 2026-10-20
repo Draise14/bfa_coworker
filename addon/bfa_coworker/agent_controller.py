@@ -1289,8 +1289,9 @@ _SURFACE_TOOLS = frozenset({
     "read_tool_output",           # Engine 9: the rest of a shortened result.
     # Engine 6: shared with external agents (update_plan is the loop's own here).
     "ask_user",                   # A question with buttons in the chat.
-    "get_scene_digest",           # Short scene summary; "unchanged" on repeat.
+    "get_scene_digest",           # Short scene summary; says unchanged on repeat.
     "update_plan",
+    "load_tools",                 # Engine 7: the server's own, for agents (the loop has its own).
     # Read-only asset/polyhaven status -- useful for any domain, was previously
     # unreachable because it appeared in no surface/domain set.
     "get_polyhaven_status",

@@ -83,9 +83,13 @@ def _source_tool_definitions() -> dict[str, dict[str, object]]:
             )
             if not is_tool:
                 continue
-            arg_names = [arg.arg for arg in node.args.args]
-            required_count = len(arg_names) - len(node.args.defaults)
-            required_names = arg_names[:required_count]
+            # FastMCP injects a ``Context`` argument; it isn't part of the schema.
+            def _is_context(arg: ast.arg) -> bool:
+                return isinstance(arg.annotation, ast.Name) and arg.annotation.id == "Context"
+            all_args = node.args.args
+            required_count = len(all_args) - len(node.args.defaults)
+            arg_names = [arg.arg for arg in all_args if not _is_context(arg)]
+            required_names = [arg.arg for arg in all_args[:required_count] if not _is_context(arg)]
             tool_defs[node.name] = {
                 "args": arg_names,
                 "required": required_names,

@@ -88,5 +88,32 @@ class TestToolCoverage(unittest.TestCase):
         )
 
 
+class TestServerDomainsMatchTheLoop(unittest.TestCase):
+    """Engine 7: the server's tools-on-demand sets are the local loop's."""
+
+    def test_same_sets(self):
+        import ast as _ast
+        text = _AC.read_text(encoding="utf-8")
+        surface = _quoted_names(_region(text, "_SURFACE_TOOLS = frozenset({", "})"))
+        src = (Path(__file__).resolve().parents[1] / "mcp" / "blmcp" / "tool_domains.py").read_text(encoding="utf-8")
+        tree = _ast.parse(src)
+        values = {}
+        for node in tree.body:
+            if isinstance(node, (_ast.Assign, _ast.AnnAssign)):
+                target = node.targets[0] if isinstance(node, _ast.Assign) else node.target
+                values[target.id] = node.value
+        server_surface = {c.value for c in _ast.walk(values["SURFACE"]) if isinstance(c, _ast.Constant)}
+        # The loop's own (not MCP tools) aren't in the server's set.
+        self.assertEqual(server_surface, surface - {"execute_blender_plan", "list_blender_templates"})
+        domains_block = _region(text, "_TOOL_DOMAINS: dict[str, frozenset[str]] = {", "_DOMAIN_KEYWORDS")
+        loop = {}
+        server = {k.value: {c.value for c in _ast.walk(v) if isinstance(c, _ast.Constant)}
+                  for k, v in zip(values["DOMAINS"].keys, values["DOMAINS"].values)}
+        for domain, names in server.items():
+            block = _region(domains_block, '"{:s}": frozenset({{'.format(domain), "})")
+            loop[domain] = _quoted_names(block) - {domain}
+        self.assertEqual(server, loop)
+
+
 if __name__ == "__main__":
     unittest.main()

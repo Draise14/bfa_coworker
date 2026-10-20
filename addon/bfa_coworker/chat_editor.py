@@ -112,7 +112,7 @@ def _status(context: Any) -> TopBar:
     props = _props()
     if _is_harness(prefs):
         running = mcp_to_blender_server.is_running()
-        return TopBar(mode_label="External MCP", mode_icon="WORLD",
+        return TopBar(mode_label="External MCP", mode_icon=_mode_icon("EXTERNAL_HARNESS"),
                       status="Bridge Running" if running else "Bridge Offline",
                       status_icon="CHECKMARK" if running else "CANCEL",
                       running=running, start_label="Start Bridge")
@@ -126,7 +126,8 @@ def _status(context: Any) -> TopBar:
                                                ui_chat._fmt_duration(elapsed))
         icon = ("SORTTIME" if state.is_thinking else "CHECKMARK" if running
                 else "TIME" if engine is not None and engine.connecting else "CANCEL")
-        return TopBar(mode_label="External Agent", mode_icon="LINKED", status=status, status_icon=icon,
+        return TopBar(mode_label="External Agent", mode_icon=_mode_icon("EXTERNAL_AGENT"), status=status,
+                      status_icon=icon,
                       running=running, start_label="Connect",
                       chat_modes=tuple((item[0], item[1], item[3]) for item in CHAT_MODE_ITEMS),
                       chat_mode=getattr(props, "chat_mode", ""))
@@ -143,10 +144,17 @@ def _status(context: Any) -> TopBar:
     ok = state.mcp_server_running
     icon = ("CHECKMARK" if ok and not state.is_thinking and not state.error else
             "SORTTIME" if state.is_thinking else "ERROR" if state.error else "CANCEL")
-    return TopBar(mode_label="Local LLM" if local else "Remote API", mode_icon="CONSOLE" if local else "URL",
+    return TopBar(mode_label="Local LLM" if local else "Remote API",
+                  mode_icon=_mode_icon("LOCAL_LLM" if local else "REMOTE_API"),
                   status=status, status_icon=icon, running=ok, error=bool(state.error),
                   chat_modes=tuple((item[0], item[1], item[3]) for item in CHAT_MODE_ITEMS),
                   chat_mode=getattr(props, "chat_mode", ""))
+
+
+def _mode_icon(mode: str) -> str:
+    """The mode's icon, as on its tab (OPERATING_MODE_ITEMS): one icon per mode everywhere."""
+    from .shared import OPERATING_MODE_ITEMS
+    return next((item[3] for item in OPERATING_MODE_ITEMS if item[0] == mode), "DOT")
 
 
 def _harness_notice(prefs: Any) -> Notice:
@@ -764,7 +772,7 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
     elif action == "answer":
         ops.agent_answer(choice=value)
     elif action == "mode_menu":
-        bpy.ops.wm.call_menu(name="BFACW_MT_operating_mode")
+        bpy.ops.wm.call_panel(name="BFACW_PT_mode_popover", keep_open=True)     # #235
     elif action == "revert_turn":
         ops.revert_turn()
     elif action == "native_edit" and surface is not None:
@@ -1015,7 +1023,8 @@ def _draw_header(self: Any, context: Any) -> None:
         layout.prop(props, "chat_mode", expand=True)
         layout.separator()
     status = layout.row(align=True)
-    status.label(text=info.mode_label, icon=info.mode_icon)
+    # The mode opens the same popover as the sidebar chat's mode button (#235).
+    status.popover("BFACW_PT_mode_popover", text=info.mode_label, icon=info.mode_icon)
     status.label(text=info.status[:60], icon=info.status_icon)
     if info.error:
         status.operator("bfacw.copy_status_error", text="", icon="COPYDOWN")

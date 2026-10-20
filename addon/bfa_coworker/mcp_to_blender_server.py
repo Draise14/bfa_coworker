@@ -1270,7 +1270,23 @@ def _execute_code_from_request(
     if _should_log_request():
         print("request:\n{:s}".format(code), file=sys.stderr)
     _started = time.monotonic()
-    exec_result = _execute_code(code, strict_json=strict_json)
+    # Engine 5 (#166): a risky step asks first (opt-in); the answer comes back deferred.
+    _risky = ""
+    try:
+        import bpy as _bpy  # pylint: disable=import-error
+        if getattr(_bpy.context.preferences.addons[__package__].preferences, "ask_before_risky_steps", False):
+            from . import risky_steps
+            _risky = risky_steps.reason(code)
+    except (KeyError, AttributeError):
+        _risky = ""
+    if _risky:
+        from . import risky_steps
+        _response, _check = risky_steps.wrap(
+            code, strict_json, _risky, lambda c, s: _execute_code(c, strict_json=s),
+            tool=str(request.get("tool") or ""))
+        exec_result = _ExecResult(_response, _check)
+    else:
+        exec_result = _execute_code(code, strict_json=strict_json)
     # Agent 9: what ran, for the activity view (External Harness) and Copy Log.
     try:
         from . import activity

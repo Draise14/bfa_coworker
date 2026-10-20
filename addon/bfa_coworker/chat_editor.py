@@ -677,6 +677,8 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
         ops.agent_approve(choice=value)
     elif action == "answer":
         ops.agent_answer(choice=value)
+    elif action == "mode_menu":
+        bpy.ops.wm.call_menu(name="BFACW_MT_operating_mode")
     elif action == "revert_turn":
         ops.revert_turn()
     elif action == "native_edit" and surface is not None:

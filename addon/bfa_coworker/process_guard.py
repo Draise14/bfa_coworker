@@ -68,6 +68,8 @@ _GENERIC_MARKERS = ("python",)
 _KIND_MARKERS = {
     "llama-server": ("llama-server",),
     "mcp-server": ("python", "blmcp", "bfa-coworker-mcp", "bfa_coworker"),
+    # External Agent apps (often a node script behind an npm shim).
+    "acp-agent": ("node", "opencode", "claude", "codex", "gemini", "copilot", "acp"),
 }
 
 

@@ -41,6 +41,23 @@ a compact sidebar chat) plus groundwork for the External Agent mode.
 - In **External Harness** mode both show a card (the chat runs in your MCP client) with Start / Stop Bridge, Copy Config and Configure.
 - **External Agent mode (preview, #93).** Chat in Coworker while an agent app on your computer does the work with Coworker's Blender tools: **OpenCode** (tested), Claude Code, Codex, Gemini or Copilot (preview), or any ACP agent through *Custom Command*. Pick the agent in the chat's controls and press **Start**; the chat says what's missing if it isn't installed. Send, Queue, Stop, images and Ask mode work as in the other modes, and the agent's thinking, tool steps (with the code it ran) and reply appear in the same chat. The agent may only use Coworker's tools -- its own shell and file edits are refused. Each message carries one line about your scene.
 
+- **External Agent, finished (#93).** Everything below works with Claude Code (checked live) and OpenCode:
+  - **Approvals in the chat:** when the agent asks before a tool, a card above the input says who wants to run what, with *Allow once*, *Always* (until you stop the agent) or *Deny*. *Ask Before Blender Tools Too* asks for Coworker's own tools as well.
+  - **Resume:** reopen Bforartists and press Start -- the chat comes back and the agent continues the same conversation. *New Thread* gives it a fresh one.
+  - **Mode, Model, Effort** dropdowns from the agent itself (remembered per agent), and the agent's own **/ commands** when you type `/`.
+  - **Setup you can follow:** version, location, whose account it uses, Install / Update / Remove.
+  - **Hardening:** the agent closes with Bforartists even on a crash; login errors say how to log in; a crash shows the agent's last output; a Stop it ignores closes it after 10 s.
+  - A reply is headed with the agent's name ("Claude Code").
+- **New Coworker tools for every engine:** `ask_user` (a question with buttons in the chat), `update_plan` (Goal & Plan), `get_scene_digest` (a short scene summary; "unchanged" on repeat), `read_tool_output`, `load_tools`.
+- **Revert a turn.** Every turn is one undo step; the Undo button on the last reply undoes it (only while you haven't changed the scene since).
+- **External Harness activity view:** the card lists every tool call your outside client made in Blender, live (ok / error, time, a preview), with *Copy Log*.
+- **Benchmarks on every engine:** run them on the External Agent too; each run records its engine, and Compare shows every engine side by side.
+
+### Changed
+
+- **Short tool results:** a result over ~8000 characters arrives as a short preview with a handle (`read_tool_output` reads the rest) -- on every engine.
+- **Tools on demand** for the External Agent (*Load Tools When Needed*, on by default): the basic tools first, the specialised ones when it asks. About 8K fewer tokens per request.
+
 ### Security
 
 - **Web pages can no longer run code in Blender (#123).** Coworker's local servers only listen on your own computer, but your browser can reach them too, and the MCP server's HTTP mode accepted requests from any web page. Every request now has to carry a private session token, a small file only your own programs can read (`%LOCALAPPDATA%\bfa_coworker\session_token` on Windows, `~/.cache/bfa_coworker/session_token` elsewhere). Coworker, its MCP server and the External Harness launcher send it automatically, so existing client configs keep working. *Settings > Advanced > Bridge Server > Require Session Token* (on by default) turns the check off for a tool of your own that can't send it.
@@ -51,6 +68,9 @@ a compact sidebar chat) plus groundwork for the External Agent mode.
 - **Node tools work with the compositor on 5.x.** `get_active_node_tree`, `wire_node_group`, `load_asset_in_context` and the usage summary read `scene.node_tree`, which no longer exists; they now use the scene's compositor node group. A read never creates or enables a node tree any more.
 - **`list_blender_templates` works.** It crashed in every setup; the templates now live with the MCP server.
 - Skills and generated code no longer set the deprecated `use_nodes = True`; new materials and worlds always have a node tree.
+
+- **Quitting no longer wipes the saved chat** (every mode): it was saved after the add-on's cleanup had emptied it.
+- **Benchmark results are saved again:** a finished suite was never written. They now live in your data folder (`%LOCALAPPDATA%/bfa_coworker/benchmark_results.json`).
 
 ### Changed
 

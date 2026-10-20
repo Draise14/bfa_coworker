@@ -120,6 +120,28 @@ class TestLayout(unittest.TestCase):
         self.assertIn("attach_menu", ids)
         self.assertNotIn("attach_screen", ids)          # a thin box keeps just the picker
 
+    def test_icon_only_buttons_are_square(self):
+        # #238, at three widths (editor, sidebar, thin sidebar); thumbnails are not buttons.
+        icon_only = ("attach_menu", "attach_render", "attach_screen", "attach_pin", "attach_remove", "tool:",
+                     "prefs", "open_editor", "mode_menu", "jump", "revert_turn", "copy")
+        for compact, width in ((False, 900), (True, 300), (True, 150)):
+            surface = sf.ChatSurface(compact=compact)
+            surface.tools = (("new_thread", "ADD"), ("attach_menu", "IMAGE_DATA"))
+            surface.box.attachment = "ref.png"
+            surface.view.revertable = True
+            surface.view.scroll = 500.0
+            top = sf.TopBar(mode_label="Local", mode_icon="CONSOLE", status="Ready", status_icon="CHECKMARK")
+            hist = _history() * 6 + [{"role": "user", "content": "x", "turn_start": True},
+                                     {"role": "assistant", "content": "Done.\n```python\nx=1\n```"}]
+            canvas = lay.Canvas(st.Style(), lay.fixed_measure(0.55), surface.interaction())
+            surface.draw(canvas, lay.Rect(0, 0, width, 900), hist, top=top if compact else None)
+            ids = [w for _r, w in canvas.hit_areas]
+            bad = [(w, r.w, r.h) for r, w in canvas.hit_areas
+                   if (w.startswith(icon_only) or (w in ("send", "stop") and surface.box._narrow))
+                   and abs(r.w - r.h) > 0.5]
+            self.assertEqual(bad, [], (compact, width))
+            self.assertTrue(any(w.startswith("copy") for w in ids))
+
     def test_tooltip_after_the_mouse_rests(self):
         # #237: a resting mouse over a button shows its tooltip after TIP_DELAY, not before.
         now = [100.0]

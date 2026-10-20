@@ -342,11 +342,11 @@ class ChatSurface:
         row = Rect(rect.x + pad, rect.top - pad - u, rect.w - 2 * pad, u)
         side = canvas.icon_size()
         # The mode icon is a button: it opens the mode menu (#193).
-        if canvas.button(Rect(row.x - pad * 0.25, row.y, side + pad * 0.5, u), "mode_menu", "",
+        if canvas.button(Rect(row.x - pad * 0.25, row.y, u, u), "mode_menu", "",          # square (#238)
                          icon=top.mode_icon):
             actions.append(("mode_menu", ""))
-        # Buttons from the right: settings, open the editor, Start/Stop.
-        bw = u * 1.15
+        # Buttons from the right: settings, open the editor, Start/Stop (square icons: #238).
+        bw = u
         x = row.right
         for widget_id, icon, label in (("prefs", "PREFERENCES", ""), ("open_editor", "FULLSCREEN_ENTER", "")):
             x -= bw
@@ -363,7 +363,7 @@ class ChatSurface:
                          icon="X" if top.running else "PLAY"):
             actions.append((running_id, ""))
         # Status, clipped to the room that's left.
-        sx = row.x + side + pad
+        sx = row.x + u + pad * 0.5
         room = x - pad - sx
         canvas.icon(Rect(sx, row.y + (u - side) / 2, side, side), top.status_icon,
                     style.text if not top.error else (0.92, 0.40, 0.33, 1.0))
@@ -422,7 +422,7 @@ class ChatSurface:
         canvas.hit_areas.append((picture, "img:" + name))
         if canvas.state.clicked == "img:" + name:
             actions.append(("open_image", name))
-        bw = u * 1.15
+        bw = u                               # square icon buttons (#238)
         remove = Rect(tray.right - pad - bw, tray.y + (tray.h - u) / 2, bw, u)
         pin = Rect(remove.x - pad * 0.5 - bw, remove.y, bw, u)
         if canvas.button(pin, "attach_pin", "", active=self.attachment_pinned,

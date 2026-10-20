@@ -2625,12 +2625,72 @@ def approval_card():
     from . import coworker_api
     open_question = coworker_api.current_question()
     if open_question is None:
-        return None
+        return _plan_card()
     _qid, q = open_question
     note = ("Pick one, or type your answer and press Enter" if q["choices"] and q["allow_text"] else
             "Pick one" if q["choices"] else "Type your answer and press Enter")
     return Approval(title=q["question"], note=note, action="answer", icon="INFO",
                     buttons=tuple(("c{:d}".format(i), choice, "") for i, choice in enumerate(q["choices"])))
+
+
+# The Plan card (#241): after a Plan turn wrote a plan, carry it out or keep refining.
+_PLAN_CARD = {"dismissed": ""}
+
+
+def _plan_key() -> str:
+    from . import session_memory as _sm
+    with _sm.store_lock:
+        goal = _sm.store.goal
+        return "|".join([goal.session_goal, goal.turn_goal] + [str(s.get("text", "")) for s in goal.steps])
+
+
+def _plan_card():
+    """A plan just made in Plan mode: Start the Plan / Keep Refining (None otherwise)."""
+    from .ui_gpu.surface import Approval
+    from . import session_memory as _sm
+    state = agent_controller._agent_state
+    try:
+        props = bpy.context.window_manager.bfacw_chat_props
+    except AttributeError:
+        return None
+    history = state.conversation_history
+    if (props.chat_mode != "PLAN" or state.is_thinking or not history
+            or history[-1].get("role") != "assistant"):
+        return None
+    with _sm.store_lock:
+        done, total = _sm.store.goal.progress()
+    if not total or done >= total or _plan_key() == _PLAN_CARD["dismissed"]:
+        return None
+    return Approval(title="The plan is ready: {:d} step{:s}".format(total, "" if total == 1 else "s"),
+                    note="Start it now (Coworker mode, with this engine), or say what should change",
+                    action="plan_card", icon="LINENUMBERS_ON",
+                    buttons=(("start", "Start the Plan", "PLAY"), ("refine", "Keep Refining", "GREASEPENCIL")))
+
+
+class BFACW_OT_plan_card(Operator):  # type: ignore[misc]
+    """The Plan card's buttons: start the plan, or keep refining it"""
+    bl_idname = "bfacw.plan_card"
+    bl_label = "Plan"
+    bl_options = {'INTERNAL'}
+
+    choice: EnumProperty(  # type: ignore[valid-type]
+        items=(("start", "Start the Plan", "Carry out the plan now, step by step (Coworker mode)"),
+               ("refine", "Keep Refining", "Hide this card and type what should change in the plan")),
+        options={'SKIP_SAVE'},
+    )
+
+    @classmethod
+    def description(cls, _context, properties) -> str:
+        return {"start": "Carry out the plan now, step by step (Coworker mode, with the engine that is on)",
+                "refine": "Hide this card and type what should change; the plan stays in Plan mode"}.get(
+                    properties.choice, cls.__doc__)
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        _PLAN_CARD["dismissed"] = _plan_key()
+        _redraw_areas(context)
+        if self.choice == "start":
+            return bpy.ops.bfacw.plan_execute()
+        return {"FINISHED"}
 
 
 _TURN_SEEN = [False]      # was a turn running at the last timer tick (Engine 6b)
@@ -2714,7 +2774,7 @@ def draw_approval_box(layout: bpy.types.UILayout) -> None:
     col = box.column(align=True)
     col.scale_y = 1.3
     row = col.row(align=True) if len(card.buttons) <= 3 else col
-    op_id = "bfacw.agent_approve" if card.action == "approve" else "bfacw.agent_answer"
+    op_id = {"approve": "bfacw.agent_approve", "plan_card": "bfacw.plan_card"}.get(card.action, "bfacw.agent_answer")
     for button_id, label, icon in card.buttons:
         row.operator(op_id, text=label, icon=icon or 'NONE').choice = button_id
 
@@ -6235,6 +6295,7 @@ _classes = (
     BFACW_PT_chat_queue,
     BFACW_PT_chat_plan,
     BFACW_OT_plan_execute,
+    BFACW_OT_plan_card,
     BFACW_PT_mode_popover,
     BFACW_PT_chat_history,
     BFACW_OT_chat_open,

@@ -209,12 +209,14 @@ class TestWorkshopExpandAndFold(unittest.TestCase):
         self.assertGreater(thinking, workshop)         # the Thinking box above the Workshop...
         self.assertGreater(workshop, reply)            # ...and the streaming reply under it
         widgets = [w for _r, w in c.hit_areas]
-        self.assertIn("fold_thinking", widgets)
-        view.thinking_folded = True
+        self.assertIn("fold_workshop", widgets)                 # #196: it folds the Workshop
+        _c, actions = self._draw(view, hist, live=_LiveThinking(), clicked="fold_workshop")
+        self.assertIn(("toggle", "t0"), actions)
+        view.expanded.add("t0")
         c, _ = self._draw(view, hist, live=_LiveThinking())
         texts = " ".join(cmd.text for cmd in c.commands if cmd.kind == "text")
-        self.assertNotIn("three spheres", texts)
-        self.assertIn("thinking hidden", texts)
+        self.assertIn("spheres", texts)                          # the Thinking box always shows
+        self.assertIn("execute_blender_code", texts)             # the Workshop is open now
 
     def test_long_thinking_entry_expands(self):
         view = cv.ChatView()

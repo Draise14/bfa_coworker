@@ -235,8 +235,6 @@ class ChatSurface:
                 self.view.expanded.symmetric_difference_update({value})
             elif action == "jump":
                 self.view.scroll = 0.0
-            elif action == "fold_thinking":
-                self.view.thinking_folded = not self.view.thinking_folded
             else:
                 out.append((action, value))
         return out

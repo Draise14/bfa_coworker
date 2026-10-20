@@ -80,9 +80,10 @@ class TestMemoryAndCheckpoints(unittest.TestCase):
         self.assertEqual(_SRC.count('bl_parent_id = "BFACW_PT_chat_session"'), 2)
 
     def test_goal_and_plan_have_their_own_panel_under_queue(self):
-        """#171 / #201: Chat, Actions, Queue, Plan (open), then Session and Status (closed)."""
+        """#212: the sidebar is Queue, Plan, Chat, History, Status, Coworker; Session sits in Status."""
         import re
         self.assertNotIn('bl_idname = "BFACW_PT_chat_session_goal"', _SRC)
+        self.assertNotIn('bl_idname = "BFACW_PT_chat_actions"', _SRC)
         chat = _SRC[_SRC.index("class BFACW_PT_chat_panel("):_SRC.index("def _draw_chat_history")]
         self.assertNotIn("_draw_goal_plan_inline(layout)", chat)
 
@@ -91,12 +92,12 @@ class TestMemoryAndCheckpoints(unittest.TestCase):
             block = _SRC[start:_SRC.index("\n\n", start)]
             order = int(re.search(r"bl_order = (\d+)", block).group(1))
             return order, "DEFAULT_CLOSED" in block
-        queue, plan, history = panel("BFACW_PT_chat_queue"), panel("BFACW_PT_chat_plan"), panel("BFACW_PT_chat_history")
-        session, status = panel("BFACW_PT_chat_session"), panel("BFACW_PT_chat_status")
-        actions = panel("BFACW_PT_chat_actions")
-        self.assertEqual(actions, (1, False))
-        self.assertEqual([queue[0], plan[0], history[0], session[0], status[0]], [2, 3, 4, 5, 6])
-        self.assertEqual([queue[1], plan[1], history[1], session[1], status[1]], [False, False, True, True, True])
+        names = ("queue", "plan", "compact", "history", "status", "controls")
+        got = [panel("BFACW_PT_chat_" + n) for n in names]
+        self.assertEqual([g[0] for g in got], [0, 1, 2, 3, 4, 5])
+        self.assertEqual([g[1] for g in got], [False, True, False, True, True, True])
+        session = _SRC[_SRC.index('bl_idname = "BFACW_PT_chat_session"'):]
+        self.assertIn('bl_parent_id = "BFACW_PT_chat_status"', session[:400])
 
 
 if __name__ == "__main__":

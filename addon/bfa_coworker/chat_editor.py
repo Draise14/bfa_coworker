@@ -1150,10 +1150,12 @@ def _poll_outside_coworker(fn: Any, inherited: Any = None) -> Any:
 def _editor_copies() -> list[type]:
     """The 3D View's Session / Queue / Status panels, registered again for this editor."""
     from . import ui_chat
-    sources = (ui_chat.BFACW_PT_chat_session, ui_chat.BFACW_PT_chat_session_context,
-               ui_chat.BFACW_PT_chat_session_memory, ui_chat.BFACW_PT_chat_actions, ui_chat.BFACW_PT_chat_queue,
-               ui_chat.BFACW_PT_chat_plan,
-               ui_chat.BFACW_PT_chat_history, ui_chat.BFACW_PT_chat_status)
+    sources = (ui_chat.BFACW_PT_chat_queue, ui_chat.BFACW_PT_chat_plan, ui_chat.BFACW_PT_chat_history,
+               ui_chat.BFACW_PT_chat_status, ui_chat.BFACW_PT_chat_session, ui_chat.BFACW_PT_chat_session_context,
+               ui_chat.BFACW_PT_chat_session_memory)
+    # The editor's own order and open state (#212); the sidebar's differ.
+    layout = {"BFACW_PT_chat_queue": (1, set()), "BFACW_PT_chat_plan": (2, set()),
+              "BFACW_PT_chat_history": (3, set()), "BFACW_PT_chat_status": (4, {"DEFAULT_CLOSED"})}
     ids = {cls.bl_idname: cls.bl_idname.replace("BFACW_PT_chat_", "BFACW_PT_editor_") for cls in sources}
     out = []
     for cls in sources:
@@ -1165,6 +1167,8 @@ def _editor_copies() -> list[type]:
         for name in ("bl_options", "bl_order"):
             if hasattr(cls, name):
                 attrs[name] = getattr(cls, name)
+        if cls.bl_idname in layout:
+            attrs["bl_order"], attrs["bl_options"] = layout[cls.bl_idname]
         for name in ("draw", "draw_header"):
             if name in cls.__dict__:
                 attrs[name] = cls.__dict__[name]

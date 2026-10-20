@@ -68,7 +68,7 @@ from . import llm_manager
 from . import mcp_to_blender_server
 from .engine import EngineCaps, Prompt
 from .engine_loop import LoopConfig, LoopEngine
-from .shared import effective_ports, CHAT_MODE_ITEMS
+from .shared import effective_ports, CHAT_MODE_ITEMS, OPERATING_MODE_ITEMS
 
 
 # The engine behind the chat for Local LLM / Remote API (Tier 4i.1b).  Created
@@ -1923,7 +1923,8 @@ def _save_chat_history() -> None:
             _save_session_memory_state()
             # Chat 7: the chat list knows it (title, when, engine, .blend).
             _chat_index().touch(_CHAT["id"], agent_controller._agent_state.conversation_history,
-                                blend=_CHAT["blend"], engine=_chat_engine_label())
+                                blend=_CHAT["blend"], engine=_chat_engine_label(),
+                                blend_path=bpy.data.filepath, mode=_operating_mode())
         except OSError:
             pass
 
@@ -2135,6 +2136,22 @@ class BFACW_OT_chat_clear(Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
+def _operating_mode() -> str:
+    try:
+        return bpy.context.preferences.addons[__package__].preferences.operating_mode
+    except (AttributeError, KeyError):
+        return ""
+
+
+def _history_mode(entry: dict) -> str:
+    """Where a chat ran, as an operating mode (older entries only kept the engine's name)."""
+    if entry.get("mode"):
+        return str(entry["mode"])
+    engine = str(entry.get("engine") or "")
+    return {"Local": "LOCAL_LLM", "Remote": "REMOTE_API", "External Harness": "EXTERNAL_HARNESS",
+            "": ""}.get(engine, "EXTERNAL_AGENT")
+
+
 def _chat_engine_label() -> str:
     """Which engine this chat runs on, for the History list."""
     try:
@@ -2166,6 +2183,62 @@ def _reset_for_chat_switch() -> None:
     agent_controller._reset_session_domains()
     agent_controller.clear_session_scene_lock()
     agent_controller._clear_system_prompt_cache()
+
+
+class BFACW_OT_chat_where(Operator):  # type: ignore[misc]
+    """Where this chat ran"""
+    bl_idname = "bfacw.chat_where"
+    bl_label = "Where It Ran"
+    bl_options = {'INTERNAL'}
+
+    engine: StringProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
+
+    @classmethod
+    def description(cls, _context, properties) -> str:
+        return "This chat ran on {:s}".format(properties.engine) if properties.engine else cls.__doc__
+
+    def execute(self, _context: bpy.types.Context) -> set[str]:
+        return {"CANCELLED"}          # just the icon and its tooltip
+
+
+class BFACW_OT_chat_open_blend(Operator):  # type: ignore[misc]
+    """Open the .blend this chat was in and continue the chat there (Blender asks to save your changes first)"""
+    bl_idname = "bfacw.chat_open_blend"
+    bl_label = "Open the Chat's .blend"
+    bl_options = {'INTERNAL'}
+
+    chat_id: StringProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return not agent_controller._agent_state.is_thinking
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        index = _chat_index()
+        entry = index.get(self.chat_id)
+        path = str((entry or {}).get("blend_path") or "")
+        if not path or not os.path.isfile(path):
+            self.report({"WARNING"}, "That .blend isn't there any more")
+            return {"CANCELLED"}
+        if agent_controller._agent_state.conversation_history:
+            _save_chat_history()
+        index.set_last_for_blend(Path(path).stem, self.chat_id)      # the file then continues this chat
+        chat_id = self.chat_id
+
+        @bpy.app.handlers.persistent
+        def continue_chat(*_args) -> None:
+            # Once: continue the chat as soon as that file is in (a cancelled open just ends it).
+            if continue_chat in bpy.app.handlers.load_post:
+                bpy.app.handlers.load_post.remove(continue_chat)
+            if os.path.normcase(bpy.data.filepath) != os.path.normcase(path):
+                return
+            _reset_for_chat_switch()
+            _CHAT["id"], _CHAT["blend"] = chat_id, _blend_key()
+            _restore_chat_history()
+            _tag_chat_regions_redraw()
+        bpy.app.handlers.load_post.append(continue_chat)
+        bpy.ops.wm.open_mainfile("INVOKE_DEFAULT", filepath=path)
+        return {"FINISHED"}
 
 
 class BFACW_OT_chat_open(Operator):  # type: ignore[misc]
@@ -2325,14 +2398,21 @@ class BFACW_PT_chat_history(Panel):  # type: ignore[misc]
             op.chat_id = entry["id"]
             head.operator("bfacw.chat_rename", text="", emboss=False, icon='GREASEPENCIL').chat_id = entry["id"]
             head.operator("bfacw.chat_delete", text="", emboss=False, icon='TRASH').chat_id = entry["id"]
-            meta = [relative_time(float(entry.get("updated", 0)))]
-            if entry.get("engine"):
-                meta.append(str(entry["engine"]))
+            # Where it ran, as the mode's icon (the name in its tooltip); its .blend, with Open (#239).
+            sub = box.row(align=True)
+            sub.scale_y = 0.8
+            mode = _history_mode(entry)
+            icon = next((item[3] for item in OPERATING_MODE_ITEMS if item[0] == mode), 'BLANK1')
+            sub.operator("bfacw.chat_where", text="", icon=icon, emboss=False).engine = str(entry.get("engine") or "")
+            sub.label(text=relative_time(float(entry.get("updated", 0))))
             if entry.get("blend"):
-                meta.append(str(entry["blend"]) + ".blend")
-            sub = box.row()
-            sub.scale_y = 0.7
-            sub.label(text="  \u00b7  ".join(meta))
+                sub.label(text=str(entry["blend"]), icon='FILE_BLEND')     # the icon says ".blend"
+                path = str(entry.get("blend_path") or "")
+                here = bool(bpy.data.filepath) and os.path.normcase(path) == os.path.normcase(bpy.data.filepath)
+                if path and not here:
+                    open_row = sub.row(align=True)
+                    open_row.enabled = os.path.isfile(path)
+                    open_row.operator("bfacw.chat_open_blend", text="Open", icon='FILEBROWSER').chat_id = entry["id"]
         if len(entries) > _HISTORY_ROWS:
             layout.label(text="{:d} more: search to find them".format(len(entries) - _HISTORY_ROWS))
 
@@ -6158,6 +6238,8 @@ _classes = (
     BFACW_PT_mode_popover,
     BFACW_PT_chat_history,
     BFACW_OT_chat_open,
+    BFACW_OT_chat_where,
+    BFACW_OT_chat_open_blend,
     BFACW_OT_chat_new,
     BFACW_OT_chat_rename,
     BFACW_OT_chat_pin,

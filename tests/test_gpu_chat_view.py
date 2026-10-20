@@ -227,6 +227,37 @@ class TestLongWorkshop(unittest.TestCase):
         self.assertTrue(any("step" in cmd.text for cmd in middle.commands if cmd.kind == "text"))
 
 
+class TestSuggestionButtons(unittest.TestCase):
+    """#220: the newest reply's closing question or options, as buttons."""
+
+    def _draw(self, view, hist, live=None, **state):
+        c = lay.Canvas(st.Style(), lay.fixed_measure(0.55), lay.InteractionState(**state))
+        actions = view.draw(c, lay.Rect(0, 0, 600, 3000), hist, live=live)
+        return c, actions
+
+    HIST = [{"role": "user", "content": "Make a table", "turn_start": True},
+            {"role": "assistant", "content": "Done. Shall I add chairs?"},
+            {"role": "user", "content": "No", "turn_start": True},
+            {"role": "assistant", "content": "Done. Shall I add a lamp?"}]
+
+    def test_only_under_the_newest_reply(self):
+        view = cv.ChatView()
+        c, _ = self._draw(view, self.HIST)
+        ids = [w for _r, w in c.hit_areas if w.startswith("suggest:")]
+        self.assertEqual(ids, ["suggest:0"])
+        labels = [cmd.text for cmd in c.commands if cmd.kind == "text"]
+        self.assertIn("Yes, add a lamp.", labels)
+        self.assertNotIn("Yes, add chairs.", labels)
+        _c, actions = self._draw(view, self.HIST, clicked="suggest:0")
+        self.assertIn(("suggest", "Yes, add a lamp."), actions)
+
+    def test_none_while_running_or_turned_off(self):
+        view = cv.ChatView()
+        view.suggest = False
+        c, _ = self._draw(view, self.HIST)
+        self.assertFalse([w for _r, w in c.hit_areas if w.startswith("suggest:")])
+
+
 class TestWorkshopExpandAndFold(unittest.TestCase):
     """#169 Show all for cut-off entries; #178 Workshop under Thinking, fold button."""
 

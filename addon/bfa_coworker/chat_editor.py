@@ -312,6 +312,8 @@ def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0) -> None:
     canvas = gpu_layout.Canvas(style, render.measure, surface.interaction())
     surface.bounds = rect
     surface.drop_hover = drop_hover()
+    from . import coworker_api
+    surface.view.revertable = coworker_api.can_revert() and not state.is_thinking
     typed_before = surface.box.model.text
     actions = surface.draw(canvas, rect, _history(), live=state, top=_status(context) if compact else None,
                            notice=_harness_notice(prefs) if harness else None,
@@ -643,6 +645,8 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
         ops.agent_approve(choice=value)
     elif action == "answer":
         ops.agent_answer(choice=value)
+    elif action == "revert_turn":
+        ops.revert_turn()
     elif action == "native_edit" and surface is not None:
         input_capture.focus(surface.box, region)
         bpy.ops.bfacw.gpu_input_native("INVOKE_DEFAULT")

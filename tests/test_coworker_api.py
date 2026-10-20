@@ -73,6 +73,37 @@ class TestQuestions(unittest.TestCase):
         self.assertTrue(api.question_state(other)["cancelled"])
 
 
+class TestRevert(unittest.TestCase):
+    """Engine 6b: an undo step before and after each turn; Revert only while untouched."""
+
+    def setUp(self):
+        self.calls = []
+        self._undo = api._undo
+        api._undo = lambda message="": self.calls.append(message) or True
+        api._turn.update(before=False, after=False, edits=0)
+
+    def tearDown(self):
+        api._undo = self._undo
+
+    def test_turn_checkpoints_and_revert(self):
+        self.assertFalse(api.can_revert())
+        api.turn_started("Claude Code's turn")
+        api.turn_started("Claude Code's turn")            # the timer seeing it again: no second step
+        api.turn_finished("Claude Code's turn")
+        self.assertEqual(self.calls, ["Before Claude Code's turn", "Claude Code's turn"])
+        self.assertTrue(api.can_revert())
+        self.assertEqual(api.revert_turn(), "")
+        self.assertEqual(self.calls[-1], "")                # one plain undo
+        self.assertFalse(api.can_revert())
+
+    def test_no_revert_after_you_changed_the_scene(self):
+        api.turn_started("Coworker's turn")
+        api.turn_finished("Coworker's turn")
+        api._count_edit()
+        self.assertFalse(api.can_revert())
+        self.assertIn("Undo History", api.revert_turn())
+
+
 class TestPlan(unittest.TestCase):
 
     def test_update_plan_writes_goal_and_plan(self):

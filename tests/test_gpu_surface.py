@@ -218,6 +218,18 @@ class TestApproval(unittest.TestCase):
         self.assertGreater(rects["approve:once"].y, rects["approve:deny"].y)
 
 
+class TestRevertButton(unittest.TestCase):
+
+    def test_only_on_the_last_reply_when_revertable(self):
+        surface = sf.ChatSurface()
+        _draw(surface)
+        self.assertNotIn("revert_turn", [w for _r, w in surface._hits])
+        surface.view.revertable = True
+        _draw(surface)
+        self.assertIn("revert_turn", [w for _r, w in surface._hits])
+        self.assertEqual(_click(surface, "revert_turn"), [("revert_turn", "")])
+
+
 class TestMentions(unittest.TestCase):
 
     def test_category_filter_row(self):

@@ -1878,6 +1878,8 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
         # bpy read races Blender's context counter and spams the console.
         agent_controller.prefetch_main_thread_context()
 
+        from . import coworker_api
+        coworker_api.turn_started(_turn_label(context))      # the undo step to revert to
         engine.submit(prompt, config)
         return {"FINISHED"}
 
@@ -2073,6 +2075,37 @@ def approval_card():
             "Pick one" if q["choices"] else "Type your answer and press Enter")
     return Approval(title=q["question"], note=note, action="answer", icon="INFO",
                     buttons=tuple(("c{:d}".format(i), choice, "") for i, choice in enumerate(q["choices"])))
+
+
+_TURN_SEEN = [False]      # was a turn running at the last timer tick (Engine 6b)
+
+
+def _turn_label(context: bpy.types.Context | None = None) -> str:
+    """The undo step's name: "Claude Code's turn", or "Coworker's turn"."""
+    name = _acp.agent_label if (_acp is not None and _is_external_agent(context) and _acp.agent_label) else "Coworker"
+    return "{:s}'s turn".format(name)
+
+
+class BFACW_OT_revert_turn(Operator):  # type: ignore[misc]
+    """Undo everything the last turn changed in the scene, in one step.
+Only while you haven't changed the scene since; otherwise use Edit > Undo History"""
+    bl_idname = "bfacw.revert_turn"
+    bl_label = "Revert Turn"
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        from . import coworker_api
+        return coworker_api.can_revert() and not agent_controller._agent_state.is_thinking
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        from . import coworker_api
+        why = coworker_api.revert_turn()
+        if why:
+            self.report({"WARNING"}, why)
+            return {"CANCELLED"}
+        self.report({"INFO"}, "Reverted the last turn")
+        _redraw_areas(context)
+        return {"FINISHED"}
 
 
 def _answer_typed(message: str) -> bool:
@@ -3186,6 +3219,15 @@ def chat_timer_update() -> float | None:
         except Exception as _drain_ex:  # pylint: disable=broad-exception-caught
             print("[Coworker] external agent drain failed: {}".format(_drain_ex))
 
+    # Engine 6b: an undo step before and after every turn (any engine), so Revert
+    # and Edit > Undo History see the agent's turn as one step.  Turns the timer
+    # sees start here (queued ones); a sent message already got its "before".
+    from . import coworker_api as _cw
+    _thinking = bool(_ac._agent_state.is_thinking)
+    if _thinking != _TURN_SEEN[0]:
+        (_cw.turn_started if _thinking else _cw.turn_finished)(_turn_label())
+        _TURN_SEEN[0] = _thinking
+
     # Mirror the turn worker's status into the UI property.  The worker must
     # not touch a bpy property itself (that races Blender's context counter);
     # it records plain Python state and we apply it here on the main thread.
@@ -3564,6 +3606,9 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             btn_row.scale_y = 1.5
             btn_row.operator("bfacw.chat_send", icon="PLAY", text="Send")
             btn_row.operator("bfacw.chat_clear", icon="X", text="New Thread")
+            from . import coworker_api
+            if coworker_api.can_revert():
+                btn_row.operator("bfacw.revert_turn", icon="LOOP_BACK", text="")
 
         draw_approval_box(layout)
 
@@ -5107,6 +5152,7 @@ _classes = (
     BFACW_OT_external_agent_npm,
     BFACW_OT_agent_approve,
     BFACW_OT_agent_answer,
+    BFACW_OT_revert_turn,
     BFACW_OT_agent_restart,
     BFACW_OT_copy_message,
     BFACW_OT_copy_code_block,

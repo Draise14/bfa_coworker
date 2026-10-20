@@ -3378,7 +3378,7 @@ def _open_mention_for_at(text: str) -> float | None:
 # Panels
 
 def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool = True,
-                       show_prefs: bool = True) -> bool:
+                       show_prefs: bool = True, minimal_image: bool = False) -> bool:
     """The chat's controls: mode, Start / Stop, status, scene protection,
     External Harness setup, chat mode, reasoning effort and the image socket.
 
@@ -3519,7 +3519,7 @@ def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool 
     # -- Image attachment socket (issue #88 / Tier 3k) ----------
     # Above the chat input: set the image BEFORE typing, so what is
     # attached is visible right next to the message it will ride with.
-    _draw_attachment_row(layout, props, context)
+    _draw_attachment_row(layout, props, context, minimal=minimal_image)
     return True
 
 
@@ -3618,11 +3618,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
 
         draw_approval_box(layout)
 
-        # -- Goal & Plan (collapsible, only once there is a goal) -------
-        # Lives with the chat (it is about the conversation), between the
-        # buttons and the history.  Read live from the store, so steps tick
-        # off while the turn is still running.
-        _draw_goal_plan_inline(layout)
+        # Goal & Plan has its own panel now (Plan, right under Queue; #171).
 
         layout.separator()
 
@@ -3939,10 +3935,11 @@ class BFACW_PT_chat_session(Panel):  # type: ignore[misc]
     """Session panel -- context usage, memory, compaction, and checkpoints."""
     bl_label = "Session"
     bl_idname = "BFACW_PT_chat_session"
+    bl_options = {'DEFAULT_CLOSED'}
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = _CHAT_PANEL_CATEGORY
-    bl_order = 1
+    bl_order = 3
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -4002,6 +3999,60 @@ class BFACW_PT_chat_session_memory(Panel):  # type: ignore[misc]
         _draw_memory_section(self.layout, context.window_manager.bfacw_chat_props)  # type: ignore[attr-defined]
 
 
+class BFACW_PT_chat_plan(Panel):  # type: ignore[misc]
+    """The goal and the step plan, with its progress: what Coworker (or your agent) is working through"""
+    bl_label = "Plan"
+    bl_idname = "BFACW_PT_chat_plan"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = _CHAT_PANEL_CATEGORY
+    bl_order = 2          # under Queue, open (#171)
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return not bpy.app.background
+
+    def draw_header(self, _context: bpy.types.Context) -> None:
+        from . import session_memory as _sm
+        with _sm.store_lock:
+            done, total = _sm.store.goal.progress()
+        row = self.layout.row(align=True)
+        row.label(text="", icon='PINNED')
+        if total:
+            sub = row.row()
+            sub.scale_x = 0.8
+            sub.progress(factor=done / float(total), type='BAR', text="{:d}/{:d}".format(done, total))
+
+    def draw(self, context: bpy.types.Context) -> None:
+        _draw_plan_minimal(self.layout)
+
+
+def _draw_plan_minimal(layout) -> None:
+    """The Plan panel: the current goal, then the steps (#171).  Minimal: editing
+    and notes stay in Edit Plan."""
+    from . import session_memory as _sm
+    with _sm.store_lock:
+        g = _sm.store.goal
+        goal = g.turn_goal or g.session_goal
+        steps = [dict(s) for s in g.steps]
+    if not (goal or steps):
+        _draw_multiline(layout, "A multi-step request shows its plan here, and the steps tick off as "
+                                "they're done.", icon='INFO')
+        return
+    if goal:
+        _draw_multiline(layout, goal, icon='USER')
+    icons = {"done": 'CHECKBOX_HLT', "doing": 'PLAY', "todo": 'CHECKBOX_DEHLT'}
+    col = layout.column(align=True)
+    for i, step in enumerate(steps, 1):
+        row = col.row()
+        row.label(text="", icon=icons.get(step.get("status"), 'CHECKBOX_DEHLT'))
+        _draw_multiline(row, "{:d}. {:s}".format(i, step.get("text", "")))
+    row = layout.row(align=True)
+    row.scale_y = 0.9
+    row.operator("bfacw.plan_open", text="Edit", icon='TEXT')
+    row.operator("bfacw.plan_clear", text="Clear", icon='X')
+
+
 class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
     """Top-level queue panel -- shows pending queued messages."""
     bl_label = "Queue"
@@ -4009,7 +4060,7 @@ class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = _CHAT_PANEL_CATEGORY
-    bl_order = 2
+    bl_order = 1          # right under the chat (#171)
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -4099,7 +4150,7 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
     bl_region_type = 'UI'
     bl_category = _CHAT_PANEL_CATEGORY
     bl_options = {'DEFAULT_CLOSED'}
-    bl_order = 3
+    bl_order = 4
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -4365,7 +4416,7 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
 # Helpers
 
 
-def _draw_attachment_row(layout, props, context) -> None:
+def _draw_attachment_row(layout, props, context, minimal: bool = False) -> None:
     """Draw the chat image socket + capture buttons (issue #88 / Tier 3k).
 
     Shared by the 3D Viewport chat panel and the Text Editor panel:
@@ -4392,6 +4443,12 @@ def _draw_attachment_row(layout, props, context) -> None:
     if img is not None and not expanded:
         head.label(text=img.name, icon='IMAGE_DATA')
     if not expanded:
+        return
+    if minimal:
+        # The Coworker editor (#171): pick an image and see it.  Render / Screen
+        # are in the toolshelf's Attach panel, and the chat's tray has the pin.
+        box.template_ID(props, "chat_image", open="image.open")
+        _draw_attachment_preview(box, img, context)
         return
     head.prop(props, "chat_image_send_once", text="Send once")
     box.template_ID(props, "chat_image", open="image.open", new="image.new")
@@ -5165,6 +5222,7 @@ _classes = (
     BFACW_OT_copy_code_block,
 
     BFACW_PT_chat_queue,
+    BFACW_PT_chat_plan,
     BFACW_PT_chat_compact,
     BFACW_PT_chat_panel,
     BFACW_PT_chat_session,

@@ -28,7 +28,7 @@ returns the actions for the host to carry out, e.g. ``("send", text)``,
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .chat_view import ChatView, _soft
@@ -194,6 +194,9 @@ class ChatSurface:
             rect = self._draw_grip(canvas, rect)
         top_edge = rect.top
         if top is not None:
+            # A short compact chat (#182): the mode row goes first, so the messages keep room.
+            if self.compact and top.chat_modes and rect.h < style.unit * 10:
+                top = replace(top, chat_modes=())
             top_edge = self._draw_top_bar(canvas, Rect(rect.x, rect.y, rect.w, rect.h), top, actions)
         inner = Rect(rect.x + pad, rect.y + pad, rect.w - 2 * pad, rect.h)
         # A notice (External Harness) replaces the chat: nothing to type into.

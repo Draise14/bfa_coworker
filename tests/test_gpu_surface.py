@@ -230,6 +230,30 @@ class TestRevertButton(unittest.TestCase):
         self.assertEqual(_click(surface, "revert_turn"), [("revert_turn", "")])
 
 
+class TestShortSidebar(unittest.TestCase):
+    """#182: a compact chat shorter than its panel keeps its top bar and input apart."""
+
+    def _draw(self, h):
+        surface = sf.ChatSurface(compact=True)
+        canvas = lay.Canvas(st.Style(), lay.fixed_measure(0.55), surface.interaction())
+        top = sf.TopBar(status="Connected", chat_modes=(("AGENT", "Coworker"), ("ASK", "Ask")), chat_mode="AGENT")
+        surface.draw(canvas, lay.Rect(0, 0, 300, h), _history() * 4, top=top)
+        return surface
+
+    def test_messages_stay_between_the_bar_and_the_input(self):
+        for h in (600, 260, 160):
+            surface = self._draw(h)
+            box = next(r for r, w in surface._hits if w == "input")
+            start = next(r for r, w in surface._hits if w in ("start", "stop_agent"))
+            chat = surface._chat_rect
+            self.assertGreaterEqual(chat.y, box.top)                 # above the input
+            self.assertLessEqual(chat.top, start.y)                  # below the top bar
+
+    def test_mode_row_goes_first_when_short(self):
+        self.assertTrue(any(w.startswith("mode:") for _r, w in self._draw(600)._hits))
+        self.assertFalse(any(w.startswith("mode:") for _r, w in self._draw(160)._hits))
+
+
 class TestMentions(unittest.TestCase):
 
     def test_category_filter_row(self):

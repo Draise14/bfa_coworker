@@ -565,6 +565,16 @@ def _draw_sidebar() -> None:
         if entry is not None:
             entry[0].bounds = None        # collapsed / scrolled away: no clicks go to it
         return
+    # Fit the chat to the part of its room that is on screen (#182): a sidebar shorter
+    # than the panel keeps the top bar and the input visible, and the messages shrink
+    # between them instead of spilling over the top bar.
+    bottom, top = max(rect.y, 0.0), min(rect.top, float(region.height))
+    if top - bottom < unit * 3:
+        entry = _SURFACES.get(region.as_pointer())
+        if entry is not None:
+            entry[0].bounds = None
+        return
+    rect = gpu_layout.Rect(rect.x, bottom, rect.w, top - bottom)
     surface = _surface(region, compact=True)
     surface.on_resize = lambda new_h, _unit=unit: _resize_panel(new_h, _unit)
     _draw(region, rect, compact=True, zoom=zoom)

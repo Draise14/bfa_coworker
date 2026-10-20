@@ -540,14 +540,46 @@ def _find_chat_rect(region: Any, expected_h: float, tabs_px: float, zoom: float 
         if top < height - 2:
             return None
     else:
-        return None
+        # Neither marker on screen (#198): the room is taller than the sidebar and scrolled
+        # to its middle.  Find it again from where it sits in the view (scrolling doesn't
+        # move it there), and only if the whole strip really is an empty panel room.
+        return _room_from_view(region, key, strip, height, room_h)
     probe_y, rgb = (top_rows[-1], top_rgb) if top_rows else (bottom_rows[0], bottom_rgb)
     row = fb.read_color(0, probe_y, width, 1, 4, 0, "UBYTE").to_list()[0]
     across = _runs([_near(px, rgb) for px in row])
     if len(across) < 2:
         return None
     left, right = across[0][0], across[-1][1] + 1
+    try:    # remember the room in view space, for when both markers are scrolled away
+        _ROOM_VIEW[key] = (region.view2d.region_to_view(0.0, float(top))[1], float(left), float(right))
+    except (AttributeError, RuntimeError):
+        pass
     return gpu_layout.Rect(float(left), float(bottom), float(right - left), float(top - bottom))
+
+
+# Where the room's top is in the region's view (scroll-independent), with its left / right.
+_ROOM_VIEW: dict[int, tuple[float, float, float]] = {}
+
+
+def _room_from_view(region: Any, key: int, strip: list, height: int, room_h: float) -> Any:
+    known = _ROOM_VIEW.get(key)
+    if known is None or not room_h:
+        return None
+    view_top, left, right = known
+    try:
+        top = float(region.view2d.view_to_region(0.0, view_top, clip=False)[1])
+    except (AttributeError, RuntimeError):
+        return None
+    bottom = top - room_h
+    if not (top >= height - 2 and bottom <= 2):
+        return None             # it should show a marker then: collapsed, moved or mid-animation
+    # The whole visible strip must be the empty room (panel background), not other panels.
+    back = _panel_back_bytes()
+    plain = sum(1 for row in strip if any(abs(px[0] - back[0]) <= 2 and abs(px[1] - back[1]) <= 2
+                                          and abs(px[2] - back[2]) <= 2 for px in row))
+    if plain < height * 0.6:
+        return None
+    return gpu_layout.Rect(left, bottom, right - left, top - bottom)
 
 
 def _draw_sidebar() -> None:

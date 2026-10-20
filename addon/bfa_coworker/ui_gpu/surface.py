@@ -81,6 +81,11 @@ class Approval:
     detail: str = ""            # the tool's input on one line
     waiting: int = 1            # questions open, this one included
     note: str = ""              # e.g. "Coworker's Blender tool"
+    # (id, label, icon) per button; a question (Engine 6's ask_user) has its choices here.
+    buttons: tuple[tuple[str, str, str], ...] = (
+        ("once", "Allow once", "CHECKMARK"), ("always", "Always", "PINNED"), ("deny", "Deny", "CANCEL"))
+    action: str = "approve"     # the action a button sends: (action, button id)
+    icon: str = "LOCKED"
 
 
 @dataclass
@@ -328,8 +333,9 @@ class ChatSurface:
         title_h = canvas.text_height(title, width - side - pad * 0.6)
         note_h = canvas.text_height(approval.note, width) if approval.note else 0.0
         detail_h = canvas.text_height(approval.detail, width - pad, "mono") + pad if approval.detail else 0.0
-        buttons = (("once", "Allow once", "CHECKMARK"), ("always", "Always", "PINNED"), ("deny", "Deny", "CANCEL"))
-        needs = [side + canvas.measure(label, "ui", style.font_size) + 3.0 * style.pad for _c, label, _i in buttons]
+        buttons = approval.buttons
+        needs = [(side if icon else 0.0) + canvas.measure(label, "ui", style.font_size) + 3.0 * style.pad
+                 for _c, label, icon in buttons]
         side_by_side = sum(needs) + pad * 0.5 * (len(needs) - 1) <= width
         rows = 1 if side_by_side else len(buttons)
         h = title_h + note_h + detail_h + rows * u * 1.25 + 2.5 * pad
@@ -340,7 +346,7 @@ class ChatSurface:
                     style.cursor, style.scale)
         top = card.top - pad
         canvas.icon(Rect(card.x + pad, top - style.line_height + (style.line_height - side) / 2, side, side),
-                    "LOCKED", style.box.text)
+                    approval.icon, style.box.text)
         top = canvas.wrapped(card.x + pad + side + pad * 0.6, top, width - side - pad * 0.6, title,
                              style.box.text, bold=True)
         if approval.note:
@@ -354,8 +360,8 @@ class ChatSurface:
         bx, by = card.x + pad, card.y + pad + (rows - 1) * u * 1.25
         for (choice, label, icon), need in zip(buttons, needs):
             bw = need if side_by_side else width
-            if canvas.button(Rect(bx, by, bw, u * 1.1), "approve:" + choice, label, icon=icon):
-                actions.append(("approve", choice))
+            if canvas.button(Rect(bx, by, bw, u * 1.1), approval.action + ":" + choice, label, icon=icon):
+                actions.append((approval.action, choice))
             if side_by_side:
                 bx += bw + pad * 0.5
             else:

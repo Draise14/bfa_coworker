@@ -73,7 +73,7 @@ def _source_tool_definitions() -> dict[str, dict[str, object]]:
         with open(path, encoding="utf-8") as fh:
             module = ast.parse(fh.read(), filename=path)
         for node in ast.walk(module):
-            if not isinstance(node, ast.FunctionDef):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             is_tool = any(
                 isinstance(deco, ast.Call) and

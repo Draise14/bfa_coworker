@@ -1814,6 +1814,10 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
         message = props.chat_input.strip()
         if not message:
             return {"CANCELLED"}
+        if _answer_typed(message):          # an open question (ask_user) takes it as its answer
+            props.chat_input = ""
+            _redraw_areas(context)
+            return {"FINISHED"}
 
         if not agent_controller._agent_state.mcp_server_running:
             self.report({"WARNING"}, "Coworker is not running. Start it from Preferences or the Chat panel.")
@@ -2013,6 +2017,8 @@ class BFACW_OT_chat_stop(Operator):  # type: ignore[misc]
     bl_description = "Stop the current generation"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
+        from . import coworker_api
+        coworker_api.cancel_questions()     # a question waiting for you is answered "cancelled"
         _loop_engine().cancel()
         agent_controller._agent_state.status_text = "Stopped"
         wm = context.window_manager
@@ -2050,16 +2056,55 @@ class BFACW_OT_agent_approve(Operator):  # type: ignore[misc]
 
 
 def approval_card():
-    """The agent's open question for the GPU chat, or None."""
-    if _acp is None:
-        return None
-    request = _acp.approvals.current()
-    if request is None:
-        return None
+    """What the chat asks you right now (GPU card / layout box): the agent's "may I?"
+    first, else a question from ask_user (Engine 6); None when nothing is open."""
     from .ui_gpu.surface import Approval
-    return Approval(title=request.title, detail=request.detail, waiting=_acp.approvals.count(),
-                    note="One of Coworker's Blender tools" if request.coworker_tool
-                    else "The agent's own tool, outside Blender")
+    request = _acp.approvals.current() if _acp is not None else None
+    if request is not None:
+        return Approval(title=request.title, detail=request.detail, waiting=_acp.approvals.count(),
+                        note="One of Coworker's Blender tools" if request.coworker_tool
+                        else "The agent's own tool, outside Blender")
+    from . import coworker_api
+    open_question = coworker_api.current_question()
+    if open_question is None:
+        return None
+    _qid, q = open_question
+    note = ("Pick one, or type your answer and press Enter" if q["choices"] and q["allow_text"] else
+            "Pick one" if q["choices"] else "Type your answer and press Enter")
+    return Approval(title=q["question"], note=note, action="answer", icon="INFO",
+                    buttons=tuple(("c{:d}".format(i), choice, "") for i, choice in enumerate(q["choices"])))
+
+
+def _answer_typed(message: str) -> bool:
+    """An open question that takes text gets your message as its answer."""
+    from . import coworker_api
+    open_question = coworker_api.current_question()
+    if open_question is None or not open_question[1]["allow_text"]:
+        return False
+    return coworker_api.answer_question(message, open_question[0])
+
+
+class BFACW_OT_agent_answer(Operator):  # type: ignore[misc]
+    """Answer the question in the chat with this choice"""
+    bl_idname = "bfacw.agent_answer"
+    bl_label = "Answer"
+    bl_options = {'INTERNAL'}
+
+    choice: StringProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        from . import coworker_api
+        open_question = coworker_api.current_question()
+        if open_question is None:
+            return {"CANCELLED"}
+        qid, q = open_question
+        try:
+            text = q["choices"][int(self.choice.lstrip("c"))]
+        except (ValueError, IndexError):
+            return {"CANCELLED"}
+        coworker_api.answer_question(text, qid)
+        _redraw_areas(context)
+        return {"FINISHED"}
 
 
 def draw_approval_box(layout: bpy.types.UILayout) -> None:
@@ -2069,17 +2114,20 @@ def draw_approval_box(layout: bpy.types.UILayout) -> None:
         return
     box = layout.box()
     title = card.title + ("  (+{:d} more)".format(card.waiting - 1) if card.waiting > 1 else "")
-    _draw_multiline(box, title, icon='LOCKED')
+    _draw_multiline(box, title, icon=card.icon)
     sub = box.column()
     sub.scale_y = 0.8
     sub.label(text=card.note)
     if card.detail:
         _draw_multiline(sub, card.detail)
-    row = box.row(align=True)
-    row.scale_y = 1.3
-    row.operator("bfacw.agent_approve", text="Allow Once", icon='CHECKMARK').choice = "once"
-    row.operator("bfacw.agent_approve", text="Always", icon='PINNED').choice = "always"
-    row.operator("bfacw.agent_approve", text="Deny", icon='CANCEL').choice = "deny"
+    if not card.buttons:
+        return
+    col = box.column(align=True)
+    col.scale_y = 1.3
+    row = col.row(align=True) if len(card.buttons) <= 3 else col
+    op_id = "bfacw.agent_approve" if card.action == "approve" else "bfacw.agent_answer"
+    for button_id, label, icon in card.buttons:
+        row.operator(op_id, text=label, icon=icon or 'NONE').choice = button_id
 
 
 class BFACW_OT_chat_queue_send(Operator):  # type: ignore[misc]
@@ -5058,6 +5106,7 @@ _classes = (
     BFACW_OT_external_agent_open_folder,
     BFACW_OT_external_agent_npm,
     BFACW_OT_agent_approve,
+    BFACW_OT_agent_answer,
     BFACW_OT_agent_restart,
     BFACW_OT_copy_message,
     BFACW_OT_copy_code_block,

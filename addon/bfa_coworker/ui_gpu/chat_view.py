@@ -58,7 +58,8 @@ _ATTACHED = re.compile(r"\s*\[attached:\s*([^\]]*)\]")
 # Thumbnail heights (in widget units) for the S / M / L sizes.
 THUMB_SIZES = {"S": 2.5, "M": 4.0, "L": 7.0}
 _LIVE_LINES = 3        # the live-thinking window, in lines
-_FRAME_LINES = 14      # code / output frames show this many lines
+_FRAME_LINES = 14      # code / output frames show this many lines (Show all for the rest)
+_ENTRY_CHARS = 600     # a Workshop thinking entry shows this much (Show all for the rest)
 
 
 def split_attachments(text: str) -> tuple[str, list[str]]:
@@ -101,6 +102,8 @@ class ChatView:
     thumb_size: str = "M"               # attachment thumbnails: S, M or L
     # The host sets it when the last turn can be undone in one step (Engine 6b).
     revertable: bool = False
+    # The running turn's live Thinking box is folded (the floating Thinking button, #178).
+    thinking_folded: bool = False
     # The host's lookup of an image's pixel size by name (None: not loaded).
     image_size: Callable[[str], "tuple[int, int] | None"] | None = None
     content_height: float = 0.0
@@ -149,11 +152,21 @@ class ChatView:
         canvas.pop_clip()
 
         self._draw_scrollbar(canvas, rect)
+        size = style.unit * 1.2
+        right = rect.right - pad - self._bar_widths(style)[1]
         if self.scroll > style.unit:
-            size = style.unit * 1.2
-            jump = Rect(rect.right - size - pad - self._bar_widths(style)[1], rect.y + pad, size, size)
+            jump = Rect(right - size, rect.y + pad, size, size)
             if canvas.button(jump, "jump", "", icon="TRIA_DOWN"):
                 actions.append(("jump", ""))
+            right = jump.x - pad * 0.5
+        if active >= 0 and str(getattr(live, "reasoning_text", "") or "").strip():
+            # Fold / unfold the live Thinking box from wherever you are in the chat.
+            label = "Thinking"
+            w = canvas.icon_size() + canvas.measure(label, "ui", style.font_size) + 2.5 * style.pad
+            pill = Rect(right - w, rect.y + pad, w, size)
+            if canvas.button(pill, "fold_thinking", label,
+                             icon="TRIA_RIGHT" if self.thinking_folded else "TRIA_DOWN"):
+                actions.append(("fold_thinking", ""))
         return actions
 
     # -- measuring -----------------------------------------------------------------
@@ -162,7 +175,8 @@ class ChatView:
         key = None
         if not active:
             key = (idx, len(turn), sum(len(message_text(m.get("content"))) for m in turn),
-                   round(width), canvas.style.scale, f"t{idx}" in self.expanded, compact, self.thumb_size)
+                   round(width), canvas.style.scale, f"t{idx}" in self.expanded, compact, self.thumb_size,
+                   tuple(sorted(k for k in self.expanded if k.startswith("x{:d}:".format(idx)))))
             cached = self._heights.get(key)
             if cached is not None:
                 return cached
@@ -208,13 +222,13 @@ class ChatView:
         # the state's thinking_dots tick.
         spinner = spinner_char(live) if active else ""
         if active:
-            # While it runs, the live stream comes first -- the Workshop grows under it
-            # and never pushes the text you are reading.
-            top = self._draw_live(canvas, idx, x, top, width, live, spinner, pad, actions)
+            # While it runs: the phase and the Thinking box, the Workshop right under
+            # them, then the reply as it streams -- the order a finished turn has (#178).
+            top = self._draw_live(canvas, idx, x, top, width, live, spinner, pad, actions, stream=False)
             if process:
                 top = self._draw_workshop(canvas, process, turn, idx, x, top - pad * 0.5, width, active,
                                           compact, actions, spinner) - pad
-            return top
+            return self._draw_live(canvas, idx, x, top, width, live, spinner, pad, actions, stream=True)
         self._live_h.pop(idx, None)
         if process:
             top = self._draw_workshop(canvas, process, turn, idx, x, top, width, active, compact, actions,
@@ -243,18 +257,30 @@ class ChatView:
         return top
 
     def _draw_live(self, canvas: Canvas, idx: int, x: float, top: float, width: float, live: Any,
-                   spinner: str, pad: float, actions: list[tuple[str, str]]) -> float:
-        """The running turn: phase + time, the live thinking (a fixed-height window
-        that shows its newest lines), then the reply as it streams (its height only
+                   spinner: str, pad: float, actions: list[tuple[str, str]], stream: bool = False) -> float:
+        """The running turn.  ``stream=False``: phase + time and the live thinking (a
+        fixed-height window that shows its newest lines; folded with the floating
+        Thinking button).  ``stream=True``: the reply as it streams (its height only
         grows, so a half-typed line can't make the chat jitter)."""
         style = canvas.style
+        if stream:
+            streaming = getattr(live, "streaming_text", "") or ""
+            if streaming:
+                start = top
+                end = self._draw_markdown(canvas, parse(streaming), idx, x, top, width, actions)
+                used = max(self._live_h.get(idx, 0.0), start - end)
+                self._live_h[idx] = used
+                top = start - used
+            return top
         label = "{:s} {:s}".format(phase_text(live), spinner)
         started = float(getattr(live, "thinking_start_time", 0.0) or 0.0)
         if started:
             label += "  |  " + fmt_duration(time.time() - started)
-        top = self._icon_line(canvas, x, top, self.agent_icon, label, _soft(style.text, 0.15))
         reasoning = " ".join(str(getattr(live, "reasoning_text", "") or "").split())
-        if reasoning:
+        if reasoning and self.thinking_folded:
+            label += "  |  thinking hidden"
+        top = self._icon_line(canvas, x, top, self.agent_icon, label, _soft(style.text, 0.15))
+        if reasoning and not self.thinking_folded:
             inner_w = width - 3 * pad
             lines = wrap_text(reasoning, inner_w, canvas.measure, "ui", style.font_size)[-_LIVE_LINES:]
             h = _LIVE_LINES * style.line_height + pad
@@ -268,13 +294,6 @@ class ChatView:
                             + style.font_size * 0.2, line, _soft(style.text_field.text, 0.25))
             canvas.pop_clip()
             top = frame.y - pad * 0.5
-        streaming = getattr(live, "streaming_text", "") or ""
-        if streaming:
-            start = top
-            end = self._draw_markdown(canvas, parse(streaming), idx, x, top, width, actions)
-            used = max(self._live_h.get(idx, 0.0), start - end)
-            self._live_h[idx] = used
-            top = start - used
         return top
 
     def _copy_button(self, canvas: Canvas, right: float, top: float, widget_id: str, text: str,
@@ -285,14 +304,18 @@ class ChatView:
             actions.append(("copy", text))
 
     def _code_frame(self, canvas: Canvas, x: float, top: float, width: float, code: str, label: str,
-                    widget_id: str, actions: list[tuple[str, str]], color: RGBA | None = None) -> float:
-        """Code (or a tool's output) in its own framed box with a header and Copy."""
+                    widget_id: str, actions: list[tuple[str, str]], color: RGBA | None = None,
+                    expand_key: str = "") -> float:
+        """Code (or a tool's output) in its own framed box with a header and Copy; a long
+        one shows its first lines and Show all (*expand_key*, #169)."""
         style = canvas.style
         pad = style.pad
         lines = code.rstrip("\n").split("\n")
-        shown = lines[:_FRAME_LINES]
+        is_open = bool(expand_key) and expand_key in self.expanded
+        shown = lines if is_open else lines[:_FRAME_LINES]
         more = len(lines) - len(shown)
-        text = "\n".join(shown) + ("\n... {:d} more line{:s}".format(more, "" if more == 1 else "s") if more else "")
+        text = "\n".join(shown) + ("\n... {:d} more line{:s}".format(more, "" if more == 1 else "s")
+                                   if more and not expand_key else "")
         head = style.line_height + pad * 0.5
         inner_w = width - 2 * pad
         h = canvas.text_height(text, inner_w, font="mono") + head + pad
@@ -302,7 +325,21 @@ class ChatView:
         canvas.label(Rect(frame.x + pad, frame.top - head, frame.w, head), label, soft)
         self._copy_button(canvas, frame.right - pad * 0.5, frame.top - pad * 0.25, widget_id, code, actions)
         canvas.wrapped(frame.x + pad, frame.top - head, inner_w, text, color or style.text_field.text, font="mono")
+        if expand_key and (more or is_open):
+            return self._show_all(canvas, x, frame.y, expand_key, is_open, more, "line", actions)
         return frame.y
+
+    def _show_all(self, canvas: Canvas, x: float, top: float, key: str, is_open: bool, more: int, unit: str,
+                  actions: list[tuple[str, str]]) -> float:
+        """The small Show all / Show less button under a cut-off entry (#169)."""
+        style = canvas.style
+        label = "Show less" if is_open else "Show all ({:d} more {:s}{:s})".format(more, unit, "" if more == 1 else "s")
+        w = canvas.icon_size() + canvas.measure(label, "ui", style.font_size) + 2 * style.pad
+        h = style.line_height * 1.1
+        if canvas.button(Rect(x, top - h - style.pad * 0.2, w, h), "more:" + key, label,
+                         icon="TRIA_DOWN" if is_open else "TRIA_RIGHT"):
+            actions.append(("toggle", key))
+        return top - h - style.pad * 0.2
 
     @staticmethod
     def _call_inputs(turn: list[dict]) -> dict[str, tuple[str, dict]]:
@@ -433,7 +470,8 @@ class ChatView:
                 code = args.get("code") if isinstance(args, dict) else None
                 if isinstance(code, str) and code.strip():      # what ran, in its own frame
                     top = self._code_frame(canvas, row_x, top - pad * 0.3, row_w, code, "python",
-                                           "copycode:{:d}:{:d}".format(idx, n), actions) - pad * 0.3
+                                           "copycode:{:d}:{:d}".format(idx, n), actions,
+                                           expand_key="x{:d}:{:d}:code".format(idx, n)) - pad * 0.3
                 elif isinstance(args, dict) and args:
                     shown = ", ".join("{:s}={:s}".format(k, json.dumps(v)[:60]) for k, v in list(args.items())[:4])
                     top = canvas.wrapped(row_x + side + gap, top, row_w - side - gap, shown,
@@ -442,16 +480,24 @@ class ChatView:
                 if result and result != "(running)":
                     top = self._code_frame(canvas, row_x + style.pad, top - pad * 0.3, row_w - style.pad, result,
                                            "error" if bad else "result", "copyres:{:d}:{:d}".format(idx, n),
-                                           actions, _ERROR if bad else None) - pad * 0.3
+                                           actions, _ERROR if bad else None,
+                                           expand_key="x{:d}:{:d}:res".format(idx, n)) - pad * 0.3
             elif role == "reasoning":
                 label = str(msg.get("label") or "Thinking")
                 body = " ".join(text.split())
                 row_top = top - pad * 0.5
+                key = "x{:d}:{:d}".format(idx, n)
+                is_open = key in self.expanded
+                cut = len(body) > _ENTRY_CHARS and not is_open
+                shown = body[:_ENTRY_CHARS].rstrip() + "..." if cut else body
                 top = self._icon_line(canvas, row_x, row_top, self.agent_icon,
-                                      "{:s}: {:s}".format(label, body[:600]), _soft(style.text),
+                                      "{:s}: {:s}".format(label, shown), _soft(style.text),
                                       row_w - style.line_height - pad * 0.5)
                 self._copy_button(canvas, row_x + row_w, row_top, "copythink:{:d}:{:d}".format(idx, n), body,
                                   actions)
+                if len(body) > _ENTRY_CHARS:
+                    top = self._show_all(canvas, row_x + canvas.icon_size() + style.pad * 0.5, top, key, is_open,
+                                         len(body) - _ENTRY_CHARS, "character", actions)
             elif is_system_note_msg(msg):
                 body = text[len("[System:"):-1].strip() if text.startswith("[System:") and text.endswith("]") else text
                 title, icon = NOTE_TITLES.get(str(msg.get("system_note") or ""), ("Note", "INFO"))

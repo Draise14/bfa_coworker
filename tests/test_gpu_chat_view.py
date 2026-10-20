@@ -210,6 +210,12 @@ class TestWorkshopExpandAndFold(unittest.TestCase):
         self.assertGreater(workshop, reply)            # ...and the streaming reply under it
         widgets = [w for _r, w in c.hit_areas]
         self.assertIn("fold_workshop", widgets)                 # #196: it folds the Workshop
+        pill = next(r for r, w in c.hit_areas if w == "fold_workshop")
+        def on_pill(kind):
+            return [cmd.text for cmd in c.commands if cmd.kind == kind and cmd.rect is not None
+                    and pill.contains(cmd.rect.x + cmd.rect.w / 2, cmd.rect.y + cmd.rect.h / 2)]
+        self.assertNotIn("Workshop", " ".join(on_pill("text")))  # #216: icons only, no label
+        self.assertIn("PACKAGE", on_pill("icon"))
         _c, actions = self._draw(view, hist, live=_LiveThinking(), clicked="fold_workshop")
         self.assertIn(("toggle", "t0"), actions)
         view.expanded.add("t0")

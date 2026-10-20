@@ -18,6 +18,9 @@ initial_instructions: |
     build it up step by step instead of writing one huge script.
 
   # Code execution gotchas
+  - SIZE: default primitives are 2 m across and scale MULTIPLIES that. For a W x D x H box use size=1 +
+    scale=(W, D, H), or set obj.dimensions = (W, D, H). Origin = centre: on the floor, z = H / 2. Place
+    things by world bounds (matrix_world @ bound_box corners), then read obj.dimensions back.
   - NO ring_segments keyword on UV sphere — use segments= and ring_count=.
   - Never reuse object references from earlier calls — auto-undo deletes them. Re-fetch with bpy.data.objects.get().
   - YOUR SELECTION IS NOT YOURS. The user may change the selection / active object / mode between

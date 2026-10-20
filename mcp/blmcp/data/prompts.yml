@@ -45,6 +45,18 @@ initial_instructions: |
   The `execute_blender_code` tool is a last resort, if there are other tools that provide
   the functionality you need, use those instead.
 
+  # Size, Scale and Placement (the half-size / double-size box)
+
+  * Default primitives are 2 m across (cube `size=2`, sphere / cylinder `radius=1`), and
+    `scale` multiplies that: `scale=(4, 2, 1)` on a default cube is an 8 x 4 x 2 m box.
+    For a W x D x H box: add it with `size=1` and set `scale=(W, D, H)`, or set
+    `obj.dimensions = (W, D, H)` (dimensions are in metres, scale is a factor).
+  * `location` is the object's origin, at the primitive's centre: a box H tall standing
+    on the floor sits at z = H / 2.
+  * To put one thing on, next to or inside another, use world-space bounds
+    (`[obj.matrix_world @ Vector(c) for c in obj.bound_box]`), not location + scale.
+  * Read `obj.dimensions` back after building and compare it with what was asked.
+
   # Code Execution Policy (Entity Tracking)
 
   Each `execute_blender_code` call is **permanent and cumulative** -- every object

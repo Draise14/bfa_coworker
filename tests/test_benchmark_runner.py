@@ -201,5 +201,43 @@ class TestResetSceneToBefore(unittest.TestCase):
         self.assertEqual(len(objs), 0)
 
 
+class TestEveryEngine(unittest.TestCase):
+    """Engine 10: runs remember their engine; Compare only compares like with like."""
+
+    def _helpers(self, runs):
+        import json
+        import tempfile
+        src = _load_source()
+        start = src.index("def _load_benchmark_runs")
+        end = src.index("def _record_step_outcome")
+        path = os.path.join(tempfile.mkdtemp(), "benchmark_results.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(runs, fh)
+        ns: dict = {"_os": os, "_BENCHMARK_RESULTS_PATH": path}
+        exec(compile("from __future__ import annotations\n" + src[start:end], _OA_PATH, "exec"), ns)  # noqa: S102
+        return ns
+
+    def test_previous_run_on_the_same_engine(self):
+        runs = [{"timestamp": 1, "timings": {"quick_sanity:1": 40.0}},            # before engines: Local
+                {"timestamp": 2, "engine": "External Agent: Claude Code", "timings": {"quick_sanity:1": 23.0}},
+                {"timestamp": 3, "engine": "Remote: gpt", "timings": {"quick_sanity:1": 12.0}},
+                {"timestamp": 4, "engine": "External Agent: Claude Code", "timings": {"quick_sanity:1": 21.0}}]
+        ns = self._helpers(runs)
+        self.assertEqual(ns["_load_previous_benchmark"]("External Agent: Claude Code")["timestamp"], 2)
+        self.assertEqual(ns["_load_previous_benchmark"]("Local")["timestamp"], 1)
+        self.assertIsNone(ns["_load_previous_benchmark"]("Remote: other"))
+        latest = ns["_latest_per_engine"]()
+        self.assertEqual(sorted(latest), ["External Agent: Claude Code", "Local", "Remote: gpt"])
+        self.assertEqual(latest["External Agent: Claude Code"]["timestamp"], 4)
+
+    def test_engine_label(self):
+        ns = self._helpers([])
+        local = types.SimpleNamespace(mode="local")
+        remote = types.SimpleNamespace(mode="remote", remote_model="gpt-5")
+        prefs = types.SimpleNamespace(operating_mode="LOCAL_LLM")
+        self.assertEqual(ns["_engine_label"](prefs, local), "Local")
+        self.assertEqual(ns["_engine_label"](prefs, remote), "Remote: gpt-5")
+
+
 if __name__ == "__main__":
     unittest.main()

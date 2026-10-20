@@ -72,6 +72,17 @@ class TestIndex(unittest.TestCase):
         self.assertEqual(self.index.get("b")["title"], "Lander")
         self.assertEqual(self.index.last_for_blend(""), "")                # no file written for "b" here
 
+    def test_mode_and_blend_path_for_open(self):
+        # #239: the mode (shown as its icon) and the file it is in now (History's Open).
+        self.index.touch("a", _chat("hi"), blend="camp", engine="Claude Code",
+                         blend_path="C:/work/camp.blend", mode="EXTERNAL_AGENT")
+        self.index.touch("a", _chat("hi again"), blend="palace", blend_path="C:/work/palace.blend", mode="LOCAL_LLM")
+        entry = self.index.get("a")
+        self.assertEqual((entry["mode"], entry["blend"], entry["blend_path"]),
+                         ("LOCAL_LLM", "palace", "C:/work/palace.blend"))
+        self.index.touch("a", _chat("unsaved file"))                      # no path: keeps the last one
+        self.assertEqual(self.index.get("a")["blend_path"], "C:/work/palace.blend")
+
     def test_delete_removes_files_and_last_for_blend(self):
         self.index.chat_path("a").write_text(json.dumps(_chat("hi")), encoding="utf-8")
         self.index.memory_path("a").write_text("{}", encoding="utf-8")

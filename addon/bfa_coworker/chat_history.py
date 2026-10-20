@@ -178,8 +178,12 @@ class ChatIndex:
         return time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
 
     # -- writing ---------------------------------------------------------------------
-    def touch(self, chat_id: str, history: list[dict[str, Any]], blend: str = "", engine: str = "") -> None:
-        """The chat was saved: keep its entry current (a chat with no message isn't listed)."""
+    def touch(self, chat_id: str, history: list[dict[str, Any]], blend: str = "", engine: str = "",
+              blend_path: str = "", mode: str = "") -> None:
+        """The chat was saved: keep its entry current (a chat with no message isn't listed).
+
+        *blend_path* (the saved file it is in now) lets History open it again; *mode* is
+        the operating mode, shown as its icon (#239)."""
         title = title_of(history)
         with self._lock:
             data = self._read()
@@ -195,6 +199,10 @@ class ChatIndex:
             entry["messages"] = len(history)
             if engine:
                 entry["engine"] = engine
+            if mode:
+                entry["mode"] = mode
+            if blend_path:
+                entry["blend"], entry["blend_path"] = blend, blend_path
             data["last_for_blend"][blend or "default"] = chat_id
             self._write(data)
 

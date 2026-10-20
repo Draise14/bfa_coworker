@@ -247,7 +247,10 @@ class ChatSurface:
         u, pad = style.unit, style.pad * 0.7
         row = Rect(rect.x + pad, rect.top - pad - u, rect.w - 2 * pad, u)
         side = canvas.icon_size()
-        canvas.icon(Rect(row.x, row.y + (u - side) / 2, side, side), top.mode_icon, style.text)
+        # The mode icon is a button: it opens the mode menu (#193).
+        if canvas.button(Rect(row.x - pad * 0.25, row.y, side + pad * 0.5, u), "mode_menu", "",
+                         icon=top.mode_icon):
+            actions.append(("mode_menu", ""))
         # Buttons from the right: settings, open the editor, Start/Stop.
         bw = u * 1.15
         x = row.right

@@ -1383,8 +1383,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
         box = layout.box()
         box.label(text="Operating Mode", icon='TOOL_SETTINGS')
-        mode_row = box.row(align=True)
-        mode_row.prop(self, "operating_mode", expand=True)
+        from . import ui_chat as _uc_modes
+        mode_row = _uc_modes.draw_mode_switcher(box, self, full_names=True)
         if agent_running:
             mode_row.enabled = False
             box.label(

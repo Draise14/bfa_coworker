@@ -254,20 +254,20 @@ OPERATING_MODE_ITEMS: list[tuple[str, str, str, str, int]] = [
         1,
     ),
     (
-        "EXTERNAL_HARNESS",
-        "External Harness",
-        "Bridge-only mode -- connect an external MCP client "
-        "(Claude Desktop, Cursor, VS Code, etc.)",
-        "NETWORK_DRIVE",
-        2,
-    ),
-    (
         "EXTERNAL_AGENT",
         "External Agent",
         "Chat here in Coworker; an agent app on this computer (OpenCode, Claude Code, Codex, "
         "Gemini, Copilot) does the work with Coworker's Blender tools",
         "LINKED",
         3,
+    ),
+    (
+        "EXTERNAL_HARNESS",
+        "External Harness",
+        "Bridge-only mode -- connect an external MCP client "
+        "(Claude Desktop, Cursor, VS Code, etc.)",
+        "NETWORK_DRIVE",
+        2,
     ),
 ]
 

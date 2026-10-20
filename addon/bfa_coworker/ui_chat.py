@@ -3659,20 +3659,10 @@ def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool 
     prefs = context.preferences.addons[__package__].preferences
     is_harness = (prefs.operating_mode == "EXTERNAL_HARNESS")
 
-    # -- Mode info + Settings button --
-    mode_row = layout.row(align=True)
-    mode_row.scale_y = 0.9
-    if is_harness:
-        mode_row.label(text="External MCP", icon='WORLD')
-    elif prefs.operating_mode == "EXTERNAL_AGENT":
-        mode_row.label(text="External Agent", icon='LINKED')
-    elif prefs.operating_mode == "LOCAL_LLM":
-        mode_row.label(text="Local LLM", icon='CONSOLE')
-    else:
-        mode_row.label(text="Remote API", icon='URL')
-    # NOTE: The model name is intentionally NOT shown here (issue #70).
-    # It lives only in the Status & Diagnostics panel, which shows the
-    # mode-correct model (local llama-server model or remote API model).
+    # -- The operating mode, switchable right here (#193) --
+    narrow = context.region is not None and context.region.width < 320 * context.preferences.system.ui_scale
+    mode_row = draw_mode_switcher(layout, prefs, icons_only=narrow)
+    mode_row.enabled = not (state.mcp_server_running or mcp_to_blender_server.is_running())
     if show_prefs:     # the Coworker editor has its settings button in the header
         mode_row.separator(factor=0.3)
         mode_row.operator("bfacw.open_addon_prefs", icon="PREFERENCES", text="")
@@ -4788,6 +4778,52 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
 # Helpers
 
 
+# The three modes where you chat in Coworker, then the one where you chat elsewhere (#192).
+_INTEGRATED_MODES = ("LOCAL_LLM", "REMOTE_API", "EXTERNAL_AGENT")
+# Short names for the switcher in narrow sidebars (the tooltips keep the full ones).
+_SHORT_MODE = {"LOCAL_LLM": "Local", "REMOTE_API": "Remote", "EXTERNAL_AGENT": "Agent",
+               "EXTERNAL_HARNESS": "Harness"}
+
+
+def draw_mode_switcher(layout, prefs, icons_only: bool = False, full_names: bool = False):
+    """Local / Remote / External Agent | External Harness, one click each (#193).
+    Returns the row (callers disable it while something runs)."""
+    row = layout.row(align=True)
+    group = row.row(align=True)
+    def label(ident: str) -> dict:
+        if full_names:
+            return {}
+        if icons_only and ident != prefs.operating_mode:    # narrow: only the active one is named
+            return {"text": ""}
+        return {"text": _SHORT_MODE[ident]}
+    for ident in _INTEGRATED_MODES:
+        group.prop_enum(prefs, "operating_mode", ident, **label(ident))
+    row.separator(factor=0.6)
+    row.prop_enum(prefs, "operating_mode", "EXTERNAL_HARNESS", **label("EXTERNAL_HARNESS"))
+    return row
+
+
+class BFACW_MT_operating_mode(bpy.types.Menu):  # type: ignore[misc]
+    """Switch how Coworker works: Local, Remote, External Agent, or External Harness"""
+    bl_idname = "BFACW_MT_operating_mode"
+    bl_label = "Operating Mode"
+
+    def draw(self, context: bpy.types.Context) -> None:
+        layout = self.layout
+        prefs = context.preferences.addons[__package__].preferences
+        running = agent_controller._agent_state.mcp_server_running or mcp_to_blender_server.is_running()
+        col = layout.column()
+        col.enabled = not running
+        for ident in _INTEGRATED_MODES:
+            col.prop_enum(prefs, "operating_mode", ident)
+        col.separator()
+        col.prop_enum(prefs, "operating_mode", "EXTERNAL_HARNESS")
+        if running:
+            layout.label(text="Stop Coworker to switch modes", icon='INFO')
+        layout.separator()
+        layout.operator("bfacw.open_addon_prefs", text="All Settings...", icon='PREFERENCES')
+
+
 def _draw_attachment_row(layout, props, context, minimal: bool = False) -> None:
     """Draw the chat image socket + capture buttons (issue #88 / Tier 3k).
 
@@ -5595,6 +5631,7 @@ _classes = (
 
     BFACW_PT_chat_queue,
     BFACW_PT_chat_plan,
+    BFACW_MT_operating_mode,
     BFACW_PT_chat_history,
     BFACW_OT_chat_open,
     BFACW_OT_chat_new,

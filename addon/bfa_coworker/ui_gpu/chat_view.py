@@ -102,8 +102,6 @@ class ChatView:
     thumb_size: str = "M"               # attachment thumbnails: S, M or L
     # The host sets it when the last turn can be undone in one step (Engine 6b).
     revertable: bool = False
-    # The running turn's live Thinking box is folded (the floating Thinking button, #178).
-    thinking_folded: bool = False
     # The host's lookup of an image's pixel size by name (None: not loaded).
     image_size: Callable[[str], "tuple[int, int] | None"] | None = None
     content_height: float = 0.0
@@ -159,14 +157,16 @@ class ChatView:
             if canvas.button(jump, "jump", "", icon="TRIA_DOWN"):
                 actions.append(("jump", ""))
             right = jump.x - pad * 0.5
-        if active >= 0 and str(getattr(live, "reasoning_text", "") or "").strip():
-            # Fold / unfold the live Thinking box from wherever you are in the chat.
-            label = "Thinking"
+        if active >= 0 and split_turn(turns[active])[1]:
+            # Fold / unfold the running turn's Workshop from wherever you are in the chat
+            # (#196); the Thinking box always shows -- it lets you feel what's happening.
+            key = "t{:d}".format(active)
+            label = "Workshop"
             w = canvas.icon_size() + canvas.measure(label, "ui", style.font_size) + 2.5 * style.pad
             pill = Rect(right - w, rect.y + pad, w, size)
-            if canvas.button(pill, "fold_thinking", label,
-                             icon="TRIA_RIGHT" if self.thinking_folded else "TRIA_DOWN"):
-                actions.append(("fold_thinking", ""))
+            if canvas.button(pill, "fold_workshop", label,
+                             icon="TRIA_DOWN" if key in self.expanded else "TRIA_RIGHT"):
+                actions.append(("toggle", key))
         return actions
 
     # -- measuring -----------------------------------------------------------------
@@ -277,10 +277,8 @@ class ChatView:
         if started:
             label += "  |  " + fmt_duration(time.time() - started)
         reasoning = " ".join(str(getattr(live, "reasoning_text", "") or "").split())
-        if reasoning and self.thinking_folded:
-            label += "  |  thinking hidden"
         top = self._icon_line(canvas, x, top, self.agent_icon, label, _soft(style.text, 0.15))
-        if reasoning and not self.thinking_folded:
+        if reasoning:
             inner_w = width - 3 * pad
             lines = wrap_text(reasoning, inner_w, canvas.measure, "ui", style.font_size)[-_LIVE_LINES:]
             h = _LIVE_LINES * style.line_height + pad

@@ -167,7 +167,9 @@ class BFACW_OT_gpu_input(bpy.types.Operator):
         router = _HOST["router"]
         if router is None:
             return self._finish()
-        if event.type in _IGNORED:
+        if event.type in _IGNORED or not event.type:
+            # No type = an event Python can't name, like a file drop (EVT_DROP): it must reach
+            # the file handlers even while the box has focus (#215).
             return {"PASS_THROUGH"}
         try:
             return self._handle(context, event, router)

@@ -189,8 +189,11 @@ def revert_turn() -> str:
         return "The scene changed after the turn, so use Edit > Undo History to pick the step."
     # The tools' own operators push undo steps of their own during the turn, so one
     # undo only took back the last of them (#242): go back to the turn's "Before" step.
-    import bpy  # pylint: disable=import-error
-    stack = getattr(bpy.context.window_manager, "undo_stack", None)
+    try:
+        import bpy  # pylint: disable=import-error
+        stack = getattr(bpy.context.window_manager, "undo_stack", None)
+    except (ImportError, AttributeError):
+        stack = None
     if stack is not None:
         names = [step.name for step in stack.steps]
         if _turn["name"] not in names:

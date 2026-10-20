@@ -79,7 +79,7 @@ class TestRevert(unittest.TestCase):
     def setUp(self):
         self.calls = []
         self._undo = api._undo
-        api._undo = lambda message="": self.calls.append(message) or True
+        api._undo = lambda message="", to_item=-1: self.calls.append(message or to_item) or True
         api._turn.update(before=False, after=False, edits=0)
 
     def tearDown(self):
@@ -90,11 +90,27 @@ class TestRevert(unittest.TestCase):
         api.turn_started("Claude Code's turn")
         api.turn_started("Claude Code's turn")            # the timer seeing it again: no second step
         api.turn_finished("Claude Code's turn")
-        self.assertEqual(self.calls, ["Before Claude Code's turn", "Claude Code's turn"])
+        self.assertEqual(len(self.calls), 2)
+        self.assertTrue(self.calls[0].startswith("Before Claude Code's turn ("))   # a name of its own (#242)
+        self.assertEqual(self.calls[1], "Claude Code's turn")
         self.assertTrue(api.can_revert())
         self.assertEqual(api.revert_turn(), "")
-        self.assertEqual(self.calls[-1], "")                # one plain undo
+        self.assertEqual(self.calls[-1], -1)                # no undo stack here (no bpy): one plain undo
         self.assertFalse(api.can_revert())
+
+    def test_revert_goes_back_to_the_turns_before_step(self):
+        # #242: a tool's own undo steps in between; Revert jumps to "Before ..." by name.
+        api.turn_started("Coworker's turn")
+        api.turn_finished("Coworker's turn")
+        names = ["Original", api._turn["name"], "wire_node_group", "Coworker's turn"]
+        steps = [types.SimpleNamespace(name=n) for n in names]
+        wm = types.SimpleNamespace(undo_stack=types.SimpleNamespace(steps=steps))
+        sys.modules["bpy"] = types.SimpleNamespace(context=types.SimpleNamespace(window_manager=wm))
+        try:
+            self.assertEqual(api.revert_turn(), "")
+        finally:
+            del sys.modules["bpy"]
+        self.assertEqual(self.calls[-1], 1)                 # undo_history(item=1), the turn's Before step
 
     def test_no_revert_after_you_changed_the_scene(self):
         api.turn_started("Coworker's turn")

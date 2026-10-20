@@ -303,6 +303,14 @@ def _sync_box(surface: ChatSurface, props: Any, busy: bool, running: bool, harne
     box.attachment = image.name if image is not None else ""
     surface.attachment_pinned = not getattr(props, "chat_image_send_once", True)
     surface.attachment_note = "Your client can look at it (get_attached_image)" if harness else ""
+    if surface.compact:     # the sidebar chat: a button column; the attach icons go there (#214)
+        from . import coworker_api
+        box.attach_buttons = False
+        last = ("stop", "PAUSE") if busy else ("revert_turn", "LOOP_BACK") if coworker_api.can_revert() else None
+        surface.tools = tuple(t for t in (
+            ("new_thread", "ADD"), ("mention", "OUTLINER_OB_MESH"), last, ("open_editor", "WINDOW"), ("", ""),
+            ("attach_menu", "IMAGE_DATA"), ("attach_render", "RENDER_STILL"), ("attach_screen", "FULLSCREEN_ENTER"),
+        ) if t is not None)
     box.busy = busy
     box.placeholder = ("Ask Coworker..." if running else
                        "Start Coworker to chat (Start, above)" if not harness else "")
@@ -710,6 +718,10 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
         if props.chat_input != value:
             props.chat_input = value
             _tag_chat_regions()         # the other chats show the new draft at once
+    elif action == "new_thread":
+        ops.chat_clear()
+    elif action == "mention":
+        ops.mention_search("INVOKE_DEFAULT")
     elif action == "attach_menu":
         bpy.ops.wm.call_panel(name="BFACW_PT_attach_popover", keep_open=True)
     elif action == "attach_render":

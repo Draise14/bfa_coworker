@@ -112,6 +112,8 @@ class ChatSurface:
     drop_hover: bool = False     # an image is being dragged over: show the drop target
     attachment_pinned: bool = False   # the attached image stays for every message
     attachment_note: str = ""         # the tray's second line instead (External Harness: #199)
+    # A column of icon buttons beside the messages (#214): (action, icon); ("", "") = a gap.
+    tools: tuple[tuple[str, str], ...] = ()
 
     # -- mouse (region pixels) ------------------------------------------------------
     def hit(self, x: float, y: float) -> str | None:
@@ -213,6 +215,8 @@ class ChatSurface:
             anchor_y = chat_y if show_input else rect.y + pad
             chat_y = self._draw_approval(canvas, Rect(inner.x, anchor_y, inner.w, 0), approval, actions) + pad
         chat = Rect(rect.x, chat_y, rect.w, max(0.0, top_edge - chat_y - pad))
+        if self.tools and notice is None and chat.w > style.unit * 6:
+            chat = self._draw_tools(canvas, chat, actions)
         self._chat_rect = chat
         if notice is not None:
             self._draw_notice(canvas, chat, notice, actions)
@@ -294,6 +298,23 @@ class ChatSurface:
                     actions.append(("chat_mode", mode_id))
             bottom = mrow.y - pad * 0.5
         return bottom
+
+    def _draw_tools(self, canvas: Canvas, chat: Rect, actions: list[tuple[str, str]]) -> Rect:
+        """The icon column on the left of the messages (#214); returns the room left for them."""
+        style = canvas.style
+        u, pad = style.unit, style.pad * 0.5
+        side = u * 1.15
+        x, y = chat.x + pad, chat.top - pad
+        for action, icon in self.tools:
+            if not action:
+                y -= pad * 1.5
+                continue
+            if y - side < chat.y:
+                break
+            if canvas.button(Rect(x, y - side, side, side), "tool:" + action, "", icon=icon):
+                actions.append((action, ""))
+            y -= side + pad * 0.4
+        return Rect(x + side, chat.y, max(0.0, chat.right - x - side), chat.h)
 
     def _draw_tray(self, canvas: Canvas, anchor: Rect, actions: list[tuple[str, str]]) -> float:
         """The image waiting to be sent, in its own box above the input: a thumbnail,

@@ -245,6 +245,19 @@ class TestPermissionsAndPrompt(unittest.TestCase):
         self.assertEqual(answers, [None])
         self.assertIsNone(engine.approvals.current())
 
+    def test_approval_auto_never_asks(self):
+        # #240: Auto allows without a card; Only Coworker Tools still refuses the agent's own.
+        engine = ea.AcpEngine(_state())
+        engine._turn_id, engine.ask_coworker_tools, engine.never_ask = "t1", True, True
+        answers = []
+        options = [{"optionId": "a1", "kind": "allow_once"}, {"optionId": "r1", "kind": "reject_once"}]
+        engine._on_permission({"toolCall": {"title": "mcp__bfa-coworker__execute_blender_code"}, "options": options},
+                              answers.append)
+        self.assertEqual(answers, ["a1"])
+        self.assertIsNone(engine.approvals.current())
+        engine._on_permission({"toolCall": {"title": "bash"}, "options": options}, answers.append)
+        self.assertEqual(answers[-1], "r1")                        # only_coworker_tools (on by default)
+
     def test_slash_command_goes_as_typed(self):
         engine = ea.AcpEngine(_state())
         engine.client = types.SimpleNamespace(commands=[{"name": "compact", "description": "Shrink"},

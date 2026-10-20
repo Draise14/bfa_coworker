@@ -310,6 +310,11 @@ def _sync_box(surface: ChatSurface, props: Any, busy: bool, running: bool, harne
     box.attachment = image.name if image is not None else ""
     surface.attachment_pinned = not getattr(props, "chat_image_send_once", True)
     surface.attachment_note = "Your client can look at it (get_attached_image)" if harness else ""
+    from .shared import APPROVAL_MODE_ITEMS
+    prefs = _prefs()
+    mode = getattr(prefs, "approval_mode", "ASK") if prefs is not None else "ASK"
+    box.approval = next(((name if name != "Risky only" else "Risky", icon)
+                         for ident, name, _d, icon, _n in APPROVAL_MODE_ITEMS if ident == mode), ("", ""))
     if surface.compact:     # the sidebar chat: a button column; the attach icons go there (#214)
         from . import coworker_api
         box.attach_buttons = False
@@ -753,6 +758,8 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
         ops.chat_clear()
     elif action == "mention":
         ops.mention_search("INVOKE_DEFAULT")
+    elif action == "approval_menu":            # Ask / Risky only / Auto (#240)
+        bpy.ops.wm.call_menu(name="BFACW_MT_approval_mode")
     elif action == "attach_menu":
         bpy.ops.wm.call_panel(name="BFACW_PT_attach_popover", keep_open=True)
     elif action == "attach_render":

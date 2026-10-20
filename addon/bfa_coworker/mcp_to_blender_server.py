@@ -1270,20 +1270,21 @@ def _execute_code_from_request(
     if _should_log_request():
         print("request:\n{:s}".format(code), file=sys.stderr)
     _started = time.monotonic()
-    # Engine 5 (#166): a risky step asks first (opt-in); the answer comes back deferred.
-    _risky = ""
+    # Engine 5 (#166) / #240: by the approval mode, a step asks first; the answer comes back deferred.
+    _kind, _why = "", ""
     try:
         import bpy as _bpy  # pylint: disable=import-error
-        if getattr(_bpy.context.preferences.addons[__package__].preferences, "ask_before_risky_steps", False):
-            from . import risky_steps
-            _risky = risky_steps.reason(code)
-    except (KeyError, AttributeError):
-        _risky = ""
-    if _risky:
+        from . import risky_steps
+        _prefs = _bpy.context.preferences.addons[__package__].preferences
+        _kind, _why = risky_steps.ask_kind(str(request.get("tool") or ""), code,
+                                           getattr(_prefs, "approval_mode", "ASK"), _prefs.operating_mode)
+    except (KeyError, AttributeError, ImportError):
+        _kind, _why = "", ""
+    if _kind:
         from . import risky_steps
         _response, _check = risky_steps.wrap(
-            code, strict_json, _risky, lambda c, s: _execute_code(c, strict_json=s),
-            tool=str(request.get("tool") or ""))
+            code, strict_json, _why, lambda c, s: _execute_code(c, strict_json=s),
+            tool=str(request.get("tool") or ""), kind=_kind)
         exec_result = _ExecResult(_response, _check)
     else:
         exec_result = _execute_code(code, strict_json=strict_json)

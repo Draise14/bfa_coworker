@@ -48,6 +48,7 @@ TIPS: dict[str, str] = {
     "attach_pin": "Keep this image for every message (pinned), or send it with the next one only",
     "attach_remove": "Remove the image",
     "send": "Send (Enter)",
+    "approval_menu": "Approval: how much the chat asks before tools run (Ask / Risky only / Auto)",
     "queue": "Queue this message: it goes when the running turn ends",
     "stop": "Stop the running turn",
     "start": "Start Coworker",

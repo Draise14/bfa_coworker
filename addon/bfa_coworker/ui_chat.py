@@ -68,7 +68,7 @@ from . import llm_manager
 from . import mcp_to_blender_server
 from .engine import EngineCaps, Prompt
 from .engine_loop import LoopConfig, LoopEngine
-from .shared import effective_ports, CHAT_MODE_ITEMS, OPERATING_MODE_ITEMS
+from .shared import effective_ports, APPROVAL_MODE_ITEMS, CHAT_MODE_ITEMS, OPERATING_MODE_ITEMS
 
 
 # The engine behind the chat for Local LLM / Remote API (Tier 4i.1b).  Created
@@ -317,6 +317,35 @@ def _on_chat_mode(self, _context) -> None:
         _sync_agent_mode(self.chat_mode)
 
 
+def _agent_follows_approval(engine, mode: str) -> None:
+    engine.ask_coworker_tools = mode == "ASK"
+    engine.never_ask = mode == "AUTO"
+
+
+def apply_approval_mode(mode: str) -> None:
+    """The approval mode changed (#240): the agent follows, and every "Always" asks again."""
+    from . import risky_steps
+    risky_steps.APPROVALS.forget_always()
+    if _acp is not None:
+        _agent_follows_approval(_acp, mode)
+        _acp.approvals.forget_always()
+    _tag_chat_regions_redraw()
+
+
+class BFACW_MT_approval_mode(bpy.types.Menu):  # type: ignore[misc]
+    """How much the chat asks before tools run"""
+    bl_idname = "BFACW_MT_approval_mode"
+    bl_label = "Approval"
+
+    def draw(self, context: bpy.types.Context) -> None:
+        prefs = context.preferences.addons[__package__].preferences
+        col = self.layout.column()
+        for ident, _name, _desc, _icon, _n in APPROVAL_MODE_ITEMS:
+            col.prop_enum(prefs, "approval_mode", ident)
+        col.separator()
+        col.label(text="Switching forgets every \"Always\"", icon='INFO')
+
+
 def _picker_for(category: str) -> dict | None:
     if _acp is None or not _acp.connected:
         return None
@@ -517,7 +546,7 @@ def draw_external_agent_setup(layout, context, compact: bool = False) -> None:
         opt = box.row()
         opt.enabled = not state.mcp_server_running
         opt.prop(prefs, "external_agent_only_coworker_tools")
-        opt.prop(prefs, "external_agent_ask_coworker_tools")
+        opt.prop(prefs, "approval_mode", text="")         # Ask asks before Blender tools too (#240)
         tools = box.row()
         tools.enabled = not state.mcp_server_running
         tools.prop(prefs, "external_agent_tools_on_demand")
@@ -2621,7 +2650,8 @@ def approval_card():
     risky = risky_steps.APPROVALS.current()
     if risky is not None:
         return Approval(title=risky.title, detail=risky.detail, waiting=risky_steps.APPROVALS.count(),
-                        note="Ask Before Risky Steps is on (Settings > Advanced > Bridge Server)", icon="WARNING")
+                        note="Approval: the lock button on the chat's input (Ask / Risky only / Auto)",
+                        icon="WARNING" if risky.reason else "LOCKED")
     from . import coworker_api
     open_question = coworker_api.current_question()
     if open_question is None:
@@ -3608,7 +3638,7 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         only_ours = getattr(prefs, "external_agent_only_coworker_tools", True)
         env = acp_presets.launch_env(preset, only_coworker_tools=only_ours)
         engine.only_coworker_tools = only_ours
-        engine.ask_coworker_tools = getattr(prefs, "external_agent_ask_coworker_tools", False)
+        _agent_follows_approval(engine, getattr(prefs, "approval_mode", "ASK"))
         engine.approvals.on_change = engine.on_change     # a question redraws the chats
         cwd = str(_agent_workspace())
         engine.connecting = True
@@ -6297,6 +6327,7 @@ _classes = (
     BFACW_OT_plan_execute,
     BFACW_OT_plan_card,
     BFACW_PT_mode_popover,
+    BFACW_MT_approval_mode,
     BFACW_PT_chat_history,
     BFACW_OT_chat_open,
     BFACW_OT_chat_where,

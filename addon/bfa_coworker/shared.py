@@ -238,6 +238,20 @@ AGENT_MODE_ITEMS: list[tuple[str, str, str]] = [
 # -- Operating Mode EnumProperty Items ------------------------------------
 # Unified top-level selector that combines agent_mode + llm_mode.
 
+# How much the chat asks before tools run (#240), for every engine.
+APPROVAL_MODE_ITEMS: list[tuple[str, str, str, str, int]] = [
+    ("ASK", "Ask",
+     "Ask before each tool that changes the scene (Allow once, Always for that tool, Deny), and before "
+     "risky steps. Looking at the scene never asks. External Agent: its tool requests; External Harness: "
+     "your client asks per tool itself, so only risky steps ask here", "LOCKED", 0),
+    ("RISKY", "Risky only",
+     "Ask only before risky steps: saving or opening files, quitting, deleting or moving files, exporting, "
+     "running another program", "WARNING", 1),
+    ("AUTO", "Auto",
+     "Never ask: every tool runs straight away (the agent's own tools still follow Only Coworker Tools)",
+     "UNLOCKED", 2),
+]
+
 OPERATING_MODE_ITEMS: list[tuple[str, str, str, str, int]] = [
     (
         "LOCAL_LLM",

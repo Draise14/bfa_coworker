@@ -2718,7 +2718,7 @@ class BFACW_OT_chat_capture_render(Operator):  # type: ignore[misc]
 # Like the Asset Browser's "Capture Screenshot Preview": the screen dims except the
 # part that will be taken.  Click an editor to take it, or drag a rectangle; Enter
 # takes the one shown (the last one), Space moves it, Shift keeps it square.
-_SHOT: dict = {"handlers": [], "rect": None}
+_SHOT: dict = {"handlers": [], "rect": None, "window": None, "hover": False}
 _SHOT_REGIONS = ("WINDOW", "HEADER", "UI", "TOOLS", "TOOL_HEADER", "FOOTER", "NAVIGATION_BAR",
                  "EXECUTE", "ASSET_SHELF", "ASSET_SHELF_HEADER", "CHANNELS", "PREVIEW")
 _SHOT_DRAG = 6
@@ -2737,8 +2737,8 @@ def _shot_rect(a, b, square: bool = False) -> tuple[int, int, int, int]:
 def _shot_draw() -> None:
     rect = _SHOT.get("rect")
     region = bpy.context.region
-    if rect is None or region is None:
-        return
+    if rect is None or region is None or bpy.context.window != _SHOT["window"]:
+        return          # only in the window being captured (#217), not a copy in every window
     import gpu
     from gpu_extras.batch import batch_for_shader
     ox, oy = region.x, region.y
@@ -2754,13 +2754,17 @@ def _shot_draw() -> None:
         return tris
 
     shade = quads(((0, 0, w, bottom), (0, top, w, h), (0, bottom, left, top), (right, bottom, w, top)))
-    edge = quads(((left - 2, bottom - 2, right + 2, bottom), (left - 2, top, right + 2, top + 2),
-                  (left - 2, bottom, left, top), (right, bottom, right + 2, top)))
+    # The border inside the part's edge (#217): a whole editor's edge lies in the gap
+    # between areas, where nothing draws.
+    edge = quads(((left, bottom, right, bottom + 2), (left, top - 2, right, top),
+                  (left, bottom, left + 2, top), (right - 2, bottom, right, top)))
+    # Hovering an editor (no part dragged yet): tint it, so it reads even when it fills the window.
+    tint = quads(((left, bottom, right, top),)) if _SHOT.get("hover") else []
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
     gpu.state.blend_set("ALPHA")
     # As the Asset Browser's capture: a light veil outside, the border in the theme's colour.
     border = tuple(bpy.context.preferences.themes[0].user_interface.editor_border) + (1.0,)
-    for tris, color in ((shade, (1.0, 1.0, 1.0, 0.25)), (edge, border[:4])):
+    for tris, color in ((shade, (1.0, 1.0, 1.0, 0.25)), (tint, (1.0, 1.0, 1.0, 0.08)), (edge, border[:4])):
         if tris:
             batch = batch_for_shader(shader, "TRIS", {"pos": tris})
             shader.bind()
@@ -2789,7 +2793,7 @@ def _shot_handlers_remove() -> None:
         except (TypeError, ValueError, RuntimeError):
             pass
     _SHOT["handlers"].clear()
-    _SHOT["rect"] = None
+    _SHOT["rect"] = _SHOT["window"] = None
 
 
 def _shot_redraw(window) -> None:
@@ -2836,6 +2840,7 @@ class BFACW_OT_chat_capture_screen(Operator):  # type: ignore[misc]
         self._win, self._start, self._dragging, self._moving = win, None, False, False
         self._square, self._cursor = False, (event.mouse_x, event.mouse_y)
         _SHOT["rect"] = last if self._has_last else _area_rect_at(win, *self._cursor)
+        _SHOT["window"], _SHOT["hover"] = win, not self._has_last
         _shot_handlers_add()
         win.cursor_modal_set("CROSSHAIR")
         try:
@@ -2893,14 +2898,14 @@ class BFACW_OT_chat_capture_screen(Operator):  # type: ignore[misc]
             rect = _SHOT["rect"]
             if self._moving and rect is not None:
                 _SHOT["rect"] = (rect[0] + dx, rect[1] + dy, rect[2] + dx, rect[3] + dy)
-                self._has_last = True
+                self._has_last, _SHOT["hover"] = True, False
             elif self._start is not None:
                 sx, sy = self._start
                 if not self._dragging and abs(x - sx) > _SHOT_DRAG and abs(y - sy) > _SHOT_DRAG:
                     self._dragging = True
                 if self._dragging:
                     _SHOT["rect"] = _shot_rect(self._start, (x, y), self._square)
-                    self._has_last = True
+                    self._has_last, _SHOT["hover"] = True, False
             elif not self._has_last:
                 _SHOT["rect"] = _area_rect_at(self._win, x, y)
             _shot_redraw(self._win)

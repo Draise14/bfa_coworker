@@ -64,6 +64,10 @@ class _BFACW_OT_test_remote_api(bpy.types.Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
+# The remote provider's models from the last Refresh (the chat's Model dropdown, #195).
+REMOTE_MODEL_IDS: list[str] = []
+
+
 class _BFACW_OT_refresh_remote_models(bpy.types.Operator):  # type: ignore[misc]
     bl_idname = "bfacw.refresh_remote_models"
     bl_label = "Refresh Models"
@@ -89,6 +93,8 @@ class _BFACW_OT_refresh_remote_models(bpy.types.Operator):  # type: ignore[misc]
 
         prefs.remote_models_count = len(models)
         prefs.remote_models_fetch_error = ""
+        # #195: kept, so the chat's Model row can be a dropdown.
+        REMOTE_MODEL_IDS[:] = sorted({str(m.get("id") if isinstance(m, dict) else m) for m in models} - {""})
 
         self.report({"INFO"}, "{:d} models available from the API".format(len(models)))
         return {"FINISHED"}

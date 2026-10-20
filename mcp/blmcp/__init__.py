@@ -60,6 +60,17 @@ def main() -> int:
 
     mcp = FastMCP("bfa-coworker", instructions=str(prompts["initial_instructions"]))
 
+    # Engine 9: every tool's result is kept short (a preview + a handle to the rest).
+    from blmcp.tools_helpers.bounded_output import bounded
+    _register_tool = mcp.tool
+
+    def _bounded_tool(*args, **kwargs):
+        if len(args) == 1 and callable(args[0]) and not kwargs:     # bare @mcp.tool
+            return _register_tool(bounded(args[0]))
+        decorate = _register_tool(*args, **kwargs)
+        return lambda fn: decorate(bounded(fn))
+    mcp.tool = _bounded_tool  # type: ignore[method-assign]
+
     # Auto-discover and register all tools (they are never un-registered).
     import blmcp.tools as tools_pkg
 

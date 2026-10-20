@@ -1286,6 +1286,7 @@ _SURFACE_TOOLS = frozenset({
     "get_object_detail_summary",
     "get_objects_summary",
     "get_operation_history",      # Avoid repeating failed operations.
+    "read_tool_output",           # Engine 9: the rest of a shortened result.
     # Read-only asset/polyhaven status -- useful for any domain, was previously
     # unreachable because it appeared in no surface/domain set.
     "get_polyhaven_status",

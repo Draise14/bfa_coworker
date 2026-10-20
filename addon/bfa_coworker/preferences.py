@@ -418,15 +418,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
     operating_mode: EnumProperty(  # type: ignore[valid-type]
         name="Operating Mode",
-        description=(
-            "Select how the Coworker agent connects to an LLM.\n"
-            "  Local -- run a local LLM via llama-server (requires download)\n"
-            "  Remote -- use a remote API like OpenAI or OpenRouter\n"
-            "  External Harness -- MCP tools only, no built-in LLM\n"
-            "\n"
-            "WARN  Cannot be changed while the agent is running.\n"
-            "Stop the agent first, then switch modes."
-        ),
+        # One line: each mode's tab adds its own description (#233).
+        description="Where the chat and the model run (stop Coworker to switch)",
         items=OPERATING_MODE_ITEMS,
         default="LOCAL_LLM",
         update=_update_operating_mode,

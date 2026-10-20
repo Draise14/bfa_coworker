@@ -239,6 +239,7 @@ class InputBox:
     _slash: bool = False                   # completing a "/command" rather than an "@"
     blink_phase: bool = True               # the host toggles this for the caret blink
     big_buttons: bool = False              # double-height buttons (the editor's full chat)
+    attach_buttons: bool = True            # image picker / render / screen on the button row (#213)
     _narrow: bool = False                  # set by draw(): the box is too thin for labelled buttons
     rect: Rect | None = None               # where the box was last drawn (for clicks)
     # Last drawn lines: (top, bottom, x0, start offset, text) and the measure used.
@@ -503,14 +504,27 @@ class InputBox:
                 else:
                     self.send()      # Send, or Queue (the host queues a send while a turn runs)
             right = button.x - gap
+        # Attach, on the left of the row (#213): the image picker, a render, part of the screen.
+        left = box.x + margin
+        if self.attach_buttons:
+            attach = [("attach_menu", "IMAGE_DATA")]
+            if not self._narrow:
+                attach += [("attach_render", "RENDER_STILL"), ("attach_screen", "FULLSCREEN_ENTER")]
+            for widget_id, icon in attach:
+                button = Rect(left, box.y + margin, u * 1.3, button_h)
+                if left + button.w > right - gap:
+                    break
+                if canvas.button(button, widget_id, "", icon=icon):
+                    self.actions.append((widget_id, ""))
+                left = button.right + gap * 0.5
         # The text colour of the field's current state: light on the normal field,
         # the selected-text colour on the focused (often light) field.
         hint_base = style.text_field.text_sel if self.focused else style.text_field.text
         hint_color = (hint_base[0], hint_base[1], hint_base[2], 0.55)
         hint = self._fit(canvas, "Enter to send  \u00b7  Shift+Enter: new line  \u00b7  @ to mention",
-                         right - box.x - 2 * pad)
+                         right - left - 2 * pad)
         if hint:
-            canvas.label(Rect(box.x + pad, box.y + margin, right - box.x - pad, button_h), hint, hint_color)
+            canvas.label(Rect(left + pad * 0.5, box.y + margin, right - left - pad, button_h), hint, hint_color)
         top = box.top - pad
         text_color = style.text_field.text_sel if self.focused else style.text_field.text
         lines = self._lines(canvas, rect.w)

@@ -657,8 +657,18 @@ def _router(context: Any, event: Any) -> tuple[ChatSurface, Any, Any] | None:
 
 # -- Actions ----------------------------------------------------------------------------
 
-def _window_override() -> dict:
+def _window_override(region: Any = None) -> dict:
+    """The window (and area) *region* is in, so an action from a floating window
+    happens there, not in the main one."""
     wm = bpy.context.window_manager
+    if region is not None:
+        try:
+            for window in wm.windows:
+                for area in window.screen.areas:
+                    if any(r == region for r in area.regions):
+                        return {"window": window, "screen": window.screen, "area": area, "region": region}
+        except ReferenceError:
+            pass
     window = bpy.context.window or (wm.windows[0] if wm.windows else None)
     return {"window": window, "screen": window.screen} if window is not None else {}
 
@@ -700,6 +710,12 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
         if props.chat_input != value:
             props.chat_input = value
             _tag_chat_regions()         # the other chats show the new draft at once
+    elif action == "attach_menu":
+        bpy.ops.wm.call_panel(name="BFACW_PT_attach_popover", keep_open=True)
+    elif action == "attach_render":
+        ops.chat_capture_render()
+    elif action == "attach_screen":
+        ops.chat_capture_screen("INVOKE_DEFAULT")
     elif action == "open_image":
         _open_image(value)
     elif action == "attachment_pin" and props is not None:
@@ -734,12 +750,11 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
 def _flush() -> None:
     pending = list(_PENDING)
     _PENDING.clear()
-    override = _window_override()
     for action, value, key in pending:
         entry = _SURFACES.get(key)
         surface, region = entry if entry is not None else (None, None)
         try:
-            with bpy.context.temp_override(**override):
+            with bpy.context.temp_override(**_window_override(region)):
                 _do(action, value, surface, region)
         except Exception as ex:  # pylint: disable=broad-exception-caught
             print("[Coworker] chat action {:s} failed: {:s}".format(action, str(ex)))
@@ -1127,7 +1142,7 @@ class BFACW_PT_editor_chat(_CoworkerPanel, bpy.types.Panel):
         from . import ui_chat
         # The plan is its own panel (Plan, under Queue), the image a picker (#171).
         ui_chat.draw_chat_controls(self.layout, context, show_chat_mode=False, show_prefs=False,
-                                   minimal_image=True)
+                                   show_image=False)      # on the input's button row (#213)
 
 
 # Blender wants poll(cls, context) exactly: closures, not default arguments.

@@ -107,6 +107,19 @@ class TestLayout(unittest.TestCase):
         self.assertNotIn("input", [w for _r, w in canvas.hit_areas])  # nothing to type into
         self.assertEqual(_click(surface, "notice:copy_config", notice=notice), [("notice", "copy_config")])
 
+    def test_attach_buttons_on_the_input_row(self):
+        # #213: the image picker, render and screen sit on the input's button row.
+        surface = sf.ChatSurface()
+        _draw(surface)
+        for widget in ("attach_menu", "attach_render", "attach_screen"):
+            self.assertEqual(_click(surface, widget), [(widget, "")])
+        narrow = sf.ChatSurface(compact=True)
+        canvas = lay.Canvas(st.Style(), lay.fixed_measure(0.55), narrow.interaction())
+        narrow.draw(canvas, lay.Rect(0, 0, 120, 400), [])
+        ids = [w for _r, w in canvas.hit_areas]
+        self.assertIn("attach_menu", ids)
+        self.assertNotIn("attach_screen", ids)          # a thin box keeps just the picker
+
     def test_notice_shows_the_attached_image(self):
         # External Harness (#199): a dropped image shows under the notice, with its own note.
         surface = sf.ChatSurface()

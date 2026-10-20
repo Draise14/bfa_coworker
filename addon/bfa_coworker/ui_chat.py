@@ -4951,9 +4951,9 @@ class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
             meta = "#{:d}  {:s}".format(idx + 1, name)
             if item.get("queued_at"):
                 meta += "  \u00b7  " + relative_time(float(item["queued_at"]))
-            if item.get("attachments"):
-                meta += "  \u00b7  image"
             head.label(text=meta, icon=icon)
+            if item.get("attachments"):         # an icon, not the word (#249)
+                head.label(text="", icon='IMAGE_DATA')
             if idx > 0:
                 op = head.operator("bfacw.queue_item", text="", icon='TRIA_UP', emboss=False)
                 op.action, op.index = "NEXT", idx

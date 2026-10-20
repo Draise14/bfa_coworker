@@ -132,7 +132,7 @@ def cancel_questions() -> None:
 # Each turn gets an undo step before and after it, so the agent's whole turn is one
 # step of Edit > Undo History, and Revert (the chat's button) undoes it in one go --
 # but only while you haven't changed the scene since (the depsgraph counter).
-_turn = {"before": False, "after": False, "edits": 0}
+_turn = {"before": False, "after": False, "edits": 0, "name": "", "n": 0}
 _edits = [0]
 
 
@@ -140,8 +140,9 @@ def _count_edit(*_args: Any) -> None:
     _edits[0] += 1
 
 
-def _undo(push_message: str = "") -> bool:
-    """``ed.undo_push`` (with a message) or ``ed.undo``, in a window's context."""
+def _undo(push_message: str = "", to_item: int = -1) -> bool:
+    """``ed.undo_push`` (with a message), ``ed.undo_history`` (to step *to_item*) or
+    ``ed.undo``, in a window's context."""
     import bpy  # pylint: disable=import-error
     wm = bpy.context.window_manager
     window = bpy.context.window or (wm.windows[0] if wm.windows else None)
@@ -151,6 +152,8 @@ def _undo(push_message: str = "") -> bool:
         with bpy.context.temp_override(window=window, screen=window.screen):
             if push_message:
                 bpy.ops.ed.undo_push(message=push_message)
+            elif to_item >= 0:
+                bpy.ops.ed.undo_history(item=to_item)
             else:
                 bpy.ops.ed.undo()
         return True
@@ -161,7 +164,10 @@ def _undo(push_message: str = "") -> bool:
 def turn_started(label: str) -> None:
     """Main thread, before the turn's first change."""
     if not _turn["before"]:
-        _turn.update(before=_undo("Before " + label), after=False)
+        # A name of its own, so Revert finds this step again (#242).
+        _turn["n"] += 1
+        name = "Before {:s} ({:d})".format(label, _turn["n"])
+        _turn.update(before=_undo(name), after=False, name=name)
 
 
 def turn_finished(label: str) -> None:
@@ -181,7 +187,18 @@ def revert_turn() -> str:
         return "There's no finished turn to revert."
     if _edits[0] != _turn["edits"]:
         return "The scene changed after the turn, so use Edit > Undo History to pick the step."
-    if not _undo():
+    # The tools' own operators push undo steps of their own during the turn, so one
+    # undo only took back the last of them (#242): go back to the turn's "Before" step.
+    import bpy  # pylint: disable=import-error
+    stack = getattr(bpy.context.window_manager, "undo_stack", None)
+    if stack is not None:
+        names = [step.name for step in stack.steps]
+        if _turn["name"] not in names:
+            return ("This turn made more steps than the undo history keeps (Preferences > System > "
+                    "Undo Steps), so use Edit > Undo History.")
+        if not _undo(to_item=len(names) - 1 - names[::-1].index(_turn["name"])):
+            return "Blender couldn't undo here."
+    elif not _undo():
         return "Blender couldn't undo here."
     _turn["after"] = False
     _redraw()

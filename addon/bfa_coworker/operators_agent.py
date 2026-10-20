@@ -396,7 +396,11 @@ _REFUSAL_STEPS: set[tuple[str, int]] = {
 }
 # Path to persist benchmark results.
 import os as _os
-_BENCHMARK_RESULTS_PATH = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "benchmark_results.json")
+# In the user's data folder: an installed extension's own folder may be read-only
+# or replaced by an update.
+_BENCHMARK_RESULTS_PATH = _os.path.join(
+    _os.environ.get("LOCALAPPDATA") or _os.path.join(_os.path.expanduser("~"), ".cache"),
+    "bfa_coworker", "benchmark_results.json")
 
 
 class _BFACW_OT_test_step(bpy.types.Operator):  # type: ignore[misc]
@@ -435,6 +439,11 @@ class _BFACW_OT_test_step(bpy.types.Operator):  # type: ignore[misc]
         # Capture the pre-step object set (main thread) so a FAILED step can
         # be rolled back and not poison the next step.
         _before_objects = {o.name for o in bpy.data.objects}
+        if step_idx + 1 == len(suite):
+            # The last step: save the results when it ends (it runs on a thread;
+            # saving after starting it saved nothing).  Set before it starts, so
+            # a step that fails at once still saves.
+            _save_when_done.add(self.suite)
         _run_test_step(
             context, self.suite, step_num, step_label, prompt,
             before_objects=_before_objects,
@@ -448,8 +457,6 @@ class _BFACW_OT_test_step(bpy.types.Operator):  # type: ignore[misc]
         if remaining == 0:
             # Auto-reset on completion.
             _test_suite_progress[self.suite] = 0
-            # Persist results.
-            _save_benchmark_results()
             self.report({"INFO"}, "Step {:d}/{:d} '{:s}' done -- suite complete, auto-reset!".format(
                 step_num, total, step_label))
         else:
@@ -561,6 +568,8 @@ def _save_benchmark_results() -> None:
 
     results = {
         "timestamp": _time.time(),
+        "engine": _bench_engine["label"] or "Local",       # Engine 10: which engine ran it
+        "statuses": {"{:s}:{:d}".format(k[0], k[1]): v for k, v in _test_suite_status.items()},
         "timings": {
             "{:s}:{:d}".format(k[0], k[1]): v
             for k, v in _test_suite_timings.items()
@@ -575,6 +584,7 @@ def _save_benchmark_results() -> None:
                 existing = _json.load(f)
                 if not isinstance(existing, list):
                     existing = [existing]
+        _os.makedirs(_os.path.dirname(_BENCHMARK_RESULTS_PATH), exist_ok=True)
         existing.append(results)
         # Keep last 20 runs.
         existing = existing[-20:]
@@ -585,18 +595,55 @@ def _save_benchmark_results() -> None:
         print("[Coworker] Failed to save benchmark results: {:s}".format(str(ex)))
 
 
-def _load_previous_benchmark() -> dict | None:
-    """Load the second-to-last benchmark run for comparison, or None."""
+def _load_benchmark_runs() -> list[dict]:
+    """Every saved run, oldest first ([] when none)."""
     import json as _json
     try:
         if _os.path.isfile(_BENCHMARK_RESULTS_PATH):
             with open(_BENCHMARK_RESULTS_PATH, "r") as f:
                 data = _json.load(f)
-                if isinstance(data, list) and len(data) >= 2:
-                    return data[-2]
+            return [r for r in (data if isinstance(data, list) else [data]) if isinstance(r, dict)]
     except Exception:  # pylint: disable=broad-exception-caught
         pass
+    return []
+
+
+def _load_previous_benchmark(engine: str | None = None) -> dict | None:
+    """The run before the latest one -- on the same *engine* when given (Engine 10:
+    a Claude Code run isn't compared with a local one).  Runs saved before engines
+    were recorded count as "Local"."""
+    runs = _load_benchmark_runs()[:-1]
+    for run in reversed(runs):
+        if engine is None or run.get("engine", "Local") == engine:
+            return run
     return None
+
+
+def _latest_per_engine() -> dict[str, dict]:
+    """The newest run of each engine, for the side-by-side table."""
+    latest: dict[str, dict] = {}
+    for run in _load_benchmark_runs():
+        latest[run.get("engine", "Local")] = run
+    return latest
+
+
+# Suites whose last step is running: save the results when it ends.
+_save_when_done: set[str] = set()
+
+# Which engine the current steps run on (set by _run_test_step).
+_bench_engine = {"label": ""}
+
+
+def _engine_label(prefs, llm_cfg) -> str:
+    """"Local", "Remote: <model>" or "External Agent: <agent>"."""
+    mode = getattr(prefs, "operating_mode", "")
+    if mode == "EXTERNAL_AGENT":
+        from . import ui_chat as _ui_chat
+        agent = _ui_chat._acp.agent_label if _ui_chat._acp is not None else ""
+        return "External Agent: " + (agent or "agent")
+    if getattr(llm_cfg, "mode", "") == "remote":
+        return "Remote: " + (getattr(llm_cfg, "remote_model", "") or "model")
+    return "Local"
 
 
 def _record_step_outcome(
@@ -705,9 +752,14 @@ def _run_test_step(
         api_key = llm_cfg.remote_api_key
         model = llm_cfg.remote_model or None
 
-    print("[Coworker] test suite '{:s}': step {:d}/{:s} starting...".format(
-        suite_key, step_num, step_label))
+    _bench_engine["label"] = _engine_label(prefs, llm_cfg)
+    print("[Coworker] test suite '{:s}': step {:d}/{:s} starting on {:s}...".format(
+        suite_key, step_num, step_label, _bench_engine["label"]))
     print("[Coworker] test suite '{:s}': prompt = {:s}".format(suite_key, prompt))
+
+    if getattr(prefs, "operating_mode", "") == "EXTERNAL_AGENT":
+        _run_agent_step(suite_key, step_num, step_label, prompt, before_objects, reset_on_failure)
+        return
 
     def _do_step():
         import time as _time
@@ -761,6 +813,9 @@ def _run_test_step(
             _ac._agent_state.error = str(ex)
         finally:
             _test_suite_running[suite_key] = False
+            if suite_key in _save_when_done:
+                _save_when_done.discard(suite_key)
+                _save_benchmark_results()
             # Reset-on-failure: roll the scene back to its pre-step object set
             # so the failed step's leftovers do not corrupt the next step.
             # Scheduled on the MAIN thread -- bpy data edits are not thread-safe.
@@ -773,6 +828,63 @@ def _run_test_step(
 
     thread = threading.Thread(target=_do_step, daemon=True)
     thread.start()
+
+
+_AGENT_STEP_TIMEOUT = 15 * 60.0
+
+
+def _run_agent_step(suite_key: str, step_num: int, step_label: str, prompt: str,
+                    before_objects: set[str] | None, reset_on_failure: bool) -> None:
+    """Engine 10: a benchmark step on the External Agent -- through its engine, like
+    a message from the chat, timed until its turn ends."""
+    from . import ui_chat as _ui_chat
+    from .engine import Prompt
+    engine = _ui_chat._acp_engine()
+    _ac = get_agent_controller()
+
+    def _do_step() -> None:
+        import time as _time
+        _test_suite_running[suite_key] = True
+        t_start = _time.monotonic()
+        prev_error = _ac._agent_state.error or ""
+        error = ""
+        try:
+            if not engine.connected:
+                raise RuntimeError("the External Agent isn't connected -- press Start first")
+            engine.submit(Prompt(text=prompt))
+            while engine.is_busy() and _time.monotonic() - t_start < _AGENT_STEP_TIMEOUT:
+                _time.sleep(0.25)
+            if engine.is_busy():
+                engine.cancel()
+                error = "timed out after {:.0f} min".format(_AGENT_STEP_TIMEOUT / 60)
+            else:
+                history = _ac._agent_state.conversation_history
+                last = history[-1] if history else {}
+                state_error = _ac._agent_state.error or ""
+                if state_error and state_error != prev_error:
+                    error = state_error
+                elif last.get("role") == "assistant" and str(last.get("content", "")).startswith(
+                        "The agent stopped with an error"):
+                    error = str(last["content"])
+        except Exception as ex:  # pylint: disable=broad-exception-caught
+            error = str(ex)
+        finally:
+            elapsed = _time.monotonic() - t_start
+            _record_step_outcome(suite_key, step_num, elapsed, error)
+            print("[Coworker] test suite '{:s}': step {:d}/{:s} {:s} in {:.1f}s{:s}".format(
+                suite_key, step_num, step_label, "FAILED" if error else "completed", elapsed,
+                " -- " + error if error else ""))
+            _test_suite_running[suite_key] = False
+            if suite_key in _save_when_done:
+                _save_when_done.discard(suite_key)
+                _save_benchmark_results()
+            if error and reset_on_failure and before_objects is not None:
+                bpy.app.timers.register(
+                    (lambda _b=set(before_objects): (_reset_scene_to_before(_b), None)[1]),
+                    first_interval=0.0,
+                )
+
+    threading.Thread(target=_do_step, daemon=True, name="bench-agent-step").start()
 
 
 # ---------------------------------------------------------------------------
@@ -1351,20 +1463,23 @@ class BFACW_OT_compare_benchmarks(bpy.types.Operator):  # type: ignore[misc]
         import time as _time
 
         current = _test_suite_timings
-        prev_data = _load_previous_benchmark()
+        engine = _bench_engine["label"] or "Local"
+        prev_data = _load_previous_benchmark(engine)
+        self._print_side_by_side()
 
         if not current:
             self.report({"INFO"}, "No current timings to compare.")
             return {"FINISHED"}
 
         if prev_data is None:
-            self.report({"INFO"}, "No previous benchmark run found. Run a suite first.")
+            self.report({"INFO"}, "No previous run on {:s} to compare with (the console shows every "
+                                  "engine side by side).".format(engine))
             return {"FINISHED"}
 
         prev_timings = prev_data.get("timings", {})
         prev_ts = prev_data.get("timestamp", 0)
 
-        print("\n[Coworker] Benchmark Comparison")
+        print("\n[Coworker] Benchmark Comparison on {:s}".format(engine))
         print("  Previous run: {:s}".format(
             _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(prev_ts))))
         print("  Current run: {:s}".format(
@@ -1389,3 +1504,22 @@ class BFACW_OT_compare_benchmarks(bpy.types.Operator):  # type: ignore[misc]
 
         self.report({"INFO"}, "Benchmark comparison printed to console.")
         return {"FINISHED"}
+
+    @staticmethod
+    def _print_side_by_side() -> None:
+        """Engine 10: the newest run of each engine, one column per engine."""
+        latest = _latest_per_engine()
+        if len(latest) < 2:
+            return
+        engines = sorted(latest)
+        steps = sorted({k for run in latest.values() for k in run.get("timings", {})})
+        print("\n[Coworker] Benchmarks, every engine side by side (newest run of each)")
+        print("  {:<22s}".format("Step") + "".join(" {:>22s}".format(e[:22]) for e in engines))
+        for step in steps:
+            cells = []
+            for e in engines:
+                t = latest[e].get("timings", {}).get(step)
+                failed = latest[e].get("statuses", {}).get(step) == "failed"
+                cells.append(" {:>22s}".format(
+                    "--" if t is None else "{:.1f}s{:s}".format(t, " FAIL" if failed else "")))
+            print("  {:<22s}".format(step) + "".join(cells))

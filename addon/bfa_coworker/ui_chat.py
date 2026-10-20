@@ -110,6 +110,13 @@ def _acp_engine():
     return _acp
 
 
+def _queued_messages(context: bpy.types.Context | None = None) -> list[dict]:
+    """The waiting messages of whichever engine the chat uses."""
+    if _is_external_agent(context) and _acp is not None:
+        return _acp.queue_items()
+    return agent_controller._message_queue.get_all()
+
+
 def _agent_workspace() -> Path:
     """Where the external agent runs (its working folder): user-private, not the .blend's."""
     local = os.environ.get("LOCALAPPDATA")
@@ -1650,7 +1657,10 @@ class BFACW_OT_queue_clear(Operator):  # type: ignore[misc]
     bl_description = "Remove all queued messages from the message queue"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        agent_controller._message_queue.clear()
+        if _is_external_agent(context) and _acp is not None:
+            _acp.clear_queue()
+        else:
+            agent_controller._message_queue.clear()
         self.report({"INFO"}, "Message queue cleared")
         _redraw_areas(context)
         return {"FINISHED"}
@@ -1663,7 +1673,7 @@ class BFACW_OT_queue_show(Operator):  # type: ignore[misc]
     bl_description = "Display all queued messages in a popup menu"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        queue_items = agent_controller._message_queue.get_all()
+        queue_items = _queued_messages(context)
         if not queue_items:
             self.report({"INFO"}, "Queue is empty")
             return {"CANCELLED"}
@@ -3564,7 +3574,7 @@ class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
     def draw(self, context: bpy.types.Context) -> None:
         layout = self.layout
         state = agent_controller._agent_state
-        queue_items = agent_controller._message_queue.get_all()
+        queue_items = _queued_messages(context)
 
         if not queue_items:
             layout.label(text="Queue empty", icon='CHECKMARK')

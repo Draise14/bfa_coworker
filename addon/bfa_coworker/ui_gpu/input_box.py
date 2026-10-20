@@ -491,7 +491,10 @@ class InputBox:
                 else:
                     self.send()      # Send, or Queue (the host queues a send while a turn runs)
             right = button.x - gap
-        hint_color = (style.text_field.text[0], style.text_field.text[1], style.text_field.text[2], 0.45)
+        # The text colour of the field's current state: light on the normal field,
+        # the selected-text colour on the focused (often light) field.
+        hint_base = style.text_field.text_sel if self.focused else style.text_field.text
+        hint_color = (hint_base[0], hint_base[1], hint_base[2], 0.55)
         hint = self._fit(canvas, "Enter to send  \u00b7  Shift+Enter: new line  \u00b7  @ to mention",
                          right - box.x - 2 * pad)
         if hint:

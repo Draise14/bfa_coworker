@@ -68,7 +68,8 @@ class AcpEngine:
         self.bus = EventBus()
         self.applier = ChatStateApplier(state)
         self.approvals = Approvals()            # the agent's "may I?" questions (Agent 5)
-        self.ask_coworker_tools = False         # on: ask before Coworker's tools too
+        self.ask_coworker_tools = False         # on: ask before Coworker's tools too (approval Ask)
+        self.never_ask = False                  # approval Auto (#240): allow without asking
         self.client: AcpClient | None = None
         self.session_id = ""
         self.agent_label = ""
@@ -491,7 +492,7 @@ class AcpEngine:
                 self.bus.emit("status", self._turn_id, text="Plan mode: {:s} not run (it would change "
                               "the scene)".format(tool))
             return
-        if (ours and not self.ask_coworker_tools) or self.approvals.allowed_always(tool):
+        if (ours and not self.ask_coworker_tools) or self.approvals.allowed_always(tool) or self.never_ask:
             answer("once")
             return
         if self.auto_approve:           # Auto mode (#177): what your settings allow, without asking

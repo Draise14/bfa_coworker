@@ -104,6 +104,38 @@ class TestWrap(unittest.TestCase):
         response, check = rs.wrap("bpy.ops.export_scene.gltf()", True, "export files", self._execute)
         self.assertEqual((response["status"], check), ("ok", None))    # Always: no question
 
+    def test_approval_modes_decide_what_asks(self):
+        # #240: Ask (our loop: each scene-changing tool; risky everywhere), Risky only, Auto.
+        code, risky = "obj.location.x = 1", "bpy.ops.wm.save_mainfile()"
+        self.assertEqual(rs.ask_kind("execute_blender_code", code, "ASK", "LOCAL_LLM"), ("execute_blender_code", ""))
+        self.assertEqual(rs.ask_kind("get_objects_summary", code, "ASK", "LOCAL_LLM"), ("", ""))   # looking
+        self.assertEqual(rs.ask_kind("execute_blender_code", code, "ASK", "EXTERNAL_AGENT"), ("", ""))  # its card
+        self.assertEqual(rs.ask_kind("execute_blender_code", code, "ASK", "EXTERNAL_HARNESS"), ("", ""))
+        self.assertEqual(rs.ask_kind("execute_blender_code", risky, "ASK", "EXTERNAL_HARNESS")[1],
+                         "save the .blend file")
+        self.assertEqual(rs.ask_kind("execute_blender_code", code, "RISKY", "LOCAL_LLM"), ("", ""))
+        self.assertEqual(rs.ask_kind("execute_blender_code", risky, "RISKY", "LOCAL_LLM")[0],
+                         "risky:save the .blend file")
+        self.assertEqual(rs.ask_kind("execute_blender_code", risky, "AUTO", "LOCAL_LLM"), ("", ""))
+
+    def test_ask_per_tool_always_and_forget(self):
+        kind, why = rs.ask_kind("execute_blender_code", "x = 1", "ASK", "LOCAL_LLM")
+        _r, check = rs.wrap("x = 1", True, why, self._execute, tool="execute_blender_code", kind=kind)
+        self.assertEqual(rs.APPROVALS.current().title, "Coworker wants to run execute_blender_code")
+        rs.APPROVALS.answer("always")
+        check()
+        response, check = rs.wrap("y = 2", True, why, self._execute, tool="execute_blender_code", kind=kind)
+        self.assertIsNone(check)                                   # Always: that tool runs
+        rs.APPROVALS.forget_always()                               # the mode changed
+        _r, check = rs.wrap("z = 3", True, why, self._execute, tool="execute_blender_code", kind=kind)
+        self.assertIsNotNone(rs.APPROVALS.current())               # asks again
+        rs.auto_declines[0] = True                                 # overnight Auto mode
+        try:
+            response, check = rs.wrap("w = 4", True, why, self._execute, tool="execute_blender_code", kind=kind)
+        finally:
+            rs.auto_declines[0] = False
+        self.assertEqual((response["status"], check), ("ok", None))   # a plain tool runs; only risky declines
+
     def test_auto_mode_declines(self):
         rs.auto_declines[0] = True
         try:

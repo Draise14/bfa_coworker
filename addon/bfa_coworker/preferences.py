@@ -37,6 +37,7 @@ from .shared import (
     AGENT_MODE_ITEMS,
     MCP_SERVER_MODE_ITEMS,
     OPERATING_MODE_ITEMS,
+    APPROVAL_MODE_ITEMS,
     CHAT_MODE_ITEMS,
     is_debug_mode,
     effective_ports,
@@ -224,15 +225,17 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         from . import session_identity
         session_identity.set_token_required(self.require_session_token)
 
-    ask_before_risky_steps: BoolProperty(  # type: ignore[valid-type]
-        name="Ask Before Risky Steps",
-        description=(
-            "Before code from any engine (Local, Remote, External Agent, External Harness) saves "
-            "the .blend file, opens or reloads a file, quits, deletes or moves files, exports, or runs "
-            "another program, the chat asks you first (Allow once, Always, Deny). In Auto mode such a "
-            "step is declined instead. Off: it runs, as before"
-        ),
-        default=False,
+    def _update_approval_mode(self, _context: bpy.types.Context) -> None:
+        from . import ui_chat
+        ui_chat.apply_approval_mode(self.approval_mode)
+
+    approval_mode: EnumProperty(  # type: ignore[valid-type]
+        name="Approval",
+        description="How much the chat asks before tools run, on every engine (switching forgets "
+                    "every \"Always\")",
+        items=APPROVAL_MODE_ITEMS,
+        default="ASK",
+        update=_update_approval_mode,
     )
 
     require_session_token: BoolProperty(  # type: ignore[valid-type]
@@ -1063,14 +1066,6 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                      "when it asks for them. Saves about 10K tokens on every request. Off: all tools "
                      "from the start"),
         default=True,
-    )
-
-    external_agent_ask_coworker_tools: BoolProperty(  # type: ignore[valid-type]
-        name="Ask Before Blender Tools Too",
-        description=("Ask you in the chat before the agent runs one of Coworker's Blender tools "
-                     "as well (they change the scene; Revert undoes a turn). Off: they run "
-                     "straight away, like in Local mode. \"Always\" lasts until you stop the agent"),
-        default=False,
     )
 
     external_agent_command: StringProperty(  # type: ignore[valid-type]
@@ -2110,7 +2105,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         else:
             bridge_box.label(text="Status: Stopped", icon='X')
         bridge_box.prop(self, "require_session_token")
-        bridge_box.prop(self, "ask_before_risky_steps")
+        bridge_box.prop(self, "approval_mode")       # also on the chat's input row (#240)
 
         # -- MCP Server (External Harness mode only) ----------------
         if self.operating_mode == "EXTERNAL_HARNESS":

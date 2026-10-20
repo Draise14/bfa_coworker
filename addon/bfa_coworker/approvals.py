@@ -104,6 +104,12 @@ class Approvals:
         if pending:
             self._changed()
 
+    def forget_always(self) -> None:
+        """The approval mode changed (#240): every "Always" asks again."""
+        with self._lock:
+            self._always.clear()
+        self._changed()
+
     def end_session(self) -> None:
         """A new agent session: cancel what's open and forget "Always"."""
         self.cancel_all()

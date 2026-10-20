@@ -240,6 +240,7 @@ class InputBox:
     blink_phase: bool = True               # the host toggles this for the caret blink
     big_buttons: bool = False              # double-height buttons (the editor's full chat)
     attach_buttons: bool = True            # image picker / render / screen on the button row (#213)
+    approval: tuple[str, str] = ("", "")   # (label, icon) of the approval button left of Send (#240)
     _narrow: bool = False                  # set by draw(): the box is too thin for labelled buttons
     rect: Rect | None = None               # where the box was last drawn (for clicks)
     # Last drawn lines: (top, bottom, x0, start offset, text) and the measure used.
@@ -433,6 +434,8 @@ class InputBox:
                 specs.append(("queue", "Queue", "ADD", False))
         else:
             specs = [("send", "Send", "PLAY", has_text)]
+        if self.approval[1]:
+            specs.append(("approval_menu", self.approval[0], self.approval[1], False))
         out = []
         for widget_id, label, icon, active in specs:
             if self._narrow:                 # a thin sidebar: square icon buttons (#238)

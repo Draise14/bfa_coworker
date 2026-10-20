@@ -26,6 +26,7 @@ from __future__ import annotations
 
 __all__ = (
     "APPROVALS",
+    "ask_kind",
     "reason",
     "wrap",
 )
@@ -60,18 +61,39 @@ def reason(code: str) -> str:
     return " and ".join(found)
 
 
+def ask_kind(tool: str, code: str, approval: str, engine: str) -> tuple[str, str]:
+    """What to ask before *code* runs, by the approval mode (#240): ``(kind, why)``, or
+    ``("", "")`` to run it.  *kind* is what "Always" remembers: ``risky:<why>`` for a risky
+    step, the tool's name for one that changes the scene (Ask, our own loop only -- an
+    External Agent asks through its own permission card, a Harness client per tool itself)."""
+    if approval == "AUTO":
+        return "", ""
+    why = reason(code)
+    if why:
+        return "risky:" + why, why
+    if approval == "ASK" and engine in ("LOCAL_LLM", "REMOTE_API") and tool:
+        from .engine import PLAN_SAFE_TOOLS
+        if tool not in PLAN_SAFE_TOOLS:          # looking never asks
+            return tool, ""
+    return "", ""
+
+
 def wrap(code: str, strict_json: bool, why: str, execute: Callable[[str, bool], Any], tool: str = "",
-         source: str = "Coworker") -> tuple[dict[str, object], Callable[[], dict[str, object] | None] | None]:
+         source: str = "Coworker", kind: str = "") -> tuple[dict[str, object], Callable[[], dict[str, object] | None] | None]:
     """``(response, check_fn)`` for the bridge: ask first, then run *code* with *execute*."""
-    kind = "risky:" + why
+    kind = kind or "risky:" + why
     if auto_declines[0]:
+        if not why:                 # Auto mode runs what Ask would ask about; only risky steps wait
+            result = execute(code, strict_json)
+            return result.response, result.check_fn
         return {"status": "error", "message": "Auto mode doesn't {:s} without the user. Leave this step for "
                                               "them, or do it another way.".format(why)}, None
     if APPROVALS.allowed_always(kind):
         result = execute(code, strict_json)
         return result.response, result.check_fn
     state: dict[str, Any] = {"answer": None, "inner": None}
-    request = ApprovalRequest(tool=kind, source=source, args={"code": code}, coworker_tool=True, reason=why)
+    request = ApprovalRequest(tool=kind if why else tool, source=source, args={"code": code}, coworker_tool=True,
+                              reason=why)
     APPROVALS.ask(request, lambda choice: state.__setitem__("answer", choice))
 
     def check() -> dict[str, object] | None:
@@ -81,8 +103,9 @@ def wrap(code: str, strict_json: bool, why: str, execute: Callable[[str, bool], 
         if answer is None:
             return None
         if answer in ("deny", "cancel"):
-            return {"status": "error", "message": "The user declined this step (it would {:s}). Don't retry "
-                                                  "it; ask them or do it another way.".format(why)}
+            what = "it would {:s}".format(why) if why else "they said no to {:s}".format(tool or "this tool")
+            return {"status": "error", "message": "The user declined this step ({:s}). Don't retry "
+                                                  "it; ask them or do it another way.".format(what)}
         result = execute(code, strict_json)
         if result.check_fn is not None:
             state["inner"] = result.check_fn

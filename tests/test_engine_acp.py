@@ -152,6 +152,23 @@ class TestPermissionsAndPrompt(unittest.TestCase):
         self.assertEqual(answer, "r1")
         self.assertIn("only use Coworker's Blender tools", notes[0].data["text"])
 
+    def test_claude_code_tool_names(self):
+        # Claude Code titles our tools mcp__bfa-coworker__<tool>.
+        answer, notes = self._ask("mcp__bfa-coworker__search_api_docs")
+        self.assertEqual((answer, notes), ("a2", []))
+        acp = sys.modules["bfacw_engine_acp_pkg.acp_client"]
+        self.assertEqual(acp._tool_name("mcp__bfa-coworker__execute_blender_code"), "execute_blender_code")
+        self.assertEqual(acp._tool_name("bfa-coworker_execute_blender_code"), "execute_blender_code")
+
+    def test_own_tools_allowed_when_not_only_coworker(self):
+        engine = ea.AcpEngine(_state())
+        engine._turn_id, engine.only_coworker_tools = "t1", False
+        answers = []
+        engine._on_permission({"toolCall": {"title": "bash"},
+                               "options": [{"optionId": "a1", "kind": "allow_once"},
+                                           {"optionId": "r1", "kind": "reject_once"}]}, answers.append)
+        self.assertEqual(answers, ["a1"])
+
     def test_prompt_blocks(self):
         engine = ea.AcpEngine(_state())
         engine.caps = eng.EngineCaps(label="x", images=True)

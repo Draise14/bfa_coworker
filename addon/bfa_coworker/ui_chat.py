@@ -135,6 +135,164 @@ def _scene_context_line(context: bpy.types.Context) -> str:
         return ""
 
 
+# -- External Agent setup: which agent, is it installed, install it ----------------------
+_AGENT_CHECKS: dict[str, object] = {}      # preset id -> acp_presets.Detection, or "checking"
+_AGENT_INSTALLS: dict[str, str] = {}    # preset id -> install status line
+
+
+def _selected_agent_preset(prefs):
+    from . import acp_presets
+    if prefs.external_agent_preset == "custom":
+        try:
+            return acp_presets.generic_preset(prefs.external_agent_command)
+        except ValueError:
+            return None
+    return acp_presets.preset_by_id(prefs.external_agent_preset)
+
+
+def _check_agent(preset) -> None:
+    """Look for *preset*'s agent in the background (it runs ``--version``)."""
+    import threading as _threading
+    from . import acp_presets
+    key = preset.id + ":" + preset.command
+    if _AGENT_CHECKS.get(key) == "checking":
+        return
+    _AGENT_CHECKS[key] = "checking"
+
+    def work() -> None:
+        _AGENT_CHECKS[key] = acp_presets.detect(preset)
+        bpy.app.timers.register(lambda: (_tag_chat_regions_redraw(), _tag_prefs_redraw(), None)[-1],
+                                first_interval=0.0)
+    _threading.Thread(target=work, daemon=True, name="acp-detect").start()
+
+
+def _tag_prefs_redraw() -> None:
+    for wm in bpy.data.window_managers:
+        for win in wm.windows:
+            for area in win.screen.areas:
+                if area.type == 'PREFERENCES':
+                    area.tag_redraw()
+
+
+def draw_external_agent_setup(layout, context, compact: bool = False) -> None:
+    """External Agent: pick the agent app, see if it's ready, install it if not.
+
+    Shared by Preferences and the chat's controls.
+    """
+    prefs = context.preferences.addons[__package__].preferences
+    state = agent_controller._agent_state
+    box = layout.box() if not compact else layout.column()
+    row = box.row(align=True)
+    row.enabled = not state.mcp_server_running
+    row.prop(prefs, "external_agent_preset", text="" if compact else "Agent")
+    if prefs.external_agent_preset == "custom":
+        box.prop(prefs, "external_agent_command", text="" if compact else "Command")
+    preset = _selected_agent_preset(prefs)
+    if preset is None:
+        box.label(text="Type the command that starts your agent in ACP mode", icon='INFO')
+        return
+    key = preset.id + ":" + preset.command
+    found = _AGENT_CHECKS.get(key)
+    if found is None:
+        _check_agent(preset)
+        found = "checking"
+    head = box.row(align=True)
+    if found == "checking":
+        head.label(text="Looking for {:s}...".format(preset.name), icon='SORTTIME')
+    elif found.ready:
+        head.label(text="{:s} is ready{:s}".format(preset.name, (" (" + found.version + ")") if found.version
+                                                    else ""), icon='CHECKMARK')
+    elif compact and not found.installed:        # the sidebar is narrow: the short form
+        head.label(text="{:s} isn't installed".format(preset.name), icon='ERROR')
+    else:
+        head.label(text=found.problem or "{:s} isn't ready".format(preset.name), icon='ERROR')
+    head.operator("bfacw.external_agent_check", text="", icon='FILE_REFRESH')
+    if found != "checking" and not found.ready:
+        installing = _AGENT_INSTALLS.get(preset.id, "")
+        if installing:
+            box.label(text=installing, icon='SORTTIME' if installing.endswith("...") else 'INFO')
+        elif preset.npm_package:
+            op = box.operator("bfacw.external_agent_install", icon='IMPORT',
+                              text="Install {:s}".format(preset.name if not preset.needs_node
+                                                         else preset.name + " (npm)"))
+            op.preset_id = preset.id
+        if preset.install_hint:
+            _draw_multiline(box, preset.install_hint) if not compact else None
+    elif found != "checking" and preset.login_hint and not compact:
+        box.label(text=preset.login_hint, icon='INFO')
+    if not compact:
+        opt = box.row()
+        opt.enabled = not state.mcp_server_running
+        opt.prop(prefs, "external_agent_only_coworker_tools")
+    if preset.docs_url and not compact:
+        box.operator("wm.url_open", text="{:s} docs".format(preset.name), icon='URL').url = preset.docs_url
+
+
+class BFACW_OT_external_agent_check(Operator):  # type: ignore[misc]
+    """Look again for the selected agent (installed? version? ACP mode?)"""
+    bl_idname = "bfacw.external_agent_check"
+    bl_label = "Check Agent"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        preset = _selected_agent_preset(context.preferences.addons[__package__].preferences)
+        if preset is not None:
+            _AGENT_CHECKS.pop(preset.id + ":" + preset.command, None)
+            _check_agent(preset)
+        return {"FINISHED"}
+
+
+class BFACW_OT_external_agent_install(Operator):  # type: ignore[misc]
+    """Install the selected agent's ACP adapter with npm (needs Node.js); you log in to the agent yourself"""
+    bl_idname = "bfacw.external_agent_install"
+    bl_label = "Install Agent"
+
+    preset_id: StringProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
+
+    def invoke(self, context, event):
+        from . import acp_presets
+        preset = acp_presets.preset_by_id(self.preset_id)
+        if preset is None or not preset.npm_package:
+            return {"CANCELLED"}
+        return context.window_manager.invoke_confirm(
+            self, event, title="Install {:s}?".format(preset.name),
+            message="Runs: npm install -g {:s}".format(preset.npm_package), confirm_text="Install")
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        import subprocess as _subprocess
+        import threading as _threading
+        from . import acp_presets
+        preset = acp_presets.preset_by_id(self.preset_id)
+        if preset is None or not preset.npm_package:
+            return {"CANCELLED"}
+        npm = acp_presets.resolve_command("npm")
+        if npm is None:
+            self.report({"WARNING"}, "npm isn't installed: install Node.js first (nodejs.org)")
+            return {"CANCELLED"}
+        _AGENT_INSTALLS[preset.id] = "Installing {:s}...".format(preset.npm_package)
+
+        def work() -> None:
+            try:
+                proc = _subprocess.run(npm + ["install", "-g", preset.npm_package], capture_output=True,
+                                       timeout=600, creationflags=getattr(_subprocess, "CREATE_NO_WINDOW", 0))
+                ok = proc.returncode == 0
+                tail = (proc.stderr or proc.stdout or b"").decode("utf-8", "replace").strip().splitlines()[-1:]
+                _AGENT_INSTALLS[preset.id] = ("Installed. " + preset.login_hint) if ok else \
+                    "Install failed: {:s}".format(tail[0] if tail else "npm error")
+            except (OSError, _subprocess.SubprocessError) as ex:
+                _AGENT_INSTALLS[preset.id] = "Install failed: {:s}".format(str(ex))
+            _AGENT_CHECKS.pop(preset.id + ":" + preset.command, None)
+
+            def done() -> None:
+                if _AGENT_INSTALLS.get(preset.id, "").startswith("Installed"):
+                    _AGENT_INSTALLS.pop(preset.id, None)
+                _check_agent(preset)
+                _tag_chat_regions_redraw()
+                _tag_prefs_redraw()
+            bpy.app.timers.register(done, first_interval=0.0)
+        _threading.Thread(target=work, daemon=True, name="acp-install").start()
+        return {"FINISHED"}
+
+
 def _loop_engine(mode: str | None = None):
     """The chat's engine: our turn loop, or the External Agent in that mode.
     *mode* ("local"/"remote") updates the loop engine's label."""
@@ -2210,7 +2368,9 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         entry = agent_controller.build_mcp_server_entry(
             blender_host=prefs.host, blender_port=bridge_port,
             use_blender_python=getattr(prefs, "use_blender_python_for_harness", True))
-        env = acp_presets.launch_env(preset)
+        only_ours = getattr(prefs, "external_agent_only_coworker_tools", True)
+        env = acp_presets.launch_env(preset, only_coworker_tools=only_ours)
+        engine.only_coworker_tools = only_ours
         cwd = str(_agent_workspace())
         engine.connecting = True
         engine.status = "Looking for {:s}...".format(preset.name)
@@ -2799,11 +2959,7 @@ def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool 
 
     # -- External Agent: which agent app does the work --
     if prefs.operating_mode == "EXTERNAL_AGENT":
-        pick = layout.row(align=True)
-        pick.enabled = not state.mcp_server_running
-        pick.prop(prefs, "external_agent_preset", text="")
-        if prefs.external_agent_preset == "custom":
-            layout.prop(prefs, "external_agent_command", text="")
+        draw_external_agent_setup(layout, context, compact=True)
 
     # -- Agent control buttons (compact) --
     row = layout.row(align=True)
@@ -2827,8 +2983,8 @@ def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool 
         is_ok = mcp_to_blender_server.is_running()
     else:
         status = props.chat_status
-        if prefs.operating_mode == "EXTERNAL_AGENT" and _acp is not None and not state.is_thinking:
-            status = _acp.status
+        if prefs.operating_mode == "EXTERNAL_AGENT" and not state.is_thinking:
+            status = _acp.status if _acp is not None else "Not connected"
         elif state.is_thinking:
             elapsed = time.time() - state.thinking_start_time if state.thinking_start_time else 0.0
             status = "{:s} {:s} ({:s})".format(
@@ -4538,6 +4694,8 @@ _classes = (
     BFACW_OT_reload_rules,
     BFACW_OT_agent_start,
     BFACW_OT_agent_stop,
+    BFACW_OT_external_agent_check,
+    BFACW_OT_external_agent_install,
     BFACW_OT_agent_restart,
     BFACW_OT_copy_message,
     BFACW_OT_copy_code_block,

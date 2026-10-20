@@ -372,7 +372,12 @@ def _content_text(content: Any) -> str:
 
 
 def _tool_name(title: str) -> str:
-    return title[len(_TOOL_PREFIX):] if title.startswith(_TOOL_PREFIX) else title
+    """Our tool's own name: OpenCode titles it ``bfa-coworker_<tool>``, Claude Code
+    ``mcp__bfa-coworker__<tool>``."""
+    for prefix in ("mcp__" + MCP_SERVER_NAME + "__", _TOOL_PREFIX):
+        if title.startswith(prefix):
+            return title[len(prefix):]
+    return title
 
 
 def _plan_steps(entries: list[Any], text_key: str) -> list[dict[str, str]]:

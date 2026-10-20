@@ -402,6 +402,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         elif self.operating_mode == "EXTERNAL_AGENT":
             # Coworker's own chat; the turn runs in the external agent (Tier 4, Agent 4).
             self.agent_mode = "SELF_CONTAINED"
+            self.pref_tab = "ADVANCED"
         _PREVIOUS_MODE["mode"] = self.operating_mode
 
     operating_mode: EnumProperty(  # type: ignore[valid-type]
@@ -1029,6 +1030,14 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default=0,
     )
 
+    external_agent_only_coworker_tools: BoolProperty(  # type: ignore[valid-type]
+        name="Only Coworker Tools",
+        description=("The agent may only use Coworker's Blender tools: its own shell and file "
+                     "tools are refused, and it doesn't load your other agent setups (skills, "
+                     "rules). Off: it may also use its own tools"),
+        default=True,
+    )
+
     external_agent_command: StringProperty(  # type: ignore[valid-type]
         name="Command",
         description=("For a custom agent: the command that starts it in ACP mode "
@@ -1337,6 +1346,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 text="Stop the agent before switching modes",
                 icon='ERROR',
             )
+        if self.operating_mode == "EXTERNAL_AGENT":
+            from . import ui_chat as _uc
+            box.label(text="Chat in Coworker; the agent app below does the work with Coworker's tools.",
+                      icon='LINKED')
+            _uc.draw_external_agent_setup(box, context)
         layout.separator()
 
         # -- Tab selector row --------------------------------------------
@@ -1353,7 +1367,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 continue
             if self.operating_mode == "REMOTE_API" and tab_id == "LOCAL_LLM":
                 continue
-            if self.operating_mode == "EXTERNAL_HARNESS" and tab_id in ("LOCAL_LLM", "REMOTE_API"):
+            if self.operating_mode in ("EXTERNAL_HARNESS", "EXTERNAL_AGENT") and                     tab_id in ("LOCAL_LLM", "REMOTE_API"):
                 continue
             is_active = (self.pref_tab == tab_id)
             op = row.operator(

@@ -61,6 +61,7 @@ class AcpEngine:
         self._turn_id = ""
         self._queue: deque[Prompt] = deque()
         self.on_change: Callable[[], None] | None = None     # redraw hook (any thread)
+        self.only_coworker_tools = True      # off: the agent may also use its own tools
 
     # -- connection ----------------------------------------------------------------
     def connect(self, argv: list[str], mcp_entry: dict[str, Any], cwd: str,
@@ -210,7 +211,8 @@ class AcpEngine:
         call = params.get("toolCall") or {}
         title = str(call.get("title") or call.get("kind") or "")
         options = params.get("options") or []
-        ours = title.startswith(MCP_SERVER_NAME) or "blender" in title.lower()
+        # OpenCode: "bfa-coworker_<tool>"; Claude Code: "mcp__bfa-coworker__<tool>".
+        ours = MCP_SERVER_NAME in title or "blender" in title.lower() or not self.only_coworker_tools
         wanted = ("allow_always", "allow_once") if ours else ("reject_once", "reject_always")
         pick = next((o for kind in wanted for o in options if o.get("kind") == kind), None)
         respond(str(pick.get("optionId")) if pick else None)

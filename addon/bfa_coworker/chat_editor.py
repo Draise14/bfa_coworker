@@ -159,7 +159,8 @@ def _harness_notice(prefs: Any) -> Notice:
         "Coworker gives it Blender's tools through the bridge.",
         ("Bridge running on port {:d}.".format(port) if port else "Bridge running.") if running
         else "Start the bridge, then connect your client.",
-        "Client: {:s}.  Copy its config and paste it into the client's MCP settings.".format(client),
+        "Client: {:s}.  Copy Config (sidebar, Coworker) and paste it into the client's MCP settings."
+        .format(client),
         "Drop an image here (or attach a render or screen) and ask your client to look at it: "
         "it reads it with get_attached_image.",
     )
@@ -171,8 +172,6 @@ def _harness_notice(prefs: Any) -> Notice:
                                         time.strftime("%H:%M:%S", time.localtime(e.when))))
         for e in activity.entries(30))
     return Notice(title="External Harness", icon="WORLD", lines=lines, buttons=(
-        ("bridge", "Stop Bridge" if running else "Start Bridge", "X" if running else "PLAY"),
-        ("copy_config", "Copy Config", "COPYDOWN"),
         ("copy_log", "Copy Log", "COPYDOWN"),
         ("configure", "Configure", "PREFERENCES"),
     ), rows=rows, rows_title="What your client did in Blender")
@@ -1156,7 +1155,7 @@ class BFACW_PT_editor_chat(_CoworkerPanel, bpy.types.Panel):
     def draw(self, context):
         from . import ui_chat
         # The plan is its own panel (Plan, under Queue), the image a picker (#171).
-        ui_chat.draw_chat_controls(self.layout, context, show_chat_mode=False, show_prefs=False,
+        ui_chat.draw_chat_controls(self.layout, context, show_chat_mode=False, has_header=True,
                                    show_image=False)      # on the input's button row (#213)
 
 

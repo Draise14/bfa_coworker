@@ -325,10 +325,25 @@ class TestWorkshopExpandAndFold(unittest.TestCase):
         c, _ = self._draw(view, hist)
         texts = " ".join(cmd.text for cmd in c.commands if cmd.kind == "text")
         self.assertNotIn("line 39", texts)
-        self.assertIn("Show all (26 more lines)", texts)
+        self.assertIn("Show all (37 more lines)", texts)          # #236: results show 3 lines
         view.expanded.add("x0:0:res")
         c, _ = self._draw(view, hist)
         self.assertIn("line 39", " ".join(cmd.text for cmd in c.commands if cmd.kind == "text"))
+
+    def test_a_long_result_line_is_cut_while_folded(self):
+        # #236: one long JSON line would wrap into many rows; folded it shows 160 characters.
+        view = cv.ChatView()
+        view.expanded.add("t0")
+        hist = [{"role": "user", "content": "go", "turn_start": True},
+                {"role": "tool", "name": "get_objects_summary", "content": "x" * 2000},
+                {"role": "assistant", "content": "Done."}]
+        c, _ = self._draw(view, hist)
+        texts = " ".join(cmd.text for cmd in c.commands if cmd.kind == "text")
+        self.assertLess(texts.count("x"), 400)
+        self.assertIn("Show all", texts)
+        view.expanded.add("x0:0:res")
+        c, _ = self._draw(view, hist)
+        self.assertGreaterEqual(" ".join(cmd.text for cmd in c.commands if cmd.kind == "text").count("x"), 2000)
 
 
 class TestChatView(unittest.TestCase):

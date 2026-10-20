@@ -135,9 +135,9 @@ def _scene_context_line(context: bpy.types.Context) -> str:
         return ""
 
 
-# -- External Agent setup: which agent, is it installed, install it ----------------------
-_AGENT_CHECKS: dict[str, object] = {}      # preset id -> acp_presets.Detection, or "checking"
-_AGENT_INSTALLS: dict[str, str] = {}    # preset id -> install status line
+# -- External Agent setup: which agent, is it installed, install / update / remove ------
+_AGENT_CHECKS: dict[str, object] = {}      # preset key -> acp_presets.Detection, or "checking"
+_AGENT_JOBS: dict[str, str] = {}           # preset id -> npm job status line
 
 
 def _selected_agent_preset(prefs):
@@ -148,6 +148,31 @@ def _selected_agent_preset(prefs):
         except ValueError:
             return None
     return acp_presets.preset_by_id(prefs.external_agent_preset)
+
+
+def _installs_file() -> Path:
+    """Which agent adapters Coworker installed (so Remove only touches those)."""
+    return _agent_workspace().parent / "installed_agents.json"
+
+
+def _installed_by_coworker() -> dict:
+    try:
+        return json.loads(_installs_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _set_installed_by_coworker(preset_id: str, package: str | None) -> None:
+    data = _installed_by_coworker()
+    if package:
+        data[preset_id] = {"package": package, "when": time.strftime("%Y-%m-%d")}
+    else:
+        data.pop(preset_id, None)
+    try:
+        _installs_file().parent.mkdir(parents=True, exist_ok=True)
+        _installs_file().write_text(json.dumps(data, indent=1), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _check_agent(preset) -> None:
@@ -174,62 +199,105 @@ def _tag_prefs_redraw() -> None:
                     area.tag_redraw()
 
 
-def draw_external_agent_setup(layout, context, compact: bool = False) -> None:
-    """External Agent: pick the agent app, see if it's ready, install it if not.
+def _agent_location(found) -> str:
+    """The file that runs the agent (the npm script for a node shim)."""
+    argv = list(getattr(found, "argv", []) or [])
+    if len(argv) >= 2 and os.path.basename(argv[0]).lower().startswith("node"):
+        return argv[1]
+    return argv[0] if argv else ""
 
-    Shared by Preferences and the chat's controls.
+
+def _npm_owned(preset, found) -> bool:
+    """The adapter runs from npm's global packages under exactly this package name."""
+    where = _agent_location(found).replace("\\", "/")
+    return bool(preset.npm_package) and "/node_modules/" + preset.npm_package + "/" in where
+
+
+def _npm_button(layout, preset, action: str, text: str, icon: str) -> None:
+    op = layout.operator("bfacw.external_agent_npm", text=text, icon=icon)
+    op.preset_id, op.action = preset.id, action
+
+
+def draw_external_agent_setup(layout, context, compact: bool = False) -> None:
+    """External Agent: pick the agent app, see if it's ready, install / update / remove it.
+
+    Preferences get the full form; the chat's controls (``compact``) the short one.
     """
     prefs = context.preferences.addons[__package__].preferences
     state = agent_controller._agent_state
     box = layout.box() if not compact else layout.column()
+    preset = _selected_agent_preset(prefs)
+    if not compact:
+        _draw_multiline(box, "Nothing runs until you press Start. Then Coworker opens the agent below in the "
+                             "background and it works in Blender with Coworker's tools, under your own "
+                             "login and subscription. To stop using it, pick another Operating Mode.",
+                        icon='INFO')
     row = box.row(align=True)
     row.enabled = not state.mcp_server_running
     row.prop(prefs, "external_agent_preset", text="" if compact else "Agent")
     if prefs.external_agent_preset == "custom":
         box.prop(prefs, "external_agent_command", text="" if compact else "Command")
-    preset = _selected_agent_preset(prefs)
     if preset is None:
         box.label(text="Type the command that starts your agent in ACP mode", icon='INFO')
         return
+    if preset.account and not compact:
+        _draw_multiline(box, preset.account, icon='USER')
     key = preset.id + ":" + preset.command
     found = _AGENT_CHECKS.get(key)
     if found is None:
         _check_agent(preset)
         found = "checking"
+    mine = preset.id in _installed_by_coworker()
+    job = _AGENT_JOBS.get(preset.id, "")
     head = box.row(align=True)
     if found == "checking":
         head.label(text="Looking for {:s}...".format(preset.name), icon='SORTTIME')
     elif found.ready:
-        head.label(text="{:s} is ready{:s}".format(preset.name, (" (" + found.version + ")") if found.version
-                                                    else ""), icon='CHECKMARK')
+        version = (" " + found.version) if found.version else ""
+        source = "" if compact else ("  (installed by Coworker)" if mine else
+                                     "  (installed with npm)" if _npm_owned(preset, found) else
+                                     "  (already on this computer)")
+        head.label(text="{:s}{:s}: ready{:s}".format(preset.name, version, source), icon='CHECKMARK')
     elif compact and not found.installed:        # the sidebar is narrow: the short form
         head.label(text="{:s} isn't installed".format(preset.name), icon='ERROR')
     else:
-        head.label(text=found.problem or "{:s} isn't ready".format(preset.name), icon='ERROR')
+        head.label(text="{:s} isn't ready".format(preset.name), icon='ERROR')
     head.operator("bfacw.external_agent_check", text="", icon='FILE_REFRESH')
-    if found != "checking" and not found.ready:
-        installing = _AGENT_INSTALLS.get(preset.id, "")
-        if installing:
-            box.label(text=installing, icon='SORTTIME' if installing.endswith("...") else 'INFO')
-        elif preset.npm_package:
-            op = box.operator("bfacw.external_agent_install", icon='IMPORT',
-                              text="Install {:s}".format(preset.name if not preset.needs_node
-                                                         else preset.name + " (npm)"))
-            op.preset_id = preset.id
-        if preset.install_hint:
-            _draw_multiline(box, preset.install_hint) if not compact else None
-    elif found != "checking" and preset.login_hint and not compact:
-        box.label(text=preset.login_hint, icon='INFO')
+    if found != "checking" and not found.ready and found.problem and not compact:
+        _draw_multiline(box, found.problem)
+    if job:
+        box.label(text=job, icon='SORTTIME' if job.endswith("...") else 'INFO')
+    if found == "checking":
+        return
+    if not found.ready:
+        if preset.npm_package and not job:
+            _npm_button(box, preset, "INSTALL", "Install {:s}".format(preset.name), 'IMPORT')
+        if preset.install_hint and not compact:
+            _draw_multiline(box, preset.install_hint)
+    elif not compact:
+        where = _agent_location(found)
+        if where:
+            loc = box.row(align=True)
+            loc.label(text=where, icon='FILE_FOLDER')
+            loc.operator("bfacw.external_agent_open_folder", text="", icon='FILE_FOLDER').path = where
+        if preset.login_hint:
+            _draw_multiline(box, preset.login_hint, icon='USER')
+        if preset.npm_package and not job:
+            actions = box.row(align=True)
+            actions.enabled = not state.mcp_server_running
+            _npm_button(actions, preset, "UPDATE", "Update", 'FILE_REFRESH')
+            if mine or _npm_owned(preset, found):
+                _npm_button(actions, preset, "REMOVE", "Remove", 'TRASH')
     if not compact:
         opt = box.row()
         opt.enabled = not state.mcp_server_running
         opt.prop(prefs, "external_agent_only_coworker_tools")
-    if preset.docs_url and not compact:
-        box.operator("wm.url_open", text="{:s} docs".format(preset.name), icon='URL').url = preset.docs_url
+        if preset.docs_url:
+            box.operator("wm.url_open", text="{:s} docs".format(preset.name), icon='URL').url = preset.docs_url
 
 
 class BFACW_OT_external_agent_check(Operator):  # type: ignore[misc]
-    """Look again for the selected agent (installed? version? ACP mode?)"""
+    """Look for the selected agent again: is it installed, which version, can Coworker start it"""
     bl_idname = "bfacw.external_agent_check"
     bl_label = "Check Agent"
 
@@ -241,21 +309,70 @@ class BFACW_OT_external_agent_check(Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
-class BFACW_OT_external_agent_install(Operator):  # type: ignore[misc]
-    """Install the selected agent's ACP adapter with npm (needs Node.js); you log in to the agent yourself"""
-    bl_idname = "bfacw.external_agent_install"
-    bl_label = "Install Agent"
+class BFACW_OT_external_agent_open_folder(Operator):  # type: ignore[misc]
+    """Show the folder the agent runs from in your file browser"""
+    bl_idname = "bfacw.external_agent_open_folder"
+    bl_label = "Open Agent Folder"
+
+    path: StringProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        folder = os.path.dirname(self.path) if os.path.isfile(self.path) else self.path
+        if not folder or not os.path.isdir(folder):
+            return {"CANCELLED"}
+        bpy.ops.wm.path_open(filepath=folder)
+        return {"FINISHED"}
+
+
+_NPM_ACTIONS = {
+    # action: (npm arguments, confirm title, confirm message, button)
+    "INSTALL": (["install", "-g", "{pkg}"], "Install {name}?",
+                "Coworker runs: npm install -g {pkg}. It uses your own {name} login. "
+                "You can remove it again from here.", "Install"),
+    "UPDATE": (["install", "-g", "{pkg}@latest"], "Update {name}?",
+               "Coworker runs: npm install -g {pkg}@latest", "Update"),
+    "REMOVE": (["uninstall", "-g", "{pkg}"], "Remove {name}?",
+               "Coworker runs: npm uninstall -g {pkg}. Your {name} login and settings stay. "
+               "Pick another Operating Mode to stop using External Agent.", "Remove"),
+}
+
+
+class BFACW_OT_external_agent_npm(Operator):  # type: ignore[misc]
+    """Install, update or remove the selected agent's ACP adapter with npm (asks first)"""
+    bl_idname = "bfacw.external_agent_npm"
+    bl_label = "Agent Adapter"
 
     preset_id: StringProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
+    action: EnumProperty(  # type: ignore[valid-type]
+        items=[("INSTALL", "Install", "Install the agent's ACP adapter (npm install -g)"),
+               ("UPDATE", "Update", "Update the agent's ACP adapter to its latest version"),
+               ("REMOVE", "Remove", "Uninstall the ACP adapter Coworker installed (npm uninstall -g)")],
+        options={'SKIP_SAVE'})
+
+    @classmethod
+    def description(cls, _context, properties):
+        from . import acp_presets
+        preset = acp_presets.preset_by_id(properties.preset_id)
+        name, pkg = (preset.name, preset.npm_package) if preset else ("the agent", "its adapter")
+        return {
+            "INSTALL": "Install {:s} for Coworker: runs `npm install -g {:s}` (needs Node.js). It uses your "
+                       "own {:s} login".format(name, pkg, name),
+            "UPDATE": "Update {:s} to its latest version: runs `npm install -g {:s}@latest`".format(name, pkg),
+            "REMOVE": "Uninstall what Coworker installed: runs `npm uninstall -g {:s}`. Your login and "
+                      "settings stay".format(pkg),
+        }.get(properties.action, "")
 
     def invoke(self, context, event):
         from . import acp_presets
         preset = acp_presets.preset_by_id(self.preset_id)
         if preset is None or not preset.npm_package:
             return {"CANCELLED"}
-        return context.window_manager.invoke_confirm(
-            self, event, title="Install {:s}?".format(preset.name),
-            message="Runs: npm install -g {:s}".format(preset.npm_package), confirm_text="Install")
+        _args, title, message, button = _NPM_ACTIONS[self.action]
+        fill = {"name": preset.name, "pkg": preset.npm_package}
+        if self.action == "REMOVE" and preset.id not in _installed_by_coworker():
+            message += " It wasn't installed by Coworker: other apps (e.g. Zed) may use it too."
+        return context.window_manager.invoke_confirm(self, event, title=title.format(**fill),
+                                                     message=message.format(**fill), confirm_text=button)
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         import subprocess as _subprocess
@@ -268,28 +385,36 @@ class BFACW_OT_external_agent_install(Operator):  # type: ignore[misc]
         if npm is None:
             self.report({"WARNING"}, "npm isn't installed: install Node.js first (nodejs.org)")
             return {"CANCELLED"}
-        _AGENT_INSTALLS[preset.id] = "Installing {:s}...".format(preset.npm_package)
+        action = self.action
+        args = [a.format(pkg=preset.npm_package) for a in _NPM_ACTIONS[action][0]]
+        verb = {"INSTALL": "Installing", "UPDATE": "Updating", "REMOVE": "Removing"}[action]
+        _AGENT_JOBS[preset.id] = "{:s} {:s}...".format(verb, preset.npm_package)
 
         def work() -> None:
+            ok = False
             try:
-                proc = _subprocess.run(npm + ["install", "-g", preset.npm_package], capture_output=True,
-                                       timeout=600, creationflags=getattr(_subprocess, "CREATE_NO_WINDOW", 0))
+                proc = _subprocess.run(npm + args, capture_output=True, timeout=600,
+                                       creationflags=getattr(_subprocess, "CREATE_NO_WINDOW", 0))
                 ok = proc.returncode == 0
                 tail = (proc.stderr or proc.stdout or b"").decode("utf-8", "replace").strip().splitlines()[-1:]
-                _AGENT_INSTALLS[preset.id] = ("Installed. " + preset.login_hint) if ok else \
-                    "Install failed: {:s}".format(tail[0] if tail else "npm error")
+                _AGENT_JOBS[preset.id] = "" if ok else "{:s} failed: {:s}".format(
+                    verb, tail[0] if tail else "npm error")
             except (OSError, _subprocess.SubprocessError) as ex:
-                _AGENT_INSTALLS[preset.id] = "Install failed: {:s}".format(str(ex))
+                _AGENT_JOBS[preset.id] = "{:s} failed: {:s}".format(verb, str(ex))
+            if ok and action == "INSTALL":
+                _set_installed_by_coworker(preset.id, preset.npm_package)
+            elif ok and action == "REMOVE":
+                _set_installed_by_coworker(preset.id, None)
             _AGENT_CHECKS.pop(preset.id + ":" + preset.command, None)
 
             def done() -> None:
-                if _AGENT_INSTALLS.get(preset.id, "").startswith("Installed"):
-                    _AGENT_INSTALLS.pop(preset.id, None)
+                if not _AGENT_JOBS.get(preset.id):
+                    _AGENT_JOBS.pop(preset.id, None)
                 _check_agent(preset)
                 _tag_chat_regions_redraw()
                 _tag_prefs_redraw()
             bpy.app.timers.register(done, first_interval=0.0)
-        _threading.Thread(target=work, daemon=True, name="acp-install").start()
+        _threading.Thread(target=work, daemon=True, name="acp-npm").start()
         return {"FINISHED"}
 
 
@@ -4695,7 +4820,8 @@ _classes = (
     BFACW_OT_agent_start,
     BFACW_OT_agent_stop,
     BFACW_OT_external_agent_check,
-    BFACW_OT_external_agent_install,
+    BFACW_OT_external_agent_open_folder,
+    BFACW_OT_external_agent_npm,
     BFACW_OT_agent_restart,
     BFACW_OT_copy_message,
     BFACW_OT_copy_code_block,

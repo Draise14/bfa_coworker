@@ -59,6 +59,7 @@ class AgentPreset:
     needs_node: bool = False
     isolation_env: tuple[tuple[str, str], ...] = ()
     plan_tool: str = ""                # agent's todo tool, if it reports plans that way
+    account: str = ""                  # whose login / subscription it uses (plain words)
 
 
 PRESETS: tuple[AgentPreset, ...] = (
@@ -75,6 +76,7 @@ PRESETS: tuple[AgentPreset, ...] = (
                        ("OPENCODE_DISABLE_EXTERNAL_SKILLS", "1"),
                        ("OPENCODE_DISABLE_AUTOUPDATE", "1")),
         plan_tool="todowrite",
+        account="Uses the model you set up in OpenCode (any provider's API key, or a local model).",
     ),
     AgentPreset(
         id="claude_code", name="Claude Code", command="claude-agent-acp",
@@ -84,6 +86,7 @@ PRESETS: tuple[AgentPreset, ...] = (
         login_hint="Log in to Claude Code once (run `claude` in a terminal), or set ANTHROPIC_API_KEY.",
         docs_url="https://github.com/agentclientprotocol/claude-agent-acp",
         needs_node=True,
+        account="Uses your Claude Code login: your Claude Pro / Max plan, or an Anthropic API key.",
     ),
     AgentPreset(
         id="codex", name="Codex CLI", command="codex-acp",
@@ -92,6 +95,7 @@ PRESETS: tuple[AgentPreset, ...] = (
         login_hint="Log in to Codex once (run `codex` in a terminal), or set OPENAI_API_KEY.",
         docs_url="https://github.com/agentclientprotocol/codex-acp",
         needs_node=True,
+        account="Uses your Codex login: your ChatGPT plan, or an OpenAI API key.",
     ),
     AgentPreset(
         id="gemini", name="Gemini CLI", command="gemini",
@@ -101,6 +105,7 @@ PRESETS: tuple[AgentPreset, ...] = (
         login_hint="Log in to Gemini CLI once (run `gemini` in a terminal).",
         docs_url="https://github.com/google-gemini/gemini-cli",
         needs_node=True,
+        account="Uses your Google login (Gemini), or a Gemini API key.",
     ),
     AgentPreset(
         id="copilot", name="GitHub Copilot CLI", command="copilot",
@@ -110,6 +115,7 @@ PRESETS: tuple[AgentPreset, ...] = (
         login_hint="Log in to Copilot CLI once (run `copilot` in a terminal).",
         docs_url="https://github.com/github/copilot-cli",
         needs_node=True,
+        account="Uses your GitHub Copilot subscription.",
     ),
 )
 

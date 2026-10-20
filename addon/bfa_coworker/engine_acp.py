@@ -78,6 +78,7 @@ class AcpEngine:
         self.connected = False
         self.connecting = False
         self.login_hint = ""             # the preset's "how to log in", for login errors
+        self.auto_approve = False        # Auto mode (#177): allow what the settings allow
         self.config_options: list[dict[str, Any]] = []     # the agent's own (mode, model...)
         self.preferred: dict[str, str] = {}                # your picks, re-applied per session
         self.on_option: Callable[[str, str], None] | None = None
@@ -461,6 +462,11 @@ class AcpEngine:
             return
         if (ours and not self.ask_coworker_tools) or self.approvals.allowed_always(tool):
             answer("once")
+            return
+        if self.auto_approve:           # Auto mode (#177): what your settings allow, without asking
+            answer("once")
+            if self._turn_id:
+                self.bus.emit("status", self._turn_id, text="Auto mode allowed {:s}".format(tool or "a tool"))
             return
         request = ApprovalRequest(tool=tool or "a tool", source=self.agent_label, args=call.get("rawInput"),
                                   coworker_tool=ours)

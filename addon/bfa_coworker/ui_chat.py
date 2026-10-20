@@ -1533,6 +1533,18 @@ def _on_chat_image_update(self, _context) -> None:
 class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
     """Persistent chat history properties stored on the WindowManager."""
 
+    chat_auto_mode: BoolProperty(  # type: ignore[valid-type]
+        name="Auto",
+        description=("Keep going on your own until the plan is done (e.g. overnight): after each good turn "
+                     "Coworker sends the next step itself, allows the agent's tool requests your settings "
+                     "allow, and answers its questions with its best judgement. It stops when the plan is "
+                     "done, a limit is reached (Preferences), two turns make no progress, on errors, or "
+                     "when you press Stop"),
+        default=False,
+        options={'SKIP_SAVE'},
+        update=lambda self, context: _auto_toggled(self, context),
+    )
+
     chat_history_filter: StringProperty(  # type: ignore[valid-type]
         name="Search Chats",
         description="Show only the chats whose title has this text",
@@ -2263,6 +2275,8 @@ class BFACW_OT_chat_stop(Operator):  # type: ignore[misc]
     def execute(self, context: bpy.types.Context) -> set[str]:
         from . import coworker_api
         coworker_api.cancel_questions()     # a question waiting for you is answered "cancelled"
+        if _AUTO["run"] is not None:
+            _AUTO["user_stop"] = True       # Auto stops after this turn (#177)
         _loop_engine().cancel()
         agent_controller._agent_state.status_text = "Stopped"
         wm = context.window_manager
@@ -3473,6 +3487,10 @@ def chat_timer_update() -> float | None:
     if _thinking != _TURN_SEEN[0]:
         (_cw.turn_started if _thinking else _cw.turn_finished)(_turn_label())
         _TURN_SEEN[0] = _thinking
+        if _thinking:
+            _AUTO["err_before"] = _ac._agent_state.error or ""
+        else:
+            _auto_after_turn()          # #177: keep going while the plan is on track
 
     # Mirror the turn worker's status into the UI property.  The worker must
     # not touch a bpy property itself (that races Blender's context counter);
@@ -4291,6 +4309,104 @@ def _draw_plan_minimal(layout) -> None:
     row.scale_y = 0.9
     row.operator("bfacw.plan_open", text="Edit", icon='TEXT')
     row.operator("bfacw.plan_clear", text="Clear", icon='X')
+    _draw_auto(layout)
+
+
+def _draw_auto(layout) -> None:
+    """Auto mode (#177): the toggle, how it's going, or why it stopped."""
+    props = bpy.context.window_manager.bfacw_chat_props
+    prefs = bpy.context.preferences.addons[__package__].preferences
+    box = layout.box()
+    box.prop(props, "chat_auto_mode", text="Auto: keep going until the plan is done", icon='TIME')
+    run = _AUTO["run"]
+    if run is not None:
+        minutes = int((time.time() - run.started) // 60)
+        _draw_multiline(box, "{:d} extra turn{:s} so far, {:d} min. Stops at {:.0f} h or {:d} turns.".format(
+            run.turns, "" if run.turns == 1 else "s", minutes, prefs.auto_max_hours, prefs.auto_max_turns))
+    elif _AUTO["last"]:
+        _draw_multiline(box, _AUTO["last"], icon='INFO')
+    else:
+        limits = box.row(align=True)
+        limits.prop(prefs, "auto_max_hours", text="Hours")
+        limits.prop(prefs, "auto_max_turns", text="Turns")
+
+
+# Auto mode's state: the run while it's on, the last summary, a Stop you pressed.
+_AUTO: dict = {"run": None, "last": "", "user_stop": False, "err_before": ""}
+
+
+def _auto_toggled(props, context) -> None:
+    from . import auto_mode, coworker_api
+    if props.chat_auto_mode and _AUTO["run"] is None:
+        prefs = context.preferences.addons[__package__].preferences
+        _AUTO.update(run=auto_mode.AutoRun(max_seconds=prefs.auto_max_hours * 3600.0,
+                                           max_turns=prefs.auto_max_turns), last="", user_stop=False)
+        coworker_api.auto_answer[0] = auto_mode.QUESTION_ANSWER
+        if _acp is not None:
+            _acp.auto_approve = True
+        print("[Coworker] Auto mode on")
+    elif not props.chat_auto_mode and _AUTO["run"] is not None:
+        _AUTO["run"].stopped = _AUTO["run"].stopped or "you turned it off"
+        _auto_finish()
+
+
+def _auto_finish() -> None:
+    """Auto stopped: say why, and stop answering for you."""
+    from . import coworker_api
+    from . import session_memory as _sm
+    run = _AUTO["run"]
+    _AUTO["run"] = None
+    coworker_api.auto_answer[0] = ""
+    if _acp is not None:
+        _acp.auto_approve = False
+    if run is None:
+        return
+    with _sm.store_lock:
+        done, total = _sm.store.goal.progress()
+    _AUTO["last"] = run.summary(done, total).replace("**", "")
+    agent_controller._agent_state.warning = _AUTO["last"]
+    print("[Coworker] " + _AUTO["last"])
+    props = bpy.context.window_manager.bfacw_chat_props
+    if props.chat_auto_mode:
+        props.chat_auto_mode = False          # the update sees no run: nothing more
+    _tag_chat_regions_redraw()
+
+
+def _auto_after_turn() -> None:
+    """A turn ended (main thread): continue, wait for the queue, or stop."""
+    run = _AUTO["run"]
+    if run is None:
+        return
+    from . import auto_mode
+    from . import session_memory as _sm
+    state = agent_controller._agent_state
+    with _sm.store_lock:
+        goal = _sm.store.goal
+        done, total = goal.progress()
+        step = goal.next_step() or {}
+    error = state.error if state.error and state.error != _AUTO["err_before"] else ""
+    cancelled = bool(_AUTO.pop("user_stop", False))
+    _AUTO["user_stop"] = False
+    action = run.after_turn(ok=not error, error=error, cancelled=cancelled, done=done, total=total,
+                            queued=len(_queued_messages()))
+    if action == "stop":
+        _auto_finish()
+    elif action == "continue":
+        prompt = auto_mode.continue_prompt(str(step.get("text", "")), done, total)
+        bpy.app.timers.register(lambda: _auto_send(prompt), first_interval=1.5)
+
+
+def _auto_send(prompt: str) -> None:
+    if _AUTO["run"] is None or agent_controller._agent_state.is_thinking:
+        return None
+    wm = bpy.context.window_manager
+    window = bpy.context.window or (wm.windows[0] if wm.windows else None)
+    if window is None:
+        return None
+    wm.bfacw_chat_props.chat_input = prompt
+    with bpy.context.temp_override(window=window, screen=window.screen):
+        bpy.ops.bfacw.chat_send()
+    return None
 
 
 class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]

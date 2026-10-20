@@ -164,6 +164,8 @@ class GoalPlan:
         text = request_text(content)
         if not text:
             return
+        if text.startswith("[Auto mode]"):
+            return          # Auto mode's own "continue" (#177): the goal stays yours
         if not self.session_goal:
             self.session_goal = _clip(text, _SESSION_GOAL_CHARS)
         self.turn_goal = _clip(text, _TURN_GOAL_CHARS)

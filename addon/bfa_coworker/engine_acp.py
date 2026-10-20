@@ -63,13 +63,13 @@ class AcpEngine:
         self.error = ""
         self.connected = False
         self.connecting = False
+        self.login_hint = ""             # the preset's "how to log in", for login errors
+        self.stop_grace = STOP_GRACE
+        self._forced_stop = False
         self._client_factory = client_factory
         self._lock = threading.Lock()
         self._turn_id = ""
         self._queue: deque[Prompt] = deque()
-        self.login_hint = ""             # the preset's "how to log in", for login errors
-        self.stop_grace = STOP_GRACE
-        self._forced_stop = False
         self.on_change: Callable[[], None] | None = None     # redraw hook (any thread)
         self.only_coworker_tools = True      # off: the agent may also use its own tools
 

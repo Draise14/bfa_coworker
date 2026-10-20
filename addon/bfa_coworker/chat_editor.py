@@ -160,6 +160,8 @@ def _harness_notice(prefs: Any) -> Notice:
         ("Bridge running on port {:d}.".format(port) if port else "Bridge running.") if running
         else "Start the bridge, then connect your client.",
         "Client: {:s}.  Copy its config and paste it into the client's MCP settings.".format(client),
+        "Drop an image here (or attach a render or screen) and ask your client to look at it: "
+        "it reads it with get_attached_image.",
     )
     from . import activity
     rows = tuple(
@@ -300,6 +302,7 @@ def _sync_box(surface: ChatSurface, props: Any, busy: bool, running: bool, harne
     image = getattr(props, "chat_image", None)
     box.attachment = image.name if image is not None else ""
     surface.attachment_pinned = not getattr(props, "chat_image_send_once", True)
+    surface.attachment_note = "Your client can look at it (get_attached_image)" if harness else ""
     box.busy = busy
     box.placeholder = ("Ask Coworker..." if running else
                        "Start Coworker to chat (Start, above)" if not harness else "")
@@ -1080,6 +1083,23 @@ class BFACW_PT_editor_tools_attach(_ToolPanel, bpy.types.Panel):
         return [("bfacw.chat_attach_image", "Attach Image...", "FILE_IMAGE", {}),
                 ("bfacw.chat_capture_render", "Attach Render", "RENDER_STILL", {}),
                 ("bfacw.chat_capture_screen", "Attach Screen", "FULLSCREEN_ENTER", {})]
+
+    def draw(self, context):
+        super().draw(context)
+        props = _props()
+        if props is None:
+            return
+        # The socket itself (#199): pick any image in the file, see what will go.
+        col = self.layout.column()
+        col.separator(factor=0.5)
+        col.template_ID(props, "chat_image", open="image.open")
+        if props.chat_image is not None and _column_count(context.region) == 4:
+            from . import ui_chat
+            ui_chat._draw_attachment_preview(col, props.chat_image, context)
+        elif props.chat_image is None and _column_count(context.region) == 4:
+            hint = col.row()
+            hint.scale_y = 0.75
+            hint.label(text="Or drop an image onto the chat.")
 
 
 class BFACW_PT_editor_tools_session(_ToolPanel, bpy.types.Panel):

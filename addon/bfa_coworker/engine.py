@@ -86,6 +86,7 @@ PLAN_SAFE_TOOLS: frozenset[str] = frozenset({
     "search_polyhaven_assets", "get_polyhaven_status", "get_screenshot_of_window_as_image",
     "get_screenshot_of_window_as_json", "get_screenshot_of_area_as_image", "search_api_docs",
     "search_manual_docs", "get_python_api_docs", "read_tool_output", "ask_user", "update_plan", "load_tools",
+    "get_attached_image",
     "list_blender_templates",
 })
 PLAN_NOTE = ("[Plan mode] Don't change the Blender scene or any file. Look at what you need (scene, docs), "

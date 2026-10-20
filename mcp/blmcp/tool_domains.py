@@ -32,6 +32,7 @@ SURFACE = frozenset({
     "get_blendfile_summary_of_linked_libraries", "get_blendfile_summary_path_info",
     "get_blendfile_summary_usage_guess", "get_object_detail_summary", "get_objects_summary",
     "get_operation_history", "read_tool_output", "ask_user", "get_scene_digest", "update_plan",
+    "get_attached_image",
     "get_polyhaven_status", "get_screenshot_of_window_as_image", "get_screenshot_of_window_as_json",
     "render_thumbnail_to_path", "get_python_api_docs", "search_api_docs", "search_manual_docs",
     "load_tools",

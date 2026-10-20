@@ -107,6 +107,19 @@ class TestLayout(unittest.TestCase):
         self.assertNotIn("input", [w for _r, w in canvas.hit_areas])  # nothing to type into
         self.assertEqual(_click(surface, "notice:copy_config", notice=notice), [("notice", "copy_config")])
 
+    def test_notice_shows_the_attached_image(self):
+        # External Harness (#199): a dropped image shows under the notice, with its own note.
+        surface = sf.ChatSurface()
+        surface.box.attachment = "ref.png"
+        surface.attachment_note = "Your client can look at it"
+        notice = sf.Notice("External Harness", "WORLD", ("x",))
+        canvas, _ = _draw(surface, notice=notice)
+        texts = [c.text for c in canvas.commands if c.kind == "text"]
+        self.assertTrue(any(t.startswith("ref.png") for t in texts))
+        self.assertTrue(any(t.startswith("Your client") for t in texts))
+        self.assertIn("attach_remove", [w for _r, w in canvas.hit_areas])
+        self.assertEqual(_click(surface, "attach_remove", notice=notice), [("attachment_remove", "")])
+
     def test_narrow_notice_stacks_buttons(self):
         surface = sf.ChatSurface(compact=True)
         notice = sf.Notice("External Harness", "WORLD", ("x",),

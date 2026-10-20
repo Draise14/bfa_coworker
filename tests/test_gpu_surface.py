@@ -202,6 +202,27 @@ class TestLayout(unittest.TestCase):
         self.assertIn("attach_remove", [w for _r, w in canvas.hit_areas])
         self.assertEqual(_click(surface, "attach_remove", notice=notice), [("attachment_remove", "")])
 
+    def test_notice_list_scrolls(self):
+        # #243: the harness card's live list scrolls with the wheel; the title says which rows show.
+        surface = sf.ChatSurface()
+        rows = tuple(("CHECKMARK", "tool_{:d}".format(i), "ok") for i in range(40))
+        notice = sf.Notice("External Harness", "WORLD", ("x",), rows=rows, rows_title="What your client did")
+        canvas, _ = _draw(surface, notice=notice)
+        texts = [c.text for c in canvas.commands if c.kind == "text"]
+        self.assertIn("tool_0", texts)
+        self.assertTrue(any(t.startswith("What your client did  (1-") for t in texts))
+        room = surface._notice_room
+        for _ in range(5):
+            self.assertTrue(surface.on_wheel(False, False, room.x + 5, room.y + 5))
+        canvas, _ = _draw(surface, notice=notice)
+        texts = [c.text for c in canvas.commands if c.kind == "text"]
+        self.assertNotIn("tool_0", texts)
+        self.assertIn("tool_5", texts)
+        for _ in range(99):
+            surface.on_wheel(False, False, room.x + 5, room.y + 5)
+        canvas, _ = _draw(surface, notice=notice)
+        self.assertIn("tool_39", [c.text for c in canvas.commands if c.kind == "text"])   # stops at the end
+
     def test_narrow_notice_stacks_buttons(self):
         surface = sf.ChatSurface(compact=True)
         notice = sf.Notice("External Harness", "WORLD", ("x",),

@@ -125,6 +125,78 @@ def cancel_questions() -> None:
     _redraw()
 
 
+# -- Turn checkpoints and Revert (Engine 6b) ------------------------------------------
+# Each turn gets an undo step before and after it, so the agent's whole turn is one
+# step of Edit > Undo History, and Revert (the chat's button) undoes it in one go --
+# but only while you haven't changed the scene since (the depsgraph counter).
+_turn = {"before": False, "after": False, "edits": 0}
+_edits = [0]
+
+
+def _count_edit(*_args: Any) -> None:
+    _edits[0] += 1
+
+
+def _undo(push_message: str = "") -> bool:
+    """``ed.undo_push`` (with a message) or ``ed.undo``, in a window's context."""
+    import bpy  # pylint: disable=import-error
+    wm = bpy.context.window_manager
+    window = bpy.context.window or (wm.windows[0] if wm.windows else None)
+    if window is None:
+        return False
+    try:
+        with bpy.context.temp_override(window=window, screen=window.screen):
+            if push_message:
+                bpy.ops.ed.undo_push(message=push_message)
+            else:
+                bpy.ops.ed.undo()
+        return True
+    except (RuntimeError, AttributeError):
+        return False
+
+
+def turn_started(label: str) -> None:
+    """Main thread, before the turn's first change."""
+    if not _turn["before"]:
+        _turn.update(before=_undo("Before " + label), after=False)
+
+
+def turn_finished(label: str) -> None:
+    """Main thread, once the turn is over."""
+    if _turn["before"] and not _turn["after"]:
+        done = _undo(label)
+        _turn.update(before=False, after=done, edits=_edits[0])
+
+
+def can_revert() -> bool:
+    return bool(_turn["after"]) and _edits[0] == _turn["edits"]
+
+
+def revert_turn() -> str:
+    """Undo the last turn; returns "" or why it can't."""
+    if not _turn["after"]:
+        return "There's no finished turn to revert."
+    if _edits[0] != _turn["edits"]:
+        return "The scene changed after the turn, so use Edit > Undo History to pick the step."
+    if not _undo():
+        return "Blender couldn't undo here."
+    _turn["after"] = False
+    _redraw()
+    return ""
+
+
+def register() -> None:
+    import bpy  # pylint: disable=import-error
+    if _count_edit not in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.append(_count_edit)
+
+
+def unregister() -> None:
+    import bpy  # pylint: disable=import-error
+    if _count_edit in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(_count_edit)
+
+
 # -- Scene digest -------------------------------------------------------------------
 _MAX_OBJECTS = 40
 _snapshots: dict[str, dict[str, tuple]] = {}      # hash -> {object name: fingerprint}

@@ -168,6 +168,7 @@ def register() -> None:
     # the scan entirely.
     from . import agent_controller
     agent_controller.migrate_vendor_deps()
+    coworker_api.register()           # Engine 6b: notices scene edits after a turn
     # External Harness configs run a launcher at a fixed path; point it at
     # this install so configs survive Coworker moving or updating (#100).
     agent_controller.sync_harness_launcher()
@@ -367,6 +368,7 @@ def unregister() -> None:
     from . import ui_chat
 
     _save_settings_backup()
+    coworker_api.unregister()
     # Keep the chat first: the cleanup below empties it (it used to be saved after,
     # so quitting overwrote the saved chat with an empty one).
     ui_chat._save_chat_history()

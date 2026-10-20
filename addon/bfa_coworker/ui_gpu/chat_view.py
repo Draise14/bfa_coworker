@@ -99,6 +99,8 @@ class ChatView:
     expanded: set[str] = field(default_factory=set)
     agent_icon: str = "WIZARD"          # the host passes "GHOST_ENABLED" in Blender
     thumb_size: str = "M"               # attachment thumbnails: S, M or L
+    # The host sets it when the last turn can be undone in one step (Engine 6b).
+    revertable: bool = False
     # The host's lookup of an image's pixel size by name (None: not loaded).
     image_size: Callable[[str], "tuple[int, int] | None"] | None = None
     content_height: float = 0.0
@@ -128,6 +130,7 @@ class ChatView:
             self.content_height = 0.0
             return actions
 
+        self._last = len(turns) - 1
         heights = [self._turn_height(canvas, turn, idx, width, idx == active, live, compact)
                    for idx, turn in enumerate(turns)]
         self.content_height = sum(heights) + gap * (len(turns) + 1)
@@ -229,6 +232,12 @@ class ChatView:
             reply = message_text(conclusion.get("content"))
             self._copy_button(canvas, x + width - done - style.pad * 0.5, row_top, "copymsg:{:d}".format(idx),
                               reply, actions)
+            if self.revertable and idx == getattr(self, "_last", -1):
+                side = style.line_height
+                right = x + width - done - style.pad - side
+                if canvas.button(Rect(right - side, row_top - side, side, side), "revert_turn", "",
+                                 icon="LOOP_BACK"):
+                    actions.append(("revert_turn", ""))
             top = self._draw_markdown(canvas, parse(reply), idx, x, top, width, actions)
         return top
 

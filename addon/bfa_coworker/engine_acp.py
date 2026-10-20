@@ -251,6 +251,25 @@ class AcpEngine:
         if wait:
             worker.join()
 
+    def switch_session(self, resume: str = "", wait: bool = False) -> None:
+        """Another chat was opened (Chat 7): continue its own agent session, or a fresh one."""
+        client = self.client
+        if client is None or not self.connected:
+            return
+        self.cancel()
+
+        def work() -> None:
+            try:
+                self.session_id = self._open_session(client, self.caps.load_session, resume, self._cwd,
+                                                     self._servers)
+            except AcpError as ex:
+                self.status = "Couldn't switch the conversation: {:s}".format(str(ex).splitlines()[0])
+            self._changed()
+        worker = threading.Thread(target=work, daemon=True, name="acp-switch-session")
+        worker.start()
+        if wait:
+            worker.join()
+
     def disconnect(self) -> None:
         client, self.client = self.client, None
         self.connected, self.session_id = False, ""

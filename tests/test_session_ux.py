@@ -91,10 +91,10 @@ class TestMemoryAndCheckpoints(unittest.TestCase):
             block = _SRC[start:_SRC.index("\n\n", start)]
             order = int(re.search(r"bl_order = (\d+)", block).group(1))
             return order, "DEFAULT_CLOSED" in block
-        queue, plan = panel("BFACW_PT_chat_queue"), panel("BFACW_PT_chat_plan")
+        queue, plan, history = panel("BFACW_PT_chat_queue"), panel("BFACW_PT_chat_plan"), panel("BFACW_PT_chat_history")
         session, status = panel("BFACW_PT_chat_session"), panel("BFACW_PT_chat_status")
-        self.assertEqual([queue[0], plan[0], session[0], status[0]], [1, 2, 3, 4])
-        self.assertEqual([queue[1], plan[1], session[1], status[1]], [False, False, True, True])
+        self.assertEqual([queue[0], plan[0], history[0], session[0], status[0]], [1, 2, 3, 4, 5])
+        self.assertEqual([queue[1], plan[1], history[1], session[1], status[1]], [False, False, True, True, True])
 
 
 if __name__ == "__main__":

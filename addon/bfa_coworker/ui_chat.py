@@ -1396,12 +1396,34 @@ def _chat_history_dir() -> Path:
     return base
 
 
+# The chat being shown (Chat 7, #156): its id, and the .blend it is continued in.
+_CHAT: dict[str, str] = {"id": "", "blend": ""}
+
+
+def _blend_key() -> str:
+    return Path(bpy.data.filepath).stem if bpy.data.filepath else ""
+
+
+def _chat_index():
+    from .chat_history import ChatIndex
+    index = ChatIndex(_chat_history_dir())
+    index.ensure()
+    return index
+
+
+def _current_chat_id() -> str:
+    """This .blend's chat: the one shown, else the one last used here, else a new one."""
+    blend = _blend_key()
+    if not _CHAT["id"] or _CHAT["blend"] != blend:
+        index = _chat_index()
+        _CHAT["id"] = index.last_for_blend(blend) or index.new_id()
+        _CHAT["blend"] = blend
+    return _CHAT["id"]
+
+
 def _chat_history_path() -> Path:
-    """Return the path to the chat history JSON file for the current blend file."""
-    session_name = "default"
-    if bpy.data.filepath:
-        session_name = Path(bpy.data.filepath).stem
-    return _chat_history_dir() / "{:s}.json".format(session_name)
+    """The current chat's file (``chats/<id>.json``; one per chat, not per .blend)."""
+    return _chat_index().chat_path(_current_chat_id())
 
 
 # ---------------------------------------------------------------------------
@@ -1510,6 +1532,13 @@ def _on_chat_image_update(self, _context) -> None:
 
 class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
     """Persistent chat history properties stored on the WindowManager."""
+
+    chat_history_filter: StringProperty(  # type: ignore[valid-type]
+        name="Search Chats",
+        description="Show only the chats whose title has this text",
+        default="",
+        options={'SKIP_SAVE', 'TEXTEDIT_UPDATE'},
+    )
 
     chat_input: StringProperty(  # type: ignore[valid-type]
         name="Input",
@@ -1662,8 +1691,8 @@ def _session_memory_archive_path() -> Path:
 
 
 def _session_memory_state_path() -> Path:
-    """Return the path of the session-memory sidecar JSON (checkpoints etc.)."""
-    return _chat_history_dir() / "default_session_memory.json"
+    """The current chat's session memory (checkpoints, goal and plan), next to it."""
+    return _chat_index().memory_path(_current_chat_id())
 
 
 def _save_session_memory_state() -> None:
@@ -1701,7 +1730,7 @@ def _load_session_memory_state() -> None:
 def _save_chat_history() -> None:
     """Save conversation history to disk (thread-safe) with versioned copies."""
     import time as _time
-    base_dir = _chat_history_path().parent
+    base_dir = _chat_history_dir()        # crash backups stay in the history folder
     with _history_save_lock:
         try:
             # Save timestamped copy.
@@ -1716,6 +1745,9 @@ def _save_chat_history() -> None:
             _prune_old_sessions(base_dir)
             # Persist the session-memory store alongside (Tier 3).
             _save_session_memory_state()
+            # Chat 7: the chat list knows it (title, when, engine, .blend).
+            _chat_index().touch(_CHAT["id"], agent_controller._agent_state.conversation_history,
+                                blend=_CHAT["blend"], engine=_chat_engine_label())
         except OSError:
             pass
 
@@ -1915,12 +1947,219 @@ class BFACW_OT_chat_clear(Operator):  # type: ignore[misc]
         agent_controller._clear_coworker_text_blocks()
         # Clear cached system prompt so project rules are reloaded on next turn.
         agent_controller._clear_system_prompt_cache()
+        # Chat 7: a new chat; the old one stays in the History list.
+        _start_new_chat()
         # External Agent: the agent forgets the old conversation as well.
         if _acp is not None and _acp.connected:
             _acp.new_session()
         _save_chat_history()
         _redraw_areas(context)
         return {"FINISHED"}
+
+
+def _chat_engine_label() -> str:
+    """Which engine this chat runs on, for the History list."""
+    try:
+        prefs = bpy.context.preferences.addons[__package__].preferences
+        mode = prefs.operating_mode
+    except (AttributeError, KeyError):
+        return ""
+    if mode == "EXTERNAL_AGENT":
+        return (_acp.agent_label if _acp is not None and _acp.agent_label else "External Agent")
+    return {"LOCAL_LLM": "Local", "REMOTE_API": "Remote", "EXTERNAL_HARNESS": "External Harness"}.get(mode, "")
+
+
+def _start_new_chat() -> None:
+    index = _chat_index()
+    _CHAT["id"], _CHAT["blend"] = index.new_id(), _blend_key()
+    index.set_last_for_blend(_CHAT["blend"], _CHAT["id"])
+
+
+def _reset_for_chat_switch() -> None:
+    """What New Thread resets, before another chat comes in."""
+    from . import session_memory as _sm
+    state = agent_controller._agent_state
+    state.conversation_history = []
+    state.streaming_text = state.reasoning_text = ""
+    state.reset_usage()
+    with _sm.store_lock:
+        _sm.store.reset()
+    agent_controller._session_turn_count = 0
+    agent_controller._reset_session_domains()
+    agent_controller.clear_session_scene_lock()
+    agent_controller._clear_system_prompt_cache()
+
+
+class BFACW_OT_chat_open(Operator):  # type: ignore[misc]
+    """Continue this chat: its messages, plan and memory come back (on External Agent, the
+agent continues its own conversation for it too)"""
+    bl_idname = "bfacw.chat_open"
+    bl_label = "Open Chat"
+    bl_options = {'INTERNAL'}
+
+    chat_id: StringProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return not agent_controller._agent_state.is_thinking
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        index = _chat_index()
+        if not self.chat_id or index.get(self.chat_id) is None or self.chat_id == _CHAT["id"]:
+            return {"CANCELLED"}
+        if agent_controller._agent_state.conversation_history:
+            _save_chat_history()
+        _reset_for_chat_switch()
+        _CHAT["id"], _CHAT["blend"] = self.chat_id, _blend_key()
+        index.set_last_for_blend(_CHAT["blend"], self.chat_id)
+        _restore_chat_history()
+        # External Agent: continue that chat's own agent session (or a fresh one).
+        if _acp is not None and _acp.connected:
+            prefs = context.preferences.addons[__package__].preferences
+            preset_id = "custom" if prefs.external_agent_preset == "custom" else prefs.external_agent_preset
+            _acp.switch_session(_saved_agent_session(_agent_sessions_file(), index.chat_path(self.chat_id).name,
+                                                     preset_id))
+        _redraw_areas(context)
+        self.report({"INFO"}, "Opened: {:s}".format(index.get(self.chat_id)["title"]))
+        return {"FINISHED"}
+
+
+class BFACW_OT_chat_new(Operator):  # type: ignore[misc]
+    """Start a new chat; this one stays in the History list"""
+    bl_idname = "bfacw.chat_new"
+    bl_label = "New Chat"
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return not agent_controller._agent_state.is_thinking
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        return bpy.ops.bfacw.chat_clear()
+
+
+class BFACW_OT_chat_rename(Operator):  # type: ignore[misc]
+    """Give this chat a name of your own"""
+    bl_idname = "bfacw.chat_rename"
+    bl_label = "Rename Chat"
+    bl_options = {'INTERNAL'}
+
+    chat_id: StringProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
+    title: StringProperty(name="Name", options={'SKIP_SAVE'})  # type: ignore[valid-type]
+
+    def invoke(self, context: bpy.types.Context, _event) -> set[str]:
+        entry = _chat_index().get(self.chat_id)
+        if entry is None:
+            return {"CANCELLED"}
+        self.title = entry.get("title", "")
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        if not _chat_index().rename(self.chat_id, self.title):
+            return {"CANCELLED"}
+        _redraw_areas(context)
+        return {"FINISHED"}
+
+
+class BFACW_OT_chat_pin(Operator):  # type: ignore[misc]
+    """Pin this chat to the top of the History list (click again to unpin)"""
+    bl_idname = "bfacw.chat_pin"
+    bl_label = "Pin Chat"
+    bl_options = {'INTERNAL'}
+
+    chat_id: StringProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        index = _chat_index()
+        entry = index.get(self.chat_id)
+        if entry is None:
+            return {"CANCELLED"}
+        index.set_pinned(self.chat_id, not entry.get("pinned"))
+        _redraw_areas(context)
+        return {"FINISHED"}
+
+
+class BFACW_OT_chat_delete(Operator):  # type: ignore[misc]
+    """Delete this chat and its memory for good (the scene isn't touched)"""
+    bl_idname = "bfacw.chat_delete"
+    bl_label = "Delete Chat"
+    bl_options = {'INTERNAL'}
+
+    chat_id: StringProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return not agent_controller._agent_state.is_thinking
+
+    def invoke(self, context: bpy.types.Context, event) -> set[str]:
+        entry = _chat_index().get(self.chat_id)
+        if entry is None:
+            return {"CANCELLED"}
+        return context.window_manager.invoke_confirm(
+            self, event, title="Delete Chat?", message="\"{:s}\" and its memory are deleted for good. "
+                                                       "The scene isn't touched.".format(entry.get("title", "")),
+            confirm_text="Delete", icon='WARNING')
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        current = self.chat_id == _CHAT["id"]
+        _chat_index().delete(self.chat_id)
+        if current:
+            bpy.ops.bfacw.chat_clear()
+        _redraw_areas(context)
+        return {"FINISHED"}
+
+
+class BFACW_PT_chat_history(Panel):  # type: ignore[misc]
+    """Your chats, not tied to the .blend: continue any of them here"""
+    bl_label = "History"
+    bl_idname = "BFACW_PT_chat_history"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = _CHAT_PANEL_CATEGORY
+    bl_options = {'DEFAULT_CLOSED'}
+    bl_order = 3
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return not bpy.app.background
+
+    def draw(self, context: bpy.types.Context) -> None:
+        from .chat_history import relative_time
+        layout = self.layout
+        props = context.window_manager.bfacw_chat_props
+        row = layout.row(align=True)
+        row.prop(props, "chat_history_filter", text="", icon='VIEWZOOM')
+        row.operator("bfacw.chat_new", text="", icon='ADD')
+        entries = _chat_index().entries(props.chat_history_filter)
+        if not entries:
+            layout.label(text="No chats yet" if not props.chat_history_filter else "No chat matches",
+                         icon='INFO')
+            return
+        current = _CHAT["id"]
+        col = layout.column(align=True)
+        for entry in entries[:_HISTORY_ROWS]:
+            box = col.box()
+            head = box.row(align=True)
+            head.operator("bfacw.chat_pin", text="", emboss=False,
+                          icon='PINNED' if entry.get("pinned") else 'UNPINNED').chat_id = entry["id"]
+            is_current = entry["id"] == current
+            op = head.operator("bfacw.chat_open", text=entry.get("title") or "(untitled)", emboss=False,
+                               icon='RADIOBUT_ON' if is_current else 'RADIOBUT_OFF', depress=is_current)
+            op.chat_id = entry["id"]
+            head.operator("bfacw.chat_rename", text="", emboss=False, icon='GREASEPENCIL').chat_id = entry["id"]
+            head.operator("bfacw.chat_delete", text="", emboss=False, icon='TRASH').chat_id = entry["id"]
+            meta = [relative_time(float(entry.get("updated", 0)))]
+            if entry.get("engine"):
+                meta.append(str(entry["engine"]))
+            if entry.get("blend"):
+                meta.append(str(entry["blend"]) + ".blend")
+            sub = box.row()
+            sub.scale_y = 0.7
+            sub.label(text="  \u00b7  ".join(meta))
+        if len(entries) > _HISTORY_ROWS:
+            layout.label(text="{:d} more: search to find them".format(len(entries) - _HISTORY_ROWS))
+
+
+_HISTORY_ROWS = 25
 
 
 class BFACW_OT_queue_clear(Operator):  # type: ignore[misc]
@@ -2787,8 +3026,9 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
             _restore_chat_history()
         sessions_file, chat_key = _agent_sessions_file(), _chat_history_path().name
         resume = _saved_agent_session(sessions_file, chat_key, preset.id) if _has_user_messages() else ""
+        # Filed under the chat that is open when the session starts (Chat 7: it can change).
         _acp_engine().on_session = lambda session_id: _remember_agent_session(
-            sessions_file, chat_key, preset.id, session_id)
+            sessions_file, (_CHAT["id"] or "default") + ".json", preset.id, session_id)
         bridge_port, _, _ = effective_ports(prefs)
         entry = agent_controller.build_mcp_server_entry(
             blender_host=prefs.host, blender_port=bridge_port,
@@ -3939,7 +4179,7 @@ class BFACW_PT_chat_session(Panel):  # type: ignore[misc]
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = _CHAT_PANEL_CATEGORY
-    bl_order = 3
+    bl_order = 4
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -4150,7 +4390,7 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
     bl_region_type = 'UI'
     bl_category = _CHAT_PANEL_CATEGORY
     bl_options = {'DEFAULT_CLOSED'}
-    bl_order = 4
+    bl_order = 5
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -5223,6 +5463,12 @@ _classes = (
 
     BFACW_PT_chat_queue,
     BFACW_PT_chat_plan,
+    BFACW_PT_chat_history,
+    BFACW_OT_chat_open,
+    BFACW_OT_chat_new,
+    BFACW_OT_chat_rename,
+    BFACW_OT_chat_pin,
+    BFACW_OT_chat_delete,
     BFACW_PT_chat_compact,
     BFACW_PT_chat_panel,
     BFACW_PT_chat_session,

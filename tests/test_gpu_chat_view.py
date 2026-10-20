@@ -186,6 +186,47 @@ class _LiveThinking(_Live):
     thinking_start_time = 0.0
 
 
+class TestLongWorkshop(unittest.TestCase):
+    """#218: a long open Workshop draws only what is in view, after the first frame."""
+
+    def _hist(self, steps):
+        hist = [{"role": "user", "content": "Build a city", "turn_start": True}]
+        for i in range(steps):
+            hist.append({"role": "assistant", "content": "", "tool_calls": [
+                {"id": "c{:d}".format(i), "function": {"name": "execute_blender_code",
+                                                         "arguments": json.dumps({"code": "x = {:d}\n".format(i) * 6})}}]})
+            hist.append({"role": "tool", "tool_call_id": "c{:d}".format(i), "name": "execute_blender_code",
+                         "content": "ok: step {:d}\n".format(i) * 4})
+        hist.append({"role": "assistant", "content": "Done."})
+        return hist
+
+    def _frame(self, view, hist):
+        c = lay.Canvas(st.Style(), lay.fixed_measure(0.55), lay.InteractionState())
+        view.draw(c, lay.Rect(0, 0, 600, 500), hist)
+        return c
+
+    def test_second_frame_skips_rows_out_of_view(self):
+        import time
+        view, hist = cv.ChatView(), self._hist(80)
+        view.expanded.add("t0")
+        t0 = time.perf_counter()
+        first = self._frame(view, hist)
+        t1 = time.perf_counter()
+        height = view.content_height
+        second = self._frame(view, hist)
+        t2 = time.perf_counter()
+        self.assertEqual(view.content_height, height)                  # the same layout
+        # 80 steps of ~12 lines each; only the few rows in the 500 px view are drawn,
+        # already on the first frame (its measuring pass learns every row's height).
+        texts = [len([cmd for cmd in c.commands if cmd.kind == "text"]) for c in (first, second)]
+        self.assertLess(texts[0], 80, texts)
+        self.assertEqual(texts[0], texts[1])
+        self.assertLess(t2 - t1, t1 - t0)
+        view.scroll = height / 2                                       # scrolled into the middle: rows show
+        middle = self._frame(view, hist)
+        self.assertTrue(any("step" in cmd.text for cmd in middle.commands if cmd.kind == "text"))
+
+
 class TestWorkshopExpandAndFold(unittest.TestCase):
     """#169 Show all for cut-off entries; #178 Workshop under Thinking, fold button."""
 

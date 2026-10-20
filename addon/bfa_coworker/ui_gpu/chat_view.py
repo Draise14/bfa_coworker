@@ -108,6 +108,7 @@ class ChatView:
     _heights: dict[tuple, float] = field(default_factory=dict)
     _drag_y: float | None = None        # mouse y while the scrollbar handle is dragged
     _live_h: dict[int, float] = field(default_factory=dict)   # running turn: tallest stream so far
+    _row_h: dict[tuple, float] = field(default_factory=dict)  # Workshop rows, measured once (#218)
 
     # -- public ----------------------------------------------------------------
     def scroll_by(self, dy: float, visible_height: float) -> None:
@@ -460,9 +461,20 @@ class ChatView:
             return top
         inputs = self._call_inputs(turn)
         row_x, row_w = x + pad, width - 2 * pad
+        clip = canvas._clips[-1] if canvas._clips else None      # None: only measuring
         for n, msg in enumerate(process):
             role = msg.get("role")
             text = message_text(msg.get("content"))
+            # A long Workshop (#218): a row measured before is only stepped over when it is
+            # off screen, or when the turn is just being measured.
+            row_key = (idx, n, role, len(text), msg.get("tool_call_id"), msg.get("name"), round(row_w),
+                       style.scale, tuple(k for k in ("x{:d}:{:d}".format(idx, n), "x{:d}:{:d}:code".format(idx, n),
+                                                      "x{:d}:{:d}:res".format(idx, n)) if k in self.expanded))
+            known = self._row_h.get(row_key)
+            if known is not None and (clip is None or top - known > clip.top or top < clip.y):
+                top -= known
+                continue
+            row_start = top
             if role == "tool":
                 bad = _tool_failed(msg)
                 name = str(msg.get("name", "tool"))
@@ -507,6 +519,9 @@ class ChatView:
                 top = self._icon_line(canvas, row_x, top - pad * 0.5, icon,
                                       "{:s}: {:s}".format(title, " ".join(body.split())[:300]),
                                       _soft(style.text, 0.5), row_w)
+            if len(self._row_h) > 5000:
+                self._row_h.clear()
+            self._row_h[row_key] = row_start - top
         return top
 
     # -- markdown --------------------------------------------------------------------

@@ -2645,17 +2645,207 @@ class BFACW_OT_chat_capture_render(Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
+# -- Capture part of the screen (#200) ------------------------------------------------
+# Like the Asset Browser's "Capture Screenshot Preview": the screen dims except the
+# part that will be taken.  Click an editor to take it, or drag a rectangle; Enter
+# takes the one shown (the last one), Space moves it, Shift keeps it square.
+_SHOT: dict = {"handlers": [], "rect": None}
+_SHOT_REGIONS = ("WINDOW", "HEADER", "UI", "TOOLS", "TOOL_HEADER", "FOOTER", "NAVIGATION_BAR",
+                 "EXECUTE", "ASSET_SHELF", "ASSET_SHELF_HEADER", "CHANNELS", "PREVIEW")
+_SHOT_DRAG = 6
+
+
+def _shot_rect(a, b, square: bool = False) -> tuple[int, int, int, int]:
+    """(left, bottom, right, top) of the corners *a* and *b*; *square*: as wide as tall."""
+    (ax, ay), (bx, by) = a, b
+    if square:
+        side = max(abs(bx - ax), abs(by - ay))
+        bx = ax + side * (1 if bx >= ax else -1)
+        by = ay + side * (1 if by >= ay else -1)
+    return min(ax, bx), min(ay, by), max(ax, bx), max(ay, by)
+
+
+def _shot_draw() -> None:
+    rect = _SHOT.get("rect")
+    region = bpy.context.region
+    if rect is None or region is None:
+        return
+    import gpu
+    from gpu_extras.batch import batch_for_shader
+    ox, oy = region.x, region.y
+    left, bottom, right, top = rect[0] - ox, rect[1] - oy, rect[2] - ox, rect[3] - oy
+    w, h = region.width, region.height
+
+    def quads(rects):
+        tris = []
+        for x0, y0, x1, y1 in rects:
+            x0, y0, x1, y1 = max(0, x0), max(0, y0), min(w, x1), min(h, y1)
+            if x1 > x0 and y1 > y0:
+                tris += [(x0, y0), (x1, y0), (x1, y1), (x0, y0), (x1, y1), (x0, y1)]
+        return tris
+
+    shade = quads(((0, 0, w, bottom), (0, top, w, h), (0, bottom, left, top), (right, bottom, w, top)))
+    edge = quads(((left - 2, bottom - 2, right + 2, bottom), (left - 2, top, right + 2, top + 2),
+                  (left - 2, bottom, left, top), (right, bottom, right + 2, top)))
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    gpu.state.blend_set("ALPHA")
+    # As the Asset Browser's capture: a light veil outside, the border in the theme's colour.
+    border = tuple(bpy.context.preferences.themes[0].user_interface.editor_border) + (1.0,)
+    for tris, color in ((shade, (1.0, 1.0, 1.0, 0.25)), (edge, border[:4])):
+        if tris:
+            batch = batch_for_shader(shader, "TRIS", {"pos": tris})
+            shader.bind()
+            shader.uniform_float("color", color)
+            batch.draw(shader)
+    gpu.state.blend_set("NONE")
+
+
+def _shot_handlers_add() -> None:
+    for name in dir(bpy.types):
+        space = getattr(bpy.types, name, None)
+        if not (name.startswith("Space") and hasattr(space, "draw_handler_add")):
+            continue
+        for region_type in _SHOT_REGIONS:
+            try:
+                handle = space.draw_handler_add(_shot_draw, (), region_type, "POST_PIXEL")
+            except (TypeError, ValueError, RuntimeError):
+                continue
+            _SHOT["handlers"].append((space, handle, region_type))
+
+
+def _shot_handlers_remove() -> None:
+    for space, handle, region_type in _SHOT["handlers"]:
+        try:
+            space.draw_handler_remove(handle, region_type)
+        except (TypeError, ValueError, RuntimeError):
+            pass
+    _SHOT["handlers"].clear()
+    _SHOT["rect"] = None
+
+
+def _shot_redraw(window) -> None:
+    try:
+        for area in window.screen.areas:
+            area.tag_redraw()
+    except (AttributeError, ReferenceError):
+        pass
+
+
+def _shot_status(header, _context) -> None:
+    row = header.layout
+    for text, icon in (("Take Editor", "MOUSE_LMB"), ("Drag a Part", "MOUSE_LMB_DRAG"),
+                       ("Take Shown", "EVENT_RETURN"), ("Move", "EVENT_SPACEKEY"),
+                       ("Square", "EVENT_SHIFT"), ("Cancel", "EVENT_ESC")):
+        row.label(text=text, icon=icon)
+
+
+def _area_rect_at(window, x: int, y: int) -> tuple[int, int, int, int] | None:
+    for area in window.screen.areas:
+        if area.x <= x < area.x + area.width and area.y <= y < area.y + area.height:
+            return area.x, area.y, area.x + area.width, area.y + area.height
+    return None
+
+
 class BFACW_OT_chat_capture_screen(Operator):  # type: ignore[misc]
     """Attach a screenshot to the chat socket (main thread only)."""
     bl_idname = "bfacw.chat_capture_screen"
     bl_label = "Capture Screen"
-    bl_description = "Screenshot the 3D Viewport (or whole window) and attach it"
+    bl_description = ("Attach part of the screen: click an editor, or drag a rectangle "
+                      "(Enter: the last one, Space: move, Shift: square, Esc: cancel)")
+
+    # The part to take, in window pixels; remembered, so Enter takes it again (#200).
+    p1: bpy.props.IntVectorProperty(size=2, options={'HIDDEN'})  # type: ignore[valid-type]
+    p2: bpy.props.IntVectorProperty(size=2, options={'HIDDEN'})  # type: ignore[valid-type]
+    use_rect: BoolProperty(default=False, options={'HIDDEN', 'SKIP_SAVE'})  # type: ignore[valid-type]
+
+    def invoke(self, context: bpy.types.Context, event) -> set[str]:
+        if bpy.app.background or context.window is None:
+            return self.execute(context)
+        win = context.window
+        last = _shot_rect(tuple(self.p1), tuple(self.p2))
+        self._has_last = last[2] - last[0] >= 8 and last[3] - last[1] >= 8
+        self._win, self._start, self._dragging, self._moving = win, None, False, False
+        self._square, self._cursor = False, (event.mouse_x, event.mouse_y)
+        _SHOT["rect"] = last if self._has_last else _area_rect_at(win, *self._cursor)
+        _shot_handlers_add()
+        win.cursor_modal_set("CROSSHAIR")
+        try:
+            context.workspace.status_text_set(_shot_status)
+        except (TypeError, AttributeError):
+            context.workspace.status_text_set("Click an editor or drag a part to attach  -  Enter: the shown part"
+                                              "  -  Space: move  -  Shift: square  -  Esc: cancel")
+        context.window_manager.modal_handler_add(self)
+        _shot_redraw(win)
+        return {'RUNNING_MODAL'}
+
+    def _end(self, context) -> None:
+        _shot_handlers_remove()
+        self._win.cursor_modal_restore()
+        try:
+            context.workspace.status_text_set(None)
+        except (TypeError, AttributeError):
+            pass
+        _shot_redraw(self._win)
+
+    def _take(self, context, rect) -> set[str]:
+        self._end(context)
+        if rect is None:
+            return {'CANCELLED'}
+        self.p1, self.p2 = rect[:2], rect[2:]
+        win, a, b = self._win, tuple(rect[:2]), tuple(rect[2:])
+
+        def later():      # after the redraw without the dimming
+            try:
+                with bpy.context.temp_override(window=win, screen=win.screen):
+                    bpy.ops.bfacw.chat_capture_screen('EXEC_DEFAULT', p1=a, p2=b, use_rect=True)
+            except (RuntimeError, ReferenceError) as ex:
+                print("[Coworker] capture: {!s}".format(ex))
+            return None
+        bpy.app.timers.register(later, first_interval=0.1)
+        return {'FINISHED'}
+
+    def modal(self, context: bpy.types.Context, event) -> set[str]:
+        x, y = event.mouse_x, event.mouse_y
+        if event.type in {'LEFT_SHIFT', 'RIGHT_SHIFT'}:
+            self._square = event.value == 'PRESS'
+        if event.type == 'SPACE':
+            self._moving = event.value == 'PRESS'
+        elif event.type in {'ESC', 'RIGHTMOUSE'} and event.value == 'PRESS':
+            self._end(context)
+            return {'CANCELLED'}
+        elif event.type in {'RET', 'NUMPAD_ENTER'} and event.value == 'PRESS':
+            return self._take(context, _SHOT["rect"])
+        elif event.type == 'LEFTMOUSE' and event.value == 'PRESS':
+            self._start, self._dragging = (x, y), False
+        elif event.type == 'LEFTMOUSE' and event.value == 'RELEASE' and self._start is not None:
+            return self._take(context, _SHOT["rect"] if self._dragging else _area_rect_at(self._win, x, y))
+        elif event.type == 'MOUSEMOVE':
+            dx, dy = x - self._cursor[0], y - self._cursor[1]
+            rect = _SHOT["rect"]
+            if self._moving and rect is not None:
+                _SHOT["rect"] = (rect[0] + dx, rect[1] + dy, rect[2] + dx, rect[3] + dy)
+                self._has_last = True
+            elif self._start is not None:
+                sx, sy = self._start
+                if not self._dragging and abs(x - sx) > _SHOT_DRAG and abs(y - sy) > _SHOT_DRAG:
+                    self._dragging = True
+                if self._dragging:
+                    _SHOT["rect"] = _shot_rect(self._start, (x, y), self._square)
+                    self._has_last = True
+            elif not self._has_last:
+                _SHOT["rect"] = _area_rect_at(self._win, x, y)
+            _shot_redraw(self._win)
+        self._cursor = (x, y)
+        return {'RUNNING_MODAL'}
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        # Prefer the 3D Viewport (what the model needs to see); fall
-        # back to the whole window when no viewport exists.  Operators
-        # always run on the main thread, which these captures require.
-        path = chat_attachments.capture_screen(target="VIEW_3D")
+        path = None
+        if self.use_rect:
+            path = chat_attachments.capture_screen_rect(context.window, *self.p1, *self.p2)
+        if not path:
+            # From a script: prefer the 3D Viewport (what the model needs to see);
+            # fall back to the whole window when no viewport exists.
+            path = chat_attachments.capture_screen(target="VIEW_3D")
         if not path:
             path = chat_attachments.capture_screen(target="WINDOW")
         if not path:

@@ -52,9 +52,17 @@ a compact sidebar chat) plus groundwork for the External Agent mode.
 - **Revert a turn.** Every turn is one undo step; the Undo button on the last reply undoes it (only while you haven't changed the scene since).
 - **External Harness activity view:** the card lists every tool call your outside client made in Blender, live (ok / error, time, a preview), with *Copy Log*.
 - **Benchmarks on every engine:** run them on the External Agent too; each run records its engine, and Compare shows every engine side by side.
+- **Mode switcher everywhere (#192, #193):** Local, Remote and Agent (the three integrated modes) side by side, then Harness, at the top of the Coworker panel, in Preferences and as a menu on the chat's mode icon.
+- **The same Model / Effort block for every engine (#195):** External Agent's Mode / Model / Effort as buttons or dropdowns; Local and Remote get theirs in the same place (Remote lists the models after Refresh).
+- **Plan mode (#194):** next to Coworker and Ask, with icons, in every chat. It makes a step plan with read-only tools and changes nothing; **Carry Out the Plan** builds it -- on any engine, since the plan stays with the chat.
+- **Queue cards (#197):** each waiting message as a card (mode, time, text) with Next, Edit and Delete; Send Next Now; Clear All.
+- **Attach Screen picks a part (#200):** click an editor or drag a rectangle, like the Asset Browser's thumbnail capture (Enter: the same part again, Space: move, Shift: square).
+- **Actions panel (#201):** the common actions as buttons under the chat, in the 3D View and editor sidebars.
+- **Images in External Harness (#199):** drop an image on the Coworker editor and your outside client reads it with the new `get_attached_image` tool. The editor's Attach toolshelf has an image picker.
 
 ### Changed
 
+- **Fixes from your testing:** the floating button folds the Workshop, and Thinking always shows (#196); the sidebar chat no longer blips away while you scroll a tall sidebar (#198); the External Agent tab comes before External Harness (#192).
 - **Short tool results:** a result over ~8000 characters arrives as a short preview with a handle (`read_tool_output` reads the rest) -- on every engine.
 - **Tools on demand** for the External Agent (*Load Tools When Needed*, on by default): the basic tools first, the specialised ones when it asks. About 8K fewer tokens per request.
 

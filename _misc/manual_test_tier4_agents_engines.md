@@ -61,9 +61,10 @@ You need Claude Code with its ACP adapter (or OpenCode) logged in. Tick each lin
 
 ## G. Sidebar and editor layout
 
-- [ ] 3D View sidebar, Coworker tab: **Chat, Queue, Plan** (open), then Session and Status (closed). (#171)
-- [ ] Coworker editor sidebar: Coworker (settings + just an image picker and preview), **Queue, Plan**,
-      Session and Status (closed). (#171)
+- [ ] 3D View sidebar, Coworker tab: **Chat, Actions, Queue, Plan** (open), then History, Session and Status
+      (closed). (#171, #201)
+- [ ] Coworker editor sidebar: Coworker (settings + just an image picker and preview), **Actions, Queue,
+      Plan**, then History, Session and Status (closed). (#171, #201)
 - [ ] Make the 3D View short (drag the timeline up) so the sidebar is shorter than the chat panel:
       the chat's top bar and the input stay visible, the messages scroll between them, nothing draws over
       the top bar. Very short: the Coworker | Ask row disappears first. (#182)
@@ -114,6 +115,39 @@ You need Claude Code with its ACP adapter (or OpenCode) logged in. Tick each lin
 - [ ] With Auto on, a risky step is declined at once (no waiting overnight).
 - [ ] Decide: should it be on by default?
 
-## M. After testing
+## M. Your feedback round (#192-#201)
+
+- [ ] Mode row at the top of the Coworker panel: **Local, Remote, Agent** together, a gap, then **Harness**
+      (also in Preferences, full names). Narrow sidebar: only the active one is named. Click the mode
+      icon in the chat's top bar: the same choice as a menu. Locked while running. (#192, #193)
+- [ ] Every mode: a **Model / Effort** block before Start (External Agent: Mode / Model / Effort as
+      buttons when there are 4 or fewer choices, else a dropdown; Remote: the model list after
+      Refresh). (#195)
+- [ ] **Coworker | Ask | Plan** with icons, in the chat and in the sidebar chat. Plan: ask for a
+      3-object scene; it writes a plan and changes nothing. **Carry Out the Plan** (Plan panel) builds
+      it. (#194)
+- [ ] Plan on one engine, switch engine (e.g. External Agent -> Local), Carry Out: the plan is still
+      there and the other engine does it. (#194)
+- [ ] The round button floating over a running turn says **Workshop** and folds the Workshop;
+      Thinking always shows. (#196)
+- [ ] Queue: send 3 messages while a turn runs. One card each (number, mode, time, the text);
+      **up** = next, **pencil** = back into the input, **X** = delete; **Send Next Now** when idle,
+      **Clear All**. (#197)
+- [ ] Sidebar chat taller than the sidebar: scroll the sidebar so the chat's top and bottom are both
+      out of view: it stays drawn, no blip (also on a squeezed monitor). (#198)
+- [ ] Editor toolshelf **Attach**: the image picker (browse any image in the file), a preview when
+      wide. (#199)
+- [ ] External Harness: drag a PNG onto the Coworker editor: it shows under the harness card ("Your
+      client can look at it"). In your client: "look at the image I attached in Blender": it calls
+      **get_attached_image** and describes it. (#199)
+- [ ] **Attach Screen**: the screen gets a light veil. Hover an editor -> click: that editor is
+      attached. Again, drag a rectangle: that part. Again, **Enter**: the same part; **Space** held
+      moves it; **Shift** square; **Esc** cancels. The status bar lists the keys. (#200)
+- [ ] **Actions** panel (3D View sidebar and editor sidebar): New Thread, @ Mention, Revert / Stop,
+      Image / Render / Screen, Goal & Plan, Rules, Copy / Export Log. Wide sidebar: several columns.
+      External Harness: the chat buttons are gone. (#201)
+- [ ] (Note) Did the Windows taskbar misbehave while testing? Say so (I now pace my own test runs).
+
+## N. After testing
 
 - [ ] `make wiki` (once your wiki edits are committed): the new **External Agent** page is there. (#163)

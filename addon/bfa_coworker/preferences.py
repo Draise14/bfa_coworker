@@ -1040,6 +1040,15 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default=True,
     )
 
+    external_agent_tools_on_demand: BoolProperty(  # type: ignore[valid-type]
+        name="Load Tools When Needed",
+        description=("Give the agent Coworker's basic tools first (scene, code, docs, screenshots, "
+                     "plan, questions) and the specialised ones (materials, nodes, assets, animation...) "
+                     "when it asks for them. Saves about 10K tokens on every request. Off: all tools "
+                     "from the start"),
+        default=True,
+    )
+
     external_agent_ask_coworker_tools: BoolProperty(  # type: ignore[valid-type]
         name="Ask Before Blender Tools Too",
         description=("Ask you in the chat before the agent runs one of Coworker's Blender tools "

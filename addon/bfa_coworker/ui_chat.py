@@ -1517,6 +1517,41 @@ def _load_chat_history() -> list[dict]:
 _history_save_lock = threading.Lock()
 
 
+def _has_user_messages() -> bool:
+    return any(m.get("role") == "user" for m in agent_controller._agent_state.conversation_history)
+
+
+def _agent_sessions_file() -> Path:
+    """Which External Agent session belongs to which chat (to resume it after a restart)."""
+    return _chat_history_dir() / "agent_sessions.json"
+
+
+def _read_agent_sessions(path: Path) -> dict:
+    try:
+        with open(str(path), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _saved_agent_session(path: Path, chat_key: str, preset_id: str) -> str:
+    """The session id the agent *preset_id* last had for this chat, or ""."""
+    entry = _read_agent_sessions(path).get(chat_key) or {}
+    return str(entry.get("session", "")) if entry.get("agent") == preset_id else ""
+
+
+def _remember_agent_session(path: Path, chat_key: str, preset_id: str, session_id: str) -> None:
+    """Keep *session_id* for this chat (any thread: plain file I/O, no bpy)."""
+    data = _read_agent_sessions(path)
+    data[chat_key] = {"agent": preset_id, "session": session_id}
+    try:
+        with open(str(path), "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+    except OSError:
+        pass
+
+
 def _session_memory_archive_path() -> Path:
     """Return the path of the session-memory archive (next to chat history)."""
     return _chat_history_dir() / "archive.jsonl"
@@ -1770,6 +1805,9 @@ class BFACW_OT_chat_clear(Operator):  # type: ignore[misc]
         agent_controller._clear_coworker_text_blocks()
         # Clear cached system prompt so project rules are reloaded on next turn.
         agent_controller._clear_system_prompt_cache()
+        # External Agent: the agent forgets the old conversation as well.
+        if _acp is not None and _acp.connected:
+            _acp.new_session()
         _save_chat_history()
         _redraw_areas(context)
         return {"FINISHED"}
@@ -2499,6 +2537,13 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         if preset is None:
             self.report({"WARNING"}, "Pick an agent, or type its command (Custom Command)")
             return {"CANCELLED"}
+        # This .blend's chat comes back, and with it the agent's session for it.
+        if not _has_user_messages():
+            _restore_chat_history()
+        sessions_file, chat_key = _agent_sessions_file(), _chat_history_path().name
+        resume = _saved_agent_session(sessions_file, chat_key, preset.id) if _has_user_messages() else ""
+        _acp_engine().on_session = lambda session_id: _remember_agent_session(
+            sessions_file, chat_key, preset.id, session_id)
         bridge_port, _, _ = effective_ports(prefs)
         entry = agent_controller.build_mcp_server_entry(
             blender_host=prefs.host, blender_port=bridge_port,
@@ -2518,7 +2563,11 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
                 engine.status = "{:s} {:s}".format(found.problem, found.hint).strip()
                 engine.on_change and engine.on_change()
                 return
-            engine.connect(found.argv, entry, cwd, env, label=preset.name, wait=True)
+            engine.connect(found.argv, entry, cwd, env, label=preset.name, wait=True, resume=resume)
+            if engine.connected and (engine.resumed or engine.resume_failed):
+                engine.status += (": continuing your last conversation" if engine.resumed
+                                  else ": couldn't continue the last conversation, so it starts fresh")
+                engine.on_change and engine.on_change()
         _threading.Thread(target=work, daemon=True, name="acp-start").start()
         context.window_manager.bfacw_chat_props.chat_status = "Starting {:s}...".format(preset.name)
         _redraw_areas(context)
@@ -2741,28 +2790,7 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
             threading.Thread(target=_warmup_remote, daemon=True).start()
             props.chat_status = "Warming up..."
 
-        # Load chat history.
-        history = _load_chat_history()
-        # Restore the session-memory store (memory note + checkpoints).
-        _load_session_memory_state()
-        if history:
-            # -- Loaded-history diagnostic -----------------------------
-            # A persisted history is restored verbatim, so a stale prompt or
-            # a bad shape from an earlier session is sent to the model as-is.
-            # Log what was loaded -- the first user message in particular
-            # reveals whether the model is answering a stale prompt.
-            print("[Coworker] _load_chat_history: loaded {:d} messages from {:s}".format(
-                len(history), str(_chat_history_path())))
-            print(agent_controller._describe_history_for_log(history))
-            # Sanitize before use: a history written by an older build may
-            # contain ui_only greetings, a leading assistant message,
-            # reasoning entries, or half-finished tool-call exchanges -- all
-            # of which trip strict Jinja chat templates.
-            history = agent_controller._sanitize_loaded_history(history)
-            if history:
-                print("[Coworker] _load_chat_history: after sanitize:")
-                print(agent_controller._describe_history_for_log(history))
-            agent_controller._agent_state.conversation_history = history
+        _restore_chat_history()
 
         # Local-mode status is driven by the background thread (Starting ->
         # Loading -> Connected / Error: ...); only remote mode marks
@@ -2772,6 +2800,31 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
 
         _redraw_areas(context)
         return {"FINISHED"}
+
+
+def _restore_chat_history() -> None:
+    """The saved chat of this .blend back in the chat (on Start, every mode)."""
+    history = _load_chat_history()
+    # Restore the session-memory store (memory note + checkpoints).
+    _load_session_memory_state()
+    if history:
+        # -- Loaded-history diagnostic -----------------------------
+        # A persisted history is restored verbatim, so a stale prompt or
+        # a bad shape from an earlier session is sent to the model as-is.
+        # Log what was loaded -- the first user message in particular
+        # reveals whether the model is answering a stale prompt.
+        print("[Coworker] _load_chat_history: loaded {:d} messages from {:s}".format(
+            len(history), str(_chat_history_path())))
+        print(agent_controller._describe_history_for_log(history))
+        # Sanitize before use: a history written by an older build may
+        # contain ui_only greetings, a leading assistant message,
+        # reasoning entries, or half-finished tool-call exchanges -- all
+        # of which trip strict Jinja chat templates.
+        history = agent_controller._sanitize_loaded_history(history)
+        if history:
+            print("[Coworker] _load_chat_history: after sanitize:")
+            print(agent_controller._describe_history_for_log(history))
+        agent_controller._agent_state.conversation_history = history
 
 
 class BFACW_OT_agent_stop(Operator):  # type: ignore[misc]
@@ -4862,8 +4915,10 @@ def register() -> None:
 
 
 def unregister() -> None:
-    # Save history.
-    _save_chat_history()
+    # Save history -- unless it's already been emptied (add-on cleanup on quit):
+    # never overwrite the saved chat with nothing.
+    if _has_user_messages():
+        _save_chat_history()
 
     # Drop the thumbnail's private preview buffer.
     free_attachment_thumbnail()

@@ -366,6 +366,9 @@ def unregister() -> None:
     from . import ui_chat
 
     _save_settings_backup()
+    # Keep the chat first: the cleanup below empties it (it used to be saved after,
+    # so quitting overwrote the saved chat with an empty one).
+    ui_chat._save_chat_history()
 
     # Clean up subprocesses.
     get_llm_manager().cleanup()

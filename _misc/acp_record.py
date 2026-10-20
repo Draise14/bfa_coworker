@@ -12,7 +12,7 @@ over as a stdio server -- and writes every JSON-RPC message, in both
 directions, to a ``.jsonl`` file::
 
     python _misc/acp_record.py --out tests/fixtures/acp/opencode_tool_call.jsonl \\
-        --cwd <project dir> --prompt "..." [--cancel-after 5] -- opencode acp
+        --cwd <project dir> --prompt "..." [--cancel-after 5] [--load <session id>] -- opencode acp
 
 Permission requests are answered with the first ``allow_once`` option (or the
 first option) and recorded.  ``fs/*`` and ``terminal/*`` requests are refused
@@ -184,6 +184,8 @@ def main() -> int:
     ap.add_argument("--cancel-after", type=float, default=0.0,
                     help="Send session/cancel this many seconds into the LAST prompt")
     ap.add_argument("--no-mcp", action="store_true", help="Do not pass our MCP server")
+    ap.add_argument("--load", default="", metavar="SESSION_ID",
+                    help="Resume this session (session/load) instead of opening a new one")
     ap.add_argument("--env", action="append", default=[], metavar="NAME=VALUE",
                     help="Extra environment variable for the agent; repeatable")
     ap.add_argument("agent", nargs=argparse.REMAINDER, help="-- <agent command and args>")
@@ -203,12 +205,17 @@ def main() -> int:
                                    "terminal": False},
         }, timeout=60)
         print("initialize:", json.dumps(init.get("result", init))[:600])
-        new = rec.request("session/new", {
-            "cwd": os.path.abspath(args.cwd),
-            "mcpServers": [] if args.no_mcp else [_default_mcp_server()],
-        }, timeout=120)
-        print("session/new:", json.dumps(new.get("result", new))[:600])
-        session_id = new.get("result", {}).get("sessionId")
+        params = {"cwd": os.path.abspath(args.cwd),
+                  "mcpServers": [] if args.no_mcp else [_default_mcp_server()]}
+        if args.load:
+            new = rec.request("session/load", dict(params, sessionId=args.load), timeout=120)
+            print("session/load:", json.dumps(new.get("result", new))[:600])
+            session_id = args.load
+        else:
+            new = rec.request("session/new", params, timeout=120)
+            print("session/new:", json.dumps(new.get("result", new))[:600])
+            session_id = new.get("result", {}).get("sessionId")
+        print("session id:", session_id)
         for i, text in enumerate(args.prompt):
             last = i == len(args.prompt) - 1
             if last and args.cancel_after > 0:

@@ -17,6 +17,10 @@ Permissions: requests for Coworker's own tools are approved (they run in
 Blender with a checkpoint to revert to); everything else the agent asks for
 (its shell, file edits) is refused, so it stays inside Blender.
 
+Resume (Agent 6): :meth:`connect` with *resume* continues an earlier session
+(``session/load``) when the agent can, else opens a new one; New Thread calls
+:meth:`new_session`.  *on_session* hears each session id, to keep it.
+
 Threads: the agent's messages arrive on the client's reader thread and are put
 on an :class:`engine.EventBus`; :meth:`drain` applies them on the main thread.
 Free of ``bpy``.
@@ -60,27 +64,33 @@ class AcpEngine:
         self._lock = threading.Lock()
         self._turn_id = ""
         self._queue: deque[Prompt] = deque()
+        self.on_session: Callable[[str], None] | None = None   # each session id (to resume later)
+        self.resumed = self.resume_failed = False
+        self._cwd, self._servers = "", []
         self.on_change: Callable[[], None] | None = None     # redraw hook (any thread)
         self.only_coworker_tools = True      # off: the agent may also use its own tools
 
     # -- connection ----------------------------------------------------------------
     def connect(self, argv: list[str], mcp_entry: dict[str, Any], cwd: str,
-                env: dict[str, str] | None = None, label: str = "", wait: bool = False) -> None:
-        """Start the agent and open a session (in the background unless *wait*)."""
+                env: dict[str, str] | None = None, label: str = "", wait: bool = False,
+                resume: str = "") -> None:
+        """Start the agent and open a session (in the background unless *wait*).
+
+        *resume*: an earlier session id to continue, when the agent supports it."""
         if self.connected or self.connecting:
             return
         self.connecting, self.error = True, ""
         self.agent_label = label or (os.path.basename(argv[0]) if argv else "agent")
         self.status = "Starting {:s}...".format(self.agent_label)
         self._changed()
-        worker = threading.Thread(target=self._connect, args=(argv, mcp_entry, cwd, env), daemon=True,
-                                  name="acp-connect")
+        worker = threading.Thread(target=self._connect, args=(argv, mcp_entry, cwd, env, resume),
+                                  daemon=True, name="acp-connect")
         worker.start()
         if wait:
             worker.join()
 
     def _connect(self, argv: list[str], mcp_entry: dict[str, Any], cwd: str,
-                 env: dict[str, str] | None) -> None:
+                 env: dict[str, str] | None, resume: str = "") -> None:
         try:
             os.makedirs(cwd, exist_ok=True)
             client = self._client_factory(argv, cwd=cwd, env=env, on_update=self._on_update,
@@ -89,8 +99,7 @@ class AcpEngine:
             info = client.initialize()
             server = stdio_mcp_server(mcp_entry["command"], list(mcp_entry.get("args") or []),
                                       dict(mcp_entry.get("env") or {}))
-            session = client.new_session(cwd, [server])
-            self.session_id = str(session.get("sessionId", ""))
+            self.session_id = self._open_session(client, info.load_session, resume, cwd, [server])
             if not self.session_id:
                 raise AcpError("the agent did not open a session")
             self.client = client
@@ -110,6 +119,42 @@ class AcpEngine:
         finally:
             self.connecting = False
             self._changed()
+
+    def _open_session(self, client: AcpClient, can_load: bool, resume: str, cwd: str,
+                      servers: list[dict[str, Any]]) -> str:
+        """Continue *resume* (``session/load``) when the agent can, else open a new session."""
+        self._cwd, self._servers = cwd, servers
+        self.resumed = self.resume_failed = False
+        session_id = ""
+        if resume and can_load:
+            try:
+                client.load_session(resume, cwd, servers)    # its replay is ignored: no turn runs
+                session_id, self.resumed = resume, True
+            except AcpError:
+                self.resume_failed = True     # gone or too old: a fresh session instead
+        if not session_id:
+            session_id = str(client.new_session(cwd, servers).get("sessionId", ""))
+        if session_id and self.on_session is not None:
+            self.on_session(session_id)
+        return session_id
+
+    def new_session(self, wait: bool = False) -> None:
+        """New Thread: the agent forgets the conversation too (same agent, a new session)."""
+        client = self.client
+        if client is None or not self.connected:
+            return
+        self.cancel()
+
+        def work() -> None:
+            try:
+                self.session_id = self._open_session(client, False, "", self._cwd, self._servers)
+            except AcpError as ex:
+                self.status = "Couldn't start a fresh session: {:s}".format(str(ex).splitlines()[0])
+            self._changed()
+        worker = threading.Thread(target=work, daemon=True, name="acp-new-session")
+        worker.start()
+        if wait:
+            worker.join()
 
     def disconnect(self) -> None:
         client, self.client = self.client, None

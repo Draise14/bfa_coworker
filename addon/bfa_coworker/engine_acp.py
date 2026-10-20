@@ -132,6 +132,7 @@ class AcpEngine:
                                    load_session=info.load_session, own_loop=True)
             # The preset's name ("Claude Code"), not the adapter's package name.
             name = self.agent_label if self._named else (info.name or self.agent_label)
+            self.applier.agent_name = name          # its replies say who wrote them
             self.status = "Connected to {:s}{:s}".format(name, " " + info.version if info.version else "")
             self.connected = True
         except (AcpError, OSError, KeyError) as ex:

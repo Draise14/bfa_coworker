@@ -3778,7 +3778,8 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             if conclusion_msg:
                 tb = hist_box.box()
                 cr = tb.row()
-                cr.label(text="Turn {:d} -- Coworker:".format(turn_num), icon=_AGENT_ICON)
+                cr.label(text="Turn {:d} -- {:s}:".format(turn_num, conclusion_msg.get("agent") or "Coworker"),
+                         icon=_AGENT_ICON)
                 _copy(cr.operator("bfacw.copy_message", text="", icon="COPYDOWN"),
                       conclusion_msg)
                 _draw_multiline(tb, conclusion_msg.get("content", ""))
@@ -3928,7 +3929,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         elif conclusion_msg:
             turn_box.separator()
             cr = turn_box.row()
-            cr.label(text="* Coworker:", icon=_AGENT_ICON)
+            cr.label(text="* {:s}:".format(conclusion_msg.get("agent") or "Coworker"), icon=_AGENT_ICON)
             _copy(cr.operator("bfacw.copy_message", text="", icon="COPYDOWN"),
                   conclusion_msg)
             _render_markdown(turn_box, conclusion_msg.get("content", ""))

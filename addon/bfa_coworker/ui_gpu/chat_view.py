@@ -493,7 +493,7 @@ class ChatView:
             text = message_text(msg.get("content"))
             # A long Workshop (#218): a row measured before is only stepped over when it is
             # off screen, or when the turn is just being measured.
-            row_key = (idx, n, role, len(text), msg.get("tool_call_id"), msg.get("name"), round(row_w),
+            row_key = (id(msg), idx, n, role, len(text), msg.get("tool_call_id"), msg.get("name"), round(row_w),
                        style.scale, tuple(k for k in ("x{:d}:{:d}".format(idx, n), "x{:d}:{:d}:code".format(idx, n),
                                                       "x{:d}:{:d}:res".format(idx, n)) if k in self.expanded))
             known = self._row_h.get(row_key)

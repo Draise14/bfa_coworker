@@ -180,6 +180,77 @@ class _Live:
     streaming_text = "Working on **it**"
 
 
+class _LiveThinking(_Live):
+    reasoning_text = "Looking at the image, three spheres are stacked on a base"
+    streaming_text = "Building the tanks now"
+    thinking_start_time = 0.0
+
+
+class TestWorkshopExpandAndFold(unittest.TestCase):
+    """#169 Show all for cut-off entries; #178 Workshop under Thinking, fold button."""
+
+    def _draw(self, view, hist, live=None, **state):
+        c = lay.Canvas(st.Style(), lay.fixed_measure(0.55), lay.InteractionState(**state))
+        actions = view.draw(c, lay.Rect(0, 0, 600, 3000), hist, live=live)
+        return c, actions
+
+    def _text_y(self, canvas, needle):
+        return next(cmd.rect.y if getattr(cmd, "rect", None) else cmd.y for cmd in canvas.commands
+                    if cmd.kind == "text" and needle in cmd.text)
+
+    def test_running_turn_order_and_fold(self):
+        view = cv.ChatView()
+        hist = [{"role": "user", "content": "Build the lander", "turn_start": True},
+                {"role": "tool", "name": "execute_blender_code", "content": "ok"}]
+        c, _ = self._draw(view, hist, live=_LiveThinking())
+        thinking = self._text_y(c, "spheres")
+        workshop = self._text_y(c, "Workshop")
+        reply = self._text_y(c, "tanks")
+        self.assertGreater(thinking, workshop)         # the Thinking box above the Workshop...
+        self.assertGreater(workshop, reply)            # ...and the streaming reply under it
+        widgets = [w for _r, w in c.hit_areas]
+        self.assertIn("fold_thinking", widgets)
+        view.thinking_folded = True
+        c, _ = self._draw(view, hist, live=_LiveThinking())
+        texts = " ".join(cmd.text for cmd in c.commands if cmd.kind == "text")
+        self.assertNotIn("three spheres", texts)
+        self.assertIn("thinking hidden", texts)
+
+    def test_long_thinking_entry_expands(self):
+        view = cv.ChatView()
+        view.expanded.add("t0")                        # the Workshop open
+        long = "word " * 300
+        hist = [{"role": "user", "content": "go", "turn_start": True},
+                {"role": "reasoning", "content": long},
+                {"role": "assistant", "content": "Done."}]
+        c, _ = self._draw(view, hist)
+        texts = " ".join(cmd.text for cmd in c.commands if cmd.kind == "text")
+        self.assertIn("Show all", texts)
+        self.assertIn("more:x0:0", [w for _r, w in c.hit_areas])
+        _c, actions = self._draw(view, hist, clicked="more:x0:0")
+        self.assertIn(("toggle", "x0:0"), actions)
+        view.expanded.add("x0:0")
+        c, _ = self._draw(view, hist)
+        texts = " ".join(cmd.text for cmd in c.commands if cmd.kind == "text")
+        self.assertIn("Show less", texts)
+        self.assertGreater(texts.count("word"), 250)
+
+    def test_long_result_frame_expands(self):
+        view = cv.ChatView()
+        view.expanded.add("t0")
+        result = "\n".join("line {:d}".format(i) for i in range(40))
+        hist = [{"role": "user", "content": "go", "turn_start": True},
+                {"role": "tool", "name": "get_objects_summary", "content": result},
+                {"role": "assistant", "content": "Done."}]
+        c, _ = self._draw(view, hist)
+        texts = " ".join(cmd.text for cmd in c.commands if cmd.kind == "text")
+        self.assertNotIn("line 39", texts)
+        self.assertIn("Show all (26 more lines)", texts)
+        view.expanded.add("x0:0:res")
+        c, _ = self._draw(view, hist)
+        self.assertIn("line 39", " ".join(cmd.text for cmd in c.commands if cmd.kind == "text"))
+
+
 class TestChatView(unittest.TestCase):
 
     def canvas(self, **state):

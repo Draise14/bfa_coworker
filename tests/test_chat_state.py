@@ -118,6 +118,22 @@ class TestRecordedSession(unittest.TestCase):
         self.assertEqual((state.streaming_text, state.turn_phase, state.ui_status), ("", "", "Idle"))
 
 
+class TestWhoAnswered(unittest.TestCase):
+    """Engine 4: an External Agent's reply says who wrote it."""
+
+    def test_reply_keeps_the_agent_name(self):
+        state = _State()
+        applier = cs.ChatStateApplier(state)
+        applier.agent_name = "Claude Code"
+        _apply_all(applier, [("turn_start", {"text": "hi"}), ("text", {"delta": "Hello"}),
+                             ("turn_end", {"stop_reason": "end_turn"})])
+        self.assertEqual(state.conversation_history[-1]["agent"], "Claude Code")
+        plain = _State()
+        _apply_all(cs.ChatStateApplier(plain), [("turn_start", {"text": "hi"}), ("text", {"delta": "Hi"}),
+                                                ("turn_end", {"stop_reason": "end_turn"})])
+        self.assertNotIn("agent", plain.conversation_history[-1])
+
+
 class TestLiveAndEndStates(unittest.TestCase):
 
     def test_live_fields_while_running(self):

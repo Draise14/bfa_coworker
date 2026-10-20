@@ -50,6 +50,8 @@ class ChatStateApplier:
                  clock: Callable[[], float] = time.time) -> None:
         self.state = state
         self.on_plan = on_plan
+        # Who answers (Engine 4): "Claude Code" on an External Agent; the reply keeps it.
+        self.agent_name = ""
         self._clock = clock
         self._turn_id = ""
         self._started = 0.0
@@ -182,7 +184,10 @@ class ChatStateApplier:
         elif not reply and stop_reason == "error":
             reply = "The agent stopped with an error: {:s}".format(state.error or "unknown error")
         if reply:
-            self._history.append({"role": "assistant", "content": reply})
+            message = {"role": "assistant", "content": reply}
+            if self.agent_name:
+                message["agent"] = self.agent_name
+            self._history.append(message)
         if self._history:
             self._history[-1]["turn_seconds"] = round(self._clock() - self._started, 1)
         state.is_thinking = False

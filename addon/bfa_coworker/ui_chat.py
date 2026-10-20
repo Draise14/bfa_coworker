@@ -171,6 +171,50 @@ def _selected_agent_preset(prefs):
     return acp_presets.preset_by_id(prefs.external_agent_preset)
 
 
+def _agent_options_file() -> Path:
+    """Your picks per agent (model, mode, effort), re-applied when it starts."""
+    return _agent_workspace().parent / "agent_options.json"
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        with open(str(path), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _remember_agent_option(path: Path, preset_id: str, config_id: str, value: str) -> None:
+    """Any thread: plain file I/O."""
+    data = _read_json(path)
+    data.setdefault(preset_id, {})[config_id] = value
+    try:
+        with open(str(path), "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+    except OSError:
+        pass
+
+
+# A picker's icon, by the agent's option category.
+_PICKER_ICONS = {"mode": 'TOOL_SETTINGS', "model": 'EXPERIMENTAL', "thought_level": 'OUTLINER_OB_LIGHT'}
+# Enum items for the open picker; kept alive here (Blender needs the strings to outlive the call).
+_PICKER_ITEMS: list[tuple[str, str, str]] = []
+
+
+def _draw_agent_pickers(layout) -> None:
+    """The running agent's own options (mode, model, effort) as dropdowns."""
+    if _acp is None or not _acp.connected:
+        return
+    col = layout.column(align=True)
+    for picker in _acp.pickers():
+        row = col.row(align=True)
+        split = row.split(factor=0.35, align=True)
+        split.label(text=picker["name"], icon=_PICKER_ICONS.get(picker["category"], 'DOT'))
+        op = split.operator("bfacw.agent_option", text=picker["current_name"])
+        op.option_id = picker["id"]
+
+
 def _installs_file() -> Path:
     """Which agent adapters Coworker installed (so Remove only touches those)."""
     return _agent_workspace().parent / "installed_agents.json"
@@ -290,6 +334,7 @@ def draw_external_agent_setup(layout, context, compact: bool = False) -> None:
         box.label(text=job, icon='SORTTIME' if job.endswith("...") else 'INFO')
     if found == "checking":
         return
+    _draw_agent_pickers(box)
     if not found.ready:
         if preset.npm_package and not job:
             _npm_button(box, preset, "INSTALL", "Install {:s}".format(preset.name), 'IMPORT')
@@ -316,6 +361,47 @@ def draw_external_agent_setup(layout, context, compact: bool = False) -> None:
         opt.prop(prefs, "external_agent_ask_coworker_tools")
         if preset.docs_url:
             box.operator("wm.url_open", text="{:s} docs".format(preset.name), icon='URL').url = preset.docs_url
+
+
+def _picker_items(self, _context):
+    picker = next((p for p in (_acp.pickers() if _acp is not None else []) if p["id"] == self.option_id), None)
+    _PICKER_ITEMS[:] = [(v, n, d or n) for v, n, d in (picker["choices"] if picker else [])] or [("", "", "")]
+    return _PICKER_ITEMS
+
+
+class BFACW_OT_agent_option(Operator):  # type: ignore[misc]
+    """Change one of the agent's own settings for this session: its mode, model or effort.
+Coworker remembers your pick for the next time this agent starts"""
+    bl_idname = "bfacw.agent_option"
+    bl_label = "Agent Setting"
+    bl_property = "value"
+    bl_options = {'INTERNAL'}
+
+    option_id: StringProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
+    value: EnumProperty(items=_picker_items, options={'SKIP_SAVE'})  # type: ignore[valid-type]
+
+    @classmethod
+    def description(cls, _context, properties) -> str:
+        picker = next((p for p in (_acp.pickers() if _acp is not None else []) if p["id"] == properties.option_id),
+                      None)
+        if picker is None:
+            return cls.__doc__
+        what = {"mode": "How the agent works (some ask before changes, Plan only plans)",
+                "model": "Which model the agent uses (from your own subscription)",
+                "thought_level": "How hard the agent thinks before it answers (more is slower)"}.get(
+                    picker["category"], picker["name"])
+        return "{:s}. Now: {:s}. Coworker remembers your pick for this agent".format(what, picker["current_name"])
+
+    def invoke(self, context: bpy.types.Context, _event) -> set[str]:
+        context.window_manager.invoke_search_popup(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        if _acp is None or not self.value:
+            return {"CANCELLED"}
+        _acp.set_option(self.option_id, self.value)
+        _redraw_areas(context)
+        return {"FINISHED"}
 
 
 class BFACW_OT_external_agent_check(Operator):  # type: ignore[misc]
@@ -2632,6 +2718,11 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         engine.connecting = True
         engine.status = "Looking for {:s}...".format(preset.name)
         engine.on_change and engine.on_change()
+
+        # Your earlier picks for this agent (model, mode, effort) come back in each session.
+        options_file = _agent_options_file()
+        engine.preferred = dict(_read_json(options_file).get(preset.id) or {})
+        engine.on_option = lambda config_id, value: _remember_agent_option(options_file, preset.id, config_id, value)
 
         def work() -> None:
             engine.login_hint = preset.login_hint
@@ -4963,6 +5054,7 @@ _classes = (
     BFACW_OT_agent_start,
     BFACW_OT_agent_stop,
     BFACW_OT_external_agent_check,
+    BFACW_OT_agent_option,
     BFACW_OT_external_agent_open_folder,
     BFACW_OT_external_agent_npm,
     BFACW_OT_agent_approve,

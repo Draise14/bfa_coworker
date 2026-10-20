@@ -46,7 +46,11 @@ from .engine import EngineCaps, EventBus, Prompt, new_turn_id
 # code, -32000, with our "agent exited", so the code alone can't tell).
 _LOGIN_WORDS = re.compile(r"\bauth(entication|orization)?\b|\blog ?in\b|not logged|unauthori[sz]ed|"
                           r"\b401\b|api[ _-]?key|credential", re.IGNORECASE)
-STOP_GRACE = 10.0      # seconds an agent gets to finish after Stop before Coworker closes it
+# The agent's options that get a picker in the chat, in this order.
+PICKER_CATEGORIES = ("mode", "model", "thought_level")
+# Modes that stop the agent asking before its tools (so Coworker couldn't refuse them).
+_SKIPS_QUESTIONS = re.compile(r"bypass|accept|\bauto\b|handles permission", re.IGNORECASE)
+STOP_GRACE = 10.0     # seconds an agent gets to finish after Stop before Coworker closes it
 
 __all__ = (
     "AcpEngine",
@@ -74,6 +78,9 @@ class AcpEngine:
         self.connected = False
         self.connecting = False
         self.login_hint = ""             # the preset's "how to log in", for login errors
+        self.config_options: list[dict[str, Any]] = []     # the agent's own (mode, model...)
+        self.preferred: dict[str, str] = {}                # your picks, re-applied per session
+        self.on_option: Callable[[str, str], None] | None = None
         self.stop_grace = STOP_GRACE
         self._forced_stop = False
         self._client_factory = client_factory
@@ -144,18 +151,86 @@ class AcpEngine:
         """Continue *resume* (``session/load``) when the agent can, else open a new session."""
         self._cwd, self._servers = cwd, servers
         self.resumed = self.resume_failed = False
-        session_id = ""
+        session_id, result = "", {}
         if resume and can_load:
             try:
-                client.load_session(resume, cwd, servers)    # its replay is ignored: no turn runs
+                result = client.load_session(resume, cwd, servers)    # its replay is ignored: no turn runs
                 session_id, self.resumed = resume, True
             except AcpError:
                 self.resume_failed = True     # gone or too old: a fresh session instead
         if not session_id:
-            session_id = str(client.new_session(cwd, servers).get("sessionId", ""))
+            result = client.new_session(cwd, servers)
+            session_id = str(result.get("sessionId", ""))
+        self.config_options = list(result.get("configOptions") or [])
+        if session_id:
+            self._apply_preferred(client, session_id)
         if session_id and self.on_session is not None:
             self.on_session(session_id)
         return session_id
+
+    # -- the agent's own options (Agent 8): mode, model, effort -----------------------
+    def pickers(self) -> list[dict[str, Any]]:
+        """The options worth a picker in the chat, with the choices that are safe now.
+
+        While *only_coworker_tools* is on, modes that skip the agent's permission
+        questions (Claude Code's Accept edits / Auto / Bypass) are left out: Coworker
+        refuses the agent's own tools when it asks, so it must keep asking."""
+        out = []
+        for option in self.config_options:
+            if option.get("type", "select") != "select" or option.get("category") not in PICKER_CATEGORIES:
+                continue
+            choices = [(str(c.get("value", "")), str(c.get("name") or c.get("value", "")), str(c.get("description", "")))
+                       for c in option.get("options") or [] if c.get("value") is not None]
+            if option.get("category") == "mode" and self.only_coworker_tools:
+                choices = [c for c in choices if not _SKIPS_QUESTIONS.search(" ".join(c))]
+            if len(choices) < 2:
+                continue
+            current = str(option.get("currentValue", ""))
+            out.append({"id": str(option.get("id", "")), "name": str(option.get("name") or option.get("id", "")),
+                        "category": option.get("category"), "current": current,
+                        "current_name": next((n for v, n, _d in choices if v == current), current),
+                        "choices": choices})
+        out.sort(key=lambda p: PICKER_CATEGORIES.index(p["category"]))
+        return out
+
+    def set_option(self, config_id: str, value: str, wait: bool = False) -> None:
+        """Change one of the agent's options (in the background); *on_option* hears it."""
+        client, session_id = self.client, self.session_id
+        if client is None or not self.connected:
+            return
+
+        def work() -> None:
+            try:
+                result = client.set_config_option(session_id, config_id, value)
+                if result.get("configOptions"):
+                    self.config_options = list(result["configOptions"])
+                else:
+                    for option in self.config_options:
+                        if option.get("id") == config_id:
+                            option["currentValue"] = value
+                self.preferred[config_id] = value
+                if self.on_option is not None:
+                    self.on_option(config_id, value)
+            except AcpError as ex:
+                self.status = "Couldn't change {:s}: {:s}".format(config_id, str(ex).splitlines()[0])
+            self._changed()
+        worker = threading.Thread(target=work, daemon=True, name="acp-option")
+        worker.start()
+        if wait:
+            worker.join()
+
+    def _apply_preferred(self, client: AcpClient, session_id: str) -> None:
+        """Your earlier picks (model, mode...) again in a new session, where still offered."""
+        allowed = {p["id"]: {v for v, _n, _d in p["choices"]} for p in self.pickers()}
+        for config_id, value in list(self.preferred.items()):
+            current = next((str(o.get("currentValue", "")) for o in self.config_options if o.get("id") == config_id), None)
+            if current is None or current == value or value not in allowed.get(config_id, ()):
+                continue
+            try:
+                result = client.set_config_option(session_id, config_id, value)
+                self.config_options = list(result.get("configOptions") or self.config_options)
+            except AcpError:
+                pass     # not offered any more: keep the agent's default
 
     def new_session(self, wait: bool = False) -> None:
         """New Thread: the agent forgets the conversation too (same agent, a new session)."""
@@ -296,6 +371,10 @@ class AcpEngine:
 
     # -- from the agent (reader thread) -----------------------------------------------
     def _on_update(self, params: dict[str, Any]) -> None:
+        update = params.get("update") or params
+        if update.get("sessionUpdate") == "config_option_update" and update.get("configOptions"):
+            self.config_options = list(update["configOptions"])     # the agent changed one itself
+            self._changed()
         turn_id = self._turn_id
         if not turn_id:
             return

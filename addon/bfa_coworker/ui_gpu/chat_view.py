@@ -59,7 +59,9 @@ _ATTACHED = re.compile(r"\s*\[attached:\s*([^\]]*)\]")
 # Thumbnail heights (in widget units) for the S / M / L sizes.
 THUMB_SIZES = {"S": 2.5, "M": 4.0, "L": 7.0}
 _LIVE_LINES = 3        # the live-thinking window, in lines
-_FRAME_LINES = 14      # code / output frames show this many lines (Show all for the rest)
+_FRAME_LINES = 14      # code frames show this many lines (Show all for the rest)
+_RESULT_LINES = 3      # a tool's result: a few lines (often not for reading; Show all: #236)
+_RESULT_LINE_CHARS = 160   # ... each cut this short while folded (one long JSON line wraps a lot)
 _ENTRY_CHARS = 600     # a Workshop thinking entry shows this much (Show all for the rest)
 
 
@@ -335,15 +337,18 @@ class ChatView:
 
     def _code_frame(self, canvas: Canvas, x: float, top: float, width: float, code: str, label: str,
                     widget_id: str, actions: list[tuple[str, str]], color: RGBA | None = None,
-                    expand_key: str = "") -> float:
+                    expand_key: str = "", max_lines: int = _FRAME_LINES, line_chars: int = 0) -> float:
         """Code (or a tool's output) in its own framed box with a header and Copy; a long
         one shows its first lines and Show all (*expand_key*, #169)."""
         style = canvas.style
         pad = style.pad
         lines = code.rstrip("\n").split("\n")
         is_open = bool(expand_key) and expand_key in self.expanded
-        shown = lines if is_open else lines[:_FRAME_LINES]
+        shown = lines if is_open else lines[:max_lines]
         more = len(lines) - len(shown)
+        cut = bool(line_chars) and not is_open and any(len(line) > line_chars for line in shown)
+        if cut:
+            shown = [line if len(line) <= line_chars else line[:line_chars] + "…" for line in shown]
         text = "\n".join(shown) + ("\n... {:d} more line{:s}".format(more, "" if more == 1 else "s")
                                    if more and not expand_key else "")
         head = style.line_height + pad * 0.5
@@ -355,7 +360,7 @@ class ChatView:
         canvas.label(Rect(frame.x + pad, frame.top - head, frame.w, head), label, soft)
         self._copy_button(canvas, frame.right - pad * 0.5, frame.top - pad * 0.25, widget_id, code, actions)
         canvas.wrapped(frame.x + pad, frame.top - head, inner_w, text, color or style.text_field.text, font="mono")
-        if expand_key and (more or is_open):
+        if expand_key and (more or is_open or cut):     # cut lines: Show all brings them back whole
             return self._show_all(canvas, x, frame.y, expand_key, is_open, more, "line", actions)
         return frame.y
 
@@ -363,7 +368,8 @@ class ChatView:
                   actions: list[tuple[str, str]]) -> float:
         """The small Show all / Show less button under a cut-off entry (#169)."""
         style = canvas.style
-        label = "Show less" if is_open else "Show all ({:d} more {:s}{:s})".format(more, unit, "" if more == 1 else "s")
+        label = ("Show less" if is_open else "Show all" if more <= 0 else
+                 "Show all ({:d} more {:s}{:s})".format(more, unit, "" if more == 1 else "s"))
         w = canvas.icon_size() + canvas.measure(label, "ui", style.font_size) + 2 * style.pad
         h = style.line_height * 1.1
         if canvas.button(Rect(x, top - h - style.pad * 0.2, w, h), "more:" + key, label,
@@ -522,7 +528,8 @@ class ChatView:
                     top = self._code_frame(canvas, row_x + style.pad, top - pad * 0.3, row_w - style.pad, result,
                                            "error" if bad else "result", "copyres:{:d}:{:d}".format(idx, n),
                                            actions, _ERROR if bad else None,
-                                           expand_key="x{:d}:{:d}:res".format(idx, n)) - pad * 0.3
+                                           expand_key="x{:d}:{:d}:res".format(idx, n),
+                                           max_lines=_RESULT_LINES, line_chars=_RESULT_LINE_CHARS) - pad * 0.3
             elif role == "reasoning":
                 label = str(msg.get("label") or "Thinking")
                 body = " ".join(text.split())

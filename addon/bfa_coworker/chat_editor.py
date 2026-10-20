@@ -128,7 +128,7 @@ def _status(context: Any) -> TopBar:
                 else "TIME" if engine is not None and engine.connecting else "CANCEL")
         return TopBar(mode_label="External Agent", mode_icon="LINKED", status=status, status_icon=icon,
                       running=running, start_label="Connect",
-                      chat_modes=tuple((item[0], item[1]) for item in CHAT_MODE_ITEMS),
+                      chat_modes=tuple((item[0], item[1], item[3]) for item in CHAT_MODE_ITEMS),
                       chat_mode=getattr(props, "chat_mode", ""))
     local = prefs is not None and prefs.operating_mode == "LOCAL_LLM"
     status = getattr(props, "chat_status", "") or ""
@@ -145,7 +145,7 @@ def _status(context: Any) -> TopBar:
             "SORTTIME" if state.is_thinking else "ERROR" if state.error else "CANCEL")
     return TopBar(mode_label="Local LLM" if local else "Remote API", mode_icon="CONSOLE" if local else "URL",
                   status=status, status_icon=icon, running=ok, error=bool(state.error),
-                  chat_modes=tuple((item[0], item[1]) for item in CHAT_MODE_ITEMS),
+                  chat_modes=tuple((item[0], item[1], item[3]) for item in CHAT_MODE_ITEMS),
                   chat_mode=getattr(props, "chat_mode", ""))
 
 

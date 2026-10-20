@@ -1565,7 +1565,8 @@ class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
 
     chat_mode: EnumProperty(  # type: ignore[valid-type]
         name="Mode",
-        description="Coworker mode: the agent can execute tools. Ask mode: read-only Q&A",
+        description="Coworker: it works in the scene. Ask: it answers without changing anything. "
+                    "Plan: it makes a step plan to carry out later, with any engine",
         items=CHAT_MODE_ITEMS,
         default="AGENT",
     )
@@ -4311,7 +4312,41 @@ def _draw_plan_minimal(layout) -> None:
     row.scale_y = 0.9
     row.operator("bfacw.plan_open", text="Edit", icon='TEXT')
     row.operator("bfacw.plan_clear", text="Clear", icon='X')
+    if any(s.get("status") != "done" for s in steps):
+        go = layout.row()
+        go.scale_y = 1.3
+        go.operator("bfacw.plan_execute", text="Carry Out the Plan", icon='PLAY')
+        props = bpy.context.window_manager.bfacw_chat_props
+        if props.chat_mode == "PLAN":
+            _draw_multiline(layout, "Planned. Carry it out here, or switch the mode above first (e.g. a "
+                                    "local model or another agent): the plan stays in this chat.", icon='INFO')
     _draw_auto(layout)
+
+
+class BFACW_OT_plan_execute(Operator):  # type: ignore[misc]
+    """Carry out the plan now, step by step, with the engine that is on now (switch Local / Remote /
+Agent first to use another one: the plan stays in this chat)"""
+    bl_idname = "bfacw.plan_execute"
+    bl_label = "Carry Out the Plan"
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        from . import session_memory as _sm
+        with _sm.store_lock:
+            pending = bool(_sm.store.goal.pending_steps())
+        return pending and not agent_controller._agent_state.is_thinking
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        from . import session_memory as _sm
+        with _sm.store_lock:
+            goal = _sm.store.goal
+            done, total = goal.progress()
+            step = (goal.next_step() or {}).get("text", "")
+        props = context.window_manager.bfacw_chat_props
+        props.chat_mode = "AGENT"
+        props.chat_input = ("Carry out the plan now ({:d}/{:d} done), step by step, starting with: {:s}. "
+                            "Keep the plan updated as you finish each step.".format(done, total, step))
+        return bpy.ops.bfacw.chat_send()
 
 
 def _draw_auto(layout) -> None:
@@ -5631,6 +5666,7 @@ _classes = (
 
     BFACW_PT_chat_queue,
     BFACW_PT_chat_plan,
+    BFACW_OT_plan_execute,
     BFACW_MT_operating_mode,
     BFACW_PT_chat_history,
     BFACW_OT_chat_open,

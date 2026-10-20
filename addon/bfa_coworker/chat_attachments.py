@@ -43,6 +43,7 @@ __all__ = (
     "capture_render",
     "capture_render_from_view",
     "capture_screen",
+    "capture_screen_rect",
     "image_to_data_uri",
     "load_image_file",
     "prune_attachments",
@@ -339,6 +340,50 @@ def capture_screen(target: str = "WINDOW") -> str | None:
             return None
     if not path.is_file():
         return None
+    prune_attachments()
+    return str(path)
+
+
+def capture_screen_rect(window, x0: int, y0: int, x1: int, y1: int) -> str | None:
+    """Screenshot *window* and keep one rectangle of it (#200).
+
+    The corners are window pixels with the origin bottom-left (event
+    ``mouse_x`` / ``mouse_y``, ``Area.x`` / ``y``), as is Blender's pixel
+    order, so no flip is needed.  A rectangle too small to read keeps the
+    whole window.  Returns the saved PNG path, or ``None``.  Main thread only.
+    """
+    import bpy  # pylint: disable=import-error,no-name-in-module
+    import numpy as np
+    if bpy.app.background or window is None:
+        return None
+    path = _unique_path(attachments_dir(), "screen")
+    try:
+        with bpy.context.temp_override(window=window, screen=window.screen):
+            bpy.ops.screen.screenshot(filepath=str(path))
+    except RuntimeError:
+        return None
+    if not path.is_file():
+        return None
+    shot = bpy.data.images.load(str(path), check_existing=False)
+    try:
+        w, h = shot.size
+        sx, sy = w / max(1, window.width), h / max(1, window.height)    # HiDPI: shot vs. window pixels
+        left, right = sorted(max(0, min(w, round(v * sx))) for v in (x0, x1))
+        bottom, top = sorted(max(0, min(h, round(v * sy))) for v in (y0, y1))
+        if right - left >= 8 and top - bottom >= 8:
+            pixels = np.empty(w * h * 4, dtype=np.float32)
+            shot.pixels.foreach_get(pixels)
+            part = pixels.reshape(h, w, 4)[bottom:top, left:right].copy()
+            out = bpy.data.images.new("bfacw_screen_part", right - left, top - bottom, alpha=True)
+            try:
+                out.pixels.foreach_set(part.ravel())
+                out.filepath_raw = str(path)
+                out.file_format = "PNG"
+                out.save()
+            finally:
+                bpy.data.images.remove(out)
+    finally:
+        bpy.data.images.remove(shot)
     prune_attachments()
     return str(path)
 

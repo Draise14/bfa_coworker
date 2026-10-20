@@ -34,12 +34,19 @@ import base64
 import os
 import threading
 from collections import deque
+import re
 from typing import Any, Callable
 
 from .acp_client import MCP_SERVER_NAME, AcpClient, AcpError, _tool_name, stdio_mcp_server, update_to_events
 from .approvals import ApprovalRequest, Approvals
 from .chat_state import ChatStateApplier
 from .engine import EngineCaps, EventBus, Prompt, new_turn_id
+
+# Words agents use when you aren't logged in (ACP's "auth required" shares its
+# code, -32000, with our "agent exited", so the code alone can't tell).
+_LOGIN_WORDS = re.compile(r"\bauth(entication|orization)?\b|\blog ?in\b|not logged|unauthori[sz]ed|"
+                          r"\b401\b|api[ _-]?key|credential", re.IGNORECASE)
+STOP_GRACE = 10.0      # seconds an agent gets to finish after Stop before Coworker closes it
 
 __all__ = (
     "AcpEngine",
@@ -66,6 +73,9 @@ class AcpEngine:
         self.error = ""
         self.connected = False
         self.connecting = False
+        self.login_hint = ""             # the preset's "how to log in", for login errors
+        self.stop_grace = STOP_GRACE
+        self._forced_stop = False
         self._client_factory = client_factory
         self._lock = threading.Lock()
         self._turn_id = ""
@@ -118,8 +128,8 @@ class AcpEngine:
             self.status = "Connected to {:s}{:s}".format(name, " " + info.version if info.version else "")
             self.connected = True
         except (AcpError, OSError, KeyError) as ex:
-            self.error = str(ex)
-            self.status = "Couldn't connect: {:s}".format(str(ex).splitlines()[0] if str(ex) else "error")
+            self.error = self._explain(ex)
+            self.status = "Couldn't connect: {:s}".format(self.error.splitlines()[0])
             try:
                 if "client" in locals():
                     client.close()      # type: ignore[possibly-undefined]
@@ -205,6 +215,15 @@ class AcpEngine:
         self.approvals.cancel_all()
         if self.client is not None and self._turn_id:
             self.client.cancel(self.session_id)
+            # An agent stuck in a tool may never answer Stop: then Coworker closes it.
+            timer = threading.Timer(self.stop_grace, self._stop_overdue, (self._turn_id, self.client))
+            timer.daemon = True
+            timer.start()
+
+    def _stop_overdue(self, turn_id: str, client: AcpClient) -> None:
+        if self._turn_id == turn_id and self.client is client:
+            self._forced_stop = True
+            client.close(timeout=2.0)      # the turn's prompt then fails and ends the turn
 
     def stop(self) -> None:
         self.cancel()
@@ -256,7 +275,13 @@ class AcpEngine:
             stop_reason = str(result.get("stopReason") or "end_turn")
         except AcpError as ex:
             stop_reason = "error"
-            self.bus.emit("error", turn_id, message=str(ex).splitlines()[0] if str(ex) else "error")
+            if self._forced_stop:
+                self._forced_stop = False
+                message = ("{:s} didn't stop when asked, so Coworker closed it. Press Start to "
+                           "carry on.".format(self.agent_label or "The agent"))
+            else:
+                message = self._explain(ex)
+            self.bus.emit("error", turn_id, message=message)
             if self.client is not None and not self.client.alive:
                 self.connected = False
                 self.status = "The agent stopped -- press Start to reconnect"
@@ -277,6 +302,16 @@ class AcpEngine:
         for kind, data in update_to_events(params.get("update") or params):
             self.bus.emit(kind, turn_id, **data)
         self._changed()
+
+    def _explain(self, ex: Exception) -> str:
+        """What went wrong, for you: a login hint when it's about logging in; else the
+        message, with the agent's last output lines (if any) as a code block."""
+        text = str(ex).strip() or "error"
+        first, _, rest = text.partition("\n")
+        if _LOGIN_WORDS.search(text):
+            return "{:s} isn't logged in. {:s}".format(
+                self.agent_label or "The agent", self.login_hint or "Log in to it once in a terminal.")
+        return first + ("\n\n```\n{:s}\n```".format(rest.strip()) if rest.strip() else "")
 
     def _on_permission(self, params: dict[str, Any], respond: Callable[[str | None], None]) -> None:
         """The agent asks before a tool: answer by the settings, or ask you in the chat."""

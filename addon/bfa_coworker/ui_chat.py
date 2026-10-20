@@ -2634,6 +2634,7 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         engine.on_change and engine.on_change()
 
         def work() -> None:
+            engine.login_hint = preset.login_hint
             found = acp_presets.detect(preset)
             engine.connecting = False
             if not found.ready:

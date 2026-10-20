@@ -21,7 +21,8 @@ object per line, over the agent's stdin/stdout.
   built-in loop.
 
 Behaviour follows the sessions recorded in ``tests/fixtures/acp`` (OpenCode
-1.19.3).  Stdlib only and free of ``bpy``.
+1.19.3).  Stdlib only (plus :mod:`process_guard`, so the agent closes with
+Blender) and free of ``bpy``.
 """
 
 from __future__ import annotations
@@ -33,6 +34,8 @@ import threading
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+from . import process_guard
 
 __all__ = (
     "AcpClient",
@@ -127,9 +130,13 @@ class AcpClient:
                 env=None if self.env is None else {**os.environ, **self.env},
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                preexec_fn=process_guard.linux_preexec(),
             )
         except OSError as ex:
             raise AcpError("could not start {!r}: {}".format(self.argv[0] if self.argv else "", ex)) from ex
+        # The agent (and what it starts: node, its CLI, our MCP server) closes with
+        # Blender, even when Blender crashes.
+        process_guard.bind_to_parent(self.proc, "acp-agent")
         self._readers = [
             threading.Thread(target=self._read_stdout, name="acp-reader", daemon=True),
             threading.Thread(target=self._read_stderr, name="acp-stderr", daemon=True),
@@ -160,6 +167,7 @@ class AcpClient:
             proc.kill()
             proc.wait(timeout=timeout)
         self._closed.set()
+        process_guard.forget(proc.pid)
         self._fail_pending("agent closed")
         # The readers end at EOF once the process is gone; then release the pipes.
         for thread in self._readers:

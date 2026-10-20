@@ -150,7 +150,7 @@ class TestTurns(unittest.TestCase):
         engine = ea.AcpEngine(_state())
         engine._turn_id = "running"
         engine.submit(eng.Prompt(text="next one", chat_mode="ASK"))
-        self.assertEqual(engine.queue_items(), [{"message": "next one", "chat_mode": "ASK"}])
+        self.assertEqual(engine.queue_items(), [{"message": "next one", "chat_mode": "ASK", "attachments": []}])
         engine.clear_queue()
         self.assertEqual(engine.queue_items(), [])
 

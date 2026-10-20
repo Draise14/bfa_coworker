@@ -301,11 +301,32 @@ class AcpEngine:
 
     def queue_items(self) -> list[dict[str, Any]]:
         """The queued messages, in the turn loop's queue shape (for the Queue panel)."""
-        return [{"message": p.text, "chat_mode": p.chat_mode} for p in list(self._queue)]
+        return [{"message": p.text, "chat_mode": p.chat_mode, "attachments": list(p.images)}
+                for p in list(self._queue)]
 
     def clear_queue(self) -> None:
         self._queue.clear()
         self._changed()
+
+    def remove_queued(self, index: int) -> Prompt | None:
+        """Take queued message *index* out (#197)."""
+        if not 0 <= index < len(self._queue):
+            return None
+        items = list(self._queue)
+        prompt = items.pop(index)
+        self._queue.clear()
+        self._queue.extend(items)
+        self._changed()
+        return prompt
+
+    def queue_to_front(self, index: int) -> bool:
+        """Queued message *index* goes next (#197)."""
+        prompt = self.remove_queued(index)
+        if prompt is None:
+            return False
+        self._queue.appendleft(prompt)
+        self._changed()
+        return True
 
     def cancel(self) -> None:
         self._queue.clear()

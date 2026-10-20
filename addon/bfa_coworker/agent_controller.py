@@ -2022,6 +2022,19 @@ class MessageQueue:
         with self._lock:
             self._queue.clear()
 
+    def remove(self, index: int) -> dict[str, Any] | None:
+        """Take message *index* (0-based) out of the queue (#197)."""
+        with self._lock:
+            return self._queue.pop(index) if 0 <= index < len(self._queue) else None
+
+    def move_to_front(self, index: int) -> bool:
+        """Message *index* goes next (#197)."""
+        with self._lock:
+            if not 0 <= index < len(self._queue):
+                return False
+            self._queue.insert(0, self._queue.pop(index))
+            return True
+
     @property
     def pending_count(self) -> int:
         """Number of messages waiting in the queue."""

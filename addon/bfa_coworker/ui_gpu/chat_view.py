@@ -40,6 +40,7 @@ from ..chat_turns import NOTE_TITLES, group_turns, is_system_note_msg, split_tur
 from .layout import Canvas, InteractionState, Rect, wrap_text
 from .markdown import Block, Span, parse
 from .style import RGBA, Style
+from .suggestions import suggestions
 
 __all__ = (
     "ChatView",
@@ -102,6 +103,9 @@ class ChatView:
     thumb_size: str = "M"               # attachment thumbnails: S, M or L
     # The host sets it when the last turn can be undone in one step (Engine 6b).
     revertable: bool = False
+    # Suggestion buttons under the newest reply (#220); the host turns them off while a card asks.
+    suggest: bool = True
+    _suggest_idx: int = -1
     # The host's lookup of an image's pixel size by name (None: not loaded).
     image_size: Callable[[str], "tuple[int, int] | None"] | None = None
     content_height: float = 0.0
@@ -133,6 +137,7 @@ class ChatView:
             return actions
 
         self._last = len(turns) - 1
+        self._suggest_idx = self._last if active < 0 and self.suggest else -1
         heights = [self._turn_height(canvas, turn, idx, width, idx == active, live, compact)
                    for idx, turn in enumerate(turns)]
         self.content_height = sum(heights) + gap * (len(turns) + 1)
@@ -182,6 +187,7 @@ class ChatView:
         if not active:
             key = (idx, len(turn), sum(len(message_text(m.get("content"))) for m in turn),
                    round(width), canvas.style.scale, f"t{idx}" in self.expanded, compact, self.thumb_size,
+                   idx == self._suggest_idx,
                    tuple(sorted(k for k in self.expanded if k.startswith("x{:d}:".format(idx)))))
             cached = self._heights.get(key)
             if cached is not None:
@@ -260,6 +266,26 @@ class ChatView:
                                  icon="LOOP_BACK"):
                     actions.append(("revert_turn", ""))
             top = self._draw_markdown(canvas, parse(reply), idx, x, top, width, actions)
+            if idx == self._suggest_idx:
+                top = self._draw_suggestions(canvas, reply, x, top, width, actions)
+        return top
+
+    def _draw_suggestions(self, canvas: Canvas, reply: str, x: float, top: float, width: float,
+                          actions: list[tuple[str, str]]) -> float:
+        """The next steps the reply offers, as large buttons; a click sends one (#220)."""
+        style = canvas.style
+        h, gap = style.unit * 1.35, style.pad * 0.4
+        room = width - canvas.icon_size() - 3 * style.pad
+        for n, (label, text) in enumerate(suggestions(reply)):
+            shown = label
+            while shown and canvas.measure(shown + "\u2026", "ui", style.font_size) > room:
+                shown = shown[:-1]
+            if shown != label:
+                shown = shown.rstrip() + "\u2026"
+            button = Rect(x, top - style.pad * 0.5 - h, width, h)
+            if canvas.button(button, "suggest:{:d}".format(n), shown, align="left", icon="FORWARD"):
+                actions.append(("suggest", text))
+            top = button.y - gap
         return top
 
     def _draw_live(self, canvas: Canvas, idx: int, x: float, top: float, width: float, live: Any,

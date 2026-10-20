@@ -347,6 +347,7 @@ def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0) -> None:
     surface.drop_hover = drop_hover()
     from . import coworker_api
     surface.view.revertable = coworker_api.can_revert() and not state.is_thinking
+    surface.view.suggest = not harness and _approval_card() is None    # no buttons while a card asks (#220)
     typed_before = surface.box.model.text
     actions = surface.draw(canvas, rect, _history(), live=state, top=_status(context) if compact else None,
                            notice=_harness_notice(prefs) if harness else None,
@@ -718,6 +719,8 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
         if props.chat_input != value:
             props.chat_input = value
             _tag_chat_regions()         # the other chats show the new draft at once
+    elif action == "suggest":       # a suggestion button (#220): sent as if typed
+        _do("send", value, surface, region)
     elif action == "new_thread":
         ops.chat_clear()
     elif action == "mention":

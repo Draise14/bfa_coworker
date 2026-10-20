@@ -39,7 +39,7 @@ from `main`, no stacked PRs. Only one open PR at a time on `agent_controller.py`
 | ✅ Done | Agents 5–7: approvals in the chat, resume after a restart, hardening (crash, login, Stop) | #150 #152 #154 |
 | ✅ Done | Agents 8–9: mode / model / effort pickers, slash commands, the External Agent wiki page; the External Harness activity view | #158 #173 #175 #176 |
 | ✅ Done | Engines 4, 6, 7, 9, 10: who answered; plan, questions, scene digest and Revert turn as tools; tools on demand (~8K tokens saved per request); short tool results; benchmarks on every engine | #167 #168 #170 #172 #174 #179 |
-| ⏭ Now | **You test it**: `_misc/manual_test_tier4_agents_engines.md` (sections A-N; M = the feedback round) + `_misc/manual_test_tier4_polish_212_221.md` | |
+| ⏭ Now | **You test it**: `_misc/manual_test_tier4_agents_engines.md` (sections A-N; M = the feedback round) (round 3 at the top: "What's left") | |
 | ✅ Done | GUI hardening: Workshop Show all, Workshop under Thinking + fold button, panel order + Plan panel, compact chat in a short sidebar | #183 #184 #185 |
 | ✅ Done | Chat 7: chat history panel; Auto mode for overnight runs; ask before risky steps (Engine 5) | #187 #188 #189 |
 | ✅ Done | Your feedback round: mode switcher + order, Model / Effort for every engine, Plan mode + Carry Out, Workshop fold, Queue cards, sidebar scroll blip, images in External Harness, Attach Screen area capture, Actions panel | #203 #204 #205 #206 #207 #208 #209 #210 (issues #192-#201) |

@@ -44,6 +44,7 @@ from `main`, no stacked PRs. Only one open PR at a time on `agent_controller.py`
 | ✅ Done | Chat 7: chat history panel; Auto mode for overnight runs; ask before risky steps (Engine 5) | #187 #188 #189 |
 | ✅ Done | Your feedback round: mode switcher + order, Model / Effort for every engine, Plan mode + Carry Out, Workshop fold, Queue cards, sidebar scroll blip, images in External Harness, Attach Screen area capture, Actions panel | #203 #204 #205 #206 #207 #208 #209 #210 (issues #192-#201) |
 | ✅ Done | Polish round: panel order, image controls on the input, sidebar button column, drop with a focused input, Workshop button icons, capture veil per window, long-Workshop speed, suggestion buttons, chat modes drive the agent's mode | #222-#231 (issues #212-#221; #219 orientation tools open) |
+| ✅ Done | Test round 2: Approval mode (Ask / Risky only / Auto) for every engine, Plan card, mode popover, History icon + Open .blend, chat tooltips, square icons, short tool results, size guidance, harness list scroll, Revert fix, no duplicate controls, mode tooltips, queue image icon | #245-#260 (issues #233-#249; #219 open) |
 | ✅ Unblocked | Chat 1: native markdown. `UILayout.label_markdown` **is** in the 5.3 dev builds; the earlier probe was wrong (`hasattr` on the class can't see RNA functions; `bl_rna.functions` can) | |
 | ✅ Done | Agent 1, part 2: record one Claude Code session (uses your Claude login) | #148 #152 |
 

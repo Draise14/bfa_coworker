@@ -60,11 +60,13 @@ a compact sidebar chat) plus groundwork for the External Agent mode.
 - **Actions panel (#201):** the common actions as buttons under the chat, in the 3D View and editor sidebars.
 - **Images in External Harness (#199):** drop an image on the Coworker editor and your outside client reads it with the new `get_attached_image` tool. The editor's Attach toolshelf has an image picker.
 - **Polish round (#212-#221):** the panel order you asked for in the editor and the sidebar (Coworker controls at the bottom of the sidebar); image controls on the chat input (a picker popover); a button column beside the sidebar chat; **suggestion buttons** from a reply's closing question or options; Coworker / Ask / Plan drive the External Agent's own mode (one control); the floating Workshop button is icons only.
+- **Test round 2 (#233-#249):** one **Approval** mode for every engine on the chat's input (Ask, the default / Risky only / Auto; switching forgets "Always"); a **Plan card** after planning (Start the Plan / Keep Refining); the mode button opens the mode tabs plus Model / Effort; History shows the mode's icon and opens the chat's .blend; tooltips on the chat's buttons; square icon buttons; Workshop results show 3 lines; agents get a size / scale / placement rule; the harness list scrolls; queue cards show the image icon.
 
 ### Changed
 
 - **Fixes from your testing:** the floating button folds the Workshop, and Thinking always shows (#196); the sidebar chat no longer blips away while you scroll a tall sidebar (#198); the External Agent tab comes before External Harness (#192).
 - **More fixes:** dropping an image works while the chat input has focus (the floating editor) (#215); Attach Screen's veil only in its own window and visible at once (#217); a long open Workshop draws only what is in view (about 10x faster per frame) (#218); chat buttons in a floating window act there.
+- **Round 2 fixes:** Revert undoes the whole turn even when its tools pushed undo steps of their own (#242); each control once in the Coworker panels (#234); each mode tab's tooltip says what it does (#233).
 - **Short tool results:** a result over ~8000 characters arrives as a short preview with a handle (`read_tool_output` reads the rest) -- on every engine.
 - **Tools on demand** for the External Agent (*Load Tools When Needed*, on by default): the basic tools first, the specialised ones when it asks. About 8K fewer tokens per request.
 

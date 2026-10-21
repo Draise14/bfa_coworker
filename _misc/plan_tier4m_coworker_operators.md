@@ -1,7 +1,7 @@
 # Tier 4m — Coworker operators (wand icon) + the tasks around them (review document)
 
 **Status**: 📝 For review, revision 2 (2026-10-21, your answers applied). Replaces the
-"quick prompt menu" idea. Tasks: **Wand 0–7** (were "Magic 0–7"), **Tools 7–9**,
+"quick prompt menu" idea. Tasks: **Wand 0–8** (were "Magic 0–7"), **Tools 7–9**,
 **Orchestrate 1–2**, **Footer 1**, **Security 1–5**. Explain (#290) and Translate (#42)
 are this same kind of operator and are in progress with another agent; they become the
 first members of the standard rather than being re-planned here.
@@ -18,13 +18,14 @@ one undo. Mostly tested code; the active engine is asked only for the judgment c
 | # | Question | Decision |
 |---|---|---|
 | 1 | Brand name | **No "Magic" word.** Conventional operator names and tooltips; the **wand badge** on the icon is the only mark (the Coworker uses a wizard hat, so the wand fits) |
-| 2 | Placement | **Native contextual locations**, like Smart Mesh Blend: next to related native operators in the editor's menus and Bforartists toolshelf tabs. A dedicated panel only for **making** new operators |
+| 2 | Placement | **Native contextual locations**, like Smart Mesh Blend: next to related native operators in the editor's menus and Bforartists toolshelf tabs. A dedicated panel only for **making** new operators (the Vault) |
 | 3 | Which model decides | **The active engine** (simpler setup, no second model in RAM) |
 | 4 | Order | **Sequencer pack first, then the Node pack**; both in this release |
 | 5 | Icons | **Self-contained** SVG + PNG in the add-on (works in plain Blender and can be sold standalone); offering them to Bforartists is a later option |
 | 6 | Toolshelf buttons (2026-10-21) | **Icon buttons in Bforartists' tabbed toolshelf, never a dropdown.** Confirmed possible add-on-side (§3.3). Plain Blender has no tabbed toolshelf: menus only. Migrating the icons into Bforartists itself → **Tier 5**, after the tools are built |
 | 7 | Convert to Vertical | **Sequencer > View** (not *Strip*, which is per-strip) |
 | 8 | Recorded operators | **Per user** (§5) |
+| 9 | Building them | A dedicated **Vault** to build operators: record, pick icon and name, then **publish** into Bforartists' collapsible toolshelf panels (§5). Replay never needs the model |
 
 ---
 
@@ -49,8 +50,8 @@ question to the engine, a result applied or shown.
 flowchart LR
     subgraph Sources["Where they come from"]
         S1["Shipped packs<br/>(Sequencer, Nodes, …)"]
-        S2["Recorded<br/>'Save Turn as Operator'"]
-        S3["Written in the Text Editor<br/>(authoring panel, #52)"]
+        S2["Built in the Vault<br/>(recorded from chat or your clicks)"]
+        S3["Edited as code<br/>(Text Editor, #52)"]
     end
     STD["Operator standard<br/>spec + run()"]
     S1 --> STD
@@ -169,7 +170,7 @@ A bad engine answer falls back to the heuristic; nothing is ever half-applied.
 | A native menu holds operators of this kind | Append there, next to the related native operator | *Strip > Remove Silences* under *Split*; *Node > Tidy & Explain* near *Frame* |
 | Bforartists tabbed toolshelf has a matching tab/panel | Add to that panel (Bforartists `ToolsystemPanel` conventions, poll on `show_toolshelf_tabs`) | *Strip* tab, next to *Split*; *Node* tab, *Frame Tools* panel |
 | The native place is a context menu | Context menu | Explain, Translate; Properties editor |
-| Making new operators | **One dedicated panel**: the Text Editor sidebar "Make Operator" (+ "Save Turn as Operator" in the chat) | Wand 6, Wand 7 |
+| Making new operators | **One dedicated panel: the Vault** (Coworker editor sidebar) + *Save to Vault* on chat replies and *Add to Vault* on right-click | Wand 6–8 |
 | Hotkeys | None by default | Users bind their own |
 
 No "Coworker" tab and no extra header menu: the operators should feel built in.
@@ -211,80 +212,87 @@ No "Coworker" tab and no extra header menu: the operators should feel built in.
 
 ---
 
-## 5. Making your own (Wand 6, Wand 7)
+## 5. Making your own — the Vault (Wand 6, 7, 8)
 
-### 5.1 Recorded operators are per user — how it works
+### 5.1 What the Vault is
 
-**Example**: you ask the chat *"rename the selected lights by their colour, warm ones
-first"* and it works. You click **Save Turn as Operator…** on that reply.
+The Vault is **the one dedicated Coworker panel**: where your own operators are built,
+kept and published. Everything else stays in native places.
+
+- **Lives** in the Coworker editor's sidebar (*Vault* panel), with a *Save to Vault* button
+  on chat replies and an *Add to Vault* entry in every button's right-click menu.
+- **Holds** your operators, per user (your Blender user folder; the same in every .blend;
+  survives add-on updates). Each one is a small folder: `operator.toml` (name, tooltip,
+  icon, place, run mode, fields) + `steps.json` (the steps). Data, not a Python script.
+- **Publishes** each operator into the place you pick: a collapsible panel ("▾") in a
+  Bforartists toolshelf tab — an existing tab such as *Object*, or your own tab such as
+  *My Tools* — as a square icon button, and/or a native menu. Plain Blender: menus only.
+- **Replays with no model.** The model may help **once, while saving** (name it, suggest
+  an icon, turn hard-coded names into "the selection", label each step), never while
+  running.
+
+```
+ Coworker editor ▸ sidebar ▸ Vault
+ ┌──────────────────────────────────────────────────┐
+ │ Vault                             [+] [⏺ Record] │
+ │ ┌──────────────────────────────────────────────┐ │
+ │ │ [💡] Rename Lights by Colour    Each ▾     ⋮ │ │ ← click the icon to change it,
+ │ │ [🎞] Trim Intro + Fade           All  ▾     ⋮ │ │   double-click the name to rename,
+ │ │ [📁] Sort Props into Kits        All  ▾     ⋮ │ │   run mode: All at once / Each selected
+ │ └──────────────────────────────────────────────┘ │
+ │ Steps of "Rename Lights by Colour"               │
+ │  ☑ 1 Read the selection                 (tool)   │ ← tick to switch a step off,
+ │  ☑ 2 Rename by light colour, warm first (tool)   │   drag to reorder,
+ │  ☐ 3 Colour-tag the collection          (tool)   │   double-click to edit
+ │  [+ Last Action] [+ From Chat] [+ Repeat/Wait…]  │
+ │ Fields: Warm first ☑                              │
+ │ Place: Toolshelf ▸ Object ▸ ▾ My Tools · Menu: Object │
+ │ [▶ Test] [Publish] [Edit as Code] [Export…]      │
+ └──────────────────────────────────────────────────┘
+   (every icon carries the small wand badge)
+
+ Published (Bforartists toolshelf, narrow):   │Object│My Tools│
+                                              ▾ My Tools
+                                               [💡][🎞][📁]
+```
+
+### 5.2 Where steps come from (Wand 7)
+
+| Source | How | Robustness |
+|---|---|---|
+| **From a chat turn** (*Save to Vault* on a reply) | The turn's tool calls + arguments, already in the Workshop events | High: tools take "the selection" and names, not context |
+| **Record what you do** (*⏺ Record* … *Stop*) | The operators you run while recording, with their settings | Medium: raw operators depend on context; the save step offers to swap known operators for tools and names for "the selection" |
+| **Add Last Action** | Your most recent operator as one step | Medium |
+| **Add to Vault** (right-click any button or property) | That button's operator, or that property's new value, as a step | Medium |
+| **Control steps** | *Repeat N times*, *For each selected*, *Wait*, *After render completes*, *Ask me* (a field at run time), *Run text block* | — |
+| **Edit as Code** (Wand 8) | Opens it in the Text Editor as a readable script + spec (#52 tech-artist path) | You own it |
+
+### 5.3 Saving and replay
 
 ```mermaid
 sequenceDiagram
     actor You
-    participant Chat
-    participant Rec as Recorder
-    participant Folder as Your operators folder
-    participant UI as Menus / toolshelf
-    You->>Chat: Save Turn as Operator…
-    Chat->>Rec: the turn's tool calls + arguments + results (already in the Workshop)
-    Rec->>You: card: steps to keep, values to turn into fields,<br/>"use the selection", name, tooltip, place, icon
-    You->>Rec: confirm
-    Rec->>Folder: rename_lights_by_colour/ (operator.toml + steps.json)
-    Rec->>UI: register now: appears in Object > Light menu (your pick)
-    Note over UI: Next Blender start: the folder is scanned and it's there again
+    participant Vault
+    participant Eng as Active engine (optional, once)
+    participant Folder as Your user folder
+    participant Shelf as Toolshelf / menus
+    You->>Vault: Save to Vault (from a reply) or Record … Stop
+    Vault->>Eng: (optional) name, icon, which values are "the selection", step labels
+    Eng-->>Vault: suggestions (you confirm or edit)
+    You->>Vault: icon, name, run mode, fields, place → Publish
+    Vault->>Folder: operator.toml + steps.json
+    Vault->>Shelf: register: the ▾ My Tools panel gets a new icon button
+    Note over Shelf: Click → steps run through the tool layer, no model;<br/>preview → apply as one undo → short report in the chat
 ```
-
-**What gets saved** — data, not a Python script, in your user folder
-(`bpy.utils.extension_path_user(…, "operators")`, outside the add-on, so it survives
-updates and is the same in every .blend):
-
-```toml
-# rename_lights_by_colour/operator.toml
-label       = "Rename Lights by Colour"
-description = "Rename the selected lights by colour, warm first"
-icon        = "LIGHT"            # gets the wand badge
-place       = ["VIEW3D_MT_object", "bfa_toolshelf:Object/Rename"]
-poll        = { selected_types = ["LIGHT"] }
-params      = [ { name = "warm_first", type = "bool", default = true } ]
-```
-```json
-// rename_lights_by_colour/steps.json — ordered steps, each a tool call
-[ {"tool": "get_objects_summary", "args": {"scope": "{selection}"}},
-  {"tool": "batch_rename", "args": {"objects": "{selection}", "rule": "by_light_colour",
-                                     "warm_first": "{warm_first}"}} ]
-```
-
-**How it replays** — with **no model**: Wand 1's factory turns each folder into a real
-operator; clicking it runs the steps through the same tool layer the chat uses, with
-`{selection}` and your fields filled in, then preview → apply as **one undo** → a short
-report in the chat. A failing step stops the run and reverts it.
 
 | Question | Answer |
 |---|---|
-| Where does it live? | Your user folder, per user, all files and versions of the add-on |
-| What if the turn used generated code (`execute_blender_code`)? | Kept as a code step, marked with a badge; it asks once before its first run (Security 5) and can be swapped for a tool later |
-| What if names/counts differ next time? | Literals you turned into fields or "the selection" are filled at run time; the poll greys the operator out when the context doesn't fit |
-| Can I edit it? | Yes: *Edit* opens it in the Text Editor's **Make Operator** panel (Wand 7) |
-| Can I share it? | *Export* writes a small zip; *Import* adds one (shows its source and asks once, Security 5). Several can be packaged as an extension (Wand 7, reuses #86) |
-| Stored in the .blend? | No (your decision). A "pin to this file" option could come later |
-| Secrets? | Never recorded: keys/tokens are stripped (Security 2) |
-
-### 5.2 The flow from both sources
-
-```mermaid
-flowchart TD
-    T["A chat turn that worked"] --> R["Save Turn as Operator…"]
-    R --> X["Its tool calls + arguments<br/>(already in the Workshop events)"]
-    X --> P["Choose parameters: names/counts → the selection,<br/>literals → fields"]
-    P --> M["operator.toml + steps.json in your user folder<br/>(kind = macro, model = none)"]
-    W["Text Editor sidebar: Make Operator<br/>(template; the Coworker helps write it, #52)"] --> V["Check: spec, poll, one-undo wrapper, icon"]
-    M --> PL["Pick its place: which menu / toolshelf panel"]
-    V --> PL
-    PL --> S["Registered: appears in that native place"]
-    S --> PK["Export / package as extension (reuses the #86 builder)"]
-```
-
-The **Make Operator** panel is the only dedicated Coworker panel in this design.
+| Several objects? | **Run mode**: *All at once* (the steps see the whole selection) or *Each selected* (once per object, still one undo) |
+| A step used generated code? | Kept as a code step, badged; asks once before its first run (Security 5) |
+| Different names next time? | Values marked as fields or "the selection" are filled at run time; the operator greys out when the context doesn't fit |
+| Share? | *Export…* writes a small zip; *Import* shows its source and asks once. Several can be packaged as an extension (Wand 8, reuses #86) |
+| In the .blend? | No, per user (your decision). A "keep a copy in this file" option can come later |
+| Secrets? | Never recorded (Security 2) |
 
 ---
 
@@ -304,6 +312,7 @@ our own designs; no code or text consulted while implementing (4b §4).
 | Downloads verified by checksum | Security 5 |
 | Local server limited to loopback with origin checks; code execution off by default | Security 1 audits our bridge/MCP against this |
 | Say plainly what Blender can't do instead of faking it | UI rule for our panels and the GPU chat |
+| (ActionRecorder, GPL-3, README + user docs only) Turn repeated work into one click: record steps, toggle/reorder/edit them, pick an icon and label, run on all selected or each selected, add loops and waits, add any button from its right-click menu, keep actions per file or shared | **The Vault** (§5): the same everyday model, but steps are **tools** where possible (robust to names and context), the model helps once at save time, results publish as native toolshelf icon buttons, per user |
 
 ---
 
@@ -322,11 +331,12 @@ flowchart LR
     W1 --> WX
     W1 --> W4["Wand 4 Bake wizard (stretch)"]
     W1 --> W5["Wand 5 Asset library wizard (stretch)"]
-    W1 --> W6["Wand 6 Save Turn as Operator"]
-    TE["Text Editor 1–2 (#52)"] --> W7["Wand 7 Make Operator panel"]
-    W1 --> W7
+    W1 --> W6["Wand 6 The Vault"]
+    W6 --> W7["Wand 7 Recording into the Vault"]
+    TE["Text Editor 1–2 (#52)"] --> W8["Wand 8 Edit as Code + package"]
+    W6 --> W8
     WX --> O1["Orchestrate 1 Map over selection"] --> O2["Orchestrate 2 Missions"]
-    S1["Security 1"] --> S2["Security 2–4"] --> W6
+    S1["Security 1"] --> S2["Security 2–4"] --> W7
     F1["Footer 1 Status bar"]
 ```
 
@@ -365,16 +375,28 @@ flowchart LR
 - As §4.3. Done when: two material sets bake to a folder and a working material from
   three answered cards; 10 props become a library with thumbnails, catalogs and author.
 
-### Wand 6 — Save Turn as Operator (M)
-- **What**: §5.1: per-user folder of `operator.toml` + `steps.json`, the save card
-  (steps, fields, selection, name, place, icon), registration at start, model-free
-  replay with one undo, Edit / Export / Import.
-- **Done when**: "rename the selected lights by colour", recorded once, replays on another
-  selection with no engine, from the menu it was placed in.
+### Wand 6 — The Vault (M)
+- **What**: the Vault panel (§5.1): list (icon picker, rename, run mode), steps (toggle,
+  reorder, edit), fields, place picker (a Bforartists toolshelf tab + collapsible panel,
+  your own tab, native menus), Test, Publish, Export/Import; per-user storage; your
+  toolshelf panels registered at start.
+- **Why**: one home for user-made tools; publishing straight into the toolshelf makes them
+  feel built in.
+- **Done when**: an operator built in the Vault shows as an icon button in *▾ My Tools*
+  after a restart, runs with no engine, one undo.
 
-### Wand 7 — Make Operator panel in the Text Editor (M, after Text Editor 1–2)
-- **What**: template, checks, place picker, Register, Package as extension.
-- **Done when**: a user-written operator appears in its chosen native menu and ships as a zip.
+### Wand 7 — Recording into the Vault (M)
+- **What**: Save to Vault from a chat reply; ⏺ Record … Stop of your own actions; Add Last
+  Action; *Add to Vault* in every button's right-click menu; control steps (repeat, each
+  selected, wait, after render, ask me, run text block); the optional one-time model pass
+  at save.
+- **Done when**: the same task, recorded once from a chat turn and once from manual
+  clicks, replays on a new selection with no engine.
+
+### Wand 8 — Edit as Code + package (M, after Text Editor 1–2)
+- **What**: open a Vault operator in the Text Editor as a readable script + spec; write one
+  from a template with the Coworker's help (#52); package several as an extension.
+- **Done when**: an edited operator republishes from the Text Editor; a set ships as a zip.
 
 ### Tools 7 — Placement (S) · Tools 8 — Organize (M) · Tools 9 — Look-dev & fix (M)
 - As on the board; they are the engines under the Organize/Fix operators (§4.3) and the

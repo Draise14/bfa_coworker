@@ -81,8 +81,8 @@ Tools 1 (VSE), Tools 2 (Text + recipes), Tools 3 (Nodes), Rig 1–2. Additions:
 
 Superseded by **`plan_tier4m_coworker_operators.md`**: ordinary-looking operators with a
 wand-badged icon in their native menus and Bforartists toolshelf tabs, with packs
-(Sequencer first, then Nodes; organize, bake, asset library), a recorder and a Make
-Operator panel in the Text Editor. The tools in §2 are what those operators call.
+(Sequencer first, then Nodes; organize, bake, asset library) and the **Vault**, where
+users record their own and publish them into the toolshelf (no model needed to replay). The tools in §2 are what those operators call.
 
 ## 6. What goes in the release vs Tier 5
 

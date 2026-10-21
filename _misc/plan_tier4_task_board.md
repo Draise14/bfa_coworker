@@ -34,13 +34,13 @@ security are written up for review in `plan_tier4m_coworker_operators.md`.
 | Refinement | ✅ | Polish / test rounds done (#203–#286); keep fixing from your test list |
 | Dedicated global multi-domain chat editor | ✅ | — (GPU 4, Chat 7) |
 | CHOYA guided buttons + prompt injection while talking | ✅ | Chat 5 done (#168 #278 #288); Queue + Plan mode in place. Wizards = GPU 6 + Wand 4–5 |
-| Text Editor as an artist→developer IDE (#52) | ☐ | Tools 2 → Text Editor 1–4 + Wand 7 (Text Editor 5 folds into Wand 7) |
+| Text Editor as an artist→developer IDE (#52) | ☐ | Tools 2 → Text Editor 1–4 + Wand 8 (Text Editor 5 folds into Wand 8) |
 | Translate this (#42) | 🟡 in progress | Chat 3 |
 | Explain this, in every context menu (#290) | 🟡 in progress | Chat 2 |
 | Contextual sidebar chat in all editors (#291) | 🟡 in progress | Sidebar 1 |
 | Footer integration of agent status | ☐ | Footer 1 (status bar; replaces Editors 5) |
 | Orchestration layer (#71) + expanded domain tools | ☐ | Tools 1–3, 5, **7–9** (new); Orchestrate 1–2 (new). Teams 1–3 → Tier 5 |
-| Quick tools in every editor → **Coworker operators** (wand icon, native places) | ☐ for review | Wand 0–3, 6 (release; Sequencer pack first); Wand 4–5 (stretch); Wand 7 with the Text Editor lane |
+| Quick tools in every editor → **Coworker operators** (wand icon, native places) | ☐ for review | Wand 0–3, 6–7 (release; Sequencer pack first; the Vault); Wand 4–5 (stretch); Wand 8 with the Text Editor lane |
 | Security checks | 🟡 token + permissions done | Security 1–5 (new) |
 
 ---
@@ -177,7 +177,7 @@ Plan: `plan_tier4c_text_editor_ide_agent.md`
 | ☐ | **Text Editor 2**: Edit with Coworker | C2 | Right-click → rewrite the selection in place, streamed, one undo step | Text Editor 1 | M | Selection rewritten; Ctrl+Z restores | |
 | ☐ | **Text Editor 3**: Run → fix | C3 | Run the script, jump to the error, fix the range | Chat 8 | S | Error line found; fix applied | |
 | ☐ | **Text Editor 4**: Recipes panel | C4 | The script's parameter block as fields; "Rerun with…" | Tools 2 | S | Change a number → script reruns | |
-| ➜ | **Text Editor 5**: Prompt templates | C5 | *Folded into **Wand 7** (Make Operator panel), 2026-10-20* | — | — | — | |
+| ➜ | **Text Editor 5**: Prompt templates | C5 | *Folded into **Wand 8** (Edit as Code), 2026-10-21* | — | — | — | |
 
 ## Editors everywhere — Coworker editor and sidebars (#26)
 
@@ -221,8 +221,8 @@ Plan: `plan_tier4s_skills_cleanroom.md`
 Review document: `plan_tier4m_coworker_operators.md` (decisions, diagrams, packs, task
 cards). Operators look native: conventional names and tooltips, a **wand badge** on the
 icon, placed in the menus and Bforartists toolshelf tabs where related native operators
-live. Explain and Translate are operators of this kind. One dedicated panel only, for
-making new operators.
+live. Explain and Translate are operators of this kind. One dedicated panel only: the
+**Vault**, where you build your own and publish them into the toolshelf.
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
@@ -234,8 +234,9 @@ making new operators.
 | ☐ | **Wand 3**: Node pack · *second* | 4m §4.2 | Tidy & Explain Tree, Frame Selected by Purpose | Wand 1, Tools 3 | M | A 60-node tree framed into labelled groups with notes on a 7B model; one undo | |
 | ☐ | **Wand 4**: Bake wizard *(stretch)* | 4m §4.3 | Bake Texture Sets… by question cards → bake → wire a material | Wand 1 | M | Two material sets bake normal + AO + base colour from three cards | |
 | ☐ | **Wand 5**: Asset library wizard *(stretch)* | 4m §4.3 | Prepare Assets for a Library… (thumbnail style, location, author, catalogs) | Wand 1 | M | 10 props become a library with thumbnails and catalogs | |
-| ☐ | **Wand 6**: Save Turn as Operator | 4m §5.1 | Per user: the last good turn's tool calls → `operator.toml` + `steps.json` in the user folder; save card (steps, fields, selection, name, place, icon); model-free replay, one undo; Edit / Export / Import | Wand 1, Security 2 | M | Recorded once, replays on another selection with no engine, from its menu, after a restart | |
-| ☐ | **Wand 7**: Make Operator panel (Text Editor) | 4m §5 | The one dedicated panel: template, checks, place picker, Register, Package as extension (#52) | Wand 1, Text Editor 1–2 | M | A user-written operator appears in its native menu and ships as a zip | |
+| ☐ | **Wand 6**: The Vault | 4m §5.1 | The one dedicated panel (Coworker editor sidebar): your operators per user (icon picker, rename, run mode *All / Each selected*), steps (toggle, reorder, edit), fields, place picker (Bforartists toolshelf tab + collapsible panel, your own tab, menus), Test, **Publish** as toolshelf icon buttons, Export / Import | Wand 1, Security 2 | M | Built in the Vault → icon button in *▾ My Tools* after a restart; runs with no engine; one undo | |
+| ☐ | **Wand 7**: Recording into the Vault | 4m §5.2 | *Save to Vault* on a chat reply (tool calls, no model at replay); ⏺ Record … Stop of your own actions; Add Last Action; *Add to Vault* on any button's right-click; control steps (repeat, each selected, wait, after render, ask me, run text block); optional one-time model pass at save (name, icon, "the selection") | Wand 6 | M | One task recorded from chat and from manual clicks both replay on a new selection with no engine | |
+| ☐ | **Wand 8**: Edit as Code + package | 4m §5.2 | A Vault operator opens in the Text Editor as a readable script + spec; write one from a template with the Coworker (#52); package several as an extension (#86 builder) | Wand 6, Text Editor 1–2 | M | An edited operator republishes; a set ships as a zip | |
 
 *Logged for Tier 5 (after the tools are built):* migrate the wand icon set into
 Bforartists so operators can use native icon names there; the add-on keeps its own copies

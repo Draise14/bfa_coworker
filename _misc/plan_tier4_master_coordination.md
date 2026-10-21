@@ -29,7 +29,7 @@ editors), the **tools** half (domain + orchestration) and **security**.
 | 7 | Sidebar chat in all editors (#291) | 🟡 in progress (another agent) | Sidebar 1 |
 | 8 | Footer integration of agent status | ☐ | Footer 1 |
 | 9 | Orchestration layer + expanded domain tools (#71) | ☐ | Tools 1–3, 5, 7–9; Orchestrate 1–2 |
-| 10 | Quick tools in every editor → **Coworker operators** (wand icon, native places) | ☐ for review | Wand 0–3, 6 (+ 4–5 stretch, 7 with Text Editor) — `plan_tier4m_coworker_operators.md` |
+| 10 | Quick tools in every editor → **Coworker operators** (wand icon, native places) | ☐ for review | Wand 0–3, 6–7 (+ 4–5 stretch, 8 with Text Editor) — `plan_tier4m_coworker_operators.md` |
 | 11 | Security checks | 🟡 | Security 1–5 |
 
 ### 0.2 Strategy
@@ -39,8 +39,9 @@ editors), the **tools** half (domain + orchestration) and **security**.
    the menus and Bforartists toolshelf tabs where related native operators live (context
    menus only where that is the native place: Explain, Translate, Properties). Mostly
    tested code; the **active engine** answers only the judgment calls; preview and one
-   undo. Users can record one from a good chat turn or write one in the Text Editor's
-   **Make Operator** panel, the only dedicated panel (`plan_tier4m_coworker_operators.md`).
+   undo. Users build their own in the **Vault**, the only dedicated panel: record from a
+   good chat turn or their own clicks, pick icon and name, publish as toolshelf icon
+   buttons; replay never needs the model (`plan_tier4m_coworker_operators.md`).
 2. **Tool first, model optional.** Day-to-day chores (organize, rename, place, fix,
    frame) are deterministic tools with a dry run and one undo, usable without a model.
    The model chooses and chains them. This is what makes 7–14B local models reliable
@@ -57,10 +58,10 @@ editors), the **tools** half (domain + orchestration) and **security**.
 ```
 Security 1 ─► Security 2–4
 Chat 4 (context) ─► Sidebar 1 ─► Footer 1
-Wand 0 spike + icons ─► Wand 1 framework ─► Wand 2 Sequencer ─► Wand 3 Nodes ─► Wand 6 recorder
+Wand 0 spike + icons ─► Wand 1 framework ─► Wand 2 Sequencer ─► Wand 3 Nodes ─► Wand 6 Vault ─► Wand 7 recording
 Tools 1 ─► Wand 2 ; Tools 3 ─► Wand 3
 Tools 7 + 8 + 9 ─► organize / fix operators ─► Orchestrate 1 ─► Orchestrate 2
-Text Editor 1–2 ─► Wand 7
+Text Editor 1–2 ─► Wand 8
 Tools 2 ─► Text Editor 1–4
 Tools 1, 3, 5, 9 in parallel (one domain per PR)
 ```
@@ -68,7 +69,7 @@ Tools 1, 3, 5, 9 in parallel (one domain per PR)
 Suggested batches for my lanes (each ends in a test round; the 🟡 lanes run in
 parallel with the other agent): **A** Security 1–2, Wand 0, Tools 1, Footer 1 ·
 **B** Wand 1, Wand 2 (Sequencer), Tools 3, Tools 7 · **C** Wand 3 (Nodes), Tools 8–9,
-Orchestrate 1 · **D** Wand 6, Tools 2 + Text Editor 1–4, Wand 7, Orchestrate 2,
+Orchestrate 1 · **D** Wand 6–7 (Vault), Tools 2 + Text Editor 1–4, Wand 8, Orchestrate 2,
 Security 3–5 · stretch Wand 4–5 → **Test 3 + Test 5** → release.
 
 ### 0.4 Cut line
@@ -88,7 +89,7 @@ Runtime 3, migrating the wand icon set into Bforartists. Ideas for those: `plan_
 | #219 (placement tools) closed as completed | Only a guidance rule shipped (#257); no tools → **Tools 7** |
 | Chat 1 (native markdown) marked unblocked | Still 0 uses of `label_markdown` in the add-on; open |
 | Editors 5 (viewport dot) | Replaced by **Footer 1** (status bar) |
-| Text Editor 5 (prompt templates) | Folded into **Wand 7** (Make Operator panel) |
+| Text Editor 5 (prompt templates) | Folded into **Wand 8** (Edit as Code) |
 | Quick prompt menu (canned prompts) | Replaced by **Coworker operators** in native places (4m §1: prompts alone are slow, inconsistent on small models, no preview/undo); no "Magic" branding, the wand badge marks them |
 | §3 lanes table below predates the engine work | Kept for history; the release order is §0.3 |
 

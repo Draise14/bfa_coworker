@@ -4429,12 +4429,9 @@ class BFACW_PT_attach_popover(Panel):  # type: ignore[misc]
         layout.label(text="Image for the next message", icon='IMAGE_DATA')
         layout.template_ID(props, "chat_image", open="image.open")
         if props.chat_image is not None:
-            _draw_attachment_preview(layout, props.chat_image, context)
+            _draw_attachment_preview(layout, props.chat_image, context, max_units=6.0)
             layout.prop(props, "chat_image_send_once", text="Send Once")
-        row = layout.row(align=True)
-        row.operator("bfacw.chat_attach_image", text="File...", icon='FILE_IMAGE')
-        row.operator("bfacw.chat_capture_render", text="Render", icon='RENDER_STILL')
-        row.operator("bfacw.chat_capture_screen", text="Screen", icon='MAKE_SCREENSHOT')
+        # Render and Screen are on the input row itself; Open is the picker's (#265).
         hint = layout.row()
         hint.scale_y = 0.75
         hint.label(text="Or drop an image file onto the chat.")
@@ -5550,11 +5547,11 @@ def _draw_attachment_row(layout, props, context, minimal: bool = False) -> None:
         # The Coworker editor (#171): pick an image and see it.  Render / Screen
         # are in the toolshelf's Attach panel, and the chat's tray has the pin.
         box.template_ID(props, "chat_image", open="image.open")
-        _draw_attachment_preview(box, img, context)
+        _draw_attachment_preview(box, img, context, max_units=8.0)
         return
     head.prop(props, "chat_image_send_once", text="Send once")
     box.template_ID(props, "chat_image", open="image.open", new="image.new")
-    _draw_attachment_preview(box, img, context)
+    _draw_attachment_preview(box, img, context, max_units=8.0)
     row = box.row(align=True)
     row.operator("bfacw.chat_capture_render", icon='RENDER_STILL', text="Render")
     row.operator("bfacw.chat_capture_screen", icon='MAKE_SCREENSHOT', text="Screen")
@@ -5833,7 +5830,7 @@ def _attachment_preview_icon(img, context) -> tuple[int, int, int]:
     return _attachment_datablock_icon(img), width, height
 
 
-def _draw_attachment_preview(layout, img, context=None) -> None:
+def _draw_attachment_preview(layout, img, context=None, max_units: float = 0.0) -> None:
     """Draw a thumbnail of the attached image (issue #88 / Tier 3k).
 
     A filename alone is easy to misread, so the user can see WHAT is
@@ -5860,7 +5857,10 @@ def _draw_attachment_preview(layout, img, context=None) -> None:
     # a row wrapper made the (deliberately large) icon button vanish --
     # measured in a real session, where the same call without the row
     # drew a 162x40 thumbnail and with it drew nothing at all.
-    layout.template_icon(icon_value=icon, scale=max(1.0, width / unit))
+    scale = max(1.0, width / unit)
+    if max_units:           # a square preview the full width of a wide panel is very tall
+        scale = min(scale, max_units)
+    layout.template_icon(icon_value=icon, scale=scale)
 
 
 def _redraw_areas(context: bpy.types.Context | None) -> None:

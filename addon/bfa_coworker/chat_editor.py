@@ -1164,22 +1164,7 @@ class BFACW_PT_editor_tools_attach(_ToolPanel, bpy.types.Panel):
                 ("bfacw.chat_capture_render", "Attach Render", "RENDER_STILL", {}),
                 ("bfacw.chat_capture_screen", "Attach Screen", "MAKE_SCREENSHOT", {})]
 
-    def draw(self, context):
-        super().draw(context)
-        props = _props()
-        if props is None:
-            return
-        # The socket itself (#199): pick any image in the file, see what will go.
-        col = self.layout.column()
-        col.separator(factor=0.5)
-        col.template_ID(props, "chat_image", open="image.open")
-        if props.chat_image is not None and _column_count(context.region) == 4:
-            from . import ui_chat
-            ui_chat._draw_attachment_preview(col, props.chat_image, context)
-        elif props.chat_image is None and _column_count(context.region) == 4:
-            hint = col.row()
-            hint.scale_y = 0.75
-            hint.label(text="Or drop an image onto the chat.")
+    # The image picker itself is the input row's popover (#265): just the buttons here.
 
 
 class BFACW_PT_editor_tools_session(_ToolPanel, bpy.types.Panel):

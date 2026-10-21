@@ -458,7 +458,7 @@ class TestChatAttachmentUI(unittest.TestCase):
         draw = _extract_ui_func(
             "_draw_attachment_row",
             {"_draw_attachment_preview":
-                lambda layout, img, context: preview_calls.append((img, context))})
+                lambda layout, img, context, **_kw: preview_calls.append((img, context))})
         log = []
         props = types.SimpleNamespace(chat_image=object(),
                                       chat_image_send_once=True)
@@ -490,7 +490,7 @@ class TestChatAttachmentUI(unittest.TestCase):
         draw = _extract_ui_func(
             "_draw_attachment_row",
             {"_draw_attachment_preview":
-                lambda layout, img, context: calls.append(img)})
+                lambda layout, img, context, **_kw: calls.append(img)})
 
         # Collapsed: the header toggle is drawn with the closed sub-panel
         # arrow, the attached name stays readable, and nothing else is

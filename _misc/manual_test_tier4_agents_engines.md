@@ -13,48 +13,47 @@ Your ticked sections A-N stay below as the record.
 
 ## R1. Layout and controls
 
-- [ ] Editor sidebar: **Coworker, Queue, Plan, History**, then **Status & Diagnostics** (closed; Session
-      is inside it). 3D View sidebar (compact chat): **Queue**, **Plan** (closed), **the chat**, History and
+- [x] Editor sidebar: **Coworker, Queue, Plan, History**, then **Status & Diagnostics** (closed; Session
+      is inside it). 3D View sitdebar (compact chat): **Queue**, **Plan** (closed), **the chat**, History and
       Status (closed), **Coworker** (closed) at the bottom. No Actions panel. (#212)
-- [ ] Each control once: Start / Stop and the status are only in the header (editor) or the top bar
+- [x] Each control once: Start / Stop and the status are only in the header (editor) or the top bar
       (sidebar chat); the mode row has no settings gear. External Harness: client + **Copy Config** in the
       panel, **Copy Log / Configure** on the card, **Start Bridge** in the header. (#234)
-- [ ] Hover each mode tab (Local / Remote / Agent / Harness): one line, then what that mode does --
+- [x] Hover each mode tab (Local / Remote / Agent / Harness): one line, then what that mode does --
       External Agent included. (#233; was A.1)
-- [ ] Sidebar chat: the mode icon in its top bar (and the editor header's mode label) opens the mode tabs
+- [x] Sidebar chat: the mode icon in its top bar (and the editor header's mode label) opens the mode tabs
       plus Model / Effort, same short-hand as the Coworker panel, and All Settings. (#235)
 
 ## R2. Images
 
-- [ ] Editor input row, left: **image / render / screen** icons; the image icon opens the picker popover
+- [x] Editor input row, left: **image / render / screen** icons; the image icon opens the picker popover
       (any image, File..., Render, Screen, Send Once, preview). No Image box in the Coworker panel. (#213)
-- [ ] Sidebar chat: a **bottom toolbar** in the grip's row, two joined groups (New Thread, @ Mention,
-      Revert / Stop | Image, Render, Screen -- the Asset Browser's capture icon); dragging off the buttons
-      still resizes. Coworker | Ask | Plan is one joined row; Open Editor only in the top bar. (#214, #263)
-- [ ] Floating Coworker editor: click into the input, then **drag a PNG from Explorer** onto the chat:
+- [x] Sidebar chat: the **icon column** left of the messages (New Thread, @ Mention, Revert / Stop, Open
+      Editor; Image, Render, Screen). (#214)
+- [x] Floating Coworker editor: click into the input, then **drag a PNG from Explorer** onto the chat:
       it attaches. (#215 -- needs your real drag)
-- [ ] **Attach Screen** from the floating editor: that window tints the hovered editor at once, no copy in
+- [x] **Attach Screen** from the floating editor: that window tints the hovered editor at once, no copy in
       the main window. (#217)
 
 ## R3. Chat
 
-- [ ] The floating Workshop button: **arrow + Workshop icon** only. (#216)
-- [ ] A 50+ step job with the Workshop open stays smooth. (#218) Tool results show a few lines, then
+- [x] The floating Workshop button: **arrow + Workshop icon** only. (#216)
+- [x] A 50+ step job with the Workshop open stays smooth. (#218) Tool results show a few lines, then
       **Show all**. (#236)
-- [ ] Hover the chat's icon buttons (Undo, Copy, the input row, the column, the top bar): a tooltip. (#237)
+- [x] Hover the chat's icon buttons (Undo, Copy, the input row, the column, the top bar): a tooltip. (#237)
       Every icon-only button is square. (#238)
-- [ ] A reply ending "Shall I ...?" or offering options: **buttons** under it; a click sends it. (#220)
+- [x] A reply ending "Shall I ...?" or offering options: **buttons** under it; a click sends it. (#220)
 - [ ] History: the mode's **icon** where the chat ran (name in the tooltip), and **Open** for the chat's
       .blend: Blender asks to save, opens it, and the same chat continues there. (#239)
-- [ ] Queue a message with an image: its card shows the **image icon**, not the word. (#249)
+- [x] Queue a message with an image: its card shows the **image icon**, not the word. (#249)
 
 ## R4. External Agent (was B.6, C.1, C.3, D.1)
 
-- [ ] Claude Code connected: no separate Mode row; Model and Effort stay. Chat **Plan** → it plans;
+- [x] Claude Code connected: no separate Mode row; Model and Effort stay. Chat **Plan** → it plans;
       **Coworker** → it works. Stop + Start: Model / Effort still set. (#221; was B.6)
 - [ ] **Revert** on the last reply undoes the whole turn, also a big one (assets, node wiring); Edit >
       Undo History shows "Before Claude Code's turn (n)". (#242; was D.1)
-- [ ] Plan mode: after the plan, a card: **Start the Plan** / **Keep refining**. (#241; was C.3)
+- [ ] Plan mode: after the plan, a card: **Start the Plan** / **Keep refining**. (#241; was C.3) _failed, only shows one button, not two_
 - [ ] **Approval** button left of Send (lock Ask / warning Risky / unlocked Auto), on every engine. Ask:
       Local asks before each scene-changing tool, the agent through its card; a save asks everywhere.
       Pick Always, then switch modes: it asks again. Auto: nothing asks. (#240; was C.1 and section L --
@@ -62,7 +61,7 @@ Your ticked sections A-N stay below as the record.
 
 ## R5. External Harness
 
-- [ ] The list "What your client did in Blender" scrolls with the wheel. (#243)
+- [x] The list "What your client did in Blender" scrolls with the wheel. (#243)
 
 ## R6. Still open from before
 

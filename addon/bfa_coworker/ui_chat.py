@@ -2165,6 +2165,38 @@ class BFACW_OT_chat_clear(Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
+_RECENT: dict = {"mtime": None, "paths": []}
+
+
+def _recent_blend_files() -> list[str]:
+    """Blender's recent-files list (File > Open Recent), re-read when it changes."""
+    try:
+        path = os.path.join(bpy.utils.user_resource('CONFIG'), "recent-files.txt")
+        mtime = os.path.getmtime(path)
+    except (OSError, AttributeError):
+        return []
+    if _RECENT["mtime"] != mtime:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                _RECENT["paths"] = [line.strip() for line in fh if line.strip()]
+        except OSError:
+            _RECENT["paths"] = []
+        _RECENT["mtime"] = mtime
+    return _RECENT["paths"]
+
+
+def _chat_blend_path(entry: dict) -> str:
+    """The .blend a History entry was in: its stored path, or -- for chats saved before
+    the path was kept (#273) -- the recent file with that name."""
+    path = str(entry.get("blend_path") or "")
+    if path and os.path.isfile(path):
+        return path
+    name = str(entry.get("blend") or "")
+    if not name:
+        return ""
+    return next((p for p in _recent_blend_files() if Path(p).stem == name and os.path.isfile(p)), "")
+
+
 def _operating_mode() -> str:
     try:
         return bpy.context.preferences.addons[__package__].preferences.operating_mode
@@ -2245,7 +2277,7 @@ class BFACW_OT_chat_open_blend(Operator):  # type: ignore[misc]
     def execute(self, context: bpy.types.Context) -> set[str]:
         index = _chat_index()
         entry = index.get(self.chat_id)
-        path = str((entry or {}).get("blend_path") or "")
+        path = _chat_blend_path(entry or {})
         if not path or not os.path.isfile(path):
             self.report({"WARNING"}, "That .blend isn't there any more")
             return {"CANCELLED"}
@@ -2436,12 +2468,10 @@ class BFACW_PT_chat_history(Panel):  # type: ignore[misc]
             sub.label(text=relative_time(float(entry.get("updated", 0))))
             if entry.get("blend"):
                 sub.label(text=str(entry["blend"]), icon='FILE_BLEND')     # the icon says ".blend"
-                path = str(entry.get("blend_path") or "")
+                path = _chat_blend_path(entry)
                 here = bool(bpy.data.filepath) and os.path.normcase(path) == os.path.normcase(bpy.data.filepath)
-                if path and not here:
-                    open_row = sub.row(align=True)
-                    open_row.enabled = os.path.isfile(path)
-                    open_row.operator("bfacw.chat_open_blend", text="", icon='FILEBROWSER').chat_id = entry["id"]
+                if path and not here:           # an icon: it fits a narrow sidebar (#273)
+                    sub.operator("bfacw.chat_open_blend", text="", icon='FILEBROWSER').chat_id = entry["id"]
         if len(entries) > _HISTORY_ROWS:
             layout.label(text="{:d} more: search to find them".format(len(entries) - _HISTORY_ROWS))
 

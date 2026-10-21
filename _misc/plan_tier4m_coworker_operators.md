@@ -6,7 +6,9 @@ basics*** (Remove Silences, Reframe for Vertical with the centre-crop node group
 from Text), **Wand 3, Spell 1** (with *Save as Spell* from a chat reply), **Procedural 1,
 Tools 7–8, Footer 1, Security 1–4**, Orchestrate 1 as stretch. **Tier 5**: Edit from
 Footage, Assemble Timeline, Export Review Video, Wand 4–5, Spell 2 (recording clicks),
-Spell 3, Procedural 2–3, Tools 9, Orchestrate 2, Security 5 — see master §0.4. The
+Spell 3, Procedural 2–3, Tools 9, Orchestrate 2, Security 5 — see master §0.5. **Re-tier
+(later)**: the **Spell Book (§5, Spell 1–3) and quick prompts #300 are Tier 5** too; this
+release ships the operators (Wand 0–3) only, with no user-made operators. The
 orchestration layer is now **threads per editor**: `plan_tier4o_orchestration_threads.md`. Replaces the
 "quick prompt menu" idea. Tasks: **Wand 0–5, Spell 1–3** (were "Magic 0–7"), **Tools 7–9**,
 **Orchestrate 1–2**, **Footer 1**, **Security 1–5**. Explain (#290) and Translate (#42)
@@ -34,7 +36,7 @@ one undo. Mostly tested code; the active engine is asked only for the judgment c
 | 8 | Recorded operators | **Per user** (§5) |
 | 9 | Building them | A dedicated **Spell Book** (renamed from "Vault": a vault stores, a spell book *runs*) to build and run **spells** — your own operators and workflows: record, pick icon and name, **publish** into Bforartists' collapsible toolshelf panels (§5). Replay never needs the model |
 | 10 | Wizard workflows | Some jobs are neither scriptable nor purely procedural: they need *looking at the material* and proposing (e.g. cutting footage). These are **wizard spells**: tools + the engine's eyes + your choices, shipped in the Spell Book and placed natively (§4.1) |
-| 11 | Procedural first | Prefer node-group assets (Bforartists Default Library add-on, your libraries, later the online libraries) and parametric results; go linear only when asked (master §0.0) |
+| 11 | Procedural first | Prefer node-group assets (Bforartists Default Library add-on, your libraries, later the online libraries) and parametric results; go linear only when asked (master §0) |
 | 12 | Quick prompts (#300) | Kept, as the lightest spell: a **prompt spell** whose one step sends a prompt to the chat; shown under the sidebar chat and in the Coworker editor's toolshelf |
 
 ---
@@ -82,7 +84,7 @@ flowchart LR
     RUN --> ENG["Active engine<br/>(only when the spec asks)"]
 ```
 
-**Fit with Tier 4**: tool first, model optional (master §0.2). Operators reuse the
+**Fit with Tier 4**: tool first, model optional (master §0.3). Operators reuse the
 domain tools (every engine can call them), question cards for wizards (Chat 5, GPU 6),
 one undo per run (Engine 6), the active engine for decisions (engine seam), and the chat
 for a short report with Revert.
@@ -242,7 +244,7 @@ The headline is a **wizard spell that edits with you**, not a template you adjus
 
 ### 4.4 Procedural first — and promoting results to assets
 
-Rule (master §0.0): **prefer procedural, go linear only when asked.**
+Rule (master §0): **prefer procedural, go linear only when asked.**
 
 ```mermaid
 flowchart TD

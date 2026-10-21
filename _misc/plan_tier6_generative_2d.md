@@ -1,5 +1,10 @@
 # BFA Coworker — Tier 5b: Generative 2D (ComfyUI Backend)
 
+> **Re-tiered 2026-10-21: this is now Tier 6 (generative).** Generation moved after
+> Tier 4 (one Coworker, every editor, side by side) and Tier 5 (automation) to stop
+> feature creep; see `plan_tier4_master_coordination.md` §0.1. "Tier 5 / 5a / 5b"
+> inside this document is the old numbering. Work already shipped stays shipped.
+
 **Date**: 2026-09-02
 **Status**: Planning — Not Started
 **Depends on**: Tier 5a (Gen Plugin Foundation — ✅ DONE), Tier 4d Moodboard MVP (deferred)
@@ -2487,7 +2492,7 @@ screenshot tool → vision LLM → description. No new code.
 | `addon/bfa_coworker/gen_controller.py` | ~80 | ComfyUI backend routing in generate() |
 | `addon/bfa_coworker/shared.py` | ~30 | New constants, lazy imports |
 | `addon/bfa_coworker/agent_controller.py` | ~20 | Tool domain: "generative" |
-| `_misc/plan_tier5_generative_local_systems.md` | ~10 | Update Phase 5b status |
+| `_misc/plan_tier6_generative_local_systems.md` | ~10 | Update Phase 5b status |
 
 ---
 

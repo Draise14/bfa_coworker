@@ -1,5 +1,7 @@
 # BFA Coworker — Tier 5a: Turbo Mode — Speculative Decoding with DFlash2
 
+> **2026-10-21**: stays Tier 5 (automation & speed). Its "Tier 5 (generative systems)" dependency is now Tier 6 and is not needed for an LLM accelerator. See master §0.1.
+
 **Date**: 2026-08-26
 **Status**: Planning — Blocked on Upstream
 **Depends on**: Tier 3f (Buddy Optimizations — model UX, GPU auto-detection), Tier 5 (generative systems infrastructure)

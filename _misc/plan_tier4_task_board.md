@@ -17,7 +17,7 @@ Blender/Bforartists 5.3, chat drawn with Blender's own `label_markdown()`.
 change · a white-room line · skill/tool claims backed by a probe · docs if user-facing ·
 the 3 quick challenges on Local if it touches the turn loop, prompts or tools. Branch
 from `main`, no stacked PRs. Only one open PR at a time on `agent_controller.py` /
-`ui_chat.py`. Sizes: **S** ≤ 2 days · **M** ≤ 1 week · **L** more. **⏩** = moved to Tier 5 (master §0.4).
+`ui_chat.py`. Sizes: **S** ≤ 2 days · **M** ≤ 1 week · **L** more. **⏩** = moved to Tier 5 (master §0.5).
 
 ---
 
@@ -50,8 +50,9 @@ from `main`, no stacked PRs. Only one open PR at a time on `agent_controller.py`
 | ✅ Done | Agent 1, part 2: record one Claude Code session (uses your Claude login) | #148 #152 |
 | ✅ Done | **2026-10-20:** choice buttons wrap (keyframe icons, green = recommended), Allow this turn + permissions dropdown, permissions **Strict / Permissive / Auto**, History Open loads the .blend at once, **Explain This** in the right-click menus (#290), **Translate** in the right-click menus (#42), the chat's voice is always Coworker, **the Coworker tab in every editor's sidebar** + *Use editor context only* (#291) | #288 #289 #292 #293 #294 #296 #297 #298 #325 |
 | 📝 Planned | **2026-10-21: the four workflows** (master §0): Coworker operators in native places (Wand 0–5, Sequencer first), the **Spell Book** (Spell 1–3; #300 becomes prompt spells), **procedural first** (Procedural 1–3), new tools (Tools 7–9), Footer 1, Orchestrate 1–2, Security 1–5. Review doc: `plan_tier4m_coworker_operators.md` | #327-#349 |
-| 📝 Planned | **2026-10-21 (later): one thread per editor** — the orchestration layer: each editor's job in its own thread, side by side (Threads 0–3, `plan_tier4o_orchestration_threads.md`). **Moved to Tier 5**: Edit from Footage + the big wizards, Spell 2–3, Procedural 2–3, Tools 9, Orchestrate 2, Teams, Security 5 (master §0.4) | #356-#359 |
-| ⏭ Next | **The rest of Tier 4, one issue per task** (below): #299-#324. Tier 4a review: what's left is Chat 4 (#299) and Quick prompts (#300); Viewport feedback and the moodboard are dropped / Tier 5 | |
+| 📝 Planned | **2026-10-21 (later): one thread per editor** — the orchestration layer: each editor's job in its own thread, side by side (Threads 0–3, `plan_tier4o_orchestration_threads.md`). **Moved to Tier 5**: Edit from Footage + the big wizards, Spell 2–3, Procedural 2–3, Tools 9, Orchestrate 2, Teams, Security 5 (master §0.5) | #356-#359 |
+| 📝 Planned | **2026-10-21 (re-tier against feature creep)**: Tier 4 = one Coworker, every editor, side by side (threads stay). **Tier 5** = automation: the **Spell Book** (Spell 1, quick prompts #300) joins the wizards, missions and teams. **Tier 6** = generative: the former Tier 5 generative plans (local systems, 2D, moodboard) renamed `plan_tier6_*`. Tiers at a glance: master §0.1 | |
+| ⏭ Next | **The rest of Tier 4, one issue per task** (below): #299-#324. Tier 4a review: what's left is Chat 4 (#299) and Quick prompts (#300); Viewport feedback and the moodboard are dropped / Tier 6 | |
 
 ---
 
@@ -172,7 +173,7 @@ Plan: `plan_tier4a_editor_integration.md`
 | ➜ | **Editors 4**: The Coworker editor | A3 | *Moved to **GPU 4** (the editor around the GPU chat), 2026-10-19* | — | — | — | |
 | ✖ | **Editors 5**: Viewport status | A4 | *Dropped 2026-10-20: less in your face; the chat and the editor are enough* | — | — | — | |
 | ✅ | **Editors 6**: Floating chat window | A5 | *Done differently:* the Coworker editor opens in its own window (Open Editor), with capture and drops working there | Editors 4 | S | A separate chat window | issues #215 #266 |
-| ☐ | **Editors 7** (#300): Quick prompts per editor | A Phase 6, C5 | One-click prompts under each sidebar chat and on the Coworker editor's toolshelf; user templates from a folder. *2026-10-21: built as **prompt spells** in the Spell Book (Spell 1), so they share its storage, icons and editing* | Editors 3, Spell 1 | S | Each editor shows its prompts; a user file adds one | |
+| ⏩ | **Editors 7** (#300): Quick prompts per editor *(Tier 5, with the Spell Book)* | A Phase 6, C5 | One-click prompts under each sidebar chat and on the Coworker editor's toolshelf; user templates from a folder. *2026-10-21: built as **prompt spells** in the Spell Book (Spell 1), so they share its storage, icons and editing* | Editors 3, Spell 1 | S | Each editor shows its prompts; a user file adds one | |
 | ☐ | **Footer 1** (#330): Agent status in the status bar | 4o §5 | One item in the global status bar with **one icon per live thread**: state (*3/7*, ✔, ⏸), a pulse while one waits for you; the popover lists threads with Stop / answer / focus; toggle. With one thread it is a single item. *Not the dropped viewport dot* | Threads 1 | S | Each thread's status follows its turn in every workspace; an approval is visible with the chat closed | |
 
 ## Rigging & animation tools
@@ -199,7 +200,7 @@ Plan: `plan_tier4s_skills_cleanroom.md`
 | ☐ | **Skills 7** (#322): Mesh quality check | S6 | `check_mesh_quality`: overlaps, loose parts, open edges, flipped normals, unapplied scale | — | S | Finds each seeded fault | |
 | ☐ | **Skills 8** (#323): Docs for skill packs | S7 | Tool-name stability; using other skill packs with External Harness | — | S | Wiki page reviewed | |
 
-## Coworker operators & the Spell Book — the four workflows (master §0)
+## Coworker operators — quick tools in native places (master §0) · Spell Book *Tier 5*
 
 Review doc: `plan_tier4m_coworker_operators.md`. Operators look native (conventional
 names, a **wand badge** on a self-contained icon), sit in the menus and Bforartists
@@ -217,7 +218,7 @@ no model.
 | ☐ | **Wand 3** (#334): Node pack · *second* | 4m §4.2 | Tidy & Explain Tree, Frame Selected by Purpose | Wand 1, Tools 3 | M | A 60-node tree framed into labelled groups with notes on a 7B model | |
 | ⏩ | **Wand 4** (#335): Bake wizard *(Tier 5)* | 4m §4.3 | Bake Texture Sets… by question cards | Wand 1 | M | Two material sets bake from three answered cards | |
 | ⏩ | **Wand 5** (#336): Asset library wizard *(Tier 5)* | 4m §4.3 | Prepare Assets for a Library… (thumbnails, location, author, catalogs) | Wand 1 | M | 10 props become a library with thumbnails and catalogs | |
-| ☐ | **Spell 1** (#337): The Spell Book | 4m §5.1 | Shipped spells, prompt spells (#300), your own per user (**Save as Spell from a chat reply**); icon, name, run mode, steps, fields, place picker, **Publish** as toolshelf icon buttons / menu items, Test, Export / Import | Wand 1, Security 2 | M | A spell shows as an icon button after a restart, runs with no engine, one undo | |
+| ⏩ | **Spell 1** (#337): The Spell Book *(Tier 5)* | 4m §5.1 | Shipped spells, prompt spells (#300), your own per user (**Save as Spell from a chat reply**); icon, name, run mode, steps, fields, place picker, **Publish** as toolshelf icon buttons / menu items, Test, Export / Import | Wand 1, Security 2 | M | A spell shows as an icon button after a restart, runs with no engine, one undo | |
 | ⏩ | **Spell 2** (#338): Recording spells *(Tier 5)* | 4m §5.2 | Record … Stop; Add Last Action; Add to Spell Book on right-click; control steps; optional one-time model pass at save | Spell 1 | M | Recorded from chat and from clicks, both replay with no engine | |
 | ⏩ | **Spell 3** (#339): Edit as Code + package *(Tier 5)* | 4m §5.2 | A spell as a readable script + spec in the Text Editor; package as an extension | Spell 1, Text Editor 1–2 | M | An edited spell republishes; a set ships as a zip | |
 

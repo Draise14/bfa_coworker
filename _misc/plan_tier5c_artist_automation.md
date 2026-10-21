@@ -1,4 +1,4 @@
-# Tier 4/5 — Artist automation: domain tools, orchestration, quick tools & wizards
+# Tier 5 — Artist automation: spells, wizards, missions, teams (+ the Tier 4 tool ideas)
 
 **Status**: 📝 Ideas catalogue (2026-10-20). Picks for the next major release are marked
 **R** (release) and go on the task board; the rest are **T5** (Tier 5) candidates.
@@ -90,16 +90,16 @@ users record their own and publish them into the toolshelf (no model needed to r
 
 ## 6. What goes in the release vs Tier 5
 
-Superseded by master §0.4 (2026-10-21). **Release**: threads per editor (Threads 0–3),
-housekeeping and placement tools (Tools 7–8), Wand 0–3 with *Sequencer basics*, the
-Spell Book (Spell 1), Procedural 1, Security 1–4; map-over-selection as stretch.
-**Tier 5**: missions and teams on top of threads, recording clicks, Edit as Code, Make
-Parametric and the nudge, the big wizards (Edit from Footage, bake, asset library),
+Superseded by master §0.1 (2026-10-21). **Tier 4**: threads per editor (Threads 0–3),
+housekeeping and placement tools (Tools 7–8), Wand 0–3 with *Sequencer basics*,
+Procedural 1, Security 1–4; map-over-selection as stretch. **Tier 5** (this doc's home):
+the Spell Book (Spell 1–3, quick prompts #300), missions and teams on top of threads,
+recording clicks, Edit as Code, Make Parametric and the nudge, the big wizards (Edit from Footage, bake, asset library),
 look-dev helpers, batch across files, export/UV/LOD, lighting presets, render queue.
 
 ## 7. Asset library ecosystem — built in tandem with the other add-on (notes, 2026-10-21)
 
-Procedural first (master §0.0) only works if there are good node-group assets to reach
+Procedural first (master §0) only works if there are good node-group assets to reach
 for. Your plan: a strong asset library built **for the other add-on in tandem**, shipped
 with Bforartists, offered through the online extensions, and later available as a
 subscription through an API key.

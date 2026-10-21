@@ -1,5 +1,10 @@
 # BFA Coworker — Tier 5: Full Generative Local Systems Plan
 
+> **Re-tiered 2026-10-21: this is now Tier 6 (generative).** Generation moved after
+> Tier 4 (one Coworker, every editor, side by side) and Tier 5 (automation) to stop
+> feature creep; see `plan_tier4_master_coordination.md` §0.1. "Tier 5 / 5a / 5b"
+> inside this document is the old numbering. Work already shipped stays shipped.
+
 **Date**: 2026-08-06
 **Status**: Phase 5a Complete — Foundation Implemented
 **Depends on**: Tier 4 (Moodboard Editor + Viewport Overlays) + Phase 2 (External Harness)

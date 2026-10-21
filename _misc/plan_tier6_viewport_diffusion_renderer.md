@@ -1,5 +1,9 @@
 # BFA Coworker - Tier 6: Viewport Diffusion Renderer
 
+> **2026-10-21**: Tier 6 is now *generative* as a whole: it also holds the former Tier 5
+> generative plans (`plan_tier6_generative_local_systems.md`, `plan_tier6_generative_2d.md`,
+> `plan_tier6_moodboard_storyboarding.md`). "Tier 5a/5b" references below mean those. See master §0.1.
+
 **Date**: 2026-08-27
 **Status**: Planning - Architecture Revised (Render Engine, Dreamer branding, compositor)
 **Depends on**: Tier 5a (Gen Plugin Foundation), Tier 4b (Viewport Overlays)

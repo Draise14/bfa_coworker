@@ -184,6 +184,127 @@ class BFACW_OT_explain(Operator):  # type: ignore[misc]
         return {'FINISHED'}
 
 
+# -- Translate (#42) -----------------------------------------------------------------
+
+def _python_path(pointer: Any, identifier: str) -> str:
+    try:
+        return "{!r}.{:s}".format(pointer, identifier)
+    except (TypeError, ValueError):
+        return ""
+
+
+def translate_text(path: str, current: str, language: str, what: str) -> str:
+    """The instruction for the chat: exact, so a small model gets it right too."""
+    if path.endswith(".as_string()"):          # a Text datablock: edited as a whole
+        text = path[:-len(".as_string()")]
+        return ("Translate {:s} into {:s}: “{:s}”. Edit the text {:s} with execute_blender_code: "
+                "replace just that part with its translation and write it back with {:s}.from_string(...); keep "
+                "line breaks, code, names and placeholders, and change nothing else. Then reply with just the "
+                "translation.").format(what, language, current, text, text)
+    return ("Translate {:s} into {:s}. It is the Python property {:s}, now: \u201c{:s}\u201d. Set it to the "
+            "translation with execute_blender_code ({:s} = \"...\"); keep line breaks, names, numbers and "
+            "placeholders as they are, and change nothing else. Then reply with just the translation.").format(
+        what, language, path, current, path)
+
+
+class BFACW_OT_translate(Operator):  # type: ignore[misc]
+    """Translate this text with Coworker: pick the language (remembered), and it sets the text for you"""
+    bl_idname = "bfacw.translate"
+    bl_label = "Translate"
+    bl_options = {'INTERNAL'}
+
+    path: StringProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
+    current: StringProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
+    what: StringProperty(default="this text", options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        if not chat_ready():
+            cls.poll_message_set("Start Coworker first (its own chat: not in External Harness)")
+            return False
+        return True
+
+    def invoke(self, context: bpy.types.Context, _event) -> set[str]:
+        return context.window_manager.invoke_props_dialog(self, width=320, title="Translate", confirm_text="Translate")
+
+    def draw(self, context: bpy.types.Context) -> None:
+        prefs = context.preferences.addons[__package__].preferences
+        layout = self.layout
+        layout.label(text=self.what[:60], icon='FONT_DATA')
+        if self.current:
+            sub = layout.row()
+            sub.scale_y = 0.8
+            sub.label(text="\u201c{:s}\u201d".format(self.current[:60] + ("..." if len(self.current) > 60 else "")))
+        layout.prop(prefs, "translate_language")
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        if not self.path:
+            return {'CANCELLED'}
+        prefs = context.preferences.addons[__package__].preferences
+        name = prefs.bl_rna.properties["translate_language"].enum_items[prefs.translate_language].name
+        if not _ask(context, translate_text(self.path, self.current, name, self.what), "AGENT"):
+            return {'CANCELLED'}
+        self.report({'INFO'}, "Translating into {:s} -- see the chat".format(name))
+        return {'FINISHED'}
+
+
+def _translate_op(layout: Any, path: str, current: str, what: str, label: str) -> None:
+    op = layout.operator("bfacw.translate", text=label, icon='FONT_DATA')
+    op.path, op.current, op.what = path, current[:2000], what
+
+
+def _translate_entry(layout: Any, _context: Any, target: dict) -> None:
+    """Any text field (a string property that isn't a file path)."""
+    if target["kind"] != "property" or target["type"] != "string":
+        return
+    if target.get("subtype") in ("FILE_PATH", "DIR_PATH", "FILE_NAME", "PASSWORD"):
+        return
+    path = _python_path(target["pointer"], target["identifier"])
+    if path:
+        _translate_op(layout, path, target["value"], "the text \u201c{:s}\u201d".format(target["label"]),
+                      "Translate \u201c{:s}\u201d...".format(target["label"][:40]))
+
+
+def _draw_text_object_menu(self: Any, context: Any) -> None:
+    obj = getattr(context, "active_object", None)
+    if obj is None or obj.type != 'FONT':
+        return
+    self.layout.separator()
+    _translate_op(self.layout, _python_path(obj.data, "body"), obj.data.body,
+                  "the text object \u201c{:s}\u201d".format(obj.name), "Translate Text...")
+
+
+def _draw_text_strip_menu(self: Any, context: Any) -> None:
+    editor = getattr(context.scene, "sequence_editor", None)
+    strip = getattr(editor, "active_strip", None)
+    if strip is None or strip.type != 'TEXT':
+        return
+    self.layout.separator()
+    _translate_op(self.layout, _python_path(strip, "text"), strip.text,
+                  "the text strip \u201c{:s}\u201d".format(strip.name), "Translate Text Strip...")
+
+
+def _draw_text_editor_menu(self: Any, context: Any) -> None:
+    text = getattr(getattr(context, "space_data", None), "text", None)
+    if text is None:
+        return
+    a = (text.current_line_index, text.current_character)
+    b = (text.select_end_line_index, text.select_end_character)
+    (l0, c0), (l1, c1) = sorted((a, b))
+    lines = [line.body for line in text.lines]
+    if (l0, c0) != (l1, c1):
+        chosen = "\n".join(lines[l0:l1 + 1])
+        chosen = chosen[c0:len(chosen) - (len(lines[l1]) - c1)] if lines else ""
+        what = "the selected text (lines {:d}-{:d}) of the text \u201c{:s}\u201d".format(l0 + 1, l1 + 1, text.name)
+        label = "Translate Selection..."
+    else:
+        chosen, what, label = text.as_string(), "the text \u201c{:s}\u201d".format(text.name), "Translate Text..."
+    self.layout.separator()
+    op = self.layout.operator("bfacw.translate", text=label, icon='FONT_DATA')
+    # A Text is edited as a whole: the instruction names the part, the path is the datablock.
+    op.path, op.current, op.what = "{!r}".format(text) + ".as_string()", chosen[:2000], what
+
+
 # -- the menus ------------------------------------------------------------------------
 
 # Entries for the button menu: (draw(layout, context, target) -> None).  Translate adds itself.
@@ -216,7 +337,14 @@ def _draw_editor_menu(self: Any, context: Any) -> None:
 
 
 _HOOKED: list[tuple[type, Callable]] = []
-_CLASSES = (BFACW_OT_explain,)
+_CLASSES = (BFACW_OT_explain, BFACW_OT_translate)
+# Menus of a kind of thing, with their draw: text objects, text strips, the Text Editor (#42).
+_THING_MENUS = (
+    ("VIEW3D_MT_object_context_menu", _draw_text_object_menu),
+    ("VIEW3D_MT_edit_font_context_menu", _draw_text_object_menu),
+    ("SEQUENCER_MT_context_menu", _draw_text_strip_menu),
+    ("TEXT_MT_context_menu", _draw_text_editor_menu),
+)
 
 
 def register() -> None:
@@ -224,6 +352,13 @@ def register() -> None:
         bpy.utils.register_class(cls)
     if _explain_entry not in BUTTON_ENTRIES:
         BUTTON_ENTRIES.insert(0, _explain_entry)
+    if _translate_entry not in BUTTON_ENTRIES:
+        BUTTON_ENTRIES.append(_translate_entry)
+    for name, draw in _THING_MENUS:
+        menu = getattr(bpy.types, name, None)
+        if menu is not None:
+            menu.append(draw)
+            _HOOKED.append((menu, draw))
     menu = getattr(bpy.types, "UI_MT_button_context_menu", None)
     if menu is not None:
         menu.append(_draw_button_menu)

@@ -244,7 +244,7 @@ class TestSuggestionButtons(unittest.TestCase):
         view = cv.ChatView()
         c, _ = self._draw(view, self.HIST)
         ids = [w for _r, w in c.hit_areas if w.startswith("suggest:")]
-        self.assertEqual(ids, ["suggest:0"])
+        self.assertEqual(ids, ["suggest:0", "suggest:1"])          # Yes and No (#270)
         labels = [cmd.text for cmd in c.commands if cmd.kind == "text"]
         self.assertIn("Yes, add a lamp.", labels)
         self.assertNotIn("Yes, add chairs.", labels)

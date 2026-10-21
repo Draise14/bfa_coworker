@@ -40,7 +40,7 @@ from ..chat_turns import NOTE_TITLES, group_turns, is_system_note_msg, split_tur
 from .layout import Canvas, InteractionState, Rect, wrap_text
 from .markdown import Block, Span, parse
 from .style import RGBA, Style
-from .suggestions import suggestions
+from .suggestions import TYPE, suggestions
 
 __all__ = (
     "ChatView",
@@ -286,7 +286,8 @@ class ChatView:
                 shown = shown.rstrip() + "\u2026"
             button = Rect(x, top - style.pad * 0.5 - h, width, h)
             if canvas.button(button, "suggest:{:d}".format(n), shown, align="left", icon="FORWARD"):
-                actions.append(("suggest", text))
+                # "No, something else...": you finish it in the input (#270).
+                actions.append(("suggest", text) if text != TYPE else ("suggest_type", "No, "))
             top = button.y - gap
         return top
 

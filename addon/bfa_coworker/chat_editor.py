@@ -762,6 +762,12 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
         if props.chat_input != value:
             props.chat_input = value
             _tag_chat_regions()         # the other chats show the new draft at once
+    elif action == "suggest_type" and surface is not None:     # "No, ..." to finish yourself (#270)
+        surface.box.model.set_text(value)
+        if props is not None:
+            props.chat_input = value
+        if region is not None:
+            input_capture.focus(surface.box, region)
     elif action == "suggest":       # a suggestion button (#220): sent as if typed
         _do("send", value, surface, region)
     elif action == "new_thread":

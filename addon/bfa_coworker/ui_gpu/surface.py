@@ -79,7 +79,7 @@ TIP_PREFIXES: tuple[tuple[str, str], ...] = (
     ("copyres:", "Copy the result"),
     ("copy:", "Copy the code"),
     ("img:", "Open this image in an Image Editor"),
-    ("suggest:", "Send this as your next message"),
+    ("suggest:", "Send this as your next message (No, something else: you finish it in the input)"),
     ("ws:", "Fold or unfold the Workshop: the turn's tool steps"),
 )
 TIP_DELAY = 0.5      # seconds the mouse rests before a tooltip shows, like Blender's

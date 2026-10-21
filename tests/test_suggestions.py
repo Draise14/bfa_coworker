@@ -36,11 +36,21 @@ sg = _load()
 class TestSuggestions(unittest.TestCase):
 
     def test_a_closing_question_becomes_a_yes(self):
+        no = ("No, something else...", sg.TYPE)              # always a second choice (#270)
         self.assertEqual(sg.suggestions("Done: the table.\n\nShall I add four chairs around your table?"),
-                         [("Yes, add four chairs around my table.",) * 2])
+                         [("Yes, add four chairs around my table.",) * 2, no])
         self.assertEqual(sg.suggestions("Done. Would you like me to light the scene?"),
-                         [("Yes, light the scene.",) * 2])
-        self.assertEqual(sg.suggestions("Which style fits best for the roof?"), [("Yes, go ahead.",) * 2])
+                         [("Yes, light the scene.",) * 2, no])
+        self.assertEqual(sg.suggestions("Which style fits best for the roof?"), [("Yes, go ahead.",) * 2, no])
+
+    def test_an_either_or_question_gives_both_halves(self):
+        # #270, the questions from the test round.
+        got = sg.suggestions("Want me to start executing this (step 1: world/fog setup), or adjust the plan first?")
+        self.assertEqual([t for _l, t in got], ["Yes, start executing this (step 1: world/fog setup).",
+                                                 "Adjust the plan first."])
+        got = sg.suggestions("Want me to push further on the bright canopy, or is this a good stopping point?")
+        self.assertEqual(len(got), 2)
+        self.assertEqual(len(sg.suggestions("Pick one (red or blue)?")), 2)    # "or" in brackets: Yes / No
 
     def test_offered_options_become_one_button_each(self):
         reply = ("The walls are up. Next, I could:\n\n"

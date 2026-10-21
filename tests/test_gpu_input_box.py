@@ -182,7 +182,7 @@ class TestSuggestions(unittest.TestCase):
     def test_click_a_suggestion(self):
         box = ib.InputBox(focused=True, provider=_provider)
         _type(box, "@cu")
-        canvas = lay.Canvas(st.Style(), lay.fixed_measure(0.55), lay.InteractionState(clicked="suggest:0"))
+        canvas = lay.Canvas(st.Style(), lay.fixed_measure(0.55), lay.InteractionState(clicked="mention:0"))
         box.draw(canvas, lay.Rect(0, 0, 500, 300))
         self.assertEqual(box.model.text, "@Cube ")
 

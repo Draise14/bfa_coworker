@@ -59,6 +59,7 @@ _ATTACHED = re.compile(r"\s*\[attached:\s*([^\]]*)\]")
 # Thumbnail heights (in widget units) for the S / M / L sizes.
 THUMB_SIZES = {"S": 2.5, "M": 4.0, "L": 7.0}
 _LIVE_LINES = 3        # the live-thinking window, in lines
+_SCROLL_IDLE_ALPHA = 0.4   # the scrollbar's strength with the mouse away (#279)
 _FRAME_LINES = 14      # code frames show this many lines (Show all for the rest)
 _RESULT_LINES = 3      # a tool's result: a few lines (often not for reading; Show all: #236)
 _RESULT_LINE_CHARS = 160   # ... each cut this short while folded (one long JSON line wraps a lot)
@@ -676,9 +677,10 @@ class ChatView:
     # -- scrollbar: like Blender's region scrollbars (View2D) ---------------------------
     @staticmethod
     def _bar_widths(style: Style) -> tuple[float, float]:
-        """(thin, full) widths: V2D_SCROLL_MIN_WIDTH and V2D_SCROLL_WIDTH."""
-        px = style.scale
-        return 5.0 * px + 2.0 * px, 0.45 * style.unit + 2.0 * px
+        """(thin, full) widths: V2D_SCROLL_MIN_WIDTH and V2D_SCROLL_WIDTH -- in UI scale only,
+        like Blender's region scrollbars: the chat's or the panel's zoom doesn't fatten it (#279)."""
+        px = style.ui_scale
+        return 5.0 * px + 2.0 * px, 0.45 * 20.0 * px + 2.0 * px
 
     def _bar_geometry(self, style: Style, rect: Rect) -> tuple[Rect, Rect, float] | None:
         """(track, handle, scroll per handle pixel) at full width, or None when all fits."""
@@ -721,7 +723,8 @@ class ChatView:
         state = canvas.state
         dragging = state.pressed == "scroll_handle"
         over = state.mouse is not None and track.contains(*state.mouse)
-        # Fade in as the mouse comes near (AZONEFADEOUT .. AZONEFADEIN), like Blender.
+        # Fade in as the mouse comes near (AZONEFADEOUT .. AZONEFADEIN), like Blender; while the
+        # chat is longer than its room it always shows, faint (#279).
         alpha = 0.0
         if dragging:
             alpha = 1.0
@@ -730,8 +733,10 @@ class ChatView:
             dx = max(track.x - mx, 0.0, mx - track.right)
             dy = max(track.y - my, 0.0, my - track.top)
             dist = (dx * dx + dy * dy) ** 0.5
-            fade_in, fade_out = 5.0 * style.unit, 6.5 * style.unit
+            unit = 20.0 * style.ui_scale
+            fade_in, fade_out = 5.0 * unit, 6.5 * unit
             alpha = 1.0 if dist <= fade_in else max(0.0, 1.0 - (dist - fade_in) / (fade_out - fade_in))
+        alpha = max(alpha, _SCROLL_IDLE_ALPHA)
         canvas.hit_areas.append((track, "scroll_track"))
         canvas.hit_areas.append((handle, "scroll_handle"))
         if alpha <= 0.0:

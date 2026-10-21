@@ -65,37 +65,37 @@ Your ticked sections A-N stay below as the record.
 
 ## R5b. Refinement pass (#265-#283)
 
-- [ ] Image popover: picker, a small preview (not super tall), Send Once; no File / Render / Screen row.
+- [x] Image popover: picker, a small preview (not super tall), Send Once; no File / Render / Screen row.
       Editor toolshelf Attach: just its three buttons. (#265)
 - [ ] From the **floating** Coworker window: **Attach Screen** veils every window; click the main window's
       3D View: that view is attached. **Attach Render** works there too, and with no 3D View open at all
       it renders the scene camera. (#266, #267)
-- [ ] Hover any button in the chats -- cards, Show all, links, the grip, the scrollbar, the @ list --
+- [x] Hover any button in the chats -- cards, Show all, links, the grip, the scrollbar, the @ list --
       a tooltip. (#268)
-- [ ] The editor's image buttons: one joined row of squares; joined rows everywhere draw one line
+- [x] The editor's image buttons: one joined row of squares; joined rows everywhere draw one line
       between buttons, not two. (#269, #283)
-- [ ] A closing question gives **two** buttons: "A, or B?" both halves; else Yes and "No, something
+- [x] A closing question gives **two** buttons: "A, or B?" both halves; else Yes and "No, something
       else..." (puts "No, " in the input). (#270)
-- [ ] While the agent runs, the lock button switches Ask / Risky / Auto at once. (#271)
-- [ ] Plan > **Edit**: the text opens at the top with the goal and steps; change a step, it shows in the
+- [x] While the agent runs, the lock button switches Ask / Risky / Auto at once. (#271)
+- [x] Plan > **Edit**: the text opens at the top with the goal and steps; change a step, it shows in the
       Plan panel. (#272)
-- [ ] History: your older chats (e.g. "Coworker test - hallway") have the **Open** icon again. (#273)
+- [x] History: your older chats (e.g. "Coworker test - hallway") have the **Open** icon again. (#273)
 - [ ] The chat's scrollbar always shows faintly; Ctrl+wheel zoom doesn't make it fatter. (#279)
 
 ## R5c. Editors and right-click menus (#290-#298)
 
-- [ ] **Coworker tab in every sidebar**: Shader / Geometry Nodes, Sequencer, Image / UV, Movie Clip,
+- [x] **Coworker tab in every sidebar**: Shader / Geometry Nodes, Sequencer, Image / UV, Movie Clip,
       Dope Sheet, Graph, NLA, Text Editor, Spreadsheet -- N, the **Coworker** tab: Queue, Plan, the compact
       chat, History, Status, Coworker. The Coworker editor's own sidebar is unchanged. (#291)
-- [ ] The chat panel's header has the **editor's icon**: on = *Use editor context only*. Ask "What am I
+- [x] The chat panel's header has the **editor's icon**: on = *Use editor context only*. Ask "What am I
       looking at?" from the Shader Editor: the reply names the material's node tree / active node. (#291)
-- [ ] Right-click any setting: **Explain This** -> an Ask-mode answer in the chat; greyed out until Coworker
+- [x] Right-click any setting: **Explain This** -> an Ask-mode answer in the chat; greyed out until Coworker
       is started. Right-click an editor's empty space: **Explain This Editor**. (#290)
-- [ ] Right-click a text field, a text object (Object / Edit mode), a text strip or the Text Editor:
+- [x] Right-click a text field, a text object (Object / Edit mode), a text strip or the Text Editor:
       **Translate...** -> pick the language (remembered) -> the text is replaced by the translation. (#42)
 - [ ] History > **Open**: the .blend opens straight away (asks to save only with unsaved changes); a moved
       or deleted file says so instead. (#293)
-- [ ] Every reply's header says **Coworker** with the hat, whichever agent works. (#297)
+- [x] Every reply's header says **Coworker** with the hat, whichever agent works. (#297)
 
 ## R6. Still open from before
 

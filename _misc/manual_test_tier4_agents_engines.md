@@ -53,7 +53,7 @@ Your ticked sections A-N stay below as the record.
       **Coworker** → it works. Stop + Start: Model / Effort still set. (#221; was B.6)
 - [ ] **Revert** on the last reply undoes the whole turn, also a big one (assets, node wiring); Edit >
       Undo History shows "Before Claude Code's turn (n)". (#242; was D.1)
-- [ ] Plan mode: after the plan, a card: **Start the Plan** / **Keep refining**. (#241; was C.3) _failed, only shows one button, not two_
+- [x] Plan mode: after the plan, a card: **Start the Plan** / **Keep refining**. (#241; was C.3) _failed, only shows one button, not two_
 - [ ] **Approval** button left of Send (lock Ask / warning Risky / unlocked Auto), on every engine. Ask:
       Local asks before each scene-changing tool, the agent through its card; a save asks everywhere.
       Pick Always, then switch modes: it asks again. Auto: nothing asks. (#240; was C.1 and section L --

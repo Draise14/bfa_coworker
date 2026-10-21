@@ -232,6 +232,9 @@ class Canvas:
         # On whole pixels: a fractional rect draws its fill and outline a pixel apart, so a
         # square icon button looked 31 x 32 (#269).
         rect = Rect(round(rect.x), round(rect.y), round(rect.w), round(rect.h))
+        # Joined to the button on its left: draw over its edge, so one line sits between them
+        # (like Blender's aligned buttons), not two.  The click area stays the button's own.
+        frame = Rect(rect.x - 1, rect.y, rect.w + 1, rect.h) if corners in ("N", "R") else rect
         colors = self.style.button
         hovered = self.state.hovered(rect)
         pressed = self.state.pressed == widget_id
@@ -239,8 +242,8 @@ class Canvas:
         if hovered and not (active or pressed):
             inner = _lighten(inner, 0.06)
         radius = self.style.radius(colors)
-        self.fill(rect, inner, radius, corners)
-        self.stroke(rect, colors.outline, radius, corners)
+        self.fill(frame, inner, radius, corners)
+        self.stroke(frame, colors.outline, radius, corners)
         text_rect = rect.inset(self.style.pad * 1.25, 0) if align != "center" else rect
         color = colors.text_sel if (active or pressed) else colors.text
         if icon:

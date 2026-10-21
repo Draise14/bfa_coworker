@@ -4626,7 +4626,9 @@ class BFACW_PT_chat_compact(Panel):  # type: ignore[misc]
         # Use editor context only (#291): this editor's own icon, on the panel's header.
         props = context.window_manager.bfacw_chat_props  # type: ignore[attr-defined]
         icon = next((s[3] for s in SIDEBAR_SPACES if s[0] == context.area.type), 'WINDOW')
-        self.layout.prop(props, "chat_editor_context_only", text="", icon=icon, emboss=True)
+        row = self.layout.row()
+        row.prop(props, "chat_editor_context_only", text="", icon=icon, emboss=True)
+        row.separator(factor=1.5)       # clear of the panel's drag handle
 
     def draw(self, context: bpy.types.Context) -> None:
         from . import chat_editor as _ce

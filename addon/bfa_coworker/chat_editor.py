@@ -595,6 +595,16 @@ def _find_chat_rect(region: Any, expected_h: float, tabs_px: float, zoom: float 
     if len(across) < 2:
         return None
     left, right = across[0][0], across[-1][1] + 1
+    # Full width: the markers sit inside the panel's padding; grow the room out to the
+    # panel's edges, through the panel's own colour as drawn just beside the markers.
+    if left > 0:
+        inside = row[left - 1]
+        while left > 0 and _near(row[left - 1], inside):
+            left -= 1
+    if right < width:
+        inside = row[right]
+        while right < width and _near(row[right], inside):
+            right += 1
     try:    # remember the room in view space, for when both markers are scrolled away
         _ROOM_VIEW[key] = (region.view2d.region_to_view(0.0, float(top))[1], float(left), float(right))
     except (AttributeError, RuntimeError):

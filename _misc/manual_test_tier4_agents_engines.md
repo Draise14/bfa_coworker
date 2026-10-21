@@ -52,7 +52,7 @@ Your ticked sections A-N stay below as the record.
 - [x] Claude Code connected: no separate Mode row; Model and Effort stay. Chat **Plan** → it plans;
       **Coworker** → it works. Stop + Start: Model / Effort still set. (#221; was B.6)
 - [ ] **Revert** on the last reply undoes the whole turn, also a big one (assets, node wiring); Edit >
-      Undo History shows "Before Claude Code's turn (n)". (#242; was D.1)
+      Undo History shows "Before Coworker's turn (n)". (#242; was D.1)
 - [x] Plan mode: after the plan, a card: **Start the Plan** / **Keep refining**. (#241; was C.3) _failed, only shows one button, not two_
 - [ ] **Permissions** button left of Send opens a dropdown: **Strict / Permissive / Auto** (lock / unlocked /
       car icons), switching at once, also while the agent runs. Strict: a card before each change -- **Allow

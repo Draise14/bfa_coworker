@@ -219,7 +219,7 @@ class TestPermissionsAndPrompt(unittest.TestCase):
         engine._on_permission(ask, answers.append)
         self.assertEqual(answers, [])                              # waits for you
         request = engine.approvals.current()
-        self.assertEqual((request.title, request.detail), ("Claude Code wants to run bash", "ls"))
+        self.assertEqual((request.title, request.detail), ("Coworker wants to run bash", "ls"))
         self.assertFalse(request.coworker_tool)
         notes = [e for e in engine.bus.drain() if e.kind == "status"]
         self.assertIn("Waiting for you", notes[0].data["text"])

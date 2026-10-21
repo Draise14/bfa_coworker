@@ -357,14 +357,15 @@ class TestChatView(unittest.TestCase):
     def icons(self, canvas):
         return [c.text for c in canvas.commands if c.kind == "icon"]
 
-    def test_reply_header_says_who_answered(self):
+    def test_reply_header_is_always_coworker(self):
+        # Whichever agent did the work, the chat's voice is Coworker's (with its hat).
         c = self.canvas()
         hist = [{"role": "user", "content": "hi", "turn_start": True},
                 {"role": "assistant", "content": "Hello", "agent": "Claude Code"}]
         cv.ChatView().draw(c, lay.Rect(0, 0, 600, 800), hist)
         words = " ".join(t.text for t in self.texts(c))
-        self.assertIn("Claude Code", words)
-        self.assertNotIn("Coworker", words)
+        self.assertIn("Coworker", words)
+        self.assertNotIn("Claude Code", words)
 
     def test_icons_read_before_words(self):
         c = self.canvas()

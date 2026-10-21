@@ -1,10 +1,108 @@
 # BFA Coworker — Tier 4 Master Plan
 
-**Revised**: 2026-10-16. Full audit of all Tier 4 plans against v1.1.37 / `main` @ deb417b
-**Status**: 📝 Ready for review. Implementation starts per lane after review, one branch per task group
+**Revised**: 2026-10-21 (§0: the four workflows; §0.1–0.5: release goals, strategy, order, cut line). Earlier full audit: 2026-10-16 against v1.1.37 @ deb417b
+**Status**: 🚧 In progress. Engines/agents and editors half done; §0 plans the rest of the release
 **Previous version**: `Plans History/plan_tier4_master_coordination_v1.md` (historical
 decisions, detailed streaming/checkpoint designs that have since shipped)
 **Task board**: `plan_tier4_task_board.md`
+
+---
+
+## 0. The goal: four workflows, one Coworker (2026-10-21)
+
+Coworker doesn't replace the chat, procedural assets or add-ons: it **opens technical-
+artist workflows to every artist** without them knowing the workflow beforehand, and
+stays out of a seasoned artist's way.
+
+| # | When the job is… | Best medium | Coworker's part |
+|---|---|---|---|
+| 1 | Serialized actions **once**, applied in context | **The chat** | Engines, tools, plan, Revert (done) |
+| 2 | Serialized actions **many times**, regardless of context | **A script / add-on** | Spell Book: record a spell from a chat turn or your clicks, replay with no model; Edit as Code; package as an extension. Chat already writes scripts without the bridge; the bridge lets it **run and fix** them |
+| 3 | An asset **parameterized** for modular reuse | **Nodes + gizmos** | Procedural first (prefer library node groups), *Make Parametric* (results → node-group assets with inputs + gizmos) |
+| 4 | **Parameterized + serialized** operations for advanced work | **All three together — the goal of this system** | Wizard spells that look at the material, propose, and build with tools + node groups (e.g. *Edit from Footage*) |
+
+**Graduation path** — promote work up the ladder only when you need it:
+
+```
+Chat result (1)
+  ├─ "I'll do this again"     → Save as Spell     → a button in the toolshelf          (2)
+  ├─ "I'll tweak this again"  → Make Parametric   → node-group asset, inputs + gizmos  (3)
+  └─ "This is a whole flow"   → a wizard spell that drives assets + asks a few things  (4)
+```
+
+**Rules**: procedural first, linear only when asked · operators and spells work without
+the chat and sit in native places · suggestions (*Save as Spell?*, *Make Parametric?*)
+are one ignorable button, never a pop-up. Detail: `plan_tier4m_coworker_operators.md`.
+
+### 0.1 Next major release — the goals and what each still needs (2026-10-21)
+
+Checked against `main` (72fe2dc). 🟡 rows run with another agent and aren't re-planned here.
+
+| # | Goal | Status | Release tasks (board) |
+|---|---|---|---|
+| 1 | Refinement | ✅ | Keep fixing from the test list |
+| 2 | Dedicated global multi-domain chat editor | ✅ | — |
+| 3 | CHOYA guided buttons + prompt injection while talking | ✅ | Wizards: GPU 6 (#324) + wizard spells |
+| 4 | Text Editor as artist→developer IDE (#52) | ☐ | Tools 2 → Text Editor 1–4; Spell 3 (Edit as Code) |
+| 5 | Translate this (#42) | ✅ | #296 |
+| 6 | Explain this in the context menus (#290) | ✅ | #294 (citing docs: Chat 9) |
+| 7 | Sidebar chat in all editors (#291) | ✅ | #298 #325; Chat 4 (#299) shows the context chip |
+| 8 | Footer integration of agent status | ☐ | **Footer 1**: one item in the global status bar (the viewport dot, Editors 5, stays dropped) |
+| 9 | Orchestration layer + expanded domain tools (#71) | ☐ | Tools 1, 3, 5, 7–9; Orchestrate 1–2; Teams → Tier 5 |
+| 10 | Quick tools in every editor | ☐ for review | **Coworker operators** (Wand 0–5, Sequencer first) + **Spell Book** (Spell 1–3; quick prompts #300 become prompt spells) |
+| 11 | Security checks | ◐ token + permissions done | Security 1–5 |
+| 12 | Procedural first + promote to assets | ☐ new | Procedural 1–3 |
+
+### 0.2 Strategy
+
+1. **Operators, not canned prompts.** Chores become ordinary-looking operators (wand
+   badge on the icon) in the menus and Bforartists toolshelf tabs where related native
+   operators live. Mostly tested code; the **active engine** answers only judgment calls;
+   preview and one undo.
+2. **Spells for what's yours and for wizard workflows.** The **Spell Book** (the one
+   dedicated panel) holds shipped wizard spells, prompt spells (#300) and your own:
+   recorded from a chat turn or your clicks, published as toolshelf icon buttons, replayed
+   with no model.
+3. **Procedural first.** Prefer library node groups and parametric results; linear only
+   when asked; *Make Parametric* promotes results to assets.
+4. **Wizards where it needs eyes.** When a job is neither scriptable nor procedural
+   (cutting footage, reframing), the engine looks at the material, proposes, and builds
+   editable results (e.g. compositor node groups per shot) — workflow 4.
+5. **Security before reach.** Security 1–2 land before recorded/shared spells.
+
+### 0.3 Order (critical path)
+
+```
+Security 1 ─► Security 2–4
+Wand 0 spike + icons ─► Wand 1 framework ─► Wand 2 Sequencer (Edit from Footage) ─► Wand 3 Nodes
+Tools 1 + Tools 5 + GPU 6 (#324) ─► Wand 2
+Wand 1 ─► Spell 1 Spell Book (+ #300 prompt spells) ─► Spell 2 recording ─► Procedural 3 nudge
+Procedural 1 ─► Tools 3 ─► Procedural 2 Make Parametric
+Tools 7 + 8 + 9 ─► organize / fix operators ─► Orchestrate 1 ─► Orchestrate 2
+Tools 2 ─► Text Editor 1–4 ─► Spell 3
+```
+
+Batches (each ends in a test round): **A** Security 1–2, Wand 0, Tools 1, Footer 1,
+Procedural 1 · **B** Wand 1, Tools 5, GPU 6, Tools 3 · **C** Wand 2 (Sequencer), Spell 1,
+Tools 7 · **D** Wand 3 (Nodes), Spell 2, Procedural 2–3, Tools 8–9, Orchestrate 1 ·
+**E** Tools 2 + Text Editor 1–4, Spell 3, Orchestrate 2, Security 3–5 · stretch Wand 4–5
+→ **Test 3 + Test 5** → release.
+
+### 0.4 Cut line
+
+**In**: the table above. **Tier 5**: agent teams, co-pilot and critic (Teams 1–3), batch
+across files, export/UV/LOD pipeline, further wizard spells, Rig 1–2 (unless tools finish
+early), Runtime 3, migrating the wand icon set into Bforartists, the asset-library
+ecosystem built with the other add-on (`plan_tier5c_artist_automation.md` §7).
+
+### 0.5 Audit notes (2026-10-20/21)
+
+| Finding | Action |
+|---|---|
+| #219 (placement tools) closed as completed | Only a guidance rule shipped (#257); no tools → **Tools 7** |
+| Chat 1 (native markdown) | Still no `label_markdown` use in the add-on; open as #301 |
+| Quick prompts (#300) vs operators | #300 kept as **prompt spells** in the Spell Book |
+| Editors 5 (viewport dot) dropped | Footer 1 is the status bar instead — your goal 8 |
 
 ---
 
@@ -235,4 +333,5 @@ native API has no tables, (3) keep the LaTeX→Unicode pre-pass. Moved from Tier
 - 2026-10-06: ACP research (4h draft).
 - **2026-10-16: Full audit. ACP + new Tier 4i engine parity become lane 1; 4b rewritten; task board created; fishing case study and Scenario added to the comparison.**
 - **2026-10-16 (review)**: "External Harness" name kept (tooltips instead of a rename); defaults for code execution, Coworker-only tools and session token accepted; minimum version 5.3 with native `label_markdown()` replacing our renderer (moved from Tier 5 to task B0); the Blender Buddy provenance item dropped.
+- **2026-10-21: The four workflows (§0).** Coworker operators in native places (wand badge, no "Magic" brand), the Spell Book (shipped wizard spells, prompt spells for #300, your own; replay with no model), procedural first + Make Parametric, Sequencer pack first with a creative *Edit from Footage* wizard; plans in `plan_tier4m_coworker_operators.md`, ideas and the asset-library notes in `plan_tier5c_artist_automation.md`.
 - **2026-10-20: Tier 4a review.** Lane A (editors) is nearly closed: the Coworker editor, the compact chat in every editor's sidebar with *Use editor context only* (#298), Explain This (#290) and Translate (#42) in the right-click menus, permissions Strict / Permissive / Auto (#292). **Dropped:** viewport agent feedback (Editors 5), less in your face. **Moodboard** stays in Tier 5. Contextual, domain-aware operators per editor come with lanes F / G. The remaining Tier 4 tasks are logged one issue per task: #299-#324 (see the task board).

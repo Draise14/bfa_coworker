@@ -240,15 +240,17 @@ AGENT_MODE_ITEMS: list[tuple[str, str, str]] = [
 
 # How much the chat asks before tools run (#240), for every engine.
 APPROVAL_MODE_ITEMS: list[tuple[str, str, str, str, int]] = [
-    ("ASK", "Ask",
-     "Ask before each change to the scene: Allow once, Allow this turn, or Deny. Looking never asks",
-     "LOCKED", 0),
-    ("RISKY", "Semi-auto",          # the id stays RISKY: saved settings keep working
-     "Changes run on their own; ask only before saving or opening files, quitting, deleting, exporting "
-     "or running another program", "UNLOCKED", 1),
-    ("AUTO", "Auto",
-     "Never ask: everything runs straight away (the agent's own tools still follow Only Coworker Tools)",
-     "AUTO", 2),
+    # Adjectives for how much freedom the tools get, strictest first (the ids stay: saved settings
+    # keep working).  The tooltips carry the detail.
+    ("ASK", "Strict",
+     "Strict: it asks before each change to the scene (Allow once, Allow this turn, or Deny). Looking "
+     "around never asks", "LOCKED", 0),
+    ("RISKY", "Permissive",
+     "Permissive: changes to the scene run on their own; it asks only before saving or opening files, "
+     "quitting, deleting, exporting or running another program", "UNLOCKED", 1),
+    ("AUTO", "Auto",               # not "Free": that reads as the price
+     "Auto: nothing asks, everything runs straight away (the agent's own tools still follow Only "
+     "Coworker Tools)", "AUTO", 2),
 ]
 
 OPERATING_MODE_ITEMS: list[tuple[str, str, str, str, int]] = [

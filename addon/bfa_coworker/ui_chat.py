@@ -5483,15 +5483,19 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
             restart_row.operator("bfacw.agent_restart", icon="LOOP_BACK", text="Restart Coworker")
 
         # -- Mode indicator --
+        external = prefs.operating_mode == "EXTERNAL_AGENT"
         if not is_harness:
-            mode_row = layout.row(align=True)
-            if prefs.operating_mode == "REMOTE_API":
-                mode_row.label(text="Mode: Remote API", icon='URL')
-            else:
-                mode_row.label(text="Mode: Local LLM", icon='CONSOLE')
+            from .shared import OPERATING_MODE_ITEMS
+            name, icon = next(((i[1], i[3]) for i in OPERATING_MODE_ITEMS if i[0] == prefs.operating_mode),
+                              ("Local LLM", 'CONSOLE'))
+            if external:
+                preset = _selected_agent_preset(prefs)
+                if preset is not None:
+                    name = "{:s} ({:s})".format(name, preset.name)
+            layout.row(align=True).label(text="Mode: " + name, icon=icon)
 
-        # -- Tool count --
-        if not is_harness and state.mcp_server_running:
+        # -- Tool count (our own turn loop's; the agent lists its tools itself) --
+        if not is_harness and not external and state.mcp_server_running:
             if state.tool_count > 0:
                 layout.label(text="Tools: {:d} loaded".format(state.tool_count), icon='MODIFIER')
             else:
@@ -5502,20 +5506,21 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
 
         # -- LLM info --
         if not is_harness:
-            llm_state = llm_manager.get_state()
-            if llm_state.is_running:
-                _draw_multiline(layout, "Model: {:s}".format(llm_state.model_name or "Local LLM"))
-            elif llm_state.download_active and llm_state.download_kind == "model":
-                prog_row = layout.row()
-                prog_row.scale_y = 0.6
-                pct = llm_state.download_progress_pct
-                if pct > 0:
-                    prog_row.progress(factor=pct / 100.0, type='BAR')
-                else:
-                    prog_row.label(text="Loading model...", icon='SORTTIME')
-            llm_cfg = llm_manager.get_config()
-            if llm_cfg.mode == "remote" and llm_cfg.remote_model:
-                _draw_multiline(layout, "Model: {:s}".format(llm_cfg.remote_model))
+            if not external:        # the local / remote model: not what the External Agent runs
+                llm_state = llm_manager.get_state()
+                if llm_state.is_running:
+                    _draw_multiline(layout, "Model: {:s}".format(llm_state.model_name or "Local LLM"))
+                elif llm_state.download_active and llm_state.download_kind == "model":
+                    prog_row = layout.row()
+                    prog_row.scale_y = 0.6
+                    pct = llm_state.download_progress_pct
+                    if pct > 0:
+                        prog_row.progress(factor=pct / 100.0, type='BAR')
+                    else:
+                        prog_row.label(text="Loading model...", icon='SORTTIME')
+                llm_cfg = llm_manager.get_config()
+                if llm_cfg.mode == "remote" and llm_cfg.remote_model:
+                    _draw_multiline(layout, "Model: {:s}".format(llm_cfg.remote_model))
 
             # -- Token usage (issue #69) --
             # Both llama-server and OpenAI-compatible remote APIs report a

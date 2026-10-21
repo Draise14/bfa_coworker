@@ -525,8 +525,10 @@ class TestChatView(unittest.TestCase):
         far = self.canvas(mouse=(10, 150))                     # mouse far away: still there, faint (#279)
         view.draw(far, rect, long)
         faint = scroll_cmds(far)
-        self.assertTrue(faint)
-        self.assertAlmostEqual(faint[0].color[3], style.scroll.inner[3] * cv._SCROLL_IDLE_ALPHA)
+        self.assertEqual(len(faint), 1, "far away: only a thin, faint handle, like a region's scrollbar")
+        self.assertAlmostEqual(faint[0].color[3], style.scroll.item[3] * cv._SCROLL_IDLE_ALPHA)
+        self.assertAlmostEqual(faint[0].rect.w, cv.ChatView._bar_widths(style)[0])
+        self.assertFalse([cmd for cmd in far.commands if cmd.kind == "outline" and cmd.rect.x > 380])
         self.assertIn("scroll_handle", [wid for _, wid in far.hit_areas])
         zoomed = lay.Canvas(st.Style().with_zoom(2.0), lay.fixed_measure(0.55), lay.InteractionState())
         self.assertEqual(cv.ChatView._bar_widths(zoomed.style), cv.ChatView._bar_widths(style))   # not zoomed

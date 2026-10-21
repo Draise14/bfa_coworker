@@ -343,7 +343,8 @@ class BFACW_MT_approval_mode(bpy.types.Menu):  # type: ignore[misc]
         for ident, _name, _desc, _icon, _n in APPROVAL_MODE_ITEMS:
             col.prop_enum(prefs, "approval_mode", ident)
         col.separator()
-        col.label(text="Switching forgets every \"Always\"", icon='INFO')
+        col.label(text="Applies at once, also while it runs", icon='INFO')
+        col.label(text="Switching forgets every \"Always\"", icon='BLANK1')
 
 
 def _picker_for(category: str) -> dict | None:
@@ -546,7 +547,7 @@ def draw_external_agent_setup(layout, context, compact: bool = False) -> None:
         opt = box.row()
         opt.enabled = not state.mcp_server_running
         opt.prop(prefs, "external_agent_only_coworker_tools")
-        opt.prop(prefs, "approval_mode", text="")         # Ask asks before Blender tools too (#240)
+        # Approval is the chat's lock button (it applies at once, also while the agent runs: #271).
         tools = box.row()
         tools.enabled = not state.mcp_server_running
         tools.prop(prefs, "external_agent_tools_on_demand")

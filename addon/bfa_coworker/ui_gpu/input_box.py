@@ -611,7 +611,7 @@ class InputBox:
             canvas.label(Rect(panel.x + pad, top - row_h, panel.w - 2 * pad, row_h), "Nothing matches", soft)
         for i, sug in enumerate(self.suggestions):
             r = Rect(panel.x + pad * 0.25, top - (i + 1) * row_h, panel.w - pad * 0.5, row_h)
-            widget_id = "suggest:{:d}".format(i)
+            widget_id = "mention:{:d}".format(i)     # not "suggest:": the reply's buttons use that (#268)
             current = i == self.suggestion_index
             if current or canvas.state.hovered(r):
                 canvas.fill(r, style.button.inner_sel if current else style.tooltip.inner_sel,

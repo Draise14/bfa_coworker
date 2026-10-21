@@ -193,6 +193,55 @@ class TestLayout(unittest.TestCase):
         self.assertEqual([round(f.rect.x - b.x) for f, b in zip(fills, buttons)], [0, -1, -1])
         self.assertEqual(sf.row_corners(0, 1), "")
 
+    def test_every_widget_everywhere_has_a_tooltip(self):
+        # #268: every widget the GPU chats draw, in frames that show them all: cards, the
+        # harness notice, Show all, a link, thumbnails, the scrollbar, the grip, the @ list.
+        ids = set()
+
+        def frame(surface, width=600, **kw):
+            canvas = lay.Canvas(st.Style(), lay.fixed_measure(0.55), surface.interaction())
+            surface.draw(canvas, lay.Rect(0, 0, width, 700), kw.pop("history", []), **kw)
+            ids.update(w for _r, w in canvas.hit_areas)
+
+        long_result = "\n".join("line {:d}".format(i) for i in range(30))
+        hist = [{"role": "user", "content": "Make it [attached: ref.png]", "turn_start": True},
+                {"role": "reasoning", "content": "word " * 300},
+                {"role": "tool", "name": "get_objects_summary", "content": long_result},
+                {"role": "assistant", "content": "Done, see [the docs](https://docs.blender.org).\n\n"
+                                                 "```python\nx = 1\n```\nShall I add a roof?"}] * 3
+        top = sf.TopBar(mode_label="Local", mode_icon="CONSOLE", status="Error: x", status_icon="ERROR", error=True,
+                        chat_modes=(("AGENT", "Coworker", ""), ("ASK", "Ask", ""), ("PLAN", "Plan", "")))
+        surface = sf.ChatSurface(compact=True)
+        surface.on_resize = lambda h: None
+        surface.tools = (("new_thread", "ADD"), ("mention", "OUTLINER_OB_MESH"), ("revert_turn", "LOOP_BACK"),
+                         ("", ""), ("attach_menu", "IMAGE_DATA"), ("attach_render", "RENDER_STILL"),
+                         ("attach_screen", "MAKE_SCREENSHOT"))
+        surface.box.attachment = "ref.png"
+        surface.box.approval = ("Ask", "LOCKED")
+        surface.view.revertable = True
+        surface.view.expanded.update({"t0", "t1", "t2"})
+        surface.view.scroll = 400.0
+        frame(surface, history=hist, top=top, approval=sf.Approval(title="Coworker wants to run x"))
+        frame(sf.ChatSurface(), history=hist)                                         # the editor size
+        question = sf.Approval(title="Which?", action="answer", buttons=(("c0", "Red", ""), ("c1", "Blue", "")))
+        frame(sf.ChatSurface(), history=hist, approval=question)
+        plan = sf.Approval(title="The plan is ready", action="plan_card",
+                           buttons=(("start", "Start the Plan", "PLAY"), ("refine", "Keep Refining", "GREASEPENCIL")))
+        frame(sf.ChatSurface(), history=hist, approval=plan)
+        notice = sf.Notice("External Harness", "WORLD", ("x",), (("copy_log", "Copy Log", "COPYDOWN"),
+                                                               ("configure", "Configure", "PREFERENCES")))
+        frame(sf.ChatSurface(), notice=notice)
+        typing = sf.ChatSurface()
+        typing.box = ib.InputBox(focused=True, provider=lambda q: [ib.Suggestion("Cube", "@Cube", "object")],
+                                 categories=(("object", "Objects", "OBJECT_DATA"),))
+        for ch in "@cu":
+            typing.box.handle_key(ib.Key(ch.upper(), unicode=ch))
+        frame(typing)
+        for prefix in ("approve:", "answer:", "plan_card:", "notice:", "more:", "link:", "img:", "scroll_",
+                       "resize", "mention:", "mcat:", "tool:", "suggest:", "copy", "mode:", "ws:", "input"):
+            self.assertTrue(any(w.startswith(prefix) for w in ids), prefix)      # the frames really show it
+        self.assertEqual(sorted(w for w in ids if not sf.tip_for(w)), [])
+
     def test_tool_row_along_the_bottom(self):
         # #214: the sidebar chat's icon buttons in a row along its bottom edge, under the input,
         # left to right; the rest of the row is still the resize grip.

@@ -70,6 +70,19 @@ TIPS: dict[str, str] = {
     "mode:PLAN": "Plan: it makes a step plan to carry out later, with any engine",
     "notice:copy_log": "Copy what your client did in Blender",
     "notice:configure": "External Harness settings",
+    "notice:bridge": "Start or stop the bridge your outside client talks to",
+    "notice:copy_config": "Copy your client's config, to paste into its MCP settings",
+    "input": "Your message: Enter sends, Shift+Enter is a new line, @ mentions, / runs an agent command",
+    "queue": "Queue this message: it goes when the running turn ends",
+    "resize": "Drag to make the chat taller or shorter",
+    "scroll_track": "Click to page up or down",
+    "scroll_handle": "Drag to scroll the chat",
+    "approve:once": "Allow this one step",
+    "approve:always": "Allow this tool for the rest of the session (switching the approval mode asks again)",
+    "approve:deny": "Don't run it: the model is told you declined",
+    "plan_card:start": "Carry out the plan now, step by step (Coworker mode, the engine that is on)",
+    "plan_card:refine": "Hide this card and type what should change in the plan",
+    "mcat:": "Show every kind",
 }
 TIP_PREFIXES: tuple[tuple[str, str], ...] = (
     ("copymsg:", "Copy the reply"),
@@ -81,6 +94,11 @@ TIP_PREFIXES: tuple[tuple[str, str], ...] = (
     ("img:", "Open this image in an Image Editor"),
     ("suggest:", "Send this as your next message (No, something else: you finish it in the input)"),
     ("ws:", "Fold or unfold the Workshop: the turn's tool steps"),
+    ("more:", "Show the whole entry, or fold it again"),
+    ("answer:", "Answer with this choice"),
+    ("mention:", "Insert this into your message (Enter or Tab)"),
+    ("mcat:", "Show only this kind"),
+    ("link:", "Open this link in your browser"),
 )
 TIP_DELAY = 0.5      # seconds the mouse rests before a tooltip shows, like Blender's
 

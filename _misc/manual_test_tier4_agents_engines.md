@@ -63,6 +63,25 @@ Your ticked sections A-N stay below as the record.
 
 - [x] The list "What your client did in Blender" scrolls with the wheel. (#243)
 
+## R5b. Refinement pass (#265-#283)
+
+- [ ] Image popover: picker, a small preview (not super tall), Send Once; no File / Render / Screen row.
+      Editor toolshelf Attach: just its three buttons. (#265)
+- [ ] From the **floating** Coworker window: **Attach Screen** veils every window; click the main window's
+      3D View: that view is attached. **Attach Render** works there too, and with no 3D View open at all
+      it renders the scene camera. (#266, #267)
+- [ ] Hover any button in the chats -- cards, Show all, links, the grip, the scrollbar, the @ list --
+      a tooltip. (#268)
+- [ ] The editor's image buttons: one joined row of squares; joined rows everywhere draw one line
+      between buttons, not two. (#269, #283)
+- [ ] A closing question gives **two** buttons: "A, or B?" both halves; else Yes and "No, something
+      else..." (puts "No, " in the input). (#270)
+- [ ] While the agent runs, the lock button switches Ask / Risky / Auto at once. (#271)
+- [ ] Plan > **Edit**: the text opens at the top with the goal and steps; change a step, it shows in the
+      Plan panel. (#272)
+- [ ] History: your older chats (e.g. "Coworker test - hallway") have the **Open** icon again. (#273)
+- [ ] The chat's scrollbar always shows faintly; Ctrl+wheel zoom doesn't make it fatter. (#279)
+
 ## R6. Still open from before
 
 - [ ] (Optional, was E.2) Log out of Claude Code, Start: "Claude Code isn't logged in" + how to log in. (#153)

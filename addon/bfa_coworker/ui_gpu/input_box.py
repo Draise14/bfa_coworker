@@ -502,8 +502,8 @@ class InputBox:
         for widget_id, label, icon, active, button_w in self._buttons(canvas):
             button = Rect(right - button_w, box.y + margin, button_w, button_h)
             if canvas.button(button, widget_id, label, active=active, icon=icon):
-                if widget_id == "stop":
-                    self.actions.append(("stop", ""))
+                if widget_id in ("stop", "approval_menu"):     # the permissions dropdown is no Send
+                    self.actions.append((widget_id, ""))
                 else:
                     self.send()      # Send, or Queue (the host queues a send while a turn runs)
             right = button.x - gap

@@ -63,17 +63,20 @@ class TestApprovals(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.box.answer("maybe")
 
-    def test_always_lasts_the_session(self):
+    def test_allow_this_turn_covers_every_tool_until_the_next_turn(self):
+        # "Always" = Allow this turn: every tool waiting now, and every one asked later in the turn.
         self._ask("bash")
         self._ask("bash")
         self._ask("write")
         self.box.answer("always")
-        self.assertEqual(self.answers, [("bash", "always"), ("bash", "always")])
-        self.assertTrue(self.box.allowed_always("bash"))
-        self.assertEqual(self.box.current().tool, "write")
-        self.box.end_session()
+        self.assertEqual(self.answers, [("bash", "always"), ("bash", "always"), ("write", "always")])
+        self.assertIsNone(self.box.current())
+        self.assertTrue(self.box.allowed_always("read"))            # a tool not asked about yet
+        self.box.new_turn()                                          # your next message
         self.assertFalse(self.box.allowed_always("bash"))
-        self.assertEqual(self.answers[-1], ("write", "cancel"))
+        self._ask("bash")
+        self.box.end_session()
+        self.assertEqual(self.answers[-1], ("bash", "cancel"))
 
     def test_stop_cancels_everything(self):
         changes = []

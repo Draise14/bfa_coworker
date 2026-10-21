@@ -1,10 +1,89 @@
 # BFA Coworker — Tier 4 Master Plan
 
-**Revised**: 2026-10-16. Full audit of all Tier 4 plans against v1.1.37 / `main` @ deb417b
-**Status**: 📝 Ready for review. Implementation starts per lane after review, one branch per task group
+**Revised**: 2026-10-20 (§0: release goals, strategy, cut line, audit against `main` @ 2a5cb56). Earlier full audit: 2026-10-16 against v1.1.37 @ deb417b
+**Status**: 🚧 In progress. Engines/agents half done (Test 0–2 passed); §0 plans the rest of the release
 **Previous version**: `Plans History/plan_tier4_master_coordination_v1.md` (historical
 decisions, detailed streaming/checkpoint designs that have since shipped)
 **Task board**: `plan_tier4_task_board.md`
+
+---
+
+## 0. Next major release — goals, strategy, cut line (audit 2026-10-20)
+
+**Where we are.** The engine and agent half of Tier 4 is done: three engines behind one
+seam, External Agent over ACP, shared plan/questions/Revert/short results/tools on
+demand, the GPU Coworker editor + compact 3D View sidebar, history, Auto mode,
+permissions. Test gates 0–2 passed. What's left is the **"where you work"** half (the
+editors), the **tools** half (domain + orchestration) and **security**.
+
+### 0.1 The goals and what each still needs
+
+| # | Goal | Status | Release tasks (board) |
+|---|---|---|---|
+| 1 | Refinement | ✅ | Keep fixing from the test list |
+| 2 | Dedicated global multi-domain chat editor | ✅ | — |
+| 3 | CHOYA guided buttons + prompt injection while talking | ✅ | Wizards via GPU 6 + Wizard 1 |
+| 4 | Text Editor as artist→developer IDE (#52) | ☐ | Tools 2 → Text Editor 1–4 |
+| 5 | Translate this (#42) | 🟡 planned | Chat 3 |
+| 6 | Explain this, every context menu (#290) | 🟡 planned | Chat 2 (widened) |
+| 7 | Sidebar chat in all editors (#291) | 🟡 3D View only | Sidebar 1 |
+| 8 | Footer integration of agent status | ☐ | Footer 1 |
+| 9 | Orchestration layer + expanded domain tools (#71) | ☐ | Tools 1–3, 5, 7–9; Orchestrate 1–2 |
+| 10 | Quick prompt menu in every editor | ☐ design | Quick 1 → Quick 2 → Wizard 1 |
+| 11 | Security checks | 🟡 | Security 1–5 |
+
+### 0.2 Strategy
+
+1. **One entry point per editor, three doors per capability.** Every new capability is a
+   server-side MCP tool (all engines get it) reachable from the chat, the **Coworker ▸**
+   quick menu (Quick 1/2) and, later, the co-pilot. Explain, Translate, quick actions and
+   wizards all live behind that one entry point instead of scattering menu items.
+2. **Tool first, model optional.** Day-to-day chores (organize, rename, place, fix,
+   frame) are deterministic tools with a dry run and one undo, usable without a model.
+   The model chooses and chains them. This is what makes 7–14B local models reliable
+   and gives the release value even with no engine running. Catalogue:
+   `plan_tier5c_artist_automation.md`.
+3. **Context comes from where you click.** Sidebar 1 + Chat 4 pass the editor, mode and
+   selection, so the same words do the right thing in the VSE, the Node editor or the
+   Text Editor.
+4. **Security before reach.** Security 1–4 land before the quick menu and sidebars put
+   the agent one click away from every editor.
+
+### 0.3 Order (critical path)
+
+```
+Security 1 ─► Security 2–4
+Chat 4 (context) ─► Sidebar 1 ─► Footer 1
+Quick 1 spike ─► Chat 2 Explain + Chat 3 Translate ─► Quick 2 catalogue
+Tools 7 + Tools 8 ─► Wizard 1 (GPU 6) ─► Orchestrate 1 ─► Orchestrate 2
+Tools 2 ─► Text Editor 1–4
+Tools 1, 3, 5, 9 in parallel (one domain per PR)
+```
+
+Suggested batches (each ends in a test round): **A** Security 1–2, Chat 4, Quick 1,
+Tools 7 · **B** Chat 2–3, Sidebar 1, Footer 1, Tools 8 · **C** Quick 2, Wizard 1,
+Orchestrate 1, Tools 1/3/9 · **D** Tools 2 + Text Editor 1–4, Orchestrate 2,
+Security 3–5 → **Test 3 + Test 5** → release.
+
+### 0.4 Cut line
+
+**In the release**: the table above. **Moved to Tier 5**: agent teams, co-pilot and
+critic (Teams 1–3), recipes/macros and batch across files, export/UV/LOD pipeline,
+further wizards, Rig 1–2 (unless Tools 1–3 finish early), Editors 6 (floating window),
+Runtime 3. Ideas for those: `plan_tier5c_artist_automation.md`.
+
+### 0.5 Audit corrections (2026-10-20)
+
+| Finding | Action |
+|---|---|
+| Board showed Chat 5 open | Done (#168 #278 #288) |
+| Board showed Chat 6 open | Revert done (#170); Edit & resend / Retry remain |
+| Board showed Runtime 1 open | Mostly done (#189 #289 #292); path guard + External repeat guard → Security 3 |
+| #219 (placement tools) closed as completed | Only a guidance rule shipped (#257); no tools → **Tools 7** |
+| Chat 1 (native markdown) marked unblocked | Still 0 uses of `label_markdown` in the add-on; open |
+| Editors 5 (viewport dot) | Replaced by **Footer 1** (status bar) |
+| Text Editor 5 (prompt templates) | Folded into **Quick 2** (one catalogue for every editor) |
+| §3 lanes table below predates the engine work | Kept for history; the release order is §0.3 |
 
 ---
 

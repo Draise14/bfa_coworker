@@ -21,6 +21,27 @@ from `main`, no stacked PRs. Only one open PR at a time on `agent_controller.py`
 
 ---
 
+## Release goals — the next major release (audit 2026-10-20)
+
+Your Tier 4 goals, checked against `main` (2a5cb56). This is the cut line for the
+release; anything not listed here waits for Tier 5. Strategy and order: master §0.
+
+| Goal | Status | Tasks left for the release |
+|---|---|---|
+| Refinement | ✅ | Polish / test rounds done (#203–#286); keep fixing from your test list |
+| Dedicated global multi-domain chat editor | ✅ | — (GPU 4, Chat 7) |
+| CHOYA guided buttons + prompt injection while talking | ✅ | Chat 5 done (#168 #278 #288); Queue + Plan mode in place. Wizards = GPU 6 |
+| Text Editor as an artist→developer IDE (#52) | ☐ | Tools 2 → Text Editor 1–4 (Text Editor 5 folds into Quick 2) |
+| Translate this (#42) | 🟡 planned only | Chat 3 (no code yet) |
+| Explain this, in every context menu (#290) | 🟡 planned only | Chat 2, widened to every context menu (no code yet) |
+| Contextual sidebar chat in all editors (#291) | 🟡 3D View only | Sidebar 1 (compact chat in every editor with a sidebar) |
+| Footer integration of agent status | ☐ | Footer 1 (replaces Editors 5) |
+| Orchestration layer (#71) + expanded domain tools | ☐ | Tools 1–3, 5, **7–9** (new); Orchestrate 1–2 (new). Teams 1–3 → Tier 5 |
+| Quick prompt menu in every editor | ☐ needs design | Quick 1 (spike) → Quick 2 (catalogue) → Wizard 1 |
+| Security checks | 🟡 token + permissions done | Security 1–5 (new) |
+
+---
+
 ## Where we are
 
 | Status | Task | PR |
@@ -113,6 +134,9 @@ Plan: `plan_tier4g_domain_tooling.md`. Each task ships its prompt chapter and re
 | ☐ | **Tools 4**: Saving & export | G4 | Save, unsaved check, pack, export selection, incremental save; risky ones ask first | Engine 5 (ship the read-only check first) | M | Export asks; incremental save versions correctly | |
 | ☐ | **Tools 5**: Review sheet | G5 | One tiled image of several views (front, back, below, camera) for vision checks | — | S | One labelled image; costs about one image | |
 | ☐ | **Tools 6**: Long jobs | G6 | Long bakes/renders run in the background with progress | — | S | A 10-minute bake doesn't time out the agent | |
+| ☐ | **Tools 7**: Placement & orientation (#219) | 5c §2.2 | `place(on_top_of / next_to / inside, gap)`, `align`, `distribute`, `drop_to_floor`, reading world-space bounds. *#219 was closed with only a guidance rule (#257); no tools exist yet* | — | S | "Put the lamp on the table, 5 cm from the edge" lands correctly on a 7B model | |
+| ☐ | **Tools 8**: Organize my scene | 5c §2.1 | `scene_audit`, `organize_scene(rules)`, `batch_rename`, `cleanup`, `relink_missing`. Dry run first, apply as one undo; also runnable without a model | — | M | A messy test scene is sorted, renamed and cleaned in one confirmed step; audit numbers before/after | |
+| ☐ | **Tools 9**: Look-dev & prep helpers | 5c §2.3–2.4 | `frame_camera`, `make_turntable`, `material_from_folder`, `fix_common` | — | M | Each runs from chat and from the quick menu with a preview | |
 
 ## Chat features — explain, translate, ask, undo, sessions
 
@@ -121,11 +145,11 @@ Plan: `plan_tier4b_competitor_ux_analysis.md`
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
 | ☐ | **Chat 1**: Native markdown, 5.3 minimum | B0 | Minimum 5.3; use Blender's `label_markdown()` wherever chat text is still drawn by **panels** (native list fallback, panel answers) and delete our old panel renderer. The GPU chat draws its own markdown (GPU 2), since `label_markdown` only works inside panels | Engine 3 | S | Panel-drawn replies use `label_markdown` on Blender + Bforartists 5.3 | |
-| ☐ | **Chat 2**: Explain this | B1 | Right-click a property, node or object → a short answer from the bundled docs, with the source; `/explain` | — | M | Property, node, object each give a cited answer on all engines | |
+| ☐ | **Chat 2**: Explain this (#290) | B1 | **Every context menu**: buttons/properties and operators (`WM_MT_button_context`), objects, nodes, Outliner items, strips, and the editor itself ("explain this editor"). Collects a small target card (RNA path, label, tooltip, value, editor) and asks in **Ask mode**, answering from the bundled docs with the source; `/explain`. Lives in the **Coworker ▸** submenu (Quick 1) | — | M | Property, operator, node, object, strip and an editor each give a cited answer on all engines | |
 | ☐ | **Chat 3**: Translate text in the scene (#42) | B1 | Right-click a text field, 3D text or text strip → **Translate with Coworker…** → language (remembered) → one small model call → confirm → written back as one undo step. Fast on light models; no full agent turn | — | S | A 3D text, a strip and a node label translate and undo cleanly | |
 | ☐ | **Chat 4**: "Where am I" chip | B6 | A line above the input (editor · mode · selection), read live at send time | — | S | Same prompt in two editors picks different correct tools | |
-| ☐ | **Chat 5**: Questions as buttons | B2 | `ask_user` choices as buttons; the suggested next step as [Do it] [Something else] | Engine 6 | S | A click resumes the same turn on all engines | |
-| ☐ | **Chat 6**: Undo the agent's turn | B4 | Revert turn (chat + scene), Edit & resend, Retry | Engine 6 | M | Revert restores chat + scene (Local), scene + note (External) | |
+| ✅ | **Chat 5**: Questions as buttons | B2 | `ask_user` choices as buttons; the suggested next step as [Do it] [Something else] | Engine 6 | S | A click resumes the same turn on all engines | #168 #278 #288 |
+| 🟡 | **Chat 6**: Undo the agent's turn | B4 | Revert turn (chat + scene), Edit & resend, Retry | Engine 6 | M | Revert restores chat + scene (Local), scene + note (External). *Revert done (#170, one undo step per turn, every engine); Edit & resend and Retry left* | #170 |
 | ✅ | **Chat 7**: Chat history panel | B3 | Your chats in one list, like VS Code / Claude: **not tied to the .blend**. A collapsible **History** panel (like Queue) in the Coworker editor and the 3D View tab: title (your first message, renamable), when, which engine / agent, the .blend it started in. Click to continue it (External Agent resumes its own session); New Thread keeps the old chat in the list; delete, pin, search. Opening a .blend still shows the chat you last used there. One file per chat + an index (today's per-.blend `default.json` files move in) | Agent 6 | M | Yesterday's chat continues from the list, in another .blend, on each engine | #187 |
 | ☐ | **Chat 8**: Run & fix shown code | B5 | Run button on code blocks (Ask mode) with a safety scan, undo, and Fix | — | M | Broken snippet → Run → Fix → Run works | |
 | ☐ | **Chat 9**: Keep docs honest | B7 | Docs and skills record their sources; a checker flags drift; review the pre-5.3 skills | Chat 1, Skills 4 | S | Drifted docs listed; old version skills trimmed or justified | |
@@ -136,7 +160,7 @@ Plan: `plan_tier4f_agent_intelligence.md`
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
-| ☐ | **Runtime 1**: Safe mode & loop guard | F1 | Trusted / Safe / Strict, path guard, stop the same call repeating 3× | Engine 5 | M | Safe mode asks before running code; 3× repeat escalates | |
+| 🟡 | **Runtime 1**: Safe mode & loop guard | F1 | Trusted / Safe / Strict, path guard, stop the same call repeating 3×. *Done: Permissions Strict / Permissive / Auto and Allow this turn (#289 #292), risky steps ask first (#189), the local loop's repeat stop rule (1.1.37). Left: path guard for file-writing code, the repeat guard for External Agent turns → Security 3* | Engine 5 | M | Safe mode asks before running code; 3× repeat escalates on every engine | #189 #289 #292 |
 | ☐ | **Runtime 2**: Skills on demand | F2 | Only skill names + descriptions in the prompt, bodies loaded when needed (also for external clients) | Skills 5 | S | Prompt shrinks measurably on Local 16K | |
 | ☐ | **Runtime 3**: Local speed | F3 | llama-server metrics, parallel slots, auto-tune | — | M | tok/s in Status; no benchmark regression | |
 
@@ -150,7 +174,7 @@ Plan: `plan_tier4c_text_editor_ide_agent.md`
 | ☐ | **Text Editor 2**: Edit with Coworker | C2 | Right-click → rewrite the selection in place, streamed, one undo step | Text Editor 1 | M | Selection rewritten; Ctrl+Z restores | |
 | ☐ | **Text Editor 3**: Run → fix | C3 | Run the script, jump to the error, fix the range | Chat 8 | S | Error line found; fix applied | |
 | ☐ | **Text Editor 4**: Recipes panel | C4 | The script's parameter block as fields; "Rerun with…" | Tools 2 | S | Change a number → script reruns | |
-| ☐ | **Text Editor 5**: Prompt templates | C5 | File-based templates per editor | Text Editor 1 | S | A user template appears and works | |
+| ➜ | **Text Editor 5**: Prompt templates | C5 | *Folded into **Quick 2** (one catalogue for every editor), 2026-10-20* | — | — | — | |
 
 ## Editors everywhere — Coworker editor and sidebars (#26)
 
@@ -162,7 +186,7 @@ Plan: `plan_tier4a_editor_integration.md`
 | ➜ | **Editors 2**: One chat component | A1 | `draw_chat_interface()` that every panel uses | Engine 4 | M | Existing panels use it; no visual change | |
 | ➜ | **Editors 3**: Chat in every sidebar | A2 | *Moved to **GPU 5** (compact sidebars), 2026-10-19* | — | — | — | |
 | ➜ | **Editors 4**: The Coworker editor | A3 | *Moved to **GPU 4** (the editor around the GPU chat), 2026-10-19* | — | — | — | |
-| ☐ | **Editors 5**: Viewport status | A4 | Status dot + focus highlight in theme colours (toggle) | Engine 3 | S | Overlay follows the agent | |
+| ➜ | **Editors 5**: Viewport status | A4 | *Replaced by **Footer 1** (2026-10-20): one status in the status bar instead of a dot per viewport* | — | — | — | |
 | ☐ | **Editors 6**: Floating chat window *(optional)* | A5 | A separate chat window | Editors 4 | S | Opens once; second click focuses it | |
 
 ## Rigging & animation tools
@@ -189,7 +213,41 @@ Plan: `plan_tier4s_skills_cleanroom.md`
 | ☐ | **Skills 7**: Mesh quality check | S6 | `check_mesh_quality`: overlaps, loose parts, open edges, flipped normals, unapplied scale | — | S | Finds each seeded fault | |
 | ☐ | **Skills 8**: Docs for skill packs | S7 | Tool-name stability; using other skill packs with External Harness | — | S | Wiki page reviewed | |
 
-## Agent teams & critics — orchestration layer (#71)
+## Editors, footer and quick menu — Coworker where you work (#291)
+
+Plans: `plan_tier4a_editor_integration.md`, ideas in `plan_tier5c_artist_automation.md` §4–5
+
+| ☐ | Task | Ref | What | Needs | Size | Done when | PR |
+|---|---|---|---|---|---|---|---|
+| ☐ | **Sidebar 1**: Chat in every sidebar (#291) | A2 | The compact GPU chat in the "Coworker" tab of every editor that has a sidebar: Shader / Geometry / Compositor nodes, VSE, Image & UV, Graph, Dope Sheet, NLA, Movie Clip, Spreadsheet, Text, File Browser. Each passes its editor context (Chat 4) so prompts fit the editor; classic panels as fallback | GPU 5 | M | The same chat, same look, in ten editors; a prompt in the VSE picks VSE tools | |
+| ☐ | **Footer 1**: Agent status in the status bar | A4 | One line in the global status bar (`STATUSBAR_HT_header`): engine icon, state (*Thinking · step 3/7 · waiting for you*), a pulse when approval is needed; click focuses the chat. Off in Preferences. Replaces the viewport dot | Engine 3 | S | Status follows the agent in every workspace; an approval request is visible without the chat open | |
+| ☐ | **Quick 1**: Quick menu spike | 5c §4 | Prototype the one entry point: a header button popover **and** a **Coworker ▸** context-menu submenu with Explain / Translate / quick actions / recent prompts / open chat. Check clutter, Bforartists header space, theme | — | S | Screenshots in 3 editors + a decision (header, context menu, or both) | |
+| ☐ | **Quick 2**: Quick-action catalogue | 5c §4 | `quick_actions/<editor>.toml` (user-extendable): each entry runs a tool with preview, a wizard, or a prompt template. Ships with the Tools 7–9 actions. Absorbs Text Editor 5 and the Coworker editor's toolshelf templates | Quick 1 | M | A user-added entry appears in its editor and works; tools run without a model | |
+| ☐ | **Wizard 1**: "Organize my scene" | 5c §5 | The first guided flow (GPU 6): audit → pick rules by buttons → preview → apply → report. Proof that wizards work on every engine and without one | Tools 8, GPU 6 | S | Runs end to end from the quick menu on a test scene; one undo | |
+
+## Orchestration — first layer (#71)
+
+The release ships the first layer; agent teams (Teams 1–3) move to Tier 5.
+
+| ☐ | Task | Ref | What | Needs | Size | Done when | PR |
+|---|---|---|---|---|---|---|---|
+| ☐ | **Orchestrate 1**: Map over selection | 5c §3 | Run one instruction per selected object / strip / node with a progress row; stop or continue on error; one undo for the batch | Tools 8 | M | "Give each selected rock a random grey material" on 30 objects, one undo | |
+| ☐ | **Orchestrate 2**: Missions with evidence | 5c §3 | Each plan step gets a scene checkpoint (a failed step reverts only itself); the mission ends with a validator pass (`scene_audit` + Skills 7) and reports numbers | Engine 6, Skills 7 | M | A 5-step mission with one failing step recovers and ends with an audit report | |
+
+## Security checks
+
+Done: session token (Engine 8), Permissions Strict / Permissive / Auto (#289 #292), risky
+steps ask first (#189), per-window session ids (#85), crash-safe servers.
+
+| ☐ | Task | Ref | What | Needs | Size | Done when | PR |
+|---|---|---|---|---|---|---|---|
+| ☐ | **Security 1**: Threat model + audit | — | One page: bridge, MCP HTTP, ACP agent processes, External Harness configs, downloads (llama-server, models, Poly Haven), the extension repository. Who can reach what; findings become tasks | — | S | `_misc/security_model.md` reviewed; findings filed | |
+| ☐ | **Security 2**: Secrets | — | API keys / HF token / session token never in logs, session exports, Copy Error or screenshots of the prefs; settings backup (#86) stores them separately or not at all | Security 1 | S | Grep of every log/export after a session finds no secret | |
+| ☐ | **Security 3**: Code & file guard | F1 | Path guard for generated code (writes outside the project/temp ask first), network calls from generated code flagged, the 3× repeat guard on every engine | Security 1 | M | A script writing to `C:\Windows` asks; a repeat loop stops on External Agent | |
+| ☐ | **Security 4**: Untrusted content | — | Text from the scene, files and downloads (text blocks, names, asset descriptions) is passed as data, never as instructions; risky steps triggered right after reading such content ask first | Security 1 | S | A text block saying "delete everything" doesn't make the agent do it | |
+| ☐ | **Security 5**: Supply chain | — | Pin and hash-check the llama-server download and vendored deps; keep the extension listing's SHA-256 (#86) | — | S | A tampered download is refused | |
+
+## Agent teams & critics — orchestration layer (#71) · *Tier 5*
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|

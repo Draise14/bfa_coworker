@@ -30,6 +30,7 @@ __all__ = (
     "unregister",
 )
 
+import time
 from types import SimpleNamespace
 from typing import Any, Callable
 
@@ -279,20 +280,38 @@ def _python_path(pointer: Any, identifier: str) -> str:
 
 
 def translate_text(path: str, current: str, language: str, what: str, source: str = "") -> str:
-    """The instruction for the chat: exact, so a small model gets it right too.
-    *source* is the language the text is in ("": let the model detect it)."""
+    """The question for the chat (Ask mode): just the translation back; Coworker writes it in
+    itself (:func:`apply_translation`), so it works on every engine, with or without tools.
+    *source* is the language the text is in ("": let the model detect it). *path* is unused
+    here (kept for the callers): the reply alone is the answer."""
+    del path
     if source:
         what = "{:s} from {:s}".format(what, source)
-    if path.endswith(".as_string()"):          # a Text datablock: edited as a whole
-        text = path[:-len(".as_string()")]
-        return ("Translate {:s} into {:s}: “{:s}”. Edit the text {:s} with execute_blender_code: "
-                "replace just that part with its translation and write it back with {:s}.from_string(...); keep "
-                "line breaks, code, names and placeholders, and change nothing else. Then reply with just the "
-                "translation.").format(what, language, current, text, text)
-    return ("Translate {:s} into {:s}. It is the Python property {:s}, now: \u201c{:s}\u201d. Set it to the "
-            "translation with execute_blender_code ({:s} = \"...\"); keep line breaks, names, numbers and "
-            "placeholders as they are, and change nothing else. Then reply with just the translation.").format(
-        what, language, path, current, path)
+    return ("Translate {:s} into {:s}:\n\n{:s}\n\nReply with only the translated text: no quotes, no notes, "
+            "nothing else. Keep line breaks, names, numbers, code and placeholders as they are.").format(
+        what, language, current)
+
+
+def clean_reply(reply: str) -> str:
+    """The translation out of a reply: without a code fence or surrounding quotes."""
+    text = reply.strip()
+    if text.startswith("```") and text.endswith("```") and text.count("\n") >= 1:
+        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip("\n")
+    for a, b in (("\u201c", "\u201d"), ('"', '"'), ("'", "'"), ("\u00ab", "\u00bb"), ("\u300c", "\u300d")):
+        if len(text) >= 2 and text.startswith(a) and text.endswith(b):
+            text = text[len(a):-len(b)]
+            break
+    return text
+
+
+def splice(full: str, span: tuple[int, int, int, int], new: str) -> str:
+    """*full* with the text from (line, char) to (line, char) replaced by *new*."""
+    lines = full.split("\n")
+    l0, c0, l1, c1 = span
+
+    def offset(line: int, char: int) -> int:
+        return sum(len(x) + 1 for x in lines[:line]) + char
+    return full[:offset(l0, c0)] + new + full[offset(l1, c1):]
 
 
 class BFACW_OT_translate(Operator):  # type: ignore[misc]
@@ -305,6 +324,7 @@ class BFACW_OT_translate(Operator):  # type: ignore[misc]
     current: StringProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
     what: StringProperty(default="this text", options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
     shown: BoolProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]  # the dialog was up
+    span: StringProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]  # Text Editor selection
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -342,7 +362,7 @@ class BFACW_OT_translate(Operator):  # type: ignore[misc]
         if not self.path:
             return {'CANCELLED'}
         if not self.shown:      # run straight from a menu that executes its items: show the dialog first
-            args = {"path": self.path, "current": self.current, "what": self.what}
+            args = {"path": self.path, "current": self.current, "what": self.what, "span": self.span}
             index = next((i for i, w in enumerate(context.window_manager.windows) if w == context.window), 0)
             bpy.app.timers.register(lambda: _translate_dialog(index, args), first_interval=0.05)
             return {'FINISHED'}
@@ -350,10 +370,95 @@ class BFACW_OT_translate(Operator):  # type: ignore[misc]
         name = prefs.bl_rna.properties["translate_language"].enum_items[prefs.translate_language].name
         source = ("" if prefs.translate_from == "auto"
                   else prefs.bl_rna.properties["translate_from"].enum_items[prefs.translate_from].name)
-        if not _ask(context, translate_text(self.path, self.current, name, self.what, source), "AGENT"):
+        history = agent_controller_history()
+        if not _ask(context, translate_text(self.path, self.current, name, self.what, source), "ASK"):
             return {'CANCELLED'}
-        self.report({'INFO'}, "Translating into {:s} -- see the chat".format(name))
+        _PENDING.update(path=self.path, span=self.span, seen=len(history), since=time.time())
+        if not bpy.app.timers.is_registered(_apply_when_answered):
+            bpy.app.timers.register(_apply_when_answered, first_interval=0.5)
+        self.report({'INFO'}, "Translating into {:s} -- it is written in when the answer comes".format(name))
         return {'FINISHED'}
+
+
+# The translation waiting for its answer: written in by Coworker, not by the agent.
+_PENDING: dict[str, Any] = {}
+
+
+def agent_controller_history() -> list:
+    from . import agent_controller
+    return agent_controller._agent_state.conversation_history
+
+
+def _apply_when_answered() -> float | None:
+    from . import agent_controller
+    if not _PENDING:
+        return None
+    state = agent_controller._agent_state
+    history = agent_controller_history()
+    reply = next((m.get("content") or "" for m in reversed(history[_PENDING["seen"]:])
+                  if m.get("role") == "assistant" and (m.get("content") or "").strip()), "")
+    if state.is_thinking or not reply:          # the turn still runs, or hasn't answered yet
+        if time.time() - _PENDING["since"] > 600:       # no answer in 10 minutes: give up
+            _PENDING.clear()
+            return None
+        return 0.5
+    pending = dict(_PENDING)
+    _PENDING.clear()
+    text = clean_reply(reply)
+    if text:
+        try:
+            apply_translation(pending["path"], pending["span"], text)
+        except Exception as ex:  # pylint: disable=broad-exception-caught
+            print("[Coworker] Translate: couldn't write the translation in: {!s}".format(ex))
+    return None
+
+
+def _editing_text_object(data: Any) -> dict | None:
+    """A context override for the text object in Edit mode that uses *data*, else None."""
+    if not isinstance(data, bpy.types.TextCurve):
+        return None
+    for window in bpy.context.window_manager.windows:
+        layer = window.view_layer
+        obj = layer.objects.active if layer else None
+        if obj is None or obj.data != data or obj.mode != 'EDIT':
+            continue
+        area = next((a for a in window.screen.areas if a.type == 'VIEW_3D'), None)
+        override = {"window": window, "screen": window.screen, "active_object": obj, "object": obj}
+        if area is not None:
+            override.update(area=area, region=next((r for r in area.regions if r.type == 'WINDOW'), None))
+        return override
+    return None
+
+
+def apply_translation(path: str, span: str, text: str) -> None:
+    """Write *text* to *path* (``owner.attr``, or ``text.as_string()`` with a *span*), one undo step."""
+    namespace = {"bpy": bpy}
+    if path.endswith(".as_string()"):
+        block = eval(path[:-len(".as_string()")], namespace)          # noqa: S307 -- our own repr()
+        if span:
+            block.from_string(splice(block.as_string(), tuple(int(v) for v in span.split(",")), text))
+        else:
+            block.from_string(text)
+    else:
+        owner, attr = path.rsplit(".", 1)
+        target = eval(owner, namespace)                                # noqa: S307 -- our own repr()
+        editing = _editing_text_object(target)
+        if editing is None:
+            setattr(target, attr, text)
+        else:
+            # A text object in Edit mode keeps its typing in an edit buffer that overwrites
+            # body when you leave: step out, set it, and step back in.
+            with bpy.context.temp_override(**editing):
+                bpy.ops.object.mode_set(mode='OBJECT')
+                setattr(target, attr, text)
+                bpy.ops.object.mode_set(mode='EDIT')
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            area.tag_redraw()
+    try:
+        bpy.ops.ed.undo_push(message="Translate")
+    except RuntimeError:
+        pass
 
 
 def _translate_dialog(window_index: int, args: dict) -> None:
@@ -398,8 +503,9 @@ def _translate_entry(layout: Any, _context: Any, target: dict) -> None:
     if target.get("subtype") == "PASSWORD":
         return
     path = _python_path(target["pointer"], target["identifier"])
+    full = getattr(target["pointer"], target["identifier"], target["value"])     # not the shortened one
     if path:
-        _translate_op(layout, path, target["value"], "the text \u201c{:s}\u201d".format(target["label"]),
+        _translate_op(layout, path, str(full), "the text \u201c{:s}\u201d".format(target["label"]),
                       "Translate \u201c{:s}\u201d...".format(target["label"][:40]))
 
 
@@ -442,6 +548,8 @@ def _draw_text_editor_menu(self: Any, context: Any) -> None:
     op = self.layout.operator("bfacw.translate", text=label, icon='FONT_DATA')
     # A Text is edited as a whole: the instruction names the part, the path is the datablock.
     op.path, op.current, op.what = "{!r}".format(text) + ".as_string()", chosen[:2000], what
+    if (l0, c0) != (l1, c1):
+        op.span = "{:d},{:d},{:d},{:d}".format(l0, c0, l1, c1)
 
 
 # -- the menus ------------------------------------------------------------------------

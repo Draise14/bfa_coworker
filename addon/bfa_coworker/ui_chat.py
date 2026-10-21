@@ -156,6 +156,63 @@ def _scene_context_line(context: bpy.types.Context) -> str:
         return ""
 
 
+_EDITOR_NAMES = {'VIEW_3D': "3D Viewport", 'IMAGE_EDITOR': "Image Editor", 'NODE_EDITOR': "Node Editor",
+                 'SEQUENCE_EDITOR': "Video Sequencer", 'CLIP_EDITOR': "Movie Clip Editor",
+                 'DOPESHEET_EDITOR': "Dope Sheet", 'GRAPH_EDITOR': "Graph Editor", 'NLA_EDITOR': "NLA Editor",
+                 'TEXT_EDITOR': "Text Editor", 'SPREADSHEET': "Spreadsheet"}
+
+
+def _editor_focus(context: bpy.types.Context) -> str:
+    """What the editor the message came from shows, in a few words (#291)."""
+    space = getattr(context, "space_data", None)
+    kind = getattr(space, "type", "")
+    try:
+        if kind == 'NODE_EDITOR':
+            tree = space.edit_tree or space.node_tree
+            if tree is not None:
+                active = tree.nodes.active
+                owner = space.id        # a material / world / scene for their own (embedded) trees
+                where = ("the {:s} '{:s}' node tree".format(type(owner).__name__.lower(), owner.name)
+                         if owner is not None and owner != tree else "node tree '{:s}'".format(tree.name))
+                return "{:s} ({:s}){:s}".format(
+                    where, space.tree_type, ", active node '{:s}'".format(active.name) if active else "")
+        elif kind == 'SEQUENCE_EDITOR':
+            editor = context.scene.sequence_editor
+            strip = editor.active_strip if editor else None
+            if strip is not None:
+                return "active strip '{:s}' ({:s}, channel {:d})".format(strip.name, strip.type, strip.channel)
+        elif kind == 'IMAGE_EDITOR' and space.image is not None:
+            return "image '{:s}'{:s}".format(space.image.name, " (UV editing)" if space.mode == 'UV' else "")
+        elif kind == 'CLIP_EDITOR' and space.clip is not None:
+            return "movie clip '{:s}'".format(space.clip.name)
+        elif kind == 'TEXT_EDITOR' and space.text is not None:
+            return "text '{:s}', line {:d}".format(space.text.name, space.text.current_line_index + 1)
+        elif kind in ('DOPESHEET_EDITOR', 'GRAPH_EDITOR', 'NLA_EDITOR'):
+            obj = context.active_object
+            action = obj.animation_data.action if obj and obj.animation_data else None
+            if action is not None:
+                return "action '{:s}' of '{:s}'".format(action.name, obj.name)
+        elif kind == 'SPREADSHEET' and context.active_object is not None:
+            return "the data of '{:s}'".format(context.active_object.name)
+    except (AttributeError, ReferenceError, TypeError):
+        pass
+    return ""
+
+
+def _editor_context_line(context: bpy.types.Context, only: bool) -> str:
+    """The editor a sidebar message came from; with *only*, the request stays in it (#291)."""
+    kind = getattr(getattr(context, "space_data", None), "type", "")
+    name = _EDITOR_NAMES.get(kind)
+    if name is None:
+        return ""
+    focus = _editor_focus(context)
+    line = "The user wrote this from the {:s}{:s}.".format(name, ": " + focus if focus else "")
+    if only:
+        line += (" Use this editor's context only: work on what it shows, and leave the rest of the "
+                 "scene alone unless asked.")
+    return line
+
+
 # -- External Agent setup: which agent, is it installed, install / update / remove ------
 _AGENT_CHECKS: dict[str, object] = {}      # preset key -> acp_presets.Detection, or "checking"
 _AGENT_JOBS: dict[str, str] = {}           # preset id -> npm job status line
@@ -1840,6 +1897,13 @@ class ChatHistoryProperties(PropertyGroup):  # type: ignore[misc]
         default=22.0, min=6.0, max=80.0,
     )
 
+    chat_editor_context_only: BoolProperty(  # type: ignore[valid-type]
+        name="Use Editor Context Only",
+        description="Messages sent from an editor's sidebar chat are about that editor: Coworker works on "
+                    "what it shows (its node tree, strips, image, text...) and leaves the rest alone",
+        default=False,
+    )
+
     chat_image_expanded: BoolProperty(  # type: ignore[valid-type]
         name="Show Image Panel",
         description=(
@@ -2105,14 +2169,17 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             _warn_failed_attachment(self, props)
 
         engine = _loop_engine(llm_cfg.mode)
-        if _is_external_agent(context):
+        external = _is_external_agent(context)
+        if external:
             _sync_agent_mode(props.chat_mode, wait=True)     # in case it connected after you picked (#221)
+        # Sent from an editor's sidebar chat: say which editor, and what it shows (#291).
+        editor_line = _editor_context_line(context, props.chat_editor_context_only) if _compact_sidebar(context) else ""
         prompt = Prompt(
             text=message,
             images=list(attachments or []),
             image_names=list(attachment_names or []),
             chat_mode=props.chat_mode,
-            context=_scene_context_line(context) if _is_external_agent(context) else "",
+            context=" ".join(p for p in (_scene_context_line(context), editor_line) if p) if external else "",
         )
         config = LoopConfig(llm_url=llm_url or None, api_key=api_key or None,
                             model=model, mcp_port=send_mcp_port)
@@ -2136,6 +2203,8 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
         # thread, so the turn worker never reads bpy itself -- an off-main
         # bpy read races Blender's context counter and spams the console.
         agent_controller.prefetch_main_thread_context()
+        if editor_line and not external:     # our loop: the editor rides with this turn's system prompt
+            agent_controller._agent_state.prefetched_system_prompt += "\n\n# Where the user is\n" + editor_line
 
         from . import coworker_api
         coworker_api.turn_started(_turn_label(context))      # the undo step to revert to
@@ -3322,7 +3391,7 @@ def _is_coworker_panel_region(context) -> bool:
     except AttributeError:
         return False
     return (area is not None
-            and area.type == "VIEW_3D"
+            and area.type in SIDEBAR_TYPES
             and region is not None
             and region.type == "UI"
             and getattr(region, "active_panel_category", "") == _CHAT_PANEL_CATEGORY)
@@ -4314,7 +4383,7 @@ def _tag_chat_regions_redraw() -> None:
                         if region.type in {'WINDOW', 'HEADER', 'UI'}:
                             region.tag_redraw()
                     continue
-                if area.type not in {'VIEW_3D', 'TEXT_EDITOR'}:
+                if area.type not in SIDEBAR_TYPES:
                     continue
                 for region in area.regions:
                     if region.type == 'UI':
@@ -4487,19 +4556,48 @@ def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool 
     return True
 
 
+# The editors with a right sidebar that get a Coworker tab (#291): space type,
+# its Space class, a short id for the panel copies, and the toggle's icon.
+SIDEBAR_SPACES = (
+    ('VIEW_3D', "SpaceView3D", "view3d", 'VIEW3D'),
+    ('IMAGE_EDITOR', "SpaceImageEditor", "image", 'IMAGE'),
+    ('NODE_EDITOR', "SpaceNodeEditor", "node", 'NODETREE'),
+    ('SEQUENCE_EDITOR', "SpaceSequenceEditor", "sequencer", 'SEQUENCE'),
+    ('CLIP_EDITOR', "SpaceClipEditor", "clip", 'TRACKER'),
+    ('DOPESHEET_EDITOR', "SpaceDopeSheetEditor", "dopesheet", 'ACTION'),
+    ('GRAPH_EDITOR', "SpaceGraphEditor", "graph", 'GRAPH'),
+    ('NLA_EDITOR', "SpaceNLA", "nla", 'NLA'),
+    ('TEXT_EDITOR', "SpaceTextEditor", "text", 'TEXT'),
+    ('SPREADSHEET', "SpaceSpreadsheet", "spreadsheet", 'SPREADSHEET'),
+)
+SIDEBAR_TYPES = frozenset(s[0] for s in SIDEBAR_SPACES)
+# Editors that still offer the classic (layout) chat; the others always show the compact one.
+_CLASSIC_TYPES = frozenset(('VIEW_3D', 'TEXT_EDITOR'))
+
+
+def docker_area(area, prefs) -> bool:
+    """True when *area*'s sidebar shows the compact GPU chat (not the Coworker editor itself)."""
+    kind = getattr(area, "type", "")
+    if kind not in SIDEBAR_TYPES:
+        return False
+    if kind == 'NODE_EDITOR':
+        from . import chat_editor as _ce
+        if _ce.is_coworker_space(area.spaces.active):
+            return False
+    return kind not in _CLASSIC_TYPES or getattr(prefs, "chat_sidebar_style", "CLASSIC") == "COMPACT"
+
+
 def _compact_sidebar(context: bpy.types.Context) -> bool:
-    """True when the 3D View's Coworker tab shows the compact GPU chat.
+    """True when this editor's Coworker tab shows the compact GPU chat.
 
     Then the classic chat panel steps aside for BFACW_PT_chat_compact (the GPU
     chat in a panel); Session, Queue and Status stay below it.
     """
-    if getattr(getattr(context, "space_data", None), "type", "") != 'VIEW_3D':
-        return False
     try:
         prefs = context.preferences.addons[__package__].preferences
-    except (KeyError, AttributeError):
+        return docker_area(context.area, prefs)
+    except (KeyError, AttributeError, ReferenceError):
         return False
-    return getattr(prefs, "chat_sidebar_style", "CLASSIC") == "COMPACT"
 
 
 class BFACW_PT_chat_compact(Panel):  # type: ignore[misc]
@@ -4523,6 +4621,12 @@ class BFACW_PT_chat_compact(Panel):  # type: ignore[misc]
 
     def draw_header(self, _context: bpy.types.Context) -> None:
         self.layout.label(text="", icon=_AGENT_ICON)
+
+    def draw_header_preset(self, context: bpy.types.Context) -> None:
+        # Use editor context only (#291): this editor's own icon, on the panel's header.
+        props = context.window_manager.bfacw_chat_props  # type: ignore[attr-defined]
+        icon = next((s[3] for s in SIDEBAR_SPACES if s[0] == context.area.type), 'WINDOW')
+        self.layout.prop(props, "chat_editor_context_only", text="", icon=icon, emboss=True)
 
     def draw(self, context: bpy.types.Context) -> None:
         from . import chat_editor as _ce
@@ -5475,7 +5579,7 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        return not bpy.app.background
+        return not bpy.app.background and not _compact_sidebar(context)   # the compact chat's place (#291)
 
     def draw(self, context: bpy.types.Context) -> None:
         layout = self.layout

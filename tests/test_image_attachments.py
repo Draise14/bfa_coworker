@@ -389,7 +389,8 @@ class TestChatAttachmentUI(unittest.TestCase):
 
     def test_is_coworker_panel_region_scopes_the_drop(self):
         is_region = _extract_ui_func(
-            "_is_coworker_panel_region", {"_CHAT_PANEL_CATEGORY": "Coworker"})
+            "_is_coworker_panel_region", {"_CHAT_PANEL_CATEGORY": "Coworker",
+                                          "SIDEBAR_TYPES": frozenset(("VIEW_3D", "IMAGE_EDITOR", "NODE_EDITOR"))})
 
         def _ctx(area_type, region_type, category):
             area = None if area_type is None else types.SimpleNamespace(
@@ -404,7 +405,9 @@ class TestChatAttachmentUI(unittest.TestCase):
         self.assertFalse(is_region(_ctx("VIEW_3D", "WINDOW", "Coworker")),
                          "the viewport itself must not be claimed")
         self.assertFalse(is_region(_ctx("VIEW_3D", "UI", "")))
-        self.assertFalse(is_region(_ctx("IMAGE_EDITOR", "UI", "Coworker")))
+        self.assertTrue(is_region(_ctx("IMAGE_EDITOR", "UI", "Coworker")),
+                        "every editor's sidebar tab takes the drop (#291)")
+        self.assertFalse(is_region(_ctx("PROPERTIES", "UI", "Coworker")))
         self.assertFalse(is_region(_ctx(None, None, "")))
 
     def test_the_addon_never_patches_blenders_own_drop_handlers(self):

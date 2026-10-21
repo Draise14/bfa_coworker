@@ -83,11 +83,6 @@ def _props() -> Any:
     return getattr(bpy.context.window_manager, "bfacw_chat_props", None)
 
 
-def _compact_enabled(context: Any = None) -> bool:
-    prefs = _prefs(context)
-    return prefs is not None and getattr(prefs, "chat_sidebar_style", "CLASSIC") == "COMPACT"
-
-
 def _is_harness(prefs: Any) -> bool:
     return prefs is not None and prefs.operating_mode == "EXTERNAL_HARNESS"
 
@@ -422,11 +417,16 @@ def drop_hover() -> bool:
 
 
 def _tag_chat_regions() -> None:
+    from . import ui_chat
     for window in bpy.context.window_manager.windows:
         for area in window.screen.areas:
             if area.type in {"NODE_EDITOR", "VIEW_3D"}:
                 for region in area.regions:
                     if region.type in {"WINDOW", "UI", "HEADER"}:
+                        region.tag_redraw()
+            elif area.type in ui_chat.SIDEBAR_TYPES:      # the other editors' sidebar chat (#291)
+                for region in area.regions:
+                    if region.type == "UI":
                         region.tag_redraw()
 
 
@@ -638,9 +638,10 @@ def _room_from_view(region: Any, key: int, strip: list, height: int, room_h: flo
 
 
 def _draw_sidebar() -> None:
+    from . import ui_chat
     context = bpy.context
     region = context.region
-    if region is None or region.type != "UI" or not _compact_enabled(context):
+    if region is None or region.type != "UI" or not ui_chat._compact_sidebar(context):
         return
     props = _props()
     zoom = _view_zoom(region)
@@ -682,12 +683,13 @@ def _router(context: Any, event: Any) -> tuple[ChatSurface, Any, Any] | None:
     window = context.window
     if window is None:
         return None
-    compact = _compact_enabled(context)
+    from . import ui_chat
+    prefs = _prefs(context)
     for area in window.screen.areas:
         if not (area.x <= event.mouse_x < area.x + area.width and area.y <= event.mouse_y < area.y + area.height):
             continue
         coworker = area.type == "NODE_EDITOR" and is_coworker_space(area.spaces.active)
-        if not coworker and not (compact and area.type == "VIEW_3D"):
+        if not coworker and not ui_chat.docker_area(area, prefs):
             return None
         for region in area.regions:
             if not (region.x <= event.mouse_x < region.x + region.width
@@ -1250,6 +1252,37 @@ def _editor_copies() -> list[type]:
     return out
 
 
+def _sidebar_copies() -> list[type]:
+    """The 3D View's sidebar tab, registered again for every other editor with a sidebar (#291):
+    the compact chat, its controls, Queue, Plan, History and Status (with Session)."""
+    from . import ui_chat
+    sources = (ui_chat.BFACW_PT_chat_compact, ui_chat.BFACW_PT_chat_controls, ui_chat.BFACW_PT_chat_queue,
+               ui_chat.BFACW_PT_chat_plan, ui_chat.BFACW_PT_chat_history, ui_chat.BFACW_PT_chat_status,
+               ui_chat.BFACW_PT_chat_session, ui_chat.BFACW_PT_chat_session_context,
+               ui_chat.BFACW_PT_chat_session_memory)
+    out = []
+    for space, _cls_name, short, _icon in ui_chat.SIDEBAR_SPACES:
+        if space == "VIEW_3D":
+            continue                # the originals live there
+        ids = {cls.bl_idname: cls.bl_idname.replace("BFACW_PT_chat_", "BFACW_PT_{:s}_chat_".format(short))
+               for cls in sources}
+        for cls in sources:
+            attrs = {"bl_idname": ids[cls.bl_idname], "bl_space_type": space, "bl_region_type": "UI",
+                     "bl_category": CATEGORY, "bl_label": cls.bl_label, "__doc__": cls.__doc__}
+            if space == "NODE_EDITOR":      # not inside the Coworker editor: it has its own
+                attrs["poll"] = classmethod(_poll_outside_coworker(None, cls.poll))
+            elif "poll" in cls.__dict__:
+                attrs["poll"] = cls.__dict__["poll"]
+            for name in ("bl_options", "bl_order", "draw", "draw_header", "draw_header_preset"):
+                if name in cls.__dict__:
+                    attrs[name] = cls.__dict__[name]
+            parent = getattr(cls, "bl_parent_id", "")
+            if parent:
+                attrs["bl_parent_id"] = ids[parent]
+            out.append(type(ids[cls.bl_idname], (bpy.types.Panel,), attrs))
+    return out
+
+
 # -- Taking over the node editor inside Coworker editors -------------------------------
 
 _ORIGINAL: dict[str, Any] = {}
@@ -1327,7 +1360,7 @@ def _over_chat(context: Any) -> bool:
         if _is_coworker(context):
             return True
         from . import ui_chat
-        return _compact_enabled(context) and ui_chat._is_coworker_panel_region(context)
+        return ui_chat._compact_sidebar(context) and ui_chat._is_coworker_panel_region(context)
     except (AttributeError, ReferenceError):
         return False
 
@@ -1403,7 +1436,7 @@ def register() -> None:
         bpy.utils.register_class(cls)
     from . import activity
     activity.on_change = _tag_chat_regions      # Agent 9: a new tool call shows at once
-    _COPIES[:] = _editor_copies()
+    _COPIES[:] = _editor_copies() + _sidebar_copies()
     for cls in _COPIES:
         bpy.utils.register_class(cls)
     ours = {c.__name__ for c in _CLASSES + tuple(_COPIES)} | {c.bl_idname for c in _COPIES}
@@ -1411,8 +1444,11 @@ def register() -> None:
     _HANDLERS.append((bpy.types.SpaceNodeEditor,
                       bpy.types.SpaceNodeEditor.draw_handler_add(_draw_editor, (), "WINDOW", "POST_PIXEL"),
                       "WINDOW"))
-    _HANDLERS.append((bpy.types.SpaceView3D,
-                      bpy.types.SpaceView3D.draw_handler_add(_draw_sidebar, (), "UI", "POST_PIXEL"), "UI"))
+    from . import ui_chat
+    for _space, cls_name, _short, _icon in ui_chat.SIDEBAR_SPACES:     # every editor's sidebar chat (#291)
+        space_cls = getattr(bpy.types, cls_name, None)
+        if space_cls is not None:
+            _HANDLERS.append((space_cls, space_cls.draw_handler_add(_draw_sidebar, (), "UI", "POST_PIXEL"), "UI"))
     input_capture.register()
     input_capture.set_host(_router, _on_box_action, _after_key)
 

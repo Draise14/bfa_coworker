@@ -82,6 +82,21 @@ Your ticked sections A-N stay below as the record.
 - [ ] History: your older chats (e.g. "Coworker test - hallway") have the **Open** icon again. (#273)
 - [ ] The chat's scrollbar always shows faintly; Ctrl+wheel zoom doesn't make it fatter. (#279)
 
+## R5c. Editors and right-click menus (#290-#298)
+
+- [ ] **Coworker tab in every sidebar**: Shader / Geometry Nodes, Sequencer, Image / UV, Movie Clip,
+      Dope Sheet, Graph, NLA, Text Editor, Spreadsheet -- N, the **Coworker** tab: Queue, Plan, the compact
+      chat, History, Status, Coworker. The Coworker editor's own sidebar is unchanged. (#291)
+- [ ] The chat panel's header has the **editor's icon**: on = *Use editor context only*. Ask "What am I
+      looking at?" from the Shader Editor: the reply names the material's node tree / active node. (#291)
+- [ ] Right-click any setting: **Explain This** -> an Ask-mode answer in the chat; greyed out until Coworker
+      is started. Right-click an editor's empty space: **Explain This Editor**. (#290)
+- [ ] Right-click a text field, a text object (Object / Edit mode), a text strip or the Text Editor:
+      **Translate...** -> pick the language (remembered) -> the text is replaced by the translation. (#42)
+- [ ] History > **Open**: the .blend opens straight away (asks to save only with unsaved changes); a moved
+      or deleted file says so instead. (#293)
+- [ ] Every reply's header says **Coworker** with the hat, whichever agent works. (#297)
+
 ## R6. Still open from before
 
 - [ ] (Optional, was E.2) Log out of Claude Code, Start: "Claude Code isn't logged in" + how to log in. (#153)

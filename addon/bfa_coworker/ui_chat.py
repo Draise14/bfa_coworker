@@ -2280,7 +2280,8 @@ class BFACW_OT_chat_where(Operator):  # type: ignore[misc]
 
 
 class BFACW_OT_chat_open_blend(Operator):  # type: ignore[misc]
-    """Open the .blend this chat was in and continue the chat there (Blender asks to save your changes first)"""
+    """Open the .blend this chat was in and continue the chat there (it asks first only when this file
+has unsaved changes)"""
     bl_idname = "bfacw.chat_open_blend"
     bl_label = "Open the Chat's .blend"
     bl_options = {'INTERNAL'}
@@ -2291,12 +2292,34 @@ class BFACW_OT_chat_open_blend(Operator):  # type: ignore[misc]
     def poll(cls, context: bpy.types.Context) -> bool:
         return not agent_controller._agent_state.is_thinking
 
+    def _path(self) -> tuple[str, str]:
+        """(path, why not) for the chat's .blend: why not when it moved, was renamed or is gone."""
+        entry = _chat_index().get(self.chat_id) or {}
+        path = _chat_blend_path(entry)
+        if path:
+            return path, ""
+        known = str(entry.get("blend_path") or "")
+        name = str(entry.get("blend") or "")
+        return "", ("{:s}.blend isn't at {:s} any more: it was moved, renamed or deleted".format(name, known)
+                    if known else "{:s}.blend wasn't found (moved, renamed or deleted?)".format(name))
+
+    def invoke(self, context: bpy.types.Context, event) -> set[str]:
+        # Straight in (no file browser): a confirmation only when this file has unsaved changes.
+        path, why = self._path()
+        if not path:
+            self.report({"ERROR"}, why)
+            return {"CANCELLED"}
+        if bpy.data.is_dirty:
+            return context.window_manager.invoke_confirm(
+                self, event, title="Open {:s}?".format(Path(path).name),
+                message="Unsaved changes in this file are lost", confirm_text="Open", icon='WARNING')
+        return self.execute(context)
+
     def execute(self, context: bpy.types.Context) -> set[str]:
         index = _chat_index()
-        entry = index.get(self.chat_id)
-        path = _chat_blend_path(entry or {})
-        if not path or not os.path.isfile(path):
-            self.report({"WARNING"}, "That .blend isn't there any more")
+        path, why = self._path()
+        if not path:
+            self.report({"ERROR"}, why)
             return {"CANCELLED"}
         if agent_controller._agent_state.conversation_history:
             _save_chat_history()
@@ -2315,7 +2338,12 @@ class BFACW_OT_chat_open_blend(Operator):  # type: ignore[misc]
             _restore_chat_history()
             _tag_chat_regions_redraw()
         bpy.app.handlers.load_post.append(continue_chat)
-        bpy.ops.wm.open_mainfile("INVOKE_DEFAULT", filepath=path)
+        try:
+            bpy.ops.wm.open_mainfile("EXEC_DEFAULT", filepath=path)     # no file browser, no second ask
+        except RuntimeError as ex:
+            bpy.app.handlers.load_post.remove(continue_chat)
+            self.report({"ERROR"}, "Couldn't open {:s}: {:s}".format(Path(path).name, str(ex).splitlines()[-1]))
+            return {"CANCELLED"}
         return {"FINISHED"}
 
 

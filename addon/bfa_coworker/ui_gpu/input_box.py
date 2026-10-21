@@ -512,7 +512,7 @@ class InputBox:
         if self.attach_buttons:
             attach = [("attach_menu", "IMAGE_DATA")]
             if not self._narrow:
-                attach += [("attach_render", "RENDER_STILL"), ("attach_screen", "FULLSCREEN_ENTER")]
+                attach += [("attach_render", "RENDER_STILL"), ("attach_screen", "MAKE_SCREENSHOT")]
             for widget_id, icon in attach:
                 button = Rect(left, box.y + margin, button_h, button_h)     # square (#238)
                 if left + button.w > right - gap:

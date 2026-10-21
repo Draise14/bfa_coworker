@@ -4434,7 +4434,7 @@ class BFACW_PT_attach_popover(Panel):  # type: ignore[misc]
         row = layout.row(align=True)
         row.operator("bfacw.chat_attach_image", text="File...", icon='FILE_IMAGE')
         row.operator("bfacw.chat_capture_render", text="Render", icon='RENDER_STILL')
-        row.operator("bfacw.chat_capture_screen", text="Screen", icon='FULLSCREEN_ENTER')
+        row.operator("bfacw.chat_capture_screen", text="Screen", icon='MAKE_SCREENSHOT')
         hint = layout.row()
         hint.scale_y = 0.75
         hint.label(text="Or drop an image file onto the chat.")
@@ -5557,7 +5557,7 @@ def _draw_attachment_row(layout, props, context, minimal: bool = False) -> None:
     _draw_attachment_preview(box, img, context)
     row = box.row(align=True)
     row.operator("bfacw.chat_capture_render", icon='RENDER_STILL', text="Render")
-    row.operator("bfacw.chat_capture_screen", icon='FULLSCREEN_ENTER', text="Screen")
+    row.operator("bfacw.chat_capture_screen", icon='MAKE_SCREENSHOT', text="Screen")
 
 
 def _ensure_attachment_preview(img) -> None:

@@ -81,22 +81,29 @@ def _shader(name: str) -> Any:
     return shader
 
 
-def _outline_points(rect: Rect, radius: float, rounded: bool | None = None) -> list[tuple[float, float]]:
+def _outline_points(rect: Rect, radius: float, rounded: bool | None = None,
+                    corners: str = "") -> list[tuple[float, float]]:
+    """*corners*: "" all rounded, "L" / "R" only that side's (a joined button row's ends), "N" none."""
     r = max(0.0, min(radius, rect.w / 2, rect.h / 2))
-    if not (r >= 0.5 if rounded is None else rounded):
+    if not (r >= 0.5 if rounded is None else rounded) or corners == "N":
         return [(rect.x, rect.y), (rect.right, rect.y), (rect.right, rect.top), (rect.x, rect.top)]
+    right, left = corners in ("", "R"), corners in ("", "L")
     pts = []
-    corners = ((rect.right - r, rect.y + r, 270), (rect.right - r, rect.top - r, 0),
-               (rect.x + r, rect.top - r, 90), (rect.x + r, rect.y + r, 180))
-    for cx, cy, start in corners:
+    spots = ((rect.right, rect.y, -1, 1, 270, right), (rect.right, rect.top, -1, -1, 0, right),
+             (rect.x, rect.top, 1, -1, 90, left), (rect.x, rect.y, 1, 1, 180, left))
+    for x, y, sx, sy, start, round_it in spots:
+        if not round_it:
+            pts.append((x, y))
+            continue
+        cx, cy = x + sx * r, y + sy * r
         for i in range(_CORNER_STEPS + 1):
             a = math.radians(start + 90 * i / _CORNER_STEPS)
             pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
     return pts
 
 
-def _fill(rect: Rect, color: tuple, radius: float) -> None:
-    pts = _outline_points(rect, radius)
+def _fill(rect: Rect, color: tuple, radius: float, corners: str = "") -> None:
+    pts = _outline_points(rect, radius, corners=corners)
     center = (rect.x + rect.w / 2, rect.y + rect.h / 2)
     tris = []
     for i, p in enumerate(pts):
@@ -108,7 +115,7 @@ def _fill(rect: Rect, color: tuple, radius: float) -> None:
     batch.draw(shader)
 
 
-def _stroke(rect: Rect, color: tuple, radius: float, width: float = 1.0) -> None:
+def _stroke(rect: Rect, color: tuple, radius: float, width: float = 1.0, corners: str = "") -> None:
     """An outline exactly *width* pixels wide (Blender's line width), on whole pixels.
 
     Drawn as a filled ring, not a smoothed line: a 1-pixel smooth line spreads
@@ -117,8 +124,8 @@ def _stroke(rect: Rect, color: tuple, radius: float, width: float = 1.0) -> None
     outer = Rect(round(rect.x), round(rect.y), round(rect.w), round(rect.h))
     w = max(1.0, round(width))
     rounded = min(radius, outer.w / 2, outer.h / 2) >= 0.5
-    a = _outline_points(outer, radius, rounded)
-    b = _outline_points(outer.inset(w), max(0.0, radius - w), rounded)
+    a = _outline_points(outer, radius, rounded, corners)
+    b = _outline_points(outer.inset(w), max(0.0, radius - w), rounded, corners)
     tris = []
     for i in range(len(a)):
         j = (i + 1) % len(a)
@@ -255,9 +262,9 @@ def render(commands: list[DrawCmd], style: Any = None) -> None:
     try:
         for cmd in commands:
             if cmd.kind == "rect" and cmd.rect is not None:
-                _fill(cmd.rect, cmd.color, cmd.radius)
+                _fill(cmd.rect, cmd.color, cmd.radius, cmd.corners)
             elif cmd.kind == "outline" and cmd.rect is not None:
-                _stroke(cmd.rect, cmd.color, cmd.radius, getattr(style, "line_width", 1.0))
+                _stroke(cmd.rect, cmd.color, cmd.radius, getattr(style, "line_width", 1.0), cmd.corners)
             elif cmd.kind == "text":
                 _text(cmd)
             elif cmd.kind == "icon" and cmd.rect is not None:

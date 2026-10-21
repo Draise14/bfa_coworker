@@ -76,7 +76,7 @@ Security 3–5 · stretch Wand 4–5 → **Test 3 + Test 5** → release.
 **In the release**: the table above. **Moved to Tier 5**: agent teams, co-pilot and
 critic (Teams 1–3), recipes/macros and batch across files, export/UV/LOD pipeline,
 further wizards, Rig 1–2 (unless Tools 1–3 finish early), Editors 6 (floating window),
-Runtime 3. Ideas for those: `plan_tier5c_artist_automation.md`.
+Runtime 3, migrating the wand icon set into Bforartists. Ideas for those: `plan_tier5c_artist_automation.md`.
 
 ### 0.5 Audit corrections (2026-10-20)
 

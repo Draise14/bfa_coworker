@@ -22,6 +22,9 @@ one undo. Mostly tested code; the active engine is asked only for the judgment c
 | 3 | Which model decides | **The active engine** (simpler setup, no second model in RAM) |
 | 4 | Order | **Sequencer pack first, then the Node pack**; both in this release |
 | 5 | Icons | **Self-contained** SVG + PNG in the add-on (works in plain Blender and can be sold standalone); offering them to Bforartists is a later option |
+| 6 | Toolshelf buttons (2026-10-21) | **Icon buttons in Bforartists' tabbed toolshelf, never a dropdown.** Confirmed possible add-on-side (§3.3). Plain Blender has no tabbed toolshelf: menus only. Migrating the icons into Bforartists itself → **Tier 5**, after the tools are built |
+| 7 | Convert to Vertical | **Sequencer > View** (not *Strip*, which is per-strip) |
+| 8 | Recorded operators | **Per user** (§5) |
 
 ---
 
@@ -143,10 +146,19 @@ A bad engine answer falls back to the heuristic; nothing is ever half-applied.
   2-px strokes, theme-neutral), so they sit well in both apps. Bforartists' own icons
   are GPL (compatible) but we keep the add-on self-contained; offering the badge set to
   Bforartists later is optional.
-- **Drawing**: menus use `layout.operator(…, icon_value=…)`. Bforartists' toolshelf
-  helper (`OperatorEntry`) only takes icon *names*, so Wand 1 adds a tiny entry class with
-  the same `draw(layout, as_icon=…)` contract using `icon_value`; it plugs into
-  Bforartists' `draw_entries` (icon grid when narrow, text buttons when wide).
+- **Drawing — no dropdown**: menus use `layout.operator(…, icon_value=…)`. In Bforartists'
+  tabbed toolshelf the buttons are the **same square icon buttons** as the native ones
+  (text buttons when the shelf is wide). Checked in Bforartists' source
+  (`space_toolsystem_common.py`): `draw_entries` → `draw_icon_buttons` only calls
+  `entry.poll` and `entry.draw(row, as_icon=True)`, with no type check, and any panel can
+  pass `icon_value`. Bforartists' own `OperatorEntry` takes icon *names* only, so Wand 1
+  ships a small `CoworkerEntry` with the same two members that draws with `icon_value`.
+  Nothing in Bforartists has to change.
+- **Plain Blender**: no tabbed toolshelf, so operators appear in menus only (the menu
+  icons still show the badge).
+- **Tier 5 (logged)**: migrate the icon set into Bforartists so the operators can use
+  native icon names there (faster drawing, theme-aware), keeping the add-on's own copies
+  for plain Blender.
 - **Build**: `_misc/build_icons.py` renders the SVGs to PNG (no Blender needed) and a
   test checks every spec's icon exists.
 
@@ -171,10 +183,10 @@ No "Coworker" tab and no extra header menu: the operators should feel built in.
 | Operator | Place | Kind / model | How |
 |---|---|---|---|
 | **Remove Silences** | *Strip* menu, Bforartists *Strip* tab | tool / none | Read the sound strip's samples → quiet ranges (threshold, min length, padding) → preview cut list → split, remove, close gaps; one undo |
-| **Convert to Vertical (9:16)** | *Sequencer > View* or render-size area; *Strip* tab | hybrid / small | Set the output size → per strip scale/crop to fill → the engine suggests a focus side per shot from a thumbnail when asked |
+| **Convert to Vertical (9:16)** | *Sequencer > View* (whole edit, not per strip) | hybrid / small | Set the output size → per strip scale/crop to fill → the engine suggests a focus side per shot from a thumbnail when asked |
 | **Subtitles from Text** | *Add* menu | tool / none | Text block lines + timings → text strips |
 | **Assemble Timeline from Scenes** | *Add* menu | tool / none | Scene strips in shot order with handles (idea from recipe → shots → timeline workflows) |
-| **Export Review Video** | *Render* area | tool / none | Fast preview render of the edit with burned-in shot names |
+| **Export Review Video** | Bforartists *Sequencer > Export* menu; *View* in plain Blender | tool / none | Fast preview render of the edit with burned-in shot names |
 
 ### 4.2 Node pack (Wand 3, second)
 
@@ -201,17 +213,75 @@ No "Coworker" tab and no extra header menu: the operators should feel built in.
 
 ## 5. Making your own (Wand 6, Wand 7)
 
+### 5.1 Recorded operators are per user — how it works
+
+**Example**: you ask the chat *"rename the selected lights by their colour, warm ones
+first"* and it works. You click **Save Turn as Operator…** on that reply.
+
+```mermaid
+sequenceDiagram
+    actor You
+    participant Chat
+    participant Rec as Recorder
+    participant Folder as Your operators folder
+    participant UI as Menus / toolshelf
+    You->>Chat: Save Turn as Operator…
+    Chat->>Rec: the turn's tool calls + arguments + results (already in the Workshop)
+    Rec->>You: card: steps to keep, values to turn into fields,<br/>"use the selection", name, tooltip, place, icon
+    You->>Rec: confirm
+    Rec->>Folder: rename_lights_by_colour/ (operator.toml + steps.json)
+    Rec->>UI: register now: appears in Object > Light menu (your pick)
+    Note over UI: Next Blender start: the folder is scanned and it's there again
+```
+
+**What gets saved** — data, not a Python script, in your user folder
+(`bpy.utils.extension_path_user(…, "operators")`, outside the add-on, so it survives
+updates and is the same in every .blend):
+
+```toml
+# rename_lights_by_colour/operator.toml
+label       = "Rename Lights by Colour"
+description = "Rename the selected lights by colour, warm first"
+icon        = "LIGHT"            # gets the wand badge
+place       = ["VIEW3D_MT_object", "bfa_toolshelf:Object/Rename"]
+poll        = { selected_types = ["LIGHT"] }
+params      = [ { name = "warm_first", type = "bool", default = true } ]
+```
+```json
+// rename_lights_by_colour/steps.json — ordered steps, each a tool call
+[ {"tool": "get_objects_summary", "args": {"scope": "{selection}"}},
+  {"tool": "batch_rename", "args": {"objects": "{selection}", "rule": "by_light_colour",
+                                     "warm_first": "{warm_first}"}} ]
+```
+
+**How it replays** — with **no model**: Wand 1's factory turns each folder into a real
+operator; clicking it runs the steps through the same tool layer the chat uses, with
+`{selection}` and your fields filled in, then preview → apply as **one undo** → a short
+report in the chat. A failing step stops the run and reverts it.
+
+| Question | Answer |
+|---|---|
+| Where does it live? | Your user folder, per user, all files and versions of the add-on |
+| What if the turn used generated code (`execute_blender_code`)? | Kept as a code step, marked with a badge; it asks once before its first run (Security 5) and can be swapped for a tool later |
+| What if names/counts differ next time? | Literals you turned into fields or "the selection" are filled at run time; the poll greys the operator out when the context doesn't fit |
+| Can I edit it? | Yes: *Edit* opens it in the Text Editor's **Make Operator** panel (Wand 7) |
+| Can I share it? | *Export* writes a small zip; *Import* adds one (shows its source and asks once, Security 5). Several can be packaged as an extension (Wand 7, reuses #86) |
+| Stored in the .blend? | No (your decision). A "pin to this file" option could come later |
+| Secrets? | Never recorded: keys/tokens are stripped (Security 2) |
+
+### 5.2 The flow from both sources
+
 ```mermaid
 flowchart TD
     T["A chat turn that worked"] --> R["Save Turn as Operator…"]
     R --> X["Its tool calls + arguments<br/>(already in the Workshop events)"]
     X --> P["Choose parameters: names/counts → the selection,<br/>literals → fields"]
-    P --> M["Spec + run() written to your operators folder<br/>(kind = macro, model = none)"]
+    P --> M["operator.toml + steps.json in your user folder<br/>(kind = macro, model = none)"]
     W["Text Editor sidebar: Make Operator<br/>(template; the Coworker helps write it, #52)"] --> V["Check: spec, poll, one-undo wrapper, icon"]
     M --> PL["Pick its place: which menu / toolshelf panel"]
     V --> PL
     PL --> S["Registered: appears in that native place"]
-    S --> PK["Package as extension (reuses the #86 builder)"]
+    S --> PK["Export / package as extension (reuses the #86 builder)"]
 ```
 
 The **Make Operator** panel is the only dedicated Coworker panel in this design.
@@ -296,7 +366,9 @@ flowchart LR
   three answered cards; 10 props become a library with thumbnails, catalogs and author.
 
 ### Wand 6 — Save Turn as Operator (M)
-- **What**: §5 recorder with a parameter card and a place picker.
+- **What**: §5.1: per-user folder of `operator.toml` + `steps.json`, the save card
+  (steps, fields, selection, name, place, icon), registration at start, model-free
+  replay with one undo, Edit / Export / Import.
 - **Done when**: "rename the selected lights by colour", recorded once, replays on another
   selection with no engine, from the menu it was placed in.
 
@@ -329,6 +401,6 @@ flowchart LR
 
 ## 8. Still open
 
-1. Convert to Vertical's place: *View* menu, the render-size panel, or the *Strip* menu?
-2. Should recorded operators be per user (default) or saved into the .blend so a file
-   carries its own tools?
+1. Should a recorded operator be able to ask the engine at replay time (a *hybrid*
+   recording), or stay model-free only? Proposal: model-free by default; "ask the
+   engine for …" as an explicit step type later.

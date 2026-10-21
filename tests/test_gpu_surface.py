@@ -193,6 +193,26 @@ class TestLayout(unittest.TestCase):
         self.assertEqual([round(f.rect.x - b.x) for f, b in zip(fills, buttons)], [0, -1, -1])
         self.assertEqual(sf.row_corners(0, 1), "")
 
+    def test_question_choices_wrap_and_mark_the_recommended_one(self):
+        # A question's choices in a narrow sidebar: inside the card, wrapped, left-aligned, with a
+        # keyframe -- green (theme jitter) for the first, the recommended one; blue for the others.
+        surface = sf.ChatSurface(compact=True)
+        long = "Just the foreground: 2 chairs, bench/sofa, coffee table, pillows, tile floor -- skip the pool"
+        card = sf.Approval(title="How much should I build?", action="answer",
+                           buttons=(("c0", "Full scene: pool, walls, dining set, all furniture", ""),
+                                    ("c1", long, ""), ("c2", "Minimal staging", "")))
+        canvas = lay.Canvas(st.Style(), lay.fixed_measure(0.55), surface.interaction())
+        surface.draw(canvas, lay.Rect(0, 0, 260, 700), [], approval=card)
+        rects = {w: r for r, w in canvas.hit_areas if w.startswith("answer:")}
+        self.assertEqual(sorted(rects), ["answer:c0", "answer:c1", "answer:c2"])
+        for r in rects.values():
+            self.assertLessEqual(r.right, 260)                                    # no overlap off the card
+        self.assertGreater(rects["answer:c1"].h, rects["answer:c2"].h)            # the long one wraps
+        style = st.Style()
+        marks = [c for c in canvas.commands if c.kind == "icon" and c.text == "KEYTYPE_JITTER_VEC"
+                 and c.color != style.keyframe_border]
+        self.assertEqual([m.color for m in marks][:2], [style.keyframes[2], style.keyframes[3]])   # green, blue
+
     def test_every_widget_everywhere_has_a_tooltip(self):
         # #268: every widget the GPU chats draw, in frames that show them all: cards, the
         # harness notice, Show all, a link, thumbnails, the scrollbar, the grip, the @ list.

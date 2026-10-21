@@ -54,6 +54,34 @@ _HEADING_SCALE = {1: 1.6, 2: 1.4, 3: 1.2, 4: 1.05}
 _HEADING_ICON = {1: "KEYTYPE_EXTREME_VEC", 2: "KEYTYPE_MOVING_HOLD_VEC", 3: "KEYTYPE_JITTER_VEC"}
 
 
+# Choices (a question's, or a reply's suggestions): a keyframe marks each, green (jitter) for the
+# recommended one -- the first -- and blue (breakdown) for the others, in the theme's colours.
+_CHOICE_ICONS = (("KEYTYPE_JITTER_VEC", 2), ("KEYTYPE_JITTER_VEC", 3))     # same diamond, two colours
+
+
+def choice_height(canvas: Canvas, width: float, text: str) -> float:
+    """The height of a choice button *width* wide: its text wraps to fit."""
+    style = canvas.style
+    inner = width - canvas.icon_size() - 2.4 * style.pad
+    return max(style.unit * 1.1, canvas.text_height(text, inner) + style.pad * 0.8)
+
+
+def draw_choice(canvas: Canvas, rect: Rect, widget_id: str, text: str, recommended: bool) -> bool:
+    """A choice as a left-aligned button with a keyframe before its wrapped text; True when clicked."""
+    style = canvas.style
+    clicked = canvas.button(rect, widget_id, "")
+    icon, colour = _CHOICE_ICONS[0] if recommended else _CHOICE_ICONS[1]
+    side = canvas.icon_size() * 1.25          # the diamond fills less of its square than an icon
+    edge = max(1.0, style.scale * 1.2)
+    mark = Rect(rect.x + style.pad * 0.8, rect.top - style.pad * 0.4 - style.line_height + (style.line_height - side) / 2,
+                side, side)
+    canvas.icon(Rect(mark.x - edge, mark.y - edge, side + 2 * edge, side + 2 * edge), icon, style.keyframe_border)
+    canvas.icon(mark, icon, style.keyframes[colour])
+    tx = mark.right + style.pad * 0.6
+    canvas.wrapped(tx, rect.top - style.pad * 0.4, rect.right - style.pad * 0.8 - tx, text, style.button.text)
+    return clicked
+
+
 # "[attached: a.png, b.jpg]" -- the marker a user message carries for its images.
 _ATTACHED = re.compile(r"\s*\[attached:\s*([^\]]*)\]")
 # Thumbnail heights (in widget units) for the S / M / L sizes.
@@ -277,16 +305,11 @@ class ChatView:
                           actions: list[tuple[str, str]]) -> float:
         """The next steps the reply offers, as large buttons; a click sends one (#220)."""
         style = canvas.style
-        h, gap = style.unit * 1.35, style.pad * 0.4
-        room = width - canvas.icon_size() - 3 * style.pad
+        gap = style.pad * 0.4
         for n, (label, text) in enumerate(suggestions(reply)):
-            shown = label
-            while shown and canvas.measure(shown + "\u2026", "ui", style.font_size) > room:
-                shown = shown[:-1]
-            if shown != label:
-                shown = shown.rstrip() + "\u2026"
+            h = choice_height(canvas, width, label)          # wraps to fit a narrow sidebar
             button = Rect(x, top - style.pad * 0.5 - h, width, h)
-            if canvas.button(button, "suggest:{:d}".format(n), shown, align="left", icon="FORWARD"):
+            if draw_choice(canvas, button, "suggest:{:d}".format(n), label, recommended=n == 0):
                 # "No, something else...": you finish it in the input (#270).
                 actions.append(("suggest", text) if text != TYPE else ("suggest_type", "No, "))
             top = button.y - gap

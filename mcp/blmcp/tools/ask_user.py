@@ -39,12 +39,13 @@ def register(mcp: FastMCP) -> None:
         Ask the user a short question in Coworker's chat, with buttons; waits for the answer.
 
         Ask when a choice really matters (style, which object, overwrite or keep) - a
-        question beats a wrong turn. Give 2-5 short ``choices``; with ``allow_text`` the user
-        may also type an answer.
+        question beats a wrong turn. Give 2-5 short ``choices``, the one you recommend FIRST
+        (the chat marks it as the recommended path); with ``allow_text`` the user may also
+        type an answer.
 
         Args:
             question: One short question.
-            choices: Button labels (2-5 short options).
+            choices: Button labels (2-5 short options), your recommended one first.
             allow_text: Let the user type an answer instead.
             wait_seconds: How long to wait (at most 280).
 

@@ -32,7 +32,7 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
-from .chat_view import ChatView, _soft
+from .chat_view import ChatView, _soft, choice_height, draw_choice
 from .input_box import InputBox
 from .layout import Canvas, InteractionState, Rect, row_corners
 from .style import Style
@@ -472,11 +472,16 @@ class ChatSurface:
         note_h = canvas.text_height(approval.note, width) if approval.note else 0.0
         detail_h = canvas.text_height(approval.detail, width - pad, "mono") + pad if approval.detail else 0.0
         buttons = approval.buttons
+        # A question's choices: one wrapped, left-aligned button each, a keyframe before it --
+        # green for the first (the recommended one), blue for the rest.
+        choices = approval.action == "answer"
+        heights = [choice_height(canvas, width, label) for _c, label, _i in buttons] if choices else []
         needs = [(side if icon else 0.0) + canvas.measure(label, "ui", style.font_size) + 3.0 * style.pad
                  for _c, label, icon in buttons]
-        side_by_side = sum(needs) + pad * 0.5 * (len(needs) - 1) <= width
+        side_by_side = not choices and sum(needs) + pad * 0.5 * (len(needs) - 1) <= width
         rows = 1 if side_by_side else len(buttons)
-        h = title_h + note_h + detail_h + rows * u * 1.25 + 2.5 * pad
+        buttons_h = sum(heights) + pad * 0.35 * max(0, len(heights) - 1) if choices else rows * u * 1.25
+        h = title_h + note_h + detail_h + buttons_h + 2.5 * pad
         card = Rect(anchor.x, anchor.y, anchor.w, h)
         canvas.box(card, colors=style.box)
         # A thin accent line on the left: this needs you.
@@ -495,6 +500,15 @@ class ChatSurface:
             canvas.fill(frame, style.text_field.inner, style.radius(style.text_field))
             canvas.wrapped(frame.x + pad * 0.5, frame.top - pad * 0.25, width - pad, approval.detail,
                            style.text_field.text, font="mono")
+        if choices:
+            y = card.y + pad + buttons_h
+            for n, ((choice, label, _icon), bh) in enumerate(zip(buttons, heights)):
+                y -= bh
+                if draw_choice(canvas, Rect(card.x + pad, y, width, bh), approval.action + ":" + choice, label,
+                               recommended=n == 0):
+                    actions.append((approval.action, choice))
+                y -= pad * 0.35
+            return card.top
         bx, by = card.x + pad, card.y + pad + (rows - 1) * u * 1.25
         for (choice, label, icon), need in zip(buttons, needs):
             bw = need if side_by_side else width

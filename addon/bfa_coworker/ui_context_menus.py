@@ -30,6 +30,7 @@ __all__ = (
     "unregister",
 )
 
+from types import SimpleNamespace
 from typing import Any, Callable
 
 import bpy  # pylint: disable=import-error
@@ -182,6 +183,90 @@ class BFACW_OT_explain(Operator):  # type: ignore[misc]
             return {'CANCELLED'}
         self.report({'INFO'}, "Asked Coworker -- the answer is in the chat")
         return {'FINISHED'}
+
+
+def spot_text(editor: str, region: str) -> str:
+    """The question for a button seen only in a picture (menus, popovers: Python can't name them)."""
+    where = " in the {:s}".format(editor) if editor else ""
+    part = {"HEADER": "header", "TOOL_HEADER": "tool settings bar", "UI": "sidebar", "TOOLS": "toolbar",
+            "FOOTER": "footer", "WINDOW": "main area"}.get(region, "")
+    if part:
+        where += "'s {:s}".format(part) if editor else " in the {:s}".format(part)
+    return ("Explain the button I right-clicked{:s}: it's the one inside the red ring in the attached "
+            "picture (a crop of the screen around my mouse). Say what it is, what it does, and when I'd use it. "
+            "Keep it short and practical.").format(where)
+
+
+class BFACW_OT_explain_spot(Operator):  # type: ignore[misc]
+    """Ask Coworker what the button you right-clicked is, with a picture of it (Ask mode)"""
+    bl_idname = "bfacw.explain_spot"
+    bl_label = "Explain This"
+    bl_options = {'INTERNAL'}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        if not chat_ready():
+            cls.poll_message_set("Start Coworker first (its own chat: not in External Harness)")
+            return False
+        return True
+
+    def invoke(self, context: bpy.types.Context, event) -> set[str]:
+        # The right-click that opened this menu was the press before this click.
+        x, y = event.mouse_prev_press_x, event.mouse_prev_press_y
+        wm = context.window_manager
+        index = next((i for i, w in enumerate(wm.windows) if w == context.window), 0)
+        # Let the menu close and the window redraw before the picture is taken.
+        bpy.app.timers.register(lambda: _explain_spot(index, x, y), first_interval=0.3)
+        return {'FINISHED'}
+
+
+def _ring(path: str, cx: int, cy: int, radius: int = 14) -> None:
+    """Mark the clicked spot on the picture with a red ring, so the model looks there."""
+    import numpy as np
+    img = bpy.data.images.load(path, check_existing=False)
+    try:
+        w, h = img.size
+        px = np.array(img.pixels[:], dtype=np.float32).reshape(h, w, 4)
+        yy, xx = np.ogrid[:h, :w]
+        d = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+        px[(d >= radius - 1.5) & (d <= radius + 1.5)] = (1.0, 0.15, 0.1, 1.0)
+        img.pixels[:] = px.ravel()
+        img.filepath_raw, img.file_format = path, "PNG"
+        img.save()
+    finally:
+        bpy.data.images.remove(img)
+
+
+def _explain_spot(window_index: int, x: int, y: int) -> None:
+    from . import chat_attachments
+    wm = bpy.context.window_manager
+    if window_index >= len(wm.windows):
+        return None
+    window = wm.windows[window_index]
+    editor, region = "", ""
+    for area in window.screen.areas:
+        if area.x <= x < area.x + area.width and area.y <= y < area.y + area.height:
+            from .ui_chat import _EDITOR_NAMES
+            editor = _EDITOR_NAMES.get(area.type) or _editor_name(SimpleNamespace(area=area))
+            region = next((r.type for r in area.regions
+                           if r.x <= x < r.x + r.width and r.y <= y < r.y + r.height), "")
+            break
+    half_w, half_h = 180, 70
+    x0, y0 = max(0, x - half_w), max(0, y - half_h)
+    path = chat_attachments.capture_screen_rect(window, x0, y0, min(window.width, x + half_w),
+                                                min(window.height, y + half_h))
+    if path:
+        _ring(path, x - x0, y - y0)
+    props = getattr(wm, "bfacw_chat_props", None)
+    if path and props is not None:
+        try:
+            props.chat_image = bpy.data.images.load(path, check_existing=False)
+            props.chat_image_send_once = True
+        except (RuntimeError, OSError):
+            pass
+    with bpy.context.temp_override(window=window, screen=window.screen):
+        _ask(bpy.context, spot_text(editor, region), "ASK")
+    return None
 
 
 # -- Translate (#42) -----------------------------------------------------------------
@@ -354,7 +439,9 @@ def _explain_entry(layout: Any, _context: Any, target: dict) -> None:
 
 def _draw_button_menu(self: Any, context: Any) -> None:
     target = clicked(context)
-    if target is None:
+    if target is None:      # a menu, popover or other button Python can't name: show it a picture
+        self.layout.separator()
+        self.layout.operator("bfacw.explain_spot", text="Explain This", icon='QUESTION')
         return
     layout = self.layout
     layout.separator()
@@ -373,7 +460,7 @@ def _draw_editor_menu(self: Any, context: Any) -> None:
 
 
 _HOOKED: list[tuple[type, Callable]] = []
-_CLASSES = (BFACW_OT_explain, BFACW_OT_translate, BFACW_OT_translate_swap)
+_CLASSES = (BFACW_OT_explain, BFACW_OT_explain_spot, BFACW_OT_translate, BFACW_OT_translate_swap)
 # Menus of a kind of thing, with their draw: text objects, text strips, the Text Editor (#42).
 _THING_MENUS = (
     ("VIEW3D_MT_object_context_menu", _draw_text_object_menu),

@@ -229,6 +229,19 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         from . import ui_chat
         ui_chat.apply_approval_mode(self.approval_mode)
 
+    translate_language: EnumProperty(  # type: ignore[valid-type]
+        name="Translate To",
+        description="The language Translate (right-click a text field, a text object or a text strip) "
+                    "turns text into; remembered for next time",
+        items=[(code, name, "Translate into " + name) for code, name in (
+            ("en", "English"), ("es", "Spanish"), ("fr", "French"), ("de", "German"), ("it", "Italian"),
+            ("pt", "Portuguese"), ("nl", "Dutch"), ("pl", "Polish"), ("ru", "Russian"), ("uk", "Ukrainian"),
+            ("tr", "Turkish"), ("ar", "Arabic"), ("hi", "Hindi"), ("id", "Indonesian"), ("vi", "Vietnamese"),
+            ("th", "Thai"), ("zh_hans", "Chinese (Simplified)"), ("zh_hant", "Chinese (Traditional)"),
+            ("ja", "Japanese"), ("ko", "Korean"))],
+        default="en",
+    )
+
     approval_mode: EnumProperty(  # type: ignore[valid-type]
         name="Approval",
         description="How much the chat asks before tools run, on every engine (switching forgets "

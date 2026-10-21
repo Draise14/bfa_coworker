@@ -48,5 +48,30 @@ class TestExplainText(unittest.TestCase):
         self.assertIn("Explain this editor: the Shader Editor (node tree: Material).", editor)
 
 
+
+def _translate_text():
+    src = (_ADDON / "ui_context_menus.py").read_text(encoding="utf-8")
+    start = src.index("def translate_text(")
+    end = src.index("\n\n\n", start)
+    ns: dict = {}
+    exec(compile(src[start:end], "ui_context_menus.py", "exec"), ns)      # noqa: S102
+    return ns["translate_text"]
+
+
+class TestTranslateText(unittest.TestCase):
+
+    def test_a_property_gets_its_exact_path_and_text(self):
+        text = _translate_text()("bpy.data.curves['Text'].body", "Hello world", "Spanish",
+                                 "the text object “Text”")
+        self.assertIn("into Spanish", text)
+        self.assertIn("bpy.data.curves['Text'].body = \"...\"", text)
+        self.assertIn("“Hello world”", text)
+        self.assertIn("keep line breaks", text)
+
+    def test_a_text_datablock_is_written_back_whole(self):
+        text = _translate_text()("bpy.data.texts['Notes'].as_string()", "Bonjour", "English", "the selected text")
+        self.assertIn("bpy.data.texts['Notes'].from_string(...)", text)
+        self.assertNotIn(".as_string() = ", text)
+
 if __name__ == "__main__":
     unittest.main()

@@ -362,7 +362,7 @@ class AcpEngine:
         shown = prompt.text + ("\n[attached: {:s}]".format(", ".join(names)) if names and prompt.images else "")
         self._turn_mode = prompt.chat_mode
         self.bus.emit("turn_start", turn_id, text=shown, mode=prompt.chat_mode)
-        if self.on_request is not None:
+        if self.on_request is not None and prompt.chat_mode != "ASK":     # a question is no goal
             self.on_request(prompt.text)
         threading.Thread(target=self._run, args=(turn_id, prompt), daemon=True, name="acp-turn").start()
         return turn_id

@@ -41,6 +41,7 @@ __all__ = (
     "attachment_name",
     "attachments_dir",
     "capture_render",
+    "capture_render_from_camera",
     "capture_render_from_view",
     "capture_screen",
     "capture_screen_rect",
@@ -177,13 +178,19 @@ def capture_render_from_view() -> str | None:
     """
     import bpy  # pylint: disable=import-error,no-name-in-module
 
-    window = bpy.context.window
-    screen = getattr(window, "screen", None)
-    if screen is None:
-        return None
-    area = _find_view3d_area(screen)
+    # This window's 3D Viewport, else one in any window (#267: the floating Coworker
+    # window has none of its own).
+    window, area = bpy.context.window, None
+    if getattr(window, "screen", None) is not None:
+        area = _find_view3d_area(window.screen)
+    if area is None:
+        windows = getattr(getattr(bpy.context, "window_manager", None), "windows", ())
+        found = [(w, a) for w in windows for a in w.screen.areas if a.type == "VIEW_3D"]
+        if found:
+            window, area = max(found, key=lambda wa: wa[1].width * wa[1].height)
     if area is None:
         return None
+    screen = window.screen
     region = next((r for r in area.regions if r.type == "WINDOW"), None)
     spaces = getattr(area, "spaces", None)
     space = spaces[0] if spaces else None
@@ -226,6 +233,29 @@ def capture_render_from_view() -> str | None:
             bpy.data.cameras.remove(cam_data)
         except (RuntimeError, ReferenceError):
             pass
+
+
+def capture_render_from_camera() -> str | None:
+    """Render the scene's active camera (no 3D Viewport open anywhere: #267) and save it.
+
+    Same cheap settings as the view render, restored after.  ``None`` without a camera
+    or when the render produced nothing.  Main thread only.
+    """
+    import bpy  # pylint: disable=import-error,no-name-in-module
+    scene = bpy.context.scene
+    if scene is None or scene.camera is None:
+        return None
+    wm = bpy.context.window_manager
+    window = bpy.context.window or (wm.windows[0] if wm.windows else None)
+    saved_settings = _clamp_render_settings(scene)
+    try:
+        with bpy.context.temp_override(window=window, screen=getattr(window, "screen", None)):
+            bpy.ops.render.render()
+        return _save_render_result(bpy.data.images.get("Render Result"))
+    except (AttributeError, RuntimeError, OSError, ValueError):
+        return None
+    finally:
+        _restore_render_settings(saved_settings)
 
 
 def _clamp_render_settings(scene) -> list:

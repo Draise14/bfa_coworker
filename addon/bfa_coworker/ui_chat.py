@@ -2892,20 +2892,19 @@ class BFACW_OT_chat_capture_render(Operator):  # type: ignore[misc]
     bl_idname = "bfacw.chat_capture_render"
     bl_label = "Render View"
     bl_description = (
-        "Render the current 3D Viewport view through a temporary camera "
-        "(your own camera is never moved) and attach the result"
+        "Render the 3D Viewport's view (in any window) through a temporary camera -- your own "
+        "camera is never moved -- or, with no 3D Viewport open, the scene's camera; and attach it"
     )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         # Render the current view.  A throwaway camera is aligned to the
         # viewport and removed again, so the scene is left untouched.
-        path = chat_attachments.capture_render_from_view()
+        path = chat_attachments.capture_render_from_view()      # a 3D Viewport in any window
         if not path:
-            # No 3D Viewport to render from (e.g. a Text-Editor-only
-            # layout): fall back to the last Render Result, if any.
-            path = chat_attachments.capture_render()
+            # No 3D Viewport anywhere: the scene's active camera (#267), else the last Render Result.
+            path = chat_attachments.capture_render_from_camera() or chat_attachments.capture_render()
         if not path:
-            self.report({"WARNING"}, "Nothing to render -- open a 3D Viewport")
+            self.report({"WARNING"}, "Nothing to render: open a 3D Viewport, or add a camera")
             return {"CANCELLED"}
         img = chat_attachments.load_image_file(path)
         if img is None:

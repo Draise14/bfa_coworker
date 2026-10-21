@@ -73,5 +73,11 @@ class TestTranslateText(unittest.TestCase):
         self.assertIn("bpy.data.texts['Notes'].from_string(...)", text)
         self.assertNotIn(".as_string() = ", text)
 
+    def test_from_a_language_or_detected(self):
+        f = _translate_text()
+        text = f("bpy.data.curves['Text'].body", "Bonjour", "English", "the text object “Text”", "French")
+        self.assertIn("the text object “Text” from French into English", text)
+        self.assertNotIn(" from ", f("bpy.data.curves['Text'].body", "Bonjour", "English", "the text"))
+
 if __name__ == "__main__":
     unittest.main()

@@ -6240,11 +6240,18 @@ class BFACW_OT_plan_open(Operator):  # type: ignore[misc]
         text.clear()
         text.write(rendered)
         _plan_last_written = rendered
+        # write() leaves the cursor at the end, so the editor opened scrolled past the last
+        # line and the plan looked empty (#272): back to the top.
+        try:
+            text.cursor_set(0)
+        except (AttributeError, TypeError):
+            text.current_line_index = 0
         # Show it: reuse an open Text Editor, else open one in a new window.
         for win in context.window_manager.windows:
             for area in win.screen.areas:
                 if area.type == 'TEXT_EDITOR':
                     area.spaces.active.text = text
+                    area.spaces.active.top = 0
                     area.tag_redraw()
                     self.report({"INFO"}, "Plan opened in the Text Editor")
                     return {"FINISHED"}
@@ -6254,6 +6261,7 @@ class BFACW_OT_plan_open(Operator):  # type: ignore[misc]
             area = new_win.screen.areas[0]
             area.ui_type = 'TEXT_EDITOR'
             area.spaces.active.text = text
+            area.spaces.active.top = 0
             self.report({"INFO"}, "Plan opened in a new Text Editor window")
         except Exception:  # pylint: disable=broad-exception-caught
             self.report({"INFO"}, "Plan saved as text '{:s}' -- open it in any "

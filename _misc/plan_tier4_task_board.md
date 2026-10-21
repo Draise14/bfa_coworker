@@ -48,6 +48,8 @@ from `main`, no stacked PRs. Only one open PR at a time on `agent_controller.py`
 | ✅ Done | Refinement pass: capture across windows, render without a 3D View, every-button tooltips, two-choice suggestions, approval hot swap, Plan Edit, History Open for older chats, bottom toolbar + joined rows, full-width sidebar chat, faint scrollbar | #262-#286 (issues #265-#279) |
 | ✅ Unblocked | Chat 1: native markdown. `UILayout.label_markdown` **is** in the 5.3 dev builds; the earlier probe was wrong (`hasattr` on the class can't see RNA functions; `bl_rna.functions` can) | |
 | ✅ Done | Agent 1, part 2: record one Claude Code session (uses your Claude login) | #148 #152 |
+| ✅ Done | **2026-10-20:** choice buttons wrap (keyframe icons, green = recommended), Allow this turn + permissions dropdown, permissions **Strict / Permissive / Auto**, History Open loads the .blend at once, **Explain This** in the right-click menus (#290), **Translate** in the right-click menus (#42), the chat's voice is always Coworker, **the Coworker tab in every editor's sidebar** + *Use editor context only* (#291) | #288 #289 #292 #293 #294 #296 #297 #298 #325 |
+| ⏭ Next | **The rest of Tier 4, one issue per task** (below): #299-#324. Tier 4a review: what's left is Chat 4 (#299) and Quick prompts (#300); Viewport feedback and the moodboard are dropped / Tier 5 | |
 
 ---
 
@@ -107,12 +109,12 @@ Plan: `plan_tier4g_domain_tooling.md`. Each task ships its prompt chapter and re
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
-| ☐ | **Tools 1**: Video Sequencer | G1 | 5 tools: strips, strip detail, timeline, move/trim, preview frame | — | M | "Move the title strip to frame 50" works on Local | |
-| ☐ | **Tools 2**: Text Editor + recipes | G2 | 5 tools: list, read lines, edit lines, search, run. Plus **recipes**: scripts with a parameter block, rerun instead of regenerate | — | M | Agent edits lines 40–45 and reruns; a recipe reruns with a new number | |
-| ☐ | **Tools 3**: Nodes | G3 | 5 tools: node detail, add, connect (fuzzy socket names), set value, mute | — | M | Noise → Roughness flow works on Local | |
-| ☐ | **Tools 4**: Saving & export | G4 | Save, unsaved check, pack, export selection, incremental save; risky ones ask first | Engine 5 (ship the read-only check first) | M | Export asks; incremental save versions correctly | |
-| ☐ | **Tools 5**: Review sheet | G5 | One tiled image of several views (front, back, below, camera) for vision checks | — | S | One labelled image; costs about one image | |
-| ☐ | **Tools 6**: Long jobs | G6 | Long bakes/renders run in the background with progress | — | S | A 10-minute bake doesn't time out the agent | |
+| ☐ | **Tools 1** (#304): Video Sequencer | G1 | 5 tools: strips, strip detail, timeline, move/trim, preview frame | — | M | "Move the title strip to frame 50" works on Local | |
+| ☐ | **Tools 2** (#305): Text Editor + recipes | G2 | 5 tools: list, read lines, edit lines, search, run. Plus **recipes**: scripts with a parameter block, rerun instead of regenerate | — | M | Agent edits lines 40–45 and reruns; a recipe reruns with a new number | |
+| ☐ | **Tools 3** (#306): Nodes | G3 | 5 tools: node detail, add, connect (fuzzy socket names), set value, mute | — | M | Noise → Roughness flow works on Local | |
+| ☐ | **Tools 4** (#307): Saving & export | G4 | Save, unsaved check, pack, export selection, incremental save; risky ones ask first | Engine 5 (ship the read-only check first) | M | Export asks; incremental save versions correctly | |
+| ☐ | **Tools 5** (#308): Review sheet | G5 | One tiled image of several views (front, back, below, camera) for vision checks | — | S | One labelled image; costs about one image | |
+| ☐ | **Tools 6** (#309): Long jobs | G6 | Long bakes/renders run in the background with progress | — | S | A 10-minute bake doesn't time out the agent | |
 
 ## Chat features — explain, translate, ask, undo, sessions
 
@@ -120,15 +122,15 @@ Plan: `plan_tier4b_competitor_ux_analysis.md`
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
-| ☐ | **Chat 1**: Native markdown, 5.3 minimum | B0 | Minimum 5.3; use Blender's `label_markdown()` wherever chat text is still drawn by **panels** (native list fallback, panel answers) and delete our old panel renderer. The GPU chat draws its own markdown (GPU 2), since `label_markdown` only works inside panels | Engine 3 | S | Panel-drawn replies use `label_markdown` on Blender + Bforartists 5.3 | |
-| ☐ | **Chat 2**: Explain this | B1 | Right-click a property, node or object → a short answer from the bundled docs, with the source; `/explain` | — | M | Property, node, object each give a cited answer on all engines | |
-| ☐ | **Chat 3**: Translate text in the scene (#42) | B1 | Right-click a text field, 3D text or text strip → **Translate with Coworker…** → language (remembered) → one small model call → confirm → written back as one undo step. Fast on light models; no full agent turn | — | S | A 3D text, a strip and a node label translate and undo cleanly | |
-| ☐ | **Chat 4**: "Where am I" chip | B6 | A line above the input (editor · mode · selection), read live at send time | — | S | Same prompt in two editors picks different correct tools | |
-| ☐ | **Chat 5**: Questions as buttons | B2 | `ask_user` choices as buttons; the suggested next step as [Do it] [Something else] | Engine 6 | S | A click resumes the same turn on all engines | |
-| ☐ | **Chat 6**: Undo the agent's turn | B4 | Revert turn (chat + scene), Edit & resend, Retry | Engine 6 | M | Revert restores chat + scene (Local), scene + note (External) | |
+| ☐ | **Chat 1** (#301): Native markdown, 5.3 minimum | B0 | Minimum 5.3; use Blender's `label_markdown()` wherever chat text is still drawn by **panels** (native list fallback, panel answers) and delete our old panel renderer. The GPU chat draws its own markdown (GPU 2), since `label_markdown` only works inside panels | Engine 3 | S | Panel-drawn replies use `label_markdown` on Blender + Bforartists 5.3 | |
+| ✅ | **Chat 2**: Explain this | B1 | Right-click a setting, an operator or an editor → **Explain This** asks in Ask mode (greyed out until Coworker runs). *Citing the bundled docs is left for Chat 9* | — | M | Property, operator, editor each give an answer on all engines | #294 (#290) |
+| ✅ | **Chat 3**: Translate text in the scene (#42) | B1 | Right-click a text field, 3D text, text strip or the Text Editor (selection or whole text) → **Translate...** → language (remembered) → written back by the agent (Revert undoes it) | — | S | A 3D text, a strip and a text field translate | #296 |
+| ☐ | **Chat 4** (#299): "Where am I" chip | B6 | A line above the input (editor · mode · selection), read live at send time. *The sidebar chats already send it (#298); this shows it* | — | S | Same prompt in two editors picks different correct tools | |
+| ✅ | **Chat 5**: Questions as buttons | B2 | `ask_user` choices as buttons; the suggested next step as buttons (two-choice, recommended in green) | Engine 6 | S | A click resumes the same turn on all engines | #168 #288 (issues #220 #270) |
+| ✅ | **Chat 6**: Undo the agent's turn | B4 | Revert turn (chat + scene) on every reply, to the named "Before Coworker's turn" undo step. *Edit & resend / Retry: later, if wanted* | Engine 6 | M | Revert restores chat + scene (Local), scene + note (External) | #170 #242 |
 | ✅ | **Chat 7**: Chat history panel | B3 | Your chats in one list, like VS Code / Claude: **not tied to the .blend**. A collapsible **History** panel (like Queue) in the Coworker editor and the 3D View tab: title (your first message, renamable), when, which engine / agent, the .blend it started in. Click to continue it (External Agent resumes its own session); New Thread keeps the old chat in the list; delete, pin, search. Opening a .blend still shows the chat you last used there. One file per chat + an index (today's per-.blend `default.json` files move in) | Agent 6 | M | Yesterday's chat continues from the list, in another .blend, on each engine | #187 |
-| ☐ | **Chat 8**: Run & fix shown code | B5 | Run button on code blocks (Ask mode) with a safety scan, undo, and Fix | — | M | Broken snippet → Run → Fix → Run works | |
-| ☐ | **Chat 9**: Keep docs honest | B7 | Docs and skills record their sources; a checker flags drift; review the pre-5.3 skills | Chat 1, Skills 4 | S | Drifted docs listed; old version skills trimmed or justified | |
+| ☐ | **Chat 8** (#302): Run & fix shown code | B5 | Run button on code blocks (Ask mode) with a safety scan, undo, and Fix | — | M | Broken snippet → Run → Fix → Run works | |
+| ☐ | **Chat 9** (#303): Keep docs honest | B7 | Docs and skills record their sources; a checker flags drift; review the pre-5.3 skills | Chat 1, Skills 4 | S | Drifted docs listed; old version skills trimmed or justified | |
 
 ## Agent runtime — safety, skills, speed
 
@@ -136,9 +138,9 @@ Plan: `plan_tier4f_agent_intelligence.md`
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
-| ☐ | **Runtime 1**: Safe mode & loop guard | F1 | Trusted / Safe / Strict, path guard, stop the same call repeating 3× | Engine 5 | M | Safe mode asks before running code; 3× repeat escalates | |
-| ☐ | **Runtime 2**: Skills on demand | F2 | Only skill names + descriptions in the prompt, bodies loaded when needed (also for external clients) | Skills 5 | S | Prompt shrinks measurably on Local 16K | |
-| ☐ | **Runtime 3**: Local speed | F3 | llama-server metrics, parallel slots, auto-tune | — | M | tok/s in Status; no benchmark regression | |
+| ☐ | **Runtime 1** (#310): Loop guard & path guard | F1 | *Permissions are done: Strict / Permissive / Auto (#292).* Left: path guard, stop the same call repeating 3× | Engine 5 | M | Safe mode asks before running code; 3× repeat escalates | |
+| ☐ | **Runtime 2** (#311): Skills on demand | F2 | Only skill names + descriptions in the prompt, bodies loaded when needed (also for external clients) | Skills 5 | S | Prompt shrinks measurably on Local 16K | |
+| ☐ | **Runtime 3** (#312): Local speed | F3 | llama-server metrics, parallel slots, auto-tune | — | M | tok/s in Status; no benchmark regression | |
 
 ## Text Editor coding agent (#52)
 
@@ -146,11 +148,11 @@ Plan: `plan_tier4c_text_editor_ide_agent.md`
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
-| ☐ | **Text Editor 1**: Code control panel | C1 | Sidebar shows the active text, cursor, selection; Generate / Fix / Explain / Edit | Tools 2, Engine 4 | S | Panel shows file info; actions work | |
-| ☐ | **Text Editor 2**: Edit with Coworker | C2 | Right-click → rewrite the selection in place, streamed, one undo step | Text Editor 1 | M | Selection rewritten; Ctrl+Z restores | |
-| ☐ | **Text Editor 3**: Run → fix | C3 | Run the script, jump to the error, fix the range | Chat 8 | S | Error line found; fix applied | |
-| ☐ | **Text Editor 4**: Recipes panel | C4 | The script's parameter block as fields; "Rerun with…" | Tools 2 | S | Change a number → script reruns | |
-| ☐ | **Text Editor 5**: Prompt templates | C5 | File-based templates per editor | Text Editor 1 | S | A user template appears and works | |
+| ☐ | **Text Editor 1** (#313): Code control panel | C1 | Sidebar shows the active text, cursor, selection; Generate / Fix / Explain / Edit | Tools 2, Engine 4 | S | Panel shows file info; actions work | |
+| ☐ | **Text Editor 2** (#314): Edit with Coworker | C2 | Right-click → rewrite the selection in place, streamed, one undo step | Text Editor 1 | M | Selection rewritten; Ctrl+Z restores | |
+| ☐ | **Text Editor 3** (#315): Run → fix | C3 | Run the script, jump to the error, fix the range | Chat 8 | S | Error line found; fix applied | |
+| ☐ | **Text Editor 4** (#316): Recipes panel | C4 | The script's parameter block as fields; "Rerun with…" | Tools 2 | S | Change a number → script reruns | |
+| ➜ | **Text Editor 5**: Prompt templates | C5 | *Moved into **Editors 7** (quick prompts per editor, #300)* | Text Editor 1 | S | A user template appears and works | |
 
 ## Editors everywhere — Coworker editor and sidebars (#26)
 
@@ -159,11 +161,12 @@ Plan: `plan_tier4a_editor_integration.md`
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
 | ✅ | **Editors 1**: Coworker editor spike | A0 | Three throwaway prototypes. Your preference order: (1) Preferences-editor clone with Python panels in the center, if it can't leak into your real Preferences; (2) Text / Node editor clone with the chat in native panels; a custom node-tree type gets its own Editor Type entry; (3) GPU drawing last | — | S | Screenshots + recommendation on #26 | |
-| ➜ | **Editors 2**: One chat component | A1 | `draw_chat_interface()` that every panel uses | Engine 4 | M | Existing panels use it; no visual change | |
-| ➜ | **Editors 3**: Chat in every sidebar | A2 | *Moved to **GPU 5** (compact sidebars), 2026-10-19* | — | — | — | |
+| ✅ | **Editors 2**: One chat component | A1 | *Done differently:* one GPU chat surface (`ui_gpu/`) draws the editor and every sidebar | Engine 4 | M | One component, both sizes | GPU 1-5 |
+| ✅ | **Editors 3**: Chat in every sidebar | A2 | The Coworker tab (Queue, Plan, chat, History, Status, Coworker) in the Node, Image, Sequencer, Clip, Dope Sheet, Graph, NLA, Text and Spreadsheet sidebars; a message says which editor it came from; *Use editor context only* toggle | GPU 5 | M | Every editor with a sidebar has the tab | #298 #325 (#291) |
 | ➜ | **Editors 4**: The Coworker editor | A3 | *Moved to **GPU 4** (the editor around the GPU chat), 2026-10-19* | — | — | — | |
-| ☐ | **Editors 5**: Viewport status | A4 | Status dot + focus highlight in theme colours (toggle) | Engine 3 | S | Overlay follows the agent | |
-| ☐ | **Editors 6**: Floating chat window *(optional)* | A5 | A separate chat window | Editors 4 | S | Opens once; second click focuses it | |
+| ✖ | **Editors 5**: Viewport status | A4 | *Dropped 2026-10-20: less in your face; the chat and the editor are enough* | — | — | — | |
+| ✅ | **Editors 6**: Floating chat window | A5 | *Done differently:* the Coworker editor opens in its own window (Open Editor), with capture and drops working there | Editors 4 | S | A separate chat window | issues #215 #266 |
+| ☐ | **Editors 7** (#300): Quick prompts per editor | A Phase 6, C5 | One-click prompts under each sidebar chat and on the Coworker editor's toolshelf; user templates from a folder | Editors 3 | S | Each editor shows its prompts; a user file adds one | |
 
 ## Rigging & animation tools
 
@@ -171,8 +174,8 @@ Plan: `plan_tier4e_nice_to_haves.md`
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
-| ☐ | **Rig 1**: Rigging tools | E1 | Armature, bone, constraint, IK chain, mirror pose, bake | Tools pattern | M | "Rig this 3-bone arm with IK" works on Local | |
-| ☐ | **Rig 2**: Animation tools | E2 | Interpolation, F-curve modifier, NLA track, bake to NLA (keyframing tool exists) | Tools pattern | M | Bounce with ease-out + noise via tools only | |
+| ☐ | **Rig 1** (#317): Rigging tools | E1 | Armature, bone, constraint, IK chain, mirror pose, bake | Tools pattern | M | "Rig this 3-bone arm with IK" works on Local | |
+| ☐ | **Rig 2** (#318): Animation tools | E2 | Interpolation, F-curve modifier, NLA track, bake to NLA (keyframing tool exists) | Tools pattern | M | Bounce with ease-out + noise via tools only | |
 
 ## Skills cleanup — clean room
 
@@ -183,11 +186,11 @@ Plan: `plan_tier4s_skills_cleanroom.md`
 | ✅ | **Skills 1**: Template tools work everywhere | S0 | Registry moved into the server; `list_blender_templates` crash fixed | — | S | Both tools work in a build and a checkout | #109 (#110) |
 | ✅ | **Skills 2**: Nodes on 5.x | S1 | Compositor via `compositing_node_group` in four tools; reads never edit; no `use_nodes` advice | — | S | Live on 5.3: read works, a read without a compositor changes nothing | #109 |
 | ✅ | **Skills 3**: Needs list | S2 | Written in the plan | — | S | Done | — |
-| ☐ | **Skills 4**: API probes | S3 | Every skill claim gets a probe that runs inside Bforartists | — | S | Probes pass on 5.3; a removed property fails a probe | |
-| ☐ | **Skills 5**: Skill format | S4 | Front matter, size budget, references on request; a checker | Skills 4 | S | Checker green; Runtime 2 can build its index | |
-| ☐ | **Skills 6**: New chapters | S5 | 5.x changes, data over operators, compositor, bone collections, render settings, bulk mesh access, "finish with evidence" | Skills 4, 5 | M | Every claim has a probe; quick challenges no worse | |
-| ☐ | **Skills 7**: Mesh quality check | S6 | `check_mesh_quality`: overlaps, loose parts, open edges, flipped normals, unapplied scale | — | S | Finds each seeded fault | |
-| ☐ | **Skills 8**: Docs for skill packs | S7 | Tool-name stability; using other skill packs with External Harness | — | S | Wiki page reviewed | |
+| ☐ | **Skills 4** (#319): API probes | S3 | Every skill claim gets a probe that runs inside Bforartists | — | S | Probes pass on 5.3; a removed property fails a probe | |
+| ☐ | **Skills 5** (#320): Skill format | S4 | Front matter, size budget, references on request; a checker | Skills 4 | S | Checker green; Runtime 2 can build its index | |
+| ☐ | **Skills 6** (#321): New chapters | S5 | 5.x changes, data over operators, compositor, bone collections, render settings, bulk mesh access, "finish with evidence" | Skills 4, 5 | M | Every claim has a probe; quick challenges no worse | |
+| ☐ | **Skills 7** (#322): Mesh quality check | S6 | `check_mesh_quality`: overlaps, loose parts, open edges, flipped normals, unapplied scale | — | S | Finds each seeded fault | |
+| ☐ | **Skills 8** (#323): Docs for skill packs | S7 | Tool-name stability; using other skill packs with External Harness | — | S | Wiki page reviewed | |
 
 ## Agent teams & critics — orchestration layer (#71)
 
@@ -215,6 +218,6 @@ show the same conversation. Replaces Editors 3 and 4, and the planned sidebar qu
 | ✅ | **GPU 2**: Chat view | — | Turns from the chat state (your message, Workshop collapsible, tool rows, reply), our own markdown subset (bold, italic, code, lists, headings, links), code blocks with Copy (Run later), **icons first** (the native chat's icon vocabulary, full-colour Bforartists icons exported from its SVGs; keyframe-coloured heading markers), headings sized like 5.3's label_markdown, live streaming, follow the newest, scroll | GPU 1, Engine 3 | M | A recorded turn draws like the panel does today, in both sizes | |
 | ✅ | **GPU 3**: Input box | — | Click to focus / Esc to leave, multi-line, **Enter sends, Shift+Enter new line**, cursor + selection, copy/paste, undo, **`@` suggestions** while typing, attachment chip, Send/Stop, "edit in a native box" for IME, restart after opening a file | GPU 1 | M | Type, edit, `@` and send without the mouse; node/viewport shortcuts never fire while focused | |
 | ✅ | **GPU 4**: The Coworker editor | A3 | Register the "Coworker" editor type; one-click setup; full chat in the center; toolshelf icon actions (templates, explain, wizards); sidebar panels (session, model, plan); header | GPU 2, 3, Editors 1 | M | Pick "Coworker" in the Editor Type menu and chat | |
-| ✅ | **GPU 5**: Compact sidebars | A2 | **Done for the 3D View** (1.1.40; Preferences > Sidebar Chat switches back to Classic). The 3D View "Coworker" tab draws the compact chat (replaces today's sidebar drawing), then Node, VSE and Text editors; native scrolling list as fallback where painting misbehaves | GPU 2, 3 | M | Same conversation, same look in the editor and in four sidebars | |
-| ☐ | **GPU 6**: Guided flows | — | The same toolkit for question buttons (Chat 5), Explain answers (Chat 2) and step-by-step wizards in the chat | GPU 4 | M | A three-step wizard runs inside the chat | |
+| ✅ | **GPU 5**: Compact sidebars | A2 | 3D View (1.1.40; Preferences > Sidebar Chat switches back to Classic there and in the Text Editor), then **every editor with a sidebar** (#298) | GPU 2, 3 | M | Same conversation, same look in the editor and in four sidebars | |
+| ☐ | **GPU 6** (#324): Guided flows | — | The same toolkit for question buttons (Chat 5), Explain answers (Chat 2) and step-by-step wizards in the chat | GPU 4 | M | A three-step wizard runs inside the chat | |
 

@@ -4,6 +4,25 @@
 **Status**: Implementation Plan — Fusion (GPU Takeover + Hybrid, BOTH)
 **Depends on**: Tier 1-3 features (chat UI, agent controller, MCP tools)
 
+> **Review 2026-10-20: 4a is nearly closed.** What happened to each part of this plan:
+>
+> | Part | Status | Where |
+> |---|---|---|
+> | Theming (theme colours, roundness, UI scale) | ✅ Done: the GPU chat reads the active theme | `ui_gpu/` (GPU 1) |
+> | Phase 1: one chat component | ✅ Done differently: one GPU chat surface, two sizes | GPU 1-3 |
+> | Phase 2: chat in every editor's sidebar | ✅ Done: the Coworker tab in the 3D View, Node, Image, Sequencer, Clip, Dope Sheet, Graph, NLA, Text and Spreadsheet sidebars. (Outliner, Properties, Console and the File Browser have no right sidebar to use.) | #298 #325 (#291) |
+> | Phase 3 / 3b: the Coworker editor | ✅ Done: a custom "Coworker" node-editor type with the full GPU chat in the centre | GPU 4 |
+> | Phase 4: floating chat window | ✅ Done differently: the Coworker editor opens in its own window | Open Editor |
+> | Phase 5: per-editor context | ✅ Basic: a sidebar message says which editor and what it shows; *Use editor context only* keeps the work there. The visible chip is **Chat 4 (#299)**; richer context (selected nodes, strips) comes with the domain tools (4g: #304, #306) | #298 |
+> | Phase 6: templates / quick prompts | ☐ **Editors 7 (#300)** (also covers 4c C5) | |
+> | Phase 7: parity and polish | ✅ Done across the test rounds (#192-#283) | |
+> | Pillar 2 / Phase 8: viewport agent feedback | ✖ Dropped: less in your face; the chat and the editor are enough | |
+> | Pillar 3: moodboard | ➜ Tier 5 (`plan_tier5_moodboard_storyboarding.md`) | |
+> | Right-click Explain / Translate | ✅ Bonus from 4b: Explain This (#290), Translate (#42) | #294 #296 |
+>
+> The smarter, domain-aware tooling and contextual operators per editor belong to 4f / 4g.
+> The rest of this document is the original plan, kept as history.
+
 > **Decision 2026-10-19 (spike done, `_misc/spikes/coworker_editor/DECISION.md`)**: the Coworker editor is a **custom node-tree editor type "Coworker"**: its own Editor Type menu entry and icon, chat in native sidebar panels, header hidden. The Preferences-editor clone was tried and rejected, because Blender's own Preferences panels draw in the same center. The audit note below is kept as history.
 >
 > **Audit 2026-10-16 (task board lane A)**: **spike A0 before any build.** The

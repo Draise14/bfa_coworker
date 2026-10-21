@@ -47,7 +47,7 @@ a compact sidebar chat) plus groundwork for the External Agent mode.
   - **Mode, Model, Effort** dropdowns from the agent itself (remembered per agent), and the agent's own **/ commands** when you type `/`.
   - **Setup you can follow:** version, location, whose account it uses, Install / Update / Remove.
   - **Hardening:** the agent closes with Bforartists even on a crash; login errors say how to log in; a crash shows the agent's last output; a Stop it ignores closes it after 10 s.
-  - A reply is headed with the agent's name ("Claude Code").
+  - Every reply is headed **Coworker**, with the hat, whichever agent does the work (#297).
 - **New Coworker tools for every engine:** `ask_user` (a question with buttons in the chat), `update_plan` (Goal & Plan), `get_scene_digest` (a short scene summary; "unchanged" on repeat), `read_tool_output`, `load_tools`.
 - **Revert a turn.** Every turn is one undo step; the Undo button on the last reply undoes it (only while you haven't changed the scene since).
 - **External Harness activity view:** the card lists every tool call your outside client made in Blender, live (ok / error, time, a preview), with *Copy Log*.
@@ -60,10 +60,17 @@ a compact sidebar chat) plus groundwork for the External Agent mode.
 - **Actions panel (#201):** the common actions as buttons under the chat, in the 3D View and editor sidebars.
 - **Images in External Harness (#199):** drop an image on the Coworker editor and your outside client reads it with the new `get_attached_image` tool. The editor's Attach toolshelf has an image picker.
 - **Polish round (#212-#221):** the panel order you asked for in the editor and the sidebar (Coworker controls at the bottom of the sidebar); image controls on the chat input (a picker popover); a button column beside the sidebar chat; **suggestion buttons** from a reply's closing question or options; Coworker / Ask / Plan drive the External Agent's own mode (one control); the floating Workshop button is icons only.
-- **Test round 2 (#233-#249):** one **Approval** mode for every engine on the chat's input (Ask, the default / Risky only / Auto; switching forgets "Always"); a **Plan card** after planning (Start the Plan / Keep Refining); the mode button opens the mode tabs plus Model / Effort; History shows the mode's icon and opens the chat's .blend; tooltips on the chat's buttons; square icon buttons; Workshop results show 3 lines; agents get a size / scale / placement rule; the harness list scrolls; queue cards show the image icon.
+- **Test round 2 (#233-#249):** one **Approval** mode for every engine on the chat's input (now named **Strict** (default) / **Permissive** / **Auto**, #292; switching forgets "Always"); a **Plan card** after planning (Start the Plan / Keep Refining); the mode button opens the mode tabs plus Model / Effort; History shows the mode's icon and opens the chat's .blend; tooltips on the chat's buttons; square icon buttons; Workshop results show 3 lines; agents get a size / scale / placement rule; the harness list scrolls; queue cards show the image icon.
+
+- **The Coworker tab in every editor's sidebar (#291).** Node (Shader, Geometry, Compositor, Texture), Image / UV, Sequencer, Movie Clip, Dope Sheet, Graph, NLA, Text and Spreadsheet editors get the 3D View's Coworker tab: Queue, Plan, the compact chat, History, Status, Coworker. A message sent there says which editor it came from and what it shows (the material's node tree and active node, the active strip, the image, the text and line...). The editor's icon on the chat panel's header turns on **Use editor context only**: Coworker then works on what that editor shows and leaves the rest alone.
+- **Explain This (#290).** Right-click any setting or button: *Explain This* asks Coworker (in Ask mode) what it does and when to use it; right-click an editor's empty space: *Explain This Editor*. Greyed out until Coworker is started.
+- **Translate (#42).** Right-click a text field, a text object, a text strip or the Text Editor (the selection or the whole text): *Translate...*, pick the language (remembered), and Coworker writes the translation back.
+- **Permissions: Strict / Permissive / Auto (#292).** The lock button left of Send: *Strict* asks before every change (**Allow once**, **Allow this turn** for every tool until your next message, **Deny**), *Permissive* only for saving / opening files, deleting, exporting and running programs, *Auto* never asks. Switches at once, also while the agent runs.
+- **Suggestion buttons wrap** to the panel's width, with keyframe icons (green = the recommended choice).
 
 ### Changed
 
+- **History > Open loads the chat's .blend straight away (#293)**: it only asks to save when you have unsaved changes, and says so when the file was moved, renamed or deleted.
 - **Fixes from your testing:** the floating button folds the Workshop, and Thinking always shows (#196); the sidebar chat no longer blips away while you scroll a tall sidebar (#198); the External Agent tab comes before External Harness (#192).
 - **More fixes:** dropping an image works while the chat input has focus (the floating editor) (#215); Attach Screen's veil only in its own window and visible at once (#217); a long open Workshop draws only what is in view (about 10x faster per frame) (#218); chat buttons in a floating window act there.
 - **Round 2 fixes:** Revert undoes the whole turn even when its tools pushed undo steps of their own (#242); each control once in the Coworker panels (#234); each mode tab's tooltip says what it does (#233).

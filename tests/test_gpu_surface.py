@@ -186,8 +186,11 @@ class TestLayout(unittest.TestCase):
                         chat_mode="AGENT")
         canvas, _ = _draw(surface, top=top)
         buttons = sorted((r for r, w in canvas.hit_areas if w.startswith("mode:")), key=lambda r: r.x)
-        corners = [next(c.corners for c in canvas.commands if c.kind == "rect" and c.rect == r) for r in buttons]
-        self.assertEqual(corners, ["L", "N", "R"])
+        fills = [next(c for c in canvas.commands if c.kind == "rect" and c.rect.right == r.right and c.rect.y == r.y
+                      and c.rect.h == r.h) for r in buttons]
+        self.assertEqual([c.corners for c in fills], ["L", "N", "R"])
+        # One line between neighbours, like Blender: each joined button draws over its left neighbour's edge.
+        self.assertEqual([round(f.rect.x - b.x) for f, b in zip(fills, buttons)], [0, -1, -1])
         self.assertEqual(sf.row_corners(0, 1), "")
 
     def test_tool_row_along_the_bottom(self):

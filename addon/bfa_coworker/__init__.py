@@ -200,6 +200,9 @@ def register() -> None:
     # The Coworker editor and the compact sidebar chat (Tier 4, GPU 4 + 5).
     from . import chat_editor
     chat_editor.register()
+    # Coworker in the right-click menus: Explain This, Translate (#290, #42).
+    from . import ui_context_menus
+    ui_context_menus.register()
 
     # Discover generative plugins (Tier 5).
     # This scans gen_plugins/ and populates the registry.
@@ -384,6 +387,8 @@ def unregister() -> None:
         pass
 
     # Unregister chat UI (the Coworker editor first: it builds on ui_chat's panels).
+    from . import ui_context_menus
+    ui_context_menus.unregister()
     from . import chat_editor
     chat_editor.unregister()
     ui_chat.unregister()

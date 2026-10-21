@@ -6015,8 +6015,9 @@ def _run_conversation_turn_inner(
     # conversation and are re-sent with every request, so no trim,
     # compaction or memory-writer failure can lose them.
     try:
-        with session_memory.store_lock:
-            session_memory.store.goal.set_request(_stored_content)
+        if chat_mode != "ASK":      # an Ask question (Explain This...) is no goal for the plan
+            with session_memory.store_lock:
+                session_memory.store.goal.set_request(_stored_content)
     except Exception as _goal_ex:  # pylint: disable=broad-exception-caught
         print("[Coworker] run_conversation_turn: goal capture skipped -- {:s}".format(
             str(_goal_ex)))

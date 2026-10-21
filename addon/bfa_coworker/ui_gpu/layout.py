@@ -229,6 +229,9 @@ class Canvas:
         With *icon*, the icon sits before the label (or alone when *label* is empty).
         *corners* joins it into a row like Blender's aligned buttons: see :func:`row_corners`.
         """
+        # On whole pixels: a fractional rect draws its fill and outline a pixel apart, so a
+        # square icon button looked 31 x 32 (#269).
+        rect = Rect(round(rect.x), round(rect.y), round(rect.w), round(rect.h))
         colors = self.style.button
         hovered = self.state.hovered(rect)
         pressed = self.state.pressed == widget_id

@@ -2441,7 +2441,7 @@ class BFACW_PT_chat_history(Panel):  # type: ignore[misc]
                 if path and not here:
                     open_row = sub.row(align=True)
                     open_row.enabled = os.path.isfile(path)
-                    open_row.operator("bfacw.chat_open_blend", text="Open", icon='FILEBROWSER').chat_id = entry["id"]
+                    open_row.operator("bfacw.chat_open_blend", text="", icon='FILEBROWSER').chat_id = entry["id"]
         if len(entries) > _HISTORY_ROWS:
             layout.label(text="{:d} more: search to find them".format(len(entries) - _HISTORY_ROWS))
 

@@ -770,16 +770,21 @@ class ChatView:
         width = full if (over or dragging) else thin
         x = track.right - width
 
-        def faded(color: RGBA) -> RGBA:
-            return (color[0], color[1], color[2], color[3] * alpha)
+        def faded(color: RGBA, strength: float = alpha) -> RGBA:
+            return (color[0], color[1], color[2], color[3] * strength)
 
+        # With the mouse away only a thin, faint handle shows, like a region's scrollbar;
+        # the track and outlines fade in as the mouse comes near.
+        near = (alpha - _SCROLL_IDLE_ALPHA) / (1.0 - _SCROLL_IDLE_ALPHA)
         radius = colors.roundness * width / 2
-        canvas.fill(Rect(x, track.y, width, track.h), faded(colors.inner), radius)
-        canvas.stroke(Rect(x, track.y, width, track.h), faded(colors.outline), radius)
+        if near > 0.0:
+            canvas.fill(Rect(x, track.y, width, track.h), faded(colors.inner, near), radius)
+            canvas.stroke(Rect(x, track.y, width, track.h), faded(colors.outline, near), radius)
         item = colors.item
         if dragging:
             item = _lighten(item, 0.2)
         elif over and handle.contains(*state.mouse):
             item = _lighten(item, 0.1)
         canvas.fill(Rect(x, handle.y, width, handle.h), faded(item), radius)
-        canvas.stroke(Rect(x, handle.y, width, handle.h), faded(colors.outline), radius)
+        if near > 0.0:
+            canvas.stroke(Rect(x, handle.y, width, handle.h), faded(colors.outline, near), radius)

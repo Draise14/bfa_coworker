@@ -438,7 +438,9 @@ class InputBox:
             specs.append(("approval_menu", self.approval[0], self.approval[1], False))
         out = []
         for widget_id, label, icon, active in specs:
-            if self._narrow:                 # a thin sidebar: square icon buttons (#238)
+            # A thin sidebar: square icon buttons (#238). Permissions always: it changes rarely,
+            # its icon and tooltip say which one, the dropdown switches it.
+            if self._narrow or widget_id == "approval_menu":
                 out.append((widget_id, "", icon, active, self._button_metrics(canvas)[2]))
                 continue
             content = canvas.measure(label, "ui", style.font_size)

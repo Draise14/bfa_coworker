@@ -339,6 +339,8 @@ class ChatSurface:
         self.tip_wait = 0.0
         widget = self.hit(*self.mouse) if self.mouse is not None and self.pressed is None else None
         tip = tip_for(widget)
+        if widget == "approval_menu" and self.box.approval[0]:     # icon only: say which one is on
+            tip = "Permissions: {:s} (click to change)".format(self.box.approval[0])
         if not tip:
             self._tip = None
             return

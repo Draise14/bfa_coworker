@@ -96,6 +96,7 @@ class AcpEngine:
         self.on_change: Callable[[], None] | None = None     # redraw hook (any thread)
         self.on_request: Callable[[str], None] | None = None  # each turn's message (Goal & Plan)
         self.only_coworker_tools = True      # off: the agent may also use its own tools
+        self.bridge_port = 0                 # the Blender bridge port its tools were given
 
     # -- connection ----------------------------------------------------------------
     def connect(self, argv: list[str], mcp_entry: dict[str, Any], cwd: str,

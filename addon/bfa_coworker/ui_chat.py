@@ -138,6 +138,28 @@ def _agent_workspace() -> Path:
     return base / "agent_workspace"
 
 
+def _ensure_bridge(prefs, port: int = 0) -> str:
+    """The External Agent's tools reach Blender through the bridge: start it again if it
+    stopped (e.g. the add-on was disabled and enabled while the agent ran). "" when it runs
+    on *port* (the one the agent was given), else what went wrong."""
+    if mcp_to_blender_server.is_running():
+        return ""
+    wanted = port or effective_ports(prefs)[0]
+    try:
+        mcp_to_blender_server.start(prefs.host, wanted)
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        return "Blender's bridge for the agent is off and didn't start again: {:s}".format(str(ex))
+    from . import execute_interactive
+    if not bpy.app.timers.is_registered(execute_interactive.run):
+        bpy.app.timers.register(execute_interactive.run, first_interval=mcp_to_blender_server.TIMER_INTERVAL_ACTIVE,
+                                persistent=True)
+    actual = mcp_to_blender_server.get_actual_port()
+    if actual and actual != wanted:
+        return ("Blender's bridge restarted on port {:d}, but the agent uses {:d} (another window took it): "
+                "Stop and Start Coworker".format(actual, wanted))
+    return ""
+
+
 def _scene_context_line(context: bpy.types.Context) -> str:
     """One short line about where the user is, sent with each External Agent message."""
     try:
@@ -2171,6 +2193,9 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
         engine = _loop_engine(llm_cfg.mode)
         external = _is_external_agent(context)
         if external:
+            problem = _ensure_bridge(prefs, getattr(_acp, "bridge_port", 0))
+            if problem:
+                self.report({"WARNING"}, problem)
             _sync_agent_mode(props.chat_mode, wait=True)     # in case it connected after you picked (#221)
         # Sent from an editor's sidebar chat: say which editor, and what it shows (#291).
         editor_line = _editor_context_line(context, props.chat_editor_context_only) if _compact_sidebar(context) else ""
@@ -3817,6 +3842,7 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         _acp_engine().on_session = lambda session_id: _remember_agent_session(
             sessions_file, (_CHAT["id"] or "default") + ".json", preset.id, session_id)
         bridge_port, _, _ = effective_ports(prefs)
+        engine.bridge_port = bridge_port        # where its tools look for Blender (_ensure_bridge)
         entry = agent_controller.build_mcp_server_entry(
             blender_host=prefs.host, blender_port=bridge_port,
             use_blender_python=getattr(prefs, "use_blender_python_for_harness", True))
@@ -6609,6 +6635,14 @@ def unregister() -> None:
     # never overwrite the saved chat with nothing.
     if _has_user_messages():
         _save_chat_history()
+
+    # The bridge stops with the add-on (__init__): close the External Agent too, or the chat
+    # says "Connected" after re-enabling while its tools can't reach Blender.
+    if _acp is not None and (_acp.connected or _acp.connecting):
+        try:
+            _acp.disconnect()
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
 
     # Drop the thumbnail's private preview buffer.
     free_attachment_thumbnail()

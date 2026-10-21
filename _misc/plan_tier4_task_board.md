@@ -17,7 +17,7 @@ Blender/Bforartists 5.3, chat drawn with Blender's own `label_markdown()`.
 change · a white-room line · skill/tool claims backed by a probe · docs if user-facing ·
 the 3 quick challenges on Local if it touches the turn loop, prompts or tools. Branch
 from `main`, no stacked PRs. Only one open PR at a time on `agent_controller.py` /
-`ui_chat.py`. Sizes: **S** ≤ 2 days · **M** ≤ 1 week · **L** more.
+`ui_chat.py`. Sizes: **S** ≤ 2 days · **M** ≤ 1 week · **L** more. **⏩** = moved to Tier 5 (master §0.5).
 
 ---
 
@@ -50,7 +50,9 @@ from `main`, no stacked PRs. Only one open PR at a time on `agent_controller.py`
 | ✅ Done | Agent 1, part 2: record one Claude Code session (uses your Claude login) | #148 #152 |
 | ✅ Done | **2026-10-20:** choice buttons wrap (keyframe icons, green = recommended), Allow this turn + permissions dropdown, permissions **Strict / Permissive / Auto**, History Open loads the .blend at once, **Explain This** in the right-click menus (#290), **Translate** in the right-click menus (#42), the chat's voice is always Coworker, **the Coworker tab in every editor's sidebar** + *Use editor context only* (#291) | #288 #289 #292 #293 #294 #296 #297 #298 #325 |
 | 📝 Planned | **2026-10-21: the four workflows** (master §0): Coworker operators in native places (Wand 0–5, Sequencer first), the **Spell Book** (Spell 1–3; #300 becomes prompt spells), **procedural first** (Procedural 1–3), new tools (Tools 7–9), Footer 1, Orchestrate 1–2, Security 1–5. Review doc: `plan_tier4m_coworker_operators.md` | #327-#349 |
-| ⏭ Next | **The rest of Tier 4, one issue per task** (below): #299-#324. Tier 4a review: what's left is Chat 4 (#299) and Quick prompts (#300); Viewport feedback and the moodboard are dropped / Tier 5 | |
+| 📝 Planned | **2026-10-21 (later): one thread per editor** — the orchestration layer: each editor's job in its own thread, side by side (Threads 0–3, `plan_tier4o_orchestration_threads.md`). **Moved to Tier 5**: Edit from Footage + the big wizards, Spell 2–3, Procedural 2–3, Tools 9, Orchestrate 2, Teams, Security 5 (master §0.5) | #356-#359 |
+| 📝 Planned | **2026-10-21 (re-tier against feature creep)**: Tier 4 = one Coworker, every editor, side by side (threads stay). **Tier 5** = automation: the **Spell Book** (Spell 1, quick prompts #300) joins the wizards, missions and teams. **Tier 6** = generative: the former Tier 5 generative plans (local systems, 2D, moodboard) renamed `plan_tier6_*`. Tiers at a glance: master §0.1 | |
+| ⏭ Next | **The rest of Tier 4, one issue per task** (below): #299-#324. Tier 4a review: what's left is Chat 4 (#299) and Quick prompts (#300); Viewport feedback and the moodboard are dropped / Tier 6 | |
 
 ---
 
@@ -66,7 +68,8 @@ Method in master §3.3. Benchmarks: the 6 core + 3 quick challenges.
 | ☐ | **Test 3: Same Coworker everywhere** | After Engine 6–7, Chat 2–6, Tools 1–3 | All engines; first-request tokens vs Test 0 | Artist script B: explain, translate, questions, Revert, plan |
 | ☐ | **Test 4: Deeper tools** | After Tools 4–6, Chat 7, Runtime 1–3, Text Editor 1–4 | Domain suites, all engines | Recipes, sessions browser, Safe mode |
 | ☐ | **Test 5: Everywhere in the UI** | After Editors 2–5 | Quick set, all engines | Artist script C: Coworker editor + sidebars |
-| ☐ | **Test 6: Agent teams** | After Teams 1–3 | Full set + a new "campfire" suite | Teams, co-pilot, critic |
+| ☐ | **Test 7: Side by side** | After Threads 3 | Quick set per thread, all engines | A scene build (3D View), a node-group tidy and a strip translation at the same time; Stop one; a deliberate conflict; Revert |
+| ☐ | **Test 6: Agent teams** *(Tier 5)* | After Teams 1–3 | Full set + a new "campfire" suite | Teams, co-pilot, critic |
 
 ---
 
@@ -118,7 +121,7 @@ Plan: `plan_tier4g_domain_tooling.md`. Each task ships its prompt chapter and re
 | ☐ | **Tools 6** (#309): Long jobs | G6 | Long bakes/renders run in the background with progress | — | S | A 10-minute bake doesn't time out the agent | |
 | ☐ | **Tools 7** (#327): Placement & orientation | 4m §4.3 | `place(on_top_of / next_to / inside, gap)`, `align`, `distribute`, `drop_to_floor` from world-space bounds. *#219 shipped only a guidance rule (#257)* | — | S | "Put the lamp on the table, 5 cm from the edge" is right on a 7B model | |
 | ☐ | **Tools 8** (#328): Organize my scene | 4m §4.3 | `scene_audit`, `organize_scene(rules)`, `batch_rename`, `cleanup`, `relink_missing`; dry run, one undo, works without a model | — | M | A messy scene audited, sorted, renamed, cleaned in one step; numbers before/after | |
-| ☐ | **Tools 9** (#329): Look-dev & prep helpers | 4m §4.3 | `frame_camera`, `make_turntable`, `material_from_folder`, `fix_common` | — | M | Each runs from the chat and as an operator with a preview | |
+| ⏩ | **Tools 9** (#329): Look-dev & prep helpers *(Tier 5)* | 4m §4.3 | `frame_camera`, `make_turntable`, `material_from_folder`, `fix_common` | — | M | Each runs from the chat and as an operator with a preview | |
 
 ## Chat features — explain, translate, ask, undo, sessions
 
@@ -170,8 +173,8 @@ Plan: `plan_tier4a_editor_integration.md`
 | ➜ | **Editors 4**: The Coworker editor | A3 | *Moved to **GPU 4** (the editor around the GPU chat), 2026-10-19* | — | — | — | |
 | ✖ | **Editors 5**: Viewport status | A4 | *Dropped 2026-10-20: less in your face; the chat and the editor are enough* | — | — | — | |
 | ✅ | **Editors 6**: Floating chat window | A5 | *Done differently:* the Coworker editor opens in its own window (Open Editor), with capture and drops working there | Editors 4 | S | A separate chat window | issues #215 #266 |
-| ☐ | **Editors 7** (#300): Quick prompts per editor | A Phase 6, C5 | One-click prompts under each sidebar chat and on the Coworker editor's toolshelf; user templates from a folder. *2026-10-21: built as **prompt spells** in the Spell Book (Spell 1), so they share its storage, icons and editing* | Editors 3, Spell 1 | S | Each editor shows its prompts; a user file adds one | |
-| ☐ | **Footer 1** (#330): Agent status in the status bar | — | One item in the global status bar: engine icon, state (*Thinking · step 3/7 · Waiting for you*), a pulse while an approval waits; click focuses the chat; toggle. *Not the dropped viewport dot* | Engine 3 | S | Status follows a turn in every workspace; an approval is visible with the chat closed | |
+| ⏩ | **Editors 7** (#300): Quick prompts per editor *(Tier 5, with the Spell Book)* | A Phase 6, C5 | One-click prompts under each sidebar chat and on the Coworker editor's toolshelf; user templates from a folder. *2026-10-21: built as **prompt spells** in the Spell Book (Spell 1), so they share its storage, icons and editing* | Editors 3, Spell 1 | S | Each editor shows its prompts; a user file adds one | |
+| ☐ | **Footer 1** (#330): Agent status in the status bar | 4o §5 | One item in the global status bar with **one icon per live thread**: state (*3/7*, ✔, ⏸), a pulse while one waits for you; the popover lists threads with Stop / answer / focus; toggle. With one thread it is a single item. *Not the dropped viewport dot* | Threads 1 | S | Each thread's status follows its turn in every workspace; an approval is visible with the chat closed | |
 
 ## Rigging & animation tools
 
@@ -197,7 +200,7 @@ Plan: `plan_tier4s_skills_cleanroom.md`
 | ☐ | **Skills 7** (#322): Mesh quality check | S6 | `check_mesh_quality`: overlaps, loose parts, open edges, flipped normals, unapplied scale | — | S | Finds each seeded fault | |
 | ☐ | **Skills 8** (#323): Docs for skill packs | S7 | Tool-name stability; using other skill packs with External Harness | — | S | Wiki page reviewed | |
 
-## Coworker operators & the Spell Book — the four workflows (master §0)
+## Coworker operators — quick tools in native places (master §0) · Spell Book *Tier 5*
 
 Review doc: `plan_tier4m_coworker_operators.md`. Operators look native (conventional
 names, a **wand badge** on a self-contained icon), sit in the menus and Bforartists
@@ -210,30 +213,38 @@ no model.
 |---|---|---|---|---|---|---|---|
 | ☐ | **Wand 0** (#331): Spike + icon set | 4m §3.3 | Remove Silences end to end in its native places with a wand-badged icon button; first 8 self-contained icons (SVG + PNG); probe the 5.3 sound API and node notes | — | S | Screenshots in Bforartists and plain Blender 5.3; spec frozen | |
 | ☐ | **Wand 1** (#332): Operator framework | 4m §3 | Spec, registry, factory, native placement (menus, toolshelf icon buttons, context menus), icons, the 5-stage pipeline, `run_operator` MCP tool | Wand 0 | M | A test pack of every kind runs from its menu, toolshelf and the chat | |
-| ☐ | **Wand 2** (#333): Sequencer pack · *first* | 4m §4.1 | **Edit from Footage…** wizard (look → propose cuts + per-shot vertical reframes → choose → build with VSE tools + compositor node groups → review), Reframe for Vertical…, Remove Silences, Subtitles, Assemble Timeline, Export Review Video | Wand 1, Tools 1, Tools 5, GPU 6 | L | 3 clips → a 30 s vertical edit with editable reframes; Remove Silences works with no engine | |
+| ☐ | **Wand 2** (#333): Sequencer basics · *first* | 4m §4.1 | Remove Silences, Reframe for Vertical (centre-crop compositor node group, editable), Subtitles from Text — all work with no engine | Wand 1, Tools 1 | M | Each runs from its native menu / toolshelf with a preview and one undo, no engine | |
+| ⏩ | **Wand 2b**: Edit from Footage *(Tier 5)* | 4m §4.1 | The wizard (look → propose cuts + per-shot reframes → choose → build → review), Assemble Timeline, Export Review Video | Wand 2, Tools 5, GPU 6, threads | L | 3 clips → a 30 s vertical edit with editable reframes | |
 | ☐ | **Wand 3** (#334): Node pack · *second* | 4m §4.2 | Tidy & Explain Tree, Frame Selected by Purpose | Wand 1, Tools 3 | M | A 60-node tree framed into labelled groups with notes on a 7B model | |
-| ☐ | **Wand 4** (#335): Bake wizard *(stretch)* | 4m §4.3 | Bake Texture Sets… by question cards | Wand 1 | M | Two material sets bake from three answered cards | |
-| ☐ | **Wand 5** (#336): Asset library wizard *(stretch)* | 4m §4.3 | Prepare Assets for a Library… (thumbnails, location, author, catalogs) | Wand 1 | M | 10 props become a library with thumbnails and catalogs | |
-| ☐ | **Spell 1** (#337): The Spell Book | 4m §5.1 | Shipped wizard spells, prompt spells (#300), your own per user; icon, name, run mode, steps, fields, place picker, **Publish** as toolshelf icon buttons / menu items, Test, Export / Import | Wand 1, Security 2 | M | A spell shows as an icon button after a restart, runs with no engine, one undo | |
-| ☐ | **Spell 2** (#338): Recording spells | 4m §5.2 | Save as Spell from a chat reply; Record … Stop; Add Last Action; Add to Spell Book on right-click; control steps; optional one-time model pass at save | Spell 1 | M | Recorded from chat and from clicks, both replay with no engine | |
-| ☐ | **Spell 3** (#339): Edit as Code + package | 4m §5.2 | A spell as a readable script + spec in the Text Editor; package as an extension | Spell 1, Text Editor 1–2 | M | An edited spell republishes; a set ships as a zip | |
+| ⏩ | **Wand 4** (#335): Bake wizard *(Tier 5)* | 4m §4.3 | Bake Texture Sets… by question cards | Wand 1 | M | Two material sets bake from three answered cards | |
+| ⏩ | **Wand 5** (#336): Asset library wizard *(Tier 5)* | 4m §4.3 | Prepare Assets for a Library… (thumbnails, location, author, catalogs) | Wand 1 | M | 10 props become a library with thumbnails and catalogs | |
+| ⏩ | **Spell 1** (#337): The Spell Book *(Tier 5)* | 4m §5.1 | Shipped spells, prompt spells (#300), your own per user (**Save as Spell from a chat reply**); icon, name, run mode, steps, fields, place picker, **Publish** as toolshelf icon buttons / menu items, Test, Export / Import | Wand 1, Security 2 | M | A spell shows as an icon button after a restart, runs with no engine, one undo | |
+| ⏩ | **Spell 2** (#338): Recording spells *(Tier 5)* | 4m §5.2 | Record … Stop; Add Last Action; Add to Spell Book on right-click; control steps; optional one-time model pass at save | Spell 1 | M | Recorded from chat and from clicks, both replay with no engine | |
+| ⏩ | **Spell 3** (#339): Edit as Code + package *(Tier 5)* | 4m §5.2 | A spell as a readable script + spec in the Text Editor; package as an extension | Spell 1, Text Editor 1–2 | M | An edited spell republishes; a set ships as a zip | |
 
 ## Procedural first — promote work to assets (master §0)
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
 | ☐ | **Procedural 1** (#340): Procedural first | 4m §4.4 | Prefer node-group assets (Default Library add-on, your libraries, online later); `find_procedural_asset(intent)`; read group inputs; linear only when asked | — | S | "A stone wall along this curve" uses a library node group with inputs set | |
-| ☐ | **Procedural 2** (#341): Make Parametric | 4m §4.4 | Linear result → Geometry Nodes asset with inputs + gizmos, saved to your library with agent-friendly metadata | Tools 3, Procedural 1 | M | A chat-built fence becomes an asset with inputs and a length gizmo | |
-| ☐ | **Procedural 3** (#342): The nudge | 4m §4.4 | *Save as Spell?* on repeats, *Make Parametric?* after a build; one ignorable button | Spell 1, Procedural 2 | S | At most once per pattern per session; never interrupts | |
+| ⏩ | **Procedural 2** (#341): Make Parametric *(Tier 5)* | 4m §4.4 | Linear result → Geometry Nodes asset with inputs + gizmos, saved to your library with agent-friendly metadata | Tools 3, Procedural 1 | M | A chat-built fence becomes an asset with inputs and a length gizmo | |
+| ⏩ | **Procedural 3** (#342): The nudge *(Tier 5)* | 4m §4.4 | *Save as Spell?* on repeats, *Make Parametric?* after a build; one ignorable button | Spell 1, Procedural 2 | S | At most once per pattern per session; never interrupts | |
 
-## Orchestration — first layer (#71)
+## Orchestration — threads per editor (#71)
 
-The release ships the first layer; agent teams (Teams 1–3) move to Tier 5.
+Plan: `plan_tier4o_orchestration_threads.md`. Each editor's job runs in its **own
+thread** (history, Stop, Queue, plan, questions), side by side; tool calls interleave on
+Blender's main thread; claims stop threads overwriting each other; Revert is honest when
+undo steps interleave. Missions and agent teams (Tier 5) are built on threads.
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
-| ☐ | **Orchestrate 1** (#343): Map over selection | 4m §7 | One instruction or operator per selected item, progress row, stop/continue on error, one undo | Tools 8 | M | 30 rocks get individual materials in one undo | |
-| ☐ | **Orchestrate 2** (#344): Missions with evidence | 4m §7 | A checkpoint per plan step; ends with a validator pass reporting numbers | Engine 6, Skills 7 | M | A failing step reverts only itself; the mission ends with an audit | |
+| ☐ | **Threads 0** (#356): Spike | 4o §5 | Measure: llama-server slots, two ACP sessions at once, interleaved tool calls + undo, the per-thread state list | — | S | Numbers in 4o §6; state list frozen | |
+| ☐ | **Threads 1** (#357): The thread model | 4o §5 | bpy-free `threads.py` (Thread, ThreadRegistry); today's globals move behind it; thread id on MCP calls; per-thread plan / ask_user / digest / domains on the server | Threads 0 | M→L | One thread behaves exactly like today; two fake-engine threads keep separate history, Queue, Stop | |
+| ☐ | **Threads 2** (#358): Each editor has its own thread | 4o §2.1 | Sidebar shows its editor's thread; header (New thread here, Switch…, Open in Coworker editor); right-click operators start in their editor's thread; thread list in the Coworker editor; saved per .blend | Threads 1 | M | A 3D and a node question become two chats; the .blend restores both | |
+| ☐ | **Threads 3** (#359): Side by side, safely | 4o §3 | Runner (cap, fair model queue, Local slots option, ACP session per thread, Remote back-off); claims + conflict asking; undo names per thread + honest Revert; Stop all; "other threads" context line | Threads 1, 2 | L | **Test 7**: 3D build + node tidy + strip translation at once; Stop one; a conflict asks; Revert never silently undoes another thread | |
+| ☐ | **Orchestrate 1** (#343): Map over selection *(stretch)* | 4m §7 | One instruction or operator per selected item, inside the editor's thread; progress row, stop/continue on error, one undo | Tools 8, Threads 3 | M | 30 rocks get individual materials in one undo | |
+| ⏩ | **Orchestrate 2** (#344): Missions *(Tier 5)* | 4o §4 | A mission thread spawns helper threads per plan step, each with a checkpoint; ends with a validator pass | Threads, Skills 7 | M | A failing step reverts only itself; the mission ends with an audit | |
 
 ## Security checks
 
@@ -246,13 +257,15 @@ steps ask first (#189), per-window session ids (#85), crash-safe servers.
 | ☐ | **Security 2** (#346): Secrets | 4m §7 | No keys/tokens in logs, exports, Copy Error, recorded spells | Security 1 | S | Grep after a full session finds none | |
 | ☐ | **Security 3** (#347): Code & file guard | 4m §7 | Writes outside project/temp ask; network from generated code flagged; repeat guard on every engine (with Runtime 1, #310) | Security 1 | M | A write to a system folder asks | |
 | ☐ | **Security 4** (#348): Untrusted content | 4m §7 | Scene/file/download text is data, never instructions | Security 1 | S | A text block saying "delete everything" changes nothing | |
-| ☐ | **Security 5** (#349): Supply chain + shared spells | 4m §7 | Hash-check downloads; shared spells and online libraries show their source and ask once | — | S | A tampered download and an unknown spell pack are stopped | |
+| ⏩ | **Security 5** (#349): Supply chain + shared spells *(Tier 5, with sharing)* | 4m §7 | Hash-check downloads; shared spells and online libraries show their source and ask once | — | S | A tampered download and an unknown spell pack are stopped | |
 
 ## Agent teams & critics — orchestration layer (#71) · *Tier 5*
 
+Built on threads (4o §4): a planner thread starts specialist threads in the right editors; the co-pilot and the critic are background threads.
+
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
-| ☐ | **Teams 1**: Agent teams | X1 | Planner → specialists → validator, one undo for the whole mission | Runtime 1, Engine 9, Engine 6 | L | Campfire scene built by a team | |
+| ☐ | **Teams 1**: Agent teams | X1 | Planner → specialists → validator, one undo for the whole mission | Threads 3, Runtime 1, Engine 9, Engine 6 | L | Campfire scene built by a team | |
 | ☐ | **Teams 2**: Scene co-pilot | X2 | Background scan for common problems with safe one-click fixes | Teams 1, Skills 7 | M | Issues listed with fixes | |
 | ☐ | **Teams 3**: Render critic | X3 | Render → critique → fix loop, using review sheets | Tools 5, Teams 1 | M | Score improves within 5 rounds, or it stops | |
 

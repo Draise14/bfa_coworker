@@ -1,5 +1,10 @@
 # BFA Coworker - Tier 5: Moodboard Storyboarding & Generative Integration
 
+> **Re-tiered 2026-10-21: this is now Tier 6 (generative).** Generation moved after
+> Tier 4 (one Coworker, every editor, side by side) and Tier 5 (automation) to stop
+> feature creep; see `plan_tier4_master_coordination.md` §0.1. "Tier 5 / 5a / 5b"
+> inside this document is the old numbering. Work already shipped stays shipped.
+
 **Date**: 2026-08-27
 **Status**: Planning - Not Started
 **Depends on**: ~~Tier 4d~~ → **Moodboard MVP now in Tier 5** (Phase 0 / Milestone M1, moved 2026-09-01), Tier 5a (Gen Plugin Foundation)

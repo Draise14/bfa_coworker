@@ -1,5 +1,9 @@
 # BFA Coworker — Tier 6: Mixar-Inspired Agent & Connector Parity
 
+> **2026-10-21**: Tier 6 is now *generative* as a whole: it also holds the former Tier 5
+> generative plans (`plan_tier6_generative_local_systems.md`, `plan_tier6_generative_2d.md`,
+> `plan_tier6_moodboard_storyboarding.md`). "Tier 5a/5b" references below mean those. See master §0.1.
+
 **Date**: 2026-10-04
 **Status**: 📋 Planning — Research Complete
 **Depends on**: 🧱 Tier 4b/4g (chat UX, domain tooling), Tier 5 (generative local systems, ComfyUI bridge), Tier 6a (generative 3D systems), Tier 6b (viewport diffusion renderer)
@@ -390,7 +394,7 @@ Ranked by fit with "better integrated and consistent with the Blender interface"
 | Generation plugin system (image done; video/audio/text stubs) | `gen_plugins/`, `gen_controller.py` | ✅ 5a / ❌ 5b–5e |
 | Gen 3D plan (TripoSR/TRELLIS/Hunyuan3D/PBR/retopo/SAM2/DUSt3R) | `plan_tier6_generative_3d_systems.md` | 📋 planned |
 | Viewport diffusion renderer ("Dreamer") | `plan_tier6_viewport_diffusion_renderer.md` | 📋 planned |
-| Moodboard | `plan_tier4d_moodboard_editor.md`, `plan_tier5_moodboard_storyboarding.md` | 📋 planned |
+| Moodboard | `plan_tier4d_moodboard_editor.md`, `plan_tier6_moodboard_storyboarding.md` | 📋 planned |
 | Skills + project rules | `skills/`, `ui_chat.py` | ✅ |
 | Sandbox for code execution | `weak_sandbox.py` | ✅ (basic) |
 

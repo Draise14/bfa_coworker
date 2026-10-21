@@ -1,6 +1,15 @@
 # Tier 4m — Coworker operators (wand icon) + the tasks around them (review document)
 
-**Status**: 📝 For review, revision 3 (2026-10-21: Spell Book, creative Sequencer edit, procedural first, the four workflows). Replaces the
+**Status**: 📝 For review, revision 3 (2026-10-21: Spell Book, creative Sequencer edit, procedural first, the four workflows).
+**Cut line (2026-10-21, later)**: this release ships **Wand 0–1, Wand 2 as *Sequencer
+basics*** (Remove Silences, Reframe for Vertical with the centre-crop node group, Subtitles
+from Text), **Wand 3, Spell 1** (with *Save as Spell* from a chat reply), **Procedural 1,
+Tools 7–8, Footer 1, Security 1–4**, Orchestrate 1 as stretch. **Tier 5**: Edit from
+Footage, Assemble Timeline, Export Review Video, Wand 4–5, Spell 2 (recording clicks),
+Spell 3, Procedural 2–3, Tools 9, Orchestrate 2, Security 5 — see master §0.5. **Re-tier
+(later)**: the **Spell Book (§5, Spell 1–3) and quick prompts #300 are Tier 5** too; this
+release ships the operators (Wand 0–3) only, with no user-made operators. The
+orchestration layer is now **threads per editor**: `plan_tier4o_orchestration_threads.md`. Replaces the
 "quick prompt menu" idea. Tasks: **Wand 0–5, Spell 1–3** (were "Magic 0–7"), **Tools 7–9**,
 **Orchestrate 1–2**, **Footer 1**, **Security 1–5**. Explain (#290) and Translate (#42)
 are this same kind of operator and are in progress with another agent; they become the
@@ -27,7 +36,7 @@ one undo. Mostly tested code; the active engine is asked only for the judgment c
 | 8 | Recorded operators | **Per user** (§5) |
 | 9 | Building them | A dedicated **Spell Book** (renamed from "Vault": a vault stores, a spell book *runs*) to build and run **spells** — your own operators and workflows: record, pick icon and name, **publish** into Bforartists' collapsible toolshelf panels (§5). Replay never needs the model |
 | 10 | Wizard workflows | Some jobs are neither scriptable nor purely procedural: they need *looking at the material* and proposing (e.g. cutting footage). These are **wizard spells**: tools + the engine's eyes + your choices, shipped in the Spell Book and placed natively (§4.1) |
-| 11 | Procedural first | Prefer node-group assets (Bforartists Default Library add-on, your libraries, later the online libraries) and parametric results; go linear only when asked (master §0.0) |
+| 11 | Procedural first | Prefer node-group assets (Bforartists Default Library add-on, your libraries, later the online libraries) and parametric results; go linear only when asked (master §0) |
 | 12 | Quick prompts (#300) | Kept, as the lightest spell: a **prompt spell** whose one step sends a prompt to the chat; shown under the sidebar chat and in the Coworker editor's toolshelf |
 
 ---
@@ -75,7 +84,7 @@ flowchart LR
     RUN --> ENG["Active engine<br/>(only when the spec asks)"]
 ```
 
-**Fit with Tier 4**: tool first, model optional (master §0.2). Operators reuse the
+**Fit with Tier 4**: tool first, model optional (master §0.3). Operators reuse the
 domain tools (every engine can call them), question cards for wizards (Chat 5, GPU 6),
 one undo per run (Engine 6), the active engine for decisions (engine seam), and the chat
 for a short report with Revert.
@@ -235,7 +244,7 @@ The headline is a **wizard spell that edits with you**, not a template you adjus
 
 ### 4.4 Procedural first — and promoting results to assets
 
-Rule (master §0.0): **prefer procedural, go linear only when asked.**
+Rule (master §0): **prefer procedural, go linear only when asked.**
 
 ```mermaid
 flowchart TD
@@ -444,6 +453,9 @@ flowchart LR
   reorder, edit), fields, place picker (a Bforartists toolshelf tab + collapsible panel,
   your own tab, native menus), Test, Publish, Export/Import; per-user storage; your
   toolshelf panels registered at start.
+  *2026-10-21 cut*: **Save as Spell from a chat reply** moves here from Spell 2 (the turn's
+  tool calls are already recorded), so your own spells exist this release; recording
+  clicks stays in Spell 2 (Tier 5).
 - **Why**: one home for user-made tools; publishing straight into the toolshelf makes them
   feel built in.
 - **Done when**: an operator built in the Spell Book shows as an icon button in *▾ My Tools*
@@ -466,13 +478,15 @@ flowchart LR
 - As on the board; they are the engines under the Organize/Fix operators (§4.3) and the
   validator pass.
 
-### Orchestrate 1 — Map over selection (M) · Orchestrate 2 — Missions with evidence (M)
-- Map one instruction or operator over the selection with one undo; plan steps with
-  their own checkpoints ending in an audit report.
+### Orchestrate 1 — Map over selection (M, stretch) · Orchestrate 2 — Missions (Tier 5)
+- Map one instruction or operator over the selection with one undo, inside the editor's
+  thread. Missions (plan steps with their own checkpoints ending in an audit report)
+  move to Tier 5 as a mission thread spawning helper threads (4o §4).
 
-### Footer 1 — Agent status in the status bar (S)
-- Engine icon + state (*Thinking · step 3/7 · Waiting for you*) in the global status bar,
-  pulse while an approval waits, click focuses the chat; reads `chat_status` only.
+### Footer 1 — Agent status in the status bar (S, after Threads 1)
+- One icon per live thread with its state (*3/7*, ✔, ⏸ + pulse while it waits for you)
+  in the global status bar; the popover lists threads with Stop / answer / focus. With
+  one thread it is the original single item. Detail: 4o §5.
 
 ### Security 1–5
 | Task | What | Done when |

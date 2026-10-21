@@ -1,7 +1,7 @@
 # BFA Coworker — Tier 4d: The Moodboard Editor — Preproduction Ideation System
 
 **Date**: 2026-08-27 (rev. 3 — blend-file persistence, frames, dual node systems, logic/string bricks, milestones)
-**Status**: ⛔ Superseded in Tier 4 — moved to **Tier 5 milestone M1** (`plan_tier5_moodboard_storyboarding.md`), decision 2026-09-01, confirmed in the 2026-10-16 audit. Kept as the design reference; the image attach socket shipped in Tier 3 (#88) is the first building block of its "agent vision bridge".
+**Status**: ⛔ Superseded in Tier 4 — moved to **Tier 5 milestone M1** (`plan_tier6_moodboard_storyboarding.md`), decision 2026-09-01, confirmed in the 2026-10-16 audit. Kept as the design reference; the image attach socket shipped in Tier 3 (#88) is the first building block of its "agent vision bridge".
 **Depends on**: Tier 3e (Chat UI Refinement), Tier 4 (Editor Integration — shared `_draw_chat_interface()`), Tier 5a (Gen Plugin Foundation — `gen_controller.py`, `GenPlugin`), existing vision pipeline (`agent_controller.py` `_pending_image`)
 
 **Reference Inspiration**: [Mixar](https://www.mixar.app) — "Moodboard in-canvas: generate references, pin style anchors, and prompt scene changes inside the editor, alongside your work." Also PureRef (reference board UX), Blender's built-in Storyboarding app template, and the Node Editor's annotation system.
@@ -1451,7 +1451,7 @@ The moodboard is the **primer for Tier 5 generative systems**. This section sket
 
 ### 11.0 Tier 5 Plan Updates Required (from this design)
 
-The Tier 5 plan (`plan_tier5_generative_local_systems.md`) assumed a simple "Moodboard = image drop zone." This design — two node systems, frames, shots, chains — requires Tier 5 updates:
+The Tier 5 plan (`plan_tier6_generative_local_systems.md`) assumed a simple "Moodboard = image drop zone." This design — two node systems, frames, shots, chains — requires Tier 5 updates:
 
 | Tier 5 Component | Current Plan | Needed Update |
 |---|---|---|
@@ -1833,7 +1833,7 @@ T7: wiki: "Frames and Shots" section                              (_misc/generat
 | `addon/bfa_coworker/preferences.py` | Moodboard preferences (thumbnail size, defaults, frame color) |
 | `addon/bfa_coworker/__init__.py` | Registration wiring |
 | `mcp/blmcp/tools/moodboard_*.py` (15 new) | MCP tools for the agent (incl. brick tools) |
-| `_misc/plan_tier5_generative_local_systems.md` | **Update**: generation routing to frames/shots, multi-ref from frames, shot-chain gen, character consistency, animatic→video, dialogue→TTS, storyboard→3D |
+| `_misc/plan_tier6_generative_local_systems.md` | **Update**: generation routing to frames/shots, multi-ref from frames, shot-chain gen, character consistency, animatic→video, dialogue→TTS, storyboard→3D |
 
 ---
 

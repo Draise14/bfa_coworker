@@ -1,4 +1,4 @@
-# Tier 4/5 — Artist automation: domain tools, orchestration, quick tools & wizards
+# Tier 5 — Artist automation: spells, wizards, missions, teams (+ the Tier 4 tool ideas)
 
 **Status**: 📝 Ideas catalogue (2026-10-20). Picks for the next major release are marked
 **R** (release) and go on the task board; the rest are **T5** (Tier 5) candidates.
@@ -66,6 +66,10 @@ Tools 1 (VSE), Tools 2 (Text + recipes), Tools 3 (Nodes), Rig 1–2. Additions:
 
 ## 3. Orchestration ideas (#71)
 
+*2026-10-21: the release's orchestration layer is **threads per editor**, side by side
+(`plan_tier4o_orchestration_threads.md`). The ideas below run inside a thread; missions
+and teams are Tier 5 and are built on threads.*
+
 | Idea | What it is | Tier |
 |---|---|---|
 | **Map over selection** | Run one instruction per selected object/strip/node with a progress row; stop on first error or continue; one undo | **R** M |
@@ -81,21 +85,21 @@ Tools 1 (VSE), Tools 2 (Text + recipes), Tools 3 (Nodes), Rig 1–2. Additions:
 
 Superseded by **`plan_tier4m_coworker_operators.md`**: ordinary-looking operators with a
 wand-badged icon in their native menus and Bforartists toolshelf tabs, with packs
-(Sequencer first, then Nodes; organize, bake, asset library) and the **Vault**, where
+(Sequencer first, then Nodes; organize, bake, asset library) and the **Spell Book**, where
 users record their own and publish them into the toolshelf (no model needed to replay). The tools in §2 are what those operators call.
 
 ## 6. What goes in the release vs Tier 5
 
-**Release** (keeps it shippable): housekeeping tools (2.1), placement (2.2),
-`frame_camera`/`make_turntable`, `material_from_folder`, `fix_common`, map-over-selection,
-mission checkpoints + validator pass, and Wand 0–3 + 6 (4m); Wand 4–5 as stretch.
-
-**Tier 5**: recipes/macros and batch across files, teams/co-pilot/critic, export/UV/LOD
-pipeline, the other wizards, lighting presets, render queue.
+Superseded by master §0.1 (2026-10-21). **Tier 4**: threads per editor (Threads 0–3),
+housekeeping and placement tools (Tools 7–8), Wand 0–3 with *Sequencer basics*,
+Procedural 1, Security 1–4; map-over-selection as stretch. **Tier 5** (this doc's home):
+the Spell Book (Spell 1–3, quick prompts #300), missions and teams on top of threads,
+recording clicks, Edit as Code, Make Parametric and the nudge, the big wizards (Edit from Footage, bake, asset library),
+look-dev helpers, batch across files, export/UV/LOD, lighting presets, render queue.
 
 ## 7. Asset library ecosystem — built in tandem with the other add-on (notes, 2026-10-21)
 
-Procedural first (master §0.0) only works if there are good node-group assets to reach
+Procedural first (master §0) only works if there are good node-group assets to reach
 for. Your plan: a strong asset library built **for the other add-on in tandem**, shipped
 with Bforartists, offered through the online extensions, and later available as a
 subscription through an API key.

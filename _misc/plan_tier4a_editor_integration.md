@@ -17,7 +17,7 @@
 > | Phase 6: templates / quick prompts | ☐ **Editors 7 (#300)** (also covers 4c C5) | |
 > | Phase 7: parity and polish | ✅ Done across the test rounds (#192-#283) | |
 > | Pillar 2 / Phase 8: viewport agent feedback | ✖ Dropped: less in your face; the chat and the editor are enough | |
-> | Pillar 3: moodboard | ➜ Tier 5 (`plan_tier5_moodboard_storyboarding.md`) | |
+> | Pillar 3: moodboard | ➜ Tier 5 (`plan_tier6_moodboard_storyboarding.md`) | |
 > | Right-click Explain / Translate | ✅ Bonus from 4b: Explain This (#290), Translate (#42) | #294 #296 |
 >
 > The smarter, domain-aware tooling and contextual operators per editor belong to 4f / 4g.
@@ -1416,7 +1416,7 @@ The "clone the Preferences editor" principle ensures the Coworker editor is
 ## Summary of All Changes
 
 > **Revised (2026-09-01)**: Moodboard (Pillar 3) moved to Tier 5 — see
-> `plan_tier5_moodboard_storyboarding.md` (milestone M1). Floating chat window
+> `plan_tier6_moodboard_storyboarding.md` (milestone M1). Floating chat window
 > (Phase 4) deferred to Tier 5 (popup/quick-chat). Phase 3b GPU enhancement
 > remains optional/deferred. The table below reflects the Tier 4 in-scope
 > subset.

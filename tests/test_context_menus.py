@@ -49,6 +49,24 @@ class TestExplainText(unittest.TestCase):
 
 
 
+def _spot_text():
+    src = (_ADDON / "ui_context_menus.py").read_text(encoding="utf-8")
+    start = src.index("def spot_text(")
+    end = src.index("\n\n\n", start)
+    ns: dict = {}
+    exec(compile(src[start:end], "ui_context_menus.py", "exec"), ns)      # noqa: S102
+    return ns["spot_text"]
+
+
+class TestSpotText(unittest.TestCase):
+
+    def test_a_button_python_cannot_name_is_shown_in_a_picture(self):
+        text = _spot_text()("3D Viewport", "HEADER")
+        self.assertIn("in the 3D Viewport's header", text)
+        self.assertIn("inside the red ring", text)
+        self.assertIn("the button I right-clicked:", _spot_text()("", ""))
+
+
 def _translate_text():
     src = (_ADDON / "ui_context_menus.py").read_text(encoding="utf-8")
     start = src.index("def translate_text(")
@@ -58,20 +76,37 @@ def _translate_text():
     return ns["translate_text"]
 
 
+def _helper(name):
+    src = (_ADDON / "ui_context_menus.py").read_text(encoding="utf-8")
+    start = src.index("def {:s}(".format(name))
+    end = src.index("\n\n\n", start)
+    ns: dict = {}
+    exec(compile(src[start:end], "ui_context_menus.py", "exec"), ns)      # noqa: S102
+    return ns[name]
+
+
 class TestTranslateText(unittest.TestCase):
 
-    def test_a_property_gets_its_exact_path_and_text(self):
+    def test_asks_for_only_the_translation(self):
         text = _translate_text()("bpy.data.curves['Text'].body", "Hello world", "Spanish",
                                  "the text object “Text”")
         self.assertIn("into Spanish", text)
-        self.assertIn("bpy.data.curves['Text'].body = \"...\"", text)
-        self.assertIn("“Hello world”", text)
-        self.assertIn("keep line breaks", text)
+        self.assertIn("Hello world", text)
+        self.assertIn("Reply with only the translated text", text)
+        self.assertIn("Keep line breaks", text)
+        self.assertNotIn("execute_blender_code", text)      # Coworker writes it in, not the agent
 
-    def test_a_text_datablock_is_written_back_whole(self):
-        text = _translate_text()("bpy.data.texts['Notes'].as_string()", "Bonjour", "English", "the selected text")
-        self.assertIn("bpy.data.texts['Notes'].from_string(...)", text)
-        self.assertNotIn(".as_string() = ", text)
+    def test_clean_reply(self):
+        clean = _helper("clean_reply")
+        self.assertEqual(clean("  “Hola mundo”  "), "Hola mundo")
+        self.assertEqual(clean('"Hola"'), "Hola")
+        self.assertEqual(clean("```\nline one\nline two\n```"), "line one\nline two")
+        self.assertEqual(clean("Hola, “amigo”"), "Hola, “amigo”")      # inner quotes stay
+
+    def test_splice_a_selection(self):
+        splice = _helper("splice")
+        self.assertEqual(splice("one two\nthree four", (0, 4, 1, 5), "X"), "one X four")
+        self.assertEqual(splice("abc", (0, 0, 0, 3), "xyz"), "xyz")
 
     def test_from_a_language_or_detected(self):
         f = _translate_text()

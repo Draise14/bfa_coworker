@@ -500,7 +500,7 @@ class AcpEngine:
             if self._turn_id:
                 self.bus.emit("status", self._turn_id, text="Auto mode allowed {:s}".format(tool or "a tool"))
             return
-        request = ApprovalRequest(tool=tool or "a tool", source=self.agent_label, args=call.get("rawInput"),
+        request = ApprovalRequest(tool=tool or "a tool", source="Coworker", args=call.get("rawInput"),
                                   coworker_tool=ours)
         if self._turn_id:
             self.bus.emit("status", self._turn_id, text="Waiting for you: allow {:s}?".format(request.tool))

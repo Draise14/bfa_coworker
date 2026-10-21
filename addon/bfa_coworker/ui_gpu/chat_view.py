@@ -279,7 +279,9 @@ class ChatView:
         if conclusion is not None:
             seconds = next((m["turn_seconds"] for m in reversed(turn)
                             if isinstance(m.get("turn_seconds"), (int, float))), None)
-            who = str(conclusion.get("agent") or "Coworker")     # Engine 4: who answered
+            # Always Coworker, with its hat, whichever engine or agent did the work: the chat's
+            # voice is Coworker's (the status line says which app is connected).
+            who = "Coworker"
             label = who + ("  |  " + fmt_duration(seconds) if seconds is not None and seconds >= 1 else "")
             row_top = top
             top = self._icon_line(canvas, x, top, self.agent_icon, label, _soft(style.text, 0.2))

@@ -2803,8 +2803,8 @@ _TURN_SEEN = [False]      # was a turn running at the last timer tick (Engine 6b
 
 
 def _turn_label(context: bpy.types.Context | None = None) -> str:
-    """The undo step's name: "Claude Code's turn", or "Coworker's turn"."""
-    name = _acp.agent_label if (_acp is not None and _is_external_agent(context) and _acp.agent_label) else "Coworker"
+    """The undo step's name: "Coworker's turn", whichever engine works."""
+    name = "Coworker"           # whichever engine works: the chat's voice is Coworker's
     return "{:s}'s turn".format(name)
 
 

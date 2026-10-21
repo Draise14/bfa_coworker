@@ -77,49 +77,18 @@ Tools 1 (VSE), Tools 2 (Text + recipes), Tools 3 (Nodes), Rig 1–2. Additions:
 | Scene co-pilot / render critic | Teams 2–3 | T5 |
 | Scheduled runs | Auto mode exists; add "run this recipe nightly" via the OS scheduler | T5 |
 
-## 4. Quick tools in every editor — the "Coworker" quick menu
+## 4–5. Quick tools and wizards → Magic operators
 
-**Need**: reach the common chores in two clicks without opening a chat, and start a chat
-*about this editor* in one.
-
-**Design (to spike — Quick 1 on the board)**:
-- **One entry point per editor**: a small Coworker button at the right of the editor's
-  header (popover), and the same content as a **Coworker ▸** submenu in the editor's
-  context menu. One place, so menus don't fill up with single items.
-- **Contents, top to bottom**:
-  1. *Explain this* / *Translate…* (context-dependent; Chat 2/3)
-  2. **Quick actions for this editor** from a catalogue file (below), e.g. in the 3D View
-     "Organize scene…", "Fix common problems", "Frame camera"; in the Node editor "Explain
-     this tree", "Tidy nodes"; in the VSE "Subtitles from text"; in the Text editor
-     "Run & fix", "Edit with Coworker".
-  3. **Recent prompts** in this editor (one click re-sends).
-  4. *Open chat* (focuses the sidebar chat or the Coworker editor).
-- **Catalogue** (`quick_actions/<editor>.toml`, user-extendable): each entry names a
-  *tool* (runs directly, with a preview/confirm), a *wizard*, or a *prompt template*
-  (goes to the chat). This merges Text Editor 5 (prompt templates) and the Coworker
-  editor's toolshelf templates into one system.
-- **No custom hotkeys** (master §6.4); users can bind the menu themselves.
-
-## 5. Wizards (guided flows in the chat — GPU 6)
-
-A wizard = a short sequence of question cards (Chat 5 buttons) around one or more tools,
-with a preview before apply. Runs on every engine; the deterministic ones need no model.
-
-| Wizard | Steps | Tier |
-|---|---|---|
-| **Organize my scene** | audit → choose rules (by type / prefix / material) → preview moves + renames → apply → report | **R** (first wizard) |
-| **Prepare for export** | target (Unity/Unreal/Godot/web) → checks (scale, normals, UVs, poly budget) → fixes → export | T5 |
-| **Make a turntable** | pick objects → length / background / lights → render preview → queue | T5 |
-| **Light this** | mood → preset → tweak with buttons | T5 |
-| **Material from photos/folder** | pick folder → map detection → preview sphere → assign | T5 |
-| **New add-on from a script** | Text editor: wrap the active script as an operator + panel + manifest (#52) | T5 |
+Superseded (2026-10-20) by **`plan_tier4m_magic_operators.md`**: a standard for Magic
+operators placed in the toolshelf tab and header menu, with starter packs (organize,
+nodes, sequencer, bake, asset library), a recorder and Text Editor authoring. The tools
+in §2 are what those operators call.
 
 ## 6. What goes in the release vs Tier 5
 
 **Release** (keeps it shippable): housekeeping tools (2.1), placement (2.2),
 `frame_camera`/`make_turntable`, `material_from_folder`, `fix_common`, map-over-selection,
-mission checkpoints + validator pass, the quick menu (spike + catalogue with the release
-tools), and **one** wizard (Organize my scene) as the proof of GPU 6.
+mission checkpoints + validator pass, and Magic 0–3 + 6 (4m); Magic 4–5 as stretch.
 
 **Tier 5**: recipes/macros and batch across files, teams/co-pilot/critic, export/UV/LOD
 pipeline, the other wizards, lighting presets, render queue.

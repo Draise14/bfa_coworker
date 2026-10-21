@@ -22,22 +22,25 @@ editors), the **tools** half (domain + orchestration) and **security**.
 |---|---|---|---|
 | 1 | Refinement | ✅ | Keep fixing from the test list |
 | 2 | Dedicated global multi-domain chat editor | ✅ | — |
-| 3 | CHOYA guided buttons + prompt injection while talking | ✅ | Wizards via GPU 6 + Wizard 1 |
+| 3 | CHOYA guided buttons + prompt injection while talking | ✅ | Wizards via GPU 6 + the Magic wizards (Magic 4–5) |
 | 4 | Text Editor as artist→developer IDE (#52) | ☐ | Tools 2 → Text Editor 1–4 |
-| 5 | Translate this (#42) | 🟡 planned | Chat 3 |
-| 6 | Explain this, every context menu (#290) | 🟡 planned | Chat 2 (widened) |
-| 7 | Sidebar chat in all editors (#291) | 🟡 3D View only | Sidebar 1 |
+| 5 | Translate this (#42) | 🟡 in progress (another agent) | Chat 3 |
+| 6 | Explain this, every context menu (#290) | 🟡 in progress (another agent) | Chat 2 |
+| 7 | Sidebar chat in all editors (#291) | 🟡 in progress (another agent) | Sidebar 1 |
 | 8 | Footer integration of agent status | ☐ | Footer 1 |
 | 9 | Orchestration layer + expanded domain tools (#71) | ☐ | Tools 1–3, 5, 7–9; Orchestrate 1–2 |
-| 10 | Quick prompt menu in every editor | ☐ design | Quick 1 → Quick 2 → Wizard 1 |
+| 10 | Quick tools in every editor → **Magic operators** | ☐ for review | Magic 0–3, 6 (+ 4–5 stretch, 7 with Text Editor) — `plan_tier4m_magic_operators.md` |
 | 11 | Security checks | 🟡 | Security 1–5 |
 
 ### 0.2 Strategy
 
-1. **One entry point per editor, three doors per capability.** Every new capability is a
-   server-side MCP tool (all engines get it) reachable from the chat, the **Coworker ▸**
-   quick menu (Quick 1/2) and, later, the co-pilot. Explain, Translate, quick actions and
-   wizards all live behind that one entry point instead of scattering menu items.
+1. **Magic operators, not canned prompts.** Day-to-day chores become real operators
+   with a wand-badged icon in the editor's **toolshelf tab** (Bforartists) and a header
+   **Magic** menu (context menus only where there's no other slot, e.g. Properties).
+   Each is mostly tested code with one small, bounded model decision where context
+   matters, a preview and one undo. Artists can also **record** one from a good chat turn
+   or **write** one in the Text Editor with the same standard
+   (`plan_tier4m_magic_operators.md`).
 2. **Tool first, model optional.** Day-to-day chores (organize, rename, place, fix,
    frame) are deterministic tools with a dry run and one undo, usable without a model.
    The model chooses and chains them. This is what makes 7–14B local models reliable
@@ -54,16 +57,18 @@ editors), the **tools** half (domain + orchestration) and **security**.
 ```
 Security 1 ─► Security 2–4
 Chat 4 (context) ─► Sidebar 1 ─► Footer 1
-Quick 1 spike ─► Chat 2 Explain + Chat 3 Translate ─► Quick 2 catalogue
-Tools 7 + Tools 8 ─► Wizard 1 (GPU 6) ─► Orchestrate 1 ─► Orchestrate 2
+Magic 0 spike ─► Magic 1 framework ─► Magic 2, Magic 3 ─► Magic 6 recorder
+Tools 7 + Tools 8 + Tools 9 ─► Magic 2 ─► Orchestrate 1 ─► Orchestrate 2
+Text Editor 1–2 ─► Magic 7
 Tools 2 ─► Text Editor 1–4
 Tools 1, 3, 5, 9 in parallel (one domain per PR)
 ```
 
-Suggested batches (each ends in a test round): **A** Security 1–2, Chat 4, Quick 1,
-Tools 7 · **B** Chat 2–3, Sidebar 1, Footer 1, Tools 8 · **C** Quick 2, Wizard 1,
-Orchestrate 1, Tools 1/3/9 · **D** Tools 2 + Text Editor 1–4, Orchestrate 2,
-Security 3–5 → **Test 3 + Test 5** → release.
+Suggested batches for my lanes (each ends in a test round; the 🟡 lanes run in
+parallel with the other agent): **A** Security 1–2, Magic 0, Tools 7, Footer 1 ·
+**B** Magic 1, Tools 8–9 · **C** Magic 2, Magic 3, Tools 1/3, Orchestrate 1 ·
+**D** Magic 6, Tools 2 + Text Editor 1–4, Magic 7, Orchestrate 2, Security 3–5 ·
+stretch Magic 4–5 → **Test 3 + Test 5** → release.
 
 ### 0.4 Cut line
 
@@ -82,7 +87,8 @@ Runtime 3. Ideas for those: `plan_tier5c_artist_automation.md`.
 | #219 (placement tools) closed as completed | Only a guidance rule shipped (#257); no tools → **Tools 7** |
 | Chat 1 (native markdown) marked unblocked | Still 0 uses of `label_markdown` in the add-on; open |
 | Editors 5 (viewport dot) | Replaced by **Footer 1** (status bar) |
-| Text Editor 5 (prompt templates) | Folded into **Quick 2** (one catalogue for every editor) |
+| Text Editor 5 (prompt templates) | Folded into **Magic 7** (write your own Magic operator) |
+| Quick prompt menu (canned prompts) | Replaced by **Magic operators** (4m §1: prompts alone are slow, inconsistent on small models, no preview/undo) |
 | §3 lanes table below predates the engine work | Kept for history; the release order is §0.3 |
 
 ---

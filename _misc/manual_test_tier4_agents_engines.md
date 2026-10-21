@@ -28,8 +28,9 @@ Your ticked sections A-N stay below as the record.
 
 - [ ] Editor input row, left: **image / render / screen** icons; the image icon opens the picker popover
       (any image, File..., Render, Screen, Send Once, preview). No Image box in the Coworker panel. (#213)
-- [ ] Sidebar chat: the **icon column** left of the messages (New Thread, @ Mention, Revert / Stop, Open
-      Editor; Image, Render, Screen). (#214)
+- [ ] Sidebar chat: a **bottom toolbar** in the grip's row, two joined groups (New Thread, @ Mention,
+      Revert / Stop | Image, Render, Screen -- the Asset Browser's capture icon); dragging off the buttons
+      still resizes. Coworker | Ask | Plan is one joined row; Open Editor only in the top bar. (#214, #263)
 - [ ] Floating Coworker editor: click into the input, then **drag a PNG from Explorer** onto the chat:
       it attaches. (#215 -- needs your real drag)
 - [ ] **Attach Screen** from the floating editor: that window tints the hovered editor at once, no copy in

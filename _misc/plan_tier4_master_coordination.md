@@ -22,25 +22,25 @@ editors), the **tools** half (domain + orchestration) and **security**.
 |---|---|---|---|
 | 1 | Refinement | ✅ | Keep fixing from the test list |
 | 2 | Dedicated global multi-domain chat editor | ✅ | — |
-| 3 | CHOYA guided buttons + prompt injection while talking | ✅ | Wizards via GPU 6 + the Magic wizards (Magic 4–5) |
+| 3 | CHOYA guided buttons + prompt injection while talking | ✅ | Wizards via GPU 6 + the wizard operators (Wand 4–5) |
 | 4 | Text Editor as artist→developer IDE (#52) | ☐ | Tools 2 → Text Editor 1–4 |
 | 5 | Translate this (#42) | 🟡 in progress (another agent) | Chat 3 |
 | 6 | Explain this, every context menu (#290) | 🟡 in progress (another agent) | Chat 2 |
 | 7 | Sidebar chat in all editors (#291) | 🟡 in progress (another agent) | Sidebar 1 |
 | 8 | Footer integration of agent status | ☐ | Footer 1 |
 | 9 | Orchestration layer + expanded domain tools (#71) | ☐ | Tools 1–3, 5, 7–9; Orchestrate 1–2 |
-| 10 | Quick tools in every editor → **Magic operators** | ☐ for review | Magic 0–3, 6 (+ 4–5 stretch, 7 with Text Editor) — `plan_tier4m_magic_operators.md` |
+| 10 | Quick tools in every editor → **Coworker operators** (wand icon, native places) | ☐ for review | Wand 0–3, 6 (+ 4–5 stretch, 7 with Text Editor) — `plan_tier4m_coworker_operators.md` |
 | 11 | Security checks | 🟡 | Security 1–5 |
 
 ### 0.2 Strategy
 
-1. **Magic operators, not canned prompts.** Day-to-day chores become real operators
-   with a wand-badged icon in the editor's **toolshelf tab** (Bforartists) and a header
-   **Magic** menu (context menus only where there's no other slot, e.g. Properties).
-   Each is mostly tested code with one small, bounded model decision where context
-   matters, a preview and one undo. Artists can also **record** one from a good chat turn
-   or **write** one in the Text Editor with the same standard
-   (`plan_tier4m_magic_operators.md`).
+1. **Operators, not canned prompts.** Day-to-day chores become ordinary-looking
+   operators — conventional names and tooltips, a **wand badge** on the icon — placed in
+   the menus and Bforartists toolshelf tabs where related native operators live (context
+   menus only where that is the native place: Explain, Translate, Properties). Mostly
+   tested code; the **active engine** answers only the judgment calls; preview and one
+   undo. Users can record one from a good chat turn or write one in the Text Editor's
+   **Make Operator** panel, the only dedicated panel (`plan_tier4m_coworker_operators.md`).
 2. **Tool first, model optional.** Day-to-day chores (organize, rename, place, fix,
    frame) are deterministic tools with a dry run and one undo, usable without a model.
    The model chooses and chains them. This is what makes 7–14B local models reliable
@@ -57,18 +57,19 @@ editors), the **tools** half (domain + orchestration) and **security**.
 ```
 Security 1 ─► Security 2–4
 Chat 4 (context) ─► Sidebar 1 ─► Footer 1
-Magic 0 spike ─► Magic 1 framework ─► Magic 2, Magic 3 ─► Magic 6 recorder
-Tools 7 + Tools 8 + Tools 9 ─► Magic 2 ─► Orchestrate 1 ─► Orchestrate 2
-Text Editor 1–2 ─► Magic 7
+Wand 0 spike + icons ─► Wand 1 framework ─► Wand 2 Sequencer ─► Wand 3 Nodes ─► Wand 6 recorder
+Tools 1 ─► Wand 2 ; Tools 3 ─► Wand 3
+Tools 7 + 8 + 9 ─► organize / fix operators ─► Orchestrate 1 ─► Orchestrate 2
+Text Editor 1–2 ─► Wand 7
 Tools 2 ─► Text Editor 1–4
 Tools 1, 3, 5, 9 in parallel (one domain per PR)
 ```
 
 Suggested batches for my lanes (each ends in a test round; the 🟡 lanes run in
-parallel with the other agent): **A** Security 1–2, Magic 0, Tools 7, Footer 1 ·
-**B** Magic 1, Tools 8–9 · **C** Magic 2, Magic 3, Tools 1/3, Orchestrate 1 ·
-**D** Magic 6, Tools 2 + Text Editor 1–4, Magic 7, Orchestrate 2, Security 3–5 ·
-stretch Magic 4–5 → **Test 3 + Test 5** → release.
+parallel with the other agent): **A** Security 1–2, Wand 0, Tools 1, Footer 1 ·
+**B** Wand 1, Wand 2 (Sequencer), Tools 3, Tools 7 · **C** Wand 3 (Nodes), Tools 8–9,
+Orchestrate 1 · **D** Wand 6, Tools 2 + Text Editor 1–4, Wand 7, Orchestrate 2,
+Security 3–5 · stretch Wand 4–5 → **Test 3 + Test 5** → release.
 
 ### 0.4 Cut line
 
@@ -87,8 +88,8 @@ Runtime 3. Ideas for those: `plan_tier5c_artist_automation.md`.
 | #219 (placement tools) closed as completed | Only a guidance rule shipped (#257); no tools → **Tools 7** |
 | Chat 1 (native markdown) marked unblocked | Still 0 uses of `label_markdown` in the add-on; open |
 | Editors 5 (viewport dot) | Replaced by **Footer 1** (status bar) |
-| Text Editor 5 (prompt templates) | Folded into **Magic 7** (write your own Magic operator) |
-| Quick prompt menu (canned prompts) | Replaced by **Magic operators** (4m §1: prompts alone are slow, inconsistent on small models, no preview/undo) |
+| Text Editor 5 (prompt templates) | Folded into **Wand 7** (Make Operator panel) |
+| Quick prompt menu (canned prompts) | Replaced by **Coworker operators** in native places (4m §1: prompts alone are slow, inconsistent on small models, no preview/undo); no "Magic" branding, the wand badge marks them |
 | §3 lanes table below predates the engine work | Kept for history; the release order is §0.3 |
 
 ---

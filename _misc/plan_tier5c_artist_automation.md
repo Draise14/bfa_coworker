@@ -77,18 +77,18 @@ Tools 1 (VSE), Tools 2 (Text + recipes), Tools 3 (Nodes), Rig 1–2. Additions:
 | Scene co-pilot / render critic | Teams 2–3 | T5 |
 | Scheduled runs | Auto mode exists; add "run this recipe nightly" via the OS scheduler | T5 |
 
-## 4–5. Quick tools and wizards → Magic operators
+## 4–5. Quick tools and wizards → Coworker operators
 
-Superseded (2026-10-20) by **`plan_tier4m_magic_operators.md`**: a standard for Magic
-operators placed in the toolshelf tab and header menu, with starter packs (organize,
-nodes, sequencer, bake, asset library), a recorder and Text Editor authoring. The tools
-in §2 are what those operators call.
+Superseded by **`plan_tier4m_coworker_operators.md`**: ordinary-looking operators with a
+wand-badged icon in their native menus and Bforartists toolshelf tabs, with packs
+(Sequencer first, then Nodes; organize, bake, asset library), a recorder and a Make
+Operator panel in the Text Editor. The tools in §2 are what those operators call.
 
 ## 6. What goes in the release vs Tier 5
 
 **Release** (keeps it shippable): housekeeping tools (2.1), placement (2.2),
 `frame_camera`/`make_turntable`, `material_from_folder`, `fix_common`, map-over-selection,
-mission checkpoints + validator pass, and Magic 0–3 + 6 (4m); Magic 4–5 as stretch.
+mission checkpoints + validator pass, and Wand 0–3 + 6 (4m); Wand 4–5 as stretch.
 
 **Tier 5**: recipes/macros and batch across files, teams/co-pilot/critic, export/UV/LOD
 pipeline, the other wizards, lighting presets, render queue.

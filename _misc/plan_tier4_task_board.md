@@ -26,21 +26,21 @@ from `main`, no stacked PRs. Only one open PR at a time on `agent_controller.py`
 Your Tier 4 goals, checked against `main` (2a5cb56). This is the cut line for the
 release; anything not listed here waits for Tier 5. Strategy and order: master §0.
 **Legend**: ✅ done · 🟡 in progress (you + another agent; not re-planned here) ·
-◐ partly done · ☐ not started. Magic operators, tools, orchestration, footer and
-security are written up for review in `plan_tier4m_magic_operators.md`.
+◐ partly done · ☐ not started. Coworker operators, tools, orchestration, footer and
+security are written up for review in `plan_tier4m_coworker_operators.md`.
 
 | Goal | Status | Tasks left for the release |
 |---|---|---|
 | Refinement | ✅ | Polish / test rounds done (#203–#286); keep fixing from your test list |
 | Dedicated global multi-domain chat editor | ✅ | — (GPU 4, Chat 7) |
-| CHOYA guided buttons + prompt injection while talking | ✅ | Chat 5 done (#168 #278 #288); Queue + Plan mode in place. Wizards = GPU 6 + Magic 4–5 |
-| Text Editor as an artist→developer IDE (#52) | ☐ | Tools 2 → Text Editor 1–4 + Magic 7 (Text Editor 5 folds into Magic 7) |
+| CHOYA guided buttons + prompt injection while talking | ✅ | Chat 5 done (#168 #278 #288); Queue + Plan mode in place. Wizards = GPU 6 + Wand 4–5 |
+| Text Editor as an artist→developer IDE (#52) | ☐ | Tools 2 → Text Editor 1–4 + Wand 7 (Text Editor 5 folds into Wand 7) |
 | Translate this (#42) | 🟡 in progress | Chat 3 |
 | Explain this, in every context menu (#290) | 🟡 in progress | Chat 2 |
 | Contextual sidebar chat in all editors (#291) | 🟡 in progress | Sidebar 1 |
 | Footer integration of agent status | ☐ | Footer 1 (status bar; replaces Editors 5) |
 | Orchestration layer (#71) + expanded domain tools | ☐ | Tools 1–3, 5, **7–9** (new); Orchestrate 1–2 (new). Teams 1–3 → Tier 5 |
-| Quick tools in every editor → **Magic operators** | ☐ for review | Magic 0–3, 6 (release); Magic 4–5 (stretch); Magic 7 with the Text Editor lane |
+| Quick tools in every editor → **Coworker operators** (wand icon, native places) | ☐ for review | Wand 0–3, 6 (release; Sequencer pack first); Wand 4–5 (stretch); Wand 7 with the Text Editor lane |
 | Security checks | 🟡 token + permissions done | Security 1–5 (new) |
 
 ---
@@ -177,7 +177,7 @@ Plan: `plan_tier4c_text_editor_ide_agent.md`
 | ☐ | **Text Editor 2**: Edit with Coworker | C2 | Right-click → rewrite the selection in place, streamed, one undo step | Text Editor 1 | M | Selection rewritten; Ctrl+Z restores | |
 | ☐ | **Text Editor 3**: Run → fix | C3 | Run the script, jump to the error, fix the range | Chat 8 | S | Error line found; fix applied | |
 | ☐ | **Text Editor 4**: Recipes panel | C4 | The script's parameter block as fields; "Rerun with…" | Tools 2 | S | Change a number → script reruns | |
-| ➜ | **Text Editor 5**: Prompt templates | C5 | *Folded into **Magic 7** (write your own Magic operator), 2026-10-20* | — | — | — | |
+| ➜ | **Text Editor 5**: Prompt templates | C5 | *Folded into **Wand 7** (Make Operator panel), 2026-10-20* | — | — | — | |
 
 ## Editors everywhere — Coworker editor and sidebars (#26)
 
@@ -216,23 +216,26 @@ Plan: `plan_tier4s_skills_cleanroom.md`
 | ☐ | **Skills 7**: Mesh quality check | S6 | `check_mesh_quality`: overlaps, loose parts, open edges, flipped normals, unapplied scale | — | S | Finds each seeded fault | |
 | ☐ | **Skills 8**: Docs for skill packs | S7 | Tool-name stability; using other skill packs with External Harness | — | S | Wiki page reviewed | |
 
-## Editors, footer and Magic operators — Coworker where you work
+## Editors, footer and Coworker operators — Coworker where you work
 
-Review document: `plan_tier4m_magic_operators.md` (diagrams, placement rules, starter
-packs, task cards). Magic replaces the earlier quick-prompt-menu idea (Quick 1/2, Wizard 1).
+Review document: `plan_tier4m_coworker_operators.md` (decisions, diagrams, packs, task
+cards). Operators look native: conventional names and tooltips, a **wand badge** on the
+icon, placed in the menus and Bforartists toolshelf tabs where related native operators
+live. Explain and Translate are operators of this kind. One dedicated panel only, for
+making new operators.
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
 | 🟡 | **Sidebar 1**: Chat in every sidebar (#291) | A2 | Compact chat in the Coworker tab of every editor with a sidebar. *In progress with another agent* | GPU 5 | M | — | |
 | ☐ | **Footer 1**: Agent status in the status bar | A4 | One item in the global status bar: engine icon, state (*Thinking · step 3/7 · Waiting for you*), a pulse while an approval waits; click focuses the chat; toggle. Replaces the viewport dot | Engine 3 | S | Status follows a turn in every workspace; an approval is visible with the chat closed | |
-| ☐ | **Magic 0**: Spike + standard | 4m §3, §6 | One Magic operator end to end in Bforartists 5.3: a "Coworker" toolshelf tab (Bforartists `ToolsystemPanel` / `draw_entries` conventions), a header "Magic" ✨ menu, a wand-badged icon via `icon_value`, the 5-stage pipeline; probe the 5.3 node-editor notes and the sound API | — | S | Screenshots in 3D View, Node editor, Sequencer; manifest frozen | |
-| ☐ | **Magic 1**: Framework | 4m §3 | `MagicSpec` manifest, registry (shipped + user folder), operator factory, placement (shelf tab / header menu / Properties context fallback / Blender fallback), badge icons, gather → decide → preview → apply → report with schema-checked decisions and a no-model heuristic, one undo, chat report, `magic_run` MCP tool | Magic 0 | M | A test pack with tool / hybrid / wizard / macro operators runs from shelf, header and chat | |
-| ☐ | **Magic 2**: Starter pack — Organize, Nodes, Fix | 4m §4 | Organize into Collections, Rename to Convention, Clean Up File, **Tidy & Explain Tree**, Drop to Floor, Align / Distribute, Fix Common Problems, Frame Camera | Magic 1, Tools 7–9 | M | Each runs with no engine and with a 7B model; preview = apply; one undo | |
-| ☐ | **Magic 3**: Sequencer pack | 4m §4 | **Remove Silences**, **Convert to Vertical (9:16)**, Subtitles from Text | Magic 1, Tools 1 | M | A talk clip loses its pauses (ripple) in one undo; a 16:9 edit becomes 9:16 | |
-| ☐ | **Magic 4**: Bake wizard *(stretch)* | 4m §4 | **Set Up & Bake Texture Sets**: pairs, maps, size, folder by cards → bake → wire a material | Magic 1 | M | Two material sets bake normal + AO + base colour from three answered cards | |
-| ☐ | **Magic 5**: Asset library wizard *(stretch)* | 4m §4 | **Prepare Assets for a Library**: thumbnail style, location, author, catalogs by cards → mark, thumbnails, catalogs, metadata, save | Magic 1 | M | 10 props become a library with thumbnails and catalogs | |
-| ☐ | **Magic 6**: Save as Magic (recorder) | 4m §5 | Turn the last good turn's tool calls into a replayable macro (no model needed), with a parameter review card | Magic 1, Security 2 | M | Recorded once, replayed on another selection with no engine | |
-| ☐ | **Magic 7**: Write your own in the Text Editor | 4m §5 | Template + validator + Register + Package as extension (#52 tech-artist path) | Magic 1, Text Editor 1–2 | M | A user-written operator appears in My Magic and ships as a zip | |
+| ☐ | **Wand 0**: Spike + icon set | 4m §3.3, §7 | Remove Silences end to end in its native places (*Strip* menu, Bforartists *Strip* tab) with a wand-badged icon; first 8 self-contained icons (SVG → PNG, light/dark); probe the 5.3 sound-sample API and node notes | — | S | Screenshots in Bforartists and plain Blender 5.3; spec frozen | |
+| ☐ | **Wand 1**: Operator framework | 4m §3 | `OperatorSpec`, registry (shipped + user folder), operator factory, native placement (menus, Bforartists toolshelf panels, context menus), icons via `icon_value`, gather → decide (active engine, schema-checked; heuristic fallback) → preview → apply (one undo) → report, `run_operator` MCP tool | Wand 0 | M | A test pack (tool / hybrid / wizard / macro) runs from its menu, its toolshelf panel and the chat; Explain/Translate can adopt the spec | |
+| ☐ | **Wand 2**: Sequencer pack · *first* | 4m §4.1 | Remove Silences, Convert to Vertical (9:16), Subtitles from Text, Assemble Timeline from Scenes, Export Review Video | Wand 1, Tools 1 | M | A talk clip loses its pauses (gaps closed) in one undo; a 16:9 edit becomes 9:16 | |
+| ☐ | **Wand 3**: Node pack · *second* | 4m §4.2 | Tidy & Explain Tree, Frame Selected by Purpose | Wand 1, Tools 3 | M | A 60-node tree framed into labelled groups with notes on a 7B model; one undo | |
+| ☐ | **Wand 4**: Bake wizard *(stretch)* | 4m §4.3 | Bake Texture Sets… by question cards → bake → wire a material | Wand 1 | M | Two material sets bake normal + AO + base colour from three cards | |
+| ☐ | **Wand 5**: Asset library wizard *(stretch)* | 4m §4.3 | Prepare Assets for a Library… (thumbnail style, location, author, catalogs) | Wand 1 | M | 10 props become a library with thumbnails and catalogs | |
+| ☐ | **Wand 6**: Save Turn as Operator | 4m §5 | The last good turn's tool calls → a replayable operator (no model needed), parameter card + place picker | Wand 1, Security 2 | M | Recorded once, replays on another selection with no engine, from its menu | |
+| ☐ | **Wand 7**: Make Operator panel (Text Editor) | 4m §5 | The one dedicated panel: template, checks, place picker, Register, Package as extension (#52) | Wand 1, Text Editor 1–2 | M | A user-written operator appears in its native menu and ships as a zip | |
 
 ## Orchestration — first layer (#71)
 
@@ -240,8 +243,8 @@ The release ships the first layer; agent teams (Teams 1–3) move to Tier 5.
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
-| ☐ | **Orchestrate 1**: Map over selection | 4m §6 | Run one instruction or Magic operator per selected object / strip / node with a progress row; stop or continue on error; one undo for the batch | Tools 8 | M | "Give each selected rock a random grey material" on 30 objects, one undo | |
-| ☐ | **Orchestrate 2**: Missions with evidence | 4m §6 | Each plan step gets a scene checkpoint (a failed step reverts only itself); the mission ends with a validator pass (`scene_audit` + Skills 7) and reports numbers | Engine 6, Skills 7 | M | A 5-step mission with one failing step recovers and ends with an audit report | |
+| ☐ | **Orchestrate 1**: Map over selection | 4m §7 | Run one instruction or operator per selected object / strip / node with a progress row; stop or continue on error; one undo for the batch | Tools 8 | M | "Give each selected rock a random grey material" on 30 objects, one undo | |
+| ☐ | **Orchestrate 2**: Missions with evidence | 4m §7 | Each plan step gets a scene checkpoint (a failed step reverts only itself); the mission ends with a validator pass (`scene_audit` + Skills 7) and reports numbers | Engine 6, Skills 7 | M | A 5-step mission with one failing step recovers and ends with an audit report | |
 
 ## Security checks
 
@@ -254,7 +257,7 @@ steps ask first (#189), per-window session ids (#85), crash-safe servers.
 | ☐ | **Security 2**: Secrets | — | API keys / HF token / session token never in logs, session exports, Copy Error or screenshots of the prefs; settings backup (#86) stores them separately or not at all | Security 1 | S | Grep of every log/export after a session finds no secret | |
 | ☐ | **Security 3**: Code & file guard | F1 | Path guard for generated code (writes outside the project/temp ask first), network calls from generated code flagged, the 3× repeat guard on every engine | Security 1 | M | A script writing to `C:\Windows` asks; a repeat loop stops on External Agent | |
 | ☐ | **Security 4**: Untrusted content | — | Text from the scene, files and downloads (text blocks, names, asset descriptions) is passed as data, never as instructions; risky steps triggered right after reading such content ask first | Security 1 | S | A text block saying "delete everything" doesn't make the agent do it | |
-| ☐ | **Security 5**: Supply chain + Magic packs | — | Pin and hash-check the llama-server download and vendored deps; keep the extension listing's SHA-256 (#86); user / shared Magic packs show their source and ask once before first run | — | S | A tampered download and an unknown Magic pack are both stopped | |
+| ☐ | **Security 5**: Supply chain + shared operator packs | — | Pin and hash-check the llama-server download and vendored deps; keep the extension listing's SHA-256 (#86); shared operator packs show their source and ask once before first run | — | S | A tampered download and an unknown operator pack are both stopped | |
 
 ## Agent teams & critics — orchestration layer (#71) · *Tier 5*
 

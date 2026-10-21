@@ -34,7 +34,7 @@ from types import SimpleNamespace
 from typing import Any, Callable
 
 import bpy  # pylint: disable=import-error
-from bpy.props import StringProperty  # pylint: disable=import-error
+from bpy.props import BoolProperty, StringProperty  # pylint: disable=import-error
 from bpy.types import Operator  # pylint: disable=import-error
 
 _VALUE_CHARS = 200
@@ -304,6 +304,7 @@ class BFACW_OT_translate(Operator):  # type: ignore[misc]
     path: StringProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
     current: StringProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
     what: StringProperty(default="this text", options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
+    shown: BoolProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]  # the dialog was up
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -313,6 +314,7 @@ class BFACW_OT_translate(Operator):  # type: ignore[misc]
         return True
 
     def invoke(self, context: bpy.types.Context, _event) -> set[str]:
+        self.shown = True
         return context.window_manager.invoke_props_dialog(self, width=320, title="Translate", confirm_text="Translate")
 
     def draw(self, context: bpy.types.Context) -> None:
@@ -339,6 +341,11 @@ class BFACW_OT_translate(Operator):  # type: ignore[misc]
     def execute(self, context: bpy.types.Context) -> set[str]:
         if not self.path:
             return {'CANCELLED'}
+        if not self.shown:      # run straight from a menu that executes its items: show the dialog first
+            args = {"path": self.path, "current": self.current, "what": self.what}
+            index = next((i for i, w in enumerate(context.window_manager.windows) if w == context.window), 0)
+            bpy.app.timers.register(lambda: _translate_dialog(index, args), first_interval=0.05)
+            return {'FINISHED'}
         prefs = context.preferences.addons[__package__].preferences
         name = prefs.bl_rna.properties["translate_language"].enum_items[prefs.translate_language].name
         source = ("" if prefs.translate_from == "auto"
@@ -347,6 +354,15 @@ class BFACW_OT_translate(Operator):  # type: ignore[misc]
             return {'CANCELLED'}
         self.report({'INFO'}, "Translating into {:s} -- see the chat".format(name))
         return {'FINISHED'}
+
+
+def _translate_dialog(window_index: int, args: dict) -> None:
+    wm = bpy.context.window_manager
+    if window_index < len(wm.windows):
+        window = wm.windows[window_index]
+        with bpy.context.temp_override(window=window, screen=window.screen):
+            bpy.ops.bfacw.translate('INVOKE_DEFAULT', **args)
+    return None
 
 
 class BFACW_OT_translate_swap(Operator):  # type: ignore[misc]
@@ -370,15 +386,16 @@ class BFACW_OT_translate_swap(Operator):  # type: ignore[misc]
 
 
 def _translate_op(layout: Any, path: str, current: str, what: str, label: str) -> None:
+    layout.operator_context = 'INVOKE_DEFAULT'      # some menus run their items without a dialog
     op = layout.operator("bfacw.translate", text=label, icon='FONT_DATA')
     op.path, op.current, op.what = path, current[:2000], what
 
 
 def _translate_entry(layout: Any, _context: Any, target: dict) -> None:
-    """Any text field (a string property that isn't a file path)."""
+    """Any text field, file paths and names too (not passwords)."""
     if target["kind"] != "property" or target["type"] != "string":
         return
-    if target.get("subtype") in ("FILE_PATH", "DIR_PATH", "FILE_NAME", "PASSWORD"):
+    if target.get("subtype") == "PASSWORD":
         return
     path = _python_path(target["pointer"], target["identifier"])
     if path:
@@ -421,6 +438,7 @@ def _draw_text_editor_menu(self: Any, context: Any) -> None:
     else:
         chosen, what, label = text.as_string(), "the text \u201c{:s}\u201d".format(text.name), "Translate Text..."
     self.layout.separator()
+    self.layout.operator_context = 'INVOKE_DEFAULT'
     op = self.layout.operator("bfacw.translate", text=label, icon='FONT_DATA')
     # A Text is edited as a whole: the instruction names the part, the path is the datablock.
     op.path, op.current, op.what = "{!r}".format(text) + ".as_string()", chosen[:2000], what
@@ -441,6 +459,7 @@ def _draw_button_menu(self: Any, context: Any) -> None:
     target = clicked(context)
     if target is None:      # a menu, popover or other button Python can't name: show it a picture
         self.layout.separator()
+        self.layout.operator_context = 'INVOKE_DEFAULT'     # its invoke reads where you right-clicked
         self.layout.operator("bfacw.explain_spot", text="Explain This", icon='QUESTION')
         return
     layout = self.layout

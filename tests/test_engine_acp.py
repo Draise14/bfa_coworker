@@ -225,8 +225,11 @@ class TestPermissionsAndPrompt(unittest.TestCase):
         self.assertIn("Waiting for you", notes[0].data["text"])
         engine.approvals.answer("always")
         self.assertEqual(answers, ["a1"])          # never the agent's own allow_always (it would keep it)
-        engine._on_permission(ask, answers.append)                 # "Always": no question this time
+        engine._on_permission(ask, answers.append)                 # "Allow this turn": no question this time
         self.assertEqual(answers, ["a1", "a1"])
+        engine._on_permission({"toolCall": {"title": "write"}, "options": options}, answers.append)
+        self.assertEqual(answers[-1], "a1")                        # ...for any tool in the turn
+        engine.approvals.new_turn()                                # your next message asks again
         engine._on_permission({"toolCall": {"title": "write"}, "options": options}, answers.append)
         engine.approvals.answer("deny")
         self.assertEqual(answers[-1], "r1")

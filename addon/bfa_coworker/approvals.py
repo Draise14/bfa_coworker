@@ -8,9 +8,9 @@ Approvals: "may I?" questions answered in the chat (Tier 4, Engine 5 / Agent 5).
 
 One model for every engine: an engine (today the External Agent) puts a
 request here and waits; the chat shows the oldest one with **Allow once**,
-**Always** and **Deny**, and the answer goes back through the request's
-callback.  "Always" lasts for the session: the same tool runs without asking
-until the agent session ends.
+**Allow this turn** ("always") and **Deny**, and the answer goes back through the
+request's callback.  "Allow this turn" lets every tool run without asking until the
+turn ends: the next message you send asks again.
 
 bpy-free and thread-safe: requests arrive on the agent's reader thread, the
 answer comes from a click on the main thread.
@@ -82,12 +82,19 @@ class Approvals:
         self._lock = threading.Lock()
         self._pending: list[tuple[ApprovalRequest, Callable[[str], None]]] = []
         self._always: set[str] = set()
+        self._turn_all = False       # "Allow this turn" picked: every tool, until the turn ends
         self.on_change: Callable[[], None] | None = None     # redraw hook (any thread)
 
     # -- engine side ---------------------------------------------------------------
     def allowed_always(self, tool: str) -> bool:
+        """Allowed without asking: "Allow this turn" was picked in this turn (any tool)."""
         with self._lock:
-            return tool in self._always
+            return self._turn_all
+
+    def new_turn(self) -> None:
+        """A new turn (your next message): ask again."""
+        with self._lock:
+            self._turn_all = False
 
     def ask(self, request: ApprovalRequest, respond: Callable[[str], None]) -> None:
         """Queue *request*; *respond* gets one of :data:`CHOICES` or "cancel", once."""
@@ -108,6 +115,7 @@ class Approvals:
         """The approval mode changed (#240): every "Always" asks again."""
         with self._lock:
             self._always.clear()
+            self._turn_all = False
         self._changed()
 
     def end_session(self) -> None:
@@ -115,6 +123,7 @@ class Approvals:
         self.cancel_all()
         with self._lock:
             self._always.clear()
+            self._turn_all = False
 
     # -- chat side -----------------------------------------------------------------
     def current(self) -> ApprovalRequest | None:
@@ -138,8 +147,9 @@ class Approvals:
             request, respond = self._pending.pop(index)
             if choice == "always":
                 self._always.add(request.tool)
-            # Questions for the same tool that "Always" now covers are answered too.
-            also = [(r, f) for r, f in self._pending if choice == "always" and r.tool == request.tool]
+                self._turn_all = True
+            # The rest of the turn is allowed: what else is waiting is answered too.
+            also = [(r, f) for r, f in self._pending if choice == "always"]
             self._pending = [p for p in self._pending if p not in also]
         respond(choice)
         for _r, other in also:

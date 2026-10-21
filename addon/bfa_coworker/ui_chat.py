@@ -322,6 +322,14 @@ def _agent_follows_approval(engine, mode: str) -> None:
     engine.never_ask = mode == "AUTO"
 
 
+def _approvals_new_turn() -> None:
+    """A new turn: "Allow this turn" from the last one asks again (risky steps and the agent's)."""
+    from . import risky_steps
+    risky_steps.APPROVALS.new_turn()
+    if _acp is not None:
+        _acp.approvals.new_turn()
+
+
 def apply_approval_mode(mode: str) -> None:
     """The approval mode changed (#240): the agent follows, and every "Always" asks again."""
     from . import risky_steps
@@ -332,19 +340,26 @@ def apply_approval_mode(mode: str) -> None:
     _tag_chat_regions_redraw()
 
 
-class BFACW_MT_approval_mode(bpy.types.Menu):  # type: ignore[misc]
-    """How much the chat asks before tools run"""
-    bl_idname = "BFACW_MT_approval_mode"
-    bl_label = "Approval"
+class BFACW_PT_approval_popover(Panel):  # type: ignore[misc]
+    """How much the chat asks before tools run: a dropdown from the button by Send"""
+    bl_label = "Permissions"
+    bl_idname = "BFACW_PT_approval_popover"
+    bl_space_type = 'TOPBAR'          # only shown as a popover
+    bl_region_type = 'HEADER'
+    bl_ui_units_x = 13
 
     def draw(self, context: bpy.types.Context) -> None:
+        layout = self.layout
         prefs = context.preferences.addons[__package__].preferences
-        col = self.layout.column()
+        layout.label(text="Before tools run", icon='LOCKED')
+        col = layout.column(align=True)
+        col.scale_y = 1.3
         for ident, _name, _desc, _icon, _n in APPROVAL_MODE_ITEMS:
             col.prop_enum(prefs, "approval_mode", ident)
-        col.separator()
-        col.label(text="Applies at once, also while it runs", icon='INFO')
-        col.label(text="Switching forgets every \"Always\"", icon='BLANK1')
+        hint = layout.column()
+        hint.scale_y = 0.8
+        _draw_multiline(hint, next(d for i, _n, d, _ic, _x in APPROVAL_MODE_ITEMS if i == prefs.approval_mode))
+        hint.label(text="Applies at once, also while it runs", icon='INFO')
 
 
 def _picker_for(category: str) -> dict | None:
@@ -2124,6 +2139,7 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
 
         from . import coworker_api
         coworker_api.turn_started(_turn_label(context))      # the undo step to revert to
+        _approvals_new_turn()                                  # "Allow this turn" ends with the turn
         engine.submit(prompt, config)
         return {"FINISHED"}
 
@@ -2647,7 +2663,8 @@ class BFACW_OT_agent_approve(Operator):  # type: ignore[misc]
 
     choice: EnumProperty(  # type: ignore[valid-type]
         items=(("once", "Allow Once", "Let the agent run this tool this one time"),
-               ("always", "Always", "Let the agent run this tool without asking until you stop the agent"),
+               ("always", "Allow This Turn", "Let every tool run without asking for the rest of this turn; "
+                                             "your next message asks again"),
                ("deny", "Deny", "Don't run it: the agent is told no and carries on without it")),
         options={'SKIP_SAVE'},
     )
@@ -2681,7 +2698,7 @@ def approval_card():
     risky = risky_steps.APPROVALS.current()
     if risky is not None:
         return Approval(title=risky.title, detail=risky.detail, waiting=risky_steps.APPROVALS.count(),
-                        note="Approval: the lock button on the chat's input (Ask / Risky only / Auto)",
+                        note="Permissions: the button by Send (Ask / Semi-auto / Auto)",
                         icon="WARNING" if risky.reason else "LOCKED")
     from . import coworker_api
     open_question = coworker_api.current_question()
@@ -4148,6 +4165,7 @@ def chat_timer_update() -> float | None:
         _TURN_SEEN[0] = _thinking
         if _thinking:
             _AUTO["err_before"] = _ac._agent_state.error or ""
+            _approvals_new_turn()           # a queued message is a new turn too
         else:
             _auto_after_turn()          # #177: keep going while the plan is on track
 
@@ -6411,7 +6429,7 @@ _classes = (
     BFACW_OT_plan_execute,
     BFACW_OT_plan_card,
     BFACW_PT_mode_popover,
-    BFACW_MT_approval_mode,
+    BFACW_PT_approval_popover,
     BFACW_PT_chat_history,
     BFACW_OT_chat_open,
     BFACW_OT_chat_where,

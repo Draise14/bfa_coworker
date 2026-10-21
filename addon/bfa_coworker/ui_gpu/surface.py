@@ -48,7 +48,7 @@ TIPS: dict[str, str] = {
     "attach_pin": "Keep this image for every message (pinned), or send it with the next one only",
     "attach_remove": "Remove the image",
     "send": "Send (Enter)",
-    "approval_menu": "Approval: how much the chat asks before tools run (Ask / Risky only / Auto)",
+    "approval_menu": "Permissions: Ask, Semi-auto or Auto -- how much the chat asks before tools run",
     "queue": "Queue this message: it goes when the running turn ends",
     "stop": "Stop the running turn",
     "start": "Start Coworker",
@@ -77,8 +77,8 @@ TIPS: dict[str, str] = {
     "resize": "Drag to make the chat taller or shorter",
     "scroll_track": "Click to page up or down",
     "scroll_handle": "Drag to scroll the chat",
-    "approve:once": "Allow this one step",
-    "approve:always": "Allow this tool for the rest of the session (switching the approval mode asks again)",
+    "approve:once": "Allow this one step (the next one asks again)",
+    "approve:always": "Allow every tool for the rest of this turn; your next message asks again",
     "approve:deny": "Don't run it: the model is told you declined",
     "plan_card:start": "Carry out the plan now, step by step (Coworker mode, the engine that is on)",
     "plan_card:refine": "Hide this card and type what should change in the plan",
@@ -161,7 +161,7 @@ class Approval:
     note: str = ""              # e.g. "Coworker's Blender tool"
     # (id, label, icon) per button; a question (Engine 6's ask_user) has its choices here.
     buttons: tuple[tuple[str, str, str], ...] = (
-        ("once", "Allow once", "CHECKMARK"), ("always", "Always", "PINNED"), ("deny", "Deny", "CANCEL"))
+        ("once", "Allow once", "CHECKMARK"), ("always", "Allow this turn", "PINNED"), ("deny", "Deny", "CANCEL"))
     action: str = "approve"     # the action a button sends: (action, button id)
     icon: str = "LOCKED"
 

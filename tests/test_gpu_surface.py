@@ -193,6 +193,15 @@ class TestLayout(unittest.TestCase):
         self.assertEqual([round(f.rect.x - b.x) for f, b in zip(fills, buttons)], [0, -1, -1])
         self.assertEqual(sf.row_corners(0, 1), "")
 
+    def test_permissions_button_opens_its_dropdown_not_send(self):
+        # It sat with Send, whose click code sent the (empty) message: a dead button.
+        surface = sf.ChatSurface()
+        surface.box.approval = ("Ask", "LOCKED")
+        surface.box.model.insert("hello")
+        _draw(surface)
+        self.assertEqual(_click(surface, "approval_menu"), [("approval_menu", "")])
+        self.assertEqual(surface.box.model.text, "hello")                     # nothing was sent
+
     def test_question_choices_wrap_and_mark_the_recommended_one(self):
         # A question's choices in a narrow sidebar: inside the card, wrapped, left-aligned, with a
         # keyframe -- green (theme jitter) for the first, the recommended one; blue for the others.

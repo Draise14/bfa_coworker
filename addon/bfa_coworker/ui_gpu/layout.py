@@ -119,6 +119,7 @@ class DrawCmd:
     font: str = "ui"
     size: float = 11.0
     bold: bool = False
+    corners: str = ""            # rect / outline: "" all rounded, "L" / "R" one side, "N" none
 
 
 @dataclass
@@ -150,11 +151,11 @@ class Canvas:
     _clips: list[Rect] = field(default_factory=list)
 
     # -- primitives ----------------------------------------------------------
-    def fill(self, rect: Rect, color: RGBA, radius: float = 0.0) -> None:
-        self.commands.append(DrawCmd("rect", rect, color, radius))
+    def fill(self, rect: Rect, color: RGBA, radius: float = 0.0, corners: str = "") -> None:
+        self.commands.append(DrawCmd("rect", rect, color, radius, corners=corners))
 
-    def stroke(self, rect: Rect, color: RGBA, radius: float = 0.0) -> None:
-        self.commands.append(DrawCmd("outline", rect, color, radius))
+    def stroke(self, rect: Rect, color: RGBA, radius: float = 0.0, corners: str = "") -> None:
+        self.commands.append(DrawCmd("outline", rect, color, radius, corners=corners))
 
     def text(self, x: float, baseline: float, text: str, color: RGBA | None = None,
              font: str = "ui", bold: bool = False, size: float | None = None) -> None:
@@ -222,10 +223,11 @@ class Canvas:
         return self.style.font_size * 1.15
 
     def button(self, rect: Rect, widget_id: str, label: str, active: bool = False,
-               align: str = "center", icon: str = "") -> bool:
+               align: str = "center", icon: str = "", corners: str = "") -> bool:
         """A themed button (``wcol_regular``); returns True on the frame it was clicked.
 
         With *icon*, the icon sits before the label (or alone when *label* is empty).
+        *corners* joins it into a row like Blender's aligned buttons: see :func:`row_corners`.
         """
         colors = self.style.button
         hovered = self.state.hovered(rect)
@@ -234,8 +236,8 @@ class Canvas:
         if hovered and not (active or pressed):
             inner = _lighten(inner, 0.06)
         radius = self.style.radius(colors)
-        self.fill(rect, inner, radius)
-        self.stroke(rect, colors.outline, radius)
+        self.fill(rect, inner, radius, corners)
+        self.stroke(rect, colors.outline, radius, corners)
         text_rect = rect.inset(self.style.pad * 1.25, 0) if align != "center" else rect
         color = colors.text_sel if (active or pressed) else colors.text
         if icon:
@@ -260,6 +262,13 @@ class Canvas:
             if rect.contains(px, py):
                 return widget_id
         return None
+
+
+def row_corners(index: int, count: int) -> str:
+    """Corners for button *index* of a joined row of *count* (Blender's aligned buttons)."""
+    if count <= 1:
+        return ""
+    return "L" if index == 0 else "R" if index == count - 1 else "N"
 
 
 def _lighten(color: RGBA, amount: float) -> RGBA:

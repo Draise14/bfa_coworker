@@ -320,8 +320,8 @@ def _sync_box(surface: ChatSurface, props: Any, busy: bool, running: bool, harne
         box.attach_buttons = False
         last = ("stop", "PAUSE") if busy else ("revert_turn", "LOOP_BACK") if coworker_api.can_revert() else None
         surface.tools = tuple(t for t in (
-            ("new_thread", "ADD"), ("mention", "OUTLINER_OB_MESH"), last, ("open_editor", "WINDOW"), ("", ""),
-            ("attach_menu", "IMAGE_DATA"), ("attach_render", "RENDER_STILL"), ("attach_screen", "FULLSCREEN_ENTER"),
+            ("new_thread", "ADD"), ("mention", "OUTLINER_OB_MESH"), last, ("", ""),
+            ("attach_menu", "IMAGE_DATA"), ("attach_render", "RENDER_STILL"), ("attach_screen", "MAKE_SCREENSHOT"),
         ) if t is not None)
     box.busy = busy
     box.placeholder = ("Ask Coworker..." if running else
@@ -992,7 +992,7 @@ class BFACW_MT_editor_chat(bpy.types.Menu):
         layout.separator()
         layout.operator("bfacw.chat_attach_image", text="Attach Image...", icon="FILE_IMAGE")
         layout.operator("bfacw.chat_capture_render", text="Attach Render", icon="RENDER_STILL")
-        layout.operator("bfacw.chat_capture_screen", text="Attach Screen", icon="FULLSCREEN_ENTER")
+        layout.operator("bfacw.chat_capture_screen", text="Attach Screen", icon="MAKE_SCREENSHOT")
         layout.separator()
         layout.operator("bfacw.queue_show", text="Show Queue", icon="FORWARD")
         layout.operator("bfacw.queue_clear", text="Clear Queue", icon="X")
@@ -1162,7 +1162,7 @@ class BFACW_PT_editor_tools_attach(_ToolPanel, bpy.types.Panel):
     def entries(self, context):
         return [("bfacw.chat_attach_image", "Attach Image...", "FILE_IMAGE", {}),
                 ("bfacw.chat_capture_render", "Attach Render", "RENDER_STILL", {}),
-                ("bfacw.chat_capture_screen", "Attach Screen", "FULLSCREEN_ENTER", {})]
+                ("bfacw.chat_capture_screen", "Attach Screen", "MAKE_SCREENSHOT", {})]
 
     def draw(self, context):
         super().draw(context)

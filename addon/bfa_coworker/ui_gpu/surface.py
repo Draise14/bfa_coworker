@@ -34,7 +34,7 @@ from typing import Any, Callable
 
 from .chat_view import ChatView, _soft
 from .input_box import InputBox
-from .layout import Canvas, InteractionState, Rect
+from .layout import Canvas, InteractionState, Rect, row_corners
 from .style import Style
 
 # Tooltips for the chat's buttons (#237), by widget id (exact, then by prefix).
@@ -169,7 +169,8 @@ class ChatSurface:
     drop_hover: bool = False     # an image is being dragged over: show the drop target
     attachment_pinned: bool = False   # the attached image stays for every message
     attachment_note: str = ""         # the tray's second line instead (External Harness: #199)
-    # A column of icon buttons beside the messages (#214): (action, icon); ("", "") = a gap.
+    # The sidebar chat's icon buttons, in a row along its bottom edge (#214): (action, icon);
+    # ("", "") = a gap.
     tools: tuple[tuple[str, str], ...] = ()
     # Tooltips (#237): the widget under a resting mouse and since when; *tip_wait* > 0 asks the
     # host to draw again that many seconds later, when the tooltip is due.
@@ -263,8 +264,8 @@ class ChatSurface:
         pad = style.pad * (0.7 if self.compact else 1.0)
         canvas.push_clip(rect)      # never paint outside the chat's room (other panels)
         canvas.fill(rect, style.back)
-        if self.compact and self.on_resize is not None:
-            rect = self._draw_grip(canvas, rect)
+        if self.compact and (self.on_resize is not None or (self.tools and notice is None)):
+            rect = self._draw_grip(canvas, rect, self.tools if notice is None else (), actions)
         top_edge = rect.top
         if top is not None:
             # A short compact chat (#182): the mode row goes first, so the messages keep room.
@@ -285,8 +286,6 @@ class ChatSurface:
             anchor_y = chat_y if show_input else rect.y + pad
             chat_y = self._draw_approval(canvas, Rect(inner.x, anchor_y, inner.w, 0), approval, actions) + pad
         chat = Rect(rect.x, chat_y, rect.w, max(0.0, top_edge - chat_y - pad))
-        if self.tools and notice is None and chat.w > style.unit * 6:
-            chat = self._draw_tools(canvas, chat, actions)
         self._chat_rect = chat
         self._notice_room = None
         if notice is not None:
@@ -394,27 +393,11 @@ class ChatSurface:
                 if w < u * 3.2:          # narrow: the icon says it (the tooltip names it)
                     label = "" if icon else label
                 if canvas.button(Rect(mrow.x + i * w, mrow.y, w, u), "mode:" + mode_id, label,
-                                 active=mode_id == top.chat_mode, icon=icon):
+                                 active=mode_id == top.chat_mode, icon=icon,
+                                 corners=row_corners(i, len(top.chat_modes))):
                     actions.append(("chat_mode", mode_id))
             bottom = mrow.y - pad * 0.5
         return bottom
-
-    def _draw_tools(self, canvas: Canvas, chat: Rect, actions: list[tuple[str, str]]) -> Rect:
-        """The icon column on the left of the messages (#214); returns the room left for them."""
-        style = canvas.style
-        u, pad = style.unit, style.pad * 0.5
-        side = u * 1.15
-        x, y = chat.x + pad, chat.top - pad
-        for action, icon in self.tools:
-            if not action:
-                y -= pad * 1.5
-                continue
-            if y - side < chat.y:
-                break
-            if canvas.button(Rect(x, y - side, side, side), "tool:" + action, "", icon=icon):
-                actions.append((action, ""))
-            y -= side + pad * 0.4
-        return Rect(x + side, chat.y, max(0.0, chat.right - x - side), chat.h)
 
     def _draw_tray(self, canvas: Canvas, anchor: Rect, actions: list[tuple[str, str]]) -> float:
         """The image waiting to be sent, in its own box above the input: a thumbnail,
@@ -521,18 +504,41 @@ class ChatSurface:
                     style.tooltip.text)
         canvas.label(Rect(chip.x + style.pad + side + style.pad * 0.6, chip.y, w, chip.h), label, style.tooltip.text)
 
-    def _draw_grip(self, canvas: Canvas, rect: Rect) -> Rect:
-        """A resize grip along the bottom edge (drag to change the panel's height)."""
+    def _draw_grip(self, canvas: Canvas, rect: Rect, tools: tuple[tuple[str, str], ...] = (),
+                   actions: list[tuple[str, str]] | None = None) -> Rect:
+        """The bottom edge: the sidebar chat's icon buttons on the left (#214), and the resize
+        grip in the rest (drag anywhere off the buttons to change the panel's height)."""
         style = canvas.style
-        h = max(6.0, style.pad * 0.9)
+        u, pad = style.unit, style.pad * 0.5
+        h = max(6.0, style.pad * 0.9) if not tools else u + pad * 1.5
         grip = Rect(rect.x, rect.y, rect.w, h)
         hovered = canvas.state.hovered(grip) or self.pressed == "resize"
         dots = style.cursor if hovered else _soft(style.text, 0.55)
-        cx, cy = grip.x + grip.w / 2, grip.y + grip.h / 2
+        if self.on_resize is not None:
+            canvas.hit_areas.append((grip, "resize"))        # under the buttons: they win
+        x = grip.x + style.pad * 0.7
+        groups: list[list[tuple[str, str]]] = [[]]
+        for action, icon in tools:
+            if action:
+                groups[-1].append((action, icon))
+            elif groups[-1]:
+                groups.append([])
+        for group in groups:                 # each group one joined row, like Blender's
+            if not group or x + u * len(group) > grip.right - u * 2:
+                break
+            for i, (action, icon) in enumerate(group):
+                if canvas.button(Rect(x, grip.y + (h - u) / 2, u, u), "tool:" + action, "", icon=icon,
+                                 corners=row_corners(i, len(group))):
+                    if actions is not None:
+                        actions.append((action, ""))
+                x += u
+            x += pad * 1.5
+        if self.on_resize is None:
+            return Rect(rect.x, rect.y + h, rect.w, rect.h - h)
+        cx, cy = (x + grip.right) / 2 if tools else grip.x + grip.w / 2, grip.y + grip.h / 2
         for i in range(-2, 3):
             canvas.fill(Rect(cx + i * 4 * style.scale - style.scale, cy - style.scale, 2 * style.scale,
                              2 * style.scale), dots, style.scale)
-        canvas.hit_areas.append((grip, "resize"))
         return Rect(rect.x, rect.y + h, rect.w, rect.h - h)
 
     def _draw_notice(self, canvas: Canvas, rect: Rect, notice: Notice, actions: list[tuple[str, str]]) -> None:

@@ -178,15 +178,32 @@ class TestLayout(unittest.TestCase):
         missing = sorted({w for _r, w in canvas.hit_areas if w != "input" and not sf.tip_for(w)})
         self.assertEqual(missing, [])
 
-    def test_tool_column_beside_the_messages(self):
-        # #214: icon buttons on the left; the messages move right of them.
+    def test_chat_modes_are_one_joined_row(self):
+        # Like Blender's aligned buttons (BW | RGB | RGBA): rounded only at the row's two ends.
         surface = sf.ChatSurface(compact=True)
+        top = sf.TopBar(mode_label="Local", mode_icon="CONSOLE", status="Ready", status_icon="CHECKMARK",
+                        chat_modes=(("AGENT", "Coworker", ""), ("ASK", "Ask", ""), ("PLAN", "Plan", "")),
+                        chat_mode="AGENT")
+        canvas, _ = _draw(surface, top=top)
+        buttons = sorted((r for r, w in canvas.hit_areas if w.startswith("mode:")), key=lambda r: r.x)
+        corners = [next(c.corners for c in canvas.commands if c.kind == "rect" and c.rect == r) for r in buttons]
+        self.assertEqual(corners, ["L", "N", "R"])
+        self.assertEqual(sf.row_corners(0, 1), "")
+
+    def test_tool_row_along_the_bottom(self):
+        # #214: the sidebar chat's icon buttons in a row along its bottom edge, under the input,
+        # left to right; the rest of the row is still the resize grip.
+        surface = sf.ChatSurface(compact=True)
+        surface.on_resize = lambda h: None
         surface.tools = (("new_thread", "ADD"), ("", ""), ("attach_menu", "IMAGE_DATA"))
         canvas, _ = _draw(surface)
         rects = {w: r for r, w in canvas.hit_areas}
-        self.assertIn("tool:new_thread", rects)
-        self.assertGreater(rects["tool:new_thread"].y, rects["tool:attach_menu"].y)    # top to bottom
-        self.assertGreaterEqual(surface._chat_rect.x, rects["tool:new_thread"].right)
+        self.assertEqual(rects["tool:new_thread"].y, rects["tool:attach_menu"].y)        # one row
+        self.assertLess(rects["tool:new_thread"].x, rects["tool:attach_menu"].x)        # left to right
+        self.assertLessEqual(rects["tool:new_thread"].top, surface.box.rect.y)          # under the input
+        grip = rects["resize"]
+        self.assertEqual(surface.hit(grip.right - 5, grip.y + grip.h / 2), "resize")
+        self.assertEqual(surface._chat_rect.x, 0.0)                                     # no column any more
         self.assertEqual(_click(surface, "tool:attach_menu"), [("attach_menu", "")])
 
     def test_notice_shows_the_attached_image(self):

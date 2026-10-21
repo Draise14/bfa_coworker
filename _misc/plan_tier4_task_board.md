@@ -116,9 +116,9 @@ Plan: `plan_tier4g_domain_tooling.md`. Each task ships its prompt chapter and re
 | ☐ | **Tools 1** (#304): Video Sequencer | G1 | 5 tools: strips, strip detail, timeline, move/trim, preview frame | — | M | "Move the title strip to frame 50" works on Local | |
 | ☐ | **Tools 2** (#305): Text Editor + recipes | G2 | 5 tools: list, read lines, edit lines, search, run. Plus **recipes**: scripts with a parameter block, rerun instead of regenerate | — | M | Agent edits lines 40–45 and reruns; a recipe reruns with a new number | |
 | ☐ | **Tools 3** (#306): Nodes | G3 | 5 tools: node detail, add, connect (fuzzy socket names), set value, mute | — | M | Noise → Roughness flow works on Local | |
-| ☐ | **Tools 4** (#307): Saving & export | G4 | Save, unsaved check, pack, export selection, incremental save; risky ones ask first | Engine 5 (ship the read-only check first) | M | Export asks; incremental save versions correctly | |
+| ☐ | **Tools 4** (#307): Saving & export | 4e §4 | Save, unsaved check, pack, export selection, incremental save; risky ones ask first | Engine 5 (ship the read-only check first) | M | Export asks; incremental save versions correctly | |
 | ☐ | **Tools 5** (#308): Review sheet | G5 | One tiled image of several views (front, back, below, camera) for vision checks | — | S | One labelled image; costs about one image | |
-| ☐ | **Tools 6** (#309): Long jobs | G6 | Long bakes/renders run in the background with progress | — | S | A 10-minute bake doesn't time out the agent | |
+| ☐ | **Tools 6** (#309): Long jobs | G6 | Long bakes/renders run in the background with progress. *The bridge keeps jobs up to an hour, but the MCP client gives up after 300 s (`tools_helpers/connection._TIMEOUT`), and bakes don't use the deferred path yet* | — | S | A 10-minute bake doesn't time out the agent | |
 | ☐ | **Tools 7** (#327): Placement & orientation | 4m §4.3 | `place(on_top_of / next_to / inside, gap)`, `align`, `distribute`, `drop_to_floor` from world-space bounds. *#219 shipped only a guidance rule (#257)* | — | S | "Put the lamp on the table, 5 cm from the edge" is right on a 7B model | |
 | ☐ | **Tools 8** (#328): Organize my scene | 4m §4.3 | `scene_audit`, `organize_scene(rules)`, `batch_rename`, `cleanup`, `relink_missing`; dry run, one undo, works without a model | — | M | A messy scene audited, sorted, renamed, cleaned in one step; numbers before/after | |
 | ⏩ | **Tools 9** (#329): Look-dev & prep helpers *(Tier 5)* | 4m §4.3 | `frame_camera`, `make_turntable`, `material_from_folder`, `fix_common` | — | M | Each runs from the chat and as an operator with a preview | |
@@ -145,9 +145,9 @@ Plan: `plan_tier4f_agent_intelligence.md`
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
-| ☐ | **Runtime 1** (#310): Loop guard & path guard | F1 | *Permissions are done: Strict / Permissive / Auto (#292).* Left: path guard, stop the same call repeating 3× | Engine 5 | M | Safe mode asks before running code; 3× repeat escalates | |
+| ☐ | **Runtime 1** (#310): Loop guard | F1 | *Permissions are done (#292); the Local/Remote loop already counts identical calls (`_MAX_IDENTICAL_CALLS = 3`) but only ends the turn quietly.* Make the repeat guard ask on the 3rd repeat and refuse the 4th, at the bridge so every engine gets it. *The path guard is Security 3* | Engine 5 | S | 3× repeat shows the approval card on every engine | |
 | ☐ | **Runtime 2** (#311): Skills on demand | F2 | Only skill names + descriptions in the prompt, bodies loaded when needed (also for external clients) | Skills 5 | S | Prompt shrinks measurably on Local 16K | |
-| ☐ | **Runtime 3** (#312): Local speed | F3 | llama-server metrics, parallel slots, auto-tune | — | M | tok/s in Status; no benchmark regression | |
+| ⏩ | **Runtime 3** (#312): Local speed *(Tier 5; speed flags already shipped, left: metrics + slots)* | F3 | llama-server metrics, parallel slots, auto-tune | — | M | tok/s in Status; no benchmark regression | |
 
 ## Text Editor coding agent (#52)
 
@@ -182,8 +182,8 @@ Plan: `plan_tier4e_nice_to_haves.md`
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
-| ☐ | **Rig 1** (#317): Rigging tools | E1 | Armature, bone, constraint, IK chain, mirror pose, bake | Tools pattern | M | "Rig this 3-bone arm with IK" works on Local | |
-| ☐ | **Rig 2** (#318): Animation tools | E2 | Interpolation, F-curve modifier, NLA track, bake to NLA (keyframing tool exists) | Tools pattern | M | Bounce with ease-out + noise via tools only | |
+| ⏩ | **Rig 1** (#317): Rigging tools *(Tier 5)* | E1 | Armature, bone, constraint, IK chain, mirror pose, bake | Tools pattern | M | "Rig this 3-bone arm with IK" works on Local | |
+| ⏩ | **Rig 2** (#318): Animation tools *(Tier 5)* | E2 | Interpolation, F-curve modifier, NLA track, bake to NLA (keyframing tool exists) | Tools pattern | M | Bounce with ease-out + noise via tools only | |
 
 ## Skills cleanup — clean room
 
@@ -255,7 +255,7 @@ steps ask first (#189), per-window session ids (#85), crash-safe servers.
 |---|---|---|---|---|---|---|---|
 | ☐ | **Security 1** (#345): Threat model + audit | 4m §7 | Bridge, MCP (loopback + origin), ACP processes, harness configs with the token, downloads, extension repo, spell folders | — | S | `_misc/security_model.md` reviewed; findings filed | |
 | ☐ | **Security 2** (#346): Secrets | 4m §7 | No keys/tokens in logs, exports, Copy Error, recorded spells | Security 1 | S | Grep after a full session finds none | |
-| ☐ | **Security 3** (#347): Code & file guard | 4m §7 | Writes outside project/temp ask; network from generated code flagged; repeat guard on every engine (with Runtime 1, #310) | Security 1 | M | A write to a system folder asks | |
+| ☐ | **Security 3** (#347): Code & file guard | 4m §7 | Writes outside the .blend's folder / temp ask; network from generated code flagged (the repeat guard is Runtime 1) | Security 1 | M | A write to a system folder asks | |
 | ☐ | **Security 4** (#348): Untrusted content | 4m §7 | Scene/file/download text is data, never instructions | Security 1 | S | A text block saying "delete everything" changes nothing | |
 | ⏩ | **Security 5** (#349): Supply chain + shared spells *(Tier 5, with sharing)* | 4m §7 | Hash-check downloads; shared spells and online libraries show their source and ask once | — | S | A tampered download and an unknown spell pack are stopped | |
 

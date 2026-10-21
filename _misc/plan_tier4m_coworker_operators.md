@@ -182,7 +182,7 @@ A bad engine answer falls back to the heuristic; nothing is ever half-applied.
 | A native menu holds operators of this kind | Append there, next to the related native operator | *Strip > Remove Silences* under *Split*; *Node > Tidy & Explain* near *Frame* |
 | Bforartists tabbed toolshelf has a matching tab/panel | Add to that panel (Bforartists `ToolsystemPanel` conventions, poll on `show_toolshelf_tabs`) | *Strip* tab, next to *Split*; *Node* tab, *Frame Tools* panel |
 | The native place is a context menu | Context menu | Explain, Translate; Properties editor |
-| Making new operators | **One dedicated panel: the Spell Book** (Coworker editor sidebar) + *Save as Spell* on chat replies and *Add to Spell Book* on right-click | Spell 1–3 |
+| Making new operators *(Tier 5)* | **One dedicated panel: the Spell Book** (Coworker editor sidebar) + *Save as Spell* on chat replies and *Add to Spell Book* on right-click | Spell 1–3 (Tier 5) |
 | Hotkeys | None by default | Users bind their own |
 
 No "Coworker" tab and no extra header menu: the operators should feel built in.
@@ -232,7 +232,8 @@ The headline is a **wizard spell that edits with you**, not a template you adjus
 | Operator | Place | Kind | Tier |
 |---|---|---|---|
 | **Organize into Collections**, **Rename to Convention**, **Clean Up File** | *Outliner* context/header, *Object* menu | hybrid / tool | Release (with Tools 8) |
-| **Drop to Floor**, **Align / Distribute**, **Fix Common Problems**, **Frame Camera** | *Object > Snap / Transform*, Bforartists *Object* tab | tool | Release (with Tools 7, 9) |
+| **Drop to Floor**, **Align / Distribute** | *Object > Snap / Transform*, Bforartists *Object* tab | tool | Tier 4 (with Tools 7) |
+| **Fix Common Problems**, **Frame Camera** | *Object*, *View > Cameras* | tool | Tier 5 (with Tools 9) |
 | **Bake Texture Sets…** (wizard) | *Object > Bake* area, *Render* properties | wizard / small | Stretch (Wand 4) |
 | **Prepare Assets for a Library…** (wizard: thumbnails, location, author, catalogs) | *Asset Browser* menu, *File* | wizard / small | Stretch (Wand 5) |
 | **Block Out Scene…** (description → coloured greybox in its own collection; rebuild/clear) | *Add* menu | hybrid / full | Tier 5 |
@@ -270,7 +271,7 @@ flowchart TD
   after a procedural-looking build — "Want sliders for this?". One suggestion button,
   easy to ignore, never a pop-up.
 
-## 5. Making your own — the Spell Book (Spell 1, 2, 3)
+## 5. Making your own — the Spell Book (Spell 1, 2, 3) · *Tier 5*
 
 ### 5.1 What the Spell Book is
 
@@ -418,7 +419,7 @@ flowchart LR
 - **Done when**: screenshots in Bforartists and plain Blender 5.3; spec fields frozen.
 
 ### Wand 1 — Framework (M)
-- **What**: `OperatorSpec`, registry (shipped + user folder), operator factory, placement
+- **What**: `OperatorSpec`, registry (shipped operators only in Tier 4; the user folder comes with the Spell Book, Tier 5), operator factory, placement
   (menus, Bforartists toolshelf, context menus), icon loading, the 5-stage pipeline with
   schema-checked decisions on the **active engine** and a heuristic fallback, preview,
   one undo, chat report, `run_operator` MCP tool so the agent can call them.

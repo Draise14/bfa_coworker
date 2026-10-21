@@ -774,7 +774,7 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
         ops.chat_clear()
     elif action == "mention":
         ops.mention_search("INVOKE_DEFAULT")
-    elif action == "approval_menu":            # the Permissions dropdown: Ask / Semi-auto / Auto
+    elif action == "approval_menu":            # the Permissions dropdown: Strict / Permissive / Free
         bpy.ops.wm.call_panel(name="BFACW_PT_approval_popover", keep_open=True)
     elif action == "attach_menu":
         bpy.ops.wm.call_panel(name="BFACW_PT_attach_popover", keep_open=True)

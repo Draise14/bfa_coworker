@@ -27,7 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .layout import Canvas, Rect
+from .layout import Canvas, row_corners, Rect
 
 __all__ = (
     "InputBox",
@@ -513,13 +513,13 @@ class InputBox:
             attach = [("attach_menu", "IMAGE_DATA")]
             if not self._narrow:
                 attach += [("attach_render", "RENDER_STILL"), ("attach_screen", "MAKE_SCREENSHOT")]
-            for widget_id, icon in attach:
-                button = Rect(left, box.y + margin, button_h, button_h)     # square (#238)
-                if left + button.w > right - gap:
-                    break
-                if canvas.button(button, widget_id, "", icon=icon):
+            fits = [a for i, a in enumerate(attach) if left + (i + 1) * button_h <= right - gap]
+            for i, (widget_id, icon) in enumerate(fits):       # one joined row of squares (#269)
+                button = Rect(left, box.y + margin, button_h, button_h)
+                if canvas.button(button, widget_id, "", icon=icon, corners=row_corners(i, len(fits))):
                     self.actions.append((widget_id, ""))
-                left = button.right + gap * 0.5
+                left = button.right
+            left += gap * 0.5
         # The text colour of the field's current state: light on the normal field,
         # the selected-text colour on the focused (often light) field.
         hint_base = style.text_field.text_sel if self.focused else style.text_field.text

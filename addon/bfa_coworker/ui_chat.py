@@ -2698,7 +2698,7 @@ def approval_card():
     risky = risky_steps.APPROVALS.current()
     if risky is not None:
         return Approval(title=risky.title, detail=risky.detail, waiting=risky_steps.APPROVALS.count(),
-                        note="Permissions: the button by Send (Strict / Permissive / Free)",
+                        note="Permissions: the button by Send (Strict / Permissive / Auto)",
                         icon="WARNING" if risky.reason else "LOCKED")
     from . import coworker_api
     open_question = coworker_api.current_question()

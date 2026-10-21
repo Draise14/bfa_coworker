@@ -248,8 +248,8 @@ APPROVAL_MODE_ITEMS: list[tuple[str, str, str, str, int]] = [
     ("RISKY", "Permissive",
      "Permissive: changes to the scene run on their own; it asks only before saving or opening files, "
      "quitting, deleting, exporting or running another program", "UNLOCKED", 1),
-    ("AUTO", "Free",
-     "Free: nothing asks, everything runs straight away (the agent's own tools still follow Only "
+    ("AUTO", "Auto",               # not "Free": that reads as the price
+     "Auto: nothing asks, everything runs straight away (the agent's own tools still follow Only "
      "Coworker Tools)", "AUTO", 2),
 ]
 

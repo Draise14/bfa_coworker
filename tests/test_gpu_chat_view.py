@@ -521,10 +521,14 @@ class TestChatView(unittest.TestCase):
         view.draw(self.canvas(), rect, long)
         style = st.Style()
         scroll_cmds = lambda c: [cmd for cmd in c.commands if cmd.kind == "rect" and cmd.rect.x > 380]
-        far = self.canvas(mouse=(10, 150))                     # mouse far away: hidden
+        far = self.canvas(mouse=(10, 150))                     # mouse far away: still there, faint (#279)
         view.draw(far, rect, long)
-        self.assertEqual(scroll_cmds(far), [])
+        faint = scroll_cmds(far)
+        self.assertTrue(faint)
+        self.assertAlmostEqual(faint[0].color[3], style.scroll.inner[3] * cv._SCROLL_IDLE_ALPHA)
         self.assertIn("scroll_handle", [wid for _, wid in far.hit_areas])
+        zoomed = lay.Canvas(st.Style().with_zoom(2.0), lay.fixed_measure(0.55), lay.InteractionState())
+        self.assertEqual(cv.ChatView._bar_widths(zoomed.style), cv.ChatView._bar_widths(style))   # not zoomed
         thin, full = cv.ChatView._bar_widths(style)
         near = self.canvas(mouse=(300, 150))                   # near: fades in, thin
         view.draw(near, rect, long)

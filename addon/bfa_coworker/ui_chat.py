@@ -2918,7 +2918,10 @@ class BFACW_OT_chat_capture_render(Operator):  # type: ignore[misc]
 # Like the Asset Browser's "Capture Screenshot Preview": the screen dims except the
 # part that will be taken.  Click an editor to take it, or drag a rectangle; Enter
 # takes the one shown (the last one), Space moves it, Shift keeps it square.
-_SHOT: dict = {"handlers": [], "rect": None, "window": None, "hover": False}
+# One capture runs in every window at once (#266): a modal only hears its own window, so each
+# window gets its own instance; per window its part ("rects") and whether it is a hovered
+# editor ("hover"); the first instance to take or cancel ends the session for all.
+_SHOT: dict = {"handlers": [], "rects": {}, "hover": {}, "session": 0, "active": False}
 _SHOT_REGIONS = ("WINDOW", "HEADER", "UI", "TOOLS", "TOOL_HEADER", "FOOTER", "NAVIGATION_BAR",
                  "EXECUTE", "ASSET_SHELF", "ASSET_SHELF_HEADER", "CHANNELS", "PREVIEW")
 _SHOT_DRAG = 6
@@ -2935,10 +2938,10 @@ def _shot_rect(a, b, square: bool = False) -> tuple[int, int, int, int]:
 
 
 def _shot_draw() -> None:
-    rect = _SHOT.get("rect")
-    region = bpy.context.region
-    if rect is None or region is None or bpy.context.window != _SHOT["window"]:
-        return          # only in the window being captured (#217), not a copy in every window
+    window, region = bpy.context.window, bpy.context.region
+    rect = _SHOT["rects"].get(window.as_pointer()) if window is not None else None
+    if rect is None or region is None:
+        return          # each window shows its own part (#217, #266), never a copy of another's
     import gpu
     from gpu_extras.batch import batch_for_shader
     ox, oy = region.x, region.y
@@ -2959,7 +2962,7 @@ def _shot_draw() -> None:
     edge = quads(((left, bottom, right, bottom + 2), (left, top - 2, right, top),
                   (left, bottom, left + 2, top), (right - 2, bottom, right, top)))
     # Hovering an editor (no part dragged yet): tint it, so it reads even when it fills the window.
-    tint = quads(((left, bottom, right, top),)) if _SHOT.get("hover") else []
+    tint = quads(((left, bottom, right, top),)) if _SHOT["hover"].get(window.as_pointer()) else []
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
     gpu.state.blend_set("ALPHA")
     # As the Asset Browser's capture: a light veil outside, the border in the theme's colour.
@@ -2993,7 +2996,9 @@ def _shot_handlers_remove() -> None:
         except (TypeError, ValueError, RuntimeError):
             pass
     _SHOT["handlers"].clear()
-    _SHOT["rect"] = _SHOT["window"] = None
+    _SHOT["rects"].clear()
+    _SHOT["hover"].clear()
+    _SHOT["active"] = False
 
 
 def _shot_redraw(window) -> None:
@@ -3031,41 +3036,77 @@ class BFACW_OT_chat_capture_screen(Operator):  # type: ignore[misc]
     p2: bpy.props.IntVectorProperty(size=2, options={'HIDDEN'})  # type: ignore[valid-type]
     use_rect: BoolProperty(default=False, options={'HIDDEN', 'SKIP_SAVE'})  # type: ignore[valid-type]
 
+    sibling: BoolProperty(default=False, options={'HIDDEN', 'SKIP_SAVE'})  # type: ignore[valid-type]
+
+    # -- this instance's window: its part, and whether that is a hovered editor --
+    def _rect(self):
+        return _SHOT["rects"].get(self._key)
+
+    def _set(self, rect, hover: bool) -> None:
+        _SHOT["rects"][self._key] = rect
+        _SHOT["hover"][self._key] = hover
+
     def invoke(self, context: bpy.types.Context, event) -> set[str]:
         if bpy.app.background or context.window is None:
             return self.execute(context)
         win = context.window
+        if not self.sibling:                 # the one you started: a new session, in every window
+            _shot_handlers_remove()
+            _SHOT["session"] += 1
+            _SHOT["active"] = True
+            _shot_handlers_add()
+        self._session, self._win, self._key = _SHOT["session"], win, win.as_pointer()
         last = _shot_rect(tuple(self.p1), tuple(self.p2))
-        self._has_last = last[2] - last[0] >= 8 and last[3] - last[1] >= 8
-        self._win, self._start, self._dragging, self._moving = win, None, False, False
+        self._has_last = not self.sibling and last[2] - last[0] >= 8 and last[3] - last[1] >= 8
+        self._start, self._dragging, self._moving = None, False, False
         self._square, self._cursor = False, (event.mouse_x, event.mouse_y)
-        _SHOT["rect"] = last if self._has_last else _area_rect_at(win, *self._cursor)
-        _SHOT["window"], _SHOT["hover"] = win, not self._has_last
-        _shot_handlers_add()
+        if self._has_last:
+            self._set(last, False)
+        elif not self.sibling:
+            self._set(_area_rect_at(win, *self._cursor), True)
         win.cursor_modal_set("CROSSHAIR")
-        try:
-            context.workspace.status_text_set(_shot_status)
-        except (TypeError, AttributeError):
-            context.workspace.status_text_set("Click an editor or drag a part to attach  -  Enter: the shown part"
-                                              "  -  Space: move  -  Shift: square  -  Esc: cancel")
         context.window_manager.modal_handler_add(self)
-        _shot_redraw(win)
+        if not self.sibling:
+            try:
+                context.workspace.status_text_set(_shot_status)
+            except (TypeError, AttributeError):
+                context.workspace.status_text_set("Click an editor or drag a part to attach (any window)  -  "
+                                                  "Enter: the shown part  -  Space: move  -  Shift: square  -  "
+                                                  "Esc: cancel")
+            for other in context.window_manager.windows:       # the other windows join in (#266)
+                if other != win:
+                    try:
+                        with context.temp_override(window=other, screen=other.screen):
+                            bpy.ops.bfacw.chat_capture_screen("INVOKE_DEFAULT", sibling=True)
+                    except RuntimeError:
+                        pass
+        for window in context.window_manager.windows:
+            _shot_redraw(window)
         return {'RUNNING_MODAL'}
+
+    def _finish(self, context) -> None:
+        """This instance ends: its cursor back (and, if it ended the session, everyone's veil)."""
+        try:
+            self._win.cursor_modal_restore()
+        except (ReferenceError, RuntimeError):
+            pass
 
     def _end(self, context) -> None:
         _shot_handlers_remove()
-        self._win.cursor_modal_restore()
+        self._finish(context)
         try:
             context.workspace.status_text_set(None)
         except (TypeError, AttributeError):
             pass
-        _shot_redraw(self._win)
+        for window in context.window_manager.windows:
+            _shot_redraw(window)
 
     def _take(self, context, rect) -> set[str]:
         self._end(context)
         if rect is None:
             return {'CANCELLED'}
-        self.p1, self.p2 = rect[:2], rect[2:]
+        if not self.sibling:
+            self.p1, self.p2 = rect[:2], rect[2:]
         win, a, b = self._win, tuple(rect[:2]), tuple(rect[2:])
 
         def later():      # after the redraw without the dimming
@@ -3079,6 +3120,9 @@ class BFACW_OT_chat_capture_screen(Operator):  # type: ignore[misc]
         return {'FINISHED'}
 
     def modal(self, context: bpy.types.Context, event) -> set[str]:
+        if self._session != _SHOT["session"] or not _SHOT["active"]:
+            self._finish(context)           # another window took it, or it was cancelled there
+            return {'CANCELLED', 'PASS_THROUGH'}
         x, y = event.mouse_x, event.mouse_y
         if event.type in {'LEFT_SHIFT', 'RIGHT_SHIFT'}:
             self._square = event.value == 'PRESS'
@@ -3088,26 +3132,26 @@ class BFACW_OT_chat_capture_screen(Operator):  # type: ignore[misc]
             self._end(context)
             return {'CANCELLED'}
         elif event.type in {'RET', 'NUMPAD_ENTER'} and event.value == 'PRESS':
-            return self._take(context, _SHOT["rect"])
+            return self._take(context, self._rect())
         elif event.type == 'LEFTMOUSE' and event.value == 'PRESS':
             self._start, self._dragging = (x, y), False
         elif event.type == 'LEFTMOUSE' and event.value == 'RELEASE' and self._start is not None:
-            return self._take(context, _SHOT["rect"] if self._dragging else _area_rect_at(self._win, x, y))
+            return self._take(context, self._rect() if self._dragging else _area_rect_at(self._win, x, y))
         elif event.type == 'MOUSEMOVE':
             dx, dy = x - self._cursor[0], y - self._cursor[1]
-            rect = _SHOT["rect"]
+            rect = self._rect()
             if self._moving and rect is not None:
-                _SHOT["rect"] = (rect[0] + dx, rect[1] + dy, rect[2] + dx, rect[3] + dy)
-                self._has_last, _SHOT["hover"] = True, False
+                self._set((rect[0] + dx, rect[1] + dy, rect[2] + dx, rect[3] + dy), False)
+                self._has_last = True
             elif self._start is not None:
                 sx, sy = self._start
                 if not self._dragging and abs(x - sx) > _SHOT_DRAG and abs(y - sy) > _SHOT_DRAG:
                     self._dragging = True
                 if self._dragging:
-                    _SHOT["rect"] = _shot_rect(self._start, (x, y), self._square)
-                    self._has_last, _SHOT["hover"] = True, False
+                    self._set(_shot_rect(self._start, (x, y), self._square), False)
+                    self._has_last = True
             elif not self._has_last:
-                _SHOT["rect"] = _area_rect_at(self._win, x, y)
+                self._set(_area_rect_at(self._win, x, y), True)
             _shot_redraw(self._win)
         self._cursor = (x, y)
         return {'RUNNING_MODAL'}

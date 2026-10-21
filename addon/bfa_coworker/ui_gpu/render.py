@@ -102,17 +102,44 @@ def _outline_points(rect: Rect, radius: float, rounded: bool | None = None,
     return pts
 
 
+def _to_linear(c: float) -> float:
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+
+def _to_srgb(c: float) -> float:
+    return c * 12.92 if c <= 0.0031308 else 1.055 * c ** (1 / 2.4) - 0.055
+
+
+def premultiplied(color: tuple) -> tuple:
+    """*color* (theme sRGB) premultiplied by its alpha. The shader takes sRGB and blends
+    in linear, so the multiply happens in linear: the same look as plain ALPHA blending."""
+    r, g, b, a = color
+    return tuple(_to_srgb(_to_linear(c) * a) for c in (r, g, b)) + (a,)
+
+
+def _tris(tris: list, color: tuple) -> None:
+    """Triangles in one colour, blended premultiplied: the region's own alpha never drops.
+
+    Plain ALPHA blending also lowers the framebuffer's alpha under a see-through
+    colour, and a sidebar over the 3D View (region overlap) is composited by that
+    alpha: a faint scrollbar or hover showed the viewport through it.
+    """
+    gpu.state.blend_set("ALPHA_PREMULT")
+    shader = _shader("UNIFORM_COLOR")
+    batch = batch_for_shader(shader, "TRIS", {"pos": tris})
+    shader.bind()
+    shader.uniform_float("color", premultiplied(color))
+    batch.draw(shader)
+    gpu.state.blend_set("ALPHA")
+
+
 def _fill(rect: Rect, color: tuple, radius: float, corners: str = "") -> None:
     pts = _outline_points(rect, radius, corners=corners)
     center = (rect.x + rect.w / 2, rect.y + rect.h / 2)
     tris = []
     for i, p in enumerate(pts):
         tris += [center, p, pts[(i + 1) % len(pts)]]
-    shader = _shader("UNIFORM_COLOR")
-    batch = batch_for_shader(shader, "TRIS", {"pos": tris})
-    shader.bind()
-    shader.uniform_float("color", color)
-    batch.draw(shader)
+    _tris(tris, color)
 
 
 def _stroke(rect: Rect, color: tuple, radius: float, width: float = 1.0, corners: str = "") -> None:
@@ -130,11 +157,7 @@ def _stroke(rect: Rect, color: tuple, radius: float, width: float = 1.0, corners
     for i in range(len(a)):
         j = (i + 1) % len(a)
         tris += [a[i], a[j], b[j], a[i], b[j], b[i]]
-    shader = _shader("UNIFORM_COLOR")
-    batch = batch_for_shader(shader, "TRIS", {"pos": tris})
-    shader.bind()
-    shader.uniform_float("color", color)
-    batch.draw(shader)
+    _tris(tris, color)
 
 
 def _source(path: str) -> tuple[int, bytes] | None:
@@ -230,11 +253,7 @@ def _icon(cmd: DrawCmd, style: Any) -> None:
     tris = _icon_triangles(cmd.text, cmd.rect)
     if not tris:
         return
-    shader = _shader("UNIFORM_COLOR")
-    batch = batch_for_shader(shader, "TRIS", {"pos": tris})
-    shader.bind()
-    shader.uniform_float("color", cmd.color)
-    batch.draw(shader)
+    _tris(tris, cmd.color)
 
 
 def _text(cmd: DrawCmd) -> None:

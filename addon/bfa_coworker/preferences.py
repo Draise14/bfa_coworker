@@ -65,6 +65,15 @@ def _download_status_icon(msg: str) -> str:
 # go back to it -- External Agent shares agent_mode / llm_mode with the others.
 _PREVIOUS_MODE: dict[str, str] = {}
 
+# Translate's languages (#42): (code, name).
+_LANGUAGES = (
+    ("en", "English"), ("es", "Spanish"), ("fr", "French"), ("de", "German"), ("it", "Italian"),
+    ("pt", "Portuguese"), ("nl", "Dutch"), ("pl", "Polish"), ("ru", "Russian"), ("uk", "Ukrainian"),
+    ("tr", "Turkish"), ("ar", "Arabic"), ("hi", "Hindi"), ("id", "Indonesian"), ("vi", "Vietnamese"),
+    ("th", "Thai"), ("zh_hans", "Chinese (Simplified)"), ("zh_hant", "Chinese (Traditional)"),
+    ("ja", "Japanese"), ("ko", "Korean"))
+
+
 class _State:
     """
     Module-level runtime state that is not persisted across sessions.
@@ -229,16 +238,19 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         from . import ui_chat
         ui_chat.apply_approval_mode(self.approval_mode)
 
+    translate_from: EnumProperty(  # type: ignore[valid-type]
+        name="Translate From",
+        description="The language the text is in (Translate, in the right-click menus); remembered for next time",
+        items=[("auto", "Detect", "Coworker works out which language the text is in", 'VIEWZOOM', 0)]
+              + [(code, name, "The text is in " + name, 'NONE', i + 1) for i, (code, name) in enumerate(_LANGUAGES)],
+        default="auto",
+    )
+
     translate_language: EnumProperty(  # type: ignore[valid-type]
         name="Translate To",
         description="The language Translate (right-click a text field, a text object or a text strip) "
                     "turns text into; remembered for next time",
-        items=[(code, name, "Translate into " + name) for code, name in (
-            ("en", "English"), ("es", "Spanish"), ("fr", "French"), ("de", "German"), ("it", "Italian"),
-            ("pt", "Portuguese"), ("nl", "Dutch"), ("pl", "Polish"), ("ru", "Russian"), ("uk", "Ukrainian"),
-            ("tr", "Turkish"), ("ar", "Arabic"), ("hi", "Hindi"), ("id", "Indonesian"), ("vi", "Vietnamese"),
-            ("th", "Thai"), ("zh_hans", "Chinese (Simplified)"), ("zh_hant", "Chinese (Traditional)"),
-            ("ja", "Japanese"), ("ko", "Korean"))],
+        items=[(code, name, "Translate into " + name) for code, name in _LANGUAGES],
         default="en",
     )
 

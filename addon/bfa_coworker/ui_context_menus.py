@@ -193,8 +193,11 @@ def _python_path(pointer: Any, identifier: str) -> str:
         return ""
 
 
-def translate_text(path: str, current: str, language: str, what: str) -> str:
-    """The instruction for the chat: exact, so a small model gets it right too."""
+def translate_text(path: str, current: str, language: str, what: str, source: str = "") -> str:
+    """The instruction for the chat: exact, so a small model gets it right too.
+    *source* is the language the text is in ("": let the model detect it)."""
+    if source:
+        what = "{:s} from {:s}".format(what, source)
     if path.endswith(".as_string()"):          # a Text datablock: edited as a whole
         text = path[:-len(".as_string()")]
         return ("Translate {:s} into {:s}: “{:s}”. Edit the text {:s} with execute_blender_code: "
@@ -235,16 +238,49 @@ class BFACW_OT_translate(Operator):  # type: ignore[misc]
             sub = layout.row()
             sub.scale_y = 0.8
             sub.label(text="\u201c{:s}\u201d".format(self.current[:60] + ("..." if len(self.current) > 60 else "")))
-        layout.prop(prefs, "translate_language")
+        # From [swap] To, both remembered (#42).
+        row = layout.row(align=True)
+        col = row.column(align=True)
+        col.label(text="From")
+        col.prop(prefs, "translate_from", text="")
+        mid = row.column(align=True)
+        mid.ui_units_x = 1.2            # a square button between the two lists
+        mid.label(text="")
+        mid.operator("bfacw.translate_swap", text="", icon='ARROW_LEFTRIGHT')
+        col = row.column(align=True)
+        col.label(text="To")
+        col.prop(prefs, "translate_language", text="")
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         if not self.path:
             return {'CANCELLED'}
         prefs = context.preferences.addons[__package__].preferences
         name = prefs.bl_rna.properties["translate_language"].enum_items[prefs.translate_language].name
-        if not _ask(context, translate_text(self.path, self.current, name, self.what), "AGENT"):
+        source = ("" if prefs.translate_from == "auto"
+                  else prefs.bl_rna.properties["translate_from"].enum_items[prefs.translate_from].name)
+        if not _ask(context, translate_text(self.path, self.current, name, self.what, source), "AGENT"):
             return {'CANCELLED'}
         self.report({'INFO'}, "Translating into {:s} -- see the chat".format(name))
+        return {'FINISHED'}
+
+
+class BFACW_OT_translate_swap(Operator):  # type: ignore[misc]
+    """Swap the From and To languages"""
+    bl_idname = "bfacw.translate_swap"
+    bl_label = "Swap Languages"
+    bl_options = {'INTERNAL'}
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        prefs = context.preferences.addons[__package__].preferences
+        if prefs.translate_from == "auto":
+            cls.poll_message_set("Pick the From language first (not Detect)")
+            return False
+        return True
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        prefs = context.preferences.addons[__package__].preferences
+        prefs.translate_from, prefs.translate_language = prefs.translate_language, prefs.translate_from
         return {'FINISHED'}
 
 
@@ -337,7 +373,7 @@ def _draw_editor_menu(self: Any, context: Any) -> None:
 
 
 _HOOKED: list[tuple[type, Callable]] = []
-_CLASSES = (BFACW_OT_explain, BFACW_OT_translate)
+_CLASSES = (BFACW_OT_explain, BFACW_OT_translate, BFACW_OT_translate_swap)
 # Menus of a kind of thing, with their draw: text objects, text strips, the Text Editor (#42).
 _THING_MENUS = (
     ("VIEW3D_MT_object_context_menu", _draw_text_object_menu),

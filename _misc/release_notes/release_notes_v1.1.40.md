@@ -1,6 +1,6 @@
 ## 🎉 What's New
 
-**Coworker 1.1.40 is the biggest release yet.** The chat has moved out of a small panel into its own **Coworker editor**, and a compact copy sits in **every editor's sidebar**. A new mode, **External Agent**, lets the agent app you already use (Claude Code, OpenCode, Codex, Gemini, Copilot) do the work through Coworker's Blender tools. Right-click almost anything to **Explain** or **Translate** it. And every engine now shares the same plan, questions, permissions, history and one-click Revert.
+**Coworker 1.1.40 is quite a large milestone.** The chat has become more than just a small panel, but now it is its own **Coworker editor**, and a compact copy sits in **every editor's sidebar**. A new mode, **External Agent**, lets the agent app you already use (Claude Code, OpenCode, Codex, Gemini, Copilot) do the work through Coworker's interface tools from directly in Blender or Bforartists. Right-click almost anything to **Explain** or **Translate** it. And every engine now shares the same plan, questions, permissions, history and one-click Revert.
 
 ![The Coworker editor](https://raw.githubusercontent.com/Draise14/bfa_coworker/main/docs/images/v1.1.40/coworker_editor.png)
 

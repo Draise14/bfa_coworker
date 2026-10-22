@@ -21,7 +21,11 @@ operator per window watches events and hands them to the chat surface
 * **Edit** opens the text in a native text field, which takes IME input
   (Chinese, Japanese, Korean...) that a GPU box can't;
 * the caret blinks, and the operator restarts after a file is opened (a
-  file load ends every modal operator) and for new windows.
+  file load ends every modal operator) and for new windows;
+* **autosave** gets a gap: Blender skips autosave while any modal operator
+  runs, so every ~30 s, once the chat has had no keys or clicks for a
+  moment, the operator ends itself in every window for a quarter second --
+  the pending autosave lands -- and then restarts (#370).
 
 Only the region is redrawn, never the whole area (a 3D View sidebar must
 not re-render the viewport).  The host calls :func:`set_host` with a
@@ -33,6 +37,7 @@ Needs ``bpy``.
 
 from __future__ import annotations
 
+import time
 from typing import Any, Callable
 
 import bpy  # pylint: disable=import-error
@@ -43,6 +48,7 @@ __all__ = (
     "ensure_running",
     "focus",
     "focused_box",
+    "gap_due",
     "key_from_event",
     "register",
     "set_host",
@@ -60,6 +66,9 @@ _DRAG: dict[str, Any] = {"hit": None}
 _ZOOM_DRAG: dict[str, Any] = {"hit": None, "y": 0.0, "zoom": 1.0}
 _HOVER: dict[str, Any] = {"hit": None, "text_cursor": False}
 _RUNNING: set[int] = set()
+# The autosave gap (#370): paused while it's open, when it last opened, the last key / click, and
+# the window timers that wake each operator so it can end.
+_AUTOSAVE: dict[str, Any] = {"paused": False, "last_gap": 0.0, "last_input": 0.0, "timers": []}
 
 _IGNORED = frozenset({"TIMER", "TIMER_REPORT", "TIMERREGION", "WINDOW_DEACTIVATE", "NONE"})
 _MOVES = frozenset({"MOUSEMOVE", "INBETWEEN_MOUSEMOVE"})
@@ -67,6 +76,9 @@ _WHEEL = {"WHEELUPMOUSE": True, "WHEELDOWNMOUSE": False}
 _NEWLINE_MARK = " ↵ "     # how a line break shows in the one-line native field
 _BLINK_SECONDS = 0.53
 _WATCH_SECONDS = 1.0
+_GAP_EVERY_SECONDS = 30.0       # at most this long between autosave gaps (or the autosave interval, if shorter)
+_GAP_SECONDS = 0.25             # how long the operators stay off; Blender retries autosave every 10 ms
+_INPUT_LULL_SECONDS = 1.5       # no gap until the chat has had no keys / clicks for this long
 
 
 def set_host(router: Router | None, on_action: OnAction | None = None,
@@ -165,8 +177,11 @@ class BFACW_OT_gpu_input(bpy.types.Operator):
 
     def modal(self, context, event):
         router = _HOST["router"]
-        if router is None:
+        if router is None or _AUTOSAVE["paused"]:     # the gap's window timer wakes us to end (#370)
             return self._finish()
+        if event.type not in _MOVES or _DRAG["hit"] is not None or _ZOOM_DRAG["hit"] is not None:
+            if event.type not in _IGNORED:
+                _AUTOSAVE["last_input"] = time.monotonic()
         if event.type in _IGNORED or not event.type:
             # No type = an event Python can't name, like a file drop (EVT_DROP): it must reach
             # the file handlers even while the box has focus (#215).
@@ -305,7 +320,7 @@ class BFACW_OT_gpu_input_native(bpy.types.Operator):
 
 def ensure_running() -> None:
     """Start the input operator in every window that doesn't have it yet."""
-    if _HOST["router"] is None:
+    if _HOST["router"] is None or _AUTOSAVE["paused"]:
         return
     wm = bpy.context.window_manager
     _RUNNING.intersection_update(w.as_pointer() for w in wm.windows)   # closed windows
@@ -319,8 +334,55 @@ def ensure_running() -> None:
             pass
 
 
-def _watch() -> float:
+def gap_due(now: float, last_gap: float, last_input: float,
+            autosave_on: bool, autosave_minutes: float) -> bool:
+    """Is it time to let Blender's autosave through (#370)?"""
+    if not autosave_on:
+        return False
+    every = min(_GAP_EVERY_SECONDS, max(1.0, autosave_minutes) * 60.0)
+    return now - last_gap >= every and now - last_input >= _INPUT_LULL_SECONDS
+
+
+def _autosave_prefs() -> tuple[bool, float]:
+    try:
+        paths = bpy.context.preferences.filepaths
+        return bool(paths.use_auto_save_temporary_files), float(paths.auto_save_time)
+    except (AttributeError, TypeError):
+        return False, 0.0
+
+
+def _open_gap() -> None:
+    """End the operator in every window for a moment, so the waiting autosave can run."""
+    _AUTOSAVE["paused"], _AUTOSAVE["last_gap"] = True, time.monotonic()
+    wm = bpy.context.window_manager
+    for window in wm.windows:
+        if window.as_pointer() in _RUNNING:
+            try:        # an idle window gets no events: a timer wakes its operator
+                _AUTOSAVE["timers"].append(wm.event_timer_add(0.02, window=window))
+            except (RuntimeError, TypeError, ValueError):
+                pass
+    bpy.app.timers.register(_close_gap, first_interval=_GAP_SECONDS, persistent=True)
+
+
+def _close_gap() -> None:
+    wm = bpy.context.window_manager
+    for timer in _AUTOSAVE["timers"]:
+        try:
+            wm.event_timer_remove(timer)
+        except (RuntimeError, TypeError, ValueError, ReferenceError):
+            pass
+    _AUTOSAVE["timers"].clear()
+    _AUTOSAVE["paused"] = False
     ensure_running()
+
+
+def _watch() -> float:
+    if not _AUTOSAVE["paused"]:
+        if _HOST["router"] is not None and _RUNNING and gap_due(
+                time.monotonic(), _AUTOSAVE["last_gap"], _AUTOSAVE["last_input"], *_autosave_prefs()):
+            _open_gap()
+        else:
+            ensure_running()
     return _WATCH_SECONDS
 
 
@@ -347,6 +409,7 @@ def register() -> None:
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
     bpy.app.handlers.load_pre.append(_on_load_pre)
+    _AUTOSAVE["last_gap"] = time.monotonic()
     for fn, first in ((_watch, 0.2), (_blink, _BLINK_SECONDS)):
         if not bpy.app.timers.is_registered(fn):
             bpy.app.timers.register(fn, first_interval=first, persistent=True)
@@ -354,6 +417,9 @@ def register() -> None:
 
 def unregister() -> None:
     set_host(None)
+    if bpy.app.timers.is_registered(_close_gap):
+        bpy.app.timers.unregister(_close_gap)
+        _close_gap()
     for fn in (_watch, _blink):
         if bpy.app.timers.is_registered(fn):
             bpy.app.timers.unregister(fn)

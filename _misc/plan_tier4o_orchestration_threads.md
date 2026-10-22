@@ -54,6 +54,12 @@ the same thing as a chat in the History panel (Chat 7) — a thread is simply a 
    (extends Chat 7's `last_for_blend` with the editor kind). Area pins fall back to the
    editor kind after a reload.
 
+### 2.2 What stays shared
+
+The engine choice and settings, the bridge, the MCP server, permissions, and **the scene
+itself**. Each thread sees the others in one cheap line of its context ("Other threads:
+Node Editor is editing *Rock Material*") so it does not trample them.
+
 ### 2.3 Context folders (Chat 10, #367)
 
 Each thread can carry **folders** next to its attachments: a reference-image folder, a
@@ -62,12 +68,6 @@ reads them on demand with three read-only tools (every engine); paths outside th
 thread's folders are refused. The scene build's thread can hold the moodboard folder
 while the Sequencer thread holds the subtitles script: folders belong to the job, like
 the history.
-
-### 2.2 What stays shared
-
-The engine choice and settings, the bridge, the MCP server, permissions, and **the scene
-itself**. Each thread sees the others in one cheap line of its context ("Other threads:
-Node Editor is editing *Rock Material*") so it does not trample them.
 
 ## 3. Running side by side
 

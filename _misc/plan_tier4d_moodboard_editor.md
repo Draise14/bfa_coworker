@@ -4,7 +4,7 @@
 **Status**: ⛔ Superseded in Tier 4 — moved to **Tier 5 milestone M1** (`plan_tier6_moodboard_storyboarding.md`), decision 2026-09-01, confirmed in the 2026-10-16 audit. Kept as the design reference; the image attach socket shipped in Tier 3 (#88) is the first building block of its "agent vision bridge".
 **Depends on**: Tier 3e (Chat UI Refinement), Tier 4 (Editor Integration — shared `_draw_chat_interface()`), Tier 5a (Gen Plugin Foundation — `gen_controller.py`, `GenPlugin`), existing vision pipeline (`agent_controller.py` `_pending_image`)
 
-**Reference Inspiration**: [Mixar](https://www.mixar.app) — "Moodboard in-canvas: generate references, pin style anchors, and prompt scene changes inside the editor, alongside your work." Also PureRef (reference board UX), Blender's built-in Storyboarding app template, and the Node Editor's annotation system.
+**Reference Inspiration**: in-canvas moodboards (generate references, pin style anchors, prompt scene changes beside your work), PureRef (reference board UX), Blender's built-in Storyboarding app template, and the Node Editor's annotation system.
 
 ---
 
@@ -979,7 +979,7 @@ The user's instinct: **logic bricks for the story** — link images (or various 
 | **Twine** | Text-based branching | Hyperlinked passages, visual map | Zero learning curve, story-first | Not visual for images, no 3D tie-in |
 | **Unreal Blueprints** | Event-driven node graph | Exec pins + data pins | Powerful, industry-standard | Heavy, intimidating for non-coders |
 | **Ren'Py** | Script-based branching | Text labels + jumps | Simple, dialogue-first | No node graph, no image board |
-| **Mixar Moodboard** | Linear reference board | In-canvas images, no branching | Simple, focused | No story structure at all |
+| **In-canvas moodboards** | Linear reference board | In-canvas images, no branching | Simple, focused | No story structure at all |
 | **Our proposal** | **Hybrid: image board + brick graph** | Cards on canvas + logic/string bricks | Story-first, image-first, agent-scriptable | New pattern — needs good onboarding |
 
 **The key differentiator**: Twine and Ren'Py are *text-first*; Blueprints are *code-first*. Our moodboard is **image-first** — the images ARE the story, and the bricks add narrative structure on top. The agent (vision) can read the images and fill the bricks.

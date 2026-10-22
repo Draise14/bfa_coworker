@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [ ] **Add Model Generator** locally, Ultrashape, Hunyuan, similar to here: https://github.com/ahujasid/blender-mcp
 - [x] **Add CC0 resource downloader** from Polyhaven, AmbientC00, Sketchfab, etc — Polyhaven tools implemented in v1.1.37.
 
+## [v1.1.41] - 2026-10-22
+
+A hotfix for autosave. Release notes: `_misc/release_notes/release_notes_v1.1.41.md`.
+
+### Fixed
+
+- **Autosave works again while Coworker is enabled (#370, #371).** Blender skips autosave while any modal operator runs, and the chat's input handler is one, running in every window -- so autosave almost never ran, and a crash could lose everything since the file was opened. Now, about every 30 seconds and only when you haven't typed or clicked in the chat for a moment, the input handler steps aside for a quarter of a second and the waiting autosave goes through. Your autosave settings apply as before.
+
 ## [v1.1.40] - 2026-10-21
 
 The biggest release yet: the Coworker editor and a Coworker tab in every editor's sidebar,

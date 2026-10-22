@@ -2,7 +2,7 @@
 
 **An AI coworker built right into Bforartists and Blender: in every editor, with your choice of model.**
 
-Coworker is a self-contained add-on that puts an AI assistant inside the interface you already
+Coworker is a self-contained add-on that puts a language assistant inside the interface you already
 use. It can look at your scene, explain any button, translate text, plan a multi-step job and
 build it, with every change one undo away. You choose the model:
 

@@ -60,6 +60,15 @@ The engine choice and settings, the bridge, the MCP server, permissions, and **t
 itself**. Each thread sees the others in one cheap line of its context ("Other threads:
 Node Editor is editing *Rock Material*") so it does not trample them.
 
+### 2.3 Context folders (Chat 10, #367)
+
+Each thread can carry **folders** next to its attachments: a reference-image folder, a
+brief, a texture set, the `textures/` next to the .blend. The agent lists, searches and
+reads them on demand with three read-only tools (every engine); paths outside the
+thread's folders are refused. The scene build's thread can hold the moodboard folder
+while the Sequencer thread holds the subtitles script: folders belong to the job, like
+the history.
+
 ## 3. Running side by side
 
 ```mermaid

@@ -23,10 +23,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [ ] **Add Model Generator** locally, Ultrashape, Hunyuan, similar to here: https://github.com/ahujasid/blender-mcp
 - [x] **Add CC0 resource downloader** from Polyhaven, AmbientC00, Sketchfab, etc — Polyhaven tools implemented in v1.1.37.
 
-## [Unreleased - v1.1.40]
+## [v1.1.40] - 2026-10-21
 
-Tier 4 has started (issue #97). This release brings the new chat (the Coworker editor and
-a compact sidebar chat) plus groundwork for the External Agent mode.
+The biggest release yet: the Coworker editor and a Coworker tab in every editor's sidebar,
+the External Agent mode (Claude Code, OpenCode and more), Explain This and Translate in the
+right-click menus, permissions, and one shared plan / questions / history / Revert on every
+engine. Release notes: `_misc/release_notes/release_notes_v1.1.40.md`.
+
+### Added (last day)
+
+- **Explain This on menus and popovers (#355):** where Python can't name the button, Coworker crops the screen around your right-click, rings the spot in red and asks about that.
+- **Translate dialog (#354, #361, #362):** From / To with a swap button, both remembered; it always opens, also from menus that skip dialogs; file paths translate too; the translation is written in as one undo step, also in a text object's Edit mode.
+
+### Fixed (last day)
+
+- External Agent tools reach Blender again after the add-on is re-enabled (#352).
+- Status & Diagnostics shows the real mode; the permissions button is a square icon; a quieter idle scrollbar (#353).
+- The 3D View sidebar chat's scrollbar and other faint fills are no longer see-through (#351).
 
 ### Added
 

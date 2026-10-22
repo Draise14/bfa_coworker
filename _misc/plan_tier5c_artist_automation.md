@@ -118,3 +118,19 @@ Open question to work out together: which node groups to build first (fence/wall
 curve, scatter, array/kit-bash, stairs, cables, procedural materials?) — the ones the
 Coworker most often builds linearly today are the best candidates (the benchmark
 transcripts can tell us).
+
+## 8. Guided tours — "show me how", never "do it for me" (Tier 5, #368)
+
+An agent that drives the UI is the opposite of a coworker; teaching a workflow with your
+own hands is what a coworker does. So Coworker never clicks for you: a tour **highlights**
+the button, panel or menu entry for each step (ring or spotlight + a one-line hint), waits
+for **you** to click it, checks the step happened, and moves on.
+
+| Piece | How |
+|---|---|
+| **A tour is a spell in teaching mode** | The Spell Book's steps (#337), shown instead of run: shipped tours (first steps in Bforartists, a first node material, cutting video) and tours made from your own spells, so a technical artist records a workflow once and the team learns it |
+| **Wizards** | Offer *Show me how* next to *Do it for me* |
+| **Highlight** | Builds on Explain This's red ring (#355): find the region and rectangle, draw a ring / spotlight, a small card with the hint and Back / Skip / Stop |
+| **Step check** | Each step names the state it expects (operator ran, property changed, editor opened); *Do this step for me* only as an explicit fallback |
+| **Narration** | Optional: ask the active engine "why this step?"; the tour itself needs no model |
+

@@ -79,6 +79,8 @@ and teams are Tier 5 and are built on threads.*
 | **Recipes / macros** | Turn a finished chat turn into a replayable recipe (tool calls + parameters, no model needed to replay) | T5 |
 | **Batch across files** | Run a recipe headless over a folder of .blend files with a report | T5 |
 | Scene co-pilot / render critic | Teams 2–3 | T5 |
+| Direct in-process tool calls for Local / Remote | Skip the HTTP round-trip to our own MCP server when the built-in loop calls a tool | T5 |
+| Call receipts | Each changing tool call gets an id; a retried call returns the first result instead of acting twice | T5 |
 | Scheduled runs | Auto mode exists; add "run this recipe nightly" via the OS scheduler | T5 |
 
 ## 4–5. Quick tools and wizards → Coworker operators

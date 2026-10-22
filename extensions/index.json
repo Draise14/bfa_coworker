@@ -6,7 +6,7 @@
       "id": "bfa_coworker",
       "schema_version": "1.0.0",
       "name": "Coworker",
-      "version": "1.1.39",
+      "version": "1.1.40",
       "tagline": "Chat based coworker -- an MCP-powered agent with LLM support",
       "maintainer": "Bforartists",
       "type": "add-on",
@@ -21,9 +21,9 @@
         "SPDX:GPL-3.0-or-later"
       ],
       "website": "https://github.com/bforartists/bfa_coworker",
-      "archive_url": "https://github.com/Draise14/bfa_coworker/releases/download/v1.1.39/bfa_coworker-1.1.39.zip",
-      "archive_size": 25251014,
-      "archive_hash": "sha256:2de8f3af6c5c7c57d5df3970cce85e5dd9b822407c37b7c6a0a8a9cf89b83dfe"
+      "archive_url": "https://github.com/Draise14/bfa_coworker/releases/download/v1.1.40/bfa_coworker-1.1.40.zip",
+      "archive_size": 25991541,
+      "archive_hash": "sha256:daf0dbc5a67ca8c2337188d07f9eec1d1afcdf3d1ffeb8d88334a24c89d75c07"
     }
   ]
 }

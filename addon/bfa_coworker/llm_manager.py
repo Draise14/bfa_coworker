@@ -25,6 +25,11 @@ __all__ = (
     "fetch_remote_models",
     "scan_existing_models",
     "find_llama_server",
+    "resolve_llama_path",
+    "llama_custom_problem",
+    "llama_asset_parts",
+    "llama_asset_url",
+    "extract_llama_folder",
     "invalidate_llama_server_cache",
     "download_model",
     "download_llama_server",
@@ -62,6 +67,7 @@ import hashlib
 import re
 import json
 import os
+import posixpath
 import shutil
 import socket
 import struct
@@ -1327,6 +1333,50 @@ def get_config() -> LLMConfig:
 
 _find_llama_server_cache: str | None = None
 _find_llama_server_checked: bool = False
+_llama_custom_problem: str = ""     # why the custom path isn't usable, for the preferences
+
+
+def llama_custom_problem() -> str:
+    """Why the custom llama-server path didn't resolve ("" when it did, or isn't checked yet)."""
+    return _llama_custom_problem
+
+
+def resolve_llama_path(path: str) -> tuple[str | None, str]:
+    """A user-given llama-server path -> ``(binary, problem)`` (#382).
+
+    Takes the binary itself or the folder it is in (also a llama.cpp checkout's
+    ``build/bin`` or ``bin``); ``~`` is expanded.  *problem* says why there is no
+    binary: not found, no llama-server in that folder, or not executable.
+    """
+    names = ("llama-server.exe", "llama-server") if sys.platform == "win32" else ("llama-server",)
+    p = os.path.expanduser((path or "").strip())
+    if not p:
+        return None, "no path set"
+    if os.path.isdir(p):
+        found = next((os.path.join(p, sub, name) for sub in ("", os.path.join("build", "bin"), "bin")
+                      for name in names if os.path.isfile(os.path.join(p, sub, name))), None)
+        if found is None:
+            return None, "no {:s} in {:s}".format(names[-1], p)
+        p = found
+    if not os.path.isfile(p):
+        return None, "file not found: {:s}".format(p)
+    if sys.platform != "win32" and not os.access(p, os.X_OK):
+        return None, "not executable -- run: chmod +x \"{:s}\"".format(p)
+    return p, ""
+
+
+def _bundled_llama_candidates(bundled_dir: Path, active_backend: str) -> list[Path]:
+    """Where a downloaded llama-server lives, preferred first.
+
+    Windows: ``llama-server-<backend>.exe`` then ``llama-server.exe``, with their DLLs
+    beside them.  Linux / macOS: one folder per variant (``llama-vulkan/``,
+    ``llama-cpu/``), because the binary loads the libraries next to it (#382).
+    """
+    if sys.platform == "win32":
+        backend_bname = "llama-server-{b}.exe".format(b=active_backend or "cpu")
+        return [bundled_dir / backend_bname, bundled_dir / "llama-server.exe"]
+    variants = ["vulkan", "cpu"] if active_backend == "vulkan" else ["cpu"]
+    return [bundled_dir / "llama-{:s}".format(v) / "llama-server" for v in variants]
 
 
 def find_llama_server() -> str | None:
@@ -1336,10 +1386,11 @@ def find_llama_server() -> str | None:
     PATH and known install locations.  Logs a warning when the found
     binary is older than _MIN_SUPPORTED_BUILD (too old for Qwen3 SSM).
     """
-    global _find_llama_server_cache, _find_llama_server_checked
+    global _find_llama_server_cache, _find_llama_server_checked, _llama_custom_problem
     if _find_llama_server_checked:
         return _find_llama_server_cache
     _find_llama_server_checked = True
+    _llama_custom_problem = ""
 
     with _lock:
         active_backend = _config.llama_backend
@@ -1355,26 +1406,24 @@ def find_llama_server() -> str | None:
     #    Only that path is used; we never fall through to PATH/bundled so
     #    the addon never tampers with a user-managed setup.
     if llama_source == "custom":
-        if llama_path and os.path.isfile(llama_path):
-            print("{:s}: custom path -> {:s}".format(_log, llama_path))
-            _find_llama_server_cache = llama_path
-            _check_llama_version(llama_path)
-            return llama_path
-        print("{:s}: custom source set but path missing/invalid -- {:s}".format(_log, llama_path or "(empty)"))
+        custom, _llama_custom_problem = resolve_llama_path(llama_path)
+        if custom:
+            print("{:s}: custom path -> {:s}".format(_log, custom))
+            _find_llama_server_cache = custom
+            _check_llama_version(custom)
+            return custom
+        print("{:s}: custom source set but not usable -- {:s}".format(_log, _llama_custom_problem))
         _find_llama_server_cache = None
         return None
 
     # 1. Bundled directory FIRST -- this is the Coworker-managed version
     #    (downloaded via the "Download llama-server" button, always recent).
-    # Check backend-specific binary first (e.g. llama-server-cuda.exe),
-    # then the generic fallback (llama-server.exe).  This ensures the
-    # correct GPU backend binary is used and its companion DLLs (cudart,
-    # etc.) are found in the same directory.
-    backend_bname = "llama-server-{b}.exe".format(b=active_backend or "cpu")
-    for bname in (backend_bname, "llama-server.exe"):
-        bpath = bundled_dir / bname
+    # Check the backend-specific binary first, then the generic fallback, so
+    # the correct GPU backend binary is used and its companion libraries
+    # (cudart, ...) are found in the same directory.
+    for bpath in _bundled_llama_candidates(bundled_dir, active_backend):
         if bpath.is_file():
-            print("{:s}: found bundled {:s} -> {:s}".format(_log, bname, str(bpath)))
+            print("{:s}: found bundled {:s} -> {:s}".format(_log, bpath.name, str(bpath)))
             _find_llama_server_cache = str(bpath)
             _check_llama_version(str(bpath))
             return str(bpath)
@@ -2599,6 +2648,57 @@ def get_pending_model_download() -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 # llama-server binary download
 
+def llama_asset_parts(system: str, machine: str, backend: str) -> tuple[str, str, str, str]:
+    """``(platform, variant, arch, archive_ext)`` of llama.cpp's release asset for this computer.
+
+    Asset names (as of b10154):
+      Windows: ``llama-{tag}-bin-win-{cpu|cuda-12.4|vulkan}-x64.zip``
+      macOS:   ``llama-{tag}-bin-macos-{arm64|x64}.tar.gz``
+      Linux:   ``llama-{tag}-bin-ubuntu[-vulkan]-{x64|arm64}.tar.gz`` -- the CPU build
+               has no variant in its name (#382)
+    """
+    arch = "arm64" if machine.lower() in ("arm64", "aarch64") else "x64"
+    if system == "win32":
+        return "win", {"cuda": "cuda-12.4", "vulkan": "vulkan"}.get(backend, "cpu"), "x64", ".zip"
+    if system == "darwin":
+        return "macos", "", arch, ".tar.gz"
+    return "ubuntu", "vulkan" if backend == "vulkan" else "", arch, ".tar.gz"
+
+
+def llama_asset_url(tag: str, platform: str, variant: str, arch: str, ext: str) -> str:
+    name = "-".join(p for p in ("llama", tag, "bin", platform, variant, arch) if p) + ext
+    return "https://github.com/ggml-org/llama.cpp/releases/download/{:s}/{:s}".format(tag, name)
+
+
+def extract_llama_folder(tf: tarfile.TarFile, binary_name: str, unpack_dir: Path) -> Path | None:
+    """Unpack the folder *binary_name* is in, flattened, into a fresh *unpack_dir* (#382).
+
+    On Linux and macOS ``llama-server`` is a small launcher that loads its libraries
+    from its own folder (``RUNPATH=$ORIGIN``), real files and version symlinks alike,
+    so the whole folder comes along.  Returns the unpacked binary, or ``None`` if the
+    archive has none.
+    """
+    binaries = [m for m in tf.getmembers() if m.isfile() and posixpath.basename(m.name) == binary_name]
+    if not binaries:
+        return None
+    top = posixpath.dirname(binaries[0].name)
+    members = []
+    for m in tf.getmembers():
+        if posixpath.dirname(m.name) != top or not (m.isfile() or m.issym()):
+            continue
+        if m.issym() and ("/" in m.linkname or m.linkname in ("", ".", "..")):
+            continue        # only links to a neighbour (libllama.so -> libllama.so.0)
+        m.name = posixpath.basename(m.name)
+        members.append(m)
+    if unpack_dir.exists():
+        shutil.rmtree(str(unpack_dir))
+    unpack_dir.mkdir(parents=True)
+    safe = {"filter": "data"} if hasattr(tarfile, "data_filter") else {}
+    print("[Coworker] download_llama_server: extracting {:d} files to {:s}".format(len(members), str(unpack_dir)))
+    tf.extractall(str(unpack_dir), members=members, **safe)
+    return unpack_dir / binary_name
+
+
 def download_llama_server(
     progress_callback: Callable[[str], None] | None = None,
     backend: str | None = None,
@@ -2626,48 +2726,11 @@ def download_llama_server(
     if backend is None or backend == "auto":
         backend = _detect_gpu_backend()
 
-    # Determine platform and architecture.
-    # Asset naming convention (as of b10154):
-    #   Windows: llama-{tag}-bin-win-{variant}-{arch}.zip
-    #   macOS:   llama-{tag}-bin-macos-{arch}.tar.gz
-    #   Ubuntu:  llama-{tag}-bin-ubuntu-{variant}-{arch}.tar.gz
-    if sys.platform == "win32":
-        platform = "win"
-        arch = "x64"
-        binary_name = "llama-server.exe"
-        archive_ext = ".zip"
-        # Map backend to variant string.
-        if backend == "cuda":
-            variant = "cuda-12.4"
-        elif backend == "vulkan":
-            variant = "vulkan"
-        else:
-            variant = "cpu"
-    elif sys.platform == "darwin":
-        platform = "macos"
-        arch = "arm64" if os.uname().machine == "arm64" else "x64"
-        binary_name = "llama-server"
-        variant = ""
-        archive_ext = ".tar.gz"
-    else:
-        platform = "ubuntu"
-        arch = "x64"
-        binary_name = "llama-server"
-        variant = "vulkan" if backend == "vulkan" else "cpu"
-        archive_ext = ".tar.gz"
-
+    machine = os.uname().machine if hasattr(os, "uname") else "AMD64"
+    platform, variant, arch, archive_ext = llama_asset_parts(sys.platform, machine, backend)
+    binary_name = "llama-server.exe" if platform == "win" else "llama-server"
     tag = _LLAMA_SERVER_VERSION
-    # Build the download URL.
-    if variant:
-        url = (
-            "https://github.com/ggml-org/llama.cpp/releases/download/{tag}/"
-            "llama-{tag}-bin-{platform}-{variant}-{arch}{ext}"
-        ).format(tag=tag, platform=platform, variant=variant, arch=arch, ext=archive_ext)
-    else:
-        url = (
-            "https://github.com/ggml-org/llama.cpp/releases/download/{tag}/"
-            "llama-{tag}-bin-{platform}-{arch}{ext}"
-        ).format(tag=tag, platform=platform, arch=arch, ext=archive_ext)
+    url = llama_asset_url(tag, platform, variant, arch, archive_ext)
 
     # CUDA cudart DLLs URL (Windows only).
     cudart_url: str | None = None
@@ -2680,7 +2743,11 @@ def download_llama_server(
     dest_dir = _get_bundled_llama_dir()
     # Use a backend-specific binary name so multiple backends can coexist.
     backend_suffix = backend if backend != "cpu" else ""
-    if backend_suffix:
+    if archive_ext != ".zip":
+        # Linux / macOS: the binary loads the libraries beside it, so each
+        # variant gets its own folder (#382).
+        dest_binary = dest_dir / "llama-{:s}".format(variant or "cpu") / binary_name
+    elif backend_suffix:
         dest_binary = dest_dir / "llama-server-{backend}.exe".format(backend=backend_suffix)
     else:
         dest_binary = dest_dir / binary_name
@@ -2785,31 +2852,18 @@ def download_llama_server(
                     extracted_bin = dest_dir / os.path.basename(binary_members[0])
         else:
             with tarfile.open(fileobj=data, mode="r:gz") as tf:
-                binary_members = [
-                    m for m in tf.getmembers()
-                    if m.name.endswith(binary_name) or m.name.endswith("/" + binary_name)
-                ]
-                if not binary_members:
+                extracted_bin = extract_llama_folder(tf, binary_name, dest_binary.parent)
+                if extracted_bin is None:
                     _set_error(
                         "Could not find {:s} in the downloaded archive".format(binary_name)
                     )
                     return None
-                # Extract all companions for tar archives too.
-                members_to_extract = list(binary_members)
-                for m in tf.getmembers():
-                    if m in members_to_extract:
-                        continue
-                    if _is_companion_file(m.name):
-                        members_to_extract.append(m)
-                print("[Coworker] download_llama_server: extracting {:d} files from archive".format(
-                    len(members_to_extract)))
-                tf.extractall(str(dest_dir), members=members_to_extract)
-                extracted_bin = dest_dir / os.path.basename(binary_members[0].name)
 
         # Move binary to final location with backend suffix.
-        if dest_binary.exists():
-            dest_binary.unlink()
-        shutil.move(str(extracted_bin), str(dest_binary))
+        if extracted_bin != dest_binary:
+            if dest_binary.exists():
+                dest_binary.unlink()
+            shutil.move(str(extracted_bin), str(dest_binary))
 
         # For CUDA builds, also download the separate cudart zip as a safety
         # net -- the main zip should already have the DLLs (extracted above),

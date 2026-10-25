@@ -374,7 +374,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         cfg.remote_api_key = self.remote_api_key
         cfg.remote_model = self.remote_model
         cfg.llama_source = self.llama_source.lower()
-        cfg.llama_path = self.llama_path
+        cfg.llama_path = bpy.path.abspath(self.llama_path)  # "//" is relative to the .blend (#382)
         cfg.llama_backend = self.llama_backend
         cfg.model_repo_id = self.model_repo_id
         cfg.model_filename = self.model_filename
@@ -457,7 +457,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         """Sync llama_path to llm_manager config and re-search for the binary."""
         llm = get_llm_manager()
         cfg = llm.get_config()
-        cfg.llama_path = self.llama_path
+        cfg.llama_path = bpy.path.abspath(self.llama_path)  # "//" is relative to the .blend (#382)
         llm.set_config(cfg)
         # Re-run detection so the UI reflects the new path immediately.
         llm.invalidate_llama_server_cache()
@@ -1510,6 +1510,9 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     text="llama-server: Not found -- check the path above",
                     icon='ERROR',
                 )
+                _problem = llm.llama_custom_problem()
+                if _problem:        # say why (#382): no such file, no llama-server in that folder...
+                    box.label(text=_problem[:1].upper() + _problem[1:])
             box.label(
                 text="Your custom binary -- the addon will not modify or update it.",
                 icon='INFO',

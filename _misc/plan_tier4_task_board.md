@@ -13,6 +13,8 @@ code runs without asking on External Agent, backed by a turn checkpoint and Reve
 "Only Coworker tools" on by default · session token on by default · minimum
 Blender/Bforartists 5.3, chat drawn with Blender's own `label_markdown()`.
 
+**No PR is merged automatically** (2026-10-25): every PR, here and in Bforartists, waits for your review.
+
 **Every PR:** tests for bpy-free code · token cost before/after if prompts or tools
 change · a white-room line · skill/tool claims backed by a probe · docs if user-facing ·
 the 3 quick challenges on Local if it touches the turn loop, prompts or tools. Branch
@@ -25,6 +27,7 @@ from `main`, no stacked PRs. Only one open PR at a time on `agent_controller.py`
 
 | Status | Task | PR |
 |---|---|---|
+| ⏭ Now | **2026-10-25: video week** — Video 0–5 + Tools 1, Wand 0, Wand 2 / Video 3 this week, Video 6 (Sequencer assets) next week. Plan `plan_tier4v_video_sequencer.md` | #374-#379 |
 | ✅ Done | Green test baseline + kickoff | #108 |
 | ✅ Done | Skills 1 + 2: template tools work everywhere; node tools read the 5.x compositor | #109 (#110) |
 | ✅ Done | Agent 1: real ACP sessions recorded with OpenCode | #111 |
@@ -106,6 +109,22 @@ Plan: `plan_tier4i_engine_parity.md`
 | ✅ | **Engine 8**: Session token | I6 | MCP + bridge require a per-start token; Copy MCP Config includes it | — | S | Tokenless request refused; every mode still works | |
 | ✅ | **Engine 9**: Short tool results | I7 | Big results become a short preview + `read_tool_output` handle | — | S | 50 KB node dump → ≤ 2 KB preview on every engine | #167 |
 | ✅ | **Engine 10**: Benchmarks on every engine | I8 | Benchmark steps go through the engine, so the same set runs on Local, Remote, External Agent; Compare groups by mode | Engine 2, Agent 4 | S | One suite side by side on three engines | #179 |
+
+## Video week — an artist-friendly Sequencer (priority, 2026-10-25)
+
+Plan: `plan_tier4v_video_sequencer.md`. A talking-head clip becomes a captioned vertical
+short in a few clicks; the basics need no model; **Suggest** proposes the edit. With
+Tools 1 (#304), Wand 0 (#331) and Wand 2 / Video 3 (#333) below.
+
+| ☐ | Task | Ref | What | Needs | Size | Done when | PR |
+|---|---|---|---|---|---|---|---|
+| ☐ | **Bundle** (#380): Ship inside Bforartists · *this week* | 4x | Coworker pre-installed (off) in Bforartists' System extensions repository from a pinned submodule; the update repository registered in default preferences; Coworker's Updates box offers **Enable Updates** (hands over to an updatable copy, settings kept). No installer needed in Bforartists. Spike: same id in two repositories | — | M | A fresh Bforartists build has Coworker offline (off); turned on and updated, it reaches the next release without a new build | |
+| ☐ | **Video 0** (#374): Spike | 4v §2–3 | Probe the 5.3 Sequencer API (compositor strip modifier, text-strip keys, scene assets as strips, SRT export, sound samples); whisper.cpp on Windows (assets, word times, VAD, speed) | — | S | Findings in 4v §6; whisper route + caption format frozen | |
+| ☐ | **Video 1** (#375): Local transcription | 4v §3 | `whisper_manager.py` like `llm_manager.py` (download, presets tiny → large-v3-turbo, start / stop); `transcribe_strip` with word times, cached per media file; Remote fallback | Video 0 | M | 2-min clip transcribes locally in < 1 min on GPU; second call instant | |
+| ☐ | **Video 2** (#376): Auto Captions | 4v §4 | Words → lines → styled text strips (Clean, Bold Pop, Word-by-word, Boxed), safe area; SRT out / in; Translate works on captions | Tools 1, Video 1 | M | In-sync captions in each style, one undo; SRT plays in a player | |
+| ☐ | **Video 4** (#377): Titles, motion, transitions | 4v §4 | First lower thirds and title cards; entrance / exit recipes (fade, pop, slide, punch), zoom punch-in, transitions (cross, dip, wipe, whip) | Tools 1 | M | Each preset and transition applies, one undo, adjustable | |
+| ☐ | **Video 5** (#378): Suggest edits | 4v §4 | Transcript + silences + contact sheet → up to 5 edits as suggestion buttons, each one undo; slim slice of Edit from Footage | Video 1–2, Tools 5 | M | ≥ 3 sensible edits on the test clip, Local and Remote | |
+| ☐ | **Video 6** (#379): Sequencer assets library · *next week* | 4v §4 | Compositor-modifier groups (Blur Fill, Reframe, Looks, Vignette, Grain, Glow, Shake, safe-area guide), **lower thirds and title cards** as scene assets, transitions; agent metadata | Video 3–4 | L | Looks, titles, transitions apply from toolshelf and chat; "warm film look + hook title" works on Local | |
 
 ## Domain tools — the agent picks a tool instead of writing `bpy`
 
@@ -212,9 +231,9 @@ no model.
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
-| ☐ | **Wand 0** (#331): Spike + icon set | 4m §3.3 | Remove Silences end to end in its native places with a wand-badged icon button; first 8 self-contained icons (SVG + PNG); probe the 5.3 sound API and node notes | — | S | Screenshots in Bforartists and plain Blender 5.3; spec frozen | |
+| ☐ | **Wand 0** (#331): Sequencer toolshelf + icon set | 4v §1, 4m §3.3 | *Video week:* the **Coworker** tab in the Sequencer toolshelf (Bforartists) + Strip / View / Add entries (Blender) holding the video buttons; Remove Silences end to end in its native places with a wand-badged icon button; first 8 self-contained icons (SVG + PNG); probe the 5.3 sound API and node notes | — | S | Screenshots in Bforartists and plain Blender 5.3; spec frozen | |
 | ☐ | **Wand 1** (#332): Operator framework | 4m §3 | Spec, registry, factory, native placement (menus, toolshelf icon buttons, context menus), icons, the 5-stage pipeline, `run_operator` MCP tool | Wand 0 | M | A test pack of every kind runs from its menu, toolshelf and the chat | |
-| ☐ | **Wand 2** (#333): Sequencer basics · *first* | 4m §4.1 | Remove Silences, Reframe for Vertical (centre-crop compositor node group, editable), Subtitles from Text — all work with no engine | Wand 1, Tools 1 | M | Each runs from its native menu / toolshelf with a preview and one undo, no engine | |
+| ☐ | **Wand 2 / Video 3** (#333): Vertical + Reframe · *video week* | 4v §4 | 9:16 with an editable **Reframe** compositor modifier per shot (centre crop or **Blur Fill**); optional Follow subject. *Remove Silences is in Wand 0; subtitles became Auto Captions (#376)* | Wand 1, Tools 1 | M | Each runs from its native menu / toolshelf with a preview and one undo, no engine | |
 | ⏩ | **Wand 2b**: Edit from Footage *(Tier 5)* | 4m §4.1 | The wizard (look → propose cuts + per-shot reframes → choose → build → review), Assemble Timeline, Export Review Video | Wand 2, Tools 5, GPU 6, threads | L | 3 clips → a 30 s vertical edit with editable reframes | |
 | ☐ | **Wand 3** (#334): Node pack · *second* | 4m §4.2 | Tidy & Explain Tree, Frame Selected by Purpose | Wand 1, Tools 3 | M | A 60-node tree framed into labelled groups with notes on a 7B model | |
 | ⏩ | **Wand 4** (#335): Bake wizard *(Tier 5)* | 4m §4.3 | Bake Texture Sets… by question cards | Wand 1 | M | Two material sets bake from three answered cards | |

@@ -69,6 +69,21 @@ thread's folders are refused. The scene build's thread can hold the moodboard fo
 while the Sequencer thread holds the subtitles script: folders belong to the job, like
 the history.
 
+### 2.4 One shared thread: the multi-domain chat (your note, 2026-10-22 / 25)
+
+Turning **Use Editor Context Only** off in an editor's sidebar moves that sidebar to a
+**shared thread** that spans every editor: today's single multi-domain chat. So the chat
+gets **thread tabs** in its header (*All editors* plus one tab per editor thread, a dot when
+one is busy or waiting), and the toggle simply picks the tab. Nothing is lost for people
+who prefer one big conversation: the shared thread is the default for anyone who never
+turns editor focus on.
+
+**Locally this needs thought** (Threads 0 measures it): one llama-server slot means
+threads take turns per request; two or three slots split the context window. Proposal:
+on **Local**, only one thread runs at a time by default (the others queue, shown on their
+tabs), and the shared thread is recommended for small models; Remote and External Agent
+run threads side by side.
+
 ## 3. Running side by side
 
 ```mermaid

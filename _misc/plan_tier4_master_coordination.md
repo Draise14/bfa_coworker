@@ -92,7 +92,7 @@ Checked against `main` (897b7db). 🟡 rows run with another agent and aren't re
 spike → Tools 1 + Wand 0 (Sequencer toolshelf, Remove Silences) → Video 1 local
 transcription → Video 2 Auto Captions → Video 3 Vertical + Reframe → Video 4 titles,
 motion, transitions → Video 5 Suggest → **Test V**; next week Video 6, the Sequencer
-assets library. Alongside it, **Bundle** (#380, `plan_tier4x_ship_with_bforartists.md`): Coworker ships inside Bforartists as a submodule with the bundled installer; updates stay async. Threads and the rest follow in the batches below.
+assets library. Alongside it, **Bundle** (#380, `plan_tier4x_ship_with_bforartists.md`): Coworker ships pre-installed (off) in Bforartists from a submodule, the update repository is pre-registered, and Coworker hands itself over to an updatable copy; updates stay async. Threads and the rest follow in the batches below.
 
 ```
 Threads 0 spike ─► Threads 1 thread model ─► Threads 2 editors ─► Threads 3 side by side ─► (Orchestrate 1)

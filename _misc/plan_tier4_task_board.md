@@ -27,7 +27,7 @@ from `main`, no stacked PRs. Only one open PR at a time on `agent_controller.py`
 
 | Status | Task | PR |
 |---|---|---|
-| ⏭ Now | **2026-10-25: video week** — Video 0–5 + Tools 1, Wand 0, Wand 2 / Video 3 this week, Video 6 (Sequencer assets) next week. Plan `plan_tier4v_video_sequencer.md` | #374-#379 |
+| ⏭ Now | **1.1.42 (week 44): architecture first** — Threads 0–2 (one turn at a time across threads; chat tabs) + #309 long jobs, #346 secrets, #310 repeat guard, #345 threat model, #380 bundling spike. **1.1.43:** Sequencer core (Video 0–3, Tools 1, Wand 0). Later: Threads 3, Video 4–6 | #356-#358 |
 | ✅ Done | Green test baseline + kickoff | #108 |
 | ✅ Done | Skills 1 + 2: template tools work everywhere; node tools read the 5.x compositor | #109 (#110) |
 | ✅ Done | Agent 1: real ACP sessions recorded with OpenCode | #111 |
@@ -110,7 +110,7 @@ Plan: `plan_tier4i_engine_parity.md`
 | ✅ | **Engine 9**: Short tool results | I7 | Big results become a short preview + `read_tool_output` handle | — | S | 50 KB node dump → ≤ 2 KB preview on every engine | #167 |
 | ✅ | **Engine 10**: Benchmarks on every engine | I8 | Benchmark steps go through the engine, so the same set runs on Local, Remote, External Agent; Compare groups by mode | Engine 2, Agent 4 | S | One suite side by side on three engines | #179 |
 
-## Video week — an artist-friendly Sequencer (priority, 2026-10-25)
+## Video — an artist-friendly Sequencer (core in 1.1.43, after threads)
 
 Plan: `plan_tier4v_video_sequencer.md`. A talking-head clip becomes a captioned vertical
 short in a few clicks; the basics need no model; **Suggest** proposes the edit. With

@@ -36,7 +36,7 @@ the speed of dense 27B models on 24 GB cards.
 |---|---|---|---|---|
 | **High** | 24 GB+ VRAM (3090 / 4090 / 5090), 32 GB+ RAM | **Qwen3.8-27B** (dense, vision) Q4_K_M / Q5_K_M **+ MTP sidecar**; alternate: a **35B-A3B MoE fully on GPU** for speed | all layers on GPU, `--spec-type draft-mtp` + `--spec-draft-model` (27B), q8 KV, 64–128K context, flash attention | 27B: ~45 → ~110 tok/s with MTP (4090, reported); MoE on GPU: ~180 tok/s (3090, reported) |
 | **Mid** | 12–16 GB VRAM (3060 12 GB, 4060 Ti 16 GB, 4070), **32 GB RAM** | a **35B-A3B MoE** at Q4_K_M: **Qwen3.6-35B-A3B** (base), **Empero Qwen3.8-35B-A3B Distill** (shorter thinking), **Ornith-1.5-35B-A3B** (coding-agent tune, MIT) | `--n-cpu-moe N` **chosen by Coworker** from free VRAM, all other layers on GPU, q8 KV, up to 262K context, `-np 1`, flash attention | ~50 tok/s decode, ~550 tok/s prefill at 262K on a 3060 12 GB + 16 GB RAM (community report, Oct 2026) |
-| **Low** | 8 GB VRAM, laptops, or CPU only; 16 GB RAM | a **9B dense** model: **Qwen3.5-9B** (today's), **Ornith-1.5-9B** (agent tune); **Gemma 4 E4B** for CPU only | full GPU offload at Q4/Q5, q8 KV, 32K context; CPU: smaller context, fewer threads for the UI | Good single-step tool use; plans kept short (Coworker's plan + stop rules already help small models) |
+| **Low** | **6–8 GB VRAM incl. AMD laptops (Vulkan)**, or CPU only; 16 GB RAM | **Gemma 4 E4B** fully on the GPU (fits 6 GB with room for the viewport); a **9B dense** model (**Qwen3.5-9B**, **Ornith-1.5-9B**) with partial offload (some layers on the CPU) where it's smarter enough to be worth the speed | Vulkan build on AMD; `-ngl` chosen from free VRAM after a viewport reserve; q8 KV, 16–32K context; CPU: smaller context, fewer threads for the UI | Good single-step tool use; plans kept short (Coworker's plan + stop rules already help small models) |
 
 Notes from the research:
 - **The Mid recipe is the big win.** The community config that runs a 35B-A3B on a
@@ -69,7 +69,7 @@ Our own benchmark decides, on the machines artists actually have:
 | What | How |
 |---|---|
 | Suite | The 6 core benchmarks + 3 quick challenges (Engine 10), plus 3 Blender tasks with screenshots (vision) |
-| Machines | **High**: a 24 GB card · **Mid**: a 12 GB card + 32 GB RAM · **Low**: an 8 GB card or a laptop; your machine is the first reference |
+| Machines | **High**: your **RTX 4090** (24 GB) · **Mid**: the 4090 **capped** to a 12 GB budget with `--n-cpu-moe` / `-ngl` (success and format results transfer; speed reads optimistic, so we compare against the community 3060 numbers, or borrow a 12 GB card) · **Low**: your **laptop with 6 GB AMD graphics** (Vulkan), the machine many artists in your area have |
 | Per candidate | success rate, tool-call format failures, turns to finish, first-token latency, decode and prefill tok/s at 8K / 32K / 128K, peak VRAM and RAM **with a scene open in Eevee** |
 | Output | `_misc/benchmarks/local_november.md`: one table per setup; the winner + an alternate |
 
@@ -77,6 +77,7 @@ Our own benchmark decides, on the machines artists actually have:
 
 | # | Task | What | Size |
 |---|---|---|---|
+| L0 | **Detect AMD / Intel graphics memory** | Today `detect_vram_gb()` asks `nvidia-smi` only, so on the AMD laptop Coworker sees *no* VRAM and guesses from RAM. Ask the downloaded llama-server itself (`--list-devices` lists each device's memory for CUDA and Vulkan), with the Windows display-adapter registry value (64-bit) as a fallback; `Win32_VideoController.AdapterRAM` caps at 4 GB, so not that | S |
 | L1 | **Bake-off** | §4, scripted so it reruns when new models land | S–M |
 | L2 | **Launch recipes** | A `LaunchRecipe` per setup and model: offload (`--n-cpu-moe` computed from free VRAM after a viewport reserve), context, KV type, flash attention, `-np 1`, sampling, reasoning switch mapped to Coworker's *Effort*, MTP when the model has heads (`--spec-type draft-mtp`, sidecar draft file). Context presets up to 262K | M |
 | L3 | **Fit check** | Before Start: weights + KV + viewport reserve vs VRAM / RAM; adjust context or offload, or say plainly why it won't fit | S |
@@ -85,7 +86,7 @@ Our own benchmark decides, on the machines artists actually have:
 | L6 | **Preset cleanup** | Three defaults + alternates; merges and uncensored fine-tunes leave the default list (still usable via *Advanced* / custom GGUF) | S |
 | L7 | **Docs + test round** | Wiki *Local LLM Setup* rewritten around the three setups; a short test list | S |
 
-**Order**: L1 → (L2 + L5) → L3 → L4 + L6 → L7. It touches `llm_manager.py`, the Local
+**Order**: L0 → L1 → (L2 + L5) → L3 → L4 + L6 → L7. It touches `llm_manager.py`, the Local
 part of `preferences.py`, and the benchmark runner, so it can run alongside Threads
 (`agent_controller.py` / `ui_chat.py`) without conflicts.
 
@@ -98,6 +99,7 @@ part of `preferences.py`, and the benchmark runner, so it can run alongside Thre
 - [ ] Mid runs a 35B-A3B on a 12 GB card at ≥ 40 tok/s; High runs ≥ 2× today's 27B speed
   with MTP.
 - [ ] The llama.cpp build is pinned and a flag change can't break Start silently.
+- [ ] On the 6 GB AMD laptop, Coworker detects the graphics memory, recommends **Low**, and the viewport stays usable during a turn.
 
 ## 7. Risks
 

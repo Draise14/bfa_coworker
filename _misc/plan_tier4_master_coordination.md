@@ -88,11 +88,20 @@ Checked against `main` (897b7db). 🟡 rows run with another agent and aren't re
 
 ### 0.4 Order (critical path) and batches
 
-**2026-10-25: the video week comes first** (`plan_tier4v_video_sequencer.md`): Video 0
-spike → Tools 1 + Wand 0 (Sequencer toolshelf, Remove Silences) → Video 1 local
-transcription → Video 2 Auto Captions → Video 3 Vertical + Reframe → Video 4 titles,
-motion, transitions → Video 5 Suggest → **Test V**; next week Video 6, the Sequencer
-assets library. Alongside it, **Bundle** (#380, `plan_tier4x_ship_with_bforartists.md`): Coworker ships pre-installed (off) in Bforartists from a submodule, the update repository is pre-registered, and Coworker hands itself over to an updatable copy; updates stay async. Threads and the rest follow in the batches below.
+**2026-10-25 (re-ordered the same day): architecture first, then the Sequencer.**
+- **1.1.42 (week 44):** threads per editor without the hard part. **Threads 0** spike →
+  **Threads 1** thread model with *one turn at a time across all threads* (today's turn
+  guard stays, so undo, Revert and scene safety are unchanged) → **Threads 2** each
+  editor's own thread, chat tabs (*All editors* + one per editor; editor focus off joins
+  *All editors*). Plus the small core fixes: long jobs (Tools 6, #309), secrets
+  (Security 2, #346), the repeat guard (Runtime 1, #310), the threat model (Security 1,
+  #345) and the Bforartists bundling spike (Bundle 0, #380).
+- **1.1.43 (week 45): the Sequencer core** (`plan_tier4v_video_sequencer.md`): Video 0
+  spike, Tools 1, Wand 0 toolshelf + Remove Silences, Video 1 local transcription,
+  Video 2 Auto Captions, Video 3 Vertical.
+- **Later:** Threads 3 (side by side, claims, interleaved undo); lower thirds / title
+  cards, transitions and Suggest (Video 4–5); the Sequencer assets library (Video 6,
+  together with your asset work in Bforartists).
 
 ```
 Threads 0 spike ─► Threads 1 thread model ─► Threads 2 editors ─► Threads 3 side by side ─► (Orchestrate 1)
@@ -371,6 +380,6 @@ native API has no tables, (3) keep the LaTeX→Unicode pre-pass. Moved from Tier
 - **2026-10-21: The four workflows (§0).** Coworker operators in native places (wand badge, no "Magic" brand), the Spell Book (shipped wizard spells, prompt spells for #300, your own; replay with no model), procedural first + Make Parametric, Sequencer pack first with a creative *Edit from Footage* wizard; plans in `plan_tier4m_coworker_operators.md`, ideas and the asset-library notes in `plan_tier5c_artist_automation.md`.
 - **2026-10-21 (later): One thread per editor.** The orchestration layer of this release is threads: each editor's job runs in its own conversation, side by side, with claims and honest Revert (`plan_tier4o_orchestration_threads.md`, Threads 0–3). Footer 1 shows one icon per thread. Moved to Tier 5: Edit from Footage and the other big wizards, Spell 2–3, Procedural 2–3, Tools 9, Orchestrate 2, Teams 1–3, Security 5 (§0.4).
 - **2026-10-21 (re-tier against feature creep).** Threads stay in Tier 4. The Spell Book (with #300 prompt spells and *Save as Spell*) and the wizard spells go to Tier 5; generative local systems, generative 2D and moodboard/storyboarding go to Tier 6 next to generative 3D and the diffusion renderer (files renamed `plan_tier6_*`). Rule: a new idea goes to the lowest tier whose foundation it needs (§0.1).
-- **2026-10-25: video week first.** An artist-friendly Sequencer is the priority: local transcription with whisper.cpp (managed like llama-server), Auto Captions, Vertical with editable Reframe / Blur Fill compositor modifiers, titles with entrance / exit, transitions, and a Suggest button (a slim Tier 4 slice of *Edit from Footage*). Next week: a Sequencer assets library (looks, blur fill, titles as scene assets, transitions). Plan: `plan_tier4v_video_sequencer.md`, issues #374–#379, #333 rescoped, #331 becomes the Sequencer toolshelf.
+- **2026-10-25 (re-ordered): architecture first.** Threads 0–2 (one turn at a time across threads) and the core fixes are 1.1.42; the Sequencer core is 1.1.43; Threads 3, titles, Suggest and the assets library come later. Earlier the same day: **video week first.** An artist-friendly Sequencer is the priority: local transcription with whisper.cpp (managed like llama-server), Auto Captions, Vertical with editable Reframe / Blur Fill compositor modifiers, titles with entrance / exit, transitions, and a Suggest button (a slim Tier 4 slice of *Edit from Footage*). Next week: a Sequencer assets library (looks, blur fill, titles as scene assets, transitions). Plan: `plan_tier4v_video_sequencer.md`, issues #374–#379, #333 rescoped, #331 becomes the Sequencer toolshelf.
 - **2026-10-21 (late): context folders and guided tours.** Context folders (point a chat at a folder; list / search / read, read-only, per thread) are a Tier 4 quick win after Threads 1 (#367). Guided tours go to Tier 5 (#368): Coworker **highlights** each step and waits for you; it never drives the UI for you. A tour is a spell played in teaching mode.
 - **2026-10-20: Tier 4a review.** Lane A (editors) is nearly closed: the Coworker editor, the compact chat in every editor's sidebar with *Use editor context only* (#298), Explain This (#290) and Translate (#42) in the right-click menus, permissions Strict / Permissive / Auto (#292). **Dropped:** viewport agent feedback (Editors 5), less in your face. **Moodboard** stays in Tier 5. Contextual, domain-aware operators per editor come with lanes F / G. The remaining Tier 4 tasks are logged one issue per task: #299-#324 (see the task board).

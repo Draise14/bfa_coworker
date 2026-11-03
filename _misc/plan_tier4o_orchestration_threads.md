@@ -199,7 +199,8 @@ flowchart LR
   per-thread (start from §1's table).
 - **Done when**: findings and numbers in this doc (§6); the per-thread state list frozen.
 
-### Threads 1 — The thread model (M→L)
+### Threads 1 — The thread model (M) · **1.1.42**
+*2026-10-25:* **one turn at a time across all threads**: the others wait on their tabs. Today's turn guard stays global, so turns never interleave and undo, Revert and the scene lock work as today. Running side by side moves to Threads 3.
 - **What**: a bpy-free `threads.py`: `Thread` (id, chat id, editor kind, engine session,
   history, queue, stop event, plan, pending question/approval, status, claims) and a
   `ThreadRegistry` (create, get by editor/area, list live, cap). Move today's globals in
@@ -212,7 +213,8 @@ flowchart LR
 - **Note**: touches `agent_controller.py` and `ui_chat.py` heavily — the board's
   one-open-PR rule applies; schedule it between the other agent's PRs.
 
-### Threads 2 — Threads in the editors (M)
+### Threads 2 — Threads in the editors (M) · **1.1.42**
+*2026-10-25:* includes the chat's **thread tabs** (*All editors* + one per editor thread) and §2.4: turning editor focus off joins *All editors*.
 - **What**: §2.1: each editor kind's sidebar shows its own thread; the header (icon,
   title, status, *New thread here*, *Switch…*, *Open in Coworker editor*); right-click
   operators start in their editor's thread; the Coworker editor's thread list with unread
@@ -220,7 +222,7 @@ flowchart LR
 - **Done when**: a 3D question and a node question asked from their sidebars land in two
   chats in History; reopening the .blend restores both.
 
-### Threads 3 — Side by side, safely (L)
+### Threads 3 — Side by side, safely (L) · *after 1.1.43*
 - **What**: the thread runner (cap, fair model queue, Local slots option, one ACP session
   per thread, Remote back-off per thread); claims and conflict asking; per-thread undo
   names and the Revert rules of §3.3; Stop all; the "other threads" context line.

@@ -89,43 +89,54 @@ def main() -> int:
 
     transport = args.transport
     if _USE_HTTP_SUPPORT and transport == "http":
-        # pylint: disable-next=import-error,no-name-in-module
-        from mcp.server.fastmcp.server import TransportSecuritySettings  # type: ignore[attr-defined]
-        from starlette.applications import Starlette
-        from starlette.middleware.cors import CORSMiddleware
-
         transport = "streamable-http"
-
-        mcp.settings.host = args.host
-        mcp.settings.port = args.port
-        mcp.settings.streamable_http_path = "/"
-        mcp.settings.stateless_http = True
-        mcp.settings.transport_security = TransportSecuritySettings(
-            enable_dns_rebinding_protection=False,
-        )
-
-        # Add CORS middleware so browser-based clients
-        # (e.g. llama.cpp web UI) can connect without preflight failures.
-        _orig = mcp.streamable_http_app
-
-        def _app_with_cors() -> Starlette:
-            app = _orig()
-            # Engine 8: require the session token when one was provided.
-            # Added BEFORE the CORS middleware, so CORS stays the outermost
-            # layer (preflights are answered and a 401 carries CORS headers).
-            _token = os.environ.get("BFACW_TOKEN", "")
-            if _token:
-                from blmcp.tools_helpers.http_auth import TokenGateMiddleware
-                app.add_middleware(TokenGateMiddleware, token=_token)
-            app.add_middleware(
-                CORSMiddleware,
-                allow_origins=["*"],
-                allow_methods=["*"],
-                allow_headers=["*"],
-            )
-            return app
-
-        mcp.streamable_http_app = _app_with_cors  # type: ignore[method-assign]
+        _configure_http(mcp, args.host, args.port)
 
     mcp.run(transport=transport)
     return 0
+
+
+def _configure_http(mcp: FastMCP, host: str, port: int) -> None:
+    """Set up the HTTP endpoint: settings, Host/Origin checks, token gate, CORS."""
+    # pylint: disable-next=import-error,no-name-in-module
+    from mcp.server.fastmcp.server import TransportSecuritySettings  # type: ignore[attr-defined]
+    from starlette.applications import Starlette
+    from starlette.middleware.cors import CORSMiddleware
+
+    from blmcp.tools_helpers import http_auth
+
+    mcp.settings.host = host
+    mcp.settings.port = port
+    mcp.settings.streamable_http_path = "/"
+    mcp.settings.stateless_http = True
+    # Security 1 (#345): refuse a foreign Host (DNS rebinding) or a browser
+    # page that isn't served from this computer -- even when the token is off.
+    mcp.settings.transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=http_auth.allowed_hosts(host, port),
+        allowed_origins=http_auth.allowed_origins(),
+    )
+
+    # Add CORS middleware so browser-based clients
+    # (e.g. llama.cpp web UI) can connect without preflight failures.
+    _orig = mcp.streamable_http_app
+
+    def _app_with_cors() -> Starlette:
+        app = _orig()
+        # Engine 8: require the session token when one was provided.
+        # Added BEFORE the CORS middleware, so CORS stays the outermost
+        # layer (preflights are answered and a 401 carries CORS headers).
+        _token = os.environ.get("BFACW_TOKEN", "")
+        if _token:
+            app.add_middleware(http_auth.TokenGateMiddleware, token=_token)
+        # Pages served from this computer only (any port), not "*".
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=http_auth.extra_origins(),
+            allow_origin_regex=http_auth.CORS_ORIGIN_REGEX,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+        return app
+
+    mcp.streamable_http_app = _app_with_cors  # type: ignore[method-assign]

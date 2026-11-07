@@ -265,7 +265,7 @@ def _explain_spot(window_index: int, x: int, y: int) -> None:
             props.chat_image_send_once = True
         except (RuntimeError, OSError):
             pass
-    with bpy.context.temp_override(window=window, screen=window.screen):
+    with bpy.context.temp_override(window=window):
         _ask(bpy.context, spot_text(editor, region), "ASK")
     return None
 
@@ -423,7 +423,7 @@ def _editing_text_object(data: Any) -> dict | None:
         if obj is None or obj.data != data or obj.mode != 'EDIT':
             continue
         area = next((a for a in window.screen.areas if a.type == 'VIEW_3D'), None)
-        override = {"window": window, "screen": window.screen, "active_object": obj, "object": obj}
+        override = {"window": window, "active_object": obj, "object": obj}
         if area is not None:
             override.update(area=area, region=next((r for r in area.regions if r.type == 'WINDOW'), None))
         return override
@@ -465,7 +465,7 @@ def _translate_dialog(window_index: int, args: dict) -> None:
     wm = bpy.context.window_manager
     if window_index < len(wm.windows):
         window = wm.windows[window_index]
-        with bpy.context.temp_override(window=window, screen=window.screen):
+        with bpy.context.temp_override(window=window):
             bpy.ops.bfacw.translate('INVOKE_DEFAULT', **args)
     return None
 

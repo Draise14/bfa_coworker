@@ -16,9 +16,11 @@ So the preferences are written to a small JSON file in Blender's user config
 folder whenever the add-on is disabled (upgrade, uninstall, quit), and a fresh
 install with untouched preferences reads them back once.
 
-Values are written straight into the property storage (``prefs[key] = value``)
-so the preferences' update callbacks -- which auto-fill *other* fields (model
-presets, provider URLs) -- don't run and overwrite what is being restored.
+Values are set like any setting (``setattr``): since Blender 5.0 the property
+storage (``prefs[key] = value``) no longer reaches ``bpy.props`` values (#396).
+Some update callbacks auto-fill *other* fields (model presets, provider URLs),
+so those settings are set first and the fields they fill are restored after
+them, ending with their saved values.
 
 Also used by the Coworker Installer (it has its own copy of ``dump``) to save
 the settings of an old copy before replacing it.  ``bpy`` is only touched
@@ -51,6 +53,9 @@ RESTORED_FLAG = "settings_restored"
 _SKIP = {"rna_type", RESTORED_FLAG, "bl_idname"}
 _SKIP_PREFIXES = ("show_", "ui_", "_")
 _VALUE_TYPES = {"BOOLEAN", "INT", "FLOAT", "STRING", "ENUM"}
+# Restored first: their update callbacks fill in other fields (mode -> agent / llm mode,
+# preset -> model, context and token fields, provider -> URL), which come after.
+_DRIVERS = ("operating_mode", "llm_mode", "remote_provider", "model_preset", "local_ctx_preset")
 
 
 def settings_path(config_dir: str) -> str:
@@ -87,44 +92,40 @@ def dump(prefs: Any) -> dict[str, Any]:
 
 
 def apply(prefs: Any, data: dict[str, Any]) -> list[str]:
-    """Write *data* into *prefs* without firing update callbacks.
+    """Set *data* on *prefs*, the fields-filling settings (:data:`_DRIVERS`) first.
 
     Unknown keys (older/newer versions), bad types and enum identifiers that
-    no longer exist are skipped.  Returns the keys that were applied.
+    no longer exist are skipped; a setting that can't be set is printed.
+    Returns the keys that were applied.
     """
     applied: list[str] = []
     props = {p.identifier: p for p in _props(prefs)}
-    for key, value in data.items():
-        prop = props.get(key)
+    order = [k for k in _DRIVERS if k in data] + [k for k in data if k not in _DRIVERS]
+    for key in order:
+        value, prop = data[key], props.get(key)
         if prop is None:
             continue
         try:
             if prop.type == "ENUM":
                 if getattr(prop, "is_enum_flag", False):
                     continue  # rare; not used by Coworker's preferences
-                items = {item.identifier: item.value for item in prop.enum_items}
-                if not isinstance(value, str) or value not in items:
+                if not isinstance(value, str) or value not in {item.identifier for item in prop.enum_items}:
                     continue  # dynamic enum or renamed option: keep the default
-                prefs[key] = items[value]
             elif prop.type == "BOOLEAN":
-                prefs[key] = bool(value)
+                value = bool(value)
             elif prop.type == "INT":
                 if isinstance(value, bool) or not isinstance(value, int):
                     continue
-                prefs[key] = int(value)
             elif prop.type == "FLOAT":
                 if isinstance(value, bool) or not isinstance(value, (int, float)):
                     continue
-                prefs[key] = float(value)
-            elif prop.type == "STRING":
-                if not isinstance(value, str):
-                    continue
-                prefs[key] = value
-            else:
+                value = float(value)
+            elif prop.type != "STRING" or not isinstance(value, str):
                 continue
+            setattr(prefs, key, value)
             applied.append(key)
-        except Exception:  # pylint: disable=broad-exception-caught
-            continue
+        except Exception as ex:  # pylint: disable=broad-exception-caught
+            print("[Coworker] settings restore: {:s} not restored ({:s})".format(key, str(ex)))
     return applied
 
 
@@ -164,7 +165,8 @@ def restore_once(prefs: Any, config_dir: str) -> list[str]:
         if getattr(prefs, RESTORED_FLAG, True):
             return []
         applied = apply(prefs, load(config_dir))
-        prefs[RESTORED_FLAG] = True
+        setattr(prefs, RESTORED_FLAG, True)
         return applied
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] settings restore: {:s}".format(str(ex)))
         return []

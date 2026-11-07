@@ -1,0 +1,196 @@
+{
+  "model": "Qwen3.5-9B-Q4_K_M.gguf",
+  "ctx_size": 32768,
+  "settings": [
+    {
+      "setting": "auto",
+      "total_slots": 4,
+      "props_n_ctx": 32768,
+      "slot_n_ctx": [
+        32768,
+        32768,
+        32768,
+        32768
+      ],
+      "decode": {
+        "1": {
+          "per_request_tok_s": [
+            127.0
+          ],
+          "total_tok_s": 127.0,
+          "wall_s": 2.47,
+          "errors": []
+        },
+        "2": {
+          "per_request_tok_s": [
+            110.6,
+            110.6
+          ],
+          "total_tok_s": 221.2,
+          "wall_s": 2.84,
+          "errors": []
+        },
+        "3": {
+          "per_request_tok_s": [
+            98.4,
+            98.3,
+            98.3
+          ],
+          "total_tok_s": 295.0,
+          "wall_s": 3.32,
+          "errors": []
+        }
+      },
+      "prompt_over_ctx_div_n": {
+        "approx_prompt_tokens": 12922,
+        "ok": true,
+        "error": ""
+      },
+      "prompt_near_slot_ctx": {
+        "approx_prompt_tokens": 26214,
+        "ok": true,
+        "error": ""
+      },
+      "quiz_solo": {
+        "score": 16,
+        "of": 16
+      },
+      "quiz_parallel": {
+        "score": 16,
+        "of": 16
+      }
+    },
+    {
+      "setting": "1",
+      "total_slots": 1,
+      "props_n_ctx": 32768,
+      "slot_n_ctx": [
+        32768
+      ],
+      "decode": {
+        "1": {
+          "per_request_tok_s": [
+            125.0
+          ],
+          "total_tok_s": 125.0,
+          "wall_s": 2.49,
+          "errors": []
+        }
+      },
+      "prompt_over_ctx_div_n": null,
+      "prompt_near_slot_ctx": {
+        "approx_prompt_tokens": 26214,
+        "ok": true,
+        "error": ""
+      },
+      "quiz_solo": {
+        "score": 16,
+        "of": 16
+      },
+      "quiz_parallel": null
+    },
+    {
+      "setting": "2",
+      "total_slots": 2,
+      "props_n_ctx": 16384,
+      "slot_n_ctx": [
+        16384,
+        16384
+      ],
+      "decode": {
+        "1": {
+          "per_request_tok_s": [
+            128.2
+          ],
+          "total_tok_s": 128.2,
+          "wall_s": 2.44,
+          "errors": []
+        },
+        "2": {
+          "per_request_tok_s": [
+            112.0,
+            112.0
+          ],
+          "total_tok_s": 224.0,
+          "wall_s": 2.78,
+          "errors": []
+        }
+      },
+      "prompt_over_ctx_div_n": {
+        "approx_prompt_tokens": 18384,
+        "ok": false,
+        "error": "HTTP 400: {\"error\":{\"code\":400,\"message\":\"request (18401 tokens) exceeds the available context size (16384 tokens), try increasing it\",\"type\":\"exceed_context_size_error\",\"n_prompt_tokens\":18401,\"n_ctx"
+      },
+      "prompt_near_slot_ctx": {
+        "approx_prompt_tokens": 13107,
+        "ok": true,
+        "error": ""
+      },
+      "quiz_solo": {
+        "score": 16,
+        "of": 16
+      },
+      "quiz_parallel": {
+        "score": 16,
+        "of": 16
+      }
+    },
+    {
+      "setting": "3",
+      "total_slots": 3,
+      "props_n_ctx": 11008,
+      "slot_n_ctx": [
+        11008,
+        11008,
+        11008
+      ],
+      "decode": {
+        "1": {
+          "per_request_tok_s": [
+            127.7
+          ],
+          "total_tok_s": 127.7,
+          "wall_s": 2.44,
+          "errors": []
+        },
+        "2": {
+          "per_request_tok_s": [
+            111.8,
+            111.9
+          ],
+          "total_tok_s": 223.7,
+          "wall_s": 2.8,
+          "errors": []
+        },
+        "3": {
+          "per_request_tok_s": [
+            98.7,
+            98.7,
+            98.7
+          ],
+          "total_tok_s": 296.1,
+          "wall_s": 3.16,
+          "errors": []
+        }
+      },
+      "prompt_over_ctx_div_n": {
+        "approx_prompt_tokens": 12922,
+        "ok": false,
+        "error": "HTTP 400: {\"error\":{\"code\":400,\"message\":\"request (12941 tokens) exceeds the available context size (11008 tokens), try increasing it\",\"type\":\"exceed_context_size_error\",\"n_prompt_tokens\":12941,\"n_ctx"
+      },
+      "prompt_near_slot_ctx": {
+        "approx_prompt_tokens": 8806,
+        "ok": true,
+        "error": ""
+      },
+      "quiz_solo": {
+        "score": 16,
+        "of": 16
+      },
+      "quiz_parallel": {
+        "score": 16,
+        "of": 16
+      }
+    }
+  ]
+}

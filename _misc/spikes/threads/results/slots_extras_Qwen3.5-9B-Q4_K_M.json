@@ -1,0 +1,186 @@
+{
+  "model": "Qwen3.5-9B-Q4_K_M.gguf",
+  "ctx_size": 32768,
+  "extras": [
+    {
+      "setting": "auto",
+      "total_slots": 4,
+      "alternate_two_8k_histories": [
+        {
+          "wall_s": 1.06,
+          "prompt_n": 8152,
+          "cache_n": 0,
+          "prompt_ms": 988,
+          "thread": "A"
+        },
+        {
+          "wall_s": 1.1,
+          "prompt_n": 8152,
+          "cache_n": 0,
+          "prompt_ms": 944,
+          "thread": "B"
+        },
+        {
+          "wall_s": 0.34,
+          "prompt_n": 516,
+          "cache_n": 7636,
+          "prompt_ms": 115,
+          "thread": "A"
+        },
+        {
+          "wall_s": 1.91,
+          "prompt_n": 516,
+          "cache_n": 7636,
+          "prompt_ms": 110,
+          "thread": "B"
+        },
+        {
+          "wall_s": 0.33,
+          "prompt_n": 516,
+          "cache_n": 7636,
+          "prompt_ms": 117,
+          "thread": "A"
+        },
+        {
+          "wall_s": 0.34,
+          "prompt_n": 516,
+          "cache_n": 7636,
+          "prompt_ms": 113,
+          "thread": "B"
+        }
+      ],
+      "two_concurrent_prompts_of_55pct_ctx": [
+        {
+          "wall_s": 3.72,
+          "prompt_n": 18636,
+          "cache_n": 0,
+          "prompt_ms": 2732
+        },
+        {
+          "wall_s": 5.0,
+          "prompt_n": 18636,
+          "cache_n": 0,
+          "prompt_ms": 2999
+        }
+      ]
+    },
+    {
+      "setting": "1",
+      "total_slots": 1,
+      "alternate_two_8k_histories": [
+        {
+          "wall_s": 1.06,
+          "prompt_n": 8152,
+          "cache_n": 0,
+          "prompt_ms": 992,
+          "thread": "A"
+        },
+        {
+          "wall_s": 1.11,
+          "prompt_n": 8152,
+          "cache_n": 0,
+          "prompt_ms": 966,
+          "thread": "B"
+        },
+        {
+          "wall_s": 0.32,
+          "prompt_n": 516,
+          "cache_n": 7636,
+          "prompt_ms": 110,
+          "thread": "A"
+        },
+        {
+          "wall_s": 0.34,
+          "prompt_n": 516,
+          "cache_n": 7636,
+          "prompt_ms": 117,
+          "thread": "B"
+        },
+        {
+          "wall_s": 0.33,
+          "prompt_n": 516,
+          "cache_n": 7636,
+          "prompt_ms": 115,
+          "thread": "A"
+        },
+        {
+          "wall_s": 0.36,
+          "prompt_n": 516,
+          "cache_n": 7636,
+          "prompt_ms": 120,
+          "thread": "B"
+        }
+      ],
+      "two_concurrent_prompts_of_55pct_ctx": [
+        {
+          "wall_s": 2.39,
+          "prompt_n": 18636,
+          "cache_n": 0,
+          "prompt_ms": 2237
+        },
+        {
+          "wall_s": 4.82,
+          "prompt_n": 18636,
+          "cache_n": 0,
+          "prompt_ms": 2205
+        }
+      ]
+    },
+    {
+      "setting": "2",
+      "total_slots": 2,
+      "alternate_two_8k_histories": [
+        {
+          "wall_s": 1.02,
+          "prompt_n": 8152,
+          "cache_n": 0,
+          "prompt_ms": 927,
+          "thread": "A"
+        },
+        {
+          "wall_s": 1.07,
+          "prompt_n": 8152,
+          "cache_n": 0,
+          "prompt_ms": 931,
+          "thread": "B"
+        },
+        {
+          "wall_s": 0.27,
+          "prompt_n": 516,
+          "cache_n": 7636,
+          "prompt_ms": 108,
+          "thread": "A"
+        },
+        {
+          "wall_s": 0.27,
+          "prompt_n": 516,
+          "cache_n": 7636,
+          "prompt_ms": 112,
+          "thread": "B"
+        },
+        {
+          "wall_s": 0.3,
+          "prompt_n": 516,
+          "cache_n": 7636,
+          "prompt_ms": 116,
+          "thread": "A"
+        },
+        {
+          "wall_s": 0.35,
+          "prompt_n": 516,
+          "cache_n": 7636,
+          "prompt_ms": 121,
+          "thread": "B"
+        }
+      ],
+      "two_concurrent_prompts_of_55pct_ctx": [
+        {
+          "error": "HTTP 400: {\"error\":{\"code\":400,\"message\":\"request (18636 tokens) exceeds the available context size (16384 tokens), try increasing it\",\"type\":\"exceed_context_size_error\",\"n_prompt_tokens\":18636,\"n_ctx\":16384}}"
+        },
+        {
+          "error": "HTTP 400: {\"error\":{\"code\":400,\"message\":\"request (18636 tokens) exceeds the available context size (16384 tokens), try increasing it\",\"type\":\"exceed_context_size_error\",\"n_prompt_tokens\":18636,\"n_ctx\":16384}}"
+        }
+      ]
+    }
+  ]
+}

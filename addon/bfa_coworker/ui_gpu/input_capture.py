@@ -328,7 +328,9 @@ def ensure_running() -> None:
         if window.as_pointer() in _RUNNING:
             continue
         try:
-            with bpy.context.temp_override(window=window, screen=window.screen):
+            # The window alone, never screen=: overriding the screen is refused while any window
+            # shows a temporary screen (Ctrl+Space), so the floating chat never came back (#391).
+            with bpy.context.temp_override(window=window):
                 bpy.ops.bfacw.gpu_input("INVOKE_DEFAULT")
         except (RuntimeError, TypeError):   # window closing / no screen yet: next tick
             pass

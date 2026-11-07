@@ -1,0 +1,112 @@
+{
+ "app": {
+  "version": "5.4.0 Alpha",
+  "online_access": false
+ },
+ "repos_after_restart": [
+  {
+   "name": "extensions.blender.org",
+   "module": "blender_org",
+   "source": "USER",
+   "enabled": true,
+   "use_remote_url": true,
+   "remote_url": "https://extensions.blender.org/api/v1/extensions/",
+   "use_sync_on_startup": true,
+   "directory": "F:\\bfa_coworker_wt\\_scratch\\bundle-380\\res\\extensions\\blender_org"
+  },
+  {
+   "name": "User Default",
+   "module": "user_default",
+   "source": "USER",
+   "enabled": true,
+   "use_remote_url": false,
+   "remote_url": "",
+   "use_sync_on_startup": false,
+   "directory": "F:\\bfa_coworker_wt\\_scratch\\bundle-380\\res\\extensions\\user_default"
+  },
+  {
+   "name": "System",
+   "module": "system",
+   "source": "SYSTEM",
+   "enabled": true,
+   "use_remote_url": false,
+   "remote_url": "",
+   "use_sync_on_startup": false,
+   "directory": "F:\\bfa_coworker_wt\\_scratch\\bundle-380\\sysext\\system"
+  },
+  {
+   "name": "Bforartists Coworker",
+   "module": "BforartistsCoworker",
+   "source": "USER",
+   "enabled": true,
+   "use_remote_url": true,
+   "remote_url": "https://raw.githubusercontent.com/Draise14/bfa_coworker/main/extensions/index.json",
+   "use_sync_on_startup": true,
+   "directory": "F:\\bfa_coworker_wt\\_scratch\\bundle-380\\res\\extensions\\BforartistsCoworker"
+  }
+ ],
+ "copies_listed": [
+  {
+   "module": "bl_ext.BforartistsCoworker.bfa_coworker",
+   "version": [
+    1,
+    1,
+    42
+   ],
+   "file": "F:\\bfa_coworker_wt\\_scratch\\bundle-380\\res\\extensions\\BforartistsCoworker\\bfa_coworker\\__init__.py"
+  },
+  {
+   "module": "bl_ext.system.bfa_coworker",
+   "version": [
+    1,
+    1,
+    41
+   ],
+   "file": "F:\\bfa_coworker_wt\\_scratch\\bundle-380\\sysext\\system\\bfa_coworker\\__init__.py"
+  }
+ ],
+ "startup_with_both_enabled": {
+  "sys": {
+   "enabled_default": true,
+   "loaded": true,
+   "addon_enabled_flag": true,
+   "in_prefs_addons": true,
+   "host": "localhost",
+   "port": 9876,
+   "settings_restored": false
+  },
+  "repo": {
+   "enabled_default": true,
+   "loaded": true,
+   "addon_enabled_flag": true,
+   "in_prefs_addons": true,
+   "host": "localhost",
+   "port": 9876,
+   "settings_restored": false
+  },
+  "class_owner": {
+   "_BFACW_Preferences": null,
+   "BFACW_OT_copy_update_url": "bl_ext.BforartistsCoworker.bfa_coworker"
+  },
+  "registered": {
+   "bl_ext.system.bfa_coworker": "1/44",
+   "bl_ext.BforartistsCoworker.bfa_coworker": "44/44"
+  },
+  "prefs_addons": [
+   "bl_ext.system.bfa_coworker",
+   "bl_ext.BforartistsCoworker.bfa_coworker"
+  ]
+ },
+ "prefs_addons_order": [
+  "bl_ext.system.bfa_coworker",
+  "bl_ext.BforartistsCoworker.bfa_coworker"
+ ],
+ "vendor_after_restart": {
+  "system_vendor_deps_present": false,
+  "home_cache_present": true
+ },
+ "q1.package_uninstall_system_dir": [
+  "FINISHED"
+ ],
+ "q1.system_copy_still_present": false
+}

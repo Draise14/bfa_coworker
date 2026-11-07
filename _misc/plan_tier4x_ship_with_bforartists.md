@@ -1,6 +1,6 @@
 # Tier 4x — Ship Coworker inside Bforartists (built-in copy + update repository, no installer)
 
-**Status**: 📝 For review (2026-10-25, revised the same day). This week's priority, next to
+**Status**: 🚧 In progress (2026-11-07). Bundle 0 spike done (§5); the submodule design is planned (§6). Earlier: 📝 For review (2026-10-25, revised the same day). This week's priority, next to
 the video week. Issue #380. Bundle 0 (spike) done on 2026-11-07: built-in copy route confirmed,
 see §5.
 **Rule**: no PR is merged automatically, in this repo or in Bforartists'. Every PR waits
@@ -68,20 +68,112 @@ Bforartists build.
 **Done when** a built-in 1.1.41 hands over to 1.1.42 from the repository with settings
 kept, and stays updatable afterwards.
 
-### Bundle 2 — Bforartists build step + submodule (M)
-- This repo: `BUNDLING.md` for Bforartists maintainers (pinning, unpacking, the default
-  repository line), and a check that the release zip is the one in `extensions/index.json`.
-- Bforartists repo: the submodule at a tag; a build step that unpacks the pinned
-  `bfa_coworker-<version>.zip` into the System extensions folder; the default
-  repository entry. A **PR to Bforartists for you to review**; nothing merges by itself.
+### Bundle 2 — The submodule in Bforartists (M) · *planned 2026-11-07, see §6*
+A **dist branch** of this repo, submoduled into Bforartists at
+`release/extensions/system/bfa_coworker`; small CMake and C changes in Bforartists.
+A **PR to Bforartists for you to review**; nothing merges by itself.
 **Done when** a fresh Bforartists build has Coworker available offline (off by default),
 and turning it on and then updating reaches the next Coworker release without a new
 Bforartists build.
 
 ### Bundle 3 — Release routine (S)
 Each Coworker release: tag → GitHub release → `extensions/index.json` PR (as today) →
-optionally bump the submodule for Bforartists' next release. Documented in
-`extensions/README.md`.
+`build_addon.py --dist` commits the built add-on to the dist branch → a submodule-bump
+PR in Bforartists for its next release. Documented in `extensions/README.md` and
+`BUNDLING.md`.
+
+## 6. How the submodule works (plan, 2026-11-07)
+
+### 6.1 What we found
+
+| Fact | Where | Consequence |
+|---|---|---|
+| Bforartists already ships five extensions as **git submodules** | `.gitmodules`: `scripts/addons_contrib/space_view3d_pie_menus`, `…_3d_navigation`, `…_copy_attributes`, `io_mesh_stl`, `io_scene_3ds` | Submodules are an accepted pattern there |
+| CMake installs `release/extensions/` into every build | `source/creator/CMakeLists.txt`: `install(DIRECTORY ${CMAKE_SOURCE_DIR}/release/extensions DESTINATION ${TARGETDIR_VER})` | A folder at `release/extensions/system/bfa_coworker` becomes the **System** extension the Bundle 0 spike tested, with no new build step |
+| That install has no `.git` exclude | same rule | A submodule's `.git` file would be copied into the install: add `PATTERN ".git" EXCLUDE` |
+| This repo **tracks every release zip** | `releases/`: 195 MB at 1.1.41, ~26 MB more per release | Submoduling this repo's main branch would pull all of that into every Bforartists clone |
+| The source is **not** what gets installed | the built add-on is 71 MB / 7,368 files; 52 MB of it is `vendor/deps` | Bforartists' build would need pip, network access and our vendoring: too much to ask of it |
+| `vendor/deps` is **Windows-only** today | compiled wheels (`cp312-win_amd64`: pydantic-core, cryptography, pywin32) | A Linux or macOS Bforartists build must not ship them; their deps must also match the Python version of that Bforartists build |
+
+### 6.2 The design: a dist branch, submoduled shallow
+
+This repo stays the development home (why it's separate: a complex add-on with its own
+release pace, tests and vendoring). For Bforartists we publish a **second, slim branch**
+in the same repo, `bforartists-dist`, holding only **what gets installed**:
+
+```
+bforartists-dist @ dist-v1.1.42           (one commit per release, nothing else)
+├── bfa_coworker/                         the built add-on without vendor/deps
+│   ├── blender_manifest.toml             (version 1.1.42)
+│   ├── __init__.py …  vendor/blmcp/      pure Python, plus precompiled .pyc (spike)
+└── deps/
+    ├── windows_x64/                      vendor/deps for Windows (today)
+    ├── linux_x64/                        later, when its vendored build exists
+    └── macos_arm64/                      later
+```
+
+In Bforartists:
+
+```
+.gitmodules
+[submodule "release/extensions/system/bfa_coworker"]
+    path = release/extensions/system/bfa_coworker
+    url = https://github.com/Draise14/bfa_coworker.git
+    branch = bforartists-dist
+    shallow = true                        # only the pinned commit, never the history
+```
+
+- **Shallow and pinned:** the superproject pins one dist commit (a tag `dist-v1.1.42`), so
+  a clone fetches only that tree, about 25 MB compressed, never `releases/` or the history.
+- **CMake (small change):** install `bfa_coworker/` into `extensions/system/bfa_coworker`,
+  and `deps/<this platform>/` into its `vendor/deps`; if this platform has no deps folder,
+  skip Coworker on that platform and say so in the build log. Exclude `.git`.
+- **C (three changes, from the spike):** `add_default_coworker()`, its call in
+  `add_defaults_all()`, and versioning that adds the *Bforartists Coworker* repository
+  (module `BforartistsCoworker`) only when its URL isn't there yet.
+- **Off by default.** It updates through *Get Extensions*, with Coworker's **Enable
+  Updates** hand-over (Bundle 1).
+
+### 6.3 The routine (how it splices in, every release)
+
+```mermaid
+flowchart LR
+    R["Coworker release vX<br/>(tag, GitHub release)"] --> I["index.json PR<br/>(as today: every user updates)"]
+    R --> D["build_addon.py --dist<br/>commits the built add-on to bforartists-dist,<br/>tags dist-vX"]
+    D --> B["PR in Bforartists:<br/>bump the submodule to dist-vX<br/>(opened by our release script or by hand)"]
+    B --> F["Bforartists' next release<br/>ships Coworker vX built in"]
+```
+
+1. **Coworker release** as today (tag, release, `index.json` PR). Users of any Bforartists
+   build get it through *Get Extensions*.
+2. **`build_addon.py --dist`** (new): split the built add-on into `bfa_coworker/` +
+   `deps/windows_x64/`, precompile `.pyc`, commit to `bforartists-dist`, tag `dist-vX`.
+   An idempotent script, so a release can be re-published.
+3. **Bump in Bforartists:** a one-line submodule PR (`git -C release/extensions/system/bfa_coworker
+   fetch --depth 1 origin tag dist-vX && git checkout dist-vX`). **Never auto-merged.**
+   Cadence: whenever Bforartists prepares a release, take the latest Coworker; in between,
+   nobody needs to bump, because updates are async.
+4. **Checks before a bump:** the dist tree's version equals the tag, `deps/<platform>` matches
+   the Bforartists build's Python version, and a CI smoke test enables the System copy
+   headless.
+
+### 6.4 Clean-up in this repo (before the first dist)
+
+- **Stop tracking `releases/*.zip`**: they belong on GitHub releases, which
+  `extensions/index.json` already points at. The history keeps them, but neither the dist
+  branch nor a shallow submodule ever fetches them. `releases/` moves to `.gitignore`.
+- `BUNDLING.md` for Bforartists maintainers: what the submodule is, how to bump it, what the
+  CMake rule does, and how to check a platform.
+
+### 6.5 Risks
+
+| Risk | Mitigation |
+|---|---|
+| Linux / macOS builds have no Coworker deps | CMake skips Coworker on a platform without `deps/<platform>`; per-platform vendoring is its own task |
+| Python version drift (deps are `cp312`) | The bump check compares the dist's ABI tag with the Bforartists build's Python; mismatches block the bump |
+| A 25 MB-per-release dist branch grows | Shallow submodule clones fetch one commit; the branch can be squashed later without breaking pinned tags |
+| `make update` in Bforartists prunes `scripts/addons_contrib` (`prune_stale_files`, inherited from Blender) | We use `release/extensions/system`, which it doesn't touch; check `make update` keeps the submodule |
+| Two copies enabled at once | Bundle 1 enforces a single enabled copy (spike) |
 
 ## 5. Bundle 0 results (spike, 2026-11-07)
 

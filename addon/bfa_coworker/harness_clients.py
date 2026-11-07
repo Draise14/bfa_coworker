@@ -166,6 +166,26 @@ def can_install(client_type: str) -> bool:
 # Writers
 
 
+# Backups of client configs a Store copy changes in place (#390): under the user's
+# home, outside AppData, so they aren't redirected into the package.
+_STORE_BACKUP_DIR = Path.home() / ".cache" / "bfa_coworker" / "harness" / "backups"
+
+
+def _mtime(path: str) -> float | None:
+    try:
+        return os.path.getmtime(path) if path else None
+    except OSError:
+        return None
+
+
+def _backup_outside_appdata(path: Path) -> None:
+    import time
+    folder = _STORE_BACKUP_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    shutil.copy2(str(path), str(folder / "{:s}.{:s}.bak".format(path.name, stamp)))
+
+
 def _write_atomic(path: Path, text: str) -> None:
     if store_paths.is_redirected(path):
         # A Store copy may change an existing file under AppData, but a new one (the
@@ -174,7 +194,19 @@ def _write_atomic(path: Path, text: str) -> None:
         if not path.is_file():
             raise ValueError("the Store version of Bforartists can't create {:s} -- start the app once "
                              "so it makes its settings file, or use Copy Config".format(str(path)))
+        # No temp file and no replace here (both would be new files), so keep the
+        # backup outside AppData, where nothing is redirected.
+        _backup_outside_appdata(path)
+        before = _mtime(store_paths.redirected_copy(path))
         path.write_text(text, encoding="utf-8")
+        # Windows documents that changing an existing AppData file reaches the real
+        # file; if this build put a private copy in the package instead, the client
+        # will never see the change -- say so rather than report success.
+        after = _mtime(store_paths.redirected_copy(path))
+        if after is not None and after != before:
+            raise ValueError("the Store version of Bforartists kept this change in its own copy of {:s}, "
+                             "so the app won't see it -- use Copy Config and paste it into the app's "
+                             "settings instead".format(str(path)))
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_file():

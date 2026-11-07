@@ -2879,6 +2879,12 @@ def _build_mcp_env(
 
     # Build PYTHONPATH from vendor directories.
     vendor_pythonpath = _find_vendor_pythonpath()
+    if vendor_pythonpath:
+        # The MCP server runs outside a Store copy's package: give it the vendor
+        # folders as they really are on disk (#390; a no-op elsewhere).
+        from . import store_paths
+        vendor_pythonpath = os.pathsep.join(
+            store_paths.real_path(p) for p in vendor_pythonpath.split(os.pathsep) if p)
     existing_pp = env.get("PYTHONPATH", "")
     if vendor_pythonpath:
         env["PYTHONPATH"] = vendor_pythonpath + (os.pathsep + existing_pp if existing_pp else "")

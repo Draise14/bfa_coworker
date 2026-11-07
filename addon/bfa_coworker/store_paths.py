@@ -30,6 +30,7 @@ __all__ = (
     "is_redirected",
     "package_family_name",
     "real_path",
+    "redirected_copy",
 )
 
 _APPMODEL_ERROR_NO_PACKAGE = 15700
@@ -104,3 +105,15 @@ def real_path(path: str | os.PathLike[str], family: str | None = None,
     if moved is not None and moved.exists():
         return str(moved)
     return text
+
+
+def redirected_copy(path: str | os.PathLike[str], family: str | None = None,
+                    env: dict[str, str] | None = None) -> str:
+    """Where a Store copy would keep its own copy of *path* ("" when nothing would be
+    redirected), whether or not that copy exists yet."""
+    text = os.fspath(path)
+    family = package_family_name() if family is None else family
+    if not family or not text or not os.path.isabs(text):
+        return ""
+    moved = _redirected(Path(text), family, dict(os.environ) if env is None else env)
+    return str(moved) if moved is not None else ""

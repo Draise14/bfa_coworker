@@ -174,11 +174,47 @@ class TestClientConfig(_Home):
         config = self.roaming / "Claude" / "claude_desktop_config.json"
         config.parent.mkdir()
         config.write_text("{}", encoding="utf-8")
+        backups = Path(self._tmp.name) / "home" / ".cache" / "bfa_coworker" / "harness" / "backups"
         family, environ = self._packaged()
-        with family, environ:
+        with family, environ, mock.patch.object(hc, "_STORE_BACKUP_DIR", backups):
             hc._write_atomic(config, '{"a": 1}')
         self.assertEqual(config.read_text(encoding="utf-8"), '{"a": 1}')
         self.assertFalse(config.with_name(config.name + ".bfacw.tmp").exists())
+        # The old config is kept outside AppData (nothing redirected there).
+        saved = list(backups.glob("claude_desktop_config.json.*.bak"))
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0].read_text(encoding="utf-8"), "{}")
+
+    def test_change_that_lands_in_the_package_copy_is_reported(self):
+        config = self.roaming / "Claude" / "claude_desktop_config.json"
+        config.parent.mkdir()
+        config.write_text("{}", encoding="utf-8")
+        private = self.cache / "Roaming" / "Claude" / "claude_desktop_config.json"
+        backups = Path(self._tmp.name) / "backups"
+        real_write = Path.write_text
+
+        def _write_into_package(path, text, *args, **kwargs):
+            # As if this Windows build copied the edited file into the package.
+            private.parent.mkdir(parents=True, exist_ok=True)
+            return real_write(private, text, *args, **kwargs)
+
+        family, environ = self._packaged()
+        with family, environ, mock.patch.object(hc, "_STORE_BACKUP_DIR", backups), \
+                mock.patch.object(Path, "write_text", _write_into_package), \
+                self.assertRaises(ValueError) as caught:
+            hc._write_atomic(config, '{"a": 1}')
+        self.assertIn("Copy Config", str(caught.exception))
+        self.assertEqual(config.read_text(encoding="utf-8"), "{}")
+
+    def test_mcp_server_gets_real_vendor_folders(self):
+        addon_vendor = self.roaming / "Bforartists" / "extensions" / "bfa_coworker" / "vendor"
+        moved = self.cache / "Roaming" / "Bforartists" / "extensions" / "bfa_coworker" / "vendor"
+        moved.mkdir(parents=True)
+        family, environ = self._packaged()
+        with family, environ, mock.patch.object(ac, "_find_vendor_pythonpath",
+                                                 return_value=str(addon_vendor)):
+            env = ac._build_mcp_env()
+        self.assertEqual(env["PYTHONPATH"].split(os.pathsep)[0], str(moved))
 
     def test_new_config_refused_with_a_reason(self):
         config = self.roaming / "Claude" / "claude_desktop_config.json"

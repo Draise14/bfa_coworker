@@ -1,0 +1,189 @@
+{
+  "version": "5.4.0 Alpha",
+  "undo_steps_pref": 32,
+  "bridge_port": 19876,
+  "thread_stamp": {
+    "status": "ok"
+  },
+  "bridge_overhead": {
+    "n": 20,
+    "median_ms": 50.9,
+    "max_ms": 54.9
+  },
+  "serialization": {
+    "calls": 12,
+    "sleep_per_call_s": 0.05,
+    "wall_s": 0.693,
+    "ideal_serial_s": 0.6,
+    "overlapping_pairs": 0,
+    "max_in_flight": 1,
+    "all_main_thread": true,
+    "all_via_timer": true,
+    "execution_order": "ABABABABABAB",
+    "latency_s": {
+      "min": 0.101,
+      "max": 0.151,
+      "mean": 0.111
+    },
+    "statuses": [
+      "ok"
+    ]
+  },
+  "serialization_long": {
+    "calls": 8,
+    "sleep_per_call_s": 0.3,
+    "wall_s": 2.433,
+    "ideal_serial_s": 2.4,
+    "overlapping_pairs": 0,
+    "max_in_flight": 1,
+    "all_main_thread": true,
+    "all_via_timer": true,
+    "execution_order": "ABABABAB",
+    "latency_s": {
+      "min": 0.306,
+      "max": 0.609,
+      "mean": 0.571
+    },
+    "statuses": [
+      "ok"
+    ]
+  },
+  "undo": {
+    "push_statuses": [
+      "ok",
+      "ok",
+      "ok",
+      "ok",
+      "ok",
+      "ok"
+    ],
+    "push_errors": [],
+    "apostrophe_label_push": [
+      "error",
+      "Traceback (most recent call last):\n  File \"F:\\bfa_coworker_wt\\threads-356\\addon\\bfa_coworker\\mcp_to_blender_server.py\", line 943, in _execute_code\n    exec(code"
+    ],
+    "after_interleave": {
+      "steps": [
+        "Original",
+        "Coworker (3D): before turn",
+        "Coworker (Node): before turn",
+        "Coworker (3D): add cube",
+        "Coworker (Node): add tree",
+        "Coworker (3D): add light",
+        "Coworker (Node): add group"
+      ],
+      "active_index": 6,
+      "active": "Coworker (Node): add group",
+      "objects": [
+        "A_Cube",
+        "A_Light",
+        "B_Group",
+        "B_Tree"
+      ]
+    },
+    "one_step_undo_status": "ok",
+    "after_one_step_undo_by_A": {
+      "steps": [
+        "Original",
+        "Coworker (3D): before turn",
+        "Coworker (Node): before turn",
+        "Coworker (3D): add cube",
+        "Coworker (Node): add tree",
+        "Coworker (3D): add light",
+        "Coworker (Node): add group"
+      ],
+      "active_index": 5,
+      "active": "Coworker (3D): add light",
+      "objects": [
+        "A_Cube",
+        "A_Light",
+        "B_Tree"
+      ]
+    },
+    "after_redo": {
+      "steps": [
+        "Original",
+        "Coworker (3D): before turn",
+        "Coworker (Node): before turn",
+        "Coworker (3D): add cube",
+        "Coworker (Node): add tree",
+        "Coworker (3D): add light",
+        "Coworker (Node): add group"
+      ],
+      "active_index": 6,
+      "active": "Coworker (Node): add group",
+      "objects": [
+        "A_Cube",
+        "A_Light",
+        "B_Group",
+        "B_Tree"
+      ]
+    },
+    "revert_A_to_item": 1,
+    "revert_A_status": [
+      "ok",
+      {
+        "ok": true
+      }
+    ],
+    "after_revert_A": {
+      "steps": [
+        "Original",
+        "Coworker (3D): before turn",
+        "Coworker (Node): before turn",
+        "Coworker (3D): add cube",
+        "Coworker (Node): add tree",
+        "Coworker (3D): add light",
+        "Coworker (Node): add group"
+      ],
+      "active_index": 1,
+      "active": "Coworker (3D): before turn",
+      "objects": []
+    },
+    "after_new_push": {
+      "steps": [
+        "Original",
+        "Coworker (3D): before turn",
+        "Coworker (3D): after revert"
+      ],
+      "active_index": 2,
+      "active": "Coworker (3D): after revert",
+      "objects": [
+        "A_After"
+      ]
+    }
+  },
+  "turn_checkpoint": {
+    "turn_after_A_start": {
+      "before": true,
+      "after": false,
+      "edits": 0,
+      "name": "Before Coworker (3D)'s turn (1)",
+      "n": 1
+    },
+    "turn_after_B_start": {
+      "before": true,
+      "after": false,
+      "edits": 0,
+      "name": "Before Coworker (3D)'s turn (1)",
+      "n": 1
+    },
+    "turn_after_both_finish": {
+      "before": false,
+      "after": true,
+      "edits": 57,
+      "name": "Before Coworker (3D)'s turn (1)",
+      "n": 1
+    },
+    "steps_tail": [
+      "Original",
+      "Coworker (3D): before turn",
+      "Coworker (3D): after revert",
+      "Before Coworker (3D)'s turn (1)",
+      "Coworker (3D)'s turn"
+    ],
+    "can_revert": {
+      "v": false
+    }
+  }
+}

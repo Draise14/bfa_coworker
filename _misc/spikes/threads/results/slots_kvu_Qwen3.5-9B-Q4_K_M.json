@@ -1,0 +1,63 @@
+{
+  "model": "Qwen3.5-9B-Q4_K_M.gguf",
+  "ctx_size": 32768,
+  "settings": [
+    {
+      "setting": "3+kvu",
+      "total_slots": 3,
+      "props_n_ctx": 32768,
+      "slot_n_ctx": [
+        32768,
+        32768,
+        32768
+      ],
+      "decode": {
+        "1": {
+          "per_request_tok_s": [
+            106.1
+          ],
+          "total_tok_s": 106.1,
+          "wall_s": 2.95,
+          "errors": []
+        },
+        "2": {
+          "per_request_tok_s": [
+            91.6,
+            91.6
+          ],
+          "total_tok_s": 183.2,
+          "wall_s": 3.38,
+          "errors": []
+        },
+        "3": {
+          "per_request_tok_s": [
+            85.2,
+            85.2,
+            85.2
+          ],
+          "total_tok_s": 255.6,
+          "wall_s": 3.84,
+          "errors": []
+        }
+      },
+      "prompt_over_ctx_div_n": {
+        "approx_prompt_tokens": 12922,
+        "ok": true,
+        "error": ""
+      },
+      "prompt_near_slot_ctx": {
+        "approx_prompt_tokens": 26214,
+        "ok": true,
+        "error": ""
+      },
+      "quiz_solo": {
+        "score": 16,
+        "of": 16
+      },
+      "quiz_parallel": {
+        "score": 16,
+        "of": 16
+      }
+    }
+  ]
+}

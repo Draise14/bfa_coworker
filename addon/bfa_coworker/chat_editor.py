@@ -713,18 +713,19 @@ def _router(context: Any, event: Any) -> tuple[ChatSurface, Any, Any] | None:
 
 def _window_override(region: Any = None) -> dict:
     """The window (and area) *region* is in, so an action from a floating window
-    happens there, not in the main one."""
+    happens there, not in the main one.  No screen: the window brings its own, and
+    overriding the screen fails while a window is maximized (#391)."""
     wm = bpy.context.window_manager
     if region is not None:
         try:
             for window in wm.windows:
                 for area in window.screen.areas:
                     if any(r == region for r in area.regions):
-                        return {"window": window, "screen": window.screen, "area": area, "region": region}
+                        return {"window": window, "area": area, "region": region}
         except ReferenceError:
             pass
     window = bpy.context.window or (wm.windows[0] if wm.windows else None)
-    return {"window": window, "screen": window.screen} if window is not None else {}
+    return {"window": window} if window is not None else {}
 
 
 def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None) -> None:

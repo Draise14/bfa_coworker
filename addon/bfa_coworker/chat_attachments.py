@@ -190,7 +190,6 @@ def capture_render_from_view() -> str | None:
             window, area = max(found, key=lambda wa: wa[1].width * wa[1].height)
     if area is None:
         return None
-    screen = window.screen
     region = next((r for r in area.regions if r.type == "WINDOW"), None)
     spaces = getattr(area, "spaces", None)
     space = spaces[0] if spaces else None
@@ -207,7 +206,7 @@ def capture_render_from_view() -> str | None:
         scene.collection.objects.link(cam_obj)
         scene.camera = cam_obj
         _copy_view_lens(cam_data, space)
-        with bpy.context.temp_override(window=window, screen=screen,
+        with bpy.context.temp_override(window=window,
                                        area=area, region=region,
                                        space_data=space, region_3d=region_3d):
             try:
@@ -249,7 +248,7 @@ def capture_render_from_camera() -> str | None:
     window = bpy.context.window or (wm.windows[0] if wm.windows else None)
     saved_settings = _clamp_render_settings(scene)
     try:
-        with bpy.context.temp_override(window=window, screen=getattr(window, "screen", None)):
+        with bpy.context.temp_override(window=window):
             bpy.ops.render.render()
         return _save_render_result(bpy.data.images.get("Render Result"))
     except (AttributeError, RuntimeError, OSError, ValueError):
@@ -388,7 +387,7 @@ def capture_screen_rect(window, x0: int, y0: int, x1: int, y1: int) -> str | Non
         return None
     path = _unique_path(attachments_dir(), "screen")
     try:
-        with bpy.context.temp_override(window=window, screen=window.screen):
+        with bpy.context.temp_override(window=window):
             bpy.ops.screen.screenshot(filepath=str(path))
     except RuntimeError:
         return None

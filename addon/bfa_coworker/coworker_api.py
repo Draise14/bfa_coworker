@@ -149,7 +149,7 @@ def _undo(push_message: str = "", to_item: int = -1) -> bool:
     if window is None:
         return False
     try:
-        with bpy.context.temp_override(window=window, screen=window.screen):
+        with bpy.context.temp_override(window=window):
             if push_message:
                 bpy.ops.ed.undo_push(message=push_message)
             elif to_item >= 0:

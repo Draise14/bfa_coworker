@@ -721,10 +721,13 @@ class TestMainConfiguration(unittest.TestCase):
             mcp_instance.settings.transport_security,
             FakeTransportSecuritySettings,
         )
-        self.assertEqual(
-            mcp_instance.settings.transport_security.kwargs,
-            {"enable_dns_rebinding_protection": False},
-        )
+        # Security 1 (#345): Host / Origin checks on, loopback on the bound port.
+        security = mcp_instance.settings.transport_security.kwargs
+        self.assertIs(security["enable_dns_rebinding_protection"], True)
+        self.assertIn("127.0.0.1:8123", security["allowed_hosts"])
+        self.assertIn("localhost:8123", security["allowed_hosts"])
+        self.assertIn("http://127.0.0.1:*", security["allowed_origins"])
+        self.assertNotIn("*", security["allowed_origins"])
         mcp_instance.run.assert_called_once_with(transport="streamable-http")
 
         app = mcp_instance.streamable_http_app()
@@ -735,7 +738,8 @@ class TestMainConfiguration(unittest.TestCase):
                 (
                     FakeCORSMiddleware,
                     {
-                        "allow_origins": ["*"],
+                        "allow_origins": [],
+                        "allow_origin_regex": r"https?://(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?",
                         "allow_methods": ["*"],
                         "allow_headers": ["*"],
                     },

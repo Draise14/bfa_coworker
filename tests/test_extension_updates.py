@@ -36,6 +36,7 @@ import threading
 import types
 import unittest
 import zipfile
+from unittest import mock
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
@@ -163,13 +164,13 @@ class _Prop:
 
 
 class _FakePrefs:
-    """Mimics AddonPreferences: attribute reads, item writes bypass 'update'."""
+    """Mimics AddonPreferences on Blender 5.x: setting an attribute runs its update
+    callback; item writes no longer reach the settings (#396)."""
 
-    def __init__(self, props, values):
-        self.bl_rna = types.SimpleNamespace(properties=props)
-        self._props = {p.identifier: p for p in props}
-        self._values = dict(values)
-        self.update_calls = []
+    def __init__(self, props, values, updates=None):
+        self.__dict__.update(bl_rna=types.SimpleNamespace(properties=props),
+                             _props={p.identifier: p for p in props}, _values=dict(values),
+                             _updates=dict(updates or {}), update_calls=[])
 
     def __getattr__(self, name):
         values = self.__dict__.get("_values", {})
@@ -177,11 +178,22 @@ class _FakePrefs:
             return values[name]
         raise AttributeError(name)
 
-    def __setitem__(self, key, value):
+    def __setattr__(self, key, value):
         prop = self._props[key]
-        if prop.type == "ENUM":
-            value = next(i.identifier for i in prop.enum_items if i.value == value)
+        if prop.type == "ENUM" and value not in {i.identifier for i in prop.enum_items}:
+            raise TypeError("enum {!r} not found".format(value))
         self._values[key] = value
+        if key in self._updates:
+            self.update_calls.append(key)
+            self._updates[key](self)
+
+    def __setitem__(self, key, value):
+        raise TypeError("bpy_struct[key] = val: id properties not supported for this type")
+
+
+def _fill_from_preset(prefs):
+    """Like _update_model_preset: picking a preset overwrites the context size."""
+    prefs.local_ctx_size = 4096
 
 
 def _coworker_prefs(**values):
@@ -193,14 +205,15 @@ def _coworker_prefs(**values):
         _Prop("timer_interval_active", "FLOAT"),
         _Prop("agent_autostart", "BOOLEAN"),
         _Prop("operating_mode", "ENUM", items=("LOCAL_LLM", "REMOTE_API", "EXTERNAL_HARNESS")),
+        _Prop("model_preset", "ENUM", items=("small", "mid")),
         _Prop("show_advanced", "BOOLEAN"),
         _Prop("model_preset_info", "STRING", readonly=True),
     ]
     base = dict(settings_restored=False, remote_api_key="", local_ctx_size=16384,
                 timer_interval_active=0.1, agent_autostart=False, operating_mode="LOCAL_LLM",
-                show_advanced=False, model_preset_info="")
+                model_preset="small", show_advanced=False, model_preset_info="")
     base.update(values)
-    return _FakePrefs(props, base)
+    return _FakePrefs(props, base, updates={"model_preset": _fill_from_preset})
 
 
 class TestSettingsTransfer(unittest.TestCase):
@@ -219,10 +232,28 @@ class TestSettingsTransfer(unittest.TestCase):
         new = _coworker_prefs()
         applied = self.st.restore_once(new, self.dir)
         self.assertEqual(set(applied), {"remote_api_key", "local_ctx_size", "operating_mode",
-                                        "agent_autostart", "timer_interval_active"})
+                                        "agent_autostart", "timer_interval_active", "model_preset"})
         self.assertEqual((new.remote_api_key, new.local_ctx_size, new.operating_mode),
                          ("sk-123", 32768, "REMOTE_API"))
         self.assertTrue(new.settings_restored)
+
+    def test_a_preset_does_not_overwrite_the_saved_fields_it_fills(self):
+        # The backup lists the context size BEFORE the preset; the preset's callback
+        # would reset it, so the preset is restored first (#396).
+        new = _coworker_prefs()
+        applied = self.st.apply(new, {"local_ctx_size": 65536, "model_preset": "mid"})
+        self.assertEqual(applied, ["model_preset", "local_ctx_size"])
+        self.assertEqual((new.model_preset, new.local_ctx_size), ("mid", 65536))
+        self.assertEqual(new.update_calls, ["model_preset"])
+
+    def test_a_setting_that_fails_is_reported(self):
+        def refuse(_prefs):
+            raise TypeError("read-only")
+        new = _coworker_prefs()
+        new._updates["agent_autostart"] = refuse
+        with mock.patch("builtins.print") as out:
+            self.assertEqual(self.st.apply(new, {"agent_autostart": True}), [])
+        self.assertIn("agent_autostart", out.call_args[0][0])
 
     def test_ui_toggles_readonly_and_bookkeeping_are_not_carried(self):
         data = self.st.dump(_coworker_prefs(show_advanced=True, model_preset_info="x"))

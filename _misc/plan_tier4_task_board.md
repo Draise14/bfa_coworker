@@ -259,7 +259,7 @@ undo steps interleave. Missions and agent teams (Tier 5) are built on threads.
 
 | ☐ | Task | Ref | What | Needs | Size | Done when | PR |
 |---|---|---|---|---|---|---|---|
-| ☐ | **Threads 0** (#356): Spike | 4o §5 | Measure: llama-server slots, two ACP sessions at once, interleaved tool calls + undo, the per-thread state list | — | S | Numbers in 4o §6; state list frozen | |
+| ✅ | **Threads 0** (#356): Spike | 4o §5 | Measure: llama-server slots, two ACP sessions at once, interleaved tool calls + undo, the per-thread state list | — | S | Numbers in 4o §6; state list frozen | Done 2026-11-07: 4o §6–7 |
 | ☐ | **Threads 1** (#357): The thread model | 4o §5 | bpy-free `threads.py` (Thread, ThreadRegistry); today's globals move behind it; thread id on MCP calls; per-thread plan / ask_user / digest / domains on the server | Threads 0 | M→L | One thread behaves exactly like today; two fake-engine threads keep separate history, Queue, Stop | |
 | ☐ | **Threads 2** (#358): Each editor has its own thread | 4o §2.1 | Sidebar shows its editor's thread; header (New thread here, Switch…, Open in Coworker editor); right-click operators start in their editor's thread; thread list in the Coworker editor; saved per .blend | Threads 1 | M | A 3D and a node question become two chats; the .blend restores both | |
 | ☐ | **Threads 3** (#359): Side by side, safely | 4o §3 | Runner (cap, fair model queue, Local slots option, ACP session per thread, Remote back-off); claims + conflict asking; undo names per thread + honest Revert; Stop all; "other threads" context line | Threads 1, 2 | L | **Test 7**: 3D build + node tidy + strip translation at once; Stop one; a conflict asks; Revert never silently undoes another thread | |

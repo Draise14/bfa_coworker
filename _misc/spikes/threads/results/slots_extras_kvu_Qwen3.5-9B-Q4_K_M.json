@@ -1,0 +1,68 @@
+{
+  "model": "Qwen3.5-9B-Q4_K_M.gguf",
+  "ctx_size": 32768,
+  "extras": [
+    {
+      "setting": "3+kvu",
+      "total_slots": 3,
+      "alternate_two_8k_histories": [
+        {
+          "wall_s": 1.2,
+          "prompt_n": 8152,
+          "cache_n": 0,
+          "prompt_ms": 1096,
+          "thread": "A"
+        },
+        {
+          "wall_s": 1.24,
+          "prompt_n": 8152,
+          "cache_n": 0,
+          "prompt_ms": 1075,
+          "thread": "B"
+        },
+        {
+          "wall_s": 0.36,
+          "prompt_n": 516,
+          "cache_n": 7636,
+          "prompt_ms": 118,
+          "thread": "A"
+        },
+        {
+          "wall_s": 2.04,
+          "prompt_n": 516,
+          "cache_n": 7636,
+          "prompt_ms": 113,
+          "thread": "B"
+        },
+        {
+          "wall_s": 0.34,
+          "prompt_n": 516,
+          "cache_n": 7636,
+          "prompt_ms": 120,
+          "thread": "A"
+        },
+        {
+          "wall_s": 0.37,
+          "prompt_n": 516,
+          "cache_n": 7636,
+          "prompt_ms": 125,
+          "thread": "B"
+        }
+      ],
+      "two_concurrent_prompts_of_55pct_ctx": [
+        {
+          "wall_s": 5.55,
+          "prompt_n": 18636,
+          "cache_n": 0,
+          "prompt_ms": 3301
+        },
+        {
+          "wall_s": 4.13,
+          "prompt_n": 18636,
+          "cache_n": 0,
+          "prompt_ms": 3073
+        }
+      ]
+    }
+  ]
+}

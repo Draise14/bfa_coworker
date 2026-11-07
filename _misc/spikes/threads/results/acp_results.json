@@ -1,0 +1,110 @@
+{
+  "claude_code": {
+    "argv": [
+      "C:\\Program Files\\nodejs\\node.EXE",
+      "C:\\Users\\USER\\AppData\\Roaming\\npm\\node_modules\\@agentclientprotocol\\claude-agent-acp\\dist\\index.js"
+    ],
+    "agent": "@agentclientprotocol/claude-agent-acp 0.94.0",
+    "load_session": true,
+    "two_sessions": true,
+    "model": [
+      "haiku",
+      "haiku"
+    ],
+    "warmup": {
+      "stop_reason": "end_turn",
+      "wall_s": 1.59
+    },
+    "solo_prompt": {
+      "stop_reason": "end_turn",
+      "wall_s": 1.61
+    },
+    "concurrent": {
+      "results": [
+        {
+          "stop_reason": "end_turn",
+          "wall_s": 1.38
+        },
+        {
+          "stop_reason": "end_turn",
+          "wall_s": 1.82
+        }
+      ],
+      "chunk_spans_s": [
+        [
+          1.1,
+          1.36,
+          3
+        ],
+        [
+          1.54,
+          1.8,
+          4
+        ]
+      ],
+      "streams_overlap": false,
+      "cancelled_at_s": null
+    },
+    "solo_long": {
+      "stop_reason": "end_turn",
+      "wall_s": 2.01
+    },
+    "concurrent_long": {
+      "results": [
+        {
+          "stop_reason": "end_turn",
+          "wall_s": 2.93
+        },
+        {
+          "stop_reason": "end_turn",
+          "wall_s": 2.18
+        }
+      ],
+      "chunk_spans_s": [
+        [
+          1.42,
+          2.91,
+          59
+        ],
+        [
+          1.09,
+          2.16,
+          54
+        ]
+      ],
+      "streams_overlap": true,
+      "cancelled_at_s": null
+    },
+    "cancel_one": {
+      "results": [
+        {
+          "stop_reason": "cancelled",
+          "wall_s": 2.02
+        },
+        {
+          "stop_reason": "end_turn",
+          "wall_s": 2.83
+        }
+      ],
+      "chunk_spans_s": [
+        [
+          2.02,
+          2.02,
+          1
+        ],
+        [
+          1.69,
+          2.8,
+          55
+        ]
+      ],
+      "streams_overlap": true,
+      "cancelled_at_s": 2.02
+    },
+    "updates_without_session_id": 0,
+    "process_alive_after": true
+  },
+  "opencode": {
+    "skipped": "OpenCode not installed (no `opencode` on PATH)"
+  }
+}

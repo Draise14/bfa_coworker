@@ -263,11 +263,19 @@ def _on_bake_cancel(*_args: Any) -> None:
     long_jobs.cancelled("OBJECT_BAKE")
 
 
+def _on_load_pre(*_args: Any) -> None:
+    # A file load stops Blender's render / bake jobs; end ours without restoring
+    # settings onto the old file's data.
+    from . import long_jobs
+    long_jobs.file_loading()
+
+
 def _handlers() -> list[tuple[Any, Any]]:
     import bpy  # pylint: disable=import-error
     h = bpy.app.handlers
     return [(h.depsgraph_update_post, _count_edit), (h.render_stats, _on_render_stats),
-            (h.render_cancel, _on_render_cancel), (h.object_bake_cancel, _on_bake_cancel)]
+            (h.render_cancel, _on_render_cancel), (h.object_bake_cancel, _on_bake_cancel),
+            (h.load_pre, _on_load_pre)]
 
 
 def register() -> None:

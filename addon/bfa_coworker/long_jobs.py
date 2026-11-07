@@ -29,6 +29,15 @@ Progress (probed in the Bforartists 5.3 source):
 * Cancel: there is no Python call that stops a render or bake job (only Esc
   and the job bar's X, which set ``G.is_break``).  The ``render_cancel`` and
   ``object_bake_cancel`` handlers tell us when it happened (:func:`cancelled`).
+  They may fire on the job's thread, so :func:`cancelled` only *marks* the job;
+  :func:`poll` (the bridge timer, on the main thread) ends it and runs its
+  ``on_finish``, which touches scene settings.
+* Loading a file ends the running jobs (:func:`file_loading`, from ``load_pre``)
+  without their ``on_finish``: it would restore settings on the old file's
+  freed data.
+
+Job ids carry a random per-process part (``job-3fa9c1-2``), so an id from an
+earlier session (a resumed agent, an old message) never names a new job.
 
 Deliberately free of ``bpy`` so it can be unit-tested outside Blender.
 """
@@ -40,6 +49,7 @@ __all__ = (
     "call_wait_seconds",
     "cancelled",
     "clear",
+    "file_loading",
     "has_running",
     "is_status_poll",
     "note_progress",
@@ -55,6 +65,7 @@ __all__ = (
 
 import itertools
 import re
+import secrets
 import threading
 import time
 import traceback
@@ -82,6 +93,8 @@ _clock: Callable[[], float] = time.monotonic
 
 _lock = threading.Lock()
 _ids = itertools.count(1)
+# Random per process: ids from an earlier session never match a new job.
+_ID_PREFIX = secrets.token_hex(3)
 _jobs: dict[str, dict[str, Any]] = {}
 
 
@@ -91,7 +104,10 @@ def is_status_poll(tool_name: str) -> bool:
 
 # get_job_status waits this long by default and at most (the bridge holds the
 # answer; ``get_job_status_toolcode._WAIT_MAX``, under the MCP socket's 300 s).
-_POLL_WAIT_DEFAULT = 60.0
+# The default stays well under the ~60 s per-call timeout some outside MCP
+# clients (External Agent / Harness) use; our own loop asks for longer waits
+# and slices them (:func:`wait_in_slices`).
+_POLL_WAIT_DEFAULT = 25.0
 _POLL_WAIT_MAX = 240.0
 
 
@@ -164,12 +180,13 @@ def start(kind: str, label: str, check_fn: Callable[[], dict[str, Any] | None],
     runs once when the job ends however it ends (restore settings, drop handlers).
     """
     now = _clock()
-    job_id = "job{:d}".format(next(_ids))
+    job_id = "job-{:s}-{:d}".format(_ID_PREFIX, next(_ids))
     with _lock:
         _jobs[job_id] = {
             "id": job_id, "kind": str(kind), "label": str(label) or str(kind).lower(),
             "state": "running", "started": now, "ended": 0.0, "deadline": now + float(timeout),
             "progress": None, "progress_text": "", "result": None, "message": "",
+            "cancel_requested": "",
             "check_fn": check_fn, "on_finish": on_finish,
         }
         _prune()
@@ -204,6 +221,10 @@ def poll() -> bool:
         jobs = [j for j in _jobs.values() if j["state"] == "running"]
     ended = False
     for job in jobs:
+        if job.get("cancel_requested"):
+            _end(job, "cancelled", message=job["cancel_requested"])
+            ended = True
+            continue
         if _clock() > job["deadline"]:
             _end(job, "error", message=(
                 "No result after {:d} minutes, so Coworker stopped waiting; Blender may still be "
@@ -242,11 +263,28 @@ def note_progress(kind: str, text: str) -> None:
 
 
 def cancelled(kind: str) -> None:
-    """Blender cancelled its job of *kind* (Esc or the job bar's X)."""
+    """Blender cancelled its job of *kind* (Esc or the job bar's X).
+
+    May be called from the job's own thread, so it only marks the jobs; the next
+    :func:`poll` on the main thread ends them and runs their ``on_finish``."""
     with _lock:
-        jobs = [j for j in _jobs.values() if j["state"] == "running" and j["kind"] == kind]
+        for job in _jobs.values():
+            if job["state"] == "running" and job["kind"] == kind and not job["cancel_requested"]:
+                job["cancel_requested"] = "Cancelled in Blender before it finished."
+
+
+def file_loading() -> None:
+    """A file is being loaded (``load_pre``): end the running jobs as cancelled,
+    without their ``on_finish`` -- it would restore settings on the old file's
+    data, which is about to be freed."""
+    with _lock:
+        jobs = [j for j in _jobs.values() if j["state"] == "running"]
+        for job in jobs:
+            job["on_finish"] = None
     for job in jobs:
-        _end(job, "cancelled", message="Cancelled in Blender before it finished.")
+        _end(job, "cancelled", message=(
+            "Cancelled because another file was loaded; Blender stops a render or bake "
+            "when the file changes."))
 
 
 def has_running() -> bool:

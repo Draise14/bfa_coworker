@@ -112,9 +112,46 @@ class TestRegistry(_JobsTest):
         bake = jobs.start("OBJECT_BAKE", "bake", lambda: None, on_finish=lambda: finished.append("bake"))
         render = jobs.start("RENDER", "render", lambda: None)
         jobs.cancelled("OBJECT_BAKE")
+        # The handler may run on the job's thread: it only marks the job ...
+        self.assertEqual(jobs.status(bake)["state"], "running")
+        self.assertEqual(finished, [])
+        # ... and the next poll (the bridge timer, main thread) ends it and restores.
+        self.assertTrue(jobs.poll())
         self.assertEqual(jobs.status(bake)["state"], "cancelled")
         self.assertEqual(jobs.status(render)["state"], "running")   # only that kind
         self.assertEqual(finished, ["bake"])
+
+    def test_cancel_from_another_thread_restores_on_the_polling_thread(self):
+        import threading
+        ran_on = []
+        jobs.start("RENDER", "render", lambda: None, on_finish=lambda: ran_on.append(threading.get_ident()))
+        worker = threading.Thread(target=jobs.cancelled, args=("RENDER",))
+        worker.start()
+        worker.join()
+        self.assertEqual(ran_on, [])
+        jobs.poll()
+        self.assertEqual(ran_on, [threading.get_ident()])
+
+    def test_file_load_ends_jobs_without_restoring(self):
+        finished = []
+        job_id = jobs.start("OBJECT_BAKE", "bake", lambda: None, on_finish=lambda: finished.append(1))
+        jobs.file_loading()
+        st = jobs.status(job_id)
+        self.assertEqual(st["state"], "cancelled")
+        self.assertIn("another file was loaded", st["message"])
+        self.assertEqual(finished, [])             # no restore onto the old file's data
+        jobs.poll()
+        self.assertEqual(finished, [])
+
+    def test_job_ids_differ_between_sessions(self):
+        first = jobs.start("RENDER", "r", lambda: None)
+        self.assertRegex(first, r"^job-[0-9a-f]{6}-\d+$")
+        old_prefix = jobs._ID_PREFIX
+        jobs._ID_PREFIX = "0a0a0a"              # as if Blender restarted
+        try:
+            self.assertEqual(jobs.status(first.replace(old_prefix, "0a0a0a"))["state"], "unknown")
+        finally:
+            jobs._ID_PREFIX = old_prefix
 
     def test_timeout(self):
         finished = []
@@ -197,7 +234,7 @@ class TestLoopHelpers(_JobsTest):
         self.assertFalse(jobs.poll_is_waiting("render_viewport_to_path", running))
 
     def test_call_wait_seconds(self):
-        self.assertEqual(jobs.call_wait_seconds("get_job_status", {"job_id": "j"}), 60.0)
+        self.assertEqual(jobs.call_wait_seconds("get_job_status", {"job_id": "j"}), 25.0)
         self.assertEqual(jobs.call_wait_seconds("get_job_status", {"wait_seconds": 9999}), 240.0)
         self.assertEqual(jobs.call_wait_seconds("get_job_status", {"wait_seconds": "x"}), 0.0)
         self.assertEqual(jobs.call_wait_seconds("get_job_status", {"wait_seconds": -5}), 0.0)

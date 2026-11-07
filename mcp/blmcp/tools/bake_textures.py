@@ -25,7 +25,8 @@ def register(mcp: FastMCP) -> None:
         annotations=ToolAnnotations(
             title="Bake Textures",
             readOnlyHint=False,
-            destructiveHint=False,
+            # It overwrites the target images' pixels outside the turn's undo step.
+            destructiveHint=True,
         )
     )
     def bake_textures(
@@ -41,6 +42,10 @@ def register(mcp: FastMCP) -> None:
         says what to add when one is missing. The engine is switched to Cycles for the
         bake and back afterwards; the scene's Bake settings (passes, samples) apply.
         Wait for the result with ``get_job_status(job_id)``.
+
+        The bake **overwrites the pixels of the target images**, and Revert / Undo
+        can't bring them back (the bake runs outside the turn's undo step): bake into
+        new images, or save the old ones first, when they matter.
 
         Args:
             bake_type: COMBINED, DIFFUSE, GLOSSY, TRANSMISSION, ROUGHNESS, EMIT, NORMAL,

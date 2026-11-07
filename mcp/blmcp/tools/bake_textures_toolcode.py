@@ -138,7 +138,8 @@ def main(params: Params) -> Any:
     image_names = [img.name for img in images]
     object_names = [ob.name for ob in objects]
     done_message = ("Baked {:s} into {:s}. The images are in memory: save them (image.save() after setting "
-                    "filepath_raw, or pack them) to keep them.".format(bake_type, ", ".join(image_names)))
+                    "filepath_raw, or pack them) to keep them. Undo / Revert can't bring back the old pixels.".format(
+                        bake_type, ", ".join(image_names)))
     if not use_job:
         restore()
         return Result(status="ok", message=done_message, objects=object_names, images=image_names)

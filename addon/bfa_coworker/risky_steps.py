@@ -53,6 +53,14 @@ _RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 
+# Tools whose effect is risky whatever their code says (their toolcode skips the
+# code scan above): asked about like a risky step in Strict and Permissive.
+_TOOL_RISKS: dict[str, str] = {
+    # Overwrites image pixels outside the turn's undo step (Tools 6, #309).
+    "bake_textures": "overwrite the target images' pixels (Undo can't bring them back)",
+}
+
+
 def reason(code: str) -> str:
     """What makes *code* risky, in plain words ("" when it isn't)."""
     if not code or _SKIP_MARK in code:
@@ -68,7 +76,7 @@ def ask_kind(tool: str, code: str, approval: str, engine: str) -> tuple[str, str
     External Agent asks through its own permission card, a Harness client per tool itself)."""
     if approval == "AUTO":
         return "", ""
-    why = reason(code)
+    why = reason(code) or _TOOL_RISKS.get(str(tool or ""), "")
     if why:
         return "risky:" + why, why
     if approval == "ASK" and engine in ("LOCAL_LLM", "REMOTE_API") and tool:

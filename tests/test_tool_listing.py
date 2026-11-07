@@ -139,6 +139,10 @@ EXPECTED_TOOLS = [
 "        bake and back afterwards; the scene's Bake settings (passes, samples) apply.\n"
 "        Wait for the result with ``get_job_status(job_id)``.\n"
 "\n"
+"        The bake **overwrites the pixels of the target images**, and Revert / Undo\n"
+"        can't bring them back (the bake runs outside the turn's undo step): bake into\n"
+"        new images, or save the old ones first, when they matter.\n"
+"\n"
 "        Args:\n"
 "            bake_type: COMBINED, DIFFUSE, GLOSSY, TRANSMISSION, ROUGHNESS, EMIT, NORMAL,\n"
 "                AO, SHADOW, POSITION, UV or ENVIRONMENT.\n"
@@ -684,7 +688,7 @@ EXPECTED_TOOLS = [
                     "type": "string"
                 },
                 "wait_seconds": {
-                    "default": 60.0,
+                    "default": 25.0,
                     "title": "Wait Seconds",
                     "type": "number"
                 }

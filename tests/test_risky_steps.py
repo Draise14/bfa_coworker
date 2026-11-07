@@ -118,6 +118,15 @@ class TestWrap(unittest.TestCase):
                          "risky:save the .blend file")
         self.assertEqual(rs.ask_kind("execute_blender_code", risky, "AUTO", "LOCAL_LLM"), ("", ""))
 
+    def test_bake_asks_like_a_risky_step(self):
+        # Its toolcode skips the code scan, but a bake overwrites pixels Undo can't restore.
+        toolcode = "# blmcp-toolcode-skip-preflight\nbpy.ops.object.bake('INVOKE_DEFAULT')"
+        kind, why = rs.ask_kind("bake_textures", toolcode, "RISKY", "LOCAL_LLM")
+        self.assertEqual(kind, "risky:" + why)
+        self.assertIn("Undo can't bring them back", why)
+        self.assertEqual(rs.ask_kind("bake_textures", toolcode, "ASK", "EXTERNAL_HARNESS")[1], why)
+        self.assertEqual(rs.ask_kind("bake_textures", toolcode, "AUTO", "LOCAL_LLM"), ("", ""))
+
     def test_ask_per_tool_always_and_forget(self):
         kind, why = rs.ask_kind("execute_blender_code", "x = 1", "ASK", "LOCAL_LLM")
         _r, check = rs.wrap("x = 1", True, why, self._execute, tool="execute_blender_code", kind=kind)

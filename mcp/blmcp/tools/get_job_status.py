@@ -31,7 +31,7 @@ def register(mcp: FastMCP) -> None:
     )
     async def get_job_status(
         job_id: str,
-        wait_seconds: float = 60.0,
+        wait_seconds: float = 25.0,
     ) -> dict[str, object]:
         """
         How a long job (a background render or bake) is doing; waits for it to finish.

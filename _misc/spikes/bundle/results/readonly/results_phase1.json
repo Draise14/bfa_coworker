@@ -1,0 +1,423 @@
+{
+ "app": {
+  "version": "5.4.0 Alpha",
+  "online_access": false,
+  "online_access_override": true,
+  "user_extensions": "F:\\bfa_coworker_wt\\_scratch\\bundle-380\\res\\extensions",
+  "system_extensions_dir": "F:\\bfa_coworker_wt\\_scratch\\bundle-380\\sysext\\system"
+ },
+ "repos_factory": [
+  {
+   "name": "extensions.blender.org",
+   "module": "blender_org",
+   "source": "USER",
+   "enabled": true,
+   "use_remote_url": true,
+   "remote_url": "https://extensions.blender.org/api/v1/extensions/",
+   "use_sync_on_startup": true,
+   "directory": "F:\\bfa_coworker_wt\\_scratch\\bundle-380\\res\\extensions\\blender_org"
+  },
+  {
+   "name": "User Default",
+   "module": "user_default",
+   "source": "USER",
+   "enabled": true,
+   "use_remote_url": false,
+   "remote_url": "",
+   "use_sync_on_startup": false,
+   "directory": "F:\\bfa_coworker_wt\\_scratch\\bundle-380\\res\\extensions\\user_default"
+  },
+  {
+   "name": "System",
+   "module": "system",
+   "source": "SYSTEM",
+   "enabled": true,
+   "use_remote_url": false,
+   "remote_url": "",
+   "use_sync_on_startup": false,
+   "directory": "F:\\bfa_coworker_wt\\_scratch\\bundle-380\\sysext\\system"
+  }
+ ],
+ "q1.copies_listed": [
+  {
+   "module": "bl_ext.system.bfa_coworker",
+   "version": [
+    1,
+    1,
+    41
+   ],
+   "file": "F:\\bfa_coworker_wt\\_scratch\\bundle-380\\sysext\\system\\bfa_coworker\\__init__.py"
+  }
+ ],
+ "q1.before_enable": {
+  "sys": {
+   "enabled_default": false,
+   "loaded": false,
+   "addon_enabled_flag": null,
+   "in_prefs_addons": false
+  },
+  "repo": null,
+  "class_owner": {
+   "_BFACW_Preferences": null,
+   "BFACW_OT_copy_update_url": null
+  },
+  "registered": {
+   "bl_ext.system.bfa_coworker": "0/0",
+   "null": "0/0"
+  },
+  "prefs_addons": []
+ },
+ "q1.enable_system": [
+  "FINISHED"
+ ],
+ "q1.after_enable": {
+  "sys": {
+   "enabled_default": true,
+   "loaded": true,
+   "addon_enabled_flag": true,
+   "in_prefs_addons": true,
+   "host": "localhost",
+   "port": 9876,
+   "settings_restored": false
+  },
+  "repo": null,
+  "class_owner": {
+   "_BFACW_Preferences": null,
+   "BFACW_OT_copy_update_url": "bl_ext.system.bfa_coworker"
+  },
+  "registered": {
+   "bl_ext.system.bfa_coworker": "44/44",
+   "null": "0/0"
+  },
+  "prefs_addons": [
+   "bl_ext.system.bfa_coworker"
+  ]
+ },
+ "q1.vendor_after_enable": {
+  "system_vendor_deps_present": true,
+  "home_cache_present": true
+ },
+ "q3.set_on_system": {
+  "in_prefs_addons": true,
+  "host": "spike.host.380",
+  "port": 9381,
+  "settings_restored": false
+ },
+ "q1.install_files_into_system": "TypeError: Converting py args to operator properties: enum \"system\" not found in ('user_default', 'blender_org')",
+ "q1.uninstall_system_poll": false,
+ "q5.online_access": false,
+ "q5.package_install_poll": false,
+ "q5.repo_sync_all_poll": false,
+ "q5.package_install_files_poll": true,
+ "q4.repo_add": [
+  "FINISHED"
+ ],
+ "q4.repo_after_add": {
+  "name": "Bforartists Coworker",
+  "module": "BforartistsCoworker",
+  "directory": "F:\\bfa_coworker_wt\\_scratch\\bundle-380\\res\\extensions\\BforartistsCoworker",
+  "use_sync_on_startup": true
+ },
+ "q2.install_next_into_repo": [
+  "FINISHED"
+ ],
+ "q2.copies_listed": [
+  {
+   "module": "bl_ext.BforartistsCoworker.bfa_coworker",
+   "version": [
+    1,
+    1,
+    42
+   ],
+   "file": "F:\\bfa_coworker_wt\\_scratch\\bundle-380\\res\\extensions\\BforartistsCoworker\\bfa_coworker\\__init__.py"
+  },
+  {
+   "module": "bl_ext.system.bfa_coworker",
+   "version": [
+    1,
+    1,
+    41
+   ],
+   "file": "F:\\bfa_coworker_wt\\_scratch\\bundle-380\\sysext\\system\\bfa_coworker\\__init__.py"
+  }
+ ],
+ "q2.legacy_error_duplicates": [],
+ "q2.extension_warnings": {},
+ "q2.after_install": {
+  "sys": {
+   "enabled_default": true,
+   "loaded": true,
+   "addon_enabled_flag": true,
+   "in_prefs_addons": true,
+   "host": "spike.host.380",
+   "port": 9381,
+   "settings_restored": false
+  },
+  "repo": {
+   "enabled_default": false,
+   "loaded": false,
+   "addon_enabled_flag": null,
+   "in_prefs_addons": false
+  },
+  "class_owner": {
+   "_BFACW_Preferences": null,
+   "BFACW_OT_copy_update_url": "bl_ext.system.bfa_coworker"
+  },
+  "registered": {
+   "bl_ext.system.bfa_coworker": "44/44",
+   "bl_ext.BforartistsCoworker.bfa_coworker": "0/0"
+  },
+  "prefs_addons": [
+   "bl_ext.system.bfa_coworker"
+  ]
+ },
+ "q3.disable_system": [
+  "FINISHED"
+ ],
+ "q3.settings_json_after_disable": {
+  "version": "1.1.41",
+  "host": "spike.host.380",
+  "port": 9381
+ },
+ "q3.enable_repo": [
+  "FINISHED"
+ ],
+ "q3.after_switch_to_repo": {
+  "sys": {
+   "enabled_default": false,
+   "loaded": false,
+   "addon_enabled_flag": false,
+   "in_prefs_addons": false
+  },
+  "repo": {
+   "enabled_default": true,
+   "loaded": true,
+   "addon_enabled_flag": true,
+   "in_prefs_addons": true,
+   "host": "localhost",
+   "port": 9876,
+   "settings_restored": false
+  },
+  "class_owner": {
+   "_BFACW_Preferences": null,
+   "BFACW_OT_copy_update_url": "bl_ext.BforartistsCoworker.bfa_coworker"
+  },
+  "registered": {
+   "bl_ext.system.bfa_coworker": "0/44",
+   "bl_ext.BforartistsCoworker.bfa_coworker": "44/44"
+  },
+  "prefs_addons": [
+   "bl_ext.BforartistsCoworker.bfa_coworker"
+  ]
+ },
+ "q3.dict_write": "TypeError: bpy_struct[key] = val: id properties not supported for this type",
+ "q3.system_props_apply": {
+  "applied": 71,
+  "host": "spike.host.380",
+  "port": 9381
+ },
+ "q3.disable_repo": [
+  "FINISHED"
+ ],
+ "q3.enable_system_again": [
+  "FINISHED"
+ ],
+ "q3.after_switch_back": {
+  "sys": {
+   "enabled_default": true,
+   "loaded": true,
+   "addon_enabled_flag": true,
+   "in_prefs_addons": true,
+   "host": "localhost",
+   "port": 9876,
+   "settings_restored": false
+  },
+  "repo": {
+   "enabled_default": false,
+   "loaded": false,
+   "addon_enabled_flag": false,
+   "in_prefs_addons": false
+  },
+  "class_owner": {
+   "_BFACW_Preferences": null,
+   "BFACW_OT_copy_update_url": "bl_ext.system.bfa_coworker"
+  },
+  "registered": {
+   "bl_ext.system.bfa_coworker": "44/44",
+   "bl_ext.BforartistsCoworker.bfa_coworker": "0/44"
+  },
+  "prefs_addons": [
+   "bl_ext.system.bfa_coworker"
+  ]
+ },
+ "q2.enable_repo_while_system_on": [
+  "FINISHED"
+ ],
+ "q2.both_enabled": {
+  "sys": {
+   "enabled_default": true,
+   "loaded": true,
+   "addon_enabled_flag": true,
+   "in_prefs_addons": true,
+   "host": "localhost",
+   "port": 9876,
+   "settings_restored": false
+  },
+  "repo": {
+   "enabled_default": true,
+   "loaded": true,
+   "addon_enabled_flag": true,
+   "in_prefs_addons": true,
+   "host": "localhost",
+   "port": 9876,
+   "settings_restored": false
+  },
+  "class_owner": {
+   "_BFACW_Preferences": null,
+   "BFACW_OT_copy_update_url": "bl_ext.BforartistsCoworker.bfa_coworker"
+  },
+  "registered": {
+   "bl_ext.system.bfa_coworker": "1/44",
+   "bl_ext.BforartistsCoworker.bfa_coworker": "44/44"
+  },
+  "prefs_addons": [
+   "bl_ext.system.bfa_coworker",
+   "bl_ext.BforartistsCoworker.bfa_coworker"
+  ]
+ },
+ "q2.disable_system_while_repo_on": [
+  "FINISHED"
+ ],
+ "q2.after_disabling_system": {
+  "sys": {
+   "enabled_default": false,
+   "loaded": false,
+   "addon_enabled_flag": false,
+   "in_prefs_addons": false
+  },
+  "repo": {
+   "enabled_default": true,
+   "loaded": true,
+   "addon_enabled_flag": true,
+   "in_prefs_addons": true,
+   "host": "localhost",
+   "port": 9876,
+   "settings_restored": false
+  },
+  "class_owner": {
+   "_BFACW_Preferences": null,
+   "BFACW_OT_copy_update_url": "bl_ext.BforartistsCoworker.bfa_coworker"
+  },
+  "registered": {
+   "bl_ext.system.bfa_coworker": "0/44",
+   "bl_ext.BforartistsCoworker.bfa_coworker": "44/44"
+  },
+  "prefs_addons": [
+   "bl_ext.BforartistsCoworker.bfa_coworker"
+  ]
+ },
+ "q2.enable_system_while_repo_on": [
+  "FINISHED"
+ ],
+ "q2.both_enabled_again": {
+  "sys": {
+   "enabled_default": true,
+   "loaded": true,
+   "addon_enabled_flag": true,
+   "in_prefs_addons": true,
+   "host": "localhost",
+   "port": 9876,
+   "settings_restored": false
+  },
+  "repo": {
+   "enabled_default": true,
+   "loaded": true,
+   "addon_enabled_flag": true,
+   "in_prefs_addons": true,
+   "host": "localhost",
+   "port": 9876,
+   "settings_restored": false
+  },
+  "class_owner": {
+   "_BFACW_Preferences": null,
+   "BFACW_OT_copy_update_url": "bl_ext.system.bfa_coworker"
+  },
+  "registered": {
+   "bl_ext.system.bfa_coworker": "44/44",
+   "bl_ext.BforartistsCoworker.bfa_coworker": "1/44"
+  },
+  "prefs_addons": [
+   "bl_ext.BforartistsCoworker.bfa_coworker",
+   "bl_ext.system.bfa_coworker"
+  ]
+ },
+ "q2.disable_repo_while_system_on": [
+  "FINISHED"
+ ],
+ "q2.after_disabling_repo": {
+  "sys": {
+   "enabled_default": true,
+   "loaded": true,
+   "addon_enabled_flag": true,
+   "in_prefs_addons": true,
+   "host": "localhost",
+   "port": 9876,
+   "settings_restored": false
+  },
+  "repo": {
+   "enabled_default": false,
+   "loaded": false,
+   "addon_enabled_flag": false,
+   "in_prefs_addons": false
+  },
+  "class_owner": {
+   "_BFACW_Preferences": null,
+   "BFACW_OT_copy_update_url": "bl_ext.system.bfa_coworker"
+  },
+  "registered": {
+   "bl_ext.system.bfa_coworker": "44/44",
+   "bl_ext.BforartistsCoworker.bfa_coworker": "0/44"
+  },
+  "prefs_addons": [
+   "bl_ext.system.bfa_coworker"
+  ]
+ },
+ "q2.enable_repo_again": [
+  "FINISHED"
+ ],
+ "q2.both_enabled_repo_last": {
+  "sys": {
+   "enabled_default": true,
+   "loaded": true,
+   "addon_enabled_flag": true,
+   "in_prefs_addons": true,
+   "host": "localhost",
+   "port": 9876,
+   "settings_restored": false
+  },
+  "repo": {
+   "enabled_default": true,
+   "loaded": true,
+   "addon_enabled_flag": true,
+   "in_prefs_addons": true,
+   "host": "localhost",
+   "port": 9876,
+   "settings_restored": false
+  },
+  "class_owner": {
+   "_BFACW_Preferences": null,
+   "BFACW_OT_copy_update_url": "bl_ext.BforartistsCoworker.bfa_coworker"
+  },
+  "registered": {
+   "bl_ext.system.bfa_coworker": "1/44",
+   "bl_ext.BforartistsCoworker.bfa_coworker": "44/44"
+  },
+  "prefs_addons": [
+   "bl_ext.system.bfa_coworker",
+   "bl_ext.BforartistsCoworker.bfa_coworker"
+  ]
+ },
+ "save_userpref": [
+  "FINISHED"
+ ]
+}

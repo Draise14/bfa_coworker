@@ -32,7 +32,7 @@ SURFACE = frozenset({
     "get_blendfile_summary_of_linked_libraries", "get_blendfile_summary_path_info",
     "get_blendfile_summary_usage_guess", "get_object_detail_summary", "get_objects_summary",
     "get_operation_history", "read_tool_output", "ask_user", "get_scene_digest", "update_plan",
-    "get_attached_image",
+    "get_attached_image", "get_job_status",
     "get_polyhaven_status", "get_screenshot_of_window_as_image", "get_screenshot_of_window_as_json",
     "render_thumbnail_to_path", "get_python_api_docs", "search_api_docs", "search_manual_docs",
     "load_tools",
@@ -46,6 +46,7 @@ DOMAINS: dict[str, frozenset[str]] = {
     "material": frozenset({
         "download_polyhaven_asset", "search_polyhaven_assets", "get_screenshot_of_area_as_image",
         "render_viewport_to_path", "setup_pbr_material", "assign_material_to_objects", "load_asset_in_context",
+        "bake_textures",
     }),
     "modeling": frozenset({
         "jump_to_view3d_object_by_name", "jump_to_view3d_object_data_by_name", "jump_to_tab_by_name",
@@ -56,7 +57,7 @@ DOMAINS: dict[str, frozenset[str]] = {
         "get_screenshot_of_area_as_image", "three_point_lighting_rig",
     }),
     "rendering": frozenset({
-        "render_viewport_to_path", "get_screenshot_of_area_as_image", "three_point_lighting_rig",
+        "render_viewport_to_path", "get_screenshot_of_area_as_image", "three_point_lighting_rig", "bake_textures",
     }),
     "vse": frozenset({
         "jump_to_tab_by_name", "jump_to_tab_by_space_type",

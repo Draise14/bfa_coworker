@@ -91,8 +91,11 @@ def send_code(code: str, strict_json: bool) -> dict[str, object]:
             "Ensure Blender is running with the MCP addon enabled and the server started.".format(host, port)
         ) from ex
     except socket.timeout as ex:
+        # Tools 6 (#309): long jobs answer with a job id instead of holding the call.
         raise ConnectionError(
-            "Blender connection timed out at {:s}:{:d}".format(host, port)
+            "Blender connection timed out at {:s}:{:d} after {:.0f} s; Blender may still be busy. "
+            "A long bake or render inside execute_blender_code blocks Blender: use bake_textures "
+            "or render_viewport_to_path(background=True), then get_job_status.".format(host, port, _TIMEOUT)
         ) from ex
     except OSError as ex:
         # NOTE: intentionally not catching `Exception` here.

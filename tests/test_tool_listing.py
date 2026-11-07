@@ -129,6 +129,58 @@ EXPECTED_TOOLS = [
         }
     },
     {
+        "name": "bake_textures",
+        "description": "\n"
+"        Bake textures with Cycles in the background; returns a ``job_id`` at once.\n"
+"\n"
+"        Each object needs a UV map and, in every material, an *active* Image Texture\n"
+"        node holding the image to bake into (Blender's own bake workflow); the error\n"
+"        says what to add when one is missing. The engine is switched to Cycles for the\n"
+"        bake and back afterwards; the scene's Bake settings (passes, samples) apply.\n"
+"        Wait for the result with ``get_job_status(job_id)``.\n"
+"\n"
+"        Args:\n"
+"            bake_type: COMBINED, DIFFUSE, GLOSSY, TRANSMISSION, ROUGHNESS, EMIT, NORMAL,\n"
+"                AO, SHADOW, POSITION, UV or ENVIRONMENT.\n"
+"            object_names: Mesh objects to bake (empty = the selected meshes).\n"
+"            margin: Pixels to extend the bake past UV island edges (-1 = the scene's).\n"
+"\n"
+"        Returns:\n"
+"            ``status``, ``job_id``, the ``objects`` and target ``images``, and a ``message``.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "bake_type": {
+                    "default": "DIFFUSE",
+                    "title": "Bake Type",
+                    "type": "string"
+                },
+                "object_names": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Object Names"
+                },
+                "margin": {
+                    "default": -1,
+                    "title": "Margin",
+                    "type": "integer"
+                }
+            },
+            "title": "bake_texturesArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "batch_keyframe_insert",
         "description": "\n"
 "        Insert keyframes on multiple objects across multiple frames.\n"
@@ -602,6 +654,45 @@ EXPECTED_TOOLS = [
                 "blend_file"
             ],
             "title": "get_blendfile_summary_usage_guess_for_cliArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "get_job_status",
+        "description": "\n"
+"        How a long job (a background render or bake) is doing; waits for it to finish.\n"
+"\n"
+"        Long jobs answer with a ``job_id`` instead of holding the call open. Call this\n"
+"        with that id: it answers as soon as the job is over, or after ``wait_seconds``\n"
+"        with ``state`` \"running\" and the progress so far. While it runs, call it again\n"
+"        (don't poll faster than every few seconds; the wait does that for you).\n"
+"\n"
+"        Args:\n"
+"            job_id: The ``job_id`` a long job returned.\n"
+"            wait_seconds: How long to wait for the job to finish (0 = answer now, at most 240).\n"
+"\n"
+"        Returns:\n"
+"            ``status``, ``job_id``, ``state`` (\"running\", \"done\", \"error\" or \"cancelled\"),\n"
+"            ``kind``, ``label``, ``elapsed_seconds``, ``progress_percent`` (when Blender\n"
+"            reports it), ``result`` once done (e.g. the ``filepath`` or baked images),\n"
+"            and a ``message``.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "job_id": {
+                    "title": "Job Id",
+                    "type": "string"
+                },
+                "wait_seconds": {
+                    "default": 60.0,
+                    "title": "Wait Seconds",
+                    "type": "number"
+                }
+            },
+            "required": [
+                "job_id"
+            ],
+            "title": "get_job_statusArguments",
             "type": "object"
         }
     },
@@ -1384,12 +1475,30 @@ EXPECTED_TOOLS = [
         "name": "render_viewport_to_path",
         "description": "\n"
 "        Render the current scene to *output_path* using current render settings.\n"
+"\n"
+"        A render that takes longer than about 45 s answers with a ``job_id`` instead\n"
+"        of the file, and carries on: wait for it with ``get_job_status(job_id)``.\n"
+"        For a render you know is long (many samples, big resolution, Cycles), pass\n"
+"        ``background=True`` to get the ``job_id`` at once.\n"
+"\n"
+"        Args:\n"
+"            output_path: File name for the image (it is written to Coworker's temp folder).\n"
+"            background: Start the render and return a ``job_id`` right away.\n"
+"\n"
+"        Returns:\n"
+"            ``status``; ``filepath`` (where the image is, or will be, written); a\n"
+"            ``job_id`` when the render goes on in the background; ``message``.\n"
 "        ",
         "inputSchema": {
             "properties": {
                 "output_path": {
                     "title": "Output Path",
                     "type": "string"
+                },
+                "background": {
+                    "default": False,
+                    "title": "Background",
+                    "type": "boolean"
                 }
             },
             "required": [

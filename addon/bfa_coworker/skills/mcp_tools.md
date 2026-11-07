@@ -32,6 +32,18 @@ Dedicated tools are pre-tested and version-safe. Raw code is the last resort.
 - `get_screenshot_of_window_as_json()` — JSON layout with areas, active object, selection.
 - `render_viewport_to_path(output_path)` — Render the current viewport to a file.
 
+## Long Jobs (Renders, Bakes)
+
+For long jobs, start them and check with `get_job_status`; don't loop faster than every few seconds.
+
+- `render_viewport_to_path(output_path, background=True)` — Start a render; returns a `job_id` at once.
+  (A render still going after ~45 s also answers with a `job_id`.)
+- `bake_textures(bake_type, object_names)` — Cycles bake into each material's active Image Texture node;
+  returns a `job_id`.
+- `get_job_status(job_id, wait_seconds=60)` — Waits for the job and answers `state` running / done /
+  error / cancelled, with progress and the result.
+- Never run a long bake or render in `execute_blender_code`: it blocks Blender and the call times out.
+
 ## When to Use `execute_blender_code`
 
 Only fall back to raw code for:

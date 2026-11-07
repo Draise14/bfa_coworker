@@ -31,6 +31,11 @@ initial_instructions: |
     `place_asset_in_scene` / `load_asset_in_context`, `wire_node_group`.
   * Check an API before guessing: `search_api_docs`, `get_python_api_docs`,
     `search_manual_docs`.
+  * Long jobs (big renders, bakes): `render_viewport_to_path(background=True)` and
+    `bake_textures` start them and return a `job_id`; then wait with
+    `get_job_status(job_id)`, which holds the answer until the job is done (don't
+    loop faster than every few seconds). Never run a long bake or render inside
+    `execute_blender_code`: it blocks Blender and the call times out.
   * Everything else: `execute_blender_code`.
 
   The API reference (`data/api/`), user manual (`data/manual/`) and skill

@@ -40,6 +40,14 @@ from .mcp_to_blender_server import _encode_response
 # but renders can take a long time and it's not desirable for them to simply give up.
 _DEFERRED_TIMEOUT = (60.0 * 60.0)
 
+# Tools 6 (#309): a checker marked with a ``job_kind`` attribute (a render, see
+# ``_template_deferred_tool_check_for_file_output.py``) that is still running
+# after this long is handed to ``long_jobs``, and the client gets its job id.
+# The callers give up much sooner than the hour above: the local loop's HTTP
+# call after 60 s, the MCP client's socket after 300 s.  So a short render
+# answers as before, and a long one never times out the agent.
+_HANDOFF_AFTER = 45.0
+
 
 class _DeferredClient:
     """
@@ -53,6 +61,7 @@ class _DeferredClient:
         "stdout",
         "stderr",
         "deadline",
+        "handoff_at",
     )
 
     def __init__(
@@ -69,6 +78,7 @@ class _DeferredClient:
         self.stdout: str = stdout
         self.stderr: str = stderr
         self.deadline: float = time.monotonic() + _DEFERRED_TIMEOUT
+        self.handoff_at: float = time.monotonic() + _HANDOFF_AFTER
 
 
 # Connections waiting for a background job to finish, polled each timer tick.
@@ -103,6 +113,24 @@ def _is_disconnected(conn: socket.socket) -> bool:
         return False
     except OSError:
         return True
+
+
+def _hand_off(dc: _DeferredClient) -> None:
+    """Answer *dc* with a job id; ``long_jobs`` keeps checking the job."""
+    from . import long_jobs
+    kind = str(getattr(dc.check_fn, "job_kind", ""))
+    job_id = long_jobs.start(kind, str(getattr(dc.check_fn, "job_label", "") or kind.lower()), dc.check_fn,
+                             getattr(dc.check_fn, "job_on_finish", None))
+    response: dict[str, object] = {"status": "ok", "result": {
+        "status": "ok", "state": "running", "job_id": job_id,
+        "message": ("Still working after {:.0f} s, so it carries on in the background. "
+                    "Call get_job_status(job_id) to wait for the result.").format(_HANDOFF_AFTER),
+    }}
+    if dc.stdout:
+        response["stdout"] = dc.stdout
+    if dc.stderr:
+        response["stderr"] = dc.stderr
+    _send_and_close(dc, response)
 
 
 def add(
@@ -160,7 +188,10 @@ def poll() -> bool:
             continue
 
         if result is None:
-            # Still pending.
+            # Still pending: a long job goes on in the background with a job id.
+            if getattr(dc.check_fn, "job_kind", "") and time.monotonic() > dc.handoff_at:
+                _hand_off(dc)
+                did_work = True
             continue
 
         if not isinstance(result, dict):

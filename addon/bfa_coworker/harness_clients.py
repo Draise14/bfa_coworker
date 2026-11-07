@@ -32,6 +32,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from . import store_paths
+
 SERVER_NAME = "bfa-coworker"
 
 # Clients whose config file location is documented, so "Add to <client>"
@@ -165,6 +167,15 @@ def can_install(client_type: str) -> bool:
 
 
 def _write_atomic(path: Path, text: str) -> None:
+    if store_paths.is_redirected(path):
+        # A Store copy may change an existing file under AppData, but a new one (the
+        # temp file, or the whole config) lands in its own package folder where the
+        # client never looks (#390).
+        if not path.is_file():
+            raise ValueError("the Store version of Bforartists can't create {:s} -- start the app once "
+                             "so it makes its settings file, or use Copy Config".format(str(path)))
+        path.write_text(text, encoding="utf-8")
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_file():
         shutil.copy2(str(path), str(path) + ".bfacw.bak")

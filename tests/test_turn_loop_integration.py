@@ -263,6 +263,11 @@ class _FakeLLMHandler(BaseHTTPRequestHandler):
                 server.mcp_requests.append(body)
             if body.get("method") == "tools/list":
                 result = {"tools": server.mcp_tools}
+            elif server.named_tool_replies.get(params.get("name")):
+                # Scripted answers for a named tool, consumed in order.
+                with server.lock:
+                    _reply = server.named_tool_replies[params.get("name")].pop(0)
+                result = {"content": [{"type": "text", "text": json.dumps(_reply)}]}
             elif "undo_push(message='bfa_coworker_" in code and "'snapshot'" in code:
                 # The loop merges the undo bookmark + entity snapshot into a
                 # single execute_blender_code call (pre-script push and
@@ -504,6 +509,8 @@ def _start_fake_server(script, mcp_tools=None):
     # Benchmark error injection: list of {"is_stream", "status", "body"}
     # specs consumed in order by matching chat requests.
     server.chat_error_specs = []
+    # Tool name -> list of result dicts answered in order (other tools).
+    server.named_tool_replies = {}
     server.lock = threading.Lock()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -834,6 +841,20 @@ _EXECUTE_CODE_TOOL = {
 }
 
 
+_JOB_STATUS_TOOL = {
+    "name": "get_job_status",
+    "description": "How a long job is doing; waits for it",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "job_id": {"type": "string"},
+            "wait_seconds": {"type": "number"},
+        },
+        "required": ["job_id"],
+    },
+}
+
+
 def _tool_call_msg(call_id, code):
     """Scripted assistant message that issues one execute_blender_code call."""
     # Non-empty content: the turn loop appends a filler user message after
@@ -957,6 +978,51 @@ class TestToolLoopIntegration(_TurnLoopTestBase):
         # the stored system prompt.
         self.assertEqual(self.sm.store.memory_block, "")
         self.assertNotIn("Session memory", history[0]["content"])
+
+    def test_waiting_for_a_long_job_is_not_a_loop(self):
+        """Tools 6 (#309): polling get_job_status while a bake runs.
+
+        Five identical status polls (the bake runs, then is done) must not
+        trip the identical-call guard (3) or the idle wind-up, and must not
+        use up the iteration budget (cut to 2 here): the agent reports the
+        bake.
+        """
+        poll = {"content": "Waiting for the bake.", "finish_reason": "tool_calls",
+                "tool_calls": [{"id": "", "type": "function", "function": {
+                    "name": "get_job_status",
+                    "arguments": json.dumps({"job_id": "job1", "wait_seconds": 5})}}]}
+        script = []
+        for i in range(5):
+            msg = json.loads(json.dumps(poll))
+            msg["tool_calls"][0]["id"] = "poll_{:d}".format(i)
+            script.append(msg)
+        script.append({"content": "The bake finished."})
+        self.server.shutdown()
+        self.server.server_close()
+        self.server = _start_fake_server(script, mcp_tools=[_EXECUTE_CODE_TOOL, _JOB_STATUS_TOOL])
+        self.port = self.server.server_address[1]
+        running = {"status": "ok", "result": {"status": "ok", "job_id": "job1", "state": "running",
+                                              "kind": "OBJECT_BAKE", "elapsed_seconds": 120}}
+        done = {"status": "ok", "result": {"status": "ok", "job_id": "job1", "state": "done",
+                                           "kind": "OBJECT_BAKE", "elapsed_seconds": 600}}
+        self.server.named_tool_replies["get_job_status"] = [running] * 4 + [done]
+        self.state.conversation_history = [{"role": "system", "content": "You are a helpful agent."}]
+        _saved_cap = self.ac._REMOTE_MAX_TOOL_ITERATIONS
+        self.ac._REMOTE_MAX_TOOL_ITERATIONS = 2
+        _url = "http://127.0.0.1:{:d}/v1/chat/completions".format(self.port)
+        texts = []
+        self._pin_fake_bpy()
+        try:
+            self.ac.run_conversation_turn(
+                "bake it", on_text=texts.append, chat_mode="AGENT",
+                llm_url=_url, model="fake-model", mcp_port=self.port)
+        finally:
+            self._unpin_fake_bpy()
+            self.ac._REMOTE_MAX_TOOL_ITERATIONS = _saved_cap
+        polls = [c for c in self._mcp_calls("tools/call")
+                 if (c.get("params") or {}).get("name") == "get_job_status"]
+        self.assertEqual(len(polls), 5)
+        self.assertIn("The bake finished.", texts)
 
     def test_forced_summary_never_sends_reasoning_in_remote_mode(self):
         """Regression: the forced-summary request must not leak ``reasoning``.

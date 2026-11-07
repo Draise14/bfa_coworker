@@ -128,6 +128,8 @@ _TOOL_TEST_ARGS: dict[str, dict[str, Any]] = {
     # ── Rendering ───────────────────────────────────────────────────
     "render_thumbnail_to_path": {"output_path": ""},
     "render_viewport_to_path": {"output_path": ""},
+    "get_job_status": {"job_id": "job0", "wait_seconds": 0},
+    "bake_textures": {"bake_type": "DIFFUSE", "object_names": ["Cube"]},
 
     # ── Documentation Search ────────────────────────────────────────
     "search_api_docs": {"query": "bpy.ops.mesh"},
@@ -174,6 +176,8 @@ _TOOL_EXPECTED_FAILURES: dict[str, str] = {
     "get_object_detail_summary": "may fail if 'Cube' doesn't exist",
     "render_thumbnail_to_path": "requires a valid output path",
     "render_viewport_to_path": "requires a valid output path",
+    "get_job_status": "no job 'job0' (answers with an error that lists the known jobs)",
+    "bake_textures": "needs a UV map and an active Image Texture node on 'Cube'",
     "download_polyhaven_asset": "requires a valid asset_id",
     "jump_to_asset_browser": "may fail if no Asset Browser is open (allow_edits=False)",
     "set_collection_color_tag": "may fail if 'Collection' doesn't exist",

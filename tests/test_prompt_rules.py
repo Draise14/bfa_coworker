@@ -52,5 +52,17 @@ class TestSelectionIsNotYours(unittest.TestCase):
             self.assertIn("un-selectable", _read(path).lower(), path)
 
 
+class TestLongJobsRule(unittest.TestCase):
+    """Tools 6 (#309): start long jobs, then wait with get_job_status (not too often)."""
+
+    def test_prompts_have_rule(self):
+        for path in (_PROMPTS, _PROMPTS_COMPACT,
+                     os.path.join(_REPO, "addon", "bfa_coworker", "skills", "mcp_tools.md")):
+            text = _read(path)
+            self.assertIn("get_job_status", text, path)
+            self.assertIn("every few seconds", text, path)
+            self.assertIn("background=True", text, path)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -16,6 +16,11 @@ Questions: :func:`post_question` opens one and returns its id; the chat shows
 the oldest open question as a card (choices as buttons; with *allow_text*,
 what you type next answers it); the tool polls :func:`question_state` until it
 is answered.  Stop cancels every open question.
+
+Long jobs (Tools 6, #309): a background render or bake registers a checker with
+:func:`start_job` and answers with its id; ``get_job_status`` reads
+:func:`job_status`.  The render and bake handlers registered here feed the
+job registry (:mod:`long_jobs`) progress and cancels.
 """
 
 from __future__ import annotations
@@ -26,9 +31,12 @@ __all__ = (
     "cancel_question",
     "cancel_questions",
     "current_question",
+    "job_status",
+    "jobs_tick",
     "post_question",
     "question_state",
     "scene_digest",
+    "start_job",
     "update_plan",
 )
 
@@ -208,16 +216,75 @@ def revert_turn() -> str:
     return ""
 
 
+# -- Long jobs (Tools 6, #309) --------------------------------------------------------
+def start_job(kind: str, label: str, check_fn: Any, on_finish: Any = None) -> str:
+    """A background job the agent checks with get_job_status; returns its id."""
+    from . import long_jobs
+    job_id = long_jobs.start(kind, label, check_fn, on_finish)
+    _redraw()
+    return job_id
+
+
+def job_status(job_id: str) -> dict[str, Any]:
+    from . import long_jobs
+    return long_jobs.status(job_id)
+
+
+_jobs_drawn = [0.0]
+
+
+def jobs_tick() -> bool:
+    """The bridge's timer: check the jobs, and redraw the chat (its job row) when one
+    ends or about once a second while one runs.  True when a job ended."""
+    import time
+    from . import long_jobs
+    ended = long_jobs.poll()
+    now = time.monotonic()
+    if ended or (long_jobs.has_running() and now - _jobs_drawn[0] >= 1.0):
+        _jobs_drawn[0] = now
+        _redraw()
+    return ended
+
+
+def _on_render_stats(*args: Any) -> None:
+    # Called from the render thread with the engine's status line ("Sample 12/128").
+    from . import long_jobs
+    if args and isinstance(args[0], str):
+        long_jobs.note_progress("RENDER", args[0])
+
+
+def _on_render_cancel(*_args: Any) -> None:
+    from . import long_jobs
+    long_jobs.cancelled("RENDER")
+
+
+def _on_bake_cancel(*_args: Any) -> None:
+    from . import long_jobs
+    long_jobs.cancelled("OBJECT_BAKE")
+
+
+def _handlers() -> list[tuple[Any, Any]]:
+    import bpy  # pylint: disable=import-error
+    h = bpy.app.handlers
+    return [(h.depsgraph_update_post, _count_edit), (h.render_stats, _on_render_stats),
+            (h.render_cancel, _on_render_cancel), (h.object_bake_cancel, _on_bake_cancel)]
+
+
 def register() -> None:
     import bpy  # pylint: disable=import-error
-    if _count_edit not in bpy.app.handlers.depsgraph_update_post:
-        bpy.app.handlers.depsgraph_update_post.append(_count_edit)
+    for handlers, fn in _handlers():
+        if fn is not _count_edit:
+            bpy.app.handlers.persistent(fn)     # jobs outlive a file load
+        if fn not in handlers:
+            handlers.append(fn)
 
 
 def unregister() -> None:
-    import bpy  # pylint: disable=import-error
-    if _count_edit in bpy.app.handlers.depsgraph_update_post:
-        bpy.app.handlers.depsgraph_update_post.remove(_count_edit)
+    from . import long_jobs
+    for handlers, fn in _handlers():
+        if fn in handlers:
+            handlers.remove(fn)
+    long_jobs.clear()
 
 
 # -- Scene digest -------------------------------------------------------------------

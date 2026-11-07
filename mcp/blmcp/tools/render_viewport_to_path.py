@@ -29,10 +29,23 @@ def register(mcp: FastMCP) -> None:
             readOnlyHint=True,
         )
     )
-    def render_viewport_to_path(output_path: str) -> dict[str, object]:
+    def render_viewport_to_path(output_path: str, background: bool = False) -> dict[str, object]:
         """
         Render the current scene to *output_path* using current render settings.
+
+        A render that takes longer than about 45 s answers with a ``job_id`` instead
+        of the file, and carries on: wait for it with ``get_job_status(job_id)``.
+        For a render you know is long (many samples, big resolution, Cycles), pass
+        ``background=True`` to get the ``job_id`` at once.
+
+        Args:
+            output_path: File name for the image (it is written to Coworker's temp folder).
+            background: Start the render and return a ``job_id`` right away.
+
+        Returns:
+            ``status``; ``filepath`` (where the image is, or will be, written); a
+            ``job_id`` when the render goes on in the background; ``message``.
         """
-        p = Params(output_path=output_path)
+        p = Params(output_path=output_path, background=bool(background))
         code = toolcode_format_call(_TOOL_CALL, p)
         return send_code(code, strict_json=True)

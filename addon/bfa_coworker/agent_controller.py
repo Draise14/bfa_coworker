@@ -3471,6 +3471,12 @@ def ensure_harness_launcher(pythonpath: str | None = None) -> Path:
         info["blender_path"] = bpy.app.binary_path
     except Exception:
         pass  # Outside Blender (tests, CLI).
+    # The launcher runs outside a Store copy's package: give it the folders as they
+    # really are on disk (#390).
+    from . import store_paths
+    info["pythonpath"] = [store_paths.real_path(p) for p in info["pythonpath"]]
+    info["dll_dirs"] = [store_paths.real_path(p) for p in info["dll_dirs"]]
+    info["addon_dir"] = store_paths.real_path(info["addon_dir"])
 
     _HARNESS_DIR.mkdir(parents=True, exist_ok=True)
     for name, text in (

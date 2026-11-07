@@ -37,6 +37,7 @@ from collections import deque
 import re
 from typing import Any, Callable
 
+from . import store_paths
 from .acp_client import MCP_SERVER_NAME, AcpClient, AcpError, _tool_name, stdio_mcp_server, update_to_events
 from .approvals import ApprovalRequest, Approvals
 from .chat_state import ChatStateApplier
@@ -122,11 +123,15 @@ class AcpEngine:
                  env: dict[str, str] | None, resume: str = "") -> None:
         try:
             os.makedirs(cwd, exist_ok=True)
+            # The agent runs outside a Store copy's package: it needs the folder as it
+            # really is on disk (#390).
+            cwd = store_paths.real_path(cwd)
             client = self._client_factory(argv, cwd=cwd, env=env, on_update=self._on_update,
                                           on_permission=self._on_permission)
             client.start()
             info = client.initialize()
-            server = stdio_mcp_server(mcp_entry["command"], list(mcp_entry.get("args") or []),
+            server = stdio_mcp_server(store_paths.real_path(mcp_entry["command"]),
+                                      [store_paths.real_path(a) for a in mcp_entry.get("args") or []],
                                       dict(mcp_entry.get("env") or {}))
             self.session_id = self._open_session(client, info.load_session, resume, cwd, [server])
             if not self.session_id:

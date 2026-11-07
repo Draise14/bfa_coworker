@@ -177,6 +177,18 @@ class TestGap(unittest.TestCase):
         self.assertEqual(wm.removed, wm.timers)
         self.assertEqual(len(self.started), 2)
 
+    def test_restart_works_while_a_window_is_maximized(self):
+        # Bforartists refuses screen= in temp_override while any window shows a temporary
+        # screen (Ctrl+Space); the floating chat then never came back after a gap (#391).
+        def override(**kw):
+            if "screen" in kw:
+                raise TypeError("Overriding context with an active temporary screen isn't supported")
+            return _NullCtx()
+        self.ic.bpy.context.temp_override = override
+        self.ic._RUNNING.clear()
+        self.ic.ensure_running()
+        self.assertEqual(len(self.started), 2)
+
     def test_no_gap_with_autosave_off(self):
         self.bpy.context.preferences.filepaths.use_auto_save_temporary_files = False
         self.ic._watch()

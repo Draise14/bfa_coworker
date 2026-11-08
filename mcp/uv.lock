@@ -56,7 +56,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "docutils" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.2.0" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.2.0,<2.0.0" },
     { name = "pyyaml" },
 ]
 

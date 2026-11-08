@@ -155,7 +155,7 @@ Followed by a null byte (Ctrl+@ on Windows, Ctrl+Shift+U 0000 on Linux).
 
 - The vendor deps directory is missing or not on PYTHONPATH
 - Run `python build_addon.py` to build the extension and populate vendor deps
-- Or manually: `pip install --target ~/.cache/bfa_coworker/vendor_deps/ mcp[cli] pyyaml docutils`
+- Or manually: `pip install --target ~/.cache/bfa_coworker/vendor_deps/ "mcp[cli]>=1.2.0,<2.0.0" pyyaml docutils`
 
 ## Preflighting the Config (recommended before manual testing)
 

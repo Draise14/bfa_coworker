@@ -114,13 +114,16 @@ def _acp_engine():
         # agent's plan (or OpenCode's to-do list) fills the steps.
         from . import session_memory as _sm
 
+        def _store():           # the running thread's Goal & Plan (#358)
+            return agent_controller._memory(agent_controller.THREADS.get(_acp.thread)).store
+
         def request(text: str) -> None:
             with _sm.store_lock:
-                _sm.store.goal.set_request(text)
+                _store().goal.set_request(text)
 
         def plan(steps: list[dict[str, str]]) -> None:
             with _sm.store_lock:
-                _sm.store.goal.apply_update({"steps": steps})
+                _store().goal.apply_update({"steps": steps})
         _acp.on_request = request
         _acp.applier.on_plan = plan
     return _acp
@@ -130,7 +133,7 @@ def _queued_messages(context: bpy.types.Context | None = None) -> list[dict]:
     """The waiting messages of whichever engine the chat uses."""
     if _is_external_agent(context) and _acp is not None:
         return _acp.queue_items()
-    return agent_controller._message_queue.get_all()
+    return agent_controller.thread_queue(_ui_thread(context)).get_all()     # this chat's thread (#358)
 
 
 def _agent_workspace() -> Path:
@@ -403,16 +406,115 @@ def _agent_follows_approval(engine, mode: str) -> None:
     engine.never_ask = mode == "AUTO"
 
 
-def _ui_thread():
-    """The thread the chat shows and acts on (#357: the default one; Threads 2 picks it
-    per editor)."""
-    return agent_controller.THREADS.default
+# -- Threads 2 (#358): each editor kind has its own thread ------------------------------
+# A sidebar chat shows its editor kind's thread while Use Editor Context Only is on (the
+# chat's tab for that editor), else the shared "All editors" thread (the default one,
+# today's single conversation).  "New thread here" pins one area to a fresh thread for
+# the session; the Coworker editor shows the thread picked in its list.
+_AREA_PINS: dict[int, str] = {}                  # area pointer -> its pinned thread id
+_EDITOR_SHOWN: dict[str, str] = {"id": ""}       # the Coworker editor's thread ("" = All editors)
 
 
-def _approvals_new_turn() -> None:
+def _ui_thread(context=None):
+    """The thread the chat in *context*'s area shows and acts on."""
+    from . import threads
+    reg = agent_controller.THREADS
+    context = context if context is not None else bpy.context
+    area = getattr(context, "area", None)
+    if area is None:
+        return reg.default
+    try:
+        kind = area.type
+        if kind == 'NODE_EDITOR':
+            from . import chat_editor as _ce
+            if _ce.is_coworker_space(area.spaces.active):
+                return reg.get(_EDITOR_SHOWN["id"]) or reg.default
+        props = context.window_manager.bfacw_chat_props  # type: ignore[attr-defined]
+        return threads.pick(reg, kind if kind in SIDEBAR_TYPES else "", pinned=_AREA_PINS.get(area.as_pointer(), ""),
+                            focus=bool(props.chat_editor_context_only), create=_editor_thread)
+    except (AttributeError, ReferenceError):
+        return reg.default
+
+
+def _editor_thread(editor: str, pin: bool = False):
+    """A new thread for *editor* kind (or an area's own, *pin*), with this .blend's last
+    chat of that editor back in it (#358)."""
+    from . import threads
+    reg = agent_controller.THREADS
+    title = threads.short_name(editor) or "Thread"
+    if pin:         # a second job next to this editor's: "3D 2", "3D 3"...
+        title += " {:d}".format(1 + sum(1 for t in reg.live() if t.editor == editor))
+    thread = reg.create(editor=editor, title=title)
+    index = _chat_index()
+    last = "" if pin else index.last_for_blend(_blend_key(), editor)
+    thread.chat_id = last or index.new_id()
+    if last:
+        _load_thread_chat(thread)
+    return thread
+
+
+def _ui_state(context=None):
+    """The shown thread's state (history, live readout); service status stays the default's."""
+    return agent_controller.thread_state(_ui_thread(context))
+
+
+def _thread_engine(thread, mode: str | None = None):
+    """The engine that runs *thread*'s turns: the External Agent (one session per thread),
+    or our loop (one LoopEngine per thread)."""
+    if thread is None or thread.is_default or _is_external_agent():
+        return _loop_engine(mode)
+    if thread.engine is None:
+        engine = LoopEngine(agent_controller.controller_for(thread))
+        engine.on_redraw = lambda: _redraw_areas_safe()
+        engine.on_turn_finished = lambda t=thread: _thread_turn_finished(t)
+        thread.engine = engine
+    if mode is not None:
+        label = "Remote" if mode == "remote" else "Local"
+        if thread.engine.caps.label != label:
+            thread.engine.name = label
+            thread.engine.caps = EngineCaps(label=label, images=True, usage=True)
+    return thread.engine
+
+
+def _thread_turn_finished(thread) -> None:
+    """A thread's turn ended (worker thread): save its chat, and mark it unread."""
+    thread.unread = True
+    if thread.is_default:
+        _save_chat_history()
+    else:
+        _save_thread_chat(thread)
+
+
+def _thread_status(thread) -> tuple[str, str]:
+    """``(word, icon)`` for a thread's tab / list row: Thinking, Waiting (a question or
+    its turn), Done (unread) or Idle."""
+    from . import coworker_api, risky_steps, threads
+    state = agent_controller.thread_state(thread)
+    tag = threads.tag(thread)
+    asks = (coworker_api.current_question(tag) is not None or risky_steps.APPROVALS.current(tag) is not None
+            or (_acp is not None and _acp.approvals.current(tag) is not None))
+    if asks:
+        return "Waiting for you", "QUESTION"
+    if state.is_thinking or state.turn_active:
+        return "Thinking", "SORTTIME"
+    if agent_controller.thread_queue(thread).pending_count:
+        return "Waiting for its turn", "TIME"
+    if thread.unread:
+        return "Done", "CHECKMARK"
+    return "Idle", "DOT"
+
+
+def _thread_title(thread) -> str:
+    from . import threads
+    if thread.is_default:
+        return "All editors"
+    return thread.title or threads.short_name(thread.editor) or "Thread"
+
+
+def _approvals_new_turn(thread=None) -> None:
     """A new turn: "Allow this turn" from the last one asks again (risky steps and the agent's)."""
     from . import loop_guard, risky_steps, threads
-    tag = threads.tag(_ui_thread())
+    tag = threads.tag(thread if thread is not None else _ui_thread())
     risky_steps.APPROVALS.new_turn(tag)
     loop_guard.BRIDGE.new_turn()        # repeats are counted per turn (#310)
     if _acp is not None:
@@ -834,7 +936,7 @@ def _loop_engine(mode: str | None = None):
     if _engine is None:
         _engine = LoopEngine(agent_controller)
         _engine.on_redraw = lambda: _redraw_areas_safe()
-        _engine.on_turn_finished = lambda: _save_chat_history()
+        _engine.on_turn_finished = lambda: _thread_turn_finished(agent_controller.THREADS.default)
         agent_controller.THREADS.default.engine = _engine     # a waiting message starts here (#357)
     if mode is not None:
         label = "Remote" if mode == "remote" else "Local"
@@ -2090,6 +2192,80 @@ def _save_chat_history() -> None:
             pass
 
 
+def _save_thread_chat(thread) -> None:
+    """An editor thread's chat in its own file; History lists it with its editor (#358)."""
+    if thread is None or thread.is_default:
+        _save_chat_history()
+        return
+    state = agent_controller.thread_state(thread)
+    history = list(state.conversation_history)
+    if not any(m.get("role") == "user" for m in history):
+        return
+    from . import session_memory as _sm
+    with _history_save_lock:
+        try:
+            index = _chat_index()
+            if not thread.chat_id:
+                thread.chat_id = index.new_id()
+            with open(str(index.chat_path(thread.chat_id)), "w", encoding="utf-8") as fh:
+                json.dump(history, fh, indent=2)
+            with _sm.store_lock:
+                payload = thread.store.to_payload()
+            with open(str(index.memory_path(thread.chat_id)), "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, indent=2)
+            index.touch(thread.chat_id, history, blend=_blend_key(), engine=_chat_engine_label(),
+                        blend_path=bpy.data.filepath, mode=_operating_mode(), editor=thread.editor)
+        except OSError:
+            pass
+
+
+def _load_thread_chat(thread) -> None:
+    """*thread*'s saved chat (``thread.chat_id``) back into it: history and Goal & Plan."""
+    from . import session_memory as _sm
+    index = _chat_index()
+    try:
+        with open(str(index.chat_path(thread.chat_id)), "r", encoding="utf-8") as fh:
+            history = json.load(fh)
+    except (OSError, ValueError):
+        history = []
+    if isinstance(history, list) and history:
+        agent_controller.thread_state(thread).conversation_history = \
+            agent_controller._sanitize_loaded_history(history)
+    try:
+        with open(str(index.memory_path(thread.chat_id)), "r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+        with _sm.store_lock:
+            thread.store.load_payload(payload)
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
+@bpy.app.handlers.persistent
+def _threads_on_save(*_args) -> None:
+    """The .blend was saved (maybe under a new name): each editor's chat is filed under it,
+    so reopening the file brings each editor its own last thread (#358)."""
+    for thread in agent_controller.THREADS.live():
+        if not thread.is_default:
+            _save_thread_chat(thread)
+
+
+@bpy.app.handlers.persistent
+def _threads_on_load(*_args) -> None:
+    """Another .blend opens: the old file's editor threads are saved and let go (#358)."""
+    _forget_editor_threads()
+
+
+def _forget_editor_threads() -> None:
+    """Another .blend: its editors bring their own threads back when first shown."""
+    reg = agent_controller.THREADS
+    for thread in reg.live():
+        if not thread.is_default and not agent_controller.thread_state(thread).turn_active:
+            _save_thread_chat(thread)
+            reg.remove(thread.id)
+    _AREA_PINS.clear()
+    _EDITOR_SHOWN["id"] = ""
+
+
 def _prune_old_sessions(base_dir) -> None:
     """Keep at most 10 versioned session files, remove oldest."""
     import re as _re
@@ -2181,13 +2357,16 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
     bl_label = "Send"
     bl_description = "Send your message to the Coworker agent"
 
+    # Right-click Explain / Translate (#358): start in this editor kind's thread.
+    editor: StringProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
+
     def execute(self, context: bpy.types.Context) -> set[str]:
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
         message = props.chat_input.strip()
         if not message:
             return {"CANCELLED"}
-        if _answer_typed(message):          # an open question (ask_user) takes it as its answer
+        if _answer_typed(message, context):     # an open question (ask_user) takes it as its answer
             props.chat_input = ""
             _redraw_areas(context)
             return {"FINISHED"}
@@ -2220,7 +2399,11 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
         if attachments is None:
             _warn_failed_attachment(self, props)
 
-        engine = _loop_engine(llm_cfg.mode)
+        from . import threads
+        thread = (threads.pick(agent_controller.THREADS, self.editor, focus=True, create=_editor_thread)
+                  if self.editor else _ui_thread(context))
+        state = agent_controller.thread_state(thread)
+        engine = _thread_engine(thread, llm_cfg.mode)
         external = _is_external_agent(context)
         if external:
             problem = _ensure_bridge(prefs, getattr(_acp, "bridge_port", 0))
@@ -2235,35 +2418,41 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             image_names=list(attachment_names or []),
             chat_mode=props.chat_mode,
             context=" ".join(p for p in (_scene_context_line(context), editor_line) if p) if external else "",
+            thread=threads.tag(thread),
         )
         config = LoopConfig(llm_url=llm_url or None, api_key=api_key or None,
                             model=model, mcp_port=send_mcp_port)
+        # The thread's system prompt (and where the user is) is read now, on the main
+        # thread, also for a message that waits for another thread's turn (#358).
+        agent_controller.prefetch_main_thread_context(thread)
+        if editor_line and not external:     # our loop: the editor rides with this turn's system prompt
+            state.prefetched_system_prompt += "\n\n# Where the user is\n" + editor_line
 
         # A running turn queues the message, unless the user pressed Stop
-        # (see LoopEngine.submit).  Only the started path shows "reading".
-        if engine.is_busy() and not agent_controller._stop_event.is_set():
+        # (see LoopEngine.submit).  Another thread's turn makes it wait in its own
+        # thread's queue (one turn at a time, #357).  Only the started path shows "reading".
+        busy = engine.is_busy() and not agent_controller.thread_stop(thread).is_set()
+        if busy or (not external and agent_controller.turn_blocked(thread)):
             pos = engine.enqueue(prompt, config)
             props.chat_input = ""
-            self.report({"INFO"}, "Message queued (position {:d})".format(pos))
+            other = agent_controller.THREADS.running()
+            self.report({"INFO"}, "Message queued (position {:d})".format(pos) if busy or other is None else
+                        "Waits for the {:s} thread's turn".format(_thread_title(other)))
             _redraw_areas(context)
             return {"FINISHED"}
 
         # Clear input and start processing.  Show the "reading" phase at once,
         # before the worker thread even starts, so the send never looks frozen.
         props.chat_input = ""
-        agent_controller._agent_state.turn_phase = "reading"
-        props.chat_status = "Reading your message..."
-        agent_controller._agent_state.ui_status = "Reading your message..."
-        # Refresh bpy-derived values (system prompt, prefs) HERE, on the main
-        # thread, so the turn worker never reads bpy itself -- an off-main
-        # bpy read races Blender's context counter and spams the console.
-        agent_controller.prefetch_main_thread_context()
-        if editor_line and not external:     # our loop: the editor rides with this turn's system prompt
-            agent_controller._agent_state.prefetched_system_prompt += "\n\n# Where the user is\n" + editor_line
+        state.turn_phase = "reading"
+        if thread.is_default:       # the shared status line mirrors the default thread only
+            props.chat_status = "Reading your message..."
+        state.ui_status = "Reading your message..."
 
         from . import coworker_api
-        coworker_api.turn_started(_turn_label(context))      # the undo step to revert to
-        _approvals_new_turn()                                  # "Allow this turn" ends with the turn
+        coworker_api.turn_started(_turn_label(context, thread))     # the undo step to revert to
+        _approvals_new_turn(thread)                            # "Allow this turn" ends with the turn
+        thread.unread = False
         engine.submit(prompt, config)
         return {"FINISHED"}
 
@@ -2276,6 +2465,11 @@ class BFACW_OT_chat_clear(Operator):  # type: ignore[misc]
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         from . import session_memory as _sm
+        thread = _ui_thread(context)
+        if not thread.is_default:       # an editor's thread: a fresh chat for it alone (#358)
+            _new_chat_in_thread(thread)
+            _redraw_areas(context)
+            return {"FINISHED"}
         agent_controller._agent_state.conversation_history.clear()
         agent_controller._agent_state.streaming_text = ""
         agent_controller._agent_state.reasoning_text = ""
@@ -2304,6 +2498,28 @@ class BFACW_OT_chat_clear(Operator):  # type: ignore[misc]
         _save_chat_history()
         _redraw_areas(context)
         return {"FINISHED"}
+
+
+def _new_chat_in_thread(thread) -> None:
+    """New Thread in an editor's thread: its history, plan, domains, text blocks and
+    remembered scene-lock names start again; the other threads keep theirs (#358)."""
+    from . import session_memory as _sm
+    state = agent_controller.thread_state(thread)
+    _save_thread_chat(thread)
+    state.conversation_history = []
+    state.streaming_text = state.reasoning_text = ""
+    state.reset_usage()
+    with _sm.store_lock:
+        thread.store.reset()
+    thread.turn_count = 0
+    agent_controller._reset_session_domains(thread)
+    agent_controller.clear_session_scene_lock(thread)
+    agent_controller._clear_coworker_text_blocks(thread)
+    thread.chat_id = _chat_index().new_id()
+    thread.session = ""
+    if _acp is not None and _acp.connected:
+        from . import threads
+        _acp.forget_thread(threads.tag(thread))     # its next turn opens a fresh session
 
 
 _RECENT: dict = {"mtime": None, "paths": []}
@@ -2673,12 +2889,13 @@ class BFACW_OT_queue_item(Operator):  # type: ignore[misc]
     def execute(self, context: bpy.types.Context) -> set[str]:
         agent = _is_external_agent(context) and _acp is not None
         props = context.window_manager.bfacw_chat_props
+        queue = agent_controller.thread_queue(_ui_thread(context))      # this chat's thread (#358)
         if self.action == "NEXT":
-            ok = _acp.queue_to_front(self.index) if agent else agent_controller._message_queue.move_to_front(self.index)
+            ok = _acp.queue_to_front(self.index) if agent else queue.move_to_front(self.index)
             if not ok:
                 return {"CANCELLED"}
         elif self.action in ("EDIT", "DELETE", "SEND"):
-            taken = _acp.remove_queued(self.index) if agent else agent_controller._message_queue.remove(self.index)
+            taken = _acp.remove_queued(self.index) if agent else queue.remove(self.index)
             if taken is None:
                 return {"CANCELLED"}
             text = taken.text if agent else str(taken.get("message", ""))
@@ -2703,7 +2920,7 @@ class BFACW_OT_queue_clear(Operator):  # type: ignore[misc]
         if _is_external_agent(context) and _acp is not None:
             _acp.clear_queue()
         else:
-            agent_controller._message_queue.clear()
+            agent_controller.thread_queue(_ui_thread(context)).clear()
         self.report({"INFO"}, "Message queue cleared")
         _redraw_areas(context)
         return {"FINISHED"}
@@ -2794,14 +3011,18 @@ class BFACW_OT_chat_stop(Operator):  # type: ignore[misc]
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         from . import coworker_api, threads
-        tag = threads.tag(_ui_thread())     # only this chat's thread stops (#357)
+        thread = _ui_thread(context)
+        tag = threads.tag(thread)           # only this chat's thread stops (#357, #358)
         coworker_api.cancel_questions(tag)  # a question waiting for you is answered "cancelled"
         if _AUTO["run"] is not None:
             _AUTO["user_stop"] = True       # Auto stops after this turn (#177)
         from . import risky_steps
         risky_steps.APPROVALS.cancel_all(tag)   # a risky step waiting for you is declined
-        _loop_engine().cancel()
-        agent_controller._agent_state.status_text = "Stopped"
+        if _is_external_agent(context) and _acp is not None and _acp.thread != tag:
+            _acp.drop_queued(tag)           # another thread's turn runs: only this one's waiting messages go
+        else:
+            _thread_engine(thread).cancel()
+        agent_controller.thread_state(thread).status_text = "Stopped"
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
         props.chat_status = "Stopped"
@@ -2832,7 +3053,7 @@ class BFACW_OT_agent_approve(Operator):  # type: ignore[misc]
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         from . import risky_steps, threads
-        tag = threads.tag(_ui_thread())
+        tag = threads.tag(_ui_thread(context))
         answered = (_acp is not None and _acp.approvals.current(tag) is not None
                     and _acp.approvals.answer(self.choice, thread=tag))
         if not answered and not risky_steps.APPROVALS.answer(self.choice, thread=tag):
@@ -2841,12 +3062,12 @@ class BFACW_OT_agent_approve(Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
-def approval_card():
+def approval_card(context=None):
     """What the chat asks you right now (GPU card / layout box): the agent's "may I?"
     first, else a question from ask_user (Engine 6); None when nothing is open."""
     from .ui_gpu.surface import Approval
     from . import threads
-    tag = threads.tag(_ui_thread())     # this chat's thread's questions only (#357)
+    tag = threads.tag(_ui_thread(context))     # this chat's thread's questions only (#357, #358)
     request = _acp.approvals.current(tag) if _acp is not None else None
     if request is not None:
         return Approval(title=request.title, detail=request.detail, waiting=_acp.approvals.count(tag),
@@ -2929,13 +3150,14 @@ class BFACW_OT_plan_card(Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
-_TURN_SEEN = [False]      # was a turn running at the last timer tick (Engine 6b)
+_TURN_SEEN: list = [False, None]    # was a turn running at the last timer tick, and whose (Engine 6b, #358)
 
 
-def _turn_label(context: bpy.types.Context | None = None) -> str:
-    """The undo step's name: "Coworker's turn", whichever engine works."""
-    name = "Coworker"           # whichever engine works: the chat's voice is Coworker's
-    return "{:s}'s turn".format(name)
+def _turn_label(context: bpy.types.Context | None = None, thread=None) -> str:
+    """The undo step's name: "Coworker's turn", whichever engine works; an editor's
+    thread says whose, "Coworker (Node)'s turn" (#358)."""
+    from . import threads
+    return "{:s}'s turn".format(threads.label(thread))
 
 
 class BFACW_OT_revert_turn(Operator):  # type: ignore[misc]
@@ -2960,10 +3182,10 @@ Only while you haven't changed the scene since; otherwise use Edit > Undo Histor
         return {"FINISHED"}
 
 
-def _answer_typed(message: str) -> bool:
+def _answer_typed(message: str, context=None) -> bool:
     """An open question that takes text gets your message as its answer."""
     from . import coworker_api, threads
-    open_question = coworker_api.current_question(threads.tag(_ui_thread()))
+    open_question = coworker_api.current_question(threads.tag(_ui_thread(context)))
     if open_question is None or not open_question[1]["allow_text"]:
         return False
     return coworker_api.answer_question(message, open_question[0])
@@ -2979,7 +3201,7 @@ class BFACW_OT_agent_answer(Operator):  # type: ignore[misc]
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         from . import coworker_api, threads
-        open_question = coworker_api.current_question(threads.tag(_ui_thread()))
+        open_question = coworker_api.current_question(threads.tag(_ui_thread(context)))
         if open_question is None:
             return {"CANCELLED"}
         qid, q = open_question
@@ -4300,14 +4522,18 @@ def chat_timer_update() -> float | None:
     global _last_idle_redraw
     from . import agent_controller as _ac
 
-    # Animate thinking dots.
-    if _ac._agent_state.is_thinking:
-        _ac._agent_state.thinking_dots += 1
+    # Animate thinking dots (every thread's, #358).
+    for _t in _ac.THREADS.live():
+        _st = _ac.thread_state(_t)
+        if _st.is_thinking:
+            _st.thinking_dots += 1
 
-    # Fold the engine's events into its turn records (main thread only).
-    if _engine is not None:
+    # Fold the engines' events into their turn records (main thread only).
+    for _eng in [_engine] + [t.engine for t in _ac.THREADS.live() if not t.is_default]:
+        if _eng is None or _eng is _acp:
+            continue
         try:
-            _engine.drain()
+            _eng.drain()
         except Exception as _drain_ex:  # pylint: disable=broad-exception-caught
             print("[Coworker] engine drain failed: {}".format(_drain_ex))
     if _acp is not None:
@@ -4321,13 +4547,16 @@ def chat_timer_update() -> float | None:
     # and Edit > Undo History see the agent's turn as one step.  Turns the timer
     # sees start here (queued ones); a sent message already got its "before".
     from . import coworker_api as _cw
-    _thinking = bool(_ac._agent_state.is_thinking)
+    # One turn at a time across threads (#357): whichever thread is thinking (#358).
+    _thinker = next((t for t in _ac.THREADS.live() if _ac.thread_state(t).is_thinking), None)
+    _thinking = _thinker is not None
     if _thinking != _TURN_SEEN[0]:
-        (_cw.turn_started if _thinking else _cw.turn_finished)(_turn_label())
+        (_cw.turn_started if _thinking else _cw.turn_finished)(_turn_label(None, _thinker or _TURN_SEEN[1]))
         _TURN_SEEN[0] = _thinking
+        _TURN_SEEN[1] = _thinker
         if _thinking:
             _AUTO["err_before"] = _ac._agent_state.error or ""
-            _approvals_new_turn()           # a queued message is a new turn too
+            _approvals_new_turn(_thinker)   # a queued message is a new turn too
         else:
             _auto_after_turn()          # #177: keep going while the plan is on track
 
@@ -4698,12 +4927,165 @@ class BFACW_PT_chat_compact(Panel):  # type: ignore[misc]
     def draw(self, context: bpy.types.Context) -> None:
         from . import chat_editor as _ce
         props = context.window_manager.bfacw_chat_props  # type: ignore[attr-defined]
+        draw_thread_header(self.layout, context)        # Threads 2 (#358)
         col = self.layout.column(align=True)
         _ce.draw_marker_row(col, "top")
         room = col.column()
         room.scale_y = max(1.0, props.chat_panel_rows - 1.0)
         room.label(text="")
         _ce.draw_marker_row(col, "bottom")
+
+
+# -- Threads 2 (#358): the sidebar's thread header and tabs, the Coworker editor's list ----
+
+def _editor_icon(editor: str) -> str:
+    return next((s[3] for s in SIDEBAR_SPACES if s[0] == editor), 'WORLD' if not editor else 'WINDOW')
+
+
+def _status_dot(thread) -> str:
+    word, icon = _thread_status(thread)
+    return icon if word != "Idle" else 'NONE'
+
+
+def draw_thread_header(layout, context) -> None:
+    """The sidebar chat's thread: tabs (All editors / this editor), then its name and
+    status with New thread here, Switch... and Open in Coworker editor."""
+    area = context.area
+    kind = getattr(area, "type", "")
+    thread = _ui_thread(context)
+    props = context.window_manager.bfacw_chat_props  # type: ignore[attr-defined]
+    tabs = layout.row(align=True)
+    shared = agent_controller.THREADS.default
+    op = tabs.operator("bfacw.thread_tab", text="All editors", icon=_status_dot(shared) if _status_dot(shared) != 'NONE'
+                       else 'WORLD', depress=thread.is_default)
+    op.editor = ""
+    if kind in SIDEBAR_TYPES:
+        mine = agent_controller.THREADS.for_editor(kind, create=False)
+        dot = _status_dot(mine) if mine is not None else 'NONE'
+        op = tabs.operator("bfacw.thread_tab", text=_EDITOR_NAMES.get(kind, kind), depress=not thread.is_default
+                           and bool(props.chat_editor_context_only),
+                           icon=dot if dot != 'NONE' else _editor_icon(kind))
+        op.editor = kind
+    row = layout.row(align=True)
+    word, icon = _thread_status(thread)
+    row.label(text="{:s} -- {:s}".format(_thread_title(thread), word), icon=icon)
+    row.operator("bfacw.thread_new_here", text="", icon='ADD')
+    row.operator("bfacw.thread_switch", text="", icon='FILE_REFRESH')
+    row.operator("bfacw.thread_open_editor", text="", icon='WINDOW')
+
+
+def draw_thread_list(layout, context) -> None:
+    """Every live thread (icon, title, editor, status, unread dot); click shows it."""
+    col = layout.column(align=True)
+    shown = _EDITOR_SHOWN["id"]
+    for thread in agent_controller.THREADS.live():
+        word, icon = _thread_status(thread)
+        row = col.row(align=True)
+        op = row.operator("bfacw.thread_show", text=_thread_title(thread), icon=_editor_icon(thread.editor),
+                          depress=(thread.id == shown) or (thread.is_default and not shown), emboss=True)
+        op.thread_id = "" if thread.is_default else thread.id
+        sub = row.row(align=True)
+        sub.alignment = 'RIGHT'
+        sub.label(text=word if word != "Idle" else "", icon=icon if word != "Idle" else 'BLANK1')
+
+
+class BFACW_OT_thread_tab(Operator):  # type: ignore[misc]
+    """Show this chat's thread: All editors (one shared conversation) or this editor's own"""
+    bl_idname = "bfacw.thread_tab"
+    bl_label = "Thread Tab"
+    bl_options = {'INTERNAL'}
+
+    editor: StringProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        props = context.window_manager.bfacw_chat_props  # type: ignore[attr-defined]
+        if getattr(context, "area", None) is not None:
+            _AREA_PINS.pop(context.area.as_pointer(), None)
+        props.chat_editor_context_only = bool(self.editor)      # the toggle picks the tab (§2.4)
+        _redraw_areas(context)
+        return {"FINISHED"}
+
+
+class BFACW_OT_thread_new_here(Operator):  # type: ignore[misc]
+    """A fresh thread in this area only (until Bforartists restarts); another job next to this editor's"""
+    bl_idname = "bfacw.thread_new_here"
+    bl_label = "New Thread Here"
+    bl_options = {'INTERNAL'}
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        area = getattr(context, "area", None)
+        if area is None:
+            return {"CANCELLED"}
+        thread = _editor_thread(area.type if area.type in SIDEBAR_TYPES else "", pin=True)
+        _AREA_PINS[area.as_pointer()] = thread.id
+        _redraw_areas(context)
+        return {"FINISHED"}
+
+
+def _switch_items(_self, _context):
+    items = [(e["id"], (e.get("title") or e["id"])[:60], "Continue this chat here")
+             for e in _chat_index().entries()[:30]]
+    return items or [("", "No chats yet", "")]
+
+
+class BFACW_OT_thread_switch(Operator):  # type: ignore[misc]
+    """Continue another chat from History in this editor's thread"""
+    bl_idname = "bfacw.thread_switch"
+    bl_label = "Switch Thread"
+    bl_options = {'INTERNAL'}
+    bl_property = "chat_id"
+
+    chat_id: EnumProperty(items=_switch_items)  # type: ignore[valid-type]
+
+    def invoke(self, context: bpy.types.Context, _event) -> set[str]:
+        context.window_manager.invoke_search_popup(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        thread = _ui_thread(context)
+        if not self.chat_id or agent_controller.thread_state(thread).turn_active:
+            return {"CANCELLED"}
+        if thread.is_default:
+            return bpy.ops.bfacw.chat_open(chat_id=self.chat_id)
+        _save_thread_chat(thread)
+        thread.chat_id = self.chat_id
+        agent_controller.thread_state(thread).conversation_history = []
+        _load_thread_chat(thread)
+        _redraw_areas(context)
+        return {"FINISHED"}
+
+
+class BFACW_OT_thread_open_editor(Operator):  # type: ignore[misc]
+    """Show this thread in the Coworker editor (the overview of every thread)"""
+    bl_idname = "bfacw.thread_open_editor"
+    bl_label = "Open in Coworker Editor"
+    bl_options = {'INTERNAL'}
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        thread = _ui_thread(context)
+        _EDITOR_SHOWN["id"] = "" if thread.is_default else thread.id
+        bpy.ops.bfacw.open_coworker_editor()
+        _redraw_areas(context)
+        return {"FINISHED"}
+
+
+class BFACW_OT_thread_show(Operator):  # type: ignore[misc]
+    """Show this thread in the Coworker editor"""
+    bl_idname = "bfacw.thread_show"
+    bl_label = "Show Thread"
+    bl_options = {'INTERNAL'}
+
+    thread_id: StringProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        _EDITOR_SHOWN["id"] = self.thread_id
+        thread = agent_controller.THREADS.get(self.thread_id)
+        if thread is not None:
+            thread.unread = False
+        _redraw_areas(context)
+        from . import chat_editor as _ce
+        _ce._tag_chat_regions()
+        return {"FINISHED"}
 
 
 class BFACW_PT_attach_popover(Panel):  # type: ignore[misc]
@@ -4764,7 +5146,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         layout = self.layout
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
-        state = agent_controller._agent_state
+        state = _ui_state(context)      # the thread this chat shows (#358)
 
         if not draw_chat_controls(layout, context):
             return
@@ -4814,7 +5196,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         layout = self.layout
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
-        state = agent_controller._agent_state
+        state = _ui_state(context)      # the thread this chat shows (#358)
         prefs = context.preferences.addons[__package__].preferences
         # Snapshot the history ONCE per frame.  The turn loop runs on a worker
         # thread and MUTATES this same list mid-draw (compaction reassigns it,
@@ -5392,7 +5774,7 @@ class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
 
     def draw(self, context: bpy.types.Context) -> None:
         layout = self.layout
-        state = agent_controller._agent_state
+        state = _ui_state(context)      # the thread this chat shows (#358)
         queue_items = _queued_messages(context)
 
         if not queue_items:
@@ -5662,7 +6044,7 @@ class BFACW_PT_chat_text_editor(Panel):  # type: ignore[misc]
         layout = self.layout
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
-        state = agent_controller._agent_state
+        state = _ui_state(context)      # the thread this chat shows (#358)
         prefs = context.preferences.addons[__package__].preferences
         is_harness = (prefs.operating_mode == "EXTERNAL_HARNESS")
 
@@ -6651,6 +7033,11 @@ _classes = (
     BFACW_PT_chat_panel,
     BFACW_PT_chat_controls,
     BFACW_PT_attach_popover,
+    BFACW_OT_thread_tab,
+    BFACW_OT_thread_new_here,
+    BFACW_OT_thread_switch,
+    BFACW_OT_thread_open_editor,
+    BFACW_OT_thread_show,
     BFACW_PT_chat_status,
     BFACW_PT_chat_session,
     BFACW_PT_chat_session_context,
@@ -6677,6 +7064,10 @@ def register() -> None:
     # Register the chat UI update timer.
     if not bpy.app.background:
         bpy.app.timers.register(chat_timer_update, first_interval=1.0, persistent=True)
+    if _threads_on_load not in bpy.app.handlers.load_pre:
+        bpy.app.handlers.load_pre.append(_threads_on_load)
+    if _threads_on_save not in bpy.app.handlers.save_post:
+        bpy.app.handlers.save_post.append(_threads_on_save)
 
 
 def unregister() -> None:
@@ -6684,6 +7075,13 @@ def unregister() -> None:
     # never overwrite the saved chat with nothing.
     if _has_user_messages():
         _save_chat_history()
+    for _thread in agent_controller.THREADS.live():        # each editor's chat too (#358)
+        if not _thread.is_default:
+            _save_thread_chat(_thread)
+    if _threads_on_load in bpy.app.handlers.load_pre:
+        bpy.app.handlers.load_pre.remove(_threads_on_load)
+    if _threads_on_save in bpy.app.handlers.save_post:
+        bpy.app.handlers.save_post.remove(_threads_on_save)
 
     # The bridge stops with the add-on (__init__): close the External Agent too, or the chat
     # says "Connected" after re-enabling while its tools can't reach Blender.

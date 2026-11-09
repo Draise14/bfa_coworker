@@ -103,7 +103,8 @@ def _status(context: Any) -> TopBar:
     """Mode, status and Start / Stop, worded like the panel chat."""
     from . import ui_chat
     prefs = _prefs(context)
-    state = agent_controller._agent_state
+    state = ui_chat._ui_state(context)          # the thread this chat shows (#358)
+    services = agent_controller._agent_state    # service status is shared
     props = _props()
     if _is_harness(prefs):
         running = mcp_to_blender_server.is_running()
@@ -128,15 +129,17 @@ def _status(context: Any) -> TopBar:
                       chat_mode=getattr(props, "chat_mode", ""))
     local = prefs is not None and prefs.operating_mode == "LOCAL_LLM"
     status = getattr(props, "chat_status", "") or ""
+    if state is not services:           # an editor's thread has its own status line (#358)
+        status = ui_chat._thread_status(ui_chat._ui_thread(context))[0]
     if state.is_thinking:
         elapsed = time.time() - state.thinking_start_time if state.thinking_start_time else 0.0
         status = "{:s} {:s} ({:s})".format(ui_chat._phase_text(state), ui_chat._spinner_char(state),
                                            ui_chat._fmt_duration(elapsed))
-    elif not state.mcp_server_running:
+    elif not services.mcp_server_running:
         status = "Offline"
     elif state.error:
         status = "Error: {:s}".format(state.error)
-    ok = state.mcp_server_running
+    ok = services.mcp_server_running
     icon = ("CHECKMARK" if ok and not state.is_thinking and not state.error else
             "SORTTIME" if state.is_thinking else "ERROR" if state.error else "CANCEL")
     return TopBar(mode_label="Local LLM" if local else "Remote API",
@@ -180,10 +183,12 @@ def _harness_notice(prefs: Any) -> Notice:
     ), rows=rows, rows_title="What your client did in Blender")
 
 
-def _history() -> list[dict]:
-    """The whole conversation, retired turns first (like the panel chat)."""
-    from . import session_memory
-    return list(session_memory.store.retired_history) + list(agent_controller._agent_state.conversation_history)
+def _history(context: Any = None) -> list[dict]:
+    """The shown thread's whole conversation, retired turns first (like the panel chat)."""
+    from . import ui_chat
+    thread = ui_chat._ui_thread(context)
+    store = agent_controller._memory(thread).store
+    return list(store.retired_history) + list(agent_controller.thread_state(thread).conversation_history)
 
 
 # Object type -> its Outliner icon, so the @ list reads like the Outliner.
@@ -333,9 +338,9 @@ def _view_zoom(region: Any) -> float:
         return 1.0
 
 
-def _approval_card() -> Any:
+def _approval_card(context: Any = None) -> Any:
     from . import ui_chat
-    return ui_chat.approval_card()
+    return ui_chat.approval_card(context)
 
 
 def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0) -> None:
@@ -345,20 +350,24 @@ def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0) -> None:
     if prefs is None or props is None:
         return
     surface = _surface(region, compact)
-    state = agent_controller._agent_state
+    from . import ui_chat
+    thread = ui_chat._ui_thread(context)       # each editor its own thread (#358)
+    state = agent_controller.thread_state(thread)
+    thread.unread = False                       # seen
     harness = _is_harness(prefs)
-    _sync_box(surface, props, state.is_thinking, state.mcp_server_running, harness)
+    _sync_box(surface, props, state.is_thinking, agent_controller._agent_state.mcp_server_running, harness)
     style = gpu_style.style_from_preferences(context.preferences, zoom=surface.zoom * zoom)
     canvas = gpu_layout.Canvas(style, render.measure, surface.interaction())
     surface.bounds = rect
     surface.drop_hover = drop_hover()
     from . import coworker_api
     surface.view.revertable = coworker_api.can_revert() and not state.is_thinking
-    surface.view.suggest = not harness and _approval_card() is None    # no buttons while a card asks (#220)
+    card = _approval_card(context)
+    surface.view.suggest = not harness and card is None    # no buttons while a card asks (#220)
     typed_before = surface.box.model.text
-    actions = surface.draw(canvas, rect, _history(), live=state, top=_status(context) if compact else None,
+    actions = surface.draw(canvas, rect, _history(context), live=state, top=_status(context) if compact else None,
                            notice=_harness_notice(prefs) if harness else None,
-                           approval=_approval_card())     # also in External Harness: a risky step asks (#166)
+                           approval=card)     # also in External Harness: a risky step asks (#166)
     if surface.box.model.text != typed_before:
         # Changed by a click while drawing (an @ suggestion): share the draft now,
         # or the panel chat's own @ popup would see the old half-typed "@Ca".
@@ -1149,6 +1158,19 @@ class _ToolPanel(_CoworkerPanel):
         _draw_tool_entries(self.layout, context, self.entries(context))
 
 
+class BFACW_PT_editor_threads(_CoworkerPanel, bpy.types.Panel):
+    """Every live thread: pick one to show it here (Threads 2, #358)"""
+
+    bl_label = "Threads"
+    bl_idname = "BFACW_PT_editor_threads"
+    bl_region_type = "TOOLS"
+    bl_order = 0
+
+    def draw(self, context: Any) -> None:
+        from . import ui_chat
+        ui_chat.draw_thread_list(self.layout, context)
+
+
 class BFACW_PT_editor_tools_chat(_ToolPanel, bpy.types.Panel):
     """Start over, mention, stop"""
 
@@ -1156,9 +1178,10 @@ class BFACW_PT_editor_tools_chat(_ToolPanel, bpy.types.Panel):
     bl_idname = "BFACW_PT_editor_tools_chat"
 
     def entries(self, context):
+        from . import ui_chat
         out = [("bfacw.chat_clear", "New Thread", "ADD", {}),
                ("bfacw.mention_search", "@ Mention", "OUTLINER_OB_MESH", {})]
-        if agent_controller._agent_state.is_thinking:
+        if ui_chat._ui_state(context).is_thinking:
             out.append(("bfacw.chat_stop", "Stop", "PAUSE", {}))
         return out
 
@@ -1425,7 +1448,7 @@ def _give_back() -> None:
 _HANDLERS: list[tuple[Any, Any, str]] = []
 _CLASSES = (BFACW_CoworkerTree, BFACW_OT_open_coworker_editor, BFACW_OT_editor_zoom, BFACW_OT_editor_jump,
             BFACW_OT_editor_thumbs,
-            BFACW_MT_editor_chat, BFACW_MT_editor_view, BFACW_PT_editor_tools_chat,
+            BFACW_MT_editor_chat, BFACW_MT_editor_view, BFACW_PT_editor_threads, BFACW_PT_editor_tools_chat,
             BFACW_PT_editor_tools_attach, BFACW_PT_editor_tools_session, BFACW_PT_editor_chat,
             BFACW_OT_chat_attach_image, BFACW_OT_editor_native_edit)
 _COPIES: list[type] = []

@@ -23,6 +23,7 @@ port it runs) call the endpoint from a browser.  ``BFACW_ALLOWED_HOSTS`` /
 
 __all__ = (
     "CORS_ORIGIN_REGEX",
+    "ThreadHeaderMiddleware",
     "TokenGateMiddleware",
     "allowed_hosts",
     "allowed_origins",
@@ -132,6 +133,31 @@ def allowed_origins() -> list[str]:
         for host in _LOOPBACK_HOSTS:
             out += ["{:s}://{:s}".format(scheme, host), "{:s}://{:s}:*".format(scheme, host)]
     return out + extra_origins()
+
+
+class ThreadHeaderMiddleware:
+    """Threads 1 (#357): the ``X-Coworker-Thread`` header names the add-on's thread that
+    calls; its tools stamp it on the bridge payload (``connection.send_code``)."""
+
+    def __init__(self, app: Callable[..., Awaitable[None]]) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        thread = ""
+        if scope.get("type") == "http":
+            for name, value in scope.get("headers") or []:
+                if name.lower() == b"x-coworker-thread":
+                    thread = value.decode("latin-1").strip()[:64]
+                    break
+        if not thread:
+            await self.app(scope, receive, send)
+            return
+        from blmcp.tools_helpers.bounded_output import CURRENT_THREAD
+        token = CURRENT_THREAD.set(thread)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            CURRENT_THREAD.reset(token)
 
 
 class TokenGateMiddleware:

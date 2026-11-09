@@ -43,6 +43,7 @@ __all__ = (
     "openai_chat_completions_stream",
 )
 
+import contextlib
 import json
 import re
 import socket
@@ -51,7 +52,7 @@ import time
 import typing
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 # -- Sampling parameters (owned here; agent_controller imports them) -
@@ -102,6 +103,32 @@ def bind(state: Any, stop_event: threading.Event) -> None:
     _stop_event = stop_event
 
 
+# Threads 1 (#357): a turn's worker uses its thread's state and Stop, not the bound ones.
+_turn = threading.local()
+
+
+@contextlib.contextmanager
+def using(state: Any, stop_event: threading.Event | None) -> Iterator[None]:
+    """Requests made by the calling worker inside this block write *state* and honour
+    *stop_event* (a thread's own); outside it, the bound ones."""
+    previous = getattr(_turn, "bound", None)
+    _turn.bound = (state, stop_event)
+    try:
+        yield
+    finally:
+        _turn.bound = previous
+
+
+def _state() -> Any:
+    bound = getattr(_turn, "bound", None)
+    return bound[0] if bound is not None else _agent_state
+
+
+def _stop() -> threading.Event | None:
+    bound = getattr(_turn, "bound", None)
+    return bound[1] if bound is not None else _stop_event
+
+
 # -- Pure conversation helpers, injected by agent_controller --------
 # These live in agent_controller (they shape the conversation history)
 # but the transport's fallback paths need them.  Injected as a namespace
@@ -128,7 +155,8 @@ def _h(name: str):
 
 def _stop_requested() -> bool:
     """True when the user requested a stop (safe before bind())."""
-    return _stop_event is not None and _stop_event.is_set()
+    stop = _stop()
+    return stop is not None and stop.is_set()
 
 
 # -- LLM HTTP 500 fault classification ------------------------------
@@ -397,8 +425,8 @@ def openai_chat_completions(
     """
     # Start each call with a clean error classification so a stale overflow
     # from a previous call is never mistaken for the current failure.
-    if _agent_state is not None:
-        _agent_state.error_kind = ""
+    if _state() is not None:
+        _state().error_kind = ""
     messages = _safe_request_messages(messages)
     temperature = _DEFAULT_TEMPERATURE_CODE if chat_mode == "AGENT" else _DEFAULT_TEMPERATURE_PROSE
     body: dict[str, Any] = {
@@ -656,7 +684,7 @@ def openai_chat_completions(
                 # Tell the user why the agent's behaviour changed.  Without
                 # this the downgrade is invisible and looks like the model
                 # simply got worse at calling tools.
-                _agent_state.warning = (
+                _state().warning = (
                     "This model's chat template rejects native tool calling, so "
                     "Coworker switched to text-based tool calling for this "
                     "request. Tool use may be less reliable than usual."
@@ -738,14 +766,14 @@ def openai_chat_completions(
                 # caller can compact the conversation and retry, and surface
                 # the real server reason instead of a bare 400.
                 if is_context_overflow(_error_body):
-                    _agent_state.error_kind = "context_overflow"
+                    _state().error_kind = "context_overflow"
                     _msg = context_overflow_message(_error_body)
                     print("[Coworker] _openai_chat_completions: 400 context window "
                           "exceeded -- not retrying the same payload")
                     if _error_body:
                         print("[Coworker] _openai_chat_completions:   400 body = {:s}".format(_error_body[:500]))
-                    _agent_state.error = _msg[:500]
-                    _agent_state.error_full = _msg
+                    _state().error = _msg[:500]
+                    _state().error_full = _msg
                     return None
                 if ("parser" in _error_body and "template" in _error_body) or "Unexpected message role" in _error_body:
                     if _flattened:
@@ -787,8 +815,8 @@ def openai_chat_completions(
                       "not retrying the same payload")
                 if _error_body:
                     print("[Coworker] _openai_chat_completions:   400 body = {:s}".format(_error_body[:500]))
-                _agent_state.error = _msg[:500]
-                _agent_state.error_full = _msg
+                _state().error = _msg[:500]
+                _state().error_full = _msg
                 return None
 
             # -- 503 Service Unavailable: model still loading ----------
@@ -818,8 +846,8 @@ def openai_chat_completions(
                     ex.code, (_body or str(ex))[:500])
                 print("[Coworker] _openai_chat_completions: HTTP {:d} is not "
                       "retryable -- surfacing the reason".format(ex.code))
-                _agent_state.error = _msg[:500]
-                _agent_state.error_full = _msg
+                _state().error = _msg[:500]
+                _state().error_full = _msg
                 return None
             if attempt < max_retries - 1:
                 # A malformed tool call is a *generation* failure, not a
@@ -856,14 +884,14 @@ def openai_chat_completions(
                 _msg = server_fault_message(_500_body)
                 print("[Coworker] _openai_chat_completions: all attempts FAILED -- "
                       "LLM server fault ({:s})".format(str(ex)))
-                _agent_state.error = _msg[:500]
-                _agent_state.error_full = _msg
+                _state().error = _msg[:500]
+                _state().error_full = _msg
             elif _is_500 and _fault == _FAULT_TOOLCALL:
                 _msg = toolcall_fault_message(_500_body)
                 print("[Coworker] _openai_chat_completions: all attempts FAILED -- "
                       "malformed tool call ({:s})".format(str(ex)))
-                _agent_state.error = _msg[:500]
-                _agent_state.error_full = _msg
+                _state().error = _msg[:500]
+                _state().error_full = _msg
             else:
                 # Reuse the body read once at the top of the handler.  Reading
                 # ``ex.read()`` again returns empty, which is exactly how a
@@ -873,12 +901,12 @@ def openai_chat_completions(
                 if _error_body:
                     print("[Coworker] _openai_chat_completions: all attempts FAILED -- {:s}".format(str(ex)))
                     print("[Coworker] _openai_chat_completions:   500 body = {:s}".format(_error_body[:500]))
-                    _agent_state.error = "LLM request failed: {:s}".format(_error_body[:500])
-                    _agent_state.error_full = "LLM request failed: {:s}".format(_error_body)
+                    _state().error = "LLM request failed: {:s}".format(_error_body[:500])
+                    _state().error_full = "LLM request failed: {:s}".format(_error_body)
                 else:
                     print("[Coworker] _openai_chat_completions: all attempts FAILED -- {:s}".format(str(ex)))
-                    _agent_state.error = "LLM request failed: {:s}".format(str(ex))
-                    _agent_state.error_full = "LLM request failed: {:s}".format(str(ex))
+                    _state().error = "LLM request failed: {:s}".format(str(ex))
+                    _state().error_full = "LLM request failed: {:s}".format(str(ex))
             return None
     return None
 
@@ -906,11 +934,11 @@ def _clear_stale_errors() -> None:
     Only ``error_kind`` used to be reset per call, so a stale ``error`` /
     ``error_full`` from an earlier failure could be read between calls.
     """
-    if _agent_state is None:
+    if _state() is None:
         return
     for _attr in ("error", "error_full", "error_kind"):
         try:
-            setattr(_agent_state, _attr, "")
+            setattr(_state(), _attr, "")
         except Exception:  # pylint: disable=broad-exception-caught
             pass
 
@@ -1079,8 +1107,8 @@ def openai_chat_completions_stream(
     """
     # Start each call with a clean error classification (see the
     # non-streaming helper) so a stale overflow is never misattributed.
-    if _agent_state is not None:
-        _agent_state.error_kind = ""
+    if _state() is not None:
+        _state().error_kind = ""
     messages = _safe_request_messages(messages)
     temperature = _DEFAULT_TEMPERATURE_CODE if chat_mode == "AGENT" else _DEFAULT_TEMPERATURE_PROSE
     body: dict[str, Any] = {
@@ -1206,16 +1234,16 @@ def openai_chat_completions_stream(
         if got_first_token:
             print("[Coworker] _openai_chat_completions_stream: stalled mid-stream "
                   "({:.0f}s with no data) -- returning partial".format(_elapsed))
-            _agent_state.warning = (
+            _state().warning = (
                 "The model stalled mid-response; the reply may be incomplete."
             )
             return _assemble_stream_result(acc)
         print("[Coworker] _openai_chat_completions_stream: no first token within "
               "{:.0f}s ({:.0f}s elapsed) -- falling back to non-streaming".format(
                   _STREAM_FIRST_TOKEN_TIMEOUT, _elapsed))
-        if _agent_state is not None:
-            _agent_state.error_kind = "stream_timeout"
-            _agent_state.error_full = (
+        if _state() is not None:
+            _state().error_kind = "stream_timeout"
+            _state().error_full = (
                 "No response from the model within {:.0f}s (server may be busy "
                 "or the model may still be loading).".format(_STREAM_FIRST_TOKEN_TIMEOUT)
             )
@@ -1226,7 +1254,7 @@ def openai_chat_completions_stream(
             # the user sees the content rather than a blank panel.
             print("[Coworker] _openai_chat_completions_stream: stream dropped "
                   "mid-generation ({:s}) -- returning partial".format(str(ex)))
-            _agent_state.warning = (
+            _state().warning = (
                 "The response stream was interrupted; the reply may be incomplete."
             )
             return _assemble_stream_result(acc)
@@ -1236,9 +1264,9 @@ def openai_chat_completions_stream(
         # non-streaming against the same unresponsive server.
         _is_timeout = isinstance(ex, socket.timeout) or isinstance(
             getattr(ex, "reason", None), socket.timeout)
-        if _is_timeout and _agent_state is not None:
-            _agent_state.error_kind = "stream_timeout"
-            _agent_state.error_full = (
+        if _is_timeout and _state() is not None:
+            _state().error_kind = "stream_timeout"
+            _state().error_full = (
                 "No response from the model within {:.0f}s (server may be busy "
                 "or the model may still be loading).".format(_STREAM_FIRST_TOKEN_TIMEOUT)
             )
@@ -1256,10 +1284,10 @@ def openai_chat_completions_stream(
             except Exception:  # pylint: disable=broad-exception-caught
                 _stream_body = ""
             if _stream_body and is_context_overflow(_stream_body):
-                if _agent_state is not None:
-                    _agent_state.error_kind = "context_overflow"
-            if _stream_body and _agent_state is not None:
-                _agent_state.error_full = "LLM stream failed: {:s}".format(_stream_body[:500])
+                if _state() is not None:
+                    _state().error_kind = "context_overflow"
+            if _stream_body and _state() is not None:
+                _state().error_full = "LLM stream failed: {:s}".format(_stream_body[:500])
         return None
 
     if not got_first_token:

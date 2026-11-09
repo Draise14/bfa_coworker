@@ -17,6 +17,11 @@ the oldest open question as a card (choices as buttons; with *allow_text*,
 what you type next answers it); the tool polls :func:`question_state` until it
 is answered.  Stop cancels every open question.
 
+Threads 1 (#357): the bridge says which thread a call comes from
+(:func:`for_thread`); its plan goes to that thread's Goal & Plan, its questions
+carry the thread (the chat can show and Stop can cancel one thread's), and the
+digest keeps each thread's own earlier snapshots.
+
 Long jobs (Tools 6, #309): a background render or bake registers a checker with
 :func:`start_job` and answers with its id; ``get_job_status`` reads
 :func:`job_status`.  The render and bake handlers registered here feed the
@@ -27,6 +32,7 @@ from __future__ import annotations
 
 __all__ = (
     "answer_question",
+    "for_thread",
     "attached_image",
     "cancel_question",
     "cancel_questions",
@@ -40,10 +46,11 @@ __all__ = (
     "update_plan",
 )
 
+import contextlib
 import hashlib
 import itertools
 import threading
-from typing import Any
+from typing import Any, Iterator
 
 _lock = threading.Lock()
 _ids = itertools.count(1)
@@ -52,6 +59,33 @@ _questions: dict[str, dict[str, Any]] = {}
 _MAX_CHOICES = 6
 # Auto mode (#177): while set, a question is answered with this at once.
 auto_answer = [""]
+# The thread the bridge runs a call for (#357; "" = the default thread).  The bridge
+# runs one call at a time on the main thread, so one slot is enough.
+_thread = [""]
+
+
+@contextlib.contextmanager
+def for_thread(thread: str) -> Iterator[None]:
+    """The bridge runs a call for *thread* (its tag) inside this block."""
+    previous, _thread[0] = _thread[0], str(thread or "")
+    try:
+        yield
+    finally:
+        _thread[0] = previous
+
+
+def _store() -> Any:
+    """The calling thread's session store (its Goal & Plan)."""
+    from . import session_memory
+    if _thread[0]:
+        try:
+            from . import agent_controller
+            thread = agent_controller.THREADS.get(_thread[0])
+            if thread is not None:
+                return agent_controller._memory(thread).store
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+    return session_memory.store
 
 
 def _redraw() -> None:
@@ -68,20 +102,21 @@ def update_plan(args: dict[str, Any]) -> str:
     """Set or tick the plan the Goal & Plan panel shows (the same as the local loop's)."""
     from . import session_memory
     with session_memory.store_lock:
-        result = session_memory.store.goal.apply_update(args if isinstance(args, dict) else {})
+        result = _store().goal.apply_update(args if isinstance(args, dict) else {})
     _redraw()
     return result
 
 
 # -- Questions ----------------------------------------------------------------------
 def post_question(question: str, choices: list[str] | None = None, allow_text: bool = True,
-                  source: str = "") -> str:
+                  source: str = "", thread: str | None = None) -> str:
     choices = [str(c).strip() for c in (choices or []) if str(c).strip()][:_MAX_CHOICES]
     qid = "q{:d}".format(next(_ids))
     with _lock:
         _questions[qid] = {"question": str(question).strip() or "?", "choices": choices,
                            "allow_text": bool(allow_text or not choices),
-                           "answer": auto_answer[0] or None, "source": source}
+                           "answer": auto_answer[0] or None, "source": source,
+                           "thread": _thread[0] if thread is None else thread}
     _redraw()
     return qid
 
@@ -99,19 +134,23 @@ def question_state(qid: str) -> dict[str, Any]:
                 "cancelled": q["answer"] is False}
 
 
-def current_question() -> tuple[str, dict[str, Any]] | None:
-    """The oldest open question ``(id, question)`` for the chat to show, or None."""
+def _mine(q: dict[str, Any], thread: str | None) -> bool:
+    return thread is None or q.get("thread", "") == thread
+
+
+def current_question(thread: str | None = None) -> tuple[str, dict[str, Any]] | None:
+    """The oldest open question ``(id, question)`` (of *thread*) for the chat to show, or None."""
     with _lock:
         for qid, q in _questions.items():
-            if q["answer"] is None:
+            if q["answer"] is None and _mine(q, thread):
                 return qid, dict(q)
     return None
 
 
-def answer_question(answer: str, qid: str = "") -> bool:
-    """Answer *qid* (or the oldest open one); False when there's none."""
+def answer_question(answer: str, qid: str = "", thread: str | None = None) -> bool:
+    """Answer *qid* (or the oldest open one, of *thread*); False when there's none."""
     with _lock:
-        open_ids = [i for i, q in _questions.items() if q["answer"] is None]
+        open_ids = [i for i, q in _questions.items() if q["answer"] is None and _mine(q, thread)]
         target = qid if qid in open_ids else (open_ids[0] if open_ids and not qid else "")
         if not target:
             return False
@@ -127,11 +166,11 @@ def cancel_question(qid: str) -> None:
     _redraw()
 
 
-def cancel_questions() -> None:
-    """Stop: every open question is answered "cancelled"."""
+def cancel_questions(thread: str | None = None) -> None:
+    """Stop: every open question (of *thread*) is answered "cancelled"."""
     with _lock:
         for q in _questions.values():
-            if q["answer"] is None:
+            if q["answer"] is None and _mine(q, thread):
                 q["answer"] = False
     _redraw()
 
@@ -297,7 +336,9 @@ def unregister() -> None:
 
 # -- Scene digest -------------------------------------------------------------------
 _MAX_OBJECTS = 40
-_snapshots: dict[str, dict[str, tuple]] = {}      # hash -> {object name: fingerprint}
+# thread tag -> {hash -> {object name: fingerprint}}: each thread keeps its own last
+# snapshots, so another thread's reads never push its "since" baseline out (#357).
+_snapshots: dict[str, dict[str, dict[str, tuple]]] = {}
 _MAX_SNAPSHOTS = 8
 
 
@@ -345,9 +386,10 @@ def scene_digest(since: str = "") -> dict[str, Any]:
                             "mode": context.mode,
                             "active": context.view_layer.objects.active.name
                             if context.view_layer.objects.active else None}
-    if len(_snapshots) >= _MAX_SNAPSHOTS and digest not in _snapshots:
-        _snapshots.pop(next(iter(_snapshots)))
-    _snapshots[digest] = prints
+    snapshots = _snapshots.setdefault(_thread[0], {})
+    if len(snapshots) >= _MAX_SNAPSHOTS and digest not in snapshots:
+        snapshots.pop(next(iter(snapshots)))
+    snapshots[digest] = prints
     if since and since == digest:
         return dict(head, unchanged=True)
     head["selected"] = [ob.name for ob in context.selected_objects][:10]
@@ -355,7 +397,7 @@ def scene_digest(since: str = "") -> dict[str, Any]:
     for ob in objects:
         counts[ob.type] = counts.get(ob.type, 0) + 1
     head["counts"] = counts
-    before = _snapshots.get(since) if since else None
+    before = snapshots.get(since) if since else None
     if before is not None:
         added = sorted(set(prints) - set(before))
         removed = sorted(set(before) - set(prints))

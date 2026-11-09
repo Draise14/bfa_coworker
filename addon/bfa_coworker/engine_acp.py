@@ -98,6 +98,12 @@ class AcpEngine:
         self.on_request: Callable[[str], None] | None = None  # each turn's message (Goal & Plan)
         self.only_coworker_tools = True      # off: the agent may also use its own tools
         self.bridge_port = 0                 # the Blender bridge port its tools were given
+        # Threads 1 (#357): one agent session per thread on the same process, one turn at
+        # a time.  A prompt's ``thread`` picks the session and the chat it writes to.
+        self.thread = ""                     # the thread whose session is current ("" = default)
+        self.state_for: Callable[[str], Any] | None = None   # a thread's chat state
+        self._threads: dict[str, tuple[str, Any, ChatStateApplier]] = {}
+        self._turn_appliers: dict[str, ChatStateApplier] = {}
 
     # -- connection ----------------------------------------------------------------
     def connect(self, argv: list[str], mcp_entry: dict[str, Any], cwd: str,
@@ -133,6 +139,7 @@ class AcpEngine:
             server = stdio_mcp_server(store_paths.real_path(mcp_entry["command"]),
                                       [store_paths.real_path(a) for a in mcp_entry.get("args") or []],
                                       dict(mcp_entry.get("env") or {}))
+            self._cwd, self._servers = cwd, [server]
             self.session_id = self._open_session(client, info.load_session, resume, cwd, [server])
             if not self.session_id:
                 raise AcpError("the agent did not open a session")
@@ -159,7 +166,6 @@ class AcpEngine:
     def _open_session(self, client: AcpClient, can_load: bool, resume: str, cwd: str,
                       servers: list[dict[str, Any]]) -> str:
         """Continue *resume* (``session/load``) when the agent can, else open a new session."""
-        self._cwd, self._servers = cwd, servers
         self.resumed = self.resume_failed = False
         session_id, result = "", {}
         if resume and can_load:
@@ -174,9 +180,53 @@ class AcpEngine:
         self.config_options = list(result.get("configOptions") or [])
         if session_id:
             self._apply_preferred(client, session_id)
-        if session_id and self.on_session is not None:
-            self.on_session(session_id)
+        if session_id and self.on_session is not None and not self.thread:
+            self.on_session(session_id)     # the default thread's session, filed under its chat
         return session_id
+
+    # -- threads (#357) ----------------------------------------------------------------
+    def use_thread(self, thread: str) -> None:
+        """Turns from now on run in *thread*'s own session and write its chat (between turns)."""
+        if thread == self.thread:
+            return
+        self._threads[self.thread] = (self.session_id, self.state, self.applier)
+        session_id, state, applier = self._threads.get(thread, ("", None, None))
+        if state is None:
+            state = self.state_for(thread) if self.state_for is not None else self.state
+            applier = ChatStateApplier(state, on_plan=self.applier.on_plan)
+            applier.agent_name = self.applier.agent_name
+        self.thread, self.session_id, self.state, self.applier = thread, session_id, state, applier
+
+    def forget_thread(self, thread: str) -> None:
+        """New Thread in an editor's thread (#358): its next turn opens a fresh session."""
+        if thread == self.thread:
+            if not self.is_busy():
+                self.session_id = ""
+        else:
+            self._threads.pop(thread, None)
+
+    def drop_queued(self, thread: str) -> int:
+        """Stop in a thread whose turn isn't the running one: its waiting messages go."""
+        kept = [p for p in self._queue if p.thread != thread]
+        dropped = len(self._queue) - len(kept)
+        self._queue.clear()
+        self._queue.extend(kept)
+        if dropped:
+            self._changed()
+        return dropped
+
+    def _servers_for(self, thread: str) -> list[dict[str, Any]]:
+        """The MCP server entries for *thread*'s session: its id in their env, so the
+        bridge knows who calls (``BFACW_THREAD_ID``)."""
+        if not thread:
+            return self._servers
+        out = []
+        for server in self._servers:
+            server = dict(server)
+            env = [e for e in server.get("env") or [] if e.get("name") != "BFACW_THREAD_ID"]
+            server["env"] = env + [{"name": "BFACW_THREAD_ID", "value": thread}]
+            out.append(server)
+        return out
 
     # -- the agent's own options (Agent 8): mode, model, effort -----------------------
     def pickers(self) -> list[dict[str, Any]]:
@@ -251,7 +301,7 @@ class AcpEngine:
 
         def work() -> None:
             try:
-                self.session_id = self._open_session(client, False, "", self._cwd, self._servers)
+                self.session_id = self._open_session(client, False, "", self._cwd, self._servers_for(self.thread))
             except AcpError as ex:
                 self.status = "Couldn't start a fresh session: {:s}".format(str(ex).splitlines()[0])
             self._changed()
@@ -270,7 +320,7 @@ class AcpEngine:
         def work() -> None:
             try:
                 self.session_id = self._open_session(client, self.caps.load_session, resume, self._cwd,
-                                                     self._servers)
+                                                     self._servers_for(self.thread))
             except AcpError as ex:
                 self.status = "Couldn't switch the conversation: {:s}".format(str(ex).splitlines()[0])
             self._changed()
@@ -336,8 +386,8 @@ class AcpEngine:
         return True
 
     def cancel(self) -> None:
-        self._queue.clear()
-        self.approvals.cancel_all()
+        self.drop_queued(self.thread)          # this thread's waiting messages only (#358)
+        self.approvals.cancel_all(self.thread)
         if self.client is not None and self._turn_id:
             self.client.cancel(self.session_id)
             # An agent stuck in a tool may never answer Stop: then Coworker closes it.
@@ -354,14 +404,23 @@ class AcpEngine:
         self.cancel()
 
     def drain(self) -> int:
-        """Apply the agent's events to the chat state (main thread)."""
-        return self.bus.drain_to(self.applier.apply)
+        """Apply the agent's events to the chat state (main thread): each turn's to the
+        chat of the thread it ran in (#357)."""
+        return self.bus.drain_to(self._apply)
+
+    def _apply(self, event: Any) -> None:
+        applier = self._turn_appliers.get(event.turn_id, self.applier)
+        applier.apply(event)
+        if event.kind == "turn_end":
+            self._turn_appliers.pop(event.turn_id, None)
 
     # -- turns ------------------------------------------------------------------------
     def _start(self, prompt: Prompt) -> str:
         turn_id = new_turn_id()
+        self.use_thread(prompt.thread)
         with self._lock:
             self._turn_id = turn_id
+        self._turn_appliers[turn_id] = self.applier
         # Like a local turn, the message in the chat keeps an "[attached: ...]"
         # marker for its images, which the chat draws as thumbnails.
         names = [n for n in prompt.image_names if n]
@@ -402,6 +461,9 @@ class AcpEngine:
         try:
             if self.client is None or not self.connected:
                 raise AcpError("not connected -- press Start first")
+            if not self.session_id:         # this thread's first turn: its own session (#357)
+                self.session_id = self._open_session(self.client, False, "", self._cwd,
+                                                     self._servers_for(self.thread))
             result = self.client.prompt(self.session_id, self._blocks(prompt), timeout=None)
             stop_reason = str(result.get("stopReason") or "end_turn")
         except AcpError as ex:
@@ -417,7 +479,7 @@ class AcpEngine:
                 self.connected = False
                 self.status = "The agent stopped -- press Start to reconnect"
         finally:
-            self.approvals.cancel_all()     # a question left from this turn has no one to answer
+            self.approvals.cancel_all(self.thread)   # a question left from this turn has no one to answer
             self.bus.emit("turn_end", turn_id, stop_reason=stop_reason)
             with self._lock:
                 self._turn_id = ""
@@ -434,6 +496,10 @@ class AcpEngine:
         turn_id = self._turn_id
         if not turn_id:
             return
+        client = self.client
+        session = getattr(client, "update_session", "") if client is not None else ""
+        if session and self.session_id and session != self.session_id:
+            return      # another thread's session (a cancelled turn's late chunks): not this turn (#357)
         for kind, data in update_to_events(params.get("update") or params):
             self.bus.emit(kind, turn_id, **data)
         self._changed()
@@ -498,7 +564,8 @@ class AcpEngine:
                 self.bus.emit("status", self._turn_id, text="Plan mode: {:s} not run (it would change "
                               "the scene)".format(tool))
             return
-        if (ours and not self.ask_coworker_tools) or self.approvals.allowed_always(tool) or self.never_ask:
+        if (ours and not self.ask_coworker_tools) or self.approvals.allowed_always(tool, self.thread) \
+                or self.never_ask:
             answer("once")
             return
         if self.auto_approve:           # Auto mode (#177): what your settings allow, without asking
@@ -507,7 +574,7 @@ class AcpEngine:
                 self.bus.emit("status", self._turn_id, text="Auto mode allowed {:s}".format(tool or "a tool"))
             return
         request = ApprovalRequest(tool=tool or "a tool", source="Coworker", args=call.get("rawInput"),
-                                  coworker_tool=ours)
+                                  coworker_tool=ours, thread=self.thread)
         if self._turn_id:
             self.bus.emit("status", self._turn_id, text="Waiting for you: allow {:s}?".format(request.tool))
         self.approvals.ask(request, answer)

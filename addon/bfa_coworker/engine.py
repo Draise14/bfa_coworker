@@ -132,6 +132,7 @@ class Prompt:
     image_names: list[str] = field(default_factory=list)  # display names
     context: str = ""          # live context chip (Tier 4b B6)
     chat_mode: str = "AGENT"   # "AGENT", "ASK" or "PLAN"
+    thread: str = ""           # the thread it belongs to (#357; "" = the default one)
 
 
 class Engine(Protocol):

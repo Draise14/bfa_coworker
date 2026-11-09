@@ -732,8 +732,11 @@ class TestMainConfiguration(unittest.TestCase):
 
         app = mcp_instance.streamable_http_app()
         self.assertIs(app, fake_app)
+        # Threads 1 (#357): the calling thread's header, inside CORS.
+        self.assertEqual([(c.__name__, kw) for c, kw in fake_app.middleware_calls[:1]],
+                         [("ThreadHeaderMiddleware", {})])
         self.assertEqual(
-            fake_app.middleware_calls,
+            fake_app.middleware_calls[1:],
             [
                 (
                     FakeCORSMiddleware,

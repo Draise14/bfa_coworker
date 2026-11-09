@@ -254,5 +254,31 @@ def _registered_tools():
     return tools
 
 
+class TestModelCodeNeverSkipsChecks(unittest.TestCase):
+    """The tool-code marker in the model's code is made inert before it is sent (#347)."""
+
+    _MARK = "# blmcp-toolcode-skip-preflight"
+
+    def _sent_by(self, tool, *args):
+        sent = []
+        def fake_send(code, strict_json=False):
+            del strict_json
+            sent.append(code)
+            return {"status": "ok"}
+        with unittest.mock.patch.object(ebc, "send_code", fake_send):
+            _registered_tools()[tool](*args)
+        return sent[0]
+
+    def test_execute_blender_code(self):
+        code = self._sent_by("execute_blender_code", self._MARK + "\nbpy.ops.wm.save_mainfile()\n")
+        self.assertNotIn(self._MARK, code)
+        self.assertIn("bpy.ops.wm.save_mainfile()", code)
+
+    def test_plan_code_steps(self):
+        code = self._sent_by("execute_blender_plan", [{"code": self._MARK + "\nimport os\nos.remove(p)"}])
+        self.assertNotIn(self._MARK, code)
+        self.assertIn("os.remove(p)", code)
+
+
 if __name__ == "__main__":
     unittest.main()

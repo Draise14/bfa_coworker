@@ -19,15 +19,19 @@ at once ("Auto mode doesn't do this without you").
 
 The bridge holds the answer back (its deferred response) and runs the code
 on the main thread once allowed.  Coworker's own repository tool-code is
-never stopped (it is marked ``# blmcp-toolcode-skip-preflight``).
+never stopped (its first line is ``# blmcp-toolcode-skip-preflight``); code
+the model wrote never skips the check, whatever it carries (#347).
 """
 
 from __future__ import annotations
 
 __all__ = (
     "APPROVALS",
+    "MODEL_CODE_TOOLS",
     "ask_kind",
+    "is_toolcode",
     "reason",
+    "untrusted",
     "wrap",
 )
 
@@ -41,6 +45,9 @@ APPROVALS = Approvals()
 auto_declines = [False]    # Auto mode is running: decline instead of waiting
 
 _SKIP_MARK = "# blmcp-toolcode-skip-preflight"
+# Tools whose code the model wrote (#347): the skip marker in it is never honoured,
+# or a model -- or text planted in a scene -- could switch the checks off.
+MODEL_CODE_TOOLS = frozenset(("execute_blender_code", "execute_blender_plan"))
 _RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("save the .blend file", re.compile(r"\bwm\.save_(?:as_)?mainfile\b")),
     ("open, reload or quit -- unsaved work is lost",
@@ -61,9 +68,20 @@ _TOOL_RISKS: dict[str, str] = {
 }
 
 
+def is_toolcode(code: str) -> bool:
+    """Coworker's own tool-code: the skip marker is its first line.  Skips the risky-step
+    check, autofix and preflight.  Code from :data:`MODEL_CODE_TOOLS` is :func:`untrusted` first."""
+    return code.startswith(_SKIP_MARK + "\n")
+
+
+def untrusted(code: str) -> str:
+    """*code* the model wrote, with any skip marker made inert so every check runs (#347)."""
+    return code.replace(_SKIP_MARK, "# (skip marker ignored: not Coworker's tool-code)")
+
+
 def reason(code: str) -> str:
     """What makes *code* risky, in plain words ("" when it isn't)."""
-    if not code or _SKIP_MARK in code:
+    if not code or is_toolcode(code):
         return ""
     found = [what for what, rule in _RULES if rule.search(code)]
     return " and ".join(found)

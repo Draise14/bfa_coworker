@@ -19,10 +19,13 @@ Run with::
 
 __all__ = ()
 
+import contextlib
 import importlib
+import json
 import sys
 import types
 import unittest
+from unittest import mock
 from pathlib import Path
 
 _ADDON = Path(__file__).resolve().parents[1] / "addon" / "bfa_coworker"
@@ -154,6 +157,86 @@ class TestWrap(unittest.TestCase):
         self.assertIsNone(check)
         self.assertIn("Auto mode doesn't", response["message"])
         self.assertIsNone(rs.APPROVALS.current())
+
+
+_MARK = "# blmcp-toolcode-skip-preflight\n"
+
+
+class TestSkipMarker(unittest.TestCase):
+    """Only Coworker's own tool-code skips the checks; the model's code never does (#347)."""
+
+    def test_only_the_first_line_counts(self):
+        save = "bpy.ops.wm.save_mainfile()"
+        self.assertEqual(rs.reason(_MARK + save), "")                                   # tool-code
+        self.assertTrue(rs.is_toolcode(_MARK + "import bpy\n"))
+        for planted in ("x = 1\n" + _MARK + save, "\n" + _MARK + save, "x = 1  " + _MARK + save,
+                        "    " + _MARK + save):
+            self.assertFalse(rs.is_toolcode(planted), planted)
+            self.assertEqual(rs.reason(planted), "save the .blend file", planted)
+
+    def test_model_code_with_the_marker_is_checked(self):
+        code = rs.untrusted(_MARK + "bpy.ops.wm.save_mainfile()")
+        self.assertFalse(rs.is_toolcode(code))
+        self.assertNotIn(_MARK.strip(), code)
+        self.assertEqual(rs.ask_kind("execute_blender_code", code, "RISKY", "LOCAL_LLM"),
+                         ("risky:save the .blend file", "save the .blend file"))
+        self.assertEqual(rs.MODEL_CODE_TOOLS, {"execute_blender_code", "execute_blender_plan"})
+
+
+class TestBridgeHonoursMarkerForToolcodeOnly(unittest.TestCase):
+    """The real bridge request path, with a stand-in ``bpy`` (Permissive approval, Local engine)."""
+
+    # A risky step and a preflight blocker that only appear in comments: the text checks
+    # still see them, so the code runs only when the checks are skipped.
+    _CODE = _MARK + "# bpy.ops.wm.save_mainfile()\nresult = {'ran': True}\n"
+    _PREFLIGHT = _MARK + "# action.fcurves\nresult = {'ran': True}\n"
+
+    @classmethod
+    def setUpClass(cls):
+        pkg = rs.__name__.rpartition(".")[0]
+        cls.bridge = importlib.import_module(pkg + ".mcp_to_blender_server")
+        cls.si = importlib.import_module(pkg + ".session_identity")
+        cls.sandbox = importlib.import_module(pkg + ".weak_sandbox")
+        bpy = types.ModuleType("bpy")
+        prefs = types.SimpleNamespace(approval_mode="RISKY", operating_mode="LOCAL_LLM")
+        bpy.context = types.SimpleNamespace(preferences=types.SimpleNamespace(
+            addons={pkg: types.SimpleNamespace(preferences=prefs)}))
+        cls.bpy = bpy
+
+    def setUp(self):
+        rs.APPROVALS.end_session()
+        self.addCleanup(rs.APPROVALS.end_session)
+        self.si.set_token_required(False)
+        self.addCleanup(self.si.set_token_required, True)
+        for patcher in (mock.patch.dict(sys.modules, {"bpy": self.bpy}),
+                        mock.patch.object(self.sandbox, "WeakSandboxForLLM", contextlib.nullcontext)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _send(self, tool, code):
+        request = {"type": "execute", "code": code, "strict_json": False, "tool": tool}
+        exec_result, _strict = self.bridge._execute_code_from_request(json.dumps(request).encode("utf-8"))
+        return exec_result
+
+    def test_coworker_toolcode_still_runs_unchecked(self):
+        for code in (self._CODE, self._PREFLIGHT):
+            result = self._send("get_objects_summary", code)
+            self.assertIsNone(result.check_fn)
+            self.assertEqual(result.response.get("status"), "ok", result.response)
+            self.assertEqual(result.response.get("result"), {"ran": True})
+        self.assertIsNone(rs.APPROVALS.current())
+
+    def test_model_code_with_the_marker_asks(self):
+        result = self._send("execute_blender_code", self._CODE)
+        self.assertIsNotNone(result.check_fn)                     # held back...
+        self.assertIsNone(result.check_fn())
+        self.assertIn("save the .blend file", rs.APPROVALS.current().title)   # ...until you answer
+
+    def test_model_code_with_the_marker_gets_preflight(self):
+        for tool in ("execute_blender_code", "execute_blender_plan"):
+            result = self._send(tool, self._PREFLIGHT)
+            self.assertEqual(result.response.get("status"), "error", result.response)
+            self.assertIn("[Preflight]", result.response.get("message", ""))
 
 
 if __name__ == "__main__":

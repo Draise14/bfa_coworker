@@ -11,6 +11,7 @@ __all__ = (
     "toolcode_format_call",
     "toolcode_load_from_filepath",
     "toolcode_wrap_with_calling_convention",
+    "untrusted_code",
 )
 
 import os
@@ -21,8 +22,19 @@ _PARAMS_PLACEHOLDER = "__BLMCP_PARAMS__"
 # preflight validator is aimed at LLM-generated snippets; toolcode sources
 # legitimately contain the same literal patterns (e.g. ``action.fcurves`` in
 # get_asset_tags, ``location=`` keyword text) and would be blocked by it, so
-# the bridge skips preflight for payloads carrying this marker.
+# the bridge skips preflight for payloads carrying this marker (as their first line).
 _TOOLCODE_MARKER = "# blmcp-toolcode-skip-preflight\n"
+
+
+def untrusted_code(code: str) -> str:
+    """
+    Make the toolcode marker inert in *code* the model wrote (Security 3, #347).
+
+    Only Coworker's own toolcode may skip the add-on's checks; otherwise a model
+    (or text planted in a scene) could switch them off.  The bridge ignores the
+    marker for model-code tools as well; this keeps it out of the request.
+    """
+    return code.replace(_TOOLCODE_MARKER.rstrip("\n"), "# (skip marker ignored: not Coworker's tool-code)")
 
 
 def toolcode_format_call(toolcode_template: str, params: object) -> str:

@@ -860,6 +860,7 @@ def _execute_code(
         just ``__repr__`` the value so it can fumble its way forward.
     """
     from .capture_output import CaptureOutput
+    from .risky_steps import is_toolcode as _is_toolcode
     from .weak_sandbox import WeakSandboxForLLM
 
     # Pre-populate common modules so LLM-generated code doesn't need to
@@ -891,7 +892,8 @@ def _execute_code(
             # BLENDER_EEVEE, subdivisions -> levels, ...) BEFORE preflight so
             # corrected code passes validation instead of being rejected.
             # Repository-controlled toolcode is skipped: it is already correct.
-            if "# blmcp-toolcode-skip-preflight" not in code:
+            is_toolcode = _is_toolcode(code)
+            if not is_toolcode:
                 from .autofix import _autofix_code
                 code, _fixes = _autofix_code(code)
                 if _fixes:
@@ -902,7 +904,7 @@ def _execute_code(
             # legitimately contain literal patterns the LLM-oriented checks
             # would flag (e.g. `action.fcurves`, `primitive_cube_add` in
             # comments and Params reprs), so they skip the validator.
-            if "# blmcp-toolcode-skip-preflight" in code:
+            if is_toolcode:
                 preflight_issues = []
             else:
                 preflight_issues = _preflight_check(code)
@@ -927,7 +929,6 @@ def _execute_code(
             # raises AttributeError), which made every window-dependent
             # tool (tab switching, viewport jumps, screenshots, asset
             # browser) fail with "No active window" through the harness.
-            is_toolcode = "# blmcp-toolcode-skip-preflight" in code
             _exec_error = [None]
             # LLM code that touches Blender must run on the calling (main)
             # thread.  A worker thread races Blender's global Python context
@@ -1251,6 +1252,11 @@ def _execute_code_from_request(
             "message": "Unknown request type: {!r}".format(request.get("type")),
         }), False
     code = request.get("code", "")
+    # Security 3 (#347): code the model wrote never skips the checks, even
+    # when it carries the tool-code marker.
+    from . import risky_steps
+    if str(request.get("tool") or "") in risky_steps.MODEL_CODE_TOOLS:
+        code = risky_steps.untrusted(str(code))
 
     # Not expected in normal use, but a clear message beats a cryptic trace-back,
     # Also make it clear where the error should be addressed.

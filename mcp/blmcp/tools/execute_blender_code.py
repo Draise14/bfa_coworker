@@ -9,6 +9,7 @@ __all__ = (
     "register",
 )
 
+from blmcp.tools_helpers import untrusted_code
 from blmcp.tools_helpers.blender_cli import run_blender_cli, synced_blend_for_cli
 from blmcp.tools_helpers.connection import send_code
 from mcp.server.fastmcp import FastMCP  # pylint: disable=import-error,no-name-in-module
@@ -56,7 +57,8 @@ def register(mcp: FastMCP) -> None:
         """
         # Not strict: LLM-generated code may return non-JSON-serializable values
         # (e.g. Blender objects). Use `repr` as a fallback instead of erroring.
-        return send_code(code, strict_json=False)
+        # The model's code never skips the add-on's checks (#347).
+        return send_code(untrusted_code(code), strict_json=False)
 
     @mcp.tool(
         annotations=ToolAnnotations(
@@ -104,7 +106,7 @@ def register(mcp: FastMCP) -> None:
         if templates is None:
             return {"status": "error", "message": "Template system unavailable in the connected Blender addon."}
         code = templates._plan_to_code(steps)
-        return send_code(code, strict_json=False)
+        return send_code(untrusted_code(code), strict_json=False)
 
     @mcp.tool(
         annotations=ToolAnnotations(

@@ -1301,10 +1301,11 @@ EXPECTED_TOOLS = [
 "        - vse: Video Sequencer navigation (jump_to_tab_by_name, jump_to_tab_by_space_type)\n"
 "\n"
 "        Load only what the request needs; the basic tools (scene, code, docs,\n"
-"        screenshots, plan, questions, get_job_status) are always there.\n"
+"        screenshots, plan, questions, bake_textures, render_viewport_to_path,\n"
+"        get_job_status) are always there. Called with no domains, it lists them.\n"
 "\n"
 "        Args:\n"
-"            domains: One or more domain names from the list above.\n"
+"            domains: One or more domain names from the list above (none: list them).\n"
 "\n"
 "        Returns:\n"
 "            The domains loaded and the tools they added (name and what it does).\n"
@@ -1312,16 +1313,21 @@ EXPECTED_TOOLS = [
         "inputSchema": {
             "properties": {
                 "domains": {
-                    "items": {
-                        "type": "string"
-                    },
-                    "title": "Domains",
-                    "type": "array"
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Domains"
                 }
             },
-            "required": [
-                "domains"
-            ],
             "title": "load_toolsArguments",
             "type": "object"
         }

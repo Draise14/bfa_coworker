@@ -20,8 +20,8 @@ def register(mcp: FastMCP) -> None:
         )
     )
     async def load_tools(
-        domains: list[str],
         ctx: Context,
+        domains: list[str] | None = None,
     ) -> dict[str, object]:
         """
         Make a group of specialised tools available when the task needs them. If a tool
@@ -53,14 +53,19 @@ def register(mcp: FastMCP) -> None:
         - vse: Video Sequencer navigation (jump_to_tab_by_name, jump_to_tab_by_space_type)
 
         Load only what the request needs; the basic tools (scene, code, docs,
-        screenshots, plan, questions, get_job_status) are always there.
+        screenshots, plan, questions, bake_textures, render_viewport_to_path,
+        get_job_status) are always there. Called with no domains, it lists them.
 
         Args:
-            domains: One or more domain names from the list above.
+            domains: One or more domain names from the list above (none: list them).
 
         Returns:
             The domains loaded and the tools they added (name and what it does).
         """
+        if not domains:     # #422: an empty call answers with the catalog, not a validation error
+            return {"status": "ok", "loaded": [],
+                    "domains": {d: sorted(tools) for d, tools in sorted(tool_domains.DOMAINS.items())},
+                    "note": "Call load_tools again with the domains you need, e.g. [\"rendering\"]."}
         loaded, unknown = tool_domains.load(domains)
         names = sorted(set().union(*(tool_domains.DOMAINS[d] for d in loaded))) if loaded else []
         if tool_domains.on_demand() and loaded:

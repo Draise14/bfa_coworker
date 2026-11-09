@@ -77,4 +77,4 @@
 
 ## 🔭 Next
 
-Threads that run side by side, so a scene build and a node tidy can work at the same time, and the draft and plan moving into each thread. Then the Sequencer core in 1.1.43. Follow along in [#97](https://github.com/Draise14/bfa_coworker/issues/97).
+**1.1.43: the Sequencer core.** Local transcription, Auto Captions, Remove Silences and Reframe for Vertical. After that: the draft, plan and usage move into each thread, and threads run side by side, so a scene build and a node tidy can work at the same time. Follow along in [#97](https://github.com/Draise14/bfa_coworker/issues/97).

@@ -23,6 +23,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [ ] **Add Model Generator** locally, Ultrashape, Hunyuan, similar to here: https://github.com/ahujasid/blender-mcp
 - [x] **Add CC0 resource downloader** from Polyhaven, AmbientC00, Sketchfab, etc — Polyhaven tools implemented in v1.1.37.
 
+## [v1.1.42] - 2026-11-09
+
+Threads: each editor has its own conversation. Long renders and bakes answer with a job id,
+a loop guard stops the agent from repeating itself, and secrets stay out of logs and copies.
+Release notes: `_misc/release_notes/release_notes_v1.1.42.md`.
+
+### Added
+
+- **Threads: each editor has its own conversation (#357, #358, #412, #413, #415).** Turn on **Use Editor Context Only** (the editor's icon on the chat's header) and that editor's sidebar chat shows its own thread, with its own history, Queue, Stop and status; two 3D Views share one. With it off, the chat shows the shared **All editors** thread, the single conversation you had before.
+  - **Thread tabs** on the sidebar chat's header: *All editors* / *this editor*, with a status icon while a thread is thinking, waits for you or for its turn, or is done and unread. Next to the thread's name and status: **New Thread Here** (pin this area to a fresh thread), **Switch Thread** (continue a History chat here) and **Open in Coworker Editor**.
+  - **Threads panel** on the Coworker editor's toolshelf: every live thread with its editor icon, title and status (*Done* = finished while you weren't looking); click one to show it.
+  - **One turn at a time across threads:** a message from another editor waits in its own thread's queue, and the chat says whose turn it waits for. Stop in one thread leaves the others alone.
+  - **Saved per .blend:** each editor thread saves to its own chat in History, and reopening the .blend brings each editor's last chat back.
+  - *Explain This* and *Translate...* run in the thread of the editor you right-clicked. Undo steps name the thread ("Coworker (Node)'s turn").
+  - **External Agent:** each thread gets its own session on the same agent process.
+- **Long jobs (#309, #397).** Renders and bakes no longer hold the tool call open or time out. A render still running after 45 s (or one started with `background=True`) answers with a **job id**, and the new `get_job_status` tool waits for it and reports running, done, error or cancelled, with progress where Blender gives it. The newest turn shows a **job row** ("Rendering 40% -- Render big.png") with Blender's own job bar under it. On every engine.
+- **`bake_textures`** (#397): bakes a pass (Diffuse by default) for the given mesh objects. It checks up front for a UV map, a material and an active Image Texture node with an image (and says what to add), switches to Cycles for the bake and back, and answers with a job id.
+- **Loop guard (#310, #411).** When the agent makes the same call with the same input again, the **3rd** time shows an approval card ("... a 3rd time with the same input": Allow or Deny), and the **4th** is refused without running. Reads that change nothing get more room, job status polls are never counted, and Auto mode declines the 3rd at once. On every engine, External Harness included.
+
+### Changed
+
+- **Render tools:** `render_viewport_to_path` no longer starts a second render while one runs, and removes a stale output file first, so an old file can't pass for the new one (#397).
+
+### Security
+
+- **Secrets never leak into logs, exports or copies (#346, #410).** The Remote API key, the Hugging Face token, the generation API key, the session token and any `Authorization: Bearer ...` line show as `***` in the console, `coworker.log`, `operations.jsonl`, Export / Copy Session Log, Copy Error, the chat's Copy buttons and the activity view's Copy Log. Files that hold a secret are written readable by you only. The settings backup still keeps your keys (that is its job), in a separate field, and never prints them.
+- **The MCP server's HTTP endpoint checks Host and Origin (#345, #393).** Only requests addressed to this computer, and only web pages served from this computer, are accepted (DNS-rebinding protection). In Network mode the bound address is allowed too; `BFACW_ALLOWED_HOSTS` / `BFACW_ALLOWED_ORIGINS` add more. The threat model is in `_misc/security_model.md`.
+- **The skip-preflight marker no longer works in the model's code (#347, #409).** Code carrying `# blmcp-toolcode-skip-preflight` used to skip the risky-step check, autofix and preflight. Now it only counts as the first line of Coworker's own tool code; in `execute_blender_code` and `execute_blender_plan` it is ignored, so every check runs.
+
+### Fixed
+
+- **Settings come back after a reinstall or update on 5.x (#396, #398).** The settings backup was written but never restored on Blender / Bforartists 5.x, so a reinstall or the Installer's hand-over came back with defaults (API key, mode, ports...). Settings are now restored in the right order, and one that can't be set is named instead of silently skipped.
+- **No traceback on the first start after an update (#400, #407).** The backup is restored just after `register()` instead of inside it, and auto-start reads the restored settings.
+- **Microsoft Store (MSIX) Bforartists (#390, #392).** External Agent failed with *"cwd" does not exist*, and the MCP launcher couldn't find Coworker, because a Store copy keeps new AppData files in its package folder. Coworker now hands the agent and MCP clients the real paths. *Add to <client>* edits an existing config in place and, in a Store copy, says why it won't create a missing one.
+- **The floating chat comes back after Ctrl+Space in the main window (#391, #394).** It used to stop taking clicks and keys until the window was closed. Explain This, Translate, attachments and the floating window's buttons had the same problem while a window was maximized.
+- **Attach Screen and Auto mode's next step work while a window is maximized (#401, #408).**
+- **Network-mode MCP startup no longer waits on a slow DNS lookup (#403, #406):** the lookup gives up after 1 s and uses this computer's main address.
+- **llama-server on Linux (#382, #383):** *Download llama-server* fetches the right file (no more HTTP 404), the archive unpacks with its libraries so it runs, and a custom path accepts the binary, its folder or a llama.cpp `build/bin`, and says why when it isn't usable.
+
 ## [v1.1.41] - 2026-10-22
 
 A hotfix for autosave. Release notes: `_misc/release_notes/release_notes_v1.1.41.md`.

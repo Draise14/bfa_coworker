@@ -57,6 +57,7 @@ class ApprovalRequest:
     args: Any = None            # the tool's input, for the detail line
     coworker_tool: bool = False   # one of Coworker's Blender tools
     reason: str = ""              # a risky step, in plain words (#166): "save over your .blend"
+    note: str = ""                # the card's small print, when it isn't the usual one (#310)
     id: str = ""
 
     def __post_init__(self) -> None:

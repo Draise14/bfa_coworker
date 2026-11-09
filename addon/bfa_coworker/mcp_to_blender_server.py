@@ -39,7 +39,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 DEFAULT_HOST = "localhost"
 DEFAULT_PORT = 9876
@@ -1271,23 +1271,41 @@ def _execute_code_from_request(
         print("request:\n{:s}".format(code), file=sys.stderr)
     _started = time.monotonic()
     # Engine 5 (#166) / #240: by the approval mode, a step asks first; the answer comes back deferred.
-    _kind, _why = "", ""
+    _kind, _why, _engine = "", "", ""
+    _tool = str(request.get("tool") or "")
     try:
         import bpy as _bpy  # pylint: disable=import-error
         from . import risky_steps
         _prefs = _bpy.context.preferences.addons[__package__].preferences
-        _kind, _why = risky_steps.ask_kind(str(request.get("tool") or ""), code,
-                                           getattr(_prefs, "approval_mode", "ASK"), _prefs.operating_mode)
+        _engine = _prefs.operating_mode
+        _kind, _why = risky_steps.ask_kind(_tool, code, getattr(_prefs, "approval_mode", "ASK"), _engine)
     except (KeyError, AttributeError, ImportError):
         _kind, _why = "", ""
-    if _kind:
-        from . import risky_steps
-        _response, _check = risky_steps.wrap(
-            code, strict_json, _why, lambda c, s: _execute_code(c, strict_json=s),
-            tool=str(request.get("tool") or ""), kind=_kind)
-        exec_result = _ExecResult(_response, _check)
-    else:
-        exec_result = _execute_code(code, strict_json=strict_json)
+
+    def _run() -> _ExecResult:
+        if _kind:
+            from . import risky_steps
+            _response, _check = risky_steps.wrap(
+                code, strict_json, _why, lambda c, s: _execute_code(c, strict_json=s), tool=_tool, kind=_kind)
+            return _ExecResult(_response, _check)
+        return _execute_code(code, strict_json=strict_json)
+
+    exec_result = None
+    # Runtime 1 (#310): the same call again and again asks, then is refused.  The local
+    # loop counts its own calls (its bookkeeping code repeats here on purpose).
+    if _tool and _engine in ("EXTERNAL_AGENT", "EXTERNAL_HARNESS"):
+        from . import loop_guard, risky_steps
+
+        def _proceed() -> tuple[dict[str, object], Any]:
+            _inner = _run()
+            return _inner.response, _inner.check_fn
+
+        _repeat = loop_guard.bridge_wrap(loop_guard.BRIDGE, risky_steps.APPROVALS, risky_steps.auto_declines[0],
+                                         _tool, {"code": code}, str(request.get("session") or ""), _proceed)
+        if _repeat is not None:
+            exec_result = _ExecResult(*_repeat)
+    if exec_result is None:
+        exec_result = _run()
     # Agent 9: what ran, for the activity view (External Harness) and Copy Log.
     try:
         from . import activity

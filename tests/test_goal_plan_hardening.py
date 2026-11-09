@@ -19,10 +19,12 @@ Covers the failures reported on 2026-10-05 (local 16K window):
 Run:  python -m unittest test_goal_plan_hardening  (from the tests/ folder)
 """
 
+import importlib
 import importlib.util
 import json
 import os
 import sys
+import threading
 import unittest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -544,13 +546,66 @@ class TestStopRules(_HardeningBase):
                              "stops after a few idle steps, not the whole budget")
         self.assertFalse(any("continuing (round" in s for s in statuses))
 
+    def _answer_repeats(self, choice):
+        """Answer the loop guard's card (#310) like a click would, from another thread."""
+        rs = importlib.import_module("bfa_coworker.risky_steps")
+        asked = []
+        done = threading.Event()
+
+        def run():
+            while not done.is_set():
+                req = rs.APPROVALS.current()
+                if req is not None:
+                    asked.append(req.title)
+                    rs.APPROVALS.answer(choice)
+                done.wait(0.01)
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        self.addCleanup(lambda: (done.set(), worker.join()))
+        return asked
+
+    def _ran_part(self, i):
+        with self.server.lock:
+            return len([r for r in self.server.mcp_requests if "Part{:d}'".format(i) in json.dumps(r)])
+
     def test_identical_calls_are_a_loop(self):
+        # The 3rd identical call asks (#310); "Deny" refuses it and the turn winds up.
+        asked = self._answer_repeats("deny")
         same = _tool_call_msg("c", _move(7))
         self._mk_server([same, same, same, same, same,
                          {"content": "Part 7 is placed. Anything else to adjust?"}])
         hist, _texts, _st = self._agent_turn("place part 7")
         self.assertLessEqual(len([m for m in hist if m.get("role") == "tool"]), 3)
         self.assertTrue(any(m.get("system_note") == "wrapup" for m in hist))
+        self.assertEqual(len(asked), 1)
+        self.assertIn("3rd time", asked[0])
+        tools = [m for m in hist if m.get("role") == "tool"]
+        self.assertIn("stopped this repeat", tools[-1]["content"])
+        self.assertEqual(self._ran_part(7), 2, "the denied 3rd never ran")
+
+    def test_identical_call_allowed_then_fourth_refused(self):
+        asked = self._answer_repeats("once")
+        same = _tool_call_msg("c", _move(7))
+        self._mk_server([same, same, same, same, same,
+                         {"content": "Part 7 is placed. Anything else to adjust?"}])
+        hist, _texts, _st = self._agent_turn("place part 7")
+        tools = [m for m in hist if m.get("role") == "tool"]
+        self.assertEqual(len(asked), 1, "asked once, on the 3rd")
+        self.assertEqual(len(tools), 4)
+        self.assertIn("Refused", tools[-1]["content"])
+        self.assertTrue(any(m.get("system_note") == "wrapup" for m in hist))
+        self.assertEqual(self._ran_part(7), 3, "the 3rd ran once allowed, the 4th never")
+
+    def test_identical_calls_in_auto_mode_never_wait(self):
+        rs = importlib.import_module("bfa_coworker.risky_steps")
+        rs.auto_declines[0] = True
+        self.addCleanup(rs.auto_declines.__setitem__, 0, False)
+        same = _tool_call_msg("c", _move(7))
+        self._mk_server([same, same, same, same, {"content": "Stopped repeating."}])
+        hist, _texts, _st = self._agent_turn("place part 7")
+        tools = [m for m in hist if m.get("role") == "tool"]
+        self.assertIn("Auto mode", tools[-1]["content"])
+        self.assertIsNone(rs.APPROVALS.current())
 
     def test_no_plan_gets_only_one_extra_round(self):
         script = [_tool_call_msg("c{:d}".format(i), _move(i)) for i in range(40)]

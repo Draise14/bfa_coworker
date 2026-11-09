@@ -95,6 +95,27 @@ class TestIndex(unittest.TestCase):
         self.assertEqual(self.index.last_for_blend("camp"), "")
 
 
+    def test_each_editor_its_last_chat_per_blend(self):
+        # Threads 2 (#358): reopening a .blend brings each editor its own last thread.
+        for chat_id in ("main", "view", "node", "other"):
+            self.index.chat_path(chat_id).write_text(json.dumps(_chat(chat_id)), encoding="utf-8")
+        self.index.touch("main", _chat("all editors"), blend="camp")
+        self.index.touch("view", _chat("build the camp"), blend="camp", editor="VIEW_3D")
+        self.index.touch("node", _chat("tidy the rock material"), blend="camp", editor="NODE_EDITOR")
+        self.index.touch("other", _chat("elsewhere"), blend="lander", editor="NODE_EDITOR")
+        self.assertEqual(self.index.last_for_blend("camp"), "main", "the shared thread keeps its key")
+        self.assertEqual(self.index.last_for_blend("camp", "VIEW_3D"), "view")
+        self.assertEqual(self.index.last_for_blend("camp", "NODE_EDITOR"), "node")
+        self.assertEqual(self.index.last_for_blend("lander", "NODE_EDITOR"), "other")
+        self.assertEqual(self.index.last_for_blend("camp", "SEQUENCE_EDITOR"), "")
+        self.assertEqual(self.index.get("node")["editor"], "NODE_EDITOR")
+        self.assertNotIn("editor", self.index.get("main"))
+        self.index.set_last_for_blend("camp", "other", editor="NODE_EDITOR")
+        self.assertEqual(self.index.last_for_blend("camp", "NODE_EDITOR"), "other")
+        self.index.delete("node")
+        self.assertEqual(self.index.last_for_blend("camp", "VIEW_3D"), "view")
+
+
 class TestMigration(unittest.TestCase):
 
     def test_old_per_blend_chats_move_in_once(self):

@@ -169,8 +169,14 @@ class ChatIndex:
         entry = self._read()["chats"].get(chat_id)
         return dict(entry, id=chat_id) if entry else None
 
-    def last_for_blend(self, blend: str) -> str:
-        chat_id = self._read()["last_for_blend"].get(blend or "default", "")
+    @staticmethod
+    def _blend_key(blend: str, editor: str = "") -> str:
+        """The .blend's key; with *editor*, that editor's own thread in it (#358)."""
+        return (blend or "default") + ("|" + editor if editor else "")
+
+    def last_for_blend(self, blend: str, editor: str = "") -> str:
+        """The chat last used in *blend* (by the *editor* kind's thread, #358)."""
+        chat_id = self._read()["last_for_blend"].get(self._blend_key(blend, editor), "")
         return chat_id if chat_id and self.chat_path(chat_id).exists() else ""
 
     @staticmethod
@@ -179,11 +185,12 @@ class ChatIndex:
 
     # -- writing ---------------------------------------------------------------------
     def touch(self, chat_id: str, history: list[dict[str, Any]], blend: str = "", engine: str = "",
-              blend_path: str = "", mode: str = "") -> None:
+              blend_path: str = "", mode: str = "", editor: str = "") -> None:
         """The chat was saved: keep its entry current (a chat with no message isn't listed).
 
         *blend_path* (the saved file it is in now) lets History open it again; *mode* is
-        the operating mode, shown as its icon (#239)."""
+        the operating mode, shown as its icon (#239); *editor* is the editor kind whose
+        thread it is (#358; "" = the shared "All editors" thread)."""
         title = title_of(history)
         with self._lock:
             data = self._read()
@@ -201,15 +208,17 @@ class ChatIndex:
                 entry["engine"] = engine
             if mode:
                 entry["mode"] = mode
+            if editor:
+                entry["editor"] = editor
             if blend_path:
                 entry["blend"], entry["blend_path"] = blend, blend_path
-            data["last_for_blend"][blend or "default"] = chat_id
+            data["last_for_blend"][self._blend_key(blend, editor)] = chat_id
             self._write(data)
 
-    def set_last_for_blend(self, blend: str, chat_id: str) -> None:
+    def set_last_for_blend(self, blend: str, chat_id: str, editor: str = "") -> None:
         with self._lock:
             data = self._read()
-            data["last_for_blend"][blend or "default"] = chat_id
+            data["last_for_blend"][self._blend_key(blend, editor)] = chat_id
             self._write(data)
 
     def rename(self, chat_id: str, title: str) -> bool:

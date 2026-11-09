@@ -120,14 +120,22 @@ def clicked(context: Any) -> dict[str, Any] | None:
     return None
 
 
+def _editor_kind(context: Any) -> str:
+    """The editor kind it was invoked from, when it has a thread of its own (#358)."""
+    from .ui_chat import SIDEBAR_TYPES
+    kind = getattr(getattr(context, "area", None), "type", "") or ""
+    return kind if kind in SIDEBAR_TYPES else ""
+
+
 def _ask(context: Any, text: str, mode: str) -> bool:
-    """Put *text* in the chat and send it (in *mode*); False when the chat can't take it."""
+    """Put *text* in the chat and send it (in *mode*), in the thread of the editor it was
+    invoked from (Threads 2, #358); False when the chat can't take it."""
     props = getattr(context.window_manager, "bfacw_chat_props", None)
     if props is None or not chat_ready():
         return False
     props.chat_mode = mode
     props.chat_input = text
-    bpy.ops.bfacw.chat_send()
+    bpy.ops.bfacw.chat_send(editor=_editor_kind(context))
     return True
 
 
@@ -370,10 +378,11 @@ class BFACW_OT_translate(Operator):  # type: ignore[misc]
         name = prefs.bl_rna.properties["translate_language"].enum_items[prefs.translate_language].name
         source = ("" if prefs.translate_from == "auto"
                   else prefs.bl_rna.properties["translate_from"].enum_items[prefs.translate_from].name)
-        history = agent_controller_history()
+        editor = _editor_kind(context)
+        history = agent_controller_history(editor)
         if not _ask(context, translate_text(self.path, self.current, name, self.what, source), "ASK"):
             return {'CANCELLED'}
-        _PENDING.update(path=self.path, span=self.span, seen=len(history), since=time.time())
+        _PENDING.update(path=self.path, span=self.span, seen=len(history), since=time.time(), editor=editor)
         if not bpy.app.timers.is_registered(_apply_when_answered):
             bpy.app.timers.register(_apply_when_answered, first_interval=0.5)
         self.report({'INFO'}, "Translating into {:s} -- it is written in when the answer comes".format(name))
@@ -384,17 +393,24 @@ class BFACW_OT_translate(Operator):  # type: ignore[misc]
 _PENDING: dict[str, Any] = {}
 
 
-def agent_controller_history() -> list:
-    from . import agent_controller
-    return agent_controller._agent_state.conversation_history
+def _thread_state(editor: str = "", create: bool = False) -> Any:
+    """The state of the thread a right-click on *editor* goes to (#358)."""
+    from . import agent_controller, threads, ui_chat
+    reg = agent_controller.THREADS
+    thread = (threads.pick(reg, editor, focus=True, create=ui_chat._editor_thread) if create
+              else reg.for_editor(editor, create=False)) if editor else None
+    return agent_controller.thread_state(thread)
+
+
+def agent_controller_history(editor: str = "") -> list:
+    return _thread_state(editor, create=True).conversation_history
 
 
 def _apply_when_answered() -> float | None:
-    from . import agent_controller
     if not _PENDING:
         return None
-    state = agent_controller._agent_state
-    history = agent_controller_history()
+    state = _thread_state(_PENDING.get("editor", ""))
+    history = state.conversation_history
     reply = next((m.get("content") or "" for m in reversed(history[_PENDING["seen"]:])
                   if m.get("role") == "assistant" and (m.get("content") or "").strip()), "")
     if state.is_thinking or not reply:          # the turn still runs, or hasn't answered yet

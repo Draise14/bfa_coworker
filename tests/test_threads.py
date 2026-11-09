@@ -178,6 +178,41 @@ class TestCurrentAndNames(unittest.TestCase):
         self.assertEqual(th.label(reg.create(editor="VIEW_3D")), "Coworker (3D)")
 
 
+class TestEditorThreads(unittest.TestCase):
+    """Threads 2 (#358): which thread an editor's chat shows."""
+
+    def test_shared_thread_unless_editor_focus(self):
+        reg = _registry()
+        self.assertIs(th.pick(reg, "VIEW_3D"), reg.default, "focus off: All editors, as before")
+        self.assertIs(th.pick(reg, "", focus=True), reg.default, "no editor kind: All editors")
+        self.assertEqual(reg.live(), [reg.default], "nothing made for a shared chat")
+
+    def test_each_editor_kind_its_own_thread(self):
+        reg = _registry()
+        made = []
+        create = lambda editor: made.append(editor) or reg.create(editor=editor)   # noqa: E731
+        view3d = th.pick(reg, "VIEW_3D", focus=True, create=create)
+        node = th.pick(reg, "NODE_EDITOR", focus=True, create=create)
+        self.assertIsNot(view3d, node)
+        self.assertIs(th.pick(reg, "VIEW_3D", focus=True, create=create), view3d, "two 3D Views share one")
+        self.assertEqual(made, ["VIEW_3D", "NODE_EDITOR"], "made once, with this .blend's last chat")
+        self.assertEqual((view3d.editor, node.editor), ("VIEW_3D", "NODE_EDITOR"))
+
+    def test_pinned_area_and_its_fallback(self):
+        reg = _registry()
+        kind = th.pick(reg, "VIEW_3D", focus=True)
+        pinned = reg.create(editor="VIEW_3D")
+        self.assertIs(th.pick(reg, "VIEW_3D", pinned=pinned.id, focus=True), pinned)
+        self.assertIs(th.pick(reg, "VIEW_3D", pinned=pinned.id), pinned, "a pin wins over the tab")
+        reg.remove(pinned.id)
+        self.assertIs(th.pick(reg, "VIEW_3D", pinned=pinned.id, focus=True), kind, "a lost pin: the editor kind")
+
+    def test_short_names(self):
+        self.assertEqual(th.short_name("NODE_EDITOR"), "Node")
+        self.assertEqual(th.short_name("SEQUENCE_EDITOR"), "Sequencer")
+        self.assertEqual(th.short_name(""), "")
+
+
 class _FakeController:
     """What agent_controller.ThreadController gives a LoopEngine, over a ThreadRegistry:
     fake turns that write the thread's history and honour its Stop."""
@@ -488,6 +523,27 @@ class TestExternalAgentSessionPerThread(unittest.TestCase):
         node = [m["content"] for m in self.states["t2"].conversation_history]
         self.assertIn("queued, node", node)
         self.assertEqual(self.engine.thread, "t2")
+
+    def test_stop_in_a_waiting_thread_drops_only_its_messages(self):
+        release = threading.Event()
+        real_prompt = self.client.prompt
+        self.client.prompt = lambda sid, blocks, timeout=None: (release.wait(5), real_prompt(sid, blocks))[1]
+        self.engine.submit(eng.Prompt(text="main runs"))
+        self.engine.submit(eng.Prompt(text="node waits", thread="t2"))
+        self.engine.submit(eng.Prompt(text="main waits"))
+        self.assertEqual(self.engine.drop_queued("t2"), 1)
+        self.assertEqual([p["message"] for p in self.engine.queue_items()], ["main waits"])
+        release.set()
+        self.assertTrue(_wait_for(lambda: len(self.client.prompts) == 2 and not self.engine.is_busy()))
+
+    def test_new_thread_in_an_editor_opens_a_fresh_session(self):
+        self._turn("node one", thread="t2")
+        self._turn("main one")
+        self.engine.forget_thread("t2")
+        self._turn("node two", thread="t2")
+        sids = [sid for sid, _servers in self.client.sessions]
+        self.assertEqual(len(sids), 3, "main, node, and the node's fresh one")
+        self.assertEqual(self.client.prompts[-1][0], sids[2])
 
     def test_permission_cards_carry_the_thread(self):
         self.engine.ask_coworker_tools = True

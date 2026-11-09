@@ -129,6 +129,7 @@ def _configure_http(mcp: FastMCP, host: str, port: int) -> None:
         _token = os.environ.get("BFACW_TOKEN", "")
         if _token:
             app.add_middleware(http_auth.TokenGateMiddleware, token=_token)
+        app.add_middleware(http_auth.ThreadHeaderMiddleware)     # Threads 1 (#357)
         # Pages served from this computer only (any port), not "*".
         app.add_middleware(
             CORSMiddleware,

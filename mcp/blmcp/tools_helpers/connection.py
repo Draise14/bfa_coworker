@@ -54,8 +54,13 @@ def send_code(code: str, strict_json: bool) -> dict[str, object]:
     session = os.environ.get("BFACW_SESSION_ID", "")
     if session:
         payload["session"] = session
+    # Threads 1 (#357): which Coworker thread calls -- the loop's request header, or the
+    # env of an External Agent session's own server.  Unknown keys are fine for the bridge.
+    from blmcp.tools_helpers.bounded_output import CURRENT_THREAD, CURRENT_TOOL
+    thread = CURRENT_THREAD.get() or os.environ.get("BFACW_THREAD_ID", "")
+    if thread:
+        payload["thread"] = thread
     # Agent 9: which tool this is for, so Blender can show it (External Harness activity).
-    from blmcp.tools_helpers.bounded_output import CURRENT_TOOL
     tool, inputs = CURRENT_TOOL.get()
     if tool:
         payload["tool"] = tool

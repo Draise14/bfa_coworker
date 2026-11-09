@@ -45,6 +45,7 @@ class Entry:
     seconds: float
     preview: str            # the result's start, or the error
     when: float             # time.time()
+    thread: str = ""        # the thread that called (#357; "" = the default one)
 
 
 _lock = threading.Lock()
@@ -59,7 +60,7 @@ def _short(value: Any, limit: int = _PREVIEW) -> str:
 
 
 def record(tool: str, args: Any, response: dict[str, Any] | None, seconds: float,
-           deferred: bool = False) -> None:
+           deferred: bool = False, thread: str = "") -> None:
     """One call the bridge ran (*response* is what it sent back)."""
     response = response or {}
     if deferred:
@@ -70,7 +71,7 @@ def record(tool: str, args: Any, response: dict[str, Any] | None, seconds: float
         status, preview = "ok", _short(response.get("result", ""))
     with _lock:
         _entries.append(Entry(tool=tool or "code", args=_short(args or "", 120), status=status,
-                              seconds=round(seconds, 2), preview=preview, when=time.time()))
+                              seconds=round(seconds, 2), preview=preview, when=time.time(), thread=thread))
     if on_change is not None:
         try:
             on_change()

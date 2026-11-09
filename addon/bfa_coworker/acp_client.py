@@ -108,6 +108,9 @@ class AcpClient:
         self.env = env
         # Called on the READER thread; must not touch bpy.
         self.on_update = on_update
+        # The session the update being handed to on_update belongs to (reader thread;
+        # Threads 1, #357: one agent process, a session per thread).
+        self.update_session = ""
         self.on_permission = on_permission
         self.proc: subprocess.Popen | None = None
         self.info = AgentInfo()
@@ -256,6 +259,7 @@ class AcpClient:
                 if update.get("sessionUpdate") == "available_commands_update":
                     self.commands = list(update.get("availableCommands") or [])
                 if self.on_update is not None:
+                    self.update_session = str((msg.get("params") or {}).get("sessionId") or "")
                     self.on_update(update)
         elif "id" in msg:
             with self._state_lock:

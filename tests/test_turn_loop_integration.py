@@ -261,6 +261,7 @@ class _FakeLLMHandler(BaseHTTPRequestHandler):
             code = str(args.get("code") or "")
             with server.lock:
                 server.mcp_requests.append(body)
+                server.mcp_thread_headers.append(self.headers.get("X-Coworker-Thread", ""))   # #357
             if body.get("method") == "tools/list":
                 result = {"tools": server.mcp_tools}
             elif server.named_tool_replies.get(params.get("name")):
@@ -491,6 +492,7 @@ def _start_fake_server(script, mcp_tools=None):
     server.chat_count = 0
     server.memory_writer_calls = []
     server.mcp_requests = []
+    server.mcp_thread_headers = []
     server.mcp_tools = list(mcp_tools or [])
     server.snapshot_script = None
     server.scene_objects = []

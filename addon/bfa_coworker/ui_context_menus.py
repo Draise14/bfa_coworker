@@ -134,8 +134,8 @@ def _ask(context: Any, text: str, mode: str) -> bool:
     if props is None or not chat_ready():
         return False
     props.chat_mode = mode
-    props.chat_input = text
-    bpy.ops.bfacw.chat_send(editor=_editor_kind(context))
+    # The text goes as is: the target thread's half-typed draft stays (#417).
+    bpy.ops.bfacw.chat_send(editor=_editor_kind(context), text=text)
     return True
 
 

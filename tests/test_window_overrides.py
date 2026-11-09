@@ -129,12 +129,14 @@ class TestWhileAWindowIsMaximized(unittest.TestCase):
         self.bpy.context.window = self.main
         self.bpy.context.window_manager = types.SimpleNamespace(windows=[self.main], bfacw_chat_props=props)
         state = types.SimpleNamespace(is_thinking=False)
-        ns = {"bpy": self.bpy, "_AUTO": {"run": object()},
-              "agent_controller": types.SimpleNamespace(_agent_state=state)}
+        # Auto mode runs in one thread (#417): its next step goes to that thread, as text.
+        thread = types.SimpleNamespace(id="t3", auto={"run": object()})
+        ns = {"bpy": self.bpy,
+              "agent_controller": types.SimpleNamespace(thread_state=lambda _t: state)}
         exec(compile(_source("def _auto_send("), "ui_chat.py", "exec"), ns)  # noqa: S102
-        ns["_auto_send"]("Next: step 2")
-        self.assertEqual(props.chat_input, "Next: step 2")
-        self.assertEqual(self.calls, [("chat_send", (), {})])
+        ns["_auto_send"](thread, "Next: step 2")
+        self.assertEqual(props.chat_input, "", "the thread's own draft is left alone")
+        self.assertEqual(self.calls, [("chat_send", (), {"thread_id": "t3", "text": "Next: step 2"})])
 
 
 if __name__ == "__main__":

@@ -43,6 +43,12 @@ from .approvals import ApprovalRequest, Approvals
 # The open "may I?" questions about risky steps (the chat shows them like the agent's).
 APPROVALS = Approvals()
 auto_declines = [False]    # Auto mode is running: decline instead of waiting
+auto_threads: set[str] = set()   # Threads 2b (#417): the threads (tags) whose Auto mode runs
+
+
+def auto_on(thread: str = "") -> bool:
+    """Auto mode runs for *thread* (its tag): nobody is there to answer its cards."""
+    return auto_declines[0] or thread in auto_threads
 
 _SKIP_MARK = "# blmcp-toolcode-skip-preflight"
 # Tools whose code the model wrote (#347): the skip marker in it is never honoured,
@@ -110,7 +116,7 @@ def wrap(code: str, strict_json: bool, why: str, execute: Callable[[str, bool], 
     """``(response, check_fn)`` for the bridge: ask first, then run *code* with *execute*.
     *thread* (#357): the calling thread's tag; its card and "Allow this turn" are its own."""
     kind = kind or "risky:" + why
-    if auto_declines[0]:
+    if auto_on(thread):
         if not why:                 # Auto mode runs what Ask would ask about; only risky steps wait
             result = execute(code, strict_json)
             return result.response, result.check_fn

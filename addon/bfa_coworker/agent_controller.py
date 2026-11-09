@@ -4622,7 +4622,7 @@ def _guard_repeat(guard: "loop_guard.LoopGuard", tool_name: str, args: dict[str,
     thread = threads.current()
     verdict, nth = guard.check(tool_name, args)
     action, error = loop_guard.decide(verdict, tool_name, nth, risky_steps.APPROVALS,
-                                      risky_steps.auto_declines[0], threads.tag(thread))
+                                      risky_steps.auto_on(threads.tag(thread)), threads.tag(thread))
     if action == loop_guard.ASK:
         print("[Coworker] run_conversation_turn: loop guard -- {:s} repeated {:d}x, asking".format(tool_name, nth))
         if on_status:

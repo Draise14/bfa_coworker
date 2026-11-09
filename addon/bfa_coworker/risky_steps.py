@@ -87,8 +87,10 @@ def ask_kind(tool: str, code: str, approval: str, engine: str) -> tuple[str, str
 
 
 def wrap(code: str, strict_json: bool, why: str, execute: Callable[[str, bool], Any], tool: str = "",
-         source: str = "Coworker", kind: str = "") -> tuple[dict[str, object], Callable[[], dict[str, object] | None] | None]:
-    """``(response, check_fn)`` for the bridge: ask first, then run *code* with *execute*."""
+         source: str = "Coworker", kind: str = "", thread: str = "",
+         ) -> tuple[dict[str, object], Callable[[], dict[str, object] | None] | None]:
+    """``(response, check_fn)`` for the bridge: ask first, then run *code* with *execute*.
+    *thread* (#357): the calling thread's tag; its card and "Allow this turn" are its own."""
     kind = kind or "risky:" + why
     if auto_declines[0]:
         if not why:                 # Auto mode runs what Ask would ask about; only risky steps wait
@@ -96,12 +98,12 @@ def wrap(code: str, strict_json: bool, why: str, execute: Callable[[str, bool], 
             return result.response, result.check_fn
         return {"status": "error", "message": "Auto mode doesn't {:s} without the user. Leave this step for "
                                               "them, or do it another way.".format(why)}, None
-    if APPROVALS.allowed_always(kind):
+    if APPROVALS.allowed_always(kind, thread):
         result = execute(code, strict_json)
         return result.response, result.check_fn
     state: dict[str, Any] = {"answer": None, "inner": None}
     request = ApprovalRequest(tool=kind if why else tool, source=source, args={"code": code}, coworker_tool=True,
-                              reason=why)
+                              reason=why, thread=thread)
     APPROVALS.ask(request, lambda choice: state.__setitem__("answer", choice))
 
     def check() -> dict[str, object] | None:

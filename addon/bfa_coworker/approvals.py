@@ -58,6 +58,7 @@ class ApprovalRequest:
     coworker_tool: bool = False   # one of Coworker's Blender tools
     reason: str = ""              # a risky step, in plain words (#166): "save over your .blend"
     note: str = ""                # the card's small print, when it isn't the usual one (#310)
+    thread: str = ""              # the thread that asks (#357); "" = the default one
     id: str = ""
 
     def __post_init__(self) -> None:
@@ -77,25 +78,35 @@ class ApprovalRequest:
 
 
 class Approvals:
-    """The open questions (oldest first) and the tools allowed for the session."""
+    """The open questions (oldest first) and the tools allowed for the session.
+
+    Threads 1 (#357): every request carries its thread; "Allow this turn", Stop and
+    the card can be limited to one thread (``thread=None``: every thread, as before)."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._pending: list[tuple[ApprovalRequest, Callable[[str], None]]] = []
         self._always: set[str] = set()
-        self._turn_all = False       # "Allow this turn" picked: every tool, until the turn ends
+        self._turn_all: set[str] = set()   # threads whose "Allow this turn" holds, until their turn ends
         self.on_change: Callable[[], None] | None = None     # redraw hook (any thread)
 
-    # -- engine side ---------------------------------------------------------------
-    def allowed_always(self, tool: str) -> bool:
-        """Allowed without asking: "Allow this turn" was picked in this turn (any tool)."""
-        with self._lock:
-            return self._turn_all
+    @staticmethod
+    def _mine(request: ApprovalRequest, thread: str | None) -> bool:
+        return thread is None or request.thread == thread
 
-    def new_turn(self) -> None:
-        """A new turn (your next message): ask again."""
+    # -- engine side ---------------------------------------------------------------
+    def allowed_always(self, tool: str, thread: str = "") -> bool:
+        """Allowed without asking: "Allow this turn" was picked in *thread*'s turn (any tool)."""
         with self._lock:
-            self._turn_all = False
+            return thread in self._turn_all
+
+    def new_turn(self, thread: str | None = None) -> None:
+        """A new turn (your next message): ask again (in *thread*, or every thread)."""
+        with self._lock:
+            if thread is None:
+                self._turn_all.clear()
+            else:
+                self._turn_all.discard(thread)
 
     def ask(self, request: ApprovalRequest, respond: Callable[[str], None]) -> None:
         """Queue *request*; *respond* gets one of :data:`CHOICES` or "cancel", once."""
@@ -103,10 +114,11 @@ class Approvals:
             self._pending.append((request, respond))
         self._changed()
 
-    def cancel_all(self) -> None:
-        """Stop or the agent went away: every open question is answered "cancel"."""
+    def cancel_all(self, thread: str | None = None) -> None:
+        """Stop or the agent went away: every open question (of *thread*) is answered "cancel"."""
         with self._lock:
-            pending, self._pending = self._pending, []
+            pending = [p for p in self._pending if self._mine(p[0], thread)]
+            self._pending = [p for p in self._pending if p not in pending]
         for _request, respond in pending:
             respond("cancel")
         if pending:
@@ -116,7 +128,7 @@ class Approvals:
         """The approval mode changed (#240): every "Always" asks again."""
         with self._lock:
             self._always.clear()
-            self._turn_all = False
+            self._turn_all.clear()
         self._changed()
 
     def end_session(self) -> None:
@@ -124,33 +136,33 @@ class Approvals:
         self.cancel_all()
         with self._lock:
             self._always.clear()
-            self._turn_all = False
+            self._turn_all.clear()
 
     # -- chat side -----------------------------------------------------------------
-    def current(self) -> ApprovalRequest | None:
-        """The question the chat shows (the oldest open one)."""
+    def current(self, thread: str | None = None) -> ApprovalRequest | None:
+        """The question the chat shows (the oldest open one, of *thread*)."""
         with self._lock:
-            return self._pending[0][0] if self._pending else None
+            return next((r for r, _f in self._pending if self._mine(r, thread)), None)
 
-    def count(self) -> int:
+    def count(self, thread: str | None = None) -> int:
         with self._lock:
-            return len(self._pending)
+            return sum(1 for r, _f in self._pending if self._mine(r, thread))
 
-    def answer(self, choice: str, request_id: str = "") -> bool:
-        """Answer the oldest question (or *request_id*); False when there's none."""
+    def answer(self, choice: str, request_id: str = "", thread: str | None = None) -> bool:
+        """Answer the oldest question (of *thread*, or *request_id*); False when there's none."""
         if choice not in CHOICES:
             raise ValueError("choice must be one of {!r}".format(CHOICES))
         with self._lock:
             index = next((i for i, (r, _) in enumerate(self._pending)
-                          if not request_id or r.id == request_id), None)
+                          if (r.id == request_id if request_id else self._mine(r, thread))), None)
             if index is None:
                 return False
             request, respond = self._pending.pop(index)
             if choice == "always":
                 self._always.add(request.tool)
-                self._turn_all = True
-            # The rest of the turn is allowed: what else is waiting is answered too.
-            also = [(r, f) for r, f in self._pending if choice == "always"]
+                self._turn_all.add(request.thread)
+            # The rest of the turn is allowed: what else waits in that thread is answered too.
+            also = [(r, f) for r, f in self._pending if choice == "always" and r.thread == request.thread]
             self._pending = [p for p in self._pending if p not in also]
         respond(choice)
         for _r, other in also:

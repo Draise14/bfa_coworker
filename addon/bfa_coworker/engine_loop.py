@@ -15,6 +15,12 @@ events on its :class:`~engine.EventBus`; the main thread drains them into
 
 The controller (the ``agent_controller`` module) is passed in, so this file
 does not import ``bpy`` and is unit-tested with a stand-in controller.
+
+Threads 1 (#357): there is one engine per thread, each driving its thread's
+controller (``agent_controller.controller_for(thread)``).  Turns still run one at
+a time across threads: while another thread's turn runs, a message waits in this
+thread's queue, and when a turn ends the oldest waiting message of any thread
+starts (``controller.next_turn``).
 """
 
 from __future__ import annotations
@@ -121,7 +127,13 @@ class LoopEngine:
         self.config = config
         if self._c._agent_state.turn_active and not self._c._stop_event.is_set():
             return None, self.enqueue(prompt, config)
+        if self._blocked():                 # another thread's turn runs: wait for it (#357)
+            return None, self.enqueue(prompt, config)
         return self._start(prompt, config), 0
+
+    def _blocked(self) -> bool:
+        blocked = getattr(self._c, "turn_blocked", None)
+        return bool(blocked()) if blocked is not None else False
 
     def enqueue(self, prompt: Prompt, config: LoopConfig) -> int:
         """Queue *prompt* for after the current turn; return its position."""
@@ -237,6 +249,16 @@ class LoopEngine:
         self.bus.emit("turn_end", turn_id, stop_reason=stop_reason)
 
     def _dequeue_next(self) -> None:
+        """Start the next queued message: this thread's, or (#357) the one of the thread
+        whose message waited longest."""
+        pick = getattr(self._c, "next_turn", None)
+        engine = pick(self) if pick is not None else self
+        if engine is not None and engine is not self:
+            engine._start_queued()
+            return
+        self._start_queued()
+
+    def _start_queued(self) -> None:
         item = self._c.dequeue_message()
         if not item:
             return

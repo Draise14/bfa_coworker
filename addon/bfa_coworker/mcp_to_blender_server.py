@@ -1273,6 +1273,10 @@ def _execute_code_from_request(
     # Engine 5 (#166) / #240: by the approval mode, a step asks first; the answer comes back deferred.
     _kind, _why, _engine = "", "", ""
     _tool = str(request.get("tool") or "")
+    # Threads 1 (#357): the calling thread ("" = the default one); its plan, questions,
+    # digest, approvals and repeat count are its own.
+    from . import threads
+    _thread = threads.tag(str(request.get("thread") or ""))
     try:
         import bpy as _bpy  # pylint: disable=import-error
         from . import risky_steps
@@ -1282,13 +1286,26 @@ def _execute_code_from_request(
     except (KeyError, AttributeError, ImportError):
         _kind, _why = "", ""
 
+    def _for_thread(fn: Callable[..., Any]) -> Callable[..., Any]:
+        """*fn*, run as the calling thread (also when a deferred check runs it later)."""
+        from . import coworker_api
+
+        def run(*args: Any, **kwargs: Any) -> Any:
+            with coworker_api.for_thread(_thread):
+                return fn(*args, **kwargs)
+        return run
+
+    def _execute(c: str, s: bool) -> _ExecResult:
+        result = _for_thread(_execute_code)(c, strict_json=s)
+        return result if result.check_fn is None else _ExecResult(result.response, _for_thread(result.check_fn))
+
     def _run() -> _ExecResult:
         if _kind:
             from . import risky_steps
-            _response, _check = risky_steps.wrap(
-                code, strict_json, _why, lambda c, s: _execute_code(c, strict_json=s), tool=_tool, kind=_kind)
+            _response, _check = risky_steps.wrap(code, strict_json, _why, _execute, tool=_tool, kind=_kind,
+                                                  thread=_thread)
             return _ExecResult(_response, _check)
-        return _execute_code(code, strict_json=strict_json)
+        return _execute(code, strict_json)
 
     exec_result = None
     # Runtime 1 (#310): the same call again and again asks, then is refused.  The local
@@ -1301,7 +1318,8 @@ def _execute_code_from_request(
             return _inner.response, _inner.check_fn
 
         _repeat = loop_guard.bridge_wrap(loop_guard.BRIDGE, risky_steps.APPROVALS, risky_steps.auto_declines[0],
-                                         _tool, {"code": code}, str(request.get("session") or ""), _proceed)
+                                         _tool, {"code": code}, str(request.get("session") or ""), _proceed,
+                                         thread=_thread)
         if _repeat is not None:
             exec_result = _ExecResult(*_repeat)
     if exec_result is None:
@@ -1311,7 +1329,7 @@ def _execute_code_from_request(
         from . import activity
         activity.record(str(request.get("tool") or ""), request.get("args") or "",
                         exec_result.response, time.monotonic() - _started,
-                        deferred=exec_result.check_fn is not None)
+                        deferred=exec_result.check_fn is not None, thread=_thread)
     except Exception:  # pylint: disable=broad-exception-caught
         pass
     _is_error = (

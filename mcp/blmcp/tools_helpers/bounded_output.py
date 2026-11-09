@@ -151,6 +151,10 @@ def _shorten_fields(result: dict[str, Any], output_id: str, total: int, how: str
 # The tool being run and its input (Agent 9: the bridge's activity view shows them).
 CURRENT_TOOL: contextvars.ContextVar[tuple[str, dict[str, Any]]] = contextvars.ContextVar(
     "bfacw_current_tool", default=("", {}))
+# The Coworker thread the request came from (Threads 1, #357): the add-on's loop sends it
+# as a header (http_auth.ThreadHeaderMiddleware); the bridge keeps that thread's plan,
+# questions and digest apart.
+CURRENT_THREAD: contextvars.ContextVar[str] = contextvars.ContextVar("bfacw_current_thread", default="")
 
 
 def _inputs(kwargs: dict[str, Any]) -> dict[str, Any]:

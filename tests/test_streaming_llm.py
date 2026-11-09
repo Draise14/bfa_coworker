@@ -145,6 +145,7 @@ def _quiet_print(*args, **kwargs):
     (Windows CI) and are irrelevant to the assertions here.
     """
 
+_STREAM_STATE = types.SimpleNamespace(warning="")
 _openai_chat_completions_stream = _extract_func(
     _SOURCE,
     "openai_chat_completions_stream",
@@ -169,7 +170,8 @@ _openai_chat_completions_stream = _extract_func(
         "_safe_request_messages": _safe_request_messages,
         "_stop_requested": _stop_event.is_set,
         "_clear_stale_errors": lambda: None,
-        "_agent_state": types.SimpleNamespace(warning=""),
+        "_agent_state": _STREAM_STATE,
+        "_state": lambda: _STREAM_STATE,    # the turn's state (Threads 1, #357)
         "print": _quiet_print,
     },
 )
@@ -851,6 +853,7 @@ class TestTurnLoopUsesStreamingWrapper(unittest.TestCase):
             "_stop_requested": lambda: False,
             "_clear_stale_errors": lambda: None,
             "_agent_state": state,
+            "_state": lambda: state,        # the turn's state (#357)
             "print": _quiet_print,
             # Closure variables the wrapper reads from the turn-loop scope.
             "llm_url": "http://x/v1/chat/completions",

@@ -1,10 +1,11 @@
 # Tier 4x — Ship Coworker inside Bforartists (built-in copy + update repository, no installer)
 
-**Status**: 📝 For review (2026-10-25, revised the same day). This week's priority, next to
-the video week. Issue #380. Bundle 0 (spike) done on 2026-11-07: built-in copy route confirmed,
-see §5.
-**Rule**: no PR is merged automatically, in this repo or in Bforartists'. Every PR waits
-for your review.
+**Status**: 🚧 In progress (2026-11-09). Bundle 0 spike done (§5); the submodule design is planned (§6);
+**refined 2026-11-09: the repository moves to the Bforartists organization and every release is
+automatic up to two clicks (§6.6–6.8).** Earlier: 📝 For review (2026-10-25, revised the same day).
+Issue #380; the Bforartists side is [Bforartists#6971](https://github.com/Bforartists/Bforartists/issues/6971).
+**Rule**: no PR is merged automatically, in this repo or in Bforartists'. Robots *open* the PRs;
+a person merges them (§6.8 lists the one place where auto-merge is an option for you to decide).
 
 ## 1. Goal
 
@@ -16,7 +17,7 @@ left, the hand-over to an updatable copy, and Coworker does that itself.
 | Piece | Where | How |
 |---|---|---|
 | **The built-in copy** | Bforartists' read-only **System** extensions repository (in the install folder) | The build unpacks `bfa_coworker-<version>.zip` from the submodule's pinned release. Off by default; on in Preferences like any bundled add-on. Works offline |
-| **The update repository** | Bforartists' **default preferences** | *Bforartists Coworker* (`…/Draise14/bfa_coworker/main/extensions/index.json`) registered like extensions.blender.org, *Check for Updates on Startup* on |
+| **The update repository** | Bforartists' **default preferences** | *Bforartists Coworker* (`…/Bforartists/bfa_coworker/main/extensions/index.json` after the move in §6.6; today `…/Draise14/…`) registered like extensions.blender.org, *Check for Updates on Startup* on |
 | **The hand-over** | Coworker's own Updates box | When a newer version is listed: **Enable Updates** installs it into the update repository (settings kept), switches to it, and leaves the built-in copy off as a fallback |
 | **Plain Blender users** | — | Keep using the Coworker Installer (#86), unchanged |
 
@@ -68,20 +69,218 @@ Bforartists build.
 **Done when** a built-in 1.1.41 hands over to 1.1.42 from the repository with settings
 kept, and stays updatable afterwards.
 
-### Bundle 2 — Bforartists build step + submodule (M)
-- This repo: `BUNDLING.md` for Bforartists maintainers (pinning, unpacking, the default
-  repository line), and a check that the release zip is the one in `extensions/index.json`.
-- Bforartists repo: the submodule at a tag; a build step that unpacks the pinned
-  `bfa_coworker-<version>.zip` into the System extensions folder; the default
-  repository entry. A **PR to Bforartists for you to review**; nothing merges by itself.
+### Bundle 2 — The submodule in Bforartists (M) · *planned 2026-11-07, see §6*
+A **dist branch** of this repo, submoduled into Bforartists at
+`release/extensions/system/bfa_coworker`; small CMake and C changes in Bforartists.
+A **PR to Bforartists for you to review**; nothing merges by itself.
 **Done when** a fresh Bforartists build has Coworker available offline (off by default),
 and turning it on and then updating reaches the next Coworker release without a new
 Bforartists build.
 
-### Bundle 3 — Release routine (S)
-Each Coworker release: tag → GitHub release → `extensions/index.json` PR (as today) →
-optionally bump the submodule for Bforartists' next release. Documented in
-`extensions/README.md`.
+### Bundle 3 — Release automation (M) · *refined 2026-11-09, see §6.6–6.8*
+Move the repository to the Bforartists organization first (§6.6). Then one workflow,
+`.github/workflows/release.yml`, turns a pushed tag `vX` into: the built zips, the GitHub
+release, the `index.json` PR, the `dist-vX` tag on the dist branch, and (through Dependabot in
+Bforartists) the submodule-bump PR there (§6.7). Documented in `extensions/README.md` and
+`BUNDLING.md`.
+**Done when** pushing a tag produces all of that with no hand-copied hash, and the two
+remaining clicks are merging the `index.json` PR and the Bforartists bump PR.
+
+## 6. How the submodule works (plan, 2026-11-07)
+
+### 6.1 What we found
+
+| Fact | Where | Consequence |
+|---|---|---|
+| Bforartists already ships five extensions as **git submodules** | `.gitmodules`: `scripts/addons_contrib/space_view3d_pie_menus`, `…_3d_navigation`, `…_copy_attributes`, `io_mesh_stl`, `io_scene_3ds` | Submodules are an accepted pattern there |
+| CMake installs `release/extensions/` into every build | `source/creator/CMakeLists.txt`: `install(DIRECTORY ${CMAKE_SOURCE_DIR}/release/extensions DESTINATION ${TARGETDIR_VER})` | A folder at `release/extensions/system/bfa_coworker` becomes the **System** extension the Bundle 0 spike tested, with no new build step |
+| That install has no `.git` exclude | same rule | A submodule's `.git` file would be copied into the install: add `PATTERN ".git" EXCLUDE` |
+| This repo **tracks every release zip** | `releases/`: 195 MB at 1.1.41, ~26 MB more per release | Submoduling this repo's main branch would pull all of that into every Bforartists clone |
+| The source is **not** what gets installed | the built add-on is 71 MB / 7,368 files; 52 MB of it is `vendor/deps` | Bforartists' build would need pip, network access and our vendoring: too much to ask of it |
+| `vendor/deps` is **Windows-only** today | compiled wheels (`cp312-win_amd64`: pydantic-core, cryptography, pywin32) | A Linux or macOS Bforartists build must not ship them; their deps must also match the Python version of that Bforartists build |
+
+### 6.2 The design: a dist branch, submoduled shallow
+
+This repo stays the development home (why it's separate: a complex add-on with its own
+release pace, tests and vendoring). For Bforartists we publish a **second, slim branch**
+in the same repo, `bforartists-dist`, holding only **what gets installed**:
+
+```
+bforartists-dist @ dist-v1.1.42           (one commit per release, nothing else)
+├── bfa_coworker/                         the built add-on without vendor/deps
+│   ├── blender_manifest.toml             (version 1.1.42)
+│   ├── __init__.py …  vendor/blmcp/      pure Python, plus precompiled .pyc (spike)
+└── deps/
+    ├── windows_x64/                      vendor/deps for Windows (today)
+    ├── linux_x64/                        later, when its vendored build exists
+    └── macos_arm64/                      later
+```
+
+In Bforartists:
+
+```
+.gitmodules
+[submodule "release/extensions/system/bfa_coworker"]
+    path = release/extensions/system/bfa_coworker
+    url = https://github.com/Draise14/bfa_coworker.git
+    branch = bforartists-dist
+    shallow = true                        # only the pinned commit, never the history
+```
+
+- **Shallow and pinned:** the superproject pins one dist commit (a tag `dist-v1.1.42`), so
+  a clone fetches only that tree, about 25 MB compressed, never `releases/` or the history.
+- **CMake (small change):** install `bfa_coworker/` into `extensions/system/bfa_coworker`,
+  and `deps/<this platform>/` into its `vendor/deps`; if this platform has no deps folder,
+  skip Coworker on that platform and say so in the build log. Exclude `.git`.
+- **C (three changes, from the spike):** `add_default_coworker()`, its call in
+  `add_defaults_all()`, and versioning that adds the *Bforartists Coworker* repository
+  (module `BforartistsCoworker`) only when its URL isn't there yet.
+- **Off by default.** It updates through *Get Extensions*, with Coworker's **Enable
+  Updates** hand-over (Bundle 1).
+
+### 6.3 The routine (how it splices in, every release)
+
+```mermaid
+flowchart LR
+    R["Coworker release vX<br/>(tag, GitHub release)"] --> I["index.json PR<br/>(as today: every user updates)"]
+    R --> D["build_addon.py --dist<br/>commits the built add-on to bforartists-dist,<br/>tags dist-vX"]
+    D --> B["PR in Bforartists:<br/>bump the submodule to dist-vX<br/>(opened by our release script or by hand)"]
+    B --> F["Bforartists' next release<br/>ships Coworker vX built in"]
+```
+
+*Superseded on 2026-11-09 by the automated routine in §6.7; the steps stay the same, a
+workflow runs them.*
+
+1. **Coworker release** as today (tag, release, `index.json` PR). Users of any Bforartists
+   build get it through *Get Extensions*.
+2. **`build_addon.py --dist`** (new): split the built add-on into `bfa_coworker/` +
+   `deps/windows_x64/`, precompile `.pyc`, commit to `bforartists-dist`, tag `dist-vX`.
+   An idempotent script, so a release can be re-published.
+3. **Bump in Bforartists:** a one-line submodule PR. **Never auto-merged** (but see §6.8).
+4. **Checks before a bump:** the dist tree's version equals the tag, `deps/<platform>` matches
+   the Bforartists build's Python version, and a CI smoke test enables the System copy
+   headless.
+
+### 6.4 Clean-up in this repo (before the first dist)
+
+- **Stop tracking `releases/*.zip`**: they belong on GitHub releases, which
+  `extensions/index.json` already points at. The history keeps them, but neither the dist
+  branch nor a shallow submodule ever fetches them. `releases/` moves to `.gitignore`.
+- `BUNDLING.md` for Bforartists maintainers: what the submodule is, how to bump it, what the
+  CMake rule does, and how to check a platform.
+
+### 6.5 Risks
+
+| Risk | Mitigation |
+|---|---|
+| Linux / macOS builds have no Coworker deps | CMake skips Coworker on a platform without `deps/<platform>`; per-platform vendoring is its own task |
+| Python version drift (deps are `cp313` today, matching Bforartists 5.x's Python 3.13; checked 2026-11-09) | The release workflow builds the deps with the Python of the pinned Bforartists build; the bump check compares the dist's ABI tag with it; a mismatch fails the check |
+| A 25 MB-per-release dist branch grows | Shallow submodule clones fetch one commit; the branch can be squashed later without breaking pinned tags |
+| `make update` in Bforartists prunes `scripts/addons_contrib` (`prune_stale_files`, inherited from Blender) | Checked 2026-11-09: the prune runs only with `--prune-destructive` and only covers `scripts/addons*`; `release/extensions/system` is untouched. `make update` initialises and updates every submodule not marked `update = none` (`make_utils.is_git_submodule_enabled`, `git_update_submodule`), and Bforartists' CI runs `make update` after checkout, so the submodule arrives with no CI change |
+| Two copies enabled at once | Bundle 1 enforces a single enabled copy (spike) |
+| The repository move breaks old links (§6.6) | GitHub redirects the old web, git and release-download URLs; Coworker 1.1.42+ points at the new URL and rewrites existing repository entries; **never create a repository named `Draise14/bfa_coworker` again** (a fork back to the personal account takes that name and ends every redirect: rename such a fork) |
+| A Dependabot bump lands mid-release in Bforartists | Bforartists' maintainers merge it when they choose; the PR names the Coworker version; nothing merges itself |
+
+### 6.6 Home: the Bforartists organization (refined 2026-11-09)
+
+**Move `Draise14/bfa_coworker` to `Bforartists/bfa_coworker`.** The update repository's URL is
+about to be written into **every Bforartists user's default preferences** (§6.2, the C change).
+Whatever URL ships there is permanent, so it should be the organization's, not a personal
+account's. The move also gives:
+
+| Gain | Why it matters |
+|---|---|
+| A permanent URL | `extensions/index.json`, the release downloads and the submodule URL all live under `Bforartists/…`; the manifest's `website` already says `github.com/bforartists/bfa_coworker` |
+| Cross-repo automation without a personal token | A GitHub App (or Dependabot, §6.7) owned by the organization, not a token tied to one person's account that expires or leaves with them |
+| Continuity and trust | Releases, issues and the Store-facing project page belong to the project; other Bforartists admins can cut a release |
+
+**What moves with it:** issues, PRs (including open ones like #405), releases and their
+assets, stars, the wiki, Actions history. **Check after the move:** Actions secrets and
+variables, webhooks, branch protection, GitHub Pages (none are used today).
+
+**Order** (the move must come before the URL is baked into Bforartists):
+1. *Settings → Transfer* to `Bforartists` (you are an organization admin). Then, on day one,
+   check that GitHub's redirects work for: the old raw `index.json` URL, an old release
+   download (`…/Draise14/bfa_coworker/releases/download/v1.1.40/…`), and `git clone`.
+2. **Coworker 1.1.42** (or the first release after the move) switches
+   `shared.UPDATE_REPO_URL` and the installer's `REPO_URL` to
+   `https://raw.githubusercontent.com/Bforartists/bfa_coworker/main/extensions/index.json`, and on
+   `register()` rewrites any repository entry whose `remote_url` is the old Draise14 URL to the
+   new one (same module name, so nothing is reinstalled). `index.json`'s `archive_url`s point at
+   `github.com/Bforartists/bfa_coworker/releases/…`.
+3. Local clones: `git remote set-url origin https://github.com/Bforartists/bfa_coworker.git`.
+4. **Never recreate `Draise14/bfa_coworker`** (a personal fork would take that name and end every
+   redirect for users still on 1.1.41 or older). Rename such a fork.
+
+### 6.7 The automated routine (refined 2026-11-09)
+
+Two clicks per release: **push the tag** and **merge the PRs**. Everything between is a workflow.
+
+```mermaid
+flowchart LR
+    T["You: push tag v1.1.42<br/>(release notes file must exist)"] --> W["release.yml (windows-latest)"]
+    W --> B["build: zips + vendored deps<br/>(Python of the pinned Bforartists build)"]
+    B --> S["smoke test: pinned Bforartists, headless,<br/>System copy enables, unit tests"]
+    S --> R["GitHub release vX<br/>(notes + addon zip + installer zip)"]
+    R --> I["PR: extensions/index.json<br/>(size + sha256 from the uploaded asset)"]
+    R --> D["commit to bforartists-dist,<br/>tag dist-vX"]
+    D --> P["Bforartists: Dependabot opens<br/>'Bump bfa_coworker to dist-vX'"]
+    P --> C["Bforartists CI builds the PR<br/>(Windows / Linux / macOS)"]
+    I --> M1["You: merge → every user can update"]
+    C --> M2["Bforartists maintainer: merge →<br/>next build ships Coworker vX built in"]
+```
+
+**In this repo, `.github/workflows/release.yml`**, on a pushed tag `v*` (or *Run workflow* with a
+version):
+1. **Guard:** the tag must equal `v` + the manifest version (no more `v.1.1.41`), and
+   `_misc/release_notes/release_notes_vX.md` must exist. Otherwise it stops before building.
+2. **Build** on `windows-latest`: `build_addon.py` with the pinned `mcp<2` deps (#402), using a
+   **pinned Bforartists portable build** downloaded from Bforartists' own releases and cached.
+   The same binary runs `extension build`, so CI needs no Blender on the runner by hand.
+3. **Test:** the bpy-free suite, then the smoke test: the pinned Bforartists, `--background`,
+   `BLENDER_SYSTEM_EXTENSIONS` pointing at the dist tree, enable `bl_ext.system.bfa_coworker`,
+   expect every class registered.
+4. **Publish:** the GitHub release `vX` with the notes file, the add-on zip and the installer.
+5. **Listing:** download the asset back, compute size and sha256, open the `index.json` PR. No
+   hand-copied hash.
+6. **Dist:** commit `bfa_coworker/` + `deps/windows_x64/` (precompiled `.pyc`) as one commit on
+   `bforartists-dist`, tag `dist-vX`. Uses the workflow's own token (same repository).
+
+**In Bforartists, the trigger is Dependabot** (`.github/dependabot.yml`), which needs no token and
+no secret:
+
+```yaml
+version: 2
+updates:
+  - package-ecosystem: gitsubmodule
+    directory: /
+    schedule: { interval: daily }
+    allow:
+      - dependency-name: release/extensions/system/bfa_coworker   # not lib/* or addons_contrib/*
+    commit-message: { prefix: "Coworker" }
+```
+
+Dependabot follows the submodule's `branch = bforartists-dist` from `.gitmodules` and opens one
+PR per new dist commit; Bforartists' existing Windows/Linux/macOS workflows build it like any PR.
+**Alternative, for a same-hour PR:** our workflow sends a `repository_dispatch`
+(`coworker-release`, with the version) to `Bforartists/Bforartists`, whose small
+`coworker-bump.yml` moves the submodule to `dist-vX` and opens the PR. That needs an
+organization-owned GitHub App installed on both repositories (one more reason for §6.6).
+Start with Dependabot; add the dispatch only if a day's delay matters.
+
+**In Bforartists' CMake, a build option:** `WITH_BFA_COWORKER` (default **ON**). Builds include
+Coworker automatically; distribution packagers can switch it off. Inside the app Coworker stays
+off until the artist enables it.
+
+### 6.8 Decisions for you
+
+| Decision | Recommended | Why |
+|---|---|---|
+| Move the repository to the Bforartists organization | **Yes, before Bundle 2 ships** | The default-preferences URL is permanent (§6.6) |
+| Trigger in Bforartists | **Dependabot** first; dispatch later if needed | No token, no secret, works on day one |
+| Auto-merge the `index.json` PR | **Allowed** once the workflow computes the hash itself | It's mechanical and checked against the uploaded asset; one less click per release. Today's rule says no, so it's yours to change |
+| Auto-merge the Bforartists bump PR | **No** | It changes what every Bforartists build ships; a maintainer picks the moment |
+| `WITH_BFA_COWORKER` default | **ON** | "Built in, switched off" for artists; an opt-out for packagers |
 
 ## 5. Bundle 0 results (spike, 2026-11-07)
 

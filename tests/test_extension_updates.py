@@ -28,6 +28,7 @@ import http.server
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -288,6 +289,105 @@ class TestSettingsTransfer(unittest.TestCase):
         new = _coworker_prefs()
         self.st.restore_once(new, os.path.join(fake.config_dir, "bfa_coworker"))
         self.assertEqual(new.remote_api_key, "sk-old")
+
+
+# ---------------------------------------------------------------------------
+# The add-on's register(): the restore waits for a timer (#400)
+
+
+class _Timers:
+    """``bpy.app.timers``: registered callbacks run only when :meth:`fire` says so."""
+
+    def __init__(self):
+        self.pending = {}
+
+    def register(self, fn, first_interval=0.0, persistent=False):
+        self.pending[fn] = first_interval
+
+    def is_registered(self, fn):
+        return fn in self.pending
+
+    def unregister(self, fn):
+        del self.pending[fn]
+
+    def fire(self, fn):
+        """Run *fn* the way Blender does: returning None removes it."""
+        if fn() is None:
+            self.pending.pop(fn, None)
+
+
+class TestRestoreAfterRegister(unittest.TestCase):
+    """``register()`` runs while ``bpy.data`` is restricted, so the restore can't run there."""
+
+    _PKG = "bfa_coworker_register_under_test"
+
+    def setUp(self):
+        self.config_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.config_dir, True)
+        self.timers = _Timers()
+        self.prefs = types.SimpleNamespace(
+            debug_mode=False, require_session_token=True, operating_mode="LOCAL_LLM", agent_mode="",
+            llm_mode="local", use_autostart=True, autostart_delay=1.0, agent_autostart=False)
+        bpy = types.ModuleType("bpy")
+        bpy.context = types.SimpleNamespace(preferences=types.SimpleNamespace(
+            addons={self._PKG: types.SimpleNamespace(preferences=self.prefs)}, is_dirty=False))
+        bpy.app = types.SimpleNamespace(background=False, online_access=True, timers=self.timers)
+        bpy.utils = types.SimpleNamespace(
+            register_class=lambda cls: None, unregister_class=lambda cls: None,
+            register_cli_command=lambda *args: object(), unregister_cli_command=lambda cmd: None,
+            user_resource=lambda kind: self.config_dir)
+        bpy.types = types.SimpleNamespace()
+
+        # Every sibling module is a stub; settings_transfer records what happens when.
+        self.events = []
+        init = os.path.join(_REPO, "addon", "bfa_coworker", "__init__.py")
+        with open(init, encoding="utf-8") as fh:
+            src = fh.read()
+        siblings = set(re.findall(r"from \.(\w+) import", src)) | set(re.findall(r"from \. import (\w+)", src))
+        modules = {"bpy": bpy}
+        modules.update({self._PKG + "." + name: mock.MagicMock() for name in siblings})
+        self.st = modules[self._PKG + ".settings_transfer"]
+        self.st.restore_once.side_effect = lambda prefs, config_dir: self._restored(prefs)
+        self.st.save.side_effect = lambda *args: self.events.append("save") or True
+        patcher = mock.patch.dict(sys.modules, modules)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        spec = importlib.util.spec_from_file_location(self._PKG, init, submodule_search_locations=[])
+        self.mod = importlib.util.module_from_spec(spec)
+        sys.modules[self._PKG] = self.mod
+        spec.loader.exec_module(self.mod)
+        self.autostart = modules[self._PKG + ".operators_server"]._autostart_timer
+
+    def _restored(self, prefs):
+        self.assertIs(prefs, self.prefs)
+        # Auto-start reads the restored settings, so it isn't scheduled yet.
+        self.events.append(("restore", self.timers.is_registered(self.autostart)))
+        return ["operating_mode"]
+
+    def test_restore_runs_once_after_register_then_auto_start(self):
+        self.mod.register()
+        self.assertEqual(self.events, [])
+        self.assertEqual(self.timers.pending.get(self.mod._after_register_timer), 0.0)
+        self.assertFalse(self.timers.is_registered(self.autostart))
+
+        self.timers.fire(self.mod._after_register_timer)
+        self.assertEqual(self.events, [("restore", False)])
+        self.assertFalse(self.timers.is_registered(self.mod._after_register_timer))
+        self.assertTrue(self.timers.is_registered(self.autostart))
+        self.assertEqual(self.st.restore_once.call_count, 1)
+
+    def test_quitting_before_the_restore_keeps_the_backup(self):
+        # Background mode never runs timers: the defaults must not replace the backup.
+        self.mod.register()
+        self.mod.unregister()
+        self.assertEqual(self.events, [])
+        self.assertFalse(self.timers.pending)
+
+        self.mod.register()
+        self.timers.fire(self.mod._after_register_timer)
+        self.mod.unregister()
+        self.assertEqual(self.events, [("restore", False), "save"])
 
 
 # ---------------------------------------------------------------------------

@@ -216,11 +216,23 @@ def register() -> None:
         print("[Coworker] gen_plugins: discovery skipped -- {:s}".format(str(ex)))
 
     # Issue #86: a fresh install (e.g. moved into the update repository by the
-    # Coworker Installer) restores the previous install's settings once --
-    # before auto-start reads them.
-    _restore_settings_backup()
+    # Coworker Installer) restores the previous install's settings once.  Not
+    # in here: bpy.data is restricted inside register(), and update callbacks
+    # of restored settings touch it (#400).  The timer restores first and then
+    # schedules auto-start, which reads the restored settings.
+    if not bpy.app.timers.is_registered(_after_register_timer):
+        bpy.app.timers.register(_after_register_timer, first_interval=0.0, persistent=True)
 
-    # Defer auto-start so the server does not slow down Blender's startup.
+
+def _after_register_timer() -> None:
+    """One-shot, right after ``register()``: restore the settings backup, then auto-start."""
+    _restore_settings_backup()
+    _schedule_autostart()
+    return None
+
+
+def _schedule_autostart() -> None:
+    """Defer auto-start so the server does not slow down Blender's startup."""
     if not bpy.app.background:
         if not _State.startup_online_ok_or_error():
             return
@@ -370,7 +382,10 @@ def unregister() -> None:
     from . import execute_interactive
     from . import ui_chat
 
-    _save_settings_backup()
+    # Until the deferred restore has run (it never does in background mode),
+    # this install holds defaults: saving them would overwrite the backup (#400).
+    if not bpy.app.timers.is_registered(_after_register_timer):
+        _save_settings_backup()
     coworker_api.unregister()
     # Keep the chat first: the cleanup below empties it (it used to be saved after,
     # so quitting overwrote the saved chat with an empty one).
@@ -400,8 +415,9 @@ def unregister() -> None:
             pass
     _cli_commands.clear()
 
-    if bpy.app.timers.is_registered(_autostart_timer):
-        bpy.app.timers.unregister(_autostart_timer)
+    for timer in (_after_register_timer, _autostart_timer):
+        if bpy.app.timers.is_registered(timer):
+            bpy.app.timers.unregister(timer)
 
     mcp_to_blender_server.stop()
     if bpy.app.timers.is_registered(execute_interactive.run):

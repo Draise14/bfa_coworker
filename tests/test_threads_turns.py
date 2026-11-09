@@ -224,7 +224,7 @@ class TestNewThreadLeavesOthersAlone(_ThreadsBase):
         self.assertEqual([t.name for t in texts], ["Notes"])
 
     def test_scene_lock_names(self):
-        cw = sys.modules["bfa_coworker.co_work_guard"]
+        cw = self.ac.co_work_guard      # the instance the controller uses (other tests load their own)
         cw.clear_session()
         cw.remember_session({"Cube"}, set(), thread="main")
         cw.remember_session({"MixNode"}, set(), thread=self.node.id)

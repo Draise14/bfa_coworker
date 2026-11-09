@@ -28,6 +28,8 @@ import json
 import logging
 import os
 import sys
+import threading
+import time
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -76,6 +78,34 @@ class TestAllowLists(unittest.TestCase):
         for want in ("127.0.0.1:9191", "STUDIO-PC:9191", "studio-pc:9191", "192.168.1.7:9191"):
             self.assertIn(want, hosts)
         self.assertNotIn("0.0.0.0:9191", hosts)
+
+    def test_wildcard_bind_survives_slow_dns(self):
+        # #403: a resolver that hangs must not hold up server start.
+        release = threading.Event()
+        self.addCleanup(release.set)
+        calls = []
+
+        def hanging_lookup(name):
+            calls.append(name)
+            release.wait(5)
+            return (name, [], ["10.9.9.9"])
+
+        with unittest.mock.patch.object(self.mod.socket, "gethostname", return_value="STUDIO-PC"), \
+                unittest.mock.patch.object(self.mod.socket, "gethostbyname_ex", side_effect=hanging_lookup), \
+                unittest.mock.patch.object(self.mod, "_primary_address", return_value=["192.168.1.7"],
+                                           create=True):
+            start = time.monotonic()
+            hosts = self.mod.allowed_hosts("0.0.0.0", 9191)
+            elapsed = time.monotonic() - start
+            again = self.mod.allowed_hosts("::", 9200)
+        self.assertLess(elapsed, 2.0)
+        for want in ("127.0.0.1:9191", "localhost:9191", "[::1]:9191", "STUDIO-PC:9191", "192.168.1.7:9191"):
+            self.assertIn(want, hosts)
+        self.assertNotIn("10.9.9.9:9191", hosts)
+        # Looked up once per process: the second start doesn't wait again.
+        self.assertEqual(calls, ["STUDIO-PC"])
+        self.assertIn("192.168.1.7:9200", again)
+        self.assertIn("127.0.0.1:9200", again)
 
     def test_environment_extras(self):
         os.environ["BFACW_ALLOWED_HOSTS"] = "studio.lan:9191, "

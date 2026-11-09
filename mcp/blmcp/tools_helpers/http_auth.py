@@ -33,6 +33,7 @@ import hmac
 import json
 import os
 import socket
+import threading
 from typing import Any, Awaitable, Callable
 
 _OPEN_PATHS = frozenset(("/health",))
@@ -42,6 +43,11 @@ _WILDCARD_BINDS = ("", "0.0.0.0", "::", "[::]")
 _EXTRA_HOSTS_ENV = "BFACW_ALLOWED_HOSTS"
 _EXTRA_ORIGINS_ENV = "BFACW_ALLOWED_ORIGINS"
 
+# A wildcard bind looks up this computer's addresses; slow or broken DNS must
+# not hold up server start (#403), so the lookup gets this long, once.
+_RESOLVE_TIMEOUT = 1.0
+_this_computer: list[str] | None = None
+
 # Browser pages served from this computer, any port (Starlette's CORS check).
 CORS_ORIGIN_REGEX = r"https?://(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?"
 
@@ -50,22 +56,58 @@ def _env_list(name: str) -> list[str]:
     return [v.strip() for v in os.environ.get(name, "").split(",") if v.strip()]
 
 
+def _primary_address() -> list[str]:
+    """This computer's outward IPv4 address, without DNS (a UDP "connect" sends nothing)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("192.0.2.1", 9))  # TEST-NET-1: only picks the route
+            address = probe.getsockname()[0]
+    except OSError:
+        return []
+    return [address] if address != "0.0.0.0" else []
+
+
+def _this_computer_names() -> list[str]:
+    """This computer's name and addresses, best effort, cached for the process.
+
+    ``gethostbyname_ex`` has no timeout of its own, so it runs in a daemon
+    thread; past :data:`_RESOLVE_TIMEOUT` the name plus the primary address
+    (no DNS) is used instead.
+    """
+    global _this_computer
+    if _this_computer is not None:
+        return list(_this_computer)
+    try:
+        name = socket.gethostname()
+    except OSError:
+        return []
+    found: list[str] = []
+
+    def resolve() -> None:
+        try:
+            found.extend(socket.gethostbyname_ex(name)[2])
+        except (OSError, UnicodeError):
+            pass
+
+    worker = threading.Thread(target=resolve, name="bfacw-host-lookup", daemon=True)
+    worker.start()
+    worker.join(_RESOLVE_TIMEOUT)
+    addresses = _primary_address() if worker.is_alive() else list(found)
+    _this_computer = [name, name.lower()] + addresses
+    return list(_this_computer)
+
+
 def allowed_hosts(bind_host: str, port: int) -> list[str]:
     """``Host`` header values the endpoint answers (``host:port``, the SDK's form).
 
     This computer's loopback names; plus the bound address when Network mode
     binds another one; for a wildcard bind (``0.0.0.0``) also this computer's
-    name and addresses, best effort.
+    name and addresses, best effort (see :func:`_this_computer_names`).
     """
     names = list(_LOOPBACK_HOSTS)
     host = bind_host.strip()
     if host in _WILDCARD_BINDS:
-        try:
-            name = socket.gethostname()
-            names += [name, name.lower()]
-            names += socket.gethostbyname_ex(name)[2]
-        except OSError:
-            pass
+        names += _this_computer_names()
     else:
         names.append("[" + host + "]" if ":" in host and not host.startswith("[") else host)
     out: list[str] = []

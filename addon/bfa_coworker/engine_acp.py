@@ -197,6 +197,24 @@ class AcpEngine:
             applier.agent_name = self.applier.agent_name
         self.thread, self.session_id, self.state, self.applier = thread, session_id, state, applier
 
+    def forget_thread(self, thread: str) -> None:
+        """New Thread in an editor's thread (#358): its next turn opens a fresh session."""
+        if thread == self.thread:
+            if not self.is_busy():
+                self.session_id = ""
+        else:
+            self._threads.pop(thread, None)
+
+    def drop_queued(self, thread: str) -> int:
+        """Stop in a thread whose turn isn't the running one: its waiting messages go."""
+        kept = [p for p in self._queue if p.thread != thread]
+        dropped = len(self._queue) - len(kept)
+        self._queue.clear()
+        self._queue.extend(kept)
+        if dropped:
+            self._changed()
+        return dropped
+
     def _servers_for(self, thread: str) -> list[dict[str, Any]]:
         """The MCP server entries for *thread*'s session: its id in their env, so the
         bridge knows who calls (``BFACW_THREAD_ID``)."""
@@ -368,7 +386,7 @@ class AcpEngine:
         return True
 
     def cancel(self) -> None:
-        self._queue.clear()
+        self.drop_queued(self.thread)          # this thread's waiting messages only (#358)
         self.approvals.cancel_all(self.thread)
         if self.client is not None and self._turn_id:
             self.client.cancel(self.session_id)

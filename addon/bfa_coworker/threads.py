@@ -35,6 +35,8 @@ __all__ = (
     "ThreadRegistry",
     "current",
     "label",
+    "pick",
+    "short_name",
     "tag",
     "use",
 )
@@ -93,6 +95,29 @@ def tag(thread: "Thread | str | None") -> str:
     "" for the default thread, so one thread looks exactly as before."""
     thread_id = thread if isinstance(thread, str) or thread is None else thread.id
     return "" if not thread_id or thread_id == DEFAULT_ID else thread_id
+
+
+def short_name(editor: str) -> str:
+    """The editor kind in a word or two ("3D", "Node", "Sequencer"); "" for no editor."""
+    return _EDITOR_NAMES.get(editor, editor.replace("_", " ").title()) if editor else ""
+
+
+def pick(registry: "ThreadRegistry", editor: str, pinned: str = "", focus: bool = False,
+         create: Callable[[str], Thread] | None = None) -> Thread:
+    """The thread a chat in an *editor* kind shows (Threads 2, #358): the area's pinned
+    thread (*New thread here*) while it lives; else, with editor *focus* on, that editor
+    kind's thread (made with *create*, or the registry's); else the shared default
+    thread ("All editors", today's one conversation)."""
+    if pinned:
+        thread = registry.get(pinned)
+        if thread is not None:
+            return thread
+    if not focus or not editor:
+        return registry.default
+    found = registry.for_editor(editor, create=False)
+    if found is not None:
+        return found
+    return create(editor) if create is not None else registry.for_editor(editor)
 
 
 def label(thread: Thread | None) -> str:

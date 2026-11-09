@@ -46,6 +46,7 @@ __all__ = (
     "check_request",
     "check_token",
     "session_token",
+    "write_private",
     "set_token_required",
     "token_required",
     "pid_alive",
@@ -186,17 +187,31 @@ def session_token() -> str:
         token = secrets.token_urlsafe(24)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_name(path.name + ".tmp")
-            tmp.write_text(token, encoding="utf-8")
-            try:
-                os.chmod(tmp, 0o600)  # owner only (best effort on Windows)
-            except OSError:
-                pass
-            os.replace(str(tmp), str(path))
+            write_private(path, token)
         except OSError:
             pass  # still protects this session; the file is retried next start
     _token_cache["token"] = token
     return token
+
+
+def write_private(path: Path, text: str) -> None:
+    """Write *text* to *path* so only your account can read it (#346).
+
+    POSIX: mode 600, given when the file is created, so it is never readable by
+    others even for a moment.  Windows ignores the mode; files under your user
+    profile (``%LOCALAPPDATA%``, ``~/.cache``, Blender's config) are already
+    private to your account there.  Raises ``OSError``.
+    """
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    try:
+        os.chmod(tmp, 0o600)    # a .tmp left over from before keeps its old mode
+    except OSError:
+        pass
+    os.replace(str(tmp), str(path))
 
 
 def set_token_required(required: bool) -> None:

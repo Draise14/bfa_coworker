@@ -65,6 +65,19 @@ def _download_status_icon(msg: str) -> str:
 # go back to it -- External Agent shares agent_mode / llm_mode with the others.
 _PREVIOUS_MODE: dict[str, str] = {}
 
+# Your keys and tokens: shown as *** in every log, export and Copy (#346).
+SECRET_PREFS = ("remote_api_key", "hf_token", "gen_remote_key")
+
+
+def publish_secrets(prefs) -> None:
+    """Hand the current keys to the log's redaction (at start and on every change)."""
+    for name in SECRET_PREFS:
+        _log_module.set_secret(name, getattr(prefs, name, ""))
+
+
+def _update_secret(self, _context) -> None:
+    publish_secrets(self)
+
 # Translate's languages (#42): (code, name).
 _LANGUAGES = (
     ("en", "English"), ("es", "Spanish"), ("fr", "French"), ("de", "German"), ("it", "Italian"),
@@ -680,6 +693,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default="",
         subtype='PASSWORD',
         description="Your API key. Get one at openrouter.ai/keys",
+        update=_update_secret,
     )
 
     # -- Remote Provider --------------------------------------------
@@ -922,6 +936,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             "Get one at https://huggingface.co/settings/tokens\n"
             "Only needed for models that require authentication."
         ),
+        update=_update_secret,
     )
 
     # -- Generation (Tier 5) Properties ------------------------------
@@ -975,6 +990,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default="",
         subtype='PASSWORD',
         description="API key for the remote generation service",
+        update=_update_secret,
     )
 
     # -- Poly Haven Resolution -------------------------------------------
@@ -1941,6 +1957,9 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         # -- API URL & Key ---------------------------------------
         box.prop(self, "remote_api_url")
         box.prop(self, "remote_api_key")
+        # Where the key goes (#346): the settings backup keeps it, privately; logs never do.
+        box.label(text="Shown as *** in logs and copies. The settings backup keeps it, readable by you only.",
+                  icon='LOCKED')
 
         row = box.row(align=True)
         row.label(text="API Key Help:", icon='HELP')

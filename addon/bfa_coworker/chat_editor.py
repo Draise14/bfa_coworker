@@ -748,7 +748,8 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
     elif action == "stop":
         ops.chat_stop()
     elif action == "copy":
-        wm.clipboard = value
+        from . import log
+        wm.clipboard = log.redact(value)        # keys and tokens as *** (#346)
     elif action == "copy_error":
         ops.copy_status_error()
     elif action == "link":

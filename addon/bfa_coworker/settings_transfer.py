@@ -25,6 +25,12 @@ them, ending with their saved values.
 Also used by the Coworker Installer (it has its own copy of ``dump``) to save
 the settings of an old copy before replacing it.  ``bpy`` is only touched
 through the objects passed in, so this module is testable without Blender.
+
+The backup keeps your API keys and Hugging Face token on purpose (that is its
+job), in their own ``secrets`` field (#346).  The file is readable by your
+account only (mode 600 on Linux / macOS; on Windows Blender's config folder is
+in your user profile, which is already private), and its contents are never
+printed or logged.
 """
 
 from __future__ import annotations
@@ -56,6 +62,26 @@ _VALUE_TYPES = {"BOOLEAN", "INT", "FLOAT", "STRING", "ENUM"}
 # Restored first: their update callbacks fill in other fields (mode -> agent / llm mode,
 # preset -> model, context and token fields, provider -> URL), which come after.
 _DRIVERS = ("operating_mode", "llm_mode", "remote_provider", "model_preset", "local_ctx_preset")
+# Kept in the backup's "secrets" field (#346): these, and any other PASSWORD field.
+SECRET_KEYS = ("remote_api_key", "hf_token", "gen_remote_key")
+
+
+def _is_secret(prop: Any) -> bool:
+    return prop.identifier in SECRET_KEYS or getattr(prop, "subtype", "") == "PASSWORD"
+
+
+def _write_private(path: str, text: str) -> None:
+    """Like ``session_identity.write_private`` (this module also loads on its own):
+    mode 600 from creation on POSIX; Windows ignores it (the user profile is private)."""
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    try:
+        os.chmod(tmp, 0o600)    # a .tmp left over from before keeps its old mode
+    except OSError:
+        pass
+    os.replace(tmp, path)
 
 
 def settings_path(config_dir: str) -> str:
@@ -125,31 +151,39 @@ def apply(prefs: Any, data: dict[str, Any]) -> list[str]:
             setattr(prefs, key, value)
             applied.append(key)
         except Exception as ex:  # pylint: disable=broad-exception-caught
-            print("[Coworker] settings restore: {:s} not restored ({:s})".format(key, str(ex)))
+            # A secret's error could quote its value: name the error only (#346).
+            reason = type(ex).__name__ if _is_secret(prop) else str(ex)
+            print("[Coworker] settings restore: {:s} not restored ({:s})".format(key, reason))
     return applied
 
 
 def save(prefs: Any, config_dir: str, version: str = "") -> bool:
-    """Write the settings backup.  Never raises."""
+    """Write the settings backup, secrets in their own field, owner-only.  Never raises."""
     try:
         os.makedirs(config_dir, exist_ok=True)
-        payload = {"format": 1, "version": version, "settings": dump(prefs)}
-        path = settings_path(config_dir)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=1, sort_keys=True)
-        os.replace(tmp, path)
+        settings = dump(prefs)
+        secret_keys = {p.identifier for p in _props(prefs) if _is_secret(p)}
+        secrets = {k: settings.pop(k) for k in sorted(secret_keys) if k in settings}
+        payload = {"format": 2, "version": version, "settings": settings, "secrets": secrets}
+        _write_private(settings_path(config_dir), json.dumps(payload, indent=1, sort_keys=True))
         return True
     except Exception:  # pylint: disable=broad-exception-caught
         return False
 
 
 def load(config_dir: str) -> dict[str, Any]:
+    """The saved settings, secrets included (format 1, from older copies and the
+    Installer, kept them among the settings)."""
     try:
         with open(settings_path(config_dir), "r", encoding="utf-8") as fh:
             payload = json.load(fh)
-        settings = payload.get("settings") if isinstance(payload, dict) else None
-        return settings if isinstance(settings, dict) else {}
+        if not isinstance(payload, dict):
+            return {}
+        settings, secrets = payload.get("settings"), payload.get("secrets")
+        out = dict(settings) if isinstance(settings, dict) else {}
+        if isinstance(secrets, dict):
+            out.update(secrets)
+        return out
     except (OSError, ValueError):
         return {}
 

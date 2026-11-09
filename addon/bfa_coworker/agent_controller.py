@@ -52,6 +52,7 @@ from typing import Any
 from . import llm_transport as _transport
 from . import session_memory
 from . import co_work_guard
+from . import long_jobs
 from . import chat_attachments
 from . import process_guard as _process_guard
 from . import session_identity as _session_identity
@@ -1299,6 +1300,7 @@ _SURFACE_TOOLS = frozenset({
     "get_scene_digest",           # Short scene summary; says unchanged on repeat.
     "update_plan",
     "get_attached_image",         # #199: the image in the attach socket (External Harness).
+    "get_job_status",             # Tools 6 (#309): waits for a background render or bake.
     "load_tools",                 # Engine 7: the server's own, for agents (the loop has its own).
     # Read-only asset/polyhaven status -- useful for any domain, was previously
     # unreachable because it appeared in no surface/domain set.
@@ -1330,6 +1332,7 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "setup_pbr_material",
         "assign_material_to_objects",
         "load_asset_in_context",
+        "bake_textures",
     }),
     "modeling": frozenset({
         "jump_to_view3d_object_by_name",
@@ -1350,6 +1353,7 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "render_viewport_to_path",
         "get_screenshot_of_area_as_image",
         "three_point_lighting_rig",
+        "bake_textures",
     }),
     "vse": frozenset({
         "jump_to_tab_by_name",
@@ -1400,7 +1404,7 @@ _DOMAIN_KEYWORDS: dict[str, list[str]] = {
     ],
     "rendering": [
         "render", "camera", "eevee", "cycles", "output",
-        "resolution", "frame", "focal length", "depth of field",
+        "resolution", "frame", "focal length", "depth of field", "bake",
     ],
     "vse": [
         "sequencer", "strip", "video", "audio", "clip", "edit",
@@ -1566,6 +1570,8 @@ def _tool_makes_progress(tool_name: str, args: dict[str, Any], result_text: str)
     if '"status": "error"' in (result_text or "")[:600]:
         return False
     name = str(tool_name or "")
+    if long_jobs.poll_is_waiting(name, result_text):
+        return True     # Tools 6: the job it waits for is the work going on.
     if "screenshot" in name or name.startswith(_READONLY_TOOL_PREFIXES):
         return False
     if name == "execute_blender_code":
@@ -4162,7 +4168,9 @@ def _call_mcp_tool_sync(
         _wd.daemon = True
         _wd.start()
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            # A status poll holds the answer while its job runs (Tools 6, #309).
+            _timeout = 60 + long_jobs.call_wait_seconds(tool_name, arguments)
+            with urllib.request.urlopen(req, timeout=_timeout) as resp:
                 raw = resp.read().decode()
                 # FastMCP in stateless_http mode wraps the JSON-RPC
                 # response in SSE (``event: message`` / ``data: {...}``).
@@ -4198,6 +4206,8 @@ _TOOL_FRIENDLY_NAMES: dict[str, str] = {
     "delete_object": "Removing object",
     "set_material": "Applying material",
     "render_scene": "Rendering",
+    "get_job_status": "Waiting for the background job",
+    "bake_textures": "Starting the bake",
 }
 
 
@@ -7205,6 +7215,7 @@ def _run_conversation_turn_inner(
             _deferred_notes: list[dict[str, Any]] = []
             _batch_progress = 0
             _batch_repeat = False
+            _batch_waits = 0     # status polls of a job still running (Tools 6)
             with session_memory.store_lock:
                 _plan_was_done = bool(session_memory.store.goal.steps) and \
                     not session_memory.store.goal.pending_steps()
@@ -7471,8 +7482,13 @@ def _run_conversation_turn_inner(
                         if tool_name == "setup_pbr_material" and "polyhaven_resolution" not in args:
                             args["polyhaven_resolution"] = _res
 
-                # Call the MCP tool.
-                result_text = _call_mcp_tool_sync(tool_name, args, mcp_port)
+                # Call the MCP tool.  A status poll waits for its job in short
+                # calls, so Stop is noticed while a bake runs (Tools 6, #309).
+                if long_jobs.is_status_poll(tool_name):
+                    result_text = long_jobs.wait_in_slices(
+                        lambda a: _call_mcp_tool_sync(tool_name, a, mcp_port), tool_name, args, _stop_event)
+                else:
+                    result_text = _call_mcp_tool_sync(tool_name, args, mcp_port)
                 _agent_state.bump_turn_cost("tools")
 
                 # -- Track code execution for smart undo ----------------
@@ -7578,13 +7594,17 @@ def _run_conversation_turn_inner(
                 # long-request auto-continue decision.
                 _tools_executed += 1
                 # Identical call (same tool + same arguments) seen again?
+                # Waiting for a long job repeats its status poll: not a loop.
                 try:
                     _sig = "{:s}:{:s}".format(tool_name, json.dumps(args, sort_keys=True, default=str))
                 except (TypeError, ValueError):
                     _sig = tool_name
-                _call_counts[_sig] = _call_counts.get(_sig, 0) + 1
-                if _call_counts[_sig] >= _MAX_IDENTICAL_CALLS:
-                    _batch_repeat = True
+                if not long_jobs.is_status_poll(tool_name):
+                    _call_counts[_sig] = _call_counts.get(_sig, 0) + 1
+                    if _call_counts[_sig] >= _MAX_IDENTICAL_CALLS:
+                        _batch_repeat = True
+                elif long_jobs.poll_is_waiting(tool_name, result_text):
+                    _batch_waits += 1
                 if _tool_makes_progress(tool_name, args, result_text):
                     _round_progress += 1
                     _turn_progress += 1
@@ -7681,6 +7701,10 @@ def _run_conversation_turn_inner(
                 _turn_progress += 1
             _plan_done_seen = _done_count
             _idle_batches = 0 if _batch_progress else _idle_batches + 1
+            if _batch_waits and _batch_waits == len(raw_tool_calls):
+                # Only waited for a long job: that costs no iteration (the job's
+                # own timeout and Stop still end the wait).
+                iterations = max(0, iterations - 1)
             _idle_limit = (_IDLE_BATCHES_AFTER_PROGRESS if _turn_progress
                            else _IDLE_BATCHES_BEFORE_PROGRESS)
             if _plan_done_now and _plan_was_done:

@@ -1437,13 +1437,16 @@ def _service_clients() -> bool:
 def poll() -> bool:
     """
     Non-blocking poll: accept new connections, service existing clients,
-    and check deferred responses.
+    check long jobs (``long_jobs``) and deferred responses.
 
     Return ``True`` if work was done or deferred clients are pending.
     """
-    from . import deferred_tool
+    from . import coworker_api, deferred_tool
     _accept_clients()
     did_work = _service_clients()
+    # Long jobs first, so a get_job_status waiting below sees a job that just ended.
+    if coworker_api.jobs_tick():
+        did_work = True
     if deferred_tool.poll():
         did_work = True
     # Stay in active polling mode while deferred clients exist.

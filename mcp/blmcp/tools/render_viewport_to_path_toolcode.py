@@ -19,12 +19,14 @@ from typing import NamedTuple
 
 class Params(NamedTuple):
     output_path: str
+    background: bool = False
 
 
 class Result(NamedTuple):
     status: str
     filepath: str | None = None
     message: str | None = None
+    job_id: str | None = None
 
 
 # @include_begin: _template_deferred_tool_check_for_file_output.py
@@ -34,6 +36,10 @@ def _deferred_tool_check_for_file_output(
         restore_attrs: list[tuple[object, str, object]] | None = None,
 ) -> Callable[[], dict[str, object] | None]:
     return lambda: None
+# @include_end
+
+
+# @include_begin: _coworker_api_shared.py
 # @include_end
 
 
@@ -57,16 +63,40 @@ def main(params: Params) -> Result | Callable[[], dict[str, object] | None]:
 
     render_args = ('INVOKE_DEFAULT',) if use_deferred else ()
 
+    if use_deferred and bpy.app.is_job_running('RENDER'):
+        rd.filepath = orig_filepath
+        return Result(status="error", message=(
+            "A render is already running. Wait for it (get_job_status, or the job bar at the "
+            "bottom), then render again."))
+    # A file left by an earlier render would read as this one's result.
+    if os.path.exists(output_path):
+        try:
+            os.remove(output_path)
+        except OSError:
+            pass
+
     try:
-        bpy.ops.render.render(*render_args, write_still=True)
+        ret = bpy.ops.render.render(*render_args, write_still=True)
     except RuntimeError as ex:
         rd.filepath = orig_filepath
         return Result(status="error", message=str(ex))
+    if 'CANCELLED' in ret:
+        rd.filepath = orig_filepath
+        return Result(status="error", message=(
+            "Blender didn't start the render (another render or bake may be running). "
+            "Try again when it has finished."))
 
     if use_deferred:
-        return _deferred_tool_check_for_file_output(
+        check = _deferred_tool_check_for_file_output(
             'RENDER', output_path, restore_attrs=[(rd, "filepath", orig_filepath)],
         )
+        if not params.background:
+            # Held open; a render still going after a while gets a job id (deferred_tool).
+            return check
+        job_id = _coworker_api().start_job('RENDER', check.job_label, check, check.job_on_finish)
+        return Result(status="ok", filepath=output_path, job_id=job_id, message=(
+            "Rendering in the background. Call get_job_status(job_id) to wait for it; "
+            "the image is written to filepath when it is done."))
 
     rd.filepath = orig_filepath
     return Result(status="ok", filepath=output_path)

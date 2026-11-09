@@ -25,17 +25,30 @@ def _deferred_tool_check_for_file_output(
 
     When *restore_attrs* is provided, each ``(obj, attr, value)`` tuple
     is restored via ``setattr`` after the job completes.
+
+    The checker carries ``job_kind`` / ``job_label``: the bridge hands a job
+    still running after a while to its job registry (Tools 6, #309), and
+    ``long_jobs`` matches the kind to Blender's render handlers.
     """
     import bpy  # pylint: disable=import-error,no-name-in-module
+
+    def restore() -> None:
+        if restore_attrs is not None:
+            for obj, attr, value in restore_attrs:
+                setattr(obj, attr, value)
 
     def check_is_finished() -> dict[str, object] | None:
         if bpy.app.is_job_running(job_type):
             return None
-        if restore_attrs is not None:
-            for obj, attr, value in restore_attrs:
-                setattr(obj, attr, value)
+        restore()
         if os.path.exists(output_path):
             return {"status": "ok", "filepath": output_path}
-        return {"status": "error", "message": "Job completed but output file was not created"}
+        return {"status": "error", "message": (
+            "The job ended without writing {:s} (it was cancelled or failed; Blender's Info "
+            "editor has the reason).".format(os.path.basename(output_path)))}
 
+    check_is_finished.job_kind = job_type  # type: ignore[attr-defined]
+    check_is_finished.job_on_finish = restore  # type: ignore[attr-defined]  # also when cancelled
+    check_is_finished.job_label = "{:s} {:s}".format(  # type: ignore[attr-defined]
+        job_type.replace("_", " ").title(), os.path.basename(output_path))
     return check_is_finished

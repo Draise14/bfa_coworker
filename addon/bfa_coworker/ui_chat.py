@@ -1650,6 +1650,24 @@ def _draw_archive_node(
         _draw_multiline(box, body)
 
 
+def _draw_job_rows(layout: bpy.types.UILayout) -> None:
+    """Tools 6 (#309): a row per background render or bake the agent is waiting for.
+
+    Under them, Blender's own job bar: it shows the real bake percentage (not
+    readable from Python) and its X cancels the job -- Python has no call that
+    stops a render or bake, so this is the Stop for it.
+    """
+    from . import long_jobs
+    jobs = long_jobs.running()
+    if not jobs:
+        return
+    box = layout.box()
+    for job in jobs:
+        box.label(text="{:s} \u2014 {:s}".format(job["text"], job["label"]),
+                  icon='RENDER_STILL' if job["kind"] == "RENDER" else 'TEXTURE')
+    box.template_running_jobs()
+
+
 def _draw_tool_inline(
     layout: bpy.types.UILayout,
     tool_name: str,
@@ -4924,11 +4942,12 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
         # Only the active (newest) turn animates while thinking -- past turns
         # keep a static label.  Computed before the header so the header can
         # show the live elapsed time for the running turn.
-        is_active_turn = state.is_thinking and (
+        is_newest_turn = (
             (props.chat_newest_first and display_idx == 0)
             or (not props.chat_newest_first
                 and display_idx == visible_count - 1)
         )
+        is_active_turn = state.is_thinking and is_newest_turn
 
         # --- Turn header (always visible) ---
         has_err = has_proc and any(
@@ -5037,6 +5056,10 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                     elif pr == "assistant":
                         work_box.label(text="Self Prompt", icon="CONSOLE")
                         _draw_multiline(work_box, pc)
+
+        # Background jobs (Tools 6): visible even while the Workshop is collapsed.
+        if is_newest_turn:
+            _draw_job_rows(turn_box)
 
         # --- Coworker reply: live while thinking, then the final message ---
         # While THIS turn is still being generated, show the live readout so

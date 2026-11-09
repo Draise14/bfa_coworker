@@ -403,8 +403,9 @@ def _agent_follows_approval(engine, mode: str) -> None:
 
 def _approvals_new_turn() -> None:
     """A new turn: "Allow this turn" from the last one asks again (risky steps and the agent's)."""
-    from . import risky_steps
+    from . import loop_guard, risky_steps
     risky_steps.APPROVALS.new_turn()
+    loop_guard.BRIDGE.new_turn()        # repeats are counted per turn (#310)
     if _acp is not None:
         _acp.approvals.new_turn()
 
@@ -2840,7 +2841,7 @@ def approval_card():
     risky = risky_steps.APPROVALS.current()
     if risky is not None:
         return Approval(title=risky.title, detail=risky.detail, waiting=risky_steps.APPROVALS.count(),
-                        note="Permissions: the button by Send (Strict / Permissive / Auto)",
+                        note=risky.note or "Permissions: the button by Send (Strict / Permissive / Auto)",
                         icon="WARNING" if risky.reason else "LOCKED")
     from . import coworker_api
     open_question = coworker_api.current_question()

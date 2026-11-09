@@ -53,6 +53,7 @@ from . import llm_transport as _transport
 from . import session_memory
 from . import co_work_guard
 from . import long_jobs
+from . import loop_guard
 from . import chat_attachments
 from . import process_guard as _process_guard
 from . import session_identity as _session_identity
@@ -1533,10 +1534,9 @@ _READONLY_TOOL_PREFIXES = (
 # Stop rules (Tier 3 hardening, 1.1.37): consecutive tool batches with no real
 # progress before the turn is wound up; the bar is higher before ANY progress
 # (a task legitimately starts by inspecting).  The same exact call repeated
-# this many times is also a loop.
+# is a loop too: ``loop_guard`` asks on the 3rd and refuses the 4th (#310).
 _IDLE_BATCHES_BEFORE_PROGRESS = 6
 _IDLE_BATCHES_AFTER_PROGRESS = 4
-_MAX_IDENTICAL_CALLS = 3
 # Tool batches the model may still run after every plan step is done.
 _BATCHES_AFTER_PLAN_DONE = 1
 
@@ -4503,6 +4503,31 @@ def _extract_error_signature(result_text: str) -> str:
     return ""
 
 
+def _guard_repeat(guard: "loop_guard.LoopGuard", tool_name: str, args: dict[str, Any],
+                  on_status: Callable[[str], None] | None = None) -> str:
+    """Runtime 1 (#310): "" to run this call, else the tool error the model gets instead.
+
+    The 3rd identical call this turn asks you with the approval card (this worker
+    thread waits; Stop declines), the 4th is refused, Auto mode declines at once."""
+    from . import risky_steps
+    verdict, nth = guard.check(tool_name, args)
+    action, error = loop_guard.decide(verdict, tool_name, nth, risky_steps.APPROVALS,
+                                      risky_steps.auto_declines[0])
+    if action == loop_guard.ASK:
+        print("[Coworker] run_conversation_turn: loop guard -- {:s} repeated {:d}x, asking".format(tool_name, nth))
+        if on_status:
+            on_status("Waiting for you: it keeps repeating a step")
+        choice = loop_guard.wait_answer(risky_steps.APPROVALS,
+                                        loop_guard.repeat_request(tool_name, args, nth, "Coworker"), _stop_event)
+        if choice in ("once", "always"):
+            return ""
+        error = loop_guard.declined(tool_name)
+    elif action == loop_guard.RUN:
+        return ""
+    print("[Coworker] run_conversation_turn: loop guard -- {:s} repeated {:d}x, refused".format(tool_name, nth))
+    return json.dumps(error)
+
+
 def _spiral_corrective_message(error_sig: str) -> str:
     """Return a corrective user message based on the repeated error signature."""
     sig_lower = error_sig.lower()
@@ -6674,7 +6699,7 @@ def _run_conversation_turn_inner(
     _turn_progress = 0       # real (scene-changing) tool calls this turn
     _idle_batches = 0        # consecutive tool batches with no progress
     _batches_after_plan_done = 0
-    _call_counts: dict[str, int] = {}  # identical-call loop detection
+    _repeat_guard = loop_guard.LoopGuard()  # identical-call loop detection (#310)
     _stop_reason = ""        # "" | "plan_done" | "idle" -> wrap up early
     with session_memory.store_lock:
         _plan_done_seen = session_memory.store.goal.progress()[0]
@@ -7316,6 +7341,19 @@ def _run_conversation_turn_inner(
                         })
                     continue  # Skip MCP call -- handled locally.
 
+                # -- Loop guard (#310): the same call again asks, then is refused --
+                _repeat_error = _guard_repeat(_repeat_guard, tool_name, args, on_status)
+                if _repeat_error:
+                    _batch_repeat = True        # wind the turn up, as before
+                    history.append({
+                        "role": "tool",
+                        "tool_call_id": tool_id,
+                        "name": tool_name,
+                        "content": _repeat_error,
+                        "summary": "Stopped a repeat",
+                    })
+                    continue
+
                 if on_status:
                     on_status(_friendly_tool_status(tool_name))
 
@@ -7607,17 +7645,9 @@ def _run_conversation_turn_inner(
                 # Progress accounting for the end-of-turn guarantee and the
                 # long-request auto-continue decision.
                 _tools_executed += 1
-                # Identical call (same tool + same arguments) seen again?
+                # Identical calls are counted before they run (_guard_repeat, #310).
                 # Waiting for a long job repeats its status poll: not a loop.
-                try:
-                    _sig = "{:s}:{:s}".format(tool_name, json.dumps(args, sort_keys=True, default=str))
-                except (TypeError, ValueError):
-                    _sig = tool_name
-                if not long_jobs.is_status_poll(tool_name):
-                    _call_counts[_sig] = _call_counts.get(_sig, 0) + 1
-                    if _call_counts[_sig] >= _MAX_IDENTICAL_CALLS:
-                        _batch_repeat = True
-                elif long_jobs.poll_is_waiting(tool_name, result_text):
+                if long_jobs.poll_is_waiting(tool_name, result_text):
                     _batch_waits += 1
                 if _tool_makes_progress(tool_name, args, result_text):
                     _round_progress += 1

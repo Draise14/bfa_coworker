@@ -2879,6 +2879,12 @@ def _build_mcp_env(
 
     # Build PYTHONPATH from vendor directories.
     vendor_pythonpath = _find_vendor_pythonpath()
+    if vendor_pythonpath:
+        # The MCP server runs outside a Store copy's package: give it the vendor
+        # folders as they really are on disk (#390; a no-op elsewhere).
+        from . import store_paths
+        vendor_pythonpath = os.pathsep.join(
+            store_paths.real_path(p) for p in vendor_pythonpath.split(os.pathsep) if p)
     existing_pp = env.get("PYTHONPATH", "")
     if vendor_pythonpath:
         env["PYTHONPATH"] = vendor_pythonpath + (os.pathsep + existing_pp if existing_pp else "")
@@ -3471,6 +3477,12 @@ def ensure_harness_launcher(pythonpath: str | None = None) -> Path:
         info["blender_path"] = bpy.app.binary_path
     except Exception:
         pass  # Outside Blender (tests, CLI).
+    # The launcher runs outside a Store copy's package: give it the folders as they
+    # really are on disk (#390).
+    from . import store_paths
+    info["pythonpath"] = [store_paths.real_path(p) for p in info["pythonpath"]]
+    info["dll_dirs"] = [store_paths.real_path(p) for p in info["dll_dirs"]]
+    info["addon_dir"] = store_paths.real_path(info["addon_dir"])
 
     _HARNESS_DIR.mkdir(parents=True, exist_ok=True)
     for name, text in (

@@ -139,7 +139,7 @@ def _error(message: str) -> dict[str, object]:
 
 
 def refused(tool: str, nth: int) -> dict[str, object]:
-    return _error("Refused: this is call {:s} to {:s} with the same input in this turn, and it isn't "
+    return _error("Refused: this is the {:s} call to {:s} with the same input in this turn, and it isn't "
                   "getting anywhere. Don't repeat it: change the approach, or stop and tell the user "
                   "what blocks you.".format(_ordinal(nth), tool or "this tool"))
 

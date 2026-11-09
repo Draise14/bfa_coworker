@@ -3233,7 +3233,9 @@ class BFACW_OT_chat_capture_screen(Operator):  # type: ignore[misc]
             for other in context.window_manager.windows:       # the other windows join in (#266)
                 if other != win:
                     try:
-                        with context.temp_override(window=other, screen=other.screen):
+                        # The window alone: it brings its own screen, and overriding the screen is refused
+                        # while any window is maximized (Ctrl+Space, #401).
+                        with context.temp_override(window=other):
                             bpy.ops.bfacw.chat_capture_screen("INVOKE_DEFAULT", sibling=True)
                     except RuntimeError:
                         pass
@@ -3268,7 +3270,7 @@ class BFACW_OT_chat_capture_screen(Operator):  # type: ignore[misc]
 
         def later():      # after the redraw without the dimming
             try:
-                with bpy.context.temp_override(window=win, screen=win.screen):
+                with bpy.context.temp_override(window=win):     # the window alone, see invoke (#401)
                     bpy.ops.bfacw.chat_capture_screen('EXEC_DEFAULT', p1=a, p2=b, use_rect=True)
             except (RuntimeError, ReferenceError) as ex:
                 print("[Coworker] capture: {!s}".format(ex))
@@ -5346,7 +5348,7 @@ def _auto_send(prompt: str) -> None:
     if window is None:
         return None
     wm.bfacw_chat_props.chat_input = prompt
-    with bpy.context.temp_override(window=window, screen=window.screen):
+    with bpy.context.temp_override(window=window):   # window only: a screen is refused while maximized (#401)
         bpy.ops.bfacw.chat_send()
     return None
 

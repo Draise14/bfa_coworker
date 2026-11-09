@@ -1310,7 +1310,8 @@ class BFACW_OT_copy_code_block(Operator):
     bl_label = "Copy Code"
     code_text: bpy.props.StringProperty(name="Code", default="")
     def execute(self, context):
-        context.window_manager.clipboard = self.code_text
+        from . import log
+        context.window_manager.clipboard = log.redact(self.code_text)     # (#346)
         self.report({"INFO"}, "Code copied to clipboard")
         return {"FINISHED"}
 
@@ -2768,7 +2769,8 @@ class BFACW_OT_copy_status_error(Operator):  # type: ignore[misc]
         if not text.strip():
             self.report({"WARNING"}, "No error text to copy")
             return {"CANCELLED"}
-        context.window_manager.clipboard = text
+        from . import log
+        context.window_manager.clipboard = log.redact(text)    # keys and tokens as *** (#346)
         self.report({"INFO"}, "Error text copied to clipboard")
         return {"FINISHED"}
 
@@ -3506,7 +3508,8 @@ class BFACW_OT_copy_message(Operator):  # type: ignore[misc]
             if content:
                 parts.append(content)
 
-        context.window_manager.clipboard = "\n\n".join(parts)
+        from . import log
+        context.window_manager.clipboard = log.redact("\n\n".join(parts))     # (#346)
         self.report({"INFO"}, "Message copied to clipboard")
         return {"FINISHED"}
 

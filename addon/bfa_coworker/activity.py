@@ -33,6 +33,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from . import log
+
 _MAX = 200
 _PREVIEW = 160
 
@@ -54,7 +56,7 @@ on_change: Callable[[], None] | None = None     # redraw hook
 
 def _short(value: Any, limit: int = _PREVIEW) -> str:
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
-    text = " ".join(text.split())
+    text = " ".join(log.redact(text).split())       # secrets as *** before cutting: no half key (#346)
     return text if len(text) <= limit else text[:limit - 3] + "..."
 
 
@@ -90,10 +92,10 @@ def clear() -> None:
 
 
 def log_text() -> str:
-    """The whole log as plain text (oldest first), for Copy Log."""
+    """The whole log as plain text (oldest first), for Copy Log; secrets as ``***`` (#346)."""
     lines = []
     for e in reversed(entries()):
         stamp = time.strftime("%H:%M:%S", time.localtime(e.when))
         lines.append("{:s}  {:s}  {:s}  {:.2f}s  {:s}\n    -> {:s}".format(
             stamp, e.status.upper(), e.tool, e.seconds, e.args, e.preview))
-    return "\n".join(lines) or "(no tool calls yet)"
+    return log.redact("\n".join(lines)) or "(no tool calls yet)"

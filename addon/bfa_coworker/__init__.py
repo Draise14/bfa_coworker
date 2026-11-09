@@ -222,11 +222,13 @@ def register() -> None:
     # schedules auto-start, which reads the restored settings.
     if not bpy.app.timers.is_registered(_after_register_timer):
         bpy.app.timers.register(_after_register_timer, first_interval=0.0, persistent=True)
+    _publish_secrets()      # keys already set; restored ones publish as they are set (#346)
 
 
 def _after_register_timer() -> None:
     """One-shot, right after ``register()``: restore the settings backup, then auto-start."""
     _restore_settings_backup()
+    _publish_secrets()      # the restored keys, whatever their update callbacks did (#346)
     _schedule_autostart()
     return None
 
@@ -376,6 +378,20 @@ def _restore_settings_backup() -> None:
     except Exception as ex:  # pylint: disable=broad-exception-caught
         print("[Coworker] settings restore skipped: {:s}".format(str(ex)))
     return None
+
+
+def _publish_secrets() -> None:
+    """#346: your keys and the session token show as *** in every log, export and Copy.
+    (Changing a key in Preferences hands the new one over too.)"""
+    try:
+        from . import log, session_identity
+        from .preferences import publish_secrets
+        addon = bpy.context.preferences.addons.get(__package__)
+        if addon is not None and addon.preferences is not None:
+            publish_secrets(addon.preferences)
+        log.set_secret("session_token", session_identity.session_token())
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] secret redaction setup: {:s}".format(str(ex)))
 
 
 def unregister() -> None:

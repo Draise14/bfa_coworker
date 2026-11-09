@@ -18,6 +18,11 @@ Usage::
 
 The log lives at ``~/.cache/bfa_coworker/logs/coworker.log`` and rotates to
 ``coworker.log.1`` when it exceeds ~1 MB (single backup, no unbounded growth).
+
+Secrets never reach it (#346): :func:`redact` replaces your API keys, the
+Hugging Face token and the session token (handed in with :func:`set_secret`)
+and anything that looks like ``Authorization: Bearer ...`` with ``***``.  The
+console, the log file, session exports and Copy buttons all go through it.
 """
 
 __all__ = (
@@ -26,9 +31,12 @@ __all__ = (
     "read_tail",
     "install_print_tee",
     "set_suppress_console",
+    "set_secret",
+    "redact",
 )
 
 import os
+import re
 import sys
 import threading
 from pathlib import Path
@@ -137,6 +145,56 @@ def _should_pass_through(data: str) -> bool:
     return any(marker in upper for marker in _SEVERITY_MARKERS)
 
 
+# ---------------------------------------------------------------------------
+# Secrets never leak (Security 2, #346)
+
+REDACTED = "***"
+# Shorter values are not hidden: a 3-letter "key" would blank out ordinary words.
+_MIN_SECRET = 8
+# Read from the environment as well: the session token given to scripted setups,
+# and the Hugging Face token the model download falls back to.
+_SECRET_ENV = ("BFACW_TOKEN", "HF_TOKEN", "HUGGINGFACE_TOKEN")
+_named_secrets: dict[str, str] = {}
+_secrets: tuple[str, ...] = ()          # longest first, swapped whole (read from any thread)
+# Secrets we were not told about but recognise: an Authorization header (in any quoting),
+# a bare bearer token, OpenAI-style "sk-..." keys and Hugging Face "hf_..." tokens.
+_SECRET_PATTERNS = (
+    re.compile(r"(?i)(\bauthorization[\"']?\s*[:=]\s*[\"']?(?:bearer|basic|token)\s+)[^\s\"',;]+"),
+    re.compile(r"(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]{8,}"),
+    re.compile(r"()\bsk-[A-Za-z0-9_-]{20,}"),
+    re.compile(r"()\bhf_[A-Za-z0-9]{20,}"),
+)
+
+
+def _rebuild_secrets() -> None:
+    global _secrets
+    found = set(_named_secrets.values())
+    found.update(os.environ.get(name, "").strip() for name in _SECRET_ENV)
+    _secrets = tuple(sorted((s for s in found if len(s) >= _MIN_SECRET), key=len, reverse=True))
+
+
+def set_secret(name: str, value: str) -> None:
+    """Hide *value* from now on (``name`` is the slot it replaces: a changed key
+    stops hiding the old one).  Empty clears the slot."""
+    _named_secrets[name] = (value or "").strip()
+    _rebuild_secrets()
+
+
+def redact(text: str) -> str:
+    """*text* with every known secret, and anything that looks like one, as ``***``."""
+    if not text:
+        return text
+    for secret in _secrets:
+        if secret in text:
+            text = text.replace(secret, REDACTED)
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub(r"\g<1>" + REDACTED, text)
+    return text
+
+
+_rebuild_secrets()
+
+
 def get_log_path() -> Path:
     """Return the log file path, creating the parent directory."""
     base = Path.home() / ".cache" / "bfa_coworker" / "logs"
@@ -164,7 +222,7 @@ def write(msg: str, level: str = "INFO") -> None:
     """
     import datetime
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    line = "[{:s}] [{:5s}] {:s}\n".format(ts, level, msg)
+    line = "[{:s}] [{:5s}] {:s}\n".format(ts, level, redact(msg))
     with _lock:
         path = get_log_path()
         _rotate_if_needed(path)
@@ -202,6 +260,8 @@ class _TeeStream:
         self._pending_suppressed_newline = False
 
     def write(self, data: str) -> int:
+        size = len(data)
+        data = redact(data)     # console and log file alike (#346)
         # Buffer and flush complete lines to the log.
         self._buf += data
         while "\n" in self._buf:
@@ -217,7 +277,7 @@ class _TeeStream:
         if self._pending_suppressed_newline and not data.strip():
             # Trailing newline of a suppressed line: swallow it.
             self._pending_suppressed_newline = False
-            return len(data)
+            return size
         # Pass through to the real console, but skip this addon's routine
         # [Coworker] diagnostics when console suppression is active
         # (debug mode OFF). Warnings/errors always pass through, as does
@@ -230,7 +290,7 @@ class _TeeStream:
             self._pending_suppressed_newline = False
         else:
             self._pending_suppressed_newline = not data.endswith("\n")
-        return len(data)
+        return size
 
     def flush(self) -> None:
         try:

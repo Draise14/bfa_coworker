@@ -3496,11 +3496,17 @@ def ensure_harness_launcher(pythonpath: str | None = None) -> Path:
             ("install.json", json.dumps(info, indent=2)),
     ):
         path = _HARNESS_DIR / name
+        private = name == "install.json"        # it holds a copy of the session token (#346)
         try:
             if path.read_text(encoding="utf-8") == text:
+                if private:
+                    os.chmod(path, 0o600)       # an older Coworker wrote it with the default mode
                 continue
         except OSError:
             pass
+        if private:
+            _session_identity.write_private(path, text)
+            continue
         tmp = path.with_name(name + ".tmp")
         tmp.write_text(text, encoding="utf-8")
         os.replace(str(tmp), str(path))
@@ -3829,19 +3835,20 @@ def validate_mcp_client_config(
 # Operation History Log (Tier 1)
 
 def _log_operation(tool_name: str, params: dict, result: str) -> None:
-    """Append a tool execution to the operation history JSONL file."""
+    """Append a tool execution to the operation history JSONL file (secrets as ***, #346)."""
     import time as _time
+    from . import log as _log
     log_path = Path.home() / ".cache" / "bfa_coworker" / "operations.jsonl"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     entry = {
         "timestamp": _time.time(),
         "tool": tool_name,
         "params": params,
-        "result": result[:500],  # Truncate for log size.
+        "result": _log.redact(result)[:500],  # Truncate for log size (after redacting: no half key).
     }
     try:
         with open(str(log_path), "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
+            f.write(_log.redact(json.dumps(entry)) + "\n")
     except OSError:
         pass  # Best-effort logging.
 
@@ -5219,10 +5226,13 @@ def export_session_log(auto_saved: bool = False) -> None:
 
     Args:
         auto_saved: If True, appends a note that this was auto-saved due to error spiral.
+
+    API keys, the HF token and the session token show as ``***`` (#346).
     """
     import time as _time
     import platform
     import bpy as _bpy  # pylint: disable=import-error
+    from . import log as _log
 
     timestamp = _time.strftime("%Y-%m-%d_%H-%M-%S", _time.localtime())
     block_name = "Coworker_Session_{:s}".format(timestamp)
@@ -5277,23 +5287,24 @@ def export_session_log(auto_saved: bool = False) -> None:
         for m in tr:
             r = m.get("role", "unknown")
             lines.append("[{:s}]".format(r.upper()))
-            c = m.get("content", "")
+            # Secrets as *** before cutting, so no half key is left (#346).
+            c = _log.redact(str(m.get("content", "")))
             if r == "assistant":
                 if c:
-                    lines.append("Content: {:s}".format(str(c)[:2000]))
+                    lines.append("Content: {:s}".format(c[:2000]))
                 for tc in m.get("tool_calls", []):
                     fn = tc.get("function", {})
                     lines.append("  Tool: {:s}".format(fn.get("name", "unknown")))
-                    lines.append("  Args: {:s}".format(str(fn.get("arguments", ""))[:500]))
+                    lines.append("  Args: {:s}".format(_log.redact(str(fn.get("arguments", "")))[:500]))
             elif r == "user":
-                lines.append("Content: {:s}".format(str(c)[:2000]))
+                lines.append("Content: {:s}".format(c[:2000]))
             elif r == "tool":
-                lines.append("Result: {:s}".format(str(c)[:1000]))
+                lines.append("Result: {:s}".format(c[:1000]))
             elif r == "reasoning":
                 # Chain-of-thought can be thousands of chars (and local models
                 # often emit it with whitespace glitches); the log only needs
                 # a bounded excerpt for debugging.
-                _r_text = str(c)
+                _r_text = c
                 if len(_r_text) > _LOG_REASONING_CHARS:
                     _r_text = (
                         _r_text[:_LOG_REASONING_CHARS]
@@ -5352,10 +5363,12 @@ def export_session_log(auto_saved: bool = False) -> None:
     lines.append("End of session log")
 
     # Write to text block on main thread.
+    text = _log.redact("\n".join(lines))
+
     def _do_export() -> None:
         try:
             text_block = _bpy.data.texts.new(block_name)
-            text_block.write("\n".join(lines))
+            text_block.write(text)
             print("[Coworker] Session log exported to text block '{:s}'".format(block_name))
         except Exception as ex:
             print("[Coworker] Failed to export session log: {:s}".format(str(ex)))
@@ -5364,9 +5377,10 @@ def export_session_log(auto_saved: bool = False) -> None:
 
 
 def export_session_log_to_clipboard() -> str:
-    """Return the session log as a string (for copy-to-clipboard)."""
+    """Return the session log as a string (for copy-to-clipboard), secrets as ``***`` (#346)."""
     import time as _time
     import platform
+    from . import log as _log
 
     lines = []
     lines.append("=" * 72)
@@ -5385,9 +5399,9 @@ def export_session_log_to_clipboard() -> str:
     for i, msg in enumerate(history):
         role = msg.get("role", "unknown")
         lines.append("\n[Message {:d}] role={:s}".format(i + 1, role))
-        content = msg.get("content", "")
-        lines.append("Content: {:s}".format(str(content)[:2000]))
-    return "\n".join(lines)
+        content = _log.redact(str(msg.get("content", "")))      # before cutting: no half key
+        lines.append("Content: {:s}".format(content[:2000]))
+    return _log.redact("\n".join(lines))
 
 
 # MCP port of the turn that last locked datablocks, so the release path can

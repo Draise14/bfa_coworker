@@ -25,12 +25,35 @@ def register(mcp: FastMCP) -> None:
     ) -> dict[str, object]:
         """
         Make a group of specialised tools available when the task needs them. If a tool
-        you need isn't in your list (materials, nodes, assets, animation, lighting...),
-        call this first; the tools appear right after.
+        you need isn't in your list (rendering, baking, materials, nodes, assets,
+        animation, lighting...), call this first; the tools appear right after.
 
-        Domains: animation, material, modeling, lighting, rendering, vse,
-        geometry_nodes, assets. Load only what the request needs; the basic tools
-        (scene, code, docs, screenshots, plan, questions) are always there.
+        Domains and the tools they add:
+        - rendering: render to a file, bake textures, lighting rig (render_viewport_to_path,
+          bake_textures, three_point_lighting_rig, get_screenshot_of_area_as_image)
+        - material: PBR materials, Polyhaven textures, bake textures (setup_pbr_material,
+          assign_material_to_objects, download_polyhaven_asset, search_polyhaven_assets,
+          load_asset_in_context, bake_textures, render_viewport_to_path,
+          get_screenshot_of_area_as_image)
+        - lighting: lights, HDRIs (three_point_lighting_rig, download_polyhaven_asset,
+          search_polyhaven_assets, render_viewport_to_path, get_screenshot_of_area_as_image)
+        - animation: keyframes (batch_keyframe_insert, jump_to_view3d_object_by_name,
+          jump_to_view3d_object_data_by_name, render_viewport_to_path)
+        - modeling: navigate and organise (jump_to_view3d_object_by_name,
+          jump_to_view3d_object_data_by_name, jump_to_tab_by_name, jump_to_tab_by_space_type,
+          set_collection_color_tag, get_screenshot_of_area_as_image)
+        - geometry_nodes: node trees (get_active_node_tree, get_node_group_interface,
+          wire_node_group, jump_to_view3d_object_by_name, jump_to_view3d_object_data_by_name,
+          get_screenshot_of_area_as_image)
+        - assets: asset libraries (search_assets, get_asset_libraries, get_asset_tags,
+          list_asset_catalogs, load_asset_in_context, place_asset_in_scene,
+          jump_to_asset_browser, download_polyhaven_asset, search_polyhaven_assets,
+          assign_material_to_objects, get_active_node_tree, get_node_group_interface,
+          wire_node_group)
+        - vse: Video Sequencer navigation (jump_to_tab_by_name, jump_to_tab_by_space_type)
+
+        Load only what the request needs; the basic tools (scene, code, docs,
+        screenshots, plan, questions, get_job_status) are always there.
 
         Args:
             domains: One or more domain names from the list above.

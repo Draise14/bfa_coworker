@@ -54,6 +54,7 @@ from . import session_memory
 from . import co_work_guard
 from . import long_jobs
 from . import loop_guard
+from . import threads
 from . import chat_attachments
 from . import process_guard as _process_guard
 from . import session_identity as _session_identity
@@ -533,7 +534,7 @@ def _clear_system_prompt_cache() -> None:
         pass
 
 
-def prefetch_main_thread_context() -> None:
+def prefetch_main_thread_context(thread: "threads.Thread | None" = None) -> None:
     """Refresh bpy-derived values for the turn worker.  Run on the MAIN thread.
 
     The conversation turn loop runs on a worker thread.  Reading
@@ -545,8 +546,9 @@ def prefetch_main_thread_context() -> None:
     reads plain Python state.  Call this right before spawning the turn thread
     (and at agent start).  Best-effort; never raises.
     """
+    state = thread_state(thread)        # the thread whose turn starts next (#357)
     try:
-        _agent_state.prefetched_system_prompt = _get_system_prompt_with_rules()
+        state.prefetched_system_prompt = _get_system_prompt_with_rules()
     except Exception:  # pylint: disable=broad-exception-caught
         pass
     try:
@@ -555,6 +557,7 @@ def prefetch_main_thread_context() -> None:
         res = getattr(prefs, "polyhaven_resolution", "") or ""
         if res:
             _agent_state.prefetched_polyhaven_resolution = str(res)
+            state.prefetched_polyhaven_resolution = str(res)
     except Exception:  # pylint: disable=broad-exception-caught
         pass
 
@@ -2089,23 +2092,127 @@ def dequeue_message() -> dict[str, Any] | None:
 _stop_event = threading.Event()
 
 
-def request_stop() -> None:
+def request_stop(thread: "threads.Thread | None" = None) -> None:
     """Request the current generation to stop as soon as possible.
 
     The co-work scene lock is NOT released here: ``request_stop`` runs on
     Blender's main thread, and running the unlock toolcode would deadlock
     against the main-thread MCP pump.  The active turn's ``finally``
-    releases the lock as soon as it unwinds.
+    releases the lock as soon as it unwinds.  Only *thread*'s turn stops (#357).
     """
     print("[Coworker] request_stop: stop requested")
-    _stop_event.set()
-    _agent_state.is_thinking = False
-    _agent_state.thinking_start_time = 0.0
+    state = thread_state(thread)
+    thread_stop(thread).set()
+    state.is_thinking = False
+    state.thinking_start_time = 0.0
 
 
-def clear_stop() -> None:
+def clear_stop(thread: "threads.Thread | None" = None) -> None:
     """Clear the stop flag before starting a new turn."""
-    _stop_event.clear()
+    thread_stop(thread).clear()
+
+
+# ---------------------------------------------------------------------------
+# Threads (Tier 4, Threads 1, #357): one conversation per job.  The module-level
+# state above (``_agent_state``, ``_stop_event``, ``_message_queue`` and
+# ``session_memory.store``) is the DEFAULT thread's, looked up when used, so
+# existing callers and tests that swap them keep working.  Turns still run one at
+# a time across threads (``THREADS.try_begin``).
+
+THREADS = threads.ThreadRegistry(make_state=lambda: AgentState(), make_queue=lambda: MessageQueue(),
+                                 make_store=lambda: session_memory.CheckpointStore())
+
+
+def _is_default(thread: "threads.Thread | None") -> bool:
+    return thread is None or thread.is_default
+
+
+def thread_state(thread: "threads.Thread | None" = None) -> "AgentState":
+    """*thread*'s history, live readout and turn guard (the default's: ``_agent_state``)."""
+    return _agent_state if _is_default(thread) else thread.state
+
+
+def thread_stop(thread: "threads.Thread | None" = None) -> threading.Event:
+    return _stop_event if _is_default(thread) else thread.stop
+
+
+def thread_queue(thread: "threads.Thread | None" = None) -> "MessageQueue":
+    return _message_queue if _is_default(thread) else thread.queue
+
+
+class _ThreadMemory:
+    """``session_memory`` with one thread's own store: ``.store`` is the thread's,
+    the rest (``store_lock``, the helpers) is the module's."""
+
+    def __init__(self, store: Any) -> None:
+        self.store = store
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(_session_memory_module, name)
+
+
+_session_memory_module = session_memory
+
+
+def _memory(thread: "threads.Thread | None" = None) -> Any:
+    """``session_memory`` as *thread* (default: the worker's current one) sees it."""
+    thread = thread if thread is not None else threads.current()
+    return session_memory if _is_default(thread) else _ThreadMemory(thread.store)
+
+
+def turn_blocked(thread: "threads.Thread | None" = None) -> bool:
+    """True while another thread's turn runs: *thread*'s message has to wait (1.1.42)."""
+    return THREADS.blocked(thread or THREADS.default)
+
+
+def next_turn(engine: Any = None, thread: "threads.Thread | None" = None) -> Any:
+    """The engine to start next: the one whose thread's queued message waited longest
+    (*engine*, the caller, stands in for its own *thread*), or None."""
+    waiting = THREADS.next_waiting(thread_queue)
+    if waiting is None:
+        return None
+    if waiting is (thread or THREADS.default):
+        return engine               # its own queue: as before threads
+    return waiting.engine
+
+
+class ThreadController:
+    """The controller's turn interface for one non-default thread: what
+    ``engine_loop.LoopEngine`` drives (the module itself serves the default thread)."""
+
+    def __init__(self, thread: "threads.Thread") -> None:
+        self.thread = thread
+
+    @property
+    def _agent_state(self) -> "AgentState":
+        return thread_state(self.thread)
+
+    @property
+    def _stop_event(self) -> threading.Event:
+        return thread_stop(self.thread)
+
+    def request_stop(self) -> None:
+        request_stop(self.thread)
+
+    def enqueue_message(self, *args: Any, **kwargs: Any) -> int:
+        return thread_queue(self.thread).enqueue(*args, **kwargs)
+
+    def dequeue_message(self) -> dict[str, Any] | None:
+        return thread_queue(self.thread).dequeue()
+
+    def run_conversation_turn(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        return run_conversation_turn(*args, thread=self.thread, **kwargs)
+
+    def turn_blocked(self) -> bool:
+        return turn_blocked(self.thread)
+
+    def next_turn(self, engine: Any = None) -> Any:
+        return next_turn(engine, self.thread)
+
+
+def controller_for(thread: "threads.Thread | None" = None) -> Any:
+    """What a LoopEngine for *thread* drives: this module for the default thread."""
+    return sys.modules[__name__] if _is_default(thread) else ThreadController(thread)
 
 
 # ---------------------------------------------------------------------------
@@ -3873,6 +3980,8 @@ def _mcp_headers() -> dict[str, str]:
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
+        # Threads 1 (#357): which thread calls; the server stamps it on the bridge payload.
+        "X-Coworker-Thread": (threads.current() or THREADS.default).id,
     }
     if _session_identity.token_required():
         headers["Authorization"] = "Bearer " + _session_identity.session_token()
@@ -4510,15 +4619,17 @@ def _guard_repeat(guard: "loop_guard.LoopGuard", tool_name: str, args: dict[str,
     The 3rd identical call this turn asks you with the approval card (this worker
     thread waits; Stop declines), the 4th is refused, Auto mode declines at once."""
     from . import risky_steps
+    thread = threads.current()
     verdict, nth = guard.check(tool_name, args)
     action, error = loop_guard.decide(verdict, tool_name, nth, risky_steps.APPROVALS,
-                                      risky_steps.auto_declines[0])
+                                      risky_steps.auto_declines[0], threads.tag(thread))
     if action == loop_guard.ASK:
         print("[Coworker] run_conversation_turn: loop guard -- {:s} repeated {:d}x, asking".format(tool_name, nth))
         if on_status:
             on_status("Waiting for you: it keeps repeating a step")
-        choice = loop_guard.wait_answer(risky_steps.APPROVALS,
-                                        loop_guard.repeat_request(tool_name, args, nth, "Coworker"), _stop_event)
+        choice = loop_guard.wait_answer(
+            risky_steps.APPROVALS,
+            loop_guard.repeat_request(tool_name, args, nth, "Coworker", threads.tag(thread)), thread_stop(thread))
         if choice in ("once", "always"):
             return ""
         error = loop_guard.declined(tool_name)
@@ -5121,7 +5232,8 @@ def _undo_code(action: str, message: str = "", extra_result: str = "") -> str:
     if action == "undo":
         body = "bpy.ops.ed.undo()"
     else:
-        body = "bpy.ops.ed.undo_push(message='{:s}')".format(message)
+        # repr(): a per-thread name like "Coworker (3D)'s turn" must not break the code (#357).
+        body = "bpy.ops.ed.undo_push(message={!r})".format(message)
     return (
         "# blmcp-toolcode-skip-preflight\n"
         "import bpy\n"
@@ -5207,17 +5319,25 @@ def _next_code_sequence() -> str:
     return "{:03d}".format(_code_sequence_counter)
 
 
-def _clear_coworker_text_blocks() -> None:
-    """Remove all Coworker_* text datablocks from Blender's text editor."""
+def _clear_coworker_text_blocks(thread: "threads.Thread | None" = None) -> None:
+    """Remove the Coworker_* text datablocks from Blender's text editor.
+
+    With other threads live, only *thread*'s own (#357): New Thread in one editor
+    must not delete another thread's code.  With one thread, every Coworker_* block."""
     global _code_sequence_counter
-    _code_sequence_counter = 0
+    thread = thread or THREADS.default
+    only_ours = len(THREADS.live()) > 1
+    if not only_ours:
+        _code_sequence_counter = 0
     try:
         import bpy as _bpy  # pylint: disable=import-error
         for text_block in list(_bpy.data.texts):
-            if text_block.name.startswith("Coworker_"):
+            if text_block.name.startswith("Coworker_") and (
+                    not only_ours or text_block.name in thread.text_blocks):
                 _bpy.data.texts.remove(text_block)
     except Exception:
         pass  # Best-effort.
+    thread.text_blocks.clear()
 
 
 def _save_code_to_text_editor_deferred(code: str, seq: str) -> None:
@@ -5227,6 +5347,8 @@ def _save_code_to_text_editor_deferred(code: str, seq: str) -> None:
     defer the ``bpy.data.texts`` operations to the main thread since
     Blender's Python API is not thread-safe.
     """
+    owner = threads.current() or THREADS.default      # whose code it is (#357)
+
     def _do_save() -> None:
         try:
             import bpy as _bpy  # pylint: disable=import-error
@@ -5235,6 +5357,7 @@ def _save_code_to_text_editor_deferred(code: str, seq: str) -> None:
                 name = "Coworker_{:s}".format(seq)
                 text_block = _bpy.data.texts.new(name)
                 text_block.write(code)
+                owner.text_blocks.add(text_block.name)
                 print("[Coworker] saved code to text editor '{:s}'".format(name))
         except Exception as _ex:
             print("[Coworker] FAILED to save code to text editor: {:s}".format(str(_ex)))
@@ -5466,7 +5589,7 @@ def _lock_step_entities(step_diff: Any, mcp_port: int, protect: object = ()) -> 
         # "prior" and the unlock would then re-lock it forever -- the
         # reported "can't edit what was built after a turn".
         new_objs, new_colls = co_work_guard.record_managed(objs, colls)
-        co_work_guard.remember_session(objs, colls)
+        co_work_guard.remember_session(objs, colls, thread=(threads.current() or THREADS.default).id)
         if not new_objs and not new_colls:
             # Already locked this cycle (e.g. re-locked by the session pass);
             # nothing to do, and the priors are already captured.
@@ -5548,7 +5671,7 @@ def _lock_session_entities(mcp_port: int, protect: object = ()) -> None:
     selection) is always excluded -- an object the user is editing stays
     theirs even if the coworker made it earlier.
     """
-    objs, colls = co_work_guard.session_names()
+    objs, colls = co_work_guard.session_names((threads.current() or THREADS.default).id)
     if not objs and not colls:
         return
     _lock_step_entities(
@@ -5556,16 +5679,17 @@ def _lock_session_entities(mcp_port: int, protect: object = ()) -> None:
         mcp_port, protect=protect)
 
 
-def clear_session_scene_lock() -> None:
+def clear_session_scene_lock(thread: "threads.Thread | None" = None) -> None:
     """Forget the session's created-entity set (New Thread / Stop).
 
     Called from the UI when the user starts a fresh thread or stops the
     agent, so a later turn does not re-lock datablocks from the old thread.
+    Only *thread*'s names (#357): another thread keeps its own.
     """
-    co_work_guard.clear_session()
+    co_work_guard.clear_session((thread or THREADS.default).id)
 
 
-def _log_turn_cost() -> None:
+def _log_turn_cost(state: "AgentState | None" = None) -> None:
     """Print + store a one-line cost summary for the turn that just ended.
 
     Tier 3i (measurement-first): attributes a turn's wall time to prompt
@@ -5575,7 +5699,7 @@ def _log_turn_cost() -> None:
     Never raises.
     """
     try:
-        cost = _agent_state.last_turn_cost
+        cost = (state or _agent_state).last_turn_cost
         if not isinstance(cost, dict) or not cost.get("requests"):
             return
         _start = float(cost.get("start", 0.0) or 0.0)
@@ -5606,19 +5730,20 @@ def _log_turn_cost() -> None:
         pass
 
 
-def _stamp_turn_duration() -> None:
+def _stamp_turn_duration(state: "AgentState | None" = None) -> None:
     """Record the just-finished turn's wall time on its last history message.
 
     The chat panel reads ``turn_seconds`` back so each finished turn can show
     how long it took (formatted with minutes).  Uses the per-turn cost ledger's
     start stamp (set at turn start); best-effort and never raises.
     """
+    state = state or _agent_state
     try:
-        cost = _agent_state.last_turn_cost
+        cost = state.last_turn_cost
         start = float(cost.get("start", 0.0) or 0.0) if isinstance(cost, dict) else 0.0
         if not start:
             return
-        hist = _agent_state.conversation_history
+        hist = state.conversation_history
         if not hist:
             return
         hist[-1]["turn_seconds"] = round(time.time() - start, 1)
@@ -5641,6 +5766,7 @@ def run_conversation_turn(
     allow_action_nudge: bool = True,
     attachments: list[str] | None = None,
     attachment_names: list[str] | None = None,
+    thread: "threads.Thread | None" = None,
 ) -> list[dict[str, Any]]:
     """
     Run a full conversation turn.
@@ -5663,8 +5789,16 @@ def run_conversation_turn(
     request of the turn; the stored history keeps only the plain
     ``[attached: ...]`` marker -- base64 never enters the saved chat JSON.
 
+    *thread* (#357) is the conversation the turn belongs to: its history, Stop,
+    plan and status (None: the default thread, i.e. the module-level state).  One
+    turn runs at a time across threads: while another thread's turn runs, this
+    returns at once without starting (the engines queue instead).
+
     This is a BLOCKING call -- run it via ``schedule_coro`` or in a thread.
     """
+    _agent_state = thread_state(thread)
+    _stop_event = thread_stop(thread)
+    _gate = thread or THREADS.default
     # -- Re-entrancy guard ----------------------------------------------
     if _agent_state.turn_active:
         if _stop_event.is_set():
@@ -5676,16 +5810,20 @@ def run_conversation_turn(
         else:
             print("[Coworker] run_conversation_turn: re-entrancy blocked -- turn already active")
             return _agent_state.conversation_history
+    if not THREADS.try_begin(_gate):
+        print("[Coworker] run_conversation_turn: another thread's turn runs -- one turn at a time")
+        return _agent_state.conversation_history
     _agent_state.turn_active = True
     _agent_state.turn_token += 1
     _my_token = _agent_state.turn_token
     try:
-        return _run_conversation_turn_inner(
-            user_message, on_text, on_status, on_reasoning,
-            llm_url, api_key, model, mcp_port, chat_mode,
-            on_stream_text, on_stream_reasoning, allow_action_nudge,
-            attachments, attachment_names,
-        )
+        with threads.use(thread), _transport.using(_agent_state, _stop_event):
+            return _run_conversation_turn_inner(
+                user_message, on_text, on_status, on_reasoning,
+                llm_url, api_key, model, mcp_port, chat_mode,
+                on_stream_text, on_stream_reasoning, allow_action_nudge,
+                attachments, attachment_names, thread,
+            )
     finally:
         # Only the turn that still owns the guard may clear it and release the
         # scene lock.  A STOPPED worker often keeps unwinding for a while (a
@@ -5697,12 +5835,14 @@ def run_conversation_turn(
             _agent_state.turn_active = False
             # Always release the co-work scene lock (FINISH, error, Stop, or
             # an exception all pass through here).
-            _release_scene_lock()
+            with threads.use(thread):
+                _release_scene_lock()
             # Tier 3i: log the turn's cost breakdown (prefill vs gen vs overhead).
-            _log_turn_cost()
+            _log_turn_cost(_agent_state)
             # Record the turn's wall time on its last message so the chat panel
             # can show each finished turn's duration.
-            _stamp_turn_duration()
+            _stamp_turn_duration(_agent_state)
+            THREADS.end(_gate)          # the next thread's turn may start (#357)
 
 
 # Turn counter for memory-block "Last updated" stamps (Tier 3).
@@ -5716,10 +5856,31 @@ _session_turn_count = 0
 _session_loaded_domains: set[str] = set()
 
 
-def _reset_session_domains() -> None:
+def _reset_session_domains(thread: "threads.Thread | None" = None) -> None:
     """Forget the session-sticky loaded domains (called by New Thread)."""
     global _session_loaded_domains
-    _session_loaded_domains = set()
+    if _is_default(thread):
+        _session_loaded_domains = set()
+    else:
+        thread.domains = set()
+
+
+def _thread_domains(thread: "threads.Thread | None" = None) -> set[str]:
+    return _session_loaded_domains if _is_default(thread) else thread.domains
+
+
+def _bump_turn_count(thread: "threads.Thread | None" = None) -> None:
+    global _session_turn_count
+    if _is_default(thread):
+        _session_turn_count += 1
+    else:
+        thread.turn_count += 1
+
+
+def _turn_index() -> int:
+    """The worker's thread's turn count (memory-block stamps)."""
+    thread = threads.current()
+    return _session_turn_count if _is_default(thread) else thread.turn_count
 
 
 def _progress_report_text(tools_executed: int) -> str:
@@ -5729,6 +5890,7 @@ def _progress_report_text(tools_executed: int) -> str:
     request failed or returned nothing), so the chat always shows where the
     work stands instead of an empty turn.
     """
+    session_memory = _memory()         # the worker's thread (#357)
     try:
         with session_memory.store_lock:
             goal = session_memory.store.goal
@@ -5756,6 +5918,7 @@ def _memory_writer_factory(llm_url: str, api_key: str, model: str, max_tokens: i
         # transient writer hiccup is left in ``_agent_state.error`` and the
         # UI / benchmark recorder reports a failed turn that actually
         # succeeded.
+        _agent_state = thread_state(threads.current())
         _saved_err = (_agent_state.error, _agent_state.error_full,
                       _agent_state.error_kind)
         try:
@@ -5798,6 +5961,8 @@ def _maybe_compact_session(
     function runs on every loop iteration, and counting there made the
     memory block's "Last updated: turn N" stamp over-count (S3).
     """
+    session_memory = _memory()         # the worker's thread (#357)
+    _session_turn_count = _turn_index()
     st = session_memory.store
     tools_tokens = _estimate_tools_tokens(tools)
     # Compare consistently: ``estimated`` (messages + tool schema) against the
@@ -5896,7 +6061,8 @@ def _force_compact_session(
 
     Never raises.
     """
-    global _session_turn_count
+    session_memory = _memory()         # the worker's thread (#357)
+    _session_turn_count = _turn_index()
     st = session_memory.store
     # Find what can be retired while ALWAYS keeping the current turn: when the
     # recent window is a long single-turn agent/reasoning run with no user
@@ -5961,15 +6127,22 @@ def _run_conversation_turn_inner(
     allow_action_nudge: bool = True,
     attachments: list[str] | None = None,
     attachment_names: list[str] | None = None,
+    thread: "threads.Thread | None" = None,
 ) -> list[dict[str, Any]]:
     """
     Inner body of ``run_conversation_turn`` -- wrapped by the re-entrancy guard.
     """
-    clear_stop()
+    # This thread's own state, Stop, plan and loaded domains (#357).  Service status
+    # and liveness stay shared: they are the default state's (``_services``).
+    _agent_state = thread_state(thread)
+    _services = thread_state()
+    _stop_event = thread_stop(thread)
+    session_memory = _memory(thread)
+    _session_loaded_domains = _thread_domains(thread)
+    _stop_event.clear()
     # One count per user turn (not per tool-loop iteration) so the memory
     # block's "Last updated: turn N" stamp reflects real user turns (S3).
-    global _session_turn_count
-    _session_turn_count += 1
+    _bump_turn_count(thread)
     history = _agent_state.conversation_history
 
     # Drop any leading assistant messages that are NOT UI-only.  A
@@ -7151,7 +7324,7 @@ def _run_conversation_turn_inner(
             if on_reasoning:
                 on_reasoning(reasoning)
 
-            _agent_state.last_llm_activity = time.monotonic()
+            _services.last_llm_activity = time.monotonic()
 
         if content:
             if on_text:

@@ -93,6 +93,8 @@ def _acp_engine():
     if _acp is None:
         from .engine_acp import AcpEngine
         _acp = AcpEngine(agent_controller._agent_state)
+        # Threads 1 (#357): a thread's turn writes that thread's chat.
+        _acp.state_for = lambda tag: agent_controller.thread_state(agent_controller.THREADS.get(tag))
 
         def changed() -> None:
             # Any thread.  The chat shows "running" and the status like the other modes.
@@ -401,13 +403,20 @@ def _agent_follows_approval(engine, mode: str) -> None:
     engine.never_ask = mode == "AUTO"
 
 
+def _ui_thread():
+    """The thread the chat shows and acts on (#357: the default one; Threads 2 picks it
+    per editor)."""
+    return agent_controller.THREADS.default
+
+
 def _approvals_new_turn() -> None:
     """A new turn: "Allow this turn" from the last one asks again (risky steps and the agent's)."""
-    from . import loop_guard, risky_steps
-    risky_steps.APPROVALS.new_turn()
+    from . import loop_guard, risky_steps, threads
+    tag = threads.tag(_ui_thread())
+    risky_steps.APPROVALS.new_turn(tag)
     loop_guard.BRIDGE.new_turn()        # repeats are counted per turn (#310)
     if _acp is not None:
-        _acp.approvals.new_turn()
+        _acp.approvals.new_turn(tag)
 
 
 def apply_approval_mode(mode: str) -> None:
@@ -826,6 +835,7 @@ def _loop_engine(mode: str | None = None):
         _engine = LoopEngine(agent_controller)
         _engine.on_redraw = lambda: _redraw_areas_safe()
         _engine.on_turn_finished = lambda: _save_chat_history()
+        agent_controller.THREADS.default.engine = _engine     # a waiting message starts here (#357)
     if mode is not None:
         label = "Remote" if mode == "remote" else "Local"
         if _engine.caps.label != label:
@@ -2783,12 +2793,13 @@ class BFACW_OT_chat_stop(Operator):  # type: ignore[misc]
     bl_description = "Stop the current generation"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        from . import coworker_api
-        coworker_api.cancel_questions()     # a question waiting for you is answered "cancelled"
+        from . import coworker_api, threads
+        tag = threads.tag(_ui_thread())     # only this chat's thread stops (#357)
+        coworker_api.cancel_questions(tag)  # a question waiting for you is answered "cancelled"
         if _AUTO["run"] is not None:
             _AUTO["user_stop"] = True       # Auto stops after this turn (#177)
         from . import risky_steps
-        risky_steps.APPROVALS.cancel_all()  # a risky step waiting for you is declined
+        risky_steps.APPROVALS.cancel_all(tag)   # a risky step waiting for you is declined
         _loop_engine().cancel()
         agent_controller._agent_state.status_text = "Stopped"
         wm = context.window_manager
@@ -2820,9 +2831,11 @@ class BFACW_OT_agent_approve(Operator):  # type: ignore[misc]
                     properties.choice, cls.__doc__)
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        from . import risky_steps
-        answered = _acp is not None and _acp.approvals.current() is not None and _acp.approvals.answer(self.choice)
-        if not answered and not risky_steps.APPROVALS.answer(self.choice):
+        from . import risky_steps, threads
+        tag = threads.tag(_ui_thread())
+        answered = (_acp is not None and _acp.approvals.current(tag) is not None
+                    and _acp.approvals.answer(self.choice, thread=tag))
+        if not answered and not risky_steps.APPROVALS.answer(self.choice, thread=tag):
             return {"CANCELLED"}
         _redraw_areas(context)
         return {"FINISHED"}
@@ -2832,19 +2845,21 @@ def approval_card():
     """What the chat asks you right now (GPU card / layout box): the agent's "may I?"
     first, else a question from ask_user (Engine 6); None when nothing is open."""
     from .ui_gpu.surface import Approval
-    request = _acp.approvals.current() if _acp is not None else None
+    from . import threads
+    tag = threads.tag(_ui_thread())     # this chat's thread's questions only (#357)
+    request = _acp.approvals.current(tag) if _acp is not None else None
     if request is not None:
-        return Approval(title=request.title, detail=request.detail, waiting=_acp.approvals.count(),
+        return Approval(title=request.title, detail=request.detail, waiting=_acp.approvals.count(tag),
                         note="One of Coworker's Blender tools" if request.coworker_tool
                         else "The agent's own tool, outside Blender")
     from . import risky_steps
-    risky = risky_steps.APPROVALS.current()
+    risky = risky_steps.APPROVALS.current(tag)
     if risky is not None:
-        return Approval(title=risky.title, detail=risky.detail, waiting=risky_steps.APPROVALS.count(),
+        return Approval(title=risky.title, detail=risky.detail, waiting=risky_steps.APPROVALS.count(tag),
                         note=risky.note or "Permissions: the button by Send (Strict / Permissive / Auto)",
                         icon="WARNING" if risky.reason else "LOCKED")
     from . import coworker_api
-    open_question = coworker_api.current_question()
+    open_question = coworker_api.current_question(tag)
     if open_question is None:
         return _plan_card()
     _qid, q = open_question
@@ -2947,8 +2962,8 @@ Only while you haven't changed the scene since; otherwise use Edit > Undo Histor
 
 def _answer_typed(message: str) -> bool:
     """An open question that takes text gets your message as its answer."""
-    from . import coworker_api
-    open_question = coworker_api.current_question()
+    from . import coworker_api, threads
+    open_question = coworker_api.current_question(threads.tag(_ui_thread()))
     if open_question is None or not open_question[1]["allow_text"]:
         return False
     return coworker_api.answer_question(message, open_question[0])
@@ -2963,8 +2978,8 @@ class BFACW_OT_agent_answer(Operator):  # type: ignore[misc]
     choice: StringProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        from . import coworker_api
-        open_question = coworker_api.current_question()
+        from . import coworker_api, threads
+        open_question = coworker_api.current_question(threads.tag(_ui_thread()))
         if open_question is None:
             return {"CANCELLED"}
         qid, q = open_question

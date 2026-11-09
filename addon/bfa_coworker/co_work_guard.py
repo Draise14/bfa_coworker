@@ -161,11 +161,13 @@ def clear() -> None:
 # -- the per-step lock only covers entities created in the current turn, so
 # cross-turn objects were user-selectable (how an accidental deletion of the
 # agent's own "Ground" happened).  Cleared only on New Thread / Stop.
-_SESSION_OBJECTS: set[str] = set()
-_SESSION_COLLECTIONS: set[str] = set()
+# Threads 1 (#357): each name remembers the thread that made it, so New Thread / Stop
+# in one thread forgets only its own (thread "" = every thread).
+_SESSION_OBJECTS: dict[str, str] = {}
+_SESSION_COLLECTIONS: dict[str, str] = {}
 
 
-def remember_session(objects: object = (), collections: object = ()) -> None:
+def remember_session(objects: object = (), collections: object = (), thread: str = "") -> None:
     """Remember names the coworker created for the rest of the session.
 
     Persists across :func:`clear` so the next turn can re-lock them.
@@ -174,23 +176,25 @@ def remember_session(objects: object = (), collections: object = ()) -> None:
     with _registry_lock:
         for name in objects or ():
             if name:
-                _SESSION_OBJECTS.add(str(name))
+                _SESSION_OBJECTS[str(name)] = thread
         for name in collections or ():
             if name:
-                _SESSION_COLLECTIONS.add(str(name))
+                _SESSION_COLLECTIONS[str(name)] = thread
 
 
-def session_names() -> tuple[set[str], set[str]]:
-    """Return ``(object_names, collection_names)`` created this session."""
+def session_names(thread: str | None = None) -> tuple[set[str], set[str]]:
+    """Return ``(object_names, collection_names)`` created this session (by *thread*)."""
     with _registry_lock:
-        return set(_SESSION_OBJECTS), set(_SESSION_COLLECTIONS)
+        return ({n for n, t in _SESSION_OBJECTS.items() if thread is None or t == thread},
+                {n for n, t in _SESSION_COLLECTIONS.items() if thread is None or t == thread})
 
 
-def clear_session() -> None:
-    """Forget every session-remembered name (New Thread / Stop)."""
+def clear_session(thread: str | None = None) -> None:
+    """Forget the session-remembered names (New Thread / Stop): *thread*'s, or all."""
     with _registry_lock:
-        _SESSION_OBJECTS.clear()
-        _SESSION_COLLECTIONS.clear()
+        for names in (_SESSION_OBJECTS, _SESSION_COLLECTIONS):
+            for name in [n for n, t in names.items() if thread is None or t == thread]:
+                del names[name]
 
 
 def lockable_names(names: object = (), protect: object = ()) -> set[str]:

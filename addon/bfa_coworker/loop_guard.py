@@ -158,15 +158,16 @@ def _kind(tool: str) -> str:
     return "repeat:" + (tool or "")
 
 
-def repeat_request(tool: str, args: Any, nth: int, source: str = "") -> ApprovalRequest:
-    """The approval card for a repeat."""
+def repeat_request(tool: str, args: Any, nth: int, source: str = "", thread: str = "") -> ApprovalRequest:
+    """The approval card for a repeat (asked in *thread*, #357)."""
     return ApprovalRequest(
         tool=_kind(tool), source=source, args=args, coworker_tool=True,
         reason="run {:s} a {:s} time with the same input".format(tool or "a tool", _ordinal(nth)),
-        note="It keeps doing the same thing: let it try again, or stop?")
+        note="It keeps doing the same thing: let it try again, or stop?", thread=thread)
 
 
-def decide(verdict: str, tool: str, nth: int, approvals: Approvals, auto: bool) -> tuple[str, dict[str, object] | None]:
+def decide(verdict: str, tool: str, nth: int, approvals: Approvals, auto: bool,
+           thread: str = "") -> tuple[str, dict[str, object] | None]:
     """What to do right now: ``(RUN, None)``, ``(REFUSE, error)`` or ``(ASK, None)`` (show the card)."""
     if verdict == RUN:
         return RUN, None
@@ -174,7 +175,7 @@ def decide(verdict: str, tool: str, nth: int, approvals: Approvals, auto: bool) 
         return REFUSE, refused(tool, nth)
     if auto:                                    # nobody is there to answer
         return REFUSE, auto_declined(tool)
-    if approvals.allowed_always(_kind(tool)):   # "Allow this turn" was picked
+    if approvals.allowed_always(_kind(tool), thread):   # "Allow this turn" was picked
         return RUN, None
     return ASK, None
 
@@ -199,19 +200,20 @@ def wait_answer(approvals: Approvals, request: ApprovalRequest, stop: Any = None
 
 def bridge_wrap(guard: LoopGuard, approvals: Approvals, auto: bool, tool: str, args: Any, key: str,
                 proceed: Callable[[], tuple[dict[str, object], Callable[[], dict[str, object] | None] | None]],
-                source: str = "The agent",
+                source: str = "The agent", thread: str = "",
                 ) -> tuple[dict[str, object], Callable[[], dict[str, object] | None] | None] | None:
     """The bridge's repeat check: None lets the call through, else ``(response, check_fn)``
-    (a refusal, or the card's deferred answer; once allowed, *proceed* runs the call)."""
-    verdict, nth = guard.check(tool, args, key)
-    action, error = decide(verdict, tool, nth, approvals, auto)
+    (a refusal, or the card's deferred answer; once allowed, *proceed* runs the call).
+    Counted per *key* (session) and *thread* (#357)."""
+    verdict, nth = guard.check(tool, args, key + "/" + thread if thread else key)
+    action, error = decide(verdict, tool, nth, approvals, auto, thread)
     if action == RUN:
         return None
     if action == REFUSE:
         print("[Coworker] loop guard: refused {:s} ({:s} identical call)".format(tool, _ordinal(nth)))
         return error, None
     state: dict[str, Any] = {"answer": None, "inner": None}
-    approvals.ask(repeat_request(tool, args, nth, source), lambda choice: state.__setitem__("answer", choice))
+    approvals.ask(repeat_request(tool, args, nth, source, thread), lambda choice: state.__setitem__("answer", choice))
 
     def check() -> dict[str, object] | None:
         if state["inner"] is not None:      # allowed, and the call itself is deferred

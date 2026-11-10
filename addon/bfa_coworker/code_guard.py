@@ -15,6 +15,7 @@ doesn't count.
   ``save_render``, ``filepath_raw`` / ``render.filepath``, a save or export
   operator's ``filepath`` -- is resolved without running anything: string
   literals, ``//`` (relative to the .blend, where Blender reads it so),
+  Blender's ``/tmp/`` (its temp folder on Windows, where Blender reads it),
   ``bpy.path.abspath``, ``bpy.data.filepath``, ``os.path`` / ``pathlib``
   joins, ``tempfile.gettempdir()``, ``~`` and environment variables, and a
   variable's last plain assignment.  Inside the .blend's folder (or below)
@@ -52,6 +53,7 @@ __all__ = (
 
 import ast
 import os
+import sys
 import tempfile
 from typing import Iterable, Iterator
 
@@ -88,6 +90,9 @@ _PATH_METHODS: dict[str, tuple[tuple[int, str], ...]] = {
 }
 _WRITE_FLAGS = frozenset(("O_WRONLY", "O_RDWR", "O_CREAT", "O_APPEND", "O_TRUNC"))
 _DEPTH = 24
+# Where Blender reads a path (render output, Image.save_render, operators...), "/tmp/" is
+# its temp folder on Windows -- the default render output is /tmp\ (#347).
+_BLENDER_TMP_IS_TEMP = sys.platform == "win32"
 
 
 def _dotted(node: ast.AST) -> str:
@@ -169,6 +174,8 @@ class _Paths:
             text = node.value
             if blender and text.startswith("//"):         # Blender reads "//" as "next to the .blend"
                 return (os.path.join(self.blend_dir, text[2:]), True) if self.blend_dir else None
+            if blender and _BLENDER_TMP_IS_TEMP and (text == "/tmp" or text[:5] in ("/tmp/", "/tmp\\")):
+                return os.path.join(self.temp, text[5:]), True
             return text, True
         if isinstance(node, ast.Name):
             return self.resolve(self._value_of(node), blender, depth)

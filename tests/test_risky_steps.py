@@ -250,6 +250,26 @@ class TestCodeAndFileGuard(unittest.TestCase):
                          _OUTSIDE + os.path.join(_ROOT, "elsewhere"))
         self.assertIn(_OUTSIDE, self._why("open('//notes.txt', 'w')"))
 
+    def test_blenders_tmp_is_the_temp_folder_on_windows(self):
+        # Blender reads "/tmp/" as its temp folder on Windows: the default render output ("/tmp\").
+        cg = importlib.import_module(rs.__name__.rpartition(".")[0] + ".code_guard")
+        defaults = ("bpy.context.scene.render.filepath = '/tmp/'",
+                    "bpy.context.scene.render.filepath = '/tmp\\\\'",
+                    "scene.render.filepath = '/tmp/render_####.png'",
+                    "bpy.data.images['a'].save_render('/tmp/x.png')",
+                    "img.filepath_raw = '/tmp'\nimg.save()")
+        with mock.patch.object(cg, "_BLENDER_TMP_IS_TEMP", True):
+            for code in defaults:
+                self.assertEqual(self._why(code), "", code)
+                self.assertEqual(self._why(code, blend=""), "", code)          # unsaved: temp is fine too
+            self.assertIn(_OUTSIDE, self._why("bpy.context.scene.render.filepath = '/tmpfiles/x.png'"))
+            if sys.platform == "win32":     # Python's open() doesn't map it: that's C:\tmp
+                self.assertIn(_OUTSIDE, self._why("open('/tmp/x.txt', 'w')"))
+        if sys.platform == "win32":
+            self.assertTrue(cg._BLENDER_TMP_IS_TEMP)
+            with mock.patch.object(cg, "_BLENDER_TMP_IS_TEMP", False):     # without the mapping it would ask
+                self.assertIn(_OUTSIDE, self._why(defaults[0]))
+
     def test_relative_paths_land_in_the_working_folder(self):
         self.assertEqual(self._why("open('notes.txt', 'w')"),
                          _OUTSIDE + os.path.join(_ROOT, "Bforartists", "notes.txt"))

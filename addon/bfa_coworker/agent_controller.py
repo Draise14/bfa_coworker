@@ -1305,6 +1305,8 @@ _SURFACE_TOOLS = frozenset({
     "update_plan",
     "get_attached_image",         # #199: the image in the attach socket (External Harness).
     "get_job_status",             # Tools 6 (#309): waits for a background render or bake.
+    "bake_textures",              # #422: an agent reaches for Python before load_tools,
+    "render_viewport_to_path",    # so baking and rendering are always offered.
     "load_tools",                 # Engine 7: the server's own, for agents (the loop has its own).
     # Read-only asset/polyhaven status -- useful for any domain, was previously
     # unreachable because it appeared in no surface/domain set.

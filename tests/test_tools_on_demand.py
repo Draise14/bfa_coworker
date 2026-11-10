@@ -85,6 +85,26 @@ class TestToolsOnDemand(unittest.TestCase):
         self.assertEqual(payload["unknown"], ["nope"])
         self.assertIn("setup_pbr_material", [t["name"] for t in payload["tools"]])
 
+    def test_bake_and_render_are_always_listed(self):
+        """#422: an agent reaches for Python before it loads a domain."""
+        async def body(session, _init, _notes):
+            return {t.name for t in (await session.list_tools()).tools}
+        names = asyncio.run(_session(True, body))
+        self.assertIn("bake_textures", names)
+        self.assertIn("render_viewport_to_path", names)
+
+    def test_no_domains_lists_them_instead_of_failing(self):
+        """#422: ``load_tools({})`` failed validation and the agent gave up on the tools."""
+        async def body(session, _init, _notes):
+            return await session.call_tool("load_tools", {})
+        result = asyncio.run(_session(True, body))
+        self.assertFalse(result.isError)
+        payload = json.loads(result.content[0].text)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["loaded"], [])
+        self.assertIn("bake_textures", payload["domains"]["rendering"])
+        self.assertIn("setup_pbr_material", payload["domains"]["material"])
+
 
 if __name__ == "__main__":
     unittest.main()

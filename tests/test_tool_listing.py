@@ -1273,15 +1273,39 @@ EXPECTED_TOOLS = [
         "name": "load_tools",
         "description": "\n"
 "        Make a group of specialised tools available when the task needs them. If a tool\n"
-"        you need isn't in your list (materials, nodes, assets, animation, lighting...),\n"
-"        call this first; the tools appear right after.\n"
+"        you need isn't in your list (rendering, baking, materials, nodes, assets,\n"
+"        animation, lighting...), call this first; the tools appear right after.\n"
 "\n"
-"        Domains: animation, material, modeling, lighting, rendering, vse,\n"
-"        geometry_nodes, assets. Load only what the request needs; the basic tools\n"
-"        (scene, code, docs, screenshots, plan, questions) are always there.\n"
+"        Domains and the tools they add:\n"
+"        - rendering: render to a file, bake textures, lighting rig (render_viewport_to_path,\n"
+"          bake_textures, three_point_lighting_rig, get_screenshot_of_area_as_image)\n"
+"        - material: PBR materials, Polyhaven textures, bake textures (setup_pbr_material,\n"
+"          assign_material_to_objects, download_polyhaven_asset, search_polyhaven_assets,\n"
+"          load_asset_in_context, bake_textures, render_viewport_to_path,\n"
+"          get_screenshot_of_area_as_image)\n"
+"        - lighting: lights, HDRIs (three_point_lighting_rig, download_polyhaven_asset,\n"
+"          search_polyhaven_assets, render_viewport_to_path, get_screenshot_of_area_as_image)\n"
+"        - animation: keyframes (batch_keyframe_insert, jump_to_view3d_object_by_name,\n"
+"          jump_to_view3d_object_data_by_name, render_viewport_to_path)\n"
+"        - modeling: navigate and organise (jump_to_view3d_object_by_name,\n"
+"          jump_to_view3d_object_data_by_name, jump_to_tab_by_name, jump_to_tab_by_space_type,\n"
+"          set_collection_color_tag, get_screenshot_of_area_as_image)\n"
+"        - geometry_nodes: node trees (get_active_node_tree, get_node_group_interface,\n"
+"          wire_node_group, jump_to_view3d_object_by_name, jump_to_view3d_object_data_by_name,\n"
+"          get_screenshot_of_area_as_image)\n"
+"        - assets: asset libraries (search_assets, get_asset_libraries, get_asset_tags,\n"
+"          list_asset_catalogs, load_asset_in_context, place_asset_in_scene,\n"
+"          jump_to_asset_browser, download_polyhaven_asset, search_polyhaven_assets,\n"
+"          assign_material_to_objects, get_active_node_tree, get_node_group_interface,\n"
+"          wire_node_group)\n"
+"        - vse: Video Sequencer navigation (jump_to_tab_by_name, jump_to_tab_by_space_type)\n"
+"\n"
+"        Load only what the request needs; the basic tools (scene, code, docs,\n"
+"        screenshots, plan, questions, bake_textures, render_viewport_to_path,\n"
+"        get_job_status) are always there. Called with no domains, it lists them.\n"
 "\n"
 "        Args:\n"
-"            domains: One or more domain names from the list above.\n"
+"            domains: One or more domain names from the list above (none: list them).\n"
 "\n"
 "        Returns:\n"
 "            The domains loaded and the tools they added (name and what it does).\n"
@@ -1289,16 +1313,21 @@ EXPECTED_TOOLS = [
         "inputSchema": {
             "properties": {
                 "domains": {
-                    "items": {
-                        "type": "string"
-                    },
-                    "title": "Domains",
-                    "type": "array"
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Domains"
                 }
             },
-            "required": [
-                "domains"
-            ],
             "title": "load_toolsArguments",
             "type": "object"
         }

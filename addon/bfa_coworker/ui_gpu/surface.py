@@ -99,7 +99,8 @@ TIP_PREFIXES: tuple[tuple[str, str], ...] = (
     ("mcat:", "Show only this kind"),
     ("link:", "Open this link in your browser"),
 )
-TIP_DELAY = 0.5      # seconds the mouse rests before a tooltip shows, like Blender's
+TIP_DELAY = 0.5      # seconds the mouse rests before a tooltip shows: Blender's UI_TOOLTIP_DELAY
+TYPING_QUIET = 2.0   # no tooltips this long after a key in the input (#388)
 
 
 def tip_for(widget_id: str | None) -> str:
@@ -198,6 +199,14 @@ class ChatSurface:
     _notice_max: int = 0
     tip_wait: float = 0.0
     _tip: tuple[str, float] | None = None
+    # #388: like native tooltips -- off with Preferences > Interface > Tooltips (the host sets
+    # *show_tips*), only after the mouse *rests*, gone on any move or click, and none while
+    # you type or a reply streams.
+    show_tips: bool = True
+    _rest: float = 0.0           # when the mouse last moved
+    _tip_shown: bool = False     # a tooltip is on screen now (a move must redraw to hide it)
+    _tip_blocked: bool = False   # clicked: no tooltip until the mouse moves again
+    _typed: tuple[str, float] = ("", -1e9)    # the draft as last drawn, and when it changed
 
     # -- mouse (region pixels) ------------------------------------------------------
     def hit(self, x: float, y: float) -> str | None:
@@ -210,7 +219,14 @@ class ChatSurface:
     def on_move(self, x: float, y: float) -> bool:
         """Track the mouse; True when the surface should redraw (hover changed)."""
         before = self.hit(*self.mouse) if self.mouse is not None else None
+        moved = self.mouse != (x, y)
         self.mouse = (x, y)
+        if moved:
+            self._rest = self.clock()
+            self._tip_blocked = False
+            if self._tip_shown:          # any move hides the tooltip (#388)
+                self._tip_shown = False
+                return True
         if self.pressed == "resize" and self.on_resize is not None and self.bounds is not None:
             self.on_resize(max(0.0, self.bounds.top - y))
             return True
@@ -224,6 +240,7 @@ class ChatSurface:
     def on_press(self, x: float, y: float, shift: bool = False) -> bool:
         """A left press; True when the surface used it."""
         self.mouse = (x, y)
+        self._tip_blocked, self._tip_shown = True, False      # a click hides it (#388)
         widget = self.hit(x, y)
         if widget is None:
             if self.box.focused:
@@ -321,7 +338,7 @@ class ChatSurface:
         canvas.pop_clip()
         self._hits = list(canvas.hit_areas)
         self._clicked = None
-        self._tooltip(canvas, rect)
+        self._tooltip(canvas, rect, live)
         # The view's own actions that only change the view are done here.
         out = []
         for action, value in actions:
@@ -333,20 +350,29 @@ class ChatSurface:
                 out.append((action, value))
         return out
 
-    def _tooltip(self, canvas: Canvas, rect: Rect) -> None:
-        """The tooltip of the button under a resting mouse, after TIP_DELAY (#237)."""
+    def _tooltip(self, canvas: Canvas, rect: Rect, live: Any = None) -> None:
+        """The tooltip of the button under a resting mouse, after TIP_DELAY (#237, #388)."""
         self.tip_wait = 0.0
-        widget = self.hit(*self.mouse) if self.mouse is not None and self.pressed is None else None
+        self._tip_shown = False
+        now = self.clock()
+        text = self.box.model.text
+        if text != self._typed[0]:
+            self._typed = (text, now)
+        typing = self.box.focused and now - self._typed[1] < TYPING_QUIET
+        quiet = (not self.show_tips or self._tip_blocked or typing
+                 or bool(getattr(live, "streaming_text", "")))                      # a reply streams
+        widget = (self.hit(*self.mouse) if self.mouse is not None and self.pressed is None and not quiet
+                  else None)
         tip = tip_for(widget)
         if widget == "approval_menu" and self.box.approval[0]:     # icon only: say which one is on
             tip = "Permissions: {:s} (click to change)".format(self.box.approval[0])
         if not tip:
             self._tip = None
             return
-        now = self.clock()
         if self._tip is None or self._tip[0] != widget:
             self._tip = (widget, now)
-        wait = TIP_DELAY - (now - self._tip[1])
+        # The mouse has to rest TIP_DELAY: moving over a button (or along a row) restarts it.
+        wait = TIP_DELAY - (now - max(self._tip[1], self._rest))
         if wait > 0:
             self.tip_wait = wait
             return
@@ -362,6 +388,7 @@ class ChatSurface:
         box = Rect(x, y, width, h)
         canvas.box(box, colors=style.tooltip)
         canvas.wrapped(box.x + pad, box.top - pad * 0.5, width - 2 * pad, tip, style.tooltip.text)
+        self._tip_shown = True
 
     def _draw_top_bar(self, canvas: Canvas, rect: Rect, top: TopBar, actions: list[tuple[str, str]]) -> float:
         """Mode + status + buttons, then the chat-mode row; return the bar's bottom edge."""

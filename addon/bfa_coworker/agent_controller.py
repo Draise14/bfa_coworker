@@ -2816,7 +2816,8 @@ def _resolve_mcp_python() -> tuple[str | None, bool]:
                 _agent_state.error = (
                     "MCP server dependencies not found in vendor deps cache. "
                     "Run 'python build_addon.py' to build the extension, "
-                    "or install manually: pip install --target ~/.cache/bfa_coworker/vendor_deps/ mcp[cli] pyyaml docutils"
+                    "or install manually: pip install --target ~/.cache/bfa_coworker/vendor_deps/ "
+                    '"mcp[cli]>=1.2.0,<2.0.0" pyyaml docutils'
                 )
             return (None, False)
 

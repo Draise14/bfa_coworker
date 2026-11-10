@@ -19,6 +19,7 @@ import functools
 import importlib
 import os
 import re
+import shlex
 import sys
 import types
 import unittest
@@ -213,6 +214,20 @@ class TestMCPDependencyRequirements(unittest.TestCase):
                 for arguments in lists:
                     self.assert_mcp_has_upper_bound([arg.value for arg in arguments.elts
                                                     if isinstance(arg, ast.Constant) and isinstance(arg.value, str)])
+
+    def test_manual_pip_hints_cap_mcp(self) -> None:
+        for filename in ("build_addon.py", "addon/bfa_coworker/agent_controller.py"):
+            with self.subTest(filename=filename):
+                with open(os.path.join(_REPO_DIR, filename), encoding="utf-8") as fh:
+                    module = ast.parse(fh.read(), filename=filename)
+                hints = [node.value.partition("pip install ")[2] for node in ast.walk(module)
+                         if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                         and "pip install " in node.value and "mcp[cli]" in node.value]
+                self.assertTrue(hints, "No MCP manual install hints found")
+                for hint in hints:
+                    lexer = shlex.shlex(hint, posix=True, punctuation_chars=True)
+                    lexer.whitespace_split = True
+                    self.assert_mcp_has_upper_bound(list(lexer))
 
 
 # ---------------------------------------------------------------------------

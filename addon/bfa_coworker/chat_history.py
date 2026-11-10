@@ -215,6 +215,26 @@ class ChatIndex:
             data["last_for_blend"][self._blend_key(blend, editor)] = chat_id
             self._write(data)
 
+    def tabs_for_blend(self, blend: str) -> list[dict[str, str]]:
+        """The chat tabs open in *blend* when it was last saved (#427): ``[{"chat", "editor"}]``
+        for the editor threads (All editors is ``last_for_blend``).  Before tabs, each editor
+        kind remembered its last chat: those come back as tabs."""
+        data = self._read()
+        key = blend or "default"
+        tabs = data.get("tabs_for_blend", {}).get(key)
+        if tabs is None:
+            prefix = key + "|"
+            tabs = [{"chat": chat_id, "editor": k[len(prefix):]}
+                    for k, chat_id in data["last_for_blend"].items() if k.startswith(prefix)]
+        return [t for t in tabs if isinstance(t, dict) and t.get("chat") and self.chat_path(t["chat"]).exists()]
+
+    def set_tabs_for_blend(self, blend: str, tabs: list[dict[str, str]]) -> None:
+        with self._lock:
+            data = self._read()
+            data.setdefault("tabs_for_blend", {})[blend or "default"] = [
+                {"chat": str(t["chat"]), "editor": str(t.get("editor", ""))} for t in tabs if t.get("chat")]
+            self._write(data)
+
     def set_last_for_blend(self, blend: str, chat_id: str, editor: str = "") -> None:
         with self._lock:
             data = self._read()
@@ -244,6 +264,8 @@ class ChatIndex:
             data = self._read()
             data["chats"].pop(chat_id, None)
             data["last_for_blend"] = {k: v for k, v in data["last_for_blend"].items() if v != chat_id}
+            for key, tabs in data.get("tabs_for_blend", {}).items():
+                data["tabs_for_blend"][key] = [t for t in tabs if t.get("chat") != chat_id]
             self._write(data)
         for path in (self.chat_path(chat_id), self.memory_path(chat_id)):
             try:

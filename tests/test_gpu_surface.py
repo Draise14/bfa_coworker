@@ -126,7 +126,7 @@ class TestLayout(unittest.TestCase):
                      "prefs", "open_editor", "mode_menu", "jump", "revert_turn", "copy")
         for compact, width in ((False, 900), (True, 300), (True, 150)):
             surface = sf.ChatSurface(compact=compact)
-            surface.tools = (("new_thread", "ADD"), ("attach_menu", "IMAGE_DATA"))
+            surface.tools = (("stop", "PAUSE"), ("attach_menu", "IMAGE_DATA"))
             surface.box.attachment = "ref.png"
             surface.view.revertable = True
             surface.view.scroll = 500.0
@@ -163,7 +163,7 @@ class TestLayout(unittest.TestCase):
 
     def test_every_button_has_a_tooltip(self):
         surface = sf.ChatSurface(compact=True)
-        surface.tools = (("new_thread", "ADD"), ("mention", "OUTLINER_OB_MESH"), ("revert_turn", "LOOP_BACK"),
+        surface.tools = (("stop", "PAUSE"), ("mention", "OUTLINER_OB_MESH"), ("revert_turn", "LOOP_BACK"),
                          ("open_editor", "WINDOW"), ("", ""), ("attach_menu", "IMAGE_DATA"),
                          ("attach_render", "RENDER_STILL"), ("attach_screen", "FULLSCREEN_ENTER"))
         surface.box.attachment = "ref.png"
@@ -242,7 +242,7 @@ class TestLayout(unittest.TestCase):
                         chat_modes=(("AGENT", "Coworker", ""), ("ASK", "Ask", ""), ("PLAN", "Plan", "")))
         surface = sf.ChatSurface(compact=True)
         surface.on_resize = lambda h: None
-        surface.tools = (("new_thread", "ADD"), ("mention", "OUTLINER_OB_MESH"), ("revert_turn", "LOOP_BACK"),
+        surface.tools = (("stop", "PAUSE"), ("mention", "OUTLINER_OB_MESH"), ("revert_turn", "LOOP_BACK"),
                          ("", ""), ("attach_menu", "IMAGE_DATA"), ("attach_render", "RENDER_STILL"),
                          ("attach_screen", "MAKE_SCREENSHOT"))
         surface.box.attachment = "ref.png"
@@ -276,12 +276,12 @@ class TestLayout(unittest.TestCase):
         # left to right; the rest of the row is still the resize grip.
         surface = sf.ChatSurface(compact=True)
         surface.on_resize = lambda h: None
-        surface.tools = (("new_thread", "ADD"), ("", ""), ("attach_menu", "IMAGE_DATA"))
+        surface.tools = (("stop", "PAUSE"), ("", ""), ("attach_menu", "IMAGE_DATA"))
         canvas, _ = _draw(surface)
         rects = {w: r for r, w in canvas.hit_areas}
-        self.assertEqual(rects["tool:new_thread"].y, rects["tool:attach_menu"].y)        # one row
-        self.assertLess(rects["tool:new_thread"].x, rects["tool:attach_menu"].x)        # left to right
-        self.assertLessEqual(rects["tool:new_thread"].top, surface.box.rect.y)          # under the input
+        self.assertEqual(rects["tool:stop"].y, rects["tool:attach_menu"].y)        # one row
+        self.assertLess(rects["tool:stop"].x, rects["tool:attach_menu"].x)        # left to right
+        self.assertLessEqual(rects["tool:stop"].top, surface.box.rect.y)          # under the input
         grip = rects["resize"]
         self.assertEqual(surface.hit(grip.right - 5, grip.y + grip.h / 2), "resize")
         self.assertEqual(surface._chat_rect.x, 0.0)                                     # no column any more

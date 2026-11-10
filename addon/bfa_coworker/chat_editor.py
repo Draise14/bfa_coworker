@@ -323,7 +323,7 @@ def _sync_box(surface: ChatSurface, props: Any, busy: bool, running: bool, harne
         box.attach_buttons = False
         last = ("stop", "PAUSE") if busy else ("revert_turn", "LOOP_BACK") if coworker_api.can_revert() else None
         surface.tools = tuple(t for t in (
-            ("new_thread", "ADD"), ("mention", "OUTLINER_OB_MESH"), last, ("", ""),
+            ("mention", "OUTLINER_OB_MESH"), last, ("", ""),
             ("attach_menu", "IMAGE_DATA"), ("attach_render", "RENDER_STILL"), ("attach_screen", "MAKE_SCREENSHOT"),
         ) if t is not None)
     box.busy = busy
@@ -776,8 +776,8 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
         ops.agent_stop()
     elif action == "prefs":
         ops.open_addon_prefs()
-    elif action == "open_editor":
-        ops.open_coworker_editor()
+    elif action == "open_editor":           # the full Coworker editor, on this chat (#427)
+        ops.thread_open_editor()
     elif action == "draft" and props is not None:
         if props.chat_input != value:
             props.chat_input = value
@@ -790,8 +790,6 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
             input_capture.focus(surface.box, region)
     elif action == "suggest":       # a suggestion button (#220): sent as if typed
         _do("send", value, surface, region)
-    elif action == "new_thread":
-        ops.chat_clear()
     elif action == "mention":
         ops.mention_search("INVOKE_DEFAULT")
     elif action == "approval_menu":            # the Permissions dropdown: Strict / Permissive / Auto
@@ -1010,7 +1008,7 @@ class BFACW_MT_editor_chat(bpy.types.Menu):
 
     def draw(self, context):
         layout = self.layout
-        layout.operator("bfacw.chat_clear", text="New Thread", icon="ADD")
+        layout.operator("bfacw.tab_new", text="New Thread", icon="ADD")     # the tabs' + (#427)
         layout.operator("bfacw.chat_stop", text="Stop", icon="PAUSE")
         layout.separator()
         layout.operator("bfacw.mention_search", text="@ Mention", icon="OUTLINER_OB_MESH")
@@ -1063,6 +1061,12 @@ def _draw_header(self: Any, context: Any) -> None:
     row = layout.row(align=True)
     row.menu("BFACW_MT_editor_chat")
     row.menu("BFACW_MT_editor_view")
+    # The chat tabs (#427), in about two fifths of the header.
+    from . import ui_chat
+    region = context.region
+    scale = context.preferences.system.ui_scale
+    layout.separator()
+    ui_chat.draw_chat_tabs(layout, context, units=max(8.0, 0.4 * region.width / (20.0 * scale)))
     layout.separator_spacer()
     info = _status(context)
     props = _props()
@@ -1165,29 +1169,15 @@ class _ToolPanel(_CoworkerPanel):
         _draw_tool_entries(self.layout, context, self.entries(context))
 
 
-class BFACW_PT_editor_threads(_CoworkerPanel, bpy.types.Panel):
-    """Every live thread: pick one to show it here (Threads 2, #358)"""
-
-    bl_label = "Threads"
-    bl_idname = "BFACW_PT_editor_threads"
-    bl_region_type = "TOOLS"
-    bl_order = 0
-
-    def draw(self, context: Any) -> None:
-        from . import ui_chat
-        ui_chat.draw_thread_list(self.layout, context)
-
-
 class BFACW_PT_editor_tools_chat(_ToolPanel, bpy.types.Panel):
-    """Start over, mention, stop"""
+    """Mention, stop (a new thread is the tabs' +, #427)"""
 
     bl_label = "Chat"
     bl_idname = "BFACW_PT_editor_tools_chat"
 
     def entries(self, context):
         from . import ui_chat
-        out = [("bfacw.chat_clear", "New Thread", "ADD", {}),
-               ("bfacw.mention_search", "@ Mention", "OUTLINER_OB_MESH", {})]
+        out = [("bfacw.mention_search", "@ Mention", "OUTLINER_OB_MESH", {})]
         if ui_chat._ui_state(context).is_thinking:
             out.append(("bfacw.chat_stop", "Stop", "PAUSE", {}))
         return out
@@ -1455,7 +1445,7 @@ def _give_back() -> None:
 _HANDLERS: list[tuple[Any, Any, str]] = []
 _CLASSES = (BFACW_CoworkerTree, BFACW_OT_open_coworker_editor, BFACW_OT_editor_zoom, BFACW_OT_editor_jump,
             BFACW_OT_editor_thumbs,
-            BFACW_MT_editor_chat, BFACW_MT_editor_view, BFACW_PT_editor_threads, BFACW_PT_editor_tools_chat,
+            BFACW_MT_editor_chat, BFACW_MT_editor_view, BFACW_PT_editor_tools_chat,
             BFACW_PT_editor_tools_attach, BFACW_PT_editor_tools_session, BFACW_PT_editor_chat,
             BFACW_OT_chat_attach_image, BFACW_OT_editor_native_edit)
 _COPIES: list[type] = []

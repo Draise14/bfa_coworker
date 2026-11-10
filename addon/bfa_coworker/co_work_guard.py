@@ -33,8 +33,8 @@ excluded from both the per-step lock and the session re-lock.
 The registry is *session state* held in this module, not scene state: a
 Blender crash cannot leave objects permanently locked, and ``unregister``
 clears it.  This module is deliberately free of ``bpy`` -- it only produces
-toolcode strings and manages plain dicts -- so it is unit-testable outside
-Blender.
+toolcode strings (their names go as data, #414) and manages plain dicts --
+so it is unit-testable outside Blender.
 """
 
 __all__ = (
@@ -213,22 +213,22 @@ def lockable_names(names: object = (), protect: object = ()) -> set[str]:
 def build_lock_code(
     object_names: object = (),
     collection_names: object = (),
-) -> str:
-    """Return toolcode that locks *object_names*/*collection_names*.
+) -> tuple[str, dict]:
+    """Return ``(code, data)`` that locks *object_names*/*collection_names*.
 
     The code records each datablock's prior ``hide_select`` into the
     ``result`` dict (``prior_hide_select`` / ``prior_hide_select_coll``) so
     the caller can restore it exactly, and sets ``hide_select = True``.
-    Carries the ``blmcp-toolcode-skip-preflight`` marker so it runs inline
-    on the main thread, like the other internally generated payloads.
+    It goes by Coworker's own route (:mod:`internal_route`, #414): the names
+    travel as *data*, which the code reads, never pasted into the code.
     """
-    objs = repr(sorted(str(n) for n in (object_names or ()) if n))
-    colls = repr(sorted(str(n) for n in (collection_names or ()) if n))
+    data = {"objects": sorted(str(n) for n in (object_names or ()) if n),
+            "collections": sorted(str(n) for n in (collection_names or ()) if n)}
     return (
         "# blmcp-toolcode-skip-preflight\n"
         "import bpy\n"
-        "_objs = " + objs + "\n"
-        "_colls = " + colls + "\n"
+        "_objs = data['objects']\n"
+        "_colls = data['collections']\n"
         "_prior = {}\n"
         "_prior_coll = {}\n"
         "_n = 0\n"
@@ -248,19 +248,20 @@ def build_lock_code(
         "    _n += 1\n"
         "result = {'status': 'ok', 'locked': _n, "
         "'prior_hide_select': _prior, 'prior_hide_select_coll': _prior_coll}\n"
-    )
+    ), data
 
 
-def build_unlock_code() -> str:
-    """Return toolcode that restores every managed ``hide_select`` value."""
+def build_unlock_code() -> tuple[str, dict]:
+    """Return ``(code, data)`` that restores every managed ``hide_select`` value
+    (the names and their priors travel as *data*, #414)."""
     with _registry_lock:
-        priors = repr({k: bool(v) for k, v in _MANAGED_OBJECTS.items()})
-        coll_priors = repr({k: bool(v) for k, v in _MANAGED_COLLECTIONS.items()})
+        data = {"objects": {k: bool(v) for k, v in _MANAGED_OBJECTS.items()},
+                "collections": {k: bool(v) for k, v in _MANAGED_COLLECTIONS.items()}}
     return (
         "# blmcp-toolcode-skip-preflight\n"
         "import bpy\n"
-        "_priors = " + priors + "\n"
-        "_coll_priors = " + coll_priors + "\n"
+        "_priors = data['objects']\n"
+        "_coll_priors = data['collections']\n"
         "_n = 0\n"
         "for _name, _val in _priors.items():\n"
         "    _o = bpy.data.objects.get(_name)\n"
@@ -275,4 +276,4 @@ def build_unlock_code() -> str:
         "    _c.hide_select = bool(_val)\n"
         "    _n += 1\n"
         "result = {'status': 'ok', 'unlocked': _n}\n"
-    )
+    ), data

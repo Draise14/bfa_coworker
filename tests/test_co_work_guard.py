@@ -11,7 +11,8 @@ re-select objects the agent is working on -- the root cause of the
 ``hide_select`` on the coworker's own objects/collections for the duration of
 the turn and restores the exact prior value when the turn ends.
 
-The module is bpy-free (it emits toolcode strings + manages plain dicts), so
+The module is bpy-free (it emits toolcode strings, with the names as data
+(#414), + manages plain dicts), so
 these tests execute the generated code against a fake ``bpy`` and prove the
 lock -> unlock round-trip restores values, plus the registry transitions.
 
@@ -23,6 +24,7 @@ Run with::
 __all__ = ()
 
 import importlib.util
+import json
 import os
 import unittest
 
@@ -63,9 +65,11 @@ class _FakeBPY:
             self.data.collections[name] = _Datablock(hide)
 
 
-def _run(code: str, bpy_mod) -> dict:
-    """Execute generated toolcode (stripping its ``import bpy``) and return result."""
-    ns = {"bpy": bpy_mod}
+def _run(call: tuple, bpy_mod) -> dict:
+    """Execute generated ``(code, data)`` (stripping its ``import bpy``) and return result.
+    The bridge gives the code its *data* (a JSON round trip) as ``data`` (#414)."""
+    code, data = call
+    ns = {"bpy": bpy_mod, "data": json.loads(json.dumps(data))}
     exec(code.replace("import bpy\n", ""), ns)  # noqa: S102 (test-controlled code)
     return ns["result"]
 
@@ -243,8 +247,28 @@ class TestLockUnlockRoundTrip(unittest.TestCase):
         self.assertEqual(result["locked"], 1)
 
     def test_codegen_carries_toolcode_marker(self):
-        self.assertIn("# blmcp-toolcode-skip-preflight", _cw.build_lock_code({"A"}, set()))
-        self.assertIn("# blmcp-toolcode-skip-preflight", _cw.build_unlock_code())
+        self.assertIn("# blmcp-toolcode-skip-preflight", _cw.build_lock_code({"A"}, set())[0])
+        self.assertIn("# blmcp-toolcode-skip-preflight", _cw.build_unlock_code()[0])
+
+    def test_names_travel_as_data_not_code(self):
+        """#414: a name that looks like a risky step, or has quotes / newlines in it,
+        is data: it never appears in the code, and the round trip still works."""
+        odd = ("wm.save_mainfile", "it's \"quoted\"\nnext line", "bpy.ops.wm.quit_blender()")
+        bpy = _FakeBPY(objects={n: False for n in odd}, collections={"os.remove(x)": False})
+        _cw.record_managed(set(odd), {"os.remove(x)"})
+        lock = _cw.build_lock_code(set(odd), {"os.remove(x)"})
+        for name in odd + ("os.remove(x)",):
+            self.assertNotIn(name, lock[0])
+        result = _run(lock, bpy)
+        self.assertEqual(result["locked"], 4)
+        self.assertTrue(all(bpy.data.objects[n].hide_select for n in odd))
+        _cw.record_prior(result["prior_hide_select"], result["prior_hide_select_coll"])
+        unlock = _cw.build_unlock_code()
+        for name in odd + ("os.remove(x)",):
+            self.assertNotIn(name, unlock[0])
+        self.assertEqual(_run(unlock, bpy)["unlocked"], 4)
+        self.assertFalse(any(bpy.data.objects[n].hide_select for n in odd))
+        self.assertFalse(bpy.data.collections["os.remove(x)"].hide_select)
 
 
 if __name__ == "__main__":

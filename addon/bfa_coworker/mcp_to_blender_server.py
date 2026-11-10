@@ -25,6 +25,7 @@ __all__ = (
     "timer_internal_vars_calc",
     "use_log",
     "log_level",
+    "get_actual_host",
     "get_actual_port",
 )
 
@@ -86,11 +87,18 @@ _timer = _TimerState()
 # Actual port the bridge server bound to (may differ from DEFAULT_PORT
 # if auto-shuffle kicked in).  0 = not started yet.
 _actual_port: int = 0
+# The host it bound (Coworker's own maintenance code connects there, #414).
+_actual_host: str = ""
 
 
 def get_actual_port() -> int:
     """Return the port the bridge server is actually listening on, or 0."""
     return _actual_port
+
+
+def get_actual_host() -> str:
+    """Return the host the bridge server bound, or "" when not started."""
+    return _actual_host
 
 
 def _find_available_port(preferred: int, max_offset: int = 100) -> int:
@@ -849,6 +857,7 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
 def _execute_code(
         code: str,
         strict_json: bool,
+        data: dict[str, Any] | None = None,
 ) -> _ExecResult:
     """
     Execute *code* and return an ``_ExecResult``.
@@ -860,6 +869,8 @@ def _execute_code(
         Only allow it to be false when executing arbitrary LLM generated code,
         in this case it's not worth the overhead of correcting the LLM mistake,
         just ``__repr__`` the value so it can fumble its way forward.
+    :param data: Coworker's own maintenance code only (:mod:`internal_route`, #414): its
+        JSON arguments (object names...), readable as ``data`` so no name is pasted into code.
     """
     from .capture_output import CaptureOutput
     from .risky_steps import is_toolcode as _is_toolcode
@@ -875,6 +886,8 @@ def _execute_code(
         "json": json,
         "re": re,
     }
+    if data is not None:
+        namespace["data"] = data
     # Advisory preflight guidance, attached to whatever the code returns.
     preflight_notes: list[str] = []
     with CaptureOutput() as captured, WeakSandboxForLLM():
@@ -1256,7 +1269,16 @@ def _execute_code_from_request(
     code = request.get("code", "")
     # Security 3 (#347): code the model wrote never skips the checks, even
     # when it carries the tool-code marker.
-    from . import risky_steps
+    from . import internal_route, risky_steps
+    # #414: Coworker's own maintenance code comes by its own route, stamped with a key
+    # only this process knows; that name without the key is refused, never run.
+    _internal = internal_route.is_internal(request)
+    if str(request.get("tool") or "") == internal_route.TOOL and not _internal:
+        print("[Coworker] bridge: refused a {:s} request without this window's key".format(internal_route.TOOL))
+        return _ExecResult({"status": "error", "message": "Coworker refused this request: {:s} is only for "
+                                                          "Coworker's own code.".format(internal_route.TOOL)}), False
+    # Its JSON arguments (names...), given to the code as ``data``.
+    _data_kw = {"data": request.get("data") if isinstance(request.get("data"), dict) else {}} if _internal else {}
     if str(request.get("tool") or "") in risky_steps.MODEL_CODE_TOOLS:
         code = risky_steps.untrusted(str(code))
 
@@ -1290,7 +1312,8 @@ def _execute_code_from_request(
         from . import risky_steps
         _prefs = _bpy.context.preferences.addons[__package__].preferences
         _engine = _prefs.operating_mode
-        _kind, _why = risky_steps.ask_kind(_tool, code, getattr(_prefs, "approval_mode", "ASK"), _engine)
+        if not _internal:           # Coworker's own bookkeeping never asks (#414)
+            _kind, _why = risky_steps.ask_kind(_tool, code, getattr(_prefs, "approval_mode", "ASK"), _engine)
     except (KeyError, AttributeError, ImportError):
         _kind, _why = "", ""
 
@@ -1304,7 +1327,7 @@ def _execute_code_from_request(
         return run
 
     def _execute(c: str, s: bool) -> _ExecResult:
-        result = _for_thread(_execute_code)(c, strict_json=s)
+        result = _for_thread(_execute_code)(c, strict_json=s, **_data_kw)
         return result if result.check_fn is None else _ExecResult(result.response, _for_thread(result.check_fn))
 
     def _run() -> _ExecResult:
@@ -1318,7 +1341,7 @@ def _execute_code_from_request(
     exec_result = None
     # Runtime 1 (#310): the same call again and again asks, then is refused.  The local
     # loop counts its own calls (its bookkeeping code repeats here on purpose).
-    if _tool and _engine in ("EXTERNAL_AGENT", "EXTERNAL_HARNESS"):
+    if _tool and not _internal and _engine in ("EXTERNAL_AGENT", "EXTERNAL_HARNESS"):
         from . import loop_guard, risky_steps
 
         def _proceed() -> tuple[dict[str, object], Any]:
@@ -1333,16 +1356,18 @@ def _execute_code_from_request(
     if exec_result is None:
         exec_result = _run()
     # Agent 9: what ran, for the activity view (External Harness) and Copy Log.
-    try:
-        from . import activity
-        _entry = activity.record(str(request.get("tool") or ""), request.get("args") or "",
-                                 exec_result.response, time.monotonic() - _started,
-                                 deferred=exec_result.check_fn is not None, thread=_thread)
-        if exec_result.check_fn is not None:
-            # #423: the entry says how it ended when the deferred answer goes out.
-            exec_result = exec_result._replace(on_answer=lambda response: activity.answered(_entry, response))
-    except Exception:  # pylint: disable=broad-exception-caught
-        pass
+    # Coworker's own bookkeeping isn't the agent's work (#414): left out.
+    if not _internal:
+        try:
+            from . import activity
+            _entry = activity.record(str(request.get("tool") or ""), request.get("args") or "",
+                                     exec_result.response, time.monotonic() - _started,
+                                     deferred=exec_result.check_fn is not None, thread=_thread)
+            if exec_result.check_fn is not None:
+                # #423: the entry says how it ended when the deferred answer goes out.
+                exec_result = exec_result._replace(on_answer=lambda response: activity.answered(_entry, response))
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
     _is_error = (
         exec_result.response.get("status") == "error"
         if not exec_result.check_fn
@@ -1602,8 +1627,9 @@ def start(host: str, port: int) -> None:
     """
 
     # Track the actual port we end up binding.
-    global _actual_port
+    global _actual_port, _actual_host
     _actual_port = port
+    _actual_host = host
 
     if is_running():
         raise RuntimeError("Server is already running")

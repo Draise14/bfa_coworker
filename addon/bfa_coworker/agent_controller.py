@@ -4436,6 +4436,16 @@ def _call_mcp_tool_sync(
         return "Error calling tool '{:s}': {:s}".format(tool_name, str(ex))
 
 
+def _call_internal(code: str, data: dict[str, Any] | None = None) -> str:
+    """Run Coworker's own maintenance *code* (snapshot, undo, cleanup, restore, the
+    co-work lock) by its own route, with names as *data* (#414): straight to this
+    window's bridge, never through the MCP server or ``execute_blender_code``, so the
+    model's checks don't read the names of the objects it made.  Worker thread only.
+    Answers like ``_call_mcp_tool_sync`` (the bridge's response as JSON text)."""
+    from . import internal_route
+    return internal_route.call(code, data, thread=(threads.current() or THREADS.default).id)
+
+
 # -- Friendly tool names for UI status -----------------------------
 
 _TOOL_FRIENDLY_NAMES: dict[str, str] = {
@@ -5254,47 +5264,49 @@ def _scene_snapshot_code() -> str:
     )
 
 
-def _build_scene_restore_code(active_name: str, selected_names) -> str:
-    """Generate toolcode restoring the pre-step active object and selection
+def _build_scene_restore_code(active_name: str, selected_names) -> tuple[str, dict[str, Any]]:
+    """Generate ``(code, data)`` restoring the pre-step active object and selection
     (scene-safety Phase 6, step 2 of the scoped-undo algorithm).
 
     Restores by NAME (never by stale reference), only touches objects that
     still exist, and every step is guarded so the restore can never break a
     recovery.  The selection is re-set explicitly because the user may have
     changed it mid-turn (Phase 5) and operators act on the live selection.
+    The names travel as *data* (#414), never pasted into the code; *data* is
+    empty when there is nothing to restore.
     """
-    parts = [
-        "# blmcp-toolcode-skip-preflight",
-        "import bpy",
-        "result = {'status': 'ok', 'restored_active': False, "
-        "'restored_selection': 0}",
-    ]
     active_name = str(active_name or "")
+    names = sorted(str(n) for n in (selected_names or ()) if str(n))
+    code = (
+        "# blmcp-toolcode-skip-preflight\n"
+        "import bpy\n"
+        "result = {'status': 'ok', 'restored_active': False, "
+        "'restored_selection': 0}\n"
+        "_act_obj = bpy.data.objects.get(data['active']) if data.get('active') else None\n"
+        "if _act_obj is not None:\n"
+        "    try:\n"
+        "        bpy.context.view_layer.objects.active = _act_obj\n"
+        "        result['restored_active'] = True\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "for _name in data.get('selected', ()):\n"
+        "    _sel_obj = bpy.data.objects.get(_name)\n"
+        "    if _sel_obj is not None:\n"
+        "        try:\n"
+        "            _sel_obj.select_set(True)\n"
+        "            result['restored_selection'] += 1\n"
+        "        except Exception:\n"
+        "            pass\n"
+    )
+    data: dict[str, Any] = {}
     if active_name:
-        parts.append(
-            "_act_obj = bpy.data.objects.get({:s})\n"
-            "if _act_obj is not None:\n"
-            "    try:\n"
-            "        bpy.context.view_layer.objects.active = _act_obj\n"
-            "        result['restored_active'] = True\n"
-            "    except Exception:\n"
-            "        pass".format(repr(active_name)))
-    names = [str(n) for n in (selected_names or ()) if str(n)]
+        data["active"] = active_name
     if names:
-        names_str = ", ".join(repr(n) for n in sorted(names))
-        parts.append(
-            "for _name in [{:s}]:\n"
-            "    _sel_obj = bpy.data.objects.get(_name)\n"
-            "    if _sel_obj is not None:\n"
-            "        try:\n"
-            "            _sel_obj.select_set(True)\n"
-            "            result['restored_selection'] += 1\n"
-            "        except Exception:\n"
-            "            pass".format(names_str))
-    return "\n".join(parts) + "\n"
+        data["selected"] = names
+    return code, data
 
 
-def _build_cleanup_code(diff: _EntityDiff) -> str:
+def _build_cleanup_code(diff: _EntityDiff) -> tuple[str, dict[str, Any]]:
     """Generate Blender Python code to remove STEP-ATTRIBUTED datablocks.
 
     This is the PRIMARY recovery path (scene-safety Phase 6, scoped
@@ -5306,6 +5318,8 @@ def _build_cleanup_code(diff: _EntityDiff) -> str:
     undo could not revert (e.g. data-API creations without an undo step).
     In-place edits (modifier_apply, mesh edits) are deliberately NOT reverted
     (design decision D9): they cannot be undone per-datablock.
+    Returns ``(code, data)``: the names travel as *data* (#414), keyed by the
+    ``bpy.data`` collection, never pasted into the code.
     """
     parts: list[str] = [
         "# blmcp-toolcode-skip-preflight",
@@ -5313,6 +5327,7 @@ def _build_cleanup_code(diff: _EntityDiff) -> str:
         "result = {'status': 'ok', 'cleaned': []}",
         "",
     ]
+    data: dict[str, Any] = {}
     # Map diff field names to bpy.data collection names and item types.
     _DATA_MAP = (
         ("object_names", "objects", "Object"),
@@ -5331,19 +5346,19 @@ def _build_cleanup_code(diff: _EntityDiff) -> str:
     for field, coll, _label in _DATA_MAP:
         names = getattr(diff, field, set())
         if names:
-            names_str = ", ".join(repr(n) for n in sorted(names))
+            data[coll] = sorted(str(n) for n in names)
             parts.append(
-                "# Remove {:d} {:s}\n"
-                "for _name in [{:s}]:\n"
+                "# Remove the {:s}\n"
+                "for _name in data.get({!r}, ()):\n"
                 "    _item = bpy.data.{:s}.get(_name)\n"
                 "    if _item:\n"
                 "        bpy.data.{:s}.remove(_item)\n"
                 "        result['cleaned'].append(_name)".format(
-                    len(names), coll, names_str, coll, coll))
+                    coll, coll, coll, coll))
     parts.append("")
     parts.append("result['message'] = 'Cleaned up {:d} orphaned datablocks'".format(
         sum(len(getattr(diff, f, set())) for f, _, _ in _DATA_MAP)))
-    return "\n".join(parts)
+    return "\n".join(parts), data
 
 
 # ---------------------------------------------------------------------------
@@ -5726,9 +5741,7 @@ def _lock_step_entities(step_diff: Any, mcp_port: int, protect: object = ()) -> 
             # Already locked this cycle (e.g. re-locked by the session pass);
             # nothing to do, and the priors are already captured.
             return
-        raw = _call_mcp_tool_sync(
-            "execute_blender_code",
-            {"code": co_work_guard.build_lock_code(new_objs, new_colls)}, mcp_port)
+        raw = _call_internal(*co_work_guard.build_lock_code(new_objs, new_colls))
         # Best-effort: capture the true prior hide_select values so the
         # unlock restores them exactly rather than a blanket False.
         try:
@@ -5762,10 +5775,7 @@ def _release_scene_lock() -> None:
         print("[Coworker] _release_scene_lock: no MCP port -- deferring unlock")
         return
     try:
-        raw = _call_mcp_tool_sync(
-            "execute_blender_code",
-            {"code": co_work_guard.build_unlock_code()},
-            _active_lock_mcp_port)
+        raw = _call_internal(*co_work_guard.build_unlock_code())
         # Only forget the priors when the unlock actually SUCCEEDED.  A
         # returned error (the tool result, which does not raise) or an
         # unparseable body means some datablocks may still be locked --
@@ -7704,8 +7714,7 @@ def _run_conversation_turn_inner(
                         #      next step diffs against the post-recovery
                         #      scene; the undo guard then resets (D8).
                         _failed_diff = _EntityDiff()
-                        _fail_raw = _call_mcp_tool_sync("execute_blender_code",
-                            {"code": _scene_snapshot_code()}, mcp_port)
+                        _fail_raw = _call_internal(_scene_snapshot_code())
                         _undo_safe_here = _undo_safe
                         try:
                             _fail_data = json.loads(_fail_raw)
@@ -7732,8 +7741,7 @@ def _run_conversation_turn_inner(
                         if _undo_safe_here and _undo_pushed:
                             # Must use context override -- bpy.ops.ed.undo() needs a window
                             # context which isn't available in the bridge server's exec() namespace.
-                            _undo_result = _call_mcp_tool_sync("execute_blender_code",
-                                {"code": _undo_code("undo")}, mcp_port)
+                            _undo_result = _call_internal(_undo_code("undo"))
                             if '"status": "error"' in _undo_result:
                                 print("[Coworker] run_conversation_turn: undo FAILED -- falling back to entity cleanup")
                         elif not _undo_safe_here:
@@ -7745,31 +7753,28 @@ def _run_conversation_turn_inner(
                         # when the failed diff could not be captured AND the
                         # global undo did not run.
                         if not _failed_diff.is_empty():
-                            _cleanup_code = _build_cleanup_code(_failed_diff)
+                            _cleanup_code, _cleanup_data = _build_cleanup_code(_failed_diff)
                         elif not (_undo_safe_here and _undo_pushed):
-                            _cleanup_code = _build_cleanup_code(_turn_entities)
+                            _cleanup_code, _cleanup_data = _build_cleanup_code(_turn_entities)
                         else:
-                            _cleanup_code = ""
+                            _cleanup_code, _cleanup_data = "", {}
                         if _cleanup_code:
-                            _call_mcp_tool_sync("execute_blender_code",
-                                {"code": _cleanup_code}, mcp_port)
+                            _call_internal(_cleanup_code, _cleanup_data)
                         # Restore the pre-step active object + selection (Phase 5
                         # fingerprint) so the retry's operators act on the same
                         # context the model assumed.
                         if _turn_snapshot is not None:
-                            _restore_code = _build_scene_restore_code(
+                            _restore_code, _restore_data = _build_scene_restore_code(
                                 getattr(_turn_snapshot, "active_object", ""),
                                 getattr(_turn_snapshot, "selected_object_names", set()))
-                            if "restored_active" in _restore_code or "select_set" in _restore_code:
-                                _call_mcp_tool_sync("execute_blender_code",
-                                    {"code": _restore_code}, mcp_port)
+                            if _restore_data:
+                                _call_internal(_restore_code, _restore_data)
                         # Push a fresh undo state so the next iteration can undo this one,
                         # WITH a snapshot: it is the new baseline (fingerprints and
                         # entity diffing resume from the post-recovery scene).
                         _repush_extra = _SNAPSHOT_EXTRA if not _code_is_readonly(_prev_code or "") else ""
-                        _repush_raw = _call_mcp_tool_sync("execute_blender_code",
-                            {"code": _undo_code("push", "bfa_coworker_pre_script", extra_result=_repush_extra)},
-                            mcp_port)
+                        _repush_raw = _call_internal(
+                            _undo_code("push", "bfa_coworker_pre_script", extra_result=_repush_extra))
                         try:
                             _repush_data = json.loads(_repush_raw)
                             if _repush_data.get("status") == "ok":
@@ -7787,9 +7792,8 @@ def _run_conversation_turn_inner(
                 # Skip entity snapshot for read-only code (no scene mutations).
                 if tool_name == "execute_blender_code" and not _undo_pushed:
                     _init_extra = _SNAPSHOT_EXTRA if not _code_is_readonly(args.get("code", "") or "") else ""
-                    merged_init_raw = _call_mcp_tool_sync("execute_blender_code",
-                        {"code": _undo_code("push", "bfa_coworker_pre_script", extra_result=_init_extra)},
-                        mcp_port)
+                    merged_init_raw = _call_internal(
+                        _undo_code("push", "bfa_coworker_pre_script", extra_result=_init_extra))
                     _undo_pushed = True
                     # Parse initial snapshot from merged result.
                     try:
@@ -7855,14 +7859,13 @@ def _run_conversation_turn_inner(
                     _prev_code_error = result_text if _prev_code_errored else ""
 
                     # -- Push bookmark + entity snapshot (merged) -------
-                    # Merging these into a single execute_blender_code call
-                    # saves 2 round-trips per iteration vs separate calls.
+                    # Merging these into a single call (Coworker's own route,
+                    # #414) saves 2 round-trips per iteration vs separate calls.
                     # Skip entity snapshot for read-only code (no scene mutations).
                     if not _prev_code_errored:
                         _step_extra = _SNAPSHOT_EXTRA if not _code_is_readonly(_prev_code or "") else ""
-                        merged_raw = _call_mcp_tool_sync("execute_blender_code",
-                            {"code": _undo_code("push", "bfa_coworker_step", extra_result=_step_extra)},
-                            mcp_port)
+                        merged_raw = _call_internal(
+                            _undo_code("push", "bfa_coworker_step", extra_result=_step_extra))
                         # Parse snapshot from merged result.
                         try:
                             merged_data = json.loads(merged_raw)

@@ -57,7 +57,6 @@ TIPS: dict[str, str] = {
     "open_editor": "Open the Coworker editor: the full chat in its own window",
     "mode_menu": "Mode: Local, Remote, Agent or Harness, and its model",
     "copy_error": "Copy the error",
-    "tool:new_thread": "New Thread: start a fresh chat (the old one stays in History)",
     "tool:mention": "@ Mention an object, material or collection",
     "tool:revert_turn": "Revert: undo the last turn in one step",
     "tool:stop": "Stop the running turn",

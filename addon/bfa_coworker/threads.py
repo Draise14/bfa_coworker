@@ -36,8 +36,11 @@ __all__ = (
     "ThreadRegistry",
     "current",
     "label",
+    "close_refused",
     "pick",
-    "picker_rows",
+    "reopen",
+    "tab_modes",
+    "tab_title",
     "short_name",
     "tag",
     "use",
@@ -292,18 +295,69 @@ class AttachmentSocket:
         return socket_image if thread.id == self.focus else thread.attachment
 
 
-def picker_rows(registry: "ThreadRegistry", editor: str) -> list[tuple[str, str, str]]:
-    """The full-screen picker's rows ``(thread id, title, editor kind)``: All editors,
-    this *editor*'s thread (``"editor:<kind>"`` until it exists), then every other live
-    thread.  Picking one pins the area to it (#417)."""
-    rows = [(registry.default.id, "All editors", "")]
-    if editor:
-        mine = registry.for_editor(editor, create=False)
-        rows.append((mine.id if mine is not None else "editor:" + editor,
-                     "This editor ({:s})".format(short_name(editor)), editor))
-    ids = {r[0] for r in rows}
-    rows += [(t.id, t.title or short_name(t.editor) or t.id, t.editor) for t in registry.live() if t.id not in ids]
-    return rows
+# -- Threads 2c (#427): chat tabs ------------------------------------------------------
+# Every live thread is an open tab, in the order they were opened, the default (All
+# editors) first.  Closing a tab lets its thread go; its chat stays in History.
+
+TAB_TITLE_CHARS = 18
+
+
+def tab_title(thread: Thread, first_message: str = "") -> str:
+    """A tab's short title: the first thing asked in it, else its editor's name."""
+    text = " ".join(str(first_message or "").split())
+    if text:
+        return text if len(text) <= TAB_TITLE_CHARS else text[:TAB_TITLE_CHARS - 1].rstrip() + "\u2026"
+    if thread.is_default:
+        return "All editors"
+    return thread.title or short_name(thread.editor) or "Chat"
+
+
+def close_refused(registry: "ThreadRegistry", thread: Thread, busy: bool = False) -> str:
+    """Why *thread*'s tab can't close now ("" when it can): its turn runs.  The default
+    tab never goes away: closing it saves its chat to History and starts it fresh."""
+    if busy or registry.running() is thread:
+        return "Its turn is running: stop it first"
+    return ""
+
+
+def reopen(registry: "ThreadRegistry", chat_id: str, editor: str = "",
+           make: Callable[[str, str], Thread] | None = None) -> Thread:
+    """The tab for History's chat *chat_id*: the open one, else a new thread for it
+    (``make(editor, chat_id)`` loads its messages)."""
+    for thread in registry.live():
+        if thread.chat_id == chat_id:
+            return thread
+    if make is not None:
+        return make(editor, chat_id)
+    thread = registry.create(editor=editor, chat_id=chat_id)
+    return thread
+
+
+def tab_modes(title_widths: list[float], shown: int, room: float, icon_w: float,
+              tail_w: float) -> list[str]:
+    """How each tab fits in *room* (UI units): ``"full"`` (icon + title), ``"icon"`` or
+    ``"hidden"`` (reached through the strip's menu).  A titled tab costs its title's width
+    plus its close button (*icon_w*), an icon tab *icon_w*; *tail_w* is the + and the menu.
+
+    All titles when they fit; else the shown tab keeps its title and the others are
+    icons; then icons drop from the far end until it fits (never the shown one)."""
+    n = len(title_widths)
+    room -= tail_w
+    if sum(w + icon_w for w in title_widths) <= room:
+        return ["full"] * n
+    modes = ["icon"] * n
+    if 0 <= shown < n:
+        modes[shown] = "full"
+
+    def width() -> float:
+        return sum((title_widths[i] + icon_w) if m == "full" else icon_w if m == "icon" else 0.0
+                   for i, m in enumerate(modes))
+    for i in range(n - 1, -1, -1):
+        if width() <= room:
+            break
+        if i != shown:
+            modes[i] = "hidden"
+    return modes
 
 
 # -- which thread a worker works for ------------------------------------------------

@@ -116,6 +116,31 @@ class TestIndex(unittest.TestCase):
         self.assertEqual(self.index.last_for_blend("camp", "VIEW_3D"), "view")
 
 
+    def test_open_tabs_per_blend(self):
+        # Threads 2c (#427): the open tabs come back with the .blend.
+        for chat_id in ("view", "node", "seq", "gone"):
+            self.index.chat_path(chat_id).write_text(json.dumps(_chat(chat_id)), encoding="utf-8")
+        self.index.set_tabs_for_blend("camp", [{"chat": "view", "editor": "VIEW_3D"},
+                                               {"chat": "node", "editor": "NODE_EDITOR"},
+                                               {"chat": "gone", "editor": "TEXT_EDITOR"}])
+        self.index.chat_path("gone").unlink()
+        self.assertEqual(self.index.tabs_for_blend("camp"), [{"chat": "view", "editor": "VIEW_3D"},
+                                                             {"chat": "node", "editor": "NODE_EDITOR"}])
+        self.assertEqual(self.index.tabs_for_blend("lander"), [])
+        self.index.delete("node")
+        self.assertEqual([t["chat"] for t in self.index.tabs_for_blend("camp")], ["view"])
+        self.index.set_tabs_for_blend("camp", [])
+        self.assertEqual(self.index.tabs_for_blend("camp"), [], "all closed: none come back")
+
+    def test_editor_chats_from_before_tabs_come_back_as_tabs(self):
+        for chat_id in ("view", "seq"):
+            self.index.chat_path(chat_id).write_text(json.dumps(_chat(chat_id)), encoding="utf-8")
+        self.index.touch("view", _chat("build"), blend="camp", editor="VIEW_3D")
+        self.index.touch("seq", _chat("titles"), blend="camp", editor="SEQUENCE_EDITOR")
+        self.assertEqual(sorted((t["chat"], t["editor"]) for t in self.index.tabs_for_blend("camp")),
+                         [("seq", "SEQUENCE_EDITOR"), ("view", "VIEW_3D")])
+
+
 class TestMigration(unittest.TestCase):
 
     def test_old_per_blend_chats_move_in_once(self):

@@ -310,35 +310,74 @@ class TestPerThreadChat(unittest.TestCase):
         self.assertFalse(cw.question_state(theirs)["answered"], "the default thread's question waits")
 
 
-class TestFullScreenPicker(unittest.TestCase):
-    """Threads 2b (#417): the picker of a maximized editor, and its pin."""
+class TestChatTabs(unittest.TestCase):
+    """Threads 2c (#427): every open thread is a tab; + makes one here, × closes it (its
+    chat stays in History), History reopens it."""
 
     def setUp(self):
         self.reg = _registry()
 
-    def test_rows(self):
-        rows = th.picker_rows(self.reg, "NODE_EDITOR")
-        self.assertEqual(rows[0], (th.DEFAULT_ID, "All editors", ""))
-        self.assertEqual(rows[1], ("editor:NODE_EDITOR", "This editor (Node)", "NODE_EDITOR"), "made when picked")
-        view = th.pick(self.reg, "VIEW_3D", focus=True)
-        node = th.pick(self.reg, "NODE_EDITOR", focus=True)
-        rows = th.picker_rows(self.reg, "NODE_EDITOR")
-        self.assertEqual([r[0] for r in rows], [th.DEFAULT_ID, node.id, view.id], "then the other threads")
+    def test_titles(self):
+        node = self.reg.create(editor="NODE_EDITOR", title="Node")
+        self.assertEqual(th.tab_title(self.reg.default), "All editors")
+        self.assertEqual(th.tab_title(node), "Node", "no message yet: the editor's name")
+        self.assertEqual(th.tab_title(node, "tidy   the rock"), "tidy the rock")
+        long = th.tab_title(node, "make the campfire scene much brighter please")
+        self.assertEqual(len(long), th.TAB_TITLE_CHARS)
+        self.assertTrue(long.endswith("…"))
 
-    def test_picking_pins_the_area(self):
-        pins = {}
-        view = th.pick(self.reg, "VIEW_3D", focus=True)
-        node = th.pick(self.reg, "NODE_EDITOR", focus=True)
-        key = 1234          # the area's space: kept through Ctrl+Space
-        pins[key] = view.id
-        self.assertIs(th.pick(self.reg, "NODE_EDITOR", pinned=pins[key], focus=True), view,
-                      "the Shader Editor now shows the 3D thread")
-        self.assertIs(th.pick(self.reg, "NODE_EDITOR", pinned=pins[key], focus=False), view, "focus off too")
-        pins[key] = th.DEFAULT_ID
-        self.assertIs(th.pick(self.reg, "NODE_EDITOR", pinned=pins[key], focus=True), self.reg.default,
-                      "All editors picked while focus is on")
-        pins.pop(key)
-        self.assertIs(th.pick(self.reg, "NODE_EDITOR", focus=True), node, "unpinned: the editor's own")
+    def test_tabs_are_the_open_threads_in_order(self):
+        view = self.reg.create(editor="VIEW_3D")
+        node = self.reg.create(editor="NODE_EDITOR")
+        self.assertEqual(self.reg.live(), [self.reg.default, view, node], "All editors first, then as opened")
+        self.assertTrue(self.reg.remove(view.id))
+        self.assertEqual(self.reg.live(), [self.reg.default, node])
+        self.assertFalse(self.reg.remove(th.DEFAULT_ID), "the All editors tab never goes away")
+
+    def test_close_refused_while_its_turn_runs(self):
+        node = self.reg.create(editor="NODE_EDITOR")
+        self.assertEqual(th.close_refused(self.reg, node), "")
+        self.assertTrue(th.close_refused(self.reg, node, busy=True))
+        self.assertTrue(self.reg.try_begin(node))
+        self.assertTrue(th.close_refused(self.reg, node))
+        self.assertFalse(self.reg.remove(node.id))
+        self.reg.end(node)
+        self.assertEqual(th.close_refused(self.reg, self.reg.default), "", "All editors: × starts it fresh")
+
+    def test_new_tab_here_is_shown_here(self):
+        pins, key = {}, 11
+        tab = self.reg.create(editor="NODE_EDITOR")         # + in a Shader Editor
+        pins[key] = tab.id
+        self.assertIs(th.pick(self.reg, "NODE_EDITOR", pinned=pins[key]), tab)
+        self.assertEqual(tab.editor, "NODE_EDITOR", "its editor context: where it was made")
+        self.reg.remove(tab.id)                             # × : the area shows All editors again
+        self.assertIs(th.pick(self.reg, "NODE_EDITOR", pinned=pins[key]), self.reg.default)
+
+    def test_history_reopens_or_switches(self):
+        made = []
+
+        def make(editor, chat_id):
+            made.append((editor, chat_id))
+            return self.reg.create(editor=editor, chat_id=chat_id)
+        tab = th.reopen(self.reg, "c1", "SEQUENCE_EDITOR", make=make)
+        self.assertEqual((tab.editor, tab.chat_id), ("SEQUENCE_EDITOR", "c1"))
+        self.assertIs(th.reopen(self.reg, "c1", "SEQUENCE_EDITOR", make=make), tab, "already open: switch to it")
+        self.assertEqual(made, [("SEQUENCE_EDITOR", "c1")])
+        self.reg.remove(tab.id)
+        again = th.reopen(self.reg, "c1", "SEQUENCE_EDITOR", make=make)
+        self.assertIsNot(again, tab)
+        self.assertEqual(again.chat_id, "c1", "a closed tab comes back from History")
+
+    def test_narrow_strips(self):
+        widths = [4.0, 6.0, 5.0, 7.0]
+        self.assertEqual(th.tab_modes(widths, 1, 40.0, 1.0, 2.0), ["full"] * 4)
+        self.assertEqual(th.tab_modes(widths, 1, 20.0, 1.0, 2.0), ["icon", "full", "icon", "icon"],
+                         "the shown tab keeps its title, the others are icons")
+        tight = th.tab_modes(widths, 1, 10.5, 1.0, 2.0)
+        self.assertEqual(tight[1], "full")
+        self.assertIn("hidden", tight, "the rest is in the menu")
+        self.assertEqual(tight[:2], ["icon", "full"], "dropped from the far end")
+        self.assertEqual(th.tab_modes(widths, 3, 9.0, 1.0, 2.0)[3], "full", "never the shown one")
 
 
 class _FakeController:

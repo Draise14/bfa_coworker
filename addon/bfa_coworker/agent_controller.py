@@ -4443,7 +4443,17 @@ def _call_internal(code: str, data: dict[str, Any] | None = None) -> str:
     model's checks don't read the names of the objects it made.  Worker thread only.
     Answers like ``_call_mcp_tool_sync`` (the bridge's response as JSON text)."""
     from . import internal_route
-    return internal_route.call(code, data, thread=(threads.current() or THREADS.default).id)
+    raw = internal_route.call(code, data, thread=(threads.current() or THREADS.default).id)
+    _agent_state.last_mcp_activity = time.monotonic()
+    _status = raw[:120]
+    try:
+        _status = str(json.loads(raw).get("status"))
+    except (ValueError, AttributeError):
+        pass
+    _names = sum(1 if isinstance(v, str) else len(v) for v in (data or {}).values())
+    print("[Coworker] _call_internal: {:s} ({:d} name(s) as data) -> {:s}".format(
+        "+".join(sorted(data)) if data else "no data", _names, _status))
+    return raw
 
 
 # -- Friendly tool names for UI status -----------------------------

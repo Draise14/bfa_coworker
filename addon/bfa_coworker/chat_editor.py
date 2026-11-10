@@ -850,20 +850,34 @@ def _flush() -> None:
     return None
 
 
+def _region_for_box(box: InputBox) -> Any:
+    return next((r for s, r in _SURFACES.values() if s.box is box), None)
+
+
+def _box_override(box: InputBox) -> dict:
+    """The window, area and region *box* is drawn in.  The keyboard modal keeps the
+    context it was started in, so without this a key typed in a second chat (or on
+    another tab) acts on the first chat's area: its tab's draft and its Send."""
+    return _window_override(_region_for_box(box))
+
+
 def _on_box_action(box: InputBox, action: str, value: str) -> None:
-    """Keyboard actions (Enter, Esc...) from input_capture, in the modal's context."""
+    """Keyboard actions (Enter, Esc...) from input_capture, in the box's own area."""
     surface = _surface_for_box(box)
     try:
-        _do(action, value, surface)
+        with bpy.context.temp_override(**_box_override(box)):
+            _do(action, value, surface, _region_for_box(box))
     except Exception as ex:  # pylint: disable=broad-exception-caught
         print("[Coworker] chat action {:s} failed: {:s}".format(action, str(ex)))
 
 
 def _after_key(box: InputBox) -> None:
-    """Keep the shared draft in step with what was typed."""
+    """Keep the draft of the tab this box shows in step with what was typed."""
     props = _props()
-    if props is not None and props.chat_input != box.model.text:
-        props.chat_input = box.model.text
+    if props is not None:
+        with bpy.context.temp_override(**_box_override(box)):
+            if props.chat_input != box.model.text:
+                props.chat_input = box.model.text
     surface = _surface_for_box(box)
     if surface is not None:
         _SYNCED[id(surface)] = box.model.text

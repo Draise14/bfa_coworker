@@ -1,6 +1,8 @@
 # Tier 4o — Orchestration layer: threads per editor, side by side (#71)
 
-**Status**: 📝 For review (2026-10-21); Threads 0 measured 2026-11-07 (§6). New tasks **Threads 0–3**; Footer 1 becomes
+**Status**: 🚧 Threads 0–2c shipped in 1.1.42 (2026-11-10): one thread per editor, one turn at a time across threads,
+chat tabs; History by file (#431) is next, then **Threads 3** (#359), which starts with the §6 corrections.
+Reviewed 2026-10-21; Threads 0 measured 2026-11-07 (§6). New tasks **Threads 0–3**; Footer 1 becomes
 thread-aware; Orchestrate 2 and agent teams move to Tier 5 and are rebuilt on threads.
 **Clean room**: our own design from the add-on's current code and Blender's own
 behaviour (undo stack, main-thread execution); spike probes before code.

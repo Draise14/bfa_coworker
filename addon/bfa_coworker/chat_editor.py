@@ -363,6 +363,7 @@ def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0) -> None:
     canvas = gpu_layout.Canvas(style, render.measure, surface.interaction())
     surface.bounds = rect
     surface.drop_hover = drop_hover()
+    surface.show_tips = bool(getattr(context.preferences.view, "show_tooltips", True))   # #388
     from . import coworker_api
     surface.view.revertable = coworker_api.can_revert() and not state.is_thinking
     card = _approval_card(context)

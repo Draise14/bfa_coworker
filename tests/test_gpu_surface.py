@@ -161,6 +161,82 @@ class TestLayout(unittest.TestCase):
         canvas, _ = _draw(surface)
         self.assertNotIn(tip, " ".join(c.text for c in canvas.commands if c.kind == "text"))
 
+    # -- #388: tooltips behave like Blender's own ---------------------------------------
+    def _tip_case(self):
+        now = [100.0]
+        surface = sf.ChatSurface()
+        surface.clock = lambda: now[0]
+        _draw(surface)
+        return surface, now, sf.TIPS["attach_menu"]
+
+    @staticmethod
+    def _shows(canvas, tip):
+        return tip in " ".join(c.text for c in canvas.commands if c.kind == "text")
+
+    def test_tooltips_off_in_preferences_shows_none(self):
+        surface, now, tip = self._tip_case()
+        surface.show_tips = False
+        surface.on_move(*_centre(surface, "attach_menu"))
+        now[0] += sf.TIP_DELAY * 4
+        canvas, _ = _draw(surface)
+        self.assertFalse(self._shows(canvas, tip))
+        self.assertEqual(surface.tip_wait, 0.0)          # nothing is due either
+
+    def test_the_mouse_has_to_rest(self):
+        surface, now, tip = self._tip_case()
+        x, y = _centre(surface, "attach_menu")
+        surface.on_move(x, y)
+        _draw(surface)
+        for step in range(4):                            # keeps moving over the same button
+            now[0] += sf.TIP_DELAY * 0.6
+            surface.on_move(x + (step % 2) + 1, y)
+            canvas, _ = _draw(surface)
+            self.assertFalse(self._shows(canvas, tip), step)
+        now[0] += sf.TIP_DELAY + 0.01                    # now it rests
+        canvas, _ = _draw(surface)
+        self.assertTrue(self._shows(canvas, tip))
+
+    def test_any_move_or_click_hides_it(self):
+        surface, now, tip = self._tip_case()
+        x, y = _centre(surface, "attach_menu")
+        surface.on_move(x, y)
+        _draw(surface)
+        now[0] += sf.TIP_DELAY + 0.01
+        canvas, _ = _draw(surface)
+        self.assertTrue(self._shows(canvas, tip))
+        self.assertTrue(surface.on_move(x + 1, y))       # a move asks for a redraw...
+        canvas, _ = _draw(surface)
+        self.assertFalse(self._shows(canvas, tip))       # ...without the tooltip
+        now[0] += sf.TIP_DELAY + 0.01
+        _draw(surface)
+        surface.on_press(x + 1, y)                       # a click hides it until the mouse moves
+        now[0] += sf.TIP_DELAY * 4
+        canvas, _ = _draw(surface)
+        self.assertFalse(self._shows(canvas, tip))
+
+    def test_none_while_a_reply_streams(self):
+        surface, now, tip = self._tip_case()
+        surface.on_move(*_centre(surface, "attach_menu"))
+        now[0] += sf.TIP_DELAY + 0.01
+        live = type("Live", (), {"streaming_text": "Building the roof", "is_thinking": True})()
+        canvas, _ = _draw(surface, live=live)
+        self.assertFalse(self._shows(canvas, tip))
+
+    def test_none_right_after_typing(self):
+        surface, now, tip = self._tip_case()
+        x, y = _centre(surface, "attach_menu")
+        surface.box.focused = True
+        surface.on_move(x, y)
+        surface.box.model.text = "add a ro"
+        now[0] += sf.TIP_DELAY + 0.01
+        canvas, _ = _draw(surface)
+        self.assertFalse(self._shows(canvas, tip))
+        now[0] += sf.TYPING_QUIET
+        _draw(surface)                                   # stopped typing a while ago...
+        now[0] += sf.TIP_DELAY + 0.01                    # ...then the usual rest
+        canvas, _ = _draw(surface)
+        self.assertTrue(self._shows(canvas, tip))
+
     def test_every_button_has_a_tooltip(self):
         surface = sf.ChatSurface(compact=True)
         surface.tools = (("stop", "PAUSE"), ("mention", "OUTLINER_OB_MESH"), ("revert_turn", "LOOP_BACK"),

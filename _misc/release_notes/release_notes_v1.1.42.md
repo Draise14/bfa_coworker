@@ -20,7 +20,7 @@
 
 ### ⏳ **Long Renders and Bakes Don't Time Out** (#309)
 - **What changed:** a render or bake no longer has to finish inside one tool call. When one is still running after 45 seconds, Coworker hands it over as a **job**, and the agent checks on it with the new `get_job_status` tool until it is done.
-- **You can see it:** in the Classic sidebar chat, the newest turn shows a **job row**, such as *Rendering 40% — Render big.png*, even with the Workshop folded. Under it sits Blender's own progress bar, with the real bake percentage and the **X** that cancels the job. In the Compact chat, Blender's status bar shows the progress.
+- **You can see it:** Blender's status bar shows the render or bake with its real progress, and its **X** cancels the job.
 - **New bake tool:** ask Coworker to bake, and `bake_textures` checks first that each object has a UV map, a material and an active Image Texture node with an image. If one is missing, it tells you what to add. It switches to Cycles for the bake and back afterwards.
 - **Safer renders:** Coworker no longer starts a second render while one is running, and an old output file can't pass for the new one.
 - Works the same on every engine: Local, Remote, External Agent and External Harness. Baking and rendering are always offered to the agent, so an External Agent like Claude Code uses them without being told (#422).
@@ -45,13 +45,14 @@
 - **Microsoft Store Bforartists:** External Agent connects. It used to fail with *"cwd" does not exist*, because a Store copy keeps new files in its own package folder where other programs can't see them. *Add to <client>* now edits an existing config file in place. (#390)
 - **The floating chat keeps working after Ctrl+Space** in the main window. Before, it stopped taking clicks and keys until you closed it. (#391)
 - **Attach Screen and Auto mode's next step work while a window is maximized.** (#401)
+- **The chat's tooltips are calmer** and follow your *Tooltips* preference: they wait until the mouse rests, vanish when you move or click, and stay away while you type or a reply streams. (#388)
 - **Network mode starts quickly** even when your network's name lookup is slow. (#403)
 - **Linux: Download llama-server works** (it gave HTTP 404) and the download runs. A custom llama-server path accepts the program, its folder or a llama.cpp `build/bin`, and says why when it can't use it. (#382)
 
 ## ⚠️ Known Limits
 
 - **Stop doesn't cancel a running render or bake.** It ends the agent's wait; the **X** on the job row's bar, or **Esc**, cancels the job itself. Bforartists needs a small API for this (#419).
-- **The Compact chat has no job row yet** (#423): Blender's status bar shows the progress.
+- **The chat doesn't show a job's progress yet** (#423): Blender's status bar does.
 - **Remote mode hasn't been checked live with tabs** or with the loop guard yet. It runs the same code as Local, which was.
 - **Tabs on OpenCode** haven't been tried; Claude Code was checked live.
 - **The Store fix and the Linux llama-server fix haven't been run on a real Store install or on Linux yet.** They were tested against the reporters' details and the real llama.cpp download. Please tell us how they work for you.

@@ -3082,14 +3082,16 @@ def start_mcp_server(
     except Exception:  # pylint: disable=broad-exception-caught
         pass
 
-    env = _build_mcp_env(blender_host=blender_host, blender_port=blender_port)
-
     # --- Resolution order ---
     mcp_exe, use_module = _resolve_mcp_python()
 
     if not mcp_exe:
         _agent_state.error = "Cannot find Python to run MCP server"
         return None
+
+    # After the resolve: it may have just installed the vendor deps, and the
+    # pywin32 folders only go on PYTHONPATH / PATH once they exist (#424).
+    env = _build_mcp_env(blender_host=blender_host, blender_port=blender_port)
 
     # --- Launch ---
 
@@ -3318,14 +3320,16 @@ def start_mcp_server_network(
     except Exception:  # pylint: disable=broad-exception-caught
         pass
 
-    env = _build_mcp_env(blender_host=blender_host, blender_port=blender_port)
-
     # --- Resolution order ---
     mcp_exe, use_module = _resolve_mcp_python()
 
     if not mcp_exe:
         _agent_state.error = "Cannot find Python to run MCP server"
         return None
+
+    # After the resolve: it may have just installed the vendor deps, and the
+    # pywin32 folders only go on PYTHONPATH / PATH once they exist (#424).
+    env = _build_mcp_env(blender_host=blender_host, blender_port=blender_port)
 
     try:
         if use_module:
@@ -3665,6 +3669,27 @@ def build_mcp_server_entry(
         py_cmd = "python"
         args = ["-m", "blmcp", "--transport", "stdio"]
     return {"command": py_cmd, "args": args, "env": env}
+
+
+def external_agent_server_entry(
+    blender_host: str = "localhost",
+    blender_port: int = 9876,
+    use_blender_python: bool = True,
+) -> tuple[dict[str, Any] | None, str]:
+    """The stdio server block External Agent hands its agent app; ``(entry, "")`` or ``(None, problem)``.
+
+    The agent app starts our MCP server itself, so the vendor deps must be in
+    place first -- the same :func:`_ensure_vendor_deps` Local's start runs
+    (#424; it may pip-install them, so call it off the main thread).  The
+    launcher's ``install.json`` is written after that, so it lists the
+    pywin32 folders a fresh install just created.
+    """
+    if use_blender_python and not _ensure_vendor_deps():
+        problems = _check_vendor_layout()
+        return (None, "Coworker's MCP server isn't ready -- {:s}".format(
+            "; ".join(problems) if problems else "its packages could not be installed (see the console)"))
+    return (build_mcp_server_entry(blender_host=blender_host, blender_port=blender_port,
+                                   use_blender_python=use_blender_python), "")
 
 
 def generate_mcp_client_config(

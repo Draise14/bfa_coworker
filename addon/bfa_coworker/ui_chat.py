@@ -4257,12 +4257,9 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
             sessions_file, (_CHAT["id"] or "default") + ".json", preset.id, session_id)
         bridge_port, _, _ = effective_ports(prefs)
         engine.bridge_port = bridge_port        # where its tools look for Blender (_ensure_bridge)
-        entry = agent_controller.build_mcp_server_entry(
-            blender_host=prefs.host, blender_port=bridge_port,
-            use_blender_python=getattr(prefs, "use_blender_python_for_harness", True))
-        if getattr(prefs, "external_agent_tools_on_demand", True):
-            # Engine 7: the server lists the basic tools; load_tools adds the rest.
-            entry["env"] = dict(entry.get("env") or {}, BFACW_TOOLS_ON_DEMAND="1")
+        host = prefs.host
+        use_blender_python = getattr(prefs, "use_blender_python_for_harness", True)
+        tools_on_demand = getattr(prefs, "external_agent_tools_on_demand", True)
         only_ours = getattr(prefs, "external_agent_only_coworker_tools", True)
         env = acp_presets.launch_env(preset, only_coworker_tools=only_ours)
         engine.only_coworker_tools = only_ours
@@ -4280,6 +4277,21 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
 
         def work() -> None:
             engine.login_hint = preset.login_hint
+            # #424: the agent app starts our MCP server, so its vendor deps come first -- the
+            # same check (and first-start install) as Local's start, here off the main thread.
+            try:
+                entry, problem = agent_controller.external_agent_server_entry(
+                    blender_host=host, blender_port=bridge_port, use_blender_python=use_blender_python)
+            except Exception as ex:  # pylint: disable=broad-exception-caught
+                entry, problem = None, "Coworker's MCP server isn't ready -- {:s}".format(str(ex))
+            if entry is None:
+                engine.connecting = False
+                engine.status = problem
+                engine.on_change and engine.on_change()
+                return
+            if tools_on_demand:
+                # Engine 7: the server lists the basic tools; load_tools adds the rest.
+                entry["env"] = dict(entry.get("env") or {}, BFACW_TOOLS_ON_DEMAND="1")
             found = acp_presets.detect(preset)
             engine.connecting = False
             if not found.ready:

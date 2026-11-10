@@ -1538,7 +1538,7 @@ class TestInternalCodeMainThreadMarker(unittest.TestCase):
         self.assertIn("# blmcp-toolcode-skip-preflight", code)
 
     def test_cleanup_code_has_toolcode_marker(self):
-        code = _build_cleanup_code(
+        code, data = _build_cleanup_code(
             types.SimpleNamespace(
                 object_names={"Torus"}, mesh_names=set(),
                 material_names=set(), light_names=set(),
@@ -1550,6 +1550,57 @@ class TestInternalCodeMainThreadMarker(unittest.TestCase):
         )
         self.assertIn("# blmcp-toolcode-skip-preflight", code)
         self.assertIn("bpy.data.objects.remove", code)
+        # #414: the names are data, never pasted into the code.
+        self.assertEqual(data, {"objects": ["Torus"]})
+        self.assertNotIn("Torus", code)
+
+    def test_cleanup_and_restore_run_odd_names_as_data(self):
+        """#414: names that look like risky steps or carry quotes / newlines are
+        removed and restored by name, and never appear in the code."""
+        odd = ["wm.save_mainfile", "it's \"quoted\"\nnext", "os.remove('x')"]
+        fields = ("object_names mesh_names material_names light_names "
+                  "camera_names collection_names curve_names "
+                  "grease_pencil_names armature_names node_group_names "
+                  "image_names text_names").split()
+        diff = types.SimpleNamespace(**{f: set() for f in fields})
+        diff.object_names = set(odd)
+        diff.mesh_names = {odd[0]}
+
+        class _Seq(dict):
+            def remove(self, item):
+                del self[next(k for k, v in self.items() if v is item)]
+
+        class _Obj:
+            def __init__(self):
+                self.selected = False
+
+            def select_set(self, state):
+                self.selected = bool(state)
+
+        objects = _Seq({n: _Obj() for n in odd + ["Keep"]})
+        meshes = _Seq({odd[0]: object()})
+        bpy = types.SimpleNamespace(data=types.SimpleNamespace(objects=objects, meshes=meshes),
+                                    context=types.SimpleNamespace(
+                                        view_layer=types.SimpleNamespace(
+                                            objects=types.SimpleNamespace(active=None))))
+
+        def run(call):
+            code, data = call
+            for name in odd:
+                self.assertNotIn(name, code)
+            ns = {"bpy": bpy, "data": json.loads(json.dumps(data))}
+            exec(code.replace("import bpy\n", ""), ns)  # noqa: S102 (test-controlled code)
+            return ns["result"]
+
+        cleaned = run(_build_cleanup_code(diff))
+        self.assertEqual(sorted(cleaned["cleaned"]), sorted(odd + [odd[0]]))
+        self.assertEqual(list(objects), ["Keep"])
+        self.assertEqual(list(meshes), [])
+        objects.update({n: _Obj() for n in odd})
+        restored = run(_build_scene_restore_code(odd[1], set(odd)))
+        self.assertTrue(restored["restored_active"])
+        self.assertEqual(restored["restored_selection"], 3)
+        self.assertIs(bpy.context.view_layer.objects.active, objects[odd[1]])
 
     def test_cleanup_code_empty_diff(self):
         """Empty diff produces no-op code but still carries the marker."""
@@ -1561,8 +1612,9 @@ class TestInternalCodeMainThreadMarker(unittest.TestCase):
                 "image_names text_names".split()
             )
         })
-        code = _build_cleanup_code(empty)
+        code, data = _build_cleanup_code(empty)
         self.assertIn("# blmcp-toolcode-skip-preflight", code)
+        self.assertEqual(data, {})
 
 
 class TestCoWorkForeignEditDetection(unittest.TestCase):
@@ -1640,18 +1692,19 @@ class TestCoWorkForeignEditDetection(unittest.TestCase):
         self.assertEqual(_detect_foreign_edit(None, None), "")
 
     def test_restore_code_sets_active_and_selection(self):
-        code = _build_scene_restore_code("Cube", {"Cube", "Sphere"})
+        code, data = _build_scene_restore_code("Cube", {"Cube", "Sphere"})
         self.assertIn("# blmcp-toolcode-skip-preflight", code)
-        self.assertIn("bpy.data.objects.get('Cube')", code)
+        self.assertIn("bpy.data.objects.get(data['active'])", code)
         self.assertIn("view_layer.objects.active = _act_obj", code)
         self.assertIn("select_set(True)", code)
-        self.assertIn("'Sphere'", code)
+        # #414: the names are data, never pasted into the code.
+        self.assertEqual(data, {"active": "Cube", "selected": ["Cube", "Sphere"]})
+        self.assertNotIn("Sphere", code)
 
     def test_restore_code_without_fingerprint_is_noop(self):
-        code = _build_scene_restore_code("", set())
+        code, data = _build_scene_restore_code("", set())
         self.assertIn("# blmcp-toolcode-skip-preflight", code)
-        self.assertNotIn("select_set", code)
-        self.assertNotIn("_act_obj", code)
+        self.assertEqual(data, {}, "nothing to restore: the loop doesn't send it")
 
     def test_scene_snapshot_code_shape(self):
         code = _scene_snapshot_code()

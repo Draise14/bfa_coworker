@@ -570,6 +570,11 @@ class _TurnLoopTestBase(unittest.TestCase):
         self.ac._session_turn_count = 0
         self.ac._system_prompt_cache.clear() if hasattr(
             self.ac, "_system_prompt_cache") else None
+        # #414: the loop's own snapshot / undo / cleanup / restore / lock code goes
+        # straight to the bridge (internal_route), which isn't running here: the
+        # stub answers it instead, as a tools/call carrying the code and its data.
+        self.ac._call_internal = lambda code, data=None: self.ac._call_mcp_tool_sync(
+            "coworker_internal", {"code": code, "data": data or {}}, self.port)
 
     def tearDown(self):
         self.server.shutdown()
@@ -1857,8 +1862,13 @@ class TestCoWorkUserEditAndScopedUndo(_TurnLoopTestBase):
                         "capture must precede the undo (a push in between "
                         "would make the undo pop our own bookmark)")
         self.assertTrue(restores, "pre-step fingerprint must be restored")
-        self.assertIn("bpy.data.objects.get('Cube')", "\n".join(
-            codes[i] for i in restores))
+        with self.server.lock:
+            internal = [(c.get("params") or {}) for c in self.server.mcp_requests
+                        if c.get("method") == "tools/call"]
+        restore_calls = [p for p in internal if "restored_active" in str(p.get("arguments", {}).get("code"))]
+        self.assertIn("Cube", json.dumps([p["arguments"].get("data") for p in restore_calls]),
+                      "the names go as data (#414)")
+        self.assertTrue(all(p.get("name") == "coworker_internal" for p in restore_calls))
         # The turn continued past the failure (sphere was created).
         self.assertIn("Sphere", self.server.scene_objects)
 

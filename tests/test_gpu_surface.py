@@ -15,6 +15,9 @@ as it sits in a region, with a fixed-width stand-in font.
    from draw; toggle and jump are done by the surface itself.
 4. Attachments: user-message markers become thumbnails (or a name chip when
    the image isn't loaded); thumbnail sizes S / M / L.
+5. The job row (#423): while ``long_jobs`` has a running render or bake, the
+   compact and the full chat draw it under the newest turn (label, time,
+   progress bar, where to stop it); none once the job ended.
 
 Run with::
 
@@ -43,6 +46,7 @@ def _load():
 
 
 sf, lay, st, ib, cv = _load()
+long_jobs = importlib.import_module("bfacw_surface_pkg.long_jobs")
 RECT = lay.Rect(0, 0, 500, 600)
 
 
@@ -613,3 +617,64 @@ class TestPolish(unittest.TestCase):
         surface.drop_hover = True
         canvas, _ = _draw(surface, top=sf.TopBar())
         self.assertIn("Drop to attach the image", [c.text for c in canvas.commands if c.kind == "text"])
+
+
+class TestJobRow(unittest.TestCase):
+    """#423: the Classic chat's job row, in the GPU chat (Compact sidebar and the Coworker editor)."""
+
+    def setUp(self):
+        long_jobs.clear()
+        self.addCleanup(long_jobs.clear)
+
+    @staticmethod
+    def _texts(canvas):
+        return " ".join(c.text for c in canvas.commands if c.kind == "text")
+
+    def test_row_while_a_bake_runs_and_none_after(self):
+        result = [None]
+        long_jobs.start("OBJECT_BAKE", "Bake combined: BakeMonkey", lambda: result[0])
+        for compact in (True, False):
+            surface = sf.ChatSurface(compact=compact)
+            canvas, _ = _draw(surface)
+            texts = self._texts(canvas)
+            self.assertIn("BakeMonkey", texts)
+            self.assertIn("Baking,", texts)
+            self.assertIn("Esc,", texts)                                  # where its X is (#419: no cancel yet)
+            icons = [c.text for c in canvas.commands if c.kind == "icon"]
+            self.assertIn("TEXTURE", icons)
+            self.assertIn("STATUSBAR", icons)
+            row = next(r for r, w in canvas.hit_areas if w == "jobs")
+            self.assertTrue(sf.tip_for("jobs"))
+            # Under the newest turn: below its reply, above the input.
+            reply = next(c for c in canvas.commands if c.kind == "text" and c.text == "Done.")
+            self.assertLess(row.top, reply.rect.y)
+            self.assertGreater(row.y, surface.box.rect.top)
+        result[0] = {"status": "ok"}
+        long_jobs.poll()
+        canvas, _ = _draw(sf.ChatSurface(compact=True))
+        self.assertNotIn("BakeMonkey", self._texts(canvas))
+        self.assertFalse(any(w == "jobs" for _r, w in canvas.hit_areas))
+
+    def test_render_progress_bar(self):
+        long_jobs.start("RENDER", "Render big.png", lambda: None)
+        long_jobs.note_progress("RENDER", "Sample 32/128")
+        style = st.Style()
+        canvas, _ = _draw(sf.ChatSurface())
+        self.assertIn("Rendering 25%", self._texts(canvas))
+        fill = next(c for c in canvas.commands if c.kind == "rect" and c.color == style.progress.item)
+        track = next(c for c in canvas.commands if c.kind == "rect" and c.color == style.progress.inner
+                     and c.rect.x == fill.rect.x and c.rect.y == fill.rect.y)
+        self.assertAlmostEqual(fill.rect.w, track.rect.w * 0.25, places=3)
+
+    def test_row_while_the_turn_runs(self):
+        long_jobs.start("OBJECT_BAKE", "Bake ao: Cube", lambda: None)
+        live = type("Live", (), {"is_thinking": True, "streaming_text": "", "reasoning_text": "",
+                                 "turn_phase": "", "thinking_dots": 0, "thinking_start_time": 0.0})()
+        hist = [{"role": "user", "content": "Bake it", "turn_start": True},
+                {"role": "tool", "name": "bake_textures", "content": '{"job_id": "job-1"}'}]
+        canvas, _ = _draw(sf.ChatSurface(compact=True), history=hist, live=live)
+        self.assertIn("Cube", self._texts(canvas))
+        # Clear of the floating Workshop button at the bottom right, which would cover the hint.
+        row = next(r for r, w in canvas.hit_areas if w == "jobs")
+        fold = next(r for r, w in canvas.hit_areas if w == "fold_workshop")
+        self.assertGreaterEqual(row.y, fold.top)

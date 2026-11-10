@@ -172,7 +172,7 @@ def _harness_notice(prefs: Any) -> Notice:
     )
     from . import activity
     rows = tuple(
-        ({"ok": "CHECKMARK", "error": "ERROR"}.get(e.status, "TIME"),
+        ({"ok": "CHECKMARK", "error": "ERROR", "cancelled": "CANCEL"}.get(e.status, "TIME"),
          "{:s}  {:s}".format(e.tool, e.args),
          "{:s} ({:.1f} s, {:s})".format(e.preview or e.status, e.seconds,
                                         time.strftime("%H:%M:%S", time.localtime(e.when))))

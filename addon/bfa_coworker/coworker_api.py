@@ -278,8 +278,11 @@ def jobs_tick() -> bool:
     """The bridge's timer: check the jobs, and redraw the chat (its job row) when one
     ends or about once a second while one runs.  True when a job ended."""
     import time
-    from . import long_jobs
+    from . import activity, long_jobs
     ended = long_jobs.poll()
+    if activity.following():
+        # #423: a call that started a job shows how the job ended (also one a file load ended).
+        activity.follow_jobs(long_jobs.status)
     now = time.monotonic()
     if ended or (long_jobs.has_running() and now - _jobs_drawn[0] >= 1.0):
         _jobs_drawn[0] = now

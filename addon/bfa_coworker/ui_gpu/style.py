@@ -84,6 +84,8 @@ _DARK_FIELD = WidgetColors((0.12, 0.12, 0.12, 1.0), (0.20, 0.20, 0.20, 1.0), (0.
                            (0.85, 0.85, 0.85, 1.0), (1.0, 1.0, 1.0, 1.0), 0.2)
 _DARK_SCROLL = WidgetColors((0.31, 0.31, 0.31, 0.5), (0.39, 0.39, 0.39, 0.5), (0.20, 0.20, 0.20, 1.0),
                             (0.90, 0.90, 0.90, 1.0), (1.0, 1.0, 1.0, 1.0), 0.5, (0.50, 0.50, 0.50, 1.0))
+_DARK_PROGRESS = WidgetColors((0.20, 0.20, 0.20, 1.0), (0.30, 0.30, 0.30, 1.0), (0.10, 0.10, 0.10, 1.0),
+                              (0.90, 0.90, 0.90, 1.0), (1.0, 1.0, 1.0, 1.0), 0.5, (0.28, 0.45, 0.70, 1.0))
 _DARK_TOOLTIP = WidgetColors((0.10, 0.10, 0.10, 1.0), (0.20, 0.20, 0.20, 1.0), (0.0, 0.0, 0.0, 1.0),
                              (0.90, 0.90, 0.90, 1.0), (1.0, 1.0, 1.0, 1.0), 0.2)
 
@@ -103,6 +105,7 @@ class Style:
     text_field: WidgetColors = _DARK_FIELD        # input field, code blocks
     tooltip: WidgetColors = _DARK_TOOLTIP
     scroll: WidgetColors = _DARK_SCROLL           # scrollbars (wcol_scroll: inner = track, item = handle)
+    progress: WidgetColors = _DARK_PROGRESS       # job bars (wcol_progress: inner = track, item = fill)
     cursor: RGBA = (0.27, 0.6, 1.0, 1.0)          # text cursor
     link: RGBA = (0.4, 0.7, 1.0, 1.0)             # hyperlinks
     # Keyframe colours (extreme, moving hold, jitter, breakdown) and their border:
@@ -192,6 +195,7 @@ def style_from_preferences(prefs: Any, zoom: float = 1.0) -> Style:
         text_field=WidgetColors.read(getattr(ui, "wcol_text", None), base.text_field),
         tooltip=WidgetColors.read(getattr(ui, "wcol_tooltip", None), base.tooltip),
         scroll=WidgetColors.read(getattr(ui, "wcol_scroll", None), base.scroll),
+        progress=WidgetColors.read(getattr(ui, "wcol_progress", None), base.progress),
         cursor=_rgba(getattr(ui, "widget_text_cursor", None), base.cursor),
         link=_rgba(getattr(ui, "link", None), base.link),
         keyframes=keyframes,  # type: ignore[arg-type]

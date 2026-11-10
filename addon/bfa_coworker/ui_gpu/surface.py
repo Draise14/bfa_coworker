@@ -82,6 +82,9 @@ TIPS: dict[str, str] = {
     "plan_card:start": "Carry out the plan now, step by step (Coworker mode, the engine that is on)",
     "plan_card:refine": "Hide this card and type what should change in the plan",
     "mcat:": "Show every kind",
+    "jobs": ("Blender runs this render or bake in the background, and Coworker waits for it. To stop it, "
+             "press Esc in the window it started in, or click the X on the job bar in the status bar; "
+             "Coworker can't stop it from here yet"),
 }
 TIP_PREFIXES: tuple[tuple[str, str], ...] = (
     ("copymsg:", "Copy the reply"),

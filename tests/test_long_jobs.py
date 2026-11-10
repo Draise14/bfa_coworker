@@ -14,6 +14,10 @@ Tests for long jobs in the background (Tier 4, task "Tools 6", #309).
    ``_HANDOFF_AFTER`` answers with a job id and goes on as a job; other
    deferred replies (ask_user, approvals) are never handed off.
 4. ``get_job_status`` tool-code: answers at once, or waits with a checker.
+5. The activity view (#423): a deferred call's entry ends done / error when
+   its answer goes out (or the client hangs up); a call that started a job
+   (``bake_textures``, a handed-off render) stays "running" until the job
+   ends done, error or cancelled.
 
 No Blender needed.  Run with::
 
@@ -325,6 +329,116 @@ class TestBridgeHandoff(_JobsTest):
         self.deferred.poll()
         self.assertTrue(self.deferred.has_pending())
         self.assertFalse(jobs.has_running())
+
+
+class TestActivityEntriesFinish(_JobsTest):
+    """#423: long-job calls no longer stay "waiting for Blender" in the activity view."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.deferred = importlib.import_module(_pkg() + ".deferred_tool")
+        cls.activity = importlib.import_module(_pkg() + ".activity")
+        cls.api = importlib.import_module(_pkg() + ".coworker_api")
+
+    def setUp(self):
+        super().setUp()
+        self.activity.clear()
+        self.deferred._deferred_clients.clear()
+        self.server_end, self.client_end = socket.socketpair()
+        self.server_end.setblocking(False)
+        self.client_end.settimeout(2.0)
+
+    def tearDown(self):
+        self.deferred.close_all()
+        self.client_end.close()
+        self.activity.clear()
+        super().tearDown()
+
+    def _deferred_call(self, tool, check):
+        """What the bridge does with a deferred call: record it, then hand it to deferred_tool."""
+        entry = self.activity.record(tool, {"job_id": "x"}, {}, 0.01, deferred=True)
+        bridge_end, client_end = socket.socketpair()      # one connection per call
+        bridge_end.setblocking(False)
+        self.addCleanup(client_end.close)
+        self.deferred.add(bridge_end, check, True, "", "",
+                          on_answer=lambda response: self.activity.answered(entry, response))
+        return entry
+
+    def test_deferred_call_ends_as_done(self):
+        answer = [None]
+        entry = self._deferred_call("get_job_status", lambda: answer[0])
+        self.deferred.poll()
+        self.assertEqual(entry.status, "waiting")
+        answer[0] = {"status": "ok", "job_id": "job-1", "state": "done", "message": "Baked COMBINED into Bake"}
+        self.deferred.poll()
+        self.assertEqual(entry.status, "ok")                       # a status poll's answer is complete
+        self.assertIn("Baked COMBINED", entry.preview)
+        self.assertNotIn("waiting", self.activity.log_text().lower())
+
+    def test_deferred_error_and_hang_up(self):
+        entry = self._deferred_call("render_viewport_to_path", lambda: {"status": "error", "message": "No camera"})
+        self.deferred.poll()
+        self.assertEqual((entry.status, entry.preview), ("error", "No camera"))
+        bridge_end, client_end = socket.socketpair()
+        bridge_end.setblocking(False)
+        other = self.activity.record("get_job_status", {}, {}, 0.0, deferred=True)
+        self.deferred.add(bridge_end, lambda: None, True, "", "",
+                          on_answer=lambda response: self.activity.answered(other, response))
+        client_end.close()                                          # the client went away
+        self.deferred.poll()
+        self.assertEqual(other.status, "error")
+
+    def test_handed_off_render_follows_its_job(self):
+        result = [None]
+
+        def check_is_finished():
+            return result[0]
+        check_is_finished.job_kind = "RENDER"
+        check_is_finished.job_label = "Render big.png"
+        entry = self._deferred_call("render_viewport_to_path", check_is_finished)
+        self.deferred._deferred_clients[0].handoff_at = 0.0
+        self.deferred.poll()                                        # answered with a job id
+        self.assertEqual(entry.status, "running")
+        self.assertTrue(entry.job_id)
+        self.assertTrue(self.activity.following())
+        self.api.jobs_tick()
+        self.assertEqual(entry.status, "running")
+        result[0] = {"status": "ok", "filepath": "/tmp/big.png"}
+        self.api.jobs_tick()                                        # the bridge's timer
+        self.assertEqual(entry.status, "ok")
+        self.assertIn("big.png", entry.preview)
+        self.assertFalse(self.activity.following())
+
+    def test_step_that_asked_first_follows_its_bake(self):
+        # bake_textures asks first (risky_steps): the deferred answer carries the call's whole answer.
+        job_id = jobs.start("OBJECT_BAKE", "Bake combined: BakeMonkey", lambda: None)
+        inner = {"status": "ok", "result": {"status": "ok", "job_id": job_id, "message": "Baking in the background."}}
+        entry = self._deferred_call("bake_textures", lambda: inner)
+        self.deferred.poll()
+        self.assertEqual((entry.status, entry.job_id), ("running", job_id))
+        declined = self._deferred_call("bake_textures", lambda: {"status": "error", "message": "The user declined"})
+        self.deferred.poll()
+        self.assertEqual((declined.status, declined.preview), ("error", "The user declined"))
+
+    def test_bake_call_ends_when_its_job_ends(self):
+        # bake_textures answers at once with a job id (not deferred).
+        job_id = jobs.start("OBJECT_BAKE", "Bake combined: Monkey", lambda: None)
+        bake = self.activity.record("bake_textures", {"bake_type": "COMBINED"}, {"status": "ok", "result": {
+            "status": "ok", "job_id": job_id, "message": "Baking in the background."}}, 0.3)
+        poll = self.activity.record("get_job_status", {"job_id": job_id}, {"status": "ok", "result": {
+            "status": "ok", "job_id": job_id, "state": "running"}}, 25.0)
+        self.assertEqual((bake.status, poll.status), ("running", "ok"))
+        jobs.cancelled("OBJECT_BAKE")                               # Esc in Blender
+        self.api.jobs_tick()
+        self.assertEqual(bake.status, "cancelled")
+        self.assertIn("Cancelled", bake.preview)
+        # A file load ends jobs outside poll(); the entry still ends.
+        job2 = jobs.start("OBJECT_BAKE", "Bake ao: Monkey", lambda: None)
+        bake2 = self.activity.record("bake_textures", {}, {"status": "ok", "result": {"status": "ok", "job_id": job2}},
+                                     0.1)
+        jobs.file_loading()
+        self.api.jobs_tick()
+        self.assertEqual(bake2.status, "cancelled")
 
 
 class TestGetJobStatusToolcode(_JobsTest):

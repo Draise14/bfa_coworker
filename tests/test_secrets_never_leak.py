@@ -137,6 +137,22 @@ class TestRedact(_Case):
             self.assertEqual(log.redact("env-token-0123456789abc"), "***")
         log.set_secret("unused", "")
 
+    def test_a_key_cut_at_the_end_of_a_line(self):
+        """#346 Remote check: a print cut the message one character before the end of a
+        token, and the log kept 29 of its 30 characters."""
+        for cut in (GEN_KEY[:-1], HF_TOKEN[:-3], SESSION_TOKEN[:9]):
+            for tail in ("", "...", "…"):
+                with self.subTest(cut=cut, tail=tail):
+                    out = log.redact("HF: " + cut + tail + "\nnext line")
+                    self.assertEqual(out, "HF: ***" + tail + "\nnext line")
+        self.assertEqual(log.redact("HF: " + GEN_KEY[:-1]), "HF: ***")
+
+    def test_a_cut_key_needs_enough_of_it_left(self):
+        short = GEN_KEY[:7]                     # below the 8 characters a secret needs
+        self.assertEqual(log.redact("x " + short), "x " + short)
+        self.assertEqual(log.redact(GEN_KEY[:12] + " and more"), GEN_KEY[:12] + " and more",
+                         "only at the end of a line, where a cut happens")
+
     def test_twice_is_the_same(self):
         once = log.redact(AUTH_LINE + " " + API_KEY)
         self.assertEqual(log.redact(once), once)

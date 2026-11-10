@@ -17,6 +17,12 @@ token never end up in a log, an export or a Copy.
 4. Files that hold a secret are owner-only (POSIX): the harness ``install.json``
    and the settings backup, which keeps the keys on purpose in a separate
    ``secrets`` field.
+5. What is saved to disk (#418): the chat files (``default_*.json``,
+   ``chats/<id>.json``, the chat list), their session memory
+   (``chats/<id>.memory.json``) and ``archive.jsonl`` have the keys as
+   ``***``; the chat on screen keeps them.  An old file with a plain key opens.
+6. The error shown in the chat (``AgentState.error``) is redacted wherever it
+   is set, also for a provider 400 that quotes the key back (#418).
 
 Run with::
 
@@ -379,6 +385,164 @@ class TestFilesThatHoldASecret(unittest.TestCase):
             st.apply(new, {"remote_api_key": API_KEY})
         self.assertIn("remote_api_key", out.call_args[0][0])
         self.assertNotIn(API_KEY, out.call_args[0][0])
+
+
+class _LLM400(BaseHTTPRequestHandler):
+    """A provider that refuses the key and quotes it back (#418)."""
+
+    def do_POST(self):  # noqa: N802 (stdlib name)
+        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        data = json.dumps({"error": {"message": "Invalid API key. Sent: " + self.headers.get("Authorization", "")
+                                     + " (also tried " + AUTH_LINE + ")"}}).encode()
+        self.send_response(400)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, *_args):
+        pass
+
+
+class TestTheErrorInTheChat(_Case):
+    """``AgentState.error`` is shown in the chat as it is: it holds no key (#418)."""
+
+    def setUp(self):
+        _hand_over()
+        self.addCleanup(_clear)
+
+    def test_any_assignment_is_redacted(self):
+        state = ac.AgentState()
+        state.error = "LLM request failed: " + AUTH_LINE + " gen " + GEN_KEY
+        state.error_full = "HTTP 400: key " + API_KEY + " token " + SESSION_TOKEN
+        self.assertNoSecret(state.error + state.error_full, "the chat's error")
+        self.assertEqual(state.error, "LLM request failed: Authorization: Bearer *** gen ***")
+        self.assertNoSecret(ac.AgentState(error="hf " + HF_TOKEN).error, "a new state's error")
+        state.error = ""
+        self.assertEqual(state.error, "")
+
+    def test_a_provider_400_that_echoes_the_key(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _LLM400)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        url = "http://127.0.0.1:{:d}/v1/chat/completions".format(server.server_address[1])
+        state = ac.AgentState()
+        lt.bind(state, threading.Event())
+        self.addCleanup(lt.bind, ac._agent_state, ac._stop_event)
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = lt.openai_chat_completions(url, [{"role": "user", "content": "hi"}], [],
+                                                api_key=API_KEY, model="m")
+        self.assertIsNone(result)
+        self.assertIn("Invalid API key", state.error)
+        self.assertIn("Bearer ***", state.error)
+        self.assertNoSecret(state.error + state.error_full, "the chat's error after a 400")
+
+
+def _ui_chat_functions(names, ns):
+    """The named top-level functions of ui_chat.py, run in *ns* (no Blender needed)."""
+    src = (_ADDON / "ui_chat.py").read_text(encoding="utf-8")
+    for name in names:
+        start = src.index("\ndef {:s}(".format(name)) + 1
+        end = src.index("\n\n\n", start)
+        exec(compile(src[start:end], "ui_chat.py", "exec"), ns)      # noqa: S102
+    return ns
+
+
+class TestSavedChatsHaveNoKey(_Case):
+    """Saved chats, their session memory, the chat list and the archive: keys as ``***`` (#418)."""
+
+    def setUp(self):
+        _hand_over()
+        self.addCleanup(_clear)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.scripts = Path(tmp.name)
+        self.sm = _import("session_memory")
+        self.history = [
+            {"role": "user", "content": "use my key " + API_KEY + " please"},
+            {"role": "assistant", "content": "ok", "tool_calls": [{"function": {
+                "name": "execute_blender_code",
+                "arguments": json.dumps({"code": "hf = '{:s}'".format(HF_TOKEN)})}}]},
+            {"role": "tool", "content": [{"type": "text", "text": "gen " + GEN_KEY + " " + AUTH_LINE}]},
+        ]
+        fake_ac = types.SimpleNamespace(_agent_state=types.SimpleNamespace(conversation_history=self.history),
+                                        thread_state=lambda thread: thread.state,
+                                        _sanitize_loaded_history=lambda h: h)
+        bpy = types.SimpleNamespace(utils=types.SimpleNamespace(user_resource=lambda _kind: str(self.scripts)),
+                                    data=types.SimpleNamespace(filepath=""))
+        self.ns = _ui_chat_functions(
+            ("_chat_history_dir", "_blend_key", "_chat_index", "_current_chat_id", "_chat_history_path",
+             "_load_chat_history", "_session_memory_archive_path", "_session_memory_state_path",
+             "_save_session_memory_state", "_save_chat_history", "_save_thread_chat", "_prune_old_sessions"),
+            {"__name__": _PKG + ".ui_chat", "__package__": _PKG, "json": json, "Path": Path, "bpy": bpy,
+             "agent_controller": fake_ac, "_log": log, "_CHAT": {"id": "", "blend": ""},
+             "_history_save_lock": threading.Lock(), "_chat_engine_label": lambda: "Local",
+             "_operating_mode": lambda: "LOCAL_LLM"})
+        # The shared session memory: what the model was told, and a checkpoint of the chat.
+        store = self.sm.store
+        saved = store.to_payload()
+        self.addCleanup(store.load_payload, saved)
+        self.addCleanup(setattr, store, "archive_path", store.archive_path)
+        store.load_payload({"memory_block": "the key is " + API_KEY,
+                            "checkpoints": [{"turn": 1, "history": list(self.history)}],
+                            "retired_history": [{"role": "user", "content": "token " + SESSION_TOKEN}]})
+
+    def _files(self):
+        folder = self.scripts / "bfa_coworker_chat_history"
+        return {p.relative_to(folder).as_posix(): p.read_text(encoding="utf-8")
+                for p in folder.rglob("*") if p.is_file()}
+
+    def test_the_shared_chat_and_its_memory(self):
+        self.ns["_save_chat_history"]()
+        files = self._files()
+        names = sorted(files)
+        self.assertTrue(any(n.startswith("default_") for n in names), names)
+        self.assertTrue(any(n.startswith("chats/") and n.endswith(".memory.json") for n in names), names)
+        self.assertIn("chats/index.json", names)
+        for name, text in files.items():
+            self.assertNoSecret(text, name)
+        chat = json.loads(files["chats/{:s}.json".format(self.ns["_CHAT"]["id"])])
+        self.assertEqual(chat[0]["content"], "use my key *** please")
+        self.assertEqual(chat[2]["content"][0]["text"], "gen *** Authorization: Bearer ***")
+        # The chat on screen keeps what you typed.
+        self.assertIn(API_KEY, self.history[0]["content"])
+        self.assertIn(API_KEY, self.sm.store.memory_block)
+
+    def test_an_editor_threads_chat(self):
+        store = self.sm.CheckpointStore()
+        store.load_payload({"memory_block": "hf " + HF_TOKEN})
+        thread = types.SimpleNamespace(is_default=False, chat_id="", editor="VIEW_3D", store=store,
+                                       state=types.SimpleNamespace(conversation_history=self.history))
+        self.ns["_save_thread_chat"](thread)
+        files = self._files()
+        self.assertIn("chats/{:s}.json".format(thread.chat_id), files)
+        self.assertIn("chats/{:s}.memory.json".format(thread.chat_id), files)
+        for name, text in files.items():
+            self.assertNoSecret(text, name)
+        self.assertIn(HF_TOKEN, store.memory_block)
+
+    def test_an_old_chat_with_a_plain_key_still_opens(self):
+        path = self.ns["_chat_history_path"]()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self.history), encoding="utf-8")
+        self.assertEqual(self.ns["_load_chat_history"](), self.history)
+        # ...and the next save writes it with ***.
+        self.ns["_save_chat_history"]()
+        self.assertNoSecret(path.read_text(encoding="utf-8"), "the old chat, saved again")
+
+    def test_the_archive_of_retired_turns(self):
+        store = self.sm.CheckpointStore()
+        store.archive_path = self.scripts / "archive.jsonl"
+        self.assertGreater(store.append_archive(list(self.history)), 0)
+        text = store.archive_path.read_text(encoding="utf-8")
+        self.assertNoSecret(text, "archive.jsonl")
+        self.assertEqual(len([json.loads(line) for line in text.splitlines()]), 3)
+
+    def test_redact_data_copies(self):
+        data = {"a": [API_KEY, {"b": (HF_TOKEN, 3)}], "n": None, "x": 1.5}
+        self.assertEqual(log.redact_data(data), {"a": ["***", {"b": ["***", 3]}], "n": None, "x": 1.5})
+        self.assertEqual(data["a"][0], API_KEY)
 
 
 class _Prefs:

@@ -22,7 +22,8 @@ The log lives at ``~/.cache/bfa_coworker/logs/coworker.log`` and rotates to
 Secrets never reach it (#346): :func:`redact` replaces your API keys, the
 Hugging Face token and the session token (handed in with :func:`set_secret`)
 and anything that looks like ``Authorization: Bearer ...`` with ``***``.  The
-console, the log file, session exports and Copy buttons all go through it.
+console, the log file, session exports and Copy buttons all go through it, and
+:func:`redact_data` does the same for saved chats and session memory (#418).
 """
 
 __all__ = (
@@ -33,6 +34,7 @@ __all__ = (
     "set_suppress_console",
     "set_secret",
     "redact",
+    "redact_data",
 )
 
 import os
@@ -40,6 +42,7 @@ import re
 import sys
 import threading
 from pathlib import Path
+from typing import Any
 
 _lock = threading.Lock()
 _LOG_MAX_BYTES = 1_000_000  # ~1 MB before rotation.
@@ -190,6 +193,18 @@ def redact(text: str) -> str:
     for pattern in _SECRET_PATTERNS:
         text = pattern.sub(r"\g<1>" + REDACTED, text)
     return text
+
+
+def redact_data(value: Any) -> Any:
+    """A copy of *value* (JSON-like: dicts, lists, strings) with :func:`redact` applied
+    to every string in it.  For what is written to disk: chats and session memory (#418)."""
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        return {k: redact_data(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact_data(v) for v in value]
+    return value
 
 
 _rebuild_secrets()

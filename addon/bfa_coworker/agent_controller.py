@@ -1964,6 +1964,14 @@ class AgentState:
     # -- Shutdown tracking ------------------------------------------
     _shutting_down: bool = False  # True during graceful shutdown.
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        # The error is shown in the chat: a provider reply that echoes your key
+        # shows *** there, wherever it is set from (#418).
+        if name in ("error", "error_full") and value and isinstance(value, str):
+            from . import log as _log
+            value = _log.redact(value)
+        object.__setattr__(self, name, value)
+
 
 _agent_state = AgentState()
 

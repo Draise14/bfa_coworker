@@ -337,7 +337,8 @@ def tab_modes(title_widths: list[float], shown: int, room: float, icon_w: float,
               tail_w: float) -> list[str]:
     """How each tab fits in *room* (UI units): ``"full"`` (icon + title), ``"icon"`` or
     ``"hidden"`` (reached through the strip's menu).  A titled tab costs its title's width
-    plus its close button (*icon_w*), an icon tab *icon_w*; *tail_w* is the + and the menu.
+    plus its icon (*icon_w*), an icon tab *icon_w*; *tail_w* is the tools to the right
+    (close, +, the menu) and the gap before them.
 
     All titles when they fit; else the shown tab keeps its title and the others are
     icons; then icons drop from the far end until it fits (never the shown one)."""

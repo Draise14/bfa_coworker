@@ -5142,13 +5142,25 @@ def tab_strip(context, units: float = 0.0):
         region = getattr(context, "region", None)
         scale = context.preferences.system.ui_scale if context.preferences else 1.0
         units = region.width / (20.0 * scale) if region is not None else 14.0
-    # Python can't measure text: about a third of a UI unit a character, plus the icon.
-    # Blender cuts a title that doesn't fit with "...", so in a narrow strip a title is
-    # given at most two fifths of it, leaving room for the other tabs' icons.
+    # Python can't measure text: about a third of a UI unit a character, plus the icon
+    # (tab_modes adds the icon's unit to a titled tab).  Blender cuts a title that doesn't
+    # fit with "...", so in a narrow strip a title is given at most two fifths of it,
+    # leaving room for the other tabs' icons.
     cap = max(3.0, 0.4 * units)
-    widths = [min(cap, 0.33 * len(label)) + 1.2 for label in labels]
+    widths = [min(cap, 0.33 * len(label)) + 0.2 for label in labels]
     shown_i = tabs.index(shown) if shown in tabs else 0
-    return shown, tabs, labels, threads.tab_modes(widths, shown_i, units, icon_w=1.0, tail_w=2.0)
+    return shown, tabs, labels, threads.tab_modes(widths, shown_i, units, icon_w=1.0,
+                                                  tail_w=_TAB_TOOLS_W + 0.5)
+
+
+_TAB_TOOLS_W = 3.0          # the tools to the right of the tabs: close, new, the tab menu
+
+
+def new_tab_tip(editor_name: str) -> str:
+    """The + tooltip: a new tab works with the context of the editor it's made in."""
+    if editor_name:
+        return "New chat in a new tab, using this {:s}'s context".format(editor_name)
+    return "New chat in a new tab, for All editors (not tied to one editor's context)"
 
 
 def draw_chat_tabs(layout, context, units: float = 0.0) -> None:
@@ -5156,21 +5168,25 @@ def draw_chat_tabs(layout, context, units: float = 0.0) -> None:
     from . import threads
     reg = agent_controller.THREADS
     shown, tabs, labels, modes = tab_strip(context, units)
-    row = layout.row(align=True)
+    row = layout.row()
+    strip = row.row(align=True)             # the tabs, left: they share what's left of the row
     for thread, label, mode in zip(tabs, labels, modes):
         if mode == "hidden":
             continue
         icon, alert = _tab_icon(thread)
-        cell = row.row(align=True)
+        cell = strip.row(align=True)
         cell.alert = alert
         op = cell.operator("bfacw.tab_show", text=label if mode == "full" else "", icon=icon,
                            depress=thread is shown)
         op.thread_id = thread.id
-        if mode == "full" and not threads.close_refused(reg, thread, agent_controller.thread_state(thread).turn_active):
-            cell.operator("bfacw.tab_close", text="", icon='X').thread_id = thread.id
-    row.operator("bfacw.tab_new", text="", icon='ADD')
-    if any(m != "full" for m in modes):
-        row.menu("BFACW_MT_chat_tabs", text="", icon='DOWNARROW_HLT')
+    row.separator()
+    tools = row.row(align=True)             # fixed width: always the same three, to the right
+    tools.ui_units_x = _TAB_TOOLS_W
+    close = tools.row(align=True)           # closes the shown tab
+    close.enabled = not threads.close_refused(reg, shown, agent_controller.thread_state(shown).turn_active)
+    close.operator("bfacw.tab_close", text="", icon='X').thread_id = shown.id
+    tools.operator("bfacw.tab_new", text="", icon='ADD')
+    tools.menu("BFACW_MT_chat_tabs", text="", icon='DOWNARROW_HLT')
 
 
 class BFACW_MT_chat_tabs(bpy.types.Menu):  # type: ignore[misc]
@@ -5214,15 +5230,15 @@ class BFACW_OT_tab_show(Operator):  # type: ignore[misc]
 
 
 class BFACW_OT_tab_new(Operator):  # type: ignore[misc]
-    """New thread here"""
+    """New chat in a new tab, using this editor's context"""
     bl_idname = "bfacw.tab_new"
-    bl_label = "New Thread"
+    bl_label = "New Chat"
     bl_options = {'INTERNAL'}
 
     @classmethod
     def description(cls, context, _properties) -> str:
         name = _area_name(context) if context is not None else ""
-        return "New thread in this {:s}".format(name) if name else "New thread (All editors)"
+        return new_tab_tip(name)
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         thread = _editor_thread(_tab_kind(context))

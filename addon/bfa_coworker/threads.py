@@ -31,11 +31,13 @@ from __future__ import annotations
 
 __all__ = (
     "DEFAULT_ID",
+    "AttachmentSocket",
     "Thread",
     "ThreadRegistry",
     "current",
     "label",
     "pick",
+    "picker_rows",
     "short_name",
     "tag",
     "use",
@@ -80,6 +82,14 @@ class Thread:
     text_blocks: set[str] = field(default_factory=set)   # its Coworker_* text blocks
     unread: bool = False          # finished while nobody looked (Threads 2 draws the dot)
     created: float = field(default_factory=time.time)
+    # Threads 2b (#417): what the chat holds for it, kept when you switch threads.
+    draft: str = ""               # the half-typed message
+    attachment: str = ""          # the attached image's name (the socket shows the focused thread's)
+    attachment_once: bool = True  # send it with the next message only (off: pinned)
+    sticky: dict[str, Any] = field(default_factory=dict)    # the pinned image's re-link record
+    auto: dict[str, Any] = field(default_factory=lambda: {"run": None, "last": "", "user_stop": False,
+                                                          "err_before": ""})     # its Auto mode
+    plan_dismissed: str = ""      # the plan the Plan card was answered for
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -234,6 +244,66 @@ class ThreadRegistry:
             if best_at is None or at < best_at:
                 best, best_at = thread, at
         return best
+
+
+# -- Threads 2b (#417): the window's one image socket -------------------------------
+class AttachmentSocket:
+    """The window has one attached-image socket (a datablock pointer the panels edit), but
+    every thread has its own attachment.  The socket holds the image of the thread whose
+    chat was used last; every thread keeps its image's name, and its pinned-image record,
+    so switching back brings it again.
+
+    ``thread.attachment`` is kept current by :meth:`set_by` for every change of the
+    socket, so a switch never reads a socket that Blender emptied (undo) as "no image".
+    """
+
+    def __init__(self, focus: str = DEFAULT_ID) -> None:
+        self.focus = focus          # the thread whose image the socket holds
+        self.sticky: dict[str, Any] = {}    # the pinned-image record of that thread
+
+    def use(self, registry: "ThreadRegistry", thread: Thread, socket_image: str = "") -> str | None:
+        """*thread*'s chat is used: ``None`` when the socket already holds its image, else
+        the image name to put in the socket ("" = empty).  *socket_image* is what the socket
+        holds now (adopted by the thread in use if it has no record yet)."""
+        if thread.id == self.focus:
+            return None
+        old = registry.get(self.focus)
+        if old is not None:
+            if not old.attachment and socket_image:
+                old.attachment = socket_image
+            old.sticky = dict(self.sticky)
+        self.sticky = dict(thread.sticky)
+        self.focus = thread.id
+        return thread.attachment
+
+    def set_by(self, registry: "ThreadRegistry", thread: Thread, image: str) -> None:
+        """The socket was set from *thread*'s chat to *image* ("" = cleared): it is that
+        thread's now; the thread that held the socket keeps the image it had."""
+        if thread.id != self.focus:
+            old = registry.get(self.focus)
+            if old is not None:
+                old.sticky = dict(self.sticky)
+            self.sticky = dict(thread.sticky)
+            self.focus = thread.id
+        thread.attachment = image
+
+    def image_of(self, thread: Thread, socket_image: str) -> str:
+        """*thread*'s image name: the socket's for the thread in use, else its record."""
+        return socket_image if thread.id == self.focus else thread.attachment
+
+
+def picker_rows(registry: "ThreadRegistry", editor: str) -> list[tuple[str, str, str]]:
+    """The full-screen picker's rows ``(thread id, title, editor kind)``: All editors,
+    this *editor*'s thread (``"editor:<kind>"`` until it exists), then every other live
+    thread.  Picking one pins the area to it (#417)."""
+    rows = [(registry.default.id, "All editors", "")]
+    if editor:
+        mine = registry.for_editor(editor, create=False)
+        rows.append((mine.id if mine is not None else "editor:" + editor,
+                     "This editor ({:s})".format(short_name(editor)), editor))
+    ids = {r[0] for r in rows}
+    rows += [(t.id, t.title or short_name(t.editor) or t.id, t.editor) for t in registry.live() if t.id not in ids]
+    return rows
 
 
 # -- which thread a worker works for ------------------------------------------------

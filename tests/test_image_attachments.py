@@ -285,6 +285,13 @@ def _ui_constants(*names):
     return out
 
 
+# One thread whose chat holds the window's image socket (Threads 2b, #417).
+_SHOWN = types.SimpleNamespace(id="main")
+_THREAD_STUBS = {"_ui_thread": lambda _context=None: _SHOWN,
+                 "_socket": lambda: types.SimpleNamespace(focus="main"),
+                 "_socket_set_by": lambda _thread, _image: None}
+
+
 def _extract_ui_func(name, extra=None):
     """Exec one ui_chat module-level function with stubbed globals."""
     src = _ui_source()
@@ -297,7 +304,7 @@ def _extract_ui_func(name, extra=None):
         idx = src.find(pattern, start + 100)
         if 0 <= idx < end:
             end = idx
-    ns = {}
+    ns = dict(_THREAD_STUBS)
     if extra:
         ns.update(extra)
     exec(compile(src[start:end], _UI_PATH, "exec"), ns)  # noqa: S102
@@ -1317,7 +1324,7 @@ class TestStickyAttachment(unittest.TestCase):
             load_image_file=_load,
             image_to_data_uri=lambda img: "data:image/png;base64,QQ==",
         )
-        self.ns = {"bpy": self.bpy, "chat_attachments": self.ca}
+        self.ns = {"bpy": self.bpy, "chat_attachments": self.ca, **_THREAD_STUBS}
         exec(compile("# ---\n" + block, _UI_PATH, "exec"), self.ns)  # noqa: S102
         self.props = types.SimpleNamespace(chat_image=None, chat_image_send_once=False)
 

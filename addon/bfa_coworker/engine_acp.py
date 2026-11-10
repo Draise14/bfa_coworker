@@ -81,6 +81,7 @@ class AcpEngine:
         self.connecting = False
         self.login_hint = ""             # the preset's "how to log in", for login errors
         self.auto_approve = False        # Auto mode (#177): allow what the settings allow
+        self.auto_threads: set[str] = set()   # ...for these threads only (#417)
         self._turn_mode = "AGENT"        # the running turn's chat mode (Plan refuses changes)
         self.config_options: list[dict[str, Any]] = []     # the agent's own (mode, model...)
         self.preferred: dict[str, str] = {}                # your picks, re-applied per session
@@ -568,7 +569,7 @@ class AcpEngine:
                 or self.never_ask:
             answer("once")
             return
-        if self.auto_approve:           # Auto mode (#177): what your settings allow, without asking
+        if self.auto_approve or self.thread in self.auto_threads:     # Auto mode (#177, #417)
             answer("once")
             if self._turn_id:
                 self.bus.emit("status", self._turn_id, text="Auto mode allowed {:s}".format(tool or "a tool"))

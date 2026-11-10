@@ -59,6 +59,7 @@ _questions: dict[str, dict[str, Any]] = {}
 _MAX_CHOICES = 6
 # Auto mode (#177): while set, a question is answered with this at once.
 auto_answer = [""]
+auto_answers: dict[str, str] = {}     # Threads 2b (#417): per thread tag, while its Auto mode runs
 # The thread the bridge runs a call for (#357; "" = the default thread).  The bridge
 # runs one call at a time on the main thread, so one slot is enough.
 _thread = [""]
@@ -115,7 +116,8 @@ def post_question(question: str, choices: list[str] | None = None, allow_text: b
     with _lock:
         _questions[qid] = {"question": str(question).strip() or "?", "choices": choices,
                            "allow_text": bool(allow_text or not choices),
-                           "answer": auto_answer[0] or None, "source": source,
+                           "answer": auto_answer[0] or auto_answers.get(
+                               _thread[0] if thread is None else thread) or None, "source": source,
                            "thread": _thread[0] if thread is None else thread}
     _redraw()
     return qid

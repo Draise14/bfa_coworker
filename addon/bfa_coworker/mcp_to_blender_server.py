@@ -1323,7 +1323,7 @@ def _execute_code_from_request(
             _inner = _run()
             return _inner.response, _inner.check_fn
 
-        _repeat = loop_guard.bridge_wrap(loop_guard.BRIDGE, risky_steps.APPROVALS, risky_steps.auto_declines[0],
+        _repeat = loop_guard.bridge_wrap(loop_guard.BRIDGE, risky_steps.APPROVALS, risky_steps.auto_on(_thread),
                                          _tool, {"code": code}, str(request.get("session") or ""), _proceed,
                                          thread=_thread)
         if _repeat is not None:

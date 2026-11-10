@@ -299,16 +299,19 @@ def _surface_for_box(box: InputBox) -> ChatSurface | None:
     return next((s for s, _r in _SURFACES.values() if s.box is box), None)
 
 
-def _sync_box(surface: ChatSurface, props: Any, busy: bool, running: bool, harness: bool) -> None:
-    """Show the shared draft (chat_input) and the add-on state in the box."""
+def _sync_box(surface: ChatSurface, props: Any, busy: bool, running: bool, harness: bool,
+              thread: Any = None) -> None:
+    """Show the thread's draft and attachment (#417) and the add-on state in the box."""
+    from . import ui_chat
     box = surface.box
-    draft = getattr(props, "chat_input", "") or ""
+    draft = (thread.draft if thread is not None else getattr(props, "chat_input", "")) or ""
     if _SYNCED.get(id(surface)) != draft and draft != box.model.text:
         box.model.set_text(draft)
     _SYNCED[id(surface)] = box.model.text
-    image = getattr(props, "chat_image", None)
+    image = ui_chat._thread_image(thread) if thread is not None else getattr(props, "chat_image", None)
     box.attachment = image.name if image is not None else ""
-    surface.attachment_pinned = not getattr(props, "chat_image_send_once", True)
+    surface.attachment_pinned = not (thread.attachment_once if thread is not None
+                                     else getattr(props, "chat_image_send_once", True))
     surface.attachment_note = "Your client can look at it (get_attached_image)" if harness else ""
     from .shared import APPROVAL_MODE_ITEMS
     prefs = _prefs()
@@ -355,7 +358,7 @@ def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0) -> None:
     state = agent_controller.thread_state(thread)
     thread.unread = False                       # seen
     harness = _is_harness(prefs)
-    _sync_box(surface, props, state.is_thinking, agent_controller._agent_state.mcp_server_running, harness)
+    _sync_box(surface, props, state.is_thinking, agent_controller._agent_state.mcp_server_running, harness, thread)
     style = gpu_style.style_from_preferences(context.preferences, zoom=surface.zoom * zoom)
     canvas = gpu_layout.Canvas(style, render.measure, surface.interaction())
     surface.bounds = rect
@@ -712,6 +715,10 @@ def _router(context: Any, event: Any) -> tuple[ChatSurface, Any, Any] | None:
                 bounds = surface.bounds
                 inside = bounds is not None and bounds.contains(event.mouse_x - region.x, event.mouse_y - region.y)
                 if inside or surface.pressed is not None or surface.box.focused:
+                    if inside and getattr(event, "value", "") == 'PRESS':
+                        # This chat is used: its thread's image goes in the window's socket (#417).
+                        with bpy.context.temp_override(window=window, area=area, region=region):
+                            ui_chat._focus_thread(ui_chat._ui_thread(bpy.context))
                     return surface, area, region
                 return None
         return None

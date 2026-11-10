@@ -76,7 +76,7 @@ MessageQueue = _message_queue_class()
 def _state():
     return types.SimpleNamespace(conversation_history=[], turn_active=False, error="", ui_status="",
                                  streaming_text="", reasoning_text="", is_thinking=False,
-                                 thinking_start_time=0.0, turn_phase="", turn_usage={})
+                                 thinking_start_time=0.0, turn_phase="", turn_usage={}, session_usage={})
 
 
 def _registry():
@@ -211,6 +211,134 @@ class TestEditorThreads(unittest.TestCase):
         self.assertEqual(th.short_name("NODE_EDITOR"), "Node")
         self.assertEqual(th.short_name("SEQUENCE_EDITOR"), "Sequencer")
         self.assertEqual(th.short_name(""), "")
+
+
+class TestPerThreadChat(unittest.TestCase):
+    """Threads 2b (#417): draft, attachment, plan, usage and Auto mode per thread; with
+    editor focus off, the All editors (default) thread's."""
+
+    def setUp(self):
+        (sm,) = _load("session_memory")
+        self.reg = th.ThreadRegistry(make_state=_state, make_queue=MessageQueue,
+                                     make_store=sm.CheckpointStore, default_objects=True)
+        self.view = th.pick(self.reg, "VIEW_3D", focus=True)
+        self.node = th.pick(self.reg, "NODE_EDITOR", focus=True)
+
+    def _shown(self, editor, focus=True):
+        return th.pick(self.reg, editor, focus=focus)
+
+    def test_drafts_stay_with_their_thread(self):
+        self._shown("VIEW_3D").draft = "add a campfire"
+        self._shown("NODE_EDITOR").draft = "tidy the rock"
+        self.assertEqual(self._shown("VIEW_3D").draft, "add a campfire")
+        self.assertEqual(self._shown("NODE_EDITOR").draft, "tidy the rock")
+        self.assertEqual(self._shown("VIEW_3D", focus=False).draft, "", "focus off: All editors' own draft")
+        self._shown("NODE_EDITOR", focus=False).draft = "shared"
+        self.assertEqual(self.reg.default.draft, "shared")
+        self.assertEqual(self.node.draft, "tidy the rock")
+
+    def test_plans_and_usage_stay_with_their_thread(self):
+        self.view.store.goal.apply_update({"steps": ["make the ground", "add the fire"]})
+        self.node.state.session_usage = {"total_tokens": 900}
+        self.assertEqual(len(self._shown("VIEW_3D").store.goal.steps), 2)
+        self.assertEqual(self._shown("NODE_EDITOR").store.goal.steps, [])
+        self.assertEqual(self._shown("VIEW_3D", focus=False).store.goal.steps, [], "All editors has its own")
+        self.assertEqual(self._shown("NODE_EDITOR").state.session_usage, {"total_tokens": 900})
+        self.assertFalse(self._shown("VIEW_3D").state.session_usage)
+
+    def test_one_socket_every_thread_its_image(self):
+        sock = th.AttachmentSocket()
+        self.assertEqual(sock.focus, th.DEFAULT_ID)
+        self.assertEqual(sock.use(self.reg, self.view, ""), "", "the 3D chat in use: its (empty) image")
+        sock.set_by(self.reg, self.view, "ref.png")
+        self.assertEqual(sock.use(self.reg, self.node, "ref.png"), "", "the node chat has none")
+        sock.set_by(self.reg, self.node, "rock.png")
+        self.assertEqual(sock.use(self.reg, self.view, "rock.png"), "ref.png", "back to 3D: its own image")
+        self.assertIsNone(sock.use(self.reg, self.view, "ref.png"), "already there")
+        self.assertEqual(sock.image_of(self.node, "ref.png"), "rock.png")
+        self.assertEqual(sock.image_of(self.view, "ref.png"), "ref.png")
+        self.assertEqual(sock.use(self.reg, self.reg.default, "ref.png"), "", "All editors keeps its own (none)")
+
+    def test_set_from_another_chat_keeps_the_holders_image(self):
+        sock = th.AttachmentSocket()
+        sock.use(self.reg, self.view, "")
+        sock.set_by(self.reg, self.view, "ref.png")
+        sock.set_by(self.reg, self.node, "rock.png")       # picked in the node chat while 3D held the socket
+        self.assertEqual((self.view.attachment, self.node.attachment), ("ref.png", "rock.png"))
+        self.assertEqual(sock.focus, self.node.id)
+
+    def test_an_emptied_socket_is_not_read_as_no_image(self):
+        # Undo can empty the window's pointer: the thread's own record wins.
+        sock = th.AttachmentSocket()
+        sock.use(self.reg, self.view, "")
+        sock.set_by(self.reg, self.view, "ref.png")
+        sock.use(self.reg, self.node, "")
+        self.assertEqual(self.view.attachment, "ref.png")
+
+    def test_pinned_image_record_moves_with_the_thread(self):
+        sock = th.AttachmentSocket()
+        sock.use(self.reg, self.view, "")
+        sock.sticky = {"image_name": "ref.png"}
+        sock.use(self.reg, self.node, "ref.png")
+        self.assertEqual(sock.sticky, {})
+        self.assertEqual(self.view.sticky, {"image_name": "ref.png"})
+        sock.use(self.reg, self.view, "")
+        self.assertEqual(sock.sticky, {"image_name": "ref.png"})
+
+    def test_auto_mode_is_per_thread(self):
+        rs, = _load("risky_steps")
+        self.addCleanup(rs.auto_threads.clear)
+        self.assertIsNot(self.view.auto, self.node.auto)
+        self.view.auto["run"] = object()
+        self.assertIsNone(self.node.auto["run"])
+        rs.auto_threads.add(th.tag(self.view))
+        self.assertTrue(rs.auto_on(th.tag(self.view)))
+        self.assertFalse(rs.auto_on(th.tag(self.node)))
+        self.assertFalse(rs.auto_on(""), "All editors waits for you")
+        declined, _check = rs.wrap("bpy.ops.wm.save_mainfile()", True, "save the .blend file",
+                                   lambda c, s: None, thread=th.tag(self.view))
+        self.assertIn("Auto mode", declined["message"])
+
+    def test_auto_answers_only_its_threads_questions(self):
+        cw._questions.clear()
+        self.addCleanup(cw._questions.clear)
+        cw.auto_answers[th.tag(self.node)] = "best guess"
+        self.addCleanup(cw.auto_answers.clear)
+        mine = cw.post_question("Which?", ["A"], thread=th.tag(self.node))
+        theirs = cw.post_question("Which?", ["A"], thread="")
+        self.assertEqual(cw.question_state(mine)["answer"], "best guess")
+        self.assertFalse(cw.question_state(theirs)["answered"], "the default thread's question waits")
+
+
+class TestFullScreenPicker(unittest.TestCase):
+    """Threads 2b (#417): the picker of a maximized editor, and its pin."""
+
+    def setUp(self):
+        self.reg = _registry()
+
+    def test_rows(self):
+        rows = th.picker_rows(self.reg, "NODE_EDITOR")
+        self.assertEqual(rows[0], (th.DEFAULT_ID, "All editors", ""))
+        self.assertEqual(rows[1], ("editor:NODE_EDITOR", "This editor (Node)", "NODE_EDITOR"), "made when picked")
+        view = th.pick(self.reg, "VIEW_3D", focus=True)
+        node = th.pick(self.reg, "NODE_EDITOR", focus=True)
+        rows = th.picker_rows(self.reg, "NODE_EDITOR")
+        self.assertEqual([r[0] for r in rows], [th.DEFAULT_ID, node.id, view.id], "then the other threads")
+
+    def test_picking_pins_the_area(self):
+        pins = {}
+        view = th.pick(self.reg, "VIEW_3D", focus=True)
+        node = th.pick(self.reg, "NODE_EDITOR", focus=True)
+        key = 1234          # the area's space: kept through Ctrl+Space
+        pins[key] = view.id
+        self.assertIs(th.pick(self.reg, "NODE_EDITOR", pinned=pins[key], focus=True), view,
+                      "the Shader Editor now shows the 3D thread")
+        self.assertIs(th.pick(self.reg, "NODE_EDITOR", pinned=pins[key], focus=False), view, "focus off too")
+        pins[key] = th.DEFAULT_ID
+        self.assertIs(th.pick(self.reg, "NODE_EDITOR", pinned=pins[key], focus=True), self.reg.default,
+                      "All editors picked while focus is on")
+        pins.pop(key)
+        self.assertIs(th.pick(self.reg, "NODE_EDITOR", focus=True), node, "unpinned: the editor's own")
 
 
 class _FakeController:
@@ -544,6 +672,20 @@ class TestExternalAgentSessionPerThread(unittest.TestCase):
         sids = [sid for sid, _servers in self.client.sessions]
         self.assertEqual(len(sids), 3, "main, node, and the node's fresh one")
         self.assertEqual(self.client.prompts[-1][0], sids[2])
+
+    def test_auto_mode_allows_only_in_its_thread(self):
+        self.engine.ask_coworker_tools = True
+        self.engine.auto_threads = {"t2"}
+        answers = []
+        call = {"toolCall": {"title": "mcp__bfa-coworker__execute_blender_code"},
+                "options": [{"kind": "allow_once", "optionId": "o"}]}
+        self.engine.use_thread("t2")
+        self.engine._on_permission(call, answers.append)
+        self.assertEqual(answers, ["o"], "t2's Auto mode allows it")
+        self.engine.use_thread("")
+        self.engine._on_permission(call, answers.append)
+        self.assertEqual(answers, ["o"], "the default thread asks you")
+        self.assertIsNotNone(self.engine.approvals.current(""))
 
     def test_permission_cards_carry_the_thread(self):
         self.engine.ask_coworker_tools = True

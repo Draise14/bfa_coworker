@@ -19,6 +19,7 @@ import functools
 import importlib
 import os
 import re
+import shlex
 import sys
 import types
 import unittest
@@ -175,6 +176,58 @@ def _call_server_tool(name: str, arguments: dict[str, object]) -> dict[str, Any]
                 return payload
 
     return asyncio.run(_run())
+
+
+class TestMCPDependencyRequirements(unittest.TestCase):
+    """Keep every MCP installer on the FastMCP-compatible major version."""
+
+    def assert_mcp_has_upper_bound(self, requirements: list[str]) -> None:
+        package = re.compile(r"^mcp(?:\[[^\]]+\])?(?=$|[\s<>=!~;])", re.IGNORECASE)
+        mcp_requirements = [requirement for requirement in requirements if package.match(requirement)]
+        self.assertTrue(mcp_requirements, "No MCP requirement found")
+        for requirement in mcp_requirements:
+            specifiers = package.sub("", requirement, count=1).partition(";")[0].strip()
+            self.assertRegex(specifiers, r"(?:^|,)\s*<\s*2(?:\.0){0,2}\s*(?:,|$)", requirement)
+
+    def test_source_requirements_cap_mcp(self) -> None:
+        for filename in ("mcp/pyproject.toml", "mcp/requirements.txt"):
+            with self.subTest(filename=filename):
+                with open(os.path.join(_REPO_DIR, filename), encoding="utf-8") as fh:
+                    requirements = [line.partition("#")[0].strip().rstrip(",").strip("\"'") for line in fh]
+                self.assert_mcp_has_upper_bound(requirements)
+
+    def test_pip_commands_cap_mcp(self) -> None:
+        for filename, function_name, variable_name in (
+            ("build_addon.py", "_bundle_deps_and_source", "pip_cmd"),
+            ("addon/bfa_coworker/agent_controller.py", "_ensure_vendor_deps", "pip_packages"),
+        ):
+            with self.subTest(filename=filename):
+                with open(os.path.join(_REPO_DIR, filename), encoding="utf-8") as fh:
+                    module = ast.parse(fh.read(), filename=filename)
+                function = next(node for node in module.body if isinstance(node, ast.FunctionDef)
+                                and node.name == function_name)
+                lists = [node.value for node in ast.walk(function) if isinstance(node, ast.Assign)
+                         and isinstance(node.value, ast.List)
+                         and any(isinstance(target, ast.Name) and target.id == variable_name
+                                 for target in node.targets)]
+                self.assertTrue(lists, f"No installer list named {variable_name}")
+                for arguments in lists:
+                    self.assert_mcp_has_upper_bound([arg.value for arg in arguments.elts
+                                                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str)])
+
+    def test_manual_pip_hints_cap_mcp(self) -> None:
+        for filename in ("build_addon.py", "addon/bfa_coworker/agent_controller.py"):
+            with self.subTest(filename=filename):
+                with open(os.path.join(_REPO_DIR, filename), encoding="utf-8") as fh:
+                    module = ast.parse(fh.read(), filename=filename)
+                hints = [node.value.partition("pip install ")[2] for node in ast.walk(module)
+                         if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                         and "pip install " in node.value and "mcp[cli]" in node.value]
+                self.assertTrue(hints, "No MCP manual install hints found")
+                for hint in hints:
+                    lexer = shlex.shlex(hint, posix=True, punctuation_chars=True)
+                    lexer.whitespace_split = True
+                    self.assert_mcp_has_upper_bound(list(lexer))
 
 
 # ---------------------------------------------------------------------------

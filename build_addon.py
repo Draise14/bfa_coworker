@@ -145,7 +145,10 @@ def _find_python_with_pip() -> str:
         print("  Using uv as pip replacement: {:s}".format(uv_path))
         return "uv"
 
-    print("ERROR: cannot find pip. Install pip or run: uv pip install --target deps/ mcp[cli] pyyaml docutils")
+    print(
+        "ERROR: cannot find pip. Install pip or run: uv pip install --target deps/ "
+        '"mcp[cli]>=1.2.0,<2.0.0" pyyaml docutils'
+    )
     sys.exit(2)
 
 

@@ -65,6 +65,9 @@ REPO_URL = "https://raw.githubusercontent.com/Draise14/bfa_coworker/main/extensi
 REPO_NAME = "Bforartists Coworker"
 PKG_ID = "bfa_coworker"
 SETTINGS_FILE = "bfa_coworker_settings.json"   # same file Coworker itself uses
+# Kept in the backup's "secrets" field, like Coworker's settings_transfer.SECRET_KEYS:
+# these, and any other PASSWORD field.
+SECRET_KEYS = ("remote_api_key", "hf_token", "gen_remote_key")
 PAYLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "payload")
 
 _SETUP_DELAY = 1.0
@@ -153,6 +156,19 @@ def installed_copies() -> list[dict[str, Any]]:
     return out
 
 
+def _write_private(path: str, text: str) -> None:
+    """*text* to *path*, mode 600 from creation on POSIX (Windows ignores it)."""
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    try:
+        os.chmod(tmp, 0o600)    # a .tmp left over from before keeps its old mode
+    except OSError:
+        pass
+    os.replace(tmp, path)
+
+
 def _settings_dir() -> str:
     return os.path.join(bpy.utils.user_resource('CONFIG'), "bfa_coworker")
 
@@ -161,13 +177,18 @@ def backup_settings(module: str) -> bool:
     """Save an enabled Coworker's preferences for the copy that replaces it.
 
     Coworker 1.1.37+ also does this itself when it is disabled; this covers
-    older copies.  Same format as Coworker's settings_transfer module.
+    older copies.  Same format as Coworker's settings_transfer module writes
+    (format 2, #346 / #418): API keys and tokens in their own ``secrets`` field,
+    the file readable by your account only (mode 600 on Linux / macOS; on
+    Windows Blender's config folder is in your user profile, already private).
+    Its contents are never printed.
     """
     addon = bpy.context.preferences.addons.get(module)
     prefs = getattr(addon, "preferences", None) if addon else None
     if prefs is None:
         return False
     data: dict[str, Any] = {}
+    secret_keys: set[str] = set()
     for prop in prefs.bl_rna.properties:
         ident = prop.identifier
         if ident in ("rna_type", "settings_restored", "bl_idname") or ident.startswith(("show_", "ui_", "_")):
@@ -176,18 +197,20 @@ def backup_settings(module: str) -> bool:
             continue
         if getattr(prop, "is_array", False):
             continue
+        if ident in SECRET_KEYS or getattr(prop, "subtype", "") == "PASSWORD":
+            secret_keys.add(ident)
         try:
             value = getattr(prefs, ident)
         except Exception:  # pylint: disable=broad-exception-caught
             continue
         if isinstance(value, (bool, int, float, str)):
             data[ident] = value
+    secrets = {k: data.pop(k) for k in sorted(secret_keys) if k in data}
+    payload = {"format": 2, "version": "", "settings": data, "secrets": secrets}
     try:
         os.makedirs(_settings_dir(), exist_ok=True)
-        path = os.path.join(_settings_dir(), SETTINGS_FILE)
-        with open(path + ".tmp", "w", encoding="utf-8") as fh:
-            json.dump({"format": 1, "version": "", "settings": data}, fh, indent=1, sort_keys=True)
-        os.replace(path + ".tmp", path)
+        _write_private(os.path.join(_settings_dir(), SETTINGS_FILE),
+                       json.dumps(payload, indent=1, sort_keys=True))
         return True
     except OSError:
         return False

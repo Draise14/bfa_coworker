@@ -290,6 +290,40 @@ class TestSettingsTransfer(unittest.TestCase):
         self.st.restore_once(new, os.path.join(fake.config_dir, "bfa_coworker"))
         self.assertEqual(new.remote_api_key, "sk-old")
 
+    def test_installer_backup_is_format_2_like_coworkers(self):
+        # Keys in their own "secrets" field, created owner-only, never printed (#418).
+        fake = _FakeBlender(self.dir)
+        inst = fake.load_installer()
+        prefs = _coworker_prefs(remote_api_key="sk-old-0123456789", local_ctx_size=32768, settings_restored=True)
+        fake.addons["bl_ext.user_default.bfa_coworker"] = types.SimpleNamespace(preferences=prefs)
+        with mock.patch("builtins.print") as out, mock.patch.object(inst.os, "open", wraps=os.open) as opened:
+            self.assertTrue(inst.backup_settings("bl_ext.user_default.bfa_coworker"))
+        out.assert_not_called()
+        self.assertEqual(opened.call_args.args[2], 0o600)
+        path = os.path.join(fake.config_dir, "bfa_coworker", inst.SETTINGS_FILE)
+        with open(path, "r", encoding="utf-8") as fh:
+            written = fh.read()
+        payload = json.loads(written)
+        self.assertEqual(payload["format"], 2)
+        self.assertEqual(payload["secrets"], {"remote_api_key": "sk-old-0123456789"})
+        self.assertNotIn("remote_api_key", payload["settings"])
+        if os.name != "nt":
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        # The same file Coworker itself writes for these settings.
+        own = os.path.join(self.dir, "coworker")
+        self.assertTrue(self.st.save(prefs, own))
+        with open(self.st.settings_path(own), "r", encoding="utf-8") as fh:
+            self.assertEqual(written, fh.read())
+
+    def test_a_format_1_backup_still_restores(self):
+        # From older copies and older Installers: the keys sit among the settings.
+        with open(self.st.settings_path(self.dir), "w", encoding="utf-8") as fh:
+            json.dump({"format": 1, "version": "", "settings": {"remote_api_key": "sk-old", "local_ctx_size": 32768}},
+                      fh)
+        new = _coworker_prefs()
+        self.assertEqual(set(self.st.restore_once(new, self.dir)), {"remote_api_key", "local_ctx_size"})
+        self.assertEqual((new.remote_api_key, new.local_ctx_size), ("sk-old", 32768))
+
 
 # ---------------------------------------------------------------------------
 # The add-on's register(): the restore waits for a timer (#400)
@@ -555,7 +589,7 @@ class TestInstaller(unittest.TestCase):
         inst.setup()
         self.assertEqual(self._versions(inst), [("Bforartists_Coworker", "1.1.37")])
         with open(os.path.join(self.fake.config_dir, "bfa_coworker", inst.SETTINGS_FILE)) as fh:
-            self.assertEqual(json.load(fh)["settings"]["remote_api_key"], "sk-from-file")
+            self.assertEqual(json.load(fh)["secrets"]["remote_api_key"], "sk-from-file")   # format 2 (#418)
         # Order matters: the old copy is gone before the new one is enabled.
         order = [c[0] for c in self.fake.calls if c[0] in ("uninstall", "install")]
         self.assertEqual(order, ["uninstall", "install"])

@@ -636,10 +636,15 @@ class CheckpointStore:
             return 0
         written = 0
         try:
+            from .log import redact_data     # no key on disk (#418)
+        except ImportError:                  # loaded on its own (tests)
+            def redact_data(m: Any) -> Any:
+                return m
+        try:
             path.parent.mkdir(parents=True, exist_ok=True)
             with open(str(path), "a", encoding="utf-8") as fh:
                 for m in retired:
-                    line = json.dumps(m, default=str) + "\n"
+                    line = json.dumps(redact_data(m), default=str) + "\n"
                     fh.write(line)
                     written += len(line.encode("utf-8"))
             self._rotate_archive(path)

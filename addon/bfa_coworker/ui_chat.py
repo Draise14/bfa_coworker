@@ -65,6 +65,7 @@ import textwrap
 from . import agent_controller
 from . import chat_attachments
 from . import llm_manager
+from . import log as _log
 from . import mcp_to_blender_server
 from .engine import EngineCaps, Prompt
 from .engine_loop import LoopConfig, LoopEngine
@@ -2279,7 +2280,7 @@ def _save_session_memory_state() -> None:
             payload = st.to_payload()
             payload["archive_path"] = str(st.archive_path)
         with open(str(_session_memory_state_path()), "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=2)
+            json.dump(_log.redact_data(payload), fh, indent=2)   # no key on disk (#418)
     except OSError:
         pass
 
@@ -2307,20 +2308,22 @@ def _save_chat_history() -> None:
     base_dir = _chat_history_dir()        # crash backups stay in the history folder
     with _history_save_lock:
         try:
+            # What goes to disk has its keys as *** (#418); the chat on screen keeps them.
+            history = _log.redact_data(agent_controller._agent_state.conversation_history)
             # Save timestamped copy.
             ts = _time.strftime("%Y-%m-%d_%H-%M-%S", _time.localtime())
             versioned_path = base_dir / "default_{:s}.json".format(ts)
             with open(str(versioned_path), "w", encoding="utf-8") as fh:
-                json.dump(agent_controller._agent_state.conversation_history, fh, indent=2)
+                json.dump(history, fh, indent=2)
             # Also save to default.json (latest).
             with open(str(_chat_history_path()), "w", encoding="utf-8") as fh:
-                json.dump(agent_controller._agent_state.conversation_history, fh, indent=2)
+                json.dump(history, fh, indent=2)
             # Prune old versions: keep last 10.
             _prune_old_sessions(base_dir)
             # Persist the session-memory store alongside (Tier 3).
             _save_session_memory_state()
             # Chat 7: the chat list knows it (title, when, engine, .blend).
-            _chat_index().touch(_CHAT["id"], agent_controller._agent_state.conversation_history,
+            _chat_index().touch(_CHAT["id"], history,
                                 blend=_CHAT["blend"], engine=_chat_engine_label(),
                                 blend_path=bpy.data.filepath, mode=_operating_mode())
         except OSError:
@@ -2336,6 +2339,7 @@ def _save_thread_chat(thread) -> None:
     history = list(state.conversation_history)
     if not any(m.get("role") == "user" for m in history):
         return
+    history = _log.redact_data(history)       # no key on disk (#418)
     from . import session_memory as _sm
     with _history_save_lock:
         try:
@@ -2347,7 +2351,7 @@ def _save_thread_chat(thread) -> None:
             with _sm.store_lock:
                 payload = thread.store.to_payload()
             with open(str(index.memory_path(thread.chat_id)), "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, indent=2)
+                json.dump(_log.redact_data(payload), fh, indent=2)
             index.touch(thread.chat_id, history, blend=_blend_key(), engine=_chat_engine_label(),
                         blend_path=bpy.data.filepath, mode=_operating_mode(), editor=thread.editor)
         except OSError:

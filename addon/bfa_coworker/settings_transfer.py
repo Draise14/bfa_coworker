@@ -172,8 +172,8 @@ def save(prefs: Any, config_dir: str, version: str = "") -> bool:
 
 
 def load(config_dir: str) -> dict[str, Any]:
-    """The saved settings, secrets included (format 1, from older copies and the
-    Installer, kept them among the settings)."""
+    """The saved settings, secrets included (format 1, from older copies and older
+    Installers, kept them among the settings; the Installer writes format 2 since #418)."""
     try:
         with open(settings_path(config_dir), "r", encoding="utf-8") as fh:
             payload = json.load(fh)

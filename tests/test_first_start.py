@@ -120,6 +120,40 @@ class TestExternalAgentEntry(_FreshProfile):
         self.assertEqual(entry["args"][:2], ["-m", "blmcp"])
 
 
+class TestFreshInstallCopiesDevBlmcp(_FreshProfile):
+    """A source install's first start: pip gives the deps, blmcp still has to be copied in."""
+
+    def run_ensure(self, layout_problems: list[list[str]]) -> tuple[bool, list[str]]:
+        def fake_run(argv, **_kwargs):
+            if "pip" in argv:
+                (self.deps / "mcp").mkdir(exist_ok=True)
+                (self.deps / "mcp" / "__init__.py").write_text("", encoding="utf-8")
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        def copy():
+            self.calls.append("copy_dev_blmcp")
+            return True
+
+        with mock.patch.object(ac.subprocess, "run", fake_run), \
+                mock.patch.object(ac, "_check_vendor_layout", mock.Mock(side_effect=layout_problems)), \
+                mock.patch.object(ac, "_copy_dev_blmcp_into_vendor", copy), \
+                contextlib.redirect_stdout(io.StringIO()):
+            return ac._ensure_vendor_deps(), self.calls
+
+    def test_blmcp_copied_on_the_first_start(self):
+        ok, calls = self.run_ensure([["blmcp package missing: vendor/blmcp"], []])
+        self.assertTrue(ok)
+        self.assertEqual(calls, ["copy_dev_blmcp"])
+
+    def test_built_install_needs_no_copy(self):
+        ok, calls = self.run_ensure([[]])
+        self.assertEqual((ok, calls), (True, []))
+
+    def test_still_incomplete_is_reported(self):
+        ok, _calls = self.run_ensure([["blmcp package missing"], ["blmcp package missing"]])
+        self.assertFalse(ok)
+
+
 class TestStartExternalAgentUsesIt(unittest.TestCase):
     """``_start_external_agent`` (ui_chat, needs bpy) builds its entry with the deps check."""
 

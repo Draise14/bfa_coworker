@@ -2318,9 +2318,13 @@ def _find_blender_python() -> str | None:
             return str(py_path)
         return None
 
-    # Linux/macOS
-    py_path = Path(sys.prefix) / "bin" / "python3"
-    return str(py_path) if py_path.is_file() else None
+    # Linux/macOS.  Linux builds ship only the versioned name (python3.13), #435.
+    bin_dir = Path(sys.prefix) / "bin"
+    for name in ("python3", "python{:d}.{:d}".format(*sys.version_info[:2]), "python"):
+        py_path = bin_dir / name
+        if py_path.is_file():
+            return str(py_path)
+    return None
 
 
 def _find_vendor_pythonpath() -> str:
@@ -3085,10 +3089,12 @@ def start_mcp_server(
     env = _build_mcp_env(blender_host=blender_host, blender_port=blender_port)
 
     # --- Resolution order ---
+    error_before = _agent_state.error
     mcp_exe, use_module = _resolve_mcp_python()
 
     if not mcp_exe:
-        _agent_state.error = "Cannot find Python to run MCP server"
+        if _agent_state.error == error_before:      # keep the reason it gave (#435)
+            _agent_state.error = "Cannot find Python to run MCP server"
         return None
 
     # --- Launch ---
@@ -3321,10 +3327,12 @@ def start_mcp_server_network(
     env = _build_mcp_env(blender_host=blender_host, blender_port=blender_port)
 
     # --- Resolution order ---
+    error_before = _agent_state.error
     mcp_exe, use_module = _resolve_mcp_python()
 
     if not mcp_exe:
-        _agent_state.error = "Cannot find Python to run MCP server"
+        if _agent_state.error == error_before:      # keep the reason it gave (#435)
+            _agent_state.error = "Cannot find Python to run MCP server"
         return None
 
     try:

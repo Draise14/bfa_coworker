@@ -180,6 +180,26 @@ def set_secret(name: str, value: str) -> None:
     _rebuild_secrets()
 
 
+_CUT_MARKS = ("...", "…")
+
+
+def _hide_cut_secret(line: str) -> str:
+    """*line* with a known secret that was cut short at its end (a shortened log line or
+    preview, with or without "...") as ``***``: the part left is still most of the key."""
+    body, mark = line, ""
+    for cut in _CUT_MARKS:
+        if line.endswith(cut):
+            body, mark = line[:-len(cut)], cut
+            break
+    for secret in _secrets:
+        if secret[:_MIN_SECRET] not in body:
+            continue
+        for kept in range(len(secret) - 1, _MIN_SECRET - 1, -1):
+            if body.endswith(secret[:kept]):
+                return body[:-kept] + REDACTED + mark
+    return line
+
+
 def redact(text: str) -> str:
     """*text* with every known secret, and anything that looks like one, as ``***``."""
     if not text:
@@ -187,6 +207,8 @@ def redact(text: str) -> str:
     for secret in _secrets:
         if secret in text:
             text = text.replace(secret, REDACTED)
+    if _secrets:
+        text = "\n".join(_hide_cut_secret(line) for line in text.split("\n"))
     for pattern in _SECRET_PATTERNS:
         text = pattern.sub(r"\g<1>" + REDACTED, text)
     return text

@@ -1200,7 +1200,7 @@ The **lock button** left of Send sets how much freedom the tools get, on every e
 | Setting | What asks |
 |---------|-----------|
 | **Strict** (default) | Every change to the scene asks first. Looking around never asks |
-| **Permissive** | Only saving or opening files, quitting, deleting, exporting or running another program |
+| **Permissive** | Only saving or opening files, quitting, deleting, exporting, running another program, writing outside the project folder or connecting to the internet |
 | **Auto** | Nothing asks |
 
 When something asks, a card above the input says **who wants to run what**, with **Allow once**, **Allow this turn** (every tool until your next message) or **Deny**. It switches at once, even while Coworker is working. Details: """ + _link("Permissions & Safety", "Permissions-and-Safety") + """.
@@ -4253,7 +4253,7 @@ Chain-of-thought output from the LLM, shown in a collapsible panel in the chat U
 The Undo button on the last reply: takes back the whole turn (back to its *Before …* undo step), while you haven't changed the scene since. See [[User-Documentation/Permissions-and-Safety|Permissions & Safety]].
 
 ### Risky Step
-Code that would save, open or quit, delete or move files, export, or run another program. Checked at the bridge for every engine; asks first in Strict and Permissive.
+Code that would save, open or quit, delete or move files, export, run another program, write outside the project folder, or connect to the internet. Checked at the bridge for every engine; asks first in Strict and Permissive.
 
 ---
 
@@ -4447,7 +4447,7 @@ The **lock button left of Send** opens *Before tools run*. The same setting is
 | Setting | What happens |
 |---------|--------------|
 | **Strict** (default) | It asks before **each change to the scene**. Looking around (reading the scene, docs, screenshots) never asks |
-| **Permissive** | Changes to the scene run on their own. It asks only before **risky steps**: saving or opening files, quitting, deleting or moving files, exporting, or running another program |
+| **Permissive** | Changes to the scene run on their own. It asks only before **risky steps**: saving or opening files, quitting, deleting or moving files, exporting, running another program, writing outside the project folder, or connecting to the internet |
 | **Auto** | Nothing asks; everything runs straight away (an External Agent's own tools still follow *Only Coworker Tools*) |
 
 {image_permissions}
@@ -4489,7 +4489,13 @@ run at the bridge, whichever app sends the code.
 
 Code from any engine is checked at the bridge before it runs. If it would **save the
 .blend, open or reload a file, quit** (unsaved work would be lost), **delete or move files,
-export**, or **run another program**, Coworker asks first — in Strict and Permissive.
+export**, **run another program**, **write outside the project folder** or **connect to the
+internet**, Coworker asks first — in Strict and Permissive.
+
+The project folder is the saved .blend's folder and everything below it (`//` paths count
+as inside); the temp folder is fine too. With an unsaved .blend there's no project folder
+yet, so any file it writes outside the temp folder asks. A path the code only works out
+while it runs (a loop over names, say) isn't guessed at. Coworker's own tools are never stopped.
 
 ---
 

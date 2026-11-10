@@ -10,8 +10,10 @@ Opt-in (*Ask Before Risky Steps*, Preferences).  Code that reaches the bridge
 from any engine -- the local loop, an External Agent, an External Harness
 client -- is checked before it runs: if it would save the .blend file, open
 or reload a file or quit (unsaved work is lost), delete or move files,
-export, or run another program, the chat asks first with the approval card
-(:mod:`approvals`).  *Allow once* runs it, *Always* lets that kind of step
+export, run another program, write outside the project folder (the .blend's
+folder; the temp folder is fine) or connect to the internet (those two are
+read from the syntax tree, :mod:`code_guard`, #347), the chat asks first with
+the approval card (:mod:`approvals`).  *Allow once* runs it, *Always* lets that kind of step
 through until Blender restarts, *Deny* tells the model you declined.
 
 While Auto mode runs nobody is there to answer, so a risky step is declined
@@ -85,22 +87,38 @@ def untrusted(code: str) -> str:
     return code.replace(_SKIP_MARK, "# (skip marker ignored: not Coworker's tool-code)")
 
 
-def reason(code: str) -> str:
-    """What makes *code* risky, in plain words ("" when it isn't)."""
+def _blend_path() -> str:
+    """The open .blend's path ("" when it isn't saved, or outside Blender)."""
+    try:
+        import bpy  # pylint: disable=import-error
+        return str(bpy.data.filepath or "")
+    except Exception:  # pylint: disable=broad-exception-caught
+        return ""
+
+
+def reason(code: str, blend_path: str | None = None) -> str:
+    """What makes *code* risky, in plain words ("" when it isn't).  *blend_path*: the open
+    .blend, whose folder is the project folder (None: ask Blender; "" = not saved)."""
     if not code or is_toolcode(code):
         return ""
     found = [what for what, rule in _RULES if rule.search(code)]
+    # Security 3 (#347): writes outside the project folder, and the internet (syntax tree).
+    from . import code_guard
+    try:
+        found += code_guard.findings(code, _blend_path() if blend_path is None else blend_path)
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] code guard: couldn't check this code ({:s})".format(type(ex).__name__))
     return " and ".join(found)
 
 
-def ask_kind(tool: str, code: str, approval: str, engine: str) -> tuple[str, str]:
+def ask_kind(tool: str, code: str, approval: str, engine: str, blend_path: str | None = None) -> tuple[str, str]:
     """What to ask before *code* runs, by the approval mode (#240): ``(kind, why)``, or
     ``("", "")`` to run it.  *kind* is what "Always" remembers: ``risky:<why>`` for a risky
     step, the tool's name for one that changes the scene (Ask, our own loop only -- an
     External Agent asks through its own permission card, a Harness client per tool itself)."""
     if approval == "AUTO":
         return "", ""
-    why = reason(code) or _TOOL_RISKS.get(str(tool or ""), "")
+    why = reason(code, blend_path) or _TOOL_RISKS.get(str(tool or ""), "")
     if why:
         return "risky:" + why, why
     if approval == "ASK" and engine in ("LOCAL_LLM", "REMOTE_API") and tool:

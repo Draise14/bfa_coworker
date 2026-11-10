@@ -2458,12 +2458,6 @@ def _ensure_vendor_deps() -> bool:
             if '__pycache__' in dirs:
                 shutil.rmtree(os.path.join(root, '__pycache__'), ignore_errors=True)
         print("[Coworker] _ensure_vendor_deps: auto-install succeeded")
-        # blmcp is source, not a wheel: a source checkout's copy still has to
-        # go into vendor/, or the first start fails with "No module named
-        # blmcp" and only the second one (the branch above) copies it (#424).
-        if _check_vendor_layout():
-            _copy_dev_blmcp_into_vendor()
-            return not _check_vendor_layout()
         return True
     except Exception as ex:
         print("[Coworker] _ensure_vendor_deps: auto-install failed -- {:s}".format(str(ex)))

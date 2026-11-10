@@ -259,6 +259,8 @@ class _ExecResult(NamedTuple):
 
     response: dict[str, object]
     check_fn: Callable[[], dict[str, object] | None] | None = None
+    # A deferred call: told the response once it goes out (the activity entry, #423).
+    on_answer: Callable[[dict[str, object]], None] | None = None
 
 
 def _encode_response(response: dict[str, object]) -> bytes:
@@ -1333,9 +1335,12 @@ def _execute_code_from_request(
     # Agent 9: what ran, for the activity view (External Harness) and Copy Log.
     try:
         from . import activity
-        activity.record(str(request.get("tool") or ""), request.get("args") or "",
-                        exec_result.response, time.monotonic() - _started,
-                        deferred=exec_result.check_fn is not None, thread=_thread)
+        _entry = activity.record(str(request.get("tool") or ""), request.get("args") or "",
+                                 exec_result.response, time.monotonic() - _started,
+                                 deferred=exec_result.check_fn is not None, thread=_thread)
+        if exec_result.check_fn is not None:
+            # #423: the entry says how it ended when the deferred answer goes out.
+            exec_result = exec_result._replace(on_answer=lambda response: activity.answered(_entry, response))
     except Exception:  # pylint: disable=broad-exception-caught
         pass
     _is_error = (
@@ -1459,6 +1464,7 @@ def _service_clients() -> bool:
                 strict_json,
                 str(exec_result.response.get("stdout", "")),
                 str(exec_result.response.get("stderr", "")),
+                on_answer=exec_result.on_answer,
             )
             # Remove from clients without closing the socket.
             try:
@@ -1526,6 +1532,8 @@ def _handle_blocking_client(conn: socket.socket) -> bool:
             if exec_result.check_fn is not None:
                 # Unpack to preserve stdout/stderr captured before the deferred handler was set up.
                 response = {**exec_result.response, "status": "error", "message": _DEFERRED_UNSUPPORTED_MESSAGE}
+                if exec_result.on_answer is not None:
+                    exec_result.on_answer(response)
                 exec_result = _ExecResult(response)
         except Exception:  # pylint: disable=broad-exception-caught
             exec_result = _ExecResult({"status": "error", "message": traceback.format_exc()})

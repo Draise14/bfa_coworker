@@ -12,6 +12,9 @@ Draws a conversation, in the chat panel's own message shapes (see
   failed ones marked, reasoning, notes), and the reply as markdown;
 * code blocks in monospace with a **Copy** button; tables as aligned rows;
 * while a turn runs, its live text and phase instead of the reply;
+* under the newest turn, a **job row** per background render or bake
+  (``long_jobs``, #423): what runs, how long, a progress bar where Blender
+  reports one, and how to stop it (Esc, or the job bar's X: Python can't);
 * laid out from the **bottom up**: the newest turn sits just above the
   input, ``scroll`` counts pixels up from the bottom (0 = follow the newest),
   and a "jump to newest" button appears when you've scrolled away.
@@ -35,6 +38,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from .. import long_jobs
 from ..chat_status import fmt_duration, phase_text, spinner_char
 from ..chat_turns import NOTE_TITLES, group_turns, is_system_note_msg, split_turn
 from .layout import Canvas, InteractionState, Rect, wrap_text
@@ -92,6 +96,10 @@ _FRAME_LINES = 14      # code frames show this many lines (Show all for the rest
 _RESULT_LINES = 3      # a tool's result: a few lines (often not for reading; Show all: #236)
 _RESULT_LINE_CHARS = 160   # ... each cut this short while folded (one long JSON line wraps a lot)
 _ENTRY_CHARS = 600     # a Workshop thinking entry shows this much (Show all for the rest)
+# The job row's last line (#423).  Python has no call that stops a render or bake (#419 adds
+# one), so instead of the X the Classic chat's Blender job bar has, it says where that X is.
+JOB_HINT = "Stop it with Esc, or the X on the job bar in the status bar"
+_JOB_ICONS = {"RENDER": "RENDER_STILL", "OBJECT_BAKE": "TEXTURE"}
 
 
 def split_attachments(text: str) -> tuple[str, list[str]]:
@@ -140,6 +148,9 @@ class ChatView:
     # The host's lookup of an image's pixel size by name (None: not loaded).
     image_size: Callable[[str], "tuple[int, int] | None"] | None = None
     content_height: float = 0.0
+    # The background jobs to show under the newest turn (#423): a render or bake Blender runs.
+    running_jobs: Callable[[], list[dict]] = long_jobs.running
+    _jobs: list[dict] = field(default_factory=list)
     _heights: dict[tuple, float] = field(default_factory=dict)
     _drag_y: float | None = None        # mouse y while the scrollbar handle is dragged
     _live_h: dict[int, float] = field(default_factory=dict)   # running turn: tallest stream so far
@@ -168,6 +179,7 @@ class ChatView:
             return actions
 
         self._last = len(turns) - 1
+        self._jobs = list(self.running_jobs() or [])
         self._suggest_idx = self._last if active < 0 and self.suggest else -1
         heights = [self._turn_height(canvas, turn, idx, width, idx == active, live, compact)
                    for idx, turn in enumerate(turns)]
@@ -215,7 +227,8 @@ class ChatView:
     def _turn_height(self, canvas: Canvas, turn: list[dict], idx: int, width: float,
                      active: bool, live: Any, compact: bool) -> float:
         key = None
-        if not active:
+        # The newest turn with a job row is measured each frame: its time line can wrap anew.
+        if not active and not (self._jobs and idx == getattr(self, "_last", -1)):
             key = (idx, len(turn), sum(len(message_text(m.get("content"))) for m in turn),
                    round(width), canvas.style.scale, f"t{idx}" in self.expanded, compact, self.thumb_size,
                    idx == self._suggest_idx,
@@ -271,7 +284,9 @@ class ChatView:
             if process:
                 top = self._draw_workshop(canvas, process, turn, idx, x, top - pad * 0.5, width, active,
                                           compact, actions, spinner) - pad
-            return self._draw_live(canvas, idx, x, top, width, live, spinner, pad, actions, stream=True)
+            top = self._draw_live(canvas, idx, x, top, width, live, spinner, pad, actions, stream=True)
+            # The floating Workshop button sits at the chat's bottom right: keep the row clear of it.
+            return self._draw_jobs(canvas, idx, x, top, width, clear_fold=bool(process))
         self._live_h.pop(idx, None)
         if process:
             top = self._draw_workshop(canvas, process, turn, idx, x, top, width, active, compact, actions,
@@ -299,9 +314,54 @@ class ChatView:
                                  icon="LOOP_BACK"):
                     actions.append(("revert_turn", ""))
             top = self._draw_markdown(canvas, parse(reply), idx, x, top, width, actions)
-            if idx == self._suggest_idx:
-                top = self._draw_suggestions(canvas, reply, x, top, width, actions)
+        top = self._draw_jobs(canvas, idx, x, top, width)
+        if conclusion is not None and idx == self._suggest_idx:
+            top = self._draw_suggestions(canvas, message_text(conclusion.get("content")), x, top, width, actions)
         return top
+
+    def _draw_jobs(self, canvas: Canvas, idx: int, x: float, top: float, width: float,
+                   clear_fold: bool = False) -> float:
+        """The job row under the newest turn (#423), like the Classic chat's
+        (``ui_chat._draw_job_rows``): per running render or bake its icon, "Baking, 40 s --
+        Bake combined: Monkey" and a progress bar where Blender reports one; then where to
+        stop it.  The whole box is one tooltip area ("jobs").  *clear_fold*: room under it for
+        the running turn's floating fold button, which would cover the hint."""
+        if not self._jobs or idx != getattr(self, "_last", -1):
+            return top
+        style = canvas.style
+        pad = style.pad
+        side, gap = canvas.icon_size(), pad * 0.6
+        text_x, text_w = x + pad + side + gap, width - 2 * pad - side - gap
+        bar_h = max(3.0, round(style.unit * 0.3))
+        rows = [("{:s} — {:s}".format(str(job.get("text", "")), str(job.get("label", ""))), job)
+                for job in self._jobs]
+        h = pad * 0.5 + canvas.text_height(JOB_HINT, text_w) + pad * 0.5
+        for text, job in rows:
+            h += canvas.text_height(text, text_w) + pad * 0.3
+            if job.get("progress") is not None:
+                h += bar_h + pad * 0.5
+        box = Rect(x, top - pad * 0.5 - h, width, h)
+        canvas.box(box, colors=style.box)
+        row_top = box.top - pad * 0.5
+        for text, job in rows:
+            canvas.icon(self._first_line_icon(canvas, x + pad, row_top, style.line_height),
+                        _JOB_ICONS.get(str(job.get("kind", "")), "TIME"), style.box.text)
+            row_top = canvas.wrapped(text_x, row_top, text_w, text, style.box.text)
+            frac = job.get("progress")
+            if frac is not None:
+                frac = max(0.0, min(1.0, float(frac)))
+                track = Rect(text_x, row_top - pad * 0.25 - bar_h, text_w, bar_h)
+                colors = style.progress
+                canvas.fill(track, colors.inner, bar_h / 2)
+                if frac > 0.0:
+                    canvas.fill(Rect(track.x, track.y, track.w * frac, bar_h), colors.item, bar_h / 2)
+                row_top = track.y - pad * 0.25
+            row_top -= pad * 0.3
+        soft = _soft(style.box.text, 0.4)
+        canvas.icon(self._first_line_icon(canvas, x + pad, row_top, style.line_height), "STATUSBAR", soft)
+        canvas.wrapped(text_x, row_top, text_w, JOB_HINT, soft)
+        canvas.hit_areas.append((box, "jobs"))
+        return box.y - (style.unit * 1.2 + pad * 0.5 if clear_fold else 0.0)
 
     def _draw_suggestions(self, canvas: Canvas, reply: str, x: float, top: float, width: float,
                           actions: list[tuple[str, str]]) -> float:

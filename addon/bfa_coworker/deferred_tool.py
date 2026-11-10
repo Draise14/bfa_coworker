@@ -16,6 +16,10 @@ which starts at an active interval but backs off when idle.
 Checkers should be lightweight (e.g. check a flag or file existence)
 so they don't block the UI, yet return promptly so the user is not left waiting after the job finishes.
 
+*on_answer* (#423) is called once with the response that went out -- or an
+error when the client hung up or the bridge stopped -- so the activity view
+can finish the call's entry instead of leaving it "waiting".
+
 """
 
 __all__ = (
@@ -62,6 +66,7 @@ class _DeferredClient:
         "stderr",
         "deadline",
         "handoff_at",
+        "on_answer",
     )
 
     def __init__(
@@ -71,6 +76,7 @@ class _DeferredClient:
         strict_json: bool,
         stdout: str,
         stderr: str,
+        on_answer: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
         self.conn: socket.socket = conn
         self.check_fn: Callable[[], dict[str, object] | None] = check_fn
@@ -79,10 +85,21 @@ class _DeferredClient:
         self.stderr: str = stderr
         self.deadline: float = time.monotonic() + _DEFERRED_TIMEOUT
         self.handoff_at: float = time.monotonic() + _HANDOFF_AFTER
+        self.on_answer: Callable[[dict[str, object]], None] | None = on_answer
 
 
 # Connections waiting for a background job to finish, polled each timer tick.
 _deferred_clients: list[_DeferredClient] = []
+
+
+def _answered(dc: _DeferredClient, response: dict[str, object]) -> None:
+    """Tell *dc*'s ``on_answer`` (once) how the call ended."""
+    on_answer, dc.on_answer = dc.on_answer, None
+    if on_answer is not None:
+        try:
+            on_answer(response)
+        except Exception:  # pylint: disable=broad-exception-caught
+            traceback.print_exc()
 
 
 def _send_and_close(dc: _DeferredClient, response: dict[str, object]) -> None:
@@ -90,6 +107,7 @@ def _send_and_close(dc: _DeferredClient, response: dict[str, object]) -> None:
         dc.conn.sendall(_encode_response(response))
     except OSError:
         pass
+    _answered(dc, response)
     try:
         dc.conn.close()
     except OSError:
@@ -139,11 +157,14 @@ def add(
     strict_json: bool,
     stdout: str,
     stderr: str,
+    on_answer: Callable[[dict[str, object]], None] | None = None,
 ) -> None:
     """
     Register a deferred client to be polled for completion.
+
+    *on_answer* gets the response once it went out (see the module docstring).
     """
-    _deferred_clients.append(_DeferredClient(conn, check_fn, strict_json, stdout, stderr))
+    _deferred_clients.append(_DeferredClient(conn, check_fn, strict_json, stdout, stderr, on_answer))
 
 
 def poll() -> bool:
@@ -160,6 +181,7 @@ def poll() -> bool:
                 dc.conn.close()
             except OSError:
                 pass
+            _answered(dc, {"status": "error", "message": "The client hung up before Blender answered."})
             try:
                 _deferred_clients.remove(dc)
             except ValueError:
@@ -244,4 +266,5 @@ def close_all() -> None:
             dc.conn.close()
         except OSError:
             pass
+        _answered(dc, {"status": "error", "message": "The bridge stopped before Blender answered."})
     _deferred_clients.clear()

@@ -1,31 +1,29 @@
 ## 🧵 What's New
 
-**Coworker 1.1.42 gives each editor its own conversation.** Ask about materials in the Shader Editor and about strips in the Sequencer, and the two chats stay apart, each with its own history, queue and Stop. Long renders and bakes no longer time out: Coworker starts them, shows a job row in the chat and checks back. And Coworker now steps in when the agent keeps repeating itself, and keeps your API keys out of every log and copy.
+**Coworker 1.1.42 puts your conversations in tabs.** Ask about materials in the Shader Editor and about strips in the Sequencer, and the two chats stay apart, each in its own tab with its own history, queue, Stop, draft and plan. Long renders and bakes no longer time out: Coworker starts them, shows a job row in the chat and checks back. And Coworker now steps in when the agent keeps repeating itself, and keeps your API keys out of every log and copy.
 
 ---
 
 ## ✨ Highlight Features
 
-### 🧵 **Threads: Each Editor Has Its Own Conversation** (#357, #358)
-- **How to use it:** click the editor's icon on the sidebar chat's header to turn on **Use Editor Context Only**. That editor's chat now shows **its own thread**, with its own history, Queue, Stop and status. Two 3D Views share one thread.
-- **Nothing changes if you don't:** with it off, every sidebar shows the shared **All editors** thread, the single conversation you had before.
-- **Thread tabs** on the sidebar chat's header:
-  - switch between *All editors* and *this editor*;
-  - a status icon shows when a thread is thinking, waiting for you or for its turn, or finished while you weren't looking;
-  - **New Thread Here** (+) gives this area a fresh thread, **Switch Thread** continues a chat from History here, and **Open in Coworker Editor** shows the thread full size.
-- **Threads panel** in the Coworker editor's toolshelf: every open thread with its editor icon, title and status. *Done* means it finished while you were elsewhere. Click one to show it.
-- **One turn at a time:** Coworker works on one thread at once. A message from another editor waits in its own thread, and the chat tells you whose turn it is waiting for. Stop in one thread leaves the others alone.
-- **Saved with your file:** each editor's thread is saved as its own chat in History. Reopen the .blend and each editor brings back its last chat.
-- **Right-click knows where you are:** *Explain This* and *Translate…* run in the thread of the editor you right-clicked, and a translation is written back from there.
-- **Undo says which thread:** a turn's undo step reads *Coworker (Node)'s turn*.
-- **External Agent:** each thread gets its own conversation with the same agent app.
+### 🧵 **Threads: A Conversation Per Job, in Tabs** (#357, #358, #417, #427)
+- **Chat tabs:** every chat (the sidebar, the Coworker editor, a maximized editor) shows the same row of tabs, one per open conversation. Each tab has its editor's icon, a short title and its status: thinking, waiting for you, waiting for its turn, or finished while you were elsewhere.
+- **+** starts a new conversation for the editor you're in. One started in the Shader Editor works with the Shader Editor's context.
+- **×** closes a tab, and the chat stays in **History**. The **All editors** tab is the shared conversation you had before; its × saves it and starts it fresh.
+- **Narrow sidebar?** The tab you're on keeps its title, the others become icons, and **▾** lists them all.
+- **Each conversation keeps its own** history, Queue, Stop, half-typed message, attached image, Goal & Plan, usage and Auto mode. Auto mode in one tab never answers another tab's questions.
+- **One turn at a time:** Coworker works on one conversation at once. A message in another tab waits in its own queue, and the chat tells you whose turn it is waiting for. Stop in one tab leaves the others alone.
+- **Saved with your file:** reopen the .blend and your open tabs come back. History opens any older chat as a tab.
+- **Right-click knows where you are:** *Explain This* and *Translate…* run in the conversation of the editor you right-clicked, and a translation is written back from there.
+- **Undo says which conversation:** a turn's undo step reads *Coworker (Node)'s turn*.
+- **External Agent:** each conversation gets its own session with the same agent app.
 
 ### ⏳ **Long Renders and Bakes Don't Time Out** (#309)
 - **What changed:** a render or bake no longer has to finish inside one tool call. When one is still running after 45 seconds, Coworker hands it over as a **job**, and the agent checks on it with the new `get_job_status` tool until it is done.
-- **You can see it:** the newest turn shows a **job row**, such as *Rendering 40% — Render big.png*, even with the Workshop folded. Under it sits Blender's own progress bar, with the real bake percentage and the **X** that cancels the job.
+- **You can see it:** in the Classic sidebar chat, the newest turn shows a **job row**, such as *Rendering 40% — Render big.png*, even with the Workshop folded. Under it sits Blender's own progress bar, with the real bake percentage and the **X** that cancels the job. In the Compact chat, Blender's status bar shows the progress.
 - **New bake tool:** ask Coworker to bake, and `bake_textures` checks first that each object has a UV map, a material and an active Image Texture node with an image. If one is missing, it tells you what to add. It switches to Cycles for the bake and back afterwards.
 - **Safer renders:** Coworker no longer starts a second render while one is running, and an old output file can't pass for the new one.
-- Works the same on every engine: Local, Remote, External Agent and External Harness.
+- Works the same on every engine: Local, Remote, External Agent and External Harness. Baking and rendering are always offered to the agent, so an External Agent like Claude Code uses them without being told (#422).
 
 ### 🔁 **Coworker Asks When the Agent Repeats Itself** (#310)
 - **The 3rd time** the agent makes exactly the same call, a card asks you: *Coworker wants to run … a 3rd time with the same input*. **Allow** lets it try again, **Deny** stops it.
@@ -53,9 +51,9 @@
 ## ⚠️ Known Limits
 
 - **Stop doesn't cancel a running render or bake.** It ends the agent's wait; the **X** on the job row's bar, or **Esc**, cancels the job itself. Bforartists needs a small API for this (#419).
-- **The draft, the attached image, the Goal & Plan panel, usage and Auto mode are still per window**, not per thread, and a maximized editor has no thread picker yet (#417).
-- **Remote mode hasn't been checked live with threads** or with the loop guard yet. It runs the same code as Local, which was.
-- **Threads on OpenCode** haven't been tried; Claude Code was checked live.
+- **The Compact chat has no job row yet** (#423): Blender's status bar shows the progress.
+- **Remote mode hasn't been checked live with tabs** or with the loop guard yet. It runs the same code as Local, which was.
+- **Tabs on OpenCode** haven't been tried; Claude Code was checked live.
 - **The Store fix and the Linux llama-server fix haven't been run on a real Store install or on Linux yet.** They were tested against the reporters' details and the real llama.cpp download. Please tell us how they work for you.
 
 ---
@@ -69,7 +67,7 @@
   3. It adds the Coworker update repository and installs Coworker.
 - **Manual:** install `bfa_coworker-1.1.42.zip` with *Preferences → Add-ons → Install from Disk*.
 
-> **Trying threads?** Open the sidebar chat in two editors (say, the 3D View and the Shader Editor), click each one's editor icon on the chat's header, and ask each its own question. Both show up in **History** as separate chats.
+> **Trying tabs?** Open the sidebar chat in the 3D View and in the Shader Editor, press **+** in each, and ask each its own question. Both stay open as tabs, and both show up in **History**.
 
 **Requires** Blender / Bforartists 5.1 or newer. Windows is tested; macOS and Linux are untested.
 
@@ -77,4 +75,4 @@
 
 ## 🔭 Next
 
-**1.1.43: the Sequencer core.** Local transcription, Auto Captions, Remove Silences and Reframe for Vertical. After that: the draft, plan and usage move into each thread, and threads run side by side, so a scene build and a node tidy can work at the same time. Follow along in [#97](https://github.com/Draise14/bfa_coworker/issues/97).
+**1.1.43: the Sequencer core.** Local transcription, Auto Captions, Remove Silences and Reframe for Vertical. After that: conversations that run side by side, so a scene build and a node tidy can work at the same time. Follow along in [#97](https://github.com/Draise14/bfa_coworker/issues/97).

@@ -25,20 +25,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [v1.1.42] - 2026-11-09
 
-Threads: each editor has its own conversation. Long renders and bakes answer with a job id,
+Threads: a conversation per job, in chat tabs. Long renders and bakes answer with a job id,
 a loop guard stops the agent from repeating itself, and secrets stay out of logs and copies.
 Release notes: `_misc/release_notes/release_notes_v1.1.42.md`.
 
 ### Added
 
-- **Threads: each editor has its own conversation (#357, #358, #412, #413, #415).** Turn on **Use Editor Context Only** (the editor's icon on the chat's header) and that editor's sidebar chat shows its own thread, with its own history, Queue, Stop and status; two 3D Views share one. With it off, the chat shows the shared **All editors** thread, the single conversation you had before.
-  - **Thread tabs** on the sidebar chat's header: *All editors* / *this editor*, with a status icon while a thread is thinking, waits for you or for its turn, or is done and unread. Next to the thread's name and status: **New Thread Here** (pin this area to a fresh thread), **Switch Thread** (continue a History chat here) and **Open in Coworker Editor**.
-  - **Threads panel** on the Coworker editor's toolshelf: every live thread with its editor icon, title and status (*Done* = finished while you weren't looking); click one to show it.
-  - **One turn at a time across threads:** a message from another editor waits in its own thread's queue, and the chat says whose turn it waits for. Stop in one thread leaves the others alone.
-  - **Saved per .blend:** each editor thread saves to its own chat in History, and reopening the .blend brings each editor's last chat back.
-  - *Explain This* and *Translate...* run in the thread of the editor you right-clicked. Undo steps name the thread ("Coworker (Node)'s turn").
-  - **External Agent:** each thread gets its own session on the same agent process.
-- **Long jobs (#309, #397).** Renders and bakes no longer hold the tool call open or time out. A render still running after 45 s (or one started with `background=True`) answers with a **job id**, and the new `get_job_status` tool waits for it and reports running, done, error or cancelled, with progress where Blender gives it. The newest turn shows a **job row** ("Rendering 40% -- Render big.png") with Blender's own job bar under it. On every engine.
+- **Threads in tabs: a conversation per job (#357, #358, #417, #427; #412, #413, #415, #426, #428).** Every chat (the sidebar, the Coworker editor, a maximized editor) shows the same row of **chat tabs**, one per open conversation, with its editor's icon, a short title and its status (thinking, waiting for you, waiting for its turn, or finished while you were elsewhere).
+  - **+** starts a conversation in the editor you're in, which then works with that editor's context. **×** closes a tab; the chat stays in History. **All editors** is the shared conversation you had before; its × saves it and starts it fresh.
+  - **Narrow sidebars:** the shown tab keeps its title, the others become icons, and **▾** lists every open tab.
+  - **Each conversation keeps its own** history, Queue, Stop, half-typed message, attached image, Goal & Plan, Session usage and Auto mode (Auto answers only that conversation's questions and cards).
+  - **One turn at a time across conversations:** a message in another tab waits in its own queue, and the chat says whose turn it waits for. Stop in one tab leaves the others alone.
+  - **Saved per .blend:** the open tabs come back when the file is reopened; History opens any older chat as a tab.
+  - *Explain This* and *Translate...* run in the conversation of the editor you right-clicked. Undo steps name the conversation ("Coworker (Node)'s turn").
+  - **External Agent:** each conversation gets its own session on the same agent process.
+  - **Replaced by the tabs:** *Use Editor Context Only*, the *All editors / this editor* switch, the thread line with New Thread Here / Switch Thread, the footer +, and the Coworker editor's Threads panel.
+- **Long jobs (#309, #397).** Renders and bakes no longer hold the tool call open or time out. A render still running after 45 s (or one started with `background=True`) answers with a **job id**, and the new `get_job_status` tool waits for it and reports running, done, error or cancelled, with progress where Blender gives it. In the Classic sidebar chat, the newest turn shows a **job row** ("Rendering 40% -- Render big.png") with Blender's own job bar under it; the Compact chat doesn't have it yet (#423), and Blender's status bar shows the progress there. On every engine. `bake_textures` and `render_viewport_to_path` are always offered to the agent, so an External Agent uses them without being told to load them (#422, #425).
 - **`bake_textures`** (#397): bakes a pass (Diffuse by default) for the given mesh objects. It checks up front for a UV map, a material and an active Image Texture node with an image (and says what to add), switches to Cycles for the bake and back, and answers with a job id.
 - **Loop guard (#310, #411).** When the agent makes the same call with the same input again, the **3rd** time shows an approval card ("... a 3rd time with the same input": Allow or Deny), and the **4th** is refused without running. Reads that change nothing get more room, job status polls are never counted, and Auto mode declines the 3rd at once. On every engine, External Harness included.
 

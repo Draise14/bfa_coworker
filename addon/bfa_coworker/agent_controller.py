@@ -2893,13 +2893,56 @@ def _find_available_port(preferred: int, max_offset: int = 100) -> int:
     return 0
 
 
+# Issue #416: a ``bfa-coworker-mcp`` on PATH (a pip install, a dev venv) can be
+# broken -- e.g. a venv launcher pointing at a folder that moved -- or a
+# different version than the add-on.  It is only used when this install has no
+# bundled server, after a ``--help`` probe.  Results per launcher path, for this
+# session: "" = it works, else why it was skipped.
+_PATH_LAUNCHER_PROBES: dict[str, str] = {}
+
+
+def _path_mcp_launcher() -> str | None:
+    """Return the ``bfa-coworker-mcp`` launcher found on PATH, if any."""
+    return (
+        shutil.which("bfa-coworker-mcp") or
+        shutil.which("bfa-coworker-mcp.exe") or
+        shutil.which("bfa-coworker-mcp.bat")
+    )
+
+
+def _probe_path_launcher(launcher: str) -> str:
+    """Run ``launcher --help`` once per session; return "" when it works, else why not."""
+    if launcher in _PATH_LAUNCHER_PROBES:
+        return _PATH_LAUNCHER_PROBES[launcher]
+    try:
+        probe = subprocess.run(
+            [launcher, "--help"], capture_output=True, text=True, errors="replace", timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+        )
+        if probe.returncode == 0:
+            why = ""
+        else:
+            lines = [ln.strip() for ln in (probe.stderr or probe.stdout or "").splitlines() if ln.strip()]
+            why = "--help exited with code {:d}: {:s}".format(
+                probe.returncode, lines[-1] if lines else "no output")
+    except subprocess.TimeoutExpired:
+        why = "--help gave no answer within 5 s"
+    except OSError as ex:
+        why = "cannot run it: {:s}".format(str(ex))
+    _PATH_LAUNCHER_PROBES[launcher] = why
+    return why
+
+
 def _resolve_mcp_python() -> tuple[str | None, bool]:
     """Resolve the Python executable and whether to use ``-m blmcp``.
 
     Resolution order:
-    1. ``bfa-coworker-mcp`` console_scripts entry point (if user has it on PATH).
-    2. Blender's bundled Python (``sys.prefix/bin/python.exe``) with
-       ``vendor/deps/`` and ``vendor/blmcp/`` on ``PYTHONPATH``.
+    1. Blender's bundled Python (``sys.prefix/bin/python.exe``) with
+       ``vendor/deps/`` and ``vendor/blmcp/`` on ``PYTHONPATH`` -- the server
+       this add-on ships.
+    2. ``bfa-coworker-mcp`` on PATH, only when the vendor layout is missing
+       (source and dev installs) and the launcher answers ``--help`` (#416).
+       It is then tried before the vendor deps get auto-installed.
     3. ``python`` from PATH as a last resort.
 
     Returns ``(python_path, use_module)`` where *use_module* is True
@@ -2908,14 +2951,22 @@ def _resolve_mcp_python() -> tuple[str | None, bool]:
     mcp_exe: str | None = None
     use_module = False
 
-    # 1. Check for a pip-installed console_scripts entry point.
-    mcp_exe = (
-        shutil.which("bfa-coworker-mcp") or
-        shutil.which("bfa-coworker-mcp.exe") or
-        shutil.which("bfa-coworker-mcp.bat")
-    )
+    launcher = _path_mcp_launcher()
+    if launcher:
+        if not _check_vendor_layout():
+            print("[Coworker] _resolve_mcp_python: skipped {:s} on PATH -- "
+                  "starting the server this add-on ships".format(launcher))
+        else:
+            why = _probe_path_launcher(launcher)
+            if why:
+                print("[Coworker] _resolve_mcp_python: skipped {:s} on PATH -- {:s}".format(
+                    launcher, why))
+            else:
+                print("[Coworker] _resolve_mcp_python: no bundled server in this install -- "
+                      "using {:s} from PATH".format(launcher))
+                mcp_exe = launcher
 
-    # 2. Fall back to Blender's bundled Python with vendor deps.
+    # Blender's bundled Python with vendor deps.
     if not mcp_exe:
         if not _ensure_vendor_deps():
             # Report the specific layout problem rather than a generic
@@ -2958,6 +3009,27 @@ def _resolve_mcp_python() -> tuple[str | None, bool]:
         print("[Coworker] _resolve_mcp_python: falling back to system python at {:s}".format(mcp_exe))
 
     return (mcp_exe, use_module)
+
+
+def _retry_without_launcher(
+    launcher: str, summary: str, where: str, relaunch: Callable[[], "subprocess.Popen | None"],
+) -> "subprocess.Popen | None":
+    """A PATH launcher exited during startup: skip it and launch once more (#416).
+
+    The launcher is marked as failed for the session, so *relaunch* resolves
+    to the bundled server and cannot pick it again.  When the retry fails
+    too, its error names the launcher that failed first.
+    """
+    global _mcp_server_process
+    _PATH_LAUNCHER_PROBES[launcher] = "exited during startup: {:s}".format(summary)
+    print("[Coworker] {:s}: {:s} from PATH exited during startup ({:s}) -- "
+          "retrying with the server this add-on ships".format(where, launcher, summary))
+    _agent_state.mcp_server_running = False
+    _mcp_server_process = None
+    retry = relaunch()
+    if retry is None:
+        _agent_state.error += " ({:s} from PATH failed first: {:s})".format(launcher, summary)
+    return retry
 
 
 def _build_mcp_env(
@@ -3023,11 +3095,9 @@ def start_mcp_server(
     """
     Launch the MCP server as a subprocess with HTTP transport.
 
-    Python resolution order:
-    1. ``bfa-coworker-mcp`` console_scripts entry point (if user has it on PATH).
-    2. Blender's bundled Python (``sys.prefix/bin/python.exe``) with
-       ``vendor/deps/`` and ``vendor/blmcp/`` on ``PYTHONPATH``.
-    3. ``python`` from PATH as a last resort.
+    Python resolution: see :func:`_resolve_mcp_python`.  When a
+    ``bfa-coworker-mcp`` from PATH exits during startup, the launch is retried
+    once with the bundled server (#416).
 
     *``_retry_depth``* is an internal parameter to cap dependency reinstall
     retries at 1 to prevent infinite recursion when imports keep failing.
@@ -3154,6 +3224,13 @@ def start_mcp_server(
         if stdout_output:
             print("[Coworker] start_mcp_server: stdout (tail) = {:s}".format(stdout_output[-1500:]))
 
+        if not use_module:
+            # #416: a bfa-coworker-mcp from PATH failed -- retry once with the
+            # bundled server (the launcher is now skipped, so this can't loop).
+            summary, _full = _summarize_mcp_failure(stderr_output, stdout_output)
+            return _retry_without_launcher(mcp_exe, summary, "start_mcp_server", lambda: start_mcp_server(
+                port=port, blender_host=blender_host, blender_port=blender_port, _retry_depth=_retry_depth))
+
         # Check if it's a ModuleNotFoundError (likely wrong Python version).
         if "ModuleNotFoundError" in error_detail or "ImportError" in error_detail:
             if _retry_depth >= 1:
@@ -3178,7 +3255,8 @@ def start_mcp_server(
                         _retry_depth=_retry_depth + 1,
                     )
         summary, full = _summarize_mcp_failure(stderr_output, stdout_output)
-        _agent_state.error = "MCP server exited immediately: {:s}".format(summary)
+        _agent_state.error = "MCP server exited immediately: {:s} (started with {:s} -m blmcp)".format(
+            summary, mcp_exe)
         _agent_state.error_full = full
         _agent_state.mcp_server_running = False
         _mcp_server_process = None
@@ -3187,7 +3265,7 @@ def start_mcp_server(
     # Process is alive -- actively wait for the port to accept connections.
     # FastMCP + Starlette imports can take 5-10s, so we poll up to 15s.
     print("[Coworker] start_mcp_server: process alive, waiting for port {:d}...".format(port))
-    port_ready = _wait_for_port("127.0.0.1", port, timeout=15.0, interval=1.0)
+    port_ready = _wait_for_port("127.0.0.1", port, timeout=15.0, interval=1.0, proc=proc)
 
     if not port_ready:
         # Port never came up -- collect drainer output for diagnostics.
@@ -3201,6 +3279,10 @@ def start_mcp_server(
         if stdout_output:
             print("[Coworker] start_mcp_server: stdout (tail) = {:s}".format(stdout_output[-1500:]))
         summary, full = _summarize_mcp_failure(stderr_output, stdout_output)
+        if not use_module and proc.poll() is not None:
+            # #416: the PATH launcher died while starting -- same retry as above.
+            return _retry_without_launcher(mcp_exe, summary, "start_mcp_server", lambda: start_mcp_server(
+                port=port, blender_host=blender_host, blender_port=blender_port, _retry_depth=_retry_depth))
         _agent_state.error = "MCP server started but port {:d} never accepted connections: {:s}".format(
             port, summary)
         _agent_state.error_full = full
@@ -3381,7 +3463,13 @@ def start_mcp_server_network(
             print("[Coworker] start_mcp_server_network: stdout (tail) = {:s}".format(
                 stdout_output[-1500:]))
         summary, full = _summarize_mcp_failure(stderr_output, stdout_output)
-        _agent_state.error = "MCP server exited immediately: {:s}".format(summary)
+        if not use_module:
+            # #416: a bfa-coworker-mcp from PATH failed -- retry once with the bundled server.
+            return _retry_without_launcher(
+                mcp_exe, summary, "start_mcp_server_network", lambda: start_mcp_server_network(
+                    host=host, port=port, blender_host=blender_host, blender_port=blender_port))
+        _agent_state.error = "MCP server exited immediately: {:s} (started with {:s} -m blmcp)".format(
+            summary, mcp_exe)
         _agent_state.error_full = full
         _agent_state.mcp_server_running = False
         _mcp_server_process = None

@@ -404,7 +404,7 @@ def _get_system_prompt(use_compact: bool | None = None) -> str:
     fallback = (
         "You are a Blender automation assistant. "
         "You have access to tools that can execute Python code in Blender. "
-        "Think aloud in full paragraphs. Explain your reasoning step by step. "
+        "Before each step, say in a sentence what you are about to do. "
         "Summarize tool results in a few words. Avoid fluff and polite filler. "
         "Execute code to complete the user's request, "
         "then respond with a brief summary of what was done."
@@ -421,12 +421,11 @@ def _get_system_prompt_with_rules() -> str:
 
         # -- Blender version announcement ----------------------
         version_str = ".".join(str(v) for v in bpy.app.version[:3])
-        # STYLE is mode-aware (Tier 3i / 3i.2).  The verbose "think aloud in
-        # full paragraphs, be thorough" style directly contradicts the compact
-        # prompt's "Be concise and decisive" and bloats generation on local
-        # models (the dominant cost of a slow turn).  Remote providers keep the
-        # verbose style (large windows, higher quality reasoning). Decide once
-        # via ``_use_compact_prompt`` so it matches the prompt variant.
+        # STYLE is mode-aware (Tier 3i / 3i.2).  Local models get the concise
+        # style: a fuller one contradicts the compact prompt's "Be concise and
+        # decisive" and bloats generation (the dominant cost of a slow turn).
+        # Remote providers get fuller progress updates.  Decide once via
+        # ``_use_compact_prompt`` so it matches the prompt variant.
         if _use_compact_prompt():
             _style = (
                 "STYLE: Be concise and decisive. State what you are about to do in "
@@ -436,11 +435,13 @@ def _get_system_prompt_with_rules() -> str:
             )
         else:
             _style = (
-                "STYLE: Think aloud in full paragraphs. Explain your reasoning step by step -- "
-                "what you observe, what you plan to do, and why. The user should be able to "
-                "follow your thought process. Be thorough but not repetitive. "
-                "When reporting tool results, be brief -- just state what happened and whether "
-                "it succeeded."
+                # Progress updates, never "think aloud" or "explain your reasoning": asking a
+                # model to write out its reasoning trips Anthropic's reasoning_extraction
+                # safeguard, which blocks the request (#460).
+                "STYLE: Keep the user posted as you work: before a step, say in a sentence what "
+                "you are about to do in the scene and what for; after it, say what changed. Plain "
+                "progress updates, not a commentary. When reporting tool results, be brief -- "
+                "just state what happened and whether it succeeded."
             )
         version_header = (
             "You are connected to Blender {:s}. "

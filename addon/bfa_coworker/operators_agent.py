@@ -39,6 +39,7 @@ import threading
 
 from .shared import effective_ports, get_llm_manager, get_agent_controller, HARNESS_PRESET_ITEMS
 from . import agent_controller as _ac_mod
+from . import mcp_to_blender_server
 
 
 class _BFACW_OT_test_remote_api(bpy.types.Operator):  # type: ignore[misc]
@@ -138,10 +139,22 @@ class _BFACW_OT_check_ports(bpy.types.Operator):  # type: ignore[misc]
             self.report({"ERROR"}, "Port check timed out")
             return {"CANCELLED"}
 
+        # This window's own bridge holds its port: that's running, not a clash (#458).
+        own_bridge = (mcp_to_blender_server.is_running()
+                      and int(mcp_to_blender_server.get_actual_port() or 0) == int(_bridge_port))
+        if own_bridge:
+            result["bridge"] = True
+        external = prefs.operating_mode in ("EXTERNAL_HARNESS", "EXTERNAL_AGENT")
         lines = []
-        for label_key in [("bridge", "Bridge"), ("mcp", "MCP"), ("llm", "LLM")]:
-            available = result.get(label_key[0], False)
-            lines.append("{:s}: {:s}".format(label_key[1], "Available" if available else "In Use"))
+        for key, label in [("bridge", "Bridge"), ("mcp", "MCP"), ("llm", "LLM")]:
+            if key == "bridge" and own_bridge:
+                state = "running here"
+            elif key != "bridge" and external:
+                state = "not used in this mode"
+                result[key] = True
+            else:
+                state = "Available" if result.get(key, False) else "In Use"
+            lines.append("{:s}: {:s}".format(label, state))
 
         summary = "  |  ".join(lines)
         if all(result.values()):
@@ -183,12 +196,13 @@ class _BFACW_OT_ping_agent(bpy.types.Operator):  # type: ignore[misc]
             return {"CANCELLED"}
 
         lines = []
+        server_label = "Agent's MCP server" if prefs.operating_mode == "EXTERNAL_AGENT" else "Harness Config"
         for key, label in [
             ("bridge_server", "Bridge"),
             ("mcp_server", "MCP"),
             ("llm_health", "LLM Health"),
             ("llm_chat", "LLM Chat"),
-            ("harness_config", "Harness Config"),
+            ("harness_config", server_label),
         ]:
             val = result.get(key, "not tested")
             if val == "N/A":
@@ -896,7 +910,52 @@ def _run_agent_step(suite_key: str, step_num: int, step_label: str, prompt: str,
 # ---------------------------------------------------------------------------
 # Copy MCP Client Config (External Harness)
 
-class BFACW_OT_copy_mcp_config(bpy.types.Operator):  # type: ignore[misc]
+class _ServerPackagesFirst:
+    """Hand out a client config only once the MCP server it starts can load (#458).
+
+    The client runs our server with Blender's Python; on a fresh install its
+    packages may still need a reinstall for that Python (about a minute, a
+    download).  From a button this waits in the background with a status line;
+    from a script, ``execute`` waits in place."""
+
+    _waiting: dict = {}
+
+    def invoke(self, context: bpy.types.Context, event) -> set[str]:
+        if _ac_mod.vendor_deps_ready():
+            return self.execute(context)
+        result: dict = {}
+        thread = threading.Thread(target=lambda: result.update(zip(("ok", "problem"), _ac_mod.prepare_harness_server())),
+                                  name="bfacw-harness-prep-op", daemon=True)
+        thread.start()
+        self._waiting = {"thread": thread, "result": result,
+                         "timer": context.window_manager.event_timer_add(0.5, window=context.window)}
+        context.workspace.status_text_set(
+            "Coworker: installing its MCP server's packages for this Python (first time, about a minute)...")
+        context.window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context: bpy.types.Context, event) -> set[str]:
+        if event.type != "TIMER" or self._waiting["thread"].is_alive():
+            return {"PASS_THROUGH"}
+        context.window_manager.event_timer_remove(self._waiting["timer"])
+        context.workspace.status_text_set(None)
+        result = self._waiting["result"]
+        if not result.get("ok"):
+            self.report({"ERROR"}, result.get("problem") or "Coworker's MCP server isn't ready (see the console)")
+            return {"CANCELLED"}
+        return self.execute(context)
+
+    def _packages_ready(self) -> bool:
+        """For ``execute`` called directly (scripts): prepare in place."""
+        if _ac_mod.vendor_deps_ready():
+            return True
+        ok, problem = _ac_mod.prepare_harness_server()
+        if not ok:
+            self.report({"ERROR"}, problem)
+        return ok
+
+
+class BFACW_OT_copy_mcp_config(_ServerPackagesFirst, bpy.types.Operator):  # type: ignore[misc]
     """Copy MCP client configuration to the clipboard."""
     bl_idname = "bfacw.copy_mcp_config"
     bl_label = "Copy MCP Config"
@@ -912,6 +971,8 @@ class BFACW_OT_copy_mcp_config(bpy.types.Operator):  # type: ignore[misc]
         prefs = context.preferences.addons[__package__].preferences
         _bridge_port, _, _ = effective_ports(prefs)
         use_blender_py = getattr(prefs, "use_blender_python_for_harness", True)
+        if use_blender_py and not self._packages_ready():
+            return {"CANCELLED"}
         config = _ac_mod.generate_mcp_client_config(
             client_type=self.client_type,
             blender_host=prefs.host,
@@ -949,7 +1010,7 @@ class BFACW_OT_copy_mcp_config(bpy.types.Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
-class BFACW_OT_install_client_config(bpy.types.Operator):  # type: ignore[misc]
+class BFACW_OT_install_client_config(_ServerPackagesFirst, bpy.types.Operator):  # type: ignore[misc]
     """Add the bfa-coworker MCP server to the selected client's config file."""
     bl_idname = "bfacw.install_client_config"
     bl_label = "Add to Client"
@@ -967,6 +1028,8 @@ class BFACW_OT_install_client_config(bpy.types.Operator):  # type: ignore[misc]
     def execute(self, context: bpy.types.Context) -> set[str]:
         prefs = context.preferences.addons[__package__].preferences
         _bridge_port, _, _ = effective_ports(prefs)
+        if getattr(prefs, "use_blender_python_for_harness", True) and not self._packages_ready():
+            return {"CANCELLED"}
         try:
             paths = _ac_mod.install_mcp_client_config(
                 self.client_type,

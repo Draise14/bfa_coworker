@@ -199,7 +199,7 @@ class TestMCPDependencyRequirements(unittest.TestCase):
     def test_pip_commands_cap_mcp(self) -> None:
         for filename, function_name, variable_name in (
             ("build_addon.py", "_bundle_deps_and_source", "pip_cmd"),
-            ("addon/bfa_coworker/agent_controller.py", "_ensure_vendor_deps", "pip_packages"),
+            ("addon/bfa_coworker/agent_controller.py", "_install_vendor_deps", "pip_packages"),
         ):
             with self.subTest(filename=filename):
                 with open(os.path.join(_REPO_DIR, filename), encoding="utf-8") as fh:

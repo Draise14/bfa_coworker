@@ -57,6 +57,7 @@ class _BFACW_OT_server_start(bpy.types.Operator):  # type: ignore[misc]
             execute_interactive.run,
             first_interval=mcp_to_blender_server.TIMER_INTERVAL_ACTIVE,
             persistent=True)
+        _prepare_harness(prefs)
         self.report({"INFO"}, "Bridge server started on {:s}:{:d}".format(prefs.host, _bridge_port))
         return {"FINISHED"}
 
@@ -116,6 +117,15 @@ def _autostart_timer() -> None:
         execute_interactive.run,
         first_interval=mcp_to_blender_server.TIMER_INTERVAL_ACTIVE,
         persistent=True)
+    _prepare_harness(prefs)
+
+
+def _prepare_harness(prefs) -> None:
+    """External Harness: the client starts our MCP server itself, so make its packages
+    loadable in the background as the bridge starts (#458)."""
+    if getattr(prefs, "operating_mode", "") == "EXTERNAL_HARNESS":
+        from .shared import get_agent_controller
+        get_agent_controller().prepare_harness_server_async()
 
 
 def _cli_execute_handler(argv: list[str]) -> int:

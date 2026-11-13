@@ -41,7 +41,7 @@ from typing import Any
 import bpy  # pylint: disable=import-error
 
 from . import agent_controller, mcp_to_blender_server
-from .shared import CHAT_MODE_ITEMS, HARNESS_PRESET_ITEMS
+from .shared import CHAT_MODE_ITEMS, HARNESS_PRESET_ITEMS, icon as safe_icon, is_bforartists
 from .ui_gpu import input_capture, render
 from .ui_gpu import layout as gpu_layout
 from .ui_gpu import style as gpu_style
@@ -58,8 +58,8 @@ __all__ = (
 
 TREE = "BFACW_CoworkerTree"
 CATEGORY = "Coworker"
-_IS_BFA = hasattr(bpy.types, "VIEW3D_MT_view")
-AGENT_ICON = "WIZARD" if _IS_BFA else "GHOST_ENABLED"
+_IS_BFA = is_bforartists()
+AGENT_ICON = safe_icon("WIZARD")       # the ghost in Blender (#456)
 _TAB_STRIP_PX = 24          # the sidebar's tab strip, at UI scale 1
 
 
@@ -1031,7 +1031,7 @@ class BFACW_MT_editor_chat(bpy.types.Menu):
         layout.separator()
         layout.operator("bfacw.chat_attach_image", text="Attach Image...", icon="FILE_IMAGE")
         layout.operator("bfacw.chat_capture_render", text="Attach Render", icon="RENDER_STILL")
-        layout.operator("bfacw.chat_capture_screen", text="Attach Screen", icon="MAKE_SCREENSHOT")
+        layout.operator("bfacw.chat_capture_screen", text="Attach Screen", icon=safe_icon("MAKE_SCREENSHOT"))
         layout.separator()
         layout.operator("bfacw.queue_show", text="Show Queue", icon="FORWARD")
         layout.operator("bfacw.queue_clear", text="Clear Queue", icon="X")
@@ -1176,6 +1176,8 @@ def _draw_tool_entries(layout: Any, context: Any, entries: list) -> None:
 
 class _ToolPanel(_CoworkerPanel):
     bl_region_type = "TOOLS"
+    # Only Bforartists' toolshelf has tabs: Blender refuses a category there (#456).
+    bl_category = CATEGORY if _IS_BFA else ""
 
     def entries(self, context) -> list:
         return []
@@ -1207,7 +1209,7 @@ class BFACW_PT_editor_tools_attach(_ToolPanel, bpy.types.Panel):
     def entries(self, context):
         return [("bfacw.chat_attach_image", "Attach Image...", "FILE_IMAGE", {}),
                 ("bfacw.chat_capture_render", "Attach Render", "RENDER_STILL", {}),
-                ("bfacw.chat_capture_screen", "Attach Screen", "MAKE_SCREENSHOT", {})]
+                ("bfacw.chat_capture_screen", "Attach Screen", safe_icon("MAKE_SCREENSHOT"), {})]
 
     # The image picker itself is the input row's popover (#265): just the buttons here.
 

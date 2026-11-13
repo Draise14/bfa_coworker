@@ -404,7 +404,7 @@ def _get_system_prompt(use_compact: bool | None = None) -> str:
     fallback = (
         "You are a Blender automation assistant. "
         "You have access to tools that can execute Python code in Blender. "
-        "Think aloud in full paragraphs. Explain your reasoning step by step. "
+        "Before each step, say in a sentence what you are about to do. "
         "Summarize tool results in a few words. Avoid fluff and polite filler. "
         "Execute code to complete the user's request, "
         "then respond with a brief summary of what was done."
@@ -421,12 +421,11 @@ def _get_system_prompt_with_rules() -> str:
 
         # -- Blender version announcement ----------------------
         version_str = ".".join(str(v) for v in bpy.app.version[:3])
-        # STYLE is mode-aware (Tier 3i / 3i.2).  The verbose "think aloud in
-        # full paragraphs, be thorough" style directly contradicts the compact
-        # prompt's "Be concise and decisive" and bloats generation on local
-        # models (the dominant cost of a slow turn).  Remote providers keep the
-        # verbose style (large windows, higher quality reasoning). Decide once
-        # via ``_use_compact_prompt`` so it matches the prompt variant.
+        # STYLE is mode-aware (Tier 3i / 3i.2).  Local models get the concise
+        # style: a fuller one contradicts the compact prompt's "Be concise and
+        # decisive" and bloats generation (the dominant cost of a slow turn).
+        # Remote providers get fuller progress updates.  Decide once via
+        # ``_use_compact_prompt`` so it matches the prompt variant.
         if _use_compact_prompt():
             _style = (
                 "STYLE: Be concise and decisive. State what you are about to do in "
@@ -436,11 +435,13 @@ def _get_system_prompt_with_rules() -> str:
             )
         else:
             _style = (
-                "STYLE: Think aloud in full paragraphs. Explain your reasoning step by step -- "
-                "what you observe, what you plan to do, and why. The user should be able to "
-                "follow your thought process. Be thorough but not repetitive. "
-                "When reporting tool results, be brief -- just state what happened and whether "
-                "it succeeded."
+                # Progress updates, never "think aloud" or "explain your reasoning": asking a
+                # model to write out its reasoning trips Anthropic's reasoning_extraction
+                # safeguard, which blocks the request (#460).
+                "STYLE: Keep the user posted as you work: before a step, say in a sentence what "
+                "you are about to do in the scene and what for; after it, say what changed. Plain "
+                "progress updates, not a commentary. When reporting tool results, be brief -- "
+                "just state what happened and whether it succeeded."
             )
         version_header = (
             "You are connected to Blender {:s}. "
@@ -2396,7 +2397,17 @@ def _ensure_vendor_deps() -> bool:
         # surfaced later as a bare "No module named 'blmcp'" traceback.
         problems = _check_vendor_layout()
         if not problems:
-            return True
+            # Files on disk are not proof (#458): the zip's compiled packages
+            # (pydantic_core, rpds) were built for another Python, so the server
+            # died on import wherever nothing reinstalled them (External Agent,
+            # External Harness).  Import them once per Python version.
+            ok, why = _vendor_imports_ok(deps_dir)
+            if ok:
+                return True
+            print("[Coworker] _ensure_vendor_deps: the packages don't load with this Python "
+                  "({:s}) -- reinstalling them: {:s}".format(_python_tag(), why))
+            shutil.rmtree(str(deps_dir), ignore_errors=True)
+            return _install_vendor_deps(deps_dir)
         print("[Coworker] _ensure_vendor_deps: deps present but layout incomplete:")
         for problem in problems:
             print("[Coworker] _ensure_vendor_deps:   - {:s}".format(problem))
@@ -2407,7 +2418,63 @@ def _ensure_vendor_deps() -> bool:
         return False
 
     print("[Coworker] _ensure_vendor_deps: vendor deps cache is missing or empty -- attempting auto-install...")
+    return _install_vendor_deps(deps_dir)
 
+
+# Written into the deps cache once its packages imported with this Python (#458).
+_DEPS_OK_MARK = ".bfacw_imports_ok"
+# What the MCP server needs to start: the SDK and its compiled parts, and blmcp.
+_VENDOR_IMPORTS = "import mcp.server.fastmcp, mcp.server.stdio, pydantic_core, yaml, blmcp"
+
+
+def _python_tag() -> str:
+    """``cp313``: Blender's Python, which also runs the MCP server."""
+    return "cp{:d}{:d}".format(*sys.version_info[:2])
+
+
+def vendor_deps_ready() -> bool:
+    """True when the MCP server's packages are known to load with this Python.
+    Fast (no subprocess): it reads the mark :func:`_vendor_imports_ok` leaves."""
+    deps_dir = _get_vendor_deps_dir()
+    try:
+        return (deps_dir / _DEPS_OK_MARK).read_text(encoding="utf-8").strip() == _python_tag()
+    except OSError:
+        return False
+
+
+def _vendor_imports_ok(deps_dir: Path) -> tuple[bool, str]:
+    """Import the MCP server's packages with Blender's Python, as the server will
+    (``(True, "")`` or ``(False, why)``).  Remembered per Python version."""
+    if vendor_deps_ready():
+        return True, ""
+    blender_py = _find_blender_python()
+    if not blender_py:
+        return True, ""         # nothing to test with; the start reports its own error
+    env = os.environ.copy()
+    env["PYTHONPATH"] = _find_vendor_pythonpath()
+    if sys.platform == "win32":
+        # pywin32's DLLs, as the launcher adds them.
+        pywin32_system32 = deps_dir / "pywin32_system32"
+        if pywin32_system32.is_dir():
+            env["PATH"] = str(pywin32_system32) + os.pathsep + env.get("PATH", "")
+    try:
+        probe = subprocess.run([blender_py, "-c", _VENDOR_IMPORTS], capture_output=True,
+                               text=True, timeout=60, env=env)
+    except (OSError, subprocess.TimeoutExpired) as ex:
+        return True, "not checked ({:s})".format(str(ex))     # can't tell: don't reinstall
+    if probe.returncode != 0:
+        lines = (probe.stderr or "").strip().splitlines()
+        return False, lines[-1] if lines else "exit {:d}".format(probe.returncode)
+    try:
+        (deps_dir / _DEPS_OK_MARK).write_text(_python_tag(), encoding="utf-8")
+    except OSError:
+        pass
+    return True, ""
+
+
+def _install_vendor_deps(deps_dir: Path) -> bool:
+    """pip-install the MCP server's packages into *deps_dir* with Blender's Python,
+    then prove they import.  Slow (a download): call it off the main thread."""
     # Try to install using Blender's pip.
     blender_py = _find_blender_python()
     if not blender_py:
@@ -2431,11 +2498,12 @@ def _ensure_vendor_deps() -> bool:
         result = subprocess.run(
             [blender_py, "-m", "pip", "install",
              "--target", str(deps_dir),
+             "--upgrade",           # over whatever a failed removal left (#458)
              "--no-compile",
              ] + pip_packages,
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=300,
         )
         if result.returncode != 0:
             print("[Coworker] _ensure_vendor_deps: pip install failed (exit {:d})".format(
@@ -2443,32 +2511,15 @@ def _ensure_vendor_deps() -> bool:
             print("[Coworker] _ensure_vendor_deps: stderr = {:s}".format(result.stderr[-2000:] or "(empty)"))
             print("[Coworker] _ensure_vendor_deps: stdout = {:s}".format(result.stdout[-2000:] or "(empty)"))
             return False
-        # Verify that the critical import actually works.
-        blender_py_verify = _find_blender_python()
-        if blender_py_verify:
-            vendor_pp = _find_vendor_pythonpath()
-            verify_env = os.environ.copy()
-            if vendor_pp:
-                verify_env["PYTHONPATH"] = vendor_pp
-            # On Windows, pywin32 DLLs must be on PATH for import verification.
-            if sys.platform == "win32":
-                pywin32_system32 = _get_vendor_deps_dir() / "pywin32_system32"
-                if pywin32_system32.is_dir():
-                    verify_env["PATH"] = str(pywin32_system32) + os.pathsep + verify_env.get("PATH", "")
-            verify = subprocess.run(
-                [blender_py_verify, "-c", "import mcp.server.fastmcp"],
-                capture_output=True, text=True, timeout=30, env=verify_env,
-            )
-            if verify.returncode != 0:
-                print("[Coworker] _ensure_vendor_deps: post-install import verification FAILED")
-                print("[Coworker] _ensure_vendor_deps: verify stderr = {:s}".format(
-                    verify.stderr[-1500:] or "(empty)"))
-                return False
-            print("[Coworker] _ensure_vendor_deps: post-install import verification OK")
         # Clean __pycache__ to save space.
         for root, dirs, _files in os.walk(str(deps_dir)):
             if '__pycache__' in dirs:
                 shutil.rmtree(os.path.join(root, '__pycache__'), ignore_errors=True)
+        # Verify that the server's imports actually work.
+        ok, why = _vendor_imports_ok(deps_dir)
+        if not ok:
+            print("[Coworker] _ensure_vendor_deps: post-install import verification FAILED: {:s}".format(why))
+            return False
         print("[Coworker] _ensure_vendor_deps: auto-install succeeded")
         return True
     except Exception as ex:
@@ -3664,7 +3715,15 @@ if _info.get("token") and not os.environ.get("BFACW_TOKEN"):
     os.environ["BFACW_TOKEN"] = _info["token"]
 
 sys.argv[0] = "blmcp"
-runpy.run_module("blmcp", run_name="__main__", alter_sys=True)
+try:
+    runpy.run_module("blmcp", run_name="__main__", alter_sys=True)
+except ImportError as ex:
+    # The client only shows "connection closed": say why and what fixes it (#458).
+    sys.stderr.write(
+        "bfa-coworker: the MCP server's packages don't load with this Python ({}). "
+        "In Blender, set Coworker to External Harness and press Start: it reinstalls them. "
+        "Then restart this app.\\n".format(ex))
+    sys.exit(1)
 '''
 
 
@@ -3788,12 +3847,48 @@ def external_agent_server_entry(
     launcher's ``install.json`` is written after that, so it lists the
     pywin32 folders a fresh install just created.
     """
-    if use_blender_python and not _ensure_vendor_deps():
-        problems = _check_vendor_layout()
-        return (None, "Coworker's MCP server isn't ready -- {:s}".format(
-            "; ".join(problems) if problems else "its packages could not be installed (see the console)"))
+    if use_blender_python:
+        ok, problem = prepare_harness_server()
+        if not ok:
+            return None, problem
     return (build_mcp_server_entry(blender_host=blender_host, blender_port=blender_port,
                                    use_blender_python=use_blender_python), "")
+
+
+def prepare_harness_server() -> tuple[bool, str]:
+    """Make the stdio MCP server an outside app starts loadable: ``(True, "")`` or
+    ``(False, problem)``.  External Agent's agent app and External Harness's client
+    both run it with Blender's Python, so its packages must import with that Python
+    (#424, #458).  May pip-install them: call it off the main thread."""
+    if not _ensure_vendor_deps():
+        problems = _check_vendor_layout()
+        return False, "Coworker's MCP server isn't ready -- {:s}".format(
+            "; ".join(problems) if problems else "its packages could not be installed (see the console)")
+    try:
+        ensure_harness_launcher()   # after the install: it lists the folders pip just made
+    except OSError as ex:
+        return False, "Coworker's MCP server launcher could not be written: {:s}".format(str(ex))
+    return True, ""
+
+
+_HARNESS_PREP: dict[str, Any] = {"thread": None, "ok": None, "problem": ""}
+
+
+def prepare_harness_server_async() -> None:
+    """:func:`prepare_harness_server` in the background, once at a time: the bridge's
+    start in External Harness mode, so a client's first start finds the server ready."""
+    thread = _HARNESS_PREP["thread"]
+    if thread is not None and thread.is_alive():
+        return
+
+    def _work() -> None:
+        ok, problem = prepare_harness_server()
+        _HARNESS_PREP["ok"], _HARNESS_PREP["problem"] = ok, problem
+        print("[Coworker] External Harness: MCP server {:s}".format("ready" if ok else problem))
+
+    _HARNESS_PREP["ok"], _HARNESS_PREP["problem"] = None, ""
+    _HARNESS_PREP["thread"] = threading.Thread(target=_work, name="bfacw-harness-prep", daemon=True)
+    _HARNESS_PREP["thread"].start()
 
 
 def generate_mcp_client_config(
@@ -8314,6 +8409,11 @@ def ping_agent(
         }
     """
     is_harness = (operating_mode == "EXTERNAL_HARNESS")
+    # External Agent too (#458): the agent app starts its own stdio MCP server and
+    # brings its own model, so llama-server and the HTTP server on 9191 are not
+    # used -- checking them only reported failures that weren't.
+    is_external = is_harness or operating_mode == "EXTERNAL_AGENT"
+    why_na = "N/A (harness mode)" if is_harness else "N/A (the agent app runs its own)"
     result: dict[str, Any] = {}
 
     # 1 -- Bridge server (raw TCP inside Blender)
@@ -8347,14 +8447,14 @@ def ping_agent(
     except Exception as ex:
         result["bridge_server"] = "FAIL: {:s}".format(str(ex))
 
-    # In harness mode, skip MCP and LLM probes -- they're external.
-    if is_harness:
-        result["mcp_server"] = "N/A (harness mode)"
-        result["llm_health"] = "N/A (harness mode)"
-        result["llm_chat"] = "N/A (harness mode)"
+    # In the external modes, skip MCP and LLM probes -- they're external.
+    if is_external:
+        result["mcp_server"] = why_na
+        result["llm_health"] = why_na
+        result["llm_chat"] = why_na
 
-        # Preflight the config the user is expected to paste into their client.
-        if check_harness_config:
+        # Preflight the server the client / agent app will start.
+        if check_harness_config or not is_harness:
             try:
                 check = validate_mcp_client_config(
                     blender_host="localhost",

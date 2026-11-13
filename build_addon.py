@@ -259,6 +259,11 @@ def main() -> int:
     os.makedirs(args.output_dir, exist_ok=True)
 
     # Step 0: Bundle MCP deps and source into vendor/.
+    # Compiled packages (pydantic_core, rpds) must match Blender's Python, not this
+    # script's: 1.1.42 shipped cp312 builds that Python 3.13 can't load (#458).  Use
+    # the Blender this build found unless BLENDER_BIN / BLENDER_PYTHON say otherwise.
+    if not os.environ.get("BLENDER_BIN") and not os.environ.get("BLENDER_PYTHON") and os.path.isfile(args.blender):
+        os.environ["BLENDER_BIN"] = args.blender
     _bundle_deps_and_source()
 
     # Step 1: Build.

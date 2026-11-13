@@ -93,6 +93,12 @@ class AcpEngine:
         self._turn_id = ""
         self._queue: deque[Prompt] = deque()
         self.on_session: Callable[[str], None] | None = None   # each session id (to resume later)
+        # #431: a tab's chat continues its own agent session.  *resume_for(thread)* is the
+        # session saved for that thread's chat ("" = none); *on_thread_session(session, thread)*
+        # hears each tab's session, to file it under its chat.
+        self.resume_for: Callable[[str], str] | None = None
+        self.preset_id = ""                 # which agent (its sessions are filed per agent)
+        self.on_thread_session: Callable[[str, str], None] | None = None
         self.resumed = self.resume_failed = False
         self._cwd, self._servers = "", []
         self.on_change: Callable[[], None] | None = None     # redraw hook (any thread)
@@ -183,6 +189,8 @@ class AcpEngine:
             self._apply_preferred(client, session_id)
         if session_id and self.on_session is not None and not self.thread:
             self.on_session(session_id)     # the default thread's session, filed under its chat
+        elif session_id and self.on_thread_session is not None and self.thread:
+            self.on_thread_session(session_id, self.thread)      # a tab's, under its chat (#431)
         return session_id
 
     # -- threads (#357) ----------------------------------------------------------------
@@ -197,6 +205,13 @@ class AcpEngine:
             applier = ChatStateApplier(state, on_plan=self.applier.on_plan)
             applier.agent_name = self.applier.agent_name
         self.thread, self.session_id, self.state, self.applier = thread, session_id, state, applier
+
+    def drop_threads(self) -> None:
+        """Another .blend opened (#431): its tabs are new threads, so the old tabs' sessions
+        and chats are let go (the default thread's stays until :meth:`switch_session`)."""
+        if self.thread and not self.is_busy():
+            self.use_thread("")
+        self._threads = {k: v for k, v in self._threads.items() if not k or k == self.thread}
 
     def forget_thread(self, thread: str) -> None:
         """New Thread in an editor's thread (#358): its next turn opens a fresh session."""
@@ -312,11 +327,13 @@ class AcpEngine:
             worker.join()
 
     def switch_session(self, resume: str = "", wait: bool = False) -> None:
-        """Another chat was opened (Chat 7): continue its own agent session, or a fresh one."""
+        """The default thread shows another chat (Chat 7; a .blend opened, #431): continue
+        that chat's own agent session, or a fresh one."""
         client = self.client
         if client is None or not self.connected:
             return
         self.cancel()
+        self.use_thread("")
 
         def work() -> None:
             try:
@@ -463,7 +480,9 @@ class AcpEngine:
             if self.client is None or not self.connected:
                 raise AcpError("not connected -- press Start first")
             if not self.session_id:         # this thread's first turn: its own session (#357)
-                self.session_id = self._open_session(self.client, False, "", self._cwd,
+                # ... continuing the session its chat had, when there was one (#431).
+                resume = self.resume_for(self.thread) if self.resume_for is not None else ""
+                self.session_id = self._open_session(self.client, self.caps.load_session, resume, self._cwd,
                                                      self._servers_for(self.thread))
             result = self.client.prompt(self.session_id, self._blocks(prompt), timeout=None)
             stop_reason = str(result.get("stopReason") or "end_turn")

@@ -4,14 +4,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Your chats in one list, not tied to the .blend (Tier 4, task "Chat 7", #156).
+Your chats, by the .blend they belong to (Tier 4, "Chat 7" #156; sessions #431).
 
-Like the chat list in VS Code or Claude: every chat has its own file
-(``chats/<id>.json``, its memory next to it as ``<id>.memory.json``) and an
-entry in ``chats/index.json`` -- title (your first message, renamable), when
-it was last used, which engine / agent, the .blend it started in, pinned.
-Opening a .blend still continues the chat you last used there
-(``last_for_blend``); any chat can be continued from any file.
+Every chat has its own file (``chats/<id>.json``, its memory next to it as
+``<id>.memory.json``) and an entry in ``chats/index.json`` -- title (your first
+message, renamable), when it was last used, which engine / agent, its .blend,
+pinned.  A .blend is a session: the chat All editors shows there
+(``last_for_blend``), its open tabs (``tabs_for_blend``) and the tab each area
+shows (``area_tabs_for_blend``).  History lists the files with their chats
+(:meth:`ChatIndex.files`); any chat can still be continued from any file.
 
 The old per-.blend files (``<blend name>.json`` next to ``chats/``) are moved
 in once (copied; the originals stay as a backup), with their memory and
@@ -24,6 +25,8 @@ from __future__ import annotations
 
 __all__ = (
     "ChatIndex",
+    "area_key",
+    "match_area_tabs",
     "relative_time",
 )
 
@@ -165,6 +168,30 @@ class ChatIndex:
         out.sort(key=lambda e: (not e.get("pinned"), -float(e.get("updated", 0))))
         return out
 
+    def files(self, query: str = "") -> list[dict[str, Any]]:
+        """History by file (#431): ``[{"blend", "blend_path", "updated", "chats"}]``, the
+        newest file first, its chats as :meth:`entries` (pinned first, then the newest).
+        Chats that never belonged to a saved file are the last group, ``blend`` "".
+        *query* matches chat titles and file names."""
+        q = query.lower().strip()
+        groups: dict[str, dict[str, Any]] = {}
+        for entry in self.entries():
+            blend = str(entry.get("blend") or "")
+            if q and q not in str(entry.get("title", "")).lower() and q not in blend.lower():
+                continue
+            group = groups.setdefault(blend, {"blend": blend, "blend_path": "", "updated": 0.0, "chats": []})
+            group["chats"].append(entry)
+            updated = float(entry.get("updated", 0))
+            if updated >= group["updated"]:
+                group["updated"] = updated
+                group["blend_path"] = str(entry.get("blend_path") or group["blend_path"])
+            elif not group["blend_path"]:
+                group["blend_path"] = str(entry.get("blend_path") or "")
+        out = sorted((g for g in groups.values() if g["blend"]), key=lambda g: -g["updated"])
+        if "" in groups:
+            out.append(groups[""])
+        return out
+
     def get(self, chat_id: str) -> dict[str, Any] | None:
         entry = self._read()["chats"].get(chat_id)
         return dict(entry, id=chat_id) if entry else None
@@ -235,6 +262,20 @@ class ChatIndex:
                 {"chat": str(t["chat"]), "editor": str(t.get("editor", ""))} for t in tabs if t.get("chat")]
             self._write(data)
 
+    def area_tabs_for_blend(self, blend: str) -> list[dict[str, str]]:
+        """The tab each area showed when *blend* was last saved or left (#431):
+        ``[{"key", "editor", "chat"}]`` (see :func:`area_key`; ``chat`` "" is All editors)."""
+        tabs = self._read().get("area_tabs_for_blend", {}).get(blend or "default") or []
+        return [t for t in tabs if isinstance(t, dict) and t.get("key")]
+
+    def set_area_tabs_for_blend(self, blend: str, tabs: list[dict[str, str]]) -> None:
+        with self._lock:
+            data = self._read()
+            data.setdefault("area_tabs_for_blend", {})[blend or "default"] = [
+                {"key": str(t["key"]), "editor": str(t.get("editor", "")), "chat": str(t.get("chat", ""))}
+                for t in tabs if t.get("key")]
+            self._write(data)
+
     def set_last_for_blend(self, blend: str, chat_id: str, editor: str = "") -> None:
         with self._lock:
             data = self._read()
@@ -266,9 +307,50 @@ class ChatIndex:
             data["last_for_blend"] = {k: v for k, v in data["last_for_blend"].items() if v != chat_id}
             for key, tabs in data.get("tabs_for_blend", {}).items():
                 data["tabs_for_blend"][key] = [t for t in tabs if t.get("chat") != chat_id]
+            for key, tabs in data.get("area_tabs_for_blend", {}).items():
+                data["area_tabs_for_blend"][key] = [t for t in tabs if t.get("chat") != chat_id]
             self._write(data)
         for path in (self.chat_path(chat_id), self.memory_path(chat_id)):
             try:
                 path.unlink()
             except OSError:
                 pass
+
+
+# -- Each area's tab (#431) ---------------------------------------------------------------
+# Blender areas have no lasting id: an area is known by its workspace, its place in the
+# workspace's screen and its editor.  When the layout changed since, the editor kind in
+# the same workspace (then anywhere) still finds it.
+
+def area_key(workspace: str, index: int, editor: str) -> str:
+    """``"<workspace>|<index>|<editor>"``: an area, as saved with its tab."""
+    return "{:s}|{:d}|{:s}".format(workspace, index, editor)
+
+
+def match_area_tabs(saved: list[dict[str, str]], areas: list[str]) -> dict[str, str]:
+    """Which saved tab each area of *areas* (their :func:`area_key`) shows again:
+    ``{area key: chat id}``.  The same key first; then, for the areas left, a saved tab of
+    the same editor kind in the same workspace, then of that kind anywhere.  Each saved
+    tab is used once."""
+    def parts(key: str) -> tuple[str, str]:
+        workspace, _, rest = key.partition("|")
+        return workspace, rest.partition("|")[2]
+
+    left = [t for t in saved if t.get("key")]
+    out: dict[str, str] = {}
+    for key in areas:
+        found = next((t for t in left if t["key"] == key), None)
+        if found is not None:
+            out[key] = str(found.get("chat", ""))
+            left.remove(found)
+    for same_workspace in (True, False):
+        for key in areas:
+            if key in out:
+                continue
+            workspace, editor = parts(key)
+            found = next((t for t in left if (t.get("editor") or parts(t["key"])[1]) == editor
+                          and (not same_workspace or parts(t["key"])[0] == workspace)), None)
+            if found is not None:
+                out[key] = str(found.get("chat", ""))
+                left.remove(found)
+    return out

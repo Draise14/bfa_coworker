@@ -289,7 +289,8 @@ def _ui_constants(*names):
 _SHOWN = types.SimpleNamespace(id="main")
 _THREAD_STUBS = {"_ui_thread": lambda _context=None: _SHOWN,
                  "_socket": lambda: types.SimpleNamespace(focus="main"),
-                 "_socket_set_by": lambda _thread, _image: None}
+                 "_socket_set_by": lambda _thread, _image: None,
+                 "safe_icon": lambda name: name}       # shared.icon (#456): names as they are
 
 
 def _extract_ui_func(name, extra=None):

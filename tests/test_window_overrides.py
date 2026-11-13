@@ -84,7 +84,12 @@ def _source(start_marker):
 def _capture_operator(bpy):
     ns = {
         "bpy": bpy, "Operator": object, "BoolProperty": lambda **_kw: None,
-        "_SHOT": {"handlers": [], "rects": {}, "hover": {}, "session": 0, "active": False},
+        "StringProperty": lambda **_kw: None,
+        "_SHOT": {"handlers": [], "rects": {}, "hover": {}, "session": 0, "active": False,
+                  "last": {}, "thread": "", "timers": [], "cursors": set()},
+        "_SHOT_TICK": 0.05,
+        "_attach_thread": lambda _context, thread_id="": types.SimpleNamespace(id=thread_id or "t-shown"),
+        "_shot_timer_remove": lambda _wm, _timer: None, "_shot_clear_windows": lambda _wm: None,
         "_shot_handlers_add": lambda: None, "_shot_handlers_remove": lambda: None,
         "_shot_redraw": lambda _window: None, "_shot_status": None,
         "_shot_rect": lambda a, b, square=False: (*a, *b),
@@ -92,7 +97,7 @@ def _capture_operator(bpy):
     }
     exec(compile(_source("class BFACW_OT_chat_capture_screen("), "ui_chat.py", "exec"), ns)  # noqa: S102
     op = ns["BFACW_OT_chat_capture_screen"]()
-    op.p1, op.p2, op.use_rect, op.sibling = (0, 0), (0, 0), False, False
+    op.p1, op.p2, op.use_rect, op.sibling, op.thread_id = (0, 0), (0, 0), False, False, ""
     return op
 
 
@@ -103,7 +108,8 @@ class TestWhileAWindowIsMaximized(unittest.TestCase):
         self.bpy = _fake_bpy(self.calls)
         self.main, self.floating = _Window(1), _Window(2)
         wm = types.SimpleNamespace(windows=[self.main, self.floating],
-                                   modal_handler_add=lambda _op: None)
+                                   modal_handler_add=lambda _op: None,
+                                   event_timer_add=lambda _step, window=None: object())
         self.context = types.SimpleNamespace(
             window=self.main, window_manager=wm, temp_override=_refusing_override,
             workspace=types.SimpleNamespace(status_text_set=lambda _text: None))
@@ -122,7 +128,8 @@ class TestWhileAWindowIsMaximized(unittest.TestCase):
         for later in self.bpy.app.timers.registered:
             later()
         self.assertEqual(self.calls, [("chat_capture_screen", ("EXEC_DEFAULT",),
-                                       {"p1": (0, 0), "p2": (50, 40), "use_rect": True})])
+                                       {"p1": (0, 0), "p2": (50, 40), "use_rect": True,
+                                        "thread_id": "t-shown"})])
 
     def test_auto_mode_sends_the_next_step(self):
         props = types.SimpleNamespace(chat_input="")

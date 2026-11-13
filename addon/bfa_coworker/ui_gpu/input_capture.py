@@ -149,6 +149,16 @@ def _local(event: Any, region: Any) -> tuple[float, float]:
     return float(event.mouse_x - region.x), float(event.mouse_y - region.y)
 
 
+def _shows_file_browser(window: Any) -> bool:
+    """*window* shows a temporary file browser: its own window, or an area maximized for it
+    (Preferences > Interface > Temporary Editors).  A File Browser in a layout is not one."""
+    try:
+        screen = window.screen
+        return bool(screen.is_temporary) and any(a.type == "FILE_BROWSER" for a in screen.areas)
+    except (AttributeError, ReferenceError):
+        return False
+
+
 def _same(a: Any, b: Any) -> bool:
     return a is not None and b is not None and a[0] is b[0]
 
@@ -185,6 +195,10 @@ class BFACW_OT_gpu_input(bpy.types.Operator):
         if event.type in _IGNORED or not event.type:
             # No type = an event Python can't name, like a file drop (EVT_DROP): it must reach
             # the file handlers even while the box has focus (#215).
+            return {"PASS_THROUGH"}
+        if _shows_file_browser(getattr(context, "window", None)):
+            # A file browser of its own (Open, Attach Image...): its keys are its own, never the
+            # focused chat's, or Enter sent the draft instead of opening the file (#449).
             return {"PASS_THROUGH"}
         try:
             return self._handle(context, event, router)

@@ -795,12 +795,15 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
         ops.mention_search("INVOKE_DEFAULT")
     elif action == "approval_menu":            # the Permissions dropdown: Strict / Permissive / Auto
         bpy.ops.wm.call_panel(name="BFACW_PT_approval_popover", keep_open=True)
-    elif action == "attach_menu":
-        bpy.ops.wm.call_panel(name="BFACW_PT_attach_popover", keep_open=True)
+    elif action == "attach_menu":               # every attach names this chat's tab (#449, #454)
+        from . import ui_chat
+        ui_chat.open_attach_popover(context)
     elif action == "attach_render":
-        ops.chat_capture_render()
+        from . import ui_chat
+        ops.chat_capture_render(thread_id=ui_chat._ui_thread(context).id)
     elif action == "attach_screen":
-        ops.chat_capture_screen("INVOKE_DEFAULT")
+        from . import ui_chat
+        ops.chat_capture_screen("INVOKE_DEFAULT", thread_id=ui_chat._ui_thread(context).id)
     elif action == "open_image":
         _open_image(value)
     elif action == "attachment_pin" and props is not None:
@@ -966,8 +969,13 @@ class BFACW_OT_chat_attach_image(bpy.types.Operator):
     filepath: bpy.props.StringProperty(subtype="FILE_PATH", options={"SKIP_SAVE"})  # type: ignore[valid-type]
     filter_image: bpy.props.BoolProperty(default=True, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore[valid-type]
     filter_folder: bpy.props.BoolProperty(default=True, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore[valid-type]
+    # The chat it attaches to (#449): set by the button, else found when the file browser opens,
+    # since the file browser hands execute no area to find it from.
+    thread_id: bpy.props.StringProperty(options={"HIDDEN", "SKIP_SAVE"})  # type: ignore[valid-type]
 
     def invoke(self, context, _event):
+        from . import ui_chat
+        self.thread_id = ui_chat._attach_thread(context, self.thread_id).id
         context.window_manager.fileselect_add(self)
         return {"RUNNING_MODAL"}
 
@@ -975,9 +983,9 @@ class BFACW_OT_chat_attach_image(bpy.types.Operator):
         from . import chat_attachments, ui_chat
         image = chat_attachments.load_image_file(self.filepath)
         if image is None:
-            self.report({"WARNING"}, "Not a supported image file")
+            self.report({"WARNING"}, "Blender can't read this file as an image")
             return {"CANCELLED"}
-        ui_chat._attach_to_socket(context, self, image)
+        ui_chat._attach_to_socket(context, self, image, ui_chat._attach_thread(context, self.thread_id))
         _tag_chat_regions()
         return {"FINISHED"}
 

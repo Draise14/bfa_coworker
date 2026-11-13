@@ -4316,6 +4316,9 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         """Start only the bridge server (External Harness mode)."""
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
+        if context.preferences.addons[__package__].preferences.operating_mode == "EXTERNAL_HARNESS":
+            # The client starts our MCP server itself: have it loadable by then (#458).
+            agent_controller.prepare_harness_server_async()
 
         if mcp_to_blender_server.is_running():
             self.report({"INFO"}, "Bridge server already running")
@@ -4896,7 +4899,7 @@ def draw_chat_controls(layout, context: bpy.types.Context, show_chat_mode: bool 
     # -- The operating mode, switchable right here (#193) --
     narrow = context.region is not None and context.region.width < 320 * context.preferences.system.ui_scale
     mode_row = draw_mode_switcher(layout, prefs, icons_only=narrow)
-    mode_row.enabled = not (state.mcp_server_running or mcp_to_blender_server.is_running())
+    mode_row.enabled = not _mode_locked(prefs)
     if show_prefs and not has_header:     # else the header / top bar has it (#234)
         mode_row.separator(factor=0.3)
         mode_row.operator("bfacw.open_addon_prefs", icon="PREFERENCES", text="")
@@ -6411,6 +6414,18 @@ def draw_mode_switcher(layout, prefs, icons_only: bool = False, full_names: bool
     return row
 
 
+def _mode_locked(prefs) -> bool:
+    """Coworker is started in its mode, so the mode stays put until Stop.  The bridge
+    alone doesn't count (#458): every mode shares it and it runs without the agent
+    (Auto Start, a harness check, an agent that was stopped), which greyed the switch
+    out with the agent off.  In External Harness the bridge is what Start starts."""
+    if agent_controller._agent_state.mcp_server_running:
+        return True
+    if _acp is not None and (_acp.connected or _acp.connecting):
+        return True
+    return prefs.operating_mode == "EXTERNAL_HARNESS" and mcp_to_blender_server.is_running()
+
+
 class BFACW_PT_mode_popover(Panel):  # type: ignore[misc]
     """The mode and its model, from the chat's mode button: the Coworker panel's rows (#235)"""
     bl_label = "Mode"
@@ -6422,7 +6437,7 @@ class BFACW_PT_mode_popover(Panel):  # type: ignore[misc]
     def draw(self, context: bpy.types.Context) -> None:
         layout = self.layout
         prefs = context.preferences.addons[__package__].preferences
-        running = agent_controller._agent_state.mcp_server_running or mcp_to_blender_server.is_running()
+        running = _mode_locked(prefs)
         row = draw_mode_switcher(layout, prefs)
         row.enabled = not running
         if running:

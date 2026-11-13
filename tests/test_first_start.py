@@ -93,7 +93,9 @@ class TestExternalAgentEntry(_FreshProfile):
                 mock.patch.object(ac, "ensure_harness_launcher", launcher):
             entry, problem = ac.external_agent_server_entry(blender_port=9876)
         self.assertEqual(problem, "")
-        self.assertEqual(self.calls, ["ensure_vendor_deps", "ensure_harness_launcher"])
+        # The packages first; the launcher after them (it is rewritten only when it changes).
+        self.assertEqual(self.calls[0], "ensure_vendor_deps")
+        self.assertEqual(set(self.calls[1:]), {"ensure_harness_launcher"})
         self.assertEqual(entry["command"], sys.executable)
         self.assertTrue(entry["args"][0].endswith(ac._HARNESS_LAUNCHER_NAME))
         info = json.loads((self.tmp / "harness" / "install.json").read_text(encoding="utf-8"))

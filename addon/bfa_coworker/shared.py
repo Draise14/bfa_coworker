@@ -30,6 +30,8 @@ __all__ = (
     "get_llm_manager",
     "get_agent_controller",
     "get_gen_controller",
+    "icon",
+    "is_bforartists",
 )
 
 import os
@@ -37,6 +39,50 @@ from pathlib import Path
 
 PORT_MIN = 1024
 PORT_MAX = 65535
+
+
+# -- Icons that work in Blender too (#456) ----------------------------------------
+# Bforartists has about 1,300 icons Blender doesn't.  A layout call or a class with
+# an unknown icon fails in Blender ("enum not found"): a class's bl_icon stops
+# register() part way.  Every Bforartists-only icon goes through icon(), which falls
+# back to a Blender icon (tests/test_blender_icons.py keeps it that way).
+ICON_FALLBACKS = {
+    "WIZARD": "GHOST_ENABLED",      # the agent
+    "WARNING": "ERROR",             # Blender's warning triangle is ERROR
+    "MAKE_SCREENSHOT": "WINDOW",
+    "EXTENSION": "PLUGIN",
+}
+_ICONS: frozenset[str] | None = None
+
+
+def is_bforartists() -> bool:
+    """True in Bforartists.  Blender has no ``bpy.app.bfa_version_string``; menus such
+    as ``VIEW3D_MT_view`` exist in both, so they can't tell them apart."""
+    try:
+        import bpy
+    except ImportError:
+        return False
+    return hasattr(bpy.app, "bfa_version_string")
+
+
+def _known_icons() -> frozenset[str] | None:
+    global _ICONS
+    if _ICONS is None:
+        try:
+            import bpy
+            _ICONS = frozenset(bpy.types.UILayout.bl_rna.functions["prop"].parameters["icon"].enum_items.keys())
+        except (ImportError, AttributeError, KeyError):
+            return None         # no bpy (tests): names pass through
+    return _ICONS
+
+
+def icon(name: str) -> str:
+    """*name* if this build has the icon, else its Blender fallback, else ``NONE``."""
+    known = _known_icons()
+    if known is None or name in known:
+        return name
+    fallback = ICON_FALLBACKS.get(name, "NONE")
+    return fallback if fallback in known else "NONE"
 
 # Default seconds to wait after registration before auto-starting the server.
 # Avoids adding work to Blender's startup sequence.
@@ -471,7 +517,7 @@ _HARNESS_PRESETS: list[HarnessPreset] = [
         identifier="cline",
         name="Cline",
         description="Open-source coding agent extension for VS Code and JetBrains.",
-        icon="EXTENSION",
+        icon=icon("EXTENSION"),
         is_open_source=True,
         config_path_help=(
             "IDE: MCP Servers icon -> Configure -> 'Configure MCP Servers' opens cline_mcp_settings.json\n"

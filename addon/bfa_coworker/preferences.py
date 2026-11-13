@@ -42,6 +42,7 @@ from .shared import (
     is_debug_mode,
     effective_ports,
     get_llm_manager,
+    icon as safe_icon,
 )
 
 
@@ -1575,7 +1576,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     row = box.row(align=True)
                     row.label(
                         text="llama-server: Installed (unknown build, {:s})".format(_source),
-                        icon='WARNING',
+                        icon=safe_icon('WARNING'),
                     )
                     row.operator(
                         "bfacw.download_llama_server",
@@ -2025,7 +2026,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         # -- Generation (Tier 5) ----------------------------------------
         gen_box = layout.box()
         gen_box.label(text="Generative (Image / Video / Audio)", icon='RENDER_RESULT')
-        gen_box.label(text="Experimental (WIP)", icon='WARNING')
+        gen_box.label(text="Experimental (WIP)", icon=safe_icon('WARNING'))
         gen_box.prop(self, "gen_backend")
 
         if self.gen_backend == "local":

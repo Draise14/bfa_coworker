@@ -18,6 +18,10 @@ operator per window watches events and hands them to the chat surface
 * **keys** go to the focused box (Enter sends, Shift+Enter adds a line...);
   while it has focus, editor shortcuts never fire;
 * Ctrl+C / X / V use the window manager clipboard;
+* **right-click** over a chat opens its own menu (``BFACW_MT_chat_context``,
+  #453) with what was under the mouse (:func:`menu_target`), not the Node
+  Editor's: the press, release and click are all used, so neither Blender's
+  (press) nor Bforartists' (click) node menu opens; nothing changes outside;
 * **Edit** opens the text in a native text field, which takes IME input
   (Chinese, Japanese, Korean...) that a GPU box can't;
 * the caret blinks, and the operator restarts after a file is opened (a
@@ -50,6 +54,8 @@ __all__ = (
     "focused_box",
     "gap_due",
     "key_from_event",
+    "menu_edit",
+    "menu_target",
     "register",
     "set_host",
     "unregister",
@@ -66,6 +72,10 @@ _DRAG: dict[str, Any] = {"hit": None}
 _ZOOM_DRAG: dict[str, Any] = {"hit": None, "y": 0.0, "zoom": 1.0}
 _HOVER: dict[str, Any] = {"hit": None, "text_cursor": False}
 _RUNNING: set[int] = set()
+# The right-click menu (#453): the chat it was opened on and what was under the mouse.
+CONTEXT_MENU = "BFACW_MT_chat_context"
+_MENU: dict[str, Any] = {"surface": None, "area": None, "region": None, "widget": None, "turn": None}
+_RIGHT = frozenset({"RELEASE", "CLICK", "DOUBLE_CLICK"})
 # The autosave gap (#370): paused while it's open, when it last opened, the last key / click, and
 # the window timers that wake each operator so it can end.
 _AUTOSAVE: dict[str, Any] = {"paused": False, "last_gap": 0.0, "last_input": 0.0, "timers": []}
@@ -89,6 +99,38 @@ def set_host(router: Router | None, on_action: OnAction | None = None,
     if router is None:
         _blur()
         _DRAG["hit"] = _HOVER["hit"] = None
+        _forget_menu()
+
+
+def menu_target() -> dict[str, Any]:
+    """What the right-click menu was opened on (#453): ``surface``, ``area``, ``region``,
+    ``widget`` (the hit id under the mouse) and ``turn`` (:meth:`ChatSurface.turn_at`)."""
+    return _MENU
+
+
+def _forget_menu() -> None:
+    _MENU.update(surface=None, area=None, region=None, widget=None, turn=None)
+
+
+def menu_edit(action: str, clipboard: str) -> str | None:
+    """*action* ``cut`` / ``copy`` / ``paste`` / ``select_all`` from the menu, on the prompt
+    it was opened on, like Ctrl+X / C / V / A (#453); the box gets the keyboard.  Returns
+    the new clipboard text, or None to leave it."""
+    surface, region = _MENU["surface"], _MENU["region"]
+    box = getattr(surface, "box", None)
+    if box is None:
+        return None
+    model, out = box.model, None
+    if action in ("cut", "copy"):
+        out = model.selected_text() or None
+        if out and action == "cut":
+            model.delete()
+    elif action == "paste":
+        box.paste(clipboard or "")
+    elif action == "select_all":
+        model.select_all()
+    focus(box, region)
+    return out
 
 
 def focused_box() -> InputBox | None:
@@ -236,6 +278,11 @@ class BFACW_OT_gpu_input(bpy.types.Operator):
                     pass
             return {"PASS_THROUGH"}
 
+        if event.type == "RIGHTMOUSE":
+            used = _right_click(context, event, router)
+            if used is not None:
+                return used
+
         if event.type == "LEFTMOUSE" and event.value == "RELEASE" and drag is not None:
             surface, _area, region = drag
             surface.on_release(*_local(event, region))
@@ -284,6 +331,42 @@ class BFACW_OT_gpu_input(bpy.types.Operator):
             _HOST["after_key"](box)
         _redraw()
         return {"RUNNING_MODAL"} if used else {"PASS_THROUGH"}
+
+
+def _chat_under(context: Any, event: Any, router: Router) -> tuple[Any, Any, Any] | None:
+    """The chat surface under the mouse (inside what it drew), or None."""
+    hit = router(context, event)
+    if hit is None or not hasattr(hit[0], "on_right_press"):
+        return None
+    bounds = hit[0].bounds
+    return hit if bounds is not None and bounds.contains(*_local(event, hit[2])) else None
+
+
+def _open_menu(context: Any, area: Any, region: Any) -> None:
+    """Open the chat's menu in *area* / *region*: its entries then run there, on that chat."""
+    try:
+        with context.temp_override(window=context.window, area=area, region=region):
+            bpy.ops.wm.call_menu(name=CONTEXT_MENU)
+    except (RuntimeError, TypeError, ReferenceError) as ex:
+        print("[Coworker] chat menu: {:s}".format(str(ex)))
+
+
+def _right_click(context: Any, event: Any, router: Router) -> set[str] | None:
+    """#453: a right press over a chat opens the chat's menu; its release and click are used
+    too.  None: not over a chat -- handled as before."""
+    hit = _chat_under(context, event, router)
+    if hit is None:
+        return None            # not over a chat: the editor's own right-click (and blur, below)
+    if event.value != "PRESS":
+        return {"RUNNING_MODAL"} if event.value in _RIGHT else None
+    surface, area, region = hit
+    x, y = _local(event, region)
+    _MENU.update(surface=surface, area=area, region=region, **surface.on_right_press(x, y))
+    if _MENU["widget"] == "input":         # like a text field: the prompt takes the keyboard
+        focus(surface.box, region)
+    _tag(region)
+    _open_menu(context, area, region)
+    return {"RUNNING_MODAL"}
 
 
 class BFACW_OT_gpu_input_native(bpy.types.Operator):
@@ -402,6 +485,7 @@ def _on_load_pre(*_args) -> None:
     _RUNNING.clear()
     _FOCUS["box"] = _FOCUS["region"] = None
     _DRAG["hit"] = _HOVER["hit"] = _ZOOM_DRAG["hit"] = None
+    _forget_menu()
 
 
 _CLASSES = (BFACW_OT_gpu_input, BFACW_OT_gpu_input_native)

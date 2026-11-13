@@ -596,6 +596,9 @@ def _draw_button_menu(self: Any, context: Any) -> None:
 
 
 def _draw_editor_menu(self: Any, context: Any) -> None:
+    from .chat_editor import is_coworker_space
+    if is_coworker_space(getattr(context, "space_data", None)):
+        return      # the chat is no node editor: its right-click opens the chat's own menu (#453)
     layout = self.layout
     layout.separator()
     layout.operator("bfacw.explain", text="Explain This Editor", icon='QUESTION').text = \

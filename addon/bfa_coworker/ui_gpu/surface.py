@@ -17,9 +17,9 @@ text and mouse state:
 * the **input box** (:mod:`.input_box`) pinned at the bottom.
 
 Mouse input arrives through :meth:`on_move` / :meth:`on_press` /
-:meth:`on_release` / :meth:`on_wheel` in region pixels (the host,
-``input_capture``, calls them); clicks land on the next :meth:`draw`, which
-returns the actions for the host to carry out, e.g. ``("send", text)``,
+:meth:`on_release` / :meth:`on_wheel` / :meth:`on_right_press` in region
+pixels (the host, ``input_capture``, calls them); clicks land on the next
+:meth:`draw`, which returns the actions for the host to carry out, e.g. ``("send", text)``,
 ``("stop", "")``, ``("copy", text)``, ``("link", url)``, ``("start", "")``,
 ``("stop_agent", "")``, ``("open_editor", "")``, ``("prefs", "")``,
 ``("chat_mode", "ASK")`` or a notice button's ``("notice", id)``.  Free of
@@ -256,6 +256,20 @@ class ChatSurface:
         self.pressed = widget
         return True
 
+    def turn_at(self, x: float, y: float) -> dict | None:
+        """The message at (x, y) in the last frame (see :meth:`ChatView.turn_at`), or None."""
+        if self._chat_rect is None or not self._chat_rect.contains(x, y):
+            return None
+        return self.view.turn_at(x, y)
+
+    def on_right_press(self, x: float, y: float) -> dict:
+        """A right press (#453): hides the tooltip and returns what the context menu shows
+        entries for -- the ``widget`` and the message (``turn``) under the mouse."""
+        self.mouse = (x, y)
+        self._tip_blocked, self._tip_shown = True, False
+        widget = self.hit(x, y)
+        return {"widget": widget, "turn": self.turn_at(x, y) if widget != "input" else None}
+
     def on_release(self, x: float, y: float) -> bool:
         """A left release; a press and release on the same widget is a click."""
         if self.pressed is None:
@@ -326,6 +340,7 @@ class ChatSurface:
         self._chat_rect = chat
         self._notice_room = None
         if notice is not None:
+            self.view.turn_rects = []       # no messages on screen: none for the right-click menu
             self._draw_notice(canvas, chat, notice, actions)
         else:
             actions += self.view.draw(canvas, chat, history, live=live, compact=self.compact)

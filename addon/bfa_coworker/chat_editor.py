@@ -1062,6 +1062,114 @@ class BFACW_MT_editor_view(bpy.types.Menu):
             layout.menu("INFO_MT_area")
 
 
+# -- The right-click menu (#453) ------------------------------------------------------
+# input_capture opens it over a chat (the editor's or a sidebar's) in that chat's area and
+# region, so its entries -- the existing operators -- act on the chat that was clicked.
+
+_COPY_WHAT = [("MESSAGE", "Message", "Copy the message under the mouse, like its Copy button"),
+              ("CODE", "Code", "Copy the code block under the mouse"),
+              ("CHAT", "Whole Chat", "Copy this chat: your messages and Coworker's replies, without the tool steps")]
+
+
+class BFACW_OT_chat_context_copy(bpy.types.Operator):
+    """Copy from the chat that was right-clicked"""
+
+    bl_idname = "bfacw.chat_context_copy"
+    bl_label = "Copy"
+    bl_options = {"INTERNAL"}
+
+    what: bpy.props.EnumProperty(items=_COPY_WHAT, default="MESSAGE", options={"SKIP_SAVE"})  # type: ignore[valid-type]
+
+    @classmethod
+    def description(cls, _context, properties):
+        return next(d for ident, _n, d in _COPY_WHAT if ident == properties.what)
+
+    def execute(self, context):
+        from . import log
+        from .ui_gpu.chat_view import transcript
+        turn = input_capture.menu_target()["turn"] or {}
+        text = (transcript(_history(context)) if self.what == "CHAT"
+                else turn.get("code", "") if self.what == "CODE" else turn.get("text", ""))
+        if not text:
+            return {"CANCELLED"}
+        context.window_manager.clipboard = log.redact(text)        # keys and tokens as *** (#346)
+        return {"FINISHED"}
+
+
+_EDIT_WHAT = [("cut", "Cut", "Cut the selected text (Ctrl X)"), ("copy", "Copy", "Copy the selected text (Ctrl C)"),
+              ("paste", "Paste", "Paste at the cursor (Ctrl V)"), ("select_all", "Select All", "Select the whole message (Ctrl A)")]
+
+
+class BFACW_OT_chat_context_edit(bpy.types.Operator):
+    """Edit the message you are typing in the chat that was right-clicked"""
+
+    bl_idname = "bfacw.chat_context_edit"
+    bl_label = "Edit Message"
+    bl_options = {"INTERNAL"}
+
+    action: bpy.props.EnumProperty(items=_EDIT_WHAT, default="paste", options={"SKIP_SAVE"})  # type: ignore[valid-type]
+
+    @classmethod
+    def description(cls, _context, properties):
+        return next(d for ident, _n, d in _EDIT_WHAT if ident == properties.action)
+
+    def execute(self, context):
+        target = input_capture.menu_target()
+        surface = target["surface"]
+        if surface is None:
+            return {"CANCELLED"}
+        wm = context.window_manager
+        copied = input_capture.menu_edit(self.action, wm.clipboard or "")
+        if copied is not None:
+            wm.clipboard = copied               # as Ctrl C / X do: your own text, as typed
+        _after_key(surface.box)                 # the tab's draft follows
+        try:
+            target["region"].tag_redraw()
+        except (AttributeError, ReferenceError):
+            pass
+        return {"FINISHED"}
+
+
+class BFACW_MT_chat_context(bpy.types.Menu):
+    bl_idname = "BFACW_MT_chat_context"
+    bl_label = "Coworker Chat"
+
+    def draw(self, context):
+        from . import ui_chat
+        layout = self.layout
+        target = input_capture.menu_target()
+        surface, turn = target["surface"], target["turn"]
+        if target["widget"] == "input" and surface is not None:
+            selected = bool(surface.box.model.selected_text())
+            for action, label, icon, enabled in (("cut", "Cut", safe_icon("CUT"), selected),
+                                                 ("copy", "Copy", "COPYDOWN", selected),
+                                                 ("paste", "Paste", "PASTEDOWN", True),
+                                                 ("select_all", "Select All", safe_icon("SELECT_ALL"), True)):
+                row = layout.row()
+                row.enabled = enabled
+                row.operator("bfacw.chat_context_edit", text=label, icon=icon).action = action
+            layout.separator()
+        elif turn:
+            if turn.get("text"):
+                layout.operator("bfacw.chat_context_copy", text="Copy Message", icon="COPYDOWN").what = "MESSAGE"
+            if turn.get("code"):
+                layout.operator("bfacw.chat_context_copy", text="Copy Code", icon="SCRIPT").what = "CODE"
+            if turn.get("last") and bpy.ops.bfacw.revert_turn.poll():
+                layout.operator("bfacw.revert_turn", text="Revert", icon="LOOP_BACK")
+            layout.separator()
+        layout.operator("bfacw.chat_attach_image", text="Attach Image...", icon="FILE_IMAGE")
+        layout.operator("bfacw.chat_capture_screen", text="Capture Editor", icon=safe_icon("MAKE_SCREENSHOT"))
+        layout.operator("bfacw.chat_capture_render", text="Capture Render", icon="RENDER_STILL")
+        layout.separator()
+        layout.operator("bfacw.tab_new", text="New Chat", icon="ADD")
+        if agent_controller.thread_state(ui_chat._ui_thread(context)).is_thinking:
+            layout.operator("bfacw.chat_stop", text="Stop", icon="PAUSE")
+        layout.operator("bfacw.chat_context_copy", text="Copy Whole Chat", icon="COPYDOWN").what = "CHAT"
+        layout.operator("wm.call_panel", text="History", icon="TIME").name = "BFACW_PT_chat_history"
+        layout.separator()
+        layout.operator("bfacw.open_addon_prefs", text="Preferences", icon="PREFERENCES")
+
+
 def _area_view_setting(area: Any, name: str, default: Any) -> Any:
     for region in (area.regions if area else ()):
         entry = _SURFACES.get(region.as_pointer())
@@ -1464,7 +1572,8 @@ _CLASSES = (BFACW_CoworkerTree, BFACW_OT_open_coworker_editor, BFACW_OT_editor_z
             BFACW_OT_editor_thumbs,
             BFACW_MT_editor_chat, BFACW_MT_editor_view, BFACW_PT_editor_tools_chat,
             BFACW_PT_editor_tools_attach, BFACW_PT_editor_tools_session, BFACW_PT_editor_chat,
-            BFACW_OT_chat_attach_image, BFACW_OT_editor_native_edit)
+            BFACW_OT_chat_attach_image, BFACW_OT_editor_native_edit,
+            BFACW_OT_chat_context_copy, BFACW_OT_chat_context_edit, BFACW_MT_chat_context)
 _COPIES: list[type] = []
 
 

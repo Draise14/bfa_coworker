@@ -1,0 +1,1 @@
+Plans are made in the main session. Implementation goes to the opus-executor subagent.

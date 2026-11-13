@@ -41,7 +41,7 @@ from typing import Any, Callable
 from .. import long_jobs
 from ..chat_status import fmt_duration, phase_text, spinner_char
 from ..chat_turns import NOTE_TITLES, group_turns, is_system_note_msg, split_turn
-from .layout import Canvas, InteractionState, Rect, wrap_text
+from .layout import Canvas, InteractionState, Rect
 from .markdown import Block, Span, parse
 from .style import RGBA, Style
 from .suggestions import TYPE, suggestions
@@ -90,7 +90,8 @@ def draw_choice(canvas: Canvas, rect: Rect, widget_id: str, text: str, recommend
 _ATTACHED = re.compile(r"\s*\[attached:\s*([^\]]*)\]")
 # Thumbnail heights (in widget units) for the S / M / L sizes.
 THUMB_SIZES = {"S": 2.5, "M": 4.0, "L": 7.0}
-_LIVE_LINES = 3        # the live-thinking window, in lines
+_LIVE_MAX_LINES = 8    # the live-thinking box grows with its text up to this many lines (#452)
+_LIVE_TAIL_CHARS = 4000    # ... and lays out only the newest part of a long chain of thought
 _SCROLL_IDLE_ALPHA = 0.4   # the scrollbar's strength with the mouse away (#279)
 _FRAME_LINES = 14      # code frames show this many lines (Show all for the rest)
 _RESULT_LINES = 3      # a tool's result: a few lines (often not for reading; Show all: #236)
@@ -127,6 +128,37 @@ def _lighten(color: RGBA, amount: float) -> RGBA:
     return (min(1.0, color[0] + amount), min(1.0, color[1] + amount), min(1.0, color[2] + amount), color[3])
 
 
+def _think_tail(text: str) -> str:
+    """The newest part of a live chain of thought, cut at a line break (#452): the box shows
+    its last lines only, so a long one isn't laid out whole each frame.  A code fence left
+    open by the cut is opened again."""
+    text = text.strip()
+    if len(text) <= _LIVE_TAIL_CHARS:
+        return text
+    head, tail = text[:-_LIVE_TAIL_CHARS], text[-_LIVE_TAIL_CHARS:]
+    cut = tail.find("\n")
+    if cut >= 0:
+        head, tail = head + tail[:cut + 1], tail[cut + 1:]
+    return ("```\n" + tail) if head.count("```") % 2 else tail
+
+
+def _markdown_gaps(blocks: list[Block], pad: float) -> tuple[float, float]:
+    """The space ``ChatView._draw_markdown`` leaves above its first block and under its last."""
+    def gaps(block: Block) -> tuple[float, float]:
+        if block.kind in ("code", "table"):
+            return pad * 0.5, pad * 0.5
+        if block.kind == "hr":
+            return pad, pad
+        if block.kind == "heading":
+            return pad * (1.2 if block.level <= 2 else 0.8), pad * 0.4
+        if block.kind in ("item", "quote"):
+            return 0.0, 0.0
+        return 0.0, pad * 0.3
+    if not blocks:
+        return 0.0, 0.0
+    return gaps(blocks[0])[0], gaps(blocks[-1])[1]
+
+
 def _tool_failed(msg: dict) -> bool:
     content = message_text(msg.get("content"))
     return content.startswith("Error") or '"status": "error"' in content
@@ -154,6 +186,7 @@ class ChatView:
     _heights: dict[tuple, float] = field(default_factory=dict)
     _drag_y: float | None = None        # mouse y while the scrollbar handle is dragged
     _live_h: dict[int, float] = field(default_factory=dict)   # running turn: tallest stream so far
+    _think_h: dict[int, float] = field(default_factory=dict)  # running turn: tallest Thinking box so far
     _row_h: dict[tuple, float] = field(default_factory=dict)  # Workshop rows, measured once (#218)
 
     # -- public ----------------------------------------------------------------
@@ -288,6 +321,7 @@ class ChatView:
             # The floating Workshop button sits at the chat's bottom right: keep the row clear of it.
             return self._draw_jobs(canvas, idx, x, top, width, clear_fold=bool(process))
         self._live_h.pop(idx, None)
+        self._think_h.pop(idx, None)
         if process:
             top = self._draw_workshop(canvas, process, turn, idx, x, top, width, active, compact, actions,
                                       spinner) - pad
@@ -379,10 +413,11 @@ class ChatView:
 
     def _draw_live(self, canvas: Canvas, idx: int, x: float, top: float, width: float, live: Any,
                    spinner: str, pad: float, actions: list[tuple[str, str]], stream: bool = False) -> float:
-        """The running turn.  ``stream=False``: phase + time and the live thinking (a
-        fixed-height window that shows its newest lines; folded with the floating
-        Thinking button).  ``stream=True``: the reply as it streams (its height only
-        grows, so a half-typed line can't make the chat jitter)."""
+        """The running turn.  ``stream=False``: phase + time and the live thinking, as
+        markdown in a box as tall as its text, up to ``_LIVE_MAX_LINES`` lines; a longer
+        one keeps its newest part in view (#452).  ``stream=True``: the reply as it
+        streams.  Both only grow during the turn, so a half-typed line can't make the
+        chat jitter."""
         style = canvas.style
         if stream:
             streaming = getattr(live, "streaming_text", "") or ""
@@ -397,23 +432,33 @@ class ChatView:
         started = float(getattr(live, "thinking_start_time", 0.0) or 0.0)
         if started:
             label += "  |  " + fmt_duration(time.time() - started)
-        reasoning = " ".join(str(getattr(live, "reasoning_text", "") or "").split())
+        reasoning = _think_tail(str(getattr(live, "reasoning_text", "") or ""))
         top = self._icon_line(canvas, x, top, self.agent_icon, label, _soft(style.text, 0.15))
-        if reasoning:
-            inner_w = width - 3 * pad
-            lines = wrap_text(reasoning, inner_w, canvas.measure, "ui", style.font_size)[-_LIVE_LINES:]
-            h = _LIVE_LINES * style.line_height + pad
-            frame = Rect(x + pad * 0.5, top - pad * 0.5 - h, width - pad, h)
-            canvas.box(frame, colors=style.text_field)
-            canvas.push_clip(frame)
-            line_top = frame.top - pad * 0.5 - (_LIVE_LINES - len(lines)) * style.line_height
-            for line in lines:      # newest lines at the bottom, like a terminal
-                line_top -= style.line_height
-                canvas.text(frame.x + pad, line_top + (style.line_height - style.font_size) / 2
-                            + style.font_size * 0.2, line, _soft(style.text_field.text, 0.25))
-            canvas.pop_clip()
-            top = frame.y - pad * 0.5
-        return top
+        if not reasoning:
+            self._think_h.pop(idx, None)
+            return top
+        # Its own lines kept, drawn as markdown in the faded colour; no Copy or links in it.
+        blocks = parse(reasoning)
+        inner_w = width - 3 * pad
+        color = _soft(style.text_field.text, 0.25)
+        lead, trail = _markdown_gaps(blocks, style.pad)
+        # Measured the way _turn_height measures a turn, so the height drawn and the one the
+        # scroll counts with agree; less the gaps markdown leaves above and below its blocks.
+        scratch = Canvas(style, canvas.measure, InteractionState())
+        content = -self._draw_markdown(scratch, blocks, idx, 0.0, 0.0, inner_w, [], color=color,
+                                       interactive=False) - lead - trail
+        inset = pad * 0.5
+        h = max(self._think_h.get(idx, 0.0), min(content, _LIVE_MAX_LINES * style.line_height) + 2 * inset)
+        self._think_h[idx] = h
+        frame = Rect(x + pad * 0.5, top - pad * 0.5 - h, width - pad, h)
+        canvas.box(frame, colors=style.text_field)
+        canvas.push_clip(frame)
+        # From the top while it fits; past the cap the newest part at the bottom, like a terminal.
+        text_top = max(frame.top - inset, frame.y + inset + content) + lead
+        self._draw_markdown(canvas, blocks, idx, frame.x + pad, text_top, inner_w, actions, color=color,
+                            interactive=False)
+        canvas.pop_clip()
+        return frame.y - pad * 0.5
 
     def _copy_button(self, canvas: Canvas, right: float, top: float, widget_id: str, text: str,
                      actions: list[tuple[str, str]]) -> None:
@@ -646,9 +691,13 @@ class ChatView:
 
     # -- markdown --------------------------------------------------------------------
     def _draw_markdown(self, canvas: Canvas, blocks: list[Block], idx: int, x: float, top: float,
-                       width: float, actions: list[tuple[str, str]]) -> float:
+                       width: float, actions: list[tuple[str, str]], color: RGBA | None = None,
+                       interactive: bool = True) -> float:
+        """Draw *blocks*; return the new top.  *color* tints all of it (the Thinking box's faded
+        look); with *interactive* off there are no Copy buttons and no link areas (#452)."""
         style = canvas.style
         pad = style.pad
+        base = color or style.text
         code_n = 0
         for block in blocks:
             if block.kind == "code" or block.kind == "table":
@@ -670,10 +719,11 @@ class ChatView:
                                  block.lang or "code", soft)
                     bw = style.unit * 0.9    # a square icon button
                     copy = Rect(box.right - bw - pad * 0.75, strip.y + (head - bw) / 2, bw, bw)
-                    if canvas.button(copy, "copy:{:d}:{:d}".format(idx, code_n), "", icon="COPYDOWN"):
+                    if interactive and canvas.button(copy, "copy:{:d}:{:d}".format(idx, code_n), "",
+                                                     icon="COPYDOWN"):
                         actions.append(("copy", text))
                     code_n += 1
-                canvas.wrapped(box.x + pad, box.top - head - pad, inner_w, text, style.text_field.text,
+                canvas.wrapped(box.x + pad, box.top - head - pad, inner_w, text, color or style.text_field.text,
                                font="mono")
                 top = box.y - pad * 0.5
             elif block.kind == "hr":
@@ -692,26 +742,30 @@ class ChatView:
                             style.keyframe_border)
                 canvas.icon(mark, icon, style.keyframes[min(block.level, 4) - 1])
                 top = self._flow(canvas, block.spans, x + side + pad * 0.6, top, width - side - pad * 0.6,
-                                 actions, size=size, bold=True, color=style.title) - pad * 0.4
+                                 actions, size=size, bold=True, color=color or style.title,
+                                 interactive=interactive) - pad * 0.4
             elif block.kind == "item":
                 indent = style.unit * (0.6 + block.level)
                 marker = ("•" if block.level == 0 else "◦") if block.marker == "-" else block.marker
                 canvas.text(x + indent - style.unit * 0.5, top - style.line_height + style.line_height * 0.3,
-                            marker, style.text)
-                top = self._flow(canvas, block.spans, x + indent, top, width - indent, actions)
+                            marker, base)
+                top = self._flow(canvas, block.spans, x + indent, top, width - indent, actions, color=color,
+                                 interactive=interactive)
             elif block.kind == "quote":
                 start = top
                 top = self._flow(canvas, block.spans, x + style.unit * 0.6, top, width - style.unit * 0.6,
-                                 actions, color=_soft(style.text, 0.25))
+                                 actions, color=_soft(base, 0.25), interactive=interactive)
                 canvas.fill(Rect(x, top, max(2.0, 2 * style.scale), start - top), style.outline)
             else:
-                top = self._flow(canvas, block.spans, x, top, width, actions) - pad * 0.3
+                top = self._flow(canvas, block.spans, x, top, width, actions, color=color,
+                                 interactive=interactive) - pad * 0.3
         return top
 
     def _flow(self, canvas: Canvas, spans: list[Span], x: float, top: float, width: float,
               actions: list[tuple[str, str]], size: float | None = None, bold: bool = False,
-              color: RGBA | None = None) -> float:
-        """Lay out styled *spans* as wrapped lines; return the new top."""
+              color: RGBA | None = None, interactive: bool = True) -> float:
+        """Lay out styled *spans* as wrapped lines; return the new top.  Links are click areas
+        only when *interactive*."""
         style = canvas.style
         size = size or style.font_size
         line_h = size * 1.45
@@ -748,11 +802,13 @@ class ChatView:
                                 line_h * 0.3)
                     canvas.text(cx, baseline, token, style.text_field.text, font="mono", size=size)
                 elif span.style == "link":
-                    canvas.text(cx, baseline, token, style.link, size=size, bold=bold)
-                    area = Rect(cx, top, w, line_h)
-                    canvas.hit_areas.append((area, "link:" + span.url))
-                    if canvas.state.clicked == "link:" + span.url and ("link", span.url) not in actions:
-                        actions.append(("link", span.url))
+                    canvas.text(cx, baseline, token, style.link if interactive else _soft(style.link, 0.25),
+                                size=size, bold=bold)
+                    if interactive:
+                        area = Rect(cx, top, w, line_h)
+                        canvas.hit_areas.append((area, "link:" + span.url))
+                        if canvas.state.clicked == "link:" + span.url and ("link", span.url) not in actions:
+                            actions.append(("link", span.url))
                 else:
                     tint = _soft(base, 0.3) if span.style == "italic" else base
                     canvas.text(cx, baseline, token, tint, size=size, bold=bold or span.style == "bold")

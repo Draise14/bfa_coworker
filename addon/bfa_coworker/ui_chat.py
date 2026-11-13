@@ -549,18 +549,78 @@ _TABS: dict = {"blend": None}       # the .blend whose saved tabs are open
 
 
 def _restore_tabs() -> None:
-    """The tabs open when this .blend was last saved come back (once per file)."""
+    """The tabs open when this .blend was last saved come back (once per file), and each
+    area shows the tab it showed then (#431)."""
     blend = _blend_key()
     if _TABS["blend"] == blend:
         return
     _TABS["blend"] = blend
     from . import threads
-    for tab in _chat_index().tabs_for_blend(blend):
+    index = _chat_index()
+    for tab in index.tabs_for_blend(blend):
         threads.reopen(agent_controller.THREADS, tab["chat"], tab.get("editor", ""), make=_editor_thread)
+    try:
+        _restore_area_tabs(index, blend)
+    except (AttributeError, ReferenceError, KeyError):
+        pass
+
+
+def _workspace_areas() -> list:
+    """Every area of every workspace, with its key in the saved session (#431)."""
+    from .chat_history import area_key
+    out = []
+    for workspace in bpy.data.workspaces:
+        for screen in workspace.screens:
+            if getattr(screen, "is_temporary", False):     # a maximized area's screen
+                continue
+            for i, area in enumerate(screen.areas):
+                out.append((area_key(workspace.name, i, area.ui_type), area))
+    return out
+
+
+def _save_area_tabs() -> None:
+    """Remember which tab each area shows, for this .blend (#431)."""
+    if _TABS["blend"] is None:
+        return          # as _save_tabs: nothing came back yet, so keep what was saved
+    try:
+        index = _chat_index()
+        reg = agent_controller.THREADS
+        tabs = []
+        for key, area in _workspace_areas():
+            thread = reg.get(_AREA_PINS.get(_pin_key(area)) or None)
+            if thread is None or thread.is_default:        # All editors: what an area shows anyway
+                continue
+            if thread.chat_id and index.chat_path(thread.chat_id).exists():
+                tabs.append({"key": key, "editor": key.rsplit("|", 1)[-1], "chat": thread.chat_id})
+        index.set_area_tabs_for_blend(_blend_key(), tabs)
+    except (OSError, AttributeError, ReferenceError):
+        pass
+
+
+def _restore_area_tabs(index, blend: str) -> None:
+    """Each area back on the tab it showed (its pin): by its place in the workspace, else
+    by its editor kind when the layout changed (#431)."""
+    saved = index.area_tabs_for_blend(blend)
+    if not saved:
+        return
+    from . import threads
+    from .chat_history import match_area_tabs
+    reg = agent_controller.THREADS
+    areas = _workspace_areas()
+    shown = match_area_tabs(saved, [key for key, _area in areas])
+    editor_of = {t["chat"]: t.get("editor", "") for t in index.tabs_for_blend(blend)}
+    for key, area in areas:
+        chat_id = shown.get(key)
+        if not chat_id or not index.chat_path(chat_id).exists():
+            continue
+        thread = threads.reopen(reg, chat_id, editor_of.get(chat_id, ""), make=_editor_thread)
+        _AREA_PINS[_pin_key(area)] = thread.id
 
 
 def _save_tabs() -> None:
     """Remember the open tabs (with a chat to come back to) for this .blend."""
+    if _TABS["blend"] is None:
+        return          # its saved tabs never came back (no chat drawn yet): keep them (#431)
     try:
         index = _chat_index()
         tabs = [{"chat": t.chat_id, "editor": t.editor} for t in agent_controller.THREADS.live()
@@ -2249,15 +2309,37 @@ def _saved_agent_session(path: Path, chat_key: str, preset_id: str) -> str:
     return str(entry.get("session", "")) if entry.get("agent") == preset_id else ""
 
 
+_agent_sessions_lock = threading.Lock()     # the default chat's and the tabs' sessions (#431)
+
+
 def _remember_agent_session(path: Path, chat_key: str, preset_id: str, session_id: str) -> None:
     """Keep *session_id* for this chat (any thread: plain file I/O, no bpy)."""
-    data = _read_agent_sessions(path)
-    data[chat_key] = {"agent": preset_id, "session": session_id}
-    try:
-        with open(str(path), "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2)
-    except OSError:
-        pass
+    with _agent_sessions_lock:
+        data = _read_agent_sessions(path)
+        data[chat_key] = {"agent": preset_id, "session": session_id}
+        try:
+            with open(str(path), "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2)
+        except OSError:
+            pass
+
+
+def _tab_chat_file(tag: str) -> str:
+    """The chat file of the tab (thread) *tag*: ``<chat id>.json``, "" when it has none."""
+    thread = agent_controller.THREADS.get(tag) if tag else None
+    return thread.chat_id + ".json" if thread is not None and thread.chat_id else ""
+
+
+def _thread_agent_session(path: Path, tag: str, preset_id: str) -> str:
+    """The session the tab *tag*'s chat had with the agent (#431); "" for none (a new chat)."""
+    chat_file = _tab_chat_file(tag)
+    return _saved_agent_session(path, chat_file, preset_id) if chat_file else ""
+
+
+def _remember_thread_session(path: Path, tag: str, preset_id: str, session_id: str) -> None:
+    chat_file = _tab_chat_file(tag)
+    if chat_file:
+        _remember_agent_session(path, chat_file, preset_id, session_id)
 
 
 def _session_memory_archive_path() -> Path:
@@ -2383,17 +2465,58 @@ def _load_thread_chat(thread) -> None:
 def _threads_on_save(*_args) -> None:
     """The .blend was saved (maybe under a new name): each editor's chat is filed under it,
     so reopening the file brings each editor its own last thread (#358)."""
+    blend = _blend_key()
+    if _CHAT["id"] and _CHAT["blend"] != blend:
+        # Saved under a new name (or for the first time): the chat goes with the file, it
+        # doesn't start again under the new name (#431).
+        _CHAT["blend"] = blend
+        if _has_user_messages():
+            _save_chat_history()
+        else:
+            _chat_index().set_last_for_blend(blend, _CHAT["id"])
     for thread in agent_controller.THREADS.live():
         if not thread.is_default:
             _save_thread_chat(thread)
     _save_tabs()
-    _TABS["blend"] = _blend_key()       # saved under a new name: these tabs are its tabs
+    _save_area_tabs()
+    if _TABS["blend"] is not None:
+        _TABS["blend"] = blend          # saved under a new name: these tabs are its tabs
 
 
 @bpy.app.handlers.persistent
 def _threads_on_load(*_args) -> None:
-    """Another .blend opens: the old file's editor threads are saved and let go (#358)."""
+    """Another .blend opens: the old file's session is saved -- its chat, tabs and each
+    area's tab (#431) -- and its editor threads are let go (#358)."""
+    if _has_user_messages() and not agent_controller._agent_state.turn_active:
+        _save_chat_history()
     _forget_editor_threads()
+
+
+@bpy.app.handlers.persistent
+def _session_on_load(*_args) -> None:
+    """A .blend opened (File > Open, recent files, History): its session comes back (#431).
+
+    All editors shows the chat last used in that file, with its Goal & Plan and memory, so
+    the next turn has it as context (Local, Remote).  On External Agent the agent
+    continues that chat's own conversation (its saved session), or starts a fresh one --
+    before, it went on in the old file's conversation.  The tabs and each area's tab come
+    back when a chat is first drawn (_restore_tabs)."""
+    if agent_controller._agent_state.turn_active:
+        return              # a turn still writes the old chat: it stays until the turn ends
+    try:
+        index = _chat_index()
+        blend = _blend_key()
+        _reset_for_chat_switch()
+        _CHAT["id"], _CHAT["blend"] = index.last_for_blend(blend) or index.new_id(), blend
+        _restore_chat_history()
+        if _acp is not None and _acp.connected:
+            _acp.drop_threads()
+            resume = (_saved_agent_session(_agent_sessions_file(), _CHAT["id"] + ".json", _acp.preset_id)
+                      if _has_user_messages() else "")
+            _acp.switch_session(resume)
+        _tag_chat_regions_redraw()
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] couldn't bring this file's chats back: {}".format(ex))
 
 
 def _forget_editor_threads() -> None:
@@ -2403,6 +2526,7 @@ def _forget_editor_threads() -> None:
         if not thread.is_default:
             _save_thread_chat(thread)
     _save_tabs()
+    _save_area_tabs()
     for thread in reg.live():
         if not thread.is_default and not agent_controller.thread_state(thread).turn_active:
             reg.remove(thread.id)
@@ -2792,19 +2916,34 @@ has unsaved changes)"""
     bl_options = {'INTERNAL'}
 
     chat_id: StringProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
+    # History's file row (#431): open that .blend with its whole session.
+    blend: StringProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
+
+    @classmethod
+    def description(cls, _context, properties) -> str:
+        if properties.blend:
+            return ("Open {:s}.blend: its chats come back as they were, each editor on the tab it showed "
+                    "(it asks first only when this file has unsaved changes)".format(properties.blend))
+        return cls.__doc__
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
         return not agent_controller._agent_state.is_thinking
 
     def _path(self) -> tuple[str, str]:
-        """(path, why not) for the chat's .blend: why not when it moved, was renamed or is gone."""
-        entry = _chat_index().get(self.chat_id) or {}
+        """(path, why not) for the .blend: why not when it moved, was renamed or is gone."""
+        index = _chat_index()
+        if self.blend:
+            group = next((g for g in index.files() if g["blend"] == self.blend), None) or {}
+            entries = group.get("chats") or []
+            entry = next((e for e in entries if _chat_blend_path(e)), entries[0] if entries else {})
+        else:
+            entry = index.get(self.chat_id) or {}
         path = _chat_blend_path(entry)
         if path:
             return path, ""
         known = str(entry.get("blend_path") or "")
-        name = str(entry.get("blend") or "")
+        name = str(entry.get("blend") or self.blend or "")
         return "", ("{:s}.blend isn't at {:s} any more: it was moved, renamed or deleted".format(name, known)
                     if known else "{:s}.blend wasn't found (moved, renamed or deleted?)".format(name))
 
@@ -2821,32 +2960,16 @@ has unsaved changes)"""
         return self.execute(context)
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        index = _chat_index()
         path, why = self._path()
         if not path:
             self.report({"ERROR"}, why)
             return {"CANCELLED"}
-        if agent_controller._agent_state.conversation_history:
-            _save_chat_history()
-        index.set_last_for_blend(Path(path).stem, self.chat_id)      # the file then continues this chat
-        chat_id = self.chat_id
-
-        @bpy.app.handlers.persistent
-        def continue_chat(*_args) -> None:
-            # Once: continue the chat as soon as that file is in (a cancelled open just ends it).
-            if continue_chat in bpy.app.handlers.load_post:
-                bpy.app.handlers.load_post.remove(continue_chat)
-            if os.path.normcase(bpy.data.filepath) != os.path.normcase(path):
-                return
-            _reset_for_chat_switch()
-            _CHAT["id"], _CHAT["blend"] = chat_id, _blend_key()
-            _restore_chat_history()
-            _tag_chat_regions_redraw()
-        bpy.app.handlers.load_post.append(continue_chat)
+        if self.chat_id and not self.blend:
+            _chat_index().set_last_for_blend(Path(path).stem, self.chat_id)   # the file continues this chat
+        # The file's session comes back on load (_session_on_load): its chat, tabs, each area's tab.
         try:
             bpy.ops.wm.open_mainfile("EXEC_DEFAULT", filepath=path)     # no file browser, no second ask
         except RuntimeError as ex:
-            bpy.app.handlers.load_post.remove(continue_chat)
             self.report({"ERROR"}, "Couldn't open {:s}: {:s}".format(Path(path).name, str(ex).splitlines()[-1]))
             return {"CANCELLED"}
         return {"FINISHED"}
@@ -2959,7 +3082,7 @@ class BFACW_OT_chat_delete(Operator):  # type: ignore[misc]
 
 
 class BFACW_PT_chat_history(Panel):  # type: ignore[misc]
-    """Your chats, not tied to the .blend: continue any of them here"""
+    """Your chats by .blend: open a file with all its chats, or continue any chat here"""
     bl_label = "History"
     bl_idname = "BFACW_PT_chat_history"
     bl_space_type = 'VIEW_3D'
@@ -2973,44 +3096,74 @@ class BFACW_PT_chat_history(Panel):  # type: ignore[misc]
         return not bpy.app.background
 
     def draw(self, context: bpy.types.Context) -> None:
-        from .chat_history import relative_time
+        # #431: the files, newest first, each with its chats (tabs) under it.
         layout = self.layout
         props = context.window_manager.bfacw_chat_props
         row = layout.row(align=True)
         row.prop(props, "chat_history_filter", text="", icon='VIEWZOOM')
-        entries = _chat_index().entries(props.chat_history_filter)
-        if not entries:
+        groups = _chat_index().files(props.chat_history_filter)
+        if not groups:
             layout.label(text="No chats yet" if not props.chat_history_filter else "No chat matches",
                          icon='INFO')
             return
         current = _current_chat_of(_ui_thread(context))     # this chat's thread's (#417)
         col = layout.column(align=True)
-        for entry in entries[:_HISTORY_ROWS]:
+        shown = total = 0
+        for group in groups:
+            total += len(group["chats"])
+            if shown >= _HISTORY_ROWS:
+                continue
             box = col.box()
-            head = box.row(align=True)
-            head.operator("bfacw.chat_pin", text="", emboss=False,
-                          icon='PINNED' if entry.get("pinned") else 'UNPINNED').chat_id = entry["id"]
-            is_current = entry["id"] == current
-            op = head.operator("bfacw.chat_open", text=entry.get("title") or "(untitled)", emboss=False,
-                               icon='RADIOBUT_ON' if is_current else 'RADIOBUT_OFF', depress=is_current)
-            op.chat_id = entry["id"]
-            head.operator("bfacw.chat_rename", text="", emboss=False, icon='GREASEPENCIL').chat_id = entry["id"]
-            head.operator("bfacw.chat_delete", text="", emboss=False, icon='TRASH').chat_id = entry["id"]
-            # Where it ran, as the mode's icon (the name in its tooltip); its .blend, with Open (#239).
-            sub = box.row(align=True)
-            sub.scale_y = 0.8
-            mode = _history_mode(entry)
-            icon = next((item[3] for item in OPERATING_MODE_ITEMS if item[0] == mode), 'BLANK1')
-            sub.operator("bfacw.chat_where", text="", icon=icon, emboss=False).engine = str(entry.get("engine") or "")
-            sub.label(text=relative_time(float(entry.get("updated", 0))))
-            if entry.get("blend"):
-                sub.label(text=str(entry["blend"]), icon='FILE_BLEND')     # the icon says ".blend"
-                path = _chat_blend_path(entry)
-                here = bool(bpy.data.filepath) and os.path.normcase(path) == os.path.normcase(bpy.data.filepath)
-                if path and not here:           # an icon: it fits a narrow sidebar (#273)
-                    sub.operator("bfacw.chat_open_blend", text="", icon='FILEBROWSER').chat_id = entry["id"]
-        if len(entries) > _HISTORY_ROWS:
-            layout.label(text="{:d} more: search to find them".format(len(entries) - _HISTORY_ROWS))
+            _draw_history_file(box, group)
+            for entry in group["chats"]:
+                if shown >= _HISTORY_ROWS:
+                    break
+                _draw_history_chat(box, entry, entry["id"] == current)
+                shown += 1
+        if total > shown:
+            layout.label(text="{:d} more: search to find them".format(total - shown))
+
+
+def _draw_history_file(box, group: dict) -> None:
+    """A file row: the .blend's name, when it was last used, and Open (#431)."""
+    from .chat_history import relative_time
+    head = box.row(align=True)
+    name = group["blend"]
+    if not name:
+        head.label(text="Not saved in a file", icon='FILE')
+        return
+    path = _chat_blend_path({"blend": name, "blend_path": group.get("blend_path", "")})
+    here = bool(bpy.data.filepath) and bool(path) and os.path.normcase(path) == os.path.normcase(bpy.data.filepath)
+    head.label(text=name, icon='FILE_BLEND')
+    sub = head.row(align=True)
+    sub.alignment = 'RIGHT'
+    sub.label(text="open" if here else relative_time(float(group.get("updated", 0))))
+    if path and not here:           # an icon: it fits a narrow sidebar (#273)
+        sub.operator("bfacw.chat_open_blend", text="", icon='FILEBROWSER').blend = name
+
+
+def _draw_history_chat(box, entry: dict, is_current: bool) -> None:
+    """A chat under its file: pin, its title (click: continue it here, as a tab), rename,
+    delete; then its editor, where it ran and when."""
+    from .chat_history import relative_time
+    head = box.row(align=True)
+    head.separator(factor=1.0)      # nested under its file
+    head.operator("bfacw.chat_pin", text="", emboss=False,
+                  icon='PINNED' if entry.get("pinned") else 'UNPINNED').chat_id = entry["id"]
+    op = head.operator("bfacw.chat_open", text=entry.get("title") or "(untitled)", emboss=False,
+                       icon='RADIOBUT_ON' if is_current else 'RADIOBUT_OFF', depress=is_current)
+    op.chat_id = entry["id"]
+    head.operator("bfacw.chat_rename", text="", emboss=False, icon='GREASEPENCIL').chat_id = entry["id"]
+    head.operator("bfacw.chat_delete", text="", emboss=False, icon='TRASH').chat_id = entry["id"]
+    # Its editor (All editors: the world), where it ran as the mode's icon (#239), when.
+    sub = box.row(align=True)
+    sub.scale_y = 0.8
+    sub.separator(factor=1.0)
+    sub.label(text="", icon=_editor_icon(str(entry.get("editor") or "")))
+    mode = _history_mode(entry)
+    icon = next((item[3] for item in OPERATING_MODE_ITEMS if item[0] == mode), 'BLANK1')
+    sub.operator("bfacw.chat_where", text="", icon=icon, emboss=False).engine = str(entry.get("engine") or "")
+    sub.label(text=relative_time(float(entry.get("updated", 0))))
 
 
 _HISTORY_ROWS = 25
@@ -4259,6 +4412,11 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         # Filed under the chat that is open when the session starts (Chat 7: it can change).
         _acp_engine().on_session = lambda session_id: _remember_agent_session(
             sessions_file, (_CHAT["id"] or "default") + ".json", preset.id, session_id)
+        # A tab's chat continues its own conversation too (#431), filed under that chat.
+        _acp_engine().preset_id = preset.id
+        _acp_engine().resume_for = lambda tag: _thread_agent_session(sessions_file, tag, preset.id)
+        _acp_engine().on_thread_session = lambda session_id, tag: _remember_thread_session(
+            sessions_file, tag, preset.id, session_id)
         bridge_port, _, _ = effective_ports(prefs)
         engine.bridge_port = bridge_port        # where its tools look for Blender (_ensure_bridge)
         host = prefs.host
@@ -7339,6 +7497,8 @@ def register() -> None:
         bpy.app.timers.register(chat_timer_update, first_interval=1.0, persistent=True)
     if _threads_on_load not in bpy.app.handlers.load_pre:
         bpy.app.handlers.load_pre.append(_threads_on_load)
+    if _session_on_load not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(_session_on_load)
     if _threads_on_save not in bpy.app.handlers.save_post:
         bpy.app.handlers.save_post.append(_threads_on_save)
 
@@ -7353,6 +7513,8 @@ def unregister() -> None:
             _save_thread_chat(_thread)
     if _threads_on_load in bpy.app.handlers.load_pre:
         bpy.app.handlers.load_pre.remove(_threads_on_load)
+    if _session_on_load in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_session_on_load)
     if _threads_on_save in bpy.app.handlers.save_post:
         bpy.app.handlers.save_post.remove(_threads_on_save)
 

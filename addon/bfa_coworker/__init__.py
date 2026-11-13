@@ -143,6 +143,56 @@ def _migrate_operating_mode() -> None:
 
 
 def register() -> None:
+    """Register Coworker, all or nothing (#456).  A failure part way (an icon Blender
+    lacks failed a class) used to leave panels registered without the add-on: Blender
+    drops a failed add-on from ``preferences.addons``, so every one of them then raised
+    a KeyError on draw.  Now what was registered is taken out again and the error stays
+    visible, so Blender shows the add-on as failed instead of half there."""
+    registered: list[type] = []
+    register_class = bpy.utils.register_class
+
+    def _recording(cls):
+        register_class(cls)
+        registered.append(cls)
+
+    bpy.utils.register_class = _recording
+    try:
+        _register()
+    except Exception:
+        import traceback
+        print("[Coworker] register failed, rolling back:\n" + traceback.format_exc())
+        _rollback(registered)
+        raise
+    finally:
+        bpy.utils.register_class = register_class
+
+
+def _rollback(registered: list[type]) -> None:
+    """Undo a failed ``_register()`` without ``unregister()``'s side effects: nothing
+    saved, so the settings backup and the saved chat are left alone (#400)."""
+    from . import chat_editor, ui_chat, ui_context_menus
+    for step in (ui_context_menus.unregister, chat_editor.unregister, ui_chat.unregister,
+                 coworker_api.unregister, mcp_to_blender_server.stop):
+        try:
+            step()
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass                # it may not have got that far
+    for cmd in _cli_commands:
+        try:
+            bpy.utils.unregister_cli_command(cmd)
+        except (RuntimeError, AttributeError):
+            pass
+    _cli_commands.clear()
+    if bpy.app.timers.is_registered(_after_register_timer):
+        bpy.app.timers.unregister(_after_register_timer)
+    for cls in reversed(registered):
+        try:
+            bpy.utils.unregister_class(cls)
+        except RuntimeError:
+            pass                # already taken out by its module
+
+
+def _register() -> None:
     # Start file-based logging as early as possible so all subsequent
     # print() diagnostics are captured to disk.
     from . import log

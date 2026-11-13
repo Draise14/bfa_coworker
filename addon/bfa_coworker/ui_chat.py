@@ -69,7 +69,7 @@ from . import log as _log
 from . import mcp_to_blender_server
 from .engine import EngineCaps, Prompt
 from .engine_loop import LoopConfig, LoopEngine
-from .shared import effective_ports, APPROVAL_MODE_ITEMS, CHAT_MODE_ITEMS, OPERATING_MODE_ITEMS
+from .shared import effective_ports, APPROVAL_MODE_ITEMS, CHAT_MODE_ITEMS, OPERATING_MODE_ITEMS, icon as safe_icon, is_bforartists
 
 
 # The engine behind the chat for Local LLM / Remote API (Tier 4i.1b).  Created
@@ -1161,10 +1161,10 @@ _ATTACHMENT_THUMBNAIL_DIM = 0.4
 _ATTACHMENT_THUMBNAIL_MAX_SOURCE_PX = 12000000
 
 
-# -- Brand detection: Bforartists has a View menu in the 3D viewport header,
-#    vanilla Blender does not.  Cache the result once at import time.
-_is_bfa: bool = hasattr(bpy.types, "VIEW3D_MT_view")
-_AGENT_ICON: str = "WIZARD" if _is_bfa else "GHOST_ENABLED"
+# -- Brand detection (#456): only Bforartists has bpy.app.bfa_version_string.  Cached
+#    once at import time.
+_is_bfa: bool = is_bforartists()
+_AGENT_ICON: str = safe_icon("WIZARD")
 
 # The thinking spinner, phase wording and durations live in chat_status.py,
 # shared with the GPU chat (Tier 4, GPU 2).
@@ -1936,7 +1936,7 @@ def _draw_tool_inline(
     row = tool_box.row()
     row.label(
         text="\u2699 {:s}".format(tool_name),
-        icon='WARNING' if is_error else 'TOOL_SETTINGS',
+        icon=safe_icon('WARNING') if is_error else 'TOOL_SETTINGS',
     )
     if message_index >= 0:
         op = row.operator("bfacw.copy_message", text="", icon='COPYDOWN')
@@ -2817,7 +2817,7 @@ has unsaved changes)"""
         if bpy.data.is_dirty:
             return context.window_manager.invoke_confirm(
                 self, event, title="Open {:s}?".format(Path(path).name),
-                message="Unsaved changes in this file are lost", confirm_text="Open", icon='WARNING')
+                message="Unsaved changes in this file are lost", confirm_text="Open", icon=safe_icon('WARNING'))
         return self.execute(context)
 
     def execute(self, context: bpy.types.Context) -> set[str]:
@@ -2943,7 +2943,7 @@ class BFACW_OT_chat_delete(Operator):  # type: ignore[misc]
         return context.window_manager.invoke_confirm(
             self, event, title="Delete Chat?", message="\"{:s}\" and its memory are deleted for good. "
                                                        "The scene isn't touched.".format(entry.get("title", "")),
-            confirm_text="Delete", icon='WARNING')
+            confirm_text="Delete", icon=safe_icon('WARNING'))
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         reg = agent_controller.THREADS
@@ -3230,7 +3230,7 @@ def approval_card(context=None):
     if risky is not None:
         return Approval(title=risky.title, detail=risky.detail, waiting=risky_steps.APPROVALS.count(tag),
                         note=risky.note or "Permissions: the button by Send (Strict / Permissive / Auto)",
-                        icon="WARNING" if risky.reason else "LOCKED")
+                        icon=safe_icon("WARNING") if risky.reason else "LOCKED")
     from . import coworker_api
     open_question = coworker_api.current_question(tag)
     if open_question is None:
@@ -5643,7 +5643,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
                 "turn_proc_{:d}".format(turn_num),
                 default_closed=True,
             )
-            pb_icon = "WARNING" if has_err else "PACKAGE"
+            pb_icon = safe_icon("WARNING") if has_err else "PACKAGE"
             if is_active_turn:
                 ws_label = "Workshop {:s}".format(_spinner_char(state))
             else:
@@ -6174,7 +6174,7 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
             else:
                 layout.label(
                     text="Tools: none loaded",
-                    icon='WARNING',
+                    icon=safe_icon('WARNING'),
                 )
 
         # -- LLM info --
@@ -6492,7 +6492,7 @@ def _draw_attachment_row(layout, props, context, minimal: bool = False) -> None:
     _draw_attachment_preview(box, img, context, max_units=8.0)
     row = box.row(align=True)
     row.operator("bfacw.chat_capture_render", icon='RENDER_STILL', text="Render")
-    row.operator("bfacw.chat_capture_screen", icon='MAKE_SCREENSHOT', text="Screen")
+    row.operator("bfacw.chat_capture_screen", icon=safe_icon('MAKE_SCREENSHOT'), text="Screen")
 
 
 def _ensure_attachment_preview(img) -> None:

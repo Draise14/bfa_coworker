@@ -477,7 +477,7 @@ class TestChatView(unittest.TestCase):
             glyph = cs.spinner_glyph(tick)
             self.assertTrue(any(t.startswith("Reading your message " + glyph + "  |  ") for t in texts))
             self.assertTrue(any(t.startswith("Workshop " + glyph) for t in texts))     # header spins too
-            self.assertIn("Planning the logs", texts)                                    # live reasoning
+            self.assertIn("Planning the logs", "".join(texts))                           # live reasoning
             frames.append(glyph)
         self.assertEqual(len(set(frames)), 3)                                          # it animates
 
@@ -490,12 +490,15 @@ class TestChatView(unittest.TestCase):
             return view._turn_height(self.canvas(), cv.group_turns(hist)[0], 0, 600, True, live, False)
 
         view = cv.ChatView()
-        short = turn_height("one line", "", view)
-        long = turn_height(" ".join("word" for _ in range(400)), "", view)
-        self.assertAlmostEqual(short, long)               # the thinking window has a fixed height
+        heights = [turn_height(" ".join("word" for _ in range(n)), "", view) for n in (2, 40, 120, 400, 30)]
+        for before, after in zip(heights, heights[1:]):
+            self.assertGreaterEqual(after + 1e-6, before)     # the Thinking box never shrinks (#452)...
+        self.assertGreater(heights[3], heights[0])           # ...it grows with its text
         grown = turn_height("x", "line one\n\nline two\n\nline three", view)
         shrunk = turn_height("x", "line one", view)        # a partial line made it shorter
         self.assertAlmostEqual(grown, shrunk)              # ...but the live turn never shrinks
+        fresh = cv.ChatView()                               # a new turn starts small again
+        self.assertLess(turn_height("x", "", fresh), heights[-1])
 
     def test_executed_code_in_its_own_frame(self):
         hist = [{"role": "user", "content": "go"},
@@ -571,6 +574,96 @@ class TestChatView(unittest.TestCase):
         empty = self.canvas()
         view.draw(empty, lay.Rect(0, 0, 280, 400), [{"role": "system", "content": "s"}])
         self.assertIn("Start a conversation", " ".join(cmd.text for cmd in self.texts(empty)))
+
+
+
+class TestThinkingBox(unittest.TestCase):
+    """#452: the live Thinking box draws markdown and is as tall as its text, up to a cap."""
+
+    HIST = [{"role": "user", "content": "go", "turn_start": True}]
+
+    def _draw(self, reasoning, view=None, width=600):
+        live = _Live()
+        live.reasoning_text, live.streaming_text = reasoning, ""
+        view = view or cv.ChatView()
+        c = lay.Canvas(st.Style(), lay.fixed_measure(0.55), lay.InteractionState())
+        view.draw(c, lay.Rect(0, 0, width, 3000), self.HIST, live=live)
+        return c, view
+
+    def _box(self, c):
+        """The Thinking box: the clip pushed for it, and the commands drawn inside it."""
+        idx = next(i for i, cmd in enumerate(c.commands) if cmd.kind == "clip" and cmd.rect.h < 2000)
+        end = next(i for i in range(idx + 1, len(c.commands)) if c.commands[i].kind in ("clip", "unclip"))
+        return c.commands[idx].rect, c.commands[idx + 1:end]
+
+    def test_one_line_has_no_empty_row(self):
+        c, _ = self._draw("Checking the scene")
+        frame, inside = self._box(c)
+        style = st.Style()
+        self.assertLess(frame.h, style.line_height * 1.5 + style.pad)        # one line, no spare row
+        texts = [cmd for cmd in inside if cmd.kind == "text"]
+        self.assertEqual("".join(t.text for t in texts), "Checking the scene")
+        first = max(t.rect.y for t in texts)                                  # its baseline
+        self.assertGreater(first, frame.top - style.line_height - style.pad)  # right under the top edge
+        self.assertGreater(min(t.rect.y for t in texts), frame.y)
+
+    def test_markdown_is_drawn(self):
+        text = "### The plan\n\nFirst **check** the `scene`.\n\n- one\n- two\n\nThen go."
+        c, _ = self._draw(text)
+        _frame, inside = self._box(c)
+        texts = [cmd for cmd in inside if cmd.kind == "text"]
+        joined = "".join(t.text for t in texts)
+        for word in ("The plan", "check", "scene", "one", "two", "Then go."):
+            self.assertIn(word, joined)
+        self.assertNotIn("**", joined)
+        self.assertNotIn("#", joined)
+        self.assertNotIn("`", joined)
+        self.assertTrue(any(t.text == "check" and t.bold for t in texts))      # bold
+        self.assertTrue(any(t.text == "scene" and t.font == "mono" for t in texts))   # code span
+        self.assertIn("•", [t.text for t in texts])                           # a list
+        self.assertTrue(any(cmd.kind == "icon" and cmd.text.startswith("KEYTYPE") for cmd in inside))  # heading
+        # Lines stay lines: "Then go." sits under the list, not run into it.
+        y = {t.text: t.rect.y for t in texts}
+        self.assertGreater(y["two"], y["Then"])
+
+    def test_long_text_is_capped_with_the_newest_lines_in_view(self):
+        text = "\n\n".join("step {:d} of the plan".format(i) for i in range(60))
+        c, _ = self._draw(text)
+        frame, inside = self._box(c)
+        style = st.Style()
+        self.assertLessEqual(frame.h, cv._LIVE_MAX_LINES * style.line_height + style.pad + 1e-6)
+        visible = [t for t in inside if t.kind == "text" and frame.y < t.rect.y < frame.top]
+        words = " ".join(t.text for t in visible)
+        self.assertIn("59", words)                       # the newest line shows...
+        self.assertNotIn(" 0 ", " " + words + " ")       # ...the oldest is scrolled out
+        newest = next(t for t in visible if t.text == "59")
+        self.assertLess(newest.rect.y, frame.y + style.line_height)    # at the bottom
+
+    def test_no_copy_or_link_areas_in_the_box(self):
+        text = "Look at [the docs](https://docs.blender.org)\n\n```python\nimport bpy\n```"
+        c, _ = self._draw(text)
+        ids = [w for _r, w in c.hit_areas]
+        self.assertFalse([w for w in ids if w.startswith("copy:") or w.startswith("link:")], ids)
+        _frame, inside = self._box(c)
+        self.assertIn("import bpy", [t.text for t in inside if t.kind == "text"])
+
+    def test_long_thought_lays_out_only_its_tail(self):
+        text = "```python\n" + "x = 1\n" * 2000 + "y = 2"         # a fence still open
+        tail = cv._think_tail(text)
+        self.assertLessEqual(len(tail), cv._LIVE_TAIL_CHARS + 4)
+        self.assertTrue(tail.startswith("```\n"))                    # opened again
+        self.assertTrue(tail.endswith("y = 2"))
+        self.assertEqual(cv._think_tail("  short  "), "short")
+
+    def test_drawn_height_matches_measured_height(self):
+        view = cv.ChatView()
+        live = _Live()
+        live.reasoning_text, live.streaming_text = "# Title\n\n" + "word " * 80, ""
+        c = lay.Canvas(st.Style(), lay.fixed_measure(0.55), lay.InteractionState())
+        turn = cv.group_turns(self.HIST)[0]
+        measured = view._turn_height(c, turn, 0, 500, True, live, False)
+        end = view._draw_turn(c, turn, 0, 0.0, 1000.0, 500, True, live, False, [])
+        self.assertAlmostEqual(1000.0 - end, measured)   # scroll counts what is drawn
 
 
 if __name__ == "__main__":

@@ -14,6 +14,8 @@ initial_instructions: |
   - For long jobs, start them and check with get_job_status: render_viewport_to_path(background=True) and
     bake_textures return a job_id, and get_job_status(job_id) waits for it. Don't loop faster than
     every few seconds. Never run a long bake or render in execute_blender_code (it blocks Blender, times out).
+  - Video Sequencer: get_vse_timeline_overview, get_vse_strips_summary, get_vse_strip_detail,
+    set_strip_frame_range (move / trim / channel, e.g. start=50), render_vse_preview -- not bpy.ops.sequencer code.
   - Return structured data (dicts), not print output.
   - Keep each script SHORT (roughly 40 lines or fewer). A tool call that is too
     large gets cut off mid-generation and fails to parse. For big jobs (scattering

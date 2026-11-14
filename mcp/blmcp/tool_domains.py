@@ -61,7 +61,8 @@ DOMAINS: dict[str, frozenset[str]] = {
         "get_node_tree_as_code", "build_node_tree_from_code",   # the compositor's trees
     }),
     "vse": frozenset({
-        "jump_to_tab_by_name", "jump_to_tab_by_space_type",
+        "jump_to_tab_by_name", "jump_to_tab_by_space_type", "get_vse_strips_summary", "get_vse_strip_detail",
+        "get_vse_timeline_overview", "set_strip_frame_range", "render_vse_preview",
         "transcribe_strip",
     }),
     "geometry_nodes": frozenset({

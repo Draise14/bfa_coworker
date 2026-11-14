@@ -88,6 +88,7 @@ PLAN_SAFE_TOOLS: frozenset[str] = frozenset({
     "search_manual_docs", "get_python_api_docs", "read_tool_output", "ask_user", "update_plan", "load_tools",
     "get_attached_image",
     "list_blender_templates",
+    "get_vse_timeline_overview", "get_vse_strips_summary", "get_vse_strip_detail",     # Tools 1 (#304)
 })
 PLAN_NOTE = ("[Plan mode] Don't change the Blender scene or any file. Look at what you need (scene, docs), "
              "then write a short step plan for this request with the update_plan tool (3-8 concrete steps), "

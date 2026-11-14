@@ -457,6 +457,16 @@ class TestPreviewContent(unittest.TestCase):
         finally:
             os.remove(fh.name)
 
+    def test_approved_step_wrapped_twice(self):
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as fh:
+            fh.write(bytes([255, 216]))
+        try:
+            inner = {"status": "ok", "filepath": fh.name}
+            result, image = self.mod.preview_content({"status": "ok", "result": {"status": "ok", "result": inner}})
+            self.assertEqual((result, image), (inner, bytes([255, 216])))
+        finally:
+            os.remove(fh.name)
+
     def test_error_and_job(self):
         self.assertEqual(self.mod.preview_content({"status": "error", "message": "boom"}),
                          ({"status": "error", "message": "boom"}, None))
@@ -477,6 +487,15 @@ class TestRegistration(unittest.TestCase):
             self.assertIn('"{:s}"'.format(name), server_vse, name)
             self.assertIn('"{:s}"'.format(name), loop_vse, name)
             self.assertTrue((_TOOLS / (name + ".py")).is_file() and (_TOOLS / (name + "_toolcode.py")).is_file())
+
+    def test_the_read_tools_never_ask_in_ask_mode(self):
+        # A Local / Remote turn in Ask mode asks before every tool that isn't in PLAN_SAFE_TOOLS.
+        engine = (_REPO / "addon" / "bfa_coworker" / "engine.py").read_text(encoding="utf-8")
+        safe = re.search(r"PLAN_SAFE_TOOLS: frozenset\[str\] = frozenset\(\{(.*?)\}\)", engine, re.S).group(1)
+        for name in ("get_vse_timeline_overview", "get_vse_strips_summary", "get_vse_strip_detail"):
+            self.assertIn('"{:s}"'.format(name), safe)
+        for name in ("set_strip_frame_range", "render_vse_preview"):      # a change, a render: as render_viewport_to_path
+            self.assertNotIn('"{:s}"'.format(name), safe)
 
     def test_annotations(self):
         for name in _NAMES:

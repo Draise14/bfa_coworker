@@ -39,6 +39,9 @@ def preview_content(response: dict[str, object]) -> tuple[dict[str, object], byt
     if response.get("status") != "ok":
         return {"status": "error", "message": str(response.get("message", "Unknown error"))}, None
     result = response.get("result")
+    # A step the user approved first can come back wrapped once more ({"status", "result"}).
+    while isinstance(result, dict) and "filepath" not in result and isinstance(result.get("result"), dict):
+        result = result["result"]
     if not isinstance(result, dict):
         return {"status": "error", "message": "Blender answered without a result."}, None
     path = result.get("filepath")

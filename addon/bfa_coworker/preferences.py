@@ -41,6 +41,7 @@ from .shared import (
     CHAT_MODE_ITEMS,
     is_debug_mode,
     effective_ports,
+    effective_whisper_port,
     get_llm_manager,
     icon as safe_icon,
 )
@@ -819,6 +820,72 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         min=0,
         max=65535,
     )
+    whisper_port: IntProperty(  # type: ignore[valid-type]
+        name="Speech Port",
+        description=(
+            "Override the speech server (whisper-server) port. "
+            "0 = use default (8481) + offset"
+        ),
+        default=0,
+        min=0,
+        max=65535,
+    )
+
+    # -- Speech (whisper.cpp, #375) ----------------------------------------
+    speech_device: EnumProperty(  # type: ignore[valid-type]
+        name="Device",
+        description="Where whisper-server runs",
+        items=[
+            ("AUTO", "Auto", "CUDA with an NVIDIA GPU, else the CPU"),
+            ("CPU", "CPU", "The CPU build (9 MB download)"),
+            ("CUDA", "CUDA", "The NVIDIA CUDA 12 build (about 690 MB download)"),
+        ],
+        default="AUTO",
+    )
+    speech_model: EnumProperty(  # type: ignore[valid-type]
+        name="Model",
+        description="The speech model whisper-server loads",
+        items=[
+            ("AUTO", "Auto", "Small on the CPU, Large v3 Turbo with CUDA"),
+            ("tiny", "Tiny (78 MB)", "Smallest and fastest; not measured"),
+            ("base", "Base (148 MB)", "Fast on the CPU"),
+            ("small", "Small (488 MB)", "The CPU default"),
+            ("medium", "Medium (1.5 GB)", "Not measured"),
+            ("large-v3-turbo", "Large v3 Turbo (1.6 GB)", "The CUDA default; slow on the CPU"),
+        ],
+        default="AUTO",
+    )
+    speech_language: EnumProperty(  # type: ignore[valid-type]
+        name="Language",
+        description="The spoken language (Auto detects it)",
+        items=[
+            ("auto", "Auto", "Detect the language"),
+            ("en", "English", ""), ("es", "Spanish", ""), ("fr", "French", ""), ("de", "German", ""),
+            ("it", "Italian", ""), ("pt", "Portuguese", ""), ("nl", "Dutch", ""), ("pl", "Polish", ""),
+            ("ru", "Russian", ""), ("uk", "Ukrainian", ""), ("tr", "Turkish", ""), ("sv", "Swedish", ""),
+            ("ja", "Japanese", ""), ("zh", "Chinese", ""), ("ko", "Korean", ""), ("hi", "Hindi", ""),
+            ("ar", "Arabic", ""),
+        ],
+        default="auto",
+    )
+    speech_prompt: StringProperty(  # type: ignore[valid-type]
+        name="Names",
+        description=("Names and terms to spell right, comma separated "
+                     "(e.g. Bforartists, Blender): sent to whisper as its prompt"),
+        default="",
+    )
+    speech_use_remote: BoolProperty(  # type: ignore[valid-type]
+        name="Use Remote for speech",
+        description=("Send the audio to the Remote provider's OpenAI-compatible "
+                     "/v1/audio/transcriptions (with the Remote API key) instead of "
+                     "transcribing on this computer"),
+        default=False,
+    )
+    speech_remote_model: StringProperty(  # type: ignore[valid-type]
+        name="Remote Model",
+        description="The provider's transcription model (e.g. whisper-1)",
+        default="whisper-1",
+    )
 
     local_ctx_size: IntProperty(  # type: ignore[valid-type]
         name="Context Window Size",
@@ -1053,6 +1120,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             ("REMOTE_API", "Remote API", "Configure remote API access", 'WORLD', 1),
             ("GENERATIVE", "Generative", "Image/video/audio generation backends", 'RENDER_RESULT', 2),
             ("ADVANCED", "Advanced", "External harness, ports, and diagnostics", 'SETTINGS', 3),
+            ("SPEECH", "Speech", "Speech to text with whisper.cpp (Sequencer transcripts)", 'SPEAKER', 4),
         ],
         default="LOCAL_LLM",
     )
@@ -1219,8 +1287,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         """Draw the current effective port values as read-only labels."""
         bridge, mcp, llm = effective_ports(self)
         col = box.column(align=True)
-        col.label(text="Effective:  Bridge {:d}  |  MCP {:d}  |  LLM {:d}".format(
-            bridge, mcp, llm))
+        col.label(text="Effective:  Bridge {:d}  |  MCP {:d}  |  LLM {:d}  |  Speech {:d}".format(
+            bridge, mcp, llm, effective_whisper_port(self)))
 
     # -- Diagnostics (debug only, behind flag) ---------------------------
 
@@ -1467,6 +1535,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             ("LOCAL_LLM", "Local Settings", 'CONSOLE'),
             ("REMOTE_API", "Remote Settings", 'WORLD'),
             ("GENERATIVE", "Generative", 'RENDER_RESULT'),
+            ("SPEECH", "Speech", 'SPEAKER'),
             ("ADVANCED", "Advanced", 'SETTINGS'),
         ]:
             # Hide irrelevant tabs based on operating mode.
@@ -1500,6 +1569,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 self.pref_tab = "ADVANCED"
         elif self.pref_tab == 'GENERATIVE':
             self._draw_tab_generative_ai(context)
+        elif self.pref_tab == 'SPEECH':
+            self._draw_tab_speech(context)
         elif self.pref_tab == 'ADVANCED':
             self._draw_tab_advanced(context)
 
@@ -2124,6 +2195,119 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         row.operator("bfacw.test_polyhaven_hdri", icon='WORLD', text="Download Test HDRI")
         row.operator("bfacw.test_polyhaven_texture", icon='TEXTURE', text="Download Test Texture")
 
+    # -- Tab: Speech (#375) ---------------------------------------------
+
+    def _draw_tab_speech(self, context: bpy.types.Context) -> None:
+        """Speech to text: whisper-server download, model, device, language, start / stop."""
+        del context
+        from . import whisper_manager as wm
+        layout = self.layout
+        st = wm.get_state()
+
+        box = layout.box()
+        box.label(text="Speech to Text (whisper.cpp)", icon='SPEAKER')
+        box.label(text="Transcribes Sequencer strips on this computer: the audio never leaves it.", icon='INFO')
+
+        def lines(col, text: str, icon: str = 'NONE') -> None:
+            for i, line in enumerate(str(text).splitlines()[:6]):
+                col.label(text=line[:160], icon=icon if i == 0 else 'BLANK1')
+
+        def progress(col, kind: str) -> None:
+            if st.download_active and st.download_kind == kind:
+                lines(col, st.download_text, 'IMPORT')
+                row = col.row(align=True)
+                row.progress(factor=max(0.0, min(1.0, st.download_pct / 100.0)), type='BAR',
+                             text="{:.0f}%".format(st.download_pct))
+                row.operator("bfacw.speech_cancel_download", text="Cancel", icon='CANCEL')
+
+        problem = wm.platform_problem()
+        if problem:
+            lines(box, problem, 'ERROR')
+        else:
+            # 1. The server
+            sub = box.box()
+            sub.label(text="1. Speech Server", icon='CONSOLE')
+            sub.row().prop(self, "speech_device", expand=True)
+            nvidia = wm.nvidia_found()
+            if self.speech_device == "AUTO":
+                sub.label(text={True: "Auto: CUDA (an NVIDIA GPU was found), with the CPU build as a fallback",
+                                False: "Auto: the CPU (no NVIDIA GPU found)",
+                                None: "Auto: looking for an NVIDIA GPU ..."}[nvidia])
+            installed = wm.installed_builds()
+            if installed:
+                names = []
+                for b in installed:
+                    tag = wm.build_info(b).get("tag") or "existing files"
+                    names.append("{:s} ({:s})".format(wm.BUILD_LABELS[b], tag))
+                sub.label(text="whisper-server: " + ", ".join(names), icon='CHECKMARK')
+            missing = wm.builds_to_download(self.speech_device, bool(nvidia))
+            if missing and not (st.download_active and st.download_kind == "server"):
+                row = sub.row(align=True)
+                row.label(text="Not downloaded: " + ", ".join(
+                    "{:s} ({:s})".format(wm.BUILD_LABELS[b], "9 MB" if b == "cpu" else "690 MB") for b in missing),
+                    icon='ERROR' if not installed else 'INFO')
+                row.operator("bfacw.speech_download_server", text="Download", icon='IMPORT')
+            if installed or missing:
+                row = sub.row(align=True)
+                row.label(text="Folder: {:s}".format(str(wm.data_dir())), icon='FILE_FOLDER')
+                row.operator("bfacw.speech_open_folder", text="Open Folder", icon='FILE_FOLDER')
+            progress(sub, "server")
+
+            # 2. The model
+            build = wm.resolve_build(self.speech_device, bool(nvidia))
+            chosen = wm.resolve_model(self.speech_model, build)
+            sub = box.box()
+            sub.label(text="2. Model", icon='OUTLINER_DATA_SPEAKER')
+            sub.prop(self, "speech_model")
+            col = sub.column(align=True)
+            for preset in wm.MODEL_PRESETS:
+                status = wm.model_status(preset.identifier)
+                row = col.row(align=True)
+                split = row.split(factor=0.34, align=True)
+                split.label(text="{:s}  {:s}{:s}".format(
+                    preset.label, wm._fmt_bytes(preset.size), "  (in use)" if preset.identifier == chosen else ""),
+                    icon='CHECKMARK' if status == "ready" else 'BLANK1')
+                rest = split.row(align=True)
+                rest.label(text=preset.note if status != "incomplete" else "Incomplete: download it again")
+                if status != "ready":
+                    op = rest.operator("bfacw.speech_download_model", text="Download", icon='IMPORT')
+                    op.model_id = preset.identifier
+                    rest.enabled = not st.download_active
+            progress(sub, "model")
+            if not st.download_active and st.download_text:
+                lines(sub, st.download_text, 'ERROR' if st.error else 'INFO')
+
+            # 3. Language
+            sub = box.box()
+            sub.label(text="3. Language", icon='FILE_TEXT')
+            sub.prop(self, "speech_language")
+            sub.prop(self, "speech_prompt")
+
+            # 4. Start / stop
+            sub = box.box()
+            sub.label(text="4. Server", icon='PLAY')
+            running = st.proc is not None and st.proc.poll() is None
+            row = sub.row(align=True)
+            if running:
+                row.label(text=st.status_text or "Running", icon='CHECKMARK' if st.ready else 'SORTTIME')
+                row.operator("bfacw.speech_stop", text="Stop", icon='CANCEL')
+            else:
+                row.label(text="Stopped (it starts by itself when a strip is transcribed)", icon='X')
+                row.operator("bfacw.speech_start", text="Start", icon='PLAY')
+            if st.error and not st.download_text:
+                lines(sub, st.error, 'ERROR')
+
+        # Remote
+        rbox = layout.box()
+        rbox.label(text="Remote", icon='WORLD')
+        rbox.prop(self, "speech_use_remote")
+        if self.speech_use_remote:
+            rbox.prop(self, "speech_remote_model")
+            rbox.label(text="Sends the audio to {:s} (/v1/audio/transcriptions, the Remote API key).".format(
+                self.remote_api_url or "the Remote API URL"), icon='INFO')
+            rbox.label(text="Only providers with an OpenAI-compatible transcription endpoint support this.",
+                       icon='BLANK1')
+
     # -- Tab: Advanced --------------------------------------------------
 
     def _draw_updates(self, layout: bpy.types.UILayout) -> None:
@@ -2385,6 +2569,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         row.prop(self, "bridge_port")
         row.prop(self, "mcp_port")
         row.prop(self, "llm_port")
+        row.prop(self, "whisper_port")
 
         # -- Skills (not in External Harness mode) -----------------------
         if self.operating_mode != "EXTERNAL_HARNESS":

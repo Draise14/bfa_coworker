@@ -1,0 +1,1031 @@
+{
+ "task": "transcribe",
+ "language": "english",
+ "duration": 125.06500244140625,
+ "text": "\n Hello,\n and\n welcome\n to\n this\n short\n test\n of\n automatic\n captions\n in\n the\n video\n sequencer.\n Today\n we\n are\n going\n to\n cut\n a\n talking\n head\n clip\n into\n a\n vertical\n short.\n First,\n the\n editor\n removes\n the\n long\n pauses\n between\n sentences,\n so\n the\n pace\n feels\n tighter.\n\n Then\n every\n spoken",
+ "segments": [
+  {
+   "id": 0,
+   "text": " Hello,",
+   "start": 1.0,
+   "end": 1.0,
+   "tokens": [
+    2425,
+    11
+   ],
+   "words": [
+    {
+     "word": " Hello",
+     "start": 1.0,
+     "end": 1.0,
+     "t_dtw": 168,
+     "probability": 0.9758201241493225
+    },
+    {
+     "word": ",",
+     "start": 1.0,
+     "end": 1.0,
+     "t_dtw": 208,
+     "probability": 0.8841193318367004
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.07382011413574219,
+   "no_speech_prob": 3.350019914249991e-13
+  },
+  {
+   "id": 1,
+   "text": " and",
+   "start": 1.0,
+   "end": 1.0,
+   "tokens": [
+    293
+   ],
+   "words": [
+    {
+     "word": " and",
+     "start": 1.0,
+     "end": 1.0,
+     "t_dtw": 248,
+     "probability": 0.9583562016487122
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.04253578186035156,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 2,
+   "text": " welcome",
+   "start": 1.0,
+   "end": 1.68,
+   "tokens": [
+    2928
+   ],
+   "words": [
+    {
+     "word": " welcome",
+     "start": 1.0,
+     "end": 1.68,
+     "t_dtw": 282,
+     "probability": 0.9463981986045837
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.05509185791015625,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 3,
+   "text": " to",
+   "start": 1.68,
+   "end": 2.2800000000000002,
+   "tokens": [
+    281
+   ],
+   "words": [
+    {
+     "word": " to",
+     "start": 1.68,
+     "end": 1.8800000000000001,
+     "t_dtw": 304,
+     "probability": 0.9977784752845764
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.002223968505859375,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 4,
+   "text": " this",
+   "start": 2.2800000000000002,
+   "end": 2.43,
+   "tokens": [
+    341
+   ],
+   "words": [
+    {
+     "word": " this",
+     "start": 2.2800000000000002,
+     "end": 2.2800000000000002,
+     "t_dtw": 324,
+     "probability": 0.9962476491928101
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.0037593841552734375,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 5,
+   "text": " short",
+   "start": 2.43,
+   "end": 2.7800000000000002,
+   "tokens": [
+    2099
+   ],
+   "words": [
+    {
+     "word": " short",
+     "start": 2.43,
+     "end": 2.7800000000000002,
+     "t_dtw": 358,
+     "probability": 0.9680665135383606
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.032454490661621094,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 6,
+   "text": " test",
+   "start": 2.7800000000000002,
+   "end": 3.36,
+   "tokens": [
+    1500
+   ],
+   "words": [
+    {
+     "word": " test",
+     "start": 2.7800000000000002,
+     "end": 2.85,
+     "t_dtw": 392,
+     "probability": 0.987260639667511
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.012821197509765625,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 7,
+   "text": " of",
+   "start": 3.36,
+   "end": 3.38,
+   "tokens": [
+    295
+   ],
+   "words": [
+    {
+     "word": " of",
+     "start": 3.36,
+     "end": 3.38,
+     "t_dtw": 416,
+     "probability": 0.9978336691856384
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.0021686553955078125,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 8,
+   "text": " automatic",
+   "start": 3.38,
+   "end": 4.2700000000000005,
+   "tokens": [
+    12509
+   ],
+   "words": [
+    {
+     "word": " automatic",
+     "start": 3.38,
+     "end": 4.23,
+     "t_dtw": 466,
+     "probability": 0.8305944204330444
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.18561363220214844,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 9,
+   "text": " captions",
+   "start": 4.2700000000000005,
+   "end": 5.0600000000000005,
+   "tokens": [
+    44832
+   ],
+   "words": [
+    {
+     "word": " captions",
+     "start": 4.2700000000000005,
+     "end": 5.0600000000000005,
+     "t_dtw": 528,
+     "probability": 0.9974902272224426
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.0025129318237304688,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 10,
+   "text": " in",
+   "start": 5.0600000000000005,
+   "end": 5.26,
+   "tokens": [
+    294
+   ],
+   "words": [
+    {
+     "word": " in",
+     "start": 5.0600000000000005,
+     "end": 5.26,
+     "t_dtw": 552,
+     "probability": 0.9958714842796326
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.0041370391845703125,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 11,
+   "text": " the",
+   "start": 5.26,
+   "end": 5.5600000000000005,
+   "tokens": [
+    264
+   ],
+   "words": [
+    {
+     "word": " the",
+     "start": 5.26,
+     "end": 5.5600000000000005,
+     "t_dtw": 564,
+     "probability": 0.9975520372390747
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.0024509429931640625,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 12,
+   "text": " video",
+   "start": 5.5600000000000005,
+   "end": 6.09,
+   "tokens": [
+    960
+   ],
+   "words": [
+    {
+     "word": " video",
+     "start": 5.5600000000000005,
+     "end": 6.03,
+     "t_dtw": 598,
+     "probability": 0.984892725944519
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.015222549438476562,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 13,
+   "text": " sequencer.",
+   "start": 6.09,
+   "end": 7.0,
+   "tokens": [
+    5123,
+    16542,
+    13
+   ],
+   "words": [
+    {
+     "word": " sequ",
+     "start": 6.09,
+     "end": 6.46,
+     "t_dtw": 642,
+     "probability": 0.985906720161438
+    },
+    {
+     "word": "encer",
+     "start": 6.46,
+     "end": 7.0,
+     "t_dtw": 682,
+     "probability": 0.9964110851287842
+    },
+    {
+     "word": ".",
+     "start": 7.0,
+     "end": 7.0,
+     "t_dtw": 736,
+     "probability": 0.9430879950523376
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.01909613609313965,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 14,
+   "text": " Today",
+   "start": 9.0,
+   "end": 9.0,
+   "tokens": [
+    2692
+   ],
+   "words": [
+    {
+     "word": " Today",
+     "start": 9.0,
+     "end": 9.0,
+     "t_dtw": 976,
+     "probability": 0.9897380471229553
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.01031494140625,
+   "no_speech_prob": 3.350019914249991e-13
+  },
+  {
+   "id": 15,
+   "text": " we",
+   "start": 9.0,
+   "end": 9.0,
+   "tokens": [
+    321
+   ],
+   "words": [
+    {
+     "word": " we",
+     "start": 9.0,
+     "end": 9.0,
+     "t_dtw": 998,
+     "probability": 0.9908373951911926
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.009204864501953125,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 16,
+   "text": " are",
+   "start": 9.0,
+   "end": 9.0,
+   "tokens": [
+    366
+   ],
+   "words": [
+    {
+     "word": " are",
+     "start": 9.0,
+     "end": 9.0,
+     "t_dtw": 1020,
+     "probability": 0.9629864692687988
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.037715911865234375,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 17,
+   "text": " going",
+   "start": 9.0,
+   "end": 9.0,
+   "tokens": [
+    516
+   ],
+   "words": [
+    {
+     "word": " going",
+     "start": 9.0,
+     "end": 9.0,
+     "t_dtw": 1050,
+     "probability": 0.9982696175575256
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.00173187255859375,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 18,
+   "text": " to",
+   "start": 9.0,
+   "end": 9.16,
+   "tokens": [
+    281
+   ],
+   "words": [
+    {
+     "word": " to",
+     "start": 9.0,
+     "end": 9.16,
+     "t_dtw": 1074,
+     "probability": 0.9992163777351379
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.0007839202880859375,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 19,
+   "text": " cut",
+   "start": 9.16,
+   "end": 9.540000000000001,
+   "tokens": [
+    1723
+   ],
+   "words": [
+    {
+     "word": " cut",
+     "start": 9.16,
+     "end": 9.540000000000001,
+     "t_dtw": 1096,
+     "probability": 0.9954328536987305
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.00457763671875,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 20,
+   "text": " a",
+   "start": 9.540000000000001,
+   "end": 10.41,
+   "tokens": [
+    257
+   ],
+   "words": [
+    {
+     "word": " a",
+     "start": 9.540000000000001,
+     "end": 9.67,
+     "t_dtw": 1114,
+     "probability": 0.9961583614349365
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.003849029541015625,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 21,
+   "text": " talking",
+   "start": 10.41,
+   "end": 10.57,
+   "tokens": [
+    1417
+   ],
+   "words": [
+    {
+     "word": " talking",
+     "start": 10.41,
+     "end": 10.57,
+     "t_dtw": 1148,
+     "probability": 0.8798657655715942
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.12798595428466797,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 22,
+   "text": " head",
+   "start": 10.57,
+   "end": 11.36,
+   "tokens": [
+    1378
+   ],
+   "words": [
+    {
+     "word": " head",
+     "start": 10.57,
+     "end": 10.83,
+     "t_dtw": 1178,
+     "probability": 0.9618502259254456
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.03889656066894531,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 23,
+   "text": " clip",
+   "start": 11.36,
+   "end": 11.59,
+   "tokens": [
+    7353
+   ],
+   "words": [
+    {
+     "word": " clip",
+     "start": 11.36,
+     "end": 11.59,
+     "t_dtw": 1216,
+     "probability": 0.9865698218345642
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.013521194458007812,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 24,
+   "text": " into",
+   "start": 11.59,
+   "end": 12.1,
+   "tokens": [
+    666
+   ],
+   "words": [
+    {
+     "word": " into",
+     "start": 11.59,
+     "end": 12.09,
+     "t_dtw": 1244,
+     "probability": 0.9929051399230957
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.0071201324462890625,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 25,
+   "text": " a",
+   "start": 12.1,
+   "end": 12.23,
+   "tokens": [
+    257
+   ],
+   "words": [
+    {
+     "word": " a",
+     "start": 12.1,
+     "end": 12.23,
+     "t_dtw": 1264,
+     "probability": 0.9980963468551636
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.0019054412841796875,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 26,
+   "text": " vertical",
+   "start": 12.23,
+   "end": 13.26,
+   "tokens": [
+    9429
+   ],
+   "words": [
+    {
+     "word": " vertical",
+     "start": 12.23,
+     "end": 13.26,
+     "t_dtw": 1298,
+     "probability": 0.9803702235221863
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.019824981689453125,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 27,
+   "text": " short.",
+   "start": 13.26,
+   "end": 14.0,
+   "tokens": [
+    2099,
+    13
+   ],
+   "words": [
+    {
+     "word": " short",
+     "start": 13.26,
+     "end": 14.0,
+     "t_dtw": 1354,
+     "probability": 0.9943360090255737
+    },
+    {
+     "word": ".",
+     "start": 14.0,
+     "end": 14.0,
+     "t_dtw": 1478,
+     "probability": 0.9724682569503784
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.011199315078556538,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 28,
+   "text": " First,",
+   "start": 15.0,
+   "end": 15.0,
+   "tokens": [
+    2386,
+    11
+   ],
+   "words": [
+    {
+     "word": " First",
+     "start": 15.0,
+     "end": 15.0,
+     "t_dtw": 1594,
+     "probability": 0.9819422364234924
+    },
+    {
+     "word": ",",
+     "start": 15.0,
+     "end": 15.0,
+     "t_dtw": 1628,
+     "probability": 0.9845114350318909
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.016916275024414062,
+   "no_speech_prob": 3.350019914249991e-13
+  },
+  {
+   "id": 29,
+   "text": " the",
+   "start": 15.0,
+   "end": 15.1,
+   "tokens": [
+    264
+   ],
+   "words": [
+    {
+     "word": " the",
+     "start": 15.0,
+     "end": 15.1,
+     "t_dtw": 1670,
+     "probability": 0.9750498533248901
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.025266647338867188,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 30,
+   "text": " editor",
+   "start": 15.1,
+   "end": 16.41,
+   "tokens": [
+    9839
+   ],
+   "words": [
+    {
+     "word": " editor",
+     "start": 15.1,
+     "end": 15.76,
+     "t_dtw": 1706,
+     "probability": 0.972369909286499
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.028018951416015625,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 31,
+   "text": " removes",
+   "start": 16.41,
+   "end": 16.53,
+   "tokens": [
+    30445
+   ],
+   "words": [
+    {
+     "word": " removes",
+     "start": 16.41,
+     "end": 16.53,
+     "t_dtw": 1762,
+     "probability": 0.9956511855125427
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.0043582916259765625,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 32,
+   "text": " the",
+   "start": 16.53,
+   "end": 16.85,
+   "tokens": [
+    264
+   ],
+   "words": [
+    {
+     "word": " the",
+     "start": 16.53,
+     "end": 16.82,
+     "t_dtw": 1784,
+     "probability": 0.9984334111213684
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.001567840576171875,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 33,
+   "text": " long",
+   "start": 16.85,
+   "end": 17.36,
+   "tokens": [
+    938
+   ],
+   "words": [
+    {
+     "word": " long",
+     "start": 16.85,
+     "end": 16.86,
+     "t_dtw": 1810,
+     "probability": 0.9964756965637207
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.0035305023193359375,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 34,
+   "text": " pauses",
+   "start": 17.36,
+   "end": 17.96,
+   "tokens": [
+    2502,
+    8355
+   ],
+   "words": [
+    {
+     "word": " pa",
+     "start": 17.36,
+     "end": 17.52,
+     "t_dtw": 1842,
+     "probability": 0.9963274598121643
+    },
+    {
+     "word": "uses",
+     "start": 17.52,
+     "end": 17.92,
+     "t_dtw": 1866,
+     "probability": 0.9995023012161255
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.0020885467529296875,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 35,
+   "text": " between",
+   "start": 17.96,
+   "end": 18.73,
+   "tokens": [
+    1296
+   ],
+   "words": [
+    {
+     "word": " between",
+     "start": 17.96,
+     "end": 18.72,
+     "t_dtw": 1896,
+     "probability": 0.9982563257217407
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.0017452239990234375,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 36,
+   "text": " sentences,",
+   "start": 18.73,
+   "end": 20.0,
+   "tokens": [
+    16579,
+    11
+   ],
+   "words": [
+    {
+     "word": " sentences",
+     "start": 18.73,
+     "end": 19.71,
+     "t_dtw": 1982,
+     "probability": 0.9970517754554749
+    },
+    {
+     "word": ",",
+     "start": 19.71,
+     "end": 20.0,
+     "t_dtw": 2026,
+     "probability": 0.9537281394004822
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.02516460418701172,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 37,
+   "text": " so",
+   "start": 20.0,
+   "end": 20.25,
+   "tokens": [
+    370
+   ],
+   "words": [
+    {
+     "word": " so",
+     "start": 20.0,
+     "end": 20.25,
+     "t_dtw": 2080,
+     "probability": 0.8948038816452026
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.11115074157714844,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 38,
+   "text": " the",
+   "start": 20.25,
+   "end": 20.62,
+   "tokens": [
+    264
+   ],
+   "words": [
+    {
+     "word": " the",
+     "start": 20.25,
+     "end": 20.62,
+     "t_dtw": 2096,
+     "probability": 0.9985762238502502
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.0014247894287109375,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 39,
+   "text": " pace",
+   "start": 20.62,
+   "end": 21.12,
+   "tokens": [
+    11638
+   ],
+   "words": [
+    {
+     "word": " pace",
+     "start": 20.62,
+     "end": 21.12,
+     "t_dtw": 2130,
+     "probability": 0.9953550100326538
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.0046558380126953125,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 40,
+   "text": " feels",
+   "start": 21.12,
+   "end": 21.740000000000002,
+   "tokens": [
+    3417
+   ],
+   "words": [
+    {
+     "word": " feels",
+     "start": 21.12,
+     "end": 21.740000000000002,
+     "t_dtw": 2166,
+     "probability": 0.9979383945465088
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.002063751220703125,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 41,
+   "text": " tighter.",
+   "start": 21.740000000000002,
+   "end": 23.0,
+   "tokens": [
+    30443,
+    13
+   ],
+   "words": [
+    {
+     "word": " tighter",
+     "start": 21.740000000000002,
+     "end": 21.93,
+     "t_dtw": 2212,
+     "probability": 0.9980449676513672
+    },
+    {
+     "word": ".",
+     "start": 22.61,
+     "end": 23.0,
+     "t_dtw": 2292,
+     "probability": 0.9677702188491821
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.0115725202485919,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 42,
+   "text": "",
+   "start": 26.0,
+   "end": 26.0,
+   "temperature": 0.0,
+   "avg_logprob": 0.0,
+   "no_speech_prob": 4.515608026389728e-11
+  },
+  {
+   "id": 43,
+   "text": " Then",
+   "start": 26.0,
+   "end": 26.34,
+   "tokens": [
+    1396
+   ],
+   "words": [
+    {
+     "word": " Then",
+     "start": 26.0,
+     "end": 26.34,
+     "t_dtw": 2662,
+     "probability": 0.9257082939147949
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.07719612121582031,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 44,
+   "text": " every",
+   "start": 26.34,
+   "end": 27.27,
+   "tokens": [
+    633
+   ],
+   "words": [
+    {
+     "word": " every",
+     "start": 26.34,
+     "end": 26.76,
+     "t_dtw": 2694,
+     "probability": 0.9851238131523132
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.014987945556640625,
+   "no_speech_prob": 0.0
+  },
+  {
+   "id": 45,
+   "text": " spoken",
+   "start": 27.27,
+   "end": 27.43,
+   "tokens": [
+    10759
+   ],
+   "words": [
+    {
+     "word": " spoken",
+     "start": 27.27,
+     "end": 27.27,
+     "t_dtw": 2740,
+     "probability": 0.997858464717865
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.00214385986328125,
+   "no_speech_prob": 0.0
+  }
+ ],
+ "detected_language": "english",
+ "detected_language_probability": 0.9998829364776611,
+ "language_probabilities": {
+  "en": 0.9998829364776611
+ }
+}

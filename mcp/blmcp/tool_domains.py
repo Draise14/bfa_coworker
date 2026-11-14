@@ -60,7 +60,7 @@ DOMAINS: dict[str, frozenset[str]] = {
         "render_viewport_to_path", "get_screenshot_of_area_as_image", "three_point_lighting_rig", "bake_textures",
     }),
     "vse": frozenset({
-        "jump_to_tab_by_name", "jump_to_tab_by_space_type",
+        "jump_to_tab_by_name", "jump_to_tab_by_space_type", "reframe_vertical",
     }),
     "geometry_nodes": frozenset({
         "jump_to_view3d_object_by_name", "jump_to_view3d_object_data_by_name", "get_screenshot_of_area_as_image",

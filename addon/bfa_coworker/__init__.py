@@ -170,8 +170,8 @@ def register() -> None:
 def _rollback(registered: list[type]) -> None:
     """Undo a failed ``_register()`` without ``unregister()``'s side effects: nothing
     saved, so the settings backup and the saved chat are left alone (#400)."""
-    from . import chat_editor, ui_chat, ui_context_menus
-    for step in (ui_context_menus.unregister, chat_editor.unregister, ui_chat.unregister,
+    from . import chat_editor, reframe, ui_chat, ui_context_menus
+    for step in (reframe.unregister, ui_context_menus.unregister, chat_editor.unregister, ui_chat.unregister,
                  coworker_api.unregister, mcp_to_blender_server.stop):
         try:
             step()
@@ -253,6 +253,9 @@ def _register() -> None:
     # Coworker in the right-click menus: Explain This, Translate (#290, #42).
     from . import ui_context_menus
     ui_context_menus.register()
+    # Make Vertical / Reframe in the Sequencer's Strip and View menus (#333).
+    from . import reframe
+    reframe.register()
 
     # Discover generative plugins (Tier 5).
     # This scans gen_plugins/ and populates the registry.
@@ -468,6 +471,8 @@ def unregister() -> None:
         pass
 
     # Unregister chat UI (the Coworker editor first: it builds on ui_chat's panels).
+    from . import reframe
+    reframe.unregister()
     from . import ui_context_menus
     ui_context_menus.unregister()
     from . import chat_editor

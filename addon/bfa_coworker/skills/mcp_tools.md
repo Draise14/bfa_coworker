@@ -49,7 +49,8 @@ For long jobs, start them and check with `get_job_status`; don't loop faster tha
 - `reframe_vertical(strips, mode)` — Make the edit vertical (9:16): each movie / image / scene strip gets
   an editable "Reframe" modifier, `CROP` (centre crop) or `BLUR_FILL` (the whole shot over a blurred copy).
   Works in a copy of the scene by default (`in_copy`); one undo step. Change a shot's framing afterwards
-  through that modifier's inputs (Offset X / Y -1..1, Zoom, Blur Fill), not the strip transform.
+  through that modifier's inputs (Properties > Strip Modifiers: Offset X / Y -1..1, Zoom, Blur Fill), not the
+  strip transform.
 
 ## When to Use `execute_blender_code`
 

@@ -70,7 +70,7 @@ def main(params: Params) -> Any:
     where = ("a vertical copy '{:s}' (the Sequencer shows it now; '{:s}' is unchanged)".format(
         done["scene"], done["source_scene"]) if done["copied"] else "'{:s}'".format(done["scene"]))
     msg = "Made {:s} {:d}x{:d} with {:s}: {:d} strip(s) reframed{:s}. Each strip's framing is its 'Reframe' " \
-          "modifier (Offset X / Y, Zoom, Blur Fill), editable in the Sequencer sidebar's Modifiers tab.".format(
+          "modifier (Offset X / Y, Zoom, Blur Fill), editable in the Properties editor's Strip Modifiers tab.".format(
               where, done["resolution"][0], done["resolution"][1],
               "Centre Crop" if mode == "CROP" else "Blur Fill", len(changed),
               ", {:d} kept their framing".format(len(kept)) if kept else "")

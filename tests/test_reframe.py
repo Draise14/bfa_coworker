@@ -317,7 +317,8 @@ class TestReframeVerticalTool(unittest.TestCase):
         self.assertEqual(list(ns["Params"]._fields), params)
 
     def test_in_the_vse_domain_of_both_lists(self):
-        spec = importlib.util.spec_from_file_location("tool_domains_reframe", _REPO / "mcp" / "blmcp" / "tool_domains.py")
+        spec = importlib.util.spec_from_file_location("tool_domains_reframe",
+                                                      _REPO / "mcp" / "blmcp" / "tool_domains.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         self.assertIn("reframe_vertical", module.DOMAINS["vse"])

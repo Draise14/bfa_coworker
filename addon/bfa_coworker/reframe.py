@@ -10,7 +10,7 @@ Make Vertical (9:16) and Reframe in the Sequencer (Video 3, #333).
 16:9 edit stays -- and gives every visible movie, image and scene strip a **Reframe**
 compositor modifier: Centre Crop, or *Blur Fill* (the whole shot over a blurred,
 dimmed copy of itself).  The framing stays editable: it is just the modifier's
-inputs (Sidebar > Modifiers, or Strip > Reframe), one value set per shot.
+inputs (Properties editor > Strip Modifiers tab, or Strip > Reframe), one value set per shot.
 
 The node group ``Coworker Reframe v1`` is built once and shared; each modifier keeps
 its own values (``mod.properties.inputs.<socket identifier>.value``).  Blender 5.2.4
@@ -743,7 +743,7 @@ _ACTIONS = (
 
 
 class BFACW_OT_reframe(Operator):
-    """Change the framing of the selected strips' Reframe modifier (it is also in Sidebar > Modifiers)"""
+    """Change the framing of the selected strips' Reframe modifier (also in Properties > Strip Modifiers)"""
     bl_idname = "bfacw.reframe"
     bl_label = "Reframe"
     bl_options = {'REGISTER', 'UNDO'}

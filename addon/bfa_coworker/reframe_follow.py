@@ -135,7 +135,8 @@ def vision_target(operating_mode: str, cfg: Any, running: bool,
         if not url:
             raise Unavailable("Follow subject needs a vision model: set the Remote API URL, key and model "
                               "in Coworker's Preferences.")
-        return _chat_url(url), str(getattr(cfg, "remote_api_key", "") or ""), str(getattr(cfg, "remote_model", "") or "")
+        return (_chat_url(url), str(getattr(cfg, "remote_api_key", "") or ""),
+                str(getattr(cfg, "remote_model", "") or ""))
     if not running:
         raise Unavailable("Follow subject needs a vision model: start Coworker with a vision-capable local "
                           "model (e.g. Gemma 4 or Qwen3.8) first.")

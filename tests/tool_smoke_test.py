@@ -157,7 +157,41 @@ _TOOL_TEST_ARGS: dict[str, dict[str, Any]] = {
 
     # ── Collections ─────────────────────────────────────────────────
     "set_collection_color_tag": {"collection_name": "Collection", "color": "COLOR_01"},
+
+    # ── Video Sequencer (Tools 1, #304) -- on the scene _VSE_SETUP_CODE builds ──
+    "get_vse_strips_summary": {"scene_name": "SmokeVSE"},
+    "get_vse_strip_detail": {"strip_name": "Title", "scene_name": "SmokeVSE"},
+    "get_vse_timeline_overview": {"scene_name": "SmokeVSE"},
+    "set_strip_frame_range": {"strip_name": "Title", "start": 50, "scene_name": "SmokeVSE"},
+    "render_vse_preview": {"frame": 55, "max_size": 512, "scene_name": "SmokeVSE"},
 }
+
+# A scene of its own for the Sequencer tools (the user's scenes are left alone): a colour
+# strip, a text strip "Title" and an image strip from a PNG made here (no download).
+_VSE_TOOLS = ("get_vse_strips_summary", "get_vse_strip_detail", "get_vse_timeline_overview",
+              "set_strip_frame_range", "render_vse_preview")
+_VSE_SETUP_CODE = """
+import os, bpy
+old = bpy.data.scenes.get("SmokeVSE")
+if old is not None:
+    bpy.data.scenes.remove(old)
+sc = bpy.data.scenes.new("SmokeVSE")
+sc.render.resolution_x, sc.render.resolution_y = 640, 360
+sc.frame_start, sc.frame_end = 1, 100
+ed = sc.sequence_editor_create()
+bg = ed.strips.new_effect(name="BG", type="COLOR", channel=1, frame_start=1, length=100)
+bg.color = (0.1, 0.2, 0.5)
+title = ed.strips.new_effect(name="Title", type="TEXT", channel=2, frame_start=10, length=40)
+title.text = "Smoke test"
+img = bpy.data.images.new("smoke_vse_img", 64, 36)
+img.pixels[:] = [1.0, 0.6, 0.1, 1.0] * (64 * 36)
+path = os.path.join(bpy.app.tempdir, "smoke_vse_img.png")
+img.filepath_raw, img.file_format = path, "PNG"
+img.save()
+bpy.data.images.remove(img)
+ed.strips.new_image(name="Logo", filepath=path, channel=3, frame_start=20)
+result = {"status": "ok", "strips": len(ed.strips_all)}
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +335,16 @@ def main() -> int:
     filter_names: list[str] = []
     if args.filter:
         filter_names = [n.strip() for n in args.filter.split(",")]
+
+    # ── Sequencer scene for the Sequencer tools ────────────────────
+    if any(t.get("name") in _VSE_TOOLS and (not filter_names or t.get("name") in filter_names) for t in tools):
+        try:
+            setup = _call_tool(base_url, "execute_blender_code", {"code": _VSE_SETUP_CODE})
+            print("Sequencer scene 'SmokeVSE': {:s}".format(
+                "built" if not setup.get("result", {}).get("isError") else "FAILED to build"))
+        except Exception as ex:  # pylint: disable=broad-exception-caught
+            print("Sequencer scene 'SmokeVSE' FAILED to build: {:s}".format(str(ex)))
+        print()
 
     # ── Run tests ──────────────────────────────────────────────────
     passed = 0

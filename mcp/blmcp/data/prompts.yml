@@ -36,7 +36,17 @@ initial_instructions: |
     `get_job_status(job_id)`, which holds the answer until the job is done (don't
     loop faster than every few seconds). Never run a long bake or render inside
     `execute_blender_code`: it blocks Blender and the call times out.
+  * Video Sequencer: the tools of the `vse` domain (see below).
   * Everything else: `execute_blender_code`.
+
+  # Video Sequencer
+
+  For timeline requests ("move the title to frame 50", "what's on channel 3?") use the
+  Sequencer tools, not `bpy.ops.sequencer` code: `get_vse_timeline_overview` first, then
+  `get_vse_strips_summary` / `get_vse_strip_detail` to find a strip by its exact name,
+  `set_strip_frame_range` to move, trim or re-channel it (one undo step; it refuses an
+  overlap and names a free channel), and `render_vse_preview` to look at a frame.
+  Frames follow Blender: a strip's `end` is the frame after its last one.
 
   The API reference (`data/api/`), user manual (`data/manual/`) and skill
   notes (`data/skills/`: materials, modifiers, mesh editing, rendering,

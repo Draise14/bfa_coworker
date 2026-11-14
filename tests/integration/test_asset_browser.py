@@ -143,10 +143,23 @@ def _python_fn_body_as_string(fn) -> str:
 # ---------------------------------------------------------------------------
 # Test class.
 
-@unittest.skipUnless(
-    os.environ.get("BLENDER_BIN"),
-    "BLENDER_BIN environment variable must be set (path to Bforartists/Blender)",
-)
+def _missing_requirement() -> str:
+    """Why this machine cannot run the test (empty when it can)."""
+    blender_bin = os.environ.get("BLENDER_BIN", "")
+    if not blender_bin:
+        return "BLENDER_BIN environment variable must be set (path to Bforartists/Blender)"
+    if not shutil.which(blender_bin):
+        return "BLENDER_BIN does not point to a Blender binary: {:s}".format(blender_bin)
+    blender_mcp = os.environ.get("BFACW_MCP", "bfa-coworker-mcp")
+    if not shutil.which(blender_mcp):
+        return "MCP server not found: '{:s}' (install mcp/ or set BFACW_MCP)".format(blender_mcp)
+    return ""
+
+
+_MISSING = _missing_requirement()
+
+
+@unittest.skipIf(_MISSING, _MISSING)
 class TestAssetBrowser(unittest.TestCase):
     """Live, headless round-trip of the Tier 3d asset tools."""
 

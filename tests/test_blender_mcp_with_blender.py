@@ -20,6 +20,9 @@ Override with ``BLENDER_BIN`` and ``BFACW_MCP`` environment variables.
 
 Foreground tests run headless via a Wayland display server (Weston).
 Set ``BFACW_FOREGROUND=1`` to use the real display instead.
+
+A class is skipped (with the reason) when its Blender binary, MCP server or
+display server is not on this machine.
 """
 
 __all__ = ()
@@ -248,6 +251,33 @@ def _wait_for_port(
     )
 
 
+def _missing_requirement(background: bool) -> str:
+    """
+    Return why this machine cannot run the suite (empty when it can).
+
+    Needs a Blender binary (``BLENDER_BIN`` or ``blender`` on ``PATH``), the
+    MCP server (``BFACW_MCP`` or ``bfa-coworker-mcp`` on ``PATH``) and, for
+    the foreground modes, a headless Wayland display server (``weston``,
+    Linux only) unless ``BFACW_FOREGROUND`` asks for the real display.
+    """
+    blender_bin = os.environ.get("BLENDER_BIN", "blender")
+    if not shutil.which(blender_bin):
+        if os.environ.get("BLENDER_BIN"):
+            return "BLENDER_BIN does not point to a Blender binary: {:s}".format(blender_bin)
+        return "no Blender binary: 'blender' is not on PATH and BLENDER_BIN is not set"
+    blender_mcp = os.environ.get("BFACW_MCP", "bfa-coworker-mcp")
+    mcp_argv = shlex.split(blender_mcp)  # as setUpClass launches it
+    if not mcp_argv or not shutil.which(mcp_argv[0]):
+        return "MCP server not found: '{:s}' (install mcp/ or set BFACW_MCP)".format(blender_mcp)
+    if not background and not os.environ.get("BFACW_FOREGROUND"):
+        weston_bin = os.environ.get("WESTON_BIN", "weston")
+        if not shutil.which(weston_bin):
+            return ("foreground mode needs a headless Wayland display server: '{:s}' "
+                    "not found (set WESTON_BIN, or BFACW_FOREGROUND=1 to use the real "
+                    "display)").format(weston_bin)
+    return ""
+
+
 class _TestServerMixin:
     """
     Shared setup, cleanup, helpers and test methods for both background
@@ -262,6 +292,10 @@ class _TestServerMixin:
 
     @classmethod
     def setUpClass(cls) -> None:
+        missing = _missing_requirement(cls._background)
+        if missing:
+            raise unittest.SkipTest(missing)
+
         blender_bin = os.environ.get("BLENDER_BIN", "blender")
         blender_mcp = os.environ.get("BFACW_MCP", "bfa-coworker-mcp")
 

@@ -247,6 +247,11 @@ def _register() -> None:
     # Migrate operating_mode from legacy agent_mode + llm_mode.
     _migrate_operating_mode()
 
+    # Coworker operators: Remove Silences in the Sequencer (Tier 4m, Wand 0, #331). Before the chat's
+    # panels: Blender keeps bl_order >= 0 and orders equal ones by registration, so the Video panel is
+    # first in the Sequencer's Coworker tab, above Queue (#504).
+    from . import wand
+    wand.register()
     # Register the chat UI modules.
     from . import ui_chat
     ui_chat.register()
@@ -256,9 +261,6 @@ def _register() -> None:
     # Coworker in the right-click menus: Explain This, Translate (#290, #42).
     from . import ui_context_menus
     ui_context_menus.register()
-    # Coworker operators: Remove Silences in the Sequencer (Tier 4m, Wand 0, #331).
-    from . import wand
-    wand.register()
     # Auto Captions in the Sequencer (#376): the Coworker section and Video panel (wand); SRT in and out.
     from . import captions_ops
     captions_ops.register()

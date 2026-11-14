@@ -49,6 +49,7 @@ from bpy.types import Menu, Operator  # pylint: disable=import-error
 from . import reframe_follow
 from . import reframe_math as rm
 from .shared import icon
+from .wand import scene as _seq
 
 GROUP_NAME = "Coworker Reframe v1"
 GROUP_TAG = "coworker_reframe"          # custom property on the group: its layout version
@@ -311,10 +312,8 @@ def fcurve_for(scene: Any, mod: Any, name: str) -> Any:
 # -- Strips and sizes ----------------------------------------------------------------------
 
 def sequencer_scene(context: Any) -> Any:
-    scene = getattr(context, "sequencer_scene", None)
-    if scene is None:
-        scene = getattr(getattr(context, "workspace", None), "sequencer_scene", None)
-    return scene or getattr(context, "scene", None)
+    """The scene the Sequencer shows (``wand.scene``, #504), else the context scene (tools, timers)."""
+    return _seq.sequencer_scene(context) or getattr(context, "scene", None)
 
 
 def source_size(strip: Any) -> tuple[int, int]:
@@ -661,9 +660,9 @@ def _tell(msg: str) -> None:
 
 # -- Operators -----------------------------------------------------------------------------
 
-def _seq_poll(context: Any) -> bool:
-    scene = sequencer_scene(context)
-    return scene is not None and scene.sequence_editor is not None
+def _seq_poll(context: Any, cls: Any) -> bool:
+    """The Sequencer's scene, with strips; else greyed out with the reason (#504)."""
+    return _seq.poll(cls, context)
 
 
 class BFACW_OT_make_vertical(Operator):
@@ -689,7 +688,7 @@ class BFACW_OT_make_vertical(Operator):
 
     @classmethod
     def poll(cls, context: Any) -> bool:
-        return _seq_poll(context)
+        return _seq_poll(context, cls)
 
     def invoke(self, context: Any, _event: Any) -> set[str]:
         return context.window_manager.invoke_props_dialog(self, width=340)
@@ -753,7 +752,7 @@ class BFACW_OT_reframe(Operator):
 
     @classmethod
     def poll(cls, context: Any) -> bool:
-        return _seq_poll(context) and not supported()
+        return _seq_poll(context, cls) and not supported()
 
     def execute(self, context: Any) -> set[str]:
         scene = sequencer_scene(context)
@@ -781,7 +780,7 @@ class BFACW_OT_reframe_follow_subject(Operator):
 
     @classmethod
     def poll(cls, context: Any) -> bool:
-        return _seq_poll(context) and not supported()
+        return _seq_poll(context, cls) and not supported()
 
     def execute(self, context: Any) -> set[str]:
         scene = sequencer_scene(context)

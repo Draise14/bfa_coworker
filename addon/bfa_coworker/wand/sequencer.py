@@ -45,6 +45,7 @@ __all__ = (
     "RATE",
     "SPEC",
     "SUBMENUS",
+    "VIEWS",
     "WINDOW_S",
     "register",
     "unregister",
@@ -59,10 +60,14 @@ from bpy.props import BoolProperty, FloatProperty  # pylint: disable=import-erro
 from bpy.types import Operator, Panel  # pylint: disable=import-error
 
 from . import icons, silences
+from .scene import poll as _sequencer_poll, sequencer_scene
 from .spec import OperatorSpec, Param, Place
 
 CATEGORY = "Coworker"
 PANEL = "Video"
+HEADER_ICON = "FILE_MOVIE"      # the toolshelf panel's header (#504)
+# The Sequencer views with a timeline: where the panel and the Strip-menu section show (#504).
+VIEWS = frozenset({"SEQUENCER", "SEQUENCER_PREVIEW"})
 
 SPEC = OperatorSpec(
     id="sequencer.remove_silences",
@@ -142,7 +147,7 @@ def _fps(scene: Any) -> float:
 
 
 def _scene(context: Any) -> Any:
-    return getattr(context, "sequencer_scene", None) or context.scene
+    return sequencer_scene(context) or context.scene
 
 
 def _level(editor: Any) -> tuple[Any, Any]:
@@ -457,11 +462,7 @@ class COWORKER_OT_sequencer_remove_silences(Operator):  # type: ignore[misc]
 
     @classmethod
     def poll(cls, context):
-        scene = _scene(context)
-        if scene is None or scene.sequence_editor is None:
-            cls.poll_message_set("The scene has no sequencer strips")
-            return False
-        return True
+        return _sequencer_poll(cls, context)      # the Sequencer's scene, with strips (#504)
 
     def _settings(self) -> tuple[float, float, float, float]:
         return self.threshold_db, self.min_silence, self.padding, self.min_keep
@@ -622,9 +623,17 @@ class COWORKER_PT_sequencer_toolshelf(Panel):  # type: ignore[misc]
 
     @classmethod
     def poll(cls, context):
+        # Both views with a timeline (#504); not the Preview alone, where Bforartists' toolshelf
+        # keeps its strip tools out too (only the Image tab) and the Strip menu has no timeline part.
         space = context.space_data
         return bool(getattr(space, "show_toolshelf_tabs", False)) and \
-            getattr(space, "view_type", "") in {"SEQUENCER"}
+            getattr(space, "view_type", "") in VIEWS
+
+    def draw_header(self, _context):
+        # The toolshelf's default width leaves room for about two letters ("Vi", like
+        # Bforartists' own "Cl" and "Im"): an icon names the panel there (#504).
+        from ..shared import icon as safe_icon
+        self.layout.label(icon=safe_icon(HEADER_ICON))
 
     def draw(self, context):
         try:
@@ -647,12 +656,14 @@ class COWORKER_PT_sequencer_sidebar(Panel):  # type: ignore[misc]
     bl_space_type = "SEQUENCE_EDITOR"
     bl_region_type = "UI"
     bl_category = CATEGORY
-    bl_order = 0                        # at the top of the tab, above the chat
+    # First in the tab: Queue and the chat's panels are 0 and up, and Blender keeps bl_order >= 0, so
+    # equal orders go by registration: the add-on registers wand before the chat (#504).
+    bl_order = 0
 
     @classmethod
     def poll(cls, context):
         space = context.space_data
-        return getattr(space, "view_type", "") in {"SEQUENCER", "SEQUENCER_PREVIEW"} and \
+        return getattr(space, "view_type", "") in VIEWS and \
             not getattr(space, "show_toolshelf_tabs", False)
 
     def draw(self, context):
@@ -664,7 +675,7 @@ class COWORKER_PT_sequencer_sidebar(Panel):  # type: ignore[misc]
 
 def _draw_strip_menu(self: Any, context: Any) -> None:
     space = context.space_data
-    if getattr(space, "view_type", "SEQUENCER") not in {"SEQUENCER", "SEQUENCER_PREVIEW"}:
+    if getattr(space, "view_type", "SEQUENCER") not in VIEWS:
         return
     layout = self.layout
     layout.separator()

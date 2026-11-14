@@ -15,6 +15,8 @@ Chats running side by side (Threads 3, #359).
 3. The External Agent: one session per chat on one agent process, prompts at
    once; updates and permission requests routed by ``sessionId``; Stop cancels
    only that chat's session.
+4. Remote: chats' requests go out at once; an HTTP 429 backs off only the chat
+   that got it (its own worker waits, honouring Retry-After and its Stop).
 
 Run with::
 
@@ -437,6 +439,95 @@ class TestExternalAgentSideBySide(unittest.TestCase):
         self.assertIn("let it go", self._texts("t2"))
         self.client.release[sid["t1"]].set()
         self.client.release[sid["t2"]].set()
+
+
+
+def _transport():
+    import importlib.util
+    path = os.path.join(os.path.dirname(_HERE), "addon", "bfa_coworker", "llm_transport.py")
+    spec = importlib.util.spec_from_file_location("_bfacw_sbs_transport", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestRateLimitPerChat(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.lt = _transport()
+
+    def test_retry_delay(self):
+        lt = self.lt
+        self.assertEqual(lt.retry_delay("3", 1), 3.0, "the provider's Retry-After")
+        self.assertEqual([lt.retry_delay(None, n) for n in (1, 2, 3)], [2.0, 4.0, 8.0])
+        self.assertEqual(lt.retry_delay("Wed, 21 Oct 2026 07:28:00 GMT", 2), 4.0, "a date: our own")
+        self.assertEqual(lt.retry_delay("999", 1), 60.0, "never longer than a minute")
+
+    def test_a_429_backs_off_only_its_chat(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        lt = self.lt
+        seen = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                body = self.rfile.read(int(self.headers.get("Content-Length", 0) or 0)).decode()
+                chat = "A" if "chat A" in body else "B"
+                seen.append((chat, time.monotonic()))
+                limited = chat == "A" and sum(1 for c, _t in seen if c == "A") <= 2
+                payload = (json.dumps({"error": {"message": "slow down"}}) if limited else
+                           json.dumps({"choices": [{"message": {"role": "assistant", "content": "ok " + chat},
+                                                    "finish_reason": "stop"}]}))
+                self.send_response(429 if limited else 200)
+                if limited:
+                    self.send_header("Retry-After", "1")
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload.encode())))
+                self.end_headers()
+                self.wfile.write(payload.encode())
+
+            def log_message(self, *args):
+                pass
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        url = "http://127.0.0.1:{:d}/v1/chat/completions".format(server.server_address[1])
+        import types
+        states = {c: types.SimpleNamespace(error="", error_full="", error_kind="", warning="", ui_status="")
+                  for c in "AB"}
+        stops = {c: threading.Event() for c in "AB"}
+        done, results = {}, {}
+
+        def chat(name):
+            with lt.using(states[name], stops[name]):
+                results[name] = lt.openai_chat_completions(url, [{"role": "user", "content": "chat " + name}], [],
+                                                           max_tokens=16)
+            done[name] = time.monotonic()
+        start = time.monotonic()
+        workers = [threading.Thread(target=chat, args=(c,)) for c in "AB"]
+        for w in workers:
+            w.start()
+        for w in workers:
+            w.join(20)
+        self.assertEqual(results["B"]["choices"][0]["message"]["content"], "ok B")
+        self.assertEqual(results["A"]["choices"][0]["message"]["content"], "ok A", "A got through after waiting")
+        self.assertLess(done["B"] - start, 0.9, "B never waited for A's back-off")
+        self.assertGreaterEqual(done["A"] - start, 1.9, "A waited Retry-After twice")
+        self.assertIn("Rate limited", states["A"].ui_status)
+        self.assertEqual(states["B"].ui_status, "", "B's chat says nothing about it")
+        self.assertEqual([c for c, _t in seen].count("B"), 1)
+
+    def test_stop_ends_the_wait(self):
+        lt = self.lt
+        import types
+        state = types.SimpleNamespace(error="", error_full="", error_kind="", warning="", ui_status="")
+        stop = threading.Event()
+        threading.Timer(0.2, stop.set).start()
+        start = time.monotonic()
+        with lt.using(state, stop):
+            self.assertTrue(lt._wait_unless_stopped(5.0))
+        self.assertLess(time.monotonic() - start, 1.0)
 
 
 if __name__ == "__main__":

@@ -17,9 +17,8 @@ stack, so this module holds what keeps them apart, free of ``bpy``:
   then, and Revert has to ask).
 * :func:`revert_choice` -- what Revert may offer (#359 / plan 4o section 3.3).
 * :func:`other_chats_line` -- the one-line "Other chats: ..." context.
-* :class:`BackOff` -- an HTTP 429 backs off only the chat that got it.
-
-The claims (who is changing what) are :mod:`claims`.
+The claims (who is changing what) are :mod:`claims`; an HTTP 429 backing off only
+the chat that got it is :func:`llm_transport.retry_delay`.
 """
 
 from __future__ import annotations

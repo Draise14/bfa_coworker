@@ -42,6 +42,8 @@ import traceback
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
+from . import side_by_side
+
 DEFAULT_HOST = "localhost"
 DEFAULT_PORT = 9876
 
@@ -244,6 +246,7 @@ class _State:
     __slots__ = (
         "sock",
         "clients",
+        "last_chat",
     )
 
     def __init__(self) -> None:
@@ -251,6 +254,8 @@ class _State:
         self.sock: socket.socket | None = None
         # Connected clients that have not yet sent a complete request.
         self.clients: list[_Client] = []
+        # The chat whose call ran last (#359): the next tick starts with the one after it.
+        self.last_chat: str = ""
 
 
 _state = _State()
@@ -1338,6 +1343,12 @@ def _execute_code_from_request(
             return _ExecResult(_response, _check)
         return _execute(code, strict_json)
 
+    def _gated_run() -> _ExecResult:
+        """Threads 3 (#359): a write to what another running chat claimed waits or asks."""
+        if _internal:
+            return _run()
+        return _claim_gate(_thread, _tool, request.get("args"), str(code), _run)
+
     exec_result = None
     # Runtime 1 (#310): the same call again and again asks, then is refused.  The local
     # loop counts its own calls (its bookkeeping code repeats here on purpose).
@@ -1345,7 +1356,7 @@ def _execute_code_from_request(
         from . import loop_guard, risky_steps
 
         def _proceed() -> tuple[dict[str, object], Any]:
-            _inner = _run()
+            _inner = _gated_run()
             return _inner.response, _inner.check_fn
 
         _repeat = loop_guard.bridge_wrap(loop_guard.BRIDGE, risky_steps.APPROVALS, risky_steps.auto_on(_thread),
@@ -1354,7 +1365,11 @@ def _execute_code_from_request(
         if _repeat is not None:
             exec_result = _ExecResult(*_repeat)
     if exec_result is None:
-        exec_result = _run()
+        exec_result = _gated_run()
+    try:
+        _note_step(_thread, _tool, str(code), _internal, exec_result)
+    except Exception as _ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] bridge: step note failed -- {:s}".format(str(_ex)))
     # Agent 9: what ran, for the activity view (External Harness) and Copy Log.
     # Coworker's own bookkeeping isn't the agent's work (#414): left out.
     if not _internal:
@@ -1380,6 +1395,183 @@ def _execute_code_from_request(
             print("response: {:s}".format(json.dumps(exec_result.response, indent=2)), file=sys.stderr)
 
     return exec_result, strict_json
+
+
+def _claim_gate(thread: str, tool: str, args: Any, code: str, run: Callable[[], _ExecResult]) -> _ExecResult:
+    """Run a write call of chat *thread*, minding the other running chats' claims (#359).
+
+    Nothing in the way (or only one chat at work): it runs, and what it changes is its
+    chat's claim.  A claim of another running chat in the way: it asks the user ("The
+    3D chat is changing Cube -- wait / go ahead", the question card) or, in Auto mode,
+    waits for that chat's turn -- at most :data:`claims.WAIT_LIMIT` seconds, then it
+    answers without changing anything.  Two chats waiting for each other: refused."""
+    from . import claims
+    from .engine import PLAN_SAFE_TOOLS
+    if not claims.writes(tool, PLAN_SAFE_TOOLS):
+        return run()
+    running = side_by_side.working_chats()
+    if thread not in running or len(running) < 2:
+        return run()                # one chat at work: as before, nothing to claim against
+    targets, whole = claims.targets_of(
+        tool, args, code,
+        exists=lambda name: _datablock_exists(name) or claims.TABLE.held_by_others(thread, name, running))
+    from . import risky_steps
+
+    def ran(do: Callable[[], _ExecResult]) -> _ExecResult:
+        before = _datablock_names() if whole else set()
+        result = do()
+        if result.check_fn is None and result.response.get("status") == "ok":
+            # Its claims: what it names, and for a script what it made, renamed or removed.
+            claims.TABLE.claim(thread, targets | (claims.changed_names(before, _datablock_names()) if whole
+                                                  else set()))
+        return result
+    decision = claims.decide(claims.TABLE, thread, targets, running, ask=not risky_steps.auto_on(thread))
+    print("[Coworker] claims: {:s} {:s} on {:s} -> {:s}".format(
+        thread or "main", tool, ", ".join(sorted(n for _k, n in targets)[:6]) or "nothing named", decision.action))
+    if decision.action == claims.RUN:
+        return ran(run)
+    from . import coworker_api
+    title = _chat_title(decision.holder)
+    shown = ", ".join(decision.names[:3])
+    if decision.action == claims.REFUSE:
+        return _ExecResult({"status": "error", "message": (
+            "Not run: the {:s} chat is waiting for this chat's changes to {:s}, so waiting for it here "
+            "would make both wait for ever. Nothing was changed. Finish or leave {:s} first, or work on "
+            "something else, then try again.").format(title, shown, shown)})
+    print("[Coworker] bridge: {:s}'s {:s} conflicts with the {:s} chat's claim on {:s} -- {:s}".format(
+        thread or "main", tool, title, shown, decision.action))
+    state: dict[str, Any] = {"mode": decision.action, "qid": "", "since": time.monotonic(), "inner": None}
+    if decision.action == claims.ASK:
+        state["qid"] = coworker_api.post_question(claims.conflict_question(title, decision.names),
+                                                  ["Wait", "Go ahead"], allow_text=False, source="conflict",
+                                                  thread=thread)
+    claims.TABLE.set_waiting(thread, decision.holder)
+
+    def give_up(message: str) -> dict[str, object]:
+        claims.TABLE.clear_waiting(thread)
+        if state["qid"]:
+            coworker_api.cancel_question(state["qid"])
+        return {"status": "error", "message": message}
+
+    def check() -> dict[str, object] | None:
+        if state["inner"] is not None:          # it ran, and its own answer is deferred
+            return state["inner"]()
+        go = False
+        if state["mode"] == claims.ASK and state["qid"]:
+            answer = coworker_api.question_state(state["qid"])
+            if answer["cancelled"]:
+                state["qid"] = ""
+                return give_up("Stopped by the user while it waited for the {:s} chat. Nothing was "
+                               "changed.".format(title))
+            if answer["answered"]:
+                state["qid"] = ""
+                go = answer["answer"].strip().lower().startswith("go")
+                state["mode"] = claims.RUN if go else claims.WAIT
+        now_running = side_by_side.working_chats()
+        if thread not in now_running or _stop_pressed(thread):
+            return give_up("This chat's turn ended (or was stopped) while the call waited. Nothing was "
+                           "changed.")
+        if not go and not claims.TABLE.conflicts(thread, targets, now_running).get(decision.holder):
+            go = True                           # the other chat's turn ended: its claims are gone
+        if not go:
+            if time.monotonic() - state["since"] > claims.WAIT_LIMIT:
+                return give_up(("The {:s} chat was still changing {:s} after {:.0f} s, so nothing was "
+                                "changed. Work on something else first, or try again in a moment.").format(
+                                    title, shown, claims.WAIT_LIMIT))
+            return None
+        claims.TABLE.clear_waiting(thread)
+        if state["qid"]:
+            coworker_api.cancel_question(state["qid"])
+            state["qid"] = ""
+        result = ran(run)
+        if result.check_fn is not None:
+            state["inner"] = result.check_fn
+            return None
+        return result.response
+    return _ExecResult({}, check)
+
+
+_CLAIM_COLLECTIONS = ("objects", "node_groups", "texts", "collections", "materials", "meshes")
+
+
+def _datablock_names() -> set[str]:
+    """The names of every datablock of a kind claims cover, and of every strip (main thread)."""
+    try:
+        import bpy  # pylint: disable=import-error
+        out = {d.name for attr in _CLAIM_COLLECTIONS for d in getattr(bpy.data, attr)}
+        for scene in bpy.data.scenes:
+            strips = getattr(getattr(scene, "sequence_editor", None), "strips_all", None)
+            if strips is not None:
+                out.update(s.name for s in strips)
+        return out
+    except Exception:  # pylint: disable=broad-exception-caught
+        return set()
+
+
+def _datablock_exists(name: str) -> bool:
+    """A datablock of a kind claims cover is called *name* now (main thread)."""
+    try:
+        import bpy  # pylint: disable=import-error
+        for attr in _CLAIM_COLLECTIONS:
+            if getattr(bpy.data, attr).get(name) is not None:
+                return True
+        for scene in bpy.data.scenes:           # strips by name
+            strips = getattr(getattr(scene, "sequence_editor", None), "strips_all", None)
+            if strips is not None and strips.get(name) is not None:
+                return True
+        return False
+    except Exception:  # pylint: disable=broad-exception-caught
+        return True                 # can't tell: count it (a claim too many only asks)
+
+
+def _stop_pressed(tag: str) -> bool:
+    """Stop was pressed in chat *tag* (its loop turn's Stop)."""
+    try:
+        from . import agent_controller
+        thread = agent_controller.THREADS.get(tag) if tag else None
+        return agent_controller.thread_stop(thread).is_set()
+    except Exception:  # pylint: disable=broad-exception-caught
+        return False
+
+
+def _chat_title(tag: str) -> str:
+    """Chat *tag*'s name for a sentence: "3D", "Node" ... ("All editors" for the default)."""
+    from . import threads
+    if not tag:
+        return "All editors"
+    try:
+        from . import agent_controller
+        thread = agent_controller.THREADS.get(tag)
+    except Exception:  # pylint: disable=broad-exception-caught
+        thread = None
+    if thread is None:
+        return tag
+    return thread.title or threads.short_name(thread.editor) or "other"
+
+
+def _note_step(thread: str, tool: str, code: str, internal: bool, exec_result: _ExecResult) -> None:
+    """A call ran for chat *thread* (#359): note on the step journal that it may have
+    pushed undo steps (a write tool, or Coworker's own undo push), and while chats run
+    side by side make a finished write call its own undo step, named by its chat
+    ("Coworker (3D): execute blender code"), so Edit > Undo History shows who did what.
+    What the call changes is never read as the user's edit (Revert's check)."""
+    from . import coworker_api
+    coworker_api.own_change()
+    if internal:
+        if "undo_push" in code or "ed.undo" in code:
+            side_by_side.JOURNAL.note(thread)
+        return
+    from .engine import PLAN_SAFE_TOOLS
+    if tool in PLAN_SAFE_TOOLS:
+        return                      # it only looks: no undo step
+    side_by_side.JOURNAL.note(thread)
+    if exec_result.check_fn is not None or exec_result.response.get("status") != "ok":
+        return
+    if not side_by_side.side_by_side():
+        return                      # one chat at work: its turn's steps as before
+    from . import agent_controller, coworker_api, threads
+    label = threads.label(agent_controller.THREADS.get(thread) if thread else None)
+    coworker_api._undo(side_by_side.undo_step_name(label, tool))
 
 
 def _close_client(client: _Client) -> None:
@@ -1423,8 +1615,13 @@ def _service_clients() -> bool:
     Return ``True`` if at least one request was executed.
     """
     did_work = False
+    ready: list[tuple[_Client, str]] = []
     # Iterate over a copy since clients may be removed during the loop.
     for client in _state.clients[:]:
+        if b"\0" in client.buffer:
+            # Complete, waiting for its chat's turn on the main thread (#359).
+            ready.append((client, side_by_side.request_thread(bytes(client.buffer))))
+            continue
         # Evict clients that have not sent a complete request in time.
         client.timeout -= 1
         if client.timeout <= 0:
@@ -1471,7 +1668,13 @@ def _service_clients() -> bool:
         if b"\0" not in client.buffer:
             # Request not yet complete.
             continue
+        ready.append((client, side_by_side.request_thread(bytes(client.buffer))))
 
+    # Several chats' calls take turns (#359): one call per chat per tick, round-robin,
+    # so a chat making many calls can't hold the others' back.  Each call still runs
+    # alone on the main thread.
+    for client, chat in side_by_side.fair_order(ready, _state.last_chat):
+        _state.last_chat = chat
         # Execute the request and send the response.
         request_data = bytes(client.buffer[:client.buffer.index(b"\0")])
         try:

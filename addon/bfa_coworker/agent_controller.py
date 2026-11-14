@@ -55,6 +55,7 @@ from . import co_work_guard
 from . import long_jobs
 from . import loop_guard
 from . import threads
+from . import side_by_side as _side_by_side
 from . import chat_attachments
 from . import process_guard as _process_guard
 from . import session_identity as _session_identity
@@ -2098,6 +2099,11 @@ def dequeue_message() -> dict[str, Any] | None:
     return _message_queue.dequeue()
 
 
+def peek_message() -> dict[str, Any] | None:
+    """The next queued message, left in the queue."""
+    return _message_queue.peek()
+
+
 # Set to request the in-flight conversation turn to abort. The conversation
 # loop checks this between iterations and inside the LLM request path.
 _stop_event = threading.Event()
@@ -2127,11 +2133,57 @@ def clear_stop(thread: "threads.Thread | None" = None) -> None:
 # Threads (Tier 4, Threads 1, #357): one conversation per job.  The module-level
 # state above (``_agent_state``, ``_stop_event``, ``_message_queue`` and
 # ``session_memory.store``) is the DEFAULT thread's, looked up when used, so
-# existing callers and tests that swap them keep working.  Turns still run one at
-# a time across threads (``THREADS.try_begin``).
+# existing callers and tests that swap them keep working.  Threads 3 (#359): the
+# registry is the thread runner -- each turn takes a slot (``THREADS.try_begin``):
+# Local runs chats chained (one slot), online engines up to the cap at once.
 
 THREADS = threads.ThreadRegistry(make_state=lambda: AgentState(), make_queue=lambda: MessageQueue(),
                                  make_store=lambda: session_memory.CheckpointStore())
+
+_ENGINE_KIND = {"LOCAL_LLM": "local", "REMOTE_API": "remote", "EXTERNAL_AGENT": "agent",
+                "EXTERNAL_HARNESS": "harness"}
+
+
+def _running_tags() -> list[str]:
+    return [threads.tag(t) for t in THREADS.running_threads()]
+
+
+# The loop's running chats count as working (once, also after a reload of this module).
+_side_by_side.WORKING[:] = [s for s in _side_by_side.WORKING if getattr(s, "__name__", "") != "_running_tags"]
+_side_by_side.WORKING.append(_running_tags)
+
+
+def other_chats_line(thread: "threads.Thread | None" = None) -> str:
+    """The one-line "Other chats working now: ..." context for *thread*'s turn (#359): what
+    each other running chat was asked, and what it is changing (its claims)."""
+    from . import claims
+    me = threads.tag(thread)
+    others = []
+    for tag in _side_by_side.working_chats():
+        if tag == me:
+            continue
+        other = THREADS.get(tag) if tag else THREADS.default
+        if other is None:
+            continue
+        title = "All editors" if other.is_default else (other.title or threads.short_name(other.editor) or "other")
+        request = ""
+        for message in reversed(thread_state(other).conversation_history):
+            if message.get("role") == "user" and not session_memory.is_system_note(message):
+                request = str(message.get("content") or "")
+                break
+        others.append((title, request, [name for _kind, name in claims.TABLE.claims_of(tag)]))
+    return _side_by_side.other_chats_line(others)
+
+
+def configure_runner(operating_mode: str, cap: int = threads.RUNNING_CAP,
+                     local_side_by_side: bool = False) -> int:
+    """Set the thread runner from the preferences (main thread, at each send): which
+    engine runs turns, the online cap ("Chats running at once") and the Local opt-in.
+    Returns how many chats may run at once now."""
+    THREADS.kind = _ENGINE_KIND.get(str(operating_mode or ""), "local")
+    THREADS.cap = max(1, min(int(cap or 1), threads.CAP_MAX))
+    THREADS.local_side_by_side = bool(local_side_by_side)
+    return THREADS.slots()
 
 
 def _is_default(thread: "threads.Thread | None") -> bool:
@@ -2172,8 +2224,22 @@ def _memory(thread: "threads.Thread | None" = None) -> Any:
 
 
 def turn_blocked(thread: "threads.Thread | None" = None) -> bool:
-    """True while another thread's turn runs: *thread*'s message has to wait (1.1.42)."""
+    """True while every slot is taken by other threads' turns: *thread*'s message has to
+    wait (#359: one slot on Local, the cap on online engines)."""
     return THREADS.blocked(thread or THREADS.default)
+
+
+def reserve_turn(thread: "threads.Thread | None" = None) -> bool:
+    """Take *thread*'s slot now, before its worker starts (#359), so two starts can never
+    both see the last free slot; False when every slot is taken.  The turn frees it."""
+    return THREADS.try_begin(thread or THREADS.default)
+
+
+def release_turn(thread: "threads.Thread | None" = None) -> None:
+    """Give back a slot taken by :func:`reserve_turn` for a turn that never started."""
+    thread = thread or THREADS.default
+    if not thread_state(thread).turn_active:
+        THREADS.end(thread)
 
 
 def next_turn(engine: Any = None, thread: "threads.Thread | None" = None) -> Any:
@@ -2211,11 +2277,20 @@ class ThreadController:
     def dequeue_message(self) -> dict[str, Any] | None:
         return thread_queue(self.thread).dequeue()
 
+    def peek_message(self) -> dict[str, Any] | None:
+        return thread_queue(self.thread).peek()
+
     def run_conversation_turn(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return run_conversation_turn(*args, thread=self.thread, **kwargs)
 
     def turn_blocked(self) -> bool:
         return turn_blocked(self.thread)
+
+    def reserve_turn(self) -> bool:
+        return reserve_turn(self.thread)
+
+    def release_turn(self) -> None:
+        release_turn(self.thread)
 
     def next_turn(self, engine: Any = None) -> Any:
         return next_turn(engine, self.thread)
@@ -5469,6 +5544,17 @@ def _build_cleanup_code(diff: _EntityDiff) -> tuple[str, dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Undo helper -- generates code that works in any workspace
 
+def _loop_step_name(name: str) -> str:
+    """The loop's own undo push *name* ("bfa_coworker_pre_script" / "bfa_coworker_step"),
+    named by its chat for a tab other than All editors (#359): "Coworker (3D): before a
+    step", so Edit > Undo History shows whose step it is when chats work side by side."""
+    thread = threads.current()
+    if thread is None or thread.is_default:
+        return name
+    words = {"bfa_coworker_pre_script": "before a step", "bfa_coworker_step": "a step"}.get(name, name)
+    return _side_by_side.undo_step_name(threads.label(thread), words)
+
+
 def _undo_code(action: str, message: str = "", extra_result: str = "") -> str:
     """Generate Blender Python code for undo/push that works in any workspace.
 
@@ -6037,9 +6123,10 @@ def run_conversation_turn(
     ``[attached: ...]`` marker -- base64 never enters the saved chat JSON.
 
     *thread* (#357) is the conversation the turn belongs to: its history, Stop,
-    plan and status (None: the default thread, i.e. the module-level state).  One
-    turn runs at a time across threads: while another thread's turn runs, this
-    returns at once without starting (the engines queue instead).
+    plan and status (None: the default thread, i.e. the module-level state).  The
+    turn takes one of the runner's slots (#359: one on Local, the cap on Remote);
+    while every slot is taken this returns at once without starting (the engines
+    queue instead, and reserve the slot before they start a worker).
 
     This is a BLOCKING call -- run it via ``schedule_coro`` or in a thread.
     """
@@ -6058,7 +6145,7 @@ def run_conversation_turn(
             print("[Coworker] run_conversation_turn: re-entrancy blocked -- turn already active")
             return _agent_state.conversation_history
     if not THREADS.try_begin(_gate):
-        print("[Coworker] run_conversation_turn: another thread's turn runs -- one turn at a time")
+        print("[Coworker] run_conversation_turn: every slot is taken by other chats' turns -- not started")
         return _agent_state.conversation_history
     _agent_state.turn_active = True
     _agent_state.turn_token += 1
@@ -6079,17 +6166,38 @@ def run_conversation_turn(
         # bumped the token and now owns the guard -- this old worker must not
         # clobber it.
         if _agent_state.turn_token == _my_token:
-            _agent_state.turn_active = False
-            # Always release the co-work scene lock (FINISH, error, Stop, or
-            # an exception all pass through here).
-            with threads.use(thread):
-                _release_scene_lock()
             # Tier 3i: log the turn's cost breakdown (prefill vs gen vs overhead).
             _log_turn_cost(_agent_state)
             # Record the turn's wall time on its last message so the chat panel
             # can show each finished turn's duration.
             _stamp_turn_duration(_agent_state)
-            THREADS.end(_gate)          # the next thread's turn may start (#357)
+            # The slot, claims and scene lock go BEFORE the guard clears (#359): the lock's
+            # release waits for Blender's main thread, and a message sent meanwhile must
+            # queue behind this turn, not start a turn whose slot this worker then frees.
+            _end_turn_slot(_gate, thread, lambda: _agent_state.turn_token == _my_token)
+            if _agent_state.turn_token == _my_token:
+                _agent_state.turn_active = False
+
+
+# Turns ending at the same moment take turns here, so exactly the last one releases
+# the co-work scene lock (#359).
+_turn_end_lock = threading.Lock()
+
+
+def _end_turn_slot(gate: "threads.Thread", thread: "threads.Thread | None",
+                   still_mine: Callable[[], bool] = lambda: True) -> None:
+    """A turn is over: the co-work scene lock is released (FINISH, error, Stop or an
+    exception all pass through here) and its slot frees.  The lock registry is one for
+    every chat, so the LAST running turn to end releases it: another chat still working
+    keeps its datablocks protected until it ends too (#359).  Its claims go too."""
+    from . import claims
+    with _turn_end_lock:
+        if not any(t is not gate for t in THREADS.running_threads()):
+            with threads.use(thread):
+                _release_scene_lock()
+        if still_mine():            # a newer turn of this chat (Stop, then a new message) keeps them
+            claims.TABLE.release(threads.tag(gate))
+            THREADS.end(gate)       # the next waiting chat's turn may start (#357, #359)
 
 
 # Turn counter for memory-block "Last updated" stamps (Tier 3).
@@ -6510,6 +6618,11 @@ def _run_conversation_turn_inner(
     _prev_code_errored: bool = False
     _prev_code_error: str = ""  # Error text for code-bug detection.
     _undo_pushed: bool = False  # True once we've pushed the first undo state.
+    # Threads 3 (#359): the step journal's number at our last undo push.  When another
+    # chat stepped on the one undo stack since, a positional ``ed.undo()`` would take back
+    # ITS step, so the failure rollback uses the step's own scoped cleanup instead.
+    _undo_mark: int = 0
+    _my_tag = threads.tag(thread)
 
     # -- Entity tracking (per-turn) ------------------------------------
     # Initial snapshot is taken lazily inside the first undo push (merged
@@ -6911,6 +7024,16 @@ def _run_conversation_turn_inner(
         if _goal_text and msgs and msgs[0].get("role") == "system":
             _sys0 = dict(msgs[0])
             _sys0["content"] = str(_sys0.get("content") or "").rstrip() + "\n\n" + _goal_text
+            msgs[0] = _sys0
+
+        # -- Other chats working now (#359): one line, this request only --
+        try:
+            _others_line = other_chats_line(thread)
+        except Exception:  # pylint: disable=broad-exception-caught
+            _others_line = ""
+        if _others_line and msgs and msgs[0].get("role") == "system":
+            _sys0 = dict(msgs[0])
+            _sys0["content"] = str(_sys0.get("content") or "").rstrip() + "\n\n" + _others_line
             msgs[0] = _sys0
 
         # -- Inject domain-skill reference (send copy, self-tuning) ----
@@ -7821,6 +7944,11 @@ def _run_conversation_turn_inner(
                         _failed_diff = _EntityDiff()
                         _fail_raw = _call_internal(_scene_snapshot_code())
                         _undo_safe_here = _undo_safe
+                        _others = _side_by_side.JOURNAL.others_since(_my_tag, _undo_mark)
+                        if _others:
+                            _undo_safe_here = False
+                            print("[Coworker] run_conversation_turn: global undo SKIPPED -- another chat "
+                                  "stepped since ({:s}); scoped cleanup only (#359)".format(", ".join(_others)))
                         try:
                             _fail_data = json.loads(_fail_raw)
                             if _fail_data.get("status") == "ok":
@@ -7879,7 +8007,8 @@ def _run_conversation_turn_inner(
                         # entity diffing resume from the post-recovery scene).
                         _repush_extra = _SNAPSHOT_EXTRA if not _code_is_readonly(_prev_code or "") else ""
                         _repush_raw = _call_internal(
-                            _undo_code("push", "bfa_coworker_pre_script", extra_result=_repush_extra))
+                            _undo_code("push", _loop_step_name("bfa_coworker_pre_script"), extra_result=_repush_extra))
+                        _undo_mark = _side_by_side.JOURNAL.mark()
                         try:
                             _repush_data = json.loads(_repush_raw)
                             if _repush_data.get("status") == "ok":
@@ -7898,8 +8027,9 @@ def _run_conversation_turn_inner(
                 if tool_name == "execute_blender_code" and not _undo_pushed:
                     _init_extra = _SNAPSHOT_EXTRA if not _code_is_readonly(args.get("code", "") or "") else ""
                     merged_init_raw = _call_internal(
-                        _undo_code("push", "bfa_coworker_pre_script", extra_result=_init_extra))
+                        _undo_code("push", _loop_step_name("bfa_coworker_pre_script"), extra_result=_init_extra))
                     _undo_pushed = True
+                    _undo_mark = _side_by_side.JOURNAL.mark()
                     # Parse initial snapshot from merged result.
                     try:
                         init_data = json.loads(merged_init_raw)
@@ -7970,7 +8100,8 @@ def _run_conversation_turn_inner(
                     if not _prev_code_errored:
                         _step_extra = _SNAPSHOT_EXTRA if not _code_is_readonly(_prev_code or "") else ""
                         merged_raw = _call_internal(
-                            _undo_code("push", "bfa_coworker_step", extra_result=_step_extra))
+                            _undo_code("push", _loop_step_name("bfa_coworker_step"), extra_result=_step_extra))
+                        _undo_mark = _side_by_side.JOURNAL.mark()
                         # Parse snapshot from merged result.
                         try:
                             merged_data = json.loads(merged_raw)

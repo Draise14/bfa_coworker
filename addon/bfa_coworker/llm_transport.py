@@ -153,6 +153,36 @@ def _h(name: str):
     return getattr(_helpers, name)
 
 
+RATE_LIMIT_TRIES = 6        # HTTP 429s in a row before a request gives up (#359)
+_RATE_LIMIT_MAX_WAIT = 60.0
+
+
+def retry_delay(retry_after: Any, attempt: int, base: float = 2.0, cap: float = _RATE_LIMIT_MAX_WAIT) -> float:
+    """Seconds to wait after the *attempt*-th HTTP 429 in a row (1-based): the provider's
+    ``Retry-After`` seconds when it sends them, else 2, 4, 8 ... s; never above *cap*.
+
+    The wait happens on the chat's own turn worker, so a 429 backs off only the chat
+    that got it (#359): the other chats' requests go on."""
+    try:
+        given = float(str(retry_after).strip()) if retry_after not in (None, "") else -1.0
+    except ValueError:
+        given = -1.0            # an HTTP date: use our own back-off
+    delay = given if given >= 0 else base * (2 ** max(0, int(attempt) - 1))
+    return max(0.0, min(delay, cap))
+
+
+def _wait_unless_stopped(seconds: float) -> bool:
+    """Sleep *seconds* on this worker, in short slices; True as soon as Stop is pressed."""
+    end = time.monotonic() + max(0.0, seconds)
+    while True:
+        if _stop_requested():
+            return True
+        left = end - time.monotonic()
+        if left <= 0:
+            return False
+        time.sleep(min(0.1, left))
+
+
 def _stop_requested() -> bool:
     """True when the user requested a stop (safe before bind())."""
     stop = _stop()
@@ -475,6 +505,7 @@ def openai_chat_completions(
     max_503_retries = 12  # Bounded so total 503 backoff stays under ~120s.
     tools_tried = bool(tools)
     _503_attempts = 0
+    _429_attempts = 0
     # One-shot guards for the request-reshaping fallbacks.  Each reshapes the
     # payload into a strictly simpler shape, so a second identical failure
     # means the reshape did not help -- retrying it would burn the whole
@@ -819,6 +850,22 @@ def openai_chat_completions(
                 _state().error_full = _msg
                 return None
 
+            # -- 429 Too Many Requests: this chat waits, the others go on --
+            # Chats run side by side on Remote (#359).  The wait is on this turn's
+            # own worker (and honours its Stop), so only the chat that got the 429
+            # backs off; the provider's Retry-After is used when it sends one.
+            if isinstance(ex, urllib.error.HTTPError) and ex.code == 429                     and _429_attempts < RATE_LIMIT_TRIES:
+                _429_attempts += 1
+                _headers = getattr(ex, "headers", None)
+                _delay = retry_delay(_headers.get("Retry-After") if _headers is not None else None,
+                                                  _429_attempts)
+                print("[Coworker] _openai_chat_completions: HTTP 429 (rate limited) -- this chat "
+                      "waits {:.0f}s, attempt {:d}".format(_delay, _429_attempts))
+                if _state() is not None:
+                    _state().ui_status = "Rate limited by the provider: trying again in {:.0f}s...".format(_delay)
+                if _wait_unless_stopped(_delay):
+                    return None
+                continue
             # -- 503 Service Unavailable: model still loading ----------
             # llama-server returns 503 while the model is loading into
             # memory (can take 30-120s for large models).  Retry with

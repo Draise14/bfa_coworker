@@ -127,6 +127,28 @@ def _acp_engine():
                 _store().goal.apply_update({"steps": steps})
         _acp.on_request = request
         _acp.applier.on_plan = plan
+
+        # Chats side by side (#359): each turn's goal and plan go to its own chat.
+        def _thread_store(tag: str):
+            return agent_controller._memory(agent_controller.THREADS.get(tag)).store
+
+        def thread_request(tag: str, text: str) -> None:
+            with _sm.store_lock:
+                _thread_store(tag).goal.set_request(text)
+
+        def thread_plan(tag: str, steps: list[dict[str, str]]) -> None:
+            with _sm.store_lock:
+                _thread_store(tag).goal.apply_update({"steps": steps})
+        _acp.on_thread_request = thread_request
+        _acp.on_thread_plan = thread_plan
+        _acp.applier.on_plan = lambda steps: thread_plan("", steps)
+        _acp.cap = _acp_cap()
+        from . import side_by_side
+        side_by_side.WORKING[:] = [s for s in side_by_side.WORKING if getattr(s, "__name__", "") != "_acp_running"]
+
+        def _acp_running():
+            return _acp.running_threads() if _acp is not None else []
+        side_by_side.WORKING.append(_acp_running)
     return _acp
 
 
@@ -493,6 +515,8 @@ def _focus_thread(thread) -> None:
     _sticky_attachment.clear()
     _sticky_attachment.update(socket.sticky)
     _sticky_relinking = True        # a swap, not the user picking: the pin record moved with it
+    from . import coworker_api
+    coworker_api.own_change()       # a tab switch is no scene edit (Revert stays, #359)
     try:
         props.chat_image = bpy.data.images.get(name) if name else None
     finally:
@@ -684,6 +708,73 @@ def _thread_turn_finished(thread) -> None:
     else:
         _save_thread_chat(thread)
         _save_tabs()            # its tab comes back with the .blend (#427)
+
+
+def _acp_cap() -> int:
+    """How many chats the External Agent runs at once (#359): the cap when its agent runs
+    sessions concurrently (measured: Claude Code), else one after another."""
+    from . import acp_presets, threads
+    preset = acp_presets.preset_by_id(getattr(_acp, "preset_id", "") or "")
+    if preset is None or not preset.concurrent_sessions:
+        return 1
+    return threads.slots_for("agent", agent_controller.THREADS.cap)
+
+
+def _runner_slots(acp=None) -> tuple[int, list]:
+    """``(slots, running threads)`` of the thread runner (#359); *acp*: the External
+    Agent's own (its turns run on its sessions, not the loop's slots)."""
+    reg = agent_controller.THREADS
+    if acp is None:
+        return reg.slots(), reg.running_threads()
+    running = [reg.get(tag) for tag in acp.running_threads()]
+    return max(1, int(getattr(acp, "cap", 1) or 1)), [t for t in running if t is not None]
+
+
+def _running_now() -> list:
+    """Every chat whose turn runs now (any engine)."""
+    if _is_external_agent() and _acp is not None:
+        return _runner_slots(_acp)[1]
+    return agent_controller.THREADS.running_threads()
+
+
+def stop_all_chats() -> int:
+    """Stop All (#359): every chat's turn stops, its waiting messages and questions go.
+    Returns how many chats were stopped."""
+    from . import coworker_api, risky_steps, threads
+    external = _acp is not None and _is_external_agent()
+
+    def stop(thread) -> bool:
+        state = agent_controller.thread_state(thread)
+        queue = agent_controller.thread_queue(thread)
+        tag = threads.tag(thread)
+        busy = bool(state.turn_active or state.is_thinking or queue.pending_count)
+        coworker_api.cancel_questions(tag)
+        risky_steps.APPROVALS.cancel_all(tag)
+        if thread.auto["run"] is not None:
+            thread.auto["user_stop"] = True
+        if external:
+            busy = busy or _acp.busy_for(tag) or any(p.thread == tag for p in list(_acp._queue))
+            _acp.cancel_thread(tag)
+        else:
+            queue.clear()
+            if state.turn_active or state.is_thinking:
+                _thread_engine(thread).cancel()
+        if busy:
+            state.status_text = "Stopped"
+        return busy
+    return threads.stop_all(agent_controller.THREADS, stop)
+
+
+class BFACW_OT_chat_stop_all(Operator):  # type: ignore[misc]
+    """Stop every chat that is working, and drop their waiting messages"""
+    bl_idname = "bfacw.chat_stop_all"
+    bl_label = "Stop All Chats"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        n = stop_all_chats()
+        self.report({"INFO"}, "Stopped {:d} chat{:s}".format(n, "" if n == 1 else "s") if n else "No chat was working")
+        _redraw_all_chats()
+        return {"FINISHED"}
 
 
 def _thread_status(thread) -> tuple[str, str]:
@@ -1173,6 +1264,11 @@ def _sync_prefs_to_config(prefs: bpy.types.AddonPreferences) -> None:
     llm_cfg.remote_api_key = prefs.remote_api_key
     llm_cfg.remote_model = prefs.remote_model
     llm_manager.set_config(llm_cfg)
+    # The thread runner (#359): online engines run chats side by side, Local chained.
+    agent_controller.configure_runner(prefs.operating_mode, int(getattr(prefs, "chats_at_once", 3)),
+                                      bool(getattr(prefs, "local_side_by_side", False)))
+    if _acp is not None:
+        _acp.cap = _acp_cap()
 
 
 _WRAP_WIDTH = 60
@@ -2723,7 +2819,8 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             images=list(attachments or []),
             image_names=list(attachment_names or []),
             chat_mode=props.chat_mode,
-            context=" ".join(p for p in (_scene_context_line(context), editor_line) if p) if external else "",
+            context=" ".join(p for p in (_scene_context_line(context), editor_line,
+                                         agent_controller.other_chats_line(thread)) if p) if external else "",   # #359
             thread=threads.tag(thread),
         )
         config = LoopConfig(llm_url=llm_url or None, api_key=api_key or None,
@@ -2735,16 +2832,21 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             state.prefetched_system_prompt += "\n\n# Where the user is\n" + editor_line
 
         # A running turn queues the message, unless the user pressed Stop
-        # (see LoopEngine.submit).  Another thread's turn makes it wait in its own
-        # thread's queue (one turn at a time, #357).  Only the started path shows "reading".
-        busy = engine.is_busy() and not agent_controller.thread_stop(thread).is_set()
-        if busy or (not external and agent_controller.turn_blocked(thread)):
+        # (see LoopEngine.submit).  When every slot of the thread runner is taken by
+        # other chats (#359: one on Local, the cap online) it waits in its own thread's
+        # queue for a free one.  Only the started path shows "reading".
+        busy_for = getattr(engine, "busy_for", None)
+        busy = (busy_for(prompt.thread) if busy_for is not None else engine.is_busy()) \
+            and not agent_controller.thread_stop(thread).is_set()
+        blocked = agent_controller.turn_blocked(thread) if not external else \
+            bool(getattr(engine, "blocked_for", lambda _t: False)(prompt.thread))
+        if busy or blocked:
             pos = engine.enqueue(prompt, config)
             if not self.text:
                 thread.draft = ""
-            other = agent_controller.THREADS.running()
-            self.report({"INFO"}, "Message queued (position {:d})".format(pos) if busy or other is None else
-                        "Waits for the {:s} thread's turn".format(_thread_title(other)))
+            slots, running = _runner_slots(engine if external else None)
+            self.report({"INFO"}, "Message queued (position {:d})".format(pos) if busy else
+                        threads.wait_message(slots, running, _thread_title))
             _redraw_areas(context)
             return {"FINISHED"}
 
@@ -2758,7 +2860,7 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
         state.ui_status = "Reading your message..."
 
         from . import coworker_api
-        coworker_api.turn_started(_turn_label(context, thread))     # the undo step to revert to
+        coworker_api.turn_started(_turn_label(context, thread), thread=threads.tag(thread))    # to revert to
         _approvals_new_turn(thread)                            # "Allow this turn" ends with the turn
         thread.unread = False
         engine.submit(prompt, config)
@@ -3359,8 +3461,8 @@ class BFACW_OT_chat_stop(Operator):  # type: ignore[misc]
             thread.auto["user_stop"] = True     # this thread's Auto stops after this turn (#177, #417)
         from . import risky_steps
         risky_steps.APPROVALS.cancel_all(tag)   # a risky step waiting for you is declined
-        if _is_external_agent(context) and _acp is not None and _acp.thread != tag:
-            _acp.drop_queued(tag)           # another thread's turn runs: only this one's waiting messages go
+        if _is_external_agent(context) and _acp is not None:
+            _acp.cancel_thread(tag)         # this chat's session and waiting messages only (#359)
         else:
             _thread_engine(thread).cancel()
         agent_controller.thread_state(thread).status_text = "Stopped"
@@ -3492,7 +3594,7 @@ class BFACW_OT_plan_card(Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
-_TURN_SEEN: list = [False, None]    # was a turn running at the last timer tick, and whose (Engine 6b, #358)
+_TURN_SEEN: dict = {}    # thread id -> was its turn running at the last timer tick (Engine 6b, #359)
 
 
 def _turn_label(context: bpy.types.Context | None = None, thread=None) -> str:
@@ -3502,26 +3604,88 @@ def _turn_label(context: bpy.types.Context | None = None, thread=None) -> str:
     return "{:s}'s turn".format(threads.label(thread))
 
 
+def _tag_title(tag: str) -> str:
+    """A chat's name by its tag, for sentences: "3D", "Node" ... ("All editors")."""
+    thread = agent_controller.THREADS.get(tag) if tag else None
+    return "All editors" if thread is None or thread.is_default else _thread_title(thread)
+
+
+def _tell_reverted(by, tags) -> None:
+    """Revert both (#359): the other chats whose changes went too hear it in their chat."""
+    for tag in tags:
+        other = agent_controller.THREADS.get(tag) if tag else agent_controller.THREADS.default
+        if other is None or other is by:
+            continue
+        agent_controller.thread_state(other).conversation_history.append({
+            "role": "assistant", "ui_only": True,
+            "content": "The {:s} chat's Revert also undid what this chat changed after its turn began.".format(
+                _tag_title(_threads_tag(by)))})
+
+
+def _threads_tag(thread) -> str:
+    from . import threads
+    return threads.tag(thread)
+
+
 class BFACW_OT_revert_turn(Operator):  # type: ignore[misc]
     """Undo everything the last turn changed in the scene, in one step.
 Only while you haven't changed the scene since; otherwise use Edit > Undo History"""
     bl_idname = "bfacw.revert_turn"
     bl_label = "Revert Turn"
 
+    # The chat whose turn (#359; "" = the chat of the area in context), and the answer to
+    # "another chat changed the scene since": revert both turns.
+    thread_id: StringProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
+    both: BoolProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
+
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
-        from . import coworker_api
-        return coworker_api.can_revert() and not agent_controller._agent_state.is_thinking
+        from . import coworker_api, threads
+        thread = _ui_thread(context)        # the chat's own last turn (#359)
+        return coworker_api.can_revert(threads.tag(thread)) and not agent_controller.thread_state(thread).is_thinking
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        from . import coworker_api
-        why = coworker_api.revert_turn()
+        from . import coworker_api, threads
+        thread = (agent_controller.THREADS.get(self.thread_id) if self.thread_id else None) or _ui_thread(context)
+        tag = threads.tag(thread)
+        choice = coworker_api.revert_choice(tag, title=_tag_title)
+        if choice.kind == "choose" and not self.both:
+            _revert_choice_popup(context, thread, choice)     # never a silent partial revert (#359)
+            return {"CANCELLED"}
+        why = coworker_api.revert_turn(tag, both=self.both, title=_tag_title)
         if why:
             self.report({"WARNING"}, why)
             return {"CANCELLED"}
-        self.report({"INFO"}, "Reverted the last turn")
-        _redraw_areas(context)
+        _tell_reverted(thread, coworker_api.reverted_with)
+        self.report({"INFO"}, "Reverted both turns" if coworker_api.reverted_with else "Reverted the last turn")
+        _redraw_all_chats()
         return {"FINISHED"}
+
+
+class BFACW_OT_revert_cancel(Operator):  # type: ignore[misc]
+    """Keep everything as it is"""
+    bl_idname = "bfacw.revert_cancel"
+    bl_label = "Cancel"
+    bl_options = {'INTERNAL'}
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        self.report({"INFO"}, "Nothing was reverted")
+        return {"FINISHED"}
+
+
+def _revert_choice_popup(context, thread, choice) -> None:
+    """Another chat changed the scene after this turn began (#359): say so, and offer
+    what is true -- Revert both turns, or Cancel."""
+    def draw(menu, _context) -> None:
+        layout = menu.layout
+        for line in textwrap.wrap(choice.message, 60):
+            layout.label(text=line)
+        layout.separator()
+        if "both" in choice.options:
+            op = layout.operator("bfacw.revert_turn", text="Revert Both Turns", icon='LOOP_BACK')
+            op.thread_id, op.both = thread.id, True
+        layout.operator("bfacw.revert_cancel", icon=safe_icon("CANCEL"))
+    context.window_manager.popup_menu(draw, title="Revert This Turn?", icon='QUESTION')
 
 
 def _answer_typed(message: str, context=None) -> bool:
@@ -5020,19 +5184,23 @@ def chat_timer_update() -> float | None:
     # and Edit > Undo History see the agent's turn as one step.  Turns the timer
     # sees start here (queued ones); a sent message already got its "before".
     from . import coworker_api as _cw
-    # One turn at a time across threads (#357): whichever thread is thinking (#358).
-    _thinker = next((t for t in _ac.THREADS.live() if _ac.thread_state(t).is_thinking), None)
-    _thinking = _thinker is not None
-    if _thinking != _TURN_SEEN[0]:
-        _finished = _TURN_SEEN[1]
-        (_cw.turn_started if _thinking else _cw.turn_finished)(_turn_label(None, _thinker or _finished))
-        _TURN_SEEN[0] = _thinking
-        _TURN_SEEN[1] = _thinker
+    from . import threads as _threads
+    # Every thread's turn on its own (#359: chats run side by side).
+    _live = _ac.THREADS.live()
+    for _t in _live:
+        _thinking = bool(_ac.thread_state(_t).is_thinking)
+        if _thinking == _TURN_SEEN.get(_t.id, False):
+            continue
+        _TURN_SEEN[_t.id] = _thinking
         if _thinking:
-            _thinker.auto["err_before"] = _ac.thread_state(_thinker).error or ""
-            _approvals_new_turn(_thinker)   # a queued message is a new turn too
-        elif _finished is not None:
-            _auto_after_turn(_finished)     # #177: keep going while its plan is on track (#417)
+            _cw.turn_started(_turn_label(None, _t), thread=_threads.tag(_t))
+            _t.auto["err_before"] = _ac.thread_state(_t).error or ""
+            _approvals_new_turn(_t)         # a queued message is a new turn too
+        else:
+            _cw.turn_finished(_turn_label(None, _t), thread=_threads.tag(_t))
+            _auto_after_turn(_t)            # #177: keep going while its plan is on track (#417)
+    for _gone in set(_TURN_SEEN) - {_t.id for _t in _live}:
+        _TURN_SEEN.pop(_gone, None)
 
     # Mirror the turn worker's status into the UI property.  The worker must
     # not touch a bpy property itself (that races Blender's context counter);
@@ -5569,6 +5737,9 @@ class BFACW_MT_chat_tabs(bpy.types.Menu):  # type: ignore[misc]
             op.thread_id = thread.id
         self.layout.separator()
         draw_new_chat_entries(self.layout, context)         # #466
+        if _running_now():                                  # #359
+            self.layout.separator()
+            self.layout.operator("bfacw.chat_stop_all", icon=safe_icon("CANCEL"))
 
 
 class BFACW_OT_tab_show(Operator):  # type: ignore[misc]
@@ -7653,6 +7824,8 @@ _classes = (
     BFACW_OT_chat_send,
     BFACW_OT_chat_clear,
     BFACW_OT_chat_stop,
+    BFACW_OT_chat_stop_all,
+    BFACW_OT_revert_cancel,
     BFACW_OT_chat_queue_send,
     BFACW_OT_chat_capture_render,
     BFACW_OT_chat_capture_screen,

@@ -56,6 +56,7 @@ from . import long_jobs
 from . import loop_guard
 from . import threads
 from . import chat_attachments
+from . import tool_images
 from . import process_guard as _process_guard
 from . import session_identity as _session_identity
 from .llm_transport import (
@@ -559,6 +560,7 @@ def prefetch_main_thread_context(thread: "threads.Thread | None" = None) -> None
         if res:
             _agent_state.prefetched_polyhaven_resolution = str(res)
             state.prefetched_polyhaven_resolution = str(res)
+        state.prefetched_remote_images = bool(getattr(prefs, "remote_accepts_images", True))
     except Exception:  # pylint: disable=broad-exception-caught
         pass
 
@@ -1757,54 +1759,36 @@ def _parse_sse_json(raw: str) -> dict[str, Any] | None:
     return None
 
 
-def _parse_sse_text_response(raw: str) -> str:
+def _parse_sse_tool_response(raw: str) -> tuple[str, list[tuple[str, str]]]:
     """
-    Parse SSE body for a tool result, extracting text content blocks.
+    Parse SSE body for a tool result: ``(text, images)``.
 
-    Handles both ``type: "text"`` and ``type: "image"`` content blocks.
-    For images, returns a descriptive message so the LLM knows the
-    screenshot was captured (the image data is not passed to the LLM
-    via this path -- it goes through the MCP ``Image`` return type).
+    *text* joins the ``type: "text"`` blocks; *images* is ``(mime, base64)``
+    for each image block (#487: a screenshot, or any tool returning ``Image``,
+    PNG or JPEG), which the turn loop shows to a model that takes pictures.
+    A result with only images has empty *text*.
     """
     result = _parse_sse_json(raw)
     if result is None:
-        return "Error: empty or unparseable SSE response"
+        return "Error: empty or unparseable SSE response", []
     if "error" in result:
-        return "Error: {:s}".format(str(result["error"]))
-    content = result.get("result", {}).get("content", [])
-    texts = []
-    has_image = False
-    for block in content:
-        if isinstance(block, dict):
-            block_type = block.get("type", "")
-            if block_type == "text":
-                texts.append(block.get("text", ""))
-            elif block_type in ("image", "image/png", "image/jpeg", "image/webp"):
-                has_image = True
-    if texts:
-        return "\n".join(texts)
-    if has_image:
-        return "Screenshot captured successfully (image data returned to LLM)"
-    return "Error: no text content in tool result"
+        return "Error: {:s}".format(str(result["error"])), []
+    content = (result.get("result") or {}).get("content") or []
+    texts = [str(block.get("text", "")) for block in content
+             if isinstance(block, dict) and block.get("type") == "text"]
+    images = tool_images.blocks_in(content)
+    if texts or images:
+        return "\n".join(texts), images
+    return "Error: no text content in tool result", []
 
 
-def _extract_image_from_tool_result(result: dict) -> str | None:
-    """
-    Extract a base64-encoded image from a tool result's content blocks.
-
-    Returns the data URI string (e.g. ``"data:image/png;base64,..."``)
-    if an image block is found, or ``None`` if there's no image.
-    """
-    content = result.get("result", {}).get("content", [])
-    for block in content:
-        if isinstance(block, dict):
-            block_type = block.get("type", "")
-            if block_type in ("image", "image/png", "image/jpeg", "image/webp"):
-                data = block.get("data", "") or block.get("source", {}).get("data", "")
-                if data:
-                    mime = block_type if block_type.startswith("image/") else "image/png"
-                    return "data:{:s};base64,{:s}".format(mime, data)
-    return None
+def _parse_sse_text_response(raw: str) -> str:
+    """The text of a tool result's SSE body (a picture-only result says it made one)."""
+    text, images = _parse_sse_tool_response(raw)
+    if images and not text:
+        return "The tool returned {:d} picture(s) ({:s}).".format(
+            len(images), ", ".join(sorted({mime for mime, _data in images})))
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -1847,6 +1831,7 @@ class AgentState:
     # ``prefetch_main_thread_context()`` before the worker starts.
     prefetched_system_prompt: str = ""
     prefetched_polyhaven_resolution: str = ""
+    prefetched_remote_images: bool = True   # Preferences > Model Sees Images (Remote, #487)
 
     # -- Token usage tracking (issue #69) ---------------------------
     # Per-call usage comes from the LLM response ``usage`` object (stream
@@ -1940,14 +1925,17 @@ class AgentState:
     turn_token: int = 0
 
     # -- Vision pipeline --------------------------------------------
-    _pending_image: str | None = None  # Base64 data URI of last screenshot
+    # Pictures this turn's tools made (#487): id -> data URI, the newest few.
+    # Stored history keeps only the ids (a note's ``tool_images``); the request
+    # build shows them to a model that takes pictures.  Reset at turn start.
+    tool_images: dict[str, str] = field(default_factory=dict)
     # -- User image attachments (issue #88 / Tier 3k) ---------------
     # Data URIs + display names captured on the MAIN thread at send
     # time (the turn worker never touches bpy), passed via
     # run_conversation_turn(attachments=...) and installed at turn
     # start, then injected into the turn's user message at request-
     # build time -- on EVERY request of the turn, never cleared after
-    # use.  The turn-start reset of ``_pending_image`` deliberately
+    # use.  The turn-start reset of ``tool_images`` deliberately
     # does NOT touch these fields; socket stickiness lives in the UI
     # (``ui_chat.ChatHistoryProperties.chat_image``), which re-passes
     # them on each send.  Stored history keeps plain text only --
@@ -4479,8 +4467,13 @@ def _call_mcp_tool_sync(
     tool_name: str,
     arguments: dict[str, Any],
     port: int = _MCP_SERVER_DEFAULT_PORT,
+    images: list[tuple[str, str]] | None = None,
 ) -> str:
-    """Call an MCP tool synchronously via the HTTP endpoint."""
+    """Call an MCP tool synchronously via the HTTP endpoint; its text.
+
+    *images* (#487): when given, the result's image blocks are appended to it as
+    ``(mime, base64)`` and the text is the tool's own text only (``""`` for a
+    picture-only result); without it a picture-only result says it made one."""
     import time as _time
     url = "http://127.0.0.1:{:d}/".format(port)
     payload = {
@@ -4517,9 +4510,13 @@ def _call_mcp_tool_sync(
                 raw = resp.read().decode()
                 # FastMCP in stateless_http mode wraps the JSON-RPC
                 # response in SSE (``event: message`` / ``data: {...}``).
-                result = _parse_sse_text_response(raw)
+                if images is None:
+                    result = _parse_sse_text_response(raw)
+                else:
+                    result, _found = _parse_sse_tool_response(raw)
+                    images.extend(_found)
                 print("[Coworker] _call_mcp_tool_sync: result = {:s}".format(
-                    result[:300]))
+                    result[:300] if result or not images else "{:d} picture(s)".format(len(images))))
                 # Update liveness and log operation.
                 _agent_state.last_mcp_activity = _time.monotonic()
                 _log_operation(tool_name, arguments, result)
@@ -4619,6 +4616,71 @@ def _format_tool_error(result_text: str) -> str:
             exc_type = stripped.split(":")[0].strip() if ":" in stripped else stripped
             return "Work had an error \u2014 {:s}, trying again".format(exc_type)
     return result_text
+
+
+def _take_tool_pictures(tool: str, call_id: str, text: str, blocks: list[tuple[str, str]], path: str,
+                        sees: bool, store: dict[str, str],
+                        batch: list[tuple[str, str, str]]) -> str:
+    """The tool message for a result that made pictures (#487).
+
+    *blocks*: its image blocks; *path*: the picture a render tool wrote.  A model
+    that takes pictures gets each one (size-capped like an attachment) through
+    *store*, listed in *batch* for the note after the batch's tool results; the
+    tool message says so.  Otherwise the message says a picture was made and where
+    it is (an image block is saved to the temp folder first): no image, no error."""
+    lines = [text] if text else []
+    unshown: list[str] = []
+    shown = 0
+    for mime, data in blocks:
+        uri = tool_images.data_uri_from_block(mime, data) if sees else None
+        if uri:
+            batch.append((tool_images.keep(store, uri), tool, call_id))
+            shown += 1
+            continue
+        saved = tool_images.save_copy(mime, data, tool)
+        size = len(data) * 3 // 4
+        unshown.append("a picture ({:s}){:s}".format(
+            tool_images.describe(mime, size), ", saved at " + saved if saved else ""))
+    if path:
+        uri = tool_images.data_uri_from_file(path) if sees else None
+        if uri:
+            batch.append((tool_images.keep(store, uri), tool, call_id))
+            shown += 1
+        else:
+            unshown.append("the picture at " + path)
+    if shown:
+        lines.append("[{:s} this call made {:s} in the next message.]".format(
+            "The picture" if shown == 1 else "The {:d} pictures".format(shown), "is" if shown == 1 else "are"))
+        print("[Coworker] run_conversation_turn: {:d} picture(s) from {:s} go to the model".format(shown, tool))
+    if unshown:
+        why = ("this model doesn't take pictures" if not sees
+               else "it couldn't be prepared to show")
+        lines.append("[This call made {:s}. It isn't shown to you: {:s}.]".format("; ".join(unshown), why))
+        print("[Coworker] run_conversation_turn: {:d} picture(s) from {:s} not shown ({:s})".format(
+            len(unshown), tool, why))
+    return "\n".join(lines)
+
+
+def _add_pictures_note(notes: list[dict[str, Any]], pictures: list[tuple[str, str, str]]) -> None:
+    """The note that carries a batch's pictures (#487), stored as text with their ids
+    (``tool_images``): the request build adds the pictures.  Folded into the batch's
+    last note when there is one, so no two notes sit in a row."""
+    calls: list[str] = []
+    for _id, tool, call in pictures:
+        label = "{:s} (call {:s})".format(tool, call) if call else tool
+        if label not in calls:
+            calls.append(label)
+    text = session_memory.make_system_note(
+        "The picture{:s} from {:s}.".format("s" if len(pictures) > 1 else "", ", ".join(calls)),
+        kind="tool_images")
+    ids = [pid for pid, _tool, _call in pictures]
+    if notes:
+        last = notes[-1]
+        notes[-1] = {**last, "content": "{:s}\n{:s}".format(str(last.get("content") or ""), text["content"]),
+                     "tool_images": list(last.get("tool_images") or []) + ids}
+    else:
+        text["tool_images"] = ids
+        notes.append(text)
 
 
 def _tool_result_summary(result_text: str, max_len: int = 150) -> str:
@@ -6421,19 +6483,18 @@ def _run_conversation_turn_inner(
     # Install this turn's user image attachments (issue #88 / Tier 3k).
     # Captured and encoded on the MAIN thread by the send path before the
     # worker started -- the worker only receives plain data URIs and never
-    # touches bpy.  Installed BEFORE the ``_pending_image`` reset below so
-    # the two stay independent: that reset clears the previous turn's MCP
-    # screenshot and must NOT clear these, and this block REPLACES (never
+    # touches bpy.  Installed BEFORE the ``tool_images`` reset below so
+    # the two stay independent: that reset clears the previous turn's tool
+    # pictures and must NOT clear these, and this block REPLACES (never
     # merges) the previous turn's attachments so images cannot leak across
     # turns.  Not cleared after injection either: every request of the turn
     # re-injects them from here.
     _agent_state.user_attachments = list(attachments or [])
     _agent_state.user_attachment_names = list(attachment_names or [])
 
-    # Clear any pending screenshot image from a previous turn -- the user
-    # is starting fresh, so the old screenshot is stale.  Deliberately
-    # does NOT touch ``user_attachments`` (Tier 3k; see above).
-    _agent_state._pending_image = None
+    # The previous turn's tool pictures are stale (#487): their notes stay in
+    # the history as text.  Deliberately does NOT touch ``user_attachments``.
+    _agent_state.tool_images = {}
 
     # -- Pre-flight empty-scene check ----------------------------------
     # Small local models often call mode-dependent operators (mode_set, etc.)
@@ -7011,26 +7072,25 @@ def _run_conversation_turn_inner(
                     ]
                 msgs[_tgt_i] = _img_msg
 
-        # -- Inject a pending screenshot into the last user message --
-        # Done BEFORE budgeting so the image is counted against the window
-        # (a pending screenshot used to be appended after the preflight and
-        # was therefore completely unbudgeted -- a direct route to a 400).
-        # A copy is used so the stored history keeps its plain-text content.
-        _pending_image: str | None = getattr(_agent_state, "_pending_image", None)
-        if _pending_image and msgs and msgs[-1].get("role") == "user":
-            _last = dict(msgs[-1])
-            _existing = _last.get("content")
-            if isinstance(_existing, str):
-                _last["content"] = [
-                    {"type": "image_url", "image_url": {"url": _pending_image}},
-                    {"type": "text", "text": _existing},
-                ]
-            elif isinstance(_existing, list):
-                _existing = list(_existing)
-                _existing.insert(0, {"type": "image_url", "image_url": {"url": _pending_image}})
-                _last["content"] = _existing
-            msgs[-1] = _last
-            _agent_state._pending_image = None  # Clear after use
+        # -- Show this turn's tool pictures (#487) ----------------------
+        # A note after the tool results names each picture's call (stored as
+        # text with ids); the picture itself joins the SENT copy here, BEFORE
+        # budgeting so it is counted at its fixed vision cost.  The newest few
+        # of the turn are kept; an older one's note stays text.
+        _turn_pics = getattr(_agent_state, "tool_images", None)
+        if _turn_pics:
+            for _pi, _pm in enumerate(msgs):
+                _ids = _pm.get("tool_images") if _pm.get("role") == "user" else None
+                _uris = [u for u in (_turn_pics.get(str(k)) for k in (_ids or [])) if u]
+                if not _uris:
+                    continue
+                _pic_msg = dict(_pm)
+                _pic_prev = _pic_msg.get("content")
+                _pic_text = (list(_pic_prev) if isinstance(_pic_prev, list)
+                             else [{"type": "text", "text": str(_pic_prev or "")}])
+                _pic_msg["content"] = _pic_text + [
+                    {"type": "image_url", "image_url": {"url": _u}} for _u in _uris]
+                msgs[_pi] = _pic_msg
 
         # -- Enforce the token budget, then preflight ------------------
         # The message-count cap above is a blunt instrument: a few large tool
@@ -7106,6 +7166,7 @@ def _run_conversation_turn_inner(
         return _strip_internal_keys(msgs), None
 
     iterations = 0
+    _sees_images: bool | None = None    # the model takes pictures (asked at the first one, #487)
     # Mode-aware iteration budget: local models get more repair rounds.
     _max_iterations = (
         _LOCAL_MAX_TOOL_ITERATIONS if llm_port_local is not None
@@ -7672,6 +7733,7 @@ def _run_conversation_turn_inner(
             # all of its tool results (a user-role note between an assistant
             # tool_calls message and its results breaks the pairing).
             _deferred_notes: list[dict[str, Any]] = []
+            _batch_pictures: list[tuple[str, str, str]] = []   # (id, tool, call id), #487
             _batch_progress = 0
             _batch_repeat = False
             _batch_waits = 0     # status polls of a job still running (Tools 6)
@@ -7954,7 +8016,16 @@ def _run_conversation_turn_inner(
                     result_text = long_jobs.wait_in_slices(
                         lambda a: _call_mcp_tool_sync(tool_name, a, mcp_port), tool_name, args, _stop_event)
                 else:
-                    result_text = _call_mcp_tool_sync(tool_name, args, mcp_port)
+                    _tool_pics: list[tuple[str, str]] = []      # its image blocks (#487)
+                    result_text = _call_mcp_tool_sync(tool_name, args, mcp_port, images=_tool_pics)
+                    _pic_file = tool_images.file_of(tool_name, result_text)
+                    if _tool_pics or _pic_file:
+                        if _sees_images is None:
+                            _sees_images = tool_images.sees_images(
+                                llm_port_local, getattr(_agent_state, "prefetched_remote_images", True))
+                        result_text = _take_tool_pictures(
+                            tool_name, tool_id, result_text, _tool_pics, _pic_file, _sees_images,
+                            _agent_state.tool_images, _batch_pictures)
                 _agent_state.bump_turn_cost("tools")
 
                 # -- Track code execution for smart undo ----------------
@@ -8086,20 +8157,6 @@ def _run_conversation_turn_inner(
                             session_memory.make_system_note(ctx, kind="entity"))
                         _entity_context_injected = True
 
-                # -- Extract screenshot image for vision-capable models -
-                # If the tool result contains an image (screenshot), store
-                # it on the agent state so it can be injected into the next
-                # user message as an image_url content block.
-                if tool_name in ("get_screenshot_of_area_as_image", "get_screenshot_of_window_as_image"):
-                    try:
-                        result_obj = json.loads(result_text)
-                        img_data = _extract_image_from_tool_result(result_obj)
-                        if img_data:
-                            _agent_state._pending_image = img_data
-                            print("[Coworker] run_conversation_turn: screenshot image captured for vision model")
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-
                 # -- Spiral detection: break repeated error loops ------
                 if tool_name == "execute_blender_code":
                     # Use the trimmed form for signature extraction: the
@@ -8176,6 +8233,9 @@ def _run_conversation_turn_inner(
                       "asking for the reply".format(_stop_reason))
                 iterations = _max_iterations
 
+            if _batch_pictures:
+                # The batch's pictures ride with one note after its tool results (#487).
+                _add_pictures_note(_deferred_notes, _batch_pictures)
             if _deferred_notes:
                 history.extend(_deferred_notes)
             if not content or not content.strip():

@@ -1341,7 +1341,7 @@ def _execute_code_from_request(
         if _kind:
             from . import risky_steps
             _response, _check = risky_steps.wrap(code, strict_json, _why, _execute, tool=_tool, kind=_kind,
-                                                  thread=_thread)
+                                                  thread=_thread, inputs=request.get("args"))
             return _ExecResult(_response, _check)
         return _execute(code, strict_json)
 
@@ -1357,7 +1357,8 @@ def _execute_code_from_request(
 
         _repeat = loop_guard.bridge_wrap(loop_guard.BRIDGE, risky_steps.APPROVALS, risky_steps.auto_on(_thread),
                                          _tool, {"code": code}, str(request.get("session") or ""), _proceed,
-                                         thread=_thread)
+                                         thread=_thread,
+                                         shown=risky_steps.card_args(_tool, code, request.get("args")))
         if _repeat is not None:
             exec_result = _ExecResult(*_repeat)
     if exec_result is None:

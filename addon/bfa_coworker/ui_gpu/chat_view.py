@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .. import long_jobs
+from ..answer_envelope import readable
 from ..chat_status import fmt_duration, phase_text, spinner_char
 from ..chat_turns import NOTE_TITLES, group_turns, is_system_note_msg, split_turn
 from .layout import Canvas, DrawCmd, InteractionState, Rect, TextLine
@@ -884,7 +885,7 @@ class ChatView:
                     shown = ", ".join("{:s}={:s}".format(k, json.dumps(v)[:60]) for k, v in list(args.items())[:4])
                     top = canvas.wrapped(row_x + side + gap, top, row_w - side - gap, shown,
                                          _soft(style.text, 0.35), font="mono")
-                result = text.strip()
+                result = readable(text).strip()     # the tool's own answer first (#500)
                 if result and result != "(running)":
                     top = self._code_frame(canvas, row_x + style.pad, top - pad * 0.3, row_w - style.pad, result,
                                            "error" if bad else "result", "copyres:{:d}:{:d}".format(idx, n),

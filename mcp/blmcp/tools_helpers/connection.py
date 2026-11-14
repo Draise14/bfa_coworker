@@ -30,6 +30,18 @@ def get_connection_params() -> tuple[str, int]:
     return host, port
 
 
+_ARGS_CHARS = 400
+_ARG_VALUE_CHARS = 120
+
+
+def _args_text(inputs: dict[str, object]) -> str:
+    """The tool's input as short JSON text, for the bridge's activity view and approval card
+    (#500): a long text value is cut on its own, so the whole stays JSON the card can read."""
+    short = {key: value[:_ARG_VALUE_CHARS] + "…" if isinstance(value, str) and len(value) > _ARG_VALUE_CHARS
+             else value for key, value in inputs.items()}
+    return json.dumps(short, ensure_ascii=False, default=str)[:_ARGS_CHARS]
+
+
 def send_code(code: str, strict_json: bool) -> dict[str, object]:
     """
     Send Python code to the Blender add-on socket server for execution.
@@ -65,7 +77,7 @@ def send_code(code: str, strict_json: bool) -> dict[str, object]:
     if tool:
         payload["tool"] = tool
         try:
-            payload["args"] = json.dumps(inputs, ensure_ascii=False, default=str)[:400]
+            payload["args"] = _args_text(inputs)
         except (TypeError, ValueError):
             pass
     # Engine 8: the bridge refuses requests without the user's session token.

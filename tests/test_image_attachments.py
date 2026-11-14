@@ -21,8 +21,8 @@ Covers the send-path wiring in ``agent_controller``:
 
 Plus the user-facing half (operators, FileHandler, panel drawing):
 registration, ``poll_drop`` areas, extension list, the main-thread
-capture helper (including Send Once), and both panels drawing the
-attachment row -- all runnable without Blender.
+capture helper (including Send Once) and the attachment preview -- all
+runnable without Blender.
 
 The turn tests reuse the fake llama-server + MCP bridge harness from
 ``test_turn_loop_integration`` (real HTTP, real turn loop).
@@ -467,96 +467,6 @@ class TestChatAttachmentUI(unittest.TestCase):
             props.chat_image,
             "a failed encode must not consume the socket")
 
-    def test_draw_attachment_row_layout(self):
-        preview_calls = []
-        draw = _extract_ui_func(
-            "_draw_attachment_row",
-            {"_draw_attachment_preview":
-                lambda layout, img, context, **_kw: preview_calls.append((img, context)),
-             "_draw_image_picker": _extract_ui_func("_draw_image_picker")})
-        log = []
-        props = types.SimpleNamespace(chat_image=object(),
-                                      chat_image_send_once=True)
-        context = object()
-        draw(_FakeLayout(log), props, context)
-
-        tpl = [c for c in log if c[0] == "template_ID"]
-        self.assertEqual(len(tpl), 1, "the socket must be drawn once")
-        self.assertEqual(tpl[0][1], (props, "chat_image"))
-        # No image.open (#449): Blender's Open fills the button it came from, and a
-        # popover or a redrawn sidebar has none; our own Open keeps the chat it is for.
-        self.assertEqual(tpl[0][2], {"new": "image.new"})
-        ops = [c[1][0] for c in log if c[0] == "operator"]
-        self.assertNotIn("bfacw.chat_image_attach", ops)
-        self.assertIn("bfacw.chat_attach_image", ops)
-        opened = [c[2] for c in log if c[0] == "operator_props" and c[1][0] == "bfacw.chat_attach_image"]
-        self.assertEqual(opened[0].thread_id, "main", "Open attaches to the chat drawn here")
-        for op_id in ("bfacw.chat_capture_render",
-                      "bfacw.chat_capture_screen"):
-            self.assertIn(op_id, ops)
-        toggles = [c for c in log if c[0] == "prop"
-                   and c[1][1] == "chat_image_send_once"]
-        self.assertEqual(len(toggles), 1, "send-once toggle must be drawn")
-        # The row hands the socketed datablock (and the context) to the
-        # preview helper so it can size itself to the panel width.
-        self.assertEqual(preview_calls, [(props.chat_image, context)],
-                         "the attached image must be previewed")
-
-    def test_the_image_row_collapses_from_its_header(self):
-        calls = []
-        draw = _extract_ui_func(
-            "_draw_attachment_row",
-            {"_draw_attachment_preview":
-                lambda layout, img, context, **_kw: calls.append(img),
-             "_draw_image_picker": _extract_ui_func("_draw_image_picker")})
-
-        # Collapsed: the header toggle is drawn with the closed sub-panel
-        # arrow, the attached name stays readable, and nothing else is
-        # drawn -- so the panel gives the chat its room back.
-        img = types.SimpleNamespace(name="shot.png")
-        props = types.SimpleNamespace(chat_image=img,
-                                      chat_image_send_once=True,
-                                      chat_image_expanded=False)
-        log = []
-        draw(_FakeLayout(log), props, None)
-        toggles = [c for c in log if c[0] == "prop"]
-        self.assertEqual(len(toggles), 1,
-                         "collapsed draws only the collapse toggle")
-        self.assertEqual(toggles[0][1][1], "chat_image_expanded")
-        self.assertEqual(toggles[0][2]["icon"], 'TRIA_RIGHT',
-                         "collapsed uses the closed sub-panel arrow")
-        self.assertIn("shot.png", [c[2].get("text") for c in log if c[0] == "label"],
-                      "what is attached stays visible while collapsed")
-        self.assertEqual([c for c in log if c[0] == "template_ID"], [])
-        self.assertEqual([c for c in log if c[0] == "operator"], [])
-        self.assertEqual(calls, [], "no thumbnail while collapsed")
-
-        # Expanded: the open arrow and the whole row come back.
-        props.chat_image_expanded = True
-        log = []
-        draw(_FakeLayout(log), props, None)
-        opened = [c for c in log if c[0] == "prop"
-                  and c[1][1] == "chat_image_expanded"]
-        self.assertEqual(opened[0][2]["icon"], 'DOWNARROW_HLT',
-                         "expanded uses the open sub-panel arrow")
-        self.assertEqual(len([c for c in log if c[0] == "template_ID"]), 1)
-        self.assertEqual(len([c for c in log if c[0] == "operator"]), 3)    # Open, Render, Screen
-        self.assertEqual(calls, [img])
-
-        # Nothing attached: the header shows no name to fall back to.
-        props.chat_image = None
-        log = []
-        draw(_FakeLayout(log), props, None)
-        self.assertEqual([c for c in log if c[0] == "label"], [])
-
-        # A stub without the property (older callers, tests) stays expanded.
-        plain = types.SimpleNamespace(chat_image=None,
-                                      chat_image_send_once=False)
-        log = []
-        draw(_FakeLayout(log), plain, None)
-        self.assertEqual(len([c for c in log if c[0] == "template_ID"]), 1,
-                         "missing property must not collapse the row")
-
     def test_attachment_preview_draws_thumbnail_and_degrades_gracefully(self):
         calls = []
         icons = {"value": (4242, 176, 44)}
@@ -865,37 +775,17 @@ class TestChatAttachmentUI(unittest.TestCase):
         self.assertTrue(reported and "shot.png" in reported[0],
                         "the attach must be reported to the user")
 
-    def test_attachment_row_sits_above_the_chat_input(self):
-        src = _ui_source()
-        panels = (
-            ("class BFACW_PT_chat_panel(", "\nclass BFACW_PT_chat_session("),
-            ("class BFACW_PT_chat_text_editor(", "\n# ---"),
-        )
-        # The 3D View panel draws its controls (image row included) through
-        # draw_chat_controls(), shared with the Coworker editor's sidebar.
-        controls = src[src.index("\ndef draw_chat_controls("):src.index("\nclass BFACW_PT_chat_compact(")]
-        self.assertIn("_draw_attachment_row(layout, props, context)", controls)
-        for start_marker, end_marker in panels:
-            start = src.index(start_marker)
-            end = src.find(end_marker, start + 1)
-            body = src[start:] if end < 0 else src[start:end]
-            row_at = body.find("_draw_attachment_row(layout, props, context)")
-            if row_at < 0:
-                row_at = body.index("draw_chat_controls(layout, context)")
-            input_at = body.index('layout.textbox(props, "chat_input")')
-            self.assertLess(
-                row_at, input_at,
-                f"{start_marker} must draw the image row ABOVE the chat input")
-
     def test_send_paths_pass_encoded_attachments(self):
         src = _ui_source()
-        # Both send operators capture on the main thread...
+        # The send operator captures on the main thread (a send while a turn runs
+        # queues through it too: the Classic Queue operator is gone, #430)...
         self.assertEqual(
-            src.count("= _capture_chat_attachment(props)"), 2,
-            "chat_send and chat_queue_send must both capture the socket")
-        # ...and put the payload on the Prompt both paths hand the engine.
-        self.assertEqual(src.count("images=list(attachments or [])"), 2)
-        self.assertEqual(src.count("image_names=list(attachment_names or [])"), 2)
+            src.count("= _capture_chat_attachment(props)"), 1,
+            "chat_send must capture the socket")
+        self.assertNotIn("class BFACW_OT_chat_queue_send(", src)
+        # ...and puts the payload on the Prompt it hands the engine (started or queued).
+        self.assertEqual(src.count("images=list(attachments or [])"), 1)
+        self.assertEqual(src.count("image_names=list(attachment_names or [])"), 1)
         # The loop engine forwards it to the turn and to the queue (Tier
         # 4i.1b), and a dequeued item's payload becomes the next Prompt.
         with open(os.path.join(_REPO, "addon", "bfa_coworker", "engine_loop.py"),
@@ -906,20 +796,13 @@ class TestChatAttachmentUI(unittest.TestCase):
         self.assertEqual(loop_src.count('images=list(item.get("attachments") or [])'), 1)
         self.assertEqual(loop_src.count('image_names=list(item.get("attachment_names") or [])'), 1)
 
-    def test_panels_draw_the_attachment_row(self):
-        src = _ui_source()
-        # Definition + the two panel call sites + the Coworker editor's lean one (#171).
-        self.assertEqual(
-            src.count("_draw_attachment_row(layout, props, context"), 4,
-            "both chat panels must draw the attachment row")
-
     def test_send_paths_warn_when_the_attachment_cannot_be_encoded(self):
         src = _ui_source()
         self.assertEqual(
-            src.count("_warn_failed_attachment(self, props)"), 2,
-            "both send operators must report a failed attachment encode")
+            src.count("_warn_failed_attachment(self, props)"), 1,
+            "the send operator must report a failed attachment encode")
         self.assertEqual(
-            src.count("if attachments is None:"), 2,
+            src.count("if attachments is None:"), 1,
             "the warning must be gated on the capture returning nothing")
 
     def test_warn_failed_attachment_only_fires_for_a_set_socket(self):

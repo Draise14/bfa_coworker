@@ -21,15 +21,16 @@ Editor Type menu, with the agent icon) that is only a chat:
 * the node editor's own panels (and their tabs) are hidden there -- every
   other node editor is untouched, and all of it is undone on unregister.
 
-**The compact sidebar chat**: with *Sidebar Chat* = Compact (Preferences),
-the 3D View's Coworker tab draws the same GPU chat in a small form, with a
-top bar for mode, status, Start / Stop, settings and "open the Coworker
-editor".  Both read the same conversation; the typed draft is shared too
-(``chat_input``), so the native @ mention and capture buttons fill it.
+**The compact sidebar chat**: the Coworker tab of every editor's sidebar
+(#291) draws the same GPU chat in a small form, with a top bar for mode,
+status, Start / Stop, settings and "open the Coworker editor".  It is the
+only sidebar chat: the Classic panel chat is gone (#430).  Both read the same
+conversation; the typed draft is shared too (``chat_input``), so the native
+@ mention and capture buttons fill it.
 
 Sending goes through the existing ``bfacw.chat_send`` operator, so every
-engine, the queue, attachments and checkpoints behave exactly as in the
-panel chat.  External Harness shows a card (the chat runs in the external
+engine, the queue, attachments and checkpoints behave the same in every
+chat.  External Harness shows a card (the chat runs in the external
 client) with Start / Stop Bridge, Copy Config and Configure.
 """
 
@@ -1654,8 +1655,7 @@ class BFACW_PT_editor_chat(_CoworkerPanel, bpy.types.Panel):
     def draw(self, context):
         from . import ui_chat
         # The plan is its own panel (Plan, under Queue), the image a picker (#171).
-        ui_chat.draw_chat_controls(self.layout, context, show_chat_mode=False, has_header=True,
-                                   show_image=False)      # on the input's button row (#213)
+        ui_chat.draw_chat_controls(self.layout, context)      # the image: on the input's button row (#213)
 
 
 # Blender wants poll(cls, context) exactly: closures, not default arguments.

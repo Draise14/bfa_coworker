@@ -33,10 +33,14 @@ operator per window watches events and hands them to the chat surface
   (Chinese, Japanese, Korean...) that a GPU box can't;
 * the caret blinks, and the operator restarts after a file is opened (a
   file load ends every modal operator) and for new windows;
-* **autosave** gets a gap: Blender skips autosave while any modal operator
-  runs, so every ~30 s, once the chat has had no keys or clicks for a
-  moment, the operator ends itself in every window for a quarter second --
-  the pending autosave lands -- and then restarts (#370).
+* **autosave** keeps running: Blender skips autosave while any modal
+  operator runs (#370), so when Blender's would be due the chat writes it
+  with Blender's own *Save Autosave* (``wm.save_auto_save``, Blender 5.2+),
+  by Blender's rules, and the operator never stops -- no key or click is
+  lost (#488).  Without that operator (Blender 5.1) it steps aside instead:
+  every ~30 s, once the chat has had no keys or clicks for a moment, the
+  operator ends itself in every window for a quarter second -- the pending
+  autosave lands -- and then restarts.
 
 Only the region is redrawn, never the whole area (a 3D View sidebar must
 not re-render the viewport).  The host calls :func:`set_host` with a
@@ -56,6 +60,7 @@ import bpy  # pylint: disable=import-error
 from .input_box import InputBox, Key
 
 __all__ = (
+    "autosave_step",
     "ensure_running",
     "focus",
     "focused_box",
@@ -85,9 +90,12 @@ _RUNNING: set[int] = set()
 CONTEXT_MENU = "BFACW_MT_chat_context"
 _MENU: dict[str, Any] = {"surface": None, "area": None, "region": None, "widget": None, "turn": None}
 _RIGHT = frozenset({"RELEASE", "CLICK", "DOUBLE_CLICK"})
-# The autosave gap (#370): paused while it's open, when it last opened, the last key / click, and
-# the window timers that wake each operator so it can end.
-_AUTOSAVE: dict[str, Any] = {"paused": False, "last_gap": 0.0, "last_input": 0.0, "timers": []}
+# Autosave (#370, #488).  "since": when Blender's autosave interval last started (the chat's last
+# autosave, a save, a clean check); "writer": Blender has wm.save_auto_save (None: not looked yet).
+# Without it, the gap: paused while it's open, when it last opened, the last key / click, and the
+# window timers that wake each operator so it can end.
+_AUTOSAVE: dict[str, Any] = {"paused": False, "last_gap": 0.0, "last_input": 0.0, "timers": [],
+                             "since": 0.0, "writer": None}
 
 _IGNORED = frozenset({"TIMER", "TIMER_REPORT", "TIMERREGION", "WINDOW_DEACTIVATE", "NONE"})
 _MOVES = frozenset({"MOUSEMOVE", "INBETWEEN_MOUSEMOVE"})
@@ -98,6 +106,10 @@ _WATCH_SECONDS = 1.0
 _GAP_EVERY_SECONDS = 30.0       # at most this long between autosave gaps (or the autosave interval, if shorter)
 _GAP_SECONDS = 0.25             # how long the operators stay off; Blender retries autosave every 10 ms
 _INPUT_LULL_SECONDS = 1.5       # no gap until the chat has had no keys / clicks for this long
+_OWN_MODAL = frozenset({"BFACW_OT_gpu_input", "bfacw.gpu_input"})
+# Modes whose undo steps are global (memfile) or image ones: Blender autosaves only in those while
+# global undo is on (ED_undosys_autosave_compatible); in edit / sculpt mode it waits.
+_AUTOSAVE_MODES = frozenset({"OBJECT", "POSE", "PAINT_TEXTURE"})
 
 
 def set_host(router: Router | None, on_action: OnAction | None = None,
@@ -497,9 +509,80 @@ def ensure_running() -> None:
             pass
 
 
+def autosave_step(now: float, since: float, autosave_on: bool, autosave_minutes: float,
+                  dirty: bool, busy: bool, undo_ok: bool) -> str:
+    """What to do about Blender's autosave on this watch tick (#488): ``"wait"``, ``"skip"``
+    (nothing to save: the next interval starts, as in Blender) or ``"write"``.
+
+    Blender's own rules (``wm_autosave_timer``, ``wm_files.cc``): every *autosave_minutes*
+    from the last autosave or save; a saved file has nothing to write; never while another
+    modal operator runs (*busy*), nor in a mode whose undo isn't global (not *undo_ok*: edit,
+    sculpt...) -- it waits.  Due one watch tick early, so the chat's write comes before
+    Blender's own timer would start retrying."""
+    if not autosave_on or now - since < max(1.0, autosave_minutes) * 60.0 - _WATCH_SECONDS:
+        return "wait"
+    if not dirty:
+        return "skip"
+    if busy or not undo_ok:
+        return "wait"
+    return "write"
+
+
+def _autosave_writer() -> bool:
+    """Blender has *Save Autosave* (``wm.save_auto_save``, 5.2+): the chat can write the
+    autosave itself and never step aside."""
+    if _AUTOSAVE["writer"] is None:
+        try:
+            bpy.ops.wm.save_auto_save.get_rna_type()
+            _AUTOSAVE["writer"] = True
+        except (AttributeError, KeyError, RuntimeError):
+            _AUTOSAVE["writer"] = False
+    return _AUTOSAVE["writer"]
+
+
+def _other_modal_running() -> bool:
+    """A modal operator other than the chat's runs in some window (a grab, a box select...)."""
+    try:
+        return any(op.bl_idname not in _OWN_MODAL
+                   for window in bpy.context.window_manager.windows for op in window.modal_operators)
+    except (AttributeError, ReferenceError):
+        return False
+
+
+def _undo_allows_autosave() -> bool:
+    try:
+        if not bpy.context.preferences.edit.use_global_undo:
+            return True
+        return bpy.context.mode in _AUTOSAVE_MODES
+    except AttributeError:
+        return True
+
+
+def _autosave_tick() -> None:
+    """Write Blender's autosave when it is due, the way Blender would (#488)."""
+    on, minutes = _autosave_prefs()
+    now = time.monotonic()
+    step = autosave_step(now, _AUTOSAVE["since"], on, minutes, bool(getattr(bpy.data, "is_dirty", True)),
+                         _other_modal_running(), _undo_allows_autosave())
+    if step == "wait":
+        return
+    _AUTOSAVE["since"] = now
+    if step == "write":
+        try:        # Blender's own autosave write; it restarts Blender's autosave timer too
+            bpy.ops.wm.save_auto_save()
+        except RuntimeError as ex:
+            print("[Coworker] autosave failed: {:s}".format(str(ex)))
+
+
+@bpy.app.handlers.persistent
+def _on_save_post(*_args) -> None:
+    # A save restarts Blender's autosave interval.
+    _AUTOSAVE["since"] = time.monotonic()
+
+
 def gap_due(now: float, last_gap: float, last_input: float,
             autosave_on: bool, autosave_minutes: float) -> bool:
-    """Is it time to let Blender's autosave through (#370)?"""
+    """Is it time to let Blender's autosave through (#370)?  Only without ``wm.save_auto_save``."""
     if not autosave_on:
         return False
     every = min(_GAP_EVERY_SECONDS, max(1.0, autosave_minutes) * 60.0)
@@ -541,11 +624,14 @@ def _close_gap() -> None:
 
 def _watch() -> float:
     if not _AUTOSAVE["paused"]:
-        if _HOST["router"] is not None and _RUNNING and gap_due(
+        chat_on = _HOST["router"] is not None and bool(_RUNNING)
+        if chat_on and _autosave_writer():
+            _autosave_tick()        # no gap: nothing the chat should get can be lost (#488)
+        elif chat_on and gap_due(
                 time.monotonic(), _AUTOSAVE["last_gap"], _AUTOSAVE["last_input"], *_autosave_prefs()):
             _open_gap()
-        else:
-            ensure_running()
+            return _WATCH_SECONDS
+        ensure_running()
     return _WATCH_SECONDS
 
 
@@ -573,7 +659,8 @@ def register() -> None:
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
     bpy.app.handlers.load_pre.append(_on_load_pre)
-    _AUTOSAVE["last_gap"] = time.monotonic()
+    bpy.app.handlers.save_post.append(_on_save_post)
+    _AUTOSAVE["last_gap"] = _AUTOSAVE["since"] = time.monotonic()
     for fn, first in ((_watch, 0.2), (_blink, _BLINK_SECONDS)):
         if not bpy.app.timers.is_registered(fn):
             bpy.app.timers.register(fn, first_interval=first, persistent=True)
@@ -589,6 +676,8 @@ def unregister() -> None:
             bpy.app.timers.unregister(fn)
     if _on_load_pre in bpy.app.handlers.load_pre:
         bpy.app.handlers.load_pre.remove(_on_load_pre)
+    if _on_save_post in bpy.app.handlers.save_post:
+        bpy.app.handlers.save_post.remove(_on_save_post)
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)
     _RUNNING.clear()

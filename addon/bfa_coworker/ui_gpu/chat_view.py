@@ -116,7 +116,8 @@ _RESULT_LINES = 3      # a tool's result: a few lines (often not for reading; Sh
 _RESULT_LINE_CHARS = 160   # ... each cut this short while folded (one long JSON line wraps a lot)
 _ENTRY_CHARS = 600     # a Workshop thinking entry shows this much (Show all for the rest)
 # The job row's last line (#423).  Python has no call that stops a render or bake (#419 adds
-# one), so instead of the X the Classic chat's Blender job bar has, it says where that X is.
+# one), so instead of an X of its own (Blender's job bar, which a GPU chat can't hold), it
+# says where that X is.
 JOB_HINT = "Stop it with Esc, or the X on the job bar in the status bar"
 _JOB_ICONS = {"RENDER": "RENDER_STILL", "OBJECT_BAKE": "TEXTURE"}
 
@@ -580,8 +581,8 @@ class ChatView:
 
     def _draw_jobs(self, canvas: Canvas, idx: int, x: float, top: float, width: float,
                    clear_fold: bool = False) -> float:
-        """The job row under the newest turn (#423), like the Classic chat's
-        (``ui_chat._draw_job_rows``): per running render or bake its icon, "Baking, 40 s --
+        """The job row under the newest turn (#423), as the Classic chat had it (removed
+        in #430): per running render or bake its icon, "Baking, 40 s --
         Bake combined: Monkey" and a progress bar where Blender reports one; then where to
         stop it.  The whole box is one tooltip area ("jobs").  *clear_fold*: room under it for
         the running turn's floating fold button, which would cover the hint."""
@@ -906,6 +907,18 @@ class ChatView:
                 if len(body) > _ENTRY_CHARS:
                     top = self._show_all(canvas, row_x + canvas.icon_size() + style.pad * 0.5, top, key, is_open,
                                          len(body) - _ENTRY_CHARS, "character", actions)
+            elif role == "compaction":
+                # Where older messages were summarized out of the model's context, and the
+                # memory note written then (as the Classic chat showed it; #430).
+                try:
+                    retired = int(msg.get("retired", 0) or 0)
+                except (TypeError, ValueError):
+                    retired = 0
+                line = "Checkpoint: {:d} earlier message{:s} summarized".format(retired, "" if retired == 1 else "s")
+                note = " ".join(text.split())
+                if note:
+                    line += ". " + note[:_ENTRY_CHARS] + ("..." if len(note) > _ENTRY_CHARS else "")
+                top = self._icon_line(canvas, row_x, top - pad * 0.5, "TIME", line, _soft(style.text, 0.5), row_w)
             elif is_system_note_msg(msg):
                 body = text[len("[System:"):-1].strip() if text.startswith("[System:") and text.endswith("]") else text
                 title, icon = NOTE_TITLES.get(str(msg.get("system_note") or ""), ("Note", "INFO"))

@@ -219,8 +219,8 @@ class TestBridge(unittest.TestCase):
 
         def proceed():
             self.ran.append(tool)
-            if deferred:
-                return {}, lambda: {"status": "ok", "result": "rendered"}
+            if deferred:        # a render's tool-code checker: its bare result
+                return {"stdout": "rendering"}, lambda: {"status": "ok", "filepath": "r.png"}
             return {"status": "ok", "result": len(self.ran)}, None
         wrapped = lg.bridge_wrap(self.guard, self.approvals, auto, tool, args, "s1", proceed)
         return proceed() if wrapped is None else wrapped
@@ -255,7 +255,33 @@ class TestBridge(unittest.TestCase):
         _response, check = self._call(deferred=True)
         self.approvals.answer("once")
         self.assertIsNone(check())
-        self.assertEqual(check(), {"status": "ok", "result": "rendered"})
+        # #487: one envelope around the render's result (the bridge sends a marked check's answer as it is).
+        self.assertEqual(check(), {"status": "ok", "result": {"status": "ok", "filepath": "r.png"}, "stdout": "rendering"})
+        self.assertTrue(getattr(check, "answers_in_full", False))
+
+    def test_repeat_card_around_an_approval_card_is_one_envelope(self):
+        # #487: the repeat card's call asks first too (risky_steps): its answer passes through as it is.
+        full = {"status": "ok", "result": {"moved": 1}}
+
+        def asked():
+            return full
+        asked.answers_in_full = True
+
+        def proceed():
+            self.ran.append("x")
+            return {}, asked
+        for _ in range(2):
+            lg.bridge_wrap(self.guard, self.approvals, False, "execute_blender_code", _CODE, "s1", proceed)
+        _response, check = lg.bridge_wrap(self.guard, self.approvals, False, "execute_blender_code", _CODE, "s1",
+                                          proceed)
+        self.approvals.answer("once")
+        self.assertIsNone(check())
+        self.assertEqual(check(), full)
+        for _ in range(2):                                       # another session, its third call: Deny
+            lg.bridge_wrap(self.guard, self.approvals, False, "execute_blender_code", _CODE, "s2", proceed)
+        _r, check = lg.bridge_wrap(self.guard, self.approvals, False, "execute_blender_code", _CODE, "s2", proceed)
+        self.approvals.answer("deny")
+        self.assertEqual(check()["status"], "error")             # declined: an error at the top, not "ok"
 
     def test_auto_mode_never_waits(self):
         self._call(auto=True)

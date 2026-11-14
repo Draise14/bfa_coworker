@@ -1412,7 +1412,9 @@ def _claim_gate(thread: str, tool: str, args: Any, code: str, run: Callable[[], 
     running = side_by_side.working_chats()
     if thread not in running or len(running) < 2:
         return run()                # one chat at work: as before, nothing to claim against
-    targets, whole = claims.targets_of(tool, args, code, exists=_datablock_exists)
+    targets, whole = claims.targets_of(
+        tool, args, code,
+        exists=lambda name: _datablock_exists(name) or claims.TABLE.held_by_others(thread, name, running))
     from . import risky_steps
 
     def ran(result: _ExecResult) -> _ExecResult:
@@ -1533,7 +1535,10 @@ def _note_step(thread: str, tool: str, code: str, internal: bool, exec_result: _
     """A call ran for chat *thread* (#359): note on the step journal that it may have
     pushed undo steps (a write tool, or Coworker's own undo push), and while chats run
     side by side make a finished write call its own undo step, named by its chat
-    ("Coworker (3D): execute blender code"), so Edit > Undo History shows who did what."""
+    ("Coworker (3D): execute blender code"), so Edit > Undo History shows who did what.
+    What the call changes is never read as the user's edit (Revert's check)."""
+    from . import coworker_api
+    coworker_api.own_change()
     if internal:
         if "undo_push" in code or "ed.undo" in code:
             side_by_side.JOURNAL.note(thread)

@@ -679,6 +679,13 @@ class TestClaimGateOnTheBridge(unittest.TestCase):
         self.assertEqual(second.check_fn()["status"], "ok")
         self.assertEqual(len(self.runs), 2)
 
+    def test_a_name_the_other_chat_renamed_still_asks(self):
+        self.br._datablock_exists = set().__contains__        # Cube is called Hero3D now
+        claims.TABLE.claim("t1", {("any", "Cube"), ("object", "Hero3D")})
+        second = self._rename("t2")
+        self.assertIsNotNone(second.check_fn, "Cube is gone from the scene, but it is the 3D chat's")
+        self.assertEqual(self.runs, [])
+
     def test_wait_runs_when_the_other_turn_ends(self):
         self._rename("t1")
         second = self._rename("t2")
@@ -792,6 +799,16 @@ class TestRevertWithTwoChats(unittest.TestCase):
         before = list(self.calls)
         self.assertIn("Undo History", cw.revert_turn("t1", both=True), "no positional undo (no undo_stack)")
         self.assertEqual(self.calls, before)
+
+    def test_coworkers_own_changes_are_not_your_edit(self):
+        cw.turn_started("Coworker (3D)'s turn", thread="t1")
+        cw.turn_finished("Coworker (3D)'s turn", thread="t1")
+        cw.own_change()                             # e.g. the scene lock's release by the bridge
+        cw._count_edit()
+        self.assertTrue(cw.can_revert("t1"))
+        cw._own_until[0] = 0.0
+        cw._count_edit()                            # later: yours
+        self.assertFalse(cw.can_revert("t1"))
 
     def test_another_chats_turn_is_not_your_edit(self):
         cw.turn_started("Coworker (3D)'s turn", thread="t1")

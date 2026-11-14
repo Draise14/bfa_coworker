@@ -202,6 +202,14 @@ class ClaimTable:
                     out[holder] = names
         return out
 
+    def held_by_others(self, chat: str, name: str, running: Iterable[str]) -> bool:
+        """Another running chat claims something called *name* (it may have renamed it
+        since: the name is gone from the scene, but it is still that chat's)."""
+        chat, running = str(chat or ""), {str(r or "") for r in running}
+        with self._lock:
+            return any(holder != chat and holder in running and any(n == name for _k, n in held)
+                       for holder, held in self._claims.items())
+
     # -- generated code: its changes are claimed after it ran ---------------------------
     def note_writer(self, chat: str, now: float | None = None) -> None:
         """*chat*'s generated code just ran: the next depsgraph updates are its changes."""

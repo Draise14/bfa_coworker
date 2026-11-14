@@ -198,10 +198,23 @@ def _any_turn_open() -> bool:
     return any(t["before"] and not t["after"] for t in _turns.values())
 
 
+_OWN_WINDOW = 1.0                 # seconds a bridge call's depsgraph updates are Coworker's own
+_own_until = [0.0]
+
+
+def own_change() -> None:
+    """The bridge ran a call (a chat's tool or Coworker's own bookkeeping, as the scene
+    lock's release when the last chat ends): the depsgraph updates it causes are no
+    edit of yours (#359)."""
+    import time
+    _own_until[0] = time.monotonic() + _OWN_WINDOW
+
+
 def _count_edit(*args: Any) -> None:
     # While a chat's turn is open the scene changes are its own (#359): another chat's
     # Revert must not read them as yours; that chat's undo steps show up in the journal.
-    if not _any_turn_open():
+    import time
+    if not _any_turn_open() and time.monotonic() > _own_until[0]:
         _edits[0] += 1
     # What generated code just changed is its chat's claim now (#359).
     from . import claims

@@ -204,17 +204,18 @@ The headline is a **wizard spell that edits with you**, not a template you adjus
    speakers) — creative choices, explained in one line each.
 3. **You choose** with question cards: pace (tight / relaxed), length, format (16:9, 9:16,
    1:1), keep the B-roll?, music on the beat?
-4. **Build**: cuts and order through the VSE tools; reframes as a small **compositor node
-   group per shot** (crop, scale, pan/zoom keyframes) or strip transforms, so every choice
-   stays editable afterwards; markers name each decision.
+4. **Build**: cuts and order through the VSE tools; reframes as a **compositor modifier per
+   shot** on one shared node group (crop, scale, pan/zoom: the per-shot values and their
+   keyframes live on each modifier, `mod.properties.inputs.<Socket_N>.value`, Video 0 / 4v §6)
+   or strip transforms, so every choice stays editable afterwards; markers name each decision.
 5. **Review**: plays the proposal; *Accept*, *Try another take on shot 3*, or *Revert* (one
    undo for the whole edit).
 
 | Operator | Place | Kind / model | How |
 |---|---|---|---|
 | **Edit from Footage…** | *Sequencer > View*; Spell Book | wizard / full | As above: look → propose → choose → build → review |
-| **Reframe for Vertical…** | *Sequencer > View* | wizard / small–full | The reframe half of the above for an existing edit: per-shot subject-aware crops as compositor node groups; centre crop with no engine |
-| **Remove Silences** | *Strip* menu, Bforartists *Strip* tab | tool / none | Quiet ranges from the samples (threshold, min length, padding) → split, remove, close gaps |
+| **Reframe for Vertical…** | *Sequencer > View* | wizard / small–full | The reframe half of the above for an existing edit: per-shot subject-aware crops as compositor modifiers (one shared group, values per modifier); centre crop with no engine |
+| **Remove Silences** | *Strip* menu, Bforartists *Strip* tab | tool / none | Quiet ranges from the samples (threshold, min length, padding) → split, remove, close gaps. Samples: `aud.Sound.file(path).resample(16000, False).rechannel(1).data()` (numpy; RMS finder 7 ms per 2 min); cuts: `Strip.split(frame, 'SOFT')`, `left_handle` / `content_start` writes (4v §6.1) |
 | **Subtitles from Text** | *Add* menu | tool / none (small with a transcript) | Text lines + timings → text strips |
 | **Assemble Timeline from Scenes** | *Add* menu | tool / none | Scene strips in shot order with handles |
 | **Export Review Video** | Bforartists *Sequencer > Export*; *View* in Blender | tool / none | Fast preview render with burned-in shot names |

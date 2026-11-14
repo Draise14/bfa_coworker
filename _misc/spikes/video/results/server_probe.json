@@ -1,0 +1,64 @@
+{
+ "cuda124:large-v3-turbo:large.v3.turbo": {
+  "health": [
+   [
+    "refused",
+    1.04,
+    "<urlopen error timed out>"
+   ],
+   [
+    "200",
+    1.6,
+    "{\"status\":\"ok\"}"
+   ]
+  ],
+  "request_s": [
+   "1.317060",
+   "1.210381"
+  ]
+ },
+ "cuda124:small:small": {
+  "health": [
+   [
+    "refused",
+    1.01,
+    "<urlopen error timed out>"
+   ],
+   [
+    "200",
+    1.06,
+    "{\"status\":\"ok\"}"
+   ]
+  ],
+  "request_s": [
+   "1.497340",
+   "1.396313"
+  ]
+ },
+ "cpu:small:small": {
+  "health": [
+   [
+    "200",
+    0.51,
+    "{\"status\":\"ok\"}"
+   ]
+  ],
+  "request_s": [
+   "16.714649",
+   "16.608539"
+  ]
+ },
+ "cpu:base:base": {
+  "health": [
+   [
+    "200",
+    0.51,
+    "{\"status\":\"ok\"}"
+   ]
+  ],
+  "request_s": [
+   "5.206616",
+   "5.202783"
+  ]
+ }
+}

@@ -22,8 +22,14 @@ pixels (the host, ``input_capture``, calls them); clicks land on the next
 :meth:`draw`, which returns the actions for the host to carry out, e.g. ``("send", text)``,
 ``("stop", "")``, ``("copy", text)``, ``("link", url)``, ``("start", "")``,
 ``("stop_agent", "")``, ``("open_editor", "")``, ``("prefs", "")``,
-``("chat_mode", "ASK")`` or a notice button's ``("notice", id)``.  Free of
-``bpy``.
+``("chat_mode", "ASK")`` or a notice button's ``("notice", id)``.
+
+Text is selected with the mouse (#451, #455): a drag in the prompt selects
+there (the box's own selection, as Shift+arrows make); a press on a message
+starts a selection in the chat that a drag extends, across lines, blocks and
+turns (the wheel scrolls meanwhile); a double-click selects a word; a click
+elsewhere clears it.  :meth:`ChatSurface.selected_text` gives it for Ctrl+C
+and the right-click menu.  Free of ``bpy``.
 """
 
 from __future__ import annotations
@@ -34,7 +40,8 @@ from typing import Any, Callable
 
 from .chat_view import ChatView, _soft, choice_height, draw_choice
 from .input_box import InputBox
-from .layout import Canvas, InteractionState, Rect, row_corners
+from .layout import Canvas, InteractionState, Rect, TextLine, row_corners
+from .selection import over_text, point_to_pos
 from .style import Style
 
 # Tooltips for the chat's buttons (#237), by widget id (exact, then by prefix).
@@ -124,6 +131,10 @@ __all__ = (
 _ZOOM_STEP = 0.1
 _ZOOM_MIN, _ZOOM_MAX = 0.6, 2.5
 _WHEEL_LINES = 3
+_DRAG_PIXELS = 3.0     # a press moves this far before it drags a selection (a click doesn't select)
+_TEXT_DRAG = ("input", "select")    # pressed while dragging a selection: in the prompt / in the chat
+# Pressing these keeps the chat's selection: they only move the view.
+_KEEPS_SELECTION = ("scroll_handle", "scroll_track", "jump", "resize")
 
 
 @dataclass
@@ -210,6 +221,15 @@ class ChatSurface:
     _tip_shown: bool = False     # a tooltip is on screen now (a move must redraw to hide it)
     _tip_blocked: bool = False   # clicked: no tooltip until the mouse moves again
     _typed: tuple[str, float] = ("", -1e9)    # the draft as last drawn, and when it changed
+    # Selecting with the mouse (#451, #455): the chat's text lines and measure of the last
+    # frame, where the press was (a drag starts past _DRAG_PIXELS), the last press for a
+    # double-click (the host sets Blender's double-click time).
+    double_click_time: float = 0.35
+    _lines: list[TextLine] = field(default_factory=list)
+    _measure: Callable[[str, str, float], float] | None = None
+    _press_at: tuple[float, float] | None = None
+    _dragging: bool = False
+    _last_press: tuple[float, float, float] | None = None
 
     # -- mouse (region pixels) ------------------------------------------------------
     def hit(self, x: float, y: float) -> str | None:
@@ -233,6 +253,18 @@ class ChatSurface:
         if self.pressed == "resize" and self.on_resize is not None and self.bounds is not None:
             self.on_resize(max(0.0, self.bounds.top - y))
             return True
+        if self.pressed in _TEXT_DRAG:
+            if not self._dragging and self._press_at is not None:
+                px, py = self._press_at
+                self._dragging = abs(x - px) > _DRAG_PIXELS or abs(y - py) > _DRAG_PIXELS
+            if self._dragging:
+                if self.pressed == "input":
+                    self.box.place_cursor(x, y, select=True)
+                else:
+                    pos = self._chat_pos(x, y)
+                    if pos is not None:
+                        self.view.extend(pos)
+            return True
         return self.pressed is not None or before != self.hit(x, y) or self._near_scrollbar(x)
 
     def on_leave(self) -> bool:
@@ -240,21 +272,80 @@ class ChatSurface:
         self.mouse = None
         return changed
 
-    def on_press(self, x: float, y: float, shift: bool = False) -> bool:
-        """A left press; True when the surface used it."""
+    def on_press(self, x: float, y: float, shift: bool = False, double: bool = False) -> bool:
+        """A left press; True when the surface used it.  *double*: the host saw a
+        double-click (a second press soon on the same spot counts as one too)."""
         self.mouse = (x, y)
         self._tip_blocked, self._tip_shown = True, False      # a click hides it (#388)
+        now = self.clock()
+        last = self._last_press
+        if not double and last is not None and now - last[0] <= self.double_click_time \
+                and abs(x - last[1]) <= _DRAG_PIXELS and abs(y - last[2]) <= _DRAG_PIXELS:
+            double = True
+        self._last_press = None if double else (now, x, y)     # a third press starts again
+        self._press_at, self._dragging = (x, y), False
         widget = self.hit(x, y)
+        if widget not in _KEEPS_SELECTION:
+            self.view.clear_selection()       # a click elsewhere clears it (a new one may start below)
         if widget is None:
+            pos = self._chat_pos(x, y, press=True)
+            if pos is not None:              # on a message: select its text (#455)
+                if self.box.focused:
+                    self.box.focused, self.box.suggestions = False, []
+                if double:
+                    self.view.select_word(pos)
+                else:
+                    self.view.select(pos)
+                self.pressed = "select"
+                return True
             if self.box.focused:
                 self.box.focused, self.box.suggestions = False, []
             return False
         if widget == "input":
             self.box.focused = True
-            self.box.place_cursor(x, y, select=shift)
+            if double:
+                self.box.select_word_at(x, y)
+            else:
+                self.box.place_cursor(x, y, select=shift)
+            self.pressed = "input"            # a drag selects (#451)
             return True
         self.pressed = widget
         return True
+
+    def _chat_pos(self, x: float, y: float, press: bool = False) -> tuple | None:
+        """The chat text position at (x, y), from the last frame.  For a press only on a
+        message (inside its turn); while dragging the nearest text on screen."""
+        if self._measure is None or self._chat_rect is None:
+            return None
+        lines = self._lines
+        if press:
+            if not self._chat_rect.contains(x, y):
+                return None
+            turn = self.view.turn_at(x, y)
+            if turn is None:
+                return None
+            lines = [line for line in lines if line.key[0] == turn["idx"]]
+        return point_to_pos(lines, x, y, self._measure)
+
+    def over_text(self, x: float, y: float) -> bool:
+        """Is (x, y) over text one can select (the prompt, or a message)?  For the I-beam."""
+        widget = self.hit(x, y)
+        if widget == "input":
+            return True
+        return (widget is None and self._chat_rect is not None and self._chat_rect.contains(x, y)
+                and over_text(self._lines, x, y))
+
+    def has_selection(self) -> bool:
+        """Is text selected in the chat (not the prompt: that's the box's own)?"""
+        return self.view.has_selection()
+
+    def selected_text(self) -> str:
+        """The chat's selected text, as shown (#455)."""
+        return self.view.selected_text()
+
+    def clear_selection(self) -> bool:
+        """Drop the chat's selection; True when there was one."""
+        return self.view.clear_selection()
 
     def turn_at(self, x: float, y: float) -> dict | None:
         """The message at (x, y) in the last frame (see :meth:`ChatView.turn_at`), or None."""
@@ -274,6 +365,12 @@ class ChatSurface:
         """A left release; a press and release on the same widget is a click."""
         if self.pressed is None:
             return False
+        if self.pressed in _TEXT_DRAG:           # the end of a selection drag, not a click
+            if self.pressed == "select" and not self.view.has_selection():
+                self.view.clear_selection()      # a plain click on a message selects nothing
+            self.pressed, self._dragging, self._press_at = None, False, None
+            self.mouse = (x, y)
+            return True
         if self.hit(x, y) == self.pressed or self.pressed in ("scroll_handle", "resize"):
             self._clicked = self.pressed if self.pressed not in ("scroll_handle", "resize") else None
         self.pressed = None
@@ -341,9 +438,13 @@ class ChatSurface:
         self._notice_room = None
         if notice is not None:
             self.view.turn_rects = []       # no messages on screen: none for the right-click menu
+            self.view.clear_selection()
             self._draw_notice(canvas, chat, notice, actions)
         else:
-            actions += self.view.draw(canvas, chat, history, live=live, compact=self.compact)
+            # While a drag selects in the chat, its end follows the mouse on this frame's text
+            # (the wheel may have scrolled it).
+            drag = self.mouse if self.pressed == "select" and self._dragging else None
+            actions += self.view.draw(canvas, chat, history, live=live, compact=self.compact, drag=drag)
         if show_input:
             before = len(self.box.actions)
             self.box.draw(canvas, input_rect)
@@ -355,6 +456,7 @@ class ChatSurface:
             self._draw_drop_target(canvas, rect)
         canvas.pop_clip()
         self._hits = list(canvas.hit_areas)
+        self._lines, self._measure = list(canvas.text_lines), canvas.measure
         self._clicked = None
         self._tooltip(canvas, rect, live)
         # The view's own actions that only change the view are done here.

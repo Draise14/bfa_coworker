@@ -14,7 +14,12 @@ operator per window watches events and hands them to the chat surface
   a press on the scrollbar handle keeps dragging even outside the region;
 * the **wheel** scrolls the chat, **Ctrl+wheel** zooms it;
 * **click** in the input box focuses it and places the cursor (Shift+click
-  selects); a click anywhere else leaves it -- that click still goes through;
+  selects, a drag selects, a double-click selects a word: #451); a click
+  anywhere else leaves it -- that click still goes through, unless it was on
+  a message: a press there selects the message's text and a drag extends it,
+  across messages (#455); Ctrl+C copies that (redacted, like the Copy
+  buttons) while the mouse is over the chat and no box has the keyboard, Esc
+  or a click elsewhere drops it;
 * **keys** go to the focused box (Enter sends, Shift+Enter adds a line...);
   while it has focus, editor shortcuts never fire;
 * Ctrl+C / X / V use the window manager clipboard; Ctrl+V's text goes to the host's
@@ -73,6 +78,8 @@ _DRAG: dict[str, Any] = {"hit": None}
 # Ctrl+MMB drag zoom over a full-size chat: (hit, start mouse y, start zoom).
 _ZOOM_DRAG: dict[str, Any] = {"hit": None, "y": 0.0, "zoom": 1.0}
 _HOVER: dict[str, Any] = {"hit": None, "text_cursor": False}
+# The chat that has text selected in its messages (#455): (surface, area, region).
+_SELECT: dict[str, Any] = {"hit": None}
 _RUNNING: set[int] = set()
 # The right-click menu (#453): the chat it was opened on and what was under the mouse.
 CONTEXT_MENU = "BFACW_MT_chat_context"
@@ -100,7 +107,7 @@ def set_host(router: Router | None, on_action: OnAction | None = None,
     _HOST["router"], _HOST["on_action"], _HOST["after_key"] = router, on_action, after_key
     if router is None:
         _blur()
-        _DRAG["hit"] = _HOVER["hit"] = None
+        _DRAG["hit"] = _HOVER["hit"] = _SELECT["hit"] = None
         _forget_menu()
 
 
@@ -289,8 +296,9 @@ class BFACW_OT_gpu_input(bpy.types.Operator):
                 x, y = _local(event, hit[2])
                 if hit[0].on_move(x, y):
                     _tag(hit[2])
-                over_text = hit[0].hit(x, y) == "input"
-            if over_text != _HOVER["text_cursor"]:    # an I-beam over the text, like a text field
+                over = getattr(hit[0], "over_text", None)
+                over_text = over(x, y) if over is not None else hit[0].hit(x, y) == "input"
+            if over_text != _HOVER["text_cursor"]:    # an I-beam over text, like a text field (#455)
                 _HOVER["text_cursor"] = over_text
                 try:
                     context.window.cursor_set("TEXT" if over_text else "DEFAULT")
@@ -310,19 +318,25 @@ class BFACW_OT_gpu_input(bpy.types.Operator):
             _tag(region)
             return {"RUNNING_MODAL"}
 
-        if event.type in {"LEFTMOUSE", "RIGHTMOUSE"} and event.value == "PRESS":
+        # Blender sends a double-click's second press as DOUBLE_CLICK (#451, #455).
+        left_double = event.type == "LEFTMOUSE" and event.value == "DOUBLE_CLICK"
+        if event.type in {"LEFTMOUSE", "RIGHTMOUSE"} and (event.value == "PRESS" or left_double):
             hit = router(context, event)
+            if event.type == "LEFTMOUSE":
+                _drop_selection_elsewhere(hit)
             if hit is not None and event.type == "LEFTMOUSE":
                 target, _area, region = hit
                 x, y = _local(event, region)
                 if hasattr(target, "on_press"):            # a chat surface
-                    used = target.on_press(x, y, shift=event.shift)
+                    used = target.on_press(x, y, shift=event.shift, double=left_double)
                     if target.box.focused:
                         focus(target.box, region)
                     elif _FOCUS["box"] is target.box:
                         _blur()
                     if target.pressed is not None:
                         _DRAG["hit"] = hit
+                    if getattr(target, "pressed", None) == "select":
+                        _SELECT["hit"] = hit
                     _tag(region)
                     if used:
                         return {"RUNNING_MODAL"}
@@ -344,13 +358,52 @@ class BFACW_OT_gpu_input(bpy.types.Operator):
 
         box = _FOCUS["box"]
         if box is None:
-            return {"PASS_THROUGH"}
+            return _selection_key(context, event, router) or {"PASS_THROUGH"}
         used = box.handle_key(key_from_event(event))
         _run_actions(box, context)
         if used and _HOST["after_key"] is not None:
             _HOST["after_key"](box)
         _redraw()
         return {"RUNNING_MODAL"} if used else {"PASS_THROUGH"}
+
+
+def _drop_selection_elsewhere(hit: Any) -> None:
+    """A left press outside the chat that has text selected drops that selection (#455)."""
+    held = _SELECT["hit"]
+    if held is None or _same(held, hit):
+        return
+    _SELECT["hit"] = None
+    try:
+        if held[0].clear_selection():
+            _tag(held[2])
+    except (AttributeError, ReferenceError):
+        pass
+
+
+def _selection_key(context: Any, event: Any, router: Router) -> set[str] | None:
+    """Ctrl+C (Cmd+C) copies the chat's selected text, Esc drops it (#455) -- while no box
+    has the keyboard and the mouse is over that chat; anywhere else the key is the editor's
+    (Ctrl+C in the 3D View still copies objects).  None: not used."""
+    held = _SELECT["hit"]
+    if held is None or event.value != "PRESS" or event.type not in ("C", "ESC"):
+        return None
+    surface, _area, region = held
+    if not getattr(surface, "has_selection", lambda: False)() or not _same(router(context, event), held):
+        return None
+    if event.type == "ESC":
+        surface.clear_selection()
+        _SELECT["hit"] = None
+        _tag(region)
+        return {"RUNNING_MODAL"}
+    if not (event.ctrl or event.oskey) or event.shift or event.alt:
+        return None
+    text = surface.selected_text()
+    if text:
+        if _HOST["on_action"] is not None:      # the host's copy: keys and tokens as *** (#346)
+            _HOST["on_action"](surface.box, "copy", text)
+        else:
+            context.window_manager.clipboard = text
+    return {"RUNNING_MODAL"}
 
 
 def _chat_under(context: Any, event: Any, router: Router) -> tuple[Any, Any, Any] | None:
@@ -504,7 +557,7 @@ def _on_load_pre(*_args) -> None:
     # Opening a file ends every modal operator and frees every area.
     _RUNNING.clear()
     _FOCUS["box"] = _FOCUS["region"] = None
-    _DRAG["hit"] = _HOVER["hit"] = _ZOOM_DRAG["hit"] = None
+    _DRAG["hit"] = _HOVER["hit"] = _ZOOM_DRAG["hit"] = _SELECT["hit"] = None
     _forget_menu()
 
 

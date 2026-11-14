@@ -432,6 +432,13 @@ class TestMouse(unittest.TestCase):
         self.assertTrue(surface.box.focused)
         self.assertFalse(surface.on_press(250, 300))                   # empty chat area: not used
         self.assertFalse(surface.box.focused)
+        surface.on_press(x, y)
+        self.assertTrue(surface.box.focused)
+        line = next(ln for ln in surface._lines if ln.key[1] == (cv.USER, 0))
+        # A press on a message selects its text (#455): used, and the prompt loses the keyboard.
+        self.assertTrue(surface.on_press(line.x + 2, (line.top + line.bottom) / 2))
+        self.assertEqual(surface.pressed, "select")
+        self.assertFalse(surface.box.focused)
 
     def test_wheel_scrolls_and_ctrl_wheel_zooms(self):
         long = [m for i in range(40) for m in ({"role": "user", "content": "q {:d}".format(i)},

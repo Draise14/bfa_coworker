@@ -28,7 +28,14 @@ The same code draws the full editor and the compact sidebar (``compact``).
 Clicks come back from :meth:`ChatView.draw` as ``(action, value)`` pairs for
 the input layer to carry out: ``("copy", text)``, ``("toggle", turn_key)``,
 ``("link", url)``, ``("jump", "")``.  For the right-click menu (#453) it
-also keeps where each turn was drawn (:meth:`ChatView.turn_at`).  Free of ``bpy``.
+also keeps where each turn was drawn (:meth:`ChatView.turn_at`).
+
+Text can be selected with the mouse (#451, #455): your messages, each block of a
+reply (code too) and the live Thinking box are **units** (:func:`unit_texts`)
+whose drawn lines the canvas keeps; the view holds the :class:`selection.ChatSelection`,
+draws its highlight behind the text and gives its text as shown
+(:meth:`ChatView.selected_text`).  A reply that is still streaming isn't
+selectable.  Free of ``bpy``.
 """
 
 from __future__ import annotations
@@ -42,16 +49,23 @@ from typing import Any, Callable
 from .. import long_jobs
 from ..chat_status import fmt_duration, phase_text, spinner_char
 from ..chat_turns import NOTE_TITLES, group_turns, is_system_note_msg, split_turn
-from .layout import Canvas, InteractionState, Rect
+from .layout import Canvas, DrawCmd, InteractionState, Rect, TextLine
 from .markdown import Block, Span, parse
+from .selection import CHIP_PAD, ChatSelection, flow_tokens, highlight_rects, join_units, point_to_pos, word_bounds
 from .style import RGBA, Style
 from .suggestions import TYPE, suggestions
 
 __all__ = (
     "ChatView",
+    "block_text",
     "message_text",
     "transcript",
+    "unit_texts",
 )
+
+# The sections of a turn's selectable units, top to bottom: your message, the live Thinking
+# box, the reply's blocks.  A unit is (section, block index).
+USER, THINK, REPLY = 0, 1, 2
 
 _ERROR = (0.92, 0.40, 0.33, 1.0)   # failed tool rows (themes have no error colour)
 # Heading sizes relative to body text, close to Blender 5.3's label_markdown.
@@ -179,6 +193,34 @@ def transcript(history: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
+def block_text(block: Block) -> str | None:
+    """The text a markdown block shows (#455), or None for one with none (a rule)."""
+    if block.kind in ("code", "table"):
+        return "\n".join(block.lines or [""])
+    if block.kind == "hr":
+        return None
+    return flow_tokens(block.spans)[0]
+
+
+def unit_texts(turn: list[dict], active: bool = False) -> list[tuple[tuple, str, str]]:
+    """A turn's selectable texts as shown, ``(unit, text, kind)`` in reading order: your
+    message (without its attachment marker) and each block of the reply (markdown markers
+    stripped); no reply while the turn runs.  The same texts the view draws, so a selection
+    can span turns that scrolled out of view (#455)."""
+    user, _process, conclusion = split_turn(turn)
+    out: list[tuple[tuple, str, str]] = []
+    if user is not None:
+        text = split_attachments(message_text(user.get("content")))[0]
+        if text:
+            out.append(((USER, 0), text, "user"))
+    if conclusion is not None and not active:
+        for n, block in enumerate(parse(message_text(conclusion.get("content")))):
+            text = block_text(block)
+            if text is not None:
+                out.append(((REPLY, n), text, block.kind))
+    return out
+
+
 def _tool_failed(msg: dict) -> bool:
     content = message_text(msg.get("content"))
     return content.startswith("Error") or '"status": "error"' in content
@@ -215,6 +257,12 @@ class ChatView:
     _user_rects: dict[int, Rect] = field(default_factory=dict)
     _code_rects: list[tuple[Rect, str]] = field(default_factory=list)
     _frame: Any = None                  # the canvas of the frame being drawn
+    # Text selected with the mouse (#451, #455), and what it needs between frames: the turns
+    # last drawn, the running one, and the blocks its Thinking box showed.
+    selection: ChatSelection | None = None
+    _turns: list[list[dict]] = field(default_factory=list)
+    _active: int = -1
+    _think_blocks: dict[int, list[Block]] = field(default_factory=dict)
 
     # -- public ----------------------------------------------------------------
     def turn_at(self, x: float, y: float) -> dict | None:
@@ -230,13 +278,99 @@ class ChatView:
                         "code": code, "last": idx == getattr(self, "_last", -1)}
         return None
 
+    # -- selection (#451, #455) -------------------------------------------------------
+    def select(self, anchor: tuple, focus: tuple | None = None) -> None:
+        """Select from *anchor* to *focus* (positions: (turn, unit, offset))."""
+        self.selection = ChatSelection(anchor, anchor if focus is None else focus)
+        self.selection.sig = self._selection_sig(self.selection)
+
+    def extend(self, focus: tuple) -> None:
+        """Move the selection's moving end to *focus*."""
+        if self.selection is None:
+            self.select(focus)
+            return
+        self.select(self.selection.anchor, focus)
+
+    def select_word(self, pos: tuple) -> None:
+        """Select the word at *pos* (a double-click)."""
+        text = next((t for unit, t, _k in self._units(pos[0]) if unit == pos[1]), "")
+        a, b = word_bounds(text, pos[2])
+        self.select((pos[0], pos[1], a), (pos[0], pos[1], b))
+
+    def clear_selection(self) -> bool:
+        had = self.selection is not None
+        self.selection = None
+        return had
+
+    def has_selection(self) -> bool:
+        return self.selection is not None and not self.selection.empty
+
+    def selected_text(self) -> str:
+        """The selected text as shown (#455): markdown markers and attachment markers left
+        out; blocks apart by a blank line.  Also for turns that scrolled out of view."""
+        sel = self.selection
+        if sel is None or sel.empty:
+            return ""
+        lo, hi = sel.ordered()
+        return join_units(((t, unit, text, kind) for t in range(lo[0], hi[0] + 1)
+                           for unit, text, kind in self._units(t)), sel)
+
+    def _units(self, idx: int) -> list[tuple[tuple, str, str]]:
+        if not 0 <= idx < len(self._turns):
+            return []
+        units = unit_texts(self._turns[idx], idx == self._active)
+        if idx == self._active:
+            for n, block in enumerate(self._think_blocks.get(idx, [])):
+                text = block_text(block)
+                if text is not None:
+                    units.append(((THINK, n), text, block.kind))
+        return sorted(units, key=lambda u: u[0])
+
+    def _selection_sig(self, sel: ChatSelection) -> tuple | None:
+        """What the selected turns are now: a selection is dropped when it changes (a turn
+        gets a message, ends, another chat shows), or when the Thinking text it covers does."""
+        lo, hi = sel.ordered()
+        out: list[Any] = []
+        for idx in range(lo[0], hi[0] + 1):
+            if not 0 <= idx < len(self._turns):
+                return None
+            turn = self._turns[idx]
+            first = message_text(turn[0].get("content"))[:200] if turn else ""
+            out.append((first, len(turn),
+                        sum(len(message_text(m.get("content"))) for m in turn), idx == self._active))
+        if lo[0] <= self._active <= hi[0] and (hi[0] > self._active or hi[1][0] >= THINK):
+            texts = [block_text(b) or "" for b in self._think_blocks.get(self._active, [])]
+            if hi[0] == self._active and hi[1][0] == THINK:
+                last = hi[1][1]
+                texts = texts[:last] + [texts[last][:hi[2]] if last < len(texts) else None]
+            out.append(tuple(texts))
+        return tuple(out)
+
+    def _unit(self, canvas: Canvas, idx: int, unit: tuple) -> tuple | None:
+        """The key a unit's lines are kept under -- in the frame on screen only."""
+        return (idx, unit) if canvas is self._frame else None
+
+    def _paint_selection(self, canvas: Canvas) -> None:
+        """The highlight, behind the selected text: the theme's text-selection colour
+        (a text field's), darker on your messages' own coloured box."""
+        sel = self.selection
+        if sel is None or sel.empty:
+            return
+        style = canvas.style
+        on_user = (style.text_field.inner[0], style.text_field.inner[1], style.text_field.inner[2], 0.55)
+        rects = highlight_rects(canvas.text_lines, sel, canvas.measure)
+        for cmd, rect, key in sorted(rects, key=lambda r: r[0], reverse=True):
+            canvas.commands.insert(cmd, DrawCmd("rect", rect, on_user if key[1][0] == USER else style.selection))
+
     def scroll_by(self, dy: float, visible_height: float) -> None:
         """Scroll up (dy > 0) or down; clamped to the content."""
         self.scroll = max(0.0, min(self.scroll + dy, max(0.0, self.content_height - visible_height)))
 
     def draw(self, canvas: Canvas, rect: Rect, history: list[dict], live: Any = None,
-             compact: bool = False) -> list[tuple[str, str]]:
-        """Draw *history* into *rect*; return the actions clicked this frame."""
+             compact: bool = False, drag: tuple[float, float] | None = None) -> list[tuple[str, str]]:
+        """Draw *history* into *rect*; return the actions clicked this frame.  *drag*: the
+        mouse while it drags a selection -- its moving end follows it on this frame's text
+        (also after the wheel scrolled under it)."""
         actions: list[tuple[str, str]] = []
         style = canvas.style
         pad = style.pad * (0.7 if compact else 1.0)
@@ -246,10 +380,12 @@ class ChatView:
         turns = group_turns([m for m in history if m.get("role") != "system"])
         active = len(turns) - 1 if (live is not None and getattr(live, "is_thinking", False)) else -1
         self.turn_rects, self._user_rects, self._code_rects = [], {}, []
+        self._turns, self._active = turns, active
         if not turns:
             canvas.wrapped(rect.x + pad, rect.top - pad, rect.w - 2 * pad,
                            "Start a conversation: type below and press Enter.", _soft(style.text))
             self.content_height = 0.0
+            self.selection = None
             return actions
 
         self._last = len(turns) - 1
@@ -275,6 +411,13 @@ class ChatView:
                                         *_copy_texts(turns[idx], idx == active)))
             bottom += h + gap
         canvas.pop_clip()
+        if self.selection is not None and self._selection_sig(self.selection) != self.selection.sig:
+            self.selection = None           # its turn changed under it
+        if drag is not None and self.selection is not None:
+            pos = point_to_pos(canvas.text_lines, drag[0], drag[1], canvas.measure)
+            if pos is not None and pos != self.selection.focus:
+                self.extend(pos)
+        self._paint_selection(canvas)
 
         self._draw_scrollbar(canvas, rect)
         size = style.unit * 1.2
@@ -351,7 +494,8 @@ class ChatView:
                               text, actions)
             text_top = box.top - pad
             if text:
-                text_top = canvas.wrapped(box.x + pad + side + gap, text_top, inner_w, text, style.button.text_sel)
+                text_top = canvas.wrapped(box.x + pad + side + gap, text_top, inner_w, text, style.button.text_sel,
+                                          unit=self._unit(canvas, idx, (USER, 0)))
             self._draw_thumbs(canvas, thumbs, box.x + pad + side + gap, text_top - pad, actions)
             top = box.y - pad
         # The same spinner and words as the panel chat (chat_status), driven by
@@ -369,6 +513,7 @@ class ChatView:
             return self._draw_jobs(canvas, idx, x, top, width, clear_fold=bool(process))
         self._live_h.pop(idx, None)
         self._think_h.pop(idx, None)
+        self._think_blocks.pop(idx, None)
         if process:
             top = self._draw_workshop(canvas, process, turn, idx, x, top, width, active, compact, actions,
                                       spinner) - pad
@@ -394,7 +539,7 @@ class ChatView:
                 if canvas.button(Rect(right - side, row_top - side, side, side), "revert_turn", "",
                                  icon="LOOP_BACK"):
                     actions.append(("revert_turn", ""))
-            top = self._draw_markdown(canvas, parse(reply), idx, x, top, width, actions)
+            top = self._draw_markdown(canvas, parse(reply), idx, x, top, width, actions, section=REPLY)
         top = self._draw_jobs(canvas, idx, x, top, width)
         if conclusion is not None and idx == self._suggest_idx:
             top = self._draw_suggestions(canvas, message_text(conclusion.get("content")), x, top, width, actions)
@@ -483,9 +628,12 @@ class ChatView:
         top = self._icon_line(canvas, x, top, self.agent_icon, label, _soft(style.text, 0.15))
         if not reasoning:
             self._think_h.pop(idx, None)
+            self._think_blocks.pop(idx, None)
             return top
         # Its own lines kept, drawn as markdown in the faded colour; no Copy or links in it.
         blocks = parse(reasoning)
+        if canvas is self._frame:
+            self._think_blocks[idx] = blocks       # what a selection in it copies (#455)
         inner_w = width - 3 * pad
         color = _soft(style.text_field.text, 0.25)
         lead, trail = _markdown_gaps(blocks, style.pad)
@@ -503,7 +651,7 @@ class ChatView:
         # From the top while it fits; past the cap the newest part at the bottom, like a terminal.
         text_top = max(frame.top - inset, frame.y + inset + content) + lead
         self._draw_markdown(canvas, blocks, idx, frame.x + pad, text_top, inner_w, actions, color=color,
-                            interactive=False)
+                            interactive=False, section=THINK)
         canvas.pop_clip()
         return frame.y - pad * 0.5
 
@@ -739,14 +887,16 @@ class ChatView:
     # -- markdown --------------------------------------------------------------------
     def _draw_markdown(self, canvas: Canvas, blocks: list[Block], idx: int, x: float, top: float,
                        width: float, actions: list[tuple[str, str]], color: RGBA | None = None,
-                       interactive: bool = True) -> float:
+                       interactive: bool = True, section: int | None = None) -> float:
         """Draw *blocks*; return the new top.  *color* tints all of it (the Thinking box's faded
-        look); with *interactive* off there are no Copy buttons and no link areas (#452)."""
+        look); with *interactive* off there are no Copy buttons and no link areas (#452).
+        With *section* each block is a selectable unit (#455): (section, block index)."""
         style = canvas.style
         pad = style.pad
         base = color or style.text
         code_n = 0
-        for block in blocks:
+        for n, block in enumerate(blocks):
+            unit = self._unit(canvas, idx, (section, n)) if section is not None else None
             if block.kind == "code" or block.kind == "table":
                 lines = block.lines or [""]
                 text = "\n".join(lines)
@@ -773,7 +923,7 @@ class ChatView:
                         actions.append(("copy", text))
                     code_n += 1
                 canvas.wrapped(box.x + pad, box.top - head - pad, inner_w, text, color or style.text_field.text,
-                               font="mono")
+                               font="mono", unit=unit)
                 top = box.y - pad * 0.5
             elif block.kind == "hr":
                 top -= pad
@@ -792,63 +942,64 @@ class ChatView:
                 canvas.icon(mark, icon, style.keyframes[min(block.level, 4) - 1])
                 top = self._flow(canvas, block.spans, x + side + pad * 0.6, top, width - side - pad * 0.6,
                                  actions, size=size, bold=True, color=color or style.title,
-                                 interactive=interactive) - pad * 0.4
+                                 interactive=interactive, unit=unit) - pad * 0.4
             elif block.kind == "item":
                 indent = style.unit * (0.6 + block.level)
                 marker = ("•" if block.level == 0 else "◦") if block.marker == "-" else block.marker
                 canvas.text(x + indent - style.unit * 0.5, top - style.line_height + style.line_height * 0.3,
                             marker, base)
                 top = self._flow(canvas, block.spans, x + indent, top, width - indent, actions, color=color,
-                                 interactive=interactive)
+                                 interactive=interactive, unit=unit)
             elif block.kind == "quote":
                 start = top
                 top = self._flow(canvas, block.spans, x + style.unit * 0.6, top, width - style.unit * 0.6,
-                                 actions, color=_soft(base, 0.25), interactive=interactive)
+                                 actions, color=_soft(base, 0.25), interactive=interactive, unit=unit)
                 canvas.fill(Rect(x, top, max(2.0, 2 * style.scale), start - top), style.outline)
             else:
                 top = self._flow(canvas, block.spans, x, top, width, actions, color=color,
-                                 interactive=interactive) - pad * 0.3
+                                 interactive=interactive, unit=unit) - pad * 0.3
         return top
 
     def _flow(self, canvas: Canvas, spans: list[Span], x: float, top: float, width: float,
               actions: list[tuple[str, str]], size: float | None = None, bold: bool = False,
-              color: RGBA | None = None, interactive: bool = True) -> float:
+              color: RGBA | None = None, interactive: bool = True, unit: tuple | None = None) -> float:
         """Lay out styled *spans* as wrapped lines; return the new top.  Links are click areas
-        only when *interactive*."""
+        only when *interactive*.  With *unit* the lines are kept for selecting (#455)."""
         style = canvas.style
         size = size or style.font_size
         line_h = size * 1.45
         base = color or style.text
-        pieces: list[tuple[str, Span]] = []
-        for span in spans:
-            for token in re.split(r"(\s+)", span.text):
-                if token:
-                    pieces.append((token, span))
-        lines: list[list[tuple[str, Span, float]]] = [[]]
+        # Words, and each run of spaces as one (none before the first word): the unit's text.
+        lines: list[list[tuple[str, Span, float, int]]] = [[]]
         used = 0.0
-        for token, span in pieces:
+        for token, span, offset in flow_tokens(spans)[1]:
             font = "mono" if span.style == "code" else "ui"
-            w = canvas.measure(token, font, size)
-            if token.isspace():
-                if lines[-1]:
-                    lines[-1].append((" ", span, canvas.measure(" ", font, size)))
-                    used += lines[-1][-1][2]
+            if token == " ":
+                lines[-1].append((" ", span, canvas.measure(" ", font, size), offset))
+                used += lines[-1][-1][2]
                 continue
+            w = canvas.measure(token, font, size)
             if lines[-1] and used + w > width:
                 while lines[-1] and lines[-1][-1][0] == " ":
                     lines[-1].pop()
                 lines.append([])
                 used = 0.0
-            lines[-1].append((token, span, w))
+            lines[-1].append((token, span, w, offset))
             used += w
+        clip = canvas._clips[-1] if canvas._clips else None
         for line in lines:
             top -= line_h
             baseline = top + (line_h - size) / 2 + size * 0.2
             cx = x
-            for token, span, w in line:
+            first_cmd = len(canvas.commands)
+            pieces = []
+            for token, span, w, offset in line:
+                font = "mono" if span.style == "code" else "ui"
+                own = -1
                 if span.style == "code":
-                    canvas.fill(Rect(cx - 2, top + line_h * 0.1, w + 4, line_h * 0.8), style.text_field.inner,
-                                line_h * 0.3)
+                    canvas.fill(Rect(cx - CHIP_PAD, top + line_h * 0.1, w + 2 * CHIP_PAD, line_h * 0.8),
+                                style.text_field.inner, line_h * 0.3)
+                    own = len(canvas.commands)          # its highlight goes over its own background
                     canvas.text(cx, baseline, token, style.text_field.text, font="mono", size=size)
                 elif span.style == "link":
                     canvas.text(cx, baseline, token, style.link if interactive else _soft(style.link, 0.25),
@@ -861,7 +1012,11 @@ class ChatView:
                 else:
                     tint = _soft(base, 0.3) if span.style == "italic" else base
                     canvas.text(cx, baseline, token, tint, size=size, bold=bold or span.style == "bold")
+                pieces.append((offset, token, cx, w, font, size, own))
                 cx += w
+            if unit is not None and pieces:
+                canvas.text_lines.append(TextLine(unit, pieces[0][0], x, top + line_h, top, "ui", size,
+                                                  tuple(pieces), first_cmd, clip))
         return top
 
     # -- scrollbar: like Blender's region scrollbars (View2D) ---------------------------

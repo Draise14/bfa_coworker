@@ -28,7 +28,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .layout import Canvas, row_corners, Rect
+from .layout import Canvas, row_corners, Rect, wrap_offsets
+from .selection import word_bounds
 
 __all__ = (
     "InputBox",
@@ -68,6 +69,10 @@ class TextModel:
 
     def select_all(self) -> None:
         self.anchor, self.cursor = 0, len(self.text)
+
+    def select_word(self, pos: int) -> None:
+        """Select the word at *pos* (a double-click, #451)."""
+        self.anchor, self.cursor = word_bounds(self.text, pos)
 
     # editing
     def _snapshot(self) -> None:
@@ -330,6 +335,12 @@ class InputBox:
         self.model.cursor = start + best
         self._refresh_suggestions()
 
+    def select_word_at(self, x: float, y: float) -> None:
+        """Select the word at (x, y) in the last drawn lines (a double-click, #451)."""
+        self.place_cursor(x, y)
+        if self._drawn:
+            self.model.select_word(self.model.cursor)
+
     # -- keys -------------------------------------------------------------------------
     def handle_key(self, key: Key) -> bool:
         """Apply *key*; return True when the box used it (the host then blocks it)."""
@@ -455,20 +466,8 @@ class InputBox:
 
     def _lines(self, canvas: Canvas, width: float) -> list[tuple[int, str]]:
         """Visual lines as (start offset, text), wrapping by words like the view."""
-        from .layout import wrap_text
-        out: list[tuple[int, str]] = []
-        offset = 0
         text_w = self._text_width(canvas, width)
-        for para in self.model.text.split("\n"):
-            pieces = wrap_text(para, text_w, canvas.measure, "ui", canvas.style.font_size)
-            consumed = 0
-            for piece in pieces:
-                start = para.find(piece, consumed) if piece else consumed
-                start = consumed if start < 0 else start
-                out.append((offset + start, piece))
-                consumed = start + len(piece)
-            offset += len(para) + 1
-        return out or [(0, "")]
+        return wrap_offsets(self.model.text, text_w, canvas.measure, "ui", canvas.style.font_size) or [(0, "")]
 
     @staticmethod
     def _fit(canvas: Canvas, text: str, width: float) -> str:
@@ -561,7 +560,7 @@ class InputBox:
                 xa = x0 + canvas.measure(piece[:a - start], "ui", size)
                 xb = x0 + canvas.measure(piece[:b - start], "ui", size) + (4 if sel[1] > end else 0)
                 canvas.fill(Rect(xa, line_top - style.line_height, max(2.0, xb - xa), style.line_height),
-                            (*style.button.inner_sel[:3], 0.55))
+                            style.selection)
             canvas.text(x0, base, piece, text_color)
             self._drawn.append((line_top, line_top - style.line_height, x0, start, piece))
             is_cursor_line = start <= self.model.cursor <= end and (row + first) == cur_line

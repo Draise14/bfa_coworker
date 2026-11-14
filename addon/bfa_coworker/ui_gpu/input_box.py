@@ -20,6 +20,12 @@ fills :attr:`InputBox.actions` with requests for the host: ``("send", text)``,
 ``("stop", "")``, ``("copy", text)``, ``("paste", "")`` (the host answers with
 :meth:`InputBox.paste`, or attaches the clipboard's image instead, #450),
 ``("native_edit", text)`` and ``("blur", "")``.
+
+Long messages (#389): the box grows with its text up to :attr:`InputBox.max_lines`
+(the host remembers it; dragging the box's top edge or Ctrl+Up / Ctrl+Down sets
+it, never past :attr:`InputBox.line_cap`, about half the chat).  Past that the
+text scrolls inside the box (:attr:`InputBox.scroll`, the wheel), and the caret
+stays in view whenever it moves or the text changes.
 Free of ``bpy``.
 """
 
@@ -39,8 +45,9 @@ __all__ = (
 )
 
 _MAX_UNDO = 200
-_MAX_VISIBLE_LINES = 6
+_MAX_VISIBLE_LINES = 6            # the default most text lines shown (#389: the user can change it)
 _MIN_VISIBLE_LINES = 2
+_MAX_LINES_LIMIT = 60             # the most anyone can ask for (the surface caps it lower: half the chat)
 _MAX_SUGGESTIONS = 8
 
 
@@ -253,6 +260,24 @@ class InputBox:
     _drawn: list[tuple[float, float, float, int, str]] = field(default_factory=list)
     _measure: Callable[[str, str, float], float] | None = None
     _size: float = 11.0
+    # Long messages (#389): at most *max_lines* text lines show (the host keeps the user's
+    # choice and hears of a change through *on_lines*), never more than *line_cap* (set by
+    # the surface: about half the chat; 0 = no cap).  *scroll* is the first line shown.
+    max_lines: int = _MAX_VISIBLE_LINES
+    line_cap: int = 0
+    scroll: int = 0
+    on_lines: Callable[[int], None] | None = None
+    resizing: bool = False                 # the top edge is being dragged
+    _drag_lines: int = 0                   # ... and the lines it shows meanwhile
+    # The last draw: every visual line, how many showed, where they start (x), the line
+    # height, the box's height without its text, and (text, cursor, rows, width) -- when that
+    # changes the caret is brought into view.
+    _layout: list[tuple[int, str]] = field(default_factory=list)
+    _visible: int = 0
+    _x0: float = 0.0
+    _line_h: float = 0.0
+    _chrome_h: float = 0.0
+    _seen: tuple = ()
 
     # -- suggestions -------------------------------------------------------------
     def _mention_query(self) -> str | None:
@@ -315,11 +340,16 @@ class InputBox:
             self.model._undo.clear()  # a sent message isn't undone back into the box
         self.suggestions = []
 
-    def place_cursor(self, x: float, y: float, select: bool = False) -> None:
-        """Move the cursor to the character nearest (x, y) in the last drawn lines."""
+    def place_cursor(self, x: float, y: float, select: bool = False, drag: bool = False) -> None:
+        """Move the cursor to the character nearest (x, y) in the last drawn lines.
+
+        *drag*: a drag past the top or bottom of the text reaches the lines scrolled out of
+        view (one line a move, more the farther away), and the box scrolls to follow (#389)."""
         if not self._drawn or self._measure is None:
             return
         row = next((r for r in self._drawn if r[1] <= y <= r[0]), None)
+        if row is None and drag:
+            row = self._row_beyond(y)
         if row is None:
             row = self._drawn[0] if y > self._drawn[0][0] else self._drawn[-1]
         _top, _bottom, x0, start, piece = row
@@ -335,6 +365,76 @@ class InputBox:
         self.model.cursor = start + best
         self._refresh_suggestions()
 
+    def _row_beyond(self, y: float) -> tuple[float, float, float, int, str] | None:
+        """The hidden line a drag at *y* (above or below the shown text) reaches, or None."""
+        if not self._layout or self._line_h <= 0 or not self._visible:
+            return None
+        top, bottom = self._drawn[0][0], self._drawn[-1][1]
+        if y > top and self.scroll > 0:
+            index = max(0, self.scroll - 1 - int((y - top) // self._line_h))
+        elif y < bottom and self.scroll + self._visible < len(self._layout):
+            index = min(len(self._layout) - 1, self.scroll + self._visible + int((bottom - y) // self._line_h))
+        else:
+            return None
+        start, piece = self._layout[index]
+        return (top, bottom, self._x0, start, piece)
+
+    # -- long messages (#389) -----------------------------------------------------------
+    def line_limit(self) -> int:
+        """The most text lines the box shows now: the user's choice within the cap."""
+        limit = max(_MIN_VISIBLE_LINES, int(self.max_lines))
+        if self.line_cap > 0:
+            limit = min(limit, max(_MIN_VISIBLE_LINES, self.line_cap))
+        return limit
+
+    def visible_lines(self, count: int) -> int:
+        """Text lines shown for *count* lines of text: as many as it has, within the limit
+        (while the top edge is dragged: the dragged size, so you see what you set)."""
+        if self.resizing:
+            return max(_MIN_VISIBLE_LINES, self._drag_lines)
+        return max(_MIN_VISIBLE_LINES, min(count, self.line_limit()))
+
+    def set_max_lines(self, lines: int) -> int:
+        """Set the most text lines (kept between the minimum and the cap); tell the host when
+        it changed.  Returns the value set."""
+        upper = self.line_cap if self.line_cap > 0 else _MAX_LINES_LIMIT
+        lines = max(_MIN_VISIBLE_LINES, min(int(lines), max(_MIN_VISIBLE_LINES, upper), _MAX_LINES_LIMIT))
+        if lines != self.max_lines:
+            self.max_lines = lines
+            if self.on_lines is not None:
+                self.on_lines(lines)
+        return lines
+
+    def lines_fitting(self, canvas: Canvas, height: float) -> int:
+        """How many text lines fit in a box *height* tall (for the surface's cap)."""
+        style = canvas.style
+        return max(_MIN_VISIBLE_LINES, int((height - self._chrome(canvas)) // style.line_height))
+
+    def begin_resize(self) -> None:
+        """The top edge is pressed: a drag sizes the box from what it shows now."""
+        self.resizing, self._drag_lines = True, max(_MIN_VISIBLE_LINES, self._visible)
+
+    def drag_top(self, y: float) -> None:
+        """The top edge is dragged to *y* (the box's bottom stays where it is)."""
+        if not self.resizing or self.rect is None or self._line_h <= 0:
+            return
+        self._drag_lines = self.set_max_lines(round((y - self.rect.y - self._chrome_h) / self._line_h))
+
+    def end_resize(self) -> None:
+        self.resizing = False
+
+    def can_scroll(self) -> bool:
+        """Is the text taller than the box (last draw)?"""
+        return len(self._layout) > self._visible > 0
+
+    def scroll_by(self, lines: int) -> bool:
+        """Scroll the text *lines* down (negative: up); True when the text is taller than the
+        box (then the wheel is the box's, even at an end)."""
+        if not self.can_scroll():
+            return False
+        self.scroll = max(0, min(len(self._layout) - self._visible, self.scroll + int(lines)))
+        return True
+
     def select_word_at(self, x: float, y: float) -> None:
         """Select the word at (x, y) in the last drawn lines (a double-click, #451)."""
         self.place_cursor(x, y)
@@ -349,6 +449,12 @@ class InputBox:
         if key.value != "PRESS":
             return key.type not in ("LEFTMOUSE", "RIGHTMOUSE", "MIDDLEMOUSE")
         m, ctrl = self.model, key.ctrl or key.oskey
+        # Ctrl+Up / Ctrl+Down: a taller or shorter box (#389); from what shows now, so a short
+        # draft in a tall box shrinks at once.
+        if key.ctrl and not (key.shift or key.alt or key.oskey) and key.type in ("UP_ARROW", "DOWN_ARROW"):
+            shown = min(self.line_limit(), max(_MIN_VISIBLE_LINES, len(self._layout)))
+            self.set_max_lines(self.line_limit() + 1 if key.type == "UP_ARROW" else shown - 1)
+            return True
         if self.suggestions:
             if key.type == "UP_ARROW":
                 self.suggestion_index = (self.suggestion_index - 1) % len(self.suggestions)
@@ -423,11 +529,16 @@ class InputBox:
 
     # -- drawing ------------------------------------------------------------------------
     def height(self, canvas: Canvas, width: float) -> float:
-        """Height the box needs at *width*: text lines (2 to 6), then the button row."""
+        """Height the box needs at *width*: text lines (2 up to :meth:`line_limit`), then the
+        button row."""
+        visible = self.visible_lines(len(self._lines(canvas, width)))
+        return self._chrome(canvas) + visible * canvas.style.line_height
+
+    def _chrome(self, canvas: Canvas) -> float:
+        """The box's height without its text lines: padding and the button row."""
         style = canvas.style
-        visible = max(_MIN_VISIBLE_LINES, min(len(self._lines(canvas, width)), _MAX_VISIBLE_LINES))
         margin, _gap, button_h = self._button_metrics(canvas)
-        return style.pad + visible * style.line_height + style.pad * 0.5 + button_h + margin
+        return style.pad + style.pad * 0.5 + button_h + margin
 
     # -- buttons -----------------------------------------------------------------------
     def _button_metrics(self, canvas: Canvas) -> tuple[float, float, float]:
@@ -498,6 +609,15 @@ class InputBox:
             ring = style.cursor if self.focused else (style.cursor[0], style.cursor[1], style.cursor[2], 0.45)
             canvas.stroke(box, ring, style.radius(style.text_field))
         canvas.hit_areas.append((box, "input"))
+        # The top edge: drag it to make the box taller or shorter (#389).  A few pixels each
+        # side of the edge, over the text field (it wins there: it is added later).
+        grip = max(3.0, 3.0 * style.scale)
+        edge = Rect(box.x, box.top - grip, box.w, grip * 2)
+        canvas.hit_areas.append((edge, "input_resize"))
+        if self.resizing or canvas.state.hovered(edge):
+            inset = style.radius(style.text_field)
+            canvas.fill(Rect(box.x + inset, box.top - style.scale * 1.5, max(0.0, box.w - 2 * inset),
+                             style.scale * 1.5), style.cursor)
         # The button row along the bottom: a shortcut hint on the left, buttons on the right.
         margin, gap, button_h = self._button_metrics(canvas)
         right = box.right - margin
@@ -546,11 +666,24 @@ class InputBox:
                                  max(1.0, style.scale * 1.5), style.line_height * 0.8), style.cursor)
             self._drawn.append((top, top - style.line_height, box.x + pad, 0, ""))
             lines = []
-        # Keep the cursor's line visible when the text is taller than the box.
+        # Text taller than the box scrolls (#389).  When the caret moved or the text changed
+        # (typing, keys, paste, a click or drag), scroll just enough to show the caret's line;
+        # otherwise keep where the wheel left it.
+        visible = self.visible_lines(len(lines))
         cur_line = max((i for i, (start, _) in enumerate(lines) if start <= self.model.cursor), default=0)
-        first = max(0, min(cur_line - _MAX_VISIBLE_LINES + 1, len(lines) - _MAX_VISIBLE_LINES))
+        seen = (self.model.text, self.model.cursor, visible, round(rect.w))
+        if seen != self._seen:
+            self._seen = seen
+            if cur_line < self.scroll:
+                self.scroll = cur_line
+            elif cur_line >= self.scroll + visible:
+                self.scroll = cur_line - visible + 1
+        self.scroll = max(0, min(self.scroll, len(lines) - visible))
+        first = self.scroll
+        self._layout, self._visible, self._x0 = lines, visible, box.x + pad
+        self._line_h, self._chrome_h = style.line_height, self._chrome(canvas)
         sel = self.model.selection
-        for row, (start, piece) in enumerate(lines[first:first + _MAX_VISIBLE_LINES]):
+        for row, (start, piece) in enumerate(lines[first:first + visible]):
             line_top = top - row * style.line_height
             base = line_top - style.line_height + (style.line_height - size) / 2 + size * 0.2
             x0 = box.x + pad
@@ -568,11 +701,28 @@ class InputBox:
                 cx = x0 + canvas.measure(piece[:self.model.cursor - start], "ui", size)
                 canvas.fill(Rect(cx, line_top - style.line_height * 0.9,
                                  max(1.0, style.scale * 1.5), style.line_height * 0.8), style.cursor)
+        if len(lines) > visible:
+            self._draw_scroll_hint(canvas, box, top, visible, len(lines), hovered or self.focused)
         canvas.pop_clip()
         if self.suggestions:
             # Commands carry a description: give their list more room.
             self._draw_suggestions(canvas, Rect(box.x, box.top, min(box.w, u * (24 if self._slash else 14)), 0))
         return self.actions[before:]
+
+    def _draw_scroll_hint(self, canvas: Canvas, box: Rect, top: float, visible: int, total: int,
+                          near: bool) -> None:
+        """A thin handle along the right of the text: where the shown lines are in the
+        message (like the chat's scrollbar with the mouse away; not draggable)."""
+        style = canvas.style
+        track_h = visible * style.line_height
+        handle_h = max(style.line_height * 0.75, track_h * visible / total)
+        travel = track_h - handle_h
+        y = top - handle_h - (self.scroll / max(1, total - visible)) * travel
+        width = 3.0 * style.ui_scale
+        item = style.scroll.item
+        alpha = item[3] * (0.8 if near else 0.45)
+        canvas.fill(Rect(box.right - style.pad * 0.5 - width, y, width, handle_h),
+                    (item[0], item[1], item[2], alpha), width / 2)
 
     def _draw_suggestions(self, canvas: Canvas, anchor: Rect) -> None:
         """The @ list above the box: a filter row (All + one icon per category),

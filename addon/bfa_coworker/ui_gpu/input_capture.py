@@ -77,7 +77,7 @@ _FOCUS: dict[str, Any] = {"box": None, "region": None}
 _DRAG: dict[str, Any] = {"hit": None}
 # Ctrl+MMB drag zoom over a full-size chat: (hit, start mouse y, start zoom).
 _ZOOM_DRAG: dict[str, Any] = {"hit": None, "y": 0.0, "zoom": 1.0}
-_HOVER: dict[str, Any] = {"hit": None, "text_cursor": False}
+_HOVER: dict[str, Any] = {"hit": None, "cursor": "DEFAULT"}
 # The chat that has text selected in its messages (#455): (surface, area, region).
 _SELECT: dict[str, Any] = {"hit": None}
 _RUNNING: set[int] = set()
@@ -291,17 +291,22 @@ class BFACW_OT_gpu_input(bpy.types.Operator):
                 if hover[0].on_leave():
                     _tag(hover[2])
             _HOVER["hit"] = hit if hit is not None and hasattr(hit[0], "on_move") else None
-            over_text = False
+            cursor = "DEFAULT"
             if _HOVER["hit"] is not None:
                 x, y = _local(event, hit[2])
                 if hit[0].on_move(x, y):
                     _tag(hit[2])
-                over = getattr(hit[0], "over_text", None)
-                over_text = over(x, y) if over is not None else hit[0].hit(x, y) == "input"
-            if over_text != _HOVER["text_cursor"]:    # an I-beam over text, like a text field (#455)
-                _HOVER["text_cursor"] = over_text
+                pick = getattr(hit[0], "cursor_at", None)
+                if pick is not None:
+                    cursor = pick(x, y)
+                elif hit[0].hit(x, y) == "input":
+                    cursor = "TEXT"
+            # An I-beam over text, like a text field (#455); up-down arrows on an edge that
+            # resizes (#389).  Kept while a drag runs (moves then don't come here).
+            if cursor != _HOVER["cursor"]:
+                _HOVER["cursor"] = cursor
                 try:
-                    context.window.cursor_set("TEXT" if over_text else "DEFAULT")
+                    context.window.cursor_set(cursor)
                 except (AttributeError, TypeError, ValueError):
                     pass
             return {"PASS_THROUGH"}

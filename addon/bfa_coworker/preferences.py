@@ -198,6 +198,20 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default="COMPACT",
     )
 
+    # The chat input's height (#389): the most text lines it grows to before it scrolls, set by
+    # dragging its top edge (or Ctrl+Up / Ctrl+Down in it); one for the sidebars, one for the
+    # Coworker editors.  Saved with the preferences, so it stays across sessions.
+    chat_input_lines_sidebar: IntProperty(  # type: ignore[valid-type]
+        name="Sidebar Input Lines",
+        description="Most lines the sidebar chat's input grows to before it scrolls (drag its top edge)",
+        default=6, min=2, max=60,
+    )
+    chat_input_lines_editor: IntProperty(  # type: ignore[valid-type]
+        name="Editor Input Lines",
+        description="Most lines the Coworker editor's input grows to before it scrolls (drag its top edge)",
+        default=6, min=2, max=60,
+    )
+
     chat_max_visible_turns: IntProperty(  # type: ignore[valid-type]
         name="Max Visible Turns",
         description=(

@@ -24,6 +24,7 @@ Chats running side by side (Threads 3, #359).
 6. Revert: directly only when no other chat stepped since the turn began;
    else Revert both (not while that chat works) or Cancel -- never a silent
    partial revert; each chat's turn checkpoint is its own.
+7. The "Other chats working now: ..." context line.
 
 Run with::
 
@@ -779,6 +780,21 @@ class TestRevertWithTwoChats(unittest.TestCase):
         cw.turn_finished("Coworker (Node)'s turn", thread="t2")
         cw._count_edit()                            # now nobody's turn: yours
         self.assertFalse(cw.can_revert("t1"))
+
+
+
+class TestOtherChatsLine(unittest.TestCase):
+
+    def test_line(self):
+        self.assertEqual(sbs.other_chats_line([]), "")
+        line = sbs.other_chats_line([("Node", "tidy   the rock shader", ["Rock Shader"]),
+                                     ("Sequencer", "x" * 80, [])])
+        self.assertTrue(line.startswith('Other chats working now: the Node chat ("tidy the rock shader"; '
+                                        'changing Rock Shader); the Sequencer chat ("'))
+        self.assertIn("…", line, "a long request is cut")
+        self.assertIn("ask the user first", line)
+        many = sbs.other_chats_line([("3D", "", ["A", "B", "C", "D", "E"])])
+        self.assertIn("the 3D chat (changing A, B, C, D ...)", many)
 
 
 if __name__ == "__main__":

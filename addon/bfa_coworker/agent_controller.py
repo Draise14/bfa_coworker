@@ -2153,6 +2153,28 @@ _side_by_side.WORKING[:] = [s for s in _side_by_side.WORKING if getattr(s, "__na
 _side_by_side.WORKING.append(_running_tags)
 
 
+def other_chats_line(thread: "threads.Thread | None" = None) -> str:
+    """The one-line "Other chats working now: ..." context for *thread*'s turn (#359): what
+    each other running chat was asked, and what it is changing (its claims)."""
+    from . import claims
+    me = threads.tag(thread)
+    others = []
+    for tag in _side_by_side.working_chats():
+        if tag == me:
+            continue
+        other = THREADS.get(tag) if tag else THREADS.default
+        if other is None:
+            continue
+        title = "All editors" if other.is_default else (other.title or threads.short_name(other.editor) or "other")
+        request = ""
+        for message in reversed(thread_state(other).conversation_history):
+            if message.get("role") == "user" and not session_memory.is_system_note(message):
+                request = str(message.get("content") or "")
+                break
+        others.append((title, request, [name for _kind, name in claims.TABLE.claims_of(tag)]))
+    return _side_by_side.other_chats_line(others)
+
+
 def configure_runner(operating_mode: str, cap: int = threads.RUNNING_CAP,
                      local_side_by_side: bool = False) -> int:
     """Set the thread runner from the preferences (main thread, at each send): which
@@ -6996,6 +7018,16 @@ def _run_conversation_turn_inner(
         if _goal_text and msgs and msgs[0].get("role") == "system":
             _sys0 = dict(msgs[0])
             _sys0["content"] = str(_sys0.get("content") or "").rstrip() + "\n\n" + _goal_text
+            msgs[0] = _sys0
+
+        # -- Other chats working now (#359): one line, this request only --
+        try:
+            _others_line = other_chats_line(thread)
+        except Exception:  # pylint: disable=broad-exception-caught
+            _others_line = ""
+        if _others_line and msgs and msgs[0].get("role") == "system":
+            _sys0 = dict(msgs[0])
+            _sys0["content"] = str(_sys0.get("content") or "").rstrip() + "\n\n" + _others_line
             msgs[0] = _sys0
 
         # -- Inject domain-skill reference (send copy, self-tuning) ----

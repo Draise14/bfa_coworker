@@ -29,6 +29,7 @@ __all__ = (
     "StepJournal",
     "WORKING",
     "fair_order",
+    "other_chats_line",
     "request_thread",
     "revert_choice",
     "side_by_side",
@@ -179,6 +180,27 @@ def _chats(tags: list[str], title: Callable[[str], str], one: str, many: str) ->
     if len(names) == 1:
         return "The {:s} chat {:s}".format(names[0], one)
     return "The {:s} and {:s} chats {:s}".format(", ".join(names[:-1]), names[-1], many)
+
+
+def other_chats_line(others: list[tuple[str, str, list[str]]], max_names: int = 4,
+                     max_request: int = 60) -> str:
+    """The one-line context a running chat gets about the others (#359): *others* is
+    ``(title, request, claimed names)`` per other chat working now; "" when none."""
+    parts = []
+    for title, request, names in others:
+        request = " ".join(str(request or "").split())
+        if len(request) > max_request:
+            request = request[:max_request - 1].rstrip() + "\u2026"
+        bits = ['"{:s}"'.format(request)] if request else []
+        names = sorted({str(n) for n in names if n})
+        if names:
+            shown = ", ".join(names[:max_names]) + (" ..." if len(names) > max_names else "")
+            bits.append("changing " + shown)
+        parts.append("the {:s} chat{:s}".format(title or "other", " ({:s})".format("; ".join(bits)) if bits else ""))
+    if not parts:
+        return ""
+    return ("Other chats working now: {:s}. Leave what they are changing to them; if this request needs it, "
+            "ask the user first.".format("; ".join(parts)))
 
 
 def undo_step_name(label: str, tool: str) -> str:

@@ -2817,7 +2817,8 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
             images=list(attachments or []),
             image_names=list(attachment_names or []),
             chat_mode=props.chat_mode,
-            context=" ".join(p for p in (_scene_context_line(context), editor_line) if p) if external else "",
+            context=" ".join(p for p in (_scene_context_line(context), editor_line,
+                                         agent_controller.other_chats_line(thread)) if p) if external else "",   # #359
             thread=threads.tag(thread),
         )
         config = LoopConfig(llm_url=llm_url or None, api_key=api_key or None,

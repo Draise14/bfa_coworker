@@ -14,6 +14,7 @@ The real ``agent_controller`` (exec'd with a stand-in bpy, as in
 2. The loop's own undo pushes in a tab are named by its chat.
 3. On Remote, two chats' turns run at once (the runner's slots), each to its
    own history; the turn's claims go when it ends.
+4. A running chat's requests carry one "Other chats working now: ..." line.
 
 Run with::
 
@@ -147,6 +148,36 @@ class TestTwoChatsOnRemote(_tli._TurnLoopTestBase):
         finally:
             self._unpin_fake_bpy()
         self.assertEqual(claims.TABLE.claims_of(self.node.id), set())
+
+
+    def test_other_chats_line_in_the_request(self):
+        self._serve([{"content": "tidied"}])
+        claims = sys.modules["bfa_coworker.claims"]
+        self.addCleanup(claims.TABLE.clear)
+        self.ac.configure_runner("REMOTE_API", 3)
+        self.state.conversation_history.append({"role": "user", "content": "build a campfire scene"})
+        claims.TABLE.claim("", {("object", "Campfire")})
+        self.assertTrue(self.ac.reserve_turn())             # the All editors chat is working
+        try:
+            line = self.ac.other_chats_line(self.node)
+            self.assertEqual(line, 'Other chats working now: the All editors chat ("build a campfire scene"; '
+                                   'changing Campfire). Leave what they are changing to them; if this request '
+                                   'needs it, ask the user first.')
+            self.assertEqual(self.ac.other_chats_line(self.ac.THREADS.default), "", "not about itself")
+            self._pin_fake_bpy()
+            try:
+                self.ac.run_conversation_turn("tidy the nodes", chat_mode="AGENT", llm_url=None,
+                                              model="fake-model", mcp_port=self.port, thread=self.node)
+            finally:
+                self._unpin_fake_bpy()
+        finally:
+            self.ac.THREADS.end(self.ac.THREADS.default)
+        with self.server.lock:
+            sent = [r for r in self.server.requests if r not in self.server.memory_writer_calls]
+        system = sent[-1]["messages"][0]["content"]
+        self.assertIn("Other chats working now: the All editors chat", system)
+        stored = self.node.state.conversation_history[0]["content"]
+        self.assertNotIn("Other chats working now", stored, "this request only, not the stored prompt")
 
 
 if __name__ == "__main__":

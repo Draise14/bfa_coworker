@@ -48,6 +48,8 @@ initial_instructions: |
   3. Create from scratch only when neither works.
   - Append = independent copy (default). Link = shared reference.
   - Node groups: use wire_node_group to splice into trees, not load_asset_in_context.
+  - Whole node trees (Geometry Nodes, shaders, compositor): get_node_tree_as_code reads one as
+    text; edit it and send it to build_node_tree_from_code (mode create / replace / update).
 
   # Stability
   - Do NOT call bpy.ops.object.auto_sync_object_data_name() — it crashes.

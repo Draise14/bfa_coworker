@@ -229,6 +229,74 @@ EXPECTED_TOOLS = [
         }
     },
     {
+        "name": "build_node_tree_from_code",
+        "description": "\n"
+"        Build or rebuild a whole node tree from the text ``get_node_tree_as_code`` prints.\n"
+"\n"
+"        One line per node: ``name = NodeType(setting=value, Socket=value, \"Socket Name\"=other.Output)``.\n"
+"        Node types are the bl_idname without its prefix (``SetPosition``, ``Math``,\n"
+"        ``BsdfPrincipled``, ``GroupInput``) or the full bl_idname; a bare key that is a node\n"
+"        property is a setting, every other key (and every quoted key) an input socket, by\n"
+"        name or identifier.  Links: ``other.Output``, ``other[\"Socket Name\"]``, a list for a\n"
+"        multi-input socket, ``muted(other.Output)``.  Interface: ``input Name: Float(min_value=0)\n"
+"        = 1.0`` / ``output Geometry: Geometry``; ``frame f (label=\"Inputs\"): a, b``; zones:\n"
+"        ``paired_output=other`` on the zone's input node; ``del name`` removes a node (update).\n"
+"        Node groups the tree uses go first, as their own ``tree \"Name\" (Type)`` blocks.\n"
+"\n"
+"        Modes: ``create`` (a new node group / material; an existing name is an error),\n"
+"        ``replace`` (rebuild the existing tree in place: same datablock, its users and\n"
+"        interface sockets kept), ``update`` (change or add only the nodes in the text).\n"
+"        Everything is checked against Blender first (a copy is built): an unknown node type,\n"
+"        setting, socket or node returns the nearest valid names and changes nothing.\n"
+"        Values Blender refuses are listed in ``not_set``.  One undo step.\n"
+"\n"
+"        Args:\n"
+"            code: The text (one or more ``tree`` / ``material`` blocks; the last is the target).\n"
+"            mode: \"create\", \"replace\" or \"update\".\n"
+"            dry_run: Only check and list the changes.\n"
+"            tree_name: Name for the target instead of the one in its header (e.g. to build a\n"
+"                copy), or the tree to update when the text has no header.\n"
+"            layout: \"auto\" (arrange left to right by links; the default for create) or \"keep\"\n"
+"                (nodes that already exist keep their place; the default for replace / update).\n"
+"\n"
+"        Returns:\n"
+"            ``status`` (\"ok\", \"dry_run\" or \"error\"), ``changes``, ``not_set``, ``errors``.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "code": {
+                    "title": "Code",
+                    "type": "string"
+                },
+                "mode": {
+                    "default": "create",
+                    "title": "Mode",
+                    "type": "string"
+                },
+                "dry_run": {
+                    "default": False,
+                    "title": "Dry Run",
+                    "type": "boolean"
+                },
+                "tree_name": {
+                    "default": "",
+                    "title": "Tree Name",
+                    "type": "string"
+                },
+                "layout": {
+                    "default": "",
+                    "title": "Layout",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "code"
+            ],
+            "title": "build_node_tree_from_codeArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "download_polyhaven_asset",
         "description": "\n"
 "        Download a Poly Haven asset and import it into the current Blender scene.\n"
@@ -731,6 +799,108 @@ EXPECTED_TOOLS = [
                 "group_name"
             ],
             "title": "get_node_group_interfaceArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "get_node_tree_as_code",
+        "description": "\n"
+"        Read a whole node tree as short build code (Geometry Nodes, shader or compositor).\n"
+"\n"
+"        One line per node, only the settings and input values that differ from a\n"
+"        new node's, links written as references, e.g.::\n"
+"\n"
+"            tree \"Scatter\" (GeometryNodeTree, is_modifier=True)\n"
+"            input Geometry: Geometry\n"
+"            input Density: Float(min_value=0.0) = 10.0\n"
+"            output Geometry: Geometry\n"
+"            \"Group Input\" = GroupInput()\n"
+"            points = DistributePointsOnFaces(Mesh=\"Group Input\".Geometry, Density=\"Group Input\".Density)\n"
+"            \"Group Output\" = GroupOutput(Geometry=points.Points)\n"
+"\n"
+"        Edit the text and send it to ``build_node_tree_from_code``.  The node groups the\n"
+"        tree uses come first, as their own ``tree`` blocks.  Read only: a missing tree is\n"
+"        reported, never created.\n"
+"\n"
+"        Which tree (like ``get_active_node_tree``): ``node_tree_name`` (a node group),\n"
+"        ``material_name``, or ``object_name`` (+ ``modifier_name``) for its Geometry Nodes\n"
+"        modifier / active material; nothing = the active object's material, then its\n"
+"        Geometry Nodes modifier, then the scene's compositor.\n"
+"\n"
+"        Args:\n"
+"            tree_type: \"geometry\", \"shader\" or \"compositor\" (or GeometryNodeTree...).\n"
+"            node_tree_name: A node group's name.\n"
+"            material_name: A material's name (its node tree).\n"
+"            object_name: An object: its Geometry Nodes modifier's group, or its material.\n"
+"            modifier_name: Which Geometry Nodes modifier of the object.\n"
+"            nodes: Only these nodes (by name).\n"
+"            include_groups: Also print the node groups the tree uses.\n"
+"            max_chars: Size limit; whole nodes are cut and the result says how to get the rest.\n"
+"            node_offset: Start at this node (to read the rest after a cut).\n"
+"\n"
+"        Returns:\n"
+"            ``code`` (the text), ``node_count``, ``cut_nodes`` and ``next_node_offset``\n"
+"            (-1 = nothing cut), the ``groups`` printed.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "tree_type": {
+                    "default": "",
+                    "title": "Tree Type",
+                    "type": "string"
+                },
+                "node_tree_name": {
+                    "default": "",
+                    "title": "Node Tree Name",
+                    "type": "string"
+                },
+                "material_name": {
+                    "default": "",
+                    "title": "Material Name",
+                    "type": "string"
+                },
+                "object_name": {
+                    "default": "",
+                    "title": "Object Name",
+                    "type": "string"
+                },
+                "modifier_name": {
+                    "default": "",
+                    "title": "Modifier Name",
+                    "type": "string"
+                },
+                "nodes": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Nodes"
+                },
+                "include_groups": {
+                    "default": True,
+                    "title": "Include Groups",
+                    "type": "boolean"
+                },
+                "max_chars": {
+                    "default": 6000,
+                    "title": "Max Chars",
+                    "type": "integer"
+                },
+                "node_offset": {
+                    "default": 0,
+                    "title": "Node Offset",
+                    "type": "integer"
+                }
+            },
+            "title": "get_node_tree_as_codeArguments",
             "type": "object"
         }
     },
@@ -1277,12 +1447,13 @@ EXPECTED_TOOLS = [
 "        animation, lighting...), call this first; the tools appear right after.\n"
 "\n"
 "        Domains and the tools they add:\n"
-"        - rendering: render to a file, bake textures, lighting rig (render_viewport_to_path,\n"
-"          bake_textures, three_point_lighting_rig, get_screenshot_of_area_as_image)\n"
-"        - material: PBR materials, Polyhaven textures, bake textures (setup_pbr_material,\n"
-"          assign_material_to_objects, download_polyhaven_asset, search_polyhaven_assets,\n"
-"          load_asset_in_context, bake_textures, render_viewport_to_path,\n"
-"          get_screenshot_of_area_as_image)\n"
+"        - rendering: render to a file, bake textures, lighting rig, compositor trees\n"
+"          (render_viewport_to_path, bake_textures, three_point_lighting_rig,\n"
+"          get_screenshot_of_area_as_image, get_node_tree_as_code, build_node_tree_from_code)\n"
+"        - material: PBR materials, Polyhaven textures, bake textures, shader trees\n"
+"          (setup_pbr_material, assign_material_to_objects, download_polyhaven_asset,\n"
+"          search_polyhaven_assets, load_asset_in_context, bake_textures, render_viewport_to_path,\n"
+"          get_screenshot_of_area_as_image, get_node_tree_as_code, build_node_tree_from_code)\n"
 "        - lighting: lights, HDRIs (three_point_lighting_rig, download_polyhaven_asset,\n"
 "          search_polyhaven_assets, render_viewport_to_path, get_screenshot_of_area_as_image)\n"
 "        - animation: keyframes (batch_keyframe_insert, jump_to_view3d_object_by_name,\n"
@@ -1290,8 +1461,9 @@ EXPECTED_TOOLS = [
 "        - modeling: navigate and organise (jump_to_view3d_object_by_name,\n"
 "          jump_to_view3d_object_data_by_name, jump_to_tab_by_name, jump_to_tab_by_space_type,\n"
 "          set_collection_color_tag, get_screenshot_of_area_as_image)\n"
-"        - geometry_nodes: node trees (get_active_node_tree, get_node_group_interface,\n"
-"          wire_node_group, jump_to_view3d_object_by_name, jump_to_view3d_object_data_by_name,\n"
+"        - geometry_nodes: node trees (get_node_tree_as_code, build_node_tree_from_code,\n"
+"          get_active_node_tree, get_node_group_interface, wire_node_group,\n"
+"          jump_to_view3d_object_by_name, jump_to_view3d_object_data_by_name,\n"
 "          get_screenshot_of_area_as_image)\n"
 "        - assets: asset libraries (search_assets, get_asset_libraries, get_asset_tags,\n"
 "          list_asset_catalogs, load_asset_in_context, place_asset_in_scene,\n"

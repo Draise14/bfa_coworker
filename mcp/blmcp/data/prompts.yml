@@ -29,6 +29,8 @@ initial_instructions: |
   * Materials and assets: `setup_pbr_material`, `assign_material_to_objects`,
     `search_polyhaven_assets` + `download_polyhaven_asset`, `search_assets` +
     `place_asset_in_scene` / `load_asset_in_context`, `wire_node_group`.
+  * Whole node trees (Geometry Nodes, shaders, the compositor): `get_node_tree_as_code` +
+    `build_node_tree_from_code` (see "Node Trees as Code").
   * Check an API before guessing: `search_api_docs`, `get_python_api_docs`,
     `search_manual_docs`.
   * Long jobs (big renders, bakes): `render_viewport_to_path(background=True)` and
@@ -254,6 +256,25 @@ initial_instructions: |
   EXCEPTION: If the user explicitly asks you to build something from
   scratch (e.g. "make a procedural wood material", "create a brick
   wall mesh"), follow their instruction -- do not substitute an asset.
+
+  # Node Trees as Code
+
+  For procedural work on a whole tree -- building a Geometry Nodes setup, a shader
+  or a compositor tree, or changing several nodes at once -- use the text form:
+    * `get_node_tree_as_code` reads a tree as one line per node, only what differs
+      from a new node: `points = DistributePointsOnFaces(Mesh="Group Input".Geometry,
+      Density=10.0)`.  Node groups it uses come first, as their own `tree` blocks.
+    * Edit the lines (or write a new tree in the same form) and send the text to
+      `build_node_tree_from_code`: `mode="create"` for a new tree, `"replace"` to rebuild
+      an existing one in place (its users and modifier values stay), `"update"` to change
+      or add only the nodes you send (`del name` removes one).  `dry_run=True` lists the
+      changes first.  Blender checks every name: a wrong node type, setting or socket
+      comes back with the nearest valid names and nothing is changed.
+    * Read the result's `not_set` list: values Blender refused are named there.
+  For a single small change (wiring one group in, one value), `wire_node_group` or a
+  short `execute_blender_code` is enough.  A new Geometry Nodes group still needs a
+  Geometry Nodes modifier on the object, and a new compositor tree has to be set as the
+  scene's `compositing_node_group`, to have an effect.
 
   # Stability Warnings
 

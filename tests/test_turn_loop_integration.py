@@ -229,10 +229,14 @@ class _FakeLLMHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/props"):
-            body = json.dumps({
+            props = {
                 "default_generation_settings": {
                     "n_ctx": int(getattr(self.server, "n_ctx", 8192))},
-            }).encode()
+            }
+            if getattr(self.server, "vision", None) is not None:
+                # llama-server reports whether a projector is loaded (#487).
+                props["modalities"] = {"vision": bool(self.server.vision), "audio": False}
+            body = json.dumps(props).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -268,7 +272,11 @@ class _FakeLLMHandler(BaseHTTPRequestHandler):
                 # Scripted answers for a named tool, consumed in order.
                 with server.lock:
                     _reply = server.named_tool_replies[params.get("name")].pop(0)
-                result = {"content": [{"type": "text", "text": json.dumps(_reply)}]}
+                if isinstance(_reply, dict) and "__content__" in _reply:
+                    # Raw MCP content blocks (an image tool, #487).
+                    result = {"content": _reply["__content__"]}
+                else:
+                    result = {"content": [{"type": "text", "text": json.dumps(_reply)}]}
             elif "undo_push(message='bfa_coworker_" in code and "'snapshot'" in code:
                 # The loop merges the undo bookmark + entity snapshot into a
                 # single execute_blender_code call (pre-script push and

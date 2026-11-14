@@ -761,6 +761,16 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         ),
     )
 
+    remote_accepts_images: BoolProperty(  # type: ignore[valid-type]
+        name="Model Sees Images",
+        default=True,
+        description=(
+            "The remote model takes pictures (most current cloud models do). "
+            "Pictures a tool makes (screenshots, renders) are then shown to it; "
+            "off, it gets a short note with where the picture is instead"
+        ),
+    )
+
     remote_models_count: IntProperty(  # type: ignore[valid-type]
         name="Models Available",
         default=0,
@@ -2008,6 +2018,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         # -- Model -----------------------------------------------
         box.label(text="Model", icon='VIEWZOOM')
         box.prop(self, "remote_model")
+        box.prop(self, "remote_accepts_images")
         row = box.row(align=True)
         row.operator("bfacw.refresh_remote_models", icon="FILE_REFRESH", text="Refresh Models")
         row.operator("bfacw.open_model_browser", icon="URL", text="Browse Models")

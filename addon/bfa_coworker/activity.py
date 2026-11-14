@@ -75,16 +75,8 @@ def _short(value: Any, limit: int = _PREVIEW) -> str:
 _STATUS_POLLS = frozenset({"get_job_status"})
 
 
-# The keys of the bridge's answer envelope (not of a tool's own result).
-_ENVELOPE = frozenset({"status", "result", "message", "stdout", "stderr", "preflight_notes"})
-
-
 def _outcome(tool: str, response: dict[str, Any]) -> tuple[str, str, str]:
-    """(status, preview, job id to follow) for an answer the bridge sent."""
-    # A step that asked first (risky_steps) answers with the call's whole answer as its result.
-    while (isinstance(response.get("result"), dict) and "result" in response["result"]
-           and set(response["result"]) <= _ENVELOPE):
-        response = response["result"]
+    """(status, preview, job id to follow) for an answer the bridge sent (one envelope, #487)."""
     result = response.get("result")
     res = result if isinstance(result, dict) else {}
     if response.get("status") == "error" or res.get("status") == "error" or res.get("state") == "error":

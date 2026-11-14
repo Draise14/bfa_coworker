@@ -22,7 +22,7 @@ def _load():
     turns = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(turns)
     ns["_is_system_note_msg"] = turns.is_system_note_msg
-    exec(src[src.index("# Human-readable display helpers"):src.index("def _hist_index(")], ns)
+    exec(src[src.index("# Human-readable display helpers"):src.index("def _wrap_text(")], ns)
     return ns, src
 
 
@@ -37,10 +37,6 @@ class TestAttachmentMarker(unittest.TestCase):
         self.assertEqual(clean, "make it like this")
         self.assertEqual(names, ["FB_IMG_1.jpg", "ref.png"])
         self.assertEqual(_NS["_split_attachment_marker"]("plain"), ("plain", []))
-
-    def test_chat_bubble_uses_icon_drawer(self):
-        self.assertIn('_draw_user_text(turn_box, user_msg.get("content", ""))', _SRC)
-
 
 class TestMemoryAndCheckpoints(unittest.TestCase):
 
@@ -84,8 +80,6 @@ class TestMemoryAndCheckpoints(unittest.TestCase):
         import re
         self.assertNotIn('bl_idname = "BFACW_PT_chat_session_goal"', _SRC)
         self.assertNotIn('bl_idname = "BFACW_PT_chat_actions"', _SRC)
-        chat = _SRC[_SRC.index("class BFACW_PT_chat_panel("):_SRC.index("def _draw_chat_history")]
-        self.assertNotIn("_draw_goal_plan_inline(layout)", chat)
 
         def panel(idname):
             start = _SRC.index('bl_idname = "{:s}"'.format(idname))

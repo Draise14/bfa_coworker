@@ -59,7 +59,7 @@
 - **The Classic chat panel** doesn't get paste, text selection or the new Thinking box. It is removed in 1.1.44.
 - **Claude Code fixes:** the tools fix was checked by starting Coworker's server the way Claude Code does, on Blender 5.2.4 and Bforartists 5.3, and the "think aloud" change by tests. A full Claude Code session wasn't run for either, and Claude's check isn't the same every time, so please report a blocked request if you see one.
 - **The chat drawn over another sidebar tab** (reported in #387) couldn't be reproduced. The Chat Draw Trace will catch it if it happens to you.
-- **The Windows port fix** was checked by tests, not in a live session with two Blender windows open.
+- **The Windows port fix** was checked with two Blender 5.2.4 windows open at once (each kept its own ports). Freeing a port left behind by a Blender that crashed was checked by tests only.
 - **A chat started in Local or Remote and continued in External Agent** starts the agent without that chat's earlier messages.
 - **Stop still doesn't cancel a running render or bake:** the **X** on the status bar does. This needs a small Bforartists API (#419).
 

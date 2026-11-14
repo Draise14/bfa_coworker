@@ -372,6 +372,44 @@ class _Scene:
             _NodeTree("Compositing Nodetree", "CompositorNodeTree") if compositor else None)
 
 
+class _Effect:
+    def __init__(self, name):
+        self.name = name
+        self.node_group = None
+
+
+class _Effects(list):
+    """``scene.compositor_effects`` (Blender 5.3+): ``active`` and ``new(name)``."""
+
+    active = None
+
+    def new(self, name, effect=None):
+        del effect
+        made = _Effect(name)
+        self.append(made)
+        self.active = made
+        return made
+
+
+class _EffectsScene(_Scene):
+    """5.3+ scene: the compositor is the active effect's node group; ``compositing_node_group`` is deprecated."""
+
+    def __init__(self):
+        super().__init__()
+        del self.compositing_node_group
+        self.compositor_effects = _Effects()
+
+    def __getattr__(self, name):
+        if name == "compositing_node_group":
+            raise AssertionError("the deprecated Scene.compositing_node_group was used")
+        raise AttributeError(name)
+
+    def __setattr__(self, name, value):
+        if name == "compositing_node_group" and "compositor_effects" in self.__dict__:
+            raise AssertionError("the deprecated Scene.compositing_node_group was set")
+        object.__setattr__(self, name, value)
+
+
 class _NodeGroups(dict):
     """``bpy.data.node_groups`` stand-in with ``new()``."""
 
@@ -728,6 +766,18 @@ class TestLoadAssetInContext(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertIsNotNone(scene.compositing_node_group)
         self.assertEqual(scene.compositing_node_group.nodes[0].bl_idname, "CompositorNodeGroup")
+
+    def test_compositor_node_group_on_compositor_effects(self):
+        """Blender 5.3+ (#503): the tree goes into a new "Scene Effect", the deprecated property is not used."""
+        _register_asset(self.bpy, self._blend, "node_groups", "CompGrade",
+                        tree_type="CompositorNodeTree")
+        scene = _EffectsScene()
+        self.bpy.context.scene = scene
+        result = self._load("CompGrade", asset_type="NODETREE")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual([e.name for e in scene.compositor_effects], ["Scene Effect"])
+        tree = scene.compositor_effects.active.node_group
+        self.assertEqual(tree.nodes[0].bl_idname, "CompositorNodeGroup")
 
     def test_collection_append_and_position(self):
         _register_asset(self.bpy, self._blend, "collections", "BrickWall")

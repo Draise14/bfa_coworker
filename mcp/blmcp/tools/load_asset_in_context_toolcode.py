@@ -17,6 +17,9 @@ from typing import Any, NamedTuple, Optional
 
 # @include_begin: _asset_index_shared.py
 # @include_end
+# @include_begin: _scene_compositor.py
+from blmcp.tools._scene_compositor import *  # noqa: F401,F403  pylint: disable=wildcard-import,unused-wildcard-import
+# @include_end
 
 
 _TREE_TYPE_ALIASES = {
@@ -224,13 +227,14 @@ def main(params: Params) -> Result:
             # --- Compositor -> add to compositor node tree ---
             elif ng_type == "CompositorNodeTree":
                 scene = _resolve_scene(bpy, params)
-                # 5.x: the compositor is a node group on the scene.  Create
-                # one when missing, as the Compositor's "New" button does.
-                comp_tree = getattr(scene, "compositing_node_group", None)
+                # 5.x: the compositor is a node group on the scene (the active
+                # compositor effect's, #503).  Create one when missing, as the
+                # Compositor's "New" button does.
+                comp_tree = scene_compositor_tree(scene)
                 if comp_tree is None:
                     comp_tree = bpy.data.node_groups.new(
                         "Compositing Nodetree", "CompositorNodeTree")
-                    scene.compositing_node_group = comp_tree
+                    set_scene_compositor_tree(scene, comp_tree)
                 if comp_tree:
                     node = comp_tree.nodes.new(type="CompositorNodeGroup")
                     node.node_tree = ng

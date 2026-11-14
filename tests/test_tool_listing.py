@@ -544,7 +544,7 @@ EXPECTED_TOOLS = [
 "        - ``\"GeometryNodeTree\"`` - the active object's active Geometry\n"
 "          Nodes modifier.\n"
 "        - ``\"CompositorNodeTree\"`` - the scene's compositor node group\n"
-"          (``scene.compositing_node_group``).\n"
+"          (its active compositor effect's).\n"
 "\n"
 "        Read only: a missing tree is reported, never created.\n"
 "        - ``node_tree_name`` - overrides resolution and reads that exact\n"

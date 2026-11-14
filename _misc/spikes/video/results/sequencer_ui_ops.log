@@ -1,0 +1,32 @@
+SRT none_selected poll False None False
+SRT active_color poll False None False
+SRT active_text poll True {'FINISHED'} 1
+00:00:00,000 --> 00:00:01,000
+First caption
+
+2
+00:00:01,208 --> 00:00:02,208
+Second, caption
+
+
+ASSET tick1 LOCAL 'Scene/CW Lower Third' {'PASS_THROUGH'} added 0 []
+ASSET INVOKE tick1 (asset browser not yet on LOCAL) 'Scene/CW Lower Third' {'FINISHED'} added 1 [('CW Lower Third.001', 8, 100, 'CW Lower Third.001')]
+ASSET INVOKE tick1 (asset browser not yet on LOCAL) 'Scene\\CW Lower Third' {'FINISHED'} added 1 [('CW Lower Third.001', 8, 100, 'CW Lower Third.001'), ('CW Lower Third.002', 9, 100, 'CW Lower Third.002')]
+ASSET tick1_all ALL 'Scene/CW Lower Third' {'PASS_THROUGH'} added 0 [('CW Lower Third.001', 'SCENE', 'CW Lower Third.001'), ('CW Lower Third.002', 'SCENE', 'CW Lower Third.002')]
+asset browser params LOCAL
+selected_assets [('CW Lower Third', 'SCENE', '', 'Scene\\CW Lower Third')]
+ASSET ctx-asset {} {'PASS_THROUGH'} added 0 [('CW Lower Third.001', 'CW Lower Third.001'), ('CW Lower Third.002', 'CW Lower Third.002')]
+ASSET ctx-asset {'asset_library_type': 'LOCAL', 'relative_asset_identifier': 'Scene\\CW Lower Third'} {'PASS_THROUGH'} added 0 [('CW Lower Third.001', 'CW Lower Third.001'), ('CW Lower Third.002', 'CW Lower Third.002')]
+asset repr attrs ['bl_rna', 'full_library_path', 'full_path', 'id_type', 'is_online', 'local_id', 'metadata', 'name', 'owner_asset_library', 'rna_type']
+refresh True
+ASSET tick2 LOCAL 'Scene/CW Lower Third' {'PASS_THROUGH'} added 0 [('CW Lower Third.001', 'SCENE', 'CW Lower Third.001'), ('CW Lower Third.002', 'SCENE', 'CW Lower Third.002')]
+ASSET tick2_all ALL 'Scene/CW Lower Third' {'PASS_THROUGH'} added 0 [('CW Lower Third.001', 'SCENE', 'CW Lower Third.001'), ('CW Lower Third.002', 'SCENE', 'CW Lower Third.002')]
+ASSET tick3 LOCAL 'Scene/CW Lower Third' {'PASS_THROUGH'} added 0 [('CW Lower Third.001', 'SCENE', 'CW Lower Third.001'), ('CW Lower Third.002', 'SCENE', 'CW Lower Third.002')]
+ASSET tick3_rel_noprefix LOCAL 'CW Lower Third' {'PASS_THROUGH'} added 0 [('CW Lower Third.001', 'SCENE', 'CW Lower Third.001'), ('CW Lower Third.002', 'SCENE', 'CW Lower Third.002')]
+ASSET tick3_backslash LOCAL 'Scene\\CW Lower Third' {'PASS_THROUGH'} added 0 [('CW Lower Third.001', 'SCENE', 'CW Lower Third.001'), ('CW Lower Third.002', 'SCENE', 'CW Lower Third.002')]
+ASSET tick3_backslash_move LOCAL 'Scene\\CW Lower Third' {'PASS_THROUGH'} added 0 [('CW Lower Third.001', 'SCENE', 'CW Lower Third.001'), ('CW Lower Third.002', 'SCENE', 'CW Lower Third.002')]
+ASSET INVOKE_DEFAULT {'FINISHED'} added 1
+lib scenes ['CW Lower Third']
+FALLBACK libraries.load + new_scene CW Lower Third.004 SCENE CW Lower Third.004 250 asset_data True
+ops sequencer with asset ['add_scene_strip_from_scene_asset']
+DONE

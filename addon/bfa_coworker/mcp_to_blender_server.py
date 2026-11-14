@@ -1318,9 +1318,16 @@ def _execute_code_from_request(
         _kind, _why = "", ""
 
     def _for_thread(fn: Callable[..., Any]) -> Callable[..., Any]:
-        """*fn*, run as the calling thread (also when a deferred check runs it later)."""
+        """*fn*, run as the calling thread (also when a deferred check runs it later).
+
+        Keeps *fn*'s attributes: a checker's ``job_kind`` / ``job_label`` /
+        ``job_on_finish`` are how the deferred answer hands a long job to
+        ``long_jobs`` after a while (#309).  Without them a long render or
+        transcription held the call open until it was done (#375)."""
+        import functools
         from . import coworker_api
 
+        @functools.wraps(fn)
         def run(*args: Any, **kwargs: Any) -> Any:
             with coworker_api.for_thread(_thread):
                 return fn(*args, **kwargs)

@@ -13,7 +13,7 @@ instead, in exactly the shapes the loop uses, so a turn from an external
 agent (Tier 4h) draws with the same bubble, Workshop, live readout and
 reply -- the panel can't tell which engine produced it.
 
-Message shapes (what ``ui_chat._split_turn`` expects):
+Message shapes (what ``chat_turns.split_turn`` expects):
 
 * ``{"role": "user", "content": request}`` starts a turn;
 * ``{"role": "reasoning", "label": ..., "content": ...}`` and

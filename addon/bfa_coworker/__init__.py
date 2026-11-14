@@ -67,6 +67,7 @@ from .operators_agent import (
     BFACW_OT_open_log,
     BFACW_OT_compare_benchmarks,
 )
+from .operators_speech import CLASSES as _SPEECH_CLASSES
 from .shared import (
     effective_ports,
     get_llm_manager,
@@ -122,6 +123,7 @@ _classes = (
     BFACW_OT_compare_benchmarks,
     _BFACW_OT_remove_llama_server,
     _BFACW_OT_open_llama_server_folder,
+    *_SPEECH_CLASSES,
 )
 
 
@@ -170,8 +172,9 @@ def register() -> None:
 def _rollback(registered: list[type]) -> None:
     """Undo a failed ``_register()`` without ``unregister()``'s side effects: nothing
     saved, so the settings backup and the saved chat are left alone (#400)."""
-    from . import chat_editor, reframe, ui_chat, ui_context_menus
-    for step in (reframe.unregister, ui_context_menus.unregister, chat_editor.unregister, ui_chat.unregister,
+    from . import captions_ops, chat_editor, reframe, ui_chat, ui_context_menus, wand
+    for step in (reframe.unregister, captions_ops.unregister, wand.unregister, ui_context_menus.unregister,
+                 chat_editor.unregister, ui_chat.unregister,
                  coworker_api.unregister, mcp_to_blender_server.stop):
         try:
             step()
@@ -253,6 +256,12 @@ def _register() -> None:
     # Coworker in the right-click menus: Explain This, Translate (#290, #42).
     from . import ui_context_menus
     ui_context_menus.register()
+    # Coworker operators: Remove Silences in the Sequencer (Tier 4m, Wand 0, #331).
+    from . import wand
+    wand.register()
+    # Auto Captions in the Sequencer: Strip > Captions, SRT in and out (#376).
+    from . import captions_ops
+    captions_ops.register()
     # Make Vertical / Reframe in the Sequencer's Strip and View menus (#333).
     from . import reframe
     reframe.register()
@@ -463,6 +472,11 @@ def unregister() -> None:
     # Clean up subprocesses.
     get_llm_manager().cleanup()
     get_agent_controller().cleanup()
+    try:
+        from . import whisper_manager
+        whisper_manager.cleanup()       # speech server (#375)
+    except Exception:
+        pass
 
     # Clean up generative controller (Tier 5).
     try:
@@ -473,6 +487,10 @@ def unregister() -> None:
     # Unregister chat UI (the Coworker editor first: it builds on ui_chat's panels).
     from . import reframe
     reframe.unregister()
+    from . import captions_ops
+    captions_ops.unregister()
+    from . import wand
+    wand.unregister()
     from . import ui_context_menus
     ui_context_menus.unregister()
     from . import chat_editor

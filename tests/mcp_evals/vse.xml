@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Ten evaluation questions for the vse tool domain (Tools 1 #304; the per-domain evals of #323).
+  Each is read-only, needs several tool calls, and has one string-checkable answer on the
+  sample timeline that tests/mcp_evals/vse_sample_scene.py builds (scene "Edit").
+  Frames follow Blender: a strip's end is the frame after its last one.
+-->
+<evaluation>
+  <qa_pair>
+    <question>Which text strip shows the words "Ana Silva - Director"? Answer with the strip's name.</question>
+    <answer>Lower Third</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>On which channel is the strip whose picture comes from the file logo.png? Answer with the number.</question>
+    <answer>3</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Inside the scene's frame range, which frames show no picture at all? Answer as first-last, e.g. 10-20.</question>
+    <answer>76-89</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>What is the name of the colour balance modifier on the colour strip that plays until the end of the scene?</question>
+    <answer>Warm</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>What text does the strip inside the meta strip show?</question>
+    <answer>Thanks for watching</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>What is the volume of the sound strip on the channel named "Audio"? Answer with the number.</question>
+    <answer>0.5</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Which strip is muted? Answer with its name.</question>
+    <answer>Flash</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>What is the opacity of the strip that starts at frame 200? Answer with the number.</question>
+    <answer>0.8</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Which marker sits on the first frame of the active strip? Answer with the marker's name.</question>
+    <answer>Cut B</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>How many seconds long is the text strip that starts at frame 10, at the scene's frame rate? Answer with a whole number.</question>
+    <answer>2</answer>
+  </qa_pair>
+</evaluation>

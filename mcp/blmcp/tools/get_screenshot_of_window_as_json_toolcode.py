@@ -26,6 +26,31 @@ class Result(NamedTuple):
     active_object: dict[str, object] | None
     selected_objects: list[dict[str, str]]
     message: str | None = None
+    # Tools 1 (#304): where the Sequencer is (scene, strip count, current frame, active strip).
+    sequencer: dict[str, object] | None = None
+
+
+def _sequencer_context(window: object, scene: object) -> dict[str, object] | None:
+    """The Sequencer's scene (5.x: the workspace's sequencer scene, else the active scene) in brief."""
+    workspace = getattr(window, "workspace", None)
+    for candidate in (getattr(workspace, "sequencer_scene", None), scene):
+        ed = getattr(candidate, "sequence_editor", None) if candidate is not None else None
+        if ed is None:
+            continue
+        strips = getattr(ed, "strips_all", None)
+        if strips is None:
+            strips = getattr(ed, "sequences_all", [])
+        if not len(strips):
+            continue
+        active = ed.active_strip
+        return {
+            "scene": candidate.name,
+            "strip_count": len(strips),
+            "current_frame": int(candidate.frame_current),
+            "active_strip": active.name if active is not None else "",
+            "active_strip_channel": int(active.channel) if active is not None else 0,
+        }
+    return None
 
 
 def main(params: None) -> Result:
@@ -88,6 +113,10 @@ def main(params: None) -> Result:
                 if space.text:
                     space_info["text_name"] = space.text.name
 
+            elif space.type == "SEQUENCE_EDITOR":
+                space_info["view_type"] = space.view_type
+                space_info["display_mode"] = getattr(space, "display_mode", "")
+
             elif space.type == "NODE_EDITOR":
                 space_info["tree_type"] = space.tree_type
                 if space.node_tree:
@@ -130,4 +159,5 @@ def main(params: None) -> Result:
         areas=areas,
         active_object=active_info,
         selected_objects=selected,
+        sequencer=_sequencer_context(window, context.scene),
     )

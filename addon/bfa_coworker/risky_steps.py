@@ -40,6 +40,7 @@ __all__ = (
 import re
 from typing import Any, Callable
 
+from .answer_envelope import answer_of, answers_in_full
 from .approvals import ApprovalRequest, Approvals
 
 # The open "may I?" questions about risky steps (the chat shows them like the agent's).
@@ -143,14 +144,16 @@ def wrap(code: str, strict_json: bool, why: str, execute: Callable[[str, bool], 
     if APPROVALS.allowed_always(kind, thread):
         result = execute(code, strict_json)
         return result.response, result.check_fn
-    state: dict[str, Any] = {"answer": None, "inner": None}
+    state: dict[str, Any] = {"answer": None, "inner": None, "extra": None}
     request = ApprovalRequest(tool=kind if why else tool, source=source, args={"code": code}, coworker_tool=True,
                               reason=why, thread=thread)
     APPROVALS.ask(request, lambda choice: state.__setitem__("answer", choice))
 
+    # #487: the card's answer is the call's whole answer, envelope included (one envelope).
+    @answers_in_full
     def check() -> dict[str, object] | None:
         if state["inner"] is not None:          # allowed, and the code itself is deferred (a render)
-            return state["inner"]()
+            return answer_of(state["inner"], state["inner"](), state["extra"])
         answer = state["answer"]
         if answer is None:
             return None
@@ -161,6 +164,7 @@ def wrap(code: str, strict_json: bool, why: str, execute: Callable[[str, bool], 
         result = execute(code, strict_json)
         if result.check_fn is not None:
             state["inner"] = result.check_fn
+            state["extra"] = {k: result.response.get(k) for k in ("stdout", "stderr")}
             return None
         return result.response
     return {}, check

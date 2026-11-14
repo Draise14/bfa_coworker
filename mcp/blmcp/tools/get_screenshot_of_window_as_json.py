@@ -31,5 +31,8 @@ def register(mcp: FastMCP) -> None:
     def get_screenshot_of_window_as_json() -> dict[str, object]:
         """
         Return a JSON description of the Blender window layout, areas, active object, and selection.
+
+        ``sequencer`` says where the Video Sequencer is (scene, strip count, current frame,
+        active strip) when a scene has strips.
         """
         return send_code(toolcode_format_call(_TOOL_CALL, None), strict_json=True)

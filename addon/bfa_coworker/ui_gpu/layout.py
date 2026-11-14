@@ -12,7 +12,9 @@ text, clipping) and **hit areas** (where each button is), so:
 * :mod:`render` turns the commands into ``gpu`` / ``blf`` calls (the only
   part that needs Blender's GPU);
 * the input layer hit-tests the previous frame's areas to set hover, press
-  and click in :class:`InteractionState` for the next frame.
+  and click in :class:`InteractionState` for the next frame;
+* **text lines** (:class:`TextLine`) where selectable text was drawn, so a
+  drag with the mouse can select it (#451, #455, see :mod:`.selection`).
 
 Text is measured through a ``measure(text, font, size) -> width`` function:
 :func:`render.measure` in Blender, a fixed-width stand-in in tests.
@@ -34,7 +36,9 @@ __all__ = (
     "InteractionState",
     "Measure",
     "Rect",
+    "TextLine",
     "fixed_measure",
+    "wrap_offsets",
     "wrap_text",
 )
 
@@ -103,6 +107,63 @@ def wrap_text(text: str, width: float, measure: Measure, font: str = "ui",
     return lines
 
 
+def wrap_offsets(text: str, width: float, measure: Measure, font: str = "ui",
+                 size: float = 11.0) -> list[tuple[int, str]]:
+    """:func:`wrap_text`'s lines with where each starts in *text*: (offset, line).
+
+    A line is always a run of *text* itself; the space a wrap drops, and each newline,
+    sit between two lines' runs."""
+    out: list[tuple[int, str]] = []
+    offset = 0
+    for para in text.split("\n"):
+        consumed = 0
+        for piece in wrap_text(para, width, measure, font, size):
+            start = para.find(piece, consumed) if piece else consumed
+            start = consumed if start < 0 else start
+            out.append((offset + start, piece))
+            consumed = start + len(piece)
+        offset += len(para) + 1
+    return out
+
+
+@dataclass(frozen=True)
+class TextLine:
+    """One drawn line of selectable text (#451, #455).
+
+    *key* is (turn, unit): which text it is part of (see ``chat_view.unit_texts``);
+    *start* the offset of its first character in that text.  *pieces* are its runs as
+    ``(offset, text, x, width, font, size, cmd)``; *cmd* is where in the frame's
+    commands a run's own highlight goes (-1: the line's, at *cmd* of the line -- behind
+    all its text; an inline-code run has a background of its own, drawn over that).
+    *clip* is the clip it was drawn in: only its part inside is on screen.
+    """
+
+    key: tuple
+    start: int
+    x: float
+    top: float
+    bottom: float
+    font: str
+    size: float
+    pieces: tuple
+    cmd: int = 0
+    clip: "Rect | None" = None
+
+    @property
+    def end(self) -> int:
+        if not self.pieces:
+            return self.start
+        last = self.pieces[-1]
+        return last[0] + len(last[1])
+
+    @property
+    def right(self) -> float:
+        if not self.pieces:
+            return self.x
+        last = self.pieces[-1]
+        return last[2] + last[3]
+
+
 @dataclass(frozen=True)
 class DrawCmd:
     """One thing to draw.  *kind*: rect, outline, text, icon, image, clip, unclip.
@@ -148,6 +209,8 @@ class Canvas:
     state: InteractionState = field(default_factory=InteractionState)
     commands: list[DrawCmd] = field(default_factory=list)
     hit_areas: list[tuple[Rect, str]] = field(default_factory=list)
+    # Selectable text drawn this frame, line by line (#451, #455).
+    text_lines: list[TextLine] = field(default_factory=list)
     _clips: list[Rect] = field(default_factory=list)
 
     # -- primitives ----------------------------------------------------------
@@ -198,11 +261,21 @@ class Canvas:
         self.text(x, baseline, text, color, font, bold)
 
     def wrapped(self, x: float, top: float, width: float, text: str, color: RGBA | None = None,
-                font: str = "ui", bold: bool = False) -> float:
-        """Draw *text* wrapped to *width* below *top*; return the new top."""
+                font: str = "ui", bold: bool = False, unit: tuple | None = None) -> float:
+        """Draw *text* wrapped to *width* below *top*; return the new top.  With *unit*
+        ((turn, unit), see :class:`TextLine`) its lines are kept for selecting."""
         size, line_h = self.style.font_size, self.style.line_height
-        for line in wrap_text(text, width, self.measure, font, size):
+        if unit is None:
+            for line in wrap_text(text, width, self.measure, font, size):
+                top -= line_h
+                self.text(x, top + (line_h - size) / 2 + size * 0.2, line, color, font, bold)
+            return top
+        clip = self._clips[-1] if self._clips else None
+        for start, line in wrap_offsets(text, width, self.measure, font, size):
             top -= line_h
+            piece = (start, line, x, self.measure(line, font, size), font, size, -1)
+            self.text_lines.append(TextLine(unit, start, x, top + line_h, top, font, size, (piece,),
+                                            len(self.commands), clip))
             self.text(x, top + (line_h - size) / 2 + size * 0.2, line, color, font, bold)
         return top
 

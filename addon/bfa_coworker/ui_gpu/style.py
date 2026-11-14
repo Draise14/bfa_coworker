@@ -81,7 +81,7 @@ _DARK_BOX = WidgetColors((0.20, 0.20, 0.20, 1.0), (0.30, 0.30, 0.30, 1.0), (0.12
 _DARK_BUTTON = WidgetColors((0.33, 0.33, 0.33, 1.0), (0.33, 0.50, 0.76, 1.0), (0.10, 0.10, 0.10, 1.0),
                             (0.90, 0.90, 0.90, 1.0), (1.0, 1.0, 1.0, 1.0), 0.3)
 _DARK_FIELD = WidgetColors((0.12, 0.12, 0.12, 1.0), (0.20, 0.20, 0.20, 1.0), (0.10, 0.10, 0.10, 1.0),
-                           (0.85, 0.85, 0.85, 1.0), (1.0, 1.0, 1.0, 1.0), 0.2)
+                           (0.85, 0.85, 0.85, 1.0), (1.0, 1.0, 1.0, 1.0), 0.2, (0.28, 0.45, 0.70, 1.0))
 _DARK_SCROLL = WidgetColors((0.31, 0.31, 0.31, 0.5), (0.39, 0.39, 0.39, 0.5), (0.20, 0.20, 0.20, 1.0),
                             (0.90, 0.90, 0.90, 1.0), (1.0, 1.0, 1.0, 1.0), 0.5, (0.50, 0.50, 0.50, 1.0))
 _DARK_PROGRESS = WidgetColors((0.20, 0.20, 0.20, 1.0), (0.30, 0.30, 0.30, 1.0), (0.10, 0.10, 0.10, 1.0),
@@ -143,6 +143,12 @@ class Style:
     @property
     def pad(self) -> float:
         return self.unit * 0.4
+
+    @property
+    def selection(self) -> RGBA:
+        """Selected text's highlight: Blender draws a text field's selection in its ``item``
+        colour (``wcol_text``), so the chat's selections look like the rest of the UI."""
+        return self.text_field.item
 
     def radius(self, colors: WidgetColors | None = None) -> float:
         """Corner radius in pixels, the way Blender derives it from roundness."""

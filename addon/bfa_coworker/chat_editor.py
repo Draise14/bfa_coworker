@@ -364,6 +364,10 @@ def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0) -> None:
     surface.bounds = rect
     surface.drop_hover = drop_hover()
     surface.show_tips = bool(getattr(context.preferences.view, "show_tooltips", True))   # #388
+    try:        # a second press this soon selects a word (#451, #455), like Blender's double-click
+        surface.double_click_time = context.preferences.inputs.mouse_double_click_time / 1000.0
+    except (AttributeError, TypeError):
+        pass
     from . import coworker_api
     surface.view.revertable = coworker_api.can_revert() and not state.is_thinking
     card = _approval_card(context)
@@ -1074,7 +1078,8 @@ class BFACW_MT_editor_view(bpy.types.Menu):
 # input_capture opens it over a chat (the editor's or a sidebar's) in that chat's area and
 # region, so its entries -- the existing operators -- act on the chat that was clicked.
 
-_COPY_WHAT = [("MESSAGE", "Message", "Copy the message under the mouse, like its Copy button"),
+_COPY_WHAT = [("SELECTION", "Selection", "Copy the text selected in the chat (Ctrl C)"),
+              ("MESSAGE", "Message", "Copy the message under the mouse, like its Copy button"),
               ("CODE", "Code", "Copy the code block under the mouse"),
               ("CHAT", "Whole Chat", "Copy this chat: your messages and Coworker's replies, without the tool steps")]
 
@@ -1095,9 +1100,14 @@ class BFACW_OT_chat_context_copy(bpy.types.Operator):
     def execute(self, context):
         from . import log
         from .ui_gpu.chat_view import transcript
-        turn = input_capture.menu_target()["turn"] or {}
-        text = (transcript(_history(context)) if self.what == "CHAT"
-                else turn.get("code", "") if self.what == "CODE" else turn.get("text", ""))
+        target = input_capture.menu_target()
+        turn = target["turn"] or {}
+        surface = target["surface"]
+        if self.what == "SELECTION":       # the text as shown, like Ctrl C (#455)
+            text = surface.selected_text() if surface is not None else ""
+        else:
+            text = (transcript(_history(context)) if self.what == "CHAT"
+                    else turn.get("code", "") if self.what == "CODE" else turn.get("text", ""))
         if not text:
             return {"CANCELLED"}
         context.window_manager.clipboard = log.redact(text)        # keys and tokens as *** (#346)
@@ -1157,7 +1167,10 @@ class BFACW_MT_chat_context(bpy.types.Menu):
                 row.enabled = enabled
                 row.operator("bfacw.chat_context_edit", text=label, icon=icon).action = action
             layout.separator()
-        elif turn:
+        elif turn or (surface is not None and surface.has_selection()):
+            if surface is not None and surface.has_selection():      # text dragged over (#455)
+                layout.operator("bfacw.chat_context_copy", text="Copy Selection", icon="COPYDOWN").what = "SELECTION"
+            turn = turn or {}
             if turn.get("text"):
                 layout.operator("bfacw.chat_context_copy", text="Copy Message", icon="COPYDOWN").what = "MESSAGE"
             if turn.get("code"):

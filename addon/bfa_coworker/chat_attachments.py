@@ -46,13 +46,17 @@ __all__ = (
     "capture_render_from_view",
     "capture_screen",
     "capture_screen_rect",
+    "clipboard_image",
     "convert_to_png",
+    "image_path_from_text",
     "image_to_data_uri",
     "load_image_file",
+    "paste_clipboard_image",
     "prune_attachments",
 )
 
 import base64
+import contextlib
 import os
 import tempfile
 import time
@@ -181,34 +185,176 @@ def convert_to_png(filepath: str) -> str:
         src = bpy.data.images.load(filepath, check_existing=False)
     except (RuntimeError, OSError, ValueError):
         return ""
-    out = None
     try:
         width, height = src.size[:]
         if width <= 0 or height <= 0:
             return ""
         stem = "".join(c for c in Path(filepath).stem if c.isalnum() or c in "-_ ")[:60].strip()
-        out = _unique_path(attachments_dir(), stem or "attached")
-        try:
-            src.file_format = "PNG"
-            src.save(filepath=str(out))
-        except (AttributeError, RuntimeError, TypeError, ValueError):
-            src.save_render(str(out))   # the scene's output settings: kept only if it is a PNG
-        if _is_png(out):
-            prune_attachments()
-            return str(out)
+        return _save_png_copy(src, stem or "attached")
     except (AttributeError, RuntimeError, OSError, ValueError):
-        pass
+        return ""
     finally:
         try:
             bpy.data.images.remove(src)
         except (ReferenceError, RuntimeError):
             pass
+
+
+def _save_png_copy(img, stem: str) -> str:
+    """Save *img*'s pixels as a new PNG named after *stem* in the attachments folder.
+
+    Returns its path, or ``""`` (and no stray file) when the copy is not a PNG or fails.
+    """
+    out = None
+    try:
+        out = _unique_path(attachments_dir(), stem)
+        try:
+            img.file_format = "PNG"
+            img.save(filepath=str(out))
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            img.save_render(str(out))   # the scene's output settings: kept only if it is a PNG
+        if _is_png(out):
+            prune_attachments()
+            return str(out)
+    except (AttributeError, RuntimeError, OSError, ValueError):
+        pass
     if out is not None:
         try:
             out.unlink()
         except OSError:
             pass
     return ""
+
+
+# -- Paste (#450) -------------------------------------------------------------------------
+
+_MAX_PATH_TEXT = 4096       # longer clipboard text is never a path
+_PASTE_TRIES = 3
+
+
+def image_path_from_text(text: str) -> str:
+    """The image file a copied path names, or ``""`` (#450).
+
+    One line: a plain path, a quoted one (Windows' "Copy as path") or a ``file://`` URI (a
+    Linux or macOS file manager), to an existing file with an image extension.  Anything
+    else -- more lines, other text, a missing file -- is ``""``: the text is pasted as text.
+    """
+    text = (text or "").strip()
+    if not text or len(text) > _MAX_PATH_TEXT or "\n" in text:
+        return ""
+    path = text.strip("\"'").strip()
+    if path.lower().startswith("file://"):
+        from urllib.parse import urlparse
+        from urllib.request import url2pathname
+        parsed = urlparse(path)
+        path = url2pathname(parsed.path)
+        if parsed.netloc and parsed.netloc.lower() != "localhost":
+            path = "//" + parsed.netloc + path      # a network share
+    if os.path.splitext(path)[1].lower() not in SUPPORTED_EXTENSIONS:
+        return ""
+    return path if os.path.isfile(path) else ""
+
+
+@contextlib.contextmanager
+def _image_editor(context):
+    """An Image Editor to run ``image.clipboard_paste`` in, with the context set to it.
+
+    The operator needs one (its poll says "Image Editor not found" otherwise).  An open
+    Image Editor in the window is used; else an area shows one for the moment and goes back
+    -- the smallest one that is neither a 3D View (a rendered viewport would restart) nor
+    the chat's own.  The image the editor showed, and its pin, come back afterwards.
+    Yields the editor's space, or ``None`` when the window has no area.
+    """
+    wm = context.window_manager
+    window = getattr(context, "window", None) or (wm.windows[0] if wm.windows else None)
+    areas = list(window.screen.areas) if window is not None else []
+    if not areas:
+        yield None
+        return
+    area = next((a for a in areas if a.type == "IMAGE_EDITOR"), None)
+    borrowed = None
+    if area is None:
+        chat = getattr(context, "area", None)
+        area = min(areas, key=lambda a: (a.type == "VIEW_3D", a == chat, a.width * a.height))
+        borrowed = area.ui_type
+        area.ui_type = "IMAGE_EDITOR"
+    try:
+        space = area.spaces.active
+        shown, pinned = space.image, space.use_image_pin
+        try:
+            region = next((r for r in area.regions if r.type == "WINDOW"), None)
+            with context.temp_override(window=window, area=area, region=region):
+                yield space
+        finally:
+            space.image, space.use_image_pin = shown, pinned
+    finally:
+        if borrowed is not None:
+            area.ui_type = borrowed
+
+
+def paste_clipboard_image(context=None):
+    """The image on the system clipboard, as a PNG file in the attachments folder (#450).
+
+    Read with Blender's own ``image.clipboard_paste`` (Blender and Bforartists; PNG and
+    bitmaps on Windows and macOS, Wayland on Linux; no Pillow, no pywin32), in an Image
+    Editor (:func:`_image_editor`).  The "Clipboard" datablock it makes is saved as a PNG
+    and removed again; the attachment is the loaded file, like an attached file.  ``None``
+    when the clipboard holds no image or anything fails.  Main thread only.
+    """
+    import bpy  # pylint: disable=import-error,no-name-in-module
+    context = context if context is not None else bpy.context
+    paste = getattr(getattr(bpy.ops, "image", None), "clipboard_paste", None)
+    if paste is None:
+        return None
+    pasted = None
+    try:
+        with _image_editor(context) as space:
+            if space is None or not paste.poll():
+                return None
+            before = space.image
+            # The first read of a picture just put on the Windows clipboard can come back empty
+            # (CANCELLED with the poll passing); read again, as a second Ctrl V would.
+            for _attempt in range(_PASTE_TRIES):
+                if paste() == {"FINISHED"}:
+                    pasted = space.image if space.image is not before else None
+                    break
+    except Exception as ex:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+        print("[Coworker] paste image: {:s}".format(str(ex)))
+    if pasted is None:
+        return None
+    try:
+        path = _save_png_copy(pasted, "clipboard")
+    finally:
+        try:
+            bpy.data.images.remove(pasted)
+        except (ReferenceError, RuntimeError):
+            pass
+    if not path:
+        return None
+    try:
+        return bpy.data.images.load(path, check_existing=True)
+    except (RuntimeError, OSError, ValueError):
+        return None
+
+
+def clipboard_image(text: str, force: bool = False, context=None):
+    """The image a paste in the chat attaches, or ``None``: paste *text* as text (#450).
+
+    1. *text* -- the clipboard's text -- names an image file: that file.
+    2. Else the clipboard's image, when there is no text (a screenshot, a picture copied
+       from a browser or an image editor) or *force* (the menus' Paste Image).  Text and a
+       picture together -- cells copied from a spreadsheet, a paragraph from a word
+       processor -- stay text for Ctrl V, as before.
+    Main thread only.
+    """
+    path = image_path_from_text(text)
+    if path:
+        image = load_image_file(path)
+        if image is not None:
+            return image
+    if (text or "").strip() and not force:
+        return None
+    return paste_clipboard_image(context)
 
 
 def _is_png(path) -> bool:

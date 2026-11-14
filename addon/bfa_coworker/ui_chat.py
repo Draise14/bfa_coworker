@@ -5731,13 +5731,16 @@ class BFACW_PT_attach_popover(Panel):  # type: ignore[misc]
         layout.label(text="Image for the next message", icon='IMAGE_DATA')
         thread = _attach_thread(context, _ATTACH_POPOVER["thread"])
         _draw_image_picker(layout, props, thread.id)
+        op = layout.operator("bfacw.chat_paste_image", text="Paste Image", icon='PASTEDOWN')     # #450
+        if op is not None:
+            op.thread_id = thread.id
         if props.chat_image is not None:
             _draw_attachment_preview(layout, props.chat_image, context, max_units=6.0)
             layout.prop(props, "chat_image_send_once", text="Send Once")
         # Render and Screen are on the input row itself; Open is the picker's (#265).
         hint = layout.row()
         hint.scale_y = 0.75
-        hint.label(text="Or drop an image file onto the chat.")
+        hint.label(text="Or drop or paste an image (Ctrl V).")
 
 
 class BFACW_PT_chat_controls(Panel):  # type: ignore[misc]

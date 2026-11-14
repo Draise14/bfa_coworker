@@ -3650,7 +3650,7 @@ Only while you haven't changed the scene since; otherwise use Edit > Undo Histor
         if choice.kind == "choose" and not self.both:
             _revert_choice_popup(context, thread, choice)     # never a silent partial revert (#359)
             return {"CANCELLED"}
-        why = coworker_api.revert_turn(tag, both=self.both)
+        why = coworker_api.revert_turn(tag, both=self.both, title=_tag_title)
         if why:
             self.report({"WARNING"}, why)
             return {"CANCELLED"}

@@ -298,11 +298,11 @@ def revert_choice(thread: str = "", title: Any = None) -> Any:
 reverted_with: list[str] = []
 
 
-def revert_turn(thread: str = "", both: bool = False) -> str:
+def revert_turn(thread: str = "", both: bool = False, title: Any = None) -> str:
     """Undo the last turn of *thread*; returns "" or why it can't.  When another chat
     stepped since the turn began, only with *both* (its steps since go too, #359)."""
     _turn = _turn_of(thread)
-    choice = revert_choice(thread)
+    choice = revert_choice(thread, title)
     if choice.kind in ("none", "edited", "busy"):
         return choice.message
     if choice.kind == "choose" and not both:

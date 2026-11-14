@@ -1412,7 +1412,7 @@ def _claim_gate(thread: str, tool: str, args: Any, code: str, run: Callable[[], 
     running = side_by_side.working_chats()
     if thread not in running or len(running) < 2:
         return run()                # one chat at work: as before, nothing to claim against
-    targets, whole = claims.targets_of(tool, args, code)
+    targets, whole = claims.targets_of(tool, args, code, exists=_datablock_exists)
     from . import risky_steps
 
     def ran(result: _ExecResult) -> _ExecResult:
@@ -1462,8 +1462,9 @@ def _claim_gate(thread: str, tool: str, args: Any, code: str, run: Callable[[], 
                 go = answer["answer"].strip().lower().startswith("go")
                 state["mode"] = claims.RUN if go else claims.WAIT
         now_running = side_by_side.working_chats()
-        if thread not in now_running:
-            return give_up("This chat's turn ended while the call waited. Nothing was changed.")
+        if thread not in now_running or _stop_pressed(thread):
+            return give_up("This chat's turn ended (or was stopped) while the call waited. Nothing was "
+                           "changed.")
         if not go and not claims.TABLE.conflicts(thread, targets, now_running).get(decision.holder):
             go = True                           # the other chat's turn ended: its claims are gone
         if not go:
@@ -1482,6 +1483,35 @@ def _claim_gate(thread: str, tool: str, args: Any, code: str, run: Callable[[], 
             return None
         return result.response
     return _ExecResult({}, check)
+
+
+_CLAIM_COLLECTIONS = ("objects", "node_groups", "texts", "collections", "materials", "meshes")
+
+
+def _datablock_exists(name: str) -> bool:
+    """A datablock of a kind claims cover is called *name* now (main thread)."""
+    try:
+        import bpy  # pylint: disable=import-error
+    except ImportError:
+        return True
+    for attr in _CLAIM_COLLECTIONS:
+        if getattr(bpy.data, attr).get(name) is not None:
+            return True
+    for scene in bpy.data.scenes:           # strips by name
+        strips = getattr(getattr(scene, "sequence_editor", None), "strips_all", None)
+        if strips is not None and strips.get(name) is not None:
+            return True
+    return False
+
+
+def _stop_pressed(tag: str) -> bool:
+    """Stop was pressed in chat *tag* (its loop turn's Stop)."""
+    try:
+        from . import agent_controller
+        thread = agent_controller.THREADS.get(tag) if tag else None
+        return agent_controller.thread_stop(thread).is_set()
+    except Exception:  # pylint: disable=broad-exception-caught
+        return False
 
 
 def _chat_title(tag: str) -> str:

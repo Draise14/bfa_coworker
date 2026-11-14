@@ -46,7 +46,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 # What a write call may change: (kind, name).
 Target = tuple[str, str]
@@ -113,9 +113,13 @@ def code_names(code: str) -> set[str]:
     return out
 
 
-def targets_of(tool: str, args: Any = None, code: str = "") -> tuple[set[Target], bool]:
+def targets_of(tool: str, args: Any = None, code: str = "",
+               exists: Callable[[str], bool] | None = None) -> tuple[set[Target], bool]:
     """``(targets, whole_scene)`` of one write call: the datablocks its arguments name,
-    and for generated code (whole-scene) every name its code quotes, as ``("any", name)``."""
+    and for generated code (whole-scene) every name its code quotes, as ``("any", name)``
+    -- with *exists*, only the quoted names of datablocks that exist now (a dict key or
+    a name the code is about to make is no claim; what it made is claimed from the
+    depsgraph after it ran)."""
     targets: set[Target] = set()
     values = _args_dict(args)
     for key, value in values.items():
@@ -128,7 +132,7 @@ def targets_of(tool: str, args: Any = None, code: str = "") -> tuple[set[Target]
     whole = tool in _CODE_TOOLS
     if whole:
         source = str(code or "") or str(values.get("code") or "")      # the bridge's is whole
-        targets.update(("any", name) for name in code_names(source))
+        targets.update(("any", name) for name in code_names(source) if exists is None or exists(name))
     return targets, whole
 
 

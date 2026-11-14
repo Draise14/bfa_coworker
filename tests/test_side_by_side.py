@@ -569,6 +569,13 @@ class TestClaims(unittest.TestCase):
         self.assertTrue(whole, "generated code: a whole-scene write")
         self.assertEqual(targets, {("any", "Cube"), ("any", "Hero")})
 
+    def test_only_existing_datablocks_count_for_code(self):
+        code = ("ob = bpy.data.objects.new('New_1', None); result = {'made': ob.name}; "
+                "bpy.data.objects['Cube'].hide_set(True)")
+        targets, _whole = claims.targets_of("execute_blender_code", None, code, exists={"Cube"}.__contains__)
+        self.assertEqual(targets, {("any", "Cube")},
+                         "a dict key ('made') or a name it is about to make is no claim")
+
     def test_which_tools_write(self):
         self.assertTrue(claims.writes("execute_blender_code"))
         self.assertTrue(claims.writes("set_collection_color_tag"))

@@ -1492,16 +1492,16 @@ def _datablock_exists(name: str) -> bool:
     """A datablock of a kind claims cover is called *name* now (main thread)."""
     try:
         import bpy  # pylint: disable=import-error
-    except ImportError:
-        return True
-    for attr in _CLAIM_COLLECTIONS:
-        if getattr(bpy.data, attr).get(name) is not None:
-            return True
-    for scene in bpy.data.scenes:           # strips by name
-        strips = getattr(getattr(scene, "sequence_editor", None), "strips_all", None)
-        if strips is not None and strips.get(name) is not None:
-            return True
-    return False
+        for attr in _CLAIM_COLLECTIONS:
+            if getattr(bpy.data, attr).get(name) is not None:
+                return True
+        for scene in bpy.data.scenes:           # strips by name
+            strips = getattr(getattr(scene, "sequence_editor", None), "strips_all", None)
+            if strips is not None and strips.get(name) is not None:
+                return True
+        return False
+    except Exception:  # pylint: disable=broad-exception-caught
+        return True                 # can't tell: count it (a claim too many only asks)
 
 
 def _stop_pressed(tag: str) -> bool:

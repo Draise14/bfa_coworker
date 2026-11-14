@@ -652,6 +652,9 @@ class TestClaimGateOnTheBridge(unittest.TestCase):
         self.addCleanup(cw._questions.clear)
         self.working = ["t1", "t2"]
         self.runs = []
+        saved_exists = self.br._datablock_exists
+        self.br._datablock_exists = {"Cube"}.__contains__          # the scene has a Cube
+        self.addCleanup(setattr, self.br, "_datablock_exists", saved_exists)
 
     def _run(self):
         self.runs.append(1)

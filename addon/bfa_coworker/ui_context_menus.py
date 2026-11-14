@@ -127,15 +127,18 @@ def _editor_kind(context: Any) -> str:
     return kind if kind in SIDEBAR_TYPES else ""
 
 
-def _ask(context: Any, text: str, mode: str) -> bool:
+def _ask(context: Any, text: str, mode: str, thread_id: str = "") -> bool:
     """Put *text* in the chat and send it (in *mode*), in the thread of the editor it was
-    invoked from (Threads 2, #358); False when the chat can't take it."""
+    invoked from (Threads 2, #358), or in *thread_id*'s; False when the chat can't take it."""
     props = getattr(context.window_manager, "bfacw_chat_props", None)
     if props is None or not chat_ready():
         return False
     props.chat_mode = mode
     # The text goes as is: the target thread's half-typed draft stays (#417).
-    bpy.ops.bfacw.chat_send(editor=_editor_kind(context), text=text)
+    if thread_id:
+        bpy.ops.bfacw.chat_send(thread_id=thread_id, text=text)
+    else:
+        bpy.ops.bfacw.chat_send(editor=_editor_kind(context), text=text)
     return True
 
 
@@ -252,14 +255,19 @@ def _explain_spot(window_index: int, x: int, y: int) -> None:
     if window_index >= len(wm.windows):
         return None
     window = wm.windows[window_index]
-    editor, region = "", ""
+    editor, region, kind = "", "", ""
     for area in window.screen.areas:
         if area.x <= x < area.x + area.width and area.y <= y < area.y + area.height:
             from .ui_chat import _EDITOR_NAMES
             editor = _EDITOR_NAMES.get(area.type) or _editor_name(SimpleNamespace(area=area))
             region = next((r.type for r in area.regions
                            if r.x <= x < r.x + r.width and r.y <= y < r.y + r.height), "")
+            kind = _editor_kind(SimpleNamespace(area=area))
             break
+    # The picture and the question go to the thread of the editor right-clicked (#358), named
+    # here: this runs from a timer, with no area to find it from later (#449).
+    from . import agent_controller, threads, ui_chat
+    thread = threads.pick(agent_controller.THREADS, kind, focus=True, create=ui_chat._editor_thread)
     half_w, half_h = 180, 70
     x0, y0 = max(0, x - half_w), max(0, y - half_h)
     path = chat_attachments.capture_screen_rect(window, x0, y0, min(window.width, x + half_w),
@@ -269,12 +277,12 @@ def _explain_spot(window_index: int, x: int, y: int) -> None:
     props = getattr(wm, "bfacw_chat_props", None)
     if path and props is not None:
         try:
-            props.chat_image = bpy.data.images.load(path, check_existing=False)
-            props.chat_image_send_once = True
+            ui_chat._attach_to_socket(bpy.context, None, bpy.data.images.load(path, check_existing=False), thread)
+            thread.attachment_once = True       # this thread's Send Once, not the default's
         except (RuntimeError, OSError):
             pass
     with bpy.context.temp_override(window=window):
-        _ask(bpy.context, spot_text(editor, region), "ASK")
+        _ask(bpy.context, spot_text(editor, region), "ASK", thread_id=thread.id)
     return None
 
 

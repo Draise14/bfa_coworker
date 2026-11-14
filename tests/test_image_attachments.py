@@ -334,6 +334,9 @@ class _FakeLayout:
 
     def operator(self, *args, **kwargs):
         self._log.append(("operator", args, kwargs))
+        op = types.SimpleNamespace()
+        self._log.append(("operator_props", args, op))
+        return op
 
     def template_ID(self, *args, **kwargs):
         self._log.append(("template_ID", args, kwargs))
@@ -469,7 +472,8 @@ class TestChatAttachmentUI(unittest.TestCase):
         draw = _extract_ui_func(
             "_draw_attachment_row",
             {"_draw_attachment_preview":
-                lambda layout, img, context, **_kw: preview_calls.append((img, context))})
+                lambda layout, img, context, **_kw: preview_calls.append((img, context)),
+             "_draw_image_picker": _extract_ui_func("_draw_image_picker")})
         log = []
         props = types.SimpleNamespace(chat_image=object(),
                                       chat_image_send_once=True)
@@ -479,12 +483,14 @@ class TestChatAttachmentUI(unittest.TestCase):
         tpl = [c for c in log if c[0] == "template_ID"]
         self.assertEqual(len(tpl), 1, "the socket must be drawn once")
         self.assertEqual(tpl[0][1], (props, "chat_image"))
-        self.assertEqual(tpl[0][2],
-                         {"open": "image.open", "new": "image.new"})
+        # No image.open (#449): Blender's Open fills the button it came from, and a
+        # popover or a redrawn sidebar has none; our own Open keeps the chat it is for.
+        self.assertEqual(tpl[0][2], {"new": "image.new"})
         ops = [c[1][0] for c in log if c[0] == "operator"]
-        # The redundant File button is gone; the socket's own "open"
-        # (image.open) is the file-browser path now.
         self.assertNotIn("bfacw.chat_image_attach", ops)
+        self.assertIn("bfacw.chat_attach_image", ops)
+        opened = [c[2] for c in log if c[0] == "operator_props" and c[1][0] == "bfacw.chat_attach_image"]
+        self.assertEqual(opened[0].thread_id, "main", "Open attaches to the chat drawn here")
         for op_id in ("bfacw.chat_capture_render",
                       "bfacw.chat_capture_screen"):
             self.assertIn(op_id, ops)
@@ -501,7 +507,8 @@ class TestChatAttachmentUI(unittest.TestCase):
         draw = _extract_ui_func(
             "_draw_attachment_row",
             {"_draw_attachment_preview":
-                lambda layout, img, context, **_kw: calls.append(img)})
+                lambda layout, img, context, **_kw: calls.append(img),
+             "_draw_image_picker": _extract_ui_func("_draw_image_picker")})
 
         # Collapsed: the header toggle is drawn with the closed sub-panel
         # arrow, the attached name stays readable, and nothing else is
@@ -533,7 +540,7 @@ class TestChatAttachmentUI(unittest.TestCase):
         self.assertEqual(opened[0][2]["icon"], 'DOWNARROW_HLT',
                          "expanded uses the open sub-panel arrow")
         self.assertEqual(len([c for c in log if c[0] == "template_ID"]), 1)
-        self.assertEqual(len([c for c in log if c[0] == "operator"]), 2)
+        self.assertEqual(len([c for c in log if c[0] == "operator"]), 3)    # Open, Render, Screen
         self.assertEqual(calls, [img])
 
         # Nothing attached: the header shows no name to fall back to.
@@ -843,7 +850,8 @@ class TestChatAttachmentUI(unittest.TestCase):
             "_attach_to_socket",
             {"chat_attachments": types.SimpleNamespace(
                 attachment_name=lambda i: "shot.png"),
-             "_ensure_attachment_preview": lambda i: warmed.append(i)})
+             "_ensure_attachment_preview": lambda i: warmed.append(i),
+             "_ATTACH_TARGET": {"thread": None}})
         context = types.SimpleNamespace(
             window_manager=types.SimpleNamespace(bfacw_chat_props=props))
         op = types.SimpleNamespace(

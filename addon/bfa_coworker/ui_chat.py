@@ -2136,11 +2136,19 @@ def _restore_attachment(props):
     return img
 
 
+# The thread an attach from our own operators is for (#449, #454): set around the socket
+# write, so the image goes to the chat that asked for it, not to whatever chat
+# ``context.area`` finds then (a timer or a file browser has no area: "All editors").
+_ATTACH_TARGET: dict = {"thread": None}
+
+
 def _on_chat_image_update(self, context) -> None:
     """RNA update for the socket: remember a new image, forget a user clear."""
     if _sticky_relinking:
         return
-    _socket_set_by(_ui_thread(context), self.chat_image)     # this chat's thread's image now (#417)
+    # Our attaches name their thread; a native set (the socket's browse) is the area's chat's (#417).
+    thread = _ATTACH_TARGET["thread"] or _ui_thread(context)
+    _socket_set_by(thread, self.chat_image)     # this chat's thread's image now (#417)
     try:
         if self.chat_image is None:
             _forget_attachment()
@@ -2614,16 +2622,32 @@ def _warn_failed_attachment(op, props) -> None:
     )
 
 
-def _attach_to_socket(context, op, img) -> None:
-    """Store *img* in the chat socket and confirm on *op* (main thread)."""
+def _attach_thread(context, thread_id: str = ""):
+    """The thread an attach goes to: *thread_id*'s, taken when the attach began (the chat whose
+    button was used), while it is open; else the chat of *context*'s area (#449, #454)."""
+    thread = agent_controller.THREADS.get(thread_id) if thread_id else None
+    return thread if thread is not None else _ui_thread(context)
+
+
+def _attach_to_socket(context, op, img, thread=None) -> None:
+    """Store *img* in the chat socket as *thread*'s image and confirm on *op* (main thread).
+
+    *thread* is the chat the attach is for, found when it began (#449, #454): this may run
+    from a timer or after a file browser, with no area in *context*.  ``None``: the chat of
+    *context*'s area.  *op* ``None``: no report."""
     props = context.window_manager.bfacw_chat_props  # type: ignore[attr-defined]
-    props.chat_image = img
+    _ATTACH_TARGET["thread"] = thread if thread is not None else _ui_thread(context)
+    try:
+        props.chat_image = img
+    finally:
+        _ATTACH_TARGET["thread"] = None
     # Warm the preview now so the panel can draw the thumbnail on its
     # first redraw instead of one frame later (the pixels are filled by
     # Blender's preview thread after ``preview_ensure()``).
     _ensure_attachment_preview(img)
-    op.report({"INFO"},
-              f"Attached {chat_attachments.attachment_name(img)}")
+    if op is not None:
+        op.report({"INFO"},
+                  f"Attached {chat_attachments.attachment_name(img)}")
 
 
 class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
@@ -3603,7 +3627,11 @@ class BFACW_OT_chat_capture_render(Operator):  # type: ignore[misc]
         "camera is never moved -- or, with no 3D Viewport open, the scene's camera; and attach it"
     )
 
+    # The chat it is for (#449): its tab, when called with no area in context.
+    thread_id: StringProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
+
     def execute(self, context: bpy.types.Context) -> set[str]:
+        thread = _attach_thread(context, self.thread_id)
         # Render the current view.  A throwaway camera is aligned to the
         # viewport and removed again, so the scene is left untouched.
         path = chat_attachments.capture_render_from_view()      # a 3D Viewport in any window
@@ -3617,21 +3645,28 @@ class BFACW_OT_chat_capture_render(Operator):  # type: ignore[misc]
         if img is None:
             self.report({"ERROR"}, "Could not load the rendered image")
             return {"CANCELLED"}
-        _attach_to_socket(context, self, img)
+        _attach_to_socket(context, self, img, thread)
         return {"FINISHED"}
 
 
 # -- Capture part of the screen (#200) ------------------------------------------------
 # Like the Asset Browser's "Capture Screenshot Preview": the screen dims except the
 # part that will be taken.  Click an editor to take it, or drag a rectangle; Enter
-# takes the one shown (the last one), Space moves it, Shift keeps it square.
+# takes the last part taken in that window (outlined), Space moves it, Shift keeps it square.
 # One capture runs in every window at once (#266): a modal only hears its own window, so each
 # window gets its own instance; per window its part ("rects") and whether it is a hovered
 # editor ("hover"); the first instance to take or cancel ends the session for all.
-_SHOT: dict = {"handlers": [], "rects": {}, "hover": {}, "session": 0, "active": False}
+# #454: the highlight always follows the mouse (the part last taken, per window, is kept in
+# "last", not in the operator's saved properties); each instance has a window timer, so it
+# ends as soon as another one ends the session; "thread" is the chat it attaches to (found
+# when it started); and a file load, a closed window, an error or the add-on going away
+# ends it too (cancel, load_pre, unregister), leaving no veil, crosshair or status text.
+_SHOT: dict = {"handlers": [], "rects": {}, "hover": {}, "session": 0, "active": False,
+               "last": {}, "thread": "", "timers": [], "cursors": set()}
 _SHOT_REGIONS = ("WINDOW", "HEADER", "UI", "TOOLS", "TOOL_HEADER", "FOOTER", "NAVIGATION_BAR",
                  "EXECUTE", "ASSET_SHELF", "ASSET_SHELF_HEADER", "CHANNELS", "PREVIEW")
 _SHOT_DRAG = 6
+_SHOT_TICK = 0.05       # each instance's window timer: how soon it notices the session ended
 
 
 def _shot_rect(a, b, square: bool = False) -> tuple[int, int, int, int]:
@@ -3646,7 +3681,8 @@ def _shot_rect(a, b, square: bool = False) -> tuple[int, int, int, int]:
 
 def _shot_draw() -> None:
     window, region = bpy.context.window, bpy.context.region
-    rect = _SHOT["rects"].get(window.as_pointer()) if window is not None else None
+    key = window.as_pointer() if window is not None else None
+    rect = _SHOT["rects"].get(key)
     if rect is None or region is None:
         return          # each window shows its own part (#217, #266), never a copy of another's
     import gpu
@@ -3663,18 +3699,25 @@ def _shot_draw() -> None:
                 tris += [(x0, y0), (x1, y0), (x1, y1), (x0, y0), (x1, y1), (x0, y1)]
         return tris
 
+    def frame(x0, y0, x1, y1, t):
+        return quads(((x0, y0, x1, y0 + t), (x0, y1 - t, x1, y1), (x0, y0, x0 + t, y1), (x1 - t, y0, x1, y1)))
+
     shade = quads(((0, 0, w, bottom), (0, top, w, h), (0, bottom, left, top), (right, bottom, w, top)))
     # The border inside the part's edge (#217): a whole editor's edge lies in the gap
     # between areas, where nothing draws.
-    edge = quads(((left, bottom, right, bottom + 2), (left, top - 2, right, top),
-                  (left, bottom, left + 2, top), (right - 2, bottom, right, top)))
+    edge = frame(left, bottom, right, top, 2)
     # Hovering an editor (no part dragged yet): tint it, so it reads even when it fills the window.
-    tint = quads(((left, bottom, right, top),)) if _SHOT["hover"].get(window.as_pointer()) else []
+    tint = quads(((left, bottom, right, top),)) if _SHOT["hover"].get(key) else []
+    # The part Enter takes again (#454): a thin outline, while the highlight follows the mouse.
+    last = _SHOT["last"].get(key)
+    ghost = (frame(last[0] - ox, last[1] - oy, last[2] - ox, last[3] - oy, 1)
+             if last is not None and tuple(last) != tuple(rect) else [])
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
     gpu.state.blend_set("ALPHA")
     # As the Asset Browser's capture: a light veil outside, the border in the theme's colour.
     border = tuple(bpy.context.preferences.themes[0].user_interface.editor_border) + (1.0,)
-    for tris, color in ((shade, (1.0, 1.0, 1.0, 0.25)), (tint, (1.0, 1.0, 1.0, 0.08)), (edge, border[:4])):
+    for tris, color in ((shade, (1.0, 1.0, 1.0, 0.25)), (tint, (1.0, 1.0, 1.0, 0.08)),
+                        (ghost, border[:3] + (0.6,)), (edge, border[:4])):
         if tris:
             batch = batch_for_shader(shader, "TRIS", {"pos": tris})
             shader.bind()
@@ -3716,10 +3759,56 @@ def _shot_redraw(window) -> None:
         pass
 
 
+def _shot_timer_remove(wm, timer) -> None:
+    """Stop one instance's window timer (once: it may already be gone)."""
+    for i, known in enumerate(_SHOT["timers"]):
+        if known is timer:
+            del _SHOT["timers"][i]
+            try:
+                wm.event_timer_remove(timer)
+            except (AttributeError, ReferenceError, RuntimeError, TypeError, ValueError):
+                pass
+            return
+
+
+def _shot_clear_windows(wm) -> None:
+    """No crosshair and no capture help in the status bar, in any window (#454)."""
+    for window in list(getattr(wm, "windows", ())):
+        try:
+            if window.as_pointer() in _SHOT["cursors"]:
+                window.cursor_modal_restore()
+            with bpy.context.temp_override(window=window):
+                window.workspace.status_text_set(None)
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            pass
+        _shot_redraw(window)
+    _SHOT["cursors"].clear()
+
+
+def _shot_end_all(wm=None) -> None:
+    """End any capture at once (file load, add-on off): veil, flag, timers, cursors, status
+    text.  A running instance sees a new session and stops on its next event."""
+    wm = wm if wm is not None else getattr(bpy.context, "window_manager", None)
+    _shot_handlers_remove()
+    for timer in list(_SHOT["timers"]):
+        _shot_timer_remove(wm, timer)
+    _SHOT["timers"].clear()
+    _SHOT["session"] += 1
+    _SHOT["thread"] = ""
+    if wm is not None:
+        _shot_clear_windows(wm)
+
+
+@bpy.app.handlers.persistent
+def _shot_on_load_pre(*_args) -> None:
+    # Opening a file ends every modal operator, maybe without its cancel(): end the capture here.
+    _shot_end_all()
+
+
 def _shot_status(header, _context) -> None:
     row = header.layout
     for text, icon in (("Take Editor", "MOUSE_LMB"), ("Drag a Part", "MOUSE_LMB_DRAG"),
-                       ("Take Shown", "EVENT_RETURN"), ("Move", "EVENT_SPACEKEY"),
+                       ("Take Last Part", "EVENT_RETURN"), ("Move", "EVENT_SPACEKEY"),
                        ("Square", "EVENT_SHIFT"), ("Cancel", "EVENT_ESC")):
         row.label(text=text, icon=icon)
 
@@ -3736,14 +3825,19 @@ class BFACW_OT_chat_capture_screen(Operator):  # type: ignore[misc]
     bl_idname = "bfacw.chat_capture_screen"
     bl_label = "Capture Screen"
     bl_description = ("Attach part of the screen: click an editor, or drag a rectangle "
-                      "(Enter: the last one, Space: move, Shift: square, Esc: cancel)")
+                      "(Enter: the last part again, Space: move, Shift: square, Esc: cancel)")
 
-    # The part to take, in window pixels; remembered, so Enter takes it again (#200).
-    p1: bpy.props.IntVectorProperty(size=2, options={'HIDDEN'})  # type: ignore[valid-type]
-    p2: bpy.props.IntVectorProperty(size=2, options={'HIDDEN'})  # type: ignore[valid-type]
+    # The part to take, in window pixels (a script, or the timer after a pick).  Not saved: a
+    # saved part froze the next run's highlight on it (#454); the last part is in _SHOT["last"].
+    p1: bpy.props.IntVectorProperty(size=2, options={'HIDDEN', 'SKIP_SAVE'})  # type: ignore[valid-type]
+    p2: bpy.props.IntVectorProperty(size=2, options={'HIDDEN', 'SKIP_SAVE'})  # type: ignore[valid-type]
     use_rect: BoolProperty(default=False, options={'HIDDEN', 'SKIP_SAVE'})  # type: ignore[valid-type]
+    # The chat it attaches to (#454): its tab, found when the capture started.
+    thread_id: StringProperty(options={'HIDDEN', 'SKIP_SAVE'})  # type: ignore[valid-type]
 
     sibling: BoolProperty(default=False, options={'HIDDEN', 'SKIP_SAVE'})  # type: ignore[valid-type]
+
+    _session, _win, _key, _timer = 0, None, 0, None
 
     # -- this instance's window: its part, and whether that is a hovered editor --
     def _rect(self):
@@ -3761,26 +3855,42 @@ class BFACW_OT_chat_capture_screen(Operator):  # type: ignore[misc]
             _shot_handlers_remove()
             _SHOT["session"] += 1
             _SHOT["active"] = True
+            _SHOT["thread"] = _attach_thread(context, self.thread_id).id    # this chat's tab (#454)
             _shot_handlers_add()
-        self._session, self._win, self._key = _SHOT["session"], win, win.as_pointer()
-        last = _shot_rect(tuple(self.p1), tuple(self.p2))
-        self._has_last = not self.sibling and last[2] - last[0] >= 8 and last[3] - last[1] >= 8
-        self._start, self._dragging, self._moving = None, False, False
-        self._square, self._cursor = False, (event.mouse_x, event.mouse_y)
-        if self._has_last:
-            self._set(last, False)
-        elif not self.sibling:
-            self._set(_area_rect_at(win, *self._cursor), True)
-        win.cursor_modal_set("CROSSHAIR")
+        self._session, self._win, self._key, self._timer = _SHOT["session"], win, win.as_pointer(), None
+        try:
+            self._begin(context, event)
+        except Exception:
+            # Nothing may stay behind (#454): no veil, flag, crosshair, timer or status text.
+            if self.sibling:
+                self._finish(context)
+            else:
+                self._end(context)
+            raise
         context.window_manager.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+    def _begin(self, context, event) -> None:
+        win, wm = self._win, context.window_manager
+        given = _shot_rect(tuple(self.p1), tuple(self.p2))
+        if not self.sibling and given[2] - given[0] >= 8 and given[3] - given[1] >= 8:
+            _SHOT["last"][self._key] = given            # a script handed a part: Enter takes it
+        self._start, self._dragging, self._moving, self._picked = None, False, False, False
+        self._square, self._cursor = False, (event.mouse_x, event.mouse_y)
+        if not self.sibling:        # the editor under the mouse; the other windows' when it gets there
+            self._set(_area_rect_at(win, *self._cursor), True)
+        self._timer = wm.event_timer_add(_SHOT_TICK, window=win)
+        _SHOT["timers"].append(self._timer)
+        win.cursor_modal_set("CROSSHAIR")
+        _SHOT["cursors"].add(self._key)
         if not self.sibling:
             try:
                 context.workspace.status_text_set(_shot_status)
             except (TypeError, AttributeError):
                 context.workspace.status_text_set("Click an editor or drag a part to attach (any window)  -  "
-                                                  "Enter: the shown part  -  Space: move  -  Shift: square  -  "
+                                                  "Enter: the last part  -  Space: move  -  Shift: square  -  "
                                                   "Esc: cancel")
-            for other in context.window_manager.windows:       # the other windows join in (#266)
+            for other in wm.windows:       # the other windows join in (#266)
                 if other != win:
                     try:
                         # The window alone: it brings its own screen, and overriding the screen is refused
@@ -3789,39 +3899,46 @@ class BFACW_OT_chat_capture_screen(Operator):  # type: ignore[misc]
                             bpy.ops.bfacw.chat_capture_screen("INVOKE_DEFAULT", sibling=True)
                     except RuntimeError:
                         pass
-        for window in context.window_manager.windows:
+        for window in wm.windows:
             _shot_redraw(window)
-        return {'RUNNING_MODAL'}
 
     def _finish(self, context) -> None:
-        """This instance ends: its cursor back (and, if it ended the session, everyone's veil)."""
+        """This instance ends: its timer and its cursor back."""
+        if self._timer is not None:
+            _shot_timer_remove(context.window_manager, self._timer)
+            self._timer = None
+        _SHOT["cursors"].discard(self._key)
         try:
             self._win.cursor_modal_restore()
-        except (ReferenceError, RuntimeError):
+        except (AttributeError, ReferenceError, RuntimeError):
             pass
 
     def _end(self, context) -> None:
+        """This instance ends the session: every window's veil, crosshair and status text."""
         _shot_handlers_remove()
         self._finish(context)
-        try:
-            context.workspace.status_text_set(None)
-        except (TypeError, AttributeError):
-            pass
-        for window in context.window_manager.windows:
-            _shot_redraw(window)
+        _shot_clear_windows(context.window_manager)
+
+    def cancel(self, context) -> None:
+        # Blender ends it from outside: a file load, its window closed (#454).
+        if self._session == _SHOT["session"] and _SHOT["active"]:
+            self._end(context)
+        else:
+            self._finish(context)
 
     def _take(self, context, rect) -> set[str]:
+        thread_id = _SHOT["thread"]
         self._end(context)
         if rect is None:
             return {'CANCELLED'}
-        if not self.sibling:
-            self.p1, self.p2 = rect[:2], rect[2:]
+        _SHOT["last"][self._key] = tuple(rect)        # Enter takes it again next time, in this window
         win, a, b = self._win, tuple(rect[:2]), tuple(rect[2:])
 
         def later():      # after the redraw without the dimming
             try:
                 with bpy.context.temp_override(window=win):     # the window alone, see invoke (#401)
-                    bpy.ops.bfacw.chat_capture_screen('EXEC_DEFAULT', p1=a, p2=b, use_rect=True)
+                    bpy.ops.bfacw.chat_capture_screen('EXEC_DEFAULT', p1=a, p2=b, use_rect=True,
+                                                      thread_id=thread_id)
             except (RuntimeError, ReferenceError) as ex:
                 print("[Coworker] capture: {!s}".format(ex))
             return None
@@ -3829,9 +3946,20 @@ class BFACW_OT_chat_capture_screen(Operator):  # type: ignore[misc]
         return {'FINISHED'}
 
     def modal(self, context: bpy.types.Context, event) -> set[str]:
+        try:
+            return self._modal(context, event)
+        except Exception as ex:  # pylint: disable=broad-exception-caught
+            # Never leave the veil up (#454): end the capture, then say why.
+            self._end(context)
+            print("[Coworker] capture ended: {!s}".format(ex))
+            return {'CANCELLED'}
+
+    def _modal(self, context, event) -> set[str]:
         if self._session != _SHOT["session"] or not _SHOT["active"]:
             self._finish(context)           # another window took it, or it was cancelled there
             return {'CANCELLED', 'PASS_THROUGH'}
+        if event.type == 'TIMER':
+            return {'PASS_THROUGH'}         # its own tick, or someone else's
         x, y = event.mouse_x, event.mouse_y
         if event.type in {'LEFT_SHIFT', 'RIGHT_SHIFT'}:
             self._square = event.value == 'PRESS'
@@ -3841,7 +3969,9 @@ class BFACW_OT_chat_capture_screen(Operator):  # type: ignore[misc]
             self._end(context)
             return {'CANCELLED'}
         elif event.type in {'RET', 'NUMPAD_ENTER'} and event.value == 'PRESS':
-            return self._take(context, self._rect())
+            # The part dragged or moved now; else the last one taken here; else the editor shown.
+            last = _SHOT["last"].get(self._key)
+            return self._take(context, self._rect() if self._picked or last is None else last)
         elif event.type == 'LEFTMOUSE' and event.value == 'PRESS':
             self._start, self._dragging = (x, y), False
         elif event.type == 'LEFTMOUSE' and event.value == 'RELEASE' and self._start is not None:
@@ -3851,21 +3981,22 @@ class BFACW_OT_chat_capture_screen(Operator):  # type: ignore[misc]
             rect = self._rect()
             if self._moving and rect is not None:
                 self._set((rect[0] + dx, rect[1] + dy, rect[2] + dx, rect[3] + dy), False)
-                self._has_last = True
+                self._picked = True
             elif self._start is not None:
                 sx, sy = self._start
                 if not self._dragging and abs(x - sx) > _SHOT_DRAG and abs(y - sy) > _SHOT_DRAG:
                     self._dragging = True
                 if self._dragging:
                     self._set(_shot_rect(self._start, (x, y), self._square), False)
-                    self._has_last = True
-            elif not self._has_last:
+                    self._picked = True
+            elif not self._picked:          # the highlight follows the mouse (#454)
                 self._set(_area_rect_at(self._win, x, y), True)
             _shot_redraw(self._win)
         self._cursor = (x, y)
         return {'RUNNING_MODAL'}
 
     def execute(self, context: bpy.types.Context) -> set[str]:
+        thread = _attach_thread(context, self.thread_id)
         path = None
         if self.use_rect:
             path = chat_attachments.capture_screen_rect(context.window, *self.p1, *self.p2)
@@ -3882,7 +4013,7 @@ class BFACW_OT_chat_capture_screen(Operator):  # type: ignore[misc]
         if img is None:
             self.report({"ERROR"}, "Could not load the screenshot")
             return {"CANCELLED"}
-        _attach_to_socket(context, self, img)
+        _attach_to_socket(context, self, img, thread)
         return {"FINISHED"}
 
 
@@ -3905,9 +4036,9 @@ class BFACW_OT_chat_image_drop(Operator):  # type: ignore[misc]
     def execute(self, context: bpy.types.Context) -> set[str]:
         img = chat_attachments.load_image_file(self.filepath)
         if img is None:
-            self.report({"WARNING"}, "Not a supported image file")
+            self.report({"WARNING"}, "Blender can't read this file as an image")
             return {"CANCELLED"}
-        _attach_to_socket(context, self, img)
+        _attach_to_socket(context, self, img, _attach_thread(context))     # the chat it was dropped on
         return {"FINISHED"}
 
 
@@ -3951,7 +4082,7 @@ class BFACW_FH_chat_drop(bpy.types.FileHandler):  # type: ignore[misc]
     bl_import_operator = "bfacw.chat_image_drop"
     # Semicolon-separated per bpy.types.FileHandler.bl_file_extensions;
     # mirrors chat_attachments.SUPPORTED_EXTENSIONS.
-    bl_file_extensions = ".png;.jpg;.jpeg;.webp;.bmp;.tif;.tiff"
+    bl_file_extensions = ".png;.jpg;.jpeg;.webp;.bmp;.tif;.tiff;.exr;.hdr;.tga;.jp2;.j2c;.dpx;.cin;.sgi;.rgb;.psd"
     # Bforartists shows this icon on our entry in its "multiple file
     # handlers" drop menu (see _image_data_icon_value).
     bl_icon = _IMAGE_DATA_ICON
@@ -5496,6 +5627,34 @@ class BFACW_OT_thread_focus(Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
+_ATTACH_POPOVER: dict = {"thread": ""}      # the chat whose attach button opened the popover (#449)
+
+
+def open_attach_popover(context) -> None:
+    """Open the Attach popover for the chat of *context*'s area (the GPU chat's attach button)."""
+    thread = _ui_thread(context)
+    _ATTACH_POPOVER["thread"] = thread.id
+    _focus_thread(thread)       # the socket the popover shows holds this chat's image (#417)
+    bpy.ops.wm.call_panel(name="BFACW_PT_attach_popover", keep_open=True)
+
+
+def _draw_image_picker(layout, props, thread_id: str, new: str = "") -> None:
+    """The socket's picker for an image already in the file, and our own Open (#449).
+
+    Not ``template_ID(open="image.open")``: Blender's Open fills the button it was started
+    from, and a popover opened by the GPU chat (or a sidebar redrawn meanwhile) has none to
+    fill, so the image loaded and nothing was attached.  ``bfacw.chat_attach_image`` keeps the
+    chat it is for (*thread_id*) and reads any image Blender can."""
+    row = layout.row(align=True)
+    if new:
+        row.template_ID(props, "chat_image", new=new)
+    else:
+        row.template_ID(props, "chat_image")
+    op = row.operator("bfacw.chat_attach_image", text="", icon=safe_icon('FILEBROWSER'))
+    if op is not None:
+        op.thread_id = thread_id
+
+
 class BFACW_PT_attach_popover(Panel):  # type: ignore[misc]
     """The image for the next message: pick, open, render or screen (#213)"""
     bl_label = "Attach"
@@ -5508,7 +5667,8 @@ class BFACW_PT_attach_popover(Panel):  # type: ignore[misc]
         layout = self.layout
         props = context.window_manager.bfacw_chat_props  # type: ignore[attr-defined]
         layout.label(text="Image for the next message", icon='IMAGE_DATA')
-        layout.template_ID(props, "chat_image", open="image.open")
+        thread = _attach_thread(context, _ATTACH_POPOVER["thread"])
+        _draw_image_picker(layout, props, thread.id)
         if props.chat_image is not None:
             _draw_attachment_preview(layout, props.chat_image, context, max_units=6.0)
             layout.prop(props, "chat_image_send_once", text="Send Once")
@@ -6623,9 +6783,10 @@ def _draw_attachment_row(layout, props, context, minimal: bool = False) -> None:
     """Draw the chat image socket + capture buttons (issue #88 / Tier 3k).
 
     Shared by the 3D Viewport chat panel and the Text Editor panel:
-    one Blender-standard socket (``template_ID``: browse / open / new)
-    fed by every attach source -- the socket's own file browser, render
-    capture, screen capture, and drag-and-drop -- plus the Send Once
+    one Blender-standard socket (``template_ID``: browse / new) and our
+    own Open (``bfacw.chat_attach_image``, #449), fed by every attach
+    source -- the file browser, render capture, screen capture, and
+    drag-and-drop -- plus the Send Once
     toggle and a thumbnail preview of what is attached.  The socket is
     encoded on the main thread at send time (``_capture_chat_attachment``),
     never during drawing.
@@ -6657,11 +6818,11 @@ def _draw_attachment_row(layout, props, context, minimal: bool = False) -> None:
     if minimal:
         # The Coworker editor (#171): pick an image and see it.  Render / Screen
         # are in the toolshelf's Attach panel, and the chat's tray has the pin.
-        box.template_ID(props, "chat_image", open="image.open")
+        _draw_image_picker(box, props, thread.id)
         _draw_attachment_preview(box, img, context, max_units=8.0)
         return
     head.prop(props, "chat_image_send_once", text="Send once")
-    box.template_ID(props, "chat_image", open="image.open", new="image.new")
+    _draw_image_picker(box, props, thread.id, new="image.new")
     _draw_attachment_preview(box, img, context, max_units=8.0)
     row = box.row(align=True)
     row.operator("bfacw.chat_capture_render", icon='RENDER_STILL', text="Render")
@@ -7497,6 +7658,8 @@ def register() -> None:
         bpy.app.timers.register(chat_timer_update, first_interval=1.0, persistent=True)
     if _threads_on_load not in bpy.app.handlers.load_pre:
         bpy.app.handlers.load_pre.append(_threads_on_load)
+    if _shot_on_load_pre not in bpy.app.handlers.load_pre:      # no capture outlives a file (#454)
+        bpy.app.handlers.load_pre.append(_shot_on_load_pre)
     if _session_on_load not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_session_on_load)
     if _threads_on_save not in bpy.app.handlers.save_post:
@@ -7513,6 +7676,13 @@ def unregister() -> None:
             _save_thread_chat(_thread)
     if _threads_on_load in bpy.app.handlers.load_pre:
         bpy.app.handlers.load_pre.remove(_threads_on_load)
+    # A capture running now ends with the add-on (#454): its draw handlers would outlive it.
+    if _shot_on_load_pre in bpy.app.handlers.load_pre:
+        bpy.app.handlers.load_pre.remove(_shot_on_load_pre)
+    try:
+        _shot_end_all()
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] capture cleanup skipped -- {:s}".format(str(ex)))
     if _session_on_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_session_on_load)
     if _threads_on_save in bpy.app.handlers.save_post:

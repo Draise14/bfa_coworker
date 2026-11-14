@@ -36,6 +36,7 @@ unit-tested outside Blender.
 
 __all__ = (
     "ATTACHMENT_LIMIT_BYTES",
+    "CONVERTED_EXTENSIONS",
     "SUPPORTED_EXTENSIONS",
     "attachment_marker",
     "attachment_name",
@@ -45,6 +46,7 @@ __all__ = (
     "capture_render_from_view",
     "capture_screen",
     "capture_screen_rect",
+    "convert_to_png",
     "image_to_data_uri",
     "load_image_file",
     "prune_attachments",
@@ -97,9 +99,15 @@ _MIME_BY_EXT = {
 # already fits the size cap.
 _RAW_OK_EXT = (".png", ".jpg", ".jpeg", ".webp")
 
-# Extensions the file browser, drag-and-drop FileHandler, and
-# ``load_image_file`` accept.
-SUPPORTED_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff")
+# Other formats Blender reads, attached as a PNG copy (#449): a vision
+# backend can't be trusted with them, and they may hold float pixels.
+CONVERTED_EXTENSIONS = (".exr", ".hdr", ".tga", ".jp2", ".j2c", ".dpx", ".cin", ".sgi", ".rgb", ".psd")
+
+# Extensions the drag-and-drop FileHandler accepts (``load_image_file``
+# tries any file Blender can read).
+SUPPORTED_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff") + CONVERTED_EXTENSIONS
+
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
 def attachments_dir() -> Path:
@@ -140,18 +148,75 @@ def load_image_file(filepath: str):
     """Load *filepath* as an image datablock for the chat socket.
 
     Returns the (possibly reused) ``bpy.types.Image``, or ``None`` when
-    the path is missing or not a supported image type.  Main thread
-    only.
+    the path is missing or Blender can't read it as an image.  A format
+    outside ``_MIME_BY_EXT`` (EXR, HDR, TGA...) is attached as a PNG copy
+    in the attachments folder (#449), so what is sent is what a vision
+    backend reads.  Main thread only.
     """
     if not filepath or not os.path.isfile(filepath):
         return None
-    if os.path.splitext(filepath)[1].lower() not in _MIME_BY_EXT:
-        return None
     import bpy  # pylint: disable=import-error,no-name-in-module
+    if os.path.splitext(filepath)[1].lower() not in _MIME_BY_EXT:
+        filepath = convert_to_png(filepath)
+        if not filepath:
+            return None
     try:
         return bpy.data.images.load(filepath, check_existing=True)
     except (RuntimeError, OSError, ValueError):
         return None
+
+
+def convert_to_png(filepath: str) -> str:
+    """Write the image file *filepath* as a PNG in the attachments folder; return its path.
+
+    For a format Blender reads but a vision backend may not (#449).  Float
+    pixels (EXR, HDR) are written the way Blender saves them to an 8-bit
+    file: through the image's colour space.  The image is loaded on its own
+    and freed again, so an image of the user's in the file is not touched.
+    Returns ``""`` when Blender can't read the file or the copy fails.
+    Main thread only.
+    """
+    import bpy  # pylint: disable=import-error,no-name-in-module
+    try:
+        src = bpy.data.images.load(filepath, check_existing=False)
+    except (RuntimeError, OSError, ValueError):
+        return ""
+    out = None
+    try:
+        width, height = src.size[:]
+        if width <= 0 or height <= 0:
+            return ""
+        stem = "".join(c for c in Path(filepath).stem if c.isalnum() or c in "-_ ")[:60].strip()
+        out = _unique_path(attachments_dir(), stem or "attached")
+        try:
+            src.file_format = "PNG"
+            src.save(filepath=str(out))
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            src.save_render(str(out))   # the scene's output settings: kept only if it is a PNG
+        if _is_png(out):
+            prune_attachments()
+            return str(out)
+    except (AttributeError, RuntimeError, OSError, ValueError):
+        pass
+    finally:
+        try:
+            bpy.data.images.remove(src)
+        except (ReferenceError, RuntimeError):
+            pass
+    if out is not None:
+        try:
+            out.unlink()
+        except OSError:
+            pass
+    return ""
+
+
+def _is_png(path) -> bool:
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(8) == _PNG_MAGIC
+    except OSError:
+        return False
 
 
 def capture_render() -> str | None:

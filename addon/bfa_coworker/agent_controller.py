@@ -1340,6 +1340,8 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "assign_material_to_objects",
         "load_asset_in_context",
         "bake_textures",
+        "get_node_tree_as_code",       # #480: whole node trees as text
+        "build_node_tree_from_code",
     }),
     "modeling": frozenset({
         "jump_to_view3d_object_by_name",
@@ -1361,6 +1363,8 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "get_screenshot_of_area_as_image",
         "three_point_lighting_rig",
         "bake_textures",
+        "get_node_tree_as_code",       # #480: the compositor's trees
+        "build_node_tree_from_code",
     }),
     "vse": frozenset({
         "jump_to_tab_by_name",
@@ -1373,6 +1377,8 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "get_active_node_tree",
         "get_node_group_interface",
         "wire_node_group",
+        "get_node_tree_as_code",       # #480: whole node trees as text
+        "build_node_tree_from_code",
     }),
     "assets": frozenset({
         "search_assets",
@@ -4571,6 +4577,8 @@ _TOOL_FRIENDLY_NAMES: dict[str, str] = {
     "render_scene": "Rendering",
     "get_job_status": "Waiting for the background job",
     "bake_textures": "Starting the bake",
+    "get_node_tree_as_code": "Reading the node tree",
+    "build_node_tree_from_code": "Building the node tree",
 }
 
 

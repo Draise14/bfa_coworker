@@ -1,7 +1,7 @@
 # Tier 4l — Local inference, November: three well-oiled setups
 
 **Status**: 📝 Pitch for review (2026-10-30). A November lane that runs **in parallel**
-with Threads (1.1.42) and the Sequencer (1.1.43): it lives in `llm_manager.py` and the
+with Threads (1.1.42) and the Sequencer (1.1.44): it lives in `llm_manager.py` and the
 Local preferences, not in `agent_controller.py` / `ui_chat.py`.
 **Research**: web sources as of 2026-10-30 (listed in §8). Vendor and third-party
 benchmarks; the bake-off (§4) decides what we ship.

@@ -23,6 +23,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [ ] **Add Model Generator** locally, Ultrashape, Hunyuan, similar to here: https://github.com/ahujasid/blender-mcp
 - [x] **Add CC0 resource downloader** from Polyhaven, AmbientC00, Sketchfab, etc — Polyhaven tools implemented in v1.1.37.
 
+## [v1.1.43] - 2026-11-13
+
+Fixes and polish from the 1.1.42 test round. Coworker now registers in Blender, Claude Code
+gets Coworker's tools on a fresh install, a .blend brings its own chats back, and the chat
+learns to paste images, select text with the mouse and open its own right-click menu, and
+gets an input you can scroll and resize.
+Release notes: `_misc/release_notes/release_notes_v1.1.43.md`.
+
+### Added
+
+- **Paste an image (#450, #470).** **Ctrl V** (Cmd V) in the chat's prompt attaches a copied image to the chat you pasted into, in the Coworker editor and the sidebar chat.
+  - A screenshot, a picture copied from a browser or an image editor, or a file copied in Explorer is attached.
+  - A copied path of an image file (plain, quoted from *Copy as path*, or a `file://` link) attaches that file; the path isn't typed into the prompt.
+  - Anything else is pasted as text, as before. When the clipboard holds both text and a picture (spreadsheet cells, a paragraph from a word processor), Ctrl V pastes the text.
+  - **Paste Image** takes the picture even then: in the attach popover, the Chat menu, the right-click menu and the editor's Attach tools. With nothing to attach it says "No image on the clipboard".
+  - To read the picture, an Image Editor in the window is used, or for a moment the smallest area that isn't a 3D View or the chat. It switches back to what it showed.
+- **Select text with the mouse (#451, #455, #471).**
+  - **In the prompt:** a drag selects (as Shift+arrows already did), a double-click selects a word. A plain click still only places the cursor.
+  - **In messages:** a drag selects across wrapped lines, headings, lists, code and turns, and the wheel scrolls while you drag. A double-click selects a word. The live Thinking box can be selected too; a reply that is still streaming can't.
+  - **Ctrl C** (Cmd C) copies the selection while the mouse is over the chat, with keys and tokens shown as `***` like the Copy buttons. Elsewhere Ctrl C is the editor's as before (it still copies objects in the 3D View). What you copy is the text as shown, without markdown.
+  - **Esc** or a click anywhere else clears the selection. The right-click menu has **Copy Selection**.
+  - Workshop rows and job rows can't be selected; their Copy buttons remain.
+- **The chat input scrolls and resizes (#389, #474).** A long message is fully reachable, in the Coworker editor and the sidebar chat.
+  - **The wheel** over the input scrolls it while its text is taller than the box; when the text fits, the wheel scrolls the chat as before. Ctrl+wheel still zooms. A thin hint on the right shows where you are.
+  - **The caret stays in view** when you type, move it, paste, undo, click or drag past the top or bottom edge; otherwise the input stays where the wheel left it.
+  - **Drag the input's top edge** to make it taller or shorter, from 2 lines up to about half the chat. The cursor shows up-down arrows over the edge. The input still grows with its text up to that size.
+  - **Ctrl+Up / Ctrl+Down** while the input has focus make it taller or shorter.
+  - **The size is remembered** separately for sidebars and the Coworker editor, saved with the preferences.
+- **The chat's own right-click menu (#453, #464).** Right-click in the Coworker editor or the sidebar chat opens Coworker's menu instead of the Node Editor's:
+  - on a message: **Copy Message**, **Copy Code** (on a code block) and **Revert** (the newest turn);
+  - on the prompt: **Cut**, **Copy**, **Paste**, **Select All**;
+  - always: Attach Image, Capture Editor, Capture Render, New Chat, Stop (while a turn runs), **Copy Whole Chat** (this chat's conversation, without tool steps), History and Preferences.
+  - Right-click outside the chat, and in normal node editors, is unchanged.
+- **A .blend is a session; History by file (#431, #462).**
+  - Leaving a file saves its chat, its tabs and the tab each area shows. Opening a file (File → Open, recent files, History) brings back its chat, Goal & Plan and memory at once, so the next turn has them in Local and Remote.
+  - Each area gets its tab back, matched by workspace, position and editor (after a layout change, the same kind of editor).
+  - **External Agent:** the agent switches to that chat's own saved session, or starts fresh for a new chat, and each tab continues its own chat's session.
+  - **Save As** keeps the chat, under the new file name.
+  - **History** lists files newest first, each with an Open button and its chats under it (editor icon, mode, time). Chats from unsaved files sit under *Not saved in a file*. Search matches chat titles and file names.
+- **Chat Draw Trace (#387, #475).** A toggle in Status & Diagnostics, off by default, with a **Copy** button: it keeps the last 300 draws of the chat with anomalies flagged, to paste into an issue after a glitch.
+
+### Changed
+
+- **+ starts a chat for All editors (#466, #468).** In every tab strip. In an editor's sidebar a new button with the editor's icon starts a chat that uses that editor's context; **New Chat for This 3D Viewport** (or the editor you're in; a Node Editor is named by its tree, e.g. *Shader Editor*) does the same from the ▾ tab menu and the right-click menu.
+  - **Start This Chat Fresh** in the ▾ tab menu, the Chat menu and the right-click menu: the chat goes to History and its tab starts empty, in the same place. It works on any tab, and is greyed out while that chat's turn runs.
+  - The Chat menu's *New Thread* is now **New Chat**.
+- **The Coworker editor's header (#467, #469).** The chat tabs sit in the centre. The S / M / L thumbnail buttons moved into a **Chat Display** dropdown (View → Small / Medium / Large Thumbnails stays). In a narrow editor the header fits: the tabs keep ×, + and the tab menu, the chat mode shows as icons and the status text is shortened, so Start / Stop and Preferences stay in view.
+- **The Thinking box (#452, #463)** shows markdown (headings, lists, bold, code) and is as tall as its text, with no empty row on top, up to 8 lines with the newest at the bottom. It only grows during a turn, so the chat doesn't jump.
+
+### Fixed
+
+- **Coworker works in Blender (#456, #457).** In Blender (not Bforartists) the add-on failed to enable (`enum "WIZARD" not found`) and left panels behind that raised `KeyError`. The four Bforartists-only icons now have Blender stand-ins, the Coworker editor's toolshelf tabs are used only in Bforartists, and an add-on that fails to enable now removes everything it registered instead of staying half there. Checked live on Blender 5.2.4.
+- **Claude Code gets Coworker's tools on a fresh install (#458, #459).** The 1.1.42 zip carried some of the MCP server's packages built for Python 3.12, while Blender 5.2 and Bforartists 5.2 / 5.3 run Python 3.13. Only Local repaired them, so External Agent talked without tools and External Harness showed `CONNECTION_CLOSED`.
+  - Every mode now checks once per Python version that the server's packages load, and reinstalls them if not, before the server starts. *Add to <client>* and *Copy MCP Config* wait for it with a status line.
+  - If they still don't load, the server says what to do instead of a bare traceback.
+  - The mode switch no longer locks just because the bridge runs while the agent is off.
+  - **Check Status** in External Agent checks the bridge and the agent's MCP server (llama-server shows N/A). **Check Ports** shows this window's bridge as "running here".
+  - The release zip is built with Blender's own Python.
+- **Claude Code on Opus 5.5 stopped blocking requests as `reasoning_extraction` (#460, #461).** Coworker's instructions asked the model to "think aloud"; on the MCP server, in Remote API and in the built-in prompt they now ask for a short progress line before and after each step instead.
+- **Opening another .blend no longer mixes up chats (#431, #462).** In External Agent the old file's chat stayed on screen, the next save wrote it into the new file's chat, and the agent kept talking in the old conversation. Save As started a new chat.
+- **Images attach to the chat you used (#449, #465).** Attaching from the file browser, captures and Explain This Spot went to *All editors*; now they go to the tab that started them. The attach popover shows its own chat's image and its button is Coworker's own Attach Image instead of Blender's Open. EXR, HDR, TGA, PSD and other formats Blender reads are attached as a PNG copy (EXR and TGA were refused). Enter in the file browser is no longer taken by the chat.
+- **The capture overlay always closes (#454, #465).** A second capture no longer starts frozen on the last rectangle: the highlight follows the mouse, and the last rectangle shows as a thin outline that **Enter** takes again. Opening a file during a capture, an error, or a cancel ends it and clears the veil, status text and crosshair in every window.
+- **Two chat glitches (#387, #475).**
+  - The messages could be blank for a frame while a reply streamed in Local / Remote: the turn changed between measuring and drawing it. The chat now reads the running turn once per frame.
+  - The sidebar chat could vanish after Resolution Scale, a monitor with another DPI or the chat's rows changed, with part of its panel scrolled out of view. A height learnt at another scale or row count is no longer used.
+  - The report of the chat drawn over another sidebar tab was not reproduced; the Chat Draw Trace is there to catch it.
+- **Freeing a port on Windows (#473, #476).** Coworker now sees servers listening on 127.0.0.1 on Windows (it never found them before and always moved to the next free port), and can free a port held by a leftover server of a Blender that has closed. Another open window's server is never touched.
+  - The test suite now passes completely; it had 9 long-standing failures.
+
 ## [v1.1.42] - 2026-11-09
 
 Threads: a conversation per job, in chat tabs. Long renders and bakes answer with a job id,

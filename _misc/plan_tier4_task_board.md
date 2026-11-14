@@ -15,7 +15,7 @@ Blender/Bforartists 5.3, chat drawn with Blender's own `label_markdown()`.
 
 **No PR is merged automatically** (2026-10-25): every PR, here and in Bforartists, waits for your review.
 
-**Decided 2026-11-10:** the Classic chat is phased out (kept in 1.1.42, removed in 1.1.43, #430) ·
+**Decided 2026-11-10:** the Classic chat is phased out (kept in 1.1.42 and 1.1.43, removed in 1.1.44, #430) ·
 History is by file, and a .blend restores all its tabs and each area's tab (#431) · new UI work
 goes to the GPU chat only.
 
@@ -31,8 +31,8 @@ from `main`, no stacked PRs. Only one open PR at a time on `agent_controller.py`
 
 | Status | Task | PR |
 |---|---|---|
-| ⏭ Now | **1.1.43: the Sequencer core, after two clean-ups.** First #430 (Classic chat removed, GPU chat only) and #431 (History by file; a .blend reopens all its tabs). Then Video 0 spike → Tools 1 → Wand 0 → Video 1 → Video 2 → Video 3. Then Threads 3, Footer 1, Video 4–6 | #430 #431 #374 #304 #331 #375 #376 #333 |
-| ⏭ Now | **1.1.42 release**: all code merged (2026-11-10); v1.1.42 is a draft. Left: the CHANGELOG + release notes for #433–#445, publish, the `extensions/index.json` listing | |
+| ⏭ Now | **1.1.44: the Sequencer core, after one clean-up.** First #430 (Classic chat removed, GPU chat only). Then Video 0 spike → Tools 1 → Wand 0 → Video 1 → Video 2 → Video 3. Then Threads 3 (#359), Footer 1, Video 4–6 | #430 #374 #304 #331 #375 #376 #333 #359 |
+| ⏭ Now | **1.1.43 release: hardening** from the 1.1.42 test round (2026-11-13). Blender registers and draws, Claude Code gets the tools on a fresh install, no "think aloud", a .blend is a session (#431), the Thinking box, the chat's right-click menu, attach and capture fixes, + for All editors, the editor header, paste an image, mouse text selection, the scrolling and resizable input, two chat glitches and the Chat Draw Trace, a green test suite. Left: build, publish, the `extensions/index.json` listing | #457 #459 #461 #462 #463 #464 #465 #468 #469 #470 #471 #474 #475 #476 |
 | ✅ Done | **1.1.42: architecture first** (2026-11-10). Threads 0–2 + 2b + 2c: one thread per editor, one turn at a time across threads, chat tabs (+ new, × close, tab menu, on the right). Long jobs (Tools 6) except Stop → cancel; secrets (Security 2 + 2b); the repeat guard (Runtime 1); the code and file guard + a trusted route for Coworker's own code (Security 3); the threat model (Security 1); the bundling spike + plan. Fixes: the MCP launcher (#416), first start on a fresh profile (#424), Linux Python (#435), typing in a second chat (#444). Remote runs for #310, #346, #357 done | #399 #409-#415 #425-#428 #432-#446 |
 | ✅ Done | Green test baseline + kickoff | #108 |
 | ✅ Done | Skills 1 + 2: template tools work everywhere; node tools read the 5.x compositor | #109 (#110) |
@@ -116,7 +116,7 @@ Plan: `plan_tier4i_engine_parity.md`
 | ✅ | **Engine 9**: Short tool results | I7 | Big results become a short preview + `read_tool_output` handle | — | S | 50 KB node dump → ≤ 2 KB preview on every engine | #167 |
 | ✅ | **Engine 10**: Benchmarks on every engine | I8 | Benchmark steps go through the engine, so the same set runs on Local, Remote, External Agent; Compare groups by mode | Engine 2, Agent 4 | S | One suite side by side on three engines | #179 |
 
-## Video — an artist-friendly Sequencer (core in 1.1.43, after threads)
+## Video — an artist-friendly Sequencer (core in 1.1.44, after threads)
 
 Plan: `plan_tier4v_video_sequencer.md`. A talking-head clip becomes a captioned vertical
 short in a few clicks; the basics need no model; **Suggest** proposes the edit. With
@@ -270,8 +270,8 @@ undo steps interleave. Missions and agent teams (Tier 5) are built on threads.
 | ✅ | **Threads 2** (#358): Each editor has its own thread | 4o §2.1 | Sidebar shows its editor's thread; header (New thread here, Switch…, Open in Coworker editor); right-click operators start in their editor's thread; thread list in the Coworker editor; saved per .blend | Threads 1 | M | A 3D and a node question become two chats; the .blend restores both | #413 → main via #415 |
 | ✅ | **Threads 2b** (#417): Everything per thread | 4o §2.1 | Draft, attachment, Goal & Plan, usage and Auto mode per thread (*All editors* when editor focus is off); a thread + mode picker in the header of a maximized / full-screen editor | Threads 2 | M | Two editor threads keep their own draft, plan and usage; full screen shows and switches the thread | #426 |
 | ✅ | **Threads 2c** (#427): Chat tabs | 4o §2.1 | Tabs replace the thread controls: *All editors* + one per editor; + new (uses this editor's context), × close, the tab menu, grouped on the right (#433); typing goes to the tab you type in (#444) | Threads 2b | M | Two tabs in one window each keep their own chat | #428 #434 #445 |
-| ☐ | **Sessions** (#431): History by file | 4o §2.1 | History lists files with their chats nested; opening a .blend (from History or File → Open) restores all its tabs and each area's tab | Threads 2c | M | Reopen a .blend: every area shows the tab it had | 1.1.43 |
-| ☐ | **Classic out** (#430): GPU chat only | 4a | Remove the Classic chat and its preference; the sidebar and the Coworker editor use the GPU chat only | #423 (job row in the GPU chat, done) | M | Nothing that worked in Classic is missing | 1.1.43 |
+| ✅ | **Sessions** (#431): History by file | 4o §2.1 | History lists files with their chats nested; opening a .blend (from History or File → Open) restores all its tabs and each area's tab | Threads 2c | M | Reopen a .blend: every area shows the tab it had | #462 (1.1.43) |
+| ☐ | **Classic out** (#430): GPU chat only | 4a | Remove the Classic chat and its preference; the sidebar and the Coworker editor use the GPU chat only | #423 (job row in the GPU chat, done) | M | Nothing that worked in Classic is missing | 1.1.44 |
 | ☐ | **Threads 3** (#359): Side by side, safely | 4o §3 | Runner (cap, fair model queue, Local slots option, ACP session per thread, Remote back-off); claims + conflict asking; undo names per thread + honest Revert; Stop all; "other threads" context line | Threads 1, 2 | L | **Test 7**: 3D build + node tidy + strip translation at once; Stop one; a conflict asks; Revert never silently undoes another thread | Threads 0 corrections first (on #359): never split llama-server's KV (4 slots on one unified 32K already); route ACP updates by `sessionId`; no positional undo, `coworker_api._turn` per thread |
 | ☐ | **Orchestrate 1** (#343): Map over selection *(stretch)* | 4m §7 | One instruction or operator per selected item, inside the editor's thread; progress row, stop/continue on error, one undo | Tools 8, Threads 3 | M | 30 rocks get individual materials in one undo | |
 | ⏩ | **Orchestrate 2** (#344): Missions *(Tier 5)* | 4o §4 | A mission thread spawns helper threads per plan step, each with a checkpoint; ends with a validator pass | Threads, Skills 7 | M | A failing step reverts only itself; the mission ends with an audit | |

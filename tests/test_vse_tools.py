@@ -506,8 +506,14 @@ class TestRegistration(unittest.TestCase):
                 self.assertIn("readOnlyHint=True", text)
 
     def test_preview_is_handled_like_the_screenshots_in_the_local_loop(self):
+        # Since #487 any tool's image block (the preview's JPEG included) reaches the
+        # model through tool_images.blocks_in; there is no per-tool list to join.
         loop = (_REPO / "addon" / "bfa_coworker" / "agent_controller.py").read_text(encoding="utf-8")
-        self.assertRegex(loop, r'"get_screenshot_of_window_as_image",\s*"render_vse_preview"\)')
+        self.assertIn("tool_images.blocks_in(content)", loop)
+        self.assertNotIn("_extract_image_from_tool_result", loop)
+        images = (_REPO / "addon" / "bfa_coworker" / "tool_images.py").read_text(encoding="utf-8")
+        self.assertIn('block.get("mimeType")', images)
+        self.assertNotIn('"render_vse_preview"', images.split("FILE_TOOLS = ", 1)[1].split("\n", 1)[0])
 
 
 if __name__ == "__main__":

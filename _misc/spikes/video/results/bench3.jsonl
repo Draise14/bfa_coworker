@@ -1,0 +1,1 @@
+{"config": "cpu:large-v3-turbo:wdtw", "exit": 0, "wall_s": 70.17, "whisper_total_s": 69.99, "load_s": 1.12, "backend": ["CPU"], "words": 209, "score": {"matched": 191, "ref_words": 204, "hyp_words": 209, "mean_err_s": 0.253, "p90_err_s": 0.425, "max_err_s": 0.58}, "text_head": "Hello, and welcome to this short test of automatic captions in the"}

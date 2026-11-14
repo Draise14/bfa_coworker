@@ -23,8 +23,10 @@ __all__ = (
     "DEFAULT_BRIDGE_PORT",
     "DEFAULT_MCP_PORT",
     "DEFAULT_LLM_PORT",
+    "DEFAULT_WHISPER_PORT",
     "is_debug_mode",
     "effective_ports",
+    "effective_whisper_port",
     "UPDATE_REPO_URL",
     "update_repo_of_this_install",
     "get_llm_manager",
@@ -99,6 +101,8 @@ STATE_OFFLINE_ERROR_MESSAGE = "Online access must be enabled in the system prefe
 DEFAULT_BRIDGE_PORT = 9876
 DEFAULT_MCP_PORT = 9191
 DEFAULT_LLM_PORT = 8081
+# whisper-server, speech to text (#375).  Clear of the others plus their offsets (0-100).
+DEFAULT_WHISPER_PORT = 8481
 
 # Debug mode: controlled by user-facing preference toggle.
 # Previously a hardcoded constant; now reads from preferences at runtime.
@@ -159,6 +163,26 @@ def effective_ports(prefs) -> tuple[int, int, int]:
     except Exception:  # pylint: disable=broad-exception-caught
         pass
     return (bridge, mcp, llm)
+
+
+def effective_whisper_port(prefs) -> int:
+    """The whisper-server port (#375), like :func:`effective_ports`: the override when
+    set (> 0), else ``DEFAULT_WHISPER_PORT + offset``; once THIS window's server runs,
+    the port it actually got (it moves up when another window holds the configured one)."""
+    offset = prefs.port_offset if hasattr(prefs, 'port_offset') else 0
+    port = (
+        prefs.whisper_port
+        if hasattr(prefs, 'whisper_port') and prefs.whisper_port > 0
+        else DEFAULT_WHISPER_PORT + offset
+    )
+    try:
+        from . import whisper_manager as _wm
+        actual = _wm.running_port()
+        if actual:
+            port = int(actual)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return port
 
 
 # -- Updates (issue #86) ----------------------------------------------------

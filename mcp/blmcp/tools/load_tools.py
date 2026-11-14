@@ -29,12 +29,13 @@ def register(mcp: FastMCP) -> None:
         animation, lighting...), call this first; the tools appear right after.
 
         Domains and the tools they add:
-        - rendering: render to a file, bake textures, lighting rig (render_viewport_to_path,
-          bake_textures, three_point_lighting_rig, get_screenshot_of_area_as_image)
-        - material: PBR materials, Polyhaven textures, bake textures (setup_pbr_material,
-          assign_material_to_objects, download_polyhaven_asset, search_polyhaven_assets,
-          load_asset_in_context, bake_textures, render_viewport_to_path,
-          get_screenshot_of_area_as_image)
+        - rendering: render to a file, bake textures, lighting rig, compositor trees
+          (render_viewport_to_path, bake_textures, three_point_lighting_rig,
+          get_screenshot_of_area_as_image, get_node_tree_as_code, build_node_tree_from_code)
+        - material: PBR materials, Polyhaven textures, bake textures, shader trees
+          (setup_pbr_material, assign_material_to_objects, download_polyhaven_asset,
+          search_polyhaven_assets, load_asset_in_context, bake_textures, render_viewport_to_path,
+          get_screenshot_of_area_as_image, get_node_tree_as_code, build_node_tree_from_code)
         - lighting: lights, HDRIs (three_point_lighting_rig, download_polyhaven_asset,
           search_polyhaven_assets, render_viewport_to_path, get_screenshot_of_area_as_image)
         - animation: keyframes (batch_keyframe_insert, jump_to_view3d_object_by_name,
@@ -42,17 +43,18 @@ def register(mcp: FastMCP) -> None:
         - modeling: navigate and organise (jump_to_view3d_object_by_name,
           jump_to_view3d_object_data_by_name, jump_to_tab_by_name, jump_to_tab_by_space_type,
           set_collection_color_tag, get_screenshot_of_area_as_image)
-        - geometry_nodes: node trees (get_active_node_tree, get_node_group_interface,
-          wire_node_group, jump_to_view3d_object_by_name, jump_to_view3d_object_data_by_name,
+        - geometry_nodes: node trees (get_node_tree_as_code, build_node_tree_from_code,
+          get_active_node_tree, get_node_group_interface, wire_node_group,
+          jump_to_view3d_object_by_name, jump_to_view3d_object_data_by_name,
           get_screenshot_of_area_as_image)
         - assets: asset libraries (search_assets, get_asset_libraries, get_asset_tags,
           list_asset_catalogs, load_asset_in_context, place_asset_in_scene,
           jump_to_asset_browser, download_polyhaven_asset, search_polyhaven_assets,
           assign_material_to_objects, get_active_node_tree, get_node_group_interface,
           wire_node_group)
-        - vse: Video Sequencer strips: list, read, move / trim, preview a frame
+        - vse: Video Sequencer strips: list, read, move / trim, preview a frame, and speech to text
           (get_vse_timeline_overview, get_vse_strips_summary, get_vse_strip_detail,
-          set_strip_frame_range, render_vse_preview, jump_to_tab_by_name,
+          set_strip_frame_range, render_vse_preview, transcribe_strip, jump_to_tab_by_name,
           jump_to_tab_by_space_type)
 
         Load only what the request needs; the basic tools (scene, code, docs,

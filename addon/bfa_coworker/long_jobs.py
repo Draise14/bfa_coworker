@@ -86,7 +86,7 @@ JOB_TIMEOUT = 60.0 * 60.0
 # Finished jobs kept for get_job_status (oldest dropped first).
 _KEEP_FINISHED = 20
 
-_KIND_VERBS = {"RENDER": "Rendering", "OBJECT_BAKE": "Baking"}
+_KIND_VERBS = {"RENDER": "Rendering", "OBJECT_BAKE": "Baking", "TRANSCRIBE": "Transcribing"}
 
 # Patched by the tests to fake a ten-minute job.
 _clock: Callable[[], float] = time.monotonic
@@ -304,8 +304,8 @@ def status(job_id: str) -> dict[str, Any]:
             known = ", ".join("{:s} ({:s}, {:s})".format(j["id"], j["label"], j["state"])
                               for j in list(_jobs.values())[-5:])
             return {"status": "error", "job_id": str(job_id), "state": "unknown", "message": (
-                "There is no job '{:s}'. {:s}Long jobs come from render_viewport_to_path(background=True) "
-                "and bake_textures, which return the job_id.".format(
+                "There is no job '{:s}'. {:s}Long jobs come from render_viewport_to_path(background=True), "
+                "bake_textures and transcribe_strip, which return the job_id.".format(
                     str(job_id), "Known jobs: {:s}. ".format(known) if known else ""))}
         out: dict[str, Any] = {
             "status": "error" if job["state"] == "error" else "ok",

@@ -14,6 +14,8 @@ initial_instructions: |
   - For long jobs, start them and check with get_job_status: render_viewport_to_path(background=True) and
     bake_textures return a job_id, and get_job_status(job_id) waits for it. Don't loop faster than
     every few seconds. Never run a long bake or render in execute_blender_code (it blocks Blender, times out).
+  - Video Sequencer: get_vse_timeline_overview, get_vse_strips_summary, get_vse_strip_detail,
+    set_strip_frame_range (move / trim / channel, e.g. start=50), render_vse_preview -- not bpy.ops.sequencer code.
   - Independent parts of a big job (different editors, a long side job) can go to helper chats with
     delegate_task: it answers at once (don't wait); the results come back as one "[Helpers]" message.
     Do small jobs and steps that depend on each other yourself. Here helpers run one after another.
@@ -51,6 +53,8 @@ initial_instructions: |
   3. Create from scratch only when neither works.
   - Append = independent copy (default). Link = shared reference.
   - Node groups: use wire_node_group to splice into trees, not load_asset_in_context.
+  - Whole node trees (Geometry Nodes, shaders, compositor): get_node_tree_as_code reads one as
+    text; edit it and send it to build_node_tree_from_code (mode create / replace / update).
 
   # Stability
   - Do NOT call bpy.ops.object.auto_sync_object_data_name() — it crashes.

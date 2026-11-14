@@ -81,13 +81,14 @@ PLAN_SAFE_TOOLS: frozenset[str] = frozenset({
     "get_objects_summary", "get_object_detail_summary", "get_scene_digest", "get_operation_history",
     "get_blendfile_summary_datablocks", "get_blendfile_summary_missing_files",
     "get_blendfile_summary_of_linked_libraries", "get_blendfile_summary_path_info",
-    "get_blendfile_summary_usage_guess", "get_active_node_tree", "get_node_group_interface",
+    "get_blendfile_summary_usage_guess", "get_active_node_tree", "get_node_group_interface", "get_node_tree_as_code",
     "get_asset_libraries", "get_asset_tags", "list_asset_catalogs", "search_assets",
     "search_polyhaven_assets", "get_polyhaven_status", "get_screenshot_of_window_as_image",
     "get_screenshot_of_window_as_json", "get_screenshot_of_area_as_image", "search_api_docs",
     "search_manual_docs", "get_python_api_docs", "read_tool_output", "ask_user", "update_plan", "load_tools",
     "get_attached_image",
     "list_blender_templates",
+    "get_vse_timeline_overview", "get_vse_strips_summary", "get_vse_strip_detail",     # Tools 1 (#304)
 })
 PLAN_NOTE = ("[Plan mode] Don't change the Blender scene or any file. Look at what you need (scene, docs), "
              "then write a short step plan for this request with the update_plan tool (3-8 concrete steps), "

@@ -35,6 +35,7 @@ import time
 import traceback
 from collections.abc import Callable
 
+from . import answer_envelope
 from .mcp_to_blender_server import _encode_response
 
 # Total wall-time in seconds allowed for a background task (e.g. rendering) to complete.
@@ -238,12 +239,13 @@ def poll() -> bool:
                 did_work = True
                 continue
 
-        # Build the final response with the standard envelope.
-        response: dict[str, object] = {"status": "ok", "result": result}
+        # The standard envelope around a tool-code checker's bare result; a checker that
+        # waited for the user answers with the whole answer already (#487: one envelope).
+        response: dict[str, object] = dict(answer_envelope.answer_of(dc.check_fn, result))
         if dc.stdout:
-            response["stdout"] = dc.stdout
+            response.setdefault("stdout", dc.stdout)
         if dc.stderr:
-            response["stderr"] = dc.stderr
+            response.setdefault("stderr", dc.stderr)
         _send_and_close(dc, response)
         did_work = True
 

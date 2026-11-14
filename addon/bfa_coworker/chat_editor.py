@@ -42,9 +42,10 @@ import bpy  # pylint: disable=import-error
 
 from . import agent_controller, mcp_to_blender_server
 from .shared import CHAT_MODE_ITEMS, HARNESS_PRESET_ITEMS, icon as safe_icon, is_bforartists
-from .ui_gpu import input_capture, render
+from .ui_gpu import draw_trace, input_capture, render
 from .ui_gpu import layout as gpu_layout
 from .ui_gpu import style as gpu_style
+from .ui_gpu.chat_view import live_snapshot
 from .ui_gpu.input_box import InputBox, Suggestion
 from .ui_gpu.surface import ChatSurface, Notice, TopBar
 
@@ -346,7 +347,9 @@ def _approval_card(context: Any = None) -> Any:
     return ui_chat.approval_card(context)
 
 
-def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0) -> None:
+def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0, trace: Any = None) -> None:
+    """Draw the chat in *rect*.  *trace*: this draw's :class:`draw_trace.Frame` while the
+    draw trace is on (#387), filled here and added to the trace."""
     context = bpy.context
     prefs = _prefs(context)
     props = _props()
@@ -375,15 +378,33 @@ def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0) -> None:
     card = _approval_card(context)
     surface.view.suggest = not harness and card is None    # no buttons while a card asks (#220)
     typed_before = surface.box.model.text
-    actions = surface.draw(canvas, rect, _history(context), live=state, top=_status(context) if compact else None,
-                           notice=_harness_notice(prefs) if harness else None,
-                           approval=card)     # also in External Harness: a risky step asks (#166)
-    if surface.box.model.text != typed_before:
-        # Changed by a click while drawing (an @ suggestion): share the draft now,
-        # or the panel chat's own @ popup would see the old half-typed "@Ca".
-        actions.append(("draft", surface.box.model.text))
-        _SYNCED[id(surface)] = surface.box.model.text
-    render.render(canvas.commands, style)
+    if trace is not None:
+        trace.live_before = _live_lengths(state)
+    # The live state once for the frame, and before the history (#387): our loop's worker
+    # adds the reply to the history and only then ends the turn, so this order never shows
+    # a turn as ended without its reply (or the turn before as still running).
+    live = live_snapshot(state)
+    history = _history(context)
+    started = time.perf_counter()
+    rendered = 0.0
+    try:
+        actions = surface.draw(canvas, rect, history, live=live, top=_status(context) if compact else None,
+                               notice=_harness_notice(prefs) if harness else None,
+                               approval=card)     # also in External Harness: a risky step asks (#166)
+        if surface.box.model.text != typed_before:
+            # Changed by a click while drawing (an @ suggestion): share the draft now,
+            # or the panel chat's own @ popup would see the old half-typed "@Ca".
+            actions.append(("draft", surface.box.model.text))
+            _SYNCED[id(surface)] = surface.box.model.text
+        rendered = time.perf_counter()
+        render.render(canvas.commands, style)
+    except Exception as ex:
+        if trace is not None:
+            trace.error = draw_trace.short_error(ex)
+        raise           # Blender prints it, as before: the trace only notes it
+    finally:
+        if trace is not None:
+            _trace_add(trace, surface, state, rect, started, rendered)
     if surface.tip_wait > 0:          # a tooltip is due (#237): draw again then
         _redraw_later(region, surface.tip_wait + 0.02)
     if actions:
@@ -408,6 +429,51 @@ def _remember_input_lines(lines: int, compact: bool) -> None:
     try:
         bpy.context.preferences.is_dirty = True
     except (AttributeError, TypeError):
+        pass
+
+
+def _live_lengths(state: Any) -> tuple[int, int, int]:
+    """What a worker thread may change while the chat draws: the running turn's text,
+    its thinking and the history (#387)."""
+    return (len(getattr(state, "streaming_text", "") or ""), len(getattr(state, "reasoning_text", "") or ""),
+            len(getattr(state, "conversation_history", None) or ()))
+
+
+def _trace_on(prefs: Any) -> bool:
+    """Status & Diagnostics > Chat Draw Trace (#387); off by default."""
+    return bool(getattr(prefs, "chat_draw_trace", False))
+
+
+def _trace_frame(where: str, context: Any, region: Any) -> Any:
+    """A new trace frame for this draw of *region* (None if that fails: never break a draw)."""
+    try:
+        tab = ""
+        if region.type == "UI":
+            tab = str(getattr(region, "active_panel_category", "") or "")
+        area = context.area
+        return draw_trace.Frame(where=where, area=area.as_pointer() if area is not None else 0,
+                                region=region.as_pointer(), region_w=int(region.width),
+                                region_h=int(region.height), tab=tab)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+
+
+def _trace_add(frame: Any, surface: Any, state: Any, rect: Any, started: float, rendered: float) -> None:
+    """Finish *frame* after the chat drew (or failed to) and add it to the trace."""
+    try:
+        now = time.perf_counter()
+        frame.rect = (rect.x, rect.y, rect.w, rect.h) if rect is not None else None
+        if started:             # drawn: layout until the GPU draw began (or failed), then the draw
+            frame.layout_ms = ((rendered or now) - started) * 1000.0
+            frame.draw_ms = (now - rendered) * 1000.0 if rendered else 0.0
+        view = surface.view if surface is not None else None
+        if view is not None:
+            frame.scroll, frame.content_h = float(view.scroll), float(view.content_height)
+            frame.turns = len(view._turns)                      # pylint: disable=protected-access
+        frame.running = bool(getattr(state, "is_thinking", False))
+        frame.live_after = _live_lengths(state)
+        draw_trace.TRACE.add(frame)
+    except Exception:  # pylint: disable=broad-exception-caught
         pass
 
 
@@ -489,7 +555,11 @@ def _draw_editor() -> None:
     if _is_coworker(context) and context.region is not None:
         _show_sidebar_once(context.space_data)
         region = context.region
-        _draw(region, gpu_layout.Rect(0.0, 0.0, float(region.width), float(region.height)), compact=False)
+        frame = _trace_frame("editor", context, region) if _trace_on(_prefs(context)) else None
+        if frame is not None:
+            frame.source = "editor"
+        _draw(region, gpu_layout.Rect(0.0, 0.0, float(region.width), float(region.height)), compact=False,
+              trace=frame)
 
 
 def _sidebar_tab_active(region: Any) -> bool:
@@ -588,13 +658,21 @@ def _runs(values: list[bool]) -> list[tuple[int, int]]:
 
 
 # The room's full height (region pixels per zoom unit), learnt while both markers
-# are on screen, so a half-scrolled panel keeps its layout and just scrolls.
-_ROOM_H: dict[int, float] = {}
+# are on screen, so a half-scrolled panel keeps its layout and just scrolls -- with what
+# it was learnt for (the chat's rows, the UI scale).  When those change the room's height
+# does too, and a stale one made the chat vanish while one marker was off screen (#387).
+_ROOM_H: dict[int, tuple[float, tuple]] = {}
+# How _find_chat_rect found the room last (for the draw trace, #387): both / top / bottom
+# (markers seen), view (remembered, #198) or none.
+_FIND: dict[str, str] = {"source": ""}
 
 
-def _find_chat_rect(region: Any, expected_h: float, tabs_px: float, zoom: float = 1.0) -> Any:
+def _find_chat_rect(region: Any, expected_h: float, tabs_px: float, zoom: float = 1.0,
+                    learnt_for: tuple = ()) -> Any:
     """The panel's whole room in region pixels (it may reach past the region's edges
-    when scrolled; the region clips it, like any panel), or None this frame."""
+    when scrolled; the region clips it, like any panel), or None this frame.
+    *learnt_for*: what the room's height depends on (rows, UI scale); a height learnt
+    for other values is not used."""
     import gpu  # pylint: disable=import-error
     top_rgb, bottom_rgb = marker_colors()
     fb = gpu.state.active_framebuffer_get()
@@ -608,29 +686,38 @@ def _find_chat_rect(region: Any, expected_h: float, tabs_px: float, zoom: float 
     bottom_rows = [y for y in range(height) if any(_near(px, bottom_rgb) for px in strip[y])]
     key = region.as_pointer()
     known = _ROOM_H.get(key)
-    room_h = known * zoom if known else expected_h
+    room_h = known[0] * zoom if known and known[1] == learnt_for else expected_h
+    _FIND["source"] = "none"
     if top_rows and bottom_rows:
+        _FIND["source"] = "both"
         top, bottom = max(top_rows) + 1, min(bottom_rows)
-        _ROOM_H[key] = (top - bottom) / max(zoom, 1e-6)
+        _ROOM_H[key] = ((top - bottom) / max(zoom, 1e-6), learnt_for)
     elif top_rows:          # bottom unseen: scrolled off the region, or clipped mid-animation
+        _FIND["source"] = "top"
         top = max(top_rows) + 1
         bottom = top - room_h
         if bottom > 2:
+            _FIND["source"] = "none"
             return None     # it should be on screen: the panel is animating, skip this frame
     elif bottom_rows:       # top scrolled away above the region
+        _FIND["source"] = "bottom"
         bottom = min(bottom_rows)
         top = bottom + room_h
         if top < height - 2:
+            _FIND["source"] = "none"
             return None
     else:
         # Neither marker on screen (#198): the room is taller than the sidebar and scrolled
         # to its middle.  Find it again from where it sits in the view (scrolling doesn't
         # move it there), and only if the whole strip really is an empty panel room.
-        return _room_from_view(region, key, strip, height, room_h)
+        found = _room_from_view(region, key, strip, height, room_h)
+        _FIND["source"] = "view" if found is not None else "none"
+        return found
     probe_y, rgb = (top_rows[-1], top_rgb) if top_rows else (bottom_rows[0], bottom_rgb)
     row = fb.read_color(0, probe_y, width, 1, 4, 0, "UBYTE").to_list()[0]
     across = _runs([_near(px, rgb) for px in row])
     if len(across) < 2:
+        _FIND["source"] = "none"
         return None
     left, right = across[0][0], across[-1][1] + 1
     # Full width: the markers sit inside the panel's padding; grow the room out to the
@@ -682,14 +769,23 @@ def _draw_sidebar() -> None:
     if region is None or region.type != "UI" or not ui_chat._compact_sidebar(context):
         return
     props = _props()
+    frame = _trace_frame("sidebar", context, region) if _trace_on(_prefs(context)) else None
+    found = time.perf_counter()
     zoom = _view_zoom(region)
     unit = 20.0 * context.preferences.system.ui_scale * zoom
     tabs = _TAB_STRIP_PX * context.preferences.view.ui_scale
-    rect = _find_chat_rect(region, (getattr(props, "chat_panel_rows", 22.0)) * unit, tabs, zoom)
+    rows = getattr(props, "chat_panel_rows", 22.0)
+    rect = _find_chat_rect(region, rows * unit, tabs, zoom,
+                           learnt_for=(round(rows, 3), round(context.preferences.system.ui_scale, 4)))
+    if frame is not None:
+        frame.source = _FIND["source"]
+        frame.find_ms = (time.perf_counter() - found) * 1000.0
     if rect is None:
         entry = _SURFACES.get(region.as_pointer())
         if entry is not None:
             entry[0].bounds = None        # collapsed / scrolled away: no clicks go to it
+        if frame is not None:
+            _trace_add(frame, None, None, None, 0.0, 0.0)
         return
     # Fit the chat to the part of its room that is on screen (#182): a sidebar shorter
     # than the panel keeps the top bar and the input visible, and the messages shrink
@@ -699,11 +795,14 @@ def _draw_sidebar() -> None:
         entry = _SURFACES.get(region.as_pointer())
         if entry is not None:
             entry[0].bounds = None
+        if frame is not None:
+            frame.source = "short"
+            _trace_add(frame, None, None, None, 0.0, 0.0)
         return
     rect = gpu_layout.Rect(rect.x, bottom, rect.w, top - bottom)
     surface = _surface(region, compact=True)
     surface.on_resize = lambda new_h, _unit=unit: _resize_panel(new_h, _unit)
-    _draw(region, rect, compact=True, zoom=zoom)
+    _draw(region, rect, compact=True, zoom=zoom, trace=frame)
 
 
 def _resize_panel(height_px: float, unit_px: float) -> None:
@@ -1015,6 +1114,32 @@ class BFACW_OT_editor_thumbs(bpy.types.Operator):
                                    else self.size)
                 region.tag_redraw()
         return {"FINISHED"}
+
+
+class BFACW_OT_copy_chat_draw_trace(bpy.types.Operator):
+    """Copy the chat's last draws to the clipboard, to paste into the glitch issue (#387)"""
+    bl_idname = "bfacw.copy_chat_draw_trace"
+    bl_label = "Copy Chat Draw Trace"
+    bl_description = ("Copy the chat's last draws (where, how big, how long, anything odd) to the clipboard, "
+                      "to paste into the issue right after a glitch")
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        header = "{:s} {:s} | {:s} | trace {:s}".format(
+            "Bforartists" if _IS_BFA else "Blender", bpy.app.version_string, _addon_version(),
+            "on" if _trace_on(_prefs(context)) else "off")
+        context.window_manager.clipboard = draw_trace.TRACE.text(header)
+        count = len(draw_trace.TRACE.frames)
+        self.report({"INFO"}, "Chat draw trace copied ({:d} draws)".format(count) if count else
+                    "No draws recorded yet: turn Chat Draw Trace on first")
+        return {"FINISHED"}
+
+
+def _addon_version() -> str:
+    try:
+        from . import addon_version
+        return "Coworker " + addon_version()
+    except Exception:  # pylint: disable=broad-exception-caught
+        return "Coworker"
 
 
 class BFACW_OT_chat_attach_image(bpy.types.Operator):
@@ -1757,7 +1882,8 @@ _CLASSES = (BFACW_CoworkerTree, BFACW_OT_open_coworker_editor, BFACW_OT_editor_z
             BFACW_MT_editor_chat, BFACW_MT_editor_view, BFACW_PT_editor_tools_chat,
             BFACW_PT_editor_tools_attach, BFACW_PT_editor_tools_session, BFACW_PT_editor_chat,
             BFACW_OT_chat_attach_image, BFACW_OT_chat_paste_image, BFACW_OT_editor_native_edit,
-            BFACW_OT_chat_context_copy, BFACW_OT_chat_context_edit, BFACW_MT_chat_context)
+            BFACW_OT_chat_context_copy, BFACW_OT_chat_context_edit, BFACW_MT_chat_context,
+            BFACW_OT_copy_chat_draw_trace)
 _COPIES: list[type] = []
 
 

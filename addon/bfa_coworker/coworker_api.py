@@ -37,6 +37,7 @@ __all__ = (
     "cancel_question",
     "cancel_questions",
     "current_question",
+    "delegate_task",
     "job_status",
     "jobs_tick",
     "post_question",
@@ -106,6 +107,22 @@ def update_plan(args: dict[str, Any]) -> str:
         result = _store().goal.apply_update(args if isinstance(args, dict) else {})
     _redraw()
     return result
+
+
+# -- Helper chats (#479) ------------------------------------------------------------
+def delegate_task(args: dict[str, Any]) -> dict[str, Any]:
+    """Open a helper chat for the calling thread and queue *args*' task there; answers at
+    once (``status``, ``message``, ``helper_id``, ``title``).  Main thread (the bridge)."""
+    try:
+        from . import helper_chats
+    except ImportError as ex:
+        return {"status": "error", "message": "Helper chats aren't available here ({:s}).".format(str(ex))}
+    try:
+        return helper_chats.delegate(_thread[0], args if isinstance(args, dict) else {})
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "message": "Coworker couldn't open a helper chat: {:s}".format(str(ex))}
 
 
 # -- Questions ----------------------------------------------------------------------

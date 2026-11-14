@@ -155,5 +155,60 @@ class TestThroughTheServer(unittest.TestCase):
         self.assertIn("output_id", text)
 
 
+class TestBlockingToolsOffTheLoop(unittest.TestCase):
+    """#479: a plain tool runs in a worker thread, so a call that waits (a long script, an
+    approval card) doesn't hold up the server's other requests (sub-agents, threads)."""
+
+    def test_two_waiting_calls_overlap_and_keep_their_context(self):
+        import threading
+        import time as _time
+        from mcp.server.fastmcp import FastMCP  # pylint: disable=import-error,no-name-in-module
+
+        mcp = FastMCP("t")
+        register = mcp.tool
+        mcp.tool = lambda *a, **k: (lambda fn: register(*a, **k)(bo.bounded(bo.off_the_loop(fn))))
+        seen = []
+
+        @mcp.tool()
+        def wait_a_moment(who: str = "") -> dict[str, object]:
+            """Waits like a call that waits for Blender."""
+            seen.append((who, bo.CURRENT_TOOL.get()[0], bo.CURRENT_THREAD.get(),
+                         threading.current_thread() is threading.main_thread()))
+            _time.sleep(0.5)
+            return {"status": "ok", "who": who}
+
+        async def run():
+            names = [t.name for t in await mcp.list_tools()]
+            token = bo.CURRENT_THREAD.set("t7")
+            try:
+                started = _time.monotonic()
+                results = await asyncio.gather(mcp.call_tool("wait_a_moment", {"who": "A"}),
+                                               mcp.call_tool("wait_a_moment", {"who": "B"}))
+                return names, results, _time.monotonic() - started
+            finally:
+                bo.CURRENT_THREAD.reset(token)
+        names, results, seconds = asyncio.run(run())
+        self.assertIn("wait_a_moment", names)
+        self.assertLess(seconds, 0.9, "the second call didn't wait for the first")
+        texts = ["".join(getattr(b, "text", "") for b in (r[0] if isinstance(r, tuple) else r)) for r in results]
+        self.assertIn('"A"', texts[0])
+        self.assertIn('"B"', texts[1])
+        self.assertEqual(sorted(seen), [("A", "wait_a_moment", "t7", False), ("B", "wait_a_moment", "t7", False)])
+
+    def test_signature_and_async_tools_kept(self):
+        import inspect
+
+        def plain(code: str, strict: bool = True) -> dict:
+            return {"code": code}
+
+        async def already():
+            return 1
+        wrapped = bo.off_the_loop(plain)
+        self.assertTrue(inspect.iscoroutinefunction(wrapped))
+        self.assertEqual(str(inspect.signature(wrapped)), str(inspect.signature(plain)))
+        self.assertIs(bo.off_the_loop(already), already)
+        self.assertEqual(asyncio.run(wrapped("x")), {"code": "x"})
+
+
 if __name__ == "__main__":
     unittest.main()

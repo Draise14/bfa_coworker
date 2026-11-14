@@ -407,7 +407,9 @@ def _get_system_prompt(use_compact: bool | None = None) -> str:
         "Before each step, say in a sentence what you are about to do. "
         "Summarize tool results in a few words. Avoid fluff and polite filler. "
         "Execute code to complete the user's request, "
-        "then respond with a brief summary of what was done."
+        "then respond with a brief summary of what was done. "
+        "Independent parts of a big job (other editors, a long side job) can go to helper chats "
+        "with delegate_task; their results come back as a message. Do small or dependent steps yourself."
     )
     _system_prompt_cache[variant] = fallback
     return fallback
@@ -1302,6 +1304,7 @@ _SURFACE_TOOLS = frozenset({
     "read_tool_output",           # Engine 9: the rest of a shortened result.
     # Engine 6: shared with external agents (update_plan is the loop's own here).
     "ask_user",                   # A question with buttons in the chat.
+    "delegate_task",              # #479: a helper chat takes a part of the job.
     "get_scene_digest",           # Short scene summary; says unchanged on repeat.
     "update_plan",
     "get_attached_image",         # #199: the image in the attach socket (External Harness).
@@ -2169,6 +2172,15 @@ def _memory(thread: "threads.Thread | None" = None) -> Any:
     """``session_memory`` as *thread* (default: the worker's current one) sees it."""
     thread = thread if thread is not None else threads.current()
     return session_memory if _is_default(thread) else _ThreadMemory(thread.store)
+
+
+def _is_helper_thread(thread: "threads.Thread | None") -> bool:
+    """True for a helper chat (#479): it isn't offered delegate_task."""
+    try:
+        from .helpers import HELPERS
+    except ImportError:
+        return False
+    return thread is not None and HELPERS.is_helper(thread.id)
 
 
 def turn_blocked(thread: "threads.Thread | None" = None) -> bool:
@@ -4555,6 +4567,7 @@ def _call_internal(code: str, data: dict[str, Any] | None = None) -> str:
 
 _TOOL_FRIENDLY_NAMES: dict[str, str] = {
     "execute_blender_code": "Running code in Blender",
+    "delegate_task": "Handing a part to a helper chat",
     "execute_blender_plan": "Running tested code templates",
     "list_blender_templates": "Showing available templates",
     "get_blendfile_summary_datablocks_toolcode": "Reading scene data",
@@ -6549,6 +6562,8 @@ def _run_conversation_turn_inner(
         if chat_mode == "PLAN":     # #194: only the tools that look (update_plan is the loop's own)
             from .engine import PLAN_SAFE_TOOLS as _plan_safe
             openai_tools = [t for t in openai_tools if t.get("function", {}).get("name") in _plan_safe]
+        if thread is not None and _is_helper_thread(thread):     # #479: helpers can't start helpers
+            openai_tools = [t for t in openai_tools if t.get("function", {}).get("name") != "delegate_task"]
 
     # The message has been received; we are assembling the prompt.  This is
     # the very first instant after Send, so show a friendly "reading" state

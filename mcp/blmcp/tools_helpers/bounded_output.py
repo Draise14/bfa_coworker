@@ -19,6 +19,7 @@ so and the result is cut without a handle.
 __all__ = (
     "LIMIT",
     "bounded",
+    "off_the_loop",
     "read",
 )
 
@@ -159,6 +160,27 @@ CURRENT_THREAD: contextvars.ContextVar[str] = contextvars.ContextVar("bfacw_curr
 
 def _inputs(kwargs: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in kwargs.items() if k != "ctx" and v not in (None, "", [], {})}
+
+
+def off_the_loop(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """A plain (blocking) tool as one that runs in a worker thread (#479).
+
+    FastMCP calls a plain tool function on the server's event loop, so while one call
+    waits for Blender (a long script, a step waiting for the user's approval card) every
+    other request to that server waits too: an outside client's sub-agents, which share
+    its one server, or two Coworker threads on the add-on's HTTP server.  In a worker
+    thread only that call waits; Blender's bridge still runs the calls one at a time on
+    its main thread.  The context (the calling thread, the tool) goes along.  Keeps the
+    signature; an ``async`` tool is returned as it is."""
+    if inspect.iscoroutinefunction(fn):
+        return fn
+    import anyio  # pylint: disable=import-outside-toplevel
+
+    @functools.wraps(fn)
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        context = contextvars.copy_context()
+        return await anyio.to_thread.run_sync(lambda: context.run(fn, *args, **kwargs))
+    return wrapper
 
 
 def bounded(fn: Callable[..., Any]) -> Callable[..., Any]:

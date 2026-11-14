@@ -24,7 +24,9 @@ text strips, SRT in and out, and Translate for many captions at once.
 
 Every caption strip has the custom property :data:`captions.TAG`:
 ``{"source", "style", "role": "line"|"word", "chars", "lines"}`` (``"line"``: the
-caption's strip name, on a word strip).
+caption's strip name, on a word strip); a line made since #497 also has ``"frame"`` (the
+output size it was laid out for) and ``"word_frames"`` (each word's first frame from the
+line's start), which Make Vertical uses to lay it out again (:func:`relayout_captions`).
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ __all__ = (
     "caption_cues",
     "import_srt",
     "register",
+    "relayout_captions",
     "remove_captions",
     "seq_scene",
     "text_changed",
@@ -324,6 +327,18 @@ def _add_highlights(scene: Any, line: Any, framed: dict, style: dict, font: Any,
     return made
 
 
+def _line_tag(source: str, style: str, chars: int, lines: int, scene: Any, frame_start: int,
+              words: Any = None) -> dict[str, Any]:
+    """A caption line's tag: also the frame it was laid out for and its words' first frames
+    (from the line's start), so Make Vertical can lay it out again (#497)."""
+    tag = {"source": source, "style": style, "role": "line", "chars": int(chars), "lines": int(lines),
+           "frame": [int(scene.render.resolution_x), int(scene.render.resolution_y)]}
+    offsets = [int(w["frame"]) - int(frame_start) for w in words or () if "frame" in w]
+    if offsets:
+        tag["word_frames"] = offsets
+    return tag
+
+
 def _occupied(ed: Any, skip: set[str]) -> dict[int, list[tuple[float, float]]]:
     out: dict[int, list[tuple[float, float]]] = {}
     for s in _top(ed):
@@ -362,8 +377,7 @@ def _place(scene: Any, groups: list[tuple[str, list[dict]]], style: dict, chars:
             text = c["text"].upper() if style["uppercase"] else c["text"]
             s = _text_strip(ed, "cap_{:04d}".format(number), channel, c["frame_start"], c["frame_end"], text,
                             style, font)
-            s[cap.TAG] = {"source": key, "style": style["key"], "role": "line", "chars": int(chars),
-                          "lines": int(lines)}
+            s[cap.TAG] = _line_tag(key, style["key"], chars, lines, scene, c["frame_start"], c.get("words"))
             made += 1
             if style["highlight"]:
                 words += _add_highlights(scene, s, c, style, font, measure)
@@ -500,6 +514,159 @@ def caption_cues(scene: Any, selected_only: bool = False) -> list[tuple[float, f
     fps = _fps(scene)
     return [((_left(s) - scene.frame_start) / fps, (_right(s) - scene.frame_start) / fps, s.text)
             for s in caption_lines(scene, selected_only)]
+
+
+# -- another frame size: Make Vertical (#497) ----------------------------------------------
+
+# What a caption piece made by a split takes over from its caption (colours and look the
+# artist may have changed; the layout comes from the style).
+_LOOK = ("color", "use_bold", "use_italic", "use_outline", "outline_color", "outline_width", "use_shadow",
+         "shadow_color", "shadow_offset", "shadow_angle", "shadow_blur", "use_box", "box_color", "box_margin",
+         "box_roundness", "anchor_x", "anchor_y", "alignment_x", "blend_type", "blend_alpha", "mute")
+
+
+def _font_size_curves(scene: Any, name: str) -> list:
+    """The fcurves animating strip *name*'s font size (Bold Pop's pop) in *scene*'s action."""
+    ad = scene.animation_data
+    action = ad.action if ad is not None else None
+    if action is None:
+        return []
+    paths = {'{:s}["{:s}"].font_size'.format(base, bpy.utils.escape_identifier(name))
+             for base in ("sequence_editor.strips_all", "sequence_editor.sequences_all")}
+    bags = []
+    for layer in getattr(action, "layers", ()):
+        for strip in layer.strips:
+            for bag in getattr(strip, "channelbags", ()):
+                bags.append(bag.fcurves)
+    if not bags and hasattr(action, "fcurves"):
+        bags.append(action.fcurves)
+    return [fc for fcurves in bags for fc in fcurves if fc.data_path in paths]
+
+
+def _steady_size(scene: Any, strip: Any) -> float:
+    """The font size a caption shows once it's up: a popping caption's last key, else its size."""
+    for fc in _font_size_curves(scene, strip.name):
+        points = sorted(fc.keyframe_points, key=lambda k: k.co[0])
+        if points:
+            return float(points[-1].co[1])
+    return float(strip.font_size)
+
+
+def _scale_font_keys(scene: Any, strip: Any, ratio: float) -> None:
+    for fc in _font_size_curves(scene, strip.name):
+        for k in fc.keyframe_points:
+            k.co[1] *= ratio
+            k.handle_left[1] *= ratio
+            k.handle_right[1] *= ratio
+        fc.update()
+
+
+def _set_right(strip: Any, frame: int) -> None:
+    if hasattr(strip, "right_handle"):
+        strip.right_handle = frame
+    else:
+        strip.frame_final_end = frame
+
+
+def _look_of(scene: Any, strip: Any) -> dict[str, Any]:
+    tr = getattr(strip, "transform", None)
+    look = {"location": tuple(strip.location), "font_size": _steady_size(scene, strip),
+            "wrap_width": strip.wrap_width, "anchor_x": strip.anchor_x, "anchor_y": strip.anchor_y}
+    if tr is not None:
+        look["transform"] = (tr.offset_x, tr.offset_y, tr.scale_x, tr.scale_y, tr.rotation)
+    return look
+
+
+def relayout_captions(scene: Any, old_res: tuple[int, int] | None = None) -> dict[str, Any]:
+    """Every Coworker caption line of *scene* laid out again for the scene's output size (Make
+    Vertical's 9:16 copy): the style's size, place and line breaks for that frame
+    (:func:`captions.relayout`); its words, timing, colours and channel stay.  Words that no
+    longer fit the style's lines become several captions inside the same time (each word at
+    its own time); Word-by-word highlights are made again over the new lines.
+
+    A caption moved, resized or transformed by hand (:func:`captions.hand_edits`) is left as it
+    is and counted.  *old_res*: the frame captions made before #497 were laid out for (they
+    don't store it).  Returns ``{"laid_out", "split", "left", "left_names", "message"}``."""
+    out: dict[str, Any] = {"laid_out": 0, "split": 0, "left": 0, "left_names": [], "message": ""}
+    ed = scene.sequence_editor
+    if ed is None:
+        return out
+    res = (int(scene.render.resolution_x), int(scene.render.resolution_y))
+    top = _top(ed)
+    lines, words_of = [], {}
+    for s in top:
+        tag = tag_of(s) or {}
+        if s.type == 'TEXT' and tag.get("role") == "line":
+            lines.append(s)
+        elif tag.get("role") == "word":
+            words_of.setdefault(tag.get("line"), []).append(s)
+    lines.sort(key=lambda s: (_left(s), s.channel))
+    number = _next_number(ed, set())
+    for line in lines:
+        tag = tag_of(line) or {}
+        key = cap.style_key(tag.get("style"))
+        made_for = tuple(int(v) for v in (tag.get("frame") or old_res or res))
+        if made_for == res:
+            continue                                    # already laid out for this frame
+        if key is None or cap.hand_edits(_look_of(scene, line), key, *made_for):
+            out["left"] += 1
+            out["left_names"].append(line.name)
+            continue
+        fs, fe = _left(line), _right(line)
+        old_words = sorted(words_of.get(line.name, ()), key=lambda w: w.name)
+        frames = None
+        if old_words and len(old_words) == len(line.text.split()):
+            frames = [_left(w) for w in old_words]
+        elif tag.get("word_frames"):
+            frames = [fs + int(v) for v in tag["word_frames"]]
+        lay = cap.relayout(line.text, key, res[0], res[1], fs, fe, int(tag.get("chars") or 0),
+                           int(tag.get("lines") or 0), made_for, frames)
+        st, pieces = lay["style"], lay["pieces"]
+        highlight = tuple(old_words[0].color) if old_words else st["highlight"]
+        names = [w.name for w in old_words]
+        for w in old_words:
+            top.remove(w)
+        if names:
+            _drop_fcurves(scene, names)
+        props = st["props"]
+        old_size = _steady_size(scene, line)
+        font = line.font
+        for i, piece in enumerate(pieces):
+            if i == 0:
+                s = line
+                if len(pieces) > 1:
+                    _set_right(s, piece["frame_end"])
+                s.text = piece["text"]
+                s.font_size = props["font_size"]
+                if old_size > 0:
+                    _scale_font_keys(scene, s, props["font_size"] / old_size)
+            else:
+                number += 1
+                s = _text_strip(ed, "cap_{:04d}".format(number), line.channel, piece["frame_start"],
+                                piece["frame_end"], piece["text"], st, font)
+                for attr in _LOOK:
+                    try:
+                        setattr(s, attr, getattr(line, attr))
+                    except (AttributeError, TypeError, ValueError):
+                        pass
+                if st["pop"] and piece["frame_end"] - piece["frame_start"] >= 5:
+                    size = s.font_size
+                    s.font_size = size * 0.78
+                    s.keyframe_insert("font_size", frame=piece["frame_start"])
+                    s.font_size = size
+                    s.keyframe_insert("font_size", frame=piece["frame_start"] + 3)
+            s.location = props["location"]
+            s.wrap_width = 1.0 if st["highlight"] else props["wrap_width"]
+            s[cap.TAG] = _line_tag(tag.get("source", ""), key, lay["chars"], lay["lines"], scene,
+                                   piece["frame_start"], piece["words"])
+            if st["highlight"] and old_words:
+                style = dict(st, uppercase=False, highlight=highlight)     # the text already is as shown
+                _add_highlights(scene, s, piece, style, font or _font(), _measure(font or _font()))
+        out["laid_out"] += 1
+        out["split"] += 1 if len(pieces) > 1 else 0
+    if out["laid_out"] or out["left"]:
+        out["message"] = cap.relayout_report(out["laid_out"], out["left"], out["split"])
+    return out
 
 
 # -- Translate (#42 for many captions) ---------------------------------------------------

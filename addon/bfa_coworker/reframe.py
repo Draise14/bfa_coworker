@@ -11,6 +11,8 @@ Make Vertical (9:16) and Reframe in the Sequencer (Video 3, #333).
 compositor modifier: Centre Crop, or *Blur Fill* (the whole shot over a blurred,
 dimmed copy of itself).  The framing stays editable: it is just the modifier's
 inputs (Properties editor > Strip Modifiers tab, or Strip > Reframe), one value set per shot.
+Coworker captions in the edit are laid out again for the new frame (#497,
+``captions_ops.relayout_captions``); text strips get no Reframe modifier.
 
 The node group ``Coworker Reframe v1`` is built once and shared; each modifier keeps
 its own values (``mod.properties.inputs.<socket identifier>.value``).  Blender 5.2.4
@@ -443,6 +445,7 @@ def make_vertical(scene: Any, mode: str = "CROP", in_copy: bool = True, resoluti
     target, copied = scene, False
     if in_copy and not scene.get(VERTICAL_TAG):
         target, copied = _copy_scene(scene), True
+    old_res = (target.render.resolution_x, target.render.resolution_y)
     target.render.resolution_x, target.render.resolution_y = w, h
     ed = target.sequence_editor
     done: dict[str, list[str]] = {"added": [], "kept": [], "reset": []}
@@ -450,6 +453,9 @@ def make_vertical(scene: Any, mode: str = "CROP", in_copy: bool = True, resoluti
         strip = ed.strips_all.get(name)
         if strip is not None:
             done[reframe_strip(target, strip, mode, reset)].append(name)
+    # Coworker captions laid out again for the new frame (#497); text strips get no Reframe.
+    from .captions_ops import relayout_captions
+    captions = relayout_captions(target, old_res)
     if copied and window is not None:
         ws = getattr(window, "workspace", None)
         if ws is not None and hasattr(ws, "sequencer_scene"):
@@ -462,7 +468,8 @@ def make_vertical(scene: Any, mode: str = "CROP", in_copy: bool = True, resoluti
         else:
             window.scene = target
     return {"scene": target.name, "source_scene": scene.name, "copied": copied, "mode": mode,
-            "resolution": [w, h], "added": done["added"], "kept": done["kept"], "reset": done["reset"]}
+            "resolution": [w, h], "added": done["added"], "kept": done["kept"], "reset": done["reset"],
+            "captions": captions}
 
 
 # -- Nudge / mode / reset ------------------------------------------------------------------
@@ -718,6 +725,8 @@ class BFACW_OT_make_vertical(Operator):
             parts.append("{:d} shot(s) reframed".format(len(done["added"]) + len(done["reset"])))
         if done["kept"]:
             parts.append("{:d} kept their framing".format(len(done["kept"])))
+        if done.get("captions", {}).get("message"):
+            parts.append(done["captions"]["message"])
         self.report({'INFO'}, "Make Vertical: " + ", ".join(parts))
         if self.follow and self.mode == "CROP":
             target = bpy.data.scenes.get(done["scene"])

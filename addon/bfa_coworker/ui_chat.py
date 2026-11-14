@@ -2766,24 +2766,36 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
 
 
 class BFACW_OT_chat_clear(Operator):  # type: ignore[misc]
-    """Clear the conversation history and start a fresh thread."""
+    """This chat goes to History and its tab starts empty"""
     bl_idname = "bfacw.chat_clear"
-    bl_label = "New Thread"
-    bl_description = "Clear conversation history and start a fresh thread (system prompt stays)"
+    bl_label = "Start This Chat Fresh"
+    bl_description = "This chat goes to History and its tab starts empty"
+
+    # The tab it was drawn for (#466): a menu names it, so the entry acts on that chat
+    # wherever it runs; "" is the chat of the area in context.
+    thread_id: StringProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        thread = _ui_thread(context)
-        if not thread.is_default:       # an editor's thread: a fresh chat for it alone (#358)
+        from . import threads
+        reg = agent_controller.THREADS
+        thread = reg.get(self.thread_id) if self.thread_id else _ui_thread(context)
+        if thread is None:              # its tab was closed meanwhile
+            return {"CANCELLED"}
+        why = threads.close_refused(reg, thread, agent_controller.thread_state(thread).turn_active)
+        if why:                         # not while its turn runs
+            self.report({"WARNING"}, why)
+            return {"CANCELLED"}
+        if thread.is_default:
+            _fresh_default_chat()
+        else:                           # another tab: a fresh chat for it alone (#358), the tab stays
             _new_chat_in_thread(thread)
-            _redraw_areas(context)
-            return {"FINISHED"}
-        _fresh_default_chat()
-        _redraw_areas(context)
+            _save_tabs()
+        _redraw_all_chats()
         return {"FINISHED"}
 
 
 def _fresh_default_chat() -> None:
-    """All editors starts fresh: its chat stays in History (× on its tab, New Thread)."""
+    """All editors starts fresh: its chat stays in History (× on its tab, Start This Chat Fresh)."""
     from . import session_memory as _sm
     agent_controller._agent_state.conversation_history.clear()
     agent_controller._agent_state.streaming_text = ""
@@ -2814,7 +2826,7 @@ def _fresh_default_chat() -> None:
 
 
 def _new_chat_in_thread(thread) -> None:
-    """New Thread in an editor's thread: its history, plan, domains, text blocks and
+    """Start This Chat Fresh in a tab other than All editors: its history, plan, domains, text blocks and
     remembered scene-lock names start again; the other threads keep theirs (#358)."""
     from . import session_memory as _sm
     state = agent_controller.thread_state(thread)
@@ -2902,7 +2914,7 @@ def _start_new_chat() -> None:
 
 
 def _reset_for_chat_switch() -> None:
-    """What New Thread resets, before another chat comes in."""
+    """What a fresh chat resets, before another chat comes in."""
     from . import session_memory as _sm
     state = agent_controller._agent_state
     state.conversation_history = []
@@ -5393,14 +5405,15 @@ class BFACW_PT_chat_compact(Panel):  # type: ignore[misc]
 # -- Threads 2c (#427): the chat tabs --------------------------------------------------------
 # One strip in every chat (Classic and Compact sidebars, the Coworker editor's header):
 # a tab per open thread (its editor's icon, a short title, its status; the shown one
-# pressed), a × to close it, one + for a new thread here, and a menu for every tab when a
-# narrow sidebar can't show them all.
+# pressed), a × to close it, one + for a new chat for All editors and, in an editor, a
+# button with its icon for a chat with its context (#466), and a menu for every tab
+# (and New Chat for This <editor>, Start This Chat Fresh).
 
 def _editor_icon(editor: str) -> str:
     return next((s[3] for s in SIDEBAR_SPACES if s[0] == editor), 'WORLD' if not editor else 'WINDOW')
 
 
-# A Node Editor named by its tree, for the tooltips ("New thread in this Shader Editor").
+# A Node Editor named by its tree, for the tooltips ("New Chat for This Shader Editor").
 _NODE_TREE_NAMES = {"ShaderNodeTree": "Shader Editor", "GeometryNodeTree": "Geometry Node Editor",
                     "CompositorNodeTree": "Compositor", "TextureNodeTree": "Texture Node Editor"}
 
@@ -5458,17 +5471,57 @@ def tab_strip(context, units: float = 0.0):
     widths = [min(cap, 0.33 * len(label)) + 0.2 for label in labels]
     shown_i = tabs.index(shown) if shown in tabs else 0
     return shown, tabs, labels, threads.tab_modes(widths, shown_i, units, icon_w=1.0,
-                                                  tail_w=_TAB_TOOLS_W + 0.5)
+                                                  tail_w=_tab_tools_w(context) + 0.5)
 
 
 _TAB_TOOLS_W = 3.0          # the tools to the right of the tabs: close, new, the tab menu
 
 
-def new_tab_tip(editor_name: str) -> str:
-    """The + tooltip: a new tab works with the context of the editor it's made in."""
+def _tab_tools_w(context) -> float:
+    """The tools' width: one unit more where the strip has an editor's own + (#466)."""
+    return _TAB_TOOLS_W + (1.0 if _tab_kind(context) else 0.0)
+
+
+# New Chat (#466): the + is for All editors everywhere; one editor's context is an opt-in.
+_NEW_CHAT_SCOPES = (('ALL', "All Editors", "A chat for All editors"),
+                    ('EDITOR', "This Editor", "A chat using this editor's context"))
+
+
+def new_tab_tip(editor_name: str = "") -> str:
+    """New Chat's tooltip: for All editors, or with *editor_name*'s context (#466)."""
     if editor_name:
         return "New chat in a new tab, using this {:s}'s context".format(editor_name)
-    return "New chat in a new tab, for All editors (not tied to one editor's context)"
+    return "New chat in a new tab, for All editors"
+
+
+def new_tab_editor(scope: str, kind: str) -> str:
+    """The editor a new tab gets: All editors ("") unless *scope* is ``EDITOR``, then *kind*."""
+    return kind if scope == 'EDITOR' else ""
+
+
+def new_chat_for_label(context) -> str:
+    """"New Chat for This 3D Viewport" where the chat has an editor's context, else ""."""
+    kind = _tab_kind(context)
+    if not kind:
+        return ""
+    return "New Chat for This {:s}".format(_area_name(context) or _EDITOR_NAMES.get(kind, kind))
+
+
+def draw_new_chat_entries(layout, context) -> None:
+    """New Chat, New Chat for This <editor> (only where the chat has one) and Start This
+    Chat Fresh (greyed out while that chat's turn runs), in the tab menu, the Chat menu
+    and the chat's right-click menu (#466)."""
+    from . import threads
+    layout.operator("bfacw.tab_new", text="New Chat", icon='ADD')
+    label = new_chat_for_label(context)
+    if label:
+        layout.operator("bfacw.tab_new", text=label, icon=_editor_icon(_tab_kind(context))).scope = 'EDITOR'
+    thread = _ui_thread(context)
+    fresh = layout.row()
+    fresh.enabled = not threads.close_refused(agent_controller.THREADS, thread,
+                                              agent_controller.thread_state(thread).turn_active)
+    fresh.operator("bfacw.chat_clear", text="Start This Chat Fresh",
+                   icon=safe_icon('FILE_REFRESH')).thread_id = thread.id
 
 
 def draw_chat_tabs(layout, context, units: float = 0.0) -> None:
@@ -5488,12 +5541,15 @@ def draw_chat_tabs(layout, context, units: float = 0.0) -> None:
                            depress=thread is shown)
         op.thread_id = thread.id
     row.separator()
-    tools = row.row(align=True)             # fixed width: always the same three, to the right
-    tools.ui_units_x = _TAB_TOOLS_W
+    kind = _tab_kind(context)
+    tools = row.row(align=True)             # fixed width, to the right: close, new, (new here,) the menu
+    tools.ui_units_x = _tab_tools_w(context)
     close = tools.row(align=True)           # closes the shown tab
     close.enabled = not threads.close_refused(reg, shown, agent_controller.thread_state(shown).turn_active)
     close.operator("bfacw.tab_close", text="", icon='X').thread_id = shown.id
-    tools.operator("bfacw.tab_new", text="", icon='ADD')
+    tools.operator("bfacw.tab_new", text="", icon='ADD')            # All editors (#466)
+    if kind:                                # with this editor's context, under its icon (#466)
+        tools.operator("bfacw.tab_new", text="", icon=_editor_icon(kind)).scope = 'EDITOR'
     tools.menu("BFACW_MT_chat_tabs", text="", icon='DOWNARROW_HLT')
 
 
@@ -5511,6 +5567,8 @@ class BFACW_MT_chat_tabs(bpy.types.Menu):  # type: ignore[misc]
             op = self.layout.operator("bfacw.tab_show", text=("\u25cf " if thread is shown else "") + text,
                                       icon=icon)
             op.thread_id = thread.id
+        self.layout.separator()
+        draw_new_chat_entries(self.layout, context)         # #466
 
 
 class BFACW_OT_tab_show(Operator):  # type: ignore[misc]
@@ -5538,18 +5596,22 @@ class BFACW_OT_tab_show(Operator):  # type: ignore[misc]
 
 
 class BFACW_OT_tab_new(Operator):  # type: ignore[misc]
-    """New chat in a new tab, using this editor's context"""
+    """New chat in a new tab, for All editors"""
     bl_idname = "bfacw.tab_new"
     bl_label = "New Chat"
     bl_options = {'INTERNAL'}
 
+    # ALL (the +): a chat for All editors; EDITOR: with this editor's context (#466).
+    scope: EnumProperty(items=_NEW_CHAT_SCOPES, default='ALL', options={'SKIP_SAVE'})  # type: ignore[valid-type]
+
     @classmethod
-    def description(cls, context, _properties) -> str:
-        name = _area_name(context) if context is not None else ""
-        return new_tab_tip(name)
+    def description(cls, context, properties) -> str:
+        if context is None or getattr(properties, "scope", 'ALL') != 'EDITOR' or not _tab_kind(context):
+            return new_tab_tip("")
+        return new_tab_tip(_area_name(context))
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        thread = _editor_thread(_tab_kind(context))
+        thread = _editor_thread(new_tab_editor(self.scope, _tab_kind(context)))
         _show_in_area(getattr(context, "area", None), thread)
         return {"FINISHED"}
 
@@ -5735,7 +5797,7 @@ class BFACW_PT_chat_panel(Panel):  # type: ignore[misc]
             btn_row.operator("bfacw.chat_queue_send", icon="ADD", text="Queue")
             btn_row.operator("bfacw.chat_stop", icon="PAUSE", text="Stop")
         else:
-            # Idle: Send + New Thread.
+            # Idle: Send (+ Revert).
             btn_row = layout.row(align=True)
             btn_row.scale_y = 1.5
             btn_row.operator("bfacw.chat_send", icon="PLAY", text="Send")

@@ -1298,7 +1298,7 @@ EXPECTED_TOOLS = [
 "          jump_to_asset_browser, download_polyhaven_asset, search_polyhaven_assets,\n"
 "          assign_material_to_objects, get_active_node_tree, get_node_group_interface,\n"
 "          wire_node_group)\n"
-"        - vse: Video Sequencer navigation (jump_to_tab_by_name, jump_to_tab_by_space_type)\n"
+"        - vse: Video Sequencer navigation (jump_to_tab_by_name, jump_to_tab_by_space_type) and speech to text (transcribe_strip)\n"
 "\n"
 "        Load only what the request needs; the basic tools (scene, code, docs,\n"
 "        screenshots, plan, questions, bake_textures, render_viewport_to_path,\n"
@@ -1917,6 +1917,74 @@ EXPECTED_TOOLS = [
                 }
             },
             "title": "three_point_lighting_rigArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "transcribe_strip",
+        "description": "\n"
+"        The spoken words of a Sequencer sound or movie strip, each with its start and end.\n"
+"\n"
+"        Transcribes the strip's media file locally with whisper.cpp (or the Remote\n"
+"        provider when the user chose that in Preferences > Coworker > Speech) and caches\n"
+"        the transcript next to the .blend, so the next call answers at once. A long clip\n"
+"        answers with a ``job_id`` instead: wait for it with ``get_job_status(job_id)``,\n"
+"        then call this again (it is cached by then).\n"
+"\n"
+"        Only the words where the strip is visible are returned, a page at a time.\n"
+"\n"
+"        Args:\n"
+"            strip: The strip's name (a SOUND or MOVIE strip).\n"
+"            language: Language code such as \"en\" or \"de\", or \"auto\" (default: the Speech setting).\n"
+"            limit: Words per answer (default 150, at most 2000; 0 = no word list, the plain text).\n"
+"            offset: Skip this many words (use ``next_offset`` from the previous answer).\n"
+"            prompt: Names and terms to spell right (e.g. \"Bforartists, Blender\").\n"
+"            model: Speech model (tiny, base, small, medium, large-v3-turbo; default: the Speech setting).\n"
+"\n"
+"        Returns:\n"
+"            ``words``: one row per word, ``[w, start, end, frame_start, frame_end]``\n"
+"            (``columns``): start / end in seconds of the media file, frames on the\n"
+"            timeline. Also ``word_count``, ``next_offset`` when there are more,\n"
+"            ``language``, ``model``, ``cached``, ``transcript_path``; or ``job_id``\n"
+"            while a long clip is transcribed; or a ``message`` saying what is missing\n"
+"            (e.g. the speech server isn't downloaded).\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "strip": {
+                    "title": "Strip",
+                    "type": "string"
+                },
+                "language": {
+                    "default": "",
+                    "title": "Language",
+                    "type": "string"
+                },
+                "limit": {
+                    "default": 150,
+                    "title": "Limit",
+                    "type": "integer"
+                },
+                "offset": {
+                    "default": 0,
+                    "title": "Offset",
+                    "type": "integer"
+                },
+                "prompt": {
+                    "default": "",
+                    "title": "Prompt",
+                    "type": "string"
+                },
+                "model": {
+                    "default": "",
+                    "title": "Model",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "strip"
+            ],
+            "title": "transcribe_stripArguments",
             "type": "object"
         }
     },

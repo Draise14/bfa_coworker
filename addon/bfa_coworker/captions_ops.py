@@ -47,6 +47,7 @@ import importlib
 import json
 import os
 import re
+import textwrap
 from typing import Any
 
 import bpy  # pylint: disable=import-error
@@ -218,6 +219,221 @@ def _fallback_dir() -> str:
         return str(manager.data_dir())
     except Exception:  # pylint: disable=broad-exception-caught
         return ""
+
+
+# -- transcribing first: Auto Captions in one action (#375 + #376) -------------------------
+
+def _speech() -> Any:
+    try:
+        return importlib.import_module(__package__ + ".speech")
+    except ImportError:
+        return None
+
+
+def untranscribed(sources: list, language: str | None) -> list:
+    """The media strips of *sources* (one per media file) that have no cached transcript."""
+    mod = _transcripts()
+    if mod is None or not hasattr(mod, "load_for_media"):
+        return []
+    out, seen = [], set()
+    for s in _media_strips(sources):
+        path = media_path(s)
+        key = source_key(path) if path else ""
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        try:
+            try:
+                found = mod.load_for_media(path, model=None, language=language, fallback_dir=_fallback_dir())
+            except TypeError:
+                found = mod.load_for_media(path, model=None, language=language)
+        except Exception:  # pylint: disable=broad-exception-caught
+            found = None
+        if found is None:
+            out.append(s)
+    return out
+
+
+def transcription_problem(language: str | None = None) -> str:
+    """"" when local (or Remote) transcription can run now, else what is missing."""
+    sp = _speech()
+    if sp is None or not transcription_available():
+        return cap.NO_TRANSCRIPTION
+    try:
+        settings = sp.settings_from_prefs(sp._prefs())  # pylint: disable=protected-access
+        return sp.setup_problem(sp.plan(settings, language=language or ""), settings)
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        return str(ex) or cap.NO_TRANSCRIPTION
+
+
+# Auto Captions waiting for its transcriptions (#516): {"scene", "uid", "sources", "params",
+# "checkers", "errors", "undo", "t0", "state": running / done / error / stopped, "message", "warn"}.
+_PENDING: list[dict[str, Any]] = []
+_POLL_S = 0.5
+STOPPED = "Auto Captions stopped: no captions were made."
+NOT_SET_UP = ("{:s} hasn't been transcribed yet. {:s} Set Up Speech in the Auto Captions dialog opens that "
+              "page; or pick a transcript file (.json).")
+
+
+def _show_job(sp: Any, checker: Any) -> None:
+    """The transcription in the job row too (#309), like the tool's (best effort)."""
+    try:
+        from . import long_jobs
+        long_jobs.start(getattr(checker, "job_kind", sp.JOB_KIND), getattr(checker, "job_label", "Transcribe"),
+                        checker)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+
+
+def _tick_jobs() -> None:
+    """End the job row's transcriptions that are over, even with the bridge (whose timer
+    does this) stopped; already loaded, never imported here (best effort)."""
+    import sys
+    api = sys.modules.get(__package__ + ".coworker_api")
+    try:
+        if api is not None:
+            api.jobs_tick()
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+
+
+def transcribe_then_caption(scene: Any, sources: list, params: dict[str, Any], undo: bool = True) -> dict[str, Any]:
+    """Start transcribing the untranscribed clips of *sources* (``transcribe_strip``'s job);
+    the captions are made when the last one is done (:func:`_poll_pending`).
+    *params*: ``style``, ``language``, ``max_chars``, ``max_lines`` of :func:`add_captions`.
+    *undo*: the captions push their own undo step when they come (False: the operator waiting
+    for them does).  Returns the job: ``state`` "running" with ``message`` what to tell the
+    artist now, or "done" when nothing had to wait (the captions are made; no undo step)."""
+    sp = _speech()
+    todo = untranscribed(sources, params.get("language"))
+    checkers, errors = [], []
+    for s in todo:
+        res = sp.transcribe_strip(s.name, language=params.get("language") or "")
+        if callable(res):
+            checkers.append(res)
+            _show_job(sp, res)
+        elif isinstance(res, dict) and res.get("status") != "ok":
+            errors.append(str(res.get("message") or "Transcribing {:s} failed.".format(s.name)))
+    job = {"scene": scene.name, "uid": getattr(scene, "session_uid", None),
+           "sources": [s.name for s in _media_strips(sources)], "params": dict(params), "checkers": checkers,
+           "errors": errors, "undo": undo, "t0": _clock(), "state": "running", "message": "", "warn": False}
+    if not checkers:                    # already done (a background run waits; a cached file)
+        job["undo"] = False
+        job.update(state="done", message=_caption_job(job, []))
+        return job
+    _PENDING.append(job)
+    if not bpy.app.timers.is_registered(_poll_pending):
+        bpy.app.timers.register(_poll_pending, first_interval=_POLL_S)
+    job["message"] = "Transcribing {:d} clip{:s} first; the captions follow when it's done.".format(
+        len(checkers), "" if len(checkers) == 1 else "s")
+    return job
+
+
+def _clock() -> float:
+    import time
+    return time.monotonic()
+
+
+def _caption_job(job: dict[str, Any], results: list) -> str:
+    """The captions of a finished *job* (main thread); what to tell the artist."""
+    errors = list(job["errors"]) + [str(r.get("message") or "") for r in results
+                                    if isinstance(r, dict) and r.get("status") != "ok"]
+    scene = bpy.data.scenes.get(job["scene"])
+    if scene is not None and job.get("uid") is not None and getattr(scene, "session_uid", None) != job["uid"]:
+        scene = None                    # another file was loaded meanwhile: its scene has the same name
+    ed = getattr(scene, "sequence_editor", None)
+    if ed is None:
+        raise CaptionsError("The scene “{:s}” is gone; no captions were made.".format(job["scene"]))
+    pool = _all(ed)
+    sources = [s for s in (pool.get(n) for n in job["sources"]) if s is not None]
+    if not sources:
+        raise CaptionsError("The clips to caption are gone; no captions were made.")
+    p = job["params"]
+    try:
+        result = add_captions(scene, sources, p.get("style", "CLEAN"), p.get("language"), "",
+                              int(p.get("max_chars", 0) or 0), int(p.get("max_lines", 0) or 0))
+    except CaptionsError as ex:
+        raise CaptionsError(" ".join([str(ex)] + [e for e in errors if e and e not in str(ex)])) from None
+    if job.get("undo", True):
+        try:
+            bpy.ops.ed.undo_push(message="Auto Captions")
+        except RuntimeError:
+            pass
+    if errors:
+        result["note"] = " ".join(errors + ([result["note"]] if "note" in result else []))
+    job["warn"] = bool(result.get("note"))
+    return "Auto Captions: " + _summary(result)
+
+
+def _poll_pending() -> float | None:
+    """The timer: a job whose transcriptions are all over gets its captions.  Nothing pops
+    up: the operator waiting for the job reports it (status bar, Info), else the console."""
+    _tick_jobs()
+    for job in list(_PENDING):
+        results = [check() for check in job["checkers"]]
+        if any(r is None for r in results):
+            continue
+        _PENDING[:] = [j for j in _PENDING if j is not job]
+        try:
+            job.update(state="done", message=_caption_job(job, results))
+        except CaptionsError as ex:
+            job.update(state="error", message="Auto Captions: {!s}".format(ex))
+        except Exception as ex:  # pylint: disable=broad-exception-caught
+            job.update(state="error", message="Auto Captions failed: {!s}".format(ex))
+        print("[Coworker] " + job["message"])
+    return _POLL_S if _PENDING else None
+
+
+def _unregister_timer() -> None:
+    try:
+        if bpy.app.timers.is_registered(_poll_pending):
+            bpy.app.timers.unregister(_poll_pending)
+    except (AttributeError, ValueError):
+        pass
+
+
+def stop_pending() -> int:
+    """Stop every Auto Captions still waiting for its transcription (Esc, a file load,
+    unregister): no captions, no timer, the transcriptions stopped (they save nothing; this
+    window's whisper-server stops) and their job rows ended.  How many were waiting."""
+    jobs = list(_PENDING)
+    _PENDING.clear()
+    _unregister_timer()
+    for job in jobs:
+        job.update(state="stopped", message=STOPPED)
+    if not jobs:
+        return 0
+    sp = _speech()
+    try:
+        if sp is not None and hasattr(sp, "stop_jobs"):
+            sp.stop_jobs()
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    try:
+        from . import long_jobs
+        long_jobs.cancelled(getattr(sp, "JOB_KIND", "TRANSCRIBE"))
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    _tick_jobs()
+    print("[Coworker] " + STOPPED)
+    return len(jobs)
+
+
+def job_status_text(job: dict[str, Any]) -> str:
+    """The status bar while Auto Captions waits: what whisper does, the time, how to stop."""
+    text = ""
+    try:
+        from . import long_jobs
+        rows = [j for j in long_jobs.running() if j.get("kind") == "TRANSCRIBE"]
+        text = str(rows[0].get("progress_text") or "") if rows else ""
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    # Its first part ("Starting whisper-server (small, CPU) on port 8481 ... The first CUDA start ..."),
+    # short: the job row cuts it at 120 characters, maybe mid-word.
+    text = textwrap.shorten(text.split(" ...")[0], 90, placeholder="...") if text else ""
+    if not text:
+        text = "Transcribing " + ", ".join(job["sources"][:2]) + ("..." if len(job["sources"]) > 2 else "")
+    return "Auto Captions: {:s}, {:d} s. Esc to stop.".format(text, int(_clock() - job["t0"]))
 
 
 # -- making and removing caption strips ---------------------------------------------------
@@ -663,6 +879,7 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
         return True
 
     def invoke(self, context: Any, _event: Any) -> set[str]:
+        _DIALOG.clear()                 # transcribed or set up since the last time: look again
         return context.window_manager.invoke_props_dialog(self, width=380, title="Auto Captions",
                                                           confirm_text="Add Captions")
 
@@ -685,18 +902,129 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
             col = layout.column(align=True)
             col.label(text="Transcription isn't in this build yet:", icon=safe_icon('INFO'))
             col.label(text="pick a transcript file, or use Import SRT.")
+        elif not self.transcript_path:
+            todo, problem = _dialog_state(context, self.language)
+            if todo and problem:
+                _wrapped(layout.column(align=True), "{:s} isn't transcribed yet. {:s}".format(
+                    todo[0], problem), 'ERROR')
+                op = layout.operator("bfacw.open_addon_prefs", text="Set Up Speech...",
+                                     icon=safe_icon('PREFERENCES'))
+                op.pref_tab = "SPEECH"
+            elif todo:
+                _wrapped(layout.column(align=True), "{:s} isn't transcribed yet: Auto Captions transcribes it first "
+                         "(the status bar shows how far; Esc stops).".format(todo[0]), 'INFO')
 
     def execute(self, context: Any) -> set[str]:
         scene = seq_scene(context)
         sources = [s for s in _media_strips(_top(scene.sequence_editor)) if s.select]
+        language = None if self.language == "auto" else self.language
+        todo = [] if self.transcript_path else untranscribed(sources, language)
+        if todo:
+            problem = transcription_problem(language)
+            if problem and problem != cap.NO_TRANSCRIPTION:
+                # Speech isn't set up: say what is missing; the dialog has the button that sets it up.
+                self.report({'ERROR'}, NOT_SET_UP.format(todo[0].name, problem))
+                return {'CANCELLED'}
+            if not problem:
+                return self._transcribe_first(context, scene, sources, language)
         try:
-            result = add_captions(scene, sources, self.style, None if self.language == "auto" else self.language,
+            result = add_captions(scene, sources, self.style, language,
                                   self.transcript_path, self.max_chars, _lines_value(self.lines))
         except CaptionsError as ex:
             self.report({'ERROR'}, str(ex))
             return {'CANCELLED'}
         self.report({'WARNING'} if result.get("note") else {'INFO'}, _summary(result))
         return {'FINISHED'}
+
+    # -- transcribing first (#516) --
+    def _transcribe_first(self, context: Any, scene: Any, sources: list, language: str | None) -> set[str]:
+        """Start the transcription; with a window, wait for the captions here (modal: Esc stops,
+        the status bar shows the progress, this operator's undo step and report hold the
+        captions).  Without one (a script), or from Adjust Last Operation (no modal there), a
+        timer makes them on its own."""
+        params = {"style": self.style, "language": language, "max_chars": self.max_chars,
+                  "max_lines": _lines_value(self.lines)}
+        # options.is_repeat: the redo panel.  Not Operator.is_repeat(), which is true whenever the
+        # last operator run was Auto Captions too.
+        options = getattr(self, "options", None)
+        redo = bool(getattr(options, "is_repeat", False) or getattr(options, "is_repeat_last", False))
+        wait = getattr(context, "window", None) is not None and not bpy.app.background and not redo
+        try:
+            job = transcribe_then_caption(scene, sources, params, undo=not wait)
+        except CaptionsError as ex:
+            self.report({'ERROR'}, str(ex))
+            return {'CANCELLED'}
+        if job["state"] != "running" or not wait:
+            self.report({'WARNING'} if job["warn"] else {'INFO'}, job["message"])
+            return {'FINISHED'}
+        self._job = job
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.25, window=context.window)
+        wm.modal_handler_add(self)
+        self._status(context, job_status_text(job))
+        return {'RUNNING_MODAL'}
+
+    def modal(self, context: Any, event: Any) -> set[str]:
+        job = self._job
+        if job["state"] == "running" and event.type == 'ESC' and event.value == 'PRESS':
+            stop_pending()
+        if job["state"] == "running":
+            if event.type == 'TIMER':
+                self._status(context, job_status_text(job))
+            return {'PASS_THROUGH'}
+        self._end(context)
+        if job["state"] == "done":
+            self.report({'WARNING'} if job["warn"] else {'INFO'}, job["message"])
+            return {'FINISHED'}
+        self.report({'WARNING'} if job["state"] == "stopped" else {'ERROR'}, job["message"])
+        return {'CANCELLED'}
+
+    def cancel(self, context: Any) -> None:
+        """Blender ends the wait (a file load, the window closes): no captions come later."""
+        if getattr(self, "_job", None) is not None and self._job["state"] == "running":
+            stop_pending()
+        self._end(context)
+
+    def _end(self, context: Any) -> None:
+        timer, self._timer = getattr(self, "_timer", None), None
+        if timer is not None:
+            try:
+                context.window_manager.event_timer_remove(timer)
+            except (AttributeError, ReferenceError, RuntimeError):
+                pass
+        self._status(context, None)
+
+    @staticmethod
+    def _status(context: Any, text: str | None) -> None:
+        try:
+            context.workspace.status_text_set(text)
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            pass
+
+
+def _wrapped(col: Any, text: str, icon: str) -> None:
+    """*text* as labels the dialog's width holds, the icon on the first."""
+    for i, line in enumerate(textwrap.wrap(text, 58)):
+        col.label(text=line, icon=safe_icon(icon) if i == 0 else 'BLANK1')
+
+
+# What the dialog shows about transcription, worked out once per selection and language:
+# {"key": (scene, clips, language), "todo": [clip names], "problem": "..."}.
+_DIALOG: dict[str, Any] = {}
+
+
+def _dialog_state(context: Any, language: str) -> tuple[list[str], str]:
+    """``(untranscribed clips, what speech is missing or "")`` for the dialog (#516)."""
+    scene = seq_scene(context)
+    ed = getattr(scene, "sequence_editor", None)
+    sources = [s for s in _media_strips(_top(ed)) if s.select] if ed is not None else []
+    lang = None if language == "auto" else language
+    key = (scene.name, tuple(s.name for s in sources), lang)
+    if _DIALOG.get("key") != key:
+        todo = [s.name for s in untranscribed(sources, lang)]
+        problem = transcription_problem(lang) if todo else ""
+        _DIALOG.update(key=key, todo=todo, problem="" if problem == cap.NO_TRANSCRIPTION else problem)
+    return list(_DIALOG["todo"]), _DIALOG["problem"]
 
 
 def _summary(result: dict) -> str:
@@ -821,6 +1149,11 @@ def unregister() -> None:
         except (ValueError, RuntimeError):
             pass
     _HOOKED.clear()
+    try:
+        stop_pending()
+    except Exception:  # pylint: disable=broad-exception-caught
+        _PENDING.clear()
+        _unregister_timer()
     for cls in reversed(_CLASSES):
         try:
             bpy.utils.unregister_class(cls)

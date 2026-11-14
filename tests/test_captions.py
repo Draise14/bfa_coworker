@@ -430,6 +430,30 @@ class _Scene:
         return self.sequence_editor
 
 
+class _Layout:
+    """Records what a dialog's draw puts in it."""
+
+    def __init__(self):
+        self.log, self.props = [], []
+        self.use_property_split, self.enabled = False, True
+
+    def prop(self, _data, name, **_kw):
+        self.log.append(("prop", name))
+
+    def label(self, text="", **kw):
+        self.log.append(("label", text, kw.get("icon")))
+
+    def operator(self, idname, text="", **_kw):
+        self.log.append(("operator", idname, text))
+        self.props.append(SimpleNamespace())
+        return self.props[-1]
+
+    def row(self, **_kw):
+        return self
+
+    column = row
+
+
 def _fake_bpy(state):
     bpy = types.ModuleType("bpy")
     bpy.path = SimpleNamespace(abspath=lambda p, library=None: p)
@@ -571,6 +595,19 @@ class TestCaptionStrips(_OpsCase):
         self.assertTrue(all(s.right_handle <= clip.right_handle for s in self.lines()))
         self.assertEqual(len(self.lines()), 3)
 
+    def test_no_transcription_in_this_build_yet_the_operator_says_so(self):
+        _clip(self.scene)
+        op, reports = self._operator()
+        self.assertEqual(op.execute(SimpleNamespace(scene=self.scene)), {'CANCELLED'})
+        self.assertIn("Import SRT", reports[-1][1])
+
+    def _operator(self):
+        op = self.ops.BFACW_OT_auto_captions()
+        op.style, op.language, op.max_chars, op.lines, op.transcript_path = "CLEAN", "auto", 0, "STYLE", ""
+        reports = []
+        op.report = lambda kind, msg: reports.append((sorted(kind)[0], msg))
+        return op, reports
+
     def test_no_transcription_in_this_build(self):
         clip = _clip(self.scene)
         self.assertFalse(self.ops.transcription_available())
@@ -605,6 +642,229 @@ class TestCaptionStrips(_OpsCase):
             self.ops.add_captions(self.scene, [_clip(self.scene)], "CLEAN", None, "")
         self.assertIn("hasn't been transcribed yet", str(ctx.exception))
         self.assertIn("transcribe_strip", str(ctx.exception))
+
+    # -- Auto Captions transcribes first (#516) --
+    def _speech_stand_ins(self, problem="", background=True):
+        """transcripts / speech as #375 has them: nothing cached until the job is done."""
+        data = json.loads(_SAMPLE.read_text(encoding="utf-8"))
+        flags = {"done": False, "started": [], "stopped": 0}
+        tx = types.ModuleType(_PKG + ".transcripts")
+        tx.load_for_media = (lambda path, model=None, language=None, blend_path=None, fallback_dir="":
+                             data if flags["done"] else None)
+        tx.words = lambda t: t["words"]
+        sp = types.ModuleType(_PKG + ".speech")
+        sp.JOB_KIND = "TRANSCRIBE"
+        sp._prefs = lambda: None
+        sp.settings_from_prefs = lambda prefs: {}
+        sp.plan = lambda settings, model="", language="": {"route": "local"}
+        sp.setup_problem = lambda p, settings: problem
+
+        def transcribe_strip(strip, language="", **_kw):
+            flags["started"].append((strip, language))
+
+            def check():
+                return {"status": "ok", "message": "words"} if flags["done"] else None
+            return check
+        sp.transcribe_strip = transcribe_strip
+
+        def stop_jobs():
+            flags["stopped"] += 1
+            return 1
+        sp.stop_jobs = stop_jobs
+        saved = {k: sys.modules.get(k, "unset") for k in (_PKG + ".speech", _PKG + ".long_jobs")}
+
+        def restore():
+            for k, v in saved.items():
+                if v == "unset":
+                    sys.modules.pop(k, None)
+                else:
+                    sys.modules[k] = v
+        self.addCleanup(restore)
+        sys.modules[_PKG + ".transcripts"] = tx
+        sys.modules[_PKG + ".speech"] = sp
+        lj = types.ModuleType(_PKG + ".long_jobs")
+        lj.started, lj.cancelled_kinds = [], []
+        lj.start = lambda kind, label, check_fn, on_finish=None: lj.started.append((kind, label))
+        lj.cancelled = lj.cancelled_kinds.append
+        lj.running = lambda: [{"kind": "TRANSCRIBE", "progress_text": "Transcribing with small (CPU)"}]
+        sys.modules[_PKG + ".long_jobs"] = lj
+        timers = []
+        self.ops.bpy.app = SimpleNamespace(background=background, timers=SimpleNamespace(
+            register=lambda fn, first_interval=0.0: timers.append(fn),
+            is_registered=lambda fn: fn in timers, unregister=lambda fn: timers.remove(fn)))
+        self.addCleanup(self.ops._PENDING.clear)
+        self.addCleanup(self.ops._DIALOG.clear)
+        return flags, timers, lj
+
+    def _window(self):
+        """A context with a window: the operator waits for the captions (modal)."""
+        calls = {"timers": [], "removed": [], "modal": [], "status": []}
+        wm = SimpleNamespace(
+            event_timer_add=lambda step, window=None: calls["timers"].append(step) or "timer",
+            event_timer_remove=lambda t: calls["removed"].append(t),
+            modal_handler_add=lambda op: calls["modal"].append(op))
+        ctx = SimpleNamespace(scene=self.scene, window=object(), window_manager=wm,
+                              workspace=SimpleNamespace(status_text_set=lambda text: calls["status"].append(text)))
+        return ctx, calls
+
+    def test_auto_captions_transcribes_then_captions(self):
+        flags, timers, lj = self._speech_stand_ins()
+        _clip(self.scene)
+        _clip(self.scene, "movie", "//media/talk.wav", channel=2, type_="MOVIE")     # same file: once
+        op, reports = self._operator()
+        self.assertEqual(op.execute(SimpleNamespace(scene=self.scene)), {'FINISHED'})
+        self.assertEqual(flags["started"], [("speech", "")])
+        self.assertIn("Transcribing 1 clip first", reports[-1][1])
+        self.assertEqual(lj.started, [("TRANSCRIBE", "Transcribe")], "in the job row too")
+        self.assertEqual(self.lines(), [], "no captions before the words")
+        self.assertEqual(len(timers), 1)
+        self.assertEqual(timers[0](), 0.5, "still transcribing: the timer goes on")
+        flags["done"] = True
+        self.assertIsNone(timers[0](), "done: the timer stops")
+        self.assertGreater(len(self.lines()), 10, "the captions came in the same action")
+        self.assertEqual(_STATE["undo"], ["Auto Captions"], "one undo step of their own (no operator waits)")
+
+    def test_in_a_window_the_operator_waits_and_reports(self):
+        flags, timers, _lj = self._speech_stand_ins(background=False)
+        _clip(self.scene)
+        ctx, calls = self._window()
+        op, reports = self._operator()
+        self.assertEqual(op.execute(ctx), {'RUNNING_MODAL'})
+        self.assertEqual((calls["modal"], calls["timers"]), ([op], [0.25]))
+        self.assertIn("Esc to stop", calls["status"][-1])
+        self.assertIn("Transcribing with small (CPU)", calls["status"][-1], "the progress line")
+        lj = sys.modules[_PKG + ".long_jobs"]
+        lj.running = lambda: [{"kind": "TRANSCRIBE", "progress_text": (
+            "Starting whisper-server (large-v3-turbo, CUDA 12) on port 8481 ... The first CUDA start on a "
+            "computer can take about 30 ")}]           # as long_jobs cuts it
+        line = self.ops.job_status_text(self.ops._PENDING[0])
+        self.assertTrue(line.startswith("Auto Captions: Starting whisper-server (large-v3-turbo, CUDA 12) on port "
+                                        "8481, "), line)
+        tick = SimpleNamespace(type='TIMER', value='NOTHING')
+        self.assertEqual(op.modal(ctx, tick), {'PASS_THROUGH'})
+        self.assertEqual(op.modal(ctx, SimpleNamespace(type='A', value='PRESS')), {'PASS_THROUGH'},
+                         "everything else goes on working")
+        flags["done"] = True
+        self.assertIsNone(timers[0]())
+        self.assertGreater(len(self.lines()), 10)
+        self.assertEqual(_STATE["undo"], [], "the operator's own undo step holds them, not a second one")
+        self.assertEqual(op.modal(ctx, tick), {'FINISHED'})
+        self.assertEqual(reports[-1][0], 'INFO')
+        self.assertIn("Auto Captions:", reports[-1][1])
+        self.assertIn("captions on channel", reports[-1][1])
+        self.assertEqual((calls["removed"], calls["status"][-1]), (["timer"], None), "status bar given back")
+
+    def test_a_second_run_in_a_row_waits_too_but_not_from_the_redo_panel(self):
+        flags, timers, _lj = self._speech_stand_ins(background=False)
+        _clip(self.scene)
+        ctx, calls = self._window()
+        op, _reports = self._operator()
+        op.is_repeat = lambda: True         # Blender: the last operator run was Auto Captions too
+        self.assertEqual(op.execute(ctx), {'RUNNING_MODAL'}, "Esc must work the second time as well")
+        self.ops._PENDING.clear()
+        timers.clear()
+        redo, _reports = self._operator()
+        redo.options = SimpleNamespace(is_repeat=True, is_repeat_last=False)     # Adjust Last Operation
+        self.assertEqual(redo.execute(ctx), {'FINISHED'}, "no modal from the redo panel: a timer instead")
+        self.assertEqual((len(calls["modal"]), len(timers)), (1, 1))
+
+    def test_esc_stops_and_leaves_nothing_behind(self):
+        flags, timers, lj = self._speech_stand_ins(background=False)
+        _clip(self.scene)
+        ctx, calls = self._window()
+        op, reports = self._operator()
+        self.assertEqual(op.execute(ctx), {'RUNNING_MODAL'})
+        self.assertEqual(op.modal(ctx, SimpleNamespace(type='ESC', value='PRESS')), {'CANCELLED'})
+        self.assertEqual(self.ops._PENDING, [], "no caption job waits")
+        self.assertEqual(timers, [], "no timer")
+        self.assertEqual(flags["stopped"], 1, "the transcription is stopped (and whisper-server with it)")
+        self.assertEqual(lj.cancelled_kinds, ["TRANSCRIBE"], "its job row ends")
+        self.assertEqual((reports[-1][0], reports[-1][1]), ('WARNING', self.ops.STOPPED))
+        self.assertEqual((calls["removed"], calls["status"][-1]), (["timer"], None))
+        flags["done"] = True                # a result that comes anyway makes nothing
+        self.assertEqual(self.lines(), [])
+        self.assertEqual(_STATE["undo"], [])
+
+    def test_a_file_load_ends_the_wait_without_captions(self):
+        flags, timers, _lj = self._speech_stand_ins(background=False)
+        _clip(self.scene)
+        ctx, calls = self._window()
+        op, _reports = self._operator()
+        self.assertEqual(op.execute(ctx), {'RUNNING_MODAL'})
+        op.cancel(ctx)                      # Blender removes the modal handler (load, window closed)
+        self.assertEqual((self.ops._PENDING, timers, flags["stopped"]), ([], [], 1))
+        self.assertEqual(calls["status"][-1], None)
+
+    def test_another_file_with_a_scene_of_the_same_name_gets_no_captions(self):
+        flags, timers, _lj = self._speech_stand_ins()
+        self.scene.session_uid = 7
+        _clip(self.scene)
+        op, _reports = self._operator()
+        self.assertEqual(op.execute(SimpleNamespace(scene=self.scene)), {'FINISHED'})
+        other = _Scene()
+        other.session_uid = 8
+        _clip(other)
+        _STATE["scenes"]["Scene"] = other
+        flags["done"] = True
+        self.assertIsNone(timers[0]())
+        self.assertEqual([s for s in other.sequence_editor.strips if s.type == 'TEXT'], [])
+
+    def test_auto_captions_with_speech_not_set_up_explains_and_offers_set_up(self):
+        problem = "Speech isn't set up yet: whisper-server (CPU) isn't downloaded."
+        flags, timers, _lj = self._speech_stand_ins(problem=problem)
+        _clip(self.scene)
+        op, reports = self._operator()
+        self.assertEqual(op.execute(SimpleNamespace(scene=self.scene)), {'CANCELLED'})
+        self.assertEqual((flags["started"], timers), ([], []))
+        self.assertEqual([s for s in self.scene.sequence_editor.strips if s.type == 'TEXT'], [], "no strips added")
+        self.assertEqual(reports[-1][0], 'ERROR')
+        self.assertIn("speech hasn't been transcribed yet", reports[-1][1])
+        self.assertIn(problem, reports[-1][1])
+        self.assertIn("Set Up Speech", reports[-1][1])
+        # The dialog says so before Add Captions, with the button that opens Preferences > Speech.
+        layout = _Layout()
+        op.layout = layout
+        op.draw(SimpleNamespace(scene=self.scene))
+        self.assertIn(("operator", "bfacw.open_addon_prefs", "Set Up Speech..."), layout.log)
+        self.assertEqual(layout.props[-1].pref_tab, "SPEECH")
+        self.assertIn("isn't downloaded", " ".join(x[1] for x in layout.log if x[0] == "label"))
+
+    def test_the_dialog_says_it_transcribes_first(self):
+        self._speech_stand_ins()
+        _clip(self.scene)
+        op, _reports = self._operator()
+        op.layout = layout = _Layout()
+        op.draw(SimpleNamespace(scene=self.scene))
+        self.assertIn("transcribes it first", " ".join(x[1] for x in layout.log if x[0] == "label"))
+        self.assertNotIn("bfacw.open_addon_prefs", [x[1] for x in layout.log])
+
+    def test_auto_captions_on_a_transcribed_clip_captions_at_once(self):
+        flags, timers, _lj = self._speech_stand_ins(background=False)
+        flags["done"] = True
+        _clip(self.scene)
+        ctx, calls = self._window()
+        op, _reports = self._operator()
+        self.assertEqual(op.execute(ctx), {'FINISHED'})
+        self.assertEqual((flags["started"], timers, calls["modal"]), ([], [], []))
+        self.assertGreater(len(self.lines()), 10)
+
+    def test_transcribed_while_starting_captions_at_once_with_one_undo_step(self):
+        # In a background run transcribe_strip waits and answers with the words.
+        flags, timers, _lj = self._speech_stand_ins()
+        sp = sys.modules[_PKG + ".speech"]
+
+        def transcribe_now(strip, language="", **_kw):
+            flags["started"].append((strip, language))
+            flags["done"] = True
+            return {"status": "ok", "message": "words"}
+        sp.transcribe_strip = transcribe_now
+        _clip(self.scene)
+        op, reports = self._operator()
+        self.assertEqual(op.execute(SimpleNamespace(scene=self.scene)), {'FINISHED'})
+        self.assertEqual(timers, [])
+        self.assertGreater(len(self.lines()), 10)
+        self.assertEqual(_STATE["undo"], [], "the operator's undo step only")
+        self.assertIn("captions on channel", reports[-1][1])
 
     def test_word_by_word_highlight(self):
         with self._measured():

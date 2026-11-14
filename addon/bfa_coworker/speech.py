@@ -32,6 +32,7 @@ __all__ = (
     "setup_problem",
     "settings_from_prefs",
     "shape_result",
+    "stop_jobs",
     "strip_media",
     "strip_timing",
     "transcribe_strip",
@@ -55,6 +56,10 @@ _TEXT_MAX = 6000
 
 _jobs_lock = threading.Lock()
 _jobs: dict[tuple[str, str, str], "_Job"] = {}
+# Held while a worker checks "stopped?" and starts whisper-server, and while stop_jobs stops
+# it: a Stop can't fall between the two and leave a server started after it (#516).
+_start_lock = threading.Lock()
+STOPPED = "Stopped before it finished; nothing was saved."
 
 
 # -- Settings -----------------------------------------------------------------------------
@@ -265,6 +270,12 @@ class _Job:
         self.error = ""
         self.seconds = 0.0
         self.t0 = time.monotonic()
+        self.stopped = threading.Event()        # stop_jobs (#516)
+        self.local = False                      # on whisper-server (not Remote)
+
+
+class _Stopped(Exception):
+    pass
 
 
 def _note(text: str) -> None:
@@ -277,18 +288,25 @@ def _note(text: str) -> None:
 
 def _work(job: _Job, media: str, key: str, size: int, p: dict[str, Any], settings: dict[str, Any],
           blend_path: str, prompt: str) -> None:
-    wav = os.path.join(tempfile.gettempdir(), "bfa_coworker_speech", "{:s}.16k.wav".format(key))
+    # Per job: one that was stopped may still be writing its WAV while the next one starts (#516).
+    wav = os.path.join(tempfile.gettempdir(), "bfa_coworker_speech", "{:s}.{:x}.16k.wav".format(key, id(job)))
+    job.local = p["route"] != "remote"
     try:
         os.makedirs(os.path.dirname(wav), exist_ok=True)
         _note("Reading the sound of {:s}".format(os.path.basename(media)))
         _write_wav(media, wav)
+        if job.stopped.is_set():
+            raise _Stopped()
         if p["route"] == "remote":
             _note("Sending the audio to the Remote provider")
             resp = whisper_manager.transcribe_remote(wav, settings["remote_url"], settings["remote_key"], p["model"],
                                                      p["language"], prompt)
             doc = transcripts.from_openai(resp, media, key, size, p["model"], language=p["language"])
         else:
-            problem = whisper_manager.start_server(p["model"], p["build"], int(settings["port"]))
+            with _start_lock:
+                if job.stopped.is_set():
+                    raise _Stopped()
+                problem = whisper_manager.start_server(p["model"], p["build"], int(settings["port"]))
             if problem:
                 raise RuntimeError(problem)
             if not whisper_manager.is_ready():
@@ -301,12 +319,14 @@ def _work(job: _Job, media: str, key: str, size: int, p: dict[str, Any], setting
             doc = transcripts.from_verbose_json(vj, media, key, size, p["model"],
                                                 build=whisper_manager.BUILD_LABELS.get(p["build"], p["build"]),
                                                 version=str(info.get("tag", "")), language=p["language"])
+        if job.stopped.is_set():
+            raise _Stopped()
         lang = p["language"] if p["language"] != "auto" else (doc.get("language") or "auto")
         path = transcripts.cache_path(key, p["cache_model"], lang, blend_path, whisper_manager.data_dir())
         transcripts.write(path, doc)
         job.doc, job.path = doc, str(path)
     except Exception as ex:  # pylint: disable=broad-exception-caught
-        job.error = str(ex) or type(ex).__name__
+        job.error = STOPPED if job.stopped.is_set() else (str(ex) or type(ex).__name__)
     finally:
         job.seconds = time.monotonic() - job.t0
         try:
@@ -375,6 +395,8 @@ def transcribe_strip(strip: str, language: str = "", limit: int = DEFAULT_LIMIT,
         with _jobs_lock:
             if _jobs.get(job_key) is job:
                 _jobs.pop(job_key, None)
+        if job.stopped.is_set():
+            return {"status": "cancelled", "message": "Transcribing '{:s}': {:s}".format(name, STOPPED)}
         if job.error or job.doc is None:
             return _error("Transcribing '{:s}' failed: {:s}".format(name, job.error or "no result"))
         return shape_result(job.doc, timing, name, limit, offset, cached=False, path=job.path, seconds=job.seconds)
@@ -386,3 +408,23 @@ def transcribe_strip(strip: str, language: str = "", limit: int = DEFAULT_LIMIT,
         job.done.wait(timeout=3600.0)
         return check_is_finished() or _error("Transcribing '{:s}' took longer than an hour.".format(name))
     return check_is_finished
+
+
+def stop_jobs() -> int:
+    """Stop every transcription still running (Auto Captions' Stop, #516); how many.
+
+    Each ends as ``cancelled`` and writes no transcript.  whisper-server can't drop a request
+    it is working on, so this window's server is stopped when a local one runs, also one kept
+    running from before (the next transcription starts it again)."""
+    with _jobs_lock:
+        running = [j for j in _jobs.values() if not j.done.is_set()]
+        for key in [k for k, j in _jobs.items() if j in running]:
+            del _jobs[key]      # the next call starts afresh, not on the stopped job
+    if not running:
+        return 0
+    with _start_lock:
+        for job in running:
+            job.stopped.set()
+        if any(job.local for job in running):
+            whisper_manager.stop_server()
+    return len(running)

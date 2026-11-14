@@ -1190,8 +1190,11 @@ class BFACW_OT_open_addon_prefs(bpy.types.Operator):  # type: ignore[misc]
     bl_label = "Open Settings"
     bl_description = "Open preferences to configure Coworker"
 
+    # A tab of the Coworker page to show ("SPEECH": Auto Captions' set-up, #516); "" keeps the current one.
+    pref_tab: bpy.props.StringProperty(default="", options={'HIDDEN', 'SKIP_SAVE'})  # type: ignore[valid-type]
+
     def execute(self, context: bpy.types.Context) -> set[str]:
-        _open_addon_prefs_filtered(context)
+        _open_addon_prefs_filtered(context, pref_tab=self.pref_tab or None)
         return {"FINISHED"}
 
 

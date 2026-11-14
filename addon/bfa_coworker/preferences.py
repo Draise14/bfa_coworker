@@ -256,6 +256,24 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         update=_update_debug_mode,
     )
 
+    # -- Chat draw trace (#387) ---------------------------------------
+
+    def _update_chat_draw_trace(self, _context: bpy.types.Context) -> None:
+        if self.chat_draw_trace:            # a fresh trace from now on
+            from .ui_gpu import draw_trace
+            draw_trace.TRACE.clear()
+
+    chat_draw_trace: BoolProperty(  # type: ignore[valid-type]
+        name="Chat Draw Trace",
+        description=(
+            "Record the last 300 draws of the chat (where, how big, how long, anything odd), "
+            "to find a rare glitch. When the chat glitches, use Copy Chat Draw Trace and paste "
+            "it into the issue. Off by default"
+        ),
+        default=False,
+        update=_update_chat_draw_trace,
+    )
+
     # -- Session token (Engine 8) ------------------------------------
 
     def _update_require_token(self, _context: bpy.types.Context) -> None:

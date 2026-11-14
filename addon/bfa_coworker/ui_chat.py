@@ -6638,6 +6638,15 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
             row.operator("bfacw.export_session_log", icon="EXPORT", text="Export Log")
             row.operator("bfacw.copy_session_log", icon="COPYDOWN", text="Copy Log")
 
+        # -- The GPU chat's draw trace (#387): on, then copy it right after a glitch --
+        from . import chat_editor as _ce
+        if _compact_sidebar(context) or _ce.is_coworker_space(context.space_data):
+            layout.separator()
+            row = layout.row(align=True)
+            row.prop(prefs, "chat_draw_trace", text="Chat Draw Trace", toggle=True,
+                     icon=safe_icon("REC") if prefs.chat_draw_trace else safe_icon("RADIOBUT_OFF"))
+            row.operator("bfacw.copy_chat_draw_trace", icon=safe_icon("COPYDOWN"), text="Copy")
+
         # -- External Harness MCP server controls --
         if is_harness and mcp_to_blender_server.is_running():
             box = layout.box()

@@ -57,7 +57,9 @@ from .suggestions import TYPE, suggestions
 
 __all__ = (
     "ChatView",
+    "LiveSnapshot",
     "block_text",
+    "live_snapshot",
     "message_text",
     "transcript",
     "unit_texts",
@@ -226,6 +228,36 @@ def _tool_failed(msg: dict) -> bool:
     return content.startswith("Error") or '"status": "error"' in content
 
 
+@dataclass(frozen=True)
+class LiveSnapshot:
+    """The running turn's live fields, read once for a frame (#387)."""
+
+    is_thinking: bool = False
+    streaming_text: str = ""
+    reasoning_text: str = ""
+    thinking_start_time: float = 0.0
+    thinking_dots: int = 0
+    turn_phase: str = ""
+
+
+def live_snapshot(live: Any) -> Any:
+    """*live* (the thread's ``AgentState``) read once, for one frame.
+
+    A worker thread writes the running turn (our loop's streaming) while the chat draws.
+    The view measures the turn and then draws it: reading the state twice, a text replaced
+    in between (the turn ending, a new request starting over) was drawn other than it was
+    measured -- an empty slot, or text past the turn's slot, for that frame (#387).
+    """
+    if live is None or isinstance(live, LiveSnapshot):
+        return live
+    def read(name: str, default: Any) -> Any:
+        value = getattr(live, name, default)
+        return default if value is None else value
+    return LiveSnapshot(bool(read("is_thinking", False)), str(read("streaming_text", "")),
+                        str(read("reasoning_text", "")), read("thinking_start_time", 0.0),
+                        read("thinking_dots", 0), str(read("turn_phase", "")))
+
+
 @dataclass
 class ChatView:
     """View state of one chat surface (scroll, open Workshops, height cache)."""
@@ -372,6 +404,7 @@ class ChatView:
         mouse while it drags a selection -- its moving end follows it on this frame's text
         (also after the wheel scrolled under it)."""
         actions: list[tuple[str, str]] = []
+        live = live_snapshot(live)          # measured and drawn from the same text (#387)
         style = canvas.style
         pad = style.pad * (0.7 if compact else 1.0)
         gap = pad

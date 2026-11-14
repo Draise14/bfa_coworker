@@ -361,6 +361,9 @@ class TestChangeList(unittest.TestCase):
         self.assertIn('add node "d" (Value)', changes)
         self.assertFalse(any('"c c"' in c for c in changes))
         self.assertEqual(diff_trees(old, old), [])
+        framed = parse_code('frame F: a, b\n').trees[0]
+        self.assertEqual(diff_trees(framed, parse_code('frame F: b, a\n').trees[0]), [])
+        self.assertEqual(diff_trees(framed, parse_code('frame F: a\n').trees[0]), ['frame "F": a'])
         removed = diff_trees(new, old)
         self.assertIn('remove node "d" (Value)', removed)
         self.assertEqual(diff_trees(None, new)[0], 'create tree "T": 4 nodes, 2 interface sockets, 1 linked inputs')

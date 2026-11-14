@@ -954,7 +954,7 @@ def diff_trees(old, new):
         if keys:
             changes.append("change node {:s}: {:s}".format(_quote(name), ", ".join(
                 "{:s} {:s} -> {:s}".format(k, a.get(k, "default"), b.get(k, "default")) for k in keys)))
-        if before.children != spec.children:
+        if sorted(before.children) != sorted(spec.children):   # their order means nothing
             changes.append("frame {:s}: {:s}".format(_quote(name), ", ".join(spec.children) or "empty"))
     for name, spec in old_nodes.items():
         if name not in new_nodes:

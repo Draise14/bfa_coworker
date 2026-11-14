@@ -9,6 +9,9 @@ Chats running side by side (Threads 3, #359).
    to the cap, the Local opt-in on the unified KV slots), a queue beyond the
    cap, the slot reserved before the worker starts, Stop in one chat leaving the
    others running, and Stop All.
+2. Interleaving: calls of several chats take turns on the main thread, one call
+   per chat per tick, round-robin; the step journal says who stepped on the one
+   undo stack; each step is named by its chat.
 
 Run with::
 
@@ -17,17 +20,21 @@ Run with::
 
 __all__ = ()
 
+import json
 import os
 import sys
 import threading
 import time
 import unittest
+import unittest.mock
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 from test_threads import _FakeController, _load, _registry, _wait_for, eng, el, th  # noqa: E402
+
+sbs, = _load("side_by_side")
 
 
 class _SlotController(_FakeController):
@@ -199,6 +206,83 @@ class TestRunner(unittest.TestCase):
         self.assertTrue(_wait_for(lambda: not self._active()))
         self.assertEqual(self.reg.running_threads(), [])
         self.assertFalse(idle.state.conversation_history)
+
+
+
+class _Conn:
+    """A client socket that has sent its whole request already."""
+
+    def recv(self, _n):
+        raise BlockingIOError
+
+    def sendall(self, _data):
+        pass
+
+    def close(self):
+        pass
+
+
+class TestInterleaving(unittest.TestCase):
+
+    def test_request_thread_reads_only_the_key(self):
+        raw = json.dumps({"type": "execute", "code": 'x = {"thread": "evil"}', "thread": "t3"}).encode()
+        self.assertEqual(sbs.request_thread(raw), "t3")
+        self.assertEqual(sbs.request_thread(json.dumps({"code": 'print("thread": "x")'}).encode()), "")
+
+    def test_fair_order_one_per_chat_round_robin(self):
+        ready = [("a1", "A"), ("a2", "A"), ("b1", "B"), ("c1", "C")]
+        self.assertEqual(sbs.fair_order(ready), [("a1", "A"), ("b1", "B"), ("c1", "C")])
+        self.assertEqual(sbs.fair_order(ready, last="A"), [("b1", "B"), ("c1", "C"), ("a1", "A")])
+        self.assertEqual(sbs.fair_order(ready, last="C"), [("a1", "A"), ("b1", "B"), ("c1", "C")])
+        self.assertEqual(sbs.fair_order([]), [])
+
+    def test_two_chats_calls_alternate_on_the_bridge(self):
+        br, = _load("mcp_to_blender_server")
+        ran = []
+
+        def fake_execute(data):
+            ran.append(json.loads(data)["thread"])
+            return br._ExecResult({"status": "ok", "result": None}), True
+        clients = []
+        for chat in ("t1", "t1", "t1", "t2", "t2", "t2"):       # t1's three calls arrived first
+            client = br._Client(_Conn())
+            client.buffer.extend(json.dumps({"type": "execute", "thread": chat}).encode() + bytes(1))
+            clients.append(client)
+        saved = list(br._state.clients), br._state.last_chat
+        br._state.clients[:] = clients
+        br._state.last_chat = ""
+        try:
+            with unittest.mock.patch.object(br, "_execute_code_from_request", fake_execute):
+                for _ in range(4):
+                    br._service_clients()
+        finally:
+            br._state.clients[:], br._state.last_chat = saved
+        self.assertEqual(ran, ["t1", "t2", "t1", "t2", "t1", "t2"], "one call per chat per tick, in turn")
+
+    def test_step_journal(self):
+        journal = sbs.StepJournal()
+        mark = journal.mark()
+        journal.note("t1")
+        self.assertEqual(journal.others_since("t1", mark), [], "its own steps don't count")
+        journal.note("t2")
+        self.assertEqual(journal.others_since("t1", mark), ["t2"])
+        mark = journal.mark()
+        journal.note("t1")
+        self.assertEqual(journal.others_since("t1", mark), [], "nothing from t2 since")
+
+    def test_undo_step_names(self):
+        self.assertEqual(sbs.undo_step_name("Coworker (3D)", "execute_blender_code"),
+                         "Coworker (3D): execute blender code")
+        self.assertEqual(sbs.undo_step_name("", ""), "Coworker: a step")
+
+    def test_working_chats_from_every_engine(self):
+        saved = list(sbs.WORKING)
+        self.addCleanup(lambda: sbs.WORKING.__setitem__(slice(None), saved))
+        sbs.WORKING[:] = [lambda: ["t1"], lambda: ["t2", "t1"]]
+        self.assertEqual(sbs.working_chats(), ["t1", "t2"])
+        self.assertTrue(sbs.side_by_side())
+        sbs.WORKING[:] = [lambda: [""]]
+        self.assertFalse(sbs.side_by_side())
 
 
 if __name__ == "__main__":

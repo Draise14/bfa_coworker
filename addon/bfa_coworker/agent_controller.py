@@ -55,6 +55,7 @@ from . import co_work_guard
 from . import long_jobs
 from . import loop_guard
 from . import threads
+from . import side_by_side as _side_by_side
 from . import chat_attachments
 from . import process_guard as _process_guard
 from . import session_identity as _session_identity
@@ -2141,6 +2142,15 @@ THREADS = threads.ThreadRegistry(make_state=lambda: AgentState(), make_queue=lam
 
 _ENGINE_KIND = {"LOCAL_LLM": "local", "REMOTE_API": "remote", "EXTERNAL_AGENT": "agent",
                 "EXTERNAL_HARNESS": "harness"}
+
+
+def _running_tags() -> list[str]:
+    return [threads.tag(t) for t in THREADS.running_threads()]
+
+
+# The loop's running chats count as working (once, also after a reload of this module).
+_side_by_side.WORKING[:] = [s for s in _side_by_side.WORKING if getattr(s, "__name__", "") != "_running_tags"]
+_side_by_side.WORKING.append(_running_tags)
 
 
 def configure_runner(operating_mode: str, cap: int = threads.RUNNING_CAP,
@@ -5512,6 +5522,17 @@ def _build_cleanup_code(diff: _EntityDiff) -> tuple[str, dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Undo helper -- generates code that works in any workspace
 
+def _loop_step_name(name: str) -> str:
+    """The loop's own undo push *name* ("bfa_coworker_pre_script" / "bfa_coworker_step"),
+    named by its chat for a tab other than All editors (#359): "Coworker (3D): before a
+    step", so Edit > Undo History shows whose step it is when chats work side by side."""
+    thread = threads.current()
+    if thread is None or thread.is_default:
+        return name
+    words = {"bfa_coworker_pre_script": "before a step", "bfa_coworker_step": "a step"}.get(name, name)
+    return _side_by_side.undo_step_name(threads.label(thread), words)
+
+
 def _undo_code(action: str, message: str = "", extra_result: str = "") -> str:
     """Generate Blender Python code for undo/push that works in any workspace.
 
@@ -7936,7 +7957,7 @@ def _run_conversation_turn_inner(
                         # entity diffing resume from the post-recovery scene).
                         _repush_extra = _SNAPSHOT_EXTRA if not _code_is_readonly(_prev_code or "") else ""
                         _repush_raw = _call_internal(
-                            _undo_code("push", "bfa_coworker_pre_script", extra_result=_repush_extra))
+                            _undo_code("push", _loop_step_name("bfa_coworker_pre_script"), extra_result=_repush_extra))
                         try:
                             _repush_data = json.loads(_repush_raw)
                             if _repush_data.get("status") == "ok":
@@ -7955,7 +7976,7 @@ def _run_conversation_turn_inner(
                 if tool_name == "execute_blender_code" and not _undo_pushed:
                     _init_extra = _SNAPSHOT_EXTRA if not _code_is_readonly(args.get("code", "") or "") else ""
                     merged_init_raw = _call_internal(
-                        _undo_code("push", "bfa_coworker_pre_script", extra_result=_init_extra))
+                        _undo_code("push", _loop_step_name("bfa_coworker_pre_script"), extra_result=_init_extra))
                     _undo_pushed = True
                     # Parse initial snapshot from merged result.
                     try:
@@ -8027,7 +8048,7 @@ def _run_conversation_turn_inner(
                     if not _prev_code_errored:
                         _step_extra = _SNAPSHOT_EXTRA if not _code_is_readonly(_prev_code or "") else ""
                         merged_raw = _call_internal(
-                            _undo_code("push", "bfa_coworker_step", extra_result=_step_extra))
+                            _undo_code("push", _loop_step_name("bfa_coworker_step"), extra_result=_step_extra))
                         # Parse snapshot from merged result.
                         try:
                             merged_data = json.loads(merged_raw)

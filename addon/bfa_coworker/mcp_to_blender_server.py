@@ -42,6 +42,8 @@ import traceback
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
+from . import side_by_side
+
 DEFAULT_HOST = "localhost"
 DEFAULT_PORT = 9876
 
@@ -244,6 +246,7 @@ class _State:
     __slots__ = (
         "sock",
         "clients",
+        "last_chat",
     )
 
     def __init__(self) -> None:
@@ -251,6 +254,8 @@ class _State:
         self.sock: socket.socket | None = None
         # Connected clients that have not yet sent a complete request.
         self.clients: list[_Client] = []
+        # The chat whose call ran last (#359): the next tick starts with the one after it.
+        self.last_chat: str = ""
 
 
 _state = _State()
@@ -1355,6 +1360,10 @@ def _execute_code_from_request(
             exec_result = _ExecResult(*_repeat)
     if exec_result is None:
         exec_result = _run()
+    try:
+        _note_step(_thread, _tool, str(code), _internal, exec_result)
+    except Exception as _ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] bridge: step note failed -- {:s}".format(str(_ex)))
     # Agent 9: what ran, for the activity view (External Harness) and Copy Log.
     # Coworker's own bookkeeping isn't the agent's work (#414): left out.
     if not _internal:
@@ -1380,6 +1389,28 @@ def _execute_code_from_request(
             print("response: {:s}".format(json.dumps(exec_result.response, indent=2)), file=sys.stderr)
 
     return exec_result, strict_json
+
+
+def _note_step(thread: str, tool: str, code: str, internal: bool, exec_result: _ExecResult) -> None:
+    """A call ran for chat *thread* (#359): note on the step journal that it may have
+    pushed undo steps (a write tool, or Coworker's own undo push), and while chats run
+    side by side make a finished write call its own undo step, named by its chat
+    ("Coworker (3D): execute blender code"), so Edit > Undo History shows who did what."""
+    if internal:
+        if "undo_push" in code or "ed.undo" in code:
+            side_by_side.JOURNAL.note(thread)
+        return
+    from .engine import PLAN_SAFE_TOOLS
+    if tool in PLAN_SAFE_TOOLS:
+        return                      # it only looks: no undo step
+    side_by_side.JOURNAL.note(thread)
+    if exec_result.check_fn is not None or exec_result.response.get("status") != "ok":
+        return
+    if not side_by_side.side_by_side():
+        return                      # one chat at work: its turn's steps as before
+    from . import agent_controller, coworker_api, threads
+    label = threads.label(agent_controller.THREADS.get(thread) if thread else None)
+    coworker_api._undo(side_by_side.undo_step_name(label, tool))
 
 
 def _close_client(client: _Client) -> None:
@@ -1423,8 +1454,13 @@ def _service_clients() -> bool:
     Return ``True`` if at least one request was executed.
     """
     did_work = False
+    ready: list[tuple[_Client, str]] = []
     # Iterate over a copy since clients may be removed during the loop.
     for client in _state.clients[:]:
+        if b"\0" in client.buffer:
+            # Complete, waiting for its chat's turn on the main thread (#359).
+            ready.append((client, side_by_side.request_thread(bytes(client.buffer))))
+            continue
         # Evict clients that have not sent a complete request in time.
         client.timeout -= 1
         if client.timeout <= 0:
@@ -1471,7 +1507,13 @@ def _service_clients() -> bool:
         if b"\0" not in client.buffer:
             # Request not yet complete.
             continue
+        ready.append((client, side_by_side.request_thread(bytes(client.buffer))))
 
+    # Several chats' calls take turns (#359): one call per chat per tick, round-robin,
+    # so a chat making many calls can't hold the others' back.  Each call still runs
+    # alone on the main thread.
+    for client, chat in side_by_side.fair_order(ready, _state.last_chat):
+        _state.last_chat = chat
         # Execute the request and send the response.
         request_data = bytes(client.buffer[:client.buffer.index(b"\0")])
         try:

@@ -515,6 +515,8 @@ def _focus_thread(thread) -> None:
     _sticky_attachment.clear()
     _sticky_attachment.update(socket.sticky)
     _sticky_relinking = True        # a swap, not the user picking: the pin record moved with it
+    from . import coworker_api
+    coworker_api.own_change()       # a tab switch is no scene edit (Revert stays, #359)
     try:
         props.chat_image = bpy.data.images.get(name) if name else None
     finally:

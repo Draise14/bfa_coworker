@@ -21,6 +21,9 @@ Chats running side by side (Threads 3, #359).
    write to another running chat's claim asks (wait / go ahead), waits in Auto
    mode, and is refused when the two would wait for each other; generated code
    is a whole-scene write whose changes are claimed from the depsgraph.
+6. Revert: directly only when no other chat stepped since the turn began;
+   else Revert both (not while that chat works) or Cancel -- never a silent
+   partial revert; each chat's turn checkpoint is its own.
 
 Run with::
 
@@ -680,11 +683,102 @@ class TestClaimGateOnTheBridge(unittest.TestCase):
         self._rename("t1")
         second = self._rename("t2")
         saved = claims.WAIT_LIMIT
-        claims.WAIT_LIMIT = 0.0
+        claims.WAIT_LIMIT = -1.0           # already waited too long (Windows' clock ticks in 16 ms)
         self.addCleanup(setattr, claims, "WAIT_LIMIT", saved)
-        time.sleep(0.01)
         self.assertIn("nothing was changed", second.check_fn()["message"])
         self.assertIsNone(cw.current_question("t2"), "its question is withdrawn")
+
+
+
+class TestRevertDecision(unittest.TestCase):
+
+    def test_the_choices(self):
+        title = {"t2": "Node", "t3": "Sequencer"}.get
+        self.assertEqual(sbs.revert_choice(False, False, [], []).kind, "none")
+        self.assertEqual(sbs.revert_choice(True, True, ["t2"], []).kind, "edited", "you changed it: Undo History")
+        direct = sbs.revert_choice(True, False, [], ["t2"])
+        self.assertEqual((direct.kind, direct.options), ("direct", ("revert",)),
+                         "another chat working elsewhere, but nothing on top of this turn")
+        both = sbs.revert_choice(True, False, ["t2"], [], title=title)
+        self.assertEqual((both.kind, both.options, both.others), ("choose", ("both", "cancel"), ["t2"]))
+        self.assertIn("The Node chat changed the scene", both.message)
+        busy = sbs.revert_choice(True, False, ["t2", "t3"], ["t3"], title=title)
+        self.assertEqual((busy.kind, busy.options), ("busy", ("cancel",)), "not while it still works")
+        self.assertIn("Sequencer chat is still working", busy.message)
+        scoped = sbs.revert_choice(True, False, ["t2"], [], has_snapshot=True)
+        self.assertEqual(scoped.options, ("both", "scoped", "cancel"), "a scoped restore where a snapshot exists")
+
+
+class TestRevertWithTwoChats(unittest.TestCase):
+    """coworker_api's turn checkpoints, one per chat, and Revert by the journal."""
+
+    def setUp(self):
+        self.calls = []
+        self._undo = cw._undo
+        cw._undo = lambda message="", to_item=-1: self.calls.append(message or to_item) or True
+        self.addCleanup(setattr, cw, "_undo", self._undo)
+        cw._turns.clear()
+        cw._turns[""] = cw._turn
+        cw._turn.update(before=False, after=False, edits=0, name="", mark=0)
+        saved = list(sbs.WORKING)
+        sbs.WORKING[:] = [lambda: list(self.working)]
+        self.addCleanup(lambda: sbs.WORKING.__setitem__(slice(None), saved))
+        self.working = []
+
+    def _stack(self):
+        import types
+        names = ["Original"] + [c for c in self.calls if isinstance(c, str)]
+        wm = types.SimpleNamespace(undo_stack=types.SimpleNamespace(steps=[types.SimpleNamespace(name=n)
+                                                                           for n in names]))
+        sys.modules["bpy"] = types.SimpleNamespace(context=types.SimpleNamespace(window_manager=wm))
+        self.addCleanup(sys.modules.pop, "bpy", None)
+        return names
+
+    def test_each_chat_its_own_checkpoint_and_direct_revert(self):
+        cw.turn_started("Coworker (3D)'s turn", thread="t1")
+        cw.turn_started("Coworker (Node)'s turn", thread="t2")
+        self.assertNotEqual(cw._turn_of("t1")["name"], cw._turn_of("t2")["name"], "a Before step each (#359)")
+        cw.turn_finished("Coworker (Node)'s turn", thread="t2")
+        self.assertTrue(cw.can_revert("t2"))
+        self.assertFalse(cw.can_revert("t1"), "its turn still runs")
+        self.assertEqual(cw.revert_choice("t2").kind, "direct",
+                         "nothing from the 3D chat since the Node turn began (its Before came earlier)")
+
+    def test_another_chat_stepped_since_offers_revert_both(self):
+        cw.turn_started("Coworker (3D)'s turn", thread="t1")
+        sbs.JOURNAL.note("t2")                      # the Node chat's call lands on top
+        cw.turn_finished("Coworker (3D)'s turn", thread="t1")
+        self.working = ["t2"]
+        self.assertEqual(cw.revert_choice("t1").kind, "busy")
+        self.assertIn("still working", cw.revert_turn("t1", both=True), "not while it works")
+        self.working = []
+        self.assertEqual(cw.revert_choice("t1").kind, "choose")
+        names = self._stack()
+        self.assertIn("Revert Both", cw.revert_turn("t1"), "never a silent partial revert")
+        self.assertEqual(self.calls[-1], "Coworker (3D)'s turn", "nothing undone")
+        cw._turn_of("t2").update(after=True, edits=cw._edits[0])
+        self.assertEqual(cw.revert_turn("t1", both=True), "")
+        self.assertEqual(self.calls[-1], names.index(cw._turn_of("t1")["name"]), "back to the 3D turn's Before step")
+        self.assertEqual(cw.reverted_with, ["t2"], "the Node chat is told")
+        self.assertFalse(cw.can_revert("t2"), "its steps went too")
+
+    def test_without_the_undo_list_both_is_refused(self):
+        cw.turn_started("Coworker (3D)'s turn", thread="t1")
+        sbs.JOURNAL.note("t2")
+        cw.turn_finished("Coworker (3D)'s turn", thread="t1")
+        before = list(self.calls)
+        self.assertIn("Undo History", cw.revert_turn("t1", both=True), "no positional undo (no undo_stack)")
+        self.assertEqual(self.calls, before)
+
+    def test_another_chats_turn_is_not_your_edit(self):
+        cw.turn_started("Coworker (3D)'s turn", thread="t1")
+        cw.turn_finished("Coworker (3D)'s turn", thread="t1")
+        cw.turn_started("Coworker (Node)'s turn", thread="t2")
+        cw._count_edit()                            # the Node chat's change, while its turn is open
+        self.assertTrue(cw.can_revert("t1"), "not counted as yours")
+        cw.turn_finished("Coworker (Node)'s turn", thread="t2")
+        cw._count_edit()                            # now nobody's turn: yours
+        self.assertFalse(cw.can_revert("t1"))
 
 
 if __name__ == "__main__":

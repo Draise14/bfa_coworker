@@ -249,6 +249,11 @@ def _undo(push_message: str = "", to_item: int = -1) -> bool:
         return False
 
 
+def _journal() -> Any:
+    from . import side_by_side
+    return side_by_side.JOURNAL
+
+
 def turn_started(label: str, thread: str = "") -> None:
     """Main thread, before the turn's first change (*thread*: whose turn, its tag)."""
     turn = _turn_of(thread)
@@ -257,6 +262,9 @@ def turn_started(label: str, thread: str = "") -> None:
         turn["n"] = next(_names)
         name = "Before {:s} ({:d})".format(label, turn["n"])
         turn.update(before=_undo(name), after=False, name=name)
+        # #359: the other chats see this step; this turn sees theirs from here on.
+        _journal().note(thread)
+        turn["mark"] = _journal().mark()
 
 
 def turn_finished(label: str, thread: str = "") -> None:
@@ -265,20 +273,40 @@ def turn_finished(label: str, thread: str = "") -> None:
     if turn["before"] and not turn["after"]:
         done = _undo(label)
         turn.update(before=False, after=done, edits=_edits[0])
+        _journal().note(thread)
 
 
 def can_revert(thread: str = "") -> bool:
+    """*thread*'s last turn has a Revert to offer (directly, or with a choice, #359)."""
     turn = _turn_of(thread)
     return bool(turn["after"]) and _edits[0] == turn["edits"]
 
 
-def revert_turn(thread: str = "") -> str:
-    """Undo the last turn of *thread*; returns "" or why it can't."""
+def revert_choice(thread: str = "", title: Any = None) -> Any:
+    """What Revert may offer for *thread*'s last turn (#359): directly only when no
+    other chat stepped on the undo stack since that turn began; else *Revert both* (not
+    while that chat still works) or *Cancel*.  *title* names a chat by its tag."""
+    from . import side_by_side
+    turn = _turn_of(thread)
+    others = side_by_side.JOURNAL.others_since(thread, int(turn.get("mark", 0))) if turn["after"] else []
+    return side_by_side.revert_choice(bool(turn["after"]), _edits[0] != turn["edits"], others,
+                                      side_by_side.working_chats(), has_snapshot=False,
+                                      title=title or (lambda tag: tag or "All editors"))
+
+
+# The chats whose steps the last "Revert both" undid as well (the chat tells them, #359).
+reverted_with: list[str] = []
+
+
+def revert_turn(thread: str = "", both: bool = False) -> str:
+    """Undo the last turn of *thread*; returns "" or why it can't.  When another chat
+    stepped since the turn began, only with *both* (its steps since go too, #359)."""
     _turn = _turn_of(thread)
-    if not _turn["after"]:
-        return "There's no finished turn to revert."
-    if _edits[0] != _turn["edits"]:
-        return "The scene changed after the turn, so use Edit > Undo History to pick the step."
+    choice = revert_choice(thread)
+    if choice.kind in ("none", "edited", "busy"):
+        return choice.message
+    if choice.kind == "choose" and not both:
+        return choice.message + " Choose Revert Both Turns to do that."
     # The tools' own operators push undo steps of their own during the turn, so one
     # undo only took back the last of them (#242): go back to the turn's "Before" step.
     try:
@@ -293,9 +321,16 @@ def revert_turn(thread: str = "") -> str:
                     "Undo Steps), so use Edit > Undo History.")
         if not _undo(to_item=len(names) - 1 - names[::-1].index(_turn["name"])):
             return "Blender couldn't undo here."
+    elif choice.kind == "choose":
+        # One plain undo would take back the newest step, another chat's: never by position.
+        return "This Blender can't find the turn's first step, so use Edit > Undo History."
     elif not _undo():
         return "Blender couldn't undo here."
     _turn["after"] = False
+    reverted_with[:] = list(choice.others) if choice.kind == "choose" else []
+    for other in reverted_with:     # their last turns' steps are gone from the stack now
+        _turn_of(other)["after"] = False
+    _journal().note(thread)
     _redraw()
     return ""
 

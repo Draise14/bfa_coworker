@@ -3601,11 +3601,39 @@ def _turn_label(context: bpy.types.Context | None = None, thread=None) -> str:
     return "{:s}'s turn".format(threads.label(thread))
 
 
+def _tag_title(tag: str) -> str:
+    """A chat's name by its tag, for sentences: "3D", "Node" ... ("All editors")."""
+    thread = agent_controller.THREADS.get(tag) if tag else None
+    return "All editors" if thread is None or thread.is_default else _thread_title(thread)
+
+
+def _tell_reverted(by, tags) -> None:
+    """Revert both (#359): the other chats whose changes went too hear it in their chat."""
+    for tag in tags:
+        other = agent_controller.THREADS.get(tag) if tag else agent_controller.THREADS.default
+        if other is None or other is by:
+            continue
+        agent_controller.thread_state(other).conversation_history.append({
+            "role": "assistant", "ui_only": True,
+            "content": "The {:s} chat's Revert also undid what this chat changed after its turn began.".format(
+                _tag_title(_threads_tag(by)))})
+
+
+def _threads_tag(thread) -> str:
+    from . import threads
+    return threads.tag(thread)
+
+
 class BFACW_OT_revert_turn(Operator):  # type: ignore[misc]
     """Undo everything the last turn changed in the scene, in one step.
 Only while you haven't changed the scene since; otherwise use Edit > Undo History"""
     bl_idname = "bfacw.revert_turn"
     bl_label = "Revert Turn"
+
+    # The chat whose turn (#359; "" = the chat of the area in context), and the answer to
+    # "another chat changed the scene since": revert both turns.
+    thread_id: StringProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
+    both: BoolProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -3615,13 +3643,46 @@ Only while you haven't changed the scene since; otherwise use Edit > Undo Histor
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         from . import coworker_api, threads
-        why = coworker_api.revert_turn(threads.tag(_ui_thread(context)))
+        thread = (agent_controller.THREADS.get(self.thread_id) if self.thread_id else None) or _ui_thread(context)
+        tag = threads.tag(thread)
+        choice = coworker_api.revert_choice(tag, title=_tag_title)
+        if choice.kind == "choose" and not self.both:
+            _revert_choice_popup(context, thread, choice)     # never a silent partial revert (#359)
+            return {"CANCELLED"}
+        why = coworker_api.revert_turn(tag, both=self.both)
         if why:
             self.report({"WARNING"}, why)
             return {"CANCELLED"}
-        self.report({"INFO"}, "Reverted the last turn")
-        _redraw_areas(context)
+        _tell_reverted(thread, coworker_api.reverted_with)
+        self.report({"INFO"}, "Reverted both turns" if coworker_api.reverted_with else "Reverted the last turn")
+        _redraw_all_chats()
         return {"FINISHED"}
+
+
+class BFACW_OT_revert_cancel(Operator):  # type: ignore[misc]
+    """Keep everything as it is"""
+    bl_idname = "bfacw.revert_cancel"
+    bl_label = "Cancel"
+    bl_options = {'INTERNAL'}
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        self.report({"INFO"}, "Nothing was reverted")
+        return {"FINISHED"}
+
+
+def _revert_choice_popup(context, thread, choice) -> None:
+    """Another chat changed the scene after this turn began (#359): say so, and offer
+    what is true -- Revert both turns, or Cancel."""
+    def draw(menu, _context) -> None:
+        layout = menu.layout
+        for line in textwrap.wrap(choice.message, 60):
+            layout.label(text=line)
+        layout.separator()
+        if "both" in choice.options:
+            op = layout.operator("bfacw.revert_turn", text="Revert Both Turns", icon='LOOP_BACK')
+            op.thread_id, op.both = thread.id, True
+        layout.operator("bfacw.revert_cancel", icon=safe_icon("CANCEL"))
+    context.window_manager.popup_menu(draw, title="Revert This Turn?", icon='QUESTION')
 
 
 def _answer_typed(message: str, context=None) -> bool:
@@ -7761,6 +7822,7 @@ _classes = (
     BFACW_OT_chat_clear,
     BFACW_OT_chat_stop,
     BFACW_OT_chat_stop_all,
+    BFACW_OT_revert_cancel,
     BFACW_OT_chat_queue_send,
     BFACW_OT_chat_capture_render,
     BFACW_OT_chat_capture_screen,

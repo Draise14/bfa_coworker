@@ -25,10 +25,12 @@ from __future__ import annotations
 
 __all__ = (
     "JOURNAL",
+    "RevertChoice",
     "StepJournal",
     "WORKING",
     "fair_order",
     "request_thread",
+    "revert_choice",
     "side_by_side",
     "undo_step_name",
     "working_chats",
@@ -36,6 +38,7 @@ __all__ = (
 
 import re
 import threading
+from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
 _THREAD_RE = re.compile(rb'"thread":\s*"([^"\\]*)"')
@@ -124,6 +127,58 @@ def working_chats() -> list[str]:
 def side_by_side() -> bool:
     """Two or more chats are working at once."""
     return len(working_chats()) >= 2
+
+
+@dataclass
+class RevertChoice:
+    """What Revert may offer for a chat's last turn (#359, plan 4o section 3.3).
+
+    ``kind``: ``none`` (no finished turn), ``edited`` (you changed the scene since),
+    ``direct`` (only this chat stepped since its turn began: revert in one go),
+    ``choose`` (another chat stepped since: *Revert both*, or *Cancel*) or ``busy``
+    (that chat is still working on top of it: not now).  ``options`` are among
+    ``revert``, ``both``, ``scoped`` (a restore from this turn's own snapshot, where
+    one was kept) and ``cancel``."""
+
+    kind: str
+    message: str = ""
+    options: tuple[str, ...] = ()
+    others: list[str] = field(default_factory=list)
+
+
+def revert_choice(finished: bool, user_edited: bool, others: list[str], working: list[str],
+                  has_snapshot: bool = False, title: Callable[[str], str] = str) -> RevertChoice:
+    """Revert's choice for a chat's last turn: *others* stepped on the undo stack since
+    that turn began, *working* are the chats running now.  Never a silent partial
+    revert: an undo to the turn's start also takes back the other chats' steps since,
+    so with *others* it is offered only as *Revert both*, and not while one of them
+    still works."""
+    if not finished:
+        return RevertChoice("none", "There's no finished turn to revert.")
+    if user_edited:
+        return RevertChoice("edited", "The scene changed after the turn, so use Edit > Undo History to "
+                                      "pick the step.")
+    others = sorted(set(others))
+    if not others:
+        return RevertChoice("direct", "", ("revert",))
+    scoped = ("scoped",) if has_snapshot else ()
+    busy = [o for o in others if o in set(working)]
+    if busy:
+        return RevertChoice("busy", "{:s} still working after this turn: reverting now would undo its steps "
+                                    "too. Wait until it's done, or use Edit > Undo History.".format(
+                                        _chats(busy, title, "is", "are")),
+                            scoped + ("cancel",), others)
+    return RevertChoice("choose", "{:s} the scene after this turn began. Reverting this turn also undoes "
+                                  "those changes.".format(_chats(others, title, "changed", "changed")),
+                        ("both",) + scoped + ("cancel",), others)
+
+
+def _chats(tags: list[str], title: Callable[[str], str], one: str, many: str) -> str:
+    """"The Node chat is" / "The Node and Sequencer chats are"."""
+    names = [title(t) for t in tags]
+    if len(names) == 1:
+        return "The {:s} chat {:s}".format(names[0], one)
+    return "The {:s} and {:s} chats {:s}".format(", ".join(names[:-1]), names[-1], many)
 
 
 def undo_step_name(label: str, tool: str) -> str:

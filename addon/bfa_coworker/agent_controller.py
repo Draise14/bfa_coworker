@@ -6590,6 +6590,11 @@ def _run_conversation_turn_inner(
     _prev_code_errored: bool = False
     _prev_code_error: str = ""  # Error text for code-bug detection.
     _undo_pushed: bool = False  # True once we've pushed the first undo state.
+    # Threads 3 (#359): the step journal's number at our last undo push.  When another
+    # chat stepped on the one undo stack since, a positional ``ed.undo()`` would take back
+    # ITS step, so the failure rollback uses the step's own scoped cleanup instead.
+    _undo_mark: int = 0
+    _my_tag = threads.tag(thread)
 
     # -- Entity tracking (per-turn) ------------------------------------
     # Initial snapshot is taken lazily inside the first undo push (merged
@@ -7901,6 +7906,11 @@ def _run_conversation_turn_inner(
                         _failed_diff = _EntityDiff()
                         _fail_raw = _call_internal(_scene_snapshot_code())
                         _undo_safe_here = _undo_safe
+                        _others = _side_by_side.JOURNAL.others_since(_my_tag, _undo_mark)
+                        if _others:
+                            _undo_safe_here = False
+                            print("[Coworker] run_conversation_turn: global undo SKIPPED -- another chat "
+                                  "stepped since ({:s}); scoped cleanup only (#359)".format(", ".join(_others)))
                         try:
                             _fail_data = json.loads(_fail_raw)
                             if _fail_data.get("status") == "ok":
@@ -7960,6 +7970,7 @@ def _run_conversation_turn_inner(
                         _repush_extra = _SNAPSHOT_EXTRA if not _code_is_readonly(_prev_code or "") else ""
                         _repush_raw = _call_internal(
                             _undo_code("push", _loop_step_name("bfa_coworker_pre_script"), extra_result=_repush_extra))
+                        _undo_mark = _side_by_side.JOURNAL.mark()
                         try:
                             _repush_data = json.loads(_repush_raw)
                             if _repush_data.get("status") == "ok":
@@ -7980,6 +7991,7 @@ def _run_conversation_turn_inner(
                     merged_init_raw = _call_internal(
                         _undo_code("push", _loop_step_name("bfa_coworker_pre_script"), extra_result=_init_extra))
                     _undo_pushed = True
+                    _undo_mark = _side_by_side.JOURNAL.mark()
                     # Parse initial snapshot from merged result.
                     try:
                         init_data = json.loads(merged_init_raw)
@@ -8051,6 +8063,7 @@ def _run_conversation_turn_inner(
                         _step_extra = _SNAPSHOT_EXTRA if not _code_is_readonly(_prev_code or "") else ""
                         merged_raw = _call_internal(
                             _undo_code("push", _loop_step_name("bfa_coworker_step"), extra_result=_step_extra))
+                        _undo_mark = _side_by_side.JOURNAL.mark()
                         # Parse snapshot from merged result.
                         try:
                             merged_data = json.loads(merged_raw)

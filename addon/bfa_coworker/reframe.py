@@ -456,6 +456,9 @@ def make_vertical(scene: Any, mode: str = "CROP", in_copy: bool = True, resoluti
             if window.scene == scene:
                 window.scene = target
             ws.sequencer_scene = target
+            # Undo removes the copy but leaves the workspace's Sequencer pointing at
+            # nothing (5.2.4): remember what it showed, the undo handler puts it back.
+            _SHOWN_BEFORE[ws.name] = scene.name
         else:
             window.scene = target
     return {"scene": target.name, "source_scene": scene.name, "copied": copied, "mode": mode,
@@ -528,7 +531,9 @@ def render_samples(strip: Any, frames: list[int], outdir: str, width: int = 384)
             tmp.frame_set(1 + int(f - strip.content_start))
             path = os.path.join(outdir, "{:s}_{:05d}.png".format(bpy.path.clean_name(strip.name), f))
             r.filepath = path
-            bpy.ops.render.render(write_still=True, scene=tmp.name)
+            # render.render(scene=...) renders the context scene's frame, not tmp's (5.2.4).
+            with bpy.context.temp_override(scene=tmp):
+                bpy.ops.render.render(write_still=True)
             if os.path.isfile(path):
                 out.append((f, path))
     finally:
@@ -825,7 +830,32 @@ _MENUS = (("SEQUENCER_MT_strip", _draw_strip_menu), ("SEQUENCER_MT_view", _draw_
 _HOOKED: list[tuple[Any, Any]] = []
 
 
+# workspace name -> the scene its Sequencer showed before Make Vertical switched it to a copy.
+_SHOWN_BEFORE: dict[str, str] = {}
+
+
+@bpy.app.handlers.persistent
+def _after_undo(*_args: Any) -> None:
+    """Ctrl+Z after Make Vertical (copy) removes the copy; show the 16:9 edit again
+    instead of an empty Sequencer."""
+    if not _SHOWN_BEFORE:
+        return
+    for ws in bpy.data.workspaces:
+        name = _SHOWN_BEFORE.get(ws.name)
+        if name and getattr(ws, "sequencer_scene", True) is None:
+            scene = bpy.data.scenes.get(name)
+            if scene is not None:
+                ws.sequencer_scene = scene
+
+
+_UNDO_HANDLERS = ("undo_post", "redo_post")
+
+
 def register() -> None:
+    for kind in _UNDO_HANDLERS:
+        handlers = getattr(bpy.app.handlers, kind)
+        if _after_undo not in handlers:
+            handlers.append(_after_undo)
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
     for name, draw in _MENUS:
@@ -842,6 +872,10 @@ def unregister() -> None:
         except (ValueError, RuntimeError):
             pass
     _HOOKED.clear()
+    for kind in _UNDO_HANDLERS:
+        handlers = getattr(bpy.app.handlers, kind)
+        while _after_undo in handlers:
+            handlers.remove(_after_undo)
     if bpy.app.timers.is_registered(_follow_poll):
         bpy.app.timers.unregister(_follow_poll)
     for cls in reversed(_CLASSES):

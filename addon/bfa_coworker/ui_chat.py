@@ -127,6 +127,28 @@ def _acp_engine():
                 _store().goal.apply_update({"steps": steps})
         _acp.on_request = request
         _acp.applier.on_plan = plan
+
+        # Chats side by side (#359): each turn's goal and plan go to its own chat.
+        def _thread_store(tag: str):
+            return agent_controller._memory(agent_controller.THREADS.get(tag)).store
+
+        def thread_request(tag: str, text: str) -> None:
+            with _sm.store_lock:
+                _thread_store(tag).goal.set_request(text)
+
+        def thread_plan(tag: str, steps: list[dict[str, str]]) -> None:
+            with _sm.store_lock:
+                _thread_store(tag).goal.apply_update({"steps": steps})
+        _acp.on_thread_request = thread_request
+        _acp.on_thread_plan = thread_plan
+        _acp.applier.on_plan = lambda steps: thread_plan("", steps)
+        _acp.cap = _acp_cap()
+        from . import side_by_side
+        side_by_side.WORKING[:] = [s for s in side_by_side.WORKING if getattr(s, "__name__", "") != "_acp_running"]
+
+        def _acp_running():
+            return _acp.running_threads() if _acp is not None else []
+        side_by_side.WORKING.append(_acp_running)
     return _acp
 
 

@@ -106,7 +106,8 @@ class AcpClient:
         self.argv = list(argv)
         self.cwd = cwd
         self.env = env
-        # Called on the READER thread; must not touch bpy.
+        # Called on the READER thread; must not touch bpy.  It gets the update's params,
+        # ``{"sessionId": ..., "update": {...}}`` (#359; update_to_events takes either).
         self.on_update = on_update
         # The session the update being handed to on_update belongs to (reader thread;
         # Threads 1, #357: one agent process, a session per thread).
@@ -255,12 +256,15 @@ class AcpClient:
             self._handle_request(msg)
         elif "method" in msg:
             if msg["method"] == "session/update":
-                update = (msg.get("params") or {}).get("update") or {}
+                params = msg.get("params") or {}
+                update = params.get("update") or {}
                 if update.get("sessionUpdate") == "available_commands_update":
                     self.commands = list(update.get("availableCommands") or [])
                 if self.on_update is not None:
-                    self.update_session = str((msg.get("params") or {}).get("sessionId") or "")
-                    self.on_update(update)
+                    self.update_session = str(params.get("sessionId") or "")
+                    # Threads 3 (#359): the whole params, so the session id rides along:
+                    # several sessions stream on one agent process at once.
+                    self.on_update({"sessionId": self.update_session, "update": update})
         elif "id" in msg:
             with self._state_lock:
                 slot = self._pending.get(msg["id"])
@@ -408,7 +412,10 @@ def _plan_steps(entries: list[Any], text_key: str) -> list[dict[str, str]]:
 
 
 def update_to_events(update: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
-    """Map one ACP ``session/update`` payload to ``(kind, data)`` engine events."""
+    """Map one ACP ``session/update`` payload to ``(kind, data)`` engine events (the
+    update, or its params ``{"sessionId", "update"}``)."""
+    if isinstance(update.get("update"), dict) and "sessionUpdate" not in update:
+        update = update["update"]
     kind = update.get("sessionUpdate")
     if kind in ("agent_message_chunk", "agent_thought_chunk"):
         content = update.get("content") or {}

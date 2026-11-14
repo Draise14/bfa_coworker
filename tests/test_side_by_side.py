@@ -12,6 +12,9 @@ Chats running side by side (Threads 3, #359).
 2. Interleaving: calls of several chats take turns on the main thread, one call
    per chat per tick, round-robin; the step journal says who stepped on the one
    undo stack; each step is named by its chat.
+3. The External Agent: one session per chat on one agent process, prompts at
+   once; updates and permission requests routed by ``sessionId``; Stop cancels
+   only that chat's session.
 
 Run with::
 
@@ -34,7 +37,7 @@ if _HERE not in sys.path:
 
 from test_threads import _FakeController, _load, _registry, _wait_for, eng, el, th  # noqa: E402
 
-sbs, = _load("side_by_side")
+sbs, ea, ac_client = _load("side_by_side", "engine_acp", "acp_client")
 
 
 class _SlotController(_FakeController):
@@ -283,6 +286,157 @@ class TestInterleaving(unittest.TestCase):
         self.assertTrue(sbs.side_by_side())
         sbs.WORKING[:] = [lambda: [""]]
         self.assertFalse(sbs.side_by_side())
+
+
+
+class _ConcurrentAcpClient:
+    """One agent process that runs several sessions' prompts at once (as Claude Code)."""
+
+    def __init__(self, argv, cwd="", env=None, on_update=None, on_permission=None):
+        self.on_update, self.on_permission = on_update, on_permission
+        self.sessions, self.cancelled, self.in_prompt = [], [], set()
+        self.release = {}
+        self.alive, self.commands, self.update_session = True, [], ""
+        self.closed = False
+        self.lock = threading.Lock()
+
+    def start(self):
+        pass
+
+    def initialize(self, timeout=None):
+        import types
+        return types.SimpleNamespace(load_session=False, image=False, name="Fake", version="1", mcp_http=False)
+
+    def new_session(self, cwd, servers, timeout=None):
+        with self.lock:
+            sid = "s{:d}".format(len(self.sessions) + 1)
+            self.sessions.append(sid)
+            self.release[sid] = threading.Event()
+        return {"sessionId": sid}
+
+    def load_session(self, sid, cwd, servers, timeout=None):
+        return {}
+
+    def say(self, sid, text):
+        """What the real client hands on: the params with the session id (#359)."""
+        self.on_update({"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk",
+                                                     "content": {"type": "text", "text": text}}})
+
+    def prompt(self, sid, blocks, timeout=None):
+        with self.lock:
+            self.in_prompt.add(sid)
+        try:
+            self.release[sid].wait(10)
+            return {"stopReason": "cancelled" if sid in self.cancelled else "end_turn"}
+        finally:
+            with self.lock:
+                self.in_prompt.discard(sid)
+
+    def cancel(self, sid):
+        self.cancelled.append(sid)
+        if sid in self.release:
+            self.release[sid].set()
+
+    def close(self, timeout=None):
+        self.closed, self.alive = True, False
+        for ev in self.release.values():
+            ev.set()
+
+
+def _acp_state():
+    import types
+    return types.SimpleNamespace(conversation_history=[], streaming_text="", reasoning_text="", is_thinking=False,
+                                 thinking_start_time=0.0, turn_phase="", ui_status="", error="")
+
+
+class TestExternalAgentSideBySide(unittest.TestCase):
+
+    def setUp(self):
+        self.states = {"": _acp_state(), "t1": _acp_state(), "t2": _acp_state()}
+        self.engine = ea.AcpEngine(self.states[""], client_factory=_ConcurrentAcpClient)
+        self.engine.state_for = self.states.get
+        self.engine.cap = 3
+        self.engine.connect(["fake"], {"command": "python", "args": [], "env": {}},
+                            os.path.join(os.environ.get("TEMP", "."), "bfacw_sbs"), wait=True)
+        self.assertTrue(self.engine.connected, self.engine.error)
+        self.client = self.engine.client
+        self.addCleanup(self.client.close)
+
+    def _both_prompting(self):
+        self.engine.submit(eng.Prompt(text="build the scene", thread="t1"))
+        self.engine.submit(eng.Prompt(text="tidy the nodes", thread="t2"))
+        self.assertTrue(_wait_for(lambda: len(self.client.in_prompt) == 2), "two prompts at once on one process")
+        sid = {t: self.engine._running[t]["session"] for t in ("t1", "t2")}
+        self.assertNotEqual(sid["t1"], sid["t2"], "a session per chat")
+        return sid
+
+    def _texts(self, tag):
+        return " ".join(str(m.get("content", "")) for m in self.states[tag].conversation_history)
+
+    def test_updates_routed_by_session(self):
+        sid = self._both_prompting()
+        self.client.say(sid["t2"], "Nodes tidied. ")
+        self.client.say(sid["t1"], "Scene built. ")
+        self.client.say("s-gone", "a cancelled session's late chunk")
+        self.client.say(sid["t2"], "Frames added.")
+        for ev in self.client.release.values():
+            ev.set()
+        self.assertTrue(_wait_for(lambda: not self.engine.is_busy()))
+        self.engine.drain()
+        self.assertIn("Scene built.", self._texts("t1"))
+        self.assertNotIn("Nodes", self._texts("t1"))
+        self.assertIn("Nodes tidied.", self._texts("t2"))
+        self.assertIn("Frames added.", self._texts("t2"))
+        self.assertNotIn("late chunk", self._texts("t1") + self._texts("t2"))
+
+    def test_update_to_events_takes_params_or_update(self):
+        update = {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "hi"}}
+        self.assertEqual(ac_client.update_to_events({"sessionId": "s1", "update": update}),
+                         ac_client.update_to_events(update))
+
+    def test_stop_in_one_chat_cancels_only_its_session(self):
+        sid = self._both_prompting()
+        self.engine.cancel_thread("t2")
+        self.assertEqual(self.client.cancelled, [sid["t2"]])
+        self.assertTrue(_wait_for(lambda: not self.engine.busy_for("t2")))
+        self.assertTrue(self.engine.busy_for("t1"), "the other chat keeps working")
+        self.client.say(sid["t1"], "still going")
+        self.client.release[sid["t1"]].set()
+        self.assertTrue(_wait_for(lambda: not self.engine.is_busy()))
+        self.engine.drain()
+        self.assertIn("still going", self._texts("t1"))
+
+    def test_cap_queues_beyond_and_starts_when_a_slot_frees(self):
+        self.engine.cap = 1
+        self.engine.submit(eng.Prompt(text="first", thread="t1"))
+        _turn, pos = self.engine.submit(eng.Prompt(text="second", thread="t2"))
+        self.assertEqual(pos, 1, "chained: the second chat waits")
+        self.assertTrue(self.engine.blocked_for("t2"))
+        self.assertTrue(_wait_for(lambda: len(self.client.in_prompt) == 1))
+        self.client.release[self.engine._running["t1"]["session"]].set()
+        self.assertTrue(_wait_for(lambda: self.engine.busy_for("t2")), "it starts when the slot frees")
+
+    def test_permission_goes_to_the_asking_sessions_chat(self):
+        sid = self._both_prompting()
+        self.engine.ask_coworker_tools = True
+        self.engine._on_permission({"sessionId": sid["t2"],
+                                    "toolCall": {"title": "mcp__bfa-coworker__execute_blender_code"},
+                                    "options": [{"kind": "allow_once", "optionId": "o"}]}, lambda _c: None)
+        self.assertIsNotNone(self.engine.approvals.current("t2"))
+        self.assertIsNone(self.engine.approvals.current("t1"))
+
+    def test_overdue_stop_lets_one_chat_go_without_closing_the_agent(self):
+        sid = self._both_prompting()
+        self.client.cancel = lambda s: self.client.cancelled.append(s)     # it ignores Stop
+        self.engine.stop_grace = 0.1
+        self.engine.cancel_thread("t2")
+        self.assertTrue(_wait_for(lambda: not self.engine.busy_for("t2")))
+        self.assertFalse(self.client.closed, "closing it would end the other chat's turn")
+        self.assertTrue(self.engine.busy_for("t1"))
+        self.engine.drain()
+        self.assertIn("let it go", self._texts("t2"))
+        self.client.release[sid["t1"]].set()
+        self.client.release[sid["t2"]].set()
 
 
 if __name__ == "__main__":

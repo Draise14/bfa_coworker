@@ -1424,6 +1424,8 @@ def _claim_gate(thread: str, tool: str, args: Any, code: str, run: Callable[[], 
                 claims.TABLE.note_writer(thread)      # its real changes: the depsgraph's updates
         return result
     decision = claims.decide(claims.TABLE, thread, targets, running, ask=not risky_steps.auto_on(thread))
+    print("[Coworker] claims: {:s} {:s} on {:s} -> {:s}".format(
+        thread or "main", tool, ", ".join(sorted(n for _k, n in targets)[:6]) or "nothing named", decision.action))
     if decision.action == claims.RUN:
         return ran(run())
     from . import coworker_api

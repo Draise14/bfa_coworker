@@ -243,8 +243,9 @@ def _updated_targets(depsgraph: Any) -> set[tuple[str, str]]:
 
 def _undo(push_message: str = "", to_item: int = -1) -> bool:
     """``ed.undo_push`` (with a message), ``ed.undo_history`` (to step *to_item*) or
-    ``ed.undo``, in a window's context."""
+    ``ed.undo``, in a window's context.  Coworker's own step: no edit of yours (#359)."""
     import bpy  # pylint: disable=import-error
+    own_change()
     wm = bpy.context.window_manager
     window = bpy.context.window or (wm.windows[0] if wm.windows else None)
     if window is None:

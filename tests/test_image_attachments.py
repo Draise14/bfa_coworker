@@ -12,7 +12,7 @@ Covers the send-path wiring in ``agent_controller``:
   copy only;
 * the stored history keeps plain text -- an ``[attached: ...]`` marker,
   never a ``data:`` URI;
-* the turn-start reset of ``_pending_image`` stays independent of
+* the turn-start reset of ``tool_images`` (#487) stays independent of
   ``user_attachments``;
 * each injected image is counted at the fixed ``_SCREENSHOT_TOKENS``
   cost before budgeting;
@@ -185,13 +185,17 @@ class TestImageAttachmentsInTurnLoop(_TurnLoopTestBase):
         self.assertNotIn("[attached", user_msgs[1]["content"])
         self.assertNotIn("data:image", json.dumps(history))
 
-    def test_pending_screenshot_reset_keeps_turn_attachments(self):
-        """Turn start clears the stale MCP screenshot but keeps this turn's
-        attachments -- the two states are independent."""
+    def test_tool_picture_reset_keeps_turn_attachments(self):
+        """Turn start clears the previous turn's tool pictures (#487) but keeps
+        this turn's attachments -- the two states are independent."""
         self._mk_server(["solo"])
+        stale = "img_stale"
+        self.state.tool_images[stale] = "data:image/png;base64,U1RBTEU"
         self.state.conversation_history = [
-            {"role": "system", "content": "You are a helpful agent."}]
-        self.state._pending_image = "data:image/png;base64,U1RBTEU"
+            {"role": "system", "content": "You are a helpful agent."},
+            {"role": "user", "content": "[System: The picture from x.]", "system_note": "tool_images",
+             "tool_images": [stale]},
+            {"role": "assistant", "content": "seen"}]
         self._run("bring image", chat_mode="ASK",
                   attachments=[_URIS[0]], attachment_names=[_NAMES[0]])
         self.assertEqual(self.state.error, "")
@@ -199,8 +203,8 @@ class TestImageAttachmentsInTurnLoop(_TurnLoopTestBase):
         reqs = self._main_requests()
         urls = [u for m in reqs[0]["messages"] for u in _image_urls(m)]
         self.assertEqual(urls, [_URIS[0]],
-                         "attachment kept; stale pending screenshot dropped")
-        self.assertIsNone(self.state._pending_image)
+                         "attachment kept; last turn's tool picture dropped")
+        self.assertEqual(len(self.state.tool_images), 0)
         self.assertEqual(self.state.user_attachments, [_URIS[0]])
 
     def test_each_image_costs_a_fixed_1500_tokens(self):

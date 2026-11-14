@@ -50,6 +50,7 @@ import threading
 import time
 from typing import Any, Callable
 
+from .answer_envelope import answer_of, answers_in_full
 from .approvals import ApprovalRequest, Approvals
 
 RUN, ASK, REFUSE = "run", "ask", "refuse"
@@ -212,12 +213,14 @@ def bridge_wrap(guard: LoopGuard, approvals: Approvals, auto: bool, tool: str, a
     if action == REFUSE:
         print("[Coworker] loop guard: refused {:s} ({:s} identical call)".format(tool, _ordinal(nth)))
         return error, None
-    state: dict[str, Any] = {"answer": None, "inner": None}
+    state: dict[str, Any] = {"answer": None, "inner": None, "extra": None}
     approvals.ask(repeat_request(tool, args, nth, source, thread), lambda choice: state.__setitem__("answer", choice))
 
+    # #487: the card's answer is the call's whole answer, envelope included (one envelope).
+    @answers_in_full
     def check() -> dict[str, object] | None:
         if state["inner"] is not None:      # allowed, and the call itself is deferred
-            return state["inner"]()
+            return answer_of(state["inner"], state["inner"](), state["extra"])
         answer = state["answer"]
         if answer is None:
             return None
@@ -226,6 +229,7 @@ def bridge_wrap(guard: LoopGuard, approvals: Approvals, auto: bool, tool: str, a
         response, inner = proceed()
         if inner is not None:
             state["inner"] = inner
+            state["extra"] = {k: response.get(k) for k in ("stdout", "stderr")}
             return None
         return response
     return {}, check

@@ -55,6 +55,7 @@ __all__ = (
     "recommend_context_size",
     "hardware_context_hint",
     "get_runtime_ctx",
+    "get_runtime_vision",
     "validate_ctx_against_hardware",
     "resolve_gpu_backend",
     "ctx_preset_label",
@@ -2064,6 +2065,44 @@ def get_runtime_ctx(port: int | None = None) -> int | None:
     return n_ctx
 
 
+# Whether the running llama-server takes images (#487), per launch like the context size.
+_runtime_vision_cache: bool | None = None
+
+
+def get_runtime_vision(port: int | None = None) -> bool:
+    """True when the running llama-server takes images (a vision projector is loaded).
+
+    ``/props`` reports it as ``modalities.vision``.  An older build without that
+    field: the projector Coworker attached at launch (``--mmproj``) decides.
+    Unknown (the server isn't reachable) counts as no, uncached: a picture sent
+    to a server without a projector is a refused request, a note never is.
+    """
+    global _runtime_vision_cache
+    if _runtime_vision_cache is not None:
+        return _runtime_vision_cache
+    if port is None:
+        with _lock:
+            port = _config.local_port
+    if not port or port <= 0:
+        return False
+    url = "http://127.0.0.1:{:d}/props".format(port)
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            body = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except (urllib.error.URLError, OSError, ValueError) as ex:
+        print("[Coworker] get_runtime_vision: /props unreachable -- {:s}".format(str(ex)))
+        return False
+    modalities = body.get("modalities") if isinstance(body, dict) else None
+    if isinstance(modalities, dict) and "vision" in modalities:
+        seen = bool(modalities.get("vision"))
+    else:
+        seen = _last_launched_model_path is not None and _resolve_mmproj_path(_last_launched_model_path) is not None
+    _runtime_vision_cache = seen
+    print("[Coworker] get_runtime_vision: the local model {:s} images".format("takes" if seen else "doesn't take"))
+    return seen
+
+
 def cancel_download() -> None:
     """Request cancellation of an in-progress model download.
 
@@ -3147,9 +3186,10 @@ def start_local_llama(
             "[Coworker] start_local_llama: ctx_size {:d} is small for agent work "
             "(system prompt + tools + conversation); consider 16K-32K in preferences".format(ctx_size))
     print("[Coworker] start_local_llama: using ctx_size {:d}".format(ctx_size))
-    global _runtime_ctx_cache, _runtime_ctx_logged_mismatch
+    global _runtime_ctx_cache, _runtime_ctx_logged_mismatch, _runtime_vision_cache
     _runtime_ctx_cache = None
     _runtime_ctx_logged_mismatch = False
+    _runtime_vision_cache = None
 
     # Large context windows on big models need a LOT of KV-cache memory.
     # Warn loudly so an OOM-ish startup failure is self-explanatory.

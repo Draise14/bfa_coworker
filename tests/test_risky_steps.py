@@ -104,11 +104,12 @@ class TestWrap(unittest.TestCase):
         self.assertEqual(self.ran, [])
 
     def test_always_and_deferred_code(self):
+        # The deferred code's tool-code checker answers its bare result.
         _r, check = rs.wrap("bpy.ops.export_scene.gltf()", True, "export files",
-                            lambda c, s: _Result({}, lambda: {"status": "ok", "result": "exported"}))
+                            lambda c, s: _Result({}, lambda: {"status": "ok", "filepath": "a.glb"}))
         rs.APPROVALS.answer("always")
         self.assertIsNone(check())                                 # the export itself is deferred...
-        self.assertEqual(check()["result"], "exported")            # ...and finishes
+        self.assertEqual(check(), {"status": "ok", "result": {"status": "ok", "filepath": "a.glb"}})  # one envelope
         response, check = rs.wrap("bpy.ops.export_scene.gltf()", True, "export files", self._execute)
         self.assertEqual((response["status"], check), ("ok", None))    # Always: no question
 

@@ -410,13 +410,22 @@ class TestActivityEntriesFinish(_JobsTest):
         self.assertFalse(self.activity.following())
 
     def test_step_that_asked_first_follows_its_bake(self):
-        # bake_textures asks first (risky_steps): the deferred answer carries the call's whole answer.
+        # bake_textures asks first (risky_steps): its checker answers the call's whole answer,
+        # which the bridge sends as it is (#487: one envelope).
         job_id = jobs.start("OBJECT_BAKE", "Bake combined: BakeMonkey", lambda: None)
         inner = {"status": "ok", "result": {"status": "ok", "job_id": job_id, "message": "Baking in the background."}}
-        entry = self._deferred_call("bake_textures", lambda: inner)
+
+        def asked():
+            return inner
+        asked.answers_in_full = True
+        entry = self._deferred_call("bake_textures", asked)
         self.deferred.poll()
         self.assertEqual((entry.status, entry.job_id), ("running", job_id))
-        declined = self._deferred_call("bake_textures", lambda: {"status": "error", "message": "The user declined"})
+
+        def denied():
+            return {"status": "error", "message": "The user declined"}
+        denied.answers_in_full = True
+        declined = self._deferred_call("bake_textures", denied)
         self.deferred.poll()
         self.assertEqual((declined.status, declined.preview), ("error", "The user declined"))
 

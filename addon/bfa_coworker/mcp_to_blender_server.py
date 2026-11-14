@@ -1343,6 +1343,12 @@ def _execute_code_from_request(
             return _ExecResult(_response, _check)
         return _execute(code, strict_json)
 
+    def _gated_run() -> _ExecResult:
+        """Threads 3 (#359): a write to what another running chat claimed waits or asks."""
+        if _internal:
+            return _run()
+        return _claim_gate(_thread, _tool, request.get("args"), str(code), _run)
+
     exec_result = None
     # Runtime 1 (#310): the same call again and again asks, then is refused.  The local
     # loop counts its own calls (its bookkeeping code repeats here on purpose).
@@ -1350,7 +1356,7 @@ def _execute_code_from_request(
         from . import loop_guard, risky_steps
 
         def _proceed() -> tuple[dict[str, object], Any]:
-            _inner = _run()
+            _inner = _gated_run()
             return _inner.response, _inner.check_fn
 
         _repeat = loop_guard.bridge_wrap(loop_guard.BRIDGE, risky_steps.APPROVALS, risky_steps.auto_on(_thread),
@@ -1359,7 +1365,7 @@ def _execute_code_from_request(
         if _repeat is not None:
             exec_result = _ExecResult(*_repeat)
     if exec_result is None:
-        exec_result = _run()
+        exec_result = _gated_run()
     try:
         _note_step(_thread, _tool, str(code), _internal, exec_result)
     except Exception as _ex:  # pylint: disable=broad-exception-caught
@@ -1389,6 +1395,108 @@ def _execute_code_from_request(
             print("response: {:s}".format(json.dumps(exec_result.response, indent=2)), file=sys.stderr)
 
     return exec_result, strict_json
+
+
+def _claim_gate(thread: str, tool: str, args: Any, code: str, run: Callable[[], _ExecResult]) -> _ExecResult:
+    """Run a write call of chat *thread*, minding the other running chats' claims (#359).
+
+    Nothing in the way (or only one chat at work): it runs, and what it changes is its
+    chat's claim.  A claim of another running chat in the way: it asks the user ("The
+    3D chat is changing Cube -- wait / go ahead", the question card) or, in Auto mode,
+    waits for that chat's turn -- at most :data:`claims.WAIT_LIMIT` seconds, then it
+    answers without changing anything.  Two chats waiting for each other: refused."""
+    from . import claims
+    from .engine import PLAN_SAFE_TOOLS
+    if not claims.writes(tool, PLAN_SAFE_TOOLS):
+        return run()
+    running = side_by_side.working_chats()
+    if thread not in running or len(running) < 2:
+        return run()                # one chat at work: as before, nothing to claim against
+    targets, whole = claims.targets_of(tool, args, code)
+    from . import risky_steps
+
+    def ran(result: _ExecResult) -> _ExecResult:
+        if result.check_fn is None and result.response.get("status") == "ok":
+            claims.TABLE.claim(thread, targets)
+            if whole:
+                claims.TABLE.note_writer(thread)      # its real changes: the depsgraph's updates
+        return result
+    decision = claims.decide(claims.TABLE, thread, targets, running, ask=not risky_steps.auto_on(thread))
+    if decision.action == claims.RUN:
+        return ran(run())
+    from . import coworker_api
+    title = _chat_title(decision.holder)
+    shown = ", ".join(decision.names[:3])
+    if decision.action == claims.REFUSE:
+        return _ExecResult({"status": "error", "message": (
+            "Not run: the {:s} chat is waiting for this chat's changes to {:s}, so waiting for it here "
+            "would make both wait for ever. Nothing was changed. Finish or leave {:s} first, or work on "
+            "something else, then try again.").format(title, shown, shown)})
+    print("[Coworker] bridge: {:s}'s {:s} conflicts with the {:s} chat's claim on {:s} -- {:s}".format(
+        thread or "main", tool, title, shown, decision.action))
+    state: dict[str, Any] = {"mode": decision.action, "qid": "", "since": time.monotonic(), "inner": None}
+    if decision.action == claims.ASK:
+        state["qid"] = coworker_api.post_question(claims.conflict_question(title, decision.names),
+                                                  ["Wait", "Go ahead"], allow_text=False, source="conflict",
+                                                  thread=thread)
+    claims.TABLE.set_waiting(thread, decision.holder)
+
+    def give_up(message: str) -> dict[str, object]:
+        claims.TABLE.clear_waiting(thread)
+        if state["qid"]:
+            coworker_api.cancel_question(state["qid"])
+        return {"status": "error", "message": message}
+
+    def check() -> dict[str, object] | None:
+        if state["inner"] is not None:          # it ran, and its own answer is deferred
+            return state["inner"]()
+        go = False
+        if state["mode"] == claims.ASK and state["qid"]:
+            answer = coworker_api.question_state(state["qid"])
+            if answer["cancelled"]:
+                state["qid"] = ""
+                return give_up("Stopped by the user while it waited for the {:s} chat. Nothing was "
+                               "changed.".format(title))
+            if answer["answered"]:
+                state["qid"] = ""
+                go = answer["answer"].strip().lower().startswith("go")
+                state["mode"] = claims.RUN if go else claims.WAIT
+        now_running = side_by_side.working_chats()
+        if thread not in now_running:
+            return give_up("This chat's turn ended while the call waited. Nothing was changed.")
+        if not go and not claims.TABLE.conflicts(thread, targets, now_running).get(decision.holder):
+            go = True                           # the other chat's turn ended: its claims are gone
+        if not go:
+            if time.monotonic() - state["since"] > claims.WAIT_LIMIT:
+                return give_up(("The {:s} chat was still changing {:s} after {:.0f} s, so nothing was "
+                                "changed. Work on something else first, or try again in a moment.").format(
+                                    title, shown, claims.WAIT_LIMIT))
+            return None
+        claims.TABLE.clear_waiting(thread)
+        if state["qid"]:
+            coworker_api.cancel_question(state["qid"])
+            state["qid"] = ""
+        result = ran(run())
+        if result.check_fn is not None:
+            state["inner"] = result.check_fn
+            return None
+        return result.response
+    return _ExecResult({}, check)
+
+
+def _chat_title(tag: str) -> str:
+    """Chat *tag*'s name for a sentence: "3D", "Node" ... ("All editors" for the default)."""
+    from . import threads
+    if not tag:
+        return "All editors"
+    try:
+        from . import agent_controller
+        thread = agent_controller.THREADS.get(tag)
+    except Exception:  # pylint: disable=broad-exception-caught
+        thread = None
+    if thread is None:
+        return tag
+    return thread.title or threads.short_name(thread.editor) or "other"
 
 
 def _note_step(thread: str, tool: str, code: str, internal: bool, exec_result: _ExecResult) -> None:

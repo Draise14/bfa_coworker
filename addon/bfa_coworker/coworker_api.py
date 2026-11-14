@@ -198,11 +198,34 @@ def _any_turn_open() -> bool:
     return any(t["before"] and not t["after"] for t in _turns.values())
 
 
-def _count_edit(*_args: Any) -> None:
+def _count_edit(*args: Any) -> None:
     # While a chat's turn is open the scene changes are its own (#359): another chat's
     # Revert must not read them as yours; that chat's undo steps show up in the journal.
     if not _any_turn_open():
         _edits[0] += 1
+    # What generated code just changed is its chat's claim now (#359).
+    from . import claims
+    if len(args) >= 2 and claims.TABLE.has_writers():
+        try:
+            claims.TABLE.claim_updates(_updated_targets(args[1]))
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+
+
+_ID_KINDS = {"OBJECT": "object", "NODETREE": "node_tree", "TEXT": "text", "COLLECTION": "collection",
+             "MATERIAL": "material"}
+
+
+def _updated_targets(depsgraph: Any) -> set[tuple[str, str]]:
+    """The datablocks a depsgraph update changed, as claim targets (not the scene itself:
+    every change updates it)."""
+    out = set()
+    for update in getattr(depsgraph, "updates", ()):
+        datablock = getattr(update.id, "original", update.id)
+        kind = _ID_KINDS.get(str(getattr(datablock, "id_type", "")))
+        if kind is not None:
+            out.add((kind, datablock.name))
+    return out
 
 
 def _undo(push_message: str = "", to_item: int = -1) -> bool:

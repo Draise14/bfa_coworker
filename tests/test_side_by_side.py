@@ -17,6 +17,10 @@ Chats running side by side (Threads 3, #359).
    only that chat's session.
 4. Remote: chats' requests go out at once; an HTTP 429 backs off only the chat
    that got it (its own worker waits, honouring Retry-After and its Stop).
+5. Claims: write calls claim what they change for their chat's running turn; a
+   write to another running chat's claim asks (wait / go ahead), waits in Auto
+   mode, and is refused when the two would wait for each other; generated code
+   is a whole-scene write whose changes are claimed from the depsgraph.
 
 Run with::
 
@@ -39,7 +43,7 @@ if _HERE not in sys.path:
 
 from test_threads import _FakeController, _load, _registry, _wait_for, eng, el, th  # noqa: E402
 
-sbs, ea, ac_client = _load("side_by_side", "engine_acp", "acp_client")
+sbs, ea, ac_client, claims, cw = _load("side_by_side", "engine_acp", "acp_client", "claims", "coworker_api")
 
 
 class _SlotController(_FakeController):
@@ -528,6 +532,159 @@ class TestRateLimitPerChat(unittest.TestCase):
         with lt.using(state, stop):
             self.assertTrue(lt._wait_unless_stopped(5.0))
         self.assertLess(time.monotonic() - start, 1.0)
+
+
+
+class TestClaims(unittest.TestCase):
+
+    def setUp(self):
+        self.table = claims.ClaimTable()
+
+    def test_what_a_write_call_names(self):
+        targets, whole = claims.targets_of("assign_material_to_objects",
+                                           json.dumps({"material_name": "Rust", "object_names": ["Cube", "Rock"]}))
+        self.assertEqual(targets, {("material", "Rust"), ("object", "Cube"), ("object", "Rock")})
+        self.assertFalse(whole)
+        cut = json.dumps({"node_tree_name": "Rock Shader", "insert_mode": "add_top_level", "x": "y" * 500})[:400]
+        self.assertIn(("node_tree", "Rock Shader"), claims.targets_of("wire_node_group", cut)[0],
+                      "the bridge's arguments are cut at 400 characters")
+        targets, whole = claims.targets_of("execute_blender_code", None,
+                                           "ob = bpy.data.objects['Cube']\nob.name = \"Hero\"\nbpy.ops.object.mode_set(mode='OBJECT')")
+        self.assertTrue(whole, "generated code: a whole-scene write")
+        self.assertEqual(targets, {("any", "Cube"), ("any", "Hero")})
+
+    def test_which_tools_write(self):
+        self.assertTrue(claims.writes("execute_blender_code"))
+        self.assertTrue(claims.writes("set_collection_color_tag"))
+        for tool in ("get_objects_summary", "search_api_docs", "jump_to_tab_by_name", "update_plan", ""):
+            self.assertFalse(claims.writes(tool, plan_safe=("update_plan",)), tool)
+
+    def test_decisions(self):
+        running = ["t1", "t2"]
+        self.table.claim("t1", {("object", "Cube")})
+        self.assertEqual(claims.decide(self.table, "t2", {("object", "Rock")}, running).action, claims.RUN)
+        asked = claims.decide(self.table, "t2", {("any", "Cube")}, running)
+        self.assertEqual((asked.action, asked.holder, asked.names), (claims.ASK, "t1", ["Cube"]),
+                         "a rename of Cube in another chat asks")
+        self.assertEqual(claims.decide(self.table, "t2", {("object", "Cube")}, running, ask=False).action,
+                         claims.WAIT, "Auto mode's answer: wait")
+        self.assertEqual(claims.decide(self.table, "t1", {("object", "Cube")}, running).action, claims.RUN,
+                         "its own claim")
+        self.assertEqual(claims.decide(self.table, "t2", {("object", "Cube")}, ["t2"]).action, claims.RUN,
+                         "claims last for the holder's running turn")
+        self.assertEqual(claims.decide(self.table, "t3", {("object", "Cube")}, running).action, claims.RUN,
+                         "a chat without a running turn (the user's own client) isn't held")
+
+    def test_no_two_chats_wait_for_each_other(self):
+        running = ["t1", "t2"]
+        self.table.claim("t1", {("object", "Cube")})
+        self.table.claim("t2", {("object", "Lamp")})
+        self.table.set_waiting("t2", "t1")          # t2 waits for t1's Cube
+        refused = claims.decide(self.table, "t1", {("object", "Lamp")}, running)
+        self.assertEqual((refused.action, refused.holder), (claims.REFUSE, "t2"))
+
+    def test_release_frees_and_unblocks(self):
+        self.table.claim("t1", {("object", "Cube")})
+        self.table.set_waiting("t2", "t1")
+        self.table.release("t1")
+        self.assertEqual(self.table.claims_of("t1"), set())
+        self.assertEqual(self.table.waits_for("t2"), "", "nobody to wait for any more")
+
+    def test_code_changes_claimed_from_the_depsgraph(self):
+        self.table.note_writer("t1", now=10.0)
+        self.assertEqual(self.table.claim_updates({("object", "Hero")}, now=10.4), ["t1"])
+        self.assertIn(("object", "Hero"), self.table.claims_of("t1"))
+        self.assertEqual(self.table.claim_updates({("object", "Later")}, now=12.0), [], "a second later: not its")
+        self.assertNotIn(("object", "Later"), self.table.claims_of("t1"))
+
+    def test_depsgraph_update_targets(self):
+        import types
+        ob = types.SimpleNamespace(id_type="OBJECT", name="Hero")
+        tree = types.SimpleNamespace(id_type="NODETREE", name="Rock")
+        scene = types.SimpleNamespace(id_type="SCENE", name="Scene")
+        graph = types.SimpleNamespace(updates=[types.SimpleNamespace(id=types.SimpleNamespace(original=ob)),
+                                               types.SimpleNamespace(id=tree), types.SimpleNamespace(id=scene)])
+        self.assertEqual(cw._updated_targets(graph), {("object", "Hero"), ("node_tree", "Rock")},
+                         "not the scene: every change updates it")
+
+    def test_question_words(self):
+        self.assertEqual(claims.conflict_question("3D", ["Cube"]),
+                         "The 3D chat is changing Cube -- wait for it to finish, or go ahead anyway?")
+
+
+class TestClaimGateOnTheBridge(unittest.TestCase):
+    """The bridge's gate: the second chat renaming Cube asks, through the question card."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.br, = _load("mcp_to_blender_server")
+
+    def setUp(self):
+        claims.TABLE.clear()
+        cw._questions.clear()
+        saved = list(sbs.WORKING)
+        sbs.WORKING[:] = [lambda: list(self.working)]
+        self.addCleanup(lambda: sbs.WORKING.__setitem__(slice(None), saved))
+        self.addCleanup(claims.TABLE.clear)
+        self.addCleanup(cw._questions.clear)
+        self.working = ["t1", "t2"]
+        self.runs = []
+
+    def _run(self):
+        self.runs.append(1)
+        return self.br._ExecResult({"status": "ok", "result": None})
+
+    def _rename(self, chat):
+        return self.br._claim_gate(chat, "execute_blender_code", None,
+                                   "bpy.data.objects['Cube'].name = 'From {:s}'".format(chat), self._run)
+
+    def test_first_runs_and_claims_second_asks(self):
+        first = self._rename("t1")
+        self.assertEqual(first.response["status"], "ok")
+        self.assertIn(("any", "Cube"), claims.TABLE.claims_of("t1"))
+        second = self._rename("t2")
+        self.assertIsNotNone(second.check_fn, "the second one waits for an answer")
+        self.assertEqual(len(self.runs), 1, "and has not overwritten anything")
+        qid, question = cw.current_question("t2")
+        self.assertIn("is changing Cube", question["question"])
+        self.assertEqual(question["choices"], ["Wait", "Go ahead"])
+        self.assertIsNone(second.check_fn())
+        cw.answer_question("Go ahead", qid)
+        self.assertEqual(second.check_fn()["status"], "ok")
+        self.assertEqual(len(self.runs), 2)
+
+    def test_wait_runs_when_the_other_turn_ends(self):
+        self._rename("t1")
+        second = self._rename("t2")
+        qid, _q = cw.current_question("t2")
+        cw.answer_question("Wait", qid)
+        self.assertIsNone(second.check_fn())
+        self.assertIsNone(second.check_fn(), "still waiting")
+        claims.TABLE.release("t1")                  # the 3D chat's turn ended
+        self.assertEqual(second.check_fn()["status"], "ok")
+        self.assertEqual(len(self.runs), 2)
+
+    def test_stop_while_it_waits_changes_nothing(self):
+        self._rename("t1")
+        second = self._rename("t2")
+        cw.cancel_questions("t2")                   # Stop in the second chat
+        self.assertIn("Nothing was changed", second.check_fn()["message"])
+        self.assertEqual(len(self.runs), 1)
+
+    def test_one_chat_at_work_runs_as_before(self):
+        self.working = ["t2"]
+        claims.TABLE.claim("t1", {("object", "Cube")})
+        self.assertEqual(self._rename("t2").response["status"], "ok")
+
+    def test_waiting_too_long_gives_up(self):
+        self._rename("t1")
+        second = self._rename("t2")
+        saved = claims.WAIT_LIMIT
+        claims.WAIT_LIMIT = 0.0
+        self.addCleanup(setattr, claims, "WAIT_LIMIT", saved)
+        time.sleep(0.01)
+        self.assertIn("nothing was changed", second.check_fn()["message"])
+        self.assertIsNone(cw.current_question("t2"), "its question is withdrawn")
 
 
 if __name__ == "__main__":

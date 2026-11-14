@@ -536,6 +536,8 @@ class AcpEngine:
                 slot["abandoned"] = True
                 self._running.pop(thread, None)
         if others:
+            from . import claims
+            claims.TABLE.release(thread)
             self.bus.emit("error", turn_id, message=self._forced_message(closed=False))
             self.bus.emit("turn_end", turn_id, stop_reason="error")     # the chat shows why
             self._changed()
@@ -653,6 +655,8 @@ class AcpEngine:
                 self.status = "The agent stopped -- press Start to reconnect"
         finally:
             if not slot.get("abandoned"):   # an abandoned turn already ended (#359)
+                from . import claims
+                claims.TABLE.release(tag)   # what it was changing is free again (#359)
                 self.approvals.cancel_all(tag)   # a question left from this turn has no one to answer
                 self.bus.emit("turn_end", turn_id, stop_reason=stop_reason)
                 with self._lock:

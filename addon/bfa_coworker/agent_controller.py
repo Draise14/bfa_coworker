@@ -6162,7 +6162,9 @@ def _end_turn_slot(gate: "threads.Thread", thread: "threads.Thread | None") -> N
     """A turn is over: the co-work scene lock is released (FINISH, error, Stop or an
     exception all pass through here) and its slot frees.  The lock registry is one for
     every chat, so the LAST running turn to end releases it: another chat still working
-    keeps its datablocks protected until it ends too (#359)."""
+    keeps its datablocks protected until it ends too (#359).  Its claims go too."""
+    from . import claims
+    claims.TABLE.release(threads.tag(gate))
     with _turn_end_lock:
         if not any(t is not gate for t in THREADS.running_threads()):
             with threads.use(thread):

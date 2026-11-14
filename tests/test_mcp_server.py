@@ -920,8 +920,12 @@ class TestModuleEntryPoint(unittest.TestCase):
 
         env = os.environ.copy()
         env.pop("PYTHONPATH", None)
+        # ``-I -S``: no site-packages, no user site, no cwd on sys.path.  The
+        # interpreter running the suite may have ``blmcp`` installed (e.g. the
+        # mcp/.venv, where it is an editable install); without these flags
+        # ``-m blmcp --help`` then simply works and nothing is "absent".
         proc = subprocess.run(
-            [sys.executable, "-m", "blmcp", "--help"],
+            [sys.executable, "-I", "-S", "-m", "blmcp", "--help"],
             capture_output=True, text=True, timeout=60, env=env,
             cwd=os.path.dirname(_MCP_DIR),  # avoid cwd-based resolution
         )

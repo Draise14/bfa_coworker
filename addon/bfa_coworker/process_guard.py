@@ -320,13 +320,73 @@ def may_kill(pid: int, kind: str) -> bool:
         return True
     if owner and _process_image(owner) is not None:
         return False  # another live Blender window owns it
-    # Orphan or unrecorded: only if it still looks like OUR server.  Generic
-    # names ("python") are not enough -- on Windows only the image name is
-    # known (python.exe), and the listener may be an unrecorded child of a
-    # launcher that another window started.  Unsure -> leave it; the caller
-    # moves to the next free port instead.
-    markers = [m for m in _KIND_MARKERS.get(kind, ()) if m not in _GENERIC_MARKERS]
+    # Orphan or unrecorded: only if it still looks like OUR server.
+    #
+    # Orphan (recorded, its Blender is gone): the same test reap_orphans()
+    # applies at every start -- any marker, generic ones included.  On Windows
+    # only the image name is known (python.exe), so without the generic
+    # marker a recorded orphan MCP server could never be freed here.
+    #
+    # Unrecorded: generic names ("python") are not enough -- the listener may
+    # be an unrecorded child of a launcher that another window started.
+    # Unsure -> leave it; the caller moves to the next free port instead.
+    markers = list(_KIND_MARKERS.get(kind, ()))
+    if not owner:
+        markers = [m for m in markers if m not in _GENERIC_MARKERS]
     return bool(markers) and any(m in image for m in markers)
+
+
+def _win_listening_pids(port: int) -> "list[int] | None":
+    """Windows: pids LISTENING on TCP *port*, from the IP Helper API.
+
+    ``GetExtendedTcpTable`` with ``TCP_TABLE_OWNER_PID_LISTENER`` -- the
+    table netstat itself reads, but complete and not localized.  (Some
+    Windows 11 builds print an incomplete netstat listing with wrong state
+    words, which hid our own listeners.)  IPv4 and IPv6.  Returns None when
+    the API is unavailable, so the caller can fall back to netstat.
+    """
+    try:
+        import struct  # pylint: disable=import-outside-toplevel
+        from ctypes import wintypes  # pylint: disable=import-outside-toplevel
+
+        iphlpapi = ctypes.WinDLL("iphlpapi")
+        fn = iphlpapi.GetExtendedTcpTable
+        fn.restype = wintypes.DWORD
+        fn.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD), wintypes.BOOL,
+                       wintypes.ULONG, ctypes.c_int, wintypes.ULONG]
+        TCP_TABLE_OWNER_PID_LISTENER = 3  # pylint: disable=invalid-name
+        # (address family, row size, offset of dwLocalPort, offset of dwOwningPid)
+        layouts = (
+            (2, 24, 8, 20),    # AF_INET:  MIB_TCPROW_OWNER_PID
+            (23, 56, 20, 52),  # AF_INET6: MIB_TCP6ROW_OWNER_PID
+        )
+        pids: list[int] = []
+        for family, row_size, port_off, pid_off in layouts:
+            size = wintypes.DWORD(0)
+            fn(None, ctypes.byref(size), False, family, TCP_TABLE_OWNER_PID_LISTENER, 0)
+            rc = 122  # ERROR_INSUFFICIENT_BUFFER: the table grew in between
+            buf = None
+            for _attempt in range(3):
+                buf = ctypes.create_string_buffer(int(size.value) + 4096)
+                size = wintypes.DWORD(len(buf))
+                rc = fn(buf, ctypes.byref(size), False, family,
+                        TCP_TABLE_OWNER_PID_LISTENER, 0)
+                if rc != 122:
+                    break
+            if rc != 0 or buf is None:
+                return None
+            count = struct.unpack_from("<I", buf, 0)[0]
+            for i in range(count):
+                row = 4 + i * row_size
+                if row + row_size > len(buf):
+                    break
+                raw_port = struct.unpack_from("<I", buf, row + port_off)[0]
+                # The port is in network byte order in the low 16 bits.
+                if (((raw_port & 0xFF) << 8) | ((raw_port >> 8) & 0xFF)) == int(port):
+                    pids.append(int(struct.unpack_from("<I", buf, row + pid_off)[0]))
+        return pids
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
 
 
 def pids_listening(port: int) -> list[int]:
@@ -334,6 +394,9 @@ def pids_listening(port: int) -> list[int]:
     pids: list[int] = []
     try:
         if sys.platform == "win32":
+            found = _win_listening_pids(port)
+            if found is not None:
+                return sorted(set(found))
             out = subprocess.run(
                 ["netstat", "-ano", "-p", "TCP"], capture_output=True, timeout=10,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -341,8 +404,9 @@ def pids_listening(port: int) -> list[int]:
             for line in out.splitlines():
                 parts = line.split()
                 # The state word is localized ("LISTENING", "ABHOEREN", ...);
-                # a listening socket's foreign address is always *:0.
-                if len(parts) >= 5 and parts[2] in ("0.0.0.0:0", "[::]:0") \
+                # a listening socket's foreign port is always 0 -- with the
+                # address it was bound to ("127.0.0.1:0", "0.0.0.0:0", "[::]:0").
+                if len(parts) >= 5 and parts[2].rsplit(":", 1)[-1] == "0" \
                         and parts[1].rsplit(":", 1)[-1] == str(port) \
                         and parts[4].isdigit():
                     pids.append(int(parts[4]))

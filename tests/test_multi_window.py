@@ -65,12 +65,12 @@ def _identify(port: int) -> dict:
 
 
 _WINDOW_A = textwrap.dedent("""
-    import sys, time, types, importlib
+    import os, sys, time, types, importlib
     pkg = types.ModuleType("bfcw_a"); pkg.__path__ = [sys.argv[1]]; sys.modules["bfcw_a"] = pkg
     bridge = importlib.import_module("bfcw_a.mcp_to_blender_server")
     si = importlib.import_module("bfcw_a.session_identity")
     bridge.start("127.0.0.1", int(sys.argv[2]))
-    print("READY", si.SESSION_ID, bridge.get_actual_port(), flush=True)
+    print("READY", si.SESSION_ID, bridge.get_actual_port(), os.getpid(), flush=True)
     end = time.time() + 60
     while time.time() < end:
         bridge.poll()
@@ -94,6 +94,10 @@ class TestTwoWindows(unittest.TestCase):
         line = cls.proc_a.stdout.readline().split()
         assert line and line[0] == "READY", line
         cls.session_a, cls.port_a = line[1], int(line[2])
+        # Window A's own pid.  Not ``proc_a.pid``: a Windows venv's python.exe
+        # is a launcher that runs the real interpreter as a CHILD process, so
+        # the Popen pid is the launcher's, not the one window A registers.
+        cls.pid_a = int(line[3])
 
         # Window B: this process, configured with the SAME port.
         p = _pkg()
@@ -194,7 +198,7 @@ class TestTwoWindows(unittest.TestCase):
     def test_other_window_is_listed_as_live(self):
         self.si._cache["t"] = 0.0
         others = self.si.other_live_sessions()
-        self.assertIn(self.proc_a.pid, [int(o["pid"]) for o in others])
+        self.assertIn(self.pid_a, [int(o["pid"]) for o in others])
         self.assertNotIn(os.getpid(), [int(o["pid"]) for o in others])
 
 
@@ -284,6 +288,21 @@ class TestKillGuard(unittest.TestCase):
             s.listen(1)
             port = s.getsockname()[1]
             self.assertIn(os.getpid(), self.pg.pids_listening(port))
+
+    def test_netstat_fallback_finds_a_localhost_listener(self):
+        # Windows without the IP Helper API: netstat shows a socket bound to
+        # 127.0.0.1 with foreign address "127.0.0.1:0", not "0.0.0.0:0".
+        from unittest import mock
+        out = ("  Proto  Local Address          Foreign Address        State           PID\r\n"
+               "  TCP    127.0.0.1:9876         127.0.0.1:0            LISTENING       111\r\n"
+               "  TCP    0.0.0.0:9876           0.0.0.0:0              LISTENING       222\r\n"
+               "  TCP    127.0.0.1:9876         127.0.0.1:50000        ESTABLISHED     333\r\n"
+               "  TCP    127.0.0.1:19876        127.0.0.1:0            LISTENING       444\r\n")
+        fake = types.SimpleNamespace(stdout=out.encode())
+        with mock.patch.object(self.pg.sys, "platform", "win32"), \
+                mock.patch.object(self.pg, "_win_listening_pids", return_value=None), \
+                mock.patch.object(self.pg.subprocess, "run", return_value=fake):
+            self.assertEqual(self.pg.pids_listening(9876), [111, 222])
 
 
 if __name__ == "__main__":

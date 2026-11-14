@@ -404,7 +404,10 @@ def _create_venv() -> str:
     Returns the path to the venv python binary.
     """
     venv_dir = os.path.join(_REPO_DIR, ".test_venv")
-    venv_python = os.path.join(venv_dir, "bin", "python")
+    if os.name == "nt":  # a Windows venv has Scripts\python.exe, not bin/python
+        venv_python = os.path.join(venv_dir, "Scripts", "python.exe")
+    else:
+        venv_python = os.path.join(venv_dir, "bin", "python")
 
     if os.path.isfile(venv_python):
         return venv_python
@@ -537,10 +540,21 @@ def _start_mock_llm(port: int) -> http.server.HTTPServer:
 # ---------------------------------------------------------------------------
 # Test class.
 
-@unittest.skipUnless(
-    os.environ.get("BLENDER_BIN"),
-    "BLENDER_BIN environment variable must be set",
-)
+def _missing_blender() -> str:
+    """Why there is no Blender to test against (empty when there is)."""
+    import shutil
+    blender_bin = os.environ.get("BLENDER_BIN", "")
+    if not blender_bin:
+        return "BLENDER_BIN environment variable must be set"
+    if not shutil.which(blender_bin):
+        return "BLENDER_BIN does not point to a Blender binary: {:s}".format(blender_bin)
+    return ""
+
+
+_MISSING_BLENDER = _missing_blender()
+
+
+@unittest.skipIf(_MISSING_BLENDER, _MISSING_BLENDER)
 class TestChatClient(unittest.TestCase):
     """
     End-to-end test: chat client -> mock LLM -> MCP server -> Blender.

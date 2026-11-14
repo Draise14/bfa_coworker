@@ -191,7 +191,10 @@ def clear_stop() -> None:
 
 ### 3. Blender Chat Panel (`ui_chat.py`)
 
-Registers two Blender UI panels with a chat interface:
+The chat itself is drawn on the GPU (`chat_editor.py`, `ui_gpu/`): the Coworker editor, and the
+compact chat in the **Coworker** tab of every editor's sidebar. `ui_chat.py` registers that tab's
+panels, the popovers and the chat's operators. (The first version drew the chat with `UILayout`
+panels, sketched below; that Classic chat was removed in 1.1.44, #430.)
 
 ```
 ┌─────────────────────────────────────┐
@@ -216,17 +219,11 @@ Registers two Blender UI panels with a chat interface:
 **Registration:**
 
 ```python
-class BFACW_PT_chat_panel(bpy.types.Panel):
+class BFACW_PT_chat_compact(bpy.types.Panel):
+    """Reserves the room the GPU chat paints (chat_editor.py)."""
     bl_label = "Coworker Chat"
-    bl_idname = "BFACW_PT_chat_panel"
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'UI'
-    bl_category = "Coworker"
-
-class BFACW_PT_chat_text_editor(bpy.types.Panel):
-    bl_label = "Coworker Chat"
-    bl_idname = "BFACW_PT_chat_text_editor"
-    bl_space_type = 'TEXT_EDITOR'
+    bl_idname = "BFACW_PT_chat_compact"
+    bl_space_type = 'VIEW_3D'       # copied for every other editor with a sidebar
     bl_region_type = 'UI'
     bl_category = "Coworker"
 ```
@@ -446,8 +443,8 @@ These files have **no upstream equivalent** — no merge conflicts expected:
 
 1. Create `addon/bfa_coworker/ui_chat.py`:
 
-   - `BFACW_PT_chat_panel` — VIEW_3D sidebar panel.
-   - `BFACW_PT_chat_text_editor` — TEXT_EDITOR sidebar panel.
+   - `BFACW_PT_chat_compact` — the sidebar chat's room (the GPU chat draws it), in every
+     editor's sidebar.
    - `BFACW_OT_chat_send` — send input to agent.
    - `BFACW_OT_chat_clear` — clear history.
    - `BFACW_OT_chat_stop` — cancel generation.

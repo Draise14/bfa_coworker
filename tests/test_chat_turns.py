@@ -65,7 +65,6 @@ _chat_turns = _load_chat_turns()
 _is_system_note_msg = _chat_turns.is_system_note_msg
 _group_turns = _chat_turns.group_turns
 _split_turn = _chat_turns.split_turn
-_hist_index = _extract_func("_hist_index")
 def _load_chat_status():
     """The spinner, phase text and durations live in chat_status.py since Tier 4 GPU 2."""
     import importlib.util
@@ -188,40 +187,6 @@ class TestGroupTurns(unittest.TestCase):
         self.assertTrue(any(m.get("role") == "compaction" for m in process))
 
 
-class TestHistIndex(unittest.TestCase):
-    """_hist_index must never raise when a message has left the history.
-
-    Regression: the chat panel called ``history.index(msg)`` while the turn's
-    worker thread mutated the same list, so a message captured by
-    ``_group_turns`` could be gone by lookup time and ``list.index`` raised
-    ``ValueError`` -- aborting the Panel draw and blanking the whole history
-    for the rest of a long turn.
-    """
-
-    def test_present_message_returns_index(self):
-        a = {"role": "user", "content": "a"}
-        b = {"role": "assistant", "content": "b"}
-        history = [a, b]
-        self.assertEqual(_hist_index(history, a), 0)
-        self.assertEqual(_hist_index(history, b), 1)
-
-    def test_missing_message_returns_minus_one(self):
-        history = [{"role": "user", "content": "a"}]
-        gone = {"role": "assistant", "content": "b"}
-        self.assertEqual(_hist_index(history, gone), -1)
-
-    def test_identity_wins_over_equal_value(self):
-        # Two distinct dicts that compare equal must map to their own slot.
-        x = {"role": "assistant", "content": "same"}
-        y = {"role": "assistant", "content": "same"}
-        history = [x, y]
-        self.assertEqual(_hist_index(history, x), 0)
-        self.assertEqual(_hist_index(history, y), 1)
-
-    def test_empty_history_returns_minus_one(self):
-        self.assertEqual(_hist_index([], {"role": "user", "content": "z"}), -1)
-
-
 class TestSplitTurn(unittest.TestCase):
     def test_user_and_conclusion_both_found(self):
         turn = [
@@ -294,40 +259,6 @@ class TestFmtDuration(unittest.TestCase):
         self.assertEqual(_fmt_duration(None), "")
         self.assertEqual(_fmt_duration("nope"), "")
         self.assertEqual(_fmt_duration(-5), "0s")
-
-
-class TestUnifiedHistoryRender(unittest.TestCase):
-    """The chat panel renders retired + live turns as ONE conversation.
-
-    Source-level pin: ``_draw_chat_history`` must build the display from the
-    combined list (``archived + live``) and render it with the ordinary turn
-    drawer.  The earlier separate "Archived context" collapsible section (which
-    split a turn across two boxes) must be gone.
-    """
-
-    def test_renders_combined_and_drops_archive_section(self):
-        src = _load_source()
-        # Find the _draw_chat_history body up to the next method.
-        start = src.find("\n    def _draw_chat_history(")
-        self.assertGreaterEqual(start, 0)
-        end = src.find("\n    def _draw_turn(", start)
-        self.assertGreater(end, start)
-        body = src[start:end]
-        self.assertIn("combined = archived + live", body)
-        self.assertIn("_group_turns(combined)", body)
-        self.assertNotIn("archived_context", body)
-        self.assertNotIn("Archived context", body)
-
-    def test_draw_turn_resolves_copy_source_per_message(self):
-        src = _load_source()
-        start = src.find("\n    def _draw_turn(")
-        end = src.find("\nclass BFACW_PT_chat_session", start)
-        body = src[start:end]
-        # Per-message source resolution for copy actions.
-        self.assertIn("def _idx(", body)
-        self.assertIn("id(msg) in archived_index", body)
-        # No stale whole-turn source flag / combined-list index lookups.
-        self.assertNotIn("_hist_index(history", body)
 
 
 class TestSessionPanelHidesInHarness(unittest.TestCase):

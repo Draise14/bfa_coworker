@@ -183,21 +183,6 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
     # -- Chat Display ---------------------------------------------
 
-    chat_sidebar_style: EnumProperty(  # type: ignore[valid-type]
-        name="Sidebar Chat",
-        description=(
-            "How the Coworker tab in the 3D View sidebar shows the chat. Compact: the "
-            "new chat, newest message at the bottom with the input pinned under it, "
-            "Enter to send (the same chat as the Coworker editor). Classic: the "
-            "previous panel layout"
-        ),
-        items=[
-            ("COMPACT", "Compact Chat", "The new chat: newest at the bottom, input pinned, Enter sends"),
-            ("CLASSIC", "Classic Panels", "The previous panel layout"),
-        ],
-        default="COMPACT",
-    )
-
     # The chat input's height (#389): the most text lines it grows to before it scrolls, set by
     # dragging its top edge (or Ctrl+Up / Ctrl+Down in it); one for the sidebars, one for the
     # Coworker editors.  Saved with the preferences, so it stays across sessions.
@@ -210,18 +195,6 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         name="Editor Input Lines",
         description="Most lines the Coworker editor's input grows to before it scrolls (drag its top edge)",
         default=6, min=2, max=60,
-    )
-
-    chat_max_visible_turns: IntProperty(  # type: ignore[valid-type]
-        name="Max Visible Turns",
-        description=(
-            "Maximum number of conversation turns shown in the chat panel. "
-            "0 = show all turns (no limit). Higher values may slow the UI "
-            "with very long conversations."
-        ),
-        default=0,
-        min=0,
-        max=100,
     )
 
     # -- Long requests (auto-continue) -----------------------------
@@ -2443,12 +2416,6 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         # -- Chat Display -----------------------------------------------
         chat_box = layout.box()
         chat_box.label(text="Chat Display", icon='SORTTIME')
-        chat_box.prop(self, "chat_sidebar_style")
-        chat_box.prop(self, "chat_max_visible_turns")
-        chat_box.label(
-            text="0 = show all turns. Higher values limit history shown.",
-            icon='INFO',
-        )
         chat_box.prop(self, "auto_continue_rounds")
         chat_box.label(
             text="Long requests keep going in rounds while the plan makes progress.",

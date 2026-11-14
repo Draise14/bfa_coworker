@@ -399,6 +399,20 @@ class TestChatView(unittest.TestCase):
         self.assertIn("FORWARD", self.icons(c))
         self.assertTrue(any(t.text.startswith("Coworker → itself") for t in self.texts(c)))
 
+    def test_a_checkpoint_shows_in_the_workshop(self):
+        """#430: where older messages were summarized, as the Classic chat's Workshop showed it."""
+        c = self.canvas()
+        view = cv.ChatView()
+        view.expanded.add("t0")
+        hist = [{"role": "user", "content": "go"},
+                {"role": "compaction", "content": "Goal: a lighthouse", "retired": 3},
+                {"role": "assistant", "content": "ok"}]
+        view.draw(c, lay.Rect(0, 0, 600, 2000), hist)
+        self.assertIn("TIME", self.icons(c))
+        text = " ".join(t.text for t in self.texts(c))
+        self.assertIn("Checkpoint: 3 earlier messages summarized", text)
+        self.assertIn("Goal: a lighthouse", text)
+
     def test_newest_turn_at_the_bottom(self):
         c = self.canvas()
         cv.ChatView().draw(c, lay.Rect(0, 0, 600, 2000), _history())

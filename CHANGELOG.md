@@ -27,7 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Fixes and polish from the 1.1.42 test round. Coworker now registers in Blender, Claude Code
 gets Coworker's tools on a fresh install, a .blend brings its own chats back, and the chat
-learns to paste images, select text with the mouse and open its own right-click menu.
+learns to paste images, select text with the mouse and open its own right-click menu, and
+gets an input you can scroll and resize.
 Release notes: `_misc/release_notes/release_notes_v1.1.43.md`.
 
 ### Added
@@ -44,6 +45,12 @@ Release notes: `_misc/release_notes/release_notes_v1.1.43.md`.
   - **Ctrl C** (Cmd C) copies the selection while the mouse is over the chat, with keys and tokens shown as `***` like the Copy buttons. Elsewhere Ctrl C is the editor's as before (it still copies objects in the 3D View). What you copy is the text as shown, without markdown.
   - **Esc** or a click anywhere else clears the selection. The right-click menu has **Copy Selection**.
   - Workshop rows and job rows can't be selected; their Copy buttons remain.
+- **The chat input scrolls and resizes (#389, #474).** A long message is fully reachable, in the Coworker editor and the sidebar chat.
+  - **The wheel** over the input scrolls it while its text is taller than the box; when the text fits, the wheel scrolls the chat as before. Ctrl+wheel still zooms. A thin hint on the right shows where you are.
+  - **The caret stays in view** when you type, move it, paste, undo, click or drag past the top or bottom edge; otherwise the input stays where the wheel left it.
+  - **Drag the input's top edge** to make it taller or shorter, from 2 lines up to about half the chat. The cursor shows up-down arrows over the edge. The input still grows with its text up to that size.
+  - **Ctrl+Up / Ctrl+Down** while the input has focus make it taller or shorter.
+  - **The size is remembered** separately for sidebars and the Coworker editor, saved with the preferences.
 - **The chat's own right-click menu (#453, #464).** Right-click in the Coworker editor or the sidebar chat opens Coworker's menu instead of the Node Editor's:
   - on a message: **Copy Message**, **Copy Code** (on a code block) and **Revert** (the newest turn);
   - on the prompt: **Cut**, **Copy**, **Paste**, **Select All**;
@@ -55,6 +62,7 @@ Release notes: `_misc/release_notes/release_notes_v1.1.43.md`.
   - **External Agent:** the agent switches to that chat's own saved session, or starts fresh for a new chat, and each tab continues its own chat's session.
   - **Save As** keeps the chat, under the new file name.
   - **History** lists files newest first, each with an Open button and its chats under it (editor icon, mode, time). Chats from unsaved files sit under *Not saved in a file*. Search matches chat titles and file names.
+- **Chat Draw Trace (#387, #475).** A toggle in Status & Diagnostics, off by default, with a **Copy** button: it keeps the last 300 draws of the chat with anomalies flagged, to paste into an issue after a glitch.
 
 ### Changed
 
@@ -77,6 +85,12 @@ Release notes: `_misc/release_notes/release_notes_v1.1.43.md`.
 - **Opening another .blend no longer mixes up chats (#431, #462).** In External Agent the old file's chat stayed on screen, the next save wrote it into the new file's chat, and the agent kept talking in the old conversation. Save As started a new chat.
 - **Images attach to the chat you used (#449, #465).** Attaching from the file browser, captures and Explain This Spot went to *All editors*; now they go to the tab that started them. The attach popover shows its own chat's image and its button is Coworker's own Attach Image instead of Blender's Open. EXR, HDR, TGA, PSD and other formats Blender reads are attached as a PNG copy (EXR and TGA were refused). Enter in the file browser is no longer taken by the chat.
 - **The capture overlay always closes (#454, #465).** A second capture no longer starts frozen on the last rectangle: the highlight follows the mouse, and the last rectangle shows as a thin outline that **Enter** takes again. Opening a file during a capture, an error, or a cancel ends it and clears the veil, status text and crosshair in every window.
+- **Two chat glitches (#387, #475).**
+  - The messages could be blank for a frame while a reply streamed in Local / Remote: the turn changed between measuring and drawing it. The chat now reads the running turn once per frame.
+  - The sidebar chat could vanish after Resolution Scale, a monitor with another DPI or the chat's rows changed, with part of its panel scrolled out of view. A height learnt at another scale or row count is no longer used.
+  - The report of the chat drawn over another sidebar tab was not reproduced; the Chat Draw Trace is there to catch it.
+- **Freeing a port on Windows (#473, #476).** Coworker now sees servers listening on 127.0.0.1 on Windows (it never found them before and always moved to the next free port), and can free a port held by a leftover server of a Blender that has closed. Another open window's server is never touched.
+  - The test suite now passes completely; it had 9 long-standing failures.
 
 ## [v1.1.42] - 2026-11-09
 

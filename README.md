@@ -31,9 +31,14 @@ A fixes-and-polish release:
 
 - **Works in Blender too,** not only in Bforartists, and **Claude Code gets Coworker's tools** on a fresh install.
 - **Each .blend brings its chats back:** its tabs, Goal & Plan and each area's tab. History is grouped by file.
-- **Paste an image** with Ctrl V, **select text with the mouse** and copy it, and **right-click** for the chat's own menu.
+- **Paste an image** with Ctrl V, **select text with the mouse** and copy it, **right-click** for the chat's own menu, and a **chat input you can scroll and resize**.
 - **+ starts a chat for All editors;** the editor's icon button starts one about that editor. **Start This Chat Fresh** clears a tab.
 - **Since 1.1.40:** a conversation per job in **chat tabs**, long renders and bakes that don't time out, and keys kept out of logs (1.1.42).
+
+| | |
+|---|---|
+| ![Sidebar chat in the 3D View](docs/images/v1.1.40/sidebar_3d_view.png) | **The Coworker tab in every editor.** The same chat in each editor's sidebar, with Queue, Plan, History and Status. *Use Editor Context Only* keeps Coworker to what that editor shows. |
+| ![Approval card](docs/images/v1.1.40/permissions.png) | **Permissions and approvals.** A card asks before a tool runs: *Allow once*, *Allow this turn* or *Deny*. Switch between Strict, Permissive and Auto at any time. |
 
 See the [release notes](https://github.com/Draise14/bfa_coworker/releases/tag/v1.1.43) and the [CHANGELOG](CHANGELOG.md).
 

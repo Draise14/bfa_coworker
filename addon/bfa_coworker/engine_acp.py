@@ -184,6 +184,7 @@ class AcpEngine:
             elif thread in self._threads:
                 _old, state, applier = self._threads[thread]
                 self._threads[thread] = (session_id, state, applier)
+
     # -- connection ----------------------------------------------------------------
     def connect(self, argv: list[str], mcp_entry: dict[str, Any], cwd: str,
                 env: dict[str, str] | None = None, label: str = "", wait: bool = False,
@@ -392,15 +393,19 @@ class AcpEngine:
                 pass     # not offered any more: keep the agent's default
 
     def new_session(self, wait: bool = False) -> None:
-        """New Thread: the agent forgets the conversation too (same agent, a new session)."""
+        """New Thread in All editors: the agent forgets the conversation too (same agent, a
+        new session for the default thread; #359: another chat's turn may be current)."""
         client = self.client
         if client is None or not self.connected:
             return
-        self.cancel()
+        self.cancel_thread("")
+        if not self.busy_for(self.thread):
+            self.use_thread("")
 
         def work() -> None:
             try:
-                self.session_id = self._open_session(client, False, "", self._cwd, self._servers_for(self.thread))
+                self._set_session("", self._open_session(client, False, "", self._cwd, self._servers_for(""),
+                                                         thread=""))
             except AcpError as ex:
                 self.status = "Couldn't start a fresh session: {:s}".format(str(ex).splitlines()[0])
             self._changed()

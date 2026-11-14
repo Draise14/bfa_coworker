@@ -127,6 +127,11 @@ def _acp_engine():
                 _store().goal.apply_update({"steps": steps})
         _acp.on_request = request
         _acp.applier.on_plan = plan
+
+        def turn_end(tag: str, stop_reason: str, error: str) -> None:     # helper chats (#479)
+            from . import helper_chats
+            helper_chats.acp_turn_ended(tag, stop_reason, error)
+        _acp.on_turn_end = turn_end
     return _acp
 
 
@@ -684,6 +689,11 @@ def _thread_turn_finished(thread) -> None:
     else:
         _save_thread_chat(thread)
         _save_tabs()            # its tab comes back with the .blend (#427)
+    try:                        # a helper's results go to the chat that asked (#479)
+        from . import helper_chats
+        helper_chats.loop_turn_finished(thread)
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] helper chats: {:s}".format(str(ex)))
 
 
 def _thread_status(thread) -> tuple[str, str]:
@@ -698,6 +708,10 @@ def _thread_status(thread) -> tuple[str, str]:
         return "Waiting for you", "QUESTION"
     if state.is_thinking or state.turn_active:
         return "Thinking", "SORTTIME"
+    from . import helper_chats, helpers
+    waiting = helper_chats.waiting(thread)
+    if waiting:                         # its helper chats work for it (#479)
+        return helpers.waiting_text(waiting), "TIME"
     if agent_controller.thread_queue(thread).pending_count:
         return "Waiting for its turn", "TIME"
     if thread.unread:
@@ -3363,6 +3377,8 @@ class BFACW_OT_chat_stop(Operator):  # type: ignore[misc]
             _acp.drop_queued(tag)           # another thread's turn runs: only this one's waiting messages go
         else:
             _thread_engine(thread).cancel()
+        from . import helper_chats
+        helper_chats.stop_helpers(thread)   # its helper chats stop too, no results come (#479)
         agent_controller.thread_state(thread).status_text = "Stopped"
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
@@ -5437,8 +5453,11 @@ def _tab_kind(context) -> str:
 
 
 def _tab_label(thread) -> str:
-    from . import threads
+    from . import helper_chats, threads
     from .chat_history import title_of
+    helper_title = helper_chats.tab_label(thread)       # a helper chat: its title (#479)
+    if helper_title:
+        return threads.tab_title(thread, helper_title)
     return threads.tab_title(thread, title_of(agent_controller.thread_state(thread).conversation_history))
 
 
@@ -5585,7 +5604,9 @@ class BFACW_OT_tab_show(Operator):  # type: ignore[misc]
         if thread is None:
             return cls.__doc__
         where = "All editors" if not thread.editor else _EDITOR_NAMES.get(thread.editor, thread.editor)
-        return "{:s} ({:s}): {:s}".format(_tab_label(thread), where, _thread_status(thread)[0])
+        from . import helper_chats
+        return "{:s}{:s} ({:s}): {:s}".format(helper_chats.tab_tip(thread), _tab_label(thread), where,
+                                              _thread_status(thread)[0])
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         thread = agent_controller.THREADS.get(self.thread_id)
@@ -5641,6 +5662,8 @@ class BFACW_OT_tab_close(Operator):  # type: ignore[misc]
         if why:
             self.report({"WARNING"}, why)
             return {"CANCELLED"}
+        from . import helper_chats
+        helper_chats.tab_closed(thread)     # a helper counts as stopped; a parent's helpers go on (#479)
         if thread.is_default:
             _fresh_default_chat()
             _redraw_all_chats()

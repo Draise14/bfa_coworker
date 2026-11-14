@@ -61,14 +61,15 @@ def main() -> int:
     mcp = FastMCP("bfa-coworker", instructions=str(prompts["initial_instructions"]))
 
     # Engine 9: every tool's result is kept short (a preview + a handle to the rest).
-    from blmcp.tools_helpers.bounded_output import bounded
+    # #479: a blocking tool runs in a worker thread, so one waiting call never holds up the rest.
+    from blmcp.tools_helpers.bounded_output import bounded, off_the_loop
     _register_tool = mcp.tool
 
     def _bounded_tool(*args, **kwargs):
         if len(args) == 1 and callable(args[0]) and not kwargs:     # bare @mcp.tool
-            return _register_tool(bounded(args[0]))
+            return _register_tool(bounded(off_the_loop(args[0])))
         decorate = _register_tool(*args, **kwargs)
-        return lambda fn: decorate(bounded(fn))
+        return lambda fn: decorate(bounded(off_the_loop(fn)))
     mcp.tool = _bounded_tool  # type: ignore[method-assign]
 
     # Auto-discover and register all tools (they are never un-registered).

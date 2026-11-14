@@ -229,6 +229,53 @@ EXPECTED_TOOLS = [
         }
     },
     {
+        "name": "delegate_task",
+        "description": "\n"
+"        Hand one independent part of the job to a helper chat in Coworker (a sub-agent).\n"
+"\n"
+"        The helper opens as its own chat tab with the task as its first message and answers\n"
+"        at once: don't wait or poll. When every helper you started has finished, their\n"
+"        results come back to this chat as one message, and you carry on from there. On a\n"
+"        local model helpers run one after another; online they may run side by side.\n"
+"\n"
+"        Delegate independent parts (different editors, a long side job). Don't delegate\n"
+"        small jobs or steps that need each other's results. Helpers can't start helpers.\n"
+"\n"
+"        Args:\n"
+"            task: What the helper should do, complete on its own (names, values, where).\n"
+"            editor: The editor whose context it works in: VIEW_3D, NODE_EDITOR,\n"
+"                SEQUENCE_EDITOR, TEXT_EDITOR, IMAGE_EDITOR, CLIP_EDITOR, DOPESHEET_EDITOR,\n"
+"                GRAPH_EDITOR, NLA_EDITOR, SPREADSHEET, or \"\" for All editors.\n"
+"            title: A short title for its tab (a few words).\n"
+"\n"
+"        Returns:\n"
+"            ``status`` (\"ok\" or \"error\"), the helper's ``helper_id`` and ``title``, and a message.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "task": {
+                    "title": "Task",
+                    "type": "string"
+                },
+                "editor": {
+                    "default": "",
+                    "title": "Editor",
+                    "type": "string"
+                },
+                "title": {
+                    "default": "",
+                    "title": "Title",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "task"
+            ],
+            "title": "delegate_taskArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "download_polyhaven_asset",
         "description": "\n"
 "        Download a Poly Haven asset and import it into the current Blender scene.\n"

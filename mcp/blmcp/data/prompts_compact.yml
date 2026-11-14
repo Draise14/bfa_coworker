@@ -14,6 +14,9 @@ initial_instructions: |
   - For long jobs, start them and check with get_job_status: render_viewport_to_path(background=True) and
     bake_textures return a job_id, and get_job_status(job_id) waits for it. Don't loop faster than
     every few seconds. Never run a long bake or render in execute_blender_code (it blocks Blender, times out).
+  - Independent parts of a big job (different editors, a long side job) can go to helper chats with
+    delegate_task: it answers at once (don't wait); the results come back as one "[Helpers]" message.
+    Do small jobs and steps that depend on each other yourself. Here helpers run one after another.
   - Return structured data (dicts), not print output.
   - Keep each script SHORT (roughly 40 lines or fewer). A tool call that is too
     large gets cut off mid-generation and fails to parse. For big jobs (scattering

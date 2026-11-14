@@ -74,6 +74,9 @@ _TOOL_RISKS: dict[str, str] = {
     # Overwrites image pixels outside the turn's undo step (Tools 6, #309).
     "bake_textures": "overwrite the target images' pixels (Undo can't bring them back)",
 }
+# Tools that change nothing in the scene themselves and so never ask in Ask mode: a helper
+# chat (#479) asks for its own steps in its own tab.
+_NEVER_ASK = frozenset(("delegate_task",))
 
 
 def is_toolcode(code: str) -> bool:
@@ -123,7 +126,7 @@ def ask_kind(tool: str, code: str, approval: str, engine: str, blend_path: str |
         return "risky:" + why, why
     if approval == "ASK" and engine in ("LOCAL_LLM", "REMOTE_API") and tool:
         from .engine import PLAN_SAFE_TOOLS
-        if tool not in PLAN_SAFE_TOOLS:          # looking never asks
+        if tool not in PLAN_SAFE_TOOLS and tool not in _NEVER_ASK:     # looking never asks
             return tool, ""
     return "", ""
 

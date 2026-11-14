@@ -1378,6 +1378,7 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "set_strip_frame_range",
         "render_vse_preview",
         "add_captions",
+        "reframe_vertical",
     }),
     "geometry_nodes": frozenset({
         "jump_to_view3d_object_by_name",

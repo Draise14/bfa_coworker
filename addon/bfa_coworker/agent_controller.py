@@ -1365,6 +1365,11 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
     "vse": frozenset({
         "jump_to_tab_by_name",
         "jump_to_tab_by_space_type",
+        "get_vse_strips_summary",     # Tools 1 (#304): the Sequencer's own tools.
+        "get_vse_strip_detail",
+        "get_vse_timeline_overview",
+        "set_strip_frame_range",
+        "render_vse_preview",
     }),
     "geometry_nodes": frozenset({
         "jump_to_view3d_object_by_name",
@@ -1534,7 +1539,7 @@ def _drop_stale_notes(history: list[dict[str, Any]], kind: str) -> None:
 # progress: re-inspecting forever is how a "done" turn kept running.
 _READONLY_TOOL_PREFIXES = (
     "get_", "search_", "list_", "jump_to_", "find_", "inspect", "describe",
-    "check_", "read_", "render_viewport", "load_tools", "update_plan",
+    "check_", "read_", "render_viewport", "render_vse_preview", "load_tools", "update_plan",
 )
 
 # Stop rules (Tier 3 hardening, 1.1.37): consecutive tool batches with no real
@@ -1802,7 +1807,7 @@ def _extract_image_from_tool_result(result: dict) -> str | None:
             if block_type in ("image", "image/png", "image/jpeg", "image/webp"):
                 data = block.get("data", "") or block.get("source", {}).get("data", "")
                 if data:
-                    mime = block_type if block_type.startswith("image/") else "image/png"
+                    mime = block_type if block_type.startswith("image/") else str(block.get("mimeType") or "image/png")
                     return "data:{:s};base64,{:s}".format(mime, data)
     return None
 
@@ -4571,6 +4576,11 @@ _TOOL_FRIENDLY_NAMES: dict[str, str] = {
     "render_scene": "Rendering",
     "get_job_status": "Waiting for the background job",
     "bake_textures": "Starting the bake",
+    "get_vse_timeline_overview": "Reading the Sequencer timeline",
+    "get_vse_strips_summary": "Listing Sequencer strips",
+    "get_vse_strip_detail": "Reading a Sequencer strip",
+    "set_strip_frame_range": "Moving a Sequencer strip",
+    "render_vse_preview": "Rendering a Sequencer preview",
 }
 
 
@@ -8090,7 +8100,8 @@ def _run_conversation_turn_inner(
                 # If the tool result contains an image (screenshot), store
                 # it on the agent state so it can be injected into the next
                 # user message as an image_url content block.
-                if tool_name in ("get_screenshot_of_area_as_image", "get_screenshot_of_window_as_image"):
+                if tool_name in ("get_screenshot_of_area_as_image", "get_screenshot_of_window_as_image",
+                                 "render_vse_preview"):
                     try:
                         result_obj = json.loads(result_text)
                         img_data = _extract_image_from_tool_result(result_obj)

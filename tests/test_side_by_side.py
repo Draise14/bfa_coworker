@@ -399,6 +399,18 @@ class TestExternalAgentSideBySide(unittest.TestCase):
         self.assertIn("Frames added.", self._texts("t2"))
         self.assertNotIn("late chunk", self._texts("t1") + self._texts("t2"))
 
+    def test_each_turn_knows_its_chat(self):
+        sid = self._both_prompting()
+        turns = {t: self.engine._running[t]["turn"] for t in ("t1", "t2")}
+        self.assertEqual({t: self.engine.turn_thread(turns[t]) for t in turns}, {"t1": "t1", "t2": "t2"},
+                         "not the current thread (the last started)")
+        for ev in self.client.release.values():
+            ev.set()
+        self.assertTrue(_wait_for(lambda: not self.engine.is_busy()))
+        self.engine.drain()
+        self.assertEqual(self.engine._turn_threads, {}, "forgotten when the turn end is applied")
+        self.assertTrue(sid)
+
     def test_update_to_events_takes_params_or_update(self):
         update = {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "hi"}}
         self.assertEqual(ac_client.update_to_events({"sessionId": "s1", "update": update}),

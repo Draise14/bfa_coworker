@@ -120,6 +120,7 @@ class AcpEngine:
         self._threads: dict[str, tuple[str, Any, ChatStateApplier]] = {}
         self._turn_appliers: dict[str, ChatStateApplier] = {}
         self.cap = 1                         # chats at once (#359; set from the preference)
+        self._turn_threads: dict[str, str] = {}    # turn id -> its thread's tag (#359)
         # Each chat's own Goal & Plan (#359): *on_thread_request(thread, text)* and
         # *on_thread_plan(thread, steps)*; unset, :attr:`on_request` / the applier's plan hook.
         self.on_thread_request: Callable[[str, str], None] | None = None
@@ -570,6 +571,12 @@ class AcpEngine:
         applier.apply(event)
         if event.kind == "turn_end":
             self._turn_appliers.pop(event.turn_id, None)
+            self._turn_threads.pop(event.turn_id, None)
+
+    def turn_thread(self, turn_id: str) -> str:
+        """The thread (tag) a turn ran in (#359: several chats' turns run at once, so the
+        current :attr:`thread` may be another's).  Valid until its ``turn_end`` is applied."""
+        return self._turn_threads.get(turn_id, self.thread)
 
     # -- turns ------------------------------------------------------------------------
     def _start(self, prompt: Prompt) -> str:
@@ -581,6 +588,7 @@ class AcpEngine:
                     "mode": prompt.chat_mode, "forced": False}
             self._running[tag] = slot
         self._turn_appliers[turn_id] = slot["applier"]
+        self._turn_threads[turn_id] = tag
         # Like a local turn, the message in the chat keeps an "[attached: ...]"
         # marker for its images, which the chat draws as thumbnails.
         names = [n for n in prompt.image_names if n]

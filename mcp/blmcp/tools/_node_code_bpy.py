@@ -347,25 +347,50 @@ def _read_value(owner, prop):
     return plain(value)
 
 
-def _new_arg_default(param):
-    default = getattr(param, "default", None)
-    if default in (None, ""):
-        items = [e.identifier for e in getattr(param, "enum_items", ())]
-        default = items[0] if items else default
-    return default
+def _new_arg_choices(param):
+    """Values to try for a new() argument the item doesn't keep: its default, then its enum choices."""
+    out = []
+    for value in [getattr(param, "default", None)] + [e.identifier for e in getattr(param, "enum_items", ())]:
+        if value not in (None, "") and value not in out:
+            out.append(value)
+    return out
+
+
+# An attribute data type (Capture Attribute, Raycast items) -> the socket type new() takes for it.
+_SOCKET_OF_DATA_TYPE = {"FLOAT_VECTOR": "VECTOR", "FLOAT2": "VECTOR", "FLOAT_COLOR": "RGBA", "BYTE_COLOR": "RGBA",
+                        "FLOAT4": "RGBA", "QUATERNION": "ROTATION", "FLOAT4X4": "MATRIX", "INT8": "INT",
+                        "INT16_2D": "INT", "INT32_2D": "INT"}
+
+
+def _new_item(coll, kwargs, fixed, extra):
+    """coll.new(**kwargs) plus the arguments the item doesn't keep (*fixed*: name -> choices to try);
+    the item's own data_type, mapped to a socket type, is tried first."""
+    if not fixed:
+        return coll.new(**kwargs)
+    error = None
+    data_type = extra.get("data_type")
+    for key, choices in fixed.items():
+        first = [_SOCKET_OF_DATA_TYPE.get(data_type, data_type)] if data_type else []
+        for value in first + [c for c in choices if c not in first]:
+            others = {k: c[0] for k, c in fixed.items() if k != key and c}
+            try:
+                return coll.new(**dict(others, **{key: value}, **kwargs))
+            except Exception as ex:  # pylint: disable=broad-except
+                error = ex
+    raise error if error is not None else ValueError("no value to create an item with")
 
 
 def _item_args(prop):
-    """(new() argument names with "name" first, item writable extras, {new() argument: value}).
+    """(new() argument names with "name" first, item writable extras, {new() argument: choices}).
 
     Only the new() arguments the item has are printed: Capture Attribute, Field to Grid and Raycast items
     are made with new(socket_type, name) but keep their type in ``data_type`` (an extra, set after
-    new() with the argument's default)."""
+    new(); see ``_new_item``)."""
     fn = prop.srna.functions["new"]
     item_names = {q.identifier for q in prop.fixed_type.properties}
     params = [q for q in fn.parameters if not q.is_output]
     args = [q.identifier for q in params if q.identifier in item_names]
-    fixed = {q.identifier: _new_arg_default(q) for q in params if q.identifier not in item_names}
+    fixed = {q.identifier: _new_arg_choices(q) for q in params if q.identifier not in item_names}
     if "name" in args:
         args = ["name"] + [a for a in args if a != "name"]
     extras = []
@@ -938,7 +963,7 @@ def apply_items(prop, coll, value, report, line, where):
                     if getattr(item, k) != v:
                         setattr(item, k, v)
             else:
-                item = coll.new(**dict(fixed, **kwargs))
+                item = _new_item(coll, kwargs, fixed, extra)
         except Exception as ex:  # pylint: disable=broad-except
             report.skip(line, "{:s} item {:d} {:s}: {:s}".format(where, i, format_value(tuple(entry)), str(ex)))
             continue

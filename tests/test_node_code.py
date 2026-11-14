@@ -437,29 +437,35 @@ class TestBlenderSide(unittest.TestCase):
         from types import SimpleNamespace
 
         class _DtItem:
-            def __init__(self, name, data_type="FLOAT"):
+            def __init__(self, name, data_type):
                 self.name = name
                 self.data_type = data_type
 
         class _DtItems(list):
+            allowed = ("FLOAT", "VECTOR")
+
             def new(self, socket_type, name):
-                assert socket_type == "FLOAT"
-                item = _DtItem(name)
+                if socket_type not in self.allowed:     # Raycast takes fewer types than it lists
+                    raise RuntimeError("Unable to create item with this socket type")
+                item = _DtItem(name, {"VECTOR": "FLOAT_VECTOR"}.get(socket_type, socket_type))
                 self.append(item)
                 return item
 
+        socket_type = _Param("socket_type", "ENUM", default="CUSTOM")
+        socket_type.enum_items = [SimpleNamespace(identifier=x) for x in ("FLOAT", "INT", "VECTOR")]
         prop = SimpleNamespace(
             srna=SimpleNamespace(functions={"new": SimpleNamespace(parameters=[
-                _Param("socket_type", "ENUM", default="FLOAT"), _Param("name"), _Param("item", "POINTER", True)])}),
+                socket_type, _Param("name"), _Param("item", "POINTER", True)])}),
             fixed_type=SimpleNamespace(properties=[
                 _Param("rna_type", "POINTER", is_readonly=True), _Param("name"),
                 _Param("data_type", "ENUM", default="FLOAT")]))
-        items = _DtItems([_DtItem("A"), _DtItem("B", "INT")])
-        self.assertEqual(self.ncb.read_items(prop, items), [("A",), ("B", {"data_type": "INT"})])
+        items = _DtItems([_DtItem("A", "FLOAT"), _DtItem("B", "INT"), _DtItem("C", "FLOAT_VECTOR")])
+        text = [("A",), ("B", {"data_type": "INT"}), ("C", {"data_type": "FLOAT_VECTOR"})]
+        self.assertEqual(self.ncb.read_items(prop, items), text)
         rebuilt = _DtItems()
         report = self.ncb.BuildReport()
-        self.ncb.apply_items(prop, rebuilt, [("A",), ("B", {"data_type": "INT"})], report, 2, "Capture.capture_items")
-        self.assertEqual([(i.name, i.data_type) for i in rebuilt], [("A", "FLOAT"), ("B", "INT")])
+        self.ncb.apply_items(prop, rebuilt, text, report, 2, "Capture.capture_items")
+        self.assertEqual([(i.name, i.data_type) for i in rebuilt], [("A", "FLOAT"), ("B", "INT"), ("C", "FLOAT_VECTOR")])
         self.assertEqual((report.errors, report.not_set), ([], []))
 
     def test_report_sorts_errors_by_line(self):

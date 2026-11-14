@@ -6166,13 +6166,17 @@ def run_conversation_turn(
         # bumped the token and now owns the guard -- this old worker must not
         # clobber it.
         if _agent_state.turn_token == _my_token:
-            _agent_state.turn_active = False
             # Tier 3i: log the turn's cost breakdown (prefill vs gen vs overhead).
             _log_turn_cost(_agent_state)
             # Record the turn's wall time on its last message so the chat panel
             # can show each finished turn's duration.
             _stamp_turn_duration(_agent_state)
-            _end_turn_slot(_gate, thread)
+            # The slot, claims and scene lock go BEFORE the guard clears (#359): the lock's
+            # release waits for Blender's main thread, and a message sent meanwhile must
+            # queue behind this turn, not start a turn whose slot this worker then frees.
+            _end_turn_slot(_gate, thread, lambda: _agent_state.turn_token == _my_token)
+            if _agent_state.turn_token == _my_token:
+                _agent_state.turn_active = False
 
 
 # Turns ending at the same moment take turns here, so exactly the last one releases
@@ -6180,18 +6184,20 @@ def run_conversation_turn(
 _turn_end_lock = threading.Lock()
 
 
-def _end_turn_slot(gate: "threads.Thread", thread: "threads.Thread | None") -> None:
+def _end_turn_slot(gate: "threads.Thread", thread: "threads.Thread | None",
+                   still_mine: Callable[[], bool] = lambda: True) -> None:
     """A turn is over: the co-work scene lock is released (FINISH, error, Stop or an
     exception all pass through here) and its slot frees.  The lock registry is one for
     every chat, so the LAST running turn to end releases it: another chat still working
     keeps its datablocks protected until it ends too (#359).  Its claims go too."""
     from . import claims
-    claims.TABLE.release(threads.tag(gate))
     with _turn_end_lock:
         if not any(t is not gate for t in THREADS.running_threads()):
             with threads.use(thread):
                 _release_scene_lock()
-        THREADS.end(gate)           # the next waiting chat's turn may start (#357, #359)
+        if still_mine():            # a newer turn of this chat (Stop, then a new message) keeps them
+            claims.TABLE.release(threads.tag(gate))
+            THREADS.end(gate)       # the next waiting chat's turn may start (#357, #359)
 
 
 # Turn counter for memory-block "Last updated" stamps (Tier 3).

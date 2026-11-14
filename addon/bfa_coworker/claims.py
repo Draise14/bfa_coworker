@@ -17,8 +17,10 @@ ahead?".  In Auto mode (or with nobody to ask) it waits.
 
 ``execute_blender_code`` can't be analysed precisely, so it counts as a
 whole-scene write: it conflicts with any other chat's claim on a name its code
-mentions, and what it really changed is claimed after it runs, from the
-depsgraph's updates (:meth:`ClaimTable.note_writer` / :meth:`claim_updates`).
+mentions, and what it really changed is claimed after it runs: the datablocks
+whose names came or went (made, renamed, removed), from a comparison of the
+names before and after (:func:`changed_names`).  (The depsgraph's updates can't
+say it: the bridge tags every object after a script, so they name them all.)
 
 The table and the decisions are free of ``bpy`` (the bridge feeds them).
 """
@@ -34,6 +36,7 @@ __all__ = (
     "TABLE",
     "WAIT",
     "WAIT_LIMIT",
+    "changed_names",
     "code_names",
     "conflict_question",
     "decide",
@@ -70,7 +73,6 @@ _NOT_NAMES = frozenset({"OBJECT", "EDIT", "MESH", "CURVE", "LIGHT", "CAMERA", "E
                         "Base Color", "Material Output", "Surface", "Strength", "Color", "data", "value"})
 
 WAIT_LIMIT = 45.0       # seconds a call waits for another chat's claim (the loop's own call times out at 60 s)
-_WRITER_WINDOW = 1.0    # seconds a code call's depsgraph updates are still its own
 
 RUN, ASK, WAIT, REFUSE = "run", "ask", "wait", "refuse"
 
@@ -136,6 +138,12 @@ def targets_of(tool: str, args: Any = None, code: str = "",
     return targets, whole
 
 
+def changed_names(before: Iterable[str], after: Iterable[str]) -> set[Target]:
+    """What a script made, renamed or removed: the names that came or went, as claim
+    targets (``("any", name)``)."""
+    return {("any", name) for name in set(before) ^ set(after)}
+
+
 def _matches(a: Target, b: Target) -> bool:
     return a[1] == b[1] and (a[0] == b[0] or "any" in (a[0], b[0]))
 
@@ -157,7 +165,6 @@ class ClaimTable:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._claims: dict[str, set[Target]] = {}
-        self._writers: dict[str, float] = {}      # chat -> when its code call ran (depsgraph claims)
         self._waiting: dict[str, str] = {}        # chat -> the chat whose claim it waits for
 
     def claim(self, chat: str, targets: Iterable[Target]) -> None:
@@ -176,7 +183,6 @@ class ClaimTable:
         chat = str(chat or "")
         with self._lock:
             self._claims.pop(chat, None)
-            self._writers.pop(chat, None)
             self._waiting.pop(chat, None)
             for waiter, holder in list(self._waiting.items()):
                 if holder == chat:
@@ -185,7 +191,6 @@ class ClaimTable:
     def clear(self) -> None:
         with self._lock:
             self._claims.clear()
-            self._writers.clear()
             self._waiting.clear()
 
     def conflicts(self, chat: str, targets: Iterable[Target], running: Iterable[str]) -> dict[str, list[str]]:
@@ -209,31 +214,6 @@ class ClaimTable:
         with self._lock:
             return any(holder != chat and holder in running and any(n == name for _k, n in held)
                        for holder, held in self._claims.items())
-
-    # -- generated code: its changes are claimed after it ran ---------------------------
-    def note_writer(self, chat: str, now: float | None = None) -> None:
-        """*chat*'s generated code just ran: the next depsgraph updates are its changes."""
-        with self._lock:
-            self._writers[str(chat or "")] = time.monotonic() if now is None else now
-
-    def has_writers(self) -> bool:
-        with self._lock:
-            return bool(self._writers)
-
-    def claim_updates(self, targets: Iterable[Target], now: float | None = None) -> list[str]:
-        """The depsgraph changed *targets*: they are claimed by the chats whose code ran
-        within the last second (every such chat: two in one tick share them).  Returns
-        those chats."""
-        now = time.monotonic() if now is None else now
-        targets = {(str(k), str(n)) for k, n in targets if n}
-        with self._lock:
-            chats = [c for c, at in self._writers.items() if now - at <= _WRITER_WINDOW]
-            for c in list(self._writers):
-                if c not in chats:
-                    self._writers.pop(c, None)
-            for c in chats:
-                self._claims.setdefault(c, set()).update(targets)
-        return chats
 
     # -- who waits for whom (no two chats wait for each other) -------------------------
     def set_waiting(self, chat: str, holder: str) -> None:

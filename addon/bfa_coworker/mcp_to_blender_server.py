@@ -1417,17 +1417,19 @@ def _claim_gate(thread: str, tool: str, args: Any, code: str, run: Callable[[], 
         exists=lambda name: _datablock_exists(name) or claims.TABLE.held_by_others(thread, name, running))
     from . import risky_steps
 
-    def ran(result: _ExecResult) -> _ExecResult:
+    def ran(do: Callable[[], _ExecResult]) -> _ExecResult:
+        before = _datablock_names() if whole else set()
+        result = do()
         if result.check_fn is None and result.response.get("status") == "ok":
-            claims.TABLE.claim(thread, targets)
-            if whole:
-                claims.TABLE.note_writer(thread)      # its real changes: the depsgraph's updates
+            # Its claims: what it names, and for a script what it made, renamed or removed.
+            claims.TABLE.claim(thread, targets | (claims.changed_names(before, _datablock_names()) if whole
+                                                  else set()))
         return result
     decision = claims.decide(claims.TABLE, thread, targets, running, ask=not risky_steps.auto_on(thread))
     print("[Coworker] claims: {:s} {:s} on {:s} -> {:s}".format(
         thread or "main", tool, ", ".join(sorted(n for _k, n in targets)[:6]) or "nothing named", decision.action))
     if decision.action == claims.RUN:
-        return ran(run())
+        return ran(run)
     from . import coworker_api
     title = _chat_title(decision.holder)
     shown = ", ".join(decision.names[:3])
@@ -1481,7 +1483,7 @@ def _claim_gate(thread: str, tool: str, args: Any, code: str, run: Callable[[], 
         if state["qid"]:
             coworker_api.cancel_question(state["qid"])
             state["qid"] = ""
-        result = ran(run())
+        result = ran(run)
         if result.check_fn is not None:
             state["inner"] = result.check_fn
             return None
@@ -1490,6 +1492,20 @@ def _claim_gate(thread: str, tool: str, args: Any, code: str, run: Callable[[], 
 
 
 _CLAIM_COLLECTIONS = ("objects", "node_groups", "texts", "collections", "materials", "meshes")
+
+
+def _datablock_names() -> set[str]:
+    """The names of every datablock of a kind claims cover, and of every strip (main thread)."""
+    try:
+        import bpy  # pylint: disable=import-error
+        out = {d.name for attr in _CLAIM_COLLECTIONS for d in getattr(bpy.data, attr)}
+        for scene in bpy.data.scenes:
+            strips = getattr(getattr(scene, "sequence_editor", None), "strips_all", None)
+            if strips is not None:
+                out.update(s.name for s in strips)
+        return out
+    except Exception:  # pylint: disable=broad-exception-caught
+        return set()
 
 
 def _datablock_exists(name: str) -> bool:

@@ -20,7 +20,7 @@ Chats running side by side (Threads 3, #359).
 5. Claims: write calls claim what they change for their chat's running turn; a
    write to another running chat's claim asks (wait / go ahead), waits in Auto
    mode, and is refused when the two would wait for each other; generated code
-   is a whole-scene write whose changes are claimed from the depsgraph.
+   is a whole-scene write whose changes (names that came or went) are claimed after it runs.
 6. Revert: directly only when no other chat stepped since the turn began;
    else Revert both (not while that chat works) or Cancel -- never a silent
    partial revert; each chat's turn checkpoint is its own.
@@ -613,22 +613,9 @@ class TestClaims(unittest.TestCase):
         self.assertEqual(self.table.claims_of("t1"), set())
         self.assertEqual(self.table.waits_for("t2"), "", "nobody to wait for any more")
 
-    def test_code_changes_claimed_from_the_depsgraph(self):
-        self.table.note_writer("t1", now=10.0)
-        self.assertEqual(self.table.claim_updates({("object", "Hero")}, now=10.4), ["t1"])
-        self.assertIn(("object", "Hero"), self.table.claims_of("t1"))
-        self.assertEqual(self.table.claim_updates({("object", "Later")}, now=12.0), [], "a second later: not its")
-        self.assertNotIn(("object", "Later"), self.table.claims_of("t1"))
-
-    def test_depsgraph_update_targets(self):
-        import types
-        ob = types.SimpleNamespace(id_type="OBJECT", name="Hero")
-        tree = types.SimpleNamespace(id_type="NODETREE", name="Rock")
-        scene = types.SimpleNamespace(id_type="SCENE", name="Scene")
-        graph = types.SimpleNamespace(updates=[types.SimpleNamespace(id=types.SimpleNamespace(original=ob)),
-                                               types.SimpleNamespace(id=tree), types.SimpleNamespace(id=scene)])
-        self.assertEqual(cw._updated_targets(graph), {("object", "Hero"), ("node_tree", "Rock")},
-                         "not the scene: every change updates it")
+    def test_what_a_script_changed(self):
+        self.assertEqual(claims.changed_names({"Cube", "Light"}, {"Hero", "Light", "New"}),
+                         {("any", "Cube"), ("any", "Hero"), ("any", "New")}, "renamed, made")
 
     def test_question_words(self):
         self.assertEqual(claims.conflict_question("3D", ["Cube"]),

@@ -27,7 +27,8 @@ keyframe markers on headings -- full-colour Bforartists icons, see :mod:`.icons`
 The same code draws the full editor and the compact sidebar (``compact``).
 Clicks come back from :meth:`ChatView.draw` as ``(action, value)`` pairs for
 the input layer to carry out: ``("copy", text)``, ``("toggle", turn_key)``,
-``("link", url)``, ``("jump", "")``.  Free of ``bpy``.
+``("link", url)``, ``("jump", "")``.  For the right-click menu (#453) it
+also keeps where each turn was drawn (:meth:`ChatView.turn_at`).  Free of ``bpy``.
 """
 
 from __future__ import annotations
@@ -49,6 +50,7 @@ from .suggestions import TYPE, suggestions
 __all__ = (
     "ChatView",
     "message_text",
+    "transcript",
 )
 
 _ERROR = (0.92, 0.40, 0.33, 1.0)   # failed tool rows (themes have no error colour)
@@ -159,6 +161,24 @@ def _markdown_gaps(blocks: list[Block], pad: float) -> tuple[float, float]:
     return gaps(blocks[0])[0], gaps(blocks[-1])[1]
 
 
+def _copy_texts(turn: list[dict], active: bool = False) -> tuple[str, str]:
+    """What a turn's two Copy buttons copy: your text and the reply ("" while it runs)."""
+    user, _process, conclusion = split_turn(turn)
+    text = split_attachments(message_text(user.get("content")))[0] if user is not None else ""
+    reply = message_text(conclusion.get("content")) if conclusion is not None and not active else ""
+    return text, reply
+
+
+def transcript(history: list[dict]) -> str:
+    """The chat as text, for the menu's Copy Whole Chat (#453): your messages and Coworker's
+    replies, turn by turn -- the same texts their Copy buttons copy; tool steps left out."""
+    parts = []
+    for turn in group_turns([m for m in history if m.get("role") != "system"]):
+        text, reply = _copy_texts(turn)
+        parts += [label + body for label, body in (("You:\n", text), ("Coworker:\n", reply)) if body.strip()]
+    return "\n\n".join(parts)
+
+
 def _tool_failed(msg: dict) -> bool:
     content = message_text(msg.get("content"))
     return content.startswith("Error") or '"status": "error"' in content
@@ -188,8 +208,28 @@ class ChatView:
     _live_h: dict[int, float] = field(default_factory=dict)   # running turn: tallest stream so far
     _think_h: dict[int, float] = field(default_factory=dict)  # running turn: tallest Thinking box so far
     _row_h: dict[tuple, float] = field(default_factory=dict)  # Workshop rows, measured once (#218)
+    # The right-click menu (#453), apart from the hit areas so left clicks don't change: each
+    # turn drawn this frame (rect clipped to the chat, index, your text, the reply), your
+    # messages' boxes and the code blocks (rect, code).  Only the real frame, never a measuring one.
+    turn_rects: list[tuple[Rect, int, str, str]] = field(default_factory=list)
+    _user_rects: dict[int, Rect] = field(default_factory=dict)
+    _code_rects: list[tuple[Rect, str]] = field(default_factory=list)
+    _frame: Any = None                  # the canvas of the frame being drawn
 
     # -- public ----------------------------------------------------------------
+    def turn_at(self, x: float, y: float) -> dict | None:
+        """The message at (x, y) in the last frame, for the right-click menu (#453): its turn
+        ``idx``, ``part`` ("user" over your message, else "reply"), ``text`` (what that part's
+        Copy button copies), ``code`` (the code block under the mouse, or "") and ``last``."""
+        for rect, idx, user, reply in self.turn_rects:
+            if rect.contains(x, y):
+                box = self._user_rects.get(idx)
+                on_user = box is not None and box.contains(x, y)
+                code = next((text for r, text in self._code_rects if r.contains(x, y)), "")
+                return {"idx": idx, "part": "user" if on_user else "reply", "text": user if on_user else reply,
+                        "code": code, "last": idx == getattr(self, "_last", -1)}
+        return None
+
     def scroll_by(self, dy: float, visible_height: float) -> None:
         """Scroll up (dy > 0) or down; clamped to the content."""
         self.scroll = max(0.0, min(self.scroll + dy, max(0.0, self.content_height - visible_height)))
@@ -205,6 +245,7 @@ class ChatView:
         self._scrollbar_input(canvas, rect)
         turns = group_turns([m for m in history if m.get("role") != "system"])
         active = len(turns) - 1 if (live is not None and getattr(live, "is_thinking", False)) else -1
+        self.turn_rects, self._user_rects, self._code_rects = [], {}, []
         if not turns:
             canvas.wrapped(rect.x + pad, rect.top - pad, rect.w - 2 * pad,
                            "Start a conversation: type below and press Enter.", _soft(style.text))
@@ -226,8 +267,12 @@ class ChatView:
             if bottom > rect.top:
                 break
             if bottom + h >= rect.y:
+                self._frame = canvas
                 self._draw_turn(canvas, turns[idx], idx, rect.x + pad, bottom + h, width,
                                 idx == active, live, compact, actions)
+                self._frame = None
+                self.turn_rects.append((Rect(rect.x + pad, bottom, width, h).intersect(rect), idx,
+                                        *_copy_texts(turns[idx], idx == active)))
             bottom += h + gap
         canvas.pop_clip()
 
@@ -298,6 +343,8 @@ class ChatView:
             h = (canvas.text_height(text, inner_w) if text else style.line_height) + thumbs_h + 2 * pad
             box = Rect(x + indent, top - h, width - indent, h)
             canvas.box(box, colors=style.button, selected=True, outline=False)
+            if canvas is self._frame:
+                self._user_rects[idx] = box
             canvas.icon(self._first_line_icon(canvas, box.x + pad, box.top - pad, style.line_height),
                         "USER", style.button.text_sel)
             self._copy_button(canvas, box.right - pad * 0.5, box.top - pad * 0.5, "copyuser:{:d}".format(idx),
@@ -710,6 +757,8 @@ class ChatView:
                 h = canvas.text_height(text, inner_w, font="mono") + 2 * pad + head
                 box = Rect(x, top - h - pad * 0.5, width, h)
                 canvas.box(box, colors=style.text_field)
+                if block.kind == "code" and canvas is self._frame:     # the menu's Copy Code (#453)
+                    self._code_rects.append((box, text))
                 if block.kind == "code":
                     strip = Rect(box.x, box.top - head, box.w, head)
                     soft = _soft(style.text_field.text, 0.4)

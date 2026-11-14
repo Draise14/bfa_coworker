@@ -81,7 +81,7 @@ PLAN_SAFE_TOOLS: frozenset[str] = frozenset({
     "get_objects_summary", "get_object_detail_summary", "get_scene_digest", "get_operation_history",
     "get_blendfile_summary_datablocks", "get_blendfile_summary_missing_files",
     "get_blendfile_summary_of_linked_libraries", "get_blendfile_summary_path_info",
-    "get_blendfile_summary_usage_guess", "get_active_node_tree", "get_node_group_interface",
+    "get_blendfile_summary_usage_guess", "get_active_node_tree", "get_node_group_interface", "get_node_tree_as_code",
     "get_asset_libraries", "get_asset_tags", "list_asset_catalogs", "search_assets",
     "search_polyhaven_assets", "get_polyhaven_status", "get_screenshot_of_window_as_image",
     "get_screenshot_of_window_as_json", "get_screenshot_of_area_as_image", "search_api_docs",

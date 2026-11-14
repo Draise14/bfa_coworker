@@ -46,7 +46,7 @@ DOMAINS: dict[str, frozenset[str]] = {
     "material": frozenset({
         "download_polyhaven_asset", "search_polyhaven_assets", "get_screenshot_of_area_as_image",
         "render_viewport_to_path", "setup_pbr_material", "assign_material_to_objects", "load_asset_in_context",
-        "bake_textures",
+        "bake_textures", "get_node_tree_as_code", "build_node_tree_from_code",
     }),
     "modeling": frozenset({
         "jump_to_view3d_object_by_name", "jump_to_view3d_object_data_by_name", "jump_to_tab_by_name",
@@ -58,6 +58,7 @@ DOMAINS: dict[str, frozenset[str]] = {
     }),
     "rendering": frozenset({
         "render_viewport_to_path", "get_screenshot_of_area_as_image", "three_point_lighting_rig", "bake_textures",
+        "get_node_tree_as_code", "build_node_tree_from_code",   # the compositor's trees
     }),
     "vse": frozenset({
         "jump_to_tab_by_name", "jump_to_tab_by_space_type",
@@ -65,6 +66,7 @@ DOMAINS: dict[str, frozenset[str]] = {
     "geometry_nodes": frozenset({
         "jump_to_view3d_object_by_name", "jump_to_view3d_object_data_by_name", "get_screenshot_of_area_as_image",
         "get_active_node_tree", "get_node_group_interface", "wire_node_group",
+        "get_node_tree_as_code", "build_node_tree_from_code",
     }),
     "assets": frozenset({
         "search_assets", "get_asset_libraries", "get_asset_tags", "list_asset_catalogs", "load_asset_in_context",

@@ -1187,44 +1187,127 @@ def _area_view_setting(area: Any, name: str, default: Any) -> Any:
     return default
 
 
+# The header's widths, in UI units (20 px at scale 1).  Python can't measure text: about
+# a third of a unit a character, as the tab strip assumes, plus the icon and the padding.
+_CHAR_W = 0.35
+_ICON_W = 1.0
+_PAD_W = 0.6
+_TABS_MIN = 8.0             # the tab strip at its smallest: a few icon tabs and its x, + and menu
+_TAB_EXTRA_W = 0.4          # a tab button is a little wider than the strip's own estimate
+_STATUS_MAX = 60            # characters
+
+
+def _text_w(text: str, icon: bool = True) -> float:
+    return _CHAR_W * len(text) + (_ICON_W if icon else 0.0) + _PAD_W
+
+
+def _header_fit(units: float, fixed: float, modes_full: float, modes_icon: float, status_len: int,
+                tabs_need: float) -> tuple[float, bool, int]:
+    """How the header fits in *units*: the room for the tab strip, the chat mode as icons
+    only, and how many characters of the status show.
+
+    *fixed* is what always shows whole (editor type, Chat, View, the mode button,
+    Start / Stop, the display dropdown, Preferences).  The tab strip keeps what it needs up
+    to two fifths of the header (never under its smallest, so its x, + and menu stay);
+    then the chat mode goes to icons and the status is cut before that room is touched.
+    The tabs get whatever is left over."""
+    free = units - fixed
+    floor = max(_TABS_MIN, min(tabs_need, 0.4 * units))
+    room = free - floor
+    status_len = min(status_len, _STATUS_MAX)
+    status_full = _ICON_W + _CHAR_W * status_len + (_PAD_W if status_len else 0.0)
+    icon_only = bool(modes_full) and room < modes_full + status_full
+    modes = modes_icon if icon_only else modes_full
+    if room - modes >= status_full:
+        chars = status_len
+    else:
+        chars = max(0, int((room - modes - _ICON_W - _PAD_W) / _CHAR_W))
+        chars = chars if chars >= 4 else 0          # a stub of text says nothing: the icon only
+    status_w = _ICON_W + (_CHAR_W * chars + _PAD_W if chars else 0.0)
+    return max(_TABS_MIN, free - modes - status_w), icon_only, chars
+
+
+def _cut(text: str, chars: int) -> str:
+    return text if len(text) <= chars else (text[:chars - 1].rstrip() + "\u2026" if chars else "")
+
+
+def _tabs_need() -> float:
+    """What the tab strip would take with every title shown (its own estimate, #427)."""
+    from . import ui_chat
+    labels = [ui_chat._tab_label(t) for t in agent_controller.THREADS.live()]
+    return sum(0.33 * len(label) + 0.2 + _ICON_W + _TAB_EXTRA_W for label in labels) + 3.5
+
+
 def _draw_header(self: Any, context: Any) -> None:
+    """Editor type, Chat, View | the chat tabs | mode, status, Start, display, Preferences (#467)."""
     layout = self.layout
     layout.template_header()
     row = layout.row(align=True)
     row.menu("BFACW_MT_editor_chat")
     row.menu("BFACW_MT_editor_view")
-    # The chat tabs (#427), in about two fifths of the header.
-    from . import ui_chat
-    region = context.region
-    scale = context.preferences.system.ui_scale
-    layout.separator()
-    ui_chat.draw_chat_tabs(layout, context, units=max(8.0, 0.4 * region.width / (20.0 * scale)))
-    layout.separator_spacer()
     info = _status(context)
     props = _props()
-    if info.chat_modes and props is not None:
-        layout.prop(props, "chat_mode", expand=True)
+    modes = info.chat_modes if props is not None else ()
+    if info.running:
+        start_text = "Stop Bridge" if info.start_label == "Start Bridge" else "Stop"
+    else:
+        start_text = info.start_label
+    fixed = (2.0 + _text_w("Chat", False) + _text_w("View", False)          # editor type, menus
+             + _text_w(info.mode_label) + 0.6 + (_ICON_W + _PAD_W if info.error else 0.0)
+             + _text_w(start_text) + 2.0 + _ICON_W + _PAD_W                # display dropdown, prefs
+             + 2.0)                                                         # gaps between the groups
+    modes_full = sum(_text_w(m[1]) for m in modes) + (0.5 if modes else 0.0)
+    modes_icon = (len(modes) * (_ICON_W + 0.4) + 0.5) if modes else 0.0
+    scale = context.preferences.system.ui_scale
+    units = context.region.width / (20.0 * scale)
+    tabs_units, icon_only, chars = _header_fit(units, fixed, modes_full, modes_icon, len(info.status),
+                                               _tabs_need())
+    # The strip's estimate leaves out what Blender adds to each tab button.
+    tabs_units = max(_TABS_MIN, tabs_units - _TAB_EXTRA_W * len(agent_controller.THREADS.live()))
+    # The chat tabs (#427) in the middle (#467).
+    from . import ui_chat
+    layout.separator_spacer()
+    ui_chat.draw_chat_tabs(layout, context, units=tabs_units)
+    layout.separator_spacer()
+    if modes:
+        layout.prop(props, "chat_mode", expand=True, icon_only=icon_only)
         layout.separator()
     status = layout.row(align=True)
     # The mode opens the same popover as the sidebar chat's mode button (#235).
     status.popover("BFACW_PT_mode_popover", text=info.mode_label, icon=info.mode_icon)
-    status.label(text=info.status[:60], icon=info.status_icon)
+    status.label(text=_cut(info.status, chars), icon=info.status_icon)
     if info.error:
         status.operator("bfacw.copy_status_error", text="", icon="COPYDOWN")
     if info.running:
-        layout.operator("bfacw.agent_stop", text="Stop Bridge" if info.start_label == "Start Bridge" else "Stop",
-                        icon="X")
+        layout.operator("bfacw.agent_stop", text=start_text, icon="X")
     else:
-        layout.operator("bfacw.agent_start", text=info.start_label, icon="PLAY")
-    layout.separator_spacer()
-    # Thumbnail size, like the File Browser's display size.
-    current = _area_view_setting(context.area, "thumb_size", "M")
-    sizes = layout.row(align=True)
-    for size, tip_icon in (("S", "IMAGE_DATA"), ("M", "IMAGE_DATA"), ("L", "IMAGE_DATA")):
-        sizes.operator("bfacw.editor_thumbs", text=size, icon=tip_icon if size == "S" else "NONE",
-                       depress=current == size).size = size
+        layout.operator("bfacw.agent_start", text=start_text, icon="PLAY")
     layout.separator()
+    # View settings, like the 3D Viewport's Overlays dropdown (#467).
+    layout.popover(panel="BFACW_PT_editor_display", text="", icon=safe_icon("OVERLAY"))
     layout.operator("bfacw.open_addon_prefs", text="", icon="PREFERENCES")
+
+
+class BFACW_PT_editor_display(bpy.types.Panel):
+    """How the chat shows: the thumbnail size (room for more view settings)"""
+
+    bl_space_type = "NODE_EDITOR"
+    bl_region_type = "HEADER"
+    bl_label = "Chat Display"
+    bl_idname = "BFACW_PT_editor_display"
+    bl_ui_units_x = 10
+
+    @classmethod
+    def poll(cls, context):
+        return _is_coworker(context)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="Thumbnail Size")
+        current = _area_view_setting(context.area, "thumb_size", "M")
+        row = layout.row(align=True)
+        for size, text in (("S", "Small"), ("M", "Medium"), ("L", "Large")):
+            row.operator("bfacw.editor_thumbs", text=text, depress=current == size).size = size
 
 
 # -- Toolshelf and sidebar --------------------------------------------------------------
@@ -1579,6 +1662,7 @@ def _give_back() -> None:
 _HANDLERS: list[tuple[Any, Any, str]] = []
 _CLASSES = (BFACW_CoworkerTree, BFACW_OT_open_coworker_editor, BFACW_OT_editor_zoom, BFACW_OT_editor_jump,
             BFACW_OT_editor_thumbs,
+            BFACW_PT_editor_display,
             BFACW_MT_editor_chat, BFACW_MT_editor_view, BFACW_PT_editor_tools_chat,
             BFACW_PT_editor_tools_attach, BFACW_PT_editor_tools_session, BFACW_PT_editor_chat,
             BFACW_OT_chat_attach_image, BFACW_OT_editor_native_edit,

@@ -379,6 +379,49 @@ class TestPlacement(unittest.TestCase):
         # No previews without Blender: the Blender icon.
         self.assertEqual(calls[0][1]["icon"], "SPEAKER")
 
+    def test_one_section_for_every_video_tool(self):
+        # The trial merge of #483, #491 and #494: one panel and one Strip-menu section.
+        bpy = _fake_bpy(False)
+        seq = _load_sequencer(bpy)
+        self.assertEqual([e.operator for e in seq._entries()], [seq.SPEC.bl_idname], "alone: Remove Silences")
+        for name in ("BFACW_OT_auto_captions", "BFACW_OT_make_vertical", "BFACW_MT_captions", "BFACW_MT_reframe"):
+            setattr(bpy.types, name, type(name, (), {}))
+        entries = seq._entries()
+        self.assertEqual([e.operator for e in entries],
+                         [seq.SPEC.bl_idname, "bfacw.auto_captions", "bfacw.make_vertical"])
+        self.assertEqual([e.icon for e in entries], ["remove_silences", "captions", "vertical"])
+        icon_names = _import("wand.icons").ICON_NAMES
+        self.assertTrue(all(e.icon in icon_names for e in entries), "wand icons")
+        calls = []
+
+        class _Layout:
+            operator_context = ""
+
+            def separator(self):
+                calls.append(("separator",))
+
+            def operator(self, idname, **kw):
+                calls.append(("operator", idname))
+
+            def menu(self, menu_id, **kw):
+                calls.append(("menu", menu_id))
+        menu = types.SimpleNamespace(layout=_Layout())
+        context = types.SimpleNamespace(space_data=types.SimpleNamespace(view_type="SEQUENCER"))
+        seq._draw_strip_menu(menu, context)
+        self.assertEqual(calls, [("separator",), ("operator", seq.SPEC.bl_idname),
+                                 ("operator", "bfacw.auto_captions"), ("operator", "bfacw.make_vertical"),
+                                 ("menu", "BFACW_MT_captions"), ("menu", "BFACW_MT_reframe")])
+
+    def test_captions_and_reframe_hook_no_strip_or_view_menu_of_their_own(self):
+        root = Path(__file__).resolve().parent.parent / "addon" / "bfa_coworker"
+        captions = (root / "captions_ops.py").read_text(encoding="utf-8")
+        reframe = (root / "reframe.py").read_text(encoding="utf-8")
+        menus = captions.split("\n_MENUS", 1)[1].split("\n", 1)[0]
+        self.assertNotIn("SEQUENCER_MT_strip", menus)
+        self.assertIn("SEQUENCER_MT_context_menu", menus)
+        self.assertIn("_MENUS: tuple = ()", reframe)
+        self.assertNotIn('"bfacw.auto_captions"', captions.split("class BFACW_MT_captions", 1)[1].split("\n_CLASSES", 1)[0])
+
 
 if __name__ == "__main__":
     unittest.main()

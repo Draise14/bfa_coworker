@@ -259,10 +259,10 @@ def _register() -> None:
     # Coworker operators: Remove Silences in the Sequencer (Tier 4m, Wand 0, #331).
     from . import wand
     wand.register()
-    # Auto Captions in the Sequencer: Strip > Captions, SRT in and out (#376).
+    # Auto Captions in the Sequencer (#376): the Coworker section and Video panel (wand); SRT in and out.
     from . import captions_ops
     captions_ops.register()
-    # Make Vertical / Reframe in the Sequencer's Strip and View menus (#333).
+    # Make Vertical / Reframe (#333): in the Sequencer's Coworker section and Video panel (wand).
     from . import reframe
     reframe.register()
 

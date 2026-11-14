@@ -25,6 +25,10 @@ Places (``SPEC.places``): the end of the Sequencer's *Strip* menu, the
 *Coworker* tab of Bforartists' tabbed toolshelf (only where
 ``show_toolshelf_tabs`` exists and is on) and the *Coworker* tab of the
 Sequencer's sidebar (Blender, and Bforartists with the toolshelf tabs off).
+
+The same panel and Strip-menu section also hold Coworker's other video tools when
+their modules are registered (:data:`OTHERS`, :data:`SUBMENUS`): Auto Captions (#376)
+and Make Vertical (#333), so each shows once, in one place.
 """
 
 from __future__ import annotations
@@ -36,9 +40,11 @@ __all__ = (
     "COWORKER_PT_sequencer_sidebar",
     "COWORKER_PT_sequencer_toolshelf",
     "CoworkerEntry",
+    "OTHERS",
     "PANEL",
     "RATE",
     "SPEC",
+    "SUBMENUS",
     "WINDOW_S",
     "register",
     "unregister",
@@ -575,8 +581,27 @@ class CoworkerEntry:
                        text="" if as_icon else self.text)
 
 
+# Coworker's other video operators, in the same Video panel and Strip-menu section when
+# their modules are registered (#376 Auto Captions, #333 Make Vertical):
+# (operator, its class name in bpy.types, text, wand icon, Blender fallback icon).
+OTHERS = (
+    ("bfacw.auto_captions", "BFACW_OT_auto_captions", "Auto Captions", "captions", "FONT_DATA"),
+    ("bfacw.make_vertical", "BFACW_OT_make_vertical", "Make Vertical", "vertical", "SEQ_PREVIEW"),
+)
+# Their submenus in the section: (menu, wand icon or "", Blender icon).
+SUBMENUS = (("BFACW_MT_captions", "captions", "FONT_DATA"), ("BFACW_MT_reframe", "", "VIEW_PAN"))
+
+
+def _registered(name: str) -> bool:
+    return getattr(bpy.types, name, None) is not None
+
+
 def _entries() -> tuple:
-    return (CoworkerEntry(SPEC.bl_idname, SPEC.label, SPEC.icon, SPEC.fallback_icon),)
+    out = [CoworkerEntry(SPEC.bl_idname, SPEC.label, SPEC.icon, SPEC.fallback_icon)]
+    for idname, cls_name, text, icon, fallback in OTHERS:
+        if _registered(cls_name):
+            out.append(CoworkerEntry(idname, text, icon, fallback))
+    return tuple(out)
 
 
 def _has_toolshelf_tabs() -> bool:
@@ -644,7 +669,18 @@ def _draw_strip_menu(self: Any, context: Any) -> None:
     layout = self.layout
     layout.separator()
     layout.operator_context = "INVOKE_DEFAULT"
+    # One Coworker section for every Coworker video tool (#331, #376, #333): each once.
     icons.operator(layout, SPEC.bl_idname, name=SPEC.icon, fallback=SPEC.fallback_icon, text=SPEC.label + "...")
+    for idname, cls_name, text, icon, fallback in OTHERS:
+        if _registered(cls_name):
+            icons.operator(layout, idname, name=icon, fallback=fallback, text=text + "...")
+    for menu_id, icon, fallback in SUBMENUS:
+        if _registered(menu_id):
+            if icon:
+                icons.menu(layout, menu_id, name=icon, fallback=fallback)
+            else:
+                from ..shared import icon as safe_icon
+                layout.menu(menu_id, icon=safe_icon(fallback))
 
 
 _REGISTERED: list[type] = []

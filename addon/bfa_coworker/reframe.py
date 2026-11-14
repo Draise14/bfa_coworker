@@ -812,21 +812,10 @@ class BFACW_MT_reframe(Menu):
         layout.operator("bfacw.reframe_follow_subject", icon=icon('TRACKER'))
 
 
-def _draw_strip_menu(self: Any, _context: Any) -> None:
-    layout = self.layout
-    layout.separator()
-    layout.operator("bfacw.make_vertical", icon=icon('SEQ_PREVIEW'))
-    layout.menu("BFACW_MT_reframe", icon=icon('VIEW_PAN'))
-
-
-def _draw_view_menu(self: Any, _context: Any) -> None:
-    layout = self.layout
-    layout.separator()
-    layout.operator("bfacw.make_vertical", icon=icon('SEQ_PREVIEW'))
-
-
 _CLASSES = (BFACW_OT_make_vertical, BFACW_OT_reframe, BFACW_OT_reframe_follow_subject, BFACW_MT_reframe)
-_MENUS = (("SEQUENCER_MT_strip", _draw_strip_menu), ("SEQUENCER_MT_view", _draw_view_menu))
+# Make Vertical and the Reframe menu are drawn by wand.sequencer's Coworker section of the
+# Strip menu and its Video panel (one place for every Coworker video tool, each once).
+_MENUS: tuple = ()
 _HOOKED: list[tuple[Any, Any]] = []
 
 

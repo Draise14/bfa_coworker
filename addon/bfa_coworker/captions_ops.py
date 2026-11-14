@@ -7,7 +7,7 @@
 Auto Captions in the Sequencer (Tier 4, Video 2, #376): caption lines become styled
 text strips, SRT in and out, and Translate for many captions at once.
 
-* **Auto Captions** (Strip > Captions): the selected sound / movie strips' words
+* **Auto Captions** (Strip menu, Coworker > Video panel): the selected sound / movie strips' words
   (from local transcription when this build has it, or a transcript file) become
   one text strip per caption line on a channel named *Captions*, in a style
   (:data:`captions.STYLES`).  *Word-by-word highlight* adds, per word, a strip on
@@ -773,15 +773,10 @@ class BFACW_MT_captions(Menu):  # type: ignore[misc]
     def draw(self, _context: Any) -> None:
         layout = self.layout
         layout.operator_context = 'INVOKE_DEFAULT'
-        layout.operator("bfacw.auto_captions", text="Auto Captions...", icon=safe_icon('FONT_DATA'))
-        layout.separator()
+        # Auto Captions itself is next to this menu, in the Strip menu's Coworker section
+        # (wand.sequencer), so it shows once.
         layout.operator("bfacw.captions_import_srt", text="Import SRT...", icon=safe_icon('IMPORT'))
         layout.operator("bfacw.captions_export_srt", text="Export SRT...", icon=safe_icon('EXPORT'))
-
-
-def _draw_strip_menu(self: Any, _context: Any) -> None:
-    self.layout.separator()
-    self.layout.menu("BFACW_MT_captions", icon=safe_icon('FONT_DATA'))
 
 
 def _draw_context_menu(self: Any, context: Any) -> None:
@@ -800,7 +795,9 @@ def _draw_context_menu(self: Any, context: Any) -> None:
 
 
 _CLASSES = (BFACW_OT_auto_captions, BFACW_OT_captions_import_srt, BFACW_OT_captions_export_srt, BFACW_MT_captions)
-_MENUS = (("SEQUENCER_MT_strip", _draw_strip_menu), ("SEQUENCER_MT_context_menu", _draw_context_menu))
+# The Strip menu's entries are drawn by wand.sequencer's Coworker section (one place for every
+# Coworker video tool); the right-click menu keeps Translate Captions.
+_MENUS = (("SEQUENCER_MT_context_menu", _draw_context_menu),)
 _HOOKED: list[tuple[Any, Any]] = []
 
 

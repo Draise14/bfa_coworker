@@ -23,6 +23,7 @@ __all__ = (
     "THEMES",
     "free",
     "icon_id",
+    "menu",
     "operator",
     "png_path",
     "size_for",
@@ -98,6 +99,16 @@ def operator(layout: Any, idname: str, *, name: str, fallback: str, text: str | 
     if value:
         return layout.operator(idname, icon_value=value, **kwargs)
     return layout.operator(idname, icon=safe_icon(fallback), **kwargs)
+
+
+def menu(layout: Any, menu_id: str, *, name: str, fallback: str, text: str | None = None) -> Any:
+    """``layout.menu`` with wand icon *name*, or the Blender icon *fallback*."""
+    from ..shared import icon as safe_icon
+    value = icon_id(name)
+    kwargs = {} if text is None else {"text": text}
+    if value:
+        return layout.menu(menu_id, icon_value=value, **kwargs)
+    return layout.menu(menu_id, icon=safe_icon(fallback), **kwargs)
 
 
 def free() -> None:

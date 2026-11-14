@@ -26,6 +26,9 @@ Long jobs (Tools 6, #309): a background render or bake registers a checker with
 :func:`start_job` and answers with its id; ``get_job_status`` reads
 :func:`job_status`.  The render and bake handlers registered here feed the
 job registry (:mod:`long_jobs`) progress and cancels.
+
+Make Vertical (Video 3, #333): ``reframe_vertical`` runs :func:`reframe_vertical`
+on the Sequencer's scene.
 """
 
 from __future__ import annotations
@@ -41,6 +44,7 @@ __all__ = (
     "jobs_tick",
     "post_question",
     "question_state",
+    "reframe_vertical",
     "scene_digest",
     "start_job",
     "update_plan",
@@ -418,3 +422,21 @@ def scene_digest(since: str = "") -> dict[str, Any]:
     if since:
         head["note"] = "The earlier hash is too old to compare; here is the whole summary."
     return head
+
+
+def reframe_vertical(strips: list[str] | None = None, mode: str = "CROP", in_copy: bool = True,
+                     resolution: str = "1080x1920", reset: bool = False) -> dict[str, Any]:
+    """Make the Sequencer's edit 9:16 with a Reframe modifier per shot (#333), one undo step.
+
+    Raises ``reframe.ReframeError`` with a clear reason when it can't.  Main thread only.
+    """
+    import bpy  # pylint: disable=import-error
+    from . import reframe
+    wm = bpy.context.window_manager
+    window = bpy.context.window or (wm.windows[0] if wm and wm.windows else None)
+    scene = getattr(getattr(window, "workspace", None), "sequencer_scene", None) if window else None
+    if scene is None:
+        scene = window.scene if window is not None else bpy.context.scene
+    done = reframe.make_vertical(scene, mode, in_copy, resolution, reset, names=strips or None, window=window)
+    _undo(push_message="Make Vertical")
+    return done

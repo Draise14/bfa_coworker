@@ -1298,7 +1298,8 @@ EXPECTED_TOOLS = [
 "          jump_to_asset_browser, download_polyhaven_asset, search_polyhaven_assets,\n"
 "          assign_material_to_objects, get_active_node_tree, get_node_group_interface,\n"
 "          wire_node_group)\n"
-"        - vse: Video Sequencer navigation (jump_to_tab_by_name, jump_to_tab_by_space_type)\n"
+"        - vse: Video Sequencer: navigation, a vertical 9:16 version with editable framing\n"
+"          (jump_to_tab_by_name, jump_to_tab_by_space_type, reframe_vertical)\n"
 "\n"
 "        Load only what the request needs; the basic tools (scene, code, docs,\n"
 "        screenshots, plan, questions, bake_textures, render_viewport_to_path,\n"
@@ -1482,6 +1483,72 @@ EXPECTED_TOOLS = [
                 "output_id"
             ],
             "title": "read_tool_outputArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "reframe_vertical",
+        "description": "\n"
+"        Make the Sequencer's edit vertical (9:16), one undo step.\n"
+"\n"
+"        Each movie, image and scene strip gets an editable \"Reframe\" compositor\n"
+"        modifier (Offset X / Y from -1 to 1 pan inside the picture, Zoom 1 = just\n"
+"        covers, Blur Fill on / off, Blur Amount, Background Dim); change a shot's\n"
+"        framing afterwards through that modifier's inputs. Strips that already have\n"
+"        one keep their framing unless ``reset``.\n"
+"\n"
+"        Args:\n"
+"            strips: Strip names to reframe (empty = every visible movie / image / scene strip).\n"
+"            mode: CROP (centre crop, fills the frame) or BLUR_FILL (the whole shot over a\n"
+"                blurred, dimmed copy of itself).\n"
+"            in_copy: Work in a copy of the scene named \"<scene> Vertical\" and show it in the\n"
+"                Sequencer, leaving the 16:9 edit as it is.\n"
+"            resolution: Output size, e.g. 1080x1920, 720x1280, 2160x3840.\n"
+"            reset: Give strips that already have a Reframe modifier fresh framing too.\n"
+"\n"
+"        Returns:\n"
+"            ``status``, the ``scene`` used (and ``source_scene``, ``copied``), ``mode``,\n"
+"            ``resolution``, ``strips_changed``, ``strips_kept`` and a ``message``.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "strips": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Strips"
+                },
+                "mode": {
+                    "default": "CROP",
+                    "title": "Mode",
+                    "type": "string"
+                },
+                "in_copy": {
+                    "default": True,
+                    "title": "In Copy",
+                    "type": "boolean"
+                },
+                "resolution": {
+                    "default": "1080x1920",
+                    "title": "Resolution",
+                    "type": "string"
+                },
+                "reset": {
+                    "default": False,
+                    "title": "Reset",
+                    "type": "boolean"
+                }
+            },
+            "title": "reframe_verticalArguments",
             "type": "object"
         }
     },

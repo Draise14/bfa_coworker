@@ -44,6 +44,13 @@ For long jobs, start them and check with `get_job_status`; don't loop faster tha
   error / cancelled, with progress and the result.
 - Never run a long bake or render in `execute_blender_code`: it blocks Blender and the call times out.
 
+## Video Sequencer
+
+- `reframe_vertical(strips, mode)` — Make the edit vertical (9:16): each movie / image / scene strip gets
+  an editable "Reframe" modifier, `CROP` (centre crop) or `BLUR_FILL` (the whole shot over a blurred copy).
+  Works in a copy of the scene by default (`in_copy`); one undo step. Change a shot's framing afterwards
+  through that modifier's inputs (Offset X / Y -1..1, Zoom, Blur Fill), not the strip transform.
+
 ## When to Use `execute_blender_code`
 
 Only fall back to raw code for:

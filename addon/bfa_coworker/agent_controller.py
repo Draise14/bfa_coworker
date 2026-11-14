@@ -1377,6 +1377,7 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "get_vse_timeline_overview",
         "set_strip_frame_range",
         "render_vse_preview",
+        "add_captions",
     }),
     "geometry_nodes": frozenset({
         "jump_to_view3d_object_by_name",
@@ -1429,7 +1430,7 @@ _DOMAIN_KEYWORDS: dict[str, list[str]] = {
     ],
     "vse": [
         "sequencer", "strip", "video", "audio", "clip", "edit",
-        "cut", "vse", "timeline",
+        "cut", "vse", "timeline", "caption", "subtitle",
     ],
     "geometry_nodes": [
         "geometry node", "node group", "modifier", "simulation",

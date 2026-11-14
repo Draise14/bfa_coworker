@@ -93,33 +93,54 @@ for a short report with Revert.
 
 ## 3. The standard (Wand 1)
 
-### 3.1 Spec — one per operator
+### 3.1 Spec — one per operator (frozen by Wand 0, #331)
+
+The fields below are **frozen**: `addon/bfa_coworker/wand/spec.py` (bpy-free dataclasses) and
+the first operator, `wand/sequencer.py`. Wand 1 builds the class, placement and MCP tool from
+them; it may add fields but not rename these.
 
 ```python
-# addon/bfa_coworker/wand/packs/sequencer.py
+# addon/bfa_coworker/wand/sequencer.py (Wand 0; a pack module in Wand 1)
 SPEC = OperatorSpec(
     id="sequencer.remove_silences",            # bl_idname "coworker.sequencer_remove_silences"
     label="Remove Silences",                   # conventional name, no brand
-    description="Cut quiet parts out of the selected sound strips and close the gaps",
-    icon="SPEAKER",                            # base icon; the wand badge is added
-    places=[                                   # where native operators of this kind live
-        Place.menu("SEQUENCER_MT_strip", after="sequencer.split"),
-        Place.toolshelf("SEQUENCE_EDITOR", category="Strip", panel="Split"),  # Bforartists
-    ],
-    kind="tool",                               # tool | macro | hybrid | wizard
-    model="none",                              # none | small (one bounded call) | full (agent turn)
-    scope="selection",
-    preview=True,
-    params=[Param("threshold_db", -40.0), Param("min_silence_s", 0.4), Param("padding_s", 0.08)],
+    description="Cut the quiet parts out of the selected sound strips, and out of the picture "
+                "that goes with them, and close the gaps",
+    icon="remove_silences",                    # wand icon (icons/wand/<name>_<theme>_<size>.png)
+    fallback_icon="SPEAKER",                   # Blender icon when the previews can't load
+    places=(
+        Place.menu("SEQUENCER_MT_strip", after="sequencer.split"),        # appended at the end
+        Place.toolshelf("SEQUENCE_EDITOR", category="Coworker", panel="Video"),  # Bforartists
+        Place.sidebar("SEQUENCE_EDITOR", category="Coworker", panel="Video"),    # Blender
+    ),
+    kind="tool", model="none", scope="selection", preview=True, undo=True,
+    params=(
+        Param("threshold_db", -40.0, "Threshold (dB)", "...", soft_min=-80, soft_max=-10),
+        Param("min_silence", 0.4, "Minimum Silence", "...", unit="TIME_ABSOLUTE"),
+        Param("padding", 0.15, "Padding", "...", unit="TIME_ABSOLUTE"),  # 0.08 clipped soft "F" onsets
+        Param("min_keep", 0.1, "Minimum Clip", "...", unit="TIME_ABSOLUTE"),
+        Param("ripple", True, "Close the Gaps", "..."),
+    ),
 )
 ```
 
 | Field | Meaning |
 |---|---|
-| `places` | Native menus and Bforartists toolshelf panels to append to; a context menu only when that's the native place (Explain, Translate, Properties editor) |
+| `id` | `"<editor>.<name>"`; `bl_idname` is `"coworker.<editor>_<name>"` (the `coworker.` prefix is for these operators only; the add-on's own UI operators stay `bfacw.`) |
+| `label`, `description` | Menu text and tooltip: conventional words, no brand |
+| `icon`, `fallback_icon` | The wand icon's name (§3.3) and the Blender icon drawn when it can't load |
+| `places` | `Place.menu(target, after)`, `Place.toolshelf(space, category, panel)` (Bforartists, only where `show_toolshelf_tabs` exists), `Place.sidebar(space, category, panel)` (Blender, and Bforartists with the tabs off). A context menu only when that's the native place |
 | `kind` | **tool** deterministic · **macro** recorded replay · **hybrid** code + one engine decision · **wizard** question cards around tools |
 | `model` | `none` works with no engine running · `small` one short structured call to the **active engine** · `full` an agent turn |
-| `poll` | Greyed out when the context doesn't fit (no sound strip selected…) |
+| `scope` | `selection` · `editor` · `scene` · `file` |
+| `preview`, `undo` | Shows what it will do before applying (a props dialog with a live preview line); one undo step per run |
+| `params` | `Param(name, default, label, description, unit, soft_min, soft_max)` → the operator's properties; also the MCP tool's arguments in Wand 1 |
+| `poll` | Not a field: the operator's own `poll` (greyed out when the context can't fit, e.g. no Sequencer strips); "nothing selected" is a clear report instead, so the artist learns why |
+
+**Learned in Wand 0**: `Menu.append` can only add at the top or the end of a menu, so
+`after=` is kept for the day a menu can be inserted into; today the entry sits at the end of
+*Strip*. Bforartists' `OperatorEntry` draws icon names only, so `CoworkerEntry` (same `poll` +
+`draw(layout, as_icon=…)`) draws `icon_value`.
 
 ### 3.2 Run pipeline
 
@@ -167,8 +188,8 @@ A bad engine answer falls back to the heuristic; nothing is ever half-applied.
   pass `icon_value`. Bforartists' own `OperatorEntry` takes icon *names* only, so Wand 1
   ships a small `CoworkerEntry` with the same two members that draws with `icon_value`.
   Nothing in Bforartists has to change.
-- **Plain Blender**: no tabbed toolshelf, so operators appear in menus only (the menu
-  icons still show the badge).
+- **Plain Blender**: no tabbed toolshelf: operators appear in menus, and (Wand 0) in a
+  *Coworker* tab of the editor's sidebar (the menu icons still show the badge).
 - **Tier 5 (logged)**: migrate the icon set into Bforartists so the operators can use
   native icon names there (faster drawing, theme-aware), keeping the add-on's own copies
   for plain Blender.
@@ -186,6 +207,9 @@ A bad engine answer falls back to the heuristic; nothing is ever half-applied.
 | Hotkeys | None by default | Users bind their own |
 
 No "Coworker" tab and no extra header menu: the operators should feel built in.
+**Exception (2026-10-25, #331 and 4v §1)**: the Sequencer's video tools share one *Coworker*
+tab (panel *Video*) in Bforartists' toolshelf, mirrored by a *Coworker* sidebar tab in
+Blender; the *Strip* menu entry stays.
 
 ---
 
@@ -516,6 +540,34 @@ flowchart LR
 - **What**: two CHOYA suggestions: *Save as Spell?* on repeats, *Make Parametric?* after a
   build. Off with one toggle.
 - **Done when**: shown at most once per pattern per session; never interrupts a turn.
+
+## 7b. Wand 0 findings (#331, probed on Blender 5.2.4)
+
+**Sound samples** (all present in plain Blender 5.2.4; Bforartists 5.3 to confirm):
+
+| Need | What works | Notes |
+|---|---|---|
+| Sound of a strip | `strip.sound` (`bpy.types.Sound`): `filepath` (`//` relative: `bpy.path.abspath(path, library=sound.library)`), `packed_file`, `samplerate`, `channels` (enum, e.g. `STEREO`) | `Sound.is_missing` is about libraries, not the file: check `os.path.isfile` |
+| Samples | `aud.Sound(path)` → `.rechannel(1).resample(8000, False).limit(t0, t1).data()` → numpy `float32` `(n, channels)` | `aud.Sound.file(path)` works too. A missing file raises `aud.error` ("couldn't be read with any installed file reader") when read, not when made. `limit` past the end gives fewer / zero rows |
+| Packed sounds | `sound.evaluated_get(depsgraph).factory` → an `aud.Sound` | `sound.factory` on the original is **None** (also in a UI session before playback); the evaluated copy has it. Fallback: write `packed_file.data` to a temp file |
+| numpy | Bundled (2.3.4 in 5.2.4) | The add-on keeps a slow pure-Python fallback |
+| Defaults | −40 dB, 0.4 s minimum silence, **0.15 s padding**, 0.1 s minimum clip | On the #374 speech clip (125 s, word starts known) 0.08 s padding cut into the soft "F" of two words (onset at −50 dB, 60 ms before −40 dB); 0.15 s keeps every word and still removes 44 s of 49 |
+| Memory | Read in 20 s chunks at 8 kHz mono, 10 ms RMS windows | A 10 s file: 0.7 s to read whole at 44.1 kHz stereo; chunks keep long files small |
+| Strip time → sound time | sound time `t` plays at frame `content_start + (t - sound_offset) * fps`, `fps = render.fps / render.fps_base`; the visible part is between `left_handle` and `right_handle` | 5.2 names: `content_start`, `left_handle`, `right_handle`, `content_duration`, `content_trim_*` (the old `frame_start`, `frame_final_*`, `frame_offset_*`, `animation_offset_*` still work, with a DeprecationWarning, "removed in 6.0"). No `speed_factor` on sound strips: speed is retiming |
+| Retiming | `strip.retiming_keys` (`RetimingKey.timeline_frame` only) | Empty on a fresh strip. Remove Silences skips retimed strips (more than two keys, or a content length that no longer matches the sound's) |
+| Split / remove | **Data level**: `strip.split(frame, split_method="SOFT", ignore_connections=True)` returns the right piece; `strips.remove(strip)` | `bpy.ops.sequencer.split` / `gap_remove` fail their poll without a Sequencer area: the data route needs no context override |
+| Ripple | `strip.content_start += delta` moves the whole strip | Moving a strip onto another on the same channel makes Blender **shuffle it to a free channel**: move in ascending order |
+| Picture with sound | `strip.connections` (a collection of strips), same movie `filepath`, or the next channel with the same start and name stem | Sound and picture are cut together, at the same frames |
+| Sequencer scene | `context.sequencer_scene` (5.x, the workspace's pinned scene) before `context.scene` | `workspace.sequencer_scene` is None in the factory Layout workspace |
+| Menus | `SEQUENCER_MT_strip` exists in both; `Menu.append` / `prepend` only | Bforartists' Sequencer has `SpaceSequenceEditor.show_toolshelf_tabs` and `bl_ui.space_sequencer_tabs` (Strip / Image tabs, `draw_entries`); Blender has neither, and a `TOOLS` panel with a category is refused there (#456) |
+
+**Node notes** (for Wand 3): there is no separate "note" API on nodes in 5.2.4 — no
+`Node.description` / `note` / `comment`, no Note node type. What exists: `node.label` (any
+node), and **`NodeFrame`**: `label`, `label_size` (default 20), `shrink`, and **`text`** (a
+`bpy.types.Text` datablock whose contents the frame shows as its note), `color` /
+`use_custom_color` / `color_tag`; nodes join a frame with `node.parent = frame`.
+`NodeTree.description` exists (the group's tooltip). So Tidy & Explain writes a frame per
+group, its label as the title and a `Text` (named after the frame) as the note.
 
 ## 8. Still open
 

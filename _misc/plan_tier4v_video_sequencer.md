@@ -198,6 +198,24 @@ Test media (generated, nothing downloaded): a 125 s System.Speech clip with 15 s
 | One preview frame to a file | PASS | Background: `scene.render.filepath = …; bpy.ops.render.render(write_still=True)` (sequencer output, 0.09 s at 1080×1920). UI: `bpy.ops.render.opengl(sequencer=True, write_still=True)` FINISHED (0.11–0.28 s) once the workspace sequencer scene is set | `render.opengl(sequencer=True)` returns CANCELLED in background: use `render.render` there (contact sheets) |
 | UI timing gotcha | — | An area type change only takes effect after the event loop runs: change the area in one timer tick, call its ops in a later one | — |
 
+#### Blender 5.4 (and Bforartists 5.2.3 on the 5.3 base)
+
+Re-run on Blender 5.4.0 alpha (fbe82a461016) and Bforartists 5.2.3 (5.3.0 base, 746e15e13b04), same
+probes, 2026-11-14. Everything in the table above holds on both, except:
+
+- **Operator keywords renamed** (5.3 and 5.4): `add_scene_strip_from_scene_asset` and
+  `effect_strip_add` take `move_strips_after_add` and `overlap_mode` instead of `move_strips` and
+  `overlap_shuffle_override`. The call above with `move_strips=False` raises `TypeError` there; leave
+  the keyword out, or pick the name the operator has. `SequencerToolSettings.overlap_mode` `EXPAND`
+  is now `RIPPLE`.
+- **`animation_offset_start/end` are deprecated** ("removed in Blender 6.0") on 5.2.4 too, so they
+  are not new names. Use `content_trim_start/end`.
+- **The stale `mod.properties.inputs` crash is fixed** on 5.3 and 5.4. It still crashes 5.2.4, so the
+  re-fetch rule stays.
+- Bforartists: `context.sequencer_scene` already returns the window's scene on factory startup, but
+  `workspace.sequencer_scene` is still `None`. Read `context.sequencer_scene` first, then the
+  workspace's.
+
 ### 6.2 whisper.cpp on Windows
 
 **Release assets.** The latest *tagged* release `v1.9.5` (2026-10-06) has **no assets**; the

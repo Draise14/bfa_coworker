@@ -2808,21 +2808,34 @@ def _start_pipe_drainer(proc: subprocess.Popen) -> tuple[list[threading.Thread],
     lock = threading.Lock()
     threads: list[threading.Thread] = []
 
+    # Each reader closes its own pipe once the process has closed its end
+    # (#502): only the reader may, a close from another thread while it
+    # reads would block on the reader's buffer lock.
     def _drain_stderr() -> None:
         if proc.stderr is None:
             return
-        for line in proc.stderr:
-            decoded = line.decode(errors="replace").rstrip("\n\r")
-            with lock:
-                stderr_lines.append(decoded)
+        try:
+            for line in proc.stderr:
+                decoded = line.decode(errors="replace").rstrip("\n\r")
+                with lock:
+                    stderr_lines.append(decoded)
+        except (OSError, ValueError):
+            pass
+        finally:
+            _close_quietly(proc.stderr)
 
     def _drain_stdout() -> None:
         if proc.stdout is None:
             return
-        for line in proc.stdout:
-            decoded = line.decode(errors="replace").rstrip("\n\r")
-            with lock:
-                stdout_lines.append(decoded)
+        try:
+            for line in proc.stdout:
+                decoded = line.decode(errors="replace").rstrip("\n\r")
+                with lock:
+                    stdout_lines.append(decoded)
+        except (OSError, ValueError):
+            pass
+        finally:
+            _close_quietly(proc.stdout)
 
     t1 = threading.Thread(target=_drain_stderr, daemon=True)
     t1.start()
@@ -2832,7 +2845,59 @@ def _start_pipe_drainer(proc: subprocess.Popen) -> tuple[list[threading.Thread],
     t2.start()
     threads.append(t2)
 
+    try:
+        proc._bfacw_pipe_readers = threads  # type: ignore[attr-defined]
+    except AttributeError:
+        pass
     return threads, stdout_lines, stderr_lines
+
+
+def _close_quietly(pipe: Any) -> None:
+    try:
+        if pipe is not None:
+            pipe.close()
+    except (OSError, ValueError):
+        pass
+
+
+def _release_process_pipes(proc: Any, timeout: float = 2.0) -> None:
+    """After *proc* has ended: let its pipe readers finish, then close its pipes (#502).
+
+    The readers close stdout / stderr themselves at end of file; this waits
+    up to *timeout* seconds for them, closes ``stdin`` and any pipe that has
+    no reader.  A pipe whose reader is still running (a child process that
+    inherited it keeps it open) stays with that reader, which closes it when
+    it ends -- it is never closed under a running read.
+    """
+    if proc is None:
+        return
+    readers = list(getattr(proc, "_bfacw_pipe_readers", None) or ())
+    deadline = time.monotonic() + max(0.0, timeout)
+    for reader in readers:
+        if reader is not threading.current_thread():
+            reader.join(max(0.0, deadline - time.monotonic()))
+    if not readers:
+        _close_quietly(getattr(proc, "stdout", None))
+        _close_quietly(getattr(proc, "stderr", None))
+    _close_quietly(getattr(proc, "stdin", None))
+
+
+def _end_process(proc: Any, timeout: float = 5.0) -> None:
+    """Terminate *proc* (kill it if it does not end in time), wait, release its pipes (#502)."""
+    if proc is None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+            proc.wait(timeout=timeout)
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    _release_process_pipes(proc)
 
 
 def _kill_process_on_port(port: int, kind: str = "mcp-server") -> None:
@@ -3170,14 +3235,7 @@ def start_mcp_server(
 
     # Kill existing process if known.
     if _mcp_server_process is not None:
-        try:
-            _mcp_server_process.terminate()
-            _mcp_server_process.wait(timeout=3)
-        except Exception:  # pylint: disable=broad-exception-caught
-            try:
-                _mcp_server_process.kill()
-            except Exception:  # pylint: disable=broad-exception-caught
-                pass
+        _end_process(_mcp_server_process, timeout=3)
         _mcp_server_process = None
         # Brief delay for OS to release the port.
         import time
@@ -3382,14 +3440,7 @@ def stop_mcp_server() -> None:
         if proc is None:
             return
 
-        try:
-            proc.terminate()
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=5)
-        except Exception:  # pylint: disable=broad-exception-caught
-            pass
+        _end_process(proc, timeout=5)
         _process_guard.forget(getattr(proc, "pid", None))
 
         _mcp_server_process = None
@@ -3424,14 +3475,7 @@ def start_mcp_server_network(
 
     # Kill existing process if known.
     if _mcp_server_process is not None:
-        try:
-            _mcp_server_process.terminate()
-            _mcp_server_process.wait(timeout=3)
-        except Exception:  # pylint: disable=broad-exception-caught
-            try:
-                _mcp_server_process.kill()
-            except Exception:  # pylint: disable=broad-exception-caught
-                pass
+        _end_process(_mcp_server_process, timeout=3)
         _mcp_server_process = None
         import time
         time.sleep(0.5)

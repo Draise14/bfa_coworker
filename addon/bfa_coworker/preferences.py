@@ -65,6 +65,9 @@ def _download_status_icon(msg: str) -> str:
 # The operating mode last switched to, so a refused switch (while running) can
 # go back to it -- External Agent shares agent_mode / llm_mode with the others.
 _PREVIOUS_MODE: dict[str, str] = {}
+# Set while a refused switch writes the previous mode back, so that write's own
+# update call does nothing (#489).
+_MODE_REVERTING: dict[str, bool] = {"on": False}
 
 # Your keys and tokens: shown as *** in every log, export and Copy (#346).
 SECRET_PREFS = ("remote_api_key", "hf_token", "gen_remote_key")
@@ -455,6 +458,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         mid-flight can kill the MCP server and leave the agent in a broken state.
         The user must stop the agent first.
         """
+        if _MODE_REVERTING["on"]:
+            return      # the refused switch below writing the previous mode back
         from . import agent_controller as _ac
         if _ac._agent_state.mcp_server_running:
             # Revert to the previous mode.  agent_mode / llm_mode still hold
@@ -468,8 +473,15 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 previous = "REMOTE_API"
             else:
                 previous = "LOCAL_LLM"
-            # The raw property holds the item's number; writing it skips this update.
-            self["operating_mode"] = next(item[4] for item in OPERATING_MODE_ITEMS if item[0] == previous)
+            # Written through the property: on Blender 5.x a bpy.props value is not an ID
+            # property, and self["operating_mode"] = ... raises "id properties not supported
+            # for this type" (#489).  The write calls this update again; the flag makes
+            # that call a no-op.
+            _MODE_REVERTING["on"] = True
+            try:
+                self.operating_mode = previous
+            finally:
+                _MODE_REVERTING["on"] = False
             return
 
         if self.operating_mode == "LOCAL_LLM":

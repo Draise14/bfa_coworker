@@ -362,6 +362,8 @@ def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0) -> None:
     style = gpu_style.style_from_preferences(context.preferences, zoom=surface.zoom * zoom)
     canvas = gpu_layout.Canvas(style, render.measure, surface.interaction())
     surface.bounds = rect
+    surface.box.max_lines = getattr(prefs, _input_lines_pref(compact), surface.box.max_lines)     # #389
+    surface.box.on_lines = lambda lines, _compact=compact: _remember_input_lines(lines, _compact)
     surface.drop_hover = drop_hover()
     surface.show_tips = bool(getattr(context.preferences.view, "show_tooltips", True))   # #388
     try:        # a second press this soon selects a word (#451, #455), like Blender's double-click
@@ -388,6 +390,25 @@ def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0) -> None:
         _PENDING.extend((action, value, region.as_pointer()) for action, value in actions)
         if not bpy.app.timers.is_registered(_flush):
             bpy.app.timers.register(_flush, first_interval=0.0)
+
+
+def _input_lines_pref(compact: bool) -> str:
+    """The preference that keeps the input's height (#389): one for sidebars, one for editors."""
+    return "chat_input_lines_sidebar" if compact else "chat_input_lines_editor"
+
+
+def _remember_input_lines(lines: int, compact: bool) -> None:
+    """The input's top edge was dragged (or Ctrl+Up / Down): keep its new height in the
+    preferences, saved with them (auto-save on quit), so it stays across sessions."""
+    prefs = _prefs()
+    name = _input_lines_pref(compact)
+    if prefs is None or getattr(prefs, name, lines) == lines:
+        return
+    setattr(prefs, name, lines)
+    try:
+        bpy.context.preferences.is_dirty = True
+    except (AttributeError, TypeError):
+        pass
 
 
 _TIP_TIMERS: set[int] = set()

@@ -29,7 +29,12 @@ there (the box's own selection, as Shift+arrows make); a press on a message
 starts a selection in the chat that a drag extends, across lines, blocks and
 turns (the wheel scrolls meanwhile); a double-click selects a word; a click
 elsewhere clears it.  :meth:`ChatSurface.selected_text` gives it for Ctrl+C
-and the right-click menu.  Free of ``bpy``.
+and the right-click menu.
+
+Long messages (#389): the wheel over the input scrolls the input while its text
+is taller than the box (else the chat); a drag on the input's top edge sizes it
+(up to about half the chat), with an up-down cursor (:meth:`ChatSurface.cursor_at`).
+Free of ``bpy``.
 """
 
 from __future__ import annotations
@@ -81,6 +86,7 @@ TIPS: dict[str, str] = {
     "input": "Your message: Enter sends, Shift+Enter is a new line, @ mentions, / runs an agent command",
     "queue": "Queue this message: it goes when the running turn ends",
     "resize": "Drag to make the chat taller or shorter",
+    "input_resize": "Drag to make the input taller or shorter (Ctrl+Up / Ctrl+Down while typing)",
     "scroll_track": "Click to page up or down",
     "scroll_handle": "Drag to scroll the chat",
     "approve:once": "Allow this one step (the next one asks again)",
@@ -134,7 +140,10 @@ _WHEEL_LINES = 3
 _DRAG_PIXELS = 3.0     # a press moves this far before it drags a selection (a click doesn't select)
 _TEXT_DRAG = ("input", "select")    # pressed while dragging a selection: in the prompt / in the chat
 # Pressing these keeps the chat's selection: they only move the view.
-_KEEPS_SELECTION = ("scroll_handle", "scroll_track", "jump", "resize")
+_KEEPS_SELECTION = ("scroll_handle", "scroll_track", "jump", "resize", "input_resize")
+# Dragged, not clicked: a release anywhere ends them.
+_DRAGGED = ("scroll_handle", "resize", "input_resize")
+_RESIZE_CURSOR = "MOVE_Y"   # Blender's up-down arrows (Window.cursor_set), as on an area's edge
 
 
 @dataclass
@@ -253,13 +262,16 @@ class ChatSurface:
         if self.pressed == "resize" and self.on_resize is not None and self.bounds is not None:
             self.on_resize(max(0.0, self.bounds.top - y))
             return True
+        if self.pressed == "input_resize":           # the input's top edge (#389)
+            self.box.drag_top(y)
+            return True
         if self.pressed in _TEXT_DRAG:
             if not self._dragging and self._press_at is not None:
                 px, py = self._press_at
                 self._dragging = abs(x - px) > _DRAG_PIXELS or abs(y - py) > _DRAG_PIXELS
             if self._dragging:
                 if self.pressed == "input":
-                    self.box.place_cursor(x, y, select=True)
+                    self.box.place_cursor(x, y, select=True, drag=True)
                 else:
                     pos = self._chat_pos(x, y)
                     if pos is not None:
@@ -309,6 +321,8 @@ class ChatSurface:
                 self.box.place_cursor(x, y, select=shift)
             self.pressed = "input"            # a drag selects (#451)
             return True
+        if widget == "input_resize":
+            self.box.begin_resize()
         self.pressed = widget
         return True
 
@@ -326,6 +340,13 @@ class ChatSurface:
                 return None
             lines = [line for line in lines if line.key[0] == turn["idx"]]
         return point_to_pos(lines, x, y, self._measure)
+
+    def cursor_at(self, x: float, y: float) -> str:
+        """The mouse cursor for (x, y): up-down arrows on an edge that resizes (#389), an
+        I-beam over text (#455), else the default."""
+        if self.hit(x, y) in ("input_resize", "resize"):
+            return _RESIZE_CURSOR
+        return "TEXT" if self.over_text(x, y) else "DEFAULT"
 
     def over_text(self, x: float, y: float) -> bool:
         """Is (x, y) over text one can select (the prompt, or a message)?  For the I-beam."""
@@ -371,23 +392,31 @@ class ChatSurface:
             self.pressed, self._dragging, self._press_at = None, False, None
             self.mouse = (x, y)
             return True
-        if self.hit(x, y) == self.pressed or self.pressed in ("scroll_handle", "resize"):
-            self._clicked = self.pressed if self.pressed not in ("scroll_handle", "resize") else None
+        if self.pressed == "input_resize":
+            self.box.end_resize()
+        if self.hit(x, y) == self.pressed or self.pressed in _DRAGGED:
+            self._clicked = self.pressed if self.pressed not in _DRAGGED else None
         self.pressed = None
         self.mouse = (x, y)
         return True
 
     def on_wheel(self, up: bool, ctrl: bool, x: float, y: float) -> bool:
-        """Scroll the chat (Ctrl: zoom the whole surface); True when used."""
-        if self._chat_rect is None or not self._chat_rect.contains(x, y):
+        """Scroll the chat (Ctrl: zoom the whole surface); True when used.  Over the input
+        the input scrolls while its text is taller than the box, else the chat (#389)."""
+        in_box = self.box.rect is not None and self.box.rect.contains(x, y)
+        if not in_box and (self._chat_rect is None or not self._chat_rect.contains(x, y)):
             return False
         room = self._notice_room
-        if not ctrl and room is not None and room.contains(x, y):     # the harness list (#243)
+        if not ctrl and not in_box and room is not None and room.contains(x, y):     # the harness list (#243)
             self.notice_scroll = max(0, min(self._notice_max, self.notice_scroll + (-1 if up else 1)))
             return True          # used, even at an end (no chat to scroll under it)
         if ctrl:
             self.zoom = max(_ZOOM_MIN, min(_ZOOM_MAX, round(self.zoom + (_ZOOM_STEP if up else -_ZOOM_STEP), 2)))
             return True
+        if in_box and self.box.scroll_by(-_WHEEL_LINES if up else _WHEEL_LINES):
+            return True          # used, even at an end: the chat doesn't move under the text
+        if self._chat_rect is None:
+            return False
         step = (self._style.line_height if self._style else 16.0) * _WHEEL_LINES
         self.view.scroll_by(step if up else -step, self._chat_rect.h)
         return True
@@ -424,6 +453,8 @@ class ChatSurface:
         # A notice (External Harness) replaces the chat: nothing to type into.
         show_input = notice is None
         self.box.big_buttons = not self.compact
+        # The input may be made at most about half the chat's height (#389).
+        self.box.line_cap = self.box.lines_fitting(canvas, (top_edge - inner.y) * 0.5)
         box_h = self.box.height(canvas, inner.w) if show_input else 0.0
         input_rect = Rect(inner.x, inner.y, inner.w, box_h)
         chat_y = input_rect.top + pad if show_input else rect.y
@@ -450,7 +481,8 @@ class ChatSurface:
             self.box.draw(canvas, input_rect)
             actions += self.box.actions[before:]
             del self.box.actions[before:]
-        elif self.box.focused:
+        else:
+            self.box.rect = None             # not on screen: the wheel and clicks don't find it
             self.box.focused = False
         if self.drop_hover:
             self._draw_drop_target(canvas, rect)

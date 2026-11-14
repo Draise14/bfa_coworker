@@ -432,6 +432,36 @@ class TestBlenderSide(unittest.TestCase):
         self.ncb.apply_items(self.prop, items, [("A", "INT", {"wrong": 1})], report, 4, "x")
         self.assertTrue(report.errors[0].startswith("line 4: x item 0: no setting 'wrong'"))
 
+    def test_items_whose_type_is_data_type(self):
+        """Capture Attribute / Field to Grid / Raycast: new(socket_type, name), the item keeps data_type."""
+        from types import SimpleNamespace
+
+        class _DtItem:
+            def __init__(self, name, data_type="FLOAT"):
+                self.name = name
+                self.data_type = data_type
+
+        class _DtItems(list):
+            def new(self, socket_type, name):
+                assert socket_type == "FLOAT"
+                item = _DtItem(name)
+                self.append(item)
+                return item
+
+        prop = SimpleNamespace(
+            srna=SimpleNamespace(functions={"new": SimpleNamespace(parameters=[
+                _Param("socket_type", "ENUM", default="FLOAT"), _Param("name"), _Param("item", "POINTER", True)])}),
+            fixed_type=SimpleNamespace(properties=[
+                _Param("rna_type", "POINTER", is_readonly=True), _Param("name"),
+                _Param("data_type", "ENUM", default="FLOAT")]))
+        items = _DtItems([_DtItem("A"), _DtItem("B", "INT")])
+        self.assertEqual(self.ncb.read_items(prop, items), [("A",), ("B", {"data_type": "INT"})])
+        rebuilt = _DtItems()
+        report = self.ncb.BuildReport()
+        self.ncb.apply_items(prop, rebuilt, [("A",), ("B", {"data_type": "INT"})], report, 2, "Capture.capture_items")
+        self.assertEqual([(i.name, i.data_type) for i in rebuilt], [("A", "FLOAT"), ("B", "INT")])
+        self.assertEqual((report.errors, report.not_set), ([], []))
+
     def test_report_sorts_errors_by_line(self):
         report = self.ncb.BuildReport()
         report.error(9, "b")

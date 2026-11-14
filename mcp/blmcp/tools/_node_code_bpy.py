@@ -347,10 +347,25 @@ def _read_value(owner, prop):
     return plain(value)
 
 
+def _new_arg_default(param):
+    default = getattr(param, "default", None)
+    if default in (None, ""):
+        items = [e.identifier for e in getattr(param, "enum_items", ())]
+        default = items[0] if items else default
+    return default
+
+
 def _item_args(prop):
-    """(new() argument names with "name" first, item writable extras)."""
+    """(new() argument names with "name" first, item writable extras, {new() argument: value}).
+
+    Only the new() arguments the item has are printed: Capture Attribute, Field to Grid and Raycast items
+    are made with new(socket_type, name) but keep their type in ``data_type`` (an extra, set after
+    new() with the argument's default)."""
     fn = prop.srna.functions["new"]
-    args = [q.identifier for q in fn.parameters if not q.is_output]
+    item_names = {q.identifier for q in prop.fixed_type.properties}
+    params = [q for q in fn.parameters if not q.is_output]
+    args = [q.identifier for q in params if q.identifier in item_names]
+    fixed = {q.identifier: _new_arg_default(q) for q in params if q.identifier not in item_names}
     if "name" in args:
         args = ["name"] + [a for a in args if a != "name"]
     extras = []
@@ -360,11 +375,11 @@ def _item_args(prop):
         if q.type in ("POINTER", "COLLECTION"):
             continue
         extras.append(q)
-    return args, extras
+    return args, extras, fixed
 
 
 def read_items(prop, coll):
-    args, extras = _item_args(prop)
+    args, extras, _fixed = _item_args(prop)
     entries = []
     for item in coll:
         entry = [plain(getattr(item, a)) for a in args]
@@ -897,7 +912,7 @@ def apply_struct(bpy, obj, struct, report, line, where):
 
 
 def apply_items(prop, coll, value, report, line, where):
-    args, extras = _item_args(prop)
+    args, extras, fixed = _item_args(prop)
     extra_names = {q.identifier for q in extras}
     if isinstance(value, int) and not isinstance(value, bool):
         wanted = [()] * value
@@ -923,7 +938,7 @@ def apply_items(prop, coll, value, report, line, where):
                     if getattr(item, k) != v:
                         setattr(item, k, v)
             else:
-                item = coll.new(**kwargs)
+                item = coll.new(**dict(fixed, **kwargs))
         except Exception as ex:  # pylint: disable=broad-except
             report.skip(line, "{:s} item {:d} {:s}: {:s}".format(where, i, format_value(tuple(entry)), str(ex)))
             continue

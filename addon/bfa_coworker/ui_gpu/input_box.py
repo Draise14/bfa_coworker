@@ -18,7 +18,8 @@ modifiers, like a Blender event), so everything here is unit-tested without
 Blender.  :meth:`InputBox.handle_key` returns whether the key was used and
 fills :attr:`InputBox.actions` with requests for the host: ``("send", text)``,
 ``("stop", "")``, ``("copy", text)``, ``("paste", "")`` (the host answers with
-:meth:`InputBox.paste`), ``("native_edit", text)`` and ``("blur", "")``.
+:meth:`InputBox.paste`, or attaches the clipboard's image instead, #450),
+``("native_edit", text)`` and ``("blur", "")``.
 Free of ``bpy``.
 """
 

@@ -804,6 +804,8 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
     elif action == "attach_screen":
         from . import ui_chat
         ops.chat_capture_screen("INVOKE_DEFAULT", thread_id=ui_chat._ui_thread(context).id)
+    elif action == "paste" and surface is not None:     # Ctrl V: an image attaches, else text (#450)
+        _paste_into(surface.box, value)
     elif action == "open_image":
         _open_image(value)
     elif action == "attachment_pin" and props is not None:
@@ -864,9 +866,39 @@ def _box_override(box: InputBox) -> dict:
     return _window_override(_region_for_box(box))
 
 
+def _paste_image(context: Any, text: str, thread: Any, op: Any = None, force: bool = False) -> bool:
+    """Attach what the clipboard holds to *thread*'s chat (#450): the image file its text
+    names, else its picture (with no text, or *force*).  False: nothing image-like, and
+    the caller pastes *text* as before.  *thread* is found when the paste began, from the
+    box's (or the menu's) area; *op* reports "Attached ..."."""
+    from . import chat_attachments, ui_chat
+    try:
+        image = chat_attachments.clipboard_image(text, force=force, context=context)
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] paste image: {:s}".format(str(ex)))
+        return False
+    if image is None:
+        return False
+    ui_chat._attach_to_socket(context, op, image, thread)
+    _tag_chat_regions()
+    return True
+
+
+def _paste_into(box: InputBox, text: str) -> None:
+    """Ctrl V (or the menu's Paste) in *box*, run in its area: an image attaches to its
+    chat, anything else is pasted as text, as before (#450)."""
+    from . import ui_chat
+    context = bpy.context
+    if not _paste_image(context, text, ui_chat._ui_thread(context)):
+        box.paste(text)
+
+
 def _on_box_action(box: InputBox, action: str, value: str) -> None:
     """Keyboard actions (Enter, Esc...) from input_capture, in the box's own area."""
     surface = _surface_for_box(box)
+    if surface is None and action == "paste":     # a box without a chat: text only
+        box.paste(value)
+        return
     try:
         with bpy.context.temp_override(**_box_override(box)):
             _do(action, value, surface, _region_for_box(box))
@@ -990,6 +1022,23 @@ class BFACW_OT_chat_attach_image(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class BFACW_OT_chat_paste_image(bpy.types.Operator):
+    """Attach the image on the clipboard to the next message: a copied picture or a copied image file path"""
+
+    bl_idname = "bfacw.chat_paste_image"
+    bl_label = "Paste Image"
+    # The chat it attaches to (#450): set by the popover's button, else the chat of the area.
+    thread_id: bpy.props.StringProperty(options={"HIDDEN", "SKIP_SAVE"})  # type: ignore[valid-type]
+
+    def execute(self, context):
+        from . import ui_chat
+        thread = ui_chat._attach_thread(context, self.thread_id)
+        if not _paste_image(context, context.window_manager.clipboard or "", thread, op=self, force=True):
+            self.report({"WARNING"}, "No image on the clipboard")
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
 class BFACW_OT_editor_native_edit(bpy.types.Operator):
     """Edit the message in a native text field (for Chinese, Japanese or Korean input)"""
 
@@ -1038,6 +1087,7 @@ class BFACW_MT_editor_chat(bpy.types.Menu):
         layout.operator("bfacw.editor_native_edit", text="Edit in Text Field (IME)", icon="GREASEPENCIL")
         layout.separator()
         layout.operator("bfacw.chat_attach_image", text="Attach Image...", icon="FILE_IMAGE")
+        layout.operator("bfacw.chat_paste_image", text="Paste Image", icon="PASTEDOWN")
         layout.operator("bfacw.chat_capture_render", text="Attach Render", icon="RENDER_STILL")
         layout.operator("bfacw.chat_capture_screen", text="Attach Screen", icon=safe_icon("MAKE_SCREENSHOT"))
         layout.separator()
@@ -1105,7 +1155,8 @@ class BFACW_OT_chat_context_copy(bpy.types.Operator):
 
 
 _EDIT_WHAT = [("cut", "Cut", "Cut the selected text (Ctrl X)"), ("copy", "Copy", "Copy the selected text (Ctrl C)"),
-              ("paste", "Paste", "Paste at the cursor (Ctrl V)"), ("select_all", "Select All", "Select the whole message (Ctrl A)")]
+              ("paste", "Paste", "Paste at the cursor; a copied picture or image file attaches instead (Ctrl V)"),
+              ("select_all", "Select All", "Select the whole message (Ctrl A)")]
 
 
 class BFACW_OT_chat_context_edit(bpy.types.Operator):
@@ -1127,9 +1178,13 @@ class BFACW_OT_chat_context_edit(bpy.types.Operator):
         if surface is None:
             return {"CANCELLED"}
         wm = context.window_manager
-        copied = input_capture.menu_edit(self.action, wm.clipboard or "")
-        if copied is not None:
-            wm.clipboard = copied               # as Ctrl C / X do: your own text, as typed
+        from . import ui_chat
+        if self.action == "paste" and _paste_image(context, wm.clipboard or "", ui_chat._ui_thread(context)):
+            input_capture.focus(surface.box, target["region"])     # as Ctrl V: the image attaches (#450)
+        else:
+            copied = input_capture.menu_edit(self.action, wm.clipboard or "")
+            if copied is not None:
+                wm.clipboard = copied           # as Ctrl C / X do: your own text, as typed
         _after_key(surface.box)                 # the tab's draft follows
         try:
             target["region"].tag_redraw()
@@ -1166,6 +1221,7 @@ class BFACW_MT_chat_context(bpy.types.Menu):
                 layout.operator("bfacw.revert_turn", text="Revert", icon="LOOP_BACK")
             layout.separator()
         layout.operator("bfacw.chat_attach_image", text="Attach Image...", icon="FILE_IMAGE")
+        layout.operator("bfacw.chat_paste_image", text="Paste Image", icon="PASTEDOWN")
         layout.operator("bfacw.chat_capture_screen", text="Capture Editor", icon=safe_icon("MAKE_SCREENSHOT"))
         layout.operator("bfacw.chat_capture_render", text="Capture Render", icon="RENDER_STILL")
         layout.separator()
@@ -1324,6 +1380,7 @@ class BFACW_PT_editor_tools_attach(_ToolPanel, bpy.types.Panel):
 
     def entries(self, context):
         return [("bfacw.chat_attach_image", "Attach Image...", "FILE_IMAGE", {}),
+                ("bfacw.chat_paste_image", "Paste Image", "PASTEDOWN", {}),
                 ("bfacw.chat_capture_render", "Attach Render", "RENDER_STILL", {}),
                 ("bfacw.chat_capture_screen", "Attach Screen", safe_icon("MAKE_SCREENSHOT"), {})]
 
@@ -1580,7 +1637,7 @@ _CLASSES = (BFACW_CoworkerTree, BFACW_OT_open_coworker_editor, BFACW_OT_editor_z
             BFACW_OT_editor_thumbs,
             BFACW_MT_editor_chat, BFACW_MT_editor_view, BFACW_PT_editor_tools_chat,
             BFACW_PT_editor_tools_attach, BFACW_PT_editor_tools_session, BFACW_PT_editor_chat,
-            BFACW_OT_chat_attach_image, BFACW_OT_editor_native_edit,
+            BFACW_OT_chat_attach_image, BFACW_OT_chat_paste_image, BFACW_OT_editor_native_edit,
             BFACW_OT_chat_context_copy, BFACW_OT_chat_context_edit, BFACW_MT_chat_context)
 _COPIES: list[type] = []
 

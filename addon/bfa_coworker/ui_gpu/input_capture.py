@@ -17,7 +17,9 @@ operator per window watches events and hands them to the chat surface
   selects); a click anywhere else leaves it -- that click still goes through;
 * **keys** go to the focused box (Enter sends, Shift+Enter adds a line...);
   while it has focus, editor shortcuts never fire;
-* Ctrl+C / X / V use the window manager clipboard;
+* Ctrl+C / X / V use the window manager clipboard; Ctrl+V's text goes to the host's
+  *on_action* (``("paste", text)``), which attaches a copied image or image file to the
+  box's chat or pastes the text (#450);
 * **right-click** over a chat opens its own menu (``BFACW_MT_chat_context``,
   #453) with what was under the mouse (:func:`menu_target`), not the Node
   Editor's: the press, release and click are all used, so neither Blender's
@@ -178,7 +180,11 @@ def _run_actions(box: InputBox, context: Any) -> None:
         if action == "copy":
             context.window_manager.clipboard = value
         elif action == "paste":
-            box.paste(context.window_manager.clipboard or "")
+            text = context.window_manager.clipboard or ""
+            if _HOST["on_action"] is None:
+                box.paste(text)
+            else:           # the host may attach an image instead, to this box's chat (#450)
+                _HOST["on_action"](box, "paste", text)
         elif action == "blur":
             _blur()
         elif action == "native_edit":

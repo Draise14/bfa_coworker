@@ -43,6 +43,7 @@ __all__ = (
     "question_state",
     "scene_digest",
     "start_job",
+    "transcribe_strip",
     "update_plan",
 )
 
@@ -269,6 +270,16 @@ def start_job(kind: str, label: str, check_fn: Any, on_finish: Any = None) -> st
 def job_status(job_id: str) -> dict[str, Any]:
     from . import long_jobs
     return long_jobs.status(job_id)
+
+
+# -- Speech (Video 1, #375) -----------------------------------------------------------
+def transcribe_strip(strip: str, language: str = "", limit: int = 150, offset: int = 0,
+                     prompt: str = "", model: str = "") -> Any:
+    """The words of a sound / movie strip with times (cached per media file): a result
+    dict, or a checker while whisper runs (a long one becomes a job, see speech.py)."""
+    from . import speech
+    return speech.transcribe_strip(strip, language=language, limit=limit, offset=offset,
+                                   prompt=prompt, model=model)
 
 
 _jobs_drawn = [0.0]

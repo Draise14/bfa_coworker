@@ -67,6 +67,7 @@ from .operators_agent import (
     BFACW_OT_open_log,
     BFACW_OT_compare_benchmarks,
 )
+from .operators_speech import CLASSES as _SPEECH_CLASSES
 from .shared import (
     effective_ports,
     get_llm_manager,
@@ -122,6 +123,7 @@ _classes = (
     BFACW_OT_compare_benchmarks,
     _BFACW_OT_remove_llama_server,
     _BFACW_OT_open_llama_server_folder,
+    *_SPEECH_CLASSES,
 )
 
 
@@ -460,6 +462,11 @@ def unregister() -> None:
     # Clean up subprocesses.
     get_llm_manager().cleanup()
     get_agent_controller().cleanup()
+    try:
+        from . import whisper_manager
+        whisper_manager.cleanup()       # speech server (#375)
+    except Exception:
+        pass
 
     # Clean up generative controller (Tier 5).
     try:

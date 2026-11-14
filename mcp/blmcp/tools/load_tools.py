@@ -50,7 +50,7 @@ def register(mcp: FastMCP) -> None:
           jump_to_asset_browser, download_polyhaven_asset, search_polyhaven_assets,
           assign_material_to_objects, get_active_node_tree, get_node_group_interface,
           wire_node_group)
-        - vse: Video Sequencer navigation (jump_to_tab_by_name, jump_to_tab_by_space_type)
+        - vse: Video Sequencer navigation (jump_to_tab_by_name, jump_to_tab_by_space_type) and speech to text (transcribe_strip)
 
         Load only what the request needs; the basic tools (scene, code, docs,
         screenshots, plan, questions, bake_textures, render_viewport_to_path,

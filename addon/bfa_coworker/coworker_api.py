@@ -181,12 +181,28 @@ def cancel_questions(thread: str | None = None) -> None:
 # Each turn gets an undo step before and after it, so the agent's whole turn is one
 # step of Edit > Undo History, and Revert (the chat's button) undoes it in one go --
 # but only while you haven't changed the scene since (the depsgraph counter).
-_turn = {"before": False, "after": False, "edits": 0, "name": "", "n": 0}
+# Threads 3 (#359): one checkpoint per thread (by its tag; "" = the default thread's,
+# ``_turn``), since chats' turns run side by side.
+_turn = {"before": False, "after": False, "edits": 0, "name": "", "n": 0, "mark": 0}
+_turns: dict[str, dict[str, Any]] = {"": _turn}
+_names = itertools.count(1)       # "Before ... (n)": unique across threads
 _edits = [0]
 
 
+def _turn_of(thread: str = "") -> dict[str, Any]:
+    return _turns.setdefault(str(thread or ""), {"before": False, "after": False, "edits": 0, "name": "",
+                                                 "n": 0, "mark": 0})
+
+
+def _any_turn_open() -> bool:
+    return any(t["before"] and not t["after"] for t in _turns.values())
+
+
 def _count_edit(*_args: Any) -> None:
-    _edits[0] += 1
+    # While a chat's turn is open the scene changes are its own (#359): another chat's
+    # Revert must not read them as yours; that chat's undo steps show up in the journal.
+    if not _any_turn_open():
+        _edits[0] += 1
 
 
 def _undo(push_message: str = "", to_item: int = -1) -> bool:
@@ -210,28 +226,32 @@ def _undo(push_message: str = "", to_item: int = -1) -> bool:
         return False
 
 
-def turn_started(label: str) -> None:
-    """Main thread, before the turn's first change."""
-    if not _turn["before"]:
+def turn_started(label: str, thread: str = "") -> None:
+    """Main thread, before the turn's first change (*thread*: whose turn, its tag)."""
+    turn = _turn_of(thread)
+    if not turn["before"]:
         # A name of its own, so Revert finds this step again (#242).
-        _turn["n"] += 1
-        name = "Before {:s} ({:d})".format(label, _turn["n"])
-        _turn.update(before=_undo(name), after=False, name=name)
+        turn["n"] = next(_names)
+        name = "Before {:s} ({:d})".format(label, turn["n"])
+        turn.update(before=_undo(name), after=False, name=name)
 
 
-def turn_finished(label: str) -> None:
+def turn_finished(label: str, thread: str = "") -> None:
     """Main thread, once the turn is over."""
-    if _turn["before"] and not _turn["after"]:
+    turn = _turn_of(thread)
+    if turn["before"] and not turn["after"]:
         done = _undo(label)
-        _turn.update(before=False, after=done, edits=_edits[0])
+        turn.update(before=False, after=done, edits=_edits[0])
 
 
-def can_revert() -> bool:
-    return bool(_turn["after"]) and _edits[0] == _turn["edits"]
+def can_revert(thread: str = "") -> bool:
+    turn = _turn_of(thread)
+    return bool(turn["after"]) and _edits[0] == turn["edits"]
 
 
-def revert_turn() -> str:
-    """Undo the last turn; returns "" or why it can't."""
+def revert_turn(thread: str = "") -> str:
+    """Undo the last turn of *thread*; returns "" or why it can't."""
+    _turn = _turn_of(thread)
     if not _turn["after"]:
         return "There's no finished turn to revert."
     if _edits[0] != _turn["edits"]:

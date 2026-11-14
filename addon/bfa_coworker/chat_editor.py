@@ -322,7 +322,9 @@ def _sync_box(surface: ChatSurface, props: Any, busy: bool, running: bool, harne
     if surface.compact:     # the sidebar chat: a button column; the attach icons go there (#214)
         from . import coworker_api
         box.attach_buttons = False
-        last = ("stop", "PAUSE") if busy else ("revert_turn", "LOOP_BACK") if coworker_api.can_revert() else None
+        from . import threads as _threads
+        can = coworker_api.can_revert(_threads.tag(thread)) if thread is not None else coworker_api.can_revert()
+        last = ("stop", "PAUSE") if busy else ("revert_turn", "LOOP_BACK") if can else None
         surface.tools = tuple(t for t in (
             ("mention", "OUTLINER_OB_MESH"), last, ("", ""),
             ("attach_menu", "IMAGE_DATA"), ("attach_render", "RENDER_STILL"), ("attach_screen", "MAKE_SCREENSHOT"),
@@ -374,7 +376,8 @@ def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0, trace: Any =
     except (AttributeError, TypeError):
         pass
     from . import coworker_api
-    surface.view.revertable = coworker_api.can_revert() and not state.is_thinking
+    from . import threads as _threads
+    surface.view.revertable = coworker_api.can_revert(_threads.tag(thread)) and not state.is_thinking
     card = _approval_card(context)
     surface.view.suggest = not harness and card is None    # no buttons while a card asks (#220)
     typed_before = surface.box.model.text

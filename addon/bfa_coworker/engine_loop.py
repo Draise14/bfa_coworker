@@ -17,10 +17,12 @@ The controller (the ``agent_controller`` module) is passed in, so this file
 does not import ``bpy`` and is unit-tested with a stand-in controller.
 
 Threads 1 (#357): there is one engine per thread, each driving its thread's
-controller (``agent_controller.controller_for(thread)``).  Turns still run one at
-a time across threads: while another thread's turn runs, a message waits in this
-thread's queue, and when a turn ends the oldest waiting message of any thread
-starts (``controller.next_turn``).
+controller (``agent_controller.controller_for(thread)``).  Threads 3 (#359): a turn
+takes one of the runner's slots (Local: one, chats run chained; Remote: the cap).
+The slot is reserved here, before the worker starts (``controller.reserve_turn``),
+so two starts never share the last one.  While every slot is taken a message waits
+in this thread's queue, and when a turn ends the oldest waiting message of a
+thread that isn't running starts (``controller.next_turn``).
 """
 
 from __future__ import annotations
@@ -127,13 +129,25 @@ class LoopEngine:
         self.config = config
         if self._c._agent_state.turn_active and not self._c._stop_event.is_set():
             return None, self.enqueue(prompt, config)
-        if self._blocked():                 # another thread's turn runs: wait for it (#357)
+        if not self._reserve():             # every slot is taken: wait for one (#357, #359)
             return None, self.enqueue(prompt, config)
         return self._start(prompt, config), 0
 
     def _blocked(self) -> bool:
         blocked = getattr(self._c, "turn_blocked", None)
         return bool(blocked()) if blocked is not None else False
+
+    def _reserve(self) -> bool:
+        """Take this thread's slot now (#359); a controller without slots: not blocked."""
+        reserve = getattr(self._c, "reserve_turn", None)
+        if reserve is not None:
+            return bool(reserve())
+        return not self._blocked()
+
+    def _unreserve(self) -> None:
+        release = getattr(self._c, "release_turn", None)
+        if release is not None:
+            release()
 
     def enqueue(self, prompt: Prompt, config: LoopConfig) -> int:
         """Queue *prompt* for after the current turn; return its position."""
@@ -250,7 +264,7 @@ class LoopEngine:
 
     def _dequeue_next(self) -> None:
         """Start the next queued message: this thread's, or (#357) the one of the thread
-        whose message waited longest."""
+        whose message waited longest (#359: of the threads not running)."""
         pick = getattr(self._c, "next_turn", None)
         engine = pick(self) if pick is not None else self
         if engine is not None and engine is not self:
@@ -259,8 +273,14 @@ class LoopEngine:
         self._start_queued()
 
     def _start_queued(self) -> None:
+        peek = getattr(self._c, "peek_message", None)
+        if peek is not None and not peek():
+            return
+        if not self._reserve():             # the slot went to another start meanwhile (#359)
+            return
         item = self._c.dequeue_message()
         if not item:
+            self._unreserve()
             return
         self._c._agent_state.ui_status = "Processing queued message..."
         self._redraw()

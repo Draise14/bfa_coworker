@@ -111,6 +111,7 @@ class AcpEngine:
         self.state_for: Callable[[str], Any] | None = None   # a thread's chat state
         self._threads: dict[str, tuple[str, Any, ChatStateApplier]] = {}
         self._turn_appliers: dict[str, ChatStateApplier] = {}
+        self.cap = 1                         # chats at once (#359; set from the preference)
 
     # -- connection ----------------------------------------------------------------
     def connect(self, argv: list[str], mcp_entry: dict[str, Any], cwd: str,
@@ -362,6 +363,26 @@ class AcpEngine:
     # -- the chat's engine interface (like LoopEngine) ------------------------------
     def is_busy(self) -> bool:
         return bool(self._turn_id)
+
+    def running_threads(self) -> list[str]:
+        """The threads (tags) whose turn runs now."""
+        return [self.thread] if self._turn_id else []
+
+    def busy_for(self, thread: str) -> bool:
+        """*thread*'s own turn runs now."""
+        return thread in self.running_threads()
+
+    def blocked_for(self, thread: str) -> bool:
+        """*thread*'s message has to wait for a free slot (another chat's turn holds it)."""
+        return not self.busy_for(thread) and len(self.running_threads()) >= max(1, self.cap)
+
+    def cancel_thread(self, thread: str) -> None:
+        """Stop in *thread*'s chat: its turn (its session only) and its waiting messages."""
+        if self.busy_for(thread) and thread == self.thread:
+            self.cancel()
+            return
+        self.drop_queued(thread)
+        self.approvals.cancel_all(thread)
 
     def submit(self, prompt: Prompt, _config: Any = None) -> tuple[str | None, int]:
         """Start a turn, or queue it while one runs: ``(turn_id, 0)`` / ``(None, position)``."""

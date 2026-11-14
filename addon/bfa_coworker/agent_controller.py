@@ -2098,6 +2098,11 @@ def dequeue_message() -> dict[str, Any] | None:
     return _message_queue.dequeue()
 
 
+def peek_message() -> dict[str, Any] | None:
+    """The next queued message, left in the queue."""
+    return _message_queue.peek()
+
+
 # Set to request the in-flight conversation turn to abort. The conversation
 # loop checks this between iterations and inside the LLM request path.
 _stop_event = threading.Event()
@@ -2127,11 +2132,26 @@ def clear_stop(thread: "threads.Thread | None" = None) -> None:
 # Threads (Tier 4, Threads 1, #357): one conversation per job.  The module-level
 # state above (``_agent_state``, ``_stop_event``, ``_message_queue`` and
 # ``session_memory.store``) is the DEFAULT thread's, looked up when used, so
-# existing callers and tests that swap them keep working.  Turns still run one at
-# a time across threads (``THREADS.try_begin``).
+# existing callers and tests that swap them keep working.  Threads 3 (#359): the
+# registry is the thread runner -- each turn takes a slot (``THREADS.try_begin``):
+# Local runs chats chained (one slot), online engines up to the cap at once.
 
 THREADS = threads.ThreadRegistry(make_state=lambda: AgentState(), make_queue=lambda: MessageQueue(),
                                  make_store=lambda: session_memory.CheckpointStore())
+
+_ENGINE_KIND = {"LOCAL_LLM": "local", "REMOTE_API": "remote", "EXTERNAL_AGENT": "agent",
+                "EXTERNAL_HARNESS": "harness"}
+
+
+def configure_runner(operating_mode: str, cap: int = threads.RUNNING_CAP,
+                     local_side_by_side: bool = False) -> int:
+    """Set the thread runner from the preferences (main thread, at each send): which
+    engine runs turns, the online cap ("Chats running at once") and the Local opt-in.
+    Returns how many chats may run at once now."""
+    THREADS.kind = _ENGINE_KIND.get(str(operating_mode or ""), "local")
+    THREADS.cap = max(1, min(int(cap or 1), threads.CAP_MAX))
+    THREADS.local_side_by_side = bool(local_side_by_side)
+    return THREADS.slots()
 
 
 def _is_default(thread: "threads.Thread | None") -> bool:
@@ -2172,8 +2192,22 @@ def _memory(thread: "threads.Thread | None" = None) -> Any:
 
 
 def turn_blocked(thread: "threads.Thread | None" = None) -> bool:
-    """True while another thread's turn runs: *thread*'s message has to wait (1.1.42)."""
+    """True while every slot is taken by other threads' turns: *thread*'s message has to
+    wait (#359: one slot on Local, the cap on online engines)."""
     return THREADS.blocked(thread or THREADS.default)
+
+
+def reserve_turn(thread: "threads.Thread | None" = None) -> bool:
+    """Take *thread*'s slot now, before its worker starts (#359), so two starts can never
+    both see the last free slot; False when every slot is taken.  The turn frees it."""
+    return THREADS.try_begin(thread or THREADS.default)
+
+
+def release_turn(thread: "threads.Thread | None" = None) -> None:
+    """Give back a slot taken by :func:`reserve_turn` for a turn that never started."""
+    thread = thread or THREADS.default
+    if not thread_state(thread).turn_active:
+        THREADS.end(thread)
 
 
 def next_turn(engine: Any = None, thread: "threads.Thread | None" = None) -> Any:
@@ -2211,11 +2245,20 @@ class ThreadController:
     def dequeue_message(self) -> dict[str, Any] | None:
         return thread_queue(self.thread).dequeue()
 
+    def peek_message(self) -> dict[str, Any] | None:
+        return thread_queue(self.thread).peek()
+
     def run_conversation_turn(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return run_conversation_turn(*args, thread=self.thread, **kwargs)
 
     def turn_blocked(self) -> bool:
         return turn_blocked(self.thread)
+
+    def reserve_turn(self) -> bool:
+        return reserve_turn(self.thread)
+
+    def release_turn(self) -> None:
+        release_turn(self.thread)
 
     def next_turn(self, engine: Any = None) -> Any:
         return next_turn(engine, self.thread)
@@ -6037,9 +6080,10 @@ def run_conversation_turn(
     ``[attached: ...]`` marker -- base64 never enters the saved chat JSON.
 
     *thread* (#357) is the conversation the turn belongs to: its history, Stop,
-    plan and status (None: the default thread, i.e. the module-level state).  One
-    turn runs at a time across threads: while another thread's turn runs, this
-    returns at once without starting (the engines queue instead).
+    plan and status (None: the default thread, i.e. the module-level state).  The
+    turn takes one of the runner's slots (#359: one on Local, the cap on Remote);
+    while every slot is taken this returns at once without starting (the engines
+    queue instead, and reserve the slot before they start a worker).
 
     This is a BLOCKING call -- run it via ``schedule_coro`` or in a thread.
     """
@@ -6058,7 +6102,7 @@ def run_conversation_turn(
             print("[Coworker] run_conversation_turn: re-entrancy blocked -- turn already active")
             return _agent_state.conversation_history
     if not THREADS.try_begin(_gate):
-        print("[Coworker] run_conversation_turn: another thread's turn runs -- one turn at a time")
+        print("[Coworker] run_conversation_turn: every slot is taken by other chats' turns -- not started")
         return _agent_state.conversation_history
     _agent_state.turn_active = True
     _agent_state.turn_token += 1
@@ -6080,16 +6124,29 @@ def run_conversation_turn(
         # clobber it.
         if _agent_state.turn_token == _my_token:
             _agent_state.turn_active = False
-            # Always release the co-work scene lock (FINISH, error, Stop, or
-            # an exception all pass through here).
-            with threads.use(thread):
-                _release_scene_lock()
             # Tier 3i: log the turn's cost breakdown (prefill vs gen vs overhead).
             _log_turn_cost(_agent_state)
             # Record the turn's wall time on its last message so the chat panel
             # can show each finished turn's duration.
             _stamp_turn_duration(_agent_state)
-            THREADS.end(_gate)          # the next thread's turn may start (#357)
+            _end_turn_slot(_gate, thread)
+
+
+# Turns ending at the same moment take turns here, so exactly the last one releases
+# the co-work scene lock (#359).
+_turn_end_lock = threading.Lock()
+
+
+def _end_turn_slot(gate: "threads.Thread", thread: "threads.Thread | None") -> None:
+    """A turn is over: the co-work scene lock is released (FINISH, error, Stop or an
+    exception all pass through here) and its slot frees.  The lock registry is one for
+    every chat, so the LAST running turn to end releases it: another chat still working
+    keeps its datablocks protected until it ends too (#359)."""
+    with _turn_end_lock:
+        if not any(t is not gate for t in THREADS.running_threads()):
+            with threads.use(thread):
+                _release_scene_lock()
+        THREADS.end(gate)           # the next waiting chat's turn may start (#357, #359)
 
 
 # Turn counter for memory-block "Last updated" stamps (Tier 3).

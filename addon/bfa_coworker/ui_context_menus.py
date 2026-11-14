@@ -456,6 +456,11 @@ def _editing_text_object(data: Any) -> dict | None:
 
 def apply_translation(path: str, span: str, text: str) -> None:
     """Write *text* to *path* (``owner.attr``, or ``text.as_string()`` with a *span*), one undo step."""
+    from . import captions
+    if path.startswith(captions.TRANSLATE_PREFIX):     # many captions at once, one strip each (#376)
+        from . import captions_ops
+        captions_ops.apply_translation(path, text)
+        return
     namespace = {"bpy": bpy}
     if path.endswith(".as_string()"):
         block = eval(path[:-len(".as_string()")], namespace)          # noqa: S307 -- our own repr()
@@ -469,6 +474,9 @@ def apply_translation(path: str, span: str, text: str) -> None:
         editing = _editing_text_object(target)
         if editing is None:
             setattr(target, attr, text)
+            if attr == "text" and getattr(target, "type", "") == 'TEXT' and target.get("bfacw_caption") is not None:
+                from . import captions_ops      # a caption's word highlights follow its new text (#376)
+                captions_ops.text_changed(target)
         else:
             # A text object in Edit mode keeps its typing in an edit buffer that overwrites
             # body when you leave: step out, set it, and step back in.

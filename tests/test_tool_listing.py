@@ -27,6 +27,76 @@ _REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # BEGIN: EXPECTED_TOOLS
 EXPECTED_TOOLS = [
     {
+        "name": "add_captions",
+        "description": "\n"
+"        Caption sound or movie strips in the Video Sequencer: their speech becomes styled\n"
+"        text strips (one per caption line, in sync) on a channel named \"Captions\".\n"
+"\n"
+"        Running it again on the same clip replaces its captions; it is one undo step.\n"
+"\n"
+"        Args:\n"
+"            strips: Names of the sound / movie strips to caption (none: the selected ones).\n"
+"            style: CLEAN, BOLD_POP, WORD_HIGHLIGHT (the spoken word lights up) or BOXED.\n"
+"            language: Spoken language code (\"en\", \"es\"...) or \"auto\".\n"
+"            transcript_path: A transcript JSON file (bfa_coworker.transcript/1) to use\n"
+"                instead of transcribing.\n"
+"\n"
+"        Returns:\n"
+"            ``lines_created``, ``channel``, ``first_frame`` / ``last_frame`` and the style;\n"
+"            ``status`` \"error\" with a ``message`` saying what's wrong.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "strips": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Strips"
+                },
+                "style": {
+                    "default": "CLEAN",
+                    "title": "Style",
+                    "type": "string"
+                },
+                "language": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Language"
+                },
+                "transcript_path": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Transcript Path"
+                }
+            },
+            "title": "add_captionsArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "ask_user",
         "description": "\n"
 "        Ask the user a short question in Coworker's chat, with buttons; waits for the answer.\n"
@@ -1298,7 +1368,7 @@ EXPECTED_TOOLS = [
 "          jump_to_asset_browser, download_polyhaven_asset, search_polyhaven_assets,\n"
 "          assign_material_to_objects, get_active_node_tree, get_node_group_interface,\n"
 "          wire_node_group)\n"
-"        - vse: Video Sequencer navigation (jump_to_tab_by_name, jump_to_tab_by_space_type)\n"
+"        - vse: Video Sequencer navigation (jump_to_tab_by_name, jump_to_tab_by_space_type) and captions (add_captions)\n"
 "\n"
 "        Load only what the request needs; the basic tools (scene, code, docs,\n"
 "        screenshots, plan, questions, bake_textures, render_viewport_to_path,\n"

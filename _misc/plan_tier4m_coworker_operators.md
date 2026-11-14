@@ -117,7 +117,7 @@ SPEC = OperatorSpec(
     params=(
         Param("threshold_db", -40.0, "Threshold (dB)", "...", soft_min=-80, soft_max=-10),
         Param("min_silence", 0.4, "Minimum Silence", "...", unit="TIME_ABSOLUTE"),
-        Param("padding", 0.08, "Padding", "...", unit="TIME_ABSOLUTE"),
+        Param("padding", 0.15, "Padding", "...", unit="TIME_ABSOLUTE"),  # 0.08 clipped soft "F" onsets
         Param("min_keep", 0.1, "Minimum Clip", "...", unit="TIME_ABSOLUTE"),
         Param("ripple", True, "Close the Gaps", "..."),
     ),
@@ -551,6 +551,7 @@ flowchart LR
 | Samples | `aud.Sound(path)` → `.rechannel(1).resample(8000, False).limit(t0, t1).data()` → numpy `float32` `(n, channels)` | `aud.Sound.file(path)` works too. A missing file raises `aud.error` ("couldn't be read with any installed file reader") when read, not when made. `limit` past the end gives fewer / zero rows |
 | Packed sounds | `sound.evaluated_get(depsgraph).factory` → an `aud.Sound` | `sound.factory` on the original is **None** (also in a UI session before playback); the evaluated copy has it. Fallback: write `packed_file.data` to a temp file |
 | numpy | Bundled (2.3.4 in 5.2.4) | The add-on keeps a slow pure-Python fallback |
+| Defaults | −40 dB, 0.4 s minimum silence, **0.15 s padding**, 0.1 s minimum clip | On the #374 speech clip (125 s, word starts known) 0.08 s padding cut into the soft "F" of two words (onset at −50 dB, 60 ms before −40 dB); 0.15 s keeps every word and still removes 44 s of 49 |
 | Memory | Read in 20 s chunks at 8 kHz mono, 10 ms RMS windows | A 10 s file: 0.7 s to read whole at 44.1 kHz stereo; chunks keep long files small |
 | Strip time → sound time | sound time `t` plays at frame `content_start + (t - sound_offset) * fps`, `fps = render.fps / render.fps_base`; the visible part is between `left_handle` and `right_handle` | 5.2 names: `content_start`, `left_handle`, `right_handle`, `content_duration`, `content_trim_*` (the old `frame_start`, `frame_final_*`, `frame_offset_*`, `animation_offset_*` still work, with a DeprecationWarning, "removed in 6.0"). No `speed_factor` on sound strips: speed is retiming |
 | Retiming | `strip.retiming_keys` (`RetimingKey.timeline_frame` only) | Empty on a fresh strip. Remove Silences skips retimed strips (more than two keys, or a content length that no longer matches the sound's) |

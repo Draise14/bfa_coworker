@@ -100,7 +100,8 @@ def find_silences(env_db: Sequence[float], window_s: float, threshold_db: float,
             if start is None:
                 start = i
         elif start is not None:
-            runs.append((start * window_s, min(i * window_s, total)))
+            # A run to the last window reaches the end (a partial last window isn't in env_db).
+            runs.append((start * window_s, total if i == len(env_db) else min(i * window_s, total)))
             start = None
     cuts = []
     for start_s, end_s in runs:

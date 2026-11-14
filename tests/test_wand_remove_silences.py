@@ -110,6 +110,12 @@ class TestFindSilences(unittest.TestCase):
         self.assertEqual(_round(S.find_silences(env, 0.01, -40.0, 0.4, 0.0, min_keep_s=0.1)),
                          [(0.0, 1.03), (2.03, 3.07)])
 
+    def test_silence_to_the_last_window_reaches_the_end(self):
+        # The sound is 1.984 s; the envelope holds 198 whole windows. Found live (#331): the
+        # trailing silence lost its "at the end" and got padding, leaving a sliver of quiet.
+        env = _env((-10.0, 100), (-70.0, 98))
+        self.assertEqual(_round(S.find_silences(env, 0.01, -40.0, 0.4, 0.15, total_s=1.984)), [(1.15, 1.984)])
+
     def test_total_clamps_the_last_window(self):
         env = _env((-10.0, 100), (-70.0, 100))
         self.assertEqual(_round(S.find_silences(env, 0.01, -40.0, 0.4, 0.1, total_s=1.95)), [(1.1, 1.95)])
@@ -352,6 +358,8 @@ class TestPlacement(unittest.TestCase):
         self.assertIn(seq.SPEC.icon, _import("wand.icons").ICON_NAMES)
         self.assertEqual(seq.SPEC.param("ripple").default, True)
         self.assertEqual(seq.SPEC.param("threshold_db").default, -40.0)
+        # 0.08 s clipped soft word onsets on the #374 speech clip; 0.15 s keeps them.
+        self.assertEqual(seq.SPEC.param("padding").default, 0.15)
 
     def test_entry_draws_like_operator_entry(self):
         seq = _load_sequencer(_fake_bpy(True))

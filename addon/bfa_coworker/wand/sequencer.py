@@ -74,7 +74,7 @@ SPEC = OperatorSpec(
               "Quieter than this counts as silence (dB below full scale)", "", -80.0, -10.0),
         Param("min_silence", 0.4, "Minimum Silence",
               "Only quiet stretches at least this long are cut", "TIME_ABSOLUTE", 0.05, 5.0),
-        Param("padding", 0.08, "Padding",
+        Param("padding", 0.15, "Padding",
               "Quiet time kept before and after the sound, so words aren't clipped", "TIME_ABSOLUTE", 0.0, 1.0),
         Param("min_keep", 0.1, "Minimum Clip",
               "What's left between two cuts is removed too when it is shorter than this (a click, a breath)",

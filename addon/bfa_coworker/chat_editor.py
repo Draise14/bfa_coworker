@@ -1030,8 +1030,9 @@ class BFACW_MT_editor_chat(bpy.types.Menu):
     bl_label = "Chat"
 
     def draw(self, context):
+        from . import ui_chat
         layout = self.layout
-        layout.operator("bfacw.tab_new", text="New Thread", icon="ADD")     # the tabs' + (#427)
+        ui_chat.draw_new_chat_entries(layout, context)      # New Chat, for This <editor>, Start Fresh (#466)
         layout.operator("bfacw.chat_stop", text="Stop", icon="PAUSE")
         layout.separator()
         layout.operator("bfacw.mention_search", text="@ Mention", icon="OUTLINER_OB_MESH")
@@ -1169,7 +1170,7 @@ class BFACW_MT_chat_context(bpy.types.Menu):
         layout.operator("bfacw.chat_capture_screen", text="Capture Editor", icon=safe_icon("MAKE_SCREENSHOT"))
         layout.operator("bfacw.chat_capture_render", text="Capture Render", icon="RENDER_STILL")
         layout.separator()
-        layout.operator("bfacw.tab_new", text="New Chat", icon="ADD")
+        ui_chat.draw_new_chat_entries(layout, context)      # New Chat, for This <editor>, Start Fresh (#466)
         if agent_controller.thread_state(ui_chat._ui_thread(context)).is_thinking:
             layout.operator("bfacw.chat_stop", text="Stop", icon="PAUSE")
         layout.operator("bfacw.chat_context_copy", text="Copy Whole Chat", icon="COPYDOWN").what = "CHAT"

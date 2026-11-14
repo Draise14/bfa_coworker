@@ -5,7 +5,8 @@
 """
 The chat tab row (#427 follow-up): the tabs on the left, then a separator, then close,
 + and the tab menu in their own fixed-width group on the right, the same three buttons
-whatever tabs are open.  The + tooltip says the new tab uses the editor's context.
+whatever tabs are open.  The + is a chat for All editors; in an editor (not the Coworker
+editor) a fourth button, with the editor's icon, is a chat using its context (#466).
 
 Runs ``ui_chat.draw_chat_tabs`` on a fake layout (no Blender needed).
 """
@@ -58,7 +59,7 @@ class _Layout:
         self.log.append(("separator", self.depth, self))
 
     def operator(self, idname, text="", icon="NONE", depress=False):
-        props = types.SimpleNamespace(thread_id="")
+        props = types.SimpleNamespace(thread_id="", scope="ALL")
         self.log.append(("op", self.depth, self, idname, text, icon, depress, props))
         return props
 
@@ -85,16 +86,22 @@ class TestTabRow(unittest.TestCase):
         self.strip = (self.b, [self.a, self.b, self.c], ["All editors", "Node", "Seq"], ["icon", "full", "hidden"])
         ac = types.SimpleNamespace(THREADS=object(),
                                    thread_state=lambda _t: types.SimpleNamespace(turn_active=False))
-        self.ui = _extract("_TAB_TOOLS_W", "new_tab_tip", "draw_chat_tabs", extra={
+        self.kind = ""          # the strip's editor kind ("" = the Coworker editor)
+        self.ui = _extract("_TAB_TOOLS_W", "_tab_tools_w", "new_tab_tip", "draw_chat_tabs", extra={
             "agent_controller": ac,
             "tab_strip": lambda _ctx, _units: self.strip,
             "_tab_icon": lambda _t: ("NODETREE", False),
+            "_tab_kind": lambda _ctx: self.kind,
+            "_editor_icon": lambda kind: {"VIEW_3D": "VIEW3D"}.get(kind, "WINDOW"),
         })
 
     def draw(self):
         log = []
         self.ui.draw_chat_tabs(_Layout(log), None)
         return log
+
+    def tools(self):
+        return [e for e in self.draw() if (e[0] == "op" and e[3] != "bfacw.tab_show") or e[0] == "menu"]
 
     def test_tabs_left_then_separator_then_tools_right(self):
         log = self.draw()
@@ -128,8 +135,25 @@ class TestTabRow(unittest.TestCase):
         self.assertIn("BFACW_MT_chat_tabs", [e[3] for e in self.draw() if e[0] == "menu"])
 
     def test_new_tab_tooltip_names_the_editors_context(self):
-        self.assertIn("Shader Editor's context", self.ui.new_tab_tip("Shader Editor"))
-        self.assertIn("All editors", self.ui.new_tab_tip(""))
+        self.assertEqual(self.ui.new_tab_tip("Shader Editor"),
+                         "New chat in a new tab, using this Shader Editor's context")
+        self.assertEqual(self.ui.new_tab_tip(""), "New chat in a new tab, for All editors")
+
+    def test_plus_is_for_all_editors(self):
+        plus = [t for t in self.tools() if t[0] == "op" and t[3] == "bfacw.tab_new"]
+        self.assertEqual(len(plus), 1, "the Coworker editor: no editor's own button")
+        self.assertEqual((plus[0][5], plus[0][7].scope), ("ADD", "ALL"))
+        self.assertEqual(plus[0][2].ui_units_x, self.ui._TAB_TOOLS_W)
+
+    def test_an_editor_strip_has_a_button_with_its_icon(self):
+        self.kind = "VIEW_3D"
+        tools = self.tools()
+        self.assertEqual([t[3] for t in tools],
+                         ["bfacw.tab_close", "bfacw.tab_new", "bfacw.tab_new", "BFACW_MT_chat_tabs"])
+        here = tools[2]
+        self.assertEqual((here[5], here[7].scope), ("VIEW3D", "EDITOR"))
+        self.assertEqual(tools[1][7].scope, "ALL", "the + stays All editors")
+        self.assertEqual(here[2].ui_units_x, self.ui._TAB_TOOLS_W + 1.0, "one unit wider for it")
 
 
 if __name__ == "__main__":

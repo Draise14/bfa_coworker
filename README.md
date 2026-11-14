@@ -25,21 +25,17 @@ build it, with every change one undo away. You choose the model:
 - **Safe by default.** Permissions (Strict / Permissive / Auto) ask before changes. Every turn is one undo step you can **Revert**. Local servers only answer your own programs.
 - **Actually useful.** 40+ tools to inspect scenes, run and check code, render previews, browse assets and Poly Haven, wire node groups and more, plus plans that tick off as Coworker works.
 
-## What's new in 1.1.40
+## What's new in 1.1.43
 
-| | |
-|---|---|
-| ![Sidebar chat in the 3D View](docs/images/v1.1.40/sidebar_3d_view.png) | **The Coworker tab in every editor.** The same chat in each editor's sidebar, with Queue, Plan, History and Status. *Use Editor Context Only* keeps Coworker to what that editor shows. |
-| ![Approval card](docs/images/v1.1.40/permissions.png) | **Permissions and approvals.** A card asks before a tool runs: *Allow once*, *Allow this turn* or *Deny*. Switch between Strict, Permissive and Auto at any time. |
+A fixes-and-polish release:
 
-- **The Coworker editor:**
-  - a full-size chat in your theme, with **@ mentions**, images, markdown and a foldable **Workshop** of tool steps;
-  - pick it from any area's *Editor Type* menu, or open it in its own window.
-- **External Agent mode:** chat with your own agent app (Claude Code, OpenCode and more), with approvals, resume and its own Mode / Model / Effort pickers.
-- **Explain This / Translate:** right-click any setting, button, text field, text strip or the Text Editor.
-- **Plan mode, Auto mode, Queue, History and Revert:** on every engine.
+- **Works in Blender too,** not only in Bforartists, and **Claude Code gets Coworker's tools** on a fresh install.
+- **Each .blend brings its chats back:** its tabs, Goal & Plan and each area's tab. History is grouped by file.
+- **Paste an image** with Ctrl V, **select text with the mouse** and copy it, and **right-click** for the chat's own menu.
+- **+ starts a chat for All editors;** the editor's icon button starts one about that editor. **Start This Chat Fresh** clears a tab.
+- **Since 1.1.40:** a conversation per job in **chat tabs**, long renders and bakes that don't time out, and keys kept out of logs (1.1.42).
 
-See the [release notes](https://github.com/Draise14/bfa_coworker/releases/tag/v1.1.40) and the [CHANGELOG](CHANGELOG.md).
+See the [release notes](https://github.com/Draise14/bfa_coworker/releases/tag/v1.1.43) and the [CHANGELOG](CHANGELOG.md).
 
 ---
 
@@ -85,7 +81,7 @@ Full guides: [Wiki](https://github.com/Draise14/bfa_coworker/wiki) ·
 
 | | |
 |---|---|
-| **Latest release** | [Download v1.1.40](https://github.com/Draise14/bfa_coworker/releases/latest) |
+| **Latest release** | [Download v1.1.43](https://github.com/Draise14/bfa_coworker/releases/latest) |
 | **All releases** | [GitHub Releases](https://github.com/Draise14/bfa_coworker/releases) |
 | **Update repository** | `https://raw.githubusercontent.com/Draise14/bfa_coworker/main/extensions/index.json` |
 | **Source code** | [Clone this repo](https://github.com/Draise14/bfa_coworker) |

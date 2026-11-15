@@ -10,7 +10,10 @@ On the main thread (the bridge runs tool-code there): find the strip and its med
 key it (:func:`transcripts.media_key`) and answer from the cache when the file was
 transcribed before.  Otherwise a worker thread reads the sound with Blender's ``aud`` and
 writes a 16 kHz mono WAV (no ffmpeg; the whole file, since the cache is per media file), starts
-whisper-server when needed, POSTs the WAV and stores the transcript.  The tool answers
+whisper-server when needed, sends the WAV in pieces of up to 30 s cut in pauses, one request
+each with no carried-over text (:func:`transcribe_pieces`, ``speech_pieces``, #540: one
+whole-file request looped) and stores the transcript.  The job says which piece it is on
+(``job_progress``: its job row, ``get_job_status``, Auto Captions' status line).  The tool answers
 with a checker (the ``deferred_tool`` convention): a short clip answers when it is done; a
 long one is handed to ``long_jobs`` after 45 s and the agent gets a ``job_id`` to wait on
 with ``get_job_status``.
@@ -40,6 +43,7 @@ __all__ = (
     "stop_jobs",
     "strip_media",
     "strip_timing",
+    "transcribe_pieces",
     "transcribe_strip",
     "was_stopped",
 )
@@ -366,9 +370,20 @@ def shape_result(doc: dict[str, Any], timing: dict[str, float], strip_name: str,
     if not limit:
         out["text"] = " ".join(w["w"] for w in shown)[:_TEXT_MAX]
     how = "from the cache" if cached else "transcribed in {:.1f} s".format(seconds)
+    pieces = engine.get("pieces") if isinstance(engine.get("pieces"), dict) else None
+    failed_note = ""
+    if pieces is not None:
+        failed = [f for f in pieces.get("failed") or [] if isinstance(f, (list, tuple)) and len(f) >= 2]
+        out["pieces"] = {"count": int(pieces.get("count") or 0), "no_speech": int(pieces.get("no_speech") or 0),
+                         "failed": [[f[0], f[1]] for f in failed]}
+        if failed:
+            failed_note = (" {:d} piece{:s} kept repeating itself even when tried again, so {:s} no words: {:s}."
+                           ).format(len(failed), "" if len(failed) == 1 else "s", "it has" if len(failed) == 1 else
+                                    "they have", ", ".join("{:s}-{:s}".format(_clock_text(f[0]), _clock_text(f[1]))
+                                                           for f in failed[:6]))
     out["message"] = ("{:d} words in '{:s}' ({:s}). Each word is [w, start, end, frame_start, frame_end]: "
-                      "seconds in the media file, frames on the timeline.{:s}").format(
-        len(shown), strip_name, how,
+                      "seconds in the media file, frames on the timeline.{:s}{:s}").format(
+        len(shown), strip_name, how, failed_note,
         " Call again with offset={:d} for the next words (limit=0 gives the plain text).".format(
             out["next_offset"]) if more else "")
     return out
@@ -391,6 +406,13 @@ class _Job:
         self.stopped = threading.Event()        # stop_jobs (#516): nobody waits for it any more
         self.local = False                      # on whisper-server (not Remote)
         self.waiters: list[_Waiter] = []        # its callers (#522), under _jobs_lock
+        # #540: what it does now, for its job row and get_job_status (long_jobs' job_progress).
+        self.progress: float | None = None      # pieces done / pieces (None: one piece, or not there yet)
+        self.progress_text = ""
+        self.progress_short = ""                # "piece 3 of 26"
+
+    def progress_state(self) -> tuple[float | None, str, str]:
+        return self.progress, self.progress_text, self.progress_short
 
 
 class _Waiter:
@@ -407,12 +429,113 @@ class _Stopped(Exception):
     pass
 
 
-def _note(text: str) -> None:
-    try:
-        from . import long_jobs
-        long_jobs.note_progress(JOB_KIND, text)
-    except Exception:  # pylint: disable=broad-exception-caught
-        pass
+def _note(job: _Job, text: str, progress: float | None = None, short: str = "") -> None:
+    """What *job* does now: its own (#540; long_jobs reads it through the checker's
+    ``job_progress``), so two transcriptions side by side don't show each other's."""
+    job.progress, job.progress_text, job.progress_short = progress, str(text or ""), str(short or "")
+
+
+def _clock_text(seconds: float) -> str:
+    seconds = max(0, int(round(seconds)))
+    return "{:d}:{:02d}:{:02d}".format(seconds // 3600, seconds // 60 % 60, seconds % 60) if seconds >= 3600 \
+        else "{:d}:{:02d}".format(seconds // 60, seconds % 60)
+
+
+def _loops(vj: dict[str, Any], length: float | None) -> str:
+    """"" or why a piece's answer is whisper looping (speech_pieces.degenerate)."""
+    from . import speech_pieces
+    words, _timing = transcripts.verbose_json_words(vj if isinstance(vj, dict) else {})
+    return speech_pieces.degenerate(words, float(length if length else (vj or {}).get("duration") or 0.0))
+
+
+def _detected_language(vj: dict[str, Any]) -> str:
+    langs = vj.get("language_probabilities") if isinstance(vj, dict) else None
+    if isinstance(langs, dict) and langs:
+        return str(max(langs, key=langs.get))
+    return transcripts.language_code(str((vj or {}).get("language") or ""))
+
+
+def transcribe_pieces(wav: str, key: str, size: int, p: dict[str, Any], prompt: str = "", media: str = "",
+                      progress: Callable[[int, int, str], None] | None = None, stop: Any = None,
+                      build_label: str = "", version: str = "") -> dict[str, Any]:
+    """The transcript of the 16 kHz mono *wav* on the running whisper-server, in pieces (#540).
+
+    The pieces (:func:`speech_pieces.plan_pieces`, cut in pauses, one whisper window each)
+    are sent one by one, with no text context (``PIECE_FIELDS``).  A piece without speech
+    (:func:`speech_pieces.has_speech`) isn't sent; one whose words loop
+    (:func:`speech_pieces.degenerate`) is sent once more with ``RETRY_FIELDS`` and, if it still
+    loops, left without words (``engine.pieces.failed``).  Word times come back in file time;
+    words in silence are dropped and word ends trimmed to the sound
+    (:func:`speech_pieces.refine_words`).  The language is detected on the first piece with
+    speech and kept for the rest.  A WAV it can't read is sent whole, as before.
+
+    *progress* ``(n, m, text)`` before piece *n* of *m*; *stop* (an Event) set: ``_Stopped``
+    before the next piece.  Nothing is written here."""
+    from . import speech_pieces as sp
+    env = sp.wav_envelope(wav, stop=stop)
+    if stop is not None and stop.is_set():
+        raise _Stopped()
+    if env is None:
+        db, hop, total, quiet = None, sp.HOP_S, 0.0, None
+        pieces = [(0.0, -1.0)]
+    else:
+        db, hop = env["db"], env["hop_s"]
+        total = env["frames"] / float(env["rate"])
+        quiet = sp.quiet_level(db)
+        pieces = sp.plan_pieces(db, hop, quiet=quiet)
+    m = len(pieces)
+    lang = p["language"]
+    parts: list[tuple[float, float | None, dict[str, Any]]] = []
+    failed: list[list[Any]] = []
+    no_speech = retried = 0
+    for n, (a, b) in enumerate(pieces, 1):
+        if stop is not None and stop.is_set():
+            raise _Stopped()
+        if progress is not None:
+            progress(n, m, "piece {:d} of {:d} ({:s}-{:s} of {:s})".format(
+                n, m, _clock_text(a), _clock_text(b), _clock_text(total)) if m > 1 else "")
+        if db is not None and not sp.has_speech(db, a, b, hop, quiet):
+            no_speech += 1
+            continue
+        if db is not None:
+            sa, sb = sp.speech_span(db, a, b, hop, quiet)
+            path = "{:s}.p{:d}.16k.wav".format(wav[:-len(".16k.wav")] if wav.endswith(".16k.wav") else wav, n)
+            length: float | None = sp.write_piece(wav, path, sa, sb)
+        else:
+            sa, path, length = 0.0, wav, None
+        try:
+            vj = whisper_manager.transcribe_wav(path, lang, prompt, extra=whisper_manager.piece_fields(prompt))
+            why = _loops(vj, length)
+            if why:
+                retried += 1
+                print("[Coworker] transcription: piece {:d} of {:d} loops ({:s}); trying again".format(n, m, why))
+                if stop is not None and stop.is_set():
+                    raise _Stopped()
+                vj = whisper_manager.transcribe_wav(path, lang, "", extra=whisper_manager.piece_fields(retry=True))
+                why = _loops(vj, length)
+        finally:
+            if path != wav:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+        if why:
+            failed.append([round(a, 3), round(b if b >= 0 else total, 3), why])
+            continue
+        if lang == "auto" and transcripts.verbose_json_words(vj)[0]:
+            lang = _detected_language(vj) or "auto"
+        parts.append((sa, length, vj))
+    duration = total or max([float((vj or {}).get("duration") or 0.0) for _o, _l, vj in parts] or [0.0])
+    merged = sp.merge_verbose_json(parts, duration) if db is not None else (
+        parts[0][2] if parts else {"duration": duration, "segments": []})
+    doc = transcripts.from_verbose_json(merged, media or wav, key, size, p["model"], build=build_label,
+                                        version=version, language=p["language"])
+    if db is not None:
+        doc["words"] = sp.refine_words(transcripts.words(doc), db, hop, quiet)
+    engine = doc.setdefault("engine", {})
+    engine["pieces"] = {"scheme": transcripts.PIECES_SCHEME, "count": m, "sent": len(parts) + len(failed),
+                        "no_speech": no_speech, "retried": retried, "failed": failed}
+    return doc
 
 
 def _work(job: _Job, media: str, key: str, size: int, p: dict[str, Any], settings: dict[str, Any],
@@ -423,12 +546,12 @@ def _work(job: _Job, media: str, key: str, size: int, p: dict[str, Any], setting
     stops = None
     try:
         os.makedirs(os.path.dirname(wav), exist_ok=True)
-        _note("Reading the sound of {:s}".format(os.path.basename(media)))
+        _note(job, "Reading the sound of {:s}".format(os.path.basename(media)))
         _write_wav(media, wav, stop=job.stopped)
         if job.stopped.is_set():
             raise _Stopped()
         if p["route"] == "remote":
-            _note("Sending the audio to the Remote provider")
+            _note(job, "Sending the audio to the Remote provider")
             resp = whisper_manager.transcribe_remote(wav, settings["remote_url"], settings["remote_key"], p["model"],
                                                      p["language"], prompt)
             doc = transcripts.from_openai(resp, media, key, size, p["model"], language=p["language"])
@@ -441,20 +564,33 @@ def _work(job: _Job, media: str, key: str, size: int, p: dict[str, Any], setting
                 raise RuntimeError(problem)
             stops = whisper_manager.stop_count()
             if not whisper_manager.is_ready():
-                _note(whisper_manager.get_state().status_text or "Starting whisper-server")
+                _note(job, whisper_manager.get_state().status_text or "Starting whisper-server")
                 if not whisper_manager.wait_ready(timeout=300.0):
                     raise RuntimeError(whisper_manager.get_state().error or "whisper-server did not start")
-            _note("Transcribing with {:s} ({:s})".format(p["model"], whisper_manager.BUILD_LABELS.get(p["build"], "")))
-            vj = whisper_manager.transcribe_wav(wav, p["language"], prompt)
+            label = whisper_manager.BUILD_LABELS.get(p["build"], p["build"])
+            _note(job, "Transcribing with {:s} ({:s})".format(p["model"], label))
+
+            def progress(n: int, m: int, where: str) -> None:
+                if m > 1:
+                    _note(job, "Transcribing {:s} with {:s} ({:s})".format(where, p["model"], label),
+                          (n - 1) / float(m), "piece {:d} of {:d}".format(n, m))
+
             info = whisper_manager.build_info(p["build"])
-            doc = transcripts.from_verbose_json(vj, media, key, size, p["model"],
-                                                build=whisper_manager.BUILD_LABELS.get(p["build"], p["build"]),
-                                                version=str(info.get("tag", "")), language=p["language"])
+            doc = transcribe_pieces(wav, key, size, p, prompt, media=media, progress=progress, stop=job.stopped,
+                                    build_label=label, version=str(info.get("tag", "")))
         if job.stopped.is_set():
             raise _Stopped()
         lang = p["language"] if p["language"] != "auto" else (doc.get("language") or "auto")
         path = transcripts.cache_path(key, p["cache_model"], lang, blend_path, whisper_manager.data_dir())
         transcripts.write(path, doc)
+        if blend_path:
+            # #541: a copy in the add-on's cache folder too, so the transcript is still found
+            # (by the media file's key) after the .blend moves to another folder.
+            try:
+                transcripts.write(transcripts.cache_path(key, p["cache_model"], lang, "", whisper_manager.data_dir()),
+                                  doc)
+            except (OSError, ValueError):
+                pass
         job.doc, job.path = doc, str(path)
     except Exception as ex:  # pylint: disable=broad-exception-caught
         job.error = str(ex) or type(ex).__name__
@@ -556,6 +692,8 @@ def transcribe_strip(strip: str, language: str = "", limit: int = DEFAULT_LIMIT,
     check_is_finished.job_kind = JOB_KIND  # type: ignore[attr-defined]
     check_is_finished.job_label = "Transcribe {:s}".format(name)  # type: ignore[attr-defined]
     check_is_finished.job_on_finish = None  # type: ignore[attr-defined]
+    # #540: piece n of m, for its job row, get_job_status and Auto Captions' status line.
+    check_is_finished.job_progress = job.progress_state  # type: ignore[attr-defined]
     if bpy.app.background:
         job.done.wait(timeout=3600.0)
         return check_is_finished() or _error("Transcribing '{:s}' took longer than an hour.".format(name))

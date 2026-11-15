@@ -46,7 +46,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from .. import long_jobs
+from .. import log, long_jobs
 from ..answer_envelope import readable
 from ..chat_status import fmt_duration, phase_text, spinner_char
 from ..chat_turns import NOTE_TITLES, group_turns, is_system_note_msg, split_turn
@@ -138,6 +138,35 @@ def message_text(content: Any) -> str:
     if isinstance(content, list):
         return " ".join(str(b.get("text", "")) for b in content if isinstance(b, dict))
     return str(content or "")
+
+
+_REDACTED: dict[tuple[str, tuple[str, ...]], str] = {}
+
+
+def _redacted(text: str) -> str:
+    """*text* with keys and tokens as ``***`` (#511), as the Copy buttons give it.  Kept per
+    text and the keys known then, so a long tool answer isn't scanned again every frame."""
+    if not text:
+        return text
+    key = (text, log._secrets)    # pylint: disable=protected-access  # a key set later hides that one too
+    shown = _REDACTED.get(key)
+    if shown is None:
+        if len(_REDACTED) > 256:
+            _REDACTED.clear()
+        shown = _REDACTED[key] = log.redact(text)
+    return shown
+
+
+def _redacted_data(value: Any) -> Any:
+    """A copy of a tool's arguments (dicts, lists, strings) with :func:`_redacted` applied to
+    every string in it, the dicts' keys too."""
+    if isinstance(value, str):
+        return _redacted(value)
+    if isinstance(value, dict):
+        return {_redacted(str(k)): _redacted_data(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redacted_data(v) for v in value]
+    return value
 
 
 def _soft(color: RGBA, amount: float = 0.35) -> RGBA:
@@ -594,7 +623,7 @@ class ChatView:
         side, gap = canvas.icon_size(), pad * 0.6
         text_x, text_w = x + pad + side + gap, width - 2 * pad - side - gap
         bar_h = max(3.0, round(style.unit * 0.3))
-        rows = [("{:s} — {:s}".format(str(job.get("text", "")), str(job.get("label", ""))), job)
+        rows = [(_redacted("{:s} — {:s}".format(str(job.get("text", "")), str(job.get("label", "")))), job)
                 for job in self._jobs]
         h = pad * 0.5 + canvas.text_height(JOB_HINT, text_w) + pad * 0.5
         for text, job in rows:
@@ -858,7 +887,7 @@ class ChatView:
         clip = canvas._clips[-1] if canvas._clips else None      # None: only measuring
         for n, msg in enumerate(process):
             role = msg.get("role")
-            text = message_text(msg.get("content"))
+            text = _redacted(message_text(msg.get("content")))     # every row: keys and tokens as *** (#511)
             # A long Workshop (#218): a row measured before is only stepped over when it is
             # off screen, or when the turn is just being measured.
             row_key = (id(msg), idx, n, role, len(text), msg.get("tool_call_id"), msg.get("name"), round(row_w),
@@ -871,8 +900,8 @@ class ChatView:
             row_start = top
             if role == "tool":
                 bad = _tool_failed(msg)
-                name = str(msg.get("name", "tool"))
-                args = msg.get("args") or inputs.get(str(msg.get("tool_call_id", "")), ("", {}))[1]
+                name = _redacted(str(msg.get("name", "tool")))      # an agent's tool title can hold its input
+                args = _redacted_data(msg.get("args") or inputs.get(str(msg.get("tool_call_id", "")), ("", {}))[1])
                 row_top = top - pad * 0.5
                 top = self._icon_line(canvas, row_x, row_top, "ERROR" if bad else "CHECKMARK", name,
                                       _ERROR if bad else style.text, row_w - style.line_height, font="mono")
@@ -885,7 +914,7 @@ class ChatView:
                     shown = ", ".join("{:s}={:s}".format(k, json.dumps(v)[:60]) for k, v in list(args.items())[:4])
                     top = canvas.wrapped(row_x + side + gap, top, row_w - side - gap, shown,
                                          _soft(style.text, 0.35), font="mono")
-                result = readable(text).strip()     # the tool's own answer first (#500)
+                result = _redacted(readable(text)).strip()     # the tool's own answer first (#500)
                 if result and result != "(running)":
                     top = self._code_frame(canvas, row_x + style.pad, top - pad * 0.3, row_w - style.pad, result,
                                            "error" if bad else "result", "copyres:{:d}:{:d}".format(idx, n),

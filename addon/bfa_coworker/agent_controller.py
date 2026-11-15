@@ -1973,8 +1973,9 @@ class AgentState:
 
     def __setattr__(self, name: str, value: Any) -> None:
         # The error is shown in the chat: a provider reply that echoes your key
-        # shows *** there, wherever it is set from (#418).
-        if name in ("error", "error_full") and value and isinstance(value, str):
+        # shows *** there, wherever it is set from (#418).  The status line too: an
+        # agent's tool title in "Using ..." can hold the tool's input (#511).
+        if name in ("error", "error_full", "ui_status") and value and isinstance(value, str):
             from . import log as _log
             value = _log.redact(value)
         object.__setattr__(self, name, value)

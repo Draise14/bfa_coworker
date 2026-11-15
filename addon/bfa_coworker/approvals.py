@@ -104,8 +104,9 @@ class ApprovalRequest:
     def title(self) -> str:
         who = self.source or "The agent"
         if self.reason:
-            return "{:s} wants to {:s}".format(who, self.reason)
-        return "{:s} wants to run {:s}".format(who, self.tool or "a tool")
+            return _redact("{:s} wants to {:s}".format(who, self.reason))
+        # An agent's own tool is named by its title, which can hold its input (a command line, #511).
+        return _redact("{:s} wants to run {:s}".format(who, self.tool or "a tool"))
 
     @property
     def detail(self) -> str:

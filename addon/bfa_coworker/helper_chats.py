@@ -275,11 +275,12 @@ def report(parent_id: str) -> None:
 # -- Stop and closing tabs (main thread) ----------------------------------------------------
 def _stop_thread(thread: Any) -> None:
     """Stop *thread*'s running turn and drop its waiting messages."""
-    from . import coworker_api, risky_steps
+    from . import coworker_api, risky_steps, speech
     ui = _ui()
     tag = threads.tag(thread)
     coworker_api.cancel_questions(tag)
     risky_steps.APPROVALS.cancel_all(tag)
+    speech.stop_chat_jobs(tag)              # a transcription its turn started (#522)
     acp = ui._acp
     if ui._is_external_agent() and acp is not None:
         acp.cancel_thread(tag)              # its own turn and waiting messages only (#359)

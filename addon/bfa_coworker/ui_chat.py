@@ -789,6 +789,8 @@ def stop_all_chats() -> int:
         if busy:
             state.status_text = "Stopped"
         return busy
+    from . import speech
+    speech.stop_chat_jobs(None)             # every chat's transcriptions; Auto Captions' go on (#522)
     return threads.stop_all(agent_controller.THREADS, stop)
 
 
@@ -2890,6 +2892,8 @@ class BFACW_OT_chat_stop(Operator):  # type: ignore[misc]
             _thread_engine(thread).cancel()
         from . import helper_chats
         helper_chats.stop_helpers(thread)   # its helper chats stop too, no results come (#479)
+        from . import speech
+        speech.stop_chat_jobs(tag)          # a transcription this chat's turn started (#522)
         agent_controller.thread_state(thread).status_text = "Stopped"
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]

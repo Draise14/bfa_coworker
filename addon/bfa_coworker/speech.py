@@ -26,17 +26,22 @@ unit-tested with stand-ins.
 from __future__ import annotations
 
 __all__ = (
+    "ANY_CHAT",
+    "CAPTIONS",
     "COLUMNS",
     "JOB_KIND",
+    "chat_owner",
     "plan",
     "repeat_context",
     "setup_problem",
     "settings_from_prefs",
     "shape_result",
+    "stop_chat_jobs",
     "stop_jobs",
     "strip_media",
     "strip_timing",
     "transcribe_strip",
+    "was_stopped",
 )
 
 import os
@@ -61,6 +66,17 @@ _jobs: dict[tuple[str, str, str], "_Job"] = {}
 # it: a Stop can't fall between the two and leave a server started after it (#516).
 _start_lock = threading.Lock()
 STOPPED = "Stopped before it finished; nothing was saved."
+
+# Who waits for a transcription (#522): a chat's turn ("chat:" + its tag; the bridge says which
+# chat calls), Auto Captions, or "" (anything else).  A Stop ends the waiting of its own callers
+# only; the job itself ends when nobody waits for it any more.
+CAPTIONS = "captions"
+ANY_CHAT = "chat:*"         # stop_jobs: every chat's (Stop All Chats)
+
+
+def chat_owner(tag: str) -> str:
+    """The owner of a transcription a chat's turn started (*tag*: the chat's, "" = the default chat)."""
+    return "chat:" + str(tag or "")
 
 
 # -- Settings -----------------------------------------------------------------------------
@@ -275,14 +291,17 @@ def _pcm16(samples: Any, frames: int) -> bytes:
     return mono.astype("<i2").tobytes()
 
 
-def _write_wav(media: str, out: str) -> None:
+def _write_wav(media: str, out: str, stop: Any = None) -> None:
     """The whole media file as a 16 kHz mono 16-bit WAV, for whisper (#520).
 
     Blender's audaspace reads the file (no ffmpeg of our own) and converts it in the reader
     (``rechannel`` and ``resample``); Python's ``wave`` writes it.  Not ``Sound.write``: its
     FFmpeg writer fails ("filling the audio frame failed") whenever a read comes back empty at
     the end of the sound, which depends on the length, the rate and the codec -- most 44.1 kHz
-    files, FLAC / MP3 / Ogg / AAC, and some MP4s -- on 5.2 to 5.4 alike."""
+    files, FLAC / MP3 / Ogg / AAC, and some MP4s -- on 5.2 to 5.4 alike.
+
+    *stop* (a ``threading.Event``, #522): set, the next piece isn't read (``_Stopped``), so a
+    long file stops within one piece; the caller removes the partial WAV."""
     import wave
     import aud  # pylint: disable=import-error,import-outside-toplevel
     name = os.path.basename(media)
@@ -296,9 +315,13 @@ def _write_wav(media: str, out: str) -> None:
             wav.setsampwidth(2)
             wav.setframerate(WAV_RATE)
             for start, end, frames in pieces:
+                if stop is not None and stop.is_set():
+                    raise _Stopped()
                 part = src if start <= 0.0 and end < 0.0 else src.limit(start, end)
                 wav.writeframes(_pcm16(part.rechannel(aud.CHANNELS_MONO).resample(WAV_RATE, _RESAMPLE_QUALITY).data(),
                                        frames))
+    except _Stopped:
+        raise
     except Exception as ex:  # pylint: disable=broad-exception-caught
         why = str(ex).strip().rstrip(".") or type(ex).__name__
         raise RuntimeError("Blender could not read the sound of {:s} ({:s}): {:s}. It may have no audio track; "
@@ -365,8 +388,19 @@ class _Job:
         self.error = ""
         self.seconds = 0.0
         self.t0 = time.monotonic()
-        self.stopped = threading.Event()        # stop_jobs (#516)
+        self.stopped = threading.Event()        # stop_jobs (#516): nobody waits for it any more
         self.local = False                      # on whisper-server (not Remote)
+        self.waiters: list[_Waiter] = []        # its callers (#522), under _jobs_lock
+
+
+class _Waiter:
+    """One call waiting for a job (#522): who made it, and whether its Stop came."""
+
+    __slots__ = ("owner", "stopped")
+
+    def __init__(self, owner: str) -> None:
+        self.owner = str(owner or "")
+        self.stopped = False
 
 
 class _Stopped(Exception):
@@ -390,7 +424,7 @@ def _work(job: _Job, media: str, key: str, size: int, p: dict[str, Any], setting
     try:
         os.makedirs(os.path.dirname(wav), exist_ok=True)
         _note("Reading the sound of {:s}".format(os.path.basename(media)))
-        _write_wav(media, wav)
+        _write_wav(media, wav, stop=job.stopped)
         if job.stopped.is_set():
             raise _Stopped()
         if p["route"] == "remote":
@@ -428,7 +462,7 @@ def _work(job: _Job, media: str, key: str, size: int, p: dict[str, Any], setting
         # plainly, not with the socket's or the start's own error.
         if isinstance(ex, whisper_manager.Stopped) or (stops is not None and whisper_manager.stop_count() != stops):
             job.error = whisper_manager.STOPPED
-        # #516: stop_jobs (Auto Captions' Esc) stopped this very job; it also stops the server.
+        # #516 / #522: stop_jobs stopped this very job (nobody waits for it any more).
         if job.stopped.is_set():
             job.error = STOPPED
     finally:
@@ -450,8 +484,12 @@ def _prefs() -> Any:
 
 
 def transcribe_strip(strip: str, language: str = "", limit: int = DEFAULT_LIMIT, offset: int = 0,
-                     prompt: str = "", model: str = "") -> dict[str, Any] | Callable[[], dict[str, Any] | None]:
-    """The tool (main thread): a result dict, or a checker while the transcription runs."""
+                     prompt: str = "", model: str = "",
+                     owner: str = "") -> dict[str, Any] | Callable[[], dict[str, Any] | None]:
+    """The tool (main thread): a result dict, or a checker while the transcription runs.
+
+    *owner*: who waits for it (:func:`chat_owner`, :data:`CAPTIONS`), so a Stop ends only its
+    own callers' transcriptions (#522)."""
     import bpy  # pylint: disable=import-error,import-outside-toplevel
     scene, st, problem = _find_strip(str(strip or "").strip())
     if problem:
@@ -488,12 +526,20 @@ def transcribe_strip(strip: str, language: str = "", limit: int = DEFAULT_LIMIT,
         job = _jobs.get(job_key)
         if job is None or job.done.is_set():
             job = _Job()
+            job.local = p["route"] != "remote"      # known before its thread runs: stop_jobs reads it
             _jobs[job_key] = job
             threading.Thread(target=_work, args=(job, media, key, size, p, settings, blend_path, words_prompt),
                              daemon=True, name="bfacw-transcribe").start()
+        # A second call for the same file (another chat, Auto Captions) waits for the same job.
+        waiter = _Waiter(owner)
+        job.waiters.append(waiter)
     name = st.name
 
     def check_is_finished() -> dict[str, Any] | None:
+        if waiter.stopped:
+            # #522: this caller's Stop (its chat's, or Auto Captions' Esc): answer now.  The job
+            # ended with it, or goes on for another caller still waiting for the same file.
+            return {"status": "cancelled", "strip": name, "message": whisper_manager.STOPPED}
         if not job.done.is_set():
             return None
         with _jobs_lock:
@@ -516,21 +562,63 @@ def transcribe_strip(strip: str, language: str = "", limit: int = DEFAULT_LIMIT,
     return check_is_finished
 
 
-def stop_jobs() -> int:
-    """Stop every transcription still running (Auto Captions' Stop, #516); how many.
+def _matches(owner: str, which: str | None) -> bool:
+    if which is None:
+        return True
+    if which == ANY_CHAT:
+        return owner.startswith("chat:")
+    return owner == which
 
-    Each ends as ``cancelled`` and writes no transcript.  whisper-server can't drop a request
-    it is working on, so this window's server is stopped when a local one runs, also one kept
-    running from before (the next transcription starts it again)."""
+
+def stop_jobs(owner: str | None = None) -> int:
+    """Stop the transcriptions still running for *owner* (#516, #522); how many it touched.
+
+    *owner*: :func:`chat_owner` (Stop in that chat), :data:`ANY_CHAT` (Stop All Chats),
+    :data:`CAPTIONS` (Auto Captions' Esc) or ``None`` (every one).  Its callers answer
+    ``cancelled`` ("Transcription stopped.") at once.  A job nobody else waits for ends too: it
+    writes no transcript and its WAV goes, and the next call starts afresh.  One another caller
+    still waits for (the same file) goes on for that caller.
+
+    whisper-server can't drop a request it is working on, so this window's server is stopped
+    when a stopped job ran on it -- also one kept running from before (the next transcription
+    starts it again) -- but never while another job still needs it: then the stopped job's
+    request runs out on the server, its result is thrown away and nothing is saved.
+
+    Locks: ``_jobs_lock`` is let go before ``_start_lock`` (then whisper_manager's) is taken."""
     with _jobs_lock:
-        running = [j for j in _jobs.values() if not j.done.is_set()]
-        for key in [k for k, j in _jobs.items() if j in running]:
-            del _jobs[key]      # the next call starts afresh, not on the stopped job
-    if not running:
-        return 0
-    with _start_lock:
-        for job in running:
-            job.stopped.set()
-        if any(job.local for job in running):
-            whisper_manager.stop_server()
-    return len(running)
+        touched: list[_Job] = []
+        ended: list[_Job] = []
+        for key, job in list(_jobs.items()):
+            if job.done.is_set() or job.stopped.is_set():
+                continue
+            mine = [w for w in job.waiters if not w.stopped and _matches(w.owner, owner)]
+            if not mine and owner is not None:
+                continue
+            for w in mine:
+                w.stopped = True
+            touched.append(job)
+            if all(w.stopped for w in job.waiters):
+                ended.append(job)
+                del _jobs[key]      # the next call starts afresh, not on the stopped job
+        # Another job that still needs the server: one still in _jobs, not over, on whisper-server.
+        needed = any(j.local and not j.done.is_set() and not j.stopped.is_set()
+                     for j in _jobs.values())
+    if ended:
+        with _start_lock:
+            for job in ended:
+                job.stopped.set()
+            if any(job.local for job in ended) and not needed:
+                whisper_manager.stop_server()
+    return len(touched)
+
+
+def stop_chat_jobs(tag: str | None = None) -> int:
+    """Stop in a chat (*tag*, "" = the default chat) or, with ``None``, Stop All Chats (#522):
+    the transcriptions that chat's (every chat's) turns started; Auto Captions' carry on."""
+    return stop_jobs(ANY_CHAT if tag is None else chat_owner(tag))
+
+
+def was_stopped(result: Any) -> bool:
+    """A transcription's answer says it was stopped (a Stop, or whisper-server stopped under it)."""
+    return isinstance(result, dict) and (result.get("status") == "cancelled"
+                                         or result.get("message") == whisper_manager.STOPPED)

@@ -647,7 +647,7 @@ class TestCaptionStrips(_OpsCase):
     def _speech_stand_ins(self, problem="", background=True):
         """transcripts / speech as #375 has them: nothing cached until the job is done."""
         data = json.loads(_SAMPLE.read_text(encoding="utf-8"))
-        flags = {"done": False, "started": [], "stopped": 0}
+        flags = {"done": False, "started": [], "stopped": 0, "owners": [], "stop_owners": [], "answer": None}
         tx = types.ModuleType(_PKG + ".transcripts")
         tx.load_for_media = (lambda path, model=None, language=None, blend_path=None, fallback_dir="":
                              data if flags["done"] else None)
@@ -659,18 +659,27 @@ class TestCaptionStrips(_OpsCase):
         sp.plan = lambda settings, model="", language="": {"route": "local"}
         sp.setup_problem = lambda p, settings: problem
 
-        def transcribe_strip(strip, language="", **_kw):
+        sp.CAPTIONS = "captions"
+
+        def transcribe_strip(strip, language="", owner="", **_kw):
             flags["started"].append((strip, language))
+            flags["owners"].append(owner)
 
             def check():
+                if flags["answer"] is not None:         # #522: stopped, or the server stopped under it
+                    return flags["answer"]
                 return {"status": "ok", "message": "words"} if flags["done"] else None
             return check
         sp.transcribe_strip = transcribe_strip
 
-        def stop_jobs():
+        def stop_jobs(owner=None):
             flags["stopped"] += 1
+            flags["stop_owners"].append(owner)
+            flags["answer"] = {"status": "cancelled", "message": "Transcription stopped."}
             return 1
         sp.stop_jobs = stop_jobs
+        sp.was_stopped = lambda r: isinstance(r, dict) and (r.get("status") == "cancelled"
+                                                            or r.get("message") == "Transcription stopped.")
         saved = {k: sys.modules.get(k, "unset") for k in (_PKG + ".speech", _PKG + ".long_jobs")}
 
         def restore():
@@ -714,6 +723,7 @@ class TestCaptionStrips(_OpsCase):
         op, reports = self._operator()
         self.assertEqual(op.execute(SimpleNamespace(scene=self.scene)), {'FINISHED'})
         self.assertEqual(flags["started"], [("speech", "")])
+        self.assertEqual(flags["owners"], ["captions"], "Auto Captions' own: a chat's Stop leaves it (#522)")
         self.assertIn("Transcribing 1 clip first", reports[-1][1])
         self.assertEqual(lj.started, [("TRANSCRIBE", "Transcribe")], "in the job row too")
         self.assertEqual(self.lines(), [], "no captions before the words")
@@ -778,11 +788,29 @@ class TestCaptionStrips(_OpsCase):
         self.assertEqual(self.ops._PENDING, [], "no caption job waits")
         self.assertEqual(timers, [], "no timer")
         self.assertEqual(flags["stopped"], 1, "the transcription is stopped (and whisper-server with it)")
-        self.assertEqual(lj.cancelled_kinds, ["TRANSCRIBE"], "its job row ends")
+        self.assertEqual(flags["stop_owners"], ["captions"], "only Auto Captions' own, not a chat's (#522)")
+        self.assertEqual(lj.cancelled_kinds, [], "not every transcription row by kind: a chat's goes on (#522)")
         self.assertEqual((reports[-1][0], reports[-1][1]), ('WARNING', self.ops.STOPPED))
         self.assertEqual((calls["removed"], calls["status"][-1]), (["timer"], None))
         flags["done"] = True                # a result that comes anyway makes nothing
         self.assertEqual(self.lines(), [])
+        self.assertEqual(_STATE["undo"], [])
+
+    def test_stop_speech_server_while_it_waits_reads_as_stopped_without_captions(self):
+        """#522 (a): Preferences > Speech > Stop Speech Server while Auto Captions waits: the
+        transcription answers "Transcription stopped." -- stopped, not an error, no captions."""
+        flags, timers, _lj = self._speech_stand_ins(background=False)
+        _clip(self.scene)
+        ctx, calls = self._window()
+        op, reports = self._operator()
+        self.assertEqual(op.execute(ctx), {'RUNNING_MODAL'})
+        flags["answer"] = {"status": "error", "message": "Transcription stopped."}
+        flags["done"] = True                # a transcript from before must not be captioned either
+        self.assertIsNone(timers[0](), "the wait is over")
+        self.assertEqual(self.lines(), [], "no captions")
+        self.assertEqual(op.modal(ctx, SimpleNamespace(type='TIMER', value='NOTHING')), {'CANCELLED'})
+        self.assertEqual((reports[-1][0], reports[-1][1]), ('WARNING', self.ops.STOPPED))
+        self.assertEqual(flags["stopped"], 0, "nothing else to stop")
         self.assertEqual(_STATE["undo"], [])
 
     def test_a_file_load_ends_the_wait_without_captions(self):

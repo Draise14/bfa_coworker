@@ -180,7 +180,18 @@ def _remove(bpy, holder, kind):
         pass
 
 
+def _in_coworker_turn():
+    """A Coworker chat turn runs this call (#501): the turn's own undo step covers it."""
+    import sys
+    for name, module in list(sys.modules.items()):
+        if name.endswith("bfa_coworker.coworker_api"):
+            return bool(getattr(module, "turn_owns_undo", lambda: False)())
+    return False
+
+
 def _undo_push(bpy, message):
+    if _in_coworker_turn():
+        return False
     wm = bpy.context.window_manager
     window = bpy.context.window or (wm.windows[0] if wm.windows else None)
     if window is None:

@@ -1575,13 +1575,13 @@ def _note_step(thread: str, tool: str, code: str, internal: bool, exec_result: _
     if tool in PLAN_SAFE_TOOLS:
         return                      # it only looks: no undo step
     side_by_side.JOURNAL.note(thread)
-    if exec_result.check_fn is not None or exec_result.response.get("status") != "ok":
+    if (exec_result.check_fn is not None or exec_result.response.get("status") != "ok"
+            or not side_by_side.side_by_side()):
+        coworker_api.note_call(thread, tool, code)      # one chat at work: its turn's step holds it (#501)
         return
-    if not side_by_side.side_by_side():
-        return                      # one chat at work: its turn's steps as before
     from . import agent_controller, coworker_api, threads
     label = threads.label(agent_controller.THREADS.get(thread) if thread else None)
-    coworker_api._undo(side_by_side.undo_step_name(label, tool))
+    coworker_api.note_call(thread, tool, code, step=side_by_side.undo_step_name(label, tool))
 
 
 def _close_client(client: _Client) -> None:

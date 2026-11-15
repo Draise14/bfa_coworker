@@ -74,35 +74,40 @@ class TestQuestions(unittest.TestCase):
 
 
 class TestRevert(unittest.TestCase):
-    """Engine 6b: an undo step before and after each turn; Revert only while untouched."""
+    """Engine 6b / #501: one undo step per turn that changed something; Revert only while untouched."""
 
     def setUp(self):
         self.calls = []
         self._undo = api._undo
         api._undo = lambda message="", to_item=-1: self.calls.append(message or to_item) or True
-        api._turn.update(before=False, after=False, edits=0)
+        api._turn.update(before=False, after=False, edits=0, writes=0, steps=0, pushes=0)
 
     def tearDown(self):
         api._undo = self._undo
+
+    @staticmethod
+    def _change():
+        api.note_call("", "execute_blender_code", "import bpy\nbpy.ops.mesh.primitive_cube_add()")
 
     def test_turn_checkpoints_and_revert(self):
         self.assertFalse(api.can_revert())
         api.turn_started("Claude Code's turn")
         api.turn_started("Claude Code's turn")            # the timer seeing it again: no second step
+        self._change()
         api.turn_finished("Claude Code's turn")
-        self.assertEqual(len(self.calls), 2)
-        self.assertTrue(self.calls[0].startswith("Before Claude Code's turn ("))   # a name of its own (#242)
-        self.assertEqual(self.calls[1], "Claude Code's turn")
+        self.assertEqual(self.calls, ["Claude Code's turn"], "#501: no step before the turn, one after it")
         self.assertTrue(api.can_revert())
         self.assertEqual(api.revert_turn(), "")
         self.assertEqual(self.calls[-1], -1)                # no undo stack here (no bpy): one plain undo
         self.assertFalse(api.can_revert())
 
-    def test_revert_goes_back_to_the_turns_before_step(self):
-        # #242: a tool's own undo steps in between; Revert jumps to "Before ..." by name.
+    def test_revert_goes_back_to_the_step_before_the_turn(self):
+        # #242: a tool's own undo steps used to sit in the turn; #501: from a turn a tool pushes
+        # none, so the turn is its one step and Revert goes to the step under it.
         api.turn_started("Coworker's turn")
+        self._change()
         api.turn_finished("Coworker's turn")
-        names = ["Original", api._turn["name"], "wire_node_group", "Coworker's turn"]
+        names = ["Original", "wire_node_group", "Coworker's turn"]
         steps = [types.SimpleNamespace(name=n) for n in names]
         wm = types.SimpleNamespace(undo_stack=types.SimpleNamespace(steps=steps))
         sys.modules["bpy"] = types.SimpleNamespace(context=types.SimpleNamespace(window_manager=wm))
@@ -110,10 +115,11 @@ class TestRevert(unittest.TestCase):
             self.assertEqual(api.revert_turn(), "")
         finally:
             del sys.modules["bpy"]
-        self.assertEqual(self.calls[-1], 1)                 # undo_history(item=1), the turn's Before step
+        self.assertEqual(self.calls[-1], 1)                 # undo_history(item=1), the step under the turn's
 
     def test_no_revert_after_you_changed_the_scene(self):
         api.turn_started("Coworker's turn")
+        self._change()
         api.turn_finished("Coworker's turn")
         api._count_edit()
         self.assertFalse(api.can_revert())

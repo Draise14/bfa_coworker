@@ -765,7 +765,7 @@ class TestRevertWithTwoChats(unittest.TestCase):
         self.addCleanup(setattr, cw, "_undo", self._undo)
         cw._turns.clear()
         cw._turns[""] = cw._turn
-        cw._turn.update(before=False, after=False, edits=0, name="", mark=0)
+        cw._turn.update(before=False, after=False, edits=0, name="", mark=0, writes=0, steps=0, pushes=0)
         saved = list(sbs.WORKING)
         sbs.WORKING[:] = [lambda: list(self.working)]
         self.addCleanup(lambda: sbs.WORKING.__setitem__(slice(None), saved))
@@ -780,19 +780,28 @@ class TestRevertWithTwoChats(unittest.TestCase):
         self.addCleanup(sys.modules.pop, "bpy", None)
         return names
 
+    @staticmethod
+    def _change(thread):
+        """A write call of chat *thread* (#501: a turn without one pushes no step, has nothing to revert)."""
+        cw.note_call(thread, "execute_blender_code", "import bpy\nbpy.ops.mesh.primitive_cube_add()")
+
     def test_each_chat_its_own_checkpoint_and_direct_revert(self):
         cw.turn_started("Coworker (3D)'s turn", thread="t1")
         cw.turn_started("Coworker (Node)'s turn", thread="t2")
-        self.assertNotEqual(cw._turn_of("t1")["name"], cw._turn_of("t2")["name"], "a Before step each (#359)")
+        self.assertIsNot(cw._turn_of("t1"), cw._turn_of("t2"), "a checkpoint each (#359)")
+        self.assertNotEqual(cw._turn_of("t1")["n"], cw._turn_of("t2")["n"])
+        self._change("t2")
         cw.turn_finished("Coworker (Node)'s turn", thread="t2")
         self.assertTrue(cw.can_revert("t2"))
         self.assertFalse(cw.can_revert("t1"), "its turn still runs")
         self.assertEqual(cw.revert_choice("t2").kind, "direct",
-                         "nothing from the 3D chat since the Node turn began (its Before came earlier)")
+                         "nothing from the 3D chat since the Node turn began (no step at a turn's start)")
 
     def test_another_chat_stepped_since_offers_revert_both(self):
         cw.turn_started("Coworker (3D)'s turn", thread="t1")
+        self._change("t1")
         sbs.JOURNAL.note("t2")                      # the Node chat's call lands on top
+        cw._push("Coworker (Node): execute blender code")
         cw.turn_finished("Coworker (3D)'s turn", thread="t1")
         self.working = ["t2"]
         self.assertEqual(cw.revert_choice("t1").kind, "busy")
@@ -804,20 +813,42 @@ class TestRevertWithTwoChats(unittest.TestCase):
         self.assertEqual(self.calls[-1], "Coworker (3D)'s turn", "nothing undone")
         cw._turn_of("t2").update(after=True, edits=cw._edits[0])
         self.assertEqual(cw.revert_turn("t1", both=True), "")
-        self.assertEqual(self.calls[-1], names.index(cw._turn_of("t1")["name"]), "back to the 3D turn's Before step")
+        self.assertEqual(self.calls[-1], names.index("Original"),
+                         "back to the step under the 3D turn's first (#501: by the steps since it began)")
         self.assertEqual(cw.reverted_with, ["t2"], "the Node chat is told")
         self.assertFalse(cw.can_revert("t2"), "its steps went too")
 
     def test_without_the_undo_list_both_is_refused(self):
         cw.turn_started("Coworker (3D)'s turn", thread="t1")
+        self._change("t1")
         sbs.JOURNAL.note("t2")
         cw.turn_finished("Coworker (3D)'s turn", thread="t1")
         before = list(self.calls)
         self.assertIn("Undo History", cw.revert_turn("t1", both=True), "no positional undo (no undo_stack)")
         self.assertEqual(self.calls, before)
 
+    def test_the_bridge_notes_each_write_call(self):
+        # #501: one chat at work -> its turn's end step holds the call; side by side -> a step each.
+        br, = _load("mcp_to_blender_server")
+        ok = br._ExecResult({"status": "ok"}, None)
+        cw.turn_started("Coworker (3D)'s turn", thread="t1")
+        br._note_step("t1", "get_scene_digest", "", False, ok)
+        br._note_step("t1", "execute_blender_code", "import bpy\nprint(len(bpy.data.objects))", False, ok)
+        self.assertEqual(cw._turn_of("t1")["writes"], 0, "a look and a script that only reads: no change")
+        br._note_step("t1", "execute_blender_code", "import bpy\nbpy.ops.mesh.primitive_cube_add()", False, ok)
+        self.assertEqual((cw._turn_of("t1")["writes"], self.calls), (1, []), "no step of its own")
+        self.working = ["t1", "t2"]
+        with unittest.mock.patch.object(th, "label", lambda thread=None: "Coworker (3D)"):
+            br._note_step("t1", "execute_blender_code", "import bpy\nbpy.ops.mesh.primitive_cube_add()", False, ok)
+        self.assertEqual(self.calls, ["Coworker (3D): execute blender code"])
+        self.assertEqual(cw._turn_of("t1")["writes"], 0, "that step holds every change so far")
+        cw.turn_finished("Coworker (3D)'s turn", thread="t1")
+        self.assertEqual(len(self.calls), 1, "no empty end step on top")
+        self.assertTrue(cw.can_revert("t1"))
+
     def test_coworkers_own_changes_are_not_your_edit(self):
         cw.turn_started("Coworker (3D)'s turn", thread="t1")
+        self._change("t1")
         cw.turn_finished("Coworker (3D)'s turn", thread="t1")
         cw.own_change()                             # e.g. the scene lock's release by the bridge
         cw._count_edit()
@@ -828,6 +859,7 @@ class TestRevertWithTwoChats(unittest.TestCase):
 
     def test_another_chats_turn_is_not_your_edit(self):
         cw.turn_started("Coworker (3D)'s turn", thread="t1")
+        self._change("t1")
         cw.turn_finished("Coworker (3D)'s turn", thread="t1")
         cw.turn_started("Coworker (Node)'s turn", thread="t2")
         cw._count_edit()                            # the Node chat's change, while its turn is open

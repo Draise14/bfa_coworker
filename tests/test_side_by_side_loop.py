@@ -9,9 +9,10 @@ The real ``agent_controller`` (exec'd with a stand-in bpy, as in
 ``test_turn_loop_integration``) against the fake LLM / MCP server:
 
 1. No positional undo while another chat stepped: a failed step's rollback
-   would ``ed.undo()`` the newest step -- the other chat's -- so with another
-   chat's step since our last push it uses the step's own scoped cleanup.
-2. The loop's own undo pushes in a tab are named by its chat.
+   would load the newest step again -- the other chat's -- so with another
+   chat's step since our baseline it uses the step's own scoped cleanup.
+2. The loop pushes no undo step of its own in a tab either (#501): the turn's
+   step, or side by side a step per write call, is the bridge's.
 3. On Remote, two chats' turns run at once (the runner's slots), each to its
    own history; the turn's claims go when it ends.
 4. A running chat's requests carry one "Other chats working now: ..." line.
@@ -47,10 +48,9 @@ class TestNoPositionalUndoWithAnotherChat(_tli._TurnLoopTestBase):
     _run_agent_turn = _CoWork._run_agent_turn
 
     def _script(self):
-        self._mk_server([
-            _tli._tool_call_msg("call_1", "bpy.ops.mesh.primitive_cube_add()"),
-            _tli._tool_call_msg("call_2", self._FAIL_MARKER + "\nimport bpy"),
-            _tli._tool_call_msg("call_3", "bpy.ops.mesh.primitive_uv_sphere_add()"),
+        self._mk_server([       # #501: the failure is the turn's first change (else no rollback anyway)
+            _tli._tool_call_msg("call_1", self._FAIL_MARKER + "\nimport bpy"),
+            _tli._tool_call_msg("call_2", "bpy.ops.mesh.primitive_uv_sphere_add()"),
             {"content": "recovered"},
         ])
         self.server.snapshot_script = True
@@ -71,14 +71,14 @@ class TestNoPositionalUndoWithAnotherChat(_tli._TurnLoopTestBase):
         self.assertIn("recovered", texts)
         codes = self._mcp_codes()
         self.assertEqual([c for c in codes if "bpy.ops.ed.undo()" in c], [],
-                         "a positional undo would have taken back the other chat's step")
+                         "loading the newest step again would have taken back the other chat's step")
         self.assertIn("Sphere", self.server.scene_objects, "the turn went on")
 
     def test_global_undo_still_used_when_alone(self):
         self._script()
         self._run_agent_turn("build the set")
         self.assertTrue([c for c in self._mcp_codes() if "bpy.ops.ed.undo()" in c],
-                        "one chat at work: the failure rollback as before")
+                        "one chat at work: the failure rollback as before (#501: undo, then redo)")
 
 
 del _CoWork        # not a test class of this module
@@ -106,12 +106,23 @@ class TestTwoChatsOnRemote(_tli._TurnLoopTestBase):
         self.lm.set_config(cfg)
         self.lm._runtime_ctx_cache = None
 
-    def test_undo_pushes_named_by_chat(self):
-        threads = sys.modules["bfa_coworker.threads"]
-        with threads.use(self.node):
-            self.assertEqual(self.ac._loop_step_name("bfa_coworker_step"), "Coworker (Node): a step")
-            self.assertEqual(self.ac._loop_step_name("bfa_coworker_pre_script"), "Coworker (Node): before a step")
-        self.assertEqual(self.ac._loop_step_name("bfa_coworker_step"), "bfa_coworker_step", "All editors: as before")
+    def test_no_undo_push_of_the_loops_own_in_a_tab(self):
+        # #359 named the loop's save points by chat; #501: there are none, in a tab neither.
+        self._serve([_tli._tool_call_msg("call_1", "bpy.ops.mesh.primitive_cube_add()"),
+                     _tli._tool_call_msg("call_2", "bpy.ops.mesh.primitive_uv_sphere_add()"),
+                     {"content": "done"}])
+        self._pin_fake_bpy()
+        try:
+            self.ac.run_conversation_turn("build", chat_mode="AGENT", llm_url=None, model="fake-model",
+                                          mcp_port=self.port, thread=self.node)
+        finally:
+            self._unpin_fake_bpy()
+        with self.server.lock:
+            codes = [str((c.get("params") or {}).get("arguments", {}).get("code", ""))
+                     for c in self.server.mcp_requests if c.get("method") == "tools/call"]
+        self.assertTrue(any("primitive_uv_sphere_add" in c for c in codes), "the turn ran its steps")
+        self.assertEqual([c for c in codes if "undo_push(" in c or "bpy.ops.ed.undo()" in c], [])
+        self.assertFalse(hasattr(self.ac, "_loop_step_name"), "no save point names left")
 
     def test_both_turns_run_at_once(self):
         self._serve([{"content": "reply"}] * 4)

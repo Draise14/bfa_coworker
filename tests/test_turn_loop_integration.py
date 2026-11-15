@@ -310,6 +310,14 @@ class _FakeLLMHandler(BaseHTTPRequestHandler):
                     "type": "text",
                     "text": json.dumps(merged),
                 }]}
+            elif "result['reloaded']" in code:
+                # #501: the failure rollback loads the newest undo step again
+                # (undo, then redo); the real bridge answers the code's result.
+                with server.lock:
+                    server.reloads = getattr(server, "reloads", 0) + 1
+                result = {"content": [{"type": "text", "text": json.dumps(
+                    {"status": "ok", "result": {"status": "ok", "message": "reload executed",
+                                                "reloaded": True}})}]}
             elif "'snapshot': {" in code and "undo_push(message=" not in code:
                 # Snapshot-ONLY call (scoped auto-undo, Phase 6): capture the
                 # scene without touching the undo stack.
@@ -1838,16 +1846,19 @@ class TestCoWorkUserEditAndScopedUndo(_TurnLoopTestBase):
             "the re-sync message must reach the model")
 
     def test_scoped_undo_runs_after_failed_step(self):
-        """A failed step (no foreign edit): snapshot-only capture, then the
-        global undo, then the fingerprint restore and a fresh baseline."""
+        """A failed step (no foreign edit) that was the turn's first change:
+        snapshot-only capture, then the rollback (#501: the newest undo step
+        loaded again -- undo, then redo -- since there is no save point on the
+        undo list any more), then the fingerprint restore and a fresh baseline."""
         self._mk_server([
-            _tool_call_msg("call_1", "bpy.ops.mesh.primitive_cube_add()"),
-            _tool_call_msg("call_2", self._FAIL_MARKER + "\\nimport bpy"),
-            _tool_call_msg("call_3", "bpy.ops.mesh.primitive_uv_sphere_add()"),
+            _tool_call_msg("call_1", self._FAIL_MARKER + "\\nimport bpy"),
+            _tool_call_msg("call_2", "bpy.ops.mesh.primitive_uv_sphere_add()"),
             {"content": "recovered"},
         ])
         self.server.snapshot_script = True
         self.server.fail_tool_markers.append(self._FAIL_MARKER)
+        self.server.scene_objects = ["Cube"]            # the user's own object, active and selected
+        self.server.scene_state.update(active_object="Cube", selected=["Cube"])
 
         history, texts = self._run_agent_turn("build the set")
 
@@ -1855,20 +1866,22 @@ class TestCoWorkUserEditAndScopedUndo(_TurnLoopTestBase):
         self.assertIn("recovered", texts)
         codes = self._mcp_codes()
         undo_pushes = [i for i, c in enumerate(codes)
-                       if "undo_push(" in c and "'snapshot'" in c]
+                       if "undo_push(" in c]
         snapshot_only = [i for i, c in enumerate(codes)
                          if "'snapshot': {" in c and "undo_push(" not in c]
         undo_calls = [i for i, c in enumerate(codes)
                       if "bpy.ops.ed.undo()" in c]
         restores = [i for i, c in enumerate(codes)
                     if "restored_active" in c]
-        # Recovery order: snapshot-only capture BEFORE the global undo.
+        # Recovery order: snapshot-only capture BEFORE the rollback.
         self.assertTrue(snapshot_only, "failed step must be captured snapshot-only")
         self.assertTrue(undo_calls,
-                        "global undo fires when no foreign edit was seen")
+                        "the rollback fires when no foreign edit was seen")
+        self.assertIn("bpy.ops.ed.redo()", codes[undo_calls[0]], "undo, then redo: the newest step again")
+        self.assertEqual(self.server.reloads, 1)
         self.assertLess(snapshot_only[0], undo_calls[0],
-                        "capture must precede the undo (a push in between "
-                        "would make the undo pop our own bookmark)")
+                        "capture must precede the rollback")
+        self.assertEqual(undo_pushes, [], "#501: the loop pushes no undo step of its own")
         self.assertTrue(restores, "pre-step fingerprint must be restored")
         with self.server.lock:
             internal = [(c.get("params") or {}) for c in self.server.mcp_requests
@@ -1880,20 +1893,44 @@ class TestCoWorkUserEditAndScopedUndo(_TurnLoopTestBase):
         # The turn continued past the failure (sphere was created).
         self.assertIn("Sphere", self.server.scene_objects)
 
-    def test_global_undo_skipped_when_user_edited_scene(self):
-        """With a foreign edit before the recovery (D8), the global undo
-        must NOT fire -- the user's undo step must be safe."""
+    def test_later_failed_step_keeps_the_turns_earlier_change(self):
+        """#501: a step fails after the turn already changed the scene.  The
+        newest undo step is older than that change, so loading it again would
+        take the change back too: scoped cleanup only, the earlier change stays,
+        and still no undo step of the loop's own."""
         self._mk_server([
             _tool_call_msg("call_1", "bpy.ops.mesh.primitive_cube_add()"),
             _tool_call_msg("call_2", self._FAIL_MARKER + "\\nimport bpy"),
             _tool_call_msg("call_3", "bpy.ops.mesh.primitive_uv_sphere_add()"),
+            {"content": "recovered"},
+        ])
+        self.server.snapshot_script = True
+        self.server.fail_tool_markers.append(self._FAIL_MARKER)
+
+        _history, texts = self._run_agent_turn("build the set")
+
+        self.assertIn("recovered", texts)
+        codes = self._mcp_codes()
+        self.assertEqual([c for c in codes if "bpy.ops.ed.undo()" in c], [], "no rollback by undo")
+        self.assertEqual([c for c in codes if "undo_push(" in c], [], "no undo step of the loop's own")
+        cleanups = [c for c in codes if "'cleaned'" in c]
+        self.assertEqual(cleanups, [], "the failed step made nothing, and the turn's earlier work is not its")
+        self.assertIn("Cube", self.server.scene_objects, "the turn's earlier change stays")
+        self.assertIn("Sphere", self.server.scene_objects)
+
+    def test_global_undo_skipped_when_user_edited_scene(self):
+        """With a foreign edit before the recovery (D8), the rollback
+        must NOT fire -- the user's undo step must be safe."""
+        self._mk_server([
+            _tool_call_msg("call_1", self._FAIL_MARKER + "\\nimport bpy"),
+            _tool_call_msg("call_2", "bpy.ops.mesh.primitive_uv_sphere_add()"),
             {"content": "recovered safely"},
         ])
         self.server.snapshot_script = True
         self.server.fail_tool_markers.append(self._FAIL_MARKER)
-        # The user edit lands right before the snapshot-only capture (3rd
-        # armed snapshot response: init push, step push, failed capture).
-        self.server.user_edit_at_push_index = 3
+        # The user edit lands right before the snapshot-only capture (2nd
+        # armed snapshot response: the baseline, then the failed capture).
+        self.server.user_edit_at_push_index = 2
 
         history, texts = self._run_agent_turn("build the set")
 

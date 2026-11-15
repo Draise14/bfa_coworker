@@ -1037,6 +1037,14 @@ class TestTool(_OpsCase):
         self.assertEqual(_STATE["undo"], ["Add Captions"])
         self.assertIn("caption lines on channel", r["message"])
 
+    def test_from_a_chat_turn_no_step_of_its_own(self):
+        # #501: the chat turn's own undo step holds the captions (one Ctrl+Z for the turn).
+        _clip(self.scene)
+        with mock.patch.object(self.ops, "_turn_owns_undo", lambda: True):
+            r = self.ops.tool_add_captions(["speech"], "bold pop", "auto", self.transcript)
+        self.assertEqual(r["status"], "ok")
+        self.assertEqual(_STATE["undo"], [])
+
     def test_the_toolcode(self):
         toolcode = _load(_TOOLS / "add_captions_toolcode.py", "bfacw_add_captions_toolcode")
         out = toolcode.main(toolcode.Params(strips=("x",)))

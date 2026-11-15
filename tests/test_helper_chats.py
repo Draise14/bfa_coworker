@@ -325,7 +325,7 @@ class _Flow(unittest.TestCase):
         lm.get_config = lambda: types.SimpleNamespace(mode="local", remote_api_url="", remote_api_key="",
                                                       remote_model="")
         cw = types.ModuleType(_PKG + ".coworker_api")
-        cw.turn_started = lambda label: None
+        cw.turn_started = lambda label, thread="": None
         cw.cancel_questions = lambda tag=None: None
         rs = types.ModuleType(_PKG + ".risky_steps")
         rs.APPROVALS = types.SimpleNamespace(cancel_all=lambda tag=None: None)

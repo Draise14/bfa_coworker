@@ -705,6 +705,11 @@ def _thread_engine(thread, mode: str | None = None):
 def _thread_turn_finished(thread) -> None:
     """A thread's turn ended (worker thread): save its chat, and mark it unread."""
     thread.unread = True
+    try:                        # the chat timer closes its turn, also a very short one (#501)
+        from . import coworker_api, threads
+        coworker_api.loop_turn_ended(threads.tag(thread))
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] turn end: {:s}".format(str(ex)))
     if thread.is_default:
         _save_chat_history()
     else:
@@ -4473,6 +4478,13 @@ def chat_timer_update() -> float | None:
     _live = _ac.THREADS.live()
     for _t in _live:
         _thinking = bool(_ac.thread_state(_t).is_thinking)
+        if _cw.take_ended(_threads.tag(_t)) and (_TURN_SEEN.get(_t.id, False) or _cw.turn_open(_threads.tag(_t))):
+            # #501: its loop turn ended, also one shorter than this timer's tick (0.5 s
+            # while idle) that the edges below never saw: close it (a queued next one
+            # that already runs starts below).
+            _TURN_SEEN[_t.id] = False
+            _cw.turn_finished(_turn_label(None, _t), thread=_threads.tag(_t))
+            _auto_after_turn(_t)
         if _thinking == _TURN_SEEN.get(_t.id, False):
             continue
         _TURN_SEEN[_t.id] = _thinking

@@ -326,9 +326,21 @@ def _vse_find_strip(scene: Any, name: str) -> Any:
     return None
 
 
+def _vse_in_coworker_turn() -> bool:
+    """A Coworker chat turn runs this call (#501): the turn's own undo step covers it."""
+    import sys
+    for name, module in list(sys.modules.items()):
+        if name.endswith("bfa_coworker.coworker_api"):
+            return bool(getattr(module, "turn_owns_undo", lambda: False)())
+    return False
+
+
 def _vse_undo_push(message: str) -> bool:
-    """One named undo step (in a window's context when there is one)."""
+    """One named undo step (in a window's context when there is one); none from a Coworker
+    chat turn, whose own step covers it (#501)."""
     import bpy  # pylint: disable=import-error,no-name-in-module
+    if _vse_in_coworker_turn():
+        return False
     wm = bpy.context.window_manager
     window = bpy.context.window or (wm.windows[0] if wm and wm.windows else None)
     try:

@@ -410,6 +410,12 @@ def reframe_strip(scene: Any, strip: Any, mode: str, reset: bool = False) -> str
 
 def _copy_scene(scene: Any) -> Any:
     copy = scene.copy()
+    # ID.copy() hands back a copy with no user (the caller is meant to assign it), and
+    # nothing counts as a scene's user -- not the window, not the workspace's Sequencer --
+    # so a 0-user copy is dropped on save (#537).  Give it the extra user Blender gives
+    # every scene it makes itself (bpy.data.scenes.new, Scene > New): not a fake user, so
+    # deleting the copy by hand still removes it and leaves nothing behind.
+    copy.use_extra_user = True
     copy.name = scene.name + " Vertical"
     copy[VERTICAL_TAG] = scene.name
     # scene.copy() shares the action: keyframes on the copy's modifiers would land in

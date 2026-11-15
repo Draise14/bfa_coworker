@@ -1054,5 +1054,142 @@ class TestRepeatContext(_TempData):
         self.assertEqual(box, [main], "the settings last read on the main thread")
 
 
+# ---------------------------------------------------------------------------
+# 11. The WAV for whisper (#520: 44.1 kHz stereo failed in aud's Sound.write)
+
+class _FakeSound:
+    """A stand-in ``aud.Sound``: records the reader chain; ``data()`` is the piece's frames at
+    the chain's rate (a frame over for a limited piece, as a resampler can be)."""
+
+    def __init__(self, log, rate=44100.0, channels=2, length=1059660, fail_data="", start=0.0, end=-1.0,
+                 out_rate=None):
+        self.log, self.specs, self.length, self.fail_data = log, (rate, channels), length, fail_data
+        self.start, self.end, self.out_rate = start, end, out_rate
+
+    def _copy(self, **kw):
+        args = dict(log=self.log, rate=self.specs[0], channels=self.specs[1], length=self.length,
+                    fail_data=self.fail_data, start=self.start, end=self.end, out_rate=self.out_rate)
+        args.update(kw)
+        return _FakeSound(**args)
+
+    def limit(self, start, end):
+        self.log.append(("limit", start, end))
+        return self._copy(start=start, end=end)
+
+    def rechannel(self, channels):
+        self.log.append(("rechannel", channels))
+        return self._copy(channels=channels)
+
+    def resample(self, rate, quality):
+        self.log.append(("resample", rate, quality))
+        return self._copy(out_rate=rate)
+
+    def data(self):
+        if self.fail_data:
+            raise RuntimeError(self.fail_data)
+        total = self.length / self.specs[0]
+        end = total if self.end < 0 else min(self.end, total)
+        rate = self.out_rate or self.specs[0]
+        return [0.0] * max(0, int((end - self.start) * rate) + (1 if self.end >= 0 else 0))
+
+    def write(self, *_a, **_k):
+        raise RuntimeError("File couldn't be written, filling the audio frame failed with ffmpeg.")
+
+
+_PIECES = speech.wav_pieces
+
+
+class TestWav(unittest.TestCase):
+    """The 16 kHz mono WAV is read through aud's reader chain and written by ``wave``."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.log = []
+        self.sound = _FakeSound(self.log)
+        fake = types.ModuleType("aud")
+        fake.CHANNELS_MONO = 1
+        fake.Sound = types.SimpleNamespace(file=self.opened)
+        for p in (mock.patch.dict(sys.modules, {"aud": fake}),
+                  # No numpy here: 16-bit silence of the frames asked for (all of them when -1).
+                  mock.patch.object(speech, "_pcm16", lambda samples, frames: bytes(2 * (
+                      frames if frames >= 0 else len(samples))))):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def opened(self, path):
+        self.log.append(("file", os.path.basename(path)))
+        if isinstance(self.sound, Exception):
+            raise self.sound
+        return self.sound
+
+    def wav(self, media="talk.wav"):
+        import wave
+        out = self.tmp / "out.wav"
+        speech._write_wav(str(self.tmp / media), str(out))
+        with wave.open(str(out), "rb") as w:
+            return (w.getframerate(), w.getnchannels(), w.getsampwidth()), w.getnframes()
+
+    def test_pieces_cover_the_sound_exactly(self):
+        self.assertEqual(speech.wav_pieces(1059660, 44100.0), [(0.0, -1.0, -1)], "a short clip is one read")
+        self.assertEqual(speech.wav_pieces(0, 44100.0), [(0.0, -1.0, -1)], "an unknown length too")
+        self.assertEqual(speech.wav_pieces(int(speech.PIECE_S) * 48000, 48000.0), [(0.0, -1.0, -1)],
+                         "exactly one piece long")
+        pieces = speech.wav_pieces(int(1500.5 * 44100), 44100.0, piece_s=600.0)
+        self.assertEqual(pieces, [(0.0, 600.0, 9600000), (600.0, 1200.0, 9600000), (1200.0, -1.0, -1)])
+        odd = speech.wav_pieces(529787, 22050.0, piece_s=7.0)
+        starts = [p[0] for p in odd]
+        self.assertEqual(starts, [7.0 * k for k in range(len(odd))])
+        for (start, _end, frames), nxt in zip(odd, starts[1:]):
+            self.assertEqual(frames, round(nxt * 16000) - round(start * 16000))
+        self.assertEqual(sum(p[2] for p in odd[:-1]), round(odd[-1][0] * 16000), "no drift at the joins")
+
+    def test_a_44k_stereo_wav_becomes_16k_mono_without_sound_write(self):
+        spec, frames = self.wav()
+        self.assertEqual(spec, (16000, 1, 2))
+        self.assertEqual(frames, int(1059660 / 44100 * 16000))
+        self.assertEqual(self.log, [("file", "talk.wav"), ("rechannel", 1),
+                                    ("resample", 16000, speech._RESAMPLE_QUALITY)],
+                         "the whole file in one read, mono first, no limit, never Sound.write")
+
+    def test_a_long_sound_is_read_in_pieces_and_keeps_its_length(self):
+        self.sound = _FakeSound(self.log, rate=48000.0, length=int(1500.5 * 48000))
+        with mock.patch.object(speech, "wav_pieces", lambda f, r: _PIECES(f, r, 600.0)):
+            _spec, frames = self.wav("long.mp4")
+        self.assertEqual([e for e in self.log if e[0] == "limit"],
+                         [("limit", 0.0, 600.0), ("limit", 600.0, 1200.0), ("limit", 1200.0, -1.0)])
+        # Each full piece is cut to its exact frames (the stand-in gives one more); the last runs to the end.
+        self.assertEqual(frames, 2 * 9600000 + int(300.5 * 16000))
+
+    def test_sound_format_for_messages(self):
+        self.assertEqual(speech.sound_format("C:/a/Talk.WAV", (44100.0, 2)), ".wav, 44.1 kHz stereo")
+        self.assertEqual(speech.sound_format("b.mp4", (48000.0, 1)), ".mp4, 48 kHz mono")
+        self.assertEqual(speech.sound_format("c.flac", (16000.0, 6)), ".flac, 16 kHz 5.1")
+        self.assertEqual(speech.sound_format("d.ogg", (22050.0, 3)), ".ogg, 22.05 kHz 3 channels")
+        self.assertEqual(speech.sound_format("e.m4a", None), ".m4a")
+        self.assertEqual(speech.sound_format("noext", None), "no extension")
+
+    def test_a_sound_blender_cannot_decode_names_the_file_and_the_format(self):
+        self.sound = _FakeSound(self.log, fail_data="File couldn't be read.")
+        with self.assertRaises(RuntimeError) as cm:
+            self.wav("voice.wav")
+        msg = str(cm.exception)
+        self.assertIn("voice.wav (.wav, 44.1 kHz stereo)", msg)
+        self.assertIn("File couldn't be read.", msg)
+
+    def test_a_file_blender_cannot_open_names_the_file_and_its_extension(self):
+        self.sound = RuntimeError("")
+        with self.assertRaises(RuntimeError) as cm:
+            self.wav("clip.xyz")
+        self.assertIn("clip.xyz (.xyz): RuntimeError.", str(cm.exception))
+
+    def test_no_samples_is_no_sound(self):
+        self.sound = _FakeSound(self.log, length=0)
+        with self.assertRaises(RuntimeError) as cm:
+            self.wav("silent.mp4")
+        self.assertEqual(str(cm.exception), "silent.mp4 (.mp4, 44.1 kHz stereo) has no sound.")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -8,8 +8,8 @@ Transcribe a Sequencer strip (Tier 4, task "Video 1", #375): the ``transcribe_st
 
 On the main thread (the bridge runs tool-code there): find the strip and its media file,
 key it (:func:`transcripts.media_key`) and answer from the cache when the file was
-transcribed before.  Otherwise a worker thread writes a 16 kHz mono WAV with Blender's
-``aud`` (no ffmpeg; the whole file, since the cache is per media file), starts
+transcribed before.  Otherwise a worker thread reads the sound with Blender's ``aud`` and
+writes a 16 kHz mono WAV (no ffmpeg; the whole file, since the cache is per media file), starts
 whisper-server when needed, POSTs the WAV and stores the transcript.  The tool answers
 with a checker (the ``deferred_tool`` convention): a short clip answers when it is done; a
 long one is handed to ``long_jobs`` after 45 s and the agent gets a ``job_id`` to wait on
@@ -225,16 +225,87 @@ def strip_timing(scene: Any, strip: Any) -> dict[str, float]:
             "fps": float(render.fps) / float(render.fps_base or 1.0)}
 
 
-def _write_wav(media: str, out: str) -> None:
-    """16 kHz mono S16 WAV with Blender's audaspace (``write`` resamples itself; no ffmpeg)."""
-    import aud  # pylint: disable=import-error,import-outside-toplevel
+WAV_RATE = 16000            # what whisper takes: 16 kHz mono 16-bit PCM
+PIECE_S = 300.0             # read 5 minutes at a time: memory doesn't grow with the length of the file
+_RESAMPLE_QUALITY = 2       # aud's resampler: 0 fastest .. 3 best
+
+
+def wav_pieces(frames: int, rate: float, piece_s: float = PIECE_S,
+               out_rate: int = WAV_RATE) -> list[tuple[float, float, int]]:
+    """``(start s, end s, frames out)`` pieces that cover a sound of *frames* at *rate*.
+
+    The frames out of a piece are its rounded end less its rounded start, so the pieces add
+    up to the whole sound exactly and every word keeps its time in the media file.  The last
+    piece runs to the end of the sound, whatever its length (``end`` -1.0, frames out -1): a
+    length Blender only estimated can't cut the end off.  An unknown length is one piece."""
+    if frames <= 0 or rate <= 0 or piece_s <= 0:
+        return [(0.0, -1.0, -1)]
+    total = frames / float(rate)
+    out, start = [], 0.0
+    while total - start > piece_s:
+        end = start + piece_s
+        out.append((start, end, int(round(end * out_rate)) - int(round(start * out_rate))))
+        start = end
+    out.append((start, -1.0, -1))
+    return out
+
+
+def sound_format(media: str, specs: Any = None) -> str:
+    """What the media is, for a message: ``".wav, 44.1 kHz stereo"`` (the extension alone when
+    Blender couldn't read its specs)."""
+    ext = os.path.splitext(media)[1].lower() or "no extension"
     try:
-        aud.Sound.file(media).write(out, 16000, aud.CHANNELS_MONO, aud.FORMAT_S16, aud.CONTAINER_WAV, aud.CODEC_PCM)
+        rate, channels = float(specs[0]), int(specs[1])
+    except (TypeError, ValueError, IndexError):
+        return ext
+    names = {1: "mono", 2: "stereo", 6: "5.1", 8: "7.1"}
+    return "{:s}, {:g} kHz {:s}".format(ext, rate / 1000.0, names.get(channels, "{:d} channels".format(channels)))
+
+
+def _pcm16(samples: Any, frames: int) -> bytes:
+    """*samples* (aud's ``data()``: a float numpy array, one column) as 16-bit PCM, cut or padded
+    with silence to *frames* (all of them when *frames* is negative)."""
+    import numpy as np  # pylint: disable=import-error,import-outside-toplevel
+    mono = np.asarray(samples, dtype=np.float32).reshape(-1)
+    if frames >= 0:
+        mono = mono[:frames] if len(mono) >= frames else np.concatenate(
+            (mono, np.zeros(frames - len(mono), np.float32)))
+    mono = np.clip(mono, -1.0, 1.0)
+    mono *= 32767.0
+    return mono.astype("<i2").tobytes()
+
+
+def _write_wav(media: str, out: str) -> None:
+    """The whole media file as a 16 kHz mono 16-bit WAV, for whisper (#520).
+
+    Blender's audaspace reads the file (no ffmpeg of our own) and converts it in the reader
+    (``rechannel`` and ``resample``); Python's ``wave`` writes it.  Not ``Sound.write``: its
+    FFmpeg writer fails ("filling the audio frame failed") whenever a read comes back empty at
+    the end of the sound, which depends on the length, the rate and the codec -- most 44.1 kHz
+    files, FLAC / MP3 / Ogg / AAC, and some MP4s -- on 5.2 to 5.4 alike."""
+    import wave
+    import aud  # pylint: disable=import-error,import-outside-toplevel
+    name = os.path.basename(media)
+    specs = None
+    try:
+        src = aud.Sound.file(media)
+        specs = src.specs
+        pieces = wav_pieces(int(getattr(src, "length", 0) or 0), float(specs[0]))
+        with wave.open(out, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(WAV_RATE)
+            for start, end, frames in pieces:
+                part = src if start <= 0.0 and end < 0.0 else src.limit(start, end)
+                wav.writeframes(_pcm16(part.rechannel(aud.CHANNELS_MONO).resample(WAV_RATE, _RESAMPLE_QUALITY).data(),
+                                       frames))
     except Exception as ex:  # pylint: disable=broad-exception-caught
-        raise RuntimeError("Blender could not read the sound of {:s} ({:s}); it may have no audio track.".format(
-            os.path.basename(media), str(ex))) from None
+        why = str(ex).strip().rstrip(".") or type(ex).__name__
+        raise RuntimeError("Blender could not read the sound of {:s} ({:s}): {:s}. It may have no audio track; "
+                           "a WAV, FLAC, MP3 or the sound of an MP4 work.".format(
+                               name, sound_format(media, specs), why)) from None
     if not os.path.isfile(out) or os.path.getsize(out) <= 44:
-        raise RuntimeError("{:s} has no sound.".format(os.path.basename(media)))
+        raise RuntimeError("{:s} ({:s}) has no sound.".format(name, sound_format(media, specs)))
 
 
 # -- Results ------------------------------------------------------------------------------

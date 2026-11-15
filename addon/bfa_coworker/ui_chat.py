@@ -1281,11 +1281,9 @@ def _sync_prefs_to_config(prefs: bpy.types.AddonPreferences) -> None:
         llm_cfg.mode = "remote"
     else:
         llm_cfg.mode = "local"  # fallback for harness mode
-    llm_cfg.llama_path = prefs.llama_path
-    llm_cfg.model_repo_id = prefs.model_repo_id
-    llm_cfg.model_filename = prefs.model_filename
-    llm_cfg.downloaded_models_dir = prefs.downloaded_models_dir
-    llm_cfg.local_ctx_size = prefs.local_ctx_size
+    # Everything that shapes the server command line (KV quant, backend,
+    # verbose, slots, ...): one shared list, so none is forgotten (#543).
+    llm_manager.apply_server_prefs(llm_cfg, prefs, bpy.path.abspath)
     llm_cfg.local_max_tokens = prefs.local_max_tokens
     llm_cfg.thinking_budget_tokens = prefs.thinking_budget_tokens
     # getattr with a default: a Blender session that still has an older
@@ -4227,6 +4225,11 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
                     # real turn then hangs 120s on a dead port.
                     _set_chat_status("Loading model... (large models can take a few minutes)")
                     if not llm_manager.wait_until_ready(timeout=300.0, proc=proc):
+                        if llm_manager.stopped_by_user(proc):
+                            # Stop pressed while it loaded: not a startup error (#543).
+                            if llm_manager.get_llama_process() is None:
+                                _set_chat_status("Stopped")
+                            return
                         _err = llm_manager.get_state().error or "llama-server did not become ready"
                         agent_controller._agent_state.error = _err
                         _set_chat_status("Error: " + _err)
@@ -4254,9 +4257,12 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
                 def _warmup_existing():
                     if llm_manager.get_config().mode == "local":
                         _set_chat_status("Loading model... (large models can take a few minutes)")
-                        if not llm_manager.wait_until_ready(
-                            timeout=300.0, proc=llm_manager.get_llama_process()
-                        ):
+                        _proc = llm_manager.get_llama_process()
+                        if not llm_manager.wait_until_ready(timeout=300.0, proc=_proc):
+                            if llm_manager.stopped_by_user(_proc):
+                                if llm_manager.get_llama_process() is None:
+                                    _set_chat_status("Stopped")
+                                return
                             _err = llm_manager.get_state().error or "llama-server did not become ready"
                             agent_controller._agent_state.error = _err
                             _set_chat_status("Error: " + _err)

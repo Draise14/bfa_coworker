@@ -444,18 +444,23 @@ class TestValidateCtxAgainstHardware(unittest.TestCase):
 
     def _with_hardware(self, ram, vram, fn):
         original = self.llm_manager._detect_hardware_cached
+        original_free = self.llm_manager._detect_free_vram_cached
         self.llm_manager._detect_hardware_cached = lambda: (ram, vram)
+        # No free-VRAM reading: the plan falls back to the total (#543).
+        self.llm_manager._detect_free_vram_cached = lambda: None
         try:
             return fn()
         finally:
             self.llm_manager._detect_hardware_cached = original
+            self.llm_manager._detect_free_vram_cached = original_free
 
     def test_none_when_config_fits(self) -> None:
-        # 8 GB model, 8 GB free VRAM after headroom, 16K ctx ~1.1 GB KV: OK.
+        # 8 GB model on a 24 GB card, 32K ctx (the smallest that holds the
+        # first request, #543): ~4 GB KV at the fallback estimate -- OK.
         warning = self._with_hardware(
             32.0, 24.0,
             lambda: self.llm_manager.validate_ctx_against_hardware(
-                8.0, "cuda", 16384))
+                8.0, "cuda", 32768))
         self.assertIsNone(warning)
 
     def test_warning_when_kv_exceeds_vram(self) -> None:

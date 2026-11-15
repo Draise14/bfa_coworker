@@ -199,7 +199,7 @@ def repeat_request(tool: str, args: Any, nth: int, source: str = "", thread: str
     return ApprovalRequest(
         tool=_kind(tool), source=source, args=args, coworker_tool=True,
         reason="run {:s} a {:s} time with the same input".format(tool or "a tool", _ordinal(nth)),
-        note="It keeps doing the same thing: let it try again, or stop?", thread=thread)
+        note="It keeps doing the same thing: let it try again, or stop?", thread=thread, name=tool)
 
 
 def decide(verdict: str, tool: str, nth: int, approvals: Approvals, auto: bool,
@@ -239,12 +239,13 @@ def wait_answer(approvals: Approvals, request: ApprovalRequest, stop: Any = None
 
 def bridge_wrap(guard: LoopGuard, approvals: Approvals, auto: bool, tool: str, args: Any, key: str,
                 proceed: Callable[[], tuple[dict[str, object], Callable[[], dict[str, object] | None] | None]],
-                source: str = "The agent", thread: str = "", can_ask: bool = True,
+                source: str = "The agent", thread: str = "", shown: Any = None, can_ask: bool = True,
                 ) -> tuple[dict[str, object], Callable[[], dict[str, object] | None] | None] | None:
     """The bridge's repeat check: None lets the call through, else ``(response, check_fn)``
     (a refusal, or the card's deferred answer; once allowed, *proceed* runs the call).
-    Counted per *key* (session) and *thread* (#357).  *can_ask* False (External Harness):
-    no card, the repeat is refused at once (#499)."""
+    Counted per *key* (session) and *thread* (#357).  *shown* (#500): what the card shows
+    for the call (the tool's arguments), when it isn't *args*.  *can_ask* False (External
+    Harness): no card, the repeat is refused at once (#499)."""
     verdict, nth = guard.check(tool, args, key + "/" + thread if thread else key)
     action, error = decide(verdict, tool, nth, approvals, auto, thread, can_ask)
     if action == RUN:
@@ -253,7 +254,8 @@ def bridge_wrap(guard: LoopGuard, approvals: Approvals, auto: bool, tool: str, a
         print("[Coworker] loop guard: refused {:s} ({:s} identical call)".format(tool, _ordinal(nth)))
         return error, None
     state: dict[str, Any] = {"answer": None, "inner": None, "extra": None}
-    approvals.ask(repeat_request(tool, args, nth, source, thread), lambda choice: state.__setitem__("answer", choice))
+    approvals.ask(repeat_request(tool, args if shown is None else shown, nth, source, thread),
+                  lambda choice: state.__setitem__("answer", choice))
 
     # #487: the card's answer is the call's whole answer, envelope included (one envelope).
     @answers_in_full

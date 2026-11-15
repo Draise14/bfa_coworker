@@ -34,18 +34,52 @@ from typing import Any, Callable
 CHOICES = ("once", "always", "deny")
 
 _DETAIL_CHARS = 160
+_VALUE_CHARS = 48       # one argument's value on the card, before it is cut (#500)
 _ids = itertools.count(1)
 
 
-def _detail(args: Any) -> str:
-    """The tool's input on one short line (the code, the query, the path...)."""
+def _redact(text: str) -> str:
+    """*text* with keys and tokens as ``***``, as the chat's Copy does (#346)."""
+    try:
+        from .log import redact
+    except ImportError:         # loaded on its own (tests): nothing to hide with
+        return text
+    return redact(text)
+
+
+def _line(text: str, limit: int, cut: str = "...") -> str:
+    """*text* redacted (before cutting: no half key) on one line, at most *limit* characters."""
+    text = " ".join(_redact(text).split())
+    return text if len(text) <= limit else text[:limit - len(cut)].rstrip() + cut
+
+
+def _detail(args: Any, name: str = "") -> str:
+    """The tool's input on one short line.
+
+    Code (``{"code": ...}``: ``execute_blender_code``, a client without a tool name) shows
+    as the code.  One of Coworker's tools (*name*, #500) shows as
+    ``name(key=value, ...)``, each value cut with an ellipsis; another agent tool shows its
+    value (one argument) or its ``key=value`` pairs.  The bridge's input is JSON text."""
+    if isinstance(args, str) and args.lstrip().startswith("{"):
+        try:
+            args = json.loads(args)
+        except ValueError:
+            pass                        # cut short on the way: shown as text
     if not args:
         return ""
-    if isinstance(args, dict) and len(args) == 1:
-        args = next(iter(args.values()))
-    text = args if isinstance(args, str) else json.dumps(args, ensure_ascii=False, default=str)
-    text = " ".join(text.split())
-    return text if len(text) <= _DETAIL_CHARS else text[:_DETAIL_CHARS - 3] + "..."
+    if isinstance(args, dict) and set(args) == {"code"} and isinstance(args["code"], str):
+        return _line(args["code"], _DETAIL_CHARS)
+    if not isinstance(args, dict):
+        text = args if isinstance(args, str) else json.dumps(args, ensure_ascii=False, default=str)
+        return _line(text, _DETAIL_CHARS, "…")
+    if not name and len(args) == 1:
+        value = next(iter(args.values()))
+        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+        return _line(text, _DETAIL_CHARS, "…")
+    pairs = ", ".join("{:s}={:s}".format(str(key), _line(json.dumps(value, ensure_ascii=False, default=str),
+                                                          _VALUE_CHARS, "…"))
+                      for key, value in args.items())
+    return _line("{:s}({:s})".format(name, pairs) if name else pairs, _DETAIL_CHARS, "…")
 
 
 @dataclass
@@ -59,6 +93,7 @@ class ApprovalRequest:
     reason: str = ""              # a risky step, in plain words (#166): "save over your .blend"
     note: str = ""                # the card's small print, when it isn't the usual one (#310)
     thread: str = ""              # the thread that asks (#357); "" = the default one
+    name: str = ""                # the tool's own name, when *tool* is a "risky:" / "repeat:" kind (#500)
     id: str = ""
 
     def __post_init__(self) -> None:
@@ -74,7 +109,9 @@ class ApprovalRequest:
 
     @property
     def detail(self) -> str:
-        return _detail(self.args)
+        """The card's line: the tool and its input (#500), or the code it runs."""
+        name = self.name or (self.tool if self.coworker_tool and ":" not in self.tool else "")
+        return _detail(self.args, name)
 
 
 class Approvals:

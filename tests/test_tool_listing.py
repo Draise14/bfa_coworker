@@ -27,6 +27,76 @@ _REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # BEGIN: EXPECTED_TOOLS
 EXPECTED_TOOLS = [
     {
+        "name": "add_captions",
+        "description": "\n"
+"        Caption sound or movie strips in the Video Sequencer: their speech becomes styled\n"
+"        text strips (one per caption line, in sync) on a channel named \"Captions\".\n"
+"\n"
+"        Running it again on the same clip replaces its captions; it is one undo step.\n"
+"\n"
+"        Args:\n"
+"            strips: Names of the sound / movie strips to caption (none: the selected ones).\n"
+"            style: CLEAN, BOLD_POP, WORD_HIGHLIGHT (the spoken word lights up) or BOXED.\n"
+"            language: Spoken language code (\"en\", \"es\"...) or \"auto\".\n"
+"            transcript_path: A transcript JSON file (bfa_coworker.transcript/1) to use\n"
+"                instead of transcribing.\n"
+"\n"
+"        Returns:\n"
+"            ``lines_created``, ``channel``, ``first_frame`` / ``last_frame`` and the style;\n"
+"            ``status`` \"error\" with a ``message`` saying what's wrong.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "strips": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Strips"
+                },
+                "style": {
+                    "default": "CLEAN",
+                    "title": "Style",
+                    "type": "string"
+                },
+                "language": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Language"
+                },
+                "transcript_path": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Transcript Path"
+                }
+            },
+            "title": "add_captionsArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "ask_user",
         "description": "\n"
 "        Ask the user a short question in Coworker's chat, with buttons; waits for the answer.\n"
@@ -293,6 +363,53 @@ EXPECTED_TOOLS = [
                 "code"
             ],
             "title": "build_node_tree_from_codeArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "delegate_task",
+        "description": "\n"
+"        Hand one independent part of the job to a helper chat in Coworker (a sub-agent).\n"
+"\n"
+"        The helper opens as its own chat tab with the task as its first message and answers\n"
+"        at once: don't wait or poll. When every helper you started has finished, their\n"
+"        results come back to this chat as one message, and you carry on from there. On a\n"
+"        local model helpers run one after another; online they may run side by side.\n"
+"\n"
+"        Delegate independent parts (different editors, a long side job). Don't delegate\n"
+"        small jobs or steps that need each other's results. Helpers can't start helpers.\n"
+"\n"
+"        Args:\n"
+"            task: What the helper should do, complete on its own (names, values, where).\n"
+"            editor: The editor whose context it works in: VIEW_3D, NODE_EDITOR,\n"
+"                SEQUENCE_EDITOR, TEXT_EDITOR, IMAGE_EDITOR, CLIP_EDITOR, DOPESHEET_EDITOR,\n"
+"                GRAPH_EDITOR, NLA_EDITOR, SPREADSHEET, or \"\" for All editors.\n"
+"            title: A short title for its tab (a few words).\n"
+"\n"
+"        Returns:\n"
+"            ``status`` (\"ok\" or \"error\"), the helper's ``helper_id`` and ``title``, and a message.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "task": {
+                    "title": "Task",
+                    "type": "string"
+                },
+                "editor": {
+                    "default": "",
+                    "title": "Editor",
+                    "type": "string"
+                },
+                "title": {
+                    "default": "",
+                    "title": "Title",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "task"
+            ],
+            "title": "delegate_taskArguments",
             "type": "object"
         }
     },
@@ -1154,10 +1271,158 @@ EXPECTED_TOOLS = [
         "name": "get_screenshot_of_window_as_json",
         "description": "\n"
 "        Return a JSON description of the Blender window layout, areas, active object, and selection.\n"
+"\n"
+"        ``sequencer`` says where the Video Sequencer is (scene, strip count, current frame,\n"
+"        active strip) when a scene has strips.\n"
 "        ",
         "inputSchema": {
             "properties": {},
             "title": "get_screenshot_of_window_as_jsonArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "get_vse_strip_detail",
+        "description": "\n"
+"        Everything about one Video Sequencer strip.\n"
+"\n"
+"        Frames and channel, content offsets, opacity and blend mode, transform and crop,\n"
+"        the source file (movie, image, sound, scene), text and its style, colour, volume,\n"
+"        speed (retiming keys), effect inputs, modifiers (colour balance values), proxy.\n"
+"\n"
+"        Args:\n"
+"            strip_name: The strip's exact name (get_vse_strips_summary lists them).\n"
+"            scene_name: Another scene (default: the scene the Sequencer shows).\n"
+"\n"
+"        Returns:\n"
+"            ``status``, ``scene``, ``strip`` (the details), ``message``; when the name is\n"
+"            not found, ``message`` lists the nearest names.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "strip_name": {
+                    "title": "Strip Name",
+                    "type": "string"
+                },
+                "scene_name": {
+                    "default": "",
+                    "title": "Scene Name",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "strip_name"
+            ],
+            "title": "get_vse_strip_detailArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "get_vse_strips_summary",
+        "description": "\n"
+"        List the Video Sequencer's strips: name, type, channel, frames, mute, lock, selection.\n"
+"\n"
+"        Use it to find a strip by name or to see what is on a channel (\"what's on channel 3?\").\n"
+"        Frames are Blender's: ``start`` is the first frame shown, ``end`` the frame after the\n"
+"        last one (a strip on frames 1-10 has start 1, end 11). Strips inside a meta strip\n"
+"        name it in ``meta``.\n"
+"\n"
+"        Args:\n"
+"            channel: Only this channel (0 = all).\n"
+"            strip_type: Only this type, e.g. TEXT, COLOR, MOVIE, IMAGE, SOUND, SCENE, META.\n"
+"            frame_start: Only strips still showing at or after this frame.\n"
+"            frame_end: Only strips starting at or before this frame.\n"
+"            name_contains: Only names containing this text (any case).\n"
+"            limit: At most this many strips (default 50, at most 500).\n"
+"            scene_name: Another scene (default: the scene the Sequencer shows).\n"
+"\n"
+"        Returns:\n"
+"            ``status``, ``scene``, ``total`` / ``matched`` / ``shown``, ``more`` (strips\n"
+"            left out by ``limit``), ``strips`` (rows sorted by channel and start), ``message``.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "channel": {
+                    "default": 0,
+                    "title": "Channel",
+                    "type": "integer"
+                },
+                "strip_type": {
+                    "default": "",
+                    "title": "Strip Type",
+                    "type": "string"
+                },
+                "frame_start": {
+                    "anyOf": [
+                        {
+                            "type": "integer"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Frame Start"
+                },
+                "frame_end": {
+                    "anyOf": [
+                        {
+                            "type": "integer"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Frame End"
+                },
+                "name_contains": {
+                    "default": "",
+                    "title": "Name Contains",
+                    "type": "string"
+                },
+                "limit": {
+                    "default": 50,
+                    "title": "Limit",
+                    "type": "integer"
+                },
+                "scene_name": {
+                    "default": "",
+                    "title": "Scene Name",
+                    "type": "string"
+                }
+            },
+            "title": "get_vse_strips_summaryArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "get_vse_timeline_overview",
+        "description": "\n"
+"        An overview of the Video Sequencer timeline; call it first for any editing request.\n"
+"\n"
+"        Frame range, fps, resolution, current frame, the channels in use (strip count, name,\n"
+"        mute, lock), gaps (frames where no picture plays), overlapping strips, markers and\n"
+"        the active strip.\n"
+"\n"
+"        Args:\n"
+"            scene_name: Another scene (default: the scene the Sequencer shows).\n"
+"\n"
+"        Returns:\n"
+"            ``status``, ``scene``, ``sequencer_shows`` (the scene the editor shows),\n"
+"            ``fps``, ``resolution`` [x, y, percent], ``frame_start`` / ``frame_end`` /\n"
+"            ``current_frame``, ``strip_count``, ``content_range``, ``active_strip``,\n"
+"            ``channels``, ``gaps`` ([first, last] frames), ``overlaps``, ``markers``, ``message``.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "scene_name": {
+                    "default": "",
+                    "title": "Scene Name",
+                    "type": "string"
+                }
+            },
+            "title": "get_vse_timeline_overviewArguments",
             "type": "object"
         }
     },
@@ -1470,7 +1735,11 @@ EXPECTED_TOOLS = [
 "          jump_to_asset_browser, download_polyhaven_asset, search_polyhaven_assets,\n"
 "          assign_material_to_objects, get_active_node_tree, get_node_group_interface,\n"
 "          wire_node_group)\n"
-"        - vse: Video Sequencer navigation (jump_to_tab_by_name, jump_to_tab_by_space_type) and speech to text (transcribe_strip)\n"
+"        - vse: Video Sequencer strips: list, read, move / trim, preview a frame, speech to text,\n"
+"          captions and a vertical 9:16 version with editable framing (get_vse_timeline_overview,\n"
+"          get_vse_strips_summary, get_vse_strip_detail, set_strip_frame_range, render_vse_preview,\n"
+"          transcribe_strip, add_captions, reframe_vertical, jump_to_tab_by_name,\n"
+"          jump_to_tab_by_space_type)\n"
 "\n"
 "        Load only what the request needs; the basic tools (scene, code, docs,\n"
 "        screenshots, plan, questions, bake_textures, render_viewport_to_path,\n"
@@ -1658,6 +1927,72 @@ EXPECTED_TOOLS = [
         }
     },
     {
+        "name": "reframe_vertical",
+        "description": "\n"
+"        Make the Sequencer's edit vertical (9:16), one undo step.\n"
+"\n"
+"        Each movie, image and scene strip gets an editable \"Reframe\" compositor\n"
+"        modifier (Offset X / Y from -1 to 1 pan inside the picture, Zoom 1 = just\n"
+"        covers, Blur Fill on / off, Blur Amount, Background Dim); change a shot's\n"
+"        framing afterwards through that modifier's inputs. Strips that already have\n"
+"        one keep their framing unless ``reset``.\n"
+"\n"
+"        Args:\n"
+"            strips: Strip names to reframe (empty = every visible movie / image / scene strip).\n"
+"            mode: CROP (centre crop, fills the frame) or BLUR_FILL (the whole shot over a\n"
+"                blurred, dimmed copy of itself).\n"
+"            in_copy: Work in a copy of the scene named \"<scene> Vertical\" and show it in the\n"
+"                Sequencer, leaving the 16:9 edit as it is.\n"
+"            resolution: Output size, e.g. 1080x1920, 720x1280, 2160x3840.\n"
+"            reset: Give strips that already have a Reframe modifier fresh framing too.\n"
+"\n"
+"        Returns:\n"
+"            ``status``, the ``scene`` used (and ``source_scene``, ``copied``), ``mode``,\n"
+"            ``resolution``, ``strips_changed``, ``strips_kept`` and a ``message``.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "strips": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Strips"
+                },
+                "mode": {
+                    "default": "CROP",
+                    "title": "Mode",
+                    "type": "string"
+                },
+                "in_copy": {
+                    "default": True,
+                    "title": "In Copy",
+                    "type": "boolean"
+                },
+                "resolution": {
+                    "default": "1080x1920",
+                    "title": "Resolution",
+                    "type": "string"
+                },
+                "reset": {
+                    "default": False,
+                    "title": "Reset",
+                    "type": "boolean"
+                }
+            },
+            "title": "reframe_verticalArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "render_thumbnail_to_path",
         "description": "\n"
 "        Render a small, low-quality thumbnail to *output_path* (temporarily overrides settings).\n"
@@ -1710,6 +2045,54 @@ EXPECTED_TOOLS = [
                 "output_path"
             ],
             "title": "render_viewport_to_pathArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "render_vse_preview",
+        "description": "\n"
+"        Render one frame of the Video Sequencer's output and return it as an image to look at.\n"
+"\n"
+"        Use it to check an edit: a title's position, what plays at a cut, a colour. The\n"
+"        scene's render settings are left as they were; the image is a JPEG in Coworker's\n"
+"        temp folder (``filepath``).\n"
+"\n"
+"        Args:\n"
+"            frame: The frame to render (default: the current frame).\n"
+"            max_size: Longest side of the image in pixels (64-2048, default 1024).\n"
+"            scene_name: Another scene (default: the scene the Sequencer shows).\n"
+"\n"
+"        Returns:\n"
+"            The image, and ``status``, ``scene``, ``frame``, ``filepath``, ``width`` /\n"
+"            ``height``, ``message`` (a ``job_id`` instead when the render takes long:\n"
+"            wait with ``get_job_status``).\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "frame": {
+                    "anyOf": [
+                        {
+                            "type": "integer"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Frame"
+                },
+                "max_size": {
+                    "default": 1024,
+                    "title": "Max Size",
+                    "type": "integer"
+                },
+                "scene_name": {
+                    "default": "",
+                    "title": "Scene Name",
+                    "type": "string"
+                }
+            },
+            "title": "render_vse_previewArguments",
             "type": "object"
         }
     },
@@ -1957,6 +2340,90 @@ EXPECTED_TOOLS = [
                 "color"
             ],
             "title": "set_collection_color_tagArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "set_strip_frame_range",
+        "description": "\n"
+"        Move or trim a Video Sequencer strip, or put it on another channel (one undo step).\n"
+"\n"
+"        \"Move the title strip to frame 50\" is ``start=50``. Give any of start, end, channel:\n"
+"        - ``start`` alone moves the whole strip so it begins there (its length is kept);\n"
+"        - ``end`` sets the frame after its last one (trims or extends the end);\n"
+"        - ``trim=True`` makes ``start`` move only the left handle (the content stays put);\n"
+"        - ``channel`` moves it to that channel (1-128).\n"
+"        A change that would overlap another strip is refused and names a free channel.\n"
+"\n"
+"        Args:\n"
+"            strip_name: The strip's exact name (get_vse_strips_summary lists them).\n"
+"            start: New first frame.\n"
+"            end: New end frame (exclusive: a strip on frames 1-10 has end 11).\n"
+"            channel: New channel.\n"
+"            trim: Trim the start instead of moving the strip.\n"
+"            scene_name: Another scene (default: the scene the Sequencer shows).\n"
+"\n"
+"        Returns:\n"
+"            ``status``, ``scene``, ``strip``, ``before`` / ``after`` (start, end, channel),\n"
+"            ``undo_step`` (one named step was pushed), ``message``.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "strip_name": {
+                    "title": "Strip Name",
+                    "type": "string"
+                },
+                "start": {
+                    "anyOf": [
+                        {
+                            "type": "integer"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Start"
+                },
+                "end": {
+                    "anyOf": [
+                        {
+                            "type": "integer"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "End"
+                },
+                "channel": {
+                    "anyOf": [
+                        {
+                            "type": "integer"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Channel"
+                },
+                "trim": {
+                    "default": False,
+                    "title": "Trim",
+                    "type": "boolean"
+                },
+                "scene_name": {
+                    "default": "",
+                    "title": "Scene Name",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "strip_name"
+            ],
+            "title": "set_strip_frame_rangeArguments",
             "type": "object"
         }
     },

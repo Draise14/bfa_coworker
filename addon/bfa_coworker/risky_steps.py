@@ -31,6 +31,7 @@ __all__ = (
     "APPROVALS",
     "MODEL_CODE_TOOLS",
     "ask_kind",
+    "card_args",
     "is_toolcode",
     "reason",
     "untrusted",
@@ -75,6 +76,9 @@ _TOOL_RISKS: dict[str, str] = {
     # Overwrites image pixels outside the turn's undo step (Tools 6, #309).
     "bake_textures": "overwrite the target images' pixels (Undo can't bring them back)",
 }
+# Tools that change nothing in the scene themselves and so never ask in Ask mode: a helper
+# chat (#479) asks for its own steps in its own tab.
+_NEVER_ASK = frozenset(("delegate_task",))
 
 
 def is_toolcode(code: str) -> bool:
@@ -124,16 +128,27 @@ def ask_kind(tool: str, code: str, approval: str, engine: str, blend_path: str |
         return "risky:" + why, why
     if approval == "ASK" and engine in ("LOCAL_LLM", "REMOTE_API") and tool:
         from .engine import PLAN_SAFE_TOOLS
-        if tool not in PLAN_SAFE_TOOLS:          # looking never asks
+        if tool not in PLAN_SAFE_TOOLS and tool not in _NEVER_ASK:     # looking never asks
             return tool, ""
     return "", ""
 
 
+def card_args(tool: str, code: str, inputs: Any = None) -> Any:
+    """What the approval card shows for a call (#500): the tool's own input (the bridge
+    request's ``args``) when what runs is Coworker's own tool-code; else the code itself --
+    code the model wrote (:data:`MODEL_CODE_TOOLS`), a client that sent no tool name, or
+    code that isn't tool-code whatever tool name it came with."""
+    if not tool or tool in MODEL_CODE_TOOLS or not inputs or not is_toolcode(code):
+        return {"code": code}
+    return inputs
+
+
 def wrap(code: str, strict_json: bool, why: str, execute: Callable[[str, bool], Any], tool: str = "",
-         source: str = "Coworker", kind: str = "", thread: str = "",
+         source: str = "Coworker", kind: str = "", thread: str = "", inputs: Any = None,
          ) -> tuple[dict[str, object], Callable[[], dict[str, object] | None] | None]:
     """``(response, check_fn)`` for the bridge: ask first, then run *code* with *execute*.
-    *thread* (#357): the calling thread's tag; its card and "Allow this turn" are its own."""
+    *thread* (#357): the calling thread's tag; its card and "Allow this turn" are its own.
+    *inputs* (#500): the tool's own arguments, for the card (else it shows *code*)."""
     kind = kind or "risky:" + why
     if auto_on(thread):
         if not why:                 # Auto mode runs what Ask would ask about; only risky steps wait
@@ -145,8 +160,8 @@ def wrap(code: str, strict_json: bool, why: str, execute: Callable[[str, bool], 
         result = execute(code, strict_json)
         return result.response, result.check_fn
     state: dict[str, Any] = {"answer": None, "inner": None, "extra": None}
-    request = ApprovalRequest(tool=kind if why else tool, source=source, args={"code": code}, coworker_tool=True,
-                              reason=why, thread=thread)
+    request = ApprovalRequest(tool=kind if why else tool, source=source, args=card_args(tool, code, inputs),
+                              coworker_tool=True, reason=why, thread=thread, name=tool)
     APPROVALS.ask(request, lambda choice: state.__setitem__("answer", choice))
 
     # #487: the card's answer is the call's whole answer, envelope included (one envelope).

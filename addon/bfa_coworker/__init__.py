@@ -172,8 +172,9 @@ def register() -> None:
 def _rollback(registered: list[type]) -> None:
     """Undo a failed ``_register()`` without ``unregister()``'s side effects: nothing
     saved, so the settings backup and the saved chat are left alone (#400)."""
-    from . import chat_editor, ui_chat, ui_context_menus, wand
-    for step in (wand.unregister, ui_context_menus.unregister, chat_editor.unregister, ui_chat.unregister,
+    from . import captions_ops, chat_editor, reframe, ui_chat, ui_context_menus, wand
+    for step in (reframe.unregister, captions_ops.unregister, wand.unregister, ui_context_menus.unregister,
+                 chat_editor.unregister, ui_chat.unregister,
                  coworker_api.unregister, mcp_to_blender_server.stop):
         try:
             step()
@@ -258,6 +259,12 @@ def _register() -> None:
     # Coworker operators: Remove Silences in the Sequencer (Tier 4m, Wand 0, #331).
     from . import wand
     wand.register()
+    # Auto Captions in the Sequencer: Strip > Captions, SRT in and out (#376).
+    from . import captions_ops
+    captions_ops.register()
+    # Make Vertical / Reframe in the Sequencer's Strip and View menus (#333).
+    from . import reframe
+    reframe.register()
 
     # Discover generative plugins (Tier 5).
     # This scans gen_plugins/ and populates the registry.
@@ -478,6 +485,10 @@ def unregister() -> None:
         pass
 
     # Unregister chat UI (the Coworker editor first: it builds on ui_chat's panels).
+    from . import reframe
+    reframe.unregister()
+    from . import captions_ops
+    captions_ops.unregister()
     from . import wand
     wand.unregister()
     from . import ui_context_menus

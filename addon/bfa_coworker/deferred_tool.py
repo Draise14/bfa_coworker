@@ -36,7 +36,7 @@ import traceback
 from collections.abc import Callable
 
 from . import answer_envelope
-from .mcp_to_blender_server import _encode_response
+from .mcp_to_blender_server import send_answer
 
 # Total wall-time in seconds allowed for a background task (e.g. rendering) to complete.
 # When exceeded, an error response is sent and the connection is closed.
@@ -104,15 +104,10 @@ def _answered(dc: _DeferredClient, response: dict[str, object]) -> None:
 
 
 def _send_and_close(dc: _DeferredClient, response: dict[str, object]) -> None:
-    try:
-        dc.conn.sendall(_encode_response(response))
-    except OSError:
-        pass
+    # #547: the bridge sends it (what the socket takes now, the rest at its next ticks) and
+    # closes the connection once all of it is out; ``sendall`` lost the rest of a large answer.
+    send_answer(dc.conn, response)
     _answered(dc, response)
-    try:
-        dc.conn.close()
-    except OSError:
-        pass
     try:
         _deferred_clients.remove(dc)
     except ValueError:

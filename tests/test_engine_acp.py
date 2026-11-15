@@ -139,7 +139,7 @@ class TestTurns(unittest.TestCase):
 
     def test_attached_image_shows_in_the_chat(self):
         engine = ea.AcpEngine(_state())
-        engine._run = lambda turn_id, prompt: None        # no agent: just the chat side
+        engine._run = lambda turn_id, prompt, slot=None: None     # no agent: just the chat side (slot: #359)
         engine.submit(eng.Prompt(text="build a pagoda", images=["data:image/png;base64,AA=="],
                                  image_names=["FB_IMG_1467.jpg"]))
         engine.drain()

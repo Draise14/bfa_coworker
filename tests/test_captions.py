@@ -713,7 +713,8 @@ class TestCaptionStrips(_OpsCase):
             event_timer_remove=lambda t: calls["removed"].append(t),
             modal_handler_add=lambda op: calls["modal"].append(op))
         ctx = SimpleNamespace(scene=self.scene, window=object(), window_manager=wm,
-                              workspace=SimpleNamespace(status_text_set=lambda text: calls["status"].append(text)))
+                              workspace=SimpleNamespace(sequencer_scene=self.scene,
+                                                        status_text_set=lambda text: calls["status"].append(text)))
         return ctx, calls
 
     def test_auto_captions_transcribes_then_captions(self):

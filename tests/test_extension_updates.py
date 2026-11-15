@@ -51,7 +51,7 @@ tagline = "test build"
 maintainer = "Bforartists"
 type = "add-on"
 website = "https://github.com/Draise14/bfa_coworker"
-blender_version_min = "5.1.0"
+blender_version_min = "5.2.0"
 license = ["SPDX:GPL-3.0-or-later"]
 tags = ["Development"]
 
@@ -120,9 +120,9 @@ class TestListing(unittest.TestCase):
     def test_drag_link_carries_the_repository(self):
         link = extension_repo.drag_install_url(
             {"archive_url": "https://github.com/x/y/releases/download/v1/bfa_coworker-1.zip",
-             "blender_version_min": "5.1.0"})
+             "blender_version_min": "5.2.0"})
         self.assertIn("repository=https%3A%2F%2Fraw.githubusercontent.com", link)
-        self.assertIn("blender_version_min=5.1.0", link)
+        self.assertIn("blender_version_min=5.2.0", link)
         self.assertTrue(link.startswith("https://github.com/x/y/releases/download/v1/bfa_coworker-1.zip?"))
 
     def test_committed_listing_is_valid_and_points_at_releases(self):
@@ -720,13 +720,13 @@ class TestWithBlenderExtensionClient(unittest.TestCase):
         self._publish("1.1.37")
         self._cli("sync", *common)
         self._cli("install", "bfa_coworker", *common, "--local-cache", "0",
-                  "--blender-version", "5.1.0", "--python-version", "3.13.0")
+                  "--blender-version", "5.2.0", "--python-version", "3.13.0")
         self.assertEqual(self._installed_version(repo_dir), "1.1.37")
         self._publish("1.1.38")
         self._cli("sync", *common)
         self.assertIn("1.1.38", self._cli("list", *common))
         self._cli("install", "bfa_coworker", *common, "--local-cache", "0",
-                  "--blender-version", "5.1.0", "--python-version", "3.13.0")
+                  "--blender-version", "5.2.0", "--python-version", "3.13.0")
         self.assertEqual(self._installed_version(repo_dir), "1.1.38")
 
     def test_blender_validates_the_installer_and_coworker_manifests(self):
@@ -742,13 +742,13 @@ class TestWithBlenderExtensionClient(unittest.TestCase):
         user_default = os.path.join(self.tmp, "user_default")
         os.makedirs(user_default)
         self._cli("install-files", inst_zip, "--local-dir", user_default,
-                  "--blender-version", "5.1.0", "--python-version", "3.13.0")
+                  "--blender-version", "5.2.0", "--python-version", "3.13.0")
         payload = os.path.join(user_default, "bfa_coworker_installer", "payload", "bfa_coworker.zip")
         self.assertTrue(os.path.isfile(payload))
         repo_dir = os.path.join(self.tmp, "remote_repo")
         os.makedirs(repo_dir)
         self._cli("install-files", payload, "--local-dir", repo_dir,
-                  "--blender-version", "5.1.0", "--python-version", "3.13.0")
+                  "--blender-version", "5.2.0", "--python-version", "3.13.0")
         self.assertEqual(self._installed_version(repo_dir), "1.1.37")
 
 

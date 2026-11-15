@@ -91,7 +91,7 @@ Full guides: [Wiki](https://github.com/Draise14/bfa_coworker/wiki) ·
 | **Update repository** | `https://raw.githubusercontent.com/Draise14/bfa_coworker/main/extensions/index.json` |
 | **Source code** | [Clone this repo](https://github.com/Draise14/bfa_coworker) |
 
-Requirements: Bforartists or Blender 5.1+, and 4–28 GB RAM for local models depending on the model.
+Requirements: Bforartists or Blender 5.2+, and 4–28 GB RAM for local models depending on the model.
 
 ---
 

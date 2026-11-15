@@ -11,14 +11,14 @@ them fails, and a class with one (the Coworker editor's ``bl_icon = "WIZARD"``) 
 ``shared.icon()`` (imported as ``safe_icon``), which falls back to a Blender icon.
 
 1. No Bforartists-only icon is written anywhere except through the helper.
-2. Every fallback is an icon Blender 5.1 and 5.2 have.
+2. Every fallback is an icon Blender 5.2 and 5.4 have.
 3. ``icon()`` keeps an icon the build has, falls back otherwise, and passes names
    through without bpy (tests).
 4. ``is_bforartists()`` asks ``bpy.app.bfa_version_string``: ``VIEW3D_MT_view``,
    the old check, exists in Blender too.
 
-The icon lists in ``tests/data`` come from Blender 5.1.2's ``UI_icons.hh``, Blender
-5.2.4's ``UILayout`` icon enum and Bforartists 5.3's ``UI_icons.hh``.
+The icon lists in ``tests/data`` come from the ``UILayout`` icon enum of Blender 5.2.4,
+Blender 5.4 and Bforartists 5.2.3, and Bforartists 5.3's ``UI_icons.hh`` (#515).
 
 Run with::
 

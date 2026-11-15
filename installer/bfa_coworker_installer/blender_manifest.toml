@@ -7,7 +7,7 @@ tagline = "Installs Coworker and keeps it up to date"
 maintainer = "Bforartists"
 type = "add-on"
 website = "https://github.com/Draise14/bfa_coworker"
-blender_version_min = "5.1.0"
+blender_version_min = "5.2.0"
 
 license = [
   "SPDX:GPL-3.0-or-later",

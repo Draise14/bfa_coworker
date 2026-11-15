@@ -9,18 +9,13 @@ Tests for Blender's autosave with the GPU chat's input router
 Blender skips autosave while any modal operator runs, and the chat keeps one
 running in every window.
 
-1. With Blender's *Save Autosave* (``wm.save_auto_save``, 5.2+) the chat
-   writes the autosave itself, by Blender's rules (``autosave_step``): every
-   interval from the last autosave or save, nothing in a saved file, never
-   while another modal operator runs or in edit / sculpt mode.  The operator
-   never steps aside, so every key and click that arrives around an autosave
+1. With Blender's *Save Autosave* (``wm.save_auto_save``) the chat writes the
+   autosave itself, by Blender's rules (``autosave_step``): every interval
+   from the last autosave or save, nothing in a saved file, never while
+   another modal operator runs or in edit / sculpt mode.  The operator never
+   steps aside, so every key and click that arrives around an autosave
    reaches the chat (#488).
-2. Without it (Blender 5.1), the gap (#370): ``gap_due`` never with autosave
-   off, waits for the interval (30 s, or the autosave interval if shorter) and
-   for a lull in keys / clicks; ``_watch`` opens it, every running operator
-   ends on its next event (a window timer wakes idle ones), nothing restarts
-   while it's open, and closing it removes the timers and restarts the
-   operators.  Keys and clicks push the next gap back; plain mouse moves don't.
+2. The operator restarts in every window, also while one is maximized (#391).
 
 Run with::
 
@@ -117,32 +112,7 @@ def _load(bpy):
             sys.modules["bpy"] = saved
 
 
-class TestGapDue(unittest.TestCase):
-
-    @classmethod
-    def setUpClass(cls):
-        cls.ic = _load(_fake_bpy())
-
-    def test_never_with_autosave_off(self):
-        self.assertFalse(self.ic.gap_due(1000.0, 0.0, 0.0, False, 2))
-
-    def test_waits_for_the_interval(self):
-        due = self.ic.gap_due
-        self.assertFalse(due(129.0, 100.0, 0.0, True, 2))
-        self.assertTrue(due(130.0, 100.0, 0.0, True, 2))
-
-    def test_short_autosave_interval_is_never_exceeded(self):
-        # 30 s cap even for a long autosave interval; a 1-minute interval still gaps every 30 s.
-        self.assertTrue(self.ic.gap_due(130.0, 100.0, 0.0, True, 60))
-        self.assertTrue(self.ic.gap_due(130.0, 100.0, 0.0, True, 1))
-
-    def test_waits_for_a_typing_lull(self):
-        due = self.ic.gap_due
-        self.assertFalse(due(200.0, 100.0, 199.0, True, 2))
-        self.assertTrue(due(200.0, 100.0, 198.0, True, 2))
-
-
-class TestGap(unittest.TestCase):
+class TestRestart(unittest.TestCase):
 
     def setUp(self):
         self.bpy = _fake_bpy()
@@ -151,40 +121,11 @@ class TestGap(unittest.TestCase):
         self.ic.bpy.ops.bfacw.gpu_input = self._start
         self.ic.set_host(lambda *_a: None)
         self.ic._RUNNING.update({1, 2})
-        self.ic._AUTOSAVE.update(paused=False, last_gap=0.0, last_input=0.0, timers=[])
+        self.ic._AUTOSAVE.update(since=0.0)
 
     def _start(self, _mode):
         self.started.append(_mode)
         self.ic._RUNNING.add(len(self.started))
-
-    def _op(self, ptr):
-        op = self.ic.BFACW_OT_gpu_input()
-        op._window = ptr
-        return op
-
-    def test_watch_opens_the_gap_and_operators_end(self):
-        ic, wm = self.ic, self.bpy.context.window_manager
-        ic._watch()
-        self.assertTrue(ic._AUTOSAVE["paused"])
-        self.assertEqual([t[1] for t in wm.timers], [1, 2])     # each window gets a wake-up timer
-        self.assertIn(ic._close_gap, self.bpy.app.timers.registered)
-        self.assertTrue(self.bpy.app.timers.registered[ic._close_gap][1])   # survives a file load
-        for ptr in (1, 2):
-            event = types.SimpleNamespace(type="TIMER", value="NOTHING")
-            self.assertEqual(self._op(ptr).modal(None, event), {"FINISHED", "PASS_THROUGH"})
-        self.assertFalse(ic._RUNNING)
-
-    def test_nothing_restarts_while_open_then_close_restarts(self):
-        ic, wm = self.ic, self.bpy.context.window_manager
-        ic._open_gap()
-        ic._RUNNING.clear()
-        ic._watch()
-        ic.ensure_running()
-        self.assertEqual(self.started, [])
-        ic._close_gap()
-        self.assertFalse(ic._AUTOSAVE["paused"])
-        self.assertEqual(wm.removed, wm.timers)
-        self.assertEqual(len(self.started), 2)
 
     def test_restart_works_while_a_window_is_maximized(self):
         # Bforartists refuses screen= in temp_override while any window shows a temporary
@@ -198,32 +139,12 @@ class TestGap(unittest.TestCase):
         self.ic.ensure_running()
         self.assertEqual(len(self.started), 2)
 
-    def test_no_gap_with_autosave_off(self):
-        self.bpy.context.preferences.filepaths.use_auto_save_temporary_files = False
-        self.ic._watch()
-        self.assertFalse(self.ic._AUTOSAVE["paused"])
-
-    def test_keys_push_the_gap_back_but_moves_dont(self):
-        ic = self.ic
-        ic._AUTOSAVE["last_input"] = 0.0
-        op = self._op(1)
-        op._handle = lambda *_a: {"PASS_THROUGH"}
-        op.modal(None, types.SimpleNamespace(type="MOUSEMOVE", value="NOTHING"))
-        self.assertEqual(ic._AUTOSAVE["last_input"], 0.0)
-        op.modal(None, types.SimpleNamespace(type="A", value="PRESS"))
-        self.assertGreater(ic._AUTOSAVE["last_input"], 0.0)
-
 
 class _Writer:
     """``bpy.ops.wm.save_auto_save``: counts writes; *fail* makes one raise like Blender."""
 
-    def __init__(self, present=True):
-        self.present, self.calls, self.fail = present, 0, False
-
-    def get_rna_type(self):
-        if not self.present:
-            raise KeyError("bpy.ops.wm.save_auto_save: not found")
-        return object()
+    def __init__(self):
+        self.calls, self.fail = 0, False
 
     def __call__(self):
         self.calls += 1
@@ -258,7 +179,7 @@ class TestAutosaveStep(unittest.TestCase):
 
 
 class TestAutosaveWriter(unittest.TestCase):
-    """Blender 5.2+: the chat writes the autosave and never steps aside (#488)."""
+    """The chat writes the autosave and never steps aside (#488)."""
 
     def setUp(self):
         self.bpy = _fake_bpy()
@@ -273,7 +194,7 @@ class TestAutosaveWriter(unittest.TestCase):
         self.ic.bpy.ops.bfacw.gpu_input = lambda _mode: None
         self.ic.set_host(lambda *_a: None)
         self.ic._RUNNING.update({1, 2})
-        self.ic._AUTOSAVE.update(paused=False, last_gap=0.0, last_input=0.0, timers=[], since=0.0, writer=None)
+        self.ic._AUTOSAVE.update(since=0.0)
 
     def _op(self, ptr):
         op = self.ic.BFACW_OT_gpu_input()
@@ -285,22 +206,20 @@ class TestAutosaveWriter(unittest.TestCase):
         ic = self.ic
         ic._watch()
         self.assertEqual(self.writer.calls, 1)
-        self.assertFalse(ic._AUTOSAVE["paused"])
         self.assertEqual(self.bpy.context.window_manager.timers, [])
-        self.assertNotIn(ic._close_gap, self.bpy.app.timers.registered)
-        ic._watch()                                     # the next interval has only just started
+        ic._watch()                                  # the next interval has only just started
         self.assertEqual(self.writer.calls, 1)
 
     def test_no_key_or_click_is_lost_around_an_autosave(self):
         # Presses before, at and after the autosave moment all reach the chat: the operators
-        # never end, whatever the gap rules would have said (a lull, 30 s since the last gap).
+        # never end.
         ic = self.ic
         ops = [self._op(1), self._op(2)]
         events = [types.SimpleNamespace(type=t, value="PRESS") for t in ("A", "LEFTMOUSE", "C", "RIGHTMOUSE")]
         got = sent = 0
         for tick in range(300):
             if tick % 50 == 0:
-                ic._AUTOSAVE.update(since=0.0, last_gap=0.0, last_input=0.0)    # due now
+                ic._AUTOSAVE.update(since=0.0)    # due now
             if tick % 3 == 0:
                 ic._watch()
             for op in ops:
@@ -347,12 +266,6 @@ class TestAutosaveWriter(unittest.TestCase):
         self.ic._on_save_post()
         self.ic._watch()
         self.assertEqual(self.writer.calls, 0)
-
-    def test_without_the_operator_the_gap_is_used(self):
-        self.writer.present = False
-        self.ic._watch()
-        self.assertEqual(self.writer.calls, 0)
-        self.assertTrue(self.ic._AUTOSAVE["paused"])
 
 
 if __name__ == "__main__":

@@ -840,14 +840,12 @@ class TestTool(_TempData):
         movie = types.SimpleNamespace(type="MOVIE", name="clip", filepath=str(ok_path))
         self.assertEqual(speech.strip_media(movie), (os.path.normpath(str(ok_path)), ""))
 
-    def test_strip_timing_new_and_old_names(self):
+    def test_strip_timing(self):
         scene = types.SimpleNamespace(render=types.SimpleNamespace(fps=30, fps_base=1.001))
         new = types.SimpleNamespace(content_start=10.0, left_handle=12, right_handle=50)
         t = speech.strip_timing(scene, new)
         self.assertEqual((t["content_start"], t["left"], t["right"]), (10.0, 12.0, 50.0))
         self.assertAlmostEqual(t["fps"], 29.97, places=2)
-        old = types.SimpleNamespace(frame_start=5.0, frame_final_start=6, frame_final_end=9)
-        self.assertEqual(speech.strip_timing(scene, old)["right"], 9.0)
 
     def test_default_page_fits_the_mcp_result_limit(self):
         # The MCP server shortens answers over 8000 characters (bounded_output.LIMIT):

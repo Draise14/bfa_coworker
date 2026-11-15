@@ -37,9 +37,7 @@ def _sequencer_context(window: object, scene: object) -> dict[str, object] | Non
         ed = getattr(candidate, "sequence_editor", None) if candidate is not None else None
         if ed is None:
             continue
-        strips = getattr(ed, "strips_all", None)
-        if strips is None:
-            strips = getattr(ed, "sequences_all", [])
+        strips = getattr(ed, "strips_all", [])
         if not len(strips):
             continue
         active = ed.active_strip

@@ -107,36 +107,30 @@ class _Problem(Exception):
     """A strip that can't be read: the message is for the artist."""
 
 
-# -- strips across Blender versions (5.2 renamed the timing properties) -----------
+# -- strip timing (the 5.2 names) -----------------------------------------------
 
 def _left(strip: Any) -> int:
-    return int(strip.left_handle if hasattr(strip, "left_handle") else strip.frame_final_start)
+    return int(strip.left_handle)
 
 
 def _right(strip: Any) -> int:
-    return int(strip.right_handle if hasattr(strip, "right_handle") else strip.frame_final_end)
+    return int(strip.right_handle)
 
 
 def _content_start(strip: Any) -> float:
-    return float(strip.content_start if hasattr(strip, "content_start") else strip.frame_start)
+    return float(strip.content_start)
 
 
 def _content_duration(strip: Any) -> float:
-    return float(strip.content_duration if hasattr(strip, "content_duration") else strip.frame_duration)
+    return float(strip.content_duration)
 
 
 def _move(strip: Any, delta: int) -> None:
-    if hasattr(strip, "content_start"):
-        strip.content_start = strip.content_start + delta
-    else:
-        strip.frame_start = strip.frame_start + delta
+    strip.content_start = strip.content_start + delta
 
 
 def _split(strip: Any, frame: int) -> Any:
-    try:
-        right = strip.split(frame=int(frame), split_method="SOFT", ignore_connections=True)
-    except TypeError:
-        right = strip.split(frame=int(frame), split_method="SOFT")
+    right = strip.split(frame=int(frame), split_method="SOFT", ignore_connections=True)
     if right is None:
         raise RuntimeError("could not split {!r} at frame {:d}".format(strip.name, int(frame)))
     return right
@@ -487,10 +481,7 @@ class COWORKER_OT_sequencer_remove_silences(Operator):  # type: ignore[misc]
         if self._prepare(context) is None:
             return {"CANCELLED"}
         wm = context.window_manager
-        try:
-            return wm.invoke_props_dialog(self, width=360, title=SPEC.label, confirm_text=SPEC.label)
-        except TypeError:                   # before 4.1: no title / confirm text
-            return wm.invoke_props_dialog(self, width=360)
+        return wm.invoke_props_dialog(self, width=360, title=SPEC.label, confirm_text=SPEC.label)
 
     def draw(self, _context):
         layout = self.layout

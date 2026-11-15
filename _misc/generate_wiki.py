@@ -494,7 +494,7 @@ def generate_home(manifest: dict, operators: list, tools: list) -> str:
     """Generate the Home.md landing page."""
     version = manifest.get("version", VERSION)
     tagline = manifest.get("tagline", "Chat based coworker — an MCP-powered agent with LLM support")
-    blender_min = manifest.get("blender_version_min", "5.1.0")
+    blender_min = manifest.get("blender_version_min", "5.2.0")
 
     return _header("Bforartists Coworker") + f"""
 > **{tagline}**
@@ -792,7 +792,7 @@ More: [[User-Documentation/Chat-Interface|Chat Interface]] ·
 def generate_installation(manifest: dict) -> str:
     """Generate Installation.md."""
     version = manifest.get("version", VERSION)
-    blender_min = manifest.get("blender_version_min", "5.1.0")
+    blender_min = manifest.get("blender_version_min", "5.2.0")
     return _header("Installation", f"Coworker v{version} — Blender {blender_min}+") + f"""
 
 ---
@@ -2795,7 +2795,6 @@ addon/bfa_coworker/
 ├── skills/                  # Version-aware skill files
 │   ├── __init__.py          # Skills loader
 │   ├── best_practices.md    # General Blender best practices
-│   ├── blender_50_51.md     # Blender 5.0-5.1 API notes
 │   ├── blender_52.md        # Blender 5.2 API notes
 │   ├── blender_53.md        # Blender 5.3 API notes
 │   ├── mcp_tools.md         # MCP tool usage guide
@@ -3399,9 +3398,8 @@ The skills system provides **version-aware instructions** that are injected into
 
 Skills are loaded cumulatively based on Blender version:
 
-- **`blender_50_51.md`** — Loaded for Blender 5.0 and 5.1
-- **`blender_52.md`** — Loaded for Blender 5.2 (includes 5.0-5.1 content)
-- **`blender_53.md`** — Loaded for Blender 5.3 (includes all previous)
+- **`blender_52.md`** — Loaded for Blender 5.2 and newer
+- **`blender_53.md`** — Loaded for Blender 5.3 and newer (with `blender_52.md`)
 
 This ensures the LLM has accurate, version-specific knowledge.
 
@@ -3479,7 +3477,7 @@ def generate_building_and_testing() -> str:
 
 ### Prerequisites
 - Python 3.10+
-- Blender / Bforartists 5.1+
+- Blender / Bforartists 5.2+
 - Git
 - `pip install build` (for dependency bundling)
 

@@ -17,7 +17,11 @@ Design constraints this module exists to honour:
   receives an already-materialised datablock or path.
 * **No imports from ``mcp.blmcp``.**  The addon ships standalone; the
   imbuf downscaler is a slimmed copy of the MCP screenshot helper
-  rather than a shared import.
+  rather than a shared import.  The one exception is the render preview
+  profile (#524): one set of caps for every look-at-the-scene render, read
+  as a file from the copy of the tools the add-on ships
+  (``vendor/blmcp/tools``; ``mcp/blmcp/tools`` in a source checkout), not
+  imported -- the tool-code inlines the same file.
 * **Stored history stays plain text.**  Data URIs live on
   ``AgentState.user_attachments`` for the request build only -- the
   saved chat JSON never carries base64 (see ``ui_chat._save_chat_history``).
@@ -44,6 +48,7 @@ __all__ = (
     "capture_render",
     "capture_render_from_camera",
     "capture_render_from_view",
+    "capture_refusal",
     "capture_screen",
     "capture_screen_rect",
     "clipboard_image",
@@ -78,15 +83,16 @@ _KEEP_ATTACHMENTS = 10
 _RENDER_CAMERA_NAME = "BFACW Render Camera"
 
 # "Render" exists to show the vision model what you are looking at, so it
-# deliberately shoots cheap: a hard sample cap, a Cycles time limit as a
-# backstop for a heavy scene, and a longest-edge cap (a vision encoder
-# turns an image into a roughly fixed token count, so extra pixels buy
-# nothing).  The user's own render settings are saved first and restored in
-# a ``finally`` -- this only ever affects the throwaway capture, never a
-# later F12 render.
-_RENDER_MAX_EDGE = 1024
-_RENDER_MAX_SAMPLES = 32
-_RENDER_TIME_LIMIT_S = 30.0
+# deliberately shoots cheap: the render preview profile (#524), the same caps
+# as the agent's render_viewport_to_path preview -- a longest-edge cap (a
+# vision encoder turns an image into a roughly fixed token count, so extra
+# pixels buy nothing), a hard sample cap, a Cycles time limit as a backstop
+# for a heavy scene, Simplify, and no compositing / Sequencer / motion blur /
+# persistent data.  The user's own render settings are saved first and
+# restored in a ``finally`` -- this only ever affects the throwaway capture,
+# never a later F12 render.  The profile is one file shared with the tool-code.
+_PREVIEW_PROFILE_FILE = "_template_render_preview_profile.py"
+_PREVIEW_PROFILE: dict = {}
 
 _MIME_BY_EXT = {
     ".png": "image/png",
@@ -389,6 +395,8 @@ def capture_render_from_view() -> str | None:
     """
     import bpy  # pylint: disable=import-error,no-name-in-module
 
+    if capture_refusal():
+        return None
     # This window's 3D Viewport, else one in any window (#267: the floating Coworker
     # window has none of its own).
     window, area = bpy.context.window, None
@@ -453,7 +461,7 @@ def capture_render_from_camera() -> str | None:
     """
     import bpy  # pylint: disable=import-error,no-name-in-module
     scene = bpy.context.scene
-    if scene is None or scene.camera is None:
+    if scene is None or scene.camera is None or capture_refusal():
         return None
     wm = bpy.context.window_manager
     window = bpy.context.window or (wm.windows[0] if wm.windows else None)
@@ -468,74 +476,80 @@ def capture_render_from_camera() -> str | None:
         _restore_render_settings(saved_settings)
 
 
-def _clamp_render_settings(scene) -> list:
-    """Lower the render cost for a one-off chat capture.
+def _preview_profile_dirs():
+    """Where the tool-code (and the preview profile) lives: the copy the built add-on
+    ships, else the repo's (a source checkout)."""
+    addon_dir = os.path.dirname(os.path.abspath(__file__))
+    return [os.path.normpath(p) for p in (
+        os.path.join(addon_dir, "vendor", "blmcp", "tools"),
+        os.path.join(addon_dir, "..", "..", "mcp", "blmcp", "tools"),
+    )]
 
-    Reduces the longest output edge to :data:`_RENDER_MAX_EDGE` (never
-    upscaling), caps the sample count and sets a Cycles time limit, so a
-    heavy scene cannot block Blender -- and the chat -- for minutes.
 
-    Returns the undo list for :func:`_restore_render_settings`: only the
-    attributes that actually changed are recorded, so restoring is exact
-    and cannot disturb anything else.  Best-effort throughout: a render
-    engine that does not expose an attribute is simply skipped.
+def _preview_profile() -> dict:
+    """The render preview profile's functions and caps (#524), read once; ``{}`` when the
+    file is missing (the capture is refused then, rather than rendered without caps)."""
+    if not _PREVIEW_PROFILE:
+        for directory in _preview_profile_dirs():
+            path = os.path.join(directory, _PREVIEW_PROFILE_FILE)
+            if not os.path.isfile(path):
+                continue
+            namespace: dict = {"__name__": "bfa_coworker_render_preview_profile"}
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    exec(compile(fh.read(), path, "exec"), namespace)  # pylint: disable=exec-used
+            except (OSError, SyntaxError):
+                continue
+            _PREVIEW_PROFILE.update(namespace)
+            break
+    return _PREVIEW_PROFILE
+
+
+def capture_refusal() -> str:
+    """Why "Render" can't capture now ("" when it can).
+
+    A render or bake job is running: a second, blocking render of the same scene ends the
+    job's render (probed on 5.2.4, #524) and doubles the load.  Or the preview profile is
+    missing, and the capture would render with the scene's full settings.
     """
-    render = getattr(scene, "render", None)
-    saved: list = []
-    if render is None:
-        return saved
-
-    def _snap(owner, attr, new_value) -> None:
-        try:
-            previous = getattr(owner, attr)
-        except AttributeError:
-            return
-        if previous is None or previous == new_value:
-            return
-        setattr(owner, attr, new_value)
-        saved.append((owner, attr, previous))
-
+    profile = _preview_profile()
+    if "_preview_busy_message" not in profile:
+        return ("Coworker's render preview settings are missing ({:s}); reinstall Coworker to capture "
+                "renders.".format(_PREVIEW_PROFILE_FILE))
     try:
-        percent = float(getattr(render, "resolution_percentage", 100) or 100)
-        width = max(1, int((getattr(render, "resolution_x", 0) or 0)
-                           * percent / 100.0))
-        height = max(1, int((getattr(render, "resolution_y", 0) or 0)
-                            * percent / 100.0))
-        longest = max(width, height)
-        if longest > _RENDER_MAX_EDGE:
-            scale = _RENDER_MAX_EDGE / float(longest)
-            _snap(render, "resolution_x", max(1, round(width * scale)))
-            _snap(render, "resolution_y", max(1, round(height * scale)))
-            _snap(render, "resolution_percentage", 100)
-    except (AttributeError, TypeError, ValueError):
-        pass
+        import bpy  # pylint: disable=import-error,no-name-in-module
+        is_job_running = getattr(bpy.app, "is_job_running", None)
+    except ImportError:
+        is_job_running = None
+    if is_job_running is None or not profile["_preview_busy_message"](is_job_running):
+        return ""
+    return "A render or bake is running: wait for it to finish (the job bar at the bottom), then Render again."
 
-    cycles = getattr(scene, "cycles", None)
-    if cycles is not None:
-        samples = getattr(cycles, "samples", None)
-        if isinstance(samples, int) and samples > _RENDER_MAX_SAMPLES:
-            _snap(cycles, "samples", _RENDER_MAX_SAMPLES)
-        limit = getattr(cycles, "time_limit", None)
-        if isinstance(limit, (int, float)) and (
-                not limit or limit > _RENDER_TIME_LIMIT_S):
-            _snap(cycles, "time_limit", _RENDER_TIME_LIMIT_S)
 
-    eevee = getattr(scene, "eevee", None)
-    if eevee is not None:
-        taa = getattr(eevee, "taa_render_samples", None)
-        if isinstance(taa, int) and taa > _RENDER_MAX_SAMPLES:
-            _snap(eevee, "taa_render_samples", _RENDER_MAX_SAMPLES)
+def _clamp_render_settings(scene) -> list:
+    """Put the render preview profile on *scene* for a one-off chat capture.
 
+    The longest output edge at most 1024 px (never upscaling), capped samples and
+    a Cycles time limit, Simplify, no compositing / Sequencer / motion blur /
+    persistent data, a PNG -- so a heavy scene cannot block Blender (and the chat)
+    for minutes.  The caps are the tool-code's own (one file).
+
+    Returns the undo list for :func:`_restore_render_settings`: only what changed
+    is recorded, so restoring is exact and cannot disturb anything else.
+    """
+    profile = _preview_profile()
+    apply = profile.get("_preview_profile_apply")
+    if apply is None or scene is None:
+        return []
+    saved, _caps = apply(scene)
     return saved
 
 
 def _restore_render_settings(saved) -> None:
     """Put back exactly what :func:`_clamp_render_settings` changed."""
-    for owner, attr, previous in saved:
-        try:
-            setattr(owner, attr, previous)
-        except (AttributeError, ReferenceError, TypeError, ValueError):
-            pass
+    restore = _preview_profile().get("_preview_profile_restore")
+    if restore is not None:
+        restore(saved)
 
 
 def capture_screen(target: str = "WINDOW") -> str | None:

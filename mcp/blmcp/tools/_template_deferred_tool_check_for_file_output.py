@@ -24,7 +24,9 @@ def _deferred_tool_check_for_file_output(
     running, or a result ``dict`` once it completes.
 
     When *restore_attrs* is provided, each ``(obj, attr, value)`` tuple
-    is restored via ``setattr`` after the job completes.
+    is restored via ``setattr`` after the job completes -- in order, and once:
+    the list is emptied, as the checker and the job's end both restore (#524).
+    One value that can't go back doesn't keep the others from it.
 
     The checker carries ``job_kind`` / ``job_label``: the bridge hands a job
     still running after a while to its job registry (Tools 6, #309), and
@@ -33,9 +35,12 @@ def _deferred_tool_check_for_file_output(
     import bpy  # pylint: disable=import-error,no-name-in-module
 
     def restore() -> None:
-        if restore_attrs is not None:
-            for obj, attr, value in restore_attrs:
+        while restore_attrs:
+            obj, attr, value = restore_attrs.pop(0)
+            try:
                 setattr(obj, attr, value)
+            except (AttributeError, ReferenceError, TypeError, ValueError, RuntimeError):
+                pass
 
     def check_is_finished() -> dict[str, object] | None:
         if bpy.app.is_job_running(job_type):

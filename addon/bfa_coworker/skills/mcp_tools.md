@@ -30,13 +30,16 @@ Dedicated tools are pre-tested and version-safe. Raw code is the last resort.
 - `get_screenshot_of_area_as_image(area_ui_type)` — Screenshot a single Blender area.
 - `get_screenshot_of_window_as_image()` — Screenshot the entire window.
 - `get_screenshot_of_window_as_json()` — JSON layout with areas, active object, selection.
-- `render_viewport_to_path(output_path)` — Render the current viewport to a file.
+- `render_viewport_to_path(output_path)` — Render the camera view to a file as a quick preview (default
+  `quality="preview"`: at most 1024 px, few samples); `quality="viewport"` for solid shading in a second;
+  `quality="final"` (the scene's own settings) only when the user asks for the real render.
 
 ## Long Jobs (Renders, Bakes)
 
 For long jobs, start them and check with `get_job_status`; don't loop faster than every few seconds.
 
-- `render_viewport_to_path(output_path, background=True)` — Start a render; returns a `job_id` at once.
+- `render_viewport_to_path(output_path, quality="final", background=True)` — Start a final render; returns a
+  `job_id` at once.
   (A render still going after ~45 s also answers with a `job_id`.)
 - `bake_textures(bake_type, object_names)` — Cycles bake into each material's active Image Texture node;
   returns a `job_id`.

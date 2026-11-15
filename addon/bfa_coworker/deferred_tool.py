@@ -183,6 +183,13 @@ def poll() -> bool:
             except OSError:
                 pass
             _answered(dc, {"status": "error", "message": "The client hung up before Blender answered."})
+            # #524: a render goes on without its caller; its job still puts the settings it
+            # changed back (the preview profile, the output path) when it is over.
+            if getattr(dc.check_fn, "job_kind", "") and getattr(dc.check_fn, "job_on_finish", None):
+                from . import long_jobs
+                long_jobs.start(str(dc.check_fn.job_kind),
+                                str(getattr(dc.check_fn, "job_label", "") or dc.check_fn.job_kind),
+                                dc.check_fn, dc.check_fn.job_on_finish)
             try:
                 _deferred_clients.remove(dc)
             except ValueError:

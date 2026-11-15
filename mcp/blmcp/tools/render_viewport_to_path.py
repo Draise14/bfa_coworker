@@ -29,23 +29,36 @@ def register(mcp: FastMCP) -> None:
             readOnlyHint=True,
         )
     )
-    def render_viewport_to_path(output_path: str, background: bool = False) -> dict[str, object]:
+    def render_viewport_to_path(
+            output_path: str, background: bool = False, quality: str = "preview",
+    ) -> dict[str, object]:
         """
-        Render the current scene to *output_path* using current render settings.
+        Render the scene's camera view to *output_path*.
+
+        ``quality="preview"`` (the default) is for looking and checking your work: at
+        most 1024 px, few samples, a Cycles time limit, Simplify on, no compositing,
+        Sequencer, motion blur or persistent data; the scene's settings are put back
+        afterwards. ``quality="viewport"`` is quicker still: solid shading (OpenGL)
+        from the camera, no materials or lighting. ``quality="final"`` renders with the
+        scene's own settings (full size and samples, can take minutes or hours): use it
+        only when the user asked for the real render.
 
         A render that takes longer than about 45 s answers with a ``job_id`` instead
         of the file, and carries on: wait for it with ``get_job_status(job_id)``.
-        For a render you know is long (many samples, big resolution, Cycles), pass
-        ``background=True`` to get the ``job_id`` at once.
+        For a final render you know is long, pass ``background=True`` to get the
+        ``job_id`` at once.
 
         Args:
             output_path: File name for the image (it is written to Coworker's temp folder).
             background: Start the render and return a ``job_id`` right away.
+            quality: ``"preview"`` (default), ``"viewport"`` or ``"final"``.
 
         Returns:
             ``status``; ``filepath`` (where the image is, or will be, written); a
-            ``job_id`` when the render goes on in the background; ``message``.
+            ``job_id`` when the render goes on in the background; ``quality`` and
+            ``caps`` (what the preview limited); ``message`` (also on an error: the
+            quality and limits it ran with).
         """
-        p = Params(output_path=output_path, background=bool(background))
+        p = Params(output_path=output_path, background=bool(background), quality=str(quality or "preview"))
         code = toolcode_format_call(_TOOL_CALL, p)
         return send_code(code, strict_json=True)

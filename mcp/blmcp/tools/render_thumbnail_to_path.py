@@ -31,7 +31,8 @@ def register(mcp: FastMCP) -> None:
     )
     def render_thumbnail_to_path(output_path: str) -> dict[str, object]:
         """
-        Render a small, low-quality thumbnail to *output_path* (temporarily overrides settings).
+        Render a small, low-quality thumbnail to *output_path* (at most 320 px and 16 samples;
+        the scene's settings are put back when the render is over).
         """
         p = Params(output_path=output_path)
         code = toolcode_format_call(_TOOL_CALL, p)

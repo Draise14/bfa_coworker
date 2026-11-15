@@ -34,7 +34,9 @@ scene.render.image_settings.file_format = 'PNG'
 
 ## Render to File (Preferred Over `execute_blender_code`)
 
-Use `render_viewport_to_path(output_path)` — it uses current render settings.
+Use `render_viewport_to_path(output_path)` to look at your work — a preview by default (at most 1024 px,
+few samples, no compositing; the scene's settings are put back). `quality="viewport"` is solid shading in
+a second. `quality="final"` uses the current render settings: only when the user asks for the real render.
 
 Use `render_thumbnail_to_path(output_path)` — for quick low-quality previews.
 

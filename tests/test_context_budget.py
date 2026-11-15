@@ -340,10 +340,24 @@ class TestPromptPreflight(unittest.TestCase):
         big_tools = [{"type": "function", "function": {
             "name": "t", "description": "z" * 20000}}]
         tight = _estimate_messages_tokens(history) + 100
-        out, err = _prompt_preflight(history, big_tools, tight)
-        # With a large tool schema counted, the history must be re-trimmed.
+        # A budget the tools fit in, but not tools + history: the history is re-trimmed.
+        roomy = _estimate_messages_tokens(history) + _estimate_tools_tokens(big_tools) - 200
+        out, err = _prompt_preflight(history, big_tools, roomy)
         self.assertLess(
             _estimate_messages_tokens(out), _estimate_messages_tokens(history))
+
+    def test_tools_larger_than_the_budget_is_an_error_not_a_fit(self):
+        # #544: the tool schema alone over the budget used to fall back to half
+        # the budget for the messages and report "fits" -- an 18K request went
+        # to a 16K window.  Now it is an error the caller must act on.
+        history = _mk_history(6)
+        big_tools = [{"type": "function", "function": {
+            "name": "t", "description": "z" * 20000}}]
+        tight = _estimate_messages_tokens(history) + 100
+        self.assertGreater(_estimate_tools_tokens(big_tools), tight)
+        out, err = _prompt_preflight(history, big_tools, tight)
+        self.assertIsNotNone(err)
+        self.assertIn("tools alone", err)
 
     def test_friendly_error_when_even_pinned_turn_overflows(self):
         huge = "z" * 200000
@@ -491,7 +505,7 @@ class TestSkillInjectionBudget(unittest.TestCase):
         # must exist.
         self.assertIn("_domain_skills_text", _src)
         self.assertIn("_domain_skill_domains", _src)
-        self.assertIn("dropped domain skills", _src)
+        self.assertIn("# 1. The domain-skill reference.", _src)      # the fitting order (#544)
 
 
 class TestGetDomainSkillsWholeFiles(unittest.TestCase):

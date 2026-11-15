@@ -680,5 +680,44 @@ class TestThinkingBox(unittest.TestCase):
         self.assertAlmostEqual(1000.0 - end, measured)   # scroll counts what is drawn
 
 
+class TestNotices(unittest.TestCase):
+    """#544: what a request left out to fit, and why a turn stopped -- in the chat body,
+    not only in the cut-off header status."""
+
+    def _frame(self, hist):
+        c = lay.Canvas(st.Style(), lay.fixed_measure(0.55), lay.InteractionState())
+        cv.ChatView().draw(c, lay.Rect(0, 0, 600, 3000), hist)
+        return c
+
+    def test_fit_line_under_the_message_and_the_reply_stays_the_reply(self):
+        hist = [{"role": "user", "content": "Add a cube", "turn_start": True},
+                {"role": "assistant", "content": "To fit the 16K context window, this request left out the "
+                 "assets tools; to keep them, raise the Context Window to 32K.", "notice": "fit"},
+                {"role": "assistant", "content": "Added the cube."}]
+        c = self._frame(hist)
+        words = " ".join(" ".join(t.text for t in c.commands if t.kind == "text").split())
+        self.assertIn("raise the Context Window to 32K", words)
+        self.assertIn("Added the cube.", words)
+        self.assertIn("INFO", [t.text for t in c.commands if t.kind == "icon"])
+        y = {frag: next(t.rect.y for t in c.commands if t.kind == "text" and frag in t.text)
+             for frag in ("Add a cube", "To fit the", "Added")}
+        self.assertGreater(y["Add a cube"], y["To fit the"])          # under your message ...
+        self.assertGreater(y["To fit the"], y["Added"])     # ... above the reply
+
+    def test_error_in_full_with_copy(self):
+        long_tail = "the last words of a long server message"
+        text = ("**This request was not sent: it does not fit the model's context window.**\n\n"
+                + "It needs about 15,500 tokens. " * 12 + long_tail)
+        hist = [{"role": "user", "content": "Add a cube", "turn_start": True},
+                {"role": "assistant", "content": text, "notice": "error"}]
+        c = self._frame(hist)
+        words = " ".join(" ".join(t.text for t in c.commands if t.kind == "text").split())
+        self.assertIn("This request was not sent", words)
+        self.assertIn("long server message", words)                    # nothing cut off
+        icons = [t.text for t in c.commands if t.kind == "icon"]
+        self.assertIn("ERROR", icons)
+        self.assertIn("COPYDOWN", icons)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -231,7 +231,7 @@ class TestImageAttachmentsInTurnLoop(_TurnLoopTestBase):
         end = src.index("\n    iterations = 0", start)
         body = src[start:end]
         inject = body.index('_img_msg["content"] = _img_blocks')
-        budget = body.index("_fit_history_to_budget(msgs, prompt_budget)")
+        budget = body.index("# -- Make the request fit (#544)")
         self.assertLess(inject, budget,
                         "attachments must be injected before budgeting")
         self.assertIn('msgs[_ti].get("turn_start")', body,

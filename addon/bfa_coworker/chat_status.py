@@ -107,6 +107,8 @@ def phase_text(state) -> str:
         return "Reading your message"
     if phase == "warming":
         return "Dreaming, one moment"
+    if phase == "waiting":          # a Local request sent, no token yet (#544)
+        return "Waiting for the model"
     return "Thinking"
 
 

@@ -860,6 +860,72 @@ class TestTool(_TempData):
         self.assertEqual(len(out["words"]), 150)
         self.assertLess(len(json.dumps(out, ensure_ascii=False)), 8000)     # as bounded_output.shorten measures
 
+    # -- Stop (#516: Auto Captions' Esc) --
+    def _stoppable(self, block_in):
+        """A worker on stand-ins that waits in *block_in* ("wav" / "transcribe") until released."""
+        gate, inside = threading.Event(), threading.Event()
+        calls = {"start": 0, "stop": 0, "write": 0}
+
+        def wait(*_a, **_k):
+            inside.set()
+            gate.wait(5)
+
+        def write_wav(media, out):
+            if block_in == "wav":
+                wait()
+            Path(out).write_bytes(b"RIFF" + b"\0" * 64)
+
+        def transcribe_wav(*_a, **_k):
+            if block_in == "transcribe":
+                wait()
+            return {"text": "hello"}
+
+        def count(name, value=None):
+            def fn(*_a, **_k):
+                calls[name] += 1
+                return value
+            return fn
+        stack = [mock.patch.object(speech, "_write_wav", write_wav),
+                 mock.patch.object(wm, "start_server", count("start", "")),
+                 mock.patch.object(wm, "stop_server", count("stop")),
+                 mock.patch.object(wm, "is_ready", lambda: True),
+                 mock.patch.object(wm, "transcribe_wav", transcribe_wav),
+                 mock.patch.object(tr, "from_verbose_json", lambda *a, **k: _doc()),
+                 mock.patch.object(tr, "write", count("write"))]
+        for p in stack:
+            p.start()
+            self.addCleanup(p.stop)
+        job = speech._Job()
+        key = ("k", "small", "en")
+        speech._jobs[key] = job
+        self.addCleanup(speech._jobs.pop, key, None)
+        p = {"route": "local", "model": "small", "build": "cpu", "cache_model": "small", "language": "en"}
+        t = threading.Thread(target=speech._work, args=(job, str(self.tmp / "a.wav"), "k", 10, p, {"port": 1}, "", ""),
+                             daemon=True)
+        t.start()
+        self.assertTrue(inside.wait(5))
+        return job, gate, t, calls
+
+    def test_stop_while_reading_the_sound_never_starts_the_server(self):
+        job, gate, t, calls = self._stoppable("wav")
+        self.assertEqual(speech.stop_jobs(), 1)
+        self.assertEqual(speech._jobs, {}, "the next call starts afresh")
+        self.assertEqual(calls["stop"], 1, "one kept running from before stops too")
+        gate.set()
+        t.join(5)
+        self.assertEqual(calls, {"start": 0, "stop": 1, "write": 0}, "and none is started after the Stop")
+        self.assertEqual(job.error, speech.STOPPED)
+        self.assertEqual(list((Path(tempfile.gettempdir()) / "bfa_coworker_speech").glob("k.*")), [], "no WAV left")
+
+    def test_stop_while_transcribing_stops_the_server_and_saves_nothing(self):
+        job, gate, t, calls = self._stoppable("transcribe")
+        self.assertEqual(speech.stop_jobs(), 1)
+        gate.set()
+        t.join(5)
+        self.assertEqual(calls, {"start": 1, "stop": 1, "write": 0})
+        self.assertIsNone(job.doc)
+        self.assertEqual(speech.stop_jobs(), 0, "nothing runs any more")
+
     def test_toolcode_params_and_result(self):
         tc = _toolcode()
         self.assertEqual(tc.Params(strip="voice"), ("voice", "", 150, 0, "", ""))

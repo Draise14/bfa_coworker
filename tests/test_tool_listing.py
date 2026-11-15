@@ -367,6 +367,53 @@ EXPECTED_TOOLS = [
         }
     },
     {
+        "name": "delegate_task",
+        "description": "\n"
+"        Hand one independent part of the job to a helper chat in Coworker (a sub-agent).\n"
+"\n"
+"        The helper opens as its own chat tab with the task as its first message and answers\n"
+"        at once: don't wait or poll. When every helper you started has finished, their\n"
+"        results come back to this chat as one message, and you carry on from there. On a\n"
+"        local model helpers run one after another; online they may run side by side.\n"
+"\n"
+"        Delegate independent parts (different editors, a long side job). Don't delegate\n"
+"        small jobs or steps that need each other's results. Helpers can't start helpers.\n"
+"\n"
+"        Args:\n"
+"            task: What the helper should do, complete on its own (names, values, where).\n"
+"            editor: The editor whose context it works in: VIEW_3D, NODE_EDITOR,\n"
+"                SEQUENCE_EDITOR, TEXT_EDITOR, IMAGE_EDITOR, CLIP_EDITOR, DOPESHEET_EDITOR,\n"
+"                GRAPH_EDITOR, NLA_EDITOR, SPREADSHEET, or \"\" for All editors.\n"
+"            title: A short title for its tab (a few words).\n"
+"\n"
+"        Returns:\n"
+"            ``status`` (\"ok\" or \"error\"), the helper's ``helper_id`` and ``title``, and a message.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "task": {
+                    "title": "Task",
+                    "type": "string"
+                },
+                "editor": {
+                    "default": "",
+                    "title": "Editor",
+                    "type": "string"
+                },
+                "title": {
+                    "default": "",
+                    "title": "Title",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "task"
+            ],
+            "title": "delegate_taskArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "download_polyhaven_asset",
         "description": "\n"
 "        Download a Poly Haven asset and import it into the current Blender scene.\n"
@@ -1688,10 +1735,11 @@ EXPECTED_TOOLS = [
 "          jump_to_asset_browser, download_polyhaven_asset, search_polyhaven_assets,\n"
 "          assign_material_to_objects, get_active_node_tree, get_node_group_interface,\n"
 "          wire_node_group)\n"
-"        - vse: Video Sequencer strips: list, read, move / trim, preview a frame, speech to text\n"
-"          and captions (get_vse_timeline_overview, get_vse_strips_summary, get_vse_strip_detail,\n"
-"          set_strip_frame_range, render_vse_preview, transcribe_strip, add_captions,\n"
-"          jump_to_tab_by_name, jump_to_tab_by_space_type)\n"
+"        - vse: Video Sequencer strips: list, read, move / trim, preview a frame, speech to text,\n"
+"          captions and a vertical 9:16 version with editable framing (get_vse_timeline_overview,\n"
+"          get_vse_strips_summary, get_vse_strip_detail, set_strip_frame_range, render_vse_preview,\n"
+"          transcribe_strip, add_captions, reframe_vertical, jump_to_tab_by_name,\n"
+"          jump_to_tab_by_space_type)\n"
 "\n"
 "        Load only what the request needs; the basic tools (scene, code, docs,\n"
 "        screenshots, plan, questions, bake_textures, render_viewport_to_path,\n"
@@ -1875,6 +1923,72 @@ EXPECTED_TOOLS = [
                 "output_id"
             ],
             "title": "read_tool_outputArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "reframe_vertical",
+        "description": "\n"
+"        Make the Sequencer's edit vertical (9:16), one undo step.\n"
+"\n"
+"        Each movie, image and scene strip gets an editable \"Reframe\" compositor\n"
+"        modifier (Offset X / Y from -1 to 1 pan inside the picture, Zoom 1 = just\n"
+"        covers, Blur Fill on / off, Blur Amount, Background Dim); change a shot's\n"
+"        framing afterwards through that modifier's inputs. Strips that already have\n"
+"        one keep their framing unless ``reset``.\n"
+"\n"
+"        Args:\n"
+"            strips: Strip names to reframe (empty = every visible movie / image / scene strip).\n"
+"            mode: CROP (centre crop, fills the frame) or BLUR_FILL (the whole shot over a\n"
+"                blurred, dimmed copy of itself).\n"
+"            in_copy: Work in a copy of the scene named \"<scene> Vertical\" and show it in the\n"
+"                Sequencer, leaving the 16:9 edit as it is.\n"
+"            resolution: Output size, e.g. 1080x1920, 720x1280, 2160x3840.\n"
+"            reset: Give strips that already have a Reframe modifier fresh framing too.\n"
+"\n"
+"        Returns:\n"
+"            ``status``, the ``scene`` used (and ``source_scene``, ``copied``), ``mode``,\n"
+"            ``resolution``, ``strips_changed``, ``strips_kept`` and a ``message``.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "strips": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Strips"
+                },
+                "mode": {
+                    "default": "CROP",
+                    "title": "Mode",
+                    "type": "string"
+                },
+                "in_copy": {
+                    "default": True,
+                    "title": "In Copy",
+                    "type": "boolean"
+                },
+                "resolution": {
+                    "default": "1080x1920",
+                    "title": "Resolution",
+                    "type": "string"
+                },
+                "reset": {
+                    "default": False,
+                    "title": "Reset",
+                    "type": "boolean"
+                }
+            },
+            "title": "reframe_verticalArguments",
             "type": "object"
         }
     },

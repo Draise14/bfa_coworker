@@ -15,10 +15,14 @@ is today's single conversation: the controller's module-level state
 ``session_memory.store``) *is* the default thread's, so one thread behaves
 exactly as before.
 
-**One turn at a time across threads** (1.1.42): the registry's turn gate lets one
-thread run a turn; another thread's message waits in its own Queue and starts
-when the gate frees (oldest waiting message first).  Undo, Revert and the scene
-lock stay as they are.  Running side by side is Threads 3 (#359).
+**Side by side** (Threads 3, #359): the registry is the thread runner.  Each
+thread's turn takes a *slot*; how many slots there are depends on the engine
+(:func:`slots_for`): online engines (Remote API, External Agent) run up to
+*cap* chats at once (the "Chats running at once" preference, 3 by default);
+Local runs them **chained**, one after another, because one machine has one
+GPU's worth of capacity (an opt-in lets Local use the same cap on llama-server's
+unified KV slots).  A thread's message waits in its own Queue while every slot
+is taken, and starts when one frees (oldest waiting message first).
 
 The turn worker marks which thread it works for (:func:`use` / :func:`current`),
 so code deep in a turn (the MCP request's thread header, the transport) finds
@@ -42,8 +46,11 @@ __all__ = (
     "tab_modes",
     "tab_title",
     "short_name",
+    "slots_for",
+    "stop_all",
     "tag",
     "use",
+    "wait_message",
 )
 
 import contextlib
@@ -54,7 +61,35 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator
 
 DEFAULT_ID = "main"
-RUNNING_CAP = 3          # live threads that may run at once (Threads 3; one at a time here)
+RUNNING_CAP = 3          # chats an online engine runs at once (the preference's default, #359)
+CAP_MAX = 8              # the preference's upper bound
+LOCAL_SLOTS_MAX = 4      # llama-server's unified KV slots (auto = 4; never split the KV, #399)
+
+# Engine kinds (``operating_mode`` in a word): which run chats at once.
+ENGINE_KINDS = ("local", "remote", "agent", "harness")
+
+
+def slots_for(kind: str, cap: int = RUNNING_CAP, local_side_by_side: bool = False) -> int:
+    """How many chats may run a turn at once on engine *kind* (#359).
+
+    Online engines (``remote``, ``agent``) run up to *cap* side by side.  ``local`` is
+    chained (1) unless *local_side_by_side* is on: then up to *cap*, at most the
+    server's :data:`LOCAL_SLOTS_MAX` unified slots.  The External Harness's outside
+    client is one chat (1)."""
+    cap = max(1, min(int(cap or 1), CAP_MAX))
+    if kind in ("remote", "agent"):
+        return cap
+    if kind == "local" and local_side_by_side:
+        return min(cap, LOCAL_SLOTS_MAX)
+    return 1
+
+
+def wait_message(slots: int, running: "list[Thread]", title: Callable[["Thread"], str]) -> str:
+    """What a message that has to wait says: whose turn it waits for when chats are
+    chained, else that it waits for a free slot."""
+    if slots <= 1 and running:
+        return "Waits for the {:s} chat's turn".format(title(running[0]))
+    return "Waits for a free slot ({:d} of {:d} chats running)".format(len(running), slots)
 
 # Editor kinds in plain words, for undo step names and status (#357, Threads 2 names them).
 _EDITOR_NAMES = {
@@ -142,7 +177,7 @@ def label(thread: Thread | None) -> str:
 
 
 class ThreadRegistry:
-    """The live threads, the default one, and the one-turn-at-a-time gate."""
+    """The live threads, the default one, and the thread runner's slots (#359)."""
 
     def __init__(self, make_state: Callable[[], Any] | None = None,
                  make_queue: Callable[[], Any] | None = None,
@@ -153,9 +188,11 @@ class ThreadRegistry:
         self._make_state = make_state
         self._make_queue = make_queue
         self._make_store = make_store
-        self.cap = cap
+        self.cap = cap                   # online engines: chats at once (the preference)
+        self.kind = "local"              # the engine running turns now (set at each send)
+        self.local_side_by_side = False  # opt-in: Local uses the cap too (unified KV slots)
         self._lock = threading.RLock()
-        self._running: str = ""          # the thread whose turn holds the gate
+        self._running: dict[str, float] = {}     # thread id -> when its turn took a slot (in order)
         self.default = Thread(id=DEFAULT_ID)
         if default_objects:
             self._fill(self.default)
@@ -203,42 +240,62 @@ class ThreadRegistry:
     def remove(self, thread_id: str) -> bool:
         """Close a thread (never the default, never while its turn runs)."""
         with self._lock:
-            if thread_id == DEFAULT_ID or thread_id == self._running or thread_id not in self._threads:
+            if thread_id == DEFAULT_ID or thread_id in self._running or thread_id not in self._threads:
                 return False
             del self._threads[thread_id]
             return True
 
-    # -- one turn at a time (1.1.42) -------------------------------------------------
+    # -- the thread runner (#359) ------------------------------------------------------
+    def slots(self) -> int:
+        """How many turns may run at once now (by the engine kind, :func:`slots_for`)."""
+        return slots_for(self.kind, self.cap, self.local_side_by_side)
+
     def try_begin(self, thread: Thread) -> bool:
-        """Take the turn gate for *thread*; False while another thread's turn runs.
-        The same thread may take it again (its stopped turn still unwinding)."""
+        """Take a slot for *thread*'s turn; False while every slot is taken.  A thread
+        that holds one keeps it (its stopped turn still unwinding, or a reserved start)."""
         with self._lock:
-            if self._running and self._running != thread.id:
+            if thread.id in self._running:
+                return True
+            if len(self._running) >= self.slots():
                 return False
-            self._running = thread.id
+            self._running[thread.id] = time.monotonic()
             return True
 
     def end(self, thread: Thread) -> None:
-        """*thread*'s turn is over: the gate is free (only its owner frees it)."""
+        """*thread*'s turn is over: its slot is free (only its owner frees it)."""
         with self._lock:
-            if self._running == thread.id:
-                self._running = ""
+            self._running.pop(thread.id, None)
 
     def running(self) -> Thread | None:
-        """The thread whose turn runs now, or None."""
+        """The thread whose turn started first of those running now, or None."""
         with self._lock:
-            return self._threads.get(self._running) if self._running else None
+            for thread_id in self._running:
+                if thread_id in self._threads:
+                    return self._threads[thread_id]
+            return None
+
+    def running_threads(self) -> list[Thread]:
+        """Every thread whose turn runs now, in the order they started."""
+        with self._lock:
+            return [self._threads[i] for i in self._running if i in self._threads]
+
+    def is_running(self, thread: Thread | None) -> bool:
+        with self._lock:
+            return thread is not None and thread.id in self._running
 
     def blocked(self, thread: Thread) -> bool:
-        """True when another thread's turn holds the gate (*thread* has to wait)."""
+        """True when *thread* holds no slot and every slot is taken (it has to wait)."""
         with self._lock:
-            return bool(self._running) and self._running != thread.id
+            return thread.id not in self._running and len(self._running) >= self.slots()
 
     def next_waiting(self, queue_of: Callable[[Thread], Any] | None = None) -> Thread | None:
         """The thread whose queued message waited longest (it goes next), or None.
+        A thread whose turn runs is skipped: its message waits for that turn.
         *queue_of* finds a thread's queue (the default's is the controller's)."""
         best, best_at = None, None
         for thread in self.live():
+            if self.is_running(thread):
+                continue
             queue = queue_of(thread) if queue_of is not None else thread.queue
             head = queue.peek() if queue is not None else None
             if not head:
@@ -247,6 +304,12 @@ class ThreadRegistry:
             if best_at is None or at < best_at:
                 best, best_at = thread, at
         return best
+
+
+def stop_all(registry: "ThreadRegistry", stop: Callable[[Thread], bool]) -> int:
+    """Stop All (#359): *stop* each live thread (it returns whether that thread was
+    working or had messages waiting); how many were."""
+    return sum(1 for thread in registry.live() if stop(thread))
 
 
 # -- Threads 2b (#417): the window's one image socket -------------------------------
@@ -315,7 +378,7 @@ def tab_title(thread: Thread, first_message: str = "") -> str:
 def close_refused(registry: "ThreadRegistry", thread: Thread, busy: bool = False) -> str:
     """Why *thread*'s tab can't close now ("" when it can): its turn runs.  The default
     tab never goes away: closing it saves its chat to History and starts it fresh."""
-    if busy or registry.running() is thread:
+    if busy or registry.is_running(thread):
         return "Its turn is running: stop it first"
     return ""
 

@@ -31,7 +31,7 @@ SURFACE = frozenset({
     "execute_blender_code", "get_blendfile_summary_datablocks", "get_blendfile_summary_missing_files",
     "get_blendfile_summary_of_linked_libraries", "get_blendfile_summary_path_info",
     "get_blendfile_summary_usage_guess", "get_object_detail_summary", "get_objects_summary",
-    "get_operation_history", "read_tool_output", "ask_user", "get_scene_digest", "update_plan",
+    "get_operation_history", "read_tool_output", "ask_user", "delegate_task", "get_scene_digest", "update_plan",
     "get_attached_image", "get_job_status", "bake_textures", "render_viewport_to_path",
     "get_polyhaven_status", "get_screenshot_of_window_as_image", "get_screenshot_of_window_as_json",
     "render_thumbnail_to_path", "get_python_api_docs", "search_api_docs", "search_manual_docs",
@@ -63,7 +63,7 @@ DOMAINS: dict[str, frozenset[str]] = {
     "vse": frozenset({
         "jump_to_tab_by_name", "jump_to_tab_by_space_type", "get_vse_strips_summary", "get_vse_strip_detail",
         "get_vse_timeline_overview", "set_strip_frame_range", "render_vse_preview",
-        "transcribe_strip", "add_captions",
+        "transcribe_strip", "add_captions", "reframe_vertical",
     }),
     "geometry_nodes": frozenset({
         "jump_to_view3d_object_by_name", "jump_to_view3d_object_data_by_name", "get_screenshot_of_area_as_image",

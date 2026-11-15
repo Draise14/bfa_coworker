@@ -26,6 +26,9 @@ Long jobs (Tools 6, #309): a background render or bake registers a checker with
 :func:`start_job` and answers with its id; ``get_job_status`` reads
 :func:`job_status`.  The render and bake handlers registered here feed the
 job registry (:mod:`long_jobs`) progress and cancels.
+
+Make Vertical (Video 3, #333): ``reframe_vertical`` runs :func:`reframe_vertical`
+on the Sequencer's scene.
 """
 
 from __future__ import annotations
@@ -37,10 +40,12 @@ __all__ = (
     "cancel_question",
     "cancel_questions",
     "current_question",
+    "delegate_task",
     "job_status",
     "jobs_tick",
     "post_question",
     "question_state",
+    "reframe_vertical",
     "scene_digest",
     "start_job",
     "transcribe_strip",
@@ -107,6 +112,22 @@ def update_plan(args: dict[str, Any]) -> str:
         result = _store().goal.apply_update(args if isinstance(args, dict) else {})
     _redraw()
     return result
+
+
+# -- Helper chats (#479) ------------------------------------------------------------
+def delegate_task(args: dict[str, Any]) -> dict[str, Any]:
+    """Open a helper chat for the calling thread and queue *args*' task there; answers at
+    once (``status``, ``message``, ``helper_id``, ``title``).  Main thread (the bridge)."""
+    try:
+        from . import helper_chats
+    except ImportError as ex:
+        return {"status": "error", "message": "Helper chats aren't available here ({:s}).".format(str(ex))}
+    try:
+        return helper_chats.delegate(_thread[0], args if isinstance(args, dict) else {})
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "message": "Coworker couldn't open a helper chat: {:s}".format(str(ex))}
 
 
 # -- Questions ----------------------------------------------------------------------
@@ -182,18 +203,48 @@ def cancel_questions(thread: str | None = None) -> None:
 # Each turn gets an undo step before and after it, so the agent's whole turn is one
 # step of Edit > Undo History, and Revert (the chat's button) undoes it in one go --
 # but only while you haven't changed the scene since (the depsgraph counter).
-_turn = {"before": False, "after": False, "edits": 0, "name": "", "n": 0}
+# Threads 3 (#359): one checkpoint per thread (by its tag; "" = the default thread's,
+# ``_turn``), since chats' turns run side by side.
+_turn = {"before": False, "after": False, "edits": 0, "name": "", "n": 0, "mark": 0}
+_turns: dict[str, dict[str, Any]] = {"": _turn}
+_names = itertools.count(1)       # "Before ... (n)": unique across threads
 _edits = [0]
 
 
+def _turn_of(thread: str = "") -> dict[str, Any]:
+    return _turns.setdefault(str(thread or ""), {"before": False, "after": False, "edits": 0, "name": "",
+                                                 "n": 0, "mark": 0})
+
+
+def _any_turn_open() -> bool:
+    return any(t["before"] and not t["after"] for t in _turns.values())
+
+
+_OWN_WINDOW = 1.0                 # seconds a bridge call's depsgraph updates are Coworker's own
+_own_until = [0.0]
+
+
+def own_change() -> None:
+    """The bridge ran a call (a chat's tool or Coworker's own bookkeeping, as the scene
+    lock's release when the last chat ends): the depsgraph updates it causes are no
+    edit of yours (#359)."""
+    import time
+    _own_until[0] = time.monotonic() + _OWN_WINDOW
+
+
 def _count_edit(*_args: Any) -> None:
-    _edits[0] += 1
+    # While a chat's turn is open the scene changes are its own (#359): another chat's
+    # Revert must not read them as yours; that chat's undo steps show up in the journal.
+    import time
+    if not _any_turn_open() and time.monotonic() > _own_until[0]:
+        _edits[0] += 1
 
 
 def _undo(push_message: str = "", to_item: int = -1) -> bool:
     """``ed.undo_push`` (with a message), ``ed.undo_history`` (to step *to_item*) or
-    ``ed.undo``, in a window's context."""
+    ``ed.undo``, in a window's context.  Coworker's own step: no edit of yours (#359)."""
     import bpy  # pylint: disable=import-error
+    own_change()
     wm = bpy.context.window_manager
     window = bpy.context.window or (wm.windows[0] if wm.windows else None)
     if window is None:
@@ -211,32 +262,64 @@ def _undo(push_message: str = "", to_item: int = -1) -> bool:
         return False
 
 
-def turn_started(label: str) -> None:
-    """Main thread, before the turn's first change."""
-    if not _turn["before"]:
+def _journal() -> Any:
+    from . import side_by_side
+    return side_by_side.JOURNAL
+
+
+def turn_started(label: str, thread: str = "") -> None:
+    """Main thread, before the turn's first change (*thread*: whose turn, its tag)."""
+    turn = _turn_of(thread)
+    if not turn["before"]:
         # A name of its own, so Revert finds this step again (#242).
-        _turn["n"] += 1
-        name = "Before {:s} ({:d})".format(label, _turn["n"])
-        _turn.update(before=_undo(name), after=False, name=name)
+        turn["n"] = next(_names)
+        name = "Before {:s} ({:d})".format(label, turn["n"])
+        turn.update(before=_undo(name), after=False, name=name)
+        # #359: the other chats see this step; this turn sees theirs from here on.
+        _journal().note(thread)
+        turn["mark"] = _journal().mark()
 
 
-def turn_finished(label: str) -> None:
+def turn_finished(label: str, thread: str = "") -> None:
     """Main thread, once the turn is over."""
-    if _turn["before"] and not _turn["after"]:
+    turn = _turn_of(thread)
+    if turn["before"] and not turn["after"]:
         done = _undo(label)
-        _turn.update(before=False, after=done, edits=_edits[0])
+        turn.update(before=False, after=done, edits=_edits[0])
+        _journal().note(thread)
 
 
-def can_revert() -> bool:
-    return bool(_turn["after"]) and _edits[0] == _turn["edits"]
+def can_revert(thread: str = "") -> bool:
+    """*thread*'s last turn has a Revert to offer (directly, or with a choice, #359)."""
+    turn = _turn_of(thread)
+    return bool(turn["after"]) and _edits[0] == turn["edits"]
 
 
-def revert_turn() -> str:
-    """Undo the last turn; returns "" or why it can't."""
-    if not _turn["after"]:
-        return "There's no finished turn to revert."
-    if _edits[0] != _turn["edits"]:
-        return "The scene changed after the turn, so use Edit > Undo History to pick the step."
+def revert_choice(thread: str = "", title: Any = None) -> Any:
+    """What Revert may offer for *thread*'s last turn (#359): directly only when no
+    other chat stepped on the undo stack since that turn began; else *Revert both* (not
+    while that chat still works) or *Cancel*.  *title* names a chat by its tag."""
+    from . import side_by_side
+    turn = _turn_of(thread)
+    others = side_by_side.JOURNAL.others_since(thread, int(turn.get("mark", 0))) if turn["after"] else []
+    return side_by_side.revert_choice(bool(turn["after"]), _edits[0] != turn["edits"], others,
+                                      side_by_side.working_chats(), has_snapshot=False,
+                                      title=title or (lambda tag: tag or "All editors"))
+
+
+# The chats whose steps the last "Revert both" undid as well (the chat tells them, #359).
+reverted_with: list[str] = []
+
+
+def revert_turn(thread: str = "", both: bool = False, title: Any = None) -> str:
+    """Undo the last turn of *thread*; returns "" or why it can't.  When another chat
+    stepped since the turn began, only with *both* (its steps since go too, #359)."""
+    _turn = _turn_of(thread)
+    choice = revert_choice(thread, title)
+    if choice.kind in ("none", "edited", "busy"):
+        return choice.message
+    if choice.kind == "choose" and not both:
+        return choice.message + " Choose Revert Both Turns to do that."
     # The tools' own operators push undo steps of their own during the turn, so one
     # undo only took back the last of them (#242): go back to the turn's "Before" step.
     try:
@@ -251,9 +334,16 @@ def revert_turn() -> str:
                     "Undo Steps), so use Edit > Undo History.")
         if not _undo(to_item=len(names) - 1 - names[::-1].index(_turn["name"])):
             return "Blender couldn't undo here."
+    elif choice.kind == "choose":
+        # One plain undo would take back the newest step, another chat's: never by position.
+        return "This Blender can't find the turn's first step, so use Edit > Undo History."
     elif not _undo():
         return "Blender couldn't undo here."
     _turn["after"] = False
+    reverted_with[:] = list(choice.others) if choice.kind == "choose" else []
+    for other in reverted_with:     # their last turns' steps are gone from the stack now
+        _turn_of(other)["after"] = False
+    _journal().note(thread)
     _redraw()
     return ""
 
@@ -429,3 +519,21 @@ def scene_digest(since: str = "") -> dict[str, Any]:
     if since:
         head["note"] = "The earlier hash is too old to compare; here is the whole summary."
     return head
+
+
+def reframe_vertical(strips: list[str] | None = None, mode: str = "CROP", in_copy: bool = True,
+                     resolution: str = "1080x1920", reset: bool = False) -> dict[str, Any]:
+    """Make the Sequencer's edit 9:16 with a Reframe modifier per shot (#333), one undo step.
+
+    Raises ``reframe.ReframeError`` with a clear reason when it can't.  Main thread only.
+    """
+    import bpy  # pylint: disable=import-error
+    from . import reframe
+    wm = bpy.context.window_manager
+    window = bpy.context.window or (wm.windows[0] if wm and wm.windows else None)
+    scene = getattr(getattr(window, "workspace", None), "sequencer_scene", None) if window else None
+    if scene is None:
+        scene = window.scene if window is not None else bpy.context.scene
+    done = reframe.make_vertical(scene, mode, in_copy, resolution, reset, names=strips or None, window=window)
+    _undo(push_message="Make Vertical")
+    return done

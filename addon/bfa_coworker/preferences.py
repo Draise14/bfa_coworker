@@ -217,6 +217,30 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         max=6,
     )
 
+    # -- Chats side by side (Threads 3, #359) ------------------------
+
+    chats_at_once: IntProperty(  # type: ignore[valid-type]
+        name="Chats Running at Once",
+        description=(
+            "Remote API and External Agent: how many chat tabs may work at the same "
+            "time; more wait for a free slot. The Local LLM runs chats one after "
+            "another unless Local Side by Side is on"
+        ),
+        default=3,
+        min=1,
+        max=8,
+    )
+
+    local_side_by_side: BoolProperty(  # type: ignore[valid-type]
+        name="Local Side by Side",
+        description=(
+            "Local LLM: let chat tabs work at the same time too (up to 4, on the "
+            "server's shared context slots). Each chat then runs slower; off, chats "
+            "take turns one after another"
+        ),
+        default=False,
+    )
+
     # -- Debug Mode --------------------------------------------------
 
     def _update_debug_mode(self, _context: bpy.types.Context) -> None:
@@ -1194,6 +1218,13 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         name="Auto: Turns",
         description="Auto mode stops after sending this many turns itself",
         default=30, min=1, max=500,
+    )
+
+    helpers_per_turn: IntProperty(  # type: ignore[valid-type]
+        name="Helpers per Turn",
+        description=("The most helper chats one chat may start in a turn (delegate_task, #479). "
+                     "Helpers can't start helpers of their own"),
+        default=4, min=1, max=12,
     )
 
     external_agent_tools_on_demand: BoolProperty(  # type: ignore[valid-type]
@@ -2629,6 +2660,15 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             text="Long requests keep going in rounds while the plan makes progress.",
             icon='INFO',
         )
+        chat_box.prop(self, "helpers_per_turn")
+        chat_box.label(
+            text="A chat can hand parts of a job to helper chats; on Local they run one after another.",
+            icon='INFO',
+        )
+        if self.operating_mode != "EXTERNAL_HARNESS":     # #359
+            chat_box.prop(self, "chats_at_once")
+            if self.operating_mode == "LOCAL_LLM":
+                chat_box.prop(self, "local_side_by_side")
 
         # -- Debug Mode -------------------------------------------------
         debug_box = layout.box()

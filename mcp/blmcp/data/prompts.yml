@@ -50,6 +50,17 @@ initial_instructions: |
   overlap and names a free channel), and `render_vse_preview` to look at a frame.
   Frames follow Blender: a strip's `end` is the frame after its last one.
 
+  # Helper Chats -- `delegate_task`
+
+  A big job that splits into independent parts (a scene build, a node tidy and a
+  strip translation; work in different editors; a long side job) can go to helper
+  chats: call `delegate_task` once per part, with a task complete on its own and
+  the editor it belongs to. It answers at once; don't wait or poll. When all your
+  helpers have finished, their results come back as one message starting with
+  "[Helpers]", and you carry on from them. Do small jobs yourself, and keep steps
+  that need each other's results in one chat. On a local model helpers run one
+  after another; online they may run side by side. Helpers can't start helpers.
+
   The API reference (`data/api/`), user manual (`data/manual/`) and skill
   notes (`data/skills/`: materials, modifiers, mesh editing, rendering,
   animation, collections) are bundled with this server: search them with the

@@ -44,7 +44,7 @@ from typing import Any
 
 import bpy  # pylint: disable=import-error
 
-from . import agent_controller, helpers, threads
+from . import agent_controller, helpers, log, threads
 from .helpers import HELPERS
 
 
@@ -345,7 +345,7 @@ def card(thread: Any) -> Any:
     rows = []
     for helper in batch:
         word, icon = _status_of(helper)
-        rows.append((helper.id, helper.title, word, icon))
+        rows.append((helper.id, log.redact(helper.title), word, icon))     # the title is an argument (#511)
     left = sum(1 for h in batch if not h.finished)
     title = "{:d} helper{:s} — {:d} working".format(len(batch), "" if len(batch) == 1 else "s", left)
     return Helpers(title=title, rows=tuple(rows))
@@ -354,7 +354,7 @@ def card(thread: Any) -> Any:
 def tab_label(thread: Any) -> str:
     """A helper tab's label (its title), or "" for any other tab."""
     helper = HELPERS.get(getattr(thread, "id", ""))
-    return helper.title if helper is not None else ""
+    return log.redact(helper.title) if helper is not None else ""     # keys as *** (#511)
 
 
 def tab_tip(thread: Any) -> str:

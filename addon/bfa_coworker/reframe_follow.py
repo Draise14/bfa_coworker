@@ -162,8 +162,9 @@ def make_asker(target: tuple[str, str, str], transport: Callable[..., Any]) -> C
     url, key, model = target
 
     def ask(path: str, _strip: str, _frame: int) -> float | None:
+        # thinking_budget_tokens None: no thinking field at all (a 0 means "off" since #544).
         response = transport(url, build_messages(_data_uri(path)), None, key or None, model or None,
-                             max_tokens=256, thinking_budget_tokens=0, chat_mode="ASK")
+                             max_tokens=256, thinking_budget_tokens=None, chat_mode="ASK")
         if not response:
             raise Unavailable("The model didn't answer (is the engine running, and can its model see images?).")
         try:

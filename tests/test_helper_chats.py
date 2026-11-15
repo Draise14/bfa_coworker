@@ -16,7 +16,12 @@ and LoopEngine, with stand-ins for the controller and the chat.
    next turn; the parent still running when the results come (they wait in its
    queue); Stop in the parent stops queued and running helpers, and nothing is
    sent back; a helper can't delegate; External Harness is refused.
-4. The External Agent's turn-end hook names the turn's thread and its error.
+   Side by side (#359, #521): online helpers run beside the asking turn; on the
+   External Agent a helper waits only for a free slot; the cap counts the asking
+   chat's own turn while other chats start; Stop cancels each helper's own turn;
+   Stop All ends queued helpers and sends no results.
+4. The External Agent's turn-end hook names the turn's thread and its error, also
+   with two chats' turns running at once.
 5. The GPU chat's Helpers card: a row per helper, a click shows its tab.
 
 Run with::
@@ -522,6 +527,219 @@ class TestFlow(_Flow):
         self.assertIsNone(self.hc.card(h1), "a helper has no helpers")
 
 
+class _FakeAcp:
+    """The External Agent's runner as #359 left it: several chats' turns at once, the
+    last chat started is the current :attr:`thread` (#521)."""
+
+    def __init__(self, cap=3):
+        self.cap, self.running, self.queue, self.cancelled, self.thread = cap, {}, [], [], ""
+        self.dropped, self.turns, self.started = [], 0, []
+
+    def busy_for(self, tag):
+        return tag in self.running
+
+    def blocked_for(self, tag):
+        return tag not in self.running and len(self.running) >= self.cap
+
+    def is_busy(self):
+        return bool(self.running)
+
+    def turn_of(self, tag):
+        return self.running.get(tag, "")
+
+    @property
+    def _turn_id(self):                         # the current thread's turn only
+        return self.running.get(self.thread, "")
+
+    @property
+    def _queue(self):
+        return self.queue
+
+    def submit(self, prompt, _config=None):
+        if self.busy_for(prompt.thread) or self.blocked_for(prompt.thread):
+            return None, self.enqueue(prompt)
+        return self._start(prompt), 0
+
+    def _start(self, prompt):
+        self.turns += 1
+        self.running[prompt.thread] = "turn_{:d}".format(self.turns)
+        self.thread = prompt.thread             # the last chat started is the current one
+        self.started.append(prompt.thread)
+        return self.running[prompt.thread]
+
+    def _start_next(self):
+        """A turn ended: waiting messages start while slots are free (as AcpEngine does)."""
+        while len(self.running) < self.cap:
+            nxt = next((p for p in self.queue if p.thread not in self.running), None)
+            if nxt is None:
+                return
+            self.queue.remove(nxt)
+            self._start(nxt)
+
+    def end(self, tag):
+        self.running.pop(tag, None)
+
+    def enqueue(self, prompt, _config=None):
+        self.queue.append(prompt)
+        return len(self.queue)
+
+    def drop_queued(self, tag):
+        self.dropped.append(tag)
+        kept = [p for p in self.queue if p.thread != tag]
+        dropped, self.queue = len(self.queue) - len(kept), kept
+        return dropped
+
+    def cancel(self):
+        self.cancel_thread(self.thread)
+
+    def cancel_thread(self, tag):
+        """Its waiting messages go and its turn ends -- here at once (the agent answered
+        Stop quickly), and the next waiting message starts, maybe another chat's."""
+        self.cancelled.append(tag)
+        self.queue = [p for p in self.queue if p.thread != tag]
+        if self.running.pop(tag, None) is not None:
+            self._start_next()
+
+
+def _stop_all_chats(namespace):
+    """``ui_chat.stop_all_chats`` from its source (ui_chat needs bpy), over *namespace*."""
+    src = (_ADDON / "ui_chat.py").read_text(encoding="utf-8")
+    start = src.index("def stop_all_chats")
+    body = src[start:src.index("\n\n\n", start)]
+    ns = dict(namespace, __name__=_PKG + ".ui_chat", __package__=_PKG)
+    exec("from __future__ import annotations\n" + body, ns)
+    return ns["stop_all_chats"]
+
+
+class TestSideBySide(_Flow):
+    """Helper chats on the thread runner of #359 (#521)."""
+
+    def external(self, cap=3):
+        acp = _FakeAcp(cap=cap)
+        ui = sys.modules[_PKG + ".ui_chat"]
+        ui._acp, ui._is_external_agent = acp, (lambda context=None: True)
+        ui._thread_engine = lambda thread, _mode=None: acp
+        self.prefs.operating_mode = "EXTERNAL_AGENT"
+        return acp
+
+    def test_remote_helpers_run_at_the_same_time_and_report_once(self):
+        self.reg.kind, self.reg.cap = "remote", 3
+        self.start_parent()
+        one = self.delegate("Tidy the rock material's nodes.", "NODE_EDITOR", "Node tidy")
+        two = self.delegate("Translate the title strips to German.", "sequencer", "Strip translate")
+        self.assertIn("is starting", one["message"])
+        self.assertIn("is starting", two["message"])
+        h1, h2 = self.helper(one), self.helper(two)
+        self.assertTrue(_wait_for(lambda: h1.state.turn_active and h2.state.turn_active),
+                        "both helpers run while the asking turn still runs")
+        self.assertTrue(self.parent.state.turn_active)
+        self.go(self.parent)
+        self.assertTrue(_wait_for(lambda: not self.parent.state.turn_active))
+        self.go(h2)
+        self.go(h1)
+        self.assertTrue(_wait_for(lambda: len(self.parent.state.conversation_history) >= 3))
+        helper_msgs = [m for m in self.parent.state.conversation_history
+                       if str(m.get("content", "")).startswith("[Helpers]")]
+        self.assertEqual(len(helper_msgs), 1, "one results message")
+        self.assertIn("Your 2 helpers finished (2 done)", helper_msgs[0]["content"])
+
+    def test_external_agent_helpers_start_beside_the_asking_turn(self):
+        acp = self.external(cap=3)
+        self.prefs.helpers_per_turn = 2
+        acp.submit(eng.Prompt(text="Build the scene", thread=th.tag(self.parent)))
+        one = self.delegate("Tidy the nodes.", "NODE_EDITOR")
+        self.assertIn("is starting", one["message"], "a free slot: not queued behind the asking turn")
+        self.assertNotEqual(acp.thread, th.tag(self.parent), "the helper is the current thread now")
+        self.assertEqual(self.delegate("Translate strips.", "SEQUENCE_EDITOR")["status"], "ok")
+        third = self.delegate("Light the set.", "VIEW_3D")
+        self.assertEqual(third["status"], "error", "still the same asking turn: the cap holds")
+        self.assertEqual(len(acp.running), 3)
+        self.assertEqual(self.hc.stop_helpers(self.parent), 2)
+        self.assertNotIn(th.tag(self.parent), acp.cancelled)
+        self.assertEqual(len(acp.cancelled), 2, "each helper's own chat only")
+        self.assertIn(th.tag(self.parent), acp.running, "the asking turn goes on")
+
+    def test_external_agent_helpers_queue_when_no_slot_is_free(self):
+        acp = self.external(cap=1)
+        acp.submit(eng.Prompt(text="Build the scene", thread=th.tag(self.parent)))
+        self.assertIn("is queued", self.delegate("Tidy the nodes.", "NODE_EDITOR")["message"])
+        self.assertEqual(len(acp.queue), 1)
+
+    def test_cap_holds_per_turn_when_another_chat_starts_in_between(self):
+        # Two chats side by side: the other chat's turn starts between two of this chat's
+        # delegate_task calls, so the current thread changes; the cap still counts this turn.
+        acp = self.external(cap=9)
+        self.prefs.helpers_per_turn = 2
+        other = self.reg.create(title="Lighting")
+        acp.submit(eng.Prompt(text="Build the scene", thread=th.tag(self.parent)))
+        self.assertEqual(self.delegate("one")["status"], "ok")
+        acp.submit(eng.Prompt(text="Light the set", thread=th.tag(other)))
+        self.assertEqual(acp.thread, th.tag(other), "the other chat is the current one now")
+        self.assertEqual(self.delegate("two")["status"], "ok")
+        third = self.delegate("three")
+        self.assertEqual(third["status"], "error", "the cap holds within the asking turn")
+        self.assertIn("Helpers per Turn", third["message"])
+        # The other chat asks for its own helpers: they count against its own turn.
+        self.assertEqual(self.delegate("its one", caller=other)["status"], "ok")
+        self.assertEqual(self.delegate("its two", caller=other)["status"], "ok")
+        self.assertEqual(self.delegate("its three", caller=other)["status"], "error")
+        # The asking chat's next turn may start helpers again.
+        acp.end(th.tag(self.parent))
+        acp.submit(eng.Prompt(text="Carry on", thread=th.tag(self.parent)))
+        acp.submit(eng.Prompt(text="Another", thread=th.tag(self.reg.create(title="Third"))))
+        self.assertEqual(self.delegate("four")["status"], "ok", "a new turn of the asking chat")
+
+    def test_stop_cancels_every_running_helper_not_only_the_current_chat(self):
+        acp = self.external()
+        h1 = self.reg.create(editor="NODE_EDITOR", title="Node tidy")
+        h2 = self.reg.create(editor="SEQUENCE_EDITOR", title="Strips")
+        for helper in (h1, h2):
+            self.hc.HELPERS.add(self.parent.id, helper.id, title=helper.title, task="x")
+            acp.submit(eng.Prompt(text="task", thread=th.tag(helper)))
+        self.assertEqual(acp.thread, th.tag(h2), "the last helper started is the current chat")
+        self.assertEqual(self.hc.stop_helpers(self.parent), 2)
+        self.assertEqual(sorted(acp.cancelled), sorted([th.tag(h1), th.tag(h2)]),
+                         "each helper's own turn is cancelled")
+        self.assertEqual(acp.running, {})
+
+    def stop_all(self, acp):
+        ui = sys.modules[_PKG + ".ui_chat"]
+        return _stop_all_chats({"agent_controller": sys.modules[_PKG + ".agent_controller"], "_acp": acp,
+                                "_is_external_agent": ui._is_external_agent,
+                                "_thread_engine": ui._thread_engine})()
+
+    def test_stop_all_sends_no_results_after_a_helper_unwinds(self):
+        acp = self.external()
+        h1 = self.reg.create(editor="NODE_EDITOR", title="Node tidy")
+        self.hc.HELPERS.add(self.parent.id, h1.id, title="Node tidy", task="x")
+        acp.submit(eng.Prompt(text="task", thread=th.tag(h1)))       # the parent waits for it
+        self.assertEqual(self.stop_all(acp), 1)
+        self.hc.acp_turn_ended(th.tag(h1), "cancelled", "")         # its turn unwinds after Stop All
+        self.assertNotIn(th.tag(self.parent), acp.running, "no [Helpers] turn starts after Stop All")
+        self.assertEqual(acp.queue, [])
+        self.assertEqual(self.hc.waiting(self.parent), 0)
+
+    def test_stop_all_ends_queued_helpers(self):
+        acp = self.external()
+        h1 = self.reg.create(editor="NODE_EDITOR", title="Node tidy")
+        h2 = self.reg.create(editor="SEQUENCE_EDITOR", title="Strips")
+        for helper in (h1, h2):
+            self.hc.HELPERS.add(self.parent.id, helper.id, title=helper.title, task="x",
+                                message="[Helper for \"Scene build\"] x")
+        acp.cap = 2
+        acp.submit(eng.Prompt(text="Slow job", thread=th.tag(self.parent)))
+        acp.submit(eng.Prompt(text="task", thread=th.tag(h1)))
+        self.assertEqual(acp.submit(eng.Prompt(text="task", thread=th.tag(h2)))[0], None, "waits for a slot")
+        self.assertEqual(self.stop_all(acp), 3)
+        self.assertNotIn(th.tag(h2), acp.started, "the asking turn's stop didn't start the queued helper")
+        self.assertEqual(acp.queue, [], "its waiting task is gone")
+        self.assertEqual(self.hc.HELPERS.get(h2.id).status, "stopped", "the queued helper is ended too")
+        self.hc._requeue(h2.id)                                     # a late resend finds it ended
+        self.hc.acp_turn_ended(th.tag(h1), "cancelled", "")
+        self.assertEqual((acp.running, acp.queue), ({}, []), "nothing starts after Stop All")
+        self.assertEqual(self.hc.waiting(self.parent), 0, "the asking chat waits for nobody")
+
+
 # -- 4. the External Agent's hook --------------------------------------------------------------
 class TestAcpTurnEndHook(unittest.TestCase):
 
@@ -535,6 +753,20 @@ class TestAcpTurnEndHook(unittest.TestCase):
         engine._apply(eng.AgentEvent("turn_end", "t_1", {"stop_reason": "error"}))
         engine._apply(eng.AgentEvent("turn_end", "t_2", {"stop_reason": "end_turn"}))
         self.assertEqual(heard, [("t7", "error", "boom"), ("", "end_turn", "")])
+
+    def test_two_chats_side_by_side_each_turn_names_its_own_thread(self):
+        ea = importlib.import_module(_PKG + ".engine_acp")
+        engine = ea.AcpEngine(_state())
+        engine.cap = 2
+        engine._run = lambda turn_id, prompt, slot=None: None      # no agent: the chat side only
+        heard = []
+        engine.on_turn_end = lambda thread, reason, error: heard.append(thread)
+        first, _ = engine.submit(eng.Prompt(text="Build", thread="t1"))
+        second, _ = engine.submit(eng.Prompt(text="Light", thread="t2"))
+        self.assertEqual(engine.thread, "t2", "the last chat started is the current one")
+        self.assertEqual((engine.turn_of("t1"), engine.turn_of("t2"), engine.turn_of("t9")), (first, second, ""))
+        engine._apply(eng.AgentEvent("turn_end", first, {"stop_reason": "end_turn"}))
+        self.assertEqual(heard, ["t1"], "the thread of the turn that ended, not the current one")
 
 
 # -- 5. the GPU chat's Helpers card ----------------------------------------------------------

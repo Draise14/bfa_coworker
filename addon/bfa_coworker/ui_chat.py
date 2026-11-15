@@ -748,13 +748,28 @@ def stop_all_chats() -> int:
     """Stop All (#359): every chat's turn stops, its waiting messages and questions go.
     Returns how many chats were stopped."""
     from . import coworker_api, risky_steps, threads
+    from .helpers import HELPERS
     external = _acp is not None and _is_external_agent()
+    # Helper chats (#479): every batch counts as stopped first, so no "[Helpers]" results
+    # message starts a turn after Stop All (a helper's turn may unwind before its parent's).
+    # Every chat's waiting messages go first too, before any turn stops: a stopped turn
+    # starts the next waiting message at once, maybe another chat's -- a queued helper (#521).
+    waiting: set[str] = set()
+    for live in agent_controller.THREADS.live():
+        HELPERS.stop_parent(live.id)
+        queue = agent_controller.thread_queue(live)
+        if external:
+            if _acp.drop_queued(threads.tag(live)):
+                waiting.add(live.id)
+        elif queue.pending_count:
+            waiting.add(live.id)
+            queue.clear()
 
     def stop(thread) -> bool:
         state = agent_controller.thread_state(thread)
         queue = agent_controller.thread_queue(thread)
         tag = threads.tag(thread)
-        busy = bool(state.turn_active or state.is_thinking or queue.pending_count)
+        busy = bool(state.turn_active or state.is_thinking or queue.pending_count) or thread.id in waiting
         coworker_api.cancel_questions(tag)
         risky_steps.APPROVALS.cancel_all(tag)
         if thread.auto["run"] is not None:

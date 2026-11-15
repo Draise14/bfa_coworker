@@ -526,6 +526,12 @@ class AcpEngine:
         self.approvals.cancel_all(thread)
         with self._lock:
             slot = self._running.get(thread)
+            if self.client is not None and slot is not None and slot.get("turn"):
+                slot["stop_asked"] = True       # a turn whose prompt isn't sent yet ends there (_run)
+                if not slot.get("session"):
+                    # Its session is still opening: nothing to cancel yet, and the current
+                    # session may be another chat's (#521: a helper that just started).
+                    return
         if self.client is not None and slot is not None and slot.get("turn"):
             self.client.cancel(str(slot.get("session") or self.session_id))
             # An agent stuck in a tool may never answer Stop: then Coworker lets it go.
@@ -577,7 +583,8 @@ class AcpEngine:
             self._turn_errors[event.turn_id] = str(event.data.get("message", ""))
         if event.kind == "turn_end":
             self._turn_appliers.pop(event.turn_id, None)
-            thread = self._turn_threads.pop(event.turn_id, self.thread)
+            thread = self.turn_thread(event.turn_id)    # not .thread: that is the last chat started (#359)
+            self._turn_threads.pop(event.turn_id, None)
             error = self._turn_errors.pop(event.turn_id, "")
             if self.on_turn_end is not None:
                 try:
@@ -589,6 +596,12 @@ class AcpEngine:
         """The thread (tag) a turn ran in (#359: several chats' turns run at once, so the
         current :attr:`thread` may be another's).  Valid until its ``turn_end`` is applied."""
         return self._turn_threads.get(turn_id, self.thread)
+
+    def turn_of(self, thread: str) -> str:
+        """*thread*'s running turn id ("" = none); unlike :attr:`_turn_id`, not only the
+        current thread's (#359, #479: a helper started later is the current one)."""
+        with self._lock:
+            return str((self._running.get(thread) or {}).get("turn", ""))
 
     # -- turns ------------------------------------------------------------------------
     def _start(self, prompt: Prompt) -> str:
@@ -665,8 +678,13 @@ class AcpEngine:
                 session = self._open_session(self.client, self.caps.load_session, resume, self._cwd,
                                              self._servers_for(tag), thread=tag)
                 self._set_session(tag, session)
-            result = self.client.prompt(session, self._blocks(prompt), timeout=None)
-            stop_reason = str(result.get("stopReason") or "end_turn")
+            with self._lock:
+                stop_asked = bool(slot.get("stop_asked"))
+            if stop_asked:          # Stop came while its session was opening (#521)
+                stop_reason = "cancelled"
+            else:
+                result = self.client.prompt(session, self._blocks(prompt), timeout=None)
+                stop_reason = str(result.get("stopReason") or "end_turn")
         except AcpError as ex:
             stop_reason = "error"
             if slot.get("abandoned"):

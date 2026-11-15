@@ -115,10 +115,17 @@ def submit(thread: Any, text: str, config: Any = None) -> str:
     config = config or fresh
     external = ui._is_external_agent()
     engine = ui._thread_engine(thread, mode)
-    prompt = Prompt(text=text, chat_mode="AGENT", thread=threads.tag(thread))
+    tag = threads.tag(thread)
+    prompt = Prompt(text=text, chat_mode="AGENT", thread=tag)
     agent_controller.prefetch_main_thread_context(thread)
-    busy = engine.is_busy() and not agent_controller.thread_stop(thread).is_set()
-    if busy or (not external and agent_controller.turn_blocked(thread)):
+    if external:
+        # The External Agent runs several chats at once (#359): wait only for this chat's
+        # own turn or a free slot, not for any chat's turn (is_busy).
+        busy = engine.busy_for(tag) or engine.blocked_for(tag)
+    else:
+        busy = (engine.is_busy() and not agent_controller.thread_stop(thread).is_set()) \
+            or agent_controller.turn_blocked(thread)     # every slot taken (#359): one on Local
+    if busy:
         engine.enqueue(prompt, config)
         _redraw()
         return "queued"
@@ -127,9 +134,9 @@ def submit(thread: Any, text: str, config: Any = None) -> str:
     state.ui_status = "Reading your message..."
     coworker_api.turn_started(ui._turn_label(None, thread))
     ui._approvals_new_turn(thread)
-    engine.submit(prompt, config)
+    turn_id, _position = engine.submit(prompt, config)     # a slot taken meanwhile: queued (#359)
     _redraw()
-    return "started"
+    return "started" if turn_id else "queued"
 
 
 # -- delegate_task (main thread, the bridge) ------------------------------------------------
@@ -145,7 +152,9 @@ def _chat_title(thread: Any) -> str:
 def _turn_key(parent: Any) -> str:
     """Which of the parent's turns this is (the cap counts per turn)."""
     acp = _ui()._acp
-    acp_turn = getattr(acp, "_turn_id", "") if acp is not None and acp.thread == threads.tag(parent) else ""
+    # The parent's own running turn, not the current thread's (#359: a helper started
+    # after it is the current one).
+    acp_turn = acp.turn_of(threads.tag(parent)) if acp is not None else ""
     return "{:d}:{:s}".format(int(getattr(agent_controller.thread_state(parent), "turn_token", 0)), acp_turn)
 
 
@@ -273,10 +282,7 @@ def _stop_thread(thread: Any) -> None:
     risky_steps.APPROVALS.cancel_all(tag)
     acp = ui._acp
     if ui._is_external_agent() and acp is not None:
-        if acp.thread == tag and acp.is_busy():
-            acp.cancel()                    # its turn, and its waiting messages
-        else:
-            acp.drop_queued(tag)
+        acp.cancel_thread(tag)              # its own turn and waiting messages only (#359)
         return
     agent_controller.thread_queue(thread).clear()
     if agent_controller.thread_state(thread).turn_active:

@@ -3154,6 +3154,10 @@ class BFACW_OT_chat_capture_render(Operator):  # type: ignore[misc]
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         thread = _attach_thread(context, self.thread_id)
+        refusal = chat_attachments.capture_refusal()       # a render or bake job is running (#524)
+        if refusal:
+            self.report({"WARNING"}, refusal)
+            return {"CANCELLED"}
         # Render the current view.  A throwaway camera is aligned to the
         # viewport and removed again, so the scene is left untouched.
         path = chat_attachments.capture_render_from_view()      # a 3D Viewport in any window

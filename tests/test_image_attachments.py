@@ -1161,11 +1161,12 @@ class TestRenderFromView(unittest.TestCase):
         at_render = [c for c in log if c[0] == "at_render"]
         self.assertEqual(len(at_render), 1, "the view must be rendered once")
         _, rx, ry, _pct, samples, time_limit = at_render[0]
-        self.assertLessEqual(max(rx, ry), self.ca._RENDER_MAX_EDGE,
+        profile = self.ca._preview_profile()        # the render preview profile (#524)
+        self.assertLessEqual(max(rx, ry), profile["_PREVIEW_MAX_EDGE"],
                              "the captured image must be downscaled")
-        self.assertLessEqual(samples, self.ca._RENDER_MAX_SAMPLES,
+        self.assertLessEqual(samples, profile["_PREVIEW_MAX_SAMPLES"],
                              "the capture must not run the full sample count")
-        self.assertEqual(time_limit, self.ca._RENDER_TIME_LIMIT_S,
+        self.assertEqual(time_limit, profile["_PREVIEW_TIME_LIMIT_S"],
                          "a Cycles time limit must backstop the capture")
 
         after = (scene.render.resolution_x, scene.render.resolution_y,

@@ -1995,7 +1995,8 @@ EXPECTED_TOOLS = [
     {
         "name": "render_thumbnail_to_path",
         "description": "\n"
-"        Render a small, low-quality thumbnail to *output_path* (temporarily overrides settings).\n"
+"        Render a small, low-quality thumbnail to *output_path* (at most 320 px and 16 samples;\n"
+"        the scene's settings are put back when the render is over).\n"
 "        ",
         "inputSchema": {
             "properties": {
@@ -2014,20 +2015,31 @@ EXPECTED_TOOLS = [
     {
         "name": "render_viewport_to_path",
         "description": "\n"
-"        Render the current scene to *output_path* using current render settings.\n"
+"        Render the scene's camera view to *output_path*.\n"
+"\n"
+"        ``quality=\"preview\"`` (the default) is for looking and checking your work: at\n"
+"        most 1024 px, few samples, a Cycles time limit, Simplify on, no compositing,\n"
+"        Sequencer, motion blur or persistent data; the scene's settings are put back\n"
+"        afterwards. ``quality=\"viewport\"`` is quicker still: solid shading (OpenGL)\n"
+"        from the camera, no materials or lighting. ``quality=\"final\"`` renders with the\n"
+"        scene's own settings (full size and samples, can take minutes or hours): use it\n"
+"        only when the user asked for the real render.\n"
 "\n"
 "        A render that takes longer than about 45 s answers with a ``job_id`` instead\n"
 "        of the file, and carries on: wait for it with ``get_job_status(job_id)``.\n"
-"        For a render you know is long (many samples, big resolution, Cycles), pass\n"
-"        ``background=True`` to get the ``job_id`` at once.\n"
+"        For a final render you know is long, pass ``background=True`` to get the\n"
+"        ``job_id`` at once.\n"
 "\n"
 "        Args:\n"
 "            output_path: File name for the image (it is written to Coworker's temp folder).\n"
 "            background: Start the render and return a ``job_id`` right away.\n"
+"            quality: ``\"preview\"`` (default), ``\"viewport\"`` or ``\"final\"``.\n"
 "\n"
 "        Returns:\n"
 "            ``status``; ``filepath`` (where the image is, or will be, written); a\n"
-"            ``job_id`` when the render goes on in the background; ``message``.\n"
+"            ``job_id`` when the render goes on in the background; ``quality`` and\n"
+"            ``caps`` (what the preview limited); ``message`` (also on an error: the\n"
+"            quality and limits it ran with).\n"
 "        ",
         "inputSchema": {
             "properties": {
@@ -2039,6 +2051,11 @@ EXPECTED_TOOLS = [
                     "default": False,
                     "title": "Background",
                     "type": "boolean"
+                },
+                "quality": {
+                    "default": "preview",
+                    "title": "Quality",
+                    "type": "string"
                 }
             },
             "required": [

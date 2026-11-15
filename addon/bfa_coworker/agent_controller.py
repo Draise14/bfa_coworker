@@ -5784,6 +5784,44 @@ _SNAPSHOT_EXTRA = (
 )
 
 
+def _initial_snapshot(raw: str) -> "tuple[_EntitySnapshot | None, str]":
+    """Read the turn's baseline snapshot from the merged undo-push answer *raw*.
+
+    Returns ``(snapshot, "")``, or ``(None, reason)`` with why there is none (#505).
+    """
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return None, "the bridge's answer was not JSON: {:s}".format(str(raw)[:200])
+    if not isinstance(data, dict):
+        return None, "the bridge's answer was not an object: {:s}".format(str(raw)[:200])
+    if data.get("status") != "ok":
+        return None, "the bridge answered {!s}: {:s}".format(
+            data.get("status"), str(data.get("message") or data.get("result") or "")[:200])
+    result = data.get("result")
+    snap = result.get("snapshot") if isinstance(result, dict) else None
+    if not isinstance(snap, dict) or not snap:
+        if isinstance(result, dict) and result.get("status") == "error":
+            return None, "the undo push answered: {:s}".format(str(result.get("message", ""))[:200])
+        return None, "the undo push answered without a snapshot"
+    try:
+        return _EntitySnapshot.from_dict(snap), ""
+    except (TypeError, ValueError, AttributeError) as ex:
+        return None, "the snapshot could not be read: {:s}".format(str(ex))
+
+
+_NO_SNAPSHOT_LOGGED: set[str] = set()
+
+
+def _note_no_initial_snapshot(reason: str) -> None:
+    """Say once per session and reason why a turn has no baseline snapshot (#505)."""
+    if reason in _NO_SNAPSHOT_LOGGED:
+        return
+    _NO_SNAPSHOT_LOGGED.add(reason)
+    print("[Coworker] run_conversation_turn: no entity snapshot at the start of this turn ({:s}) -- "
+          "the co-work scene lock is off for this turn".format(reason))
+
+
 # ---------------------------------------------------------------------------
 # Text editor memory bank helpers
 
@@ -8165,38 +8203,31 @@ def _run_conversation_turn_inner(
 
                 # -- Push initial undo state + initial snapshot (merged) -
                 # Merging saves 1 round-trip at the start of each turn.
-                # Skip entity snapshot for read-only code (no scene mutations).
+                # Always with the snapshot, also for code that looks read-only:
+                # it is the turn's baseline -- later steps diff against it to
+                # lock what they make (#505).
                 if tool_name == "execute_blender_code" and not _undo_pushed:
-                    _init_extra = _SNAPSHOT_EXTRA if not _code_is_readonly(args.get("code", "") or "") else ""
                     merged_init_raw = _call_internal(
-                        _undo_code("push", _loop_step_name("bfa_coworker_pre_script"), extra_result=_init_extra))
+                        _undo_code("push", _loop_step_name("bfa_coworker_pre_script"), extra_result=_SNAPSHOT_EXTRA))
                     _undo_pushed = True
                     _undo_mark = _side_by_side.JOURNAL.mark()
-                    # Parse initial snapshot from merged result.
-                    try:
-                        init_data = json.loads(merged_init_raw)
-                        if init_data.get("status") == "ok":
-                            snap_data = init_data.get("result", {}).get("snapshot")
-                            if snap_data:
-                                _turn_snapshot = _EntitySnapshot.from_dict(snap_data)
-                                print("[Coworker] run_conversation_turn: initial entity snapshot taken")
-                                # The user's selection at TURN START is their
-                                # working set -- capture it so the lock never
-                                # protects objects the user is actively editing.
-                                _lock_exclude = set(
-                                    getattr(_turn_snapshot, "selected_object_names", set()) or set())
-                                _tip = getattr(_turn_snapshot, "active_object", "") or ""
-                                if _tip:
-                                    _lock_exclude.add(_tip)
-                                if _lock_exclude:
-                                    print("[Coworker] run_conversation_turn: excluding the user's "
-                                          "{:d} selected object(s) from the co-work lock".format(
-                                              len(_lock_exclude)))
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                    if _turn_snapshot is None:
-                        print("[Coworker] run_conversation_turn: initial entity snapshot FAILED -- "
-                              "continuing without the co-work scene lock for this turn")
+                    _turn_snapshot, _snap_reason = _initial_snapshot(merged_init_raw)
+                    if _turn_snapshot is not None:
+                        print("[Coworker] run_conversation_turn: initial entity snapshot taken")
+                        # The user's selection at TURN START is their
+                        # working set -- capture it so the lock never
+                        # protects objects the user is actively editing.
+                        _lock_exclude = set(
+                            getattr(_turn_snapshot, "selected_object_names", set()) or set())
+                        _tip = getattr(_turn_snapshot, "active_object", "") or ""
+                        if _tip:
+                            _lock_exclude.add(_tip)
+                        if _lock_exclude:
+                            print("[Coworker] run_conversation_turn: excluding the user's "
+                                  "{:d} selected object(s) from the co-work lock".format(
+                                      len(_lock_exclude)))
+                    else:
+                        _note_no_initial_snapshot(_snap_reason)
                     # Re-lock objects the coworker created in earlier turns so
                     # they stay protected while it works on them this turn.
                     _lock_session_entities(mcp_port, _lock_exclude)

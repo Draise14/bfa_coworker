@@ -122,7 +122,10 @@ def _status(context: Any) -> TopBar:
             elapsed = time.time() - state.thinking_start_time if state.thinking_start_time else 0.0
             status = "{:s} {:s} ({:s})".format(ui_chat._phase_text(state), ui_chat._spinner_char(state),
                                                ui_chat._fmt_duration(elapsed))
-        icon = ("SORTTIME" if state.is_thinking else "CHECKMARK" if running
+        waiting = _helpers_waiting(context, state)
+        if waiting:
+            status = waiting
+        icon = ("SORTTIME" if state.is_thinking else "TIME" if waiting else "CHECKMARK" if running
                 else "TIME" if engine is not None and engine.connecting else "CANCEL")
         return TopBar(mode_label="External Agent", mode_icon=_mode_icon("EXTERNAL_AGENT"), status=status,
                       status_icon=icon,
@@ -141,14 +144,26 @@ def _status(context: Any) -> TopBar:
         status = "Offline"
     elif state.error:
         status = "Error: {:s}".format(state.error)
+    waiting = _helpers_waiting(context, state) if services.mcp_server_running else ""
+    if waiting:
+        status = waiting
     ok = services.mcp_server_running
-    icon = ("CHECKMARK" if ok and not state.is_thinking and not state.error else
+    icon = ("TIME" if waiting else "CHECKMARK" if ok and not state.is_thinking and not state.error else
             "SORTTIME" if state.is_thinking else "ERROR" if state.error else "CANCEL")
     return TopBar(mode_label="Local LLM" if local else "Remote API",
                   mode_icon=_mode_icon("LOCAL_LLM" if local else "REMOTE_API"),
                   status=status, status_icon=icon, running=ok, error=bool(state.error),
                   chat_modes=tuple((item[0], item[1], item[3]) for item in CHAT_MODE_ITEMS),
                   chat_mode=getattr(props, "chat_mode", ""))
+
+
+def _helpers_waiting(context: Any, state: Any) -> str:
+    """"Waiting for 2 helpers" while the shown chat is idle and its helper chats work (#479)."""
+    if state.is_thinking:
+        return ""
+    from . import helper_chats, helpers, ui_chat
+    count = helper_chats.waiting(ui_chat._ui_thread(context))
+    return helpers.waiting_text(count) if count else ""
 
 
 def _mode_icon(mode: str) -> str:
@@ -323,7 +338,9 @@ def _sync_box(surface: ChatSurface, props: Any, busy: bool, running: bool, harne
     if surface.compact:     # the sidebar chat: a button column; the attach icons go there (#214)
         from . import coworker_api
         box.attach_buttons = False
-        last = ("stop", "PAUSE") if busy else ("revert_turn", "LOOP_BACK") if coworker_api.can_revert() else None
+        from . import threads as _threads
+        can = coworker_api.can_revert(_threads.tag(thread)) if thread is not None else coworker_api.can_revert()
+        last = ("stop", "PAUSE") if busy else ("revert_turn", "LOOP_BACK") if can else None
         surface.tools = tuple(t for t in (
             ("mention", "OUTLINER_OB_MESH"), last, ("", ""),
             ("attach_menu", "IMAGE_DATA"), ("attach_render", "RENDER_STILL"), ("attach_screen", "MAKE_SCREENSHOT"),
@@ -362,7 +379,11 @@ def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0, trace: Any =
     state = agent_controller.thread_state(thread)
     thread.unread = False                       # seen
     harness = _is_harness(prefs)
-    _sync_box(surface, props, state.is_thinking, agent_controller._agent_state.mcp_server_running, harness, thread)
+    from . import helper_chats
+    helpers_card = None if harness else helper_chats.card(thread)     # its helper chats (#479)
+    # Waiting for its helpers counts as busy: Stop (which stops them too) stays at hand.
+    _sync_box(surface, props, state.is_thinking or helpers_card is not None,
+              agent_controller._agent_state.mcp_server_running, harness, thread)
     style = gpu_style.style_from_preferences(context.preferences, zoom=surface.zoom * zoom)
     canvas = gpu_layout.Canvas(style, render.measure, surface.interaction())
     surface.bounds = rect
@@ -375,7 +396,8 @@ def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0, trace: Any =
     except (AttributeError, TypeError):
         pass
     from . import coworker_api
-    surface.view.revertable = coworker_api.can_revert() and not state.is_thinking
+    from . import threads as _threads
+    surface.view.revertable = coworker_api.can_revert(_threads.tag(thread)) and not state.is_thinking
     card = _approval_card(context)
     surface.view.suggest = not harness and card is None    # no buttons while a card asks (#220)
     typed_before = surface.box.model.text
@@ -391,7 +413,8 @@ def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0, trace: Any =
     try:
         actions = surface.draw(canvas, rect, history, live=live, top=_status(context) if compact else None,
                                notice=_harness_notice(prefs) if harness else None,
-                               approval=card)     # also in External Harness: a risky step asks (#166)
+                               approval=card,     # also in External Harness: a risky step asks (#166)
+                               helpers=helpers_card)
         if surface.box.model.text != typed_before:
             # Changed by a click while drawing (an @ suggestion): share the draft now,
             # or the panel chat's own @ popup would see the old half-typed "@Ca".
@@ -904,6 +927,8 @@ def _do(action: str, value: str, surface: ChatSurface | None, region: Any = None
         ops.open_addon_prefs()
     elif action == "open_editor":           # the full Coworker editor, on this chat (#427)
         ops.thread_open_editor()
+    elif action == "show_helper":           # a row of the Helpers card: that helper's tab, here (#479)
+        ops.tab_show(thread_id=value)
     elif action == "draft" and props is not None:
         if props.chat_input != value:
             props.chat_input = value

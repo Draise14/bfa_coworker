@@ -15,6 +15,10 @@ __all__ = (
 
 from typing import Any, NamedTuple
 
+# @include_begin: _scene_compositor.py
+from blmcp.tools._scene_compositor import *  # noqa: F401,F403  pylint: disable=wildcard-import,unused-wildcard-import
+# @include_end
+
 
 _TREE_TYPE_ALIASES = {
     "SHADER": "ShaderNodeTree",
@@ -165,9 +169,9 @@ def _resolve_by_type(tree_type: str):
 
     if tree_type == "CompositorNodeTree":
         scene = bpy.context.scene
-        # 5.x: the compositor is a node group on the scene; ``Scene.node_tree``
-        # no longer exists.  Read only -- never enable or create a tree.
-        tree = getattr(scene, "compositing_node_group", None)
+        # 5.x: the compositor is a node group on the scene (the active
+        # compositor effect's, #503).  Read only -- never create a tree.
+        tree = scene_compositor_tree(scene)
         if tree is None:
             return None, (
                 "Scene '{:s}' has no compositor node tree (create one in the "

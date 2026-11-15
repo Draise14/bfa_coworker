@@ -18,6 +18,10 @@ try:
     parse_code  # noqa: B018 -- defined when spliced into a tool-code
 except NameError:  # imported by the server or the tests
     from blmcp.tools._node_code_format import *  # noqa: F401,F403  pylint: disable=wildcard-import,unused-wildcard-import
+try:
+    scene_compositor_tree  # noqa: B018 -- spliced in before this file (_scene_compositor.py)
+except NameError:
+    from blmcp.tools._scene_compositor import *  # noqa: F401,F403  pylint: disable=wildcard-import,unused-wildcard-import
 
 
 TREE_TYPE_ALIASES = {
@@ -214,8 +218,9 @@ def resolve_target(bpy, tree_type="", node_tree_name="", material_name="", objec
                 return mat.node_tree, "material", mat.name, ""
         elif candidate == "CompositorNodeTree" and not object_name:
             scene = bpy.context.scene
-            # 5.x: the compositor is a node group on the scene; read only -- never create one.
-            tree = getattr(scene, "compositing_node_group", None)
+            # 5.x: the compositor is a node group on the scene (the active compositor
+            # effect's, #503); read only -- never create one.
+            tree = scene_compositor_tree(scene)
             if tree is not None:
                 return tree, "tree", tree.name, ""
     if wanted == "CompositorNodeTree":
@@ -499,11 +504,33 @@ def _unused_choice(node, prop):
     return prop.type == "ENUM" and not prop.is_enum_flag and getattr(node, prop.identifier) == ""
 
 
+def _replaced_by_socket(node, prop):
+    """A setting Blender deprecated for an input socket the node has (#503): the socket carries its value.
+
+    Blender 5.3+ mark e.g. ``GeometryNodeMergeLayers.mode`` deprecated with the note
+    ``Replaced by '.inputs["Mode"]'.``; reading it would only warn and say what the socket says.
+    """
+    if not getattr(prop, "is_deprecated", False):
+        return False
+    note = str(getattr(prop, "deprecated_note", "") or "")
+    start = note.find(".inputs[")
+    if start < 0:
+        return False
+    rest = note[start + len(".inputs["):].lstrip()
+    if not rest or rest[0] not in "\"'":
+        return False
+    end = rest.find(rest[0], 1)
+    name = rest[1:end] if end > 0 else ""
+    return bool(name) and any(s.name == name or s.identifier == name for s in node.inputs)
+
+
 def read_settings(bpy, node, fresh):
     """[(key, value)] of the settings that differ from *fresh* (a new node of the same type)."""
     out = []
     for prop, kind in setting_props(bpy, node):
         key = prop.identifier
+        if _replaced_by_socket(node, prop):
+            continue
         if kind == "value" and _unused_choice(node, prop):
             continue
         try:

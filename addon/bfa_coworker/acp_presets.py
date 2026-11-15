@@ -60,6 +60,9 @@ class AgentPreset:
     isolation_env: tuple[tuple[str, str], ...] = ()
     plan_tool: str = ""                # agent's todo tool, if it reports plans that way
     account: str = ""                  # whose login / subscription it uses (plain words)
+    # Runs several sessions' prompts at once on one process (measured, #399).  Off: the
+    # chats' turns take turns on it, one after another, until it is measured (#359).
+    concurrent_sessions: bool = False
 
 
 PRESETS: tuple[AgentPreset, ...] = (
@@ -87,6 +90,7 @@ PRESETS: tuple[AgentPreset, ...] = (
         docs_url="https://github.com/agentclientprotocol/claude-agent-acp",
         needs_node=True,
         account="Uses your Claude Code login: your Claude Pro / Max plan, or an Anthropic API key.",
+        concurrent_sessions=True,       # two sessions at once, cancel isolated (#399, 0.94.0)
     ),
     AgentPreset(
         id="codex", name="Codex CLI", command="codex-acp",

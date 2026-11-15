@@ -43,7 +43,7 @@ def register(mcp: FastMCP) -> None:
         - ``"GeometryNodeTree"`` - the active object's active Geometry
           Nodes modifier.
         - ``"CompositorNodeTree"`` - the scene's compositor node group
-          (``scene.compositing_node_group``).
+          (its active compositor effect's).
 
         Read only: a missing tree is reported, never created.
         - ``node_tree_name`` - overrides resolution and reads that exact

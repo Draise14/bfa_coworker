@@ -21,6 +21,9 @@ from typing import Any, NamedTuple
 # @include_begin: _node_code_format.py
 from blmcp.tools._node_code_format import *  # noqa: F401,F403  pylint: disable=wildcard-import,unused-wildcard-import
 # @include_end
+# @include_begin: _scene_compositor.py
+from blmcp.tools._scene_compositor import *  # noqa: F401,F403  pylint: disable=wildcard-import,unused-wildcard-import
+# @include_end
 # @include_begin: _node_code_bpy.py
 from blmcp.tools._node_code_bpy import *  # noqa: F401,F403  pylint: disable=wildcard-import,unused-wildcard-import
 # @include_end

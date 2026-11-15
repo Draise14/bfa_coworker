@@ -15,6 +15,10 @@ __all__ = (
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
+# @include_begin: _scene_compositor.py
+from blmcp.tools._scene_compositor import *  # noqa: F401,F403  pylint: disable=wildcard-import,unused-wildcard-import
+# @include_end
+
 # Vertex count of Blender's default cube.
 _DEFAULT_CUBE_VERTS = 8
 
@@ -161,9 +165,10 @@ def _usage_probability_for_compositing(data: Any, scene: Any) -> tuple[str, dict
     """
     del data
     signals: list[tuple[float, float]] = []
-    # 5.x: the compositor is a node group on the scene.  A default tree has
-    # `Render Layers` + `Composite`; more nodes means real compositing work.
-    node_tree = getattr(scene, "compositing_node_group", None)
+    # 5.x: the compositor is a node group on the scene (the active compositor
+    # effect's, #503).  A default tree has `Render Layers` + `Composite`; more
+    # nodes means real compositing work.
+    node_tree = scene_compositor_tree(scene)
     signals.append((
         float(bool(node_tree and len(node_tree.nodes) > 2)),
         1.0,

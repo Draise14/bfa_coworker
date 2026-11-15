@@ -29,6 +29,7 @@ __all__ = (
     "COLUMNS",
     "JOB_KIND",
     "plan",
+    "repeat_context",
     "setup_problem",
     "settings_from_prefs",
     "shape_result",
@@ -79,6 +80,29 @@ def settings_from_prefs(prefs: Any) -> dict[str, Any]:
         "remote_key": str(g("remote_api_key", "") or ""),
         "port": int(effective_whisper_port(prefs)) if prefs is not None else DEFAULT_WHISPER_PORT,
     }
+
+
+_last_settings: list[dict[str, Any]] = []      # the last ones read on the main thread
+
+
+def repeat_context() -> str:
+    """What a ``transcribe_strip`` answer depends on besides its input, for the loop guard
+    (#499): the speech settings and the builds / models on disk.  Transcribing a strip again
+    after setting speech up or picking another model, device or language is a new call, not
+    a repeat.  Off the main thread (the local loop's worker) the preferences are not read
+    (that races Blender's context): the settings last read on the main thread are used."""
+    if threading.current_thread() is threading.main_thread():
+        settings = settings_from_prefs(_prefs())
+        _last_settings[:] = [settings]
+    else:
+        settings = _last_settings[0] if _last_settings else {}
+    ready = [p.identifier for p in whisper_manager.MODEL_PRESETS
+             if whisper_manager.model_status(p.identifier) == "ready"]
+    return "|".join(str(part) for part in (
+        settings.get("device", ""), settings.get("model", ""), settings.get("language", ""),
+        settings.get("use_remote", ""), settings.get("remote_model", ""),
+        bool(settings.get("remote_url")) and bool(settings.get("remote_key")),
+        ",".join(whisper_manager.installed_builds()), ",".join(ready)))
 
 
 def plan(settings: dict[str, Any], model: str = "", language: str = "") -> dict[str, Any]:
@@ -291,6 +315,7 @@ def _work(job: _Job, media: str, key: str, size: int, p: dict[str, Any], setting
     # Per job: one that was stopped may still be writing its WAV while the next one starts (#516).
     wav = os.path.join(tempfile.gettempdir(), "bfa_coworker_speech", "{:s}.{:x}.16k.wav".format(key, id(job)))
     job.local = p["route"] != "remote"
+    stops = None
     try:
         os.makedirs(os.path.dirname(wav), exist_ok=True)
         _note("Reading the sound of {:s}".format(os.path.basename(media)))
@@ -309,6 +334,7 @@ def _work(job: _Job, media: str, key: str, size: int, p: dict[str, Any], setting
                 problem = whisper_manager.start_server(p["model"], p["build"], int(settings["port"]))
             if problem:
                 raise RuntimeError(problem)
+            stops = whisper_manager.stop_count()
             if not whisper_manager.is_ready():
                 _note(whisper_manager.get_state().status_text or "Starting whisper-server")
                 if not whisper_manager.wait_ready(timeout=300.0):
@@ -326,7 +352,14 @@ def _work(job: _Job, media: str, key: str, size: int, p: dict[str, Any], setting
         transcripts.write(path, doc)
         job.doc, job.path = doc, str(path)
     except Exception as ex:  # pylint: disable=broad-exception-caught
-        job.error = STOPPED if job.stopped.is_set() else (str(ex) or type(ex).__name__)
+        job.error = str(ex) or type(ex).__name__
+        # #499: the server was stopped while this job used it (Stop in the Speech tab): say so
+        # plainly, not with the socket's or the start's own error.
+        if isinstance(ex, whisper_manager.Stopped) or (stops is not None and whisper_manager.stop_count() != stops):
+            job.error = whisper_manager.STOPPED
+        # #516: stop_jobs (Auto Captions' Esc) stopped this very job; it also stops the server.
+        if job.stopped.is_set():
+            job.error = STOPPED
     finally:
         job.seconds = time.monotonic() - job.t0
         try:
@@ -397,6 +430,8 @@ def transcribe_strip(strip: str, language: str = "", limit: int = DEFAULT_LIMIT,
                 _jobs.pop(job_key, None)
         if job.stopped.is_set():
             return {"status": "cancelled", "message": "Transcribing '{:s}': {:s}".format(name, STOPPED)}
+        if job.error == whisper_manager.STOPPED:        # Stop pressed: no socket error text (#499)
+            return _error(whisper_manager.STOPPED)
         if job.error or job.doc is None:
             return _error("Transcribing '{:s}' failed: {:s}".format(name, job.error or "no result"))
         return shape_result(job.doc, timing, name, limit, offset, cached=False, path=job.path, seconds=job.seconds)

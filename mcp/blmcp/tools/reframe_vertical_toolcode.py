@@ -38,6 +38,7 @@ class Result(NamedTuple):
     resolution: Any = None
     strips_changed: Any = None
     strips_kept: Any = None
+    captions: Any = None
 
 
 # @include_begin: _coworker_api_shared.py
@@ -74,6 +75,13 @@ def main(params: Params) -> Any:
               where, done["resolution"][0], done["resolution"][1],
               "Centre Crop" if mode == "CROP" else "Blur Fill", len(changed),
               ", {:d} kept their framing".format(len(kept)) if kept else "")
+    captions = done.get("captions") or {}
+    if captions.get("message"):
+        msg += " Captions: {:s}.".format(captions["message"])
+        if captions.get("left_names"):
+            msg += " Left as edited (moved or resized by hand): {:s}.".format(", ".join(captions["left_names"][:20]))
     return Result(status="ok", message=msg, scene=done["scene"], source_scene=done["source_scene"],
                   copied=bool(done["copied"]), mode=mode, resolution=list(done["resolution"]),
-                  strips_changed=changed, strips_kept=kept)
+                  strips_changed=changed, strips_kept=kept,
+                  captions={k: captions[k] for k in ("laid_out", "split", "left", "left_names") if k in captions}
+                  or None)

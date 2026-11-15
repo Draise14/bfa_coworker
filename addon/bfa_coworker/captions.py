@@ -18,6 +18,9 @@ Auto Captions (Tier 4, Video 2, #376): the parts that need no Blender.
 * **Frames and channels**: :func:`to_frames` (seconds in the media -> timeline
   frames, clipped to what the strip shows), :func:`highlight_windows`,
   :func:`pick_channel`, :func:`owned_by` (re-running replaces a source's captions).
+* **Another frame** (Make Vertical, #497): :func:`relayout` lays a caption out again for
+  a new output size by the same rules (splitting it in time where its words no longer fit
+  the style's lines), :func:`hand_edits` tells a caption moved or resized by hand.
 * **SRT**: :func:`format_srt` and the tolerant :func:`parse_srt`.
 * **Translate**: :func:`batch_text` / :func:`parse_batch_reply` (many captions in one
   question, written back one strip each).
@@ -45,6 +48,7 @@ __all__ = (
     "even_words",
     "format_srt",
     "frame_kind",
+    "hand_edits",
     "highlight_left",
     "highlight_windows",
     "layout_lines",
@@ -53,6 +57,9 @@ __all__ = (
     "parse_batch_reply",
     "parse_srt",
     "pick_channel",
+    "relayout",
+    "relayout_limits",
+    "relayout_report",
     "resolve_style",
     "safe_area",
     "srt_time",
@@ -707,3 +714,117 @@ def text_box(lines: Sequence[str], font_px: float, measure: Callable[[str, float
     """``(width, height)`` in pixels of *lines* at *font_px* (height from :data:`LINE_HEIGHT`)."""
     width = max((measure(ln, font_px) for ln in lines), default=0.0)
     return width, len(lines) * font_px * LINE_HEIGHT
+
+
+# -- a caption laid out again for another frame (Make Vertical, #497) ---------------------
+
+def relayout_limits(name: str, chars: int, lines: int, old_res: Sequence[float] | None,
+                    new_res: Sequence[float]) -> tuple[int, int]:
+    """Characters per line and lines for a caption moving from *old_res* to *new_res*: the
+    style's own number for the new frame when the caption used the style's number for the old
+    one (or none is known), else the caption's own number, at most what fits the new frame."""
+    key = style_key(name) or "CLEAN"
+    style = STYLES[key]
+    fit = default_max_chars(key, *new_res)
+    chars = int(chars or 0)
+    if chars <= 0 or old_res is None or chars == default_max_chars(key, *old_res):
+        new_chars = fit
+    else:
+        new_chars = min(chars, fit)
+    if style["highlight"]:
+        new_lines = 1
+    else:
+        new_lines = 1 if int(lines or style["max_lines"]) <= 1 else 2
+    return new_chars, new_lines
+
+
+def hand_edits(look: dict[str, Any], name: str, res_x: float, res_y: float) -> list[str]:
+    """What of a caption line's layout differs from what style *name* gives at *res_x* x *res_y*
+    (the frame it was made for); empty when it is as the style made it.
+
+    *look*: ``location``, ``font_size`` (the steady size, not a pop key's), ``wrap_width``,
+    ``anchor_x`` / ``anchor_y`` and, if the strip has one, ``transform``
+    (``offset_x, offset_y, scale_x, scale_y, rotation``).  Text, colours and timing are not
+    layout: a caption whose words were changed by hand is still laid out again."""
+    key = style_key(name)
+    if key is None:
+        return ["style"]
+    props = resolve_style(key, res_x, res_y)["props"]
+    out = []
+    loc = tuple(look.get("location") or (0.0, 0.0))
+    if len(loc) < 2 or abs(loc[0] - props["location"][0]) > 1e-3 or abs(loc[1] - props["location"][1]) > 1e-3:
+        out.append("position")
+    if abs(float(look.get("font_size") or 0.0) - props["font_size"]) > 0.6:
+        out.append("size")
+    wrap = 1.0 if STYLES[key]["highlight"] else props["wrap_width"]
+    if look.get("wrap_width") is not None and abs(float(look["wrap_width"]) - wrap) > 1e-3:
+        out.append("wrap width")
+    if (look.get("anchor_x", "CENTER"), look.get("anchor_y", "BOTTOM")) != (props["anchor_x"], props["anchor_y"]):
+        out.append("anchor")
+    tr = look.get("transform")
+    if tr is not None:
+        ox, oy, sx, sy, rot = (float(v) for v in tr)
+        if abs(ox) > 1e-3 or abs(oy) > 1e-3 or abs(sx - 1.0) > 1e-4 or abs(sy - 1.0) > 1e-4 or abs(rot) > 1e-4:
+            out.append("transform")
+    return out
+
+
+def relayout(text: str, name: str, res_x: float, res_y: float, frame_start: int, frame_end: int,
+             chars: int = 0, lines: int = 0, old_res: Sequence[float] | None = None,
+             word_frames: Sequence[float] | None = None) -> dict[str, Any]:
+    """A caption (its *text* as shown, from *frame_start* to *frame_end*, end exclusive) laid
+    out again in style *name* for a *res_x* x *res_y* frame, by the same rules Auto Captions
+    uses there: the style's size and place (:func:`resolve_style`), its characters per line
+    (:func:`relayout_limits`) and lines.
+
+    Words that don't fit the style's lines in the new frame are split into several captions
+    inside the same time, where :func:`build_captions` would split them; each word keeps its
+    time (*word_frames*: each word's first frame, when known; else the time is shared out by
+    word length, as Import SRT does).  The words themselves never change.
+
+    Returns ``{"style": resolve_style(...), "chars", "lines", "pieces": [{"text", "lines",
+    "frame_start", "frame_end", "words": [{"w", "frame"}]}]}`` (one piece when it fits)."""
+    st = resolve_style(name, res_x, res_y)
+    chars, lines = relayout_limits(st["key"], chars, lines, old_res, (res_x, res_y))
+    frame_start, frame_end = int(frame_start), int(max(frame_end, frame_start + 1))
+    words = str(text or "").split()
+    if word_frames is not None and len(word_frames) == len(words) and words:
+        starts, prev = [], float(frame_start)
+        for i, f in enumerate(word_frames):
+            f = float(frame_start) if i == 0 else min(max(float(f), prev), float(frame_end))
+            starts.append(f)
+            prev = f
+    else:
+        starts = [w["start"] for w in even_words(" ".join(words), frame_start, frame_end)]
+    timed = [{"w": w, "start": s, "end": starts[i + 1] if i + 1 < len(words) else float(frame_end)}
+             for i, (w, s) in enumerate(zip(words, starts))]
+
+    def piece(group: list[dict], fs: int, fe: int) -> dict[str, Any]:
+        ln = layout_lines([w["w"] for w in group], chars, lines, force=True) or []
+        return {"text": "\n".join(ln), "lines": ln, "frame_start": fs, "frame_end": fe,
+                "words": [{"w": w["w"], "frame": int(round(w["start"]))} for w in group]}
+
+    whole = [piece(timed, frame_start, frame_end)]
+    if len(words) < 2 or layout_lines(words, chars, lines) is not None:
+        return {"style": st, "chars": chars, "lines": lines, "pieces": whole}
+    # build_captions' split, without its clean-up of the words (they are kept exactly as shown):
+    # at sentence ends first, then where a stretch reads best.
+    stretches: list[list[dict]] = [[timed[0]]]
+    for prev, w in zip(timed, timed[1:]):
+        if is_sentence_end(prev["w"]):
+            stretches.append([])
+        stretches[-1].append(w)
+    groups = [g for seg in stretches for g in _split(seg, chars, lines, math.inf)]
+    bounds = [frame_start] + [int(round(g[0]["start"])) for g in groups[1:]] + [frame_end]
+    if any(b >= a_next for b, a_next in zip(bounds, bounds[1:])):
+        return {"style": st, "chars": chars, "lines": lines, "pieces": whole}     # no frame for a piece
+    pieces = [piece(g, bounds[i], bounds[i + 1]) for i, g in enumerate(groups)]
+    return {"style": st, "chars": chars, "lines": lines, "pieces": pieces}
+
+
+def relayout_report(laid_out: int, left: int, split: int = 0) -> str:
+    """``"27 captions laid out for vertical (8 split to fit), 1 left as edited"``."""
+    text = "{:d} caption{:s} laid out for vertical".format(laid_out, "" if laid_out == 1 else "s")
+    if split:
+        text += " ({:d} split to fit)".format(split)
+    return text + ", {:d} left as edited".format(left)

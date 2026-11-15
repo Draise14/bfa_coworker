@@ -226,7 +226,7 @@ def strip_timing(scene: Any, strip: Any) -> dict[str, float]:
 
 
 WAV_RATE = 16000            # what whisper takes: 16 kHz mono 16-bit PCM
-PIECE_S = 300.0             # read 5 minutes at a time: memory stays ~200 MB, also for an hour-long file
+PIECE_S = 300.0             # read 5 minutes at a time: memory doesn't grow with the length of the file
 _RESAMPLE_QUALITY = 2       # aud's resampler: 0 fastest .. 3 best
 
 
@@ -300,9 +300,10 @@ def _write_wav(media: str, out: str) -> None:
                 wav.writeframes(_pcm16(part.rechannel(aud.CHANNELS_MONO).resample(WAV_RATE, _RESAMPLE_QUALITY).data(),
                                        frames))
     except Exception as ex:  # pylint: disable=broad-exception-caught
+        why = str(ex).strip().rstrip(".") or type(ex).__name__
         raise RuntimeError("Blender could not read the sound of {:s} ({:s}): {:s}. It may have no audio track; "
                            "a WAV, FLAC, MP3 or the sound of an MP4 work.".format(
-                               name, sound_format(media, specs), str(ex) or type(ex).__name__)) from None
+                               name, sound_format(media, specs), why)) from None
     if not os.path.isfile(out) or os.path.getsize(out) <= 44:
         raise RuntimeError("{:s} ({:s}) has no sound.".format(name, sound_format(media, specs)))
 

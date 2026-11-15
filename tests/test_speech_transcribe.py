@@ -1175,8 +1175,7 @@ class TestWav(unittest.TestCase):
         with self.assertRaises(RuntimeError) as cm:
             self.wav("voice.wav")
         msg = str(cm.exception)
-        self.assertIn("voice.wav (.wav, 44.1 kHz stereo)", msg)
-        self.assertIn("File couldn't be read.", msg)
+        self.assertIn("voice.wav (.wav, 44.1 kHz stereo): File couldn't be read. It may have no audio track", msg)
 
     def test_a_file_blender_cannot_open_names_the_file_and_its_extension(self):
         self.sound = RuntimeError("")

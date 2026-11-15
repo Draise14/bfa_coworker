@@ -13,11 +13,18 @@ of error: the agent's next script acts on a selection/active object that no
 longer matches its assumptions.
 
 The lock sets ``hide_select`` on the objects and collections the coworker
-created for the duration of the turn.  ``hide_select`` gates UI
-picking only; programmatic ``obj.select_set()`` and ``bpy.ops`` context
-overrides still work, so the agent is unaffected while the user cannot
-re-select the managed datablocks in the viewport/outliner.  Everything is
-restored when the turn ends (including on stop, error, or exception).
+created for the duration of the turn, so the user cannot re-select the
+managed datablocks in the viewport/outliner.  Everything is restored when
+the turn ends (including on stop, error, or exception).
+
+``hide_select`` gates more than UI picking: ``obj.select_set()`` is ignored
+on such an object and operators that need a selection end CANCELLED
+(``modifier_apply``), without an error (#548).  So the lock is *lifted*
+while one of Coworker's calls runs on Blender's main thread and put back
+before the call returns (:func:`lifted`, used by the bridge's sandbox and
+around Coworker's own undo steps): the user can't click in between -- the
+main thread is busy -- and a click made meanwhile is handled after the lock
+is back.  The undo steps Coworker pushes never hold the lock either.
 
 NOTE: only *created* datablocks are locked.  Pre-existing objects that the
 agent *modifies* (but does not create) are not tracked by the created-entity
@@ -49,9 +56,16 @@ __all__ = (
     "build_lock_code",
     "build_unlock_code",
     "lockable_names",
+    "is_releasing",
+    "lift",
+    "lifted",
+    "releasing",
+    "relock",
 )
 
+import contextlib
 import threading
+from typing import Any, Iterator
 
 # Managed datablock names -> the ``hide_select`` value they had before the
 # lock, so the unlock can restore the exact prior state (not a blanket
@@ -72,6 +86,10 @@ _PRIOR_KNOWN_COLLECTIONS: set[str] = set()
 # new turn or UI action after a Stop (the re-entrancy guard clears
 # ``turn_active`` while the old thread may still be in flight).
 _registry_lock = threading.RLock()
+
+# The unlock is on its way (#548): the bridge's sandbox doesn't lift meanwhile, or around
+# the unlock code it would lock again what that code just restored.
+_RELEASING = [False]
 
 
 def is_locked() -> bool:
@@ -277,3 +295,78 @@ def build_unlock_code() -> tuple[str, dict]:
         "    _n += 1\n"
         "result = {'status': 'ok', 'unlocked': _n}\n"
     ), data
+
+
+# -- Lifting the lock while Coworker's own call runs (#548) ----------------
+_KINDS = (("objects", _MANAGED_OBJECTS, _PRIOR_KNOWN_OBJECTS),
+          ("collections", _MANAGED_COLLECTIONS, _PRIOR_KNOWN_COLLECTIONS))
+
+
+def lift(blend_data: Any) -> list[tuple[str, str]]:
+    """Main thread: give each locked datablock its own ``hide_select`` back for one call.
+
+    Only names whose own value is known (the lock code reported it) and is False, and
+    that are locked now; a datablock that was unselectable on its own stays so.  Returns
+    ``[(kind, name)]`` for :func:`relock`.  Also while the unlock is on its way: an undo
+    step or a save then still gets the own values (the unlock can't run in between -- both
+    are on the main thread); only the bridge's sandbox holds back then (:func:`is_releasing`).
+    Never raises."""
+    if not _LOCKED:
+        return []
+    with _registry_lock:
+        wanted = [(kind, name) for kind, managed, known in _KINDS
+                  for name in sorted(known) if managed.get(name) is False]
+    held: list[tuple[str, str]] = []
+    for kind, name in wanted:
+        try:
+            block = getattr(blend_data, kind).get(name)
+            if block is not None and block.hide_select:
+                block.hide_select = False
+                held.append((kind, name))
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+    return held
+
+
+def relock(blend_data: Any, held: Any) -> None:
+    """Main thread: lock again what :func:`lift` gave back -- by name, and only what is
+    still managed (a release meanwhile wins; a renamed or removed one is skipped).
+    Never raises."""
+    for kind, name in held or ():
+        with _registry_lock:
+            still = name in (_MANAGED_OBJECTS if kind == "objects" else _MANAGED_COLLECTIONS)
+        if not still:
+            continue
+        try:
+            block = getattr(blend_data, kind).get(name)
+            if block is not None:
+                block.hide_select = True
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+
+
+@contextlib.contextmanager
+def lifted(blend_data: Any) -> Iterator[list[tuple[str, str]]]:
+    """Main thread: the lock lifted for the ``with`` body, put back after it (also when
+    it raises)."""
+    held = lift(blend_data)
+    try:
+        yield held
+    finally:
+        relock(blend_data, held)
+
+
+def is_releasing() -> bool:
+    """The unlock is on its way: the bridge's sandbox doesn't lift (it runs the unlock code
+    too, and would lock again what that code restored)."""
+    return _RELEASING[0]
+
+
+@contextlib.contextmanager
+def releasing() -> Iterator[None]:
+    """Around the unlock call (worker thread): no bridge call lifts the lock meanwhile."""
+    _RELEASING[0] = True
+    try:
+        yield
+    finally:
+        _RELEASING[0] = False

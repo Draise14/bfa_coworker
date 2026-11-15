@@ -391,6 +391,10 @@ def _cuts(info: dict, threshold_db: float, min_silence: float, padding: float, m
 
 def _cut_member(strips: Any, strip: Any, frames: list[tuple]) -> int:
     """Remove *frames* from *strip* (split + remove); the number of pieces removed."""
+    # Strip.split() and strips.remove() free strips without stopping the Sequencer's
+    # prefetch first; it is stopped here, before the first split (#536).
+    from .prefetch import remove_strips, stop_prefetch
+    stop_prefetch(strip)
     piece, removed = strip, 0
     for first, end in frames:
         if piece is None:
@@ -403,7 +407,7 @@ def _cut_member(strips: Any, strip: Any, frames: list[tuple]) -> int:
         first, end = max(first, left), min(end, right)
         middle = piece if first <= left else _split(piece, first)
         rest = _split(middle, end) if end < right else None
-        strips.remove(middle)
+        remove_strips(strips, [middle])
         removed += 1
         piece = rest
     return removed

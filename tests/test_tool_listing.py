@@ -32,7 +32,12 @@ EXPECTED_TOOLS = [
 "        Caption sound or movie strips in the Video Sequencer: their speech becomes styled\n"
 "        text strips (one per caption line, in sync) on a channel named \"Captions\".\n"
 "\n"
-"        Running it again on the same clip replaces its captions; it is one undo step.\n"
+"        Every given strip gets the captions of the part of its media it shows (each piece of a\n"
+"        cut clip, a clip used twice).  A movie strip is heard through the sound strip of the same\n"
+"        file over its time.  Muted and retimed strips, and strips with no speech or no\n"
+"        transcript, are skipped and named in ``strips_skipped``.  Running it again replaces the\n"
+"        captions over those strips, but keeps captions edited by hand (``kept_edited``) unless\n"
+"        ``replace_edited``; it is one undo step.\n"
 "\n"
 "        Args:\n"
 "            strips: Names of the sound / movie strips to caption (none: the selected ones).\n"
@@ -40,10 +45,13 @@ EXPECTED_TOOLS = [
 "            language: Spoken language code (\"en\", \"es\"...) or \"auto\".\n"
 "            transcript_path: A transcript JSON file (bfa_coworker.transcript/1) to use\n"
 "                instead of transcribing.\n"
+"            replace_edited: Also replace captions changed by hand since they were made.\n"
 "\n"
 "        Returns:\n"
-"            ``lines_created``, ``channel``, ``first_frame`` / ``last_frame`` and the style;\n"
-"            ``status`` \"error\" with a ``message`` saying what's wrong.\n"
+"            ``lines_created``, ``channel``, ``first_frame`` / ``last_frame``, the style,\n"
+"            ``strips_captioned`` (names), ``strips_skipped`` (``{strip, reason}``: \"no speech\",\n"
+"            \"retimed\", \"no transcript\" or \"muted\") and ``kept_edited``; ``message`` says it all\n"
+"            in a sentence.  ``status`` \"error\" with a ``message`` saying what's wrong.\n"
 "        ",
         "inputSchema": {
             "properties": {
@@ -90,6 +98,11 @@ EXPECTED_TOOLS = [
                     ],
                     "default": None,
                     "title": "Transcript Path"
+                },
+                "replace_edited": {
+                    "default": False,
+                    "title": "Replace Edited",
+                    "type": "boolean"
                 }
             },
             "title": "add_captionsArguments",

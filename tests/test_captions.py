@@ -604,6 +604,7 @@ class TestCaptionStrips(_OpsCase):
     def _operator(self):
         op = self.ops.BFACW_OT_auto_captions()
         op.style, op.language, op.max_chars, op.lines, op.transcript_path = "CLEAN", "auto", 0, "STYLE", ""
+        op.replace_edited = False
         reports = []
         op.report = lambda kind, msg: reports.append((sorted(kind)[0], msg))
         return op, reports
@@ -1078,7 +1079,7 @@ class TestTool(_OpsCase):
         out = toolcode.main(toolcode.Params(strips=("x",)))
         self.assertEqual(out.status, "error")                      # the add-on isn't loaded under its name
         fake = types.ModuleType("bl_ext.user_default.bfa_coworker.captions_ops")
-        fake.tool_add_captions = lambda strips, style, language, path: {
+        fake.tool_add_captions = lambda strips, style, language, path, replace_edited=False: {
             "status": "ok", "message": "m", "lines_created": 3, "channel": 4, "first_frame": 1, "last_frame": 9,
             "style": "Clean", "extra_key": "dropped"}
         sys.modules[fake.__name__] = fake

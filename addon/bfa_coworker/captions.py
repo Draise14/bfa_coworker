@@ -18,6 +18,11 @@ Auto Captions (Tier 4, Video 2, #376): the parts that need no Blender.
 * **Frames and channels**: :func:`to_frames` (seconds in the media -> timeline
   frames, clipped to what the strip shows), :func:`highlight_windows`,
   :func:`pick_channel`, :func:`owned_by` (re-running replaces a source's captions).
+* **Every selected strip** (#538): :func:`captions_for_strips` maps one file's transcript to
+  captions for each strip that shows it (its source offset, trims and place on the timeline;
+  captions never cross a strip's edge nor overlap a neighbour's); :func:`plan_strips` (a movie
+  heard through its sound strip, muted and retimed strips skipped), :func:`replace_plan` and
+  :func:`caption_signature` (a re-run keeps captions edited by hand), :func:`strips_report`.
 * **Another frame** (Make Vertical, #497): :func:`relayout` lays a caption out again for
   a new output size by the same rules (splitting it in time where its words no longer fit
   the style's lines), :func:`hand_edits` tells a caption moved or resized by hand.
@@ -37,12 +42,20 @@ __all__ = (
     "NOT_TRANSCRIBED",
     "NO_TRANSCRIPTION",
     "SCHEMA",
+    "SKIP_MUTED",
+    "SKIP_NO_SPEECH",
+    "SKIP_NO_TRANSCRIPT",
+    "SKIP_RETIMED",
+    "SKIP_TEXT",
     "STYLES",
     "TAG",
     "TRANSLATE_PREFIX",
     "CaptionsError",
     "batch_text",
     "build_captions",
+    "caption_signature",
+    "captions_for_strip",
+    "captions_for_strips",
     "check_tool_params",
     "default_max_chars",
     "even_words",
@@ -52,26 +65,34 @@ __all__ = (
     "highlight_left",
     "highlight_windows",
     "layout_lines",
+    "media_frame",
     "normalise_words",
     "owned_by",
     "parse_batch_reply",
     "parse_srt",
+    "partner_outcome",
     "pick_channel",
+    "plan_strips",
     "relayout",
     "relayout_limits",
     "relayout_report",
+    "replace_plan",
     "resolve_style",
     "safe_area",
+    "separate",
     "srt_time",
     "strip_tags",
+    "strips_report",
     "style_key",
     "to_frames",
     "transcript_words",
+    "words_in_strip",
 )
 
 import html
 import math
 import re
+import zlib
 from typing import Any, Callable, Iterable, Sequence
 
 SCHEMA = "bfa_coworker.transcript/1"
@@ -441,16 +462,21 @@ def highlight_left(x_center: float, line_width: float, prefix_width: float, fram
 
 
 def pick_channel(occupied: dict[int, list[tuple[float, float]]], names: dict[int, str], above: int,
-                 span: tuple[float, float], need: int = 1, max_channel: int = MAX_CHANNEL) -> int | None:
+                 span: tuple[float, float] | Sequence[tuple[float, float]], need: int = 1,
+                 max_channel: int = MAX_CHANNEL) -> int | None:
     """The channel for the captions: a channel already named *Captions* above *above* if it
     (and the *need* - 1 above it) is free over *span*, else the first such free channel above
-    *above*; None when there's no room.  *occupied* = channel -> (start, end) of its strips."""
+    *above*; None when there's no room.  *occupied* = channel -> (start, end) of its strips.
+    *span* may also be a list of ``(start, end)``: each caption's own frames (#538), so a caption
+    kept between them doesn't push the new ones onto another channel."""
+    spans = list(span) if span and isinstance(span[0], (tuple, list)) else [span]
+
     def free(ch: int) -> bool:
         for c in range(ch, ch + need):
             if c > max_channel:
                 return False
             for a, b in occupied.get(c, ()):
-                if a < span[1] and span[0] < b:
+                if any(a < s1 and s0 < b for s0, s1 in spans):
                     return False
         return True
 
@@ -469,6 +495,192 @@ def owned_by(tag: Any, sources: Iterable[str]) -> bool:
     if not isinstance(tag, dict):
         return False
     return tag.get("source") in set(sources)
+
+
+# -- every selected strip (#538) ------------------------------------------------------
+
+# Why a selected strip got no captions (``strips_skipped[i]["reason"]``).
+SKIP_NO_SPEECH = "no speech"
+SKIP_RETIMED = "retimed"
+SKIP_NO_TRANSCRIPT = "no transcript"
+SKIP_MUTED = "muted"
+SKIP_TEXT = {
+    SKIP_NO_SPEECH: "no speech in the part it shows",
+    SKIP_RETIMED: "retimed: its speed changed, so captions would be out of sync (reset its retiming to caption it)",
+    SKIP_NO_TRANSCRIPT: "no transcript",
+    SKIP_MUTED: "muted: none of it is heard",
+}
+
+
+def plan_strips(items: Sequence[dict]) -> tuple[list[dict], dict[str, str], dict[str, list[str]]]:
+    """Which of the selected media strips *items* get their own captions.
+
+    *items*: ``{"name", "type": "SOUND"|"MOVIE", "key" (the media file), "left", "right",
+    "muted", "retimed"}``.  A movie strip is heard through a selected sound strip of the same
+    file over its time (its own sound, connected or not): it takes that strip's outcome and is
+    not captioned twice.  A movie with no such sound strip is captioned itself.  Muted and
+    retimed strips are skipped.
+
+    Returns ``(todo, skipped, partners)``: the strips to caption (sounds first, then in time
+    order), ``{name: reason}`` for those skipped here, ``{movie name: [sound names]}``."""
+    sounds = [it for it in items if it["type"] == "SOUND"]
+    partners: dict[str, list[str]] = {}
+    todo: list[dict] = []
+    skipped: dict[str, str] = {}
+    for it in items:
+        if it["type"] != "SOUND":
+            heard = [s["name"] for s in sounds if s["key"] == it["key"]
+                     and s["left"] < it["right"] and it["left"] < s["right"]]
+            if heard:
+                partners[it["name"]] = heard
+                continue
+        if it.get("muted"):
+            skipped[it["name"]] = SKIP_MUTED
+        elif it.get("retimed"):
+            skipped[it["name"]] = SKIP_RETIMED
+        else:
+            todo.append(it)
+    todo.sort(key=lambda it: (it["type"] != "SOUND", it["left"], it["name"]))
+    return todo, skipped, partners
+
+
+def partner_outcome(outcomes: Sequence[str]) -> str:
+    """A movie's outcome from its sound strips' (``"captioned"`` or a skip reason): captioned
+    when any of them is, else the first reason."""
+    if any(o == "captioned" for o in outcomes):
+        return "captioned"
+    return next(iter(outcomes), SKIP_NO_SPEECH)
+
+
+def media_frame(t: float, content_start: float, offset: float, fps: float) -> float:
+    """The timeline frame where media second *t* of a strip plays: its content starts at
+    *content_start*, a sound strip's *offset* (``sound_offset``, seconds) slips it."""
+    return content_start + (t - offset) * fps
+
+
+def words_in_strip(words: Iterable[Any], content_start: float, left: float, right: float,
+                   offset: float, fps: float) -> list[dict[str, Any]]:
+    """The words a strip plays: those whose start falls on a frame it shows (*left* <= frame <
+    *right*, rounded as the captions are).  One word belongs to one piece of a cut clip."""
+    out = []
+    for w in normalise_words(words):
+        f = int(round(media_frame(w["start"], content_start, offset, fps)))
+        if int(left) <= f < int(right):
+            out.append(w)
+    return out
+
+
+def captions_for_strip(words: Iterable[Any], strip: dict, fps: float, max_chars: int = 36,
+                       max_lines: int = 2) -> list[dict[str, Any]]:
+    """The captions of one strip (``{"name", "content_start", "left", "right", "offset"}``) on
+    the timeline: its own words grouped into captions (never across its edges), framed and
+    clipped to what it shows; each caption has ``"strip"``."""
+    offset = float(strip.get("offset") or 0.0)
+    cs = float(strip["content_start"])
+    mine = words_in_strip(words, cs, strip["left"], strip["right"], offset, fps)
+    caps = build_captions(mine, max_chars, max_lines)
+    framed = to_frames(caps, fps, cs - offset * fps, strip["left"], strip["right"])
+    for c in framed:
+        c["strip"] = strip["name"]
+    return framed
+
+
+def separate(framed: Iterable[dict]) -> tuple[list[dict], int]:
+    """Captions of several strips in time order, none overlapping another: a caption ends where
+    the next one starts; one that would start on the same frame as the one before moves after
+    it (and is left out when no frame is left).  ``(captions, how many were left out)``."""
+    out: list[dict] = []
+    dropped = 0
+    for c in sorted(framed, key=lambda c: (c["frame_start"], c["frame_end"])):
+        c = dict(c)
+        if out and c["frame_start"] < out[-1]["frame_end"]:
+            prev = out[-1]
+            if c["frame_start"] > prev["frame_start"]:
+                prev["frame_end"] = c["frame_start"]
+            else:
+                c["frame_start"] = prev["frame_end"]
+                if c["frame_end"] <= c["frame_start"]:
+                    dropped += 1
+                    continue
+        out.append(c)
+    return out, dropped
+
+
+def captions_for_strips(words: Iterable[Any], strips: Sequence[dict], fps: float, max_chars: int = 36,
+                        max_lines: int = 2) -> dict[str, Any]:
+    """A transcript (one media file's timed words, media seconds) -> timeline captions for each
+    of *strips* that shows that file: ``{"name", "content_start", "left", "right", "offset"}``
+    (frames; *offset* in seconds).  Each strip gets the words inside the part of the media it
+    shows, grouped into captions that stay inside it; captions of neighbouring strips don't
+    overlap.
+
+    Returns ``{"captions": [framed captions with "strip"], "captioned": [names],
+    "no_speech": [names], "left_out": int}``."""
+    words = list(words or ())
+    framed: list[dict] = []
+    captioned, silent = [], []
+    for strip in strips:
+        mine = captions_for_strip(words, strip, fps, max_chars, max_lines)
+        (captioned if mine else silent).append(strip["name"])
+        framed.extend(mine)
+    kept, dropped = separate(framed)
+    return {"captions": kept, "captioned": captioned, "no_speech": silent, "left_out": dropped}
+
+
+def caption_signature(text: str, length: int, channel: int, location: Sequence[float]) -> str:
+    """What a caption looked like when Coworker made it: its text, length (frames), channel and
+    place.  Not its time on the timeline: Remove Silences' ripple slides captions along with
+    the clip, which is not a hand edit."""
+    loc = tuple(round(float(v), 4) for v in tuple(location)[:2])
+    raw = "{:s}\x00{:d}\x00{:d}\x00{!r}".format(str(text), int(length), int(channel), loc)
+    return "{:08x}".format(zlib.crc32(raw.encode("utf-8")))
+
+
+def replace_plan(lines: Sequence[dict], targets: Sequence[tuple] | None, present: Sequence[tuple] = (),
+                 replace_edited: bool = False) -> tuple[set[str], set[str]]:
+    """Which earlier caption lines a run replaces, and which hand-edited ones it keeps.
+
+    *lines*: ``{"name", "key", "left", "right", "edited"}`` (the earlier captions of the sources
+    being captioned).  *targets*: ``(key, left, right)`` of the strips captioned now (None:
+    every line of those sources goes, as for Import SRT); *present*: ``(key, left, right)`` of
+    every strip of those sources in the scene.  A line goes when it lies over a strip captioned
+    now, or over no strip of its source any more (left behind); a line over another strip of the
+    same file that isn't captioned now stays.  An *edited* line is kept unless
+    *replace_edited*.  Returns ``(names to remove, edited names kept)``."""
+    doomed: set[str] = set()
+    kept: set[str] = set()
+
+    def over(line: dict, spans: Sequence[tuple]) -> bool:
+        return any(k == line["key"] and a < line["right"] and line["left"] < b for k, a, b in spans)
+
+    for line in lines:
+        if targets is not None and not over(line, targets) and over(line, present):
+            continue
+        if line.get("edited") and not replace_edited:
+            kept.add(line["name"])
+        else:
+            doomed.add(line["name"])
+    return doomed, kept
+
+
+def strips_report(captioned: Sequence[str], skipped: Sequence[dict], kept_edited: int = 0) -> str:
+    """``"for 6 strips; skipped 1, no speech in the part it shows: “Music”; kept 1 caption
+    edited by hand (...)"`` -- the part of the report about the strips (#538), skipped strips
+    grouped by reason (:data:`SKIP_TEXT`)."""
+    n = len(captioned)
+    parts = ["for {:d} strip{:s}".format(n, "" if n == 1 else "s")]
+    by_reason: dict[str, list[str]] = {}
+    for s in skipped:
+        by_reason.setdefault(s["reason"], []).append(s["strip"])
+    for reason, names in by_reason.items():
+        shown = ", ".join("“{:s}”".format(x) for x in names[:4])
+        if len(names) > 4:
+            shown += " and {:d} more".format(len(names) - 4)
+        parts.append("skipped {:d}, {:s}: {:s}".format(len(names), SKIP_TEXT.get(reason, reason), shown))
+    if kept_edited:
+        parts.append("kept {:d} caption{:s} edited by hand (Replace Edited Captions replaces {:s})".format(
+            kept_edited, "" if kept_edited == 1 else "s", "it" if kept_edited == 1 else "them"))
+    return "; ".join(parts)
 
 
 # -- styles --------------------------------------------------------------------------

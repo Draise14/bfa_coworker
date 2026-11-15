@@ -119,8 +119,12 @@ class AcpEngine:
         self.state_for: Callable[[str], Any] | None = None   # a thread's chat state
         self._threads: dict[str, tuple[str, Any, ChatStateApplier]] = {}
         self._turn_appliers: dict[str, ChatStateApplier] = {}
+        # Helper chats (#479): *on_turn_end(thread, stop_reason, error)* hears each turn's end
+        # on the main thread (from drain), once its events are in that thread's chat.
+        self.on_turn_end: Callable[[str, str, str], None] | None = None
+        self._turn_errors: dict[str, str] = {}
         self.cap = 1                         # chats at once (#359; set from the preference)
-        self._turn_threads: dict[str, str] = {}    # turn id -> its thread's tag (#359)
+        self._turn_threads: dict[str, str] = {}    # turn id -> its thread's tag (#359, #479)
         # Each chat's own Goal & Plan (#359): *on_thread_request(thread, text)* and
         # *on_thread_plan(thread, steps)*; unset, :attr:`on_request` / the applier's plan hook.
         self.on_thread_request: Callable[[str, str], None] | None = None
@@ -569,9 +573,17 @@ class AcpEngine:
     def _apply(self, event: Any) -> None:
         applier = self._turn_appliers.get(event.turn_id, self.applier)
         applier.apply(event)
+        if event.kind == "error":
+            self._turn_errors[event.turn_id] = str(event.data.get("message", ""))
         if event.kind == "turn_end":
             self._turn_appliers.pop(event.turn_id, None)
-            self._turn_threads.pop(event.turn_id, None)
+            thread = self._turn_threads.pop(event.turn_id, self.thread)
+            error = self._turn_errors.pop(event.turn_id, "")
+            if self.on_turn_end is not None:
+                try:
+                    self.on_turn_end(thread, str(event.data.get("stop_reason", "end_turn")), error)
+                except Exception as ex:  # pylint: disable=broad-exception-caught
+                    print("[Coworker] turn-end hook failed: {:s}".format(str(ex)))
 
     def turn_thread(self, turn_id: str) -> str:
         """The thread (tag) a turn ran in (#359: several chats' turns run at once, so the

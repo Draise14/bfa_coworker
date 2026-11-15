@@ -100,6 +100,7 @@ TIPS: dict[str, str] = {
              "Coworker can't stop it from here yet"),
 }
 TIP_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("helper:", "Show this helper chat's tab: it works on a part of this chat's job"),
     ("copymsg:", "Copy the reply"),
     ("copyuser:", "Copy your message"),
     ("copythink:", "Copy this thinking"),
@@ -130,6 +131,7 @@ def tip_for(widget_id: str | None) -> str:
 __all__ = (
     "Approval",
     "ChatSurface",
+    "Helpers",
     "Notice",
     "TopBar",
 )
@@ -187,6 +189,15 @@ class Approval:
         ("once", "Allow once", "CHECKMARK"), ("always", "Allow this turn", "PINNED"), ("deny", "Deny", "CANCEL"))
     action: str = "approve"     # the action a button sends: (action, button id)
     icon: str = "LOCKED"
+
+
+@dataclass
+class Helpers:
+    """The asking chat's helper chats while any is unfinished (#479): one row each, a click
+    shows its tab."""
+
+    title: str                                   # "2 helpers -- 1 working"
+    rows: tuple[tuple[str, str, str, str], ...] = ()     # (thread id, title, status word, icon)
 
 
 @dataclass
@@ -433,7 +444,7 @@ class ChatSurface:
 
     def draw(self, canvas: Canvas, rect: Rect, history: list[dict], live: Any = None,
              top: TopBar | None = None, notice: Notice | None = None,
-             approval: Approval | None = None) -> list[tuple[str, str]]:
+             approval: Approval | None = None, helpers: Helpers | None = None) -> list[tuple[str, str]]:
         """Draw into *rect* (region pixels); return this frame's actions."""
         style = canvas.style
         self._style = style
@@ -464,6 +475,8 @@ class ChatSurface:
         if approval is not None:     # the question, right above the input (or at the bottom: #166)
             anchor_y = chat_y if show_input else rect.y + pad
             chat_y = self._draw_approval(canvas, Rect(inner.x, anchor_y, inner.w, 0), approval, actions) + pad
+        if helpers is not None and helpers.rows and show_input:     # its helper chats (#479)
+            chat_y = self._draw_helpers(canvas, Rect(inner.x, chat_y, inner.w, 0), helpers, actions) + pad
         chat = Rect(rect.x, chat_y, rect.w, max(0.0, top_edge - chat_y - pad))
         self._chat_rect = chat
         self._notice_room = None
@@ -698,6 +711,31 @@ class ChatSurface:
                 bx += bw + pad * 0.5
             else:
                 by -= u * 1.25
+        return card.top
+
+    def _draw_helpers(self, canvas: Canvas, anchor: Rect, helpers: Helpers,
+                      actions: list[tuple[str, str]]) -> float:
+        """The helper chats of this chat: a title, then one row each (status icon, title,
+        status); a row is a button that shows that helper's tab.  Returns its top."""
+        style = canvas.style
+        u, pad = style.unit, style.pad * 0.6
+        row_h = u * 1.05
+        h = u + len(helpers.rows) * row_h + 2 * pad
+        card = Rect(anchor.x, anchor.y, anchor.w, h)
+        canvas.box(card, colors=style.box)
+        side = canvas.icon_size()
+        head = Rect(card.x + pad, card.top - pad - u, card.w - 2 * pad, u)
+        canvas.icon(Rect(head.x, head.y + (u - side) / 2, side, side), "WIZARD", style.box.text)
+        canvas.label(Rect(head.x + side + pad * 0.6, head.y, head.w - side, u),
+                     _fit(canvas, helpers.title, head.w - side - pad), style.box.text, bold=True)
+        y = head.y
+        for thread_id, title, word, icon in helpers.rows:
+            y -= row_h
+            row = Rect(card.x + pad, y, card.w - 2 * pad, row_h * 0.95)
+            widget = "helper:" + thread_id
+            text = _fit(canvas, "{:s}  —  {:s}".format(title, word), row.w - side - 3 * pad)
+            if canvas.button(row, widget, text, icon=icon, align="left"):
+                actions.append(("show_helper", thread_id))
         return card.top
 
     def _draw_drop_target(self, canvas: Canvas, rect: Rect) -> None:

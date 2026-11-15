@@ -551,7 +551,8 @@ def _draw_text_object_menu(self: Any, context: Any) -> None:
 
 
 def _draw_text_strip_menu(self: Any, context: Any) -> None:
-    editor = getattr(context.scene, "sequence_editor", None)
+    from .wand.scene import sequencer_scene       # the scene the Sequencer shows, not the window's (#504)
+    editor = getattr(sequencer_scene(context), "sequence_editor", None)
     strip = getattr(editor, "active_strip", None)
     if strip is None or strip.type != 'TEXT':
         return

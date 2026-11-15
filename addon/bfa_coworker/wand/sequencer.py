@@ -25,6 +25,10 @@ Places (``SPEC.places``): the end of the Sequencer's *Strip* menu, the
 *Coworker* tab of Bforartists' tabbed toolshelf (only where
 ``show_toolshelf_tabs`` exists and is on) and the *Coworker* tab of the
 Sequencer's sidebar (Blender, and Bforartists with the toolshelf tabs off).
+
+The same panel and Strip-menu section also hold Coworker's other video tools when
+their modules are registered (:data:`OTHERS`, :data:`SUBMENUS`): Auto Captions (#376)
+and Make Vertical (#333), so each shows once, in one place.
 """
 
 from __future__ import annotations
@@ -36,9 +40,12 @@ __all__ = (
     "COWORKER_PT_sequencer_sidebar",
     "COWORKER_PT_sequencer_toolshelf",
     "CoworkerEntry",
+    "OTHERS",
     "PANEL",
     "RATE",
     "SPEC",
+    "SUBMENUS",
+    "VIEWS",
     "WINDOW_S",
     "register",
     "unregister",
@@ -53,10 +60,14 @@ from bpy.props import BoolProperty, FloatProperty  # pylint: disable=import-erro
 from bpy.types import Operator, Panel  # pylint: disable=import-error
 
 from . import icons, silences
+from .scene import poll as _sequencer_poll, sequencer_scene
 from .spec import OperatorSpec, Param, Place
 
 CATEGORY = "Coworker"
 PANEL = "Video"
+HEADER_ICON = "FILE_MOVIE"      # the toolshelf panel's header (#504)
+# The Sequencer views with a timeline: where the panel and the Strip-menu section show (#504).
+VIEWS = frozenset({"SEQUENCER", "SEQUENCER_PREVIEW"})
 
 SPEC = OperatorSpec(
     id="sequencer.remove_silences",
@@ -136,7 +147,7 @@ def _fps(scene: Any) -> float:
 
 
 def _scene(context: Any) -> Any:
-    return getattr(context, "sequencer_scene", None) or context.scene
+    return sequencer_scene(context) or context.scene
 
 
 def _level(editor: Any) -> tuple[Any, Any]:
@@ -451,11 +462,7 @@ class COWORKER_OT_sequencer_remove_silences(Operator):  # type: ignore[misc]
 
     @classmethod
     def poll(cls, context):
-        scene = _scene(context)
-        if scene is None or scene.sequence_editor is None:
-            cls.poll_message_set("The scene has no sequencer strips")
-            return False
-        return True
+        return _sequencer_poll(cls, context)      # the Sequencer's scene, with strips (#504)
 
     def _settings(self) -> tuple[float, float, float, float]:
         return self.threshold_db, self.min_silence, self.padding, self.min_keep
@@ -575,8 +582,27 @@ class CoworkerEntry:
                        text="" if as_icon else self.text)
 
 
+# Coworker's other video operators, in the same Video panel and Strip-menu section when
+# their modules are registered (#376 Auto Captions, #333 Make Vertical):
+# (operator, its class name in bpy.types, text, wand icon, Blender fallback icon).
+OTHERS = (
+    ("bfacw.auto_captions", "BFACW_OT_auto_captions", "Auto Captions", "captions", "FONT_DATA"),
+    ("bfacw.make_vertical", "BFACW_OT_make_vertical", "Make Vertical", "vertical", "SEQ_PREVIEW"),
+)
+# Their submenus in the section: (menu, wand icon or "", Blender icon).
+SUBMENUS = (("BFACW_MT_captions", "captions", "FONT_DATA"), ("BFACW_MT_reframe", "", "VIEW_PAN"))
+
+
+def _registered(name: str) -> bool:
+    return getattr(bpy.types, name, None) is not None
+
+
 def _entries() -> tuple:
-    return (CoworkerEntry(SPEC.bl_idname, SPEC.label, SPEC.icon, SPEC.fallback_icon),)
+    out = [CoworkerEntry(SPEC.bl_idname, SPEC.label, SPEC.icon, SPEC.fallback_icon)]
+    for idname, cls_name, text, icon, fallback in OTHERS:
+        if _registered(cls_name):
+            out.append(CoworkerEntry(idname, text, icon, fallback))
+    return tuple(out)
 
 
 def _has_toolshelf_tabs() -> bool:
@@ -597,9 +623,17 @@ class COWORKER_PT_sequencer_toolshelf(Panel):  # type: ignore[misc]
 
     @classmethod
     def poll(cls, context):
+        # Both views with a timeline (#504); not the Preview alone, where Bforartists' toolshelf
+        # keeps its strip tools out too (only the Image tab) and the Strip menu has no timeline part.
         space = context.space_data
         return bool(getattr(space, "show_toolshelf_tabs", False)) and \
-            getattr(space, "view_type", "") in {"SEQUENCER"}
+            getattr(space, "view_type", "") in VIEWS
+
+    def draw_header(self, _context):
+        # The toolshelf's default width leaves room for about two letters ("Vi", like
+        # Bforartists' own "Cl" and "Im"): an icon names the panel there (#504).
+        from ..shared import icon as safe_icon
+        self.layout.label(icon=safe_icon(HEADER_ICON))
 
     def draw(self, context):
         try:
@@ -622,12 +656,14 @@ class COWORKER_PT_sequencer_sidebar(Panel):  # type: ignore[misc]
     bl_space_type = "SEQUENCE_EDITOR"
     bl_region_type = "UI"
     bl_category = CATEGORY
-    bl_order = 0                        # at the top of the tab, above the chat
+    # First in the tab: Queue and the chat's panels are 0 and up, and Blender keeps bl_order >= 0, so
+    # equal orders go by registration: the add-on registers wand before the chat (#504).
+    bl_order = 0
 
     @classmethod
     def poll(cls, context):
         space = context.space_data
-        return getattr(space, "view_type", "") in {"SEQUENCER", "SEQUENCER_PREVIEW"} and \
+        return getattr(space, "view_type", "") in VIEWS and \
             not getattr(space, "show_toolshelf_tabs", False)
 
     def draw(self, context):
@@ -639,12 +675,23 @@ class COWORKER_PT_sequencer_sidebar(Panel):  # type: ignore[misc]
 
 def _draw_strip_menu(self: Any, context: Any) -> None:
     space = context.space_data
-    if getattr(space, "view_type", "SEQUENCER") not in {"SEQUENCER", "SEQUENCER_PREVIEW"}:
+    if getattr(space, "view_type", "SEQUENCER") not in VIEWS:
         return
     layout = self.layout
     layout.separator()
     layout.operator_context = "INVOKE_DEFAULT"
+    # One Coworker section for every Coworker video tool (#331, #376, #333): each once.
     icons.operator(layout, SPEC.bl_idname, name=SPEC.icon, fallback=SPEC.fallback_icon, text=SPEC.label + "...")
+    for idname, cls_name, text, icon, fallback in OTHERS:
+        if _registered(cls_name):
+            icons.operator(layout, idname, name=icon, fallback=fallback, text=text + "...")
+    for menu_id, icon, fallback in SUBMENUS:
+        if _registered(menu_id):
+            if icon:
+                icons.menu(layout, menu_id, name=icon, fallback=fallback)
+            else:
+                from ..shared import icon as safe_icon
+                layout.menu(menu_id, icon=safe_icon(fallback))
 
 
 _REGISTERED: list[type] = []

@@ -7,7 +7,7 @@
 Auto Captions in the Sequencer (Tier 4, Video 2, #376): caption lines become styled
 text strips, SRT in and out, and Translate for many captions at once.
 
-* **Auto Captions** (Strip > Captions): the selected sound / movie strips' words
+* **Auto Captions** (Strip menu, Coworker > Video panel): the selected sound / movie strips' words
   (from local transcription when this build has it, or a transcript file) become
   one text strip per caption line on a channel named *Captions*, in a style
   (:data:`captions.STYLES`).  *Word-by-word highlight* adds, per word, a strip on
@@ -60,6 +60,7 @@ from bpy_extras.io_utils import ExportHelper, ImportHelper  # pylint: disable=im
 from . import captions as cap
 from .captions import CaptionsError
 from .shared import icon as safe_icon
+from .wand import scene as _seq
 
 _NAME_RE = re.compile(r"^cap_(\d{4,})$")
 
@@ -67,12 +68,9 @@ _NAME_RE = re.compile(r"^cap_(\d{4,})$")
 # -- the Sequencer's scene and strips (5.1 names as a fallback) -------------------------
 
 def seq_scene(context: Any = None) -> Any:
-    """The scene the Sequencer shows (``sequencer_scene`` in 5.2+), else the context scene."""
+    """The scene the Sequencer shows (``wand.scene``, #504), else the context scene (tools, timers)."""
     ctx = context or bpy.context
-    scene = getattr(ctx, "sequencer_scene", None)
-    if scene is None:
-        scene = getattr(getattr(ctx, "workspace", None), "sequencer_scene", None)
-    return scene or ctx.scene
+    return _seq.sequencer_scene(ctx) or ctx.scene
 
 
 def _top(ed: Any) -> Any:
@@ -823,6 +821,8 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
 
     @classmethod
     def poll(cls, context: Any) -> bool:
+        if not _seq.poll(cls, context):        # the Sequencer's scene, with strips (#504)
+            return False
         ed = getattr(seq_scene(context), "sequence_editor", None)
         if ed is None or not any(s.select for s in _media_strips(_top(ed))):
             cls.poll_message_set("Select a sound or movie strip first")
@@ -890,6 +890,13 @@ class BFACW_OT_captions_import_srt(Operator, ImportHelper):  # type: ignore[misc
         name="Max Characters", default=0, min=0, max=80,
         description="Characters per line for Word-by-word highlight (0: what fits the frame)")
 
+    @classmethod
+    def poll(cls, context: Any) -> bool:
+        if _seq.sequencer_scene(context) is None:      # strips are made if there are none (#504)
+            cls.poll_message_set(_seq.NO_SCENE)
+            return False
+        return True
+
     def execute(self, context: Any) -> set[str]:
         scene = seq_scene(context)
         try:
@@ -913,6 +920,8 @@ class BFACW_OT_captions_export_srt(Operator, ExportHelper):  # type: ignore[misc
 
     @classmethod
     def poll(cls, context: Any) -> bool:
+        if not _seq.poll(cls, context):
+            return False
         if not caption_lines(seq_scene(context)):
             cls.poll_message_set("No captions: add some with Auto Captions or Import SRT")
             return False
@@ -940,15 +949,10 @@ class BFACW_MT_captions(Menu):  # type: ignore[misc]
     def draw(self, _context: Any) -> None:
         layout = self.layout
         layout.operator_context = 'INVOKE_DEFAULT'
-        layout.operator("bfacw.auto_captions", text="Auto Captions...", icon=safe_icon('FONT_DATA'))
-        layout.separator()
+        # Auto Captions itself is next to this menu, in the Strip menu's Coworker section
+        # (wand.sequencer), so it shows once.
         layout.operator("bfacw.captions_import_srt", text="Import SRT...", icon=safe_icon('IMPORT'))
         layout.operator("bfacw.captions_export_srt", text="Export SRT...", icon=safe_icon('EXPORT'))
-
-
-def _draw_strip_menu(self: Any, _context: Any) -> None:
-    self.layout.separator()
-    self.layout.menu("BFACW_MT_captions", icon=safe_icon('FONT_DATA'))
 
 
 def _draw_context_menu(self: Any, context: Any) -> None:
@@ -967,7 +971,9 @@ def _draw_context_menu(self: Any, context: Any) -> None:
 
 
 _CLASSES = (BFACW_OT_auto_captions, BFACW_OT_captions_import_srt, BFACW_OT_captions_export_srt, BFACW_MT_captions)
-_MENUS = (("SEQUENCER_MT_strip", _draw_strip_menu), ("SEQUENCER_MT_context_menu", _draw_context_menu))
+# The Strip menu's entries are drawn by wand.sequencer's Coworker section (one place for every
+# Coworker video tool); the right-click menu keeps Translate Captions.
+_MENUS = (("SEQUENCER_MT_context_menu", _draw_context_menu),)
 _HOOKED: list[tuple[Any, Any]] = []
 
 

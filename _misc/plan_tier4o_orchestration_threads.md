@@ -179,6 +179,58 @@ Blender has **one linear undo stack** per file. Threads must respect it:
 | **Orchestrate 2** missions with checkpoints | **Tier 5**, with teams: a mission becomes a thread that spawns helper threads per step |
 | **Teams 1–3** (planner → specialists → validator, co-pilot, critic) | **Tier 5**, built on threads: a planner thread starts specialist threads in the right editors and reads their results; the co-pilot and the critic are background threads |
 | Handing off between threads ("ask the Node thread to…") | Tier 5, with teams |
+| **Helper chats** (sub-agents, #479) | Tier 4, 1.1.44 — see §4.1 |
+
+### 4.1 Helper chats — a chat hands work to sub-agents (#479)
+
+A chat calls **`delegate_task(task, editor, title)`** (surface tool, every engine that runs
+Coworker's tools: Local / Remote through our loop, External Agent through MCP). Coworker
+opens a **helper tab** (a normal thread with its own editor context, history, Stop and
+permissions; no area switches to it), queues the task there as its first message
+(`[Helper for "<asking chat>"] <task>` plus "end with a short, concrete result") and
+**answers at once** — the asking turn never waits. When every helper of the asking chat's
+open batch has finished (done, failed or stopped), **one** message starting `[Helpers]`
+with each helper's final answer (trimmed to 1500 characters, with a note) is queued to the
+asking chat, and the normal queue starts its next turn. While they work, the asking chat
+shows a **Helpers card** above the input (a row per helper with its status, a click shows
+its tab), its status says *Waiting for N helpers*, and Stop stays at hand.
+
+- **Schedule**: today's rule (one turn at a time across tabs) runs the helpers one after
+  another after the asking turn, on every engine — the chained schedule Local needs. The
+  thread runner of Threads 3 can run them side by side online; helper chats rely only on
+  the thread/queue entry points below, so nothing changes for them.
+- **Limits**: a helper can't delegate (the tool is not offered to it, and refused if
+  called); at most *Helpers per Turn* (default 4, Preferences) per asking turn; External
+  Harness refuses it (the client has its own sub-agents). In Ask mode the tool itself never
+  asks: each helper asks for its own steps in its own tab.
+- **Stop** in the asking chat stops its queued and running helpers and **no results
+  message is sent**. Stop in a helper's tab, or closing a waiting helper's tab, counts as
+  *stopped* in the results. Closing the asking tab leaves the helpers as plain chats.
+- **Entry points used** (keep them for Threads 3): `ui_chat._editor_thread(editor)` (new
+  tab), `ui_chat._thread_engine(thread)` with `.submit(prompt, config)` / `.enqueue(...)`
+  and `agent_controller.turn_blocked(thread)` (start or queue, like Send),
+  `agent_controller.thread_queue(thread).enqueue(...)` (the results, from the helper's
+  worker), `LoopEngine.on_turn_finished` (worker, before the next queued message starts)
+  with `LoopEngine.last_stop_reason` / `last_error`, `AcpEngine.on_turn_end(thread,
+  stop_reason, error)` (main thread, from drain), `agent_controller.thread_state(thread)`,
+  `THREADS.get / live / remove`, `request_stop` via the engine's `cancel()`.
+
+**External Harness, several sub-agents at once** (measured on Blender 5.2.4, 2026-11-14,
+`_scratch/s479`): an outside client's sub-agents share its one MCP server. Calls are
+**serialised safely**: every call runs on Blender's main thread through the bridge, one at
+a time, each answers with its own result (two clients × 5 interleaved calls, 10/10 right,
+~0.2 s each; two calls in flight on one server, and two at once on the HTTP server: both
+right, the second waits for the first's 3 s script). Two things were shared:
+1. **FastMCP ran every plain (non-`async`) tool on the server's event loop**, so while one
+   call waited — a long script, or a risky step waiting for the user's approval card — every
+   other request to that server waited too: another sub-agent's call didn't answer for as
+   long as the card stayed open (and on the add-on's HTTP server, another thread's call).
+   Fixed: plain tools run in a worker thread (`bounded_output.off_the_loop`), with their
+   context (thread id, tool name); Blender still runs them one at a time.
+2. **The bridge's repeat count** (Runtime 1) sees one client: identical reads from two
+   sub-agents in a row add up (the 5th identical read asks, the 6th is refused); any other
+   call in between resets it. Left as is — a client's sub-agents can't be told apart over
+   MCP; the card says what happens.
 
 ## 5. Tasks
 

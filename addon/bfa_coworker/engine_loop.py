@@ -99,6 +99,11 @@ class LoopEngine:
         self.on_redraw: Callable[[], None] | None = None
         self.on_turn_finished: Callable[[], None] | None = None
         self.records: OrderedDict[str, TurnRecord] = OrderedDict()
+        # How the last turn ended, for on_turn_finished (helper chats, #479): its
+        # stop reason ("end_turn" / "cancelled" / "error"), its error and its request.
+        self.last_stop_reason = ""
+        self.last_error = ""
+        self.last_request = ""
 
     # -- Engine protocol ---------------------------------------------------
     def send(self, prompt: Prompt) -> str:
@@ -246,6 +251,9 @@ class LoopEngine:
             stop_reason = "error"
         else:
             stop_reason = "end_turn"
+        self.last_stop_reason = stop_reason
+        self.last_error = str(state.error or "") if stop_reason == "error" else ""
+        self.last_request = prompt.text
         self.bus.emit("turn_end", turn_id, stop_reason=stop_reason)
 
     def _dequeue_next(self) -> None:

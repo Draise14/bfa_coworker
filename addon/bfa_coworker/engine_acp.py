@@ -111,6 +111,11 @@ class AcpEngine:
         self.state_for: Callable[[str], Any] | None = None   # a thread's chat state
         self._threads: dict[str, tuple[str, Any, ChatStateApplier]] = {}
         self._turn_appliers: dict[str, ChatStateApplier] = {}
+        # Helper chats (#479): *on_turn_end(thread, stop_reason, error)* hears each turn's end
+        # on the main thread (from drain), once its events are in that thread's chat.
+        self.on_turn_end: Callable[[str, str, str], None] | None = None
+        self._turn_threads: dict[str, str] = {}
+        self._turn_errors: dict[str, str] = {}
 
     # -- connection ----------------------------------------------------------------
     def connect(self, argv: list[str], mcp_entry: dict[str, Any], cwd: str,
@@ -429,8 +434,17 @@ class AcpEngine:
     def _apply(self, event: Any) -> None:
         applier = self._turn_appliers.get(event.turn_id, self.applier)
         applier.apply(event)
+        if event.kind == "error":
+            self._turn_errors[event.turn_id] = str(event.data.get("message", ""))
         if event.kind == "turn_end":
             self._turn_appliers.pop(event.turn_id, None)
+            thread = self._turn_threads.pop(event.turn_id, self.thread)
+            error = self._turn_errors.pop(event.turn_id, "")
+            if self.on_turn_end is not None:
+                try:
+                    self.on_turn_end(thread, str(event.data.get("stop_reason", "end_turn")), error)
+                except Exception as ex:  # pylint: disable=broad-exception-caught
+                    print("[Coworker] turn-end hook failed: {:s}".format(str(ex)))
 
     # -- turns ------------------------------------------------------------------------
     def _start(self, prompt: Prompt) -> str:
@@ -439,6 +453,7 @@ class AcpEngine:
         with self._lock:
             self._turn_id = turn_id
         self._turn_appliers[turn_id] = self.applier
+        self._turn_threads[turn_id] = prompt.thread
         # Like a local turn, the message in the chat keeps an "[attached: ...]"
         # marker for its images, which the chat draws as thumbnails.
         names = [n for n in prompt.image_names if n]

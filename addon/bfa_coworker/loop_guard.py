@@ -17,7 +17,14 @@ minutes, tokens and sometimes the scene.  One rule for every engine:
   reading the digest after every step is normal, reading it five times in a
   row without doing anything is not;
 - a long job's status poll (``get_job_status``) is never counted;
-- in Auto mode nobody can answer: the 3rd call is declined at once.
+- a tool whose answer also depends on state outside its input (settings,
+  installed files: :data:`_CONTEXT_MODULES`) is counted with that state, so
+  a call made after it changed is a new call -- transcribing a strip again
+  after setting speech up or picking another model is not a loop (#499);
+- in Auto mode nobody can answer: the 3rd call is declined at once;
+- an External Harness client has its chat outside Blender, so nobody is at
+  the card either: the 3rd call is refused at once with a plain text instead
+  of waiting for an answer that never comes (#499).
 
 The local loop (Local / Remote) keeps its own :class:`LoopGuard` per turn and
 waits for the answer on its worker thread (:func:`wait_answer`).  External
@@ -45,6 +52,7 @@ __all__ = (
 )
 
 import hashlib
+import importlib
 import json
 import threading
 import time
@@ -85,6 +93,25 @@ def _is_exempt(tool: str) -> bool:
     return is_status_poll(tool)      # waiting for a render repeats its poll (Tools 6)
 
 
+# Tools whose answer also depends on state outside their input: the module named here has
+# ``repeat_context() -> str`` (cheap, bpy-safe on any thread).  A call made after that state
+# changed is a new call, not a repeat; the same call with the same state still is (#499).
+_CONTEXT_MODULES: dict[str, str] = {
+    "transcribe_strip": "speech",     # the speech settings, the builds and models installed
+}
+
+
+def _context(tool: str) -> str:
+    """The state *tool*'s answer depends on besides its input ("" for most tools)."""
+    name = _CONTEXT_MODULES.get(tool)
+    if not name:
+        return ""
+    try:
+        return str(importlib.import_module("." + name, __package__).repeat_context() or "")
+    except Exception:  # pylint: disable=broad-exception-caught  # count it as before
+        return ""
+
+
 class LoopGuard:
     """Counts identical calls per key (a session) until the turn ends."""
 
@@ -114,7 +141,8 @@ class LoopGuard:
         if _is_exempt(tool):
             return RUN, 0
         read = _is_read(tool)
-        sig = signature(tool, args)
+        context = _context(tool)
+        sig = signature(tool, {"input": args, "context": context} if context else args)
         with self._lock:
             now = self._clock()
             if self.idle_reset > 0 and now - self._last.get(key, now) > self.idle_reset:
@@ -155,6 +183,13 @@ def auto_declined(tool: str) -> dict[str, object]:
                   "input). Change the approach, or finish and report what blocks you.".format(tool or "this tool"))
 
 
+def unanswered(tool: str, nth: int) -> dict[str, object]:
+    """No one can answer a card in Blender (External Harness: the chat is the client's)."""
+    return _error("Refused: this is the {:s} call to {:s} with the same input in this turn, and nobody in "
+                  "Blender can let a repeat through. Don't repeat it: change the approach, or stop and ask the "
+                  "user in your chat what blocks you.".format(_ordinal(nth), tool or "this tool"))
+
+
 def _kind(tool: str) -> str:
     return "repeat:" + (tool or "")
 
@@ -168,8 +203,9 @@ def repeat_request(tool: str, args: Any, nth: int, source: str = "", thread: str
 
 
 def decide(verdict: str, tool: str, nth: int, approvals: Approvals, auto: bool,
-           thread: str = "") -> tuple[str, dict[str, object] | None]:
-    """What to do right now: ``(RUN, None)``, ``(REFUSE, error)`` or ``(ASK, None)`` (show the card)."""
+           thread: str = "", can_ask: bool = True) -> tuple[str, dict[str, object] | None]:
+    """What to do right now: ``(RUN, None)``, ``(REFUSE, error)`` or ``(ASK, None)`` (show the card).
+    *can_ask* False: nobody can answer a card (External Harness), refuse instead of asking."""
     if verdict == RUN:
         return RUN, None
     if verdict == REFUSE:
@@ -178,6 +214,8 @@ def decide(verdict: str, tool: str, nth: int, approvals: Approvals, auto: bool,
         return REFUSE, auto_declined(tool)
     if approvals.allowed_always(_kind(tool), thread):   # "Allow this turn" was picked
         return RUN, None
+    if not can_ask:
+        return REFUSE, unanswered(tool, nth)
     return ASK, None
 
 
@@ -201,14 +239,15 @@ def wait_answer(approvals: Approvals, request: ApprovalRequest, stop: Any = None
 
 def bridge_wrap(guard: LoopGuard, approvals: Approvals, auto: bool, tool: str, args: Any, key: str,
                 proceed: Callable[[], tuple[dict[str, object], Callable[[], dict[str, object] | None] | None]],
-                source: str = "The agent", thread: str = "", shown: Any = None,
+                source: str = "The agent", thread: str = "", shown: Any = None, can_ask: bool = True,
                 ) -> tuple[dict[str, object], Callable[[], dict[str, object] | None] | None] | None:
     """The bridge's repeat check: None lets the call through, else ``(response, check_fn)``
     (a refusal, or the card's deferred answer; once allowed, *proceed* runs the call).
     Counted per *key* (session) and *thread* (#357).  *shown* (#500): what the card shows
-    for the call (the tool's arguments), when it isn't *args*."""
+    for the call (the tool's arguments), when it isn't *args*.  *can_ask* False (External
+    Harness): no card, the repeat is refused at once (#499)."""
     verdict, nth = guard.check(tool, args, key + "/" + thread if thread else key)
-    action, error = decide(verdict, tool, nth, approvals, auto, thread)
+    action, error = decide(verdict, tool, nth, approvals, auto, thread, can_ask)
     if action == RUN:
         return None
     if action == REFUSE:

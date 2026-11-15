@@ -1369,7 +1369,9 @@ def _execute_code_from_request(
         _repeat = loop_guard.bridge_wrap(loop_guard.BRIDGE, risky_steps.APPROVALS, risky_steps.auto_on(_thread),
                                          _tool, {"code": code}, str(request.get("session") or ""), _proceed,
                                          thread=_thread,
-                                         shown=risky_steps.card_args(_tool, code, request.get("args")))
+                                         shown=risky_steps.card_args(_tool, code, request.get("args")),
+                                         # #499: a Harness client's chat is outside Blender: no one answers a card.
+                                         can_ask=_engine != "EXTERNAL_HARNESS")
         if _repeat is not None:
             exec_result = _ExecResult(*_repeat)
     if exec_result is None:

@@ -191,8 +191,10 @@ class TestBridgeCards(unittest.TestCase):
         self._send("execute_blender_code", code, {"code": code})
         self.assertEqual(rs.APPROVALS.current().detail, "import bpy result = {'frame': 7}")
 
-    def test_the_harness_repeat_card_shows_the_tools_arguments(self):
-        self._setup("AUTO", "EXTERNAL_HARNESS")
+    def test_the_external_agent_repeat_card_shows_the_tools_arguments(self):
+        # The External Agent: on the External Harness nobody can answer a card, so its
+        # repeat is refused at once without one (#499, test_loop_guard).
+        self._setup("AUTO", "EXTERNAL_AGENT")
         lg.BRIDGE.new_turn()
         self.addCleanup(lg.BRIDGE.new_turn)
         args = {"name": "Cube", "location": [0, 0, 1]}

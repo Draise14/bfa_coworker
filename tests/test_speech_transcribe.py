@@ -34,6 +34,7 @@ import json
 import os
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -865,6 +866,126 @@ class TestTool(_TempData):
         out = speech.shape_result(_doc(), self.TIMING, "talk", limit=1)
         self.assertEqual(set(out) - set(tc.Result._fields), set())         # nothing dropped
         self.assertEqual(set({"status": 1, "message": 1}) - set(tc.Result._fields), set())
+
+
+# ---------------------------------------------------------------------------
+# 10. Stop mid-transcription, and what a repeated call depends on (#499)
+
+def _resetting_server(on_request):
+    """A stand-in whisper-server that reads the request, calls *on_request*, then resets the
+    connection (what Windows reports as [WinError 10054] when Stop ends the process)."""
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+
+    def run():
+        conn, _addr = srv.accept()
+        with conn:
+            conn.settimeout(5)
+            data = b""
+            while b"RIFF" not in data:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    break
+                data += chunk
+            on_request()
+            linger = struct.pack("HH", 1, 0) if sys.platform == "win32" else struct.pack("ii", 1, 0)
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, linger)     # close = reset
+        srv.close()
+    threading.Thread(target=run, daemon=True).start()
+    return srv.getsockname()[1]
+
+
+class TestStop(_TempData):
+
+    def _wav(self):
+        wav = self.tmp / "a.wav"
+        wav.write_bytes(b"RIFF" + b"\0" * 64)
+        return wav
+
+    def test_stop_mid_request_answers_stopped(self):
+        port = _resetting_server(wm.stop_server)          # Stop pressed while the request runs
+        with self.assertRaises(wm.Stopped) as cm:
+            wm.transcribe_wav(self._wav(), "en", port=port, timeout=10)
+        self.assertEqual(str(cm.exception), "Transcription stopped.")
+
+    def test_a_reset_without_stop_is_still_an_error(self):
+        port = _resetting_server(lambda: None)            # the server died on its own: not "stopped"
+        with self.assertRaises(OSError) as cm:
+            wm.transcribe_wav(self._wav(), "en", port=port, timeout=10)
+        self.assertNotIsInstance(cm.exception, wm.Stopped)
+
+    def _job(self, transcribe):
+        job = speech._Job()
+        p = {"route": "local", "model": "small", "cache_model": "small", "language": "en", "build": "cpu"}
+        with mock.patch.object(speech, "_write_wav", lambda media, out: Path(out).write_bytes(b"RIFF")), \
+                mock.patch.object(wm, "start_server", lambda *a: ""), \
+                mock.patch.object(wm, "is_ready", lambda: True), \
+                mock.patch.object(wm, "transcribe_wav", transcribe):
+            speech._work(job, str(self.tmp / "a.mp4"), "0123456789abcdef", 10, p, {"port": 1}, "", "")
+        return job
+
+    def test_the_job_says_stopped_not_the_socket_error(self):
+        def reset_after_stop(*_a, **_k):
+            wm.stop_server()
+            raise ConnectionResetError(10054, "An existing connection was forcibly closed by the remote host")
+        self.assertEqual(self._job(reset_after_stop).error, "Transcription stopped.")
+
+        def reset(*_a, **_k):
+            raise ConnectionResetError(10054, "An existing connection was forcibly closed by the remote host")
+        self.assertIn("forcibly closed", self._job(reset).error, "no Stop: the error as it was")
+
+    def test_the_tool_answers_stopped_plainly(self):
+        src = (_ADDON / "speech.py").read_text(encoding="utf-8")
+        body = src[src.index("def check_is_finished("):src.index("check_is_finished.job_kind")]
+        self.assertIn("job.error == whisper_manager.STOPPED", body)
+        self.assertIn("return _error(whisper_manager.STOPPED)", body)
+
+
+class TestRepeatContext(_TempData):
+    """transcribe_strip's state for the loop guard: settings and files on disk (#499)."""
+
+    PREFS = dict(speech_device="CUDA", speech_model="AUTO", speech_language="en", speech_prompt="",
+                 speech_use_remote=False, speech_remote_model="whisper-1", remote_api_url="", remote_api_key="",
+                 port_offset=0, whisper_port=0)
+
+    def setUp(self):
+        super().setUp()
+        self.prefs = types.SimpleNamespace(**self.PREFS)
+        patcher = mock.patch.object(speech, "_prefs", lambda: self.prefs)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_changes_with_set_up_and_settings_only(self):
+        first = speech.repeat_context()
+        self.assertEqual(speech.repeat_context(), first, "nothing changed: the same")
+        exe = wm.build_dir("cuda12") / "Release" / "whisper-server.exe"
+        exe.parent.mkdir(parents=True)
+        exe.write_bytes(b"MZ")
+        built = speech.repeat_context()
+        self.assertNotEqual(built, first, "a build installed")
+        with open(wm.model_file("tiny"), "wb") as fh:          # the smallest: not sparse on Windows
+            fh.truncate(wm.get_preset("tiny").size)
+        ready = speech.repeat_context()
+        self.assertNotEqual(ready, built, "a model downloaded")
+        for name, value in (("speech_model", "small"), ("speech_device", "CPU"), ("speech_language", "de"),
+                            ("speech_use_remote", True)):
+            before = speech.repeat_context()
+            setattr(self.prefs, name, value)
+            self.assertNotEqual(speech.repeat_context(), before, name)
+        self.prefs.remote_api_key = "sk-secret"
+        self.prefs.remote_api_url = "https://example.invalid"
+        self.assertNotIn("sk-secret", speech.repeat_context(), "the key itself is never in it")
+
+    def test_off_the_main_thread_the_preferences_are_not_read(self):
+        main = speech.repeat_context()
+        self.prefs.speech_model = "small"
+        box = []
+        with mock.patch.object(speech, "_prefs", side_effect=AssertionError("read off the main thread")):
+            t = threading.Thread(target=lambda: box.append(speech.repeat_context()))
+            t.start()
+            t.join()
+        self.assertEqual(box, [main], "the settings last read on the main thread")
 
 
 if __name__ == "__main__":

@@ -45,6 +45,8 @@ __all__ = (
     "BUILDS",
     "BUILD_PATTERNS",
     "MODEL_PRESETS",
+    "STOPPED",
+    "Stopped",
     "WhisperState",
     "build_dir",
     "builds_to_download",
@@ -71,12 +73,14 @@ __all__ = (
     "server_exe",
     "start_download",
     "start_server",
+    "stop_count",
     "stop_server",
     "transcribe_remote",
     "transcribe_wav",
     "wait_ready",
 )
 
+import http.client
 import json
 import os
 import platform as _platform
@@ -191,6 +195,7 @@ class WhisperState:
 
 _lock = threading.RLock()
 _state = WhisperState()
+_stops = [0]        # how often the server was stopped (Stop, a model switch, unregister)
 _cancel = threading.Event()
 _data_dir_override: list[Path] = []
 _nvidia: list[bool] = []
@@ -810,11 +815,29 @@ def _terminate(proc: Any) -> None:
     _process_guard.forget(getattr(proc, "pid", None))
 
 
+# What a transcription stopped by Stop answers (#499), instead of the socket's own error.
+STOPPED = "Transcription stopped."
+
+
+class Stopped(RuntimeError):
+    """The server was stopped while it worked on a request (Stop, another model, Blender closing)."""
+
+    def __init__(self) -> None:
+        super().__init__(STOPPED)
+
+
+def stop_count() -> int:
+    """How often the server was stopped so far: a change while a request runs means Stop ended it."""
+    with _lock:
+        return _stops[0]
+
+
 def stop_server() -> None:
     """Stop this window's whisper-server (and any leftover one it launched)."""
     with _lock:
         proc = _state.proc
         _state.proc = None
+        _stops[0] += 1
     _terminate(proc)
     try:
         _process_guard.kill_own(KIND)
@@ -861,6 +884,7 @@ def inference_fields(language: str = "auto", prompt: str = "") -> list[tuple[str
 def transcribe_wav(wav_path: str | os.PathLike, language: str = "auto", prompt: str = "",
                    port: int | None = None, timeout: float = 3600.0) -> dict[str, Any]:
     """POST the WAV to this window's whisper-server; returns its ``verbose_json``."""
+    stops = stop_count()
     port = port or running_port()
     if not port:
         raise RuntimeError("whisper-server isn't running")
@@ -873,6 +897,12 @@ def transcribe_wav(wav_path: str | os.PathLike, language: str = "auto", prompt: 
     except urllib.error.HTTPError as ex:
         detail = ex.read().decode("utf-8", errors="replace")[:300]
         raise RuntimeError("whisper-server answered HTTP {:d}: {:s}".format(ex.code, detail)) from None
+    except (OSError, http.client.HTTPException):
+        # #499: Stop ends the server mid-request; the socket's own error ("[WinError 10054] An
+        # existing connection was forcibly closed ...") says nothing useful then.
+        if stop_count() != stops:
+            raise Stopped() from None
+        raise
 
 
 # OpenAI's endpoint takes at most 25 MB per file (about 13 minutes of 16 kHz mono WAV).

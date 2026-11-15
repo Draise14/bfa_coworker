@@ -14,6 +14,9 @@ Tests for the loop guard (loop_guard.py, Runtime 1, #310).
    through, the local loop's wait ends on an answer or on Stop.
 4. The bridge: ask on the 3rd (the card, a deferred answer), refuse the 4th,
    a recorded ACP tool call replayed until it is stopped.
+5. #499: External Harness refuses the 3rd at once (nobody is at the card); a tool
+   whose answer depends on state outside its input (transcribe_strip: speech
+   settings, installed files) counts a call after that state changed as new.
 
 Run with::
 
@@ -29,6 +32,7 @@ import threading
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _ADDON = Path(__file__).resolve().parents[1] / "addon" / "bfa_coworker"
 _FIXTURES = Path(__file__).resolve().parent / "fixtures" / "acp"
@@ -320,6 +324,133 @@ class TestBridge(unittest.TestCase):
         self._call()
         self.guard.new_turn()
         self.assertEqual(self._call()[0]["status"], "ok")
+
+
+class TestNobodyAtTheCard(unittest.TestCase):
+    """External Harness (#499): the chat is the client's, nobody answers a card in Blender."""
+
+    def setUp(self):
+        self.guard = lg.LoopGuard()
+        self.approvals = ap.Approvals()
+        self.ran = []
+
+    def _call(self, can_ask=False):
+        def proceed():
+            self.ran.append(1)
+            return {"status": "ok"}, None
+        wrapped = lg.bridge_wrap(self.guard, self.approvals, False, "execute_blender_code", _CODE, "s1", proceed,
+                                 can_ask=can_ask)
+        return proceed() if wrapped is None else wrapped
+
+    def test_the_third_is_refused_at_once_without_a_card(self):
+        self._call()
+        self._call()
+        response, check = self._call()
+        self.assertIsNone(check, "nothing waits")
+        self.assertIsNone(self.approvals.current(), "no card")
+        self.assertEqual(response["status"], "error")
+        self.assertIn("3rd call to execute_blender_code", response["message"])
+        self.assertIn("ask the user in your chat", response["message"])
+        self.assertEqual(len(self.ran), 2, "the 3rd never ran")
+        self.assertIn("Refused", self._call()[0]["message"], "the 4th as before")
+
+    def test_others_still_ask(self):
+        self._call(can_ask=True)
+        self._call(can_ask=True)
+        _response, check = self._call(can_ask=True)
+        self.assertIsNotNone(check)
+        self.assertIsNotNone(self.approvals.current())
+
+    def test_decide(self):
+        a = ap.Approvals()
+        action, error = lg.decide(lg.ASK, "t", 3, a, False, can_ask=False)
+        self.assertEqual(action, lg.REFUSE)
+        self.assertIn("nobody in Blender", error["message"])
+        self.assertEqual(lg.decide(lg.RUN, "t", 2, a, False, can_ask=False), (lg.RUN, None))
+        self.assertIn("Auto mode", lg.decide(lg.ASK, "t", 3, a, True, can_ask=False)[1]["message"])
+
+    def test_the_bridge_passes_it_for_the_harness_only(self):
+        src = (_ADDON / "mcp_to_blender_server.py").read_text(encoding="utf-8")
+        call = src[src.index("loop_guard.bridge_wrap("):]
+        call = call[:call.index("if _repeat is not None")]
+        self.assertIn('can_ask=_engine != "EXTERNAL_HARNESS"', call)
+
+
+class TestStateOutsideTheInput(unittest.TestCase):
+    """#499: a tool whose answer depends on settings / installed files counts with them."""
+
+    def setUp(self):
+        self.state = ["not set up"]
+        patcher = mock.patch.dict(lg._CONTEXT_MODULES, {"t": "x"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        real = lg._context
+        patcher = mock.patch.object(lg, "_context", lambda tool: self.state[0] if tool == "t" else real(tool))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_call_after_the_state_changed_is_a_new_call(self):
+        g = lg.LoopGuard()
+        self.assertEqual(g.check("t", A1), (lg.RUN, 1))      # "Speech isn't set up yet"
+        self.state[0] = "set up, CUDA, Auto"
+        self.assertEqual(g.check("t", A1), (lg.RUN, 1))      # transcribed
+        self.state[0] = "set up, CUDA, small"
+        self.assertEqual(g.check("t", A1), (lg.RUN, 1))      # another model: transcribed again
+        # Nothing changes now: a real loop, caught as before.
+        self.assertEqual([g.check("t", A1)[0] for _ in range(3)], [lg.RUN, lg.ASK, lg.REFUSE])
+
+    def test_other_tools_are_counted_as_before(self):
+        g = lg.LoopGuard()
+        got = []
+        for i in range(4):
+            self.state[0] = "state {:d}".format(i)          # only "t" reads it
+            got.append(g.check("execute_blender_code", _CODE)[0])
+        self.assertEqual(got, [lg.RUN, lg.RUN, lg.ASK, lg.REFUSE])
+
+    def test_only_transcribe_strip_has_one(self):
+        self.assertEqual(set(lg._CONTEXT_MODULES) - {"t"}, {"transcribe_strip"})
+        self.assertEqual(lg._context("execute_blender_code"), "")
+
+
+class TestContextProviders(unittest.TestCase):
+
+    def test_a_broken_provider_counts_as_before(self):
+        with mock.patch.dict(lg._CONTEXT_MODULES, {"t": "no_such_module"}):
+            self.assertEqual(lg._context("t"), "")
+            g = lg.LoopGuard()
+            self.assertEqual([g.check("t", 1)[0] for _ in range(3)], [lg.RUN, lg.RUN, lg.ASK])
+
+    def test_transcribe_strip_reads_the_speech_state(self):
+        # The real provider (speech.repeat_context), bpy-free: set-up and a model change move it.
+        import tempfile
+        from pathlib import Path as _P
+        speech = importlib.import_module("bfacw_loop_guard_pkg.speech")
+        wm = importlib.import_module("bfacw_loop_guard_pkg.whisper_manager")
+        prefs = types.SimpleNamespace(speech_device="CPU", speech_model="AUTO", speech_language="en",
+                                      speech_use_remote=False, speech_remote_model="whisper-1", remote_api_url="",
+                                      remote_api_key="", port_offset=0, whisper_port=0)
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(speech, "_prefs", lambda: prefs):
+            wm.set_data_dir(_P(tmp))
+            try:
+                g = lg.LoopGuard()
+                code = {"code": "transcribe_strip('talk_sound', language='en')"}
+                self.assertEqual(g.check("transcribe_strip", code), (lg.RUN, 1))      # not set up
+                exe = wm.build_dir("cpu") / "Release" / "whisper-server.exe"
+                exe.parent.mkdir(parents=True)
+                exe.write_bytes(b"MZ")
+                with open(wm.model_file("tiny"), "wb") as fh:
+                    fh.truncate(wm.get_preset("tiny").size)
+                self.assertEqual(g.check("transcribe_strip", code), (lg.RUN, 1))      # set up
+                self.assertEqual(g.check("transcribe_strip", code), (lg.RUN, 2))      # the same again
+                prefs.speech_model = "tiny"
+                self.assertEqual(g.check("transcribe_strip", code), (lg.RUN, 1))      # another model
+                self.assertEqual([g.check("transcribe_strip", code)[0] for _ in range(3)],
+                                 [lg.RUN, lg.ASK, lg.REFUSE])                          # then a loop
+            finally:
+                wm.set_data_dir(None)
+
+
+A1 = {"code": "transcribe_strip('talk_sound', language='en')"}
 
 
 if __name__ == "__main__":

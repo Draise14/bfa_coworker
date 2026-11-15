@@ -870,7 +870,7 @@ class TestTool(_TempData):
             inside.set()
             gate.wait(5)
 
-        def write_wav(media, out):
+        def write_wav(media, out, stop=None):
             if block_in == "wav":
                 wait()
             Path(out).write_bytes(b"RIFF" + b"\0" * 64)
@@ -984,7 +984,7 @@ class TestStop(_TempData):
     def _job(self, transcribe):
         job = speech._Job()
         p = {"route": "local", "model": "small", "cache_model": "small", "language": "en", "build": "cpu"}
-        with mock.patch.object(speech, "_write_wav", lambda media, out: Path(out).write_bytes(b"RIFF")), \
+        with mock.patch.object(speech, "_write_wav", lambda media, out, stop=None: Path(out).write_bytes(b"RIFF")), \
                 mock.patch.object(wm, "start_server", lambda *a: ""), \
                 mock.patch.object(wm, "is_ready", lambda: True), \
                 mock.patch.object(wm, "transcribe_wav", transcribe):
@@ -1188,6 +1188,234 @@ class TestWav(unittest.TestCase):
         with self.assertRaises(RuntimeError) as cm:
             self.wav("silent.mp4")
         self.assertEqual(str(cm.exception), "silent.mp4 (.mp4, 44.1 kHz stereo) has no sound.")
+
+
+    def test_a_stop_between_pieces_ends_the_wav_at_once(self):
+        """#522: a long file stops within one piece; the caller removes the partial WAV."""
+        class StopAfter:            # not set while the first piece is read, set from the second on
+            def __init__(self):
+                self.n = 0
+
+            def is_set(self):
+                self.n += 1
+                return self.n > 1
+        self.sound = _FakeSound(self.log, rate=48000.0, length=int(1500.5 * 48000))
+        with mock.patch.object(speech, "wav_pieces", lambda f, r: _PIECES(f, r, 600.0)):
+            with self.assertRaises(speech._Stopped):
+                speech._write_wav(str(self.tmp / "long.mp4"), str(self.tmp / "out.wav"), stop=StopAfter())
+        self.assertEqual([e for e in self.log if e[0] == "limit"], [("limit", 0.0, 600.0)], "no second piece read")
+
+
+# ---------------------------------------------------------------------------
+# 12. Stop per caller (#522): a chat's Stop ends its own transcriptions, not another chat's
+#     or Auto Captions'; whisper-server stops only when no other job needs it.
+
+class TestStopPerCaller(_TempData):
+    TIMING = {"content_start": 1.0, "left": 1.0, "right": 100000.0, "fps": 24.0}
+    PLAN = {"route": "local", "model": "small", "build": "cpu", "cache_model": "small", "language": "en"}
+
+    def setUp(self):
+        super().setUp()
+        self.calls = {"start": 0, "stop": 0, "stop_locks": []}
+        self.written = []
+        self.block = {}             # media key -> "wav" / "transcribe": wait there until released
+        self.gates = {}             # media key -> (gate, inside)
+        bpy = types.ModuleType("bpy")
+        bpy.app = types.SimpleNamespace(background=False)
+        bpy.data = types.SimpleNamespace(filepath="")
+
+        def wait(key, stage):
+            if self.block.get(key) == stage:
+                gate, inside = self.gates[key]
+                inside.set()
+                gate.wait(5)
+
+        def write_wav(media, out, stop=None):
+            wait(os.path.basename(media), "wav")
+            Path(out).write_bytes(b"RIFF" + b"\0" * 64)
+
+        def transcribe_wav(wav, *_a, **_k):
+            wait(os.path.basename(str(wav)).split(".")[0], "transcribe")
+            return {"text": "hello"}
+
+        def start_server(*_a, **_k):
+            self.calls["start"] += 1
+            return ""
+
+        def stop_server():
+            self.calls["stop"] += 1
+            # The lock order: _jobs_lock let go, _start_lock held (no lock taken twice).
+            free = speech._jobs_lock.acquire(blocking=False)
+            if free:
+                speech._jobs_lock.release()
+            self.calls["stop_locks"].append((free, speech._start_lock.locked()))
+        for p in (mock.patch.dict(sys.modules, {"bpy": bpy}),
+                  mock.patch.object(speech, "_find_strip", lambda n: (None, types.SimpleNamespace(name=n), "")),
+                  mock.patch.object(speech, "strip_media", lambda st: (str(self.tmp / st.name), "")),
+                  mock.patch.object(speech, "strip_timing", lambda sc, st: dict(self.TIMING)),
+                  mock.patch.object(speech, "_prefs", lambda: None),
+                  mock.patch.object(speech, "plan", lambda settings, model="", language="": dict(self.PLAN)),
+                  mock.patch.object(speech, "setup_problem", lambda p, settings: ""),
+                  mock.patch.object(speech, "_write_wav", write_wav),
+                  mock.patch.object(tr, "media_key", lambda path: (os.path.basename(path), 10)),
+                  mock.patch.object(tr, "find_cached", lambda *a, **k: None),
+                  mock.patch.object(tr, "from_verbose_json", lambda *a, **k: _doc()),
+                  mock.patch.object(tr, "write", lambda path, doc: self.written.append(Path(path).name.split(".")[0])),
+                  mock.patch.object(wm, "start_server", start_server),
+                  mock.patch.object(wm, "stop_server", stop_server),
+                  mock.patch.object(wm, "is_ready", lambda: True),
+                  mock.patch.object(wm, "build_info", lambda build: {}),
+                  mock.patch.object(wm, "transcribe_wav", transcribe_wav)):
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(self._release_all)
+
+    def _release_all(self):
+        for gate, _inside in self.gates.values():
+            gate.set()
+        for t in [t for t in threading.enumerate() if t.name == "bfacw-transcribe"]:
+            t.join(5)
+        speech._jobs.clear()
+
+    def call(self, key, owner, stage="transcribe"):
+        """transcribe_strip(*key*) for *owner*, its worker held in *stage*; the checker."""
+        if stage and key not in self.gates:
+            self.block[key] = stage
+            self.gates[key] = (threading.Event(), threading.Event())
+        check = speech.transcribe_strip(key, language="en", owner=owner)
+        self.assertTrue(callable(check))
+        if stage:
+            self.assertTrue(self.gates[key][1].wait(5), "the worker reached " + stage)
+        return check
+
+    def finish(self, *keys):
+        for key in keys:
+            self.gates[key][0].set()
+        for t in [t for t in threading.enumerate() if t.name == "bfacw-transcribe"]:
+            t.join(5)
+
+    def wavs(self):
+        return list((Path(tempfile.gettempdir()) / "bfa_coworker_speech").glob("*.16k.wav"))
+
+    STOPPED = {"status": "cancelled", "message": "Transcription stopped."}
+
+    def answer(self, check):
+        out = check()
+        return out if out is None else {k: out[k] for k in ("status", "message") if k in out}
+
+    def test_stop_in_a_chat_ends_its_transcription_and_the_idle_server(self):
+        check = self.call("a", speech.chat_owner("A"))
+        self.assertEqual(speech.stop_chat_jobs("A"), 1)
+        self.assertEqual(self.answer(check), self.STOPPED, "the tool answers at once, while whisper still runs")
+        self.assertEqual(speech._jobs, {}, "no job left: the next call starts afresh")
+        self.assertEqual(self.calls["stop"], 1, "nobody else needs whisper-server: it stops")
+        self.assertEqual(self.calls["stop_locks"], [(True, True)], "_jobs_lock let go, _start_lock held")
+        self.finish("a")
+        self.assertEqual(self.written, [], "no transcript cached")
+        self.assertEqual(self.wavs(), [], "no WAV left")
+        self.assertEqual(speech.stop_chat_jobs("A"), 0, "nothing runs any more")
+
+    def test_another_chats_transcription_goes_on_and_keeps_the_server(self):
+        mine = self.call("a", speech.chat_owner("A"))
+        other = self.call("b", speech.chat_owner("B"))
+        self.assertEqual(speech.stop_chat_jobs("A"), 1)
+        self.assertEqual(self.answer(mine), self.STOPPED)
+        self.assertIsNone(other(), "chat B's still runs")
+        self.assertEqual(self.calls["stop"], 0, "chat B's job needs whisper-server: it keeps running")
+        self.finish("a", "b")
+        self.assertEqual(self.answer(mine), self.STOPPED, "A's result, when it came anyway, is thrown away")
+        self.assertEqual(other()["status"], "ok")
+        self.assertEqual(self.written, ["b"], "only B's transcript is cached")
+        self.assertEqual(self.wavs(), [])
+
+    def test_two_chats_on_the_same_file_share_the_job_and_one_stop_leaves_it(self):
+        mine = self.call("same", speech.chat_owner("A"))
+        other = self.call("same", speech.chat_owner("B"))
+        self.assertEqual(len(speech._jobs), 1, "one job for both")
+        job = next(iter(speech._jobs.values()))
+        self.assertEqual([w.owner for w in job.waiters], ["chat:A", "chat:B"])
+        self.assertEqual(speech.stop_chat_jobs("A"), 1)
+        self.assertEqual(self.answer(mine), self.STOPPED)
+        self.assertFalse(job.stopped.is_set(), "B still waits for it")
+        self.assertEqual(self.calls["stop"], 0)
+        self.finish("same")
+        self.assertEqual(other()["status"], "ok")
+        self.assertEqual(self.written, ["same"], "B wanted it: cached")
+
+    def test_the_last_caller_of_a_shared_job_ends_it(self):
+        a = self.call("same", speech.chat_owner("A"))
+        b = self.call("same", speech.chat_owner("B"))
+        speech.stop_chat_jobs("A")
+        self.assertEqual(speech.stop_chat_jobs("B"), 1)
+        self.assertEqual((self.answer(a), self.answer(b)), (self.STOPPED, self.STOPPED))
+        self.assertEqual((speech._jobs, self.calls["stop"]), ({}, 1))
+        self.finish("same")
+        self.assertEqual(self.written, [])
+
+    def test_auto_captions_is_left_alone_and_leaves_the_chats_alone(self):
+        chat = self.call("a", speech.chat_owner("A"))
+        caps = self.call("c", speech.CAPTIONS)
+        self.assertEqual(speech.stop_chat_jobs("A"), 1)
+        self.assertEqual(speech.stop_chat_jobs(None), 0, "Stop All Chats: Auto Captions' isn't a chat's")
+        self.assertIsNone(caps())
+        self.assertEqual(self.calls["stop"], 0, "Auto Captions still needs whisper-server")
+        other = self.call("b", speech.chat_owner("B"))
+        self.assertEqual(speech.stop_jobs(speech.CAPTIONS), 1, "Auto Captions' Esc")
+        self.assertEqual(self.answer(caps), self.STOPPED)
+        self.assertIsNone(other(), "a chat's transcription goes on after Auto Captions' Esc")
+        self.assertEqual(self.calls["stop"], 0)
+        self.finish("a", "b", "c")
+        self.assertEqual((self.answer(chat), other()["status"], self.written), (self.STOPPED, "ok", ["b"]))
+
+    def test_stop_all_chats_ends_every_chats_transcription(self):
+        checks = [self.call(k, speech.chat_owner(t)) for k, t in (("a", "A"), ("b", "B"), ("d", ""))]
+        self.assertEqual(speech.stop_chat_jobs(None), 3)
+        self.assertEqual([self.answer(c) for c in checks], [self.STOPPED] * 3)
+        self.assertEqual((speech._jobs, self.calls["stop"]), ({}, 1), "the server once, after the last")
+        self.finish("a", "b", "d")
+        self.assertEqual((self.written, self.wavs()), ([], []))
+
+    def test_stop_while_reading_the_sound_never_starts_the_server(self):
+        check = self.call("a", speech.chat_owner("A"), stage="wav")
+        speech.stop_chat_jobs("A")
+        self.finish("a")
+        self.assertEqual(self.answer(check), self.STOPPED)
+        self.assertEqual((self.calls["start"], self.written, self.wavs()), (0, [], []))
+
+    def test_after_a_stop_the_next_call_works(self):
+        self.call("a", speech.chat_owner("A"))
+        speech.stop_chat_jobs("A")
+        self.finish("a")
+        self.block.pop("a")
+        again = speech.transcribe_strip("a", language="en", owner=speech.chat_owner("A"))
+        for t in [t for t in threading.enumerate() if t.name == "bfacw-transcribe"]:
+            t.join(5)
+        out = again()
+        self.assertEqual((out["status"], out["word_count"], self.written), ("ok", 3, ["a"]))
+
+    def test_the_bridge_says_which_chat_calls(self):
+        api = _load("coworker_api")
+        with mock.patch.object(speech, "transcribe_strip", lambda *a, **k: k.get("owner")):
+            with api.for_thread("thread-7"):
+                self.assertEqual(api.transcribe_strip("a"), "chat:thread-7")
+            self.assertEqual(api.transcribe_strip("a"), "chat:", "the default chat")
+
+    def test_the_chats_stop_buttons_stop_their_transcriptions(self):
+        """Stop (its chat's tag), Stop All Chats (every chat's) and a helper chat's stop (its tag)."""
+        ui = (_ADDON / "ui_chat.py").read_text(encoding="utf-8")
+        stop = ui[ui.index("class BFACW_OT_chat_stop(Operator)"):ui.index("class BFACW_OT_agent_approve(")]
+        self.assertIn("speech.stop_chat_jobs(tag)", stop)
+        stop_all = ui[ui.index("def stop_all_chats("):ui.index("class BFACW_OT_chat_stop_all(")]
+        self.assertIn("speech.stop_chat_jobs(None)", stop_all)
+        hc = (_ADDON / "helper_chats.py").read_text(encoding="utf-8")
+        body = hc[hc.index("def _stop_thread("):hc.index("def stop_helpers(")]
+        self.assertIn("speech.stop_chat_jobs(tag)", body)
+
+    def test_was_stopped(self):
+        self.assertTrue(speech.was_stopped(self.STOPPED))
+        self.assertTrue(speech.was_stopped({"status": "error", "message": wm.STOPPED}), "Stop Speech Server (#512)")
+        self.assertFalse(speech.was_stopped({"status": "error", "message": "Transcribing 'a' failed: x"}))
+        self.assertFalse(speech.was_stopped(None))
 
 
 if __name__ == "__main__":

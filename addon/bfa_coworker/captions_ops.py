@@ -309,7 +309,9 @@ def transcribe_then_caption(scene: Any, sources: list, params: dict[str, Any], u
     todo = untranscribed(sources, params.get("language"))
     checkers, errors = [], []
     for s in todo:
-        res = sp.transcribe_strip(s.name, language=params.get("language") or "")
+        # Auto Captions' own: Esc stops these, Stop in a chat doesn't (#522).
+        res = sp.transcribe_strip(s.name, language=params.get("language") or "",
+                                  owner=getattr(sp, "CAPTIONS", "captions"))
         if callable(res):
             checkers.append(res)
             _show_job(sp, res)
@@ -375,6 +377,12 @@ def _poll_pending() -> float | None:
         if any(r is None for r in results):
             continue
         _PENDING[:] = [j for j in _PENDING if j is not job]
+        if any(_was_stopped(r) for r in results):
+            # Stop Speech Server (Preferences) while it waited: stopped, not an error, and no
+            # captions from what was there before (#522).
+            job.update(state="stopped", message=STOPPED)
+            print("[Coworker] " + job["message"])
+            continue
         try:
             job.update(state="done", message=_caption_job(job, results))
         except CaptionsError as ex:
@@ -383,6 +391,15 @@ def _poll_pending() -> float | None:
             job.update(state="error", message="Auto Captions failed: {!s}".format(ex))
         print("[Coworker] " + job["message"])
     return _POLL_S if _PENDING else None
+
+
+def _was_stopped(result: Any) -> bool:
+    """A transcription's answer says it was stopped (``speech.was_stopped``)."""
+    test = getattr(_speech(), "was_stopped", None)
+    try:
+        return bool(test(result)) if callable(test) else False
+    except Exception:  # pylint: disable=broad-exception-caught
+        return False
 
 
 def _unregister_timer() -> None:
@@ -395,8 +412,9 @@ def _unregister_timer() -> None:
 
 def stop_pending() -> int:
     """Stop every Auto Captions still waiting for its transcription (Esc, a file load,
-    unregister): no captions, no timer, the transcriptions stopped (they save nothing; this
-    window's whisper-server stops) and their job rows ended.  How many were waiting."""
+    unregister): no captions, no timer, its transcriptions stopped (they save nothing; this
+    window's whisper-server stops unless another job still needs it) and their job rows ended.
+    A transcription a chat's turn started carries on (#522).  How many were waiting."""
     jobs = list(_PENDING)
     _PENDING.clear()
     _unregister_timer()
@@ -407,14 +425,11 @@ def stop_pending() -> int:
     sp = _speech()
     try:
         if sp is not None and hasattr(sp, "stop_jobs"):
-            sp.stop_jobs()
+            sp.stop_jobs(getattr(sp, "CAPTIONS", "captions"))
     except Exception:  # pylint: disable=broad-exception-caught
         pass
-    try:
-        from . import long_jobs
-        long_jobs.cancelled(getattr(sp, "JOB_KIND", "TRANSCRIBE"))
-    except Exception:  # pylint: disable=broad-exception-caught
-        pass
+    # Their checkers answer "cancelled" now, so the job rows end on this tick: not by kind
+    # (long_jobs.cancelled), which ended a chat's transcription row too (#522).
     _tick_jobs()
     print("[Coworker] " + STOPPED)
     return len(jobs)

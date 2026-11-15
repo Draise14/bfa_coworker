@@ -366,10 +366,11 @@ def job_status(job_id: str) -> dict[str, Any]:
 def transcribe_strip(strip: str, language: str = "", limit: int = 150, offset: int = 0,
                      prompt: str = "", model: str = "") -> Any:
     """The words of a sound / movie strip with times (cached per media file): a result
-    dict, or a checker while whisper runs (a long one becomes a job, see speech.py)."""
+    dict, or a checker while whisper runs (a long one becomes a job, see speech.py).
+    The calling chat owns it: Stop in that chat ends it (#522)."""
     from . import speech
     return speech.transcribe_strip(strip, language=language, limit=limit, offset=offset,
-                                   prompt=prompt, model=model)
+                                   prompt=prompt, model=model, owner=speech.chat_owner(_thread[0]))
 
 
 _jobs_drawn = [0.0]

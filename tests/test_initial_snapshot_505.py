@@ -88,9 +88,11 @@ class FirstStepTakesTheBaseline(_TurnLoopTestBase):
         self.assertTrue(self.ac._code_is_readonly(_MOVE), "the case of #505: the heuristic calls it read-only")
         log = self._turn([_tool_call_msg("call_1", _MOVE), _tool_call_msg("call_2", _MAKE),
                           {"content": "moved and added"}])
-        pushes = [code for code, _data in self._internal() if "bfa_coworker_pre_script" in code]
-        self.assertEqual(len(pushes), 1)
-        self.assertIn("'snapshot'", pushes[0], "the first push asks for the baseline snapshot")
+        internal = [code for code, _data in self._internal()]
+        self.assertTrue(internal)
+        self.assertIn("'snapshot': {", internal[0], "the turn's first internal call takes the baseline snapshot")
+        # #501: a snapshot only -- the loop pushes no undo step of its own.
+        self.assertEqual([c for c in internal if "undo_push(" in c], [])
         self.assertIn("initial entity snapshot taken", log)
         self.assertNotIn("FAILED", log)
         self.assertNotIn("no entity snapshot", log)

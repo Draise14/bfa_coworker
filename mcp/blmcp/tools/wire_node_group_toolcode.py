@@ -111,9 +111,10 @@ def main(params: Params) -> Result:
                 "Could not resolve a target node tree for '{:s}'".format(tree_type),
             )
 
-        # Undo point *before* any mutation.
+        # Undo point *before* any mutation (from a Coworker chat turn, the turn's own step, #501).
         try:
-            bpy.ops.ed.undo_push(message="wire_node_group:\n{:s}".format(params.asset_name))
+            if not _in_coworker_turn():
+                bpy.ops.ed.undo_push(message="wire_node_group:\n{:s}".format(params.asset_name))
         except Exception:
             pass  # No window/area -- still proceed.
 
@@ -160,6 +161,15 @@ def main(params: Params) -> Result:
 
     except Exception as ex:
         return _error(params, "Failed to wire node group: {:s}".format(str(ex)))
+
+
+def _in_coworker_turn() -> bool:
+    """A Coworker chat turn runs this call (#501): the turn's own undo step covers it."""
+    import sys
+    for name, module in list(sys.modules.items()):
+        if name.endswith("bfa_coworker.coworker_api"):
+            return bool(getattr(module, "turn_owns_undo", lambda: False)())
+    return False
 
 
 def _error(params: Params, message: str) -> Result:

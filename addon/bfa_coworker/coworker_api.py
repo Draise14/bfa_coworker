@@ -200,20 +200,58 @@ def cancel_questions(thread: str | None = None) -> None:
 
 
 # -- Turn checkpoints and Revert (Engine 6b) ------------------------------------------
-# Each turn gets an undo step before and after it, so the agent's whole turn is one
-# step of Edit > Undo History, and Revert (the chat's button) undoes it in one go --
-# but only while you haven't changed the scene since (the depsgraph counter).
+# A turn that changed the scene is one step of Edit > Undo History, pushed when it ends
+# (#501: one Ctrl+Z per turn; a turn that changed nothing pushes none), and Revert (the
+# chat's button) undoes it in one go -- but only while you haven't changed the scene
+# since (the depsgraph counter).  Nothing pushes in between: a tool called from a turn
+# leaves its own step out (turn_owns_undo), the loop's save points are snapshots only.
 # Threads 3 (#359): one checkpoint per thread (by its tag; "" = the default thread's,
-# ``_turn``), since chats' turns run side by side.
-_turn = {"before": False, "after": False, "edits": 0, "name": "", "n": 0, "mark": 0}
+# ``_turn``), since chats' turns run side by side; then each finished write call gets
+# a step of its own (note_call), and the turn's end pushes only what no step holds yet.
+# "before": the turn is open; "writes": its changes no step holds yet; "steps": the
+# undo steps it pushed; "pushes": Coworker's push count when it began (Revert both).
+_turn = {"before": False, "after": False, "edits": 0, "name": "", "n": 0, "mark": 0,
+         "writes": 0, "steps": 0, "pushes": 0}
 _turns: dict[str, dict[str, Any]] = {"": _turn}
-_names = itertools.count(1)       # "Before ... (n)": unique across threads
+_names = itertools.count(1)       # a number per turn, unique across threads
 _edits = [0]
+_pushes = [0]                     # Coworker's own undo pushes so far (#501)
+_last_push = [""]                 # ... and the name of the newest one
+_ended: set[str] = set()          # chats whose loop turn ended (worker thread, #501)
 
 
 def _turn_of(thread: str = "") -> dict[str, Any]:
     return _turns.setdefault(str(thread or ""), {"before": False, "after": False, "edits": 0, "name": "",
-                                                 "n": 0, "mark": 0})
+                                                 "n": 0, "mark": 0, "writes": 0, "steps": 0, "pushes": 0})
+
+
+def turn_open(thread: str = "") -> bool:
+    """*thread*'s turn has started and not ended yet."""
+    turn = _turns.get(str(thread or ""))
+    return bool(turn and turn["before"])
+
+
+def turn_owns_undo() -> bool:
+    """The bridge runs this call for a chat whose turn is open (#501): the turn's own undo
+    step covers what the call changes, so a tool pushes no step of its own.  Outside a
+    turn (a plain MCP client, a wand, an operator) False: the tool keeps its step."""
+    return turn_open(_thread[0])
+
+
+def loop_turn_ended(thread: str = "") -> None:
+    """The loop's turn of *thread* ended (its worker thread): the chat timer closes it at
+    its next tick, also a turn shorter than one tick, which it never saw run (#501)."""
+    with _lock:
+        _ended.add(str(thread or ""))
+
+
+def take_ended(thread: str = "") -> bool:
+    """Main thread: did *thread*'s loop turn end since the last ask?"""
+    with _lock:
+        if str(thread or "") in _ended:
+            _ended.discard(str(thread or ""))
+            return True
+    return False
 
 
 def _any_turn_open() -> bool:
@@ -262,31 +300,55 @@ def _undo(push_message: str = "", to_item: int = -1) -> bool:
         return False
 
 
+def _push(name: str) -> bool:
+    """One undo step of Coworker's own, counted (#501: Revert goes back by the count)."""
+    if not _undo(name):
+        return False
+    _pushes[0] += 1
+    _last_push[0] = name
+    return True
+
+
 def _journal() -> Any:
     from . import side_by_side
     return side_by_side.JOURNAL
 
 
+def note_call(thread: str, tool: str, code: str = "", step: str = "") -> None:
+    """Main thread (the bridge): chat *thread*'s call *tool* ran, one that isn't only a
+    look (#501).  With *step* it gets that undo step of its own now (chats side by side,
+    #359: it holds every change so far); else what it may have changed waits for its
+    turn's step."""
+    from . import turn_undo
+    turn = _turns.get(str(thread or ""))
+    is_open = bool(turn and turn["before"])
+    if step:
+        if _push(step) and is_open:
+            turn.update(steps=turn["steps"] + 1, writes=0, name=step)
+    elif is_open and turn_undo.call_changes(tool, code):
+        turn["writes"] += 1
+
+
 def turn_started(label: str, thread: str = "") -> None:
-    """Main thread, before the turn's first change (*thread*: whose turn, its tag)."""
+    """Main thread, before the turn's first change (*thread*: whose turn, its tag).  No
+    undo step here (#501): the turn's step comes at its end, if it changed something."""
     turn = _turn_of(thread)
     if not turn["before"]:
-        # A name of its own, so Revert finds this step again (#242).
         turn["n"] = next(_names)
-        name = "Before {:s} ({:d})".format(label, turn["n"])
-        turn.update(before=_undo(name), after=False, name=name)
-        # #359: the other chats see this step; this turn sees theirs from here on.
-        _journal().note(thread)
-        turn["mark"] = _journal().mark()
+        # #359: this turn sees the other chats' steps from here on.
+        turn.update(before=True, after=False, name="", writes=0, steps=0, pushes=_pushes[0],
+                    mark=_journal().mark())
 
 
 def turn_finished(label: str, thread: str = "") -> None:
-    """Main thread, once the turn is over."""
+    """Main thread, once the turn is over: its one undo step, *label*, when it changed
+    something no step holds yet (#501); a turn that changed nothing pushes none."""
     turn = _turn_of(thread)
-    if turn["before"] and not turn["after"]:
-        done = _undo(label)
-        turn.update(before=False, after=done, edits=_edits[0])
-        _journal().note(thread)
+    if turn["before"]:
+        if turn["writes"] and _push(label):
+            turn.update(steps=turn["steps"] + 1, name=label)
+            _journal().note(thread)
+        turn.update(before=False, after=turn["steps"] > 0, edits=_edits[0], writes=0)
 
 
 def can_revert(thread: str = "") -> bool:
@@ -320,8 +382,10 @@ def revert_turn(thread: str = "", both: bool = False, title: Any = None) -> str:
         return choice.message
     if choice.kind == "choose" and not both:
         return choice.message + " Choose Revert Both Turns to do that."
-    # The tools' own operators push undo steps of their own during the turn, so one
-    # undo only took back the last of them (#242): go back to the turn's "Before" step.
+    # #501: the turn's steps are its end step (side by side, a step per write call), so go
+    # back by them; with *both* by every Coworker step since the turn began (#359).
+    from . import turn_undo
+    count = _turn["steps"] if choice.kind == "direct" else _pushes[0] - int(_turn.get("pushes", 0))
     try:
         import bpy  # pylint: disable=import-error
         stack = getattr(bpy.context.window_manager, "undo_stack", None)
@@ -329,16 +393,20 @@ def revert_turn(thread: str = "", both: bool = False, title: Any = None) -> str:
         stack = None
     if stack is not None:
         names = [step.name for step in stack.steps]
-        if _turn["name"] not in names:
-            return ("This turn made more steps than the undo history keeps (Preferences > System > "
-                    "Undo Steps), so use Edit > Undo History.")
-        if not _undo(to_item=len(names) - 1 - names[::-1].index(_turn["name"])):
+        active = next((getattr(stack, a) for a in ("active_index", "active_step_index") if hasattr(stack, a)), None)
+        target, why = turn_undo.revert_target(count, names, active if isinstance(active, int) else None,
+                                              _last_push[0])
+        if why:
+            return why
+        if not _undo(to_item=target):
             return "Blender couldn't undo here."
     elif choice.kind == "choose":
-        # One plain undo would take back the newest step, another chat's: never by position.
+        # Plain undos would take back the newest steps, another chat's: never by position.
         return "This Blender can't find the turn's first step, so use Edit > Undo History."
-    elif not _undo():
-        return "Blender couldn't undo here."
+    else:
+        for _step in range(count):
+            if not _undo():
+                return "Blender couldn't undo here."
     _turn["after"] = False
     reverted_with[:] = list(choice.others) if choice.kind == "choose" else []
     for other in reverted_with:     # their last turns' steps are gone from the stack now
@@ -535,5 +603,6 @@ def reframe_vertical(strips: list[str] | None = None, mode: str = "CROP", in_cop
     if scene is None:
         scene = window.scene if window is not None else bpy.context.scene
     done = reframe.make_vertical(scene, mode, in_copy, resolution, reset, names=strips or None, window=window)
-    _undo(push_message="Make Vertical")
+    if not turn_owns_undo():        # from a chat turn its own step covers it (#501)
+        _undo(push_message="Make Vertical")
     return done

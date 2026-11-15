@@ -56,6 +56,7 @@ from . import long_jobs
 from . import loop_guard
 from . import threads
 from . import side_by_side as _side_by_side
+from . import turn_undo
 from . import chat_attachments
 from . import tool_images
 from . import process_guard as _process_guard
@@ -5685,17 +5686,6 @@ def _build_cleanup_code(diff: _EntityDiff) -> tuple[str, dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Undo helper -- generates code that works in any workspace
 
-def _loop_step_name(name: str) -> str:
-    """The loop's own undo push *name* ("bfa_coworker_pre_script" / "bfa_coworker_step"),
-    named by its chat for a tab other than All editors (#359): "Coworker (3D): before a
-    step", so Edit > Undo History shows whose step it is when chats work side by side."""
-    thread = threads.current()
-    if thread is None or thread.is_default:
-        return name
-    words = {"bfa_coworker_pre_script": "before a step", "bfa_coworker_step": "a step"}.get(name, name)
-    return _side_by_side.undo_step_name(threads.label(thread), words)
-
-
 def _undo_code(action: str, message: str = "", extra_result: str = "") -> str:
     """Generate Blender Python code for undo/push that works in any workspace.
 
@@ -5703,13 +5693,17 @@ def _undo_code(action: str, message: str = "", extra_result: str = "") -> str:
     (e.g. Scripting workspace).  Without this fallback, the ``for...else``
     loop silently skips and the undo never fires, leaving duplicate objects.
 
-    *action* -- ``"undo"`` or ``"push"``.
+    *action* -- ``"undo"``, ``"push"`` or ``"reload"``: load the newest undo step
+        again (undo, then redo; #501), which drops what changed since it and adds no
+        step; ``result['reloaded']`` says whether both ran.
     *message* -- undo step name (only used when *action* is ``"push"``).
     *extra_result* -- optional extra JSON keys to append to the result dict
         (e.g. ``'\\n    "snapshot": {...},\\n'``).
     """
     if action == "undo":
         body = "bpy.ops.ed.undo()"
+    elif action == "reload":
+        body = "result['reloaded'] = bpy.ops.ed.undo() == {'FINISHED'} and bpy.ops.ed.redo() == {'FINISHED'}"
     else:
         # repr(): a per-thread name like "Coworker (3D)'s turn" must not break the code (#357).
         body = "bpy.ops.ed.undo_push(message={!r})".format(message)
@@ -6795,11 +6789,17 @@ def _run_conversation_turn_inner(
     _prev_code: str | None = None
     _prev_code_errored: bool = False
     _prev_code_error: str = ""  # Error text for code-bug detection.
-    _undo_pushed: bool = False  # True once we've pushed the first undo state.
-    # Threads 3 (#359): the step journal's number at our last undo push.  When another
-    # chat stepped on the one undo stack since, a positional ``ed.undo()`` would take back
-    # ITS step, so the failure rollback uses the step's own scoped cleanup instead.
+    _undo_pushed: bool = False  # True once the turn's baseline snapshot was taken (no undo step, #501).
+    # Threads 3 (#359): the step journal's number at our last baseline.  When another
+    # chat stepped on the one undo stack since, loading the newest step again would not
+    # be ours to load, so the failure rollback uses the step's own scoped cleanup instead.
     _undo_mark: int = 0
+    # #501: the calls of this turn that may have changed the scene so far.  A failed
+    # script that was the first of them can be taken back by loading the newest undo
+    # step again (it holds the scene from before the turn); a later one only by cleanup.
+    _turn_writes: int = 0
+    _writes_before_code: int = 0    # ... just before the last execute_blender_code call
+    _writes_after_code: int = 0     # ... and just after it
     _my_tag = threads.tag(thread)
 
     # -- Entity tracking (per-turn) ------------------------------------
@@ -8122,7 +8122,12 @@ def _run_conversation_turn_inner(
                         #   5. Re-push the baseline WITH a snapshot so the
                         #      next step diffs against the post-recovery
                         #      scene; the undo guard then resets (D8).
+                        #   #501: there is no save point on the undo list any
+                        #   more (one step per turn), so step 2 is "load the
+                        #   newest undo step again" and only while it still holds
+                        #   the scene from just before the failed script.
                         _failed_diff = _EntityDiff()
+                        _failed_captured = False
                         _fail_raw = _call_internal(_scene_snapshot_code())
                         _undo_safe_here = _undo_safe
                         _others = _side_by_side.JOURNAL.others_since(_my_tag, _undo_mark)
@@ -8137,6 +8142,7 @@ def _run_conversation_turn_inner(
                                 if _fail_snap and _turn_snapshot is not None:
                                     _failed_snap = _EntitySnapshot.from_dict(_fail_snap)
                                     _failed_diff = _diff_snapshots(_turn_snapshot, _failed_snap)
+                                    _failed_captured = True
                                     _foreign_fail = _detect_foreign_edit(
                                         _turn_snapshot, _failed_snap, _prev_code or "")
                                     if _foreign_fail:
@@ -8152,23 +8158,39 @@ def _run_conversation_turn_inner(
                                             kind="scene_change"))
                         except (json.JSONDecodeError, TypeError):
                             pass
-                        if _undo_safe_here and _undo_pushed:
-                            # Must use context override -- bpy.ops.ed.undo() needs a window
-                            # context which isn't available in the bridge server's exec() namespace.
-                            _undo_result = _call_internal(_undo_code("undo"))
-                            if '"status": "error"' in _undo_result:
-                                print("[Coworker] run_conversation_turn: undo FAILED -- falling back to entity cleanup")
+                        _reloaded = False
+                        _others_working = [c for c in _side_by_side.working_chats() if c != _my_tag]
+                        _first_change = _writes_before_code == 0 and _turn_writes == _writes_after_code
+                        if _undo_pushed and turn_undo.reload_allowed(_first_change, _undo_safe_here,
+                                                                    _others, _others_working):
+                            # The failed script was the turn's first change: Blender's newest
+                            # undo step is still the scene from before it.  Load it again (undo,
+                            # then redo, in a window's context): no step is added (#501).
+                            _undo_result = _call_internal(_undo_code("reload"))
+                            try:
+                                _reloaded = bool(json.loads(_undo_result).get("result", {}).get("reloaded"))
+                            except (json.JSONDecodeError, TypeError, AttributeError):
+                                _reloaded = False
+                            if _reloaded:
+                                _turn_writes = _writes_after_code = 0       # back to the scene before the turn
+                            else:
+                                print("[Coworker] run_conversation_turn: reload FAILED -- falling back to entity cleanup")
                         elif not _undo_safe_here:
                             print("[Coworker] run_conversation_turn: global undo SKIPPED -- "
                                   "user edited the scene mid-turn; scoped cleanup only (D8)")
+                        else:
+                            print("[Coworker] run_conversation_turn: reload SKIPPED -- the turn changed the "
+                                  "scene before the failed step{:s}; scoped cleanup only (#501)".format(
+                                      " (other chats working: {:s})".format(", ".join(_others_working))
+                                      if _others_working else ""))
                         # Idempotent cleanup of the failed step's OWN datablocks
-                        # (after the undo: anything it already reverted is simply
+                        # (after the reload: anything it already reverted is simply
                         # not found).  Whole-turn diff only as a legacy fallback
                         # when the failed diff could not be captured AND the
-                        # global undo did not run.
+                        # reload did not run.
                         if not _failed_diff.is_empty():
                             _cleanup_code, _cleanup_data = _build_cleanup_code(_failed_diff)
-                        elif not (_undo_safe_here and _undo_pushed):
+                        elif not _reloaded and not _failed_captured:
                             _cleanup_code, _cleanup_data = _build_cleanup_code(_turn_entities)
                         else:
                             _cleanup_code, _cleanup_data = "", {}
@@ -8183,12 +8205,10 @@ def _run_conversation_turn_inner(
                                 getattr(_turn_snapshot, "selected_object_names", set()))
                             if _restore_data:
                                 _call_internal(_restore_code, _restore_data)
-                        # Push a fresh undo state so the next iteration can undo this one,
-                        # WITH a snapshot: it is the new baseline (fingerprints and
-                        # entity diffing resume from the post-recovery scene).
-                        _repush_extra = _SNAPSHOT_EXTRA if not _code_is_readonly(_prev_code or "") else ""
-                        _repush_raw = _call_internal(
-                            _undo_code("push", _loop_step_name("bfa_coworker_pre_script"), extra_result=_repush_extra))
+                        # A fresh snapshot (no undo step, #501): it is the new baseline
+                        # (fingerprints and entity diffing resume from the post-recovery scene).
+                        _repush_raw = (_call_internal(_scene_snapshot_code())
+                                       if not _code_is_readonly(_prev_code or "") else "")
                         _undo_mark = _side_by_side.JOURNAL.mark()
                         try:
                             _repush_data = json.loads(_repush_raw)
@@ -8202,14 +8222,12 @@ def _run_conversation_turn_inner(
                         # baked in, so the global-undo guard resets (D8).
                         _undo_safe = True
 
-                # -- Push initial undo state + initial snapshot (merged) -
-                # Merging saves 1 round-trip at the start of each turn.
-                # Always with the snapshot, also for code that looks read-only:
-                # it is the turn's baseline -- later steps diff against it to
-                # lock what they make (#505).
+                # -- The turn's baseline snapshot (no undo step, #501) ---
+                # Always taken, also for code that looks read-only: it is the
+                # turn's baseline -- later steps diff against it to lock what
+                # they make (#505).
                 if tool_name == "execute_blender_code" and not _undo_pushed:
-                    merged_init_raw = _call_internal(
-                        _undo_code("push", _loop_step_name("bfa_coworker_pre_script"), extra_result=_SNAPSHOT_EXTRA))
+                    merged_init_raw = _call_internal(_scene_snapshot_code())
                     _undo_pushed = True
                     _undo_mark = _side_by_side.JOURNAL.mark()
                     _turn_snapshot, _snap_reason = _initial_snapshot(merged_init_raw)
@@ -8269,6 +8287,13 @@ def _run_conversation_turn_inner(
                             tool_name, tool_id, result_text, _tool_pics, _pic_file, _sees_images,
                             _agent_state.tool_images, _batch_pictures)
                 _agent_state.bump_turn_cost("tools")
+                from .engine import PLAN_SAFE_TOOLS as _plan_safe
+                if tool_name == "execute_blender_code":
+                    _writes_before_code = _turn_writes
+                if turn_undo.call_changes(tool_name, str(args.get("code", "") or ""), _plan_safe):
+                    _turn_writes += 1           # #501: a change of this turn so far
+                if tool_name == "execute_blender_code":
+                    _writes_after_code = _turn_writes
 
                 # -- Track code execution for smart undo ----------------
                 if tool_name == "execute_blender_code":
@@ -8276,14 +8301,12 @@ def _run_conversation_turn_inner(
                     _prev_code_errored = '"status": "error"' in result_text
                     _prev_code_error = result_text if _prev_code_errored else ""
 
-                    # -- Push bookmark + entity snapshot (merged) -------
-                    # Merging these into a single call (Coworker's own route,
-                    # #414) saves 2 round-trips per iteration vs separate calls.
-                    # Skip entity snapshot for read-only code (no scene mutations).
+                    # -- The step's entity snapshot (no undo step, #501) -
+                    # Coworker's own route (#414), one round-trip.  Skipped
+                    # for read-only code (no scene mutations).
                     if not _prev_code_errored:
-                        _step_extra = _SNAPSHOT_EXTRA if not _code_is_readonly(_prev_code or "") else ""
-                        merged_raw = _call_internal(
-                            _undo_code("push", _loop_step_name("bfa_coworker_step"), extra_result=_step_extra))
+                        merged_raw = (_call_internal(_scene_snapshot_code())
+                                      if not _code_is_readonly(_prev_code or "") else "")
                         _undo_mark = _side_by_side.JOURNAL.mark()
                         # Parse snapshot from merged result.
                         try:

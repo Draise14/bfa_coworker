@@ -964,6 +964,15 @@ def apply_translation(path: str, reply: str) -> tuple[int, int]:
 
 # -- the MCP tool ----------------------------------------------------------------------
 
+def _turn_owns_undo() -> bool:
+    """A Coworker chat turn runs this tool call (#501): the turn's own undo step covers it."""
+    try:
+        from . import coworker_api
+    except ImportError:
+        return False
+    return coworker_api.turn_owns_undo()
+
+
 def tool_add_captions(strips: Any = None, style: str = "CLEAN", language: str | None = None,
                       transcript_path: str | None = None) -> dict[str, Any]:
     """``add_captions`` (MCP): a result dict, ``status`` ``"ok"`` or ``"error"`` + ``message``."""
@@ -990,7 +999,8 @@ def tool_add_captions(strips: Any = None, style: str = "CLEAN", language: str | 
         result["message"] = "{:d} caption lines on channel {:d} ({:s}), frames {:d}-{:d}.".format(
             result["lines_created"], result["channel"], result["style"], result["first_frame"], result["last_frame"])
         try:
-            bpy.ops.ed.undo_push(message="Add Captions")
+            if not _turn_owns_undo():       # from a chat turn its own step covers it (#501)
+                bpy.ops.ed.undo_push(message="Add Captions")
         except RuntimeError:
             pass
         return result

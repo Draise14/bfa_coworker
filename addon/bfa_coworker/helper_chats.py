@@ -132,7 +132,7 @@ def submit(thread: Any, text: str, config: Any = None) -> str:
     state = agent_controller.thread_state(thread)
     state.turn_phase = "reading"
     state.ui_status = "Reading your message..."
-    coworker_api.turn_started(ui._turn_label(None, thread))
+    coworker_api.turn_started(ui._turn_label(None, thread), thread=tag)     # its own turn, not the default chat's
     ui._approvals_new_turn(thread)
     turn_id, _position = engine.submit(prompt, config)     # a slot taken meanwhile: queued (#359)
     _redraw()

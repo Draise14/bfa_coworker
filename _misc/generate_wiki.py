@@ -1023,10 +1023,6 @@ preview. See [[User-Documentation/External-Harness|External Harness]].
 - Save executed code to text datablocks.
 
 ### Chat Display
-- **Sidebar Chat** — **Compact Chat** (default: the new chat, newest at the bottom, input
-  pinned, Enter sends — the same chat as the Coworker editor) or **Classic Panels** (the
-  previous layout).
-- **Max Visible Turns** (0 = all).
 - **Auto-Continue Rounds** — long requests keep going in rounds while the plan makes progress.
 
 ### Debug Mode
@@ -1114,8 +1110,6 @@ The **Coworker** tab is in the sidebar (N) of:
 The tab holds, top to bottom: **Queue**, **Plan**, the **Coworker Chat** (the compact chat), **History**, **Status & Diagnostics**, and the **Coworker** controls (closed at first). Drag the chat's bottom edge to make it taller or shorter.
 
 **Use Editor Context Only:** the editor's own icon on the *Coworker Chat* panel's header. Turn it on and messages sent from that sidebar are about that editor: Coworker works on what it shows (its node tree, strips, image, text...) and leaves the rest of the scene alone.
-
-**Classic panels:** in the 3D View and the Text Editor you can switch back to the previous panel layout with *Preferences → Coworker → Chat Display → Sidebar Chat → Classic Panels*. The other editors always use the compact chat.
 
 """ + _image(
     "sidebar_node_editor",
@@ -2499,8 +2493,6 @@ The add-on uses three ports by default:
 - The tab is in the sidebars of the 3D View, Node editors, Image / UV, Sequencer, Movie
   Clip, Dope Sheet, Graph, NLA, Text and Spreadsheet editors. Press **N** (or *View →
   Sidebar*) to open the sidebar.
-- Prefer the old layout in the 3D View? *Preferences → Coworker → Chat Display → Sidebar
-  Chat → Classic Panels*.
 
 ### ↩️ Revert Turn Is Not Offered
 - Revert only works while you haven't changed the scene since that turn; after your own
@@ -2604,7 +2596,7 @@ Runs inside Blender / Bforartists' Python. The main pieces:
 
 | Area | Modules | What it does |
 |------|---------|--------------|
-| **Chat UI** | `ui_gpu/` (style, layout, input box, chat view, render, surface), `ui_chat.py`, `chat_editor.py` | The GPU-drawn, theme-matched chat: the **Coworker editor** and the compact **sidebar chat** in every editor. `ui_chat.py` also keeps the Classic panels, popovers and operators |
+| **Chat UI** | `ui_gpu/` (style, layout, input box, chat view, render, surface), `ui_chat.py`, `chat_editor.py` | The GPU-drawn, theme-matched chat: the **Coworker editor** and the compact **sidebar chat** in every editor. `ui_chat.py` keeps the sidebar tab's panels, the popovers and the chat's operators |
 | **Engine seam** | `engine.py` | `AgentEvent`, `EventBus` (thread-safe; merges stream chunks), `TurnRecord`, `Engine` protocol, `FakeEngine` for tests. bpy-free |
 | **Local / Remote engine** | `engine_loop.py` (`LoopEngine`), `agent_controller.py`, `llm_transport.py`, `llm_manager.py` | Our own turn loop: prompt, tool calls through MCP, streaming, plan, compaction. `LoopEngine` owns the worker thread, Queue hand-off and Stop |
 | **External Agent engine** | `engine_acp.py` (`AcpEngine`), `acp_client.py`, `acp_presets.py` | Starts the agent app, talks ACP, hands it Coworker's MCP server, relays its permission requests to the approval card, resumes sessions |
@@ -2836,7 +2828,7 @@ addon/bfa_coworker/
         ["`llm_transport.py`", "LLM HTTP transport", "`chat_completion()`, streaming, retry/error handling"],
         ["`session_memory.py`", "Session memory & checkpoints", "`compact_history()`, `CheckpointStore`, `build_memory_block()`"],
         ["`co_work_guard.py`", "Co-work scene lock", "`lock()`, `unlock()`, `is_locked()`, `managed_names()`"],
-        ["`ui_chat.py`", "Chat panel UI", "`BFACW_PT_chat_panel`, `BFACW_PT_chat_session`, `BFACW_OT_chat_send`"],
+        ["`ui_chat.py`", "Chat panels and operators", "`BFACW_PT_chat_compact`, `BFACW_PT_chat_session`, `BFACW_OT_chat_send`"],
         ["`mcp_to_blender_server.py`", "TCP bridge server", "`start()`, `stop()`, `poll()`, `_execute_code()`"],
         ["`gen_controller.py`", "Generative AI", "`GenConfig`, `GenState`, `generate()`"],
         ["`gen_plugins/`", "Plugin system", "`GenPlugin`, `PLUGIN_REGISTRY`, `discover()`"],
@@ -4066,7 +4058,7 @@ A feature allowing users to configure and save multiple remote API provider prof
 ## C
 
 ### Chat Panel
-The in-Blender UI for talking to Coworker: the **Coworker editor**, and the **sidebar chat** in the Coworker tab of every editor. *Classic Panels* (Preferences → Chat Display) brings back the older panel layout.
+The in-Blender UI for talking to Coworker: the **Coworker editor**, and the **sidebar chat** in the Coworker tab of every editor.
 
 ### Checkpoint
 An automatic snapshot of the session (memory block + history + message count), created at each compaction and other key moments. Restoring one is non-destructive — the current state is saved first. See [[User-Documentation/Session-Memory|Session Memory & Checkpoints]].

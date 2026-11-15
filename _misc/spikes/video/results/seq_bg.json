@@ -1,0 +1,1406 @@
+{
+ "blender": "5.2.4 LTS",
+ "mode": "bg",
+ "checks": [
+  {
+   "name": "strips: SequenceEditor collections",
+   "ok": true,
+   "detail": {
+    "strips": true,
+    "strips_all": true,
+    "sequences": false,
+    "sequences_all": false,
+    "meta_stack": true,
+    "active_strip": true,
+    "selected_strips": false,
+    "channels": true,
+    "display_stack": true
+   }
+  },
+  {
+   "name": "strips: StripsTopLevel functions",
+   "ok": true,
+   "detail": [
+    "new_clip",
+    "new_effect",
+    "new_image",
+    "new_mask",
+    "new_meta",
+    "new_movie",
+    "new_scene",
+    "new_sound",
+    "remove"
+   ]
+  },
+  {
+   "name": "strips: new_effect types",
+   "ok": true,
+   "detail": [
+    "CROSS",
+    "ADD",
+    "SUBTRACT",
+    "ALPHA_OVER",
+    "ALPHA_UNDER",
+    "GAMMA_CROSS",
+    "COMPOSITOR",
+    "MULTIPLY",
+    "WIPE",
+    "GLOW",
+    "COLOR",
+    "SPEED",
+    "MULTICAM",
+    "ADJUSTMENT",
+    "GAUSSIAN_BLUR",
+    "TEXT",
+    "COLORMIX"
+   ]
+  },
+  {
+   "name": "strips: created without ops (new_movie/new_sound/new_effect COLOR,TEXT,ADJUSTMENT/new_scene)",
+   "ok": true,
+   "detail": {
+    "movie": {
+     "type": "MOVIE",
+     "rna": "MovieStrip"
+    },
+    "sound": {
+     "type": "SOUND",
+     "rna": "SoundStrip"
+    },
+    "color": {
+     "type": "COLOR",
+     "rna": "ColorStrip"
+    },
+    "text": {
+     "type": "TEXT",
+     "rna": "TextStrip"
+    },
+    "scene": {
+     "type": "SCENE",
+     "rna": "SceneStrip"
+    },
+    "adjust": {
+     "type": "ADJUSTMENT",
+     "rna": "AdjustmentStrip"
+    }
+   }
+  },
+  {
+   "name": "strips: movie frame properties",
+   "ok": true,
+   "detail": {
+    "select_left_handle": false,
+    "select_right_handle": false,
+    "frame_final_duration": 3001,
+    "duration": 3001,
+    "frame_duration": 3001,
+    "content_duration": 3001,
+    "frame_start": 1.0,
+    "content_start": 1.0,
+    "content_end": 3002,
+    "frame_final_start": 1,
+    "left_handle": 1,
+    "frame_final_end": 3002,
+    "right_handle": 3002,
+    "frame_offset_start": 0.0,
+    "left_handle_offset": 0.0,
+    "frame_offset_end": 0.0,
+    "right_handle_offset": 0.0,
+    "channel": 1,
+    "blend_type": "ALPHA_OVER",
+    "blend_alpha": 1.0,
+    "use_reverse_frames": false,
+    "animation_offset_start": 0,
+    "content_trim_start": 0,
+    "animation_offset_end": 0,
+    "content_trim_end": 0
+   }
+  },
+  {
+   "name": "strips: trim left handle via left_handle",
+   "ok": true,
+   "detail": {
+    "before(frame_start,final_start,final_end,offset_start)": [
+     1.0,
+     1,
+     3002,
+     0.0
+    ],
+    "after": [
+     1.0,
+     49,
+     3002,
+     48.0
+    ]
+   }
+  },
+  {
+   "name": "strips: move by frame_start",
+   "ok": true,
+   "detail": [
+    101.0,
+    149
+   ]
+  },
+  {
+   "name": "strips: sound strip",
+   "ok": true,
+   "detail": {
+    "frame_final_duration": 3001,
+    "frame_duration": 3001,
+    "frame_start": 1.0,
+    "frame_final_start": 1,
+    "frame_final_end": 3002,
+    "frame_offset_start": 0.0,
+    "frame_offset_end": 0.0,
+    "sound": "<POINTER>",
+    "volume": 1.0,
+    "pan": 0.0,
+    "sound_offset": 0.0,
+    "show_waveform": true,
+    "pitch_correction": true
+   }
+  },
+  {
+   "name": "strips: sound datablock",
+   "ok": true,
+   "detail": {
+    "name": "speech_44k_stereo.wav",
+    "name_full": "speech_44k_stereo.wav",
+    "id_type": "SOUND",
+    "session_uid": 135,
+    "is_evaluated": false,
+    "original": "<POINTER>",
+    "users": 1,
+    "use_fake_user": false,
+    "use_extra_user": false,
+    "is_embedded_data": false,
+    "is_linked_packed": false,
+    "is_missing": false,
+    "is_runtime_data": false,
+    "is_editable": true,
+    "tag": false,
+    "is_library_indirect": false,
+    "library": "<POINTER>",
+    "library_weak_reference": "<POINTER>",
+    "asset_data": "<POINTER>",
+    "override_library": "<POINTER>",
+    "preview": "<POINTER>",
+    "filepath": "F:\\bfa_coworker_wt\\_scratch\\spike374\\media\\speech_44k_stereo.wav",
+    "packed_file": "<POINTER>",
+    "use_memory_cache": false,
+    "use_mono": false,
+    "samplerate": 44100,
+    "channels": "STEREO"
+   }
+  },
+  {
+   "name": "strips: Strip functions",
+   "ok": true,
+   "detail": [
+    "bl_system_properties_get",
+    "invalidate_cache",
+    "move_to_meta",
+    "parent_meta",
+    "split",
+    "strip_elem_from_frame",
+    "swap"
+   ]
+  },
+  {
+   "name": "strips: movie element (orig size)",
+   "ok": true,
+   "detail": {
+    "filename": "talking_16x9.mp4",
+    "orig_width": 1920,
+    "orig_height": 1080,
+    "orig_fps": 24.0
+   }
+  },
+  {
+   "name": "strips: new_sound(<mp4>) = the movie's audio track",
+   "ok": true,
+   "detail": {
+    "dur": 3001,
+    "movie_dur": 2953,
+    "rate": 48000
+   }
+  },
+  {
+   "name": "compositor: StripModifiers.new types",
+   "ok": true,
+   "detail": [
+    "BRIGHT_CONTRAST",
+    "COLOR_BALANCE",
+    "COMPOSITOR",
+    "CURVES",
+    "HUE_CORRECT",
+    "MASK",
+    "TONEMAP",
+    "WHITE_BALANCE",
+    "SOUND_EQUALIZER",
+    "PITCH",
+    "ECHO"
+   ]
+  },
+  {
+   "name": "compositor: Transform node inputs",
+   "ok": true,
+   "detail": [
+    "Image",
+    "X",
+    "Y",
+    "Angle",
+    "Scale",
+    "Interpolation",
+    "Extension X",
+    "Extension Y"
+   ]
+  },
+  {
+   "name": "compositor: Blur node inputs/props",
+   "ok": true,
+   "detail": {
+    "inputs": [
+     "Image",
+     "Size",
+     "Type",
+     "Extend Bounds",
+     "Separable"
+    ],
+    "props": {}
+   }
+  },
+  {
+   "name": "compositor: modifier rna",
+   "ok": true,
+   "detail": {
+    "rna": "SequencerCompositorModifierData",
+    "props": {
+     "name": "Reframe",
+     "type": "COMPOSITOR",
+     "mute": false,
+     "enable": true,
+     "show_preview": true,
+     "show_expanded": false,
+     "input_mask_type": "STRIP",
+     "mask_time": "RELATIVE",
+     "input_mask_strip": "<POINTER>",
+     "input_mask_id": "<POINTER>",
+     "is_active": true,
+     "node_group": "<POINTER>",
+     "show_group_selector": true,
+     "open_mask_input_panel": false,
+     "properties": "<POINTER>"
+    }
+   }
+  },
+  {
+   "name": "compositor: node_group assigned",
+   "ok": true,
+   "detail": "CW Reframe"
+  },
+  {
+   "name": "compositor: per-modifier inputs = mod.properties.inputs.<identifier>.value",
+   "ok": true,
+   "detail": {
+    "properties": "CompositorNodesModifierInterface",
+    "inputs": "CompositorNodesInterfaceInputs",
+    "zoom id": "Socket_1",
+    "blur id": "Socket_2",
+    "zoom value": 1.0,
+    "path": "sequence_editor.strips_all[\"movie\"].modifiers[\"Reframe\"].properties.inputs.Socket_1.value"
+   }
+  },
+  {
+   "name": "text: all TextStrip properties",
+   "ok": true,
+   "detail": {
+    "name": "caption",
+    "type": "TEXT",
+    "select": true,
+    "select_left_handle": false,
+    "select_right_handle": false,
+    "mute": false,
+    "lock": false,
+    "frame_final_duration": 96,
+    "duration": 96,
+    "frame_duration": 1,
+    "content_duration": 1,
+    "frame_start": 1.0,
+    "content_start": 1.0,
+    "content_end": 2,
+    "frame_final_start": 1,
+    "left_handle": 1,
+    "frame_final_end": 97,
+    "right_handle": 97,
+    "frame_offset_start": 0.0,
+    "left_handle_offset": 0.0,
+    "frame_offset_end": -95.0,
+    "right_handle_offset": -95.0,
+    "channel": 8,
+    "blend_type": "ALPHA_OVER",
+    "blend_alpha": 1.0,
+    "effect_fader": 0.0,
+    "use_default_fade": true,
+    "color_tag": "NONE",
+    "modifiers": "<COLLECTION>",
+    "show_retiming_keys": false,
+    "connections": "<COLLECTION>",
+    "use_deinterlace": false,
+    "alpha_mode": "STRAIGHT",
+    "use_flip_x": false,
+    "use_flip_y": false,
+    "use_float": false,
+    "use_reverse_frames": false,
+    "color_multiply": 1.0,
+    "multiply_alpha": false,
+    "color_saturation": 1.0,
+    "strobe": 0.0,
+    "transform": "<POINTER>",
+    "crop": "<POINTER>",
+    "use_proxy": false,
+    "proxy": "<POINTER>",
+    "input_count": 0,
+    "font": "<POINTER>",
+    "font_size": 60.0,
+    "space_line": 1.0,
+    "abs_space_line": 60.0,
+    "use_absolute_line_spacing": false,
+    "color": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "shadow_color": [
+     0.0,
+     0.0,
+     0.0,
+     0.699999988079071
+    ],
+    "shadow_angle": 1.1344640254974365,
+    "shadow_offset": 0.03999999910593033,
+    "shadow_blur": 0.0,
+    "outline_color": [
+     0.0,
+     0.0,
+     0.0,
+     0.699999988079071
+    ],
+    "outline_width": 0.05000000074505806,
+    "box_color": [
+     0.20000000298023224,
+     0.20000000298023224,
+     0.20000000298023224,
+     0.699999988079071
+    ],
+    "location": [
+     0.5,
+     0.5
+    ],
+    "wrap_width": 1.0,
+    "box_margin": 0.009999999776482582,
+    "box_roundness": 0.0,
+    "alignment_x": "CENTER",
+    "anchor_x": "CENTER",
+    "anchor_y": "CENTER",
+    "text": "Hello captions",
+    "use_shadow": false,
+    "use_outline": false,
+    "use_box": false,
+    "use_bold": false,
+    "use_italic": false,
+    "textbox_state": "<POINTER>"
+   }
+  },
+  {
+   "name": "text: style property names",
+   "ok": true,
+   "detail": {
+    "color_tag": "NONE",
+    "color_multiply": 1.0,
+    "color_saturation": 1.0,
+    "font": "<POINTER>",
+    "font_size": 60.0,
+    "color": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "shadow_color": [
+     0.0,
+     0.0,
+     0.0,
+     0.699999988079071
+    ],
+    "shadow_angle": 1.1344640254974365,
+    "shadow_offset": 0.03999999910593033,
+    "shadow_blur": 0.0,
+    "outline_color": [
+     0.0,
+     0.0,
+     0.0,
+     0.699999988079071
+    ],
+    "outline_width": 0.05000000074505806,
+    "box_color": [
+     0.20000000298023224,
+     0.20000000298023224,
+     0.20000000298023224,
+     0.699999988079071
+    ],
+    "location": [
+     0.5,
+     0.5
+    ],
+    "wrap_width": 1.0,
+    "box_margin": 0.009999999776482582,
+    "box_roundness": 0.0,
+    "alignment_x": "CENTER",
+    "anchor_x": "CENTER",
+    "anchor_y": "CENTER",
+    "use_shadow": false,
+    "use_outline": false,
+    "use_box": false,
+    "use_bold": false,
+    "use_italic": false,
+    "textbox_state": "<POINTER>"
+   }
+  },
+  {
+   "name": "text: enum values",
+   "ok": true,
+   "detail": {
+    "anchor_x": [
+     "LEFT",
+     "CENTER",
+     "RIGHT"
+    ],
+    "anchor_y": [
+     "TOP",
+     "CENTER",
+     "BOTTOM"
+    ],
+    "alignment_x": [
+     "LEFT",
+     "CENTER",
+     "RIGHT"
+    ]
+   }
+  },
+  {
+   "name": "text: keyframe_insert results",
+   "ok": true,
+   "detail": {
+    "location": [
+     true,
+     true
+    ],
+    "font_size": [
+     true,
+     true
+    ],
+    "color": [
+     true,
+     true
+    ],
+    "blend_alpha": [
+     true,
+     true
+    ]
+   }
+  },
+  {
+   "name": "text: fcurve data paths",
+   "ok": true,
+   "detail": [
+    "sequence_editor.strips_all[\"caption\"].blend_alpha[0]",
+    "sequence_editor.strips_all[\"caption\"].color[3]",
+    "sequence_editor.strips_all[\"caption\"].font_size[0]",
+    "sequence_editor.strips_all[\"caption\"].location[0]",
+    "sequence_editor.strips_all[\"caption\"].location[1]"
+   ]
+  },
+  {
+   "name": "text: animated values evaluate at frames 1/7/13",
+   "ok": true,
+   "detail": {
+    "1": {
+     "loc": [
+      0.5,
+      -0.1
+     ],
+     "size": 10.0,
+     "alpha": 0.0,
+     "blend_alpha": 0.0
+    },
+    "7": {
+     "loc": [
+      0.5,
+      0.05
+     ],
+     "size": 50.0,
+     "alpha": 0.5,
+     "blend_alpha": 0.5
+    },
+    "13": {
+     "loc": [
+      0.5,
+      0.2
+     ],
+     "size": 90.0,
+     "alpha": 1.0,
+     "blend_alpha": 1.0
+    }
+   }
+  },
+  {
+   "name": "text: styled",
+   "ok": true,
+   "detail": {
+    "shadow_color": [
+     0.0,
+     0.0,
+     0.0,
+     0.699999988079071
+    ],
+    "shadow_angle": 0.699999988079071,
+    "shadow_offset": 0.05000000074505806,
+    "shadow_blur": 0.20000000298023224,
+    "outline_color": [
+     0.0,
+     0.0,
+     0.0,
+     0.699999988079071
+    ],
+    "outline_width": 0.10000000149011612,
+    "box_color": [
+     0.20000000298023224,
+     0.20000000298023224,
+     0.20000000298023224,
+     0.699999988079071
+    ],
+    "wrap_width": 0.800000011920929,
+    "box_margin": 0.019999999552965164,
+    "box_roundness": 0.5,
+    "alignment_x": "CENTER",
+    "anchor_x": "CENTER",
+    "anchor_y": "BOTTOM",
+    "use_shadow": true,
+    "use_outline": true,
+    "use_box": true,
+    "use_bold": true,
+    "textbox_state": "<POINTER>"
+   }
+  },
+  {
+   "name": "text: font from bpy.data.fonts.load",
+   "ok": true,
+   "detail": "Arial Bold"
+  },
+  {
+   "name": "render: use_sequencer / compositor_device",
+   "ok": true,
+   "detail": {
+    "use_sequencer": true,
+    "compositor_device": "GPU",
+    "compositor_precision": "AUTO"
+   }
+  },
+  {
+   "name": "compositor: interface default_value change reaches the modifier? (expected no)",
+   "ok": true,
+   "detail": {
+    "iface zoom2": {
+     "size": [
+      1080,
+      1920
+     ],
+     "mean": 0.072,
+     "sharp": 0.00198
+    }
+   }
+  },
+  {
+   "name": "compositor: per-modifier input change changes the render",
+   "ok": true,
+   "detail": {
+    "default": {
+     "size": [
+      1080,
+      1920
+     ],
+     "mean": 0.072,
+     "sharp": 0.00198
+    },
+    "zoom2": {
+     "size": [
+      1080,
+      1920
+     ],
+     "mean": 0.1874,
+     "sharp": 0.0026
+    }
+   }
+  },
+  {
+   "name": "compositor: blur input changes the render",
+   "ok": true,
+   "detail": {
+    "zoom2": {
+     "size": [
+      1080,
+      1920
+     ],
+     "mean": 0.1874,
+     "sharp": 0.0026
+    },
+    "blur40": {
+     "size": [
+      1080,
+      1920
+     ],
+     "mean": 0.1988,
+     "sharp": 0.00196
+    }
+   }
+  },
+  {
+   "name": "render: 1080x1920 still render timings (s)",
+   "ok": true,
+   "detail": {
+    "no modifier": 0.21,
+    "no modifier (2nd)": 0.09,
+    "modifier zoom 1 blur 0": 0.597,
+    "modifier zoom 1 blur 0 (2nd)": 0.087,
+    "modifier zoom 2 (per-modifier input)": 0.204,
+    "modifier zoom 2 blur 40": 0.198,
+    "modifier zoom 2 blur 40 on CPU": 0.115,
+    "modifier zoom 2 blur 40 on GPU": 0.111
+   }
+  },
+  {
+   "name": "render: modifier off vs on image",
+   "ok": false,
+   "detail": {
+    "nomod": {
+     "size": [
+      1080,
+      1920
+     ],
+     "mean": 0.072,
+     "sharp": 0.00198
+    },
+    "mod": {
+     "size": [
+      1080,
+      1920
+     ],
+     "mean": 0.072,
+     "sharp": 0.00198
+    }
+   }
+  },
+  {
+   "name": "compositor: keyframe the per-modifier input (lives on the scene's action)",
+   "ok": true,
+   "detail": [
+    "sequence_editor.strips_all[\"movie\"].modifiers[\"Reframe\"].properties.inputs.Socket_1.value"
+   ]
+  },
+  {
+   "name": "compositor: keyframe a node input inside the group",
+   "ok": true,
+   "detail": [
+    "nodes[\"Transform\"].inputs[1].default_value"
+   ]
+  },
+  {
+   "name": "compositor: group users",
+   "ok": true,
+   "detail": {
+    "users": 1
+   }
+  },
+  {
+   "name": "render: render.opengl(sequencer=True) in bg",
+   "ok": false,
+   "detail": {
+    "ret": [
+     "CANCELLED"
+    ],
+    "s": 0.001
+   }
+  },
+  {
+   "name": "srt: sequencer ops containing subtitle/srt/text/import",
+   "ok": true,
+   "detail": [
+    "export_subtitles",
+    "text_cursor_move",
+    "text_cursor_set",
+    "text_delete",
+    "text_deselect_all",
+    "text_edit_copy",
+    "text_edit_cut",
+    "text_edit_mode_toggle",
+    "text_edit_paste",
+    "text_insert",
+    "text_line_break",
+    "text_select_all",
+    "text_strip_style_preset_add"
+   ]
+  },
+  {
+   "name": "srt: all sequencer ops",
+   "ok": true,
+   "detail": [
+    "add_scene_strip_from_scene_asset",
+    "box_blade",
+    "change_effect_type",
+    "change_path",
+    "change_scene",
+    "connect",
+    "copy",
+    "crossfade_sounds",
+    "cursor_set",
+    "deinterlace_selected_movies",
+    "delete",
+    "disconnect",
+    "duplicate",
+    "duplicate_move",
+    "duplicate_move_linked",
+    "effect_strip_add",
+    "enable_proxies",
+    "export_subtitles",
+    "fades_add",
+    "fades_clear",
+    "gap_insert",
+    "gap_remove",
+    "image_strip_add",
+    "images_separate",
+    "lock",
+    "mask_strip_add",
+    "meta_make",
+    "meta_separate",
+    "meta_toggle",
+    "movie_strip_add",
+    "movieclip_strip_add",
+    "mute",
+    "offset_clear",
+    "paste",
+    "preview_duplicate_move",
+    "preview_duplicate_move_linked",
+    "reassign_inputs",
+    "rebuild_proxy",
+    "refresh_all",
+    "reload",
+    "rename_channel",
+    "rendersize",
+    "retiming_add_freeze_frame_slide",
+    "retiming_add_transition_slide",
+    "retiming_freeze_frame_add",
+    "retiming_key_add",
+    "retiming_key_delete",
+    "retiming_reset",
+    "retiming_segment_speed_set",
+    "retiming_show",
+    "retiming_transition_add",
+    "sample",
+    "scene_frame_range_update",
+    "scene_strip_add",
+    "scene_strip_add_new",
+    "select",
+    "select_all",
+    "select_box",
+    "select_circle",
+    "select_grouped",
+    "select_handle",
+    "select_handles",
+    "select_lasso",
+    "select_less",
+    "select_linked",
+    "select_linked_pick",
+    "select_more",
+    "select_side",
+    "select_side_of_frame",
+    "set_range_to_strips",
+    "slip",
+    "snap",
+    "sound_strip_add",
+    "split",
+    "split_multicam",
+    "strip_color_tag_set",
+    "strip_jump",
+    "strip_modifier_add",
+    "strip_modifier_add_node_group",
+    "strip_modifier_copy",
+    "strip_modifier_duplicate",
+    "strip_modifier_equalizer_redefine",
+    "strip_modifier_move",
+    "strip_modifier_move_to_index",
+    "strip_modifier_remove",
+    "strip_modifier_set_active",
+    "strip_transform_clear",
+    "strip_transform_fit",
+    "swap",
+    "swap_data",
+    "swap_inputs",
+    "text_cursor_move",
+    "text_cursor_set",
+    "text_delete",
+    "text_deselect_all",
+    "text_edit_copy",
+    "text_edit_cut",
+    "text_edit_mode_toggle",
+    "text_edit_paste",
+    "text_insert",
+    "text_line_break",
+    "text_select_all",
+    "text_strip_style_preset_add",
+    "unlock",
+    "unmute",
+    "view_all",
+    "view_all_preview",
+    "view_frame",
+    "view_ghost_border",
+    "view_selected",
+    "view_zoom_ratio"
+   ]
+  },
+  {
+   "name": "srt: poll() before setting the sequencer scene",
+   "ok": true,
+   "detail": false
+  },
+  {
+   "name": "srt: export_subtitles(filepath) before setting the sequencer scene",
+   "ok": false,
+   "detail": [
+    [
+     "plain",
+     "Operator bpy.ops.sequencer.export_subtitles.poll() Context missing sequencer scene"
+    ],
+    [
+     "override scene+sequencer_scene+workspace",
+     "Operator bpy.ops.sequencer.export_subtitles.poll() failed, context is incorrect"
+    ]
+   ]
+  },
+  {
+   "name": "srt: set workspace.sequencer_scene",
+   "ok": true,
+   "detail": {
+    "context.sequencer_scene": null,
+    "workspace": "Layout",
+    "set workspace.sequencer_scene": true,
+    "after": "Scene"
+   }
+  },
+  {
+   "name": "srt: poll() after",
+   "ok": true,
+   "detail": false
+  },
+  {
+   "name": "srt: export_subtitles(filepath) after setting the sequencer scene",
+   "ok": false,
+   "detail": [
+    [
+     "plain",
+     "Operator bpy.ops.sequencer.export_subtitles.poll() failed, context is incorrect"
+    ],
+    [
+     "override scene+sequencer_scene+workspace",
+     "Operator bpy.ops.sequencer.export_subtitles.poll() failed, context is incorrect"
+    ]
+   ]
+  },
+  {
+   "name": "asset: sequencer.add_scene_strip_from_scene_asset exists",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "asset: operator properties",
+   "ok": true,
+   "detail": [
+    "move_strips",
+    "frame_start",
+    "channel",
+    "replace_sel",
+    "overlap",
+    "overlap_shuffle_override",
+    "skip_locked_or_muted_channels",
+    "asset_library_type",
+    "asset_library_identifier",
+    "relative_asset_identifier"
+   ]
+  },
+  {
+   "name": "asset: Scene.asset_mark()",
+   "ok": true,
+   "detail": "CW Lower Third"
+  },
+  {
+   "name": "asset: add_scene_strip_from_scene_asset LOCAL 'Scene/CW Lower Third'",
+   "ok": false,
+   "detail": [
+    [
+     "plain",
+     "Operator bpy.ops.sequencer.add_scene_strip_from_scene_asset.poll() failed, context is incorrect"
+    ],
+    [
+     "override scene+sequencer_scene+workspace",
+     "Operator bpy.ops.sequencer.add_scene_strip_from_scene_asset.poll() failed, context is incorrect"
+    ]
+   ]
+  },
+  {
+   "name": "asset: strip added",
+   "ok": false,
+   "detail": []
+  },
+  {
+   "name": "asset: scenes after",
+   "ok": true,
+   "detail": [
+    "CW Lower Third",
+    "Scene",
+    "Title Template"
+   ]
+  },
+  {
+   "name": "asset: fallback new_scene(tpl.copy()) works",
+   "ok": true,
+   "detail": {
+    "scene": "CW Lower Third.001"
+   }
+  },
+  {
+   "name": "audio: aud module",
+   "ok": true,
+   "detail": {
+    "file": null,
+    "Sound attrs": [
+     "ADSR",
+     "accumulate",
+     "addSound",
+     "animateableTimeStretchPitchScale",
+     "binaural",
+     "buffer",
+     "cache",
+     "convolver",
+     "data",
+     "delay",
+     "echo",
+     "envelope",
+     "fadein",
+     "fadeout",
+     "file",
+     "filter",
+     "highpass",
+     "join",
+     "length",
+     "limit",
+     "list",
+     "loop",
+     "lowpass",
+     "mix",
+     "modulate",
+     "mutable",
+     "pingpong",
+     "pitch",
+     "rechannel",
+     "resample",
+     "reverse",
+     "sawtooth",
+     "silence",
+     "sine",
+     "specs",
+     "square",
+     "sum",
+     "threshold",
+     "timeStretchPitchScale",
+     "triangle",
+     "volume",
+     "write"
+    ]
+   }
+  },
+  {
+   "name": "audio: numpy",
+   "ok": true,
+   "detail": "2.3.4"
+  },
+  {
+   "name": "audio: bpy.types.Sound props",
+   "ok": true,
+   "detail": {
+    "name": "speech_44k_stereo.wav",
+    "name_full": "speech_44k_stereo.wav",
+    "id_type": "SOUND",
+    "session_uid": 135,
+    "is_evaluated": false,
+    "original": "<POINTER>",
+    "users": 0,
+    "use_fake_user": false,
+    "use_extra_user": false,
+    "is_embedded_data": false,
+    "is_linked_packed": false,
+    "is_missing": false,
+    "is_runtime_data": false,
+    "is_editable": true,
+    "tag": false,
+    "is_library_indirect": false,
+    "library": "<POINTER>",
+    "library_weak_reference": "<POINTER>",
+    "asset_data": "<POINTER>",
+    "override_library": "<POINTER>",
+    "preview": "<POINTER>",
+    "filepath": "F:\\bfa_coworker_wt\\_scratch\\spike374\\media\\speech_44k_stereo.wav",
+    "packed_file": "<POINTER>",
+    "use_memory_cache": false,
+    "use_mono": false,
+    "samplerate": 44100,
+    "channels": "STEREO"
+   }
+  },
+  {
+   "name": "audio: Sound has factory/samples API",
+   "ok": true,
+   "detail": {
+    "factory": true,
+    "samplerate": true,
+    "channels": true,
+    "pack": true,
+    "use_mono": true,
+    "use_memory_cache": true
+   }
+  },
+  {
+   "name": "audio: aud.Sound.file(path).data()",
+   "ok": true,
+   "detail": {
+    "specs(rate,channels)": [
+     44100.0,
+     2
+    ],
+    "length_samples": 5515131,
+    "shape": [
+     5515131,
+     2
+    ],
+    "dtype": "float32",
+    "MB": 44.1,
+    "read_s": 0.098
+   }
+  },
+  {
+   "name": "audio: aud reads the mp4's audio track",
+   "ok": true,
+   "detail": {
+    "specs": [
+     48000.0,
+     2
+    ],
+    "shape": [
+     6002688,
+     2
+    ],
+    "s": 0.093
+   }
+  },
+  {
+   "name": "audio: resample(16000).rechannel(1).data()",
+   "ok": true,
+   "detail": {
+    "shape": [
+     2000896,
+     1
+    ],
+    "MB": 8.0,
+    "s": 0.089
+   }
+  },
+  {
+   "name": "audio: aud Sound.write(16 kHz mono S16 WAV PCM) from resampled mp4",
+   "ok": false,
+   "detail": "File couldn't be written, filling the audio frame failed with ffmpeg."
+  },
+  {
+   "name": "audio: aud write variant: file(mp4).write(path, 16000, MONO, S16, WAV, PCM) no resample chain",
+   "ok": true,
+   "detail": {
+    "path": "F:\\bfa_coworker_wt\\_scratch\\spike374\\seq\\from_mp4_16k_bg_v0.wav",
+    "rate": 16000,
+    "ch": 1,
+    "sec": 125.12
+   }
+  },
+  {
+   "name": "audio: aud write variant: file(wav44).write(path, 44100, STEREO, S16, WAV, PCM)",
+   "ok": true,
+   "detail": {
+    "path": "F:\\bfa_coworker_wt\\_scratch\\spike374\\seq\\from_mp4_16k_bg_v1.wav",
+    "rate": 44100,
+    "ch": 2,
+    "sec": 125.08
+   }
+  },
+  {
+   "name": "audio: aud write variant: resampled.write(path, 16000, MONO, FLOAT32, WAV, PCM)",
+   "ok": false,
+   "detail": "File couldn't be written, filling the audio frame failed with ffmpeg."
+  },
+  {
+   "name": "audio: aud write variant: resampled.write(path, 16000, MONO, S16, FLAC, FLAC)",
+   "ok": true,
+   "detail": {
+    "path": "F:\\bfa_coworker_wt\\_scratch\\spike374\\seq\\from_mp4_16k_bg_v3.wav",
+    "specs": [
+     16000.0,
+     1
+    ],
+    "sec": 125.06
+   }
+  },
+  {
+   "name": "audio: aud write variant: buffer(data,16000).write(path, 16000, MONO, S16, WAV, PCM)",
+   "ok": false,
+   "detail": "File couldn't be written, filling the audio frame failed with ffmpeg."
+  },
+  {
+   "name": "audio: fallback numpy + wave module -> 16 kHz mono WAV",
+   "ok": true,
+   "detail": {
+    "path": "F:\\bfa_coworker_wt\\_scratch\\spike374\\seq\\from_mp4_16k_bg.wav",
+    "s": 0.005,
+    "MB": 4.0
+   }
+  },
+  {
+   "name": "audio: RMS silence finder on 16 kHz mono (-40 dBFS, >=0.35 s)",
+   "ok": true,
+   "detail": {
+    "n": 35,
+    "s": 0.008,
+    "ranges": [
+     [
+      0.0,
+      1.38
+     ],
+     [
+      1.86,
+      2.36
+     ],
+     [
+      6.94,
+      9.46
+     ],
+     [
+      13.66,
+      15.58
+     ],
+     [
+      16.08,
+      16.6
+     ],
+     [
+      20.08,
+      20.6
+     ],
+     [
+      22.3,
+      26.46
+     ],
+     [
+      29.86,
+      31.4
+     ],
+     [
+      36.74,
+      39.06
+     ],
+     [
+      40.3,
+      40.8
+     ],
+     [
+      42.16,
+      42.66
+     ],
+     [
+      44.06,
+      44.62
+     ],
+     [
+      45.82,
+      46.3
+     ],
+     [
+      47.86,
+      52.68
+     ],
+     [
+      54.02,
+      55.1
+     ],
+     [
+      59.12,
+      61.18
+     ],
+     [
+      61.74,
+      62.26
+     ],
+     [
+      65.7,
+      66.2
+     ],
+     [
+      68.08,
+      70.98
+     ],
+     [
+      73.06,
+      73.6
+     ],
+     [
+      74.86,
+      75.38
+     ],
+     [
+      76.48,
+      78.12
+     ],
+     [
+      80.66,
+      81.16
+     ],
+     [
+      81.86,
+      87.36
+     ],
+     [
+      91.08,
+      93.02
+     ],
+     [
+      94.12,
+      94.64
+     ],
+     [
+      95.26,
+      95.76
+     ],
+     [
+      96.54,
+      97.06
+     ],
+     [
+      99.64,
+      103.28
+     ],
+     [
+      103.8,
+      104.3
+     ],
+     [
+      109.48,
+      111.78
+     ],
+     [
+      113.36,
+      113.92
+     ],
+     [
+      116.74,
+      118.6
+     ],
+     [
+      119.94,
+      120.44
+     ],
+     [
+      122.28,
+      125.04
+     ]
+    ]
+   }
+  },
+  {
+   "name": "audio: RMS on 44.1k stereo",
+   "ok": true,
+   "detail": {
+    "windows": 6252,
+    "s": 0.0593
+   }
+  },
+  {
+   "name": "audio: Scene audio settings",
+   "ok": true,
+   "detail": {
+    "use_audio": true,
+    "use_audio_scrub": false,
+    "audio_doppler_speed": 343.29998779296875,
+    "audio_doppler_factor": 1.0,
+    "audio_distance_model": "INVERSE_CLAMPED",
+    "audio_volume": 1.0
+   }
+  },
+  {
+   "name": "audio: sound.mixdown properties",
+   "ok": true,
+   "detail": [
+    "filepath",
+    "check_existing",
+    "filter_blender",
+    "filter_backup",
+    "filter_image",
+    "filter_movie",
+    "filter_python",
+    "filter_font",
+    "filter_sound",
+    "filter_text",
+    "filter_archive",
+    "filter_btx",
+    "filter_alembic",
+    "filter_usd",
+    "filter_obj",
+    "filter_volume",
+    "filter_folder",
+    "filter_blenlib",
+    "filemode",
+    "sort_method",
+    "accuracy",
+    "container",
+    "codec",
+    "channels",
+    "format",
+    "mixrate",
+    "split_channels"
+   ]
+  },
+  {
+   "name": "audio: sound.mixdown(WAV,PCM,S16,16000,MONO) of the scene",
+   "ok": true,
+   "detail": {
+    "ret": [
+     "FINISHED"
+    ],
+    "s": 0.91,
+    "exists": true,
+    "rate": 16000,
+    "ch": 1,
+    "sec": 125.09,
+    "scene_range": [
+     101,
+     3101
+    ]
+   }
+  }
+ ]
+}

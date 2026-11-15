@@ -61,10 +61,10 @@ class TestNoPositionalUndoWithAnotherChat(_tli._TurnLoopTestBase):
         real = self.ac._call_mcp_tool_sync
         journal = self.ac._side_by_side.JOURNAL
 
-        def other_chat_steps_meanwhile(name, args, port):
+        def other_chat_steps_meanwhile(name, args, port, **kw):     # images= since #487
             if self._FAIL_MARKER in str((args or {}).get("code", "")):
                 journal.note("t9")          # the Node chat's call ran between ours
-            return real(name, args, port)
+            return real(name, args, port, **kw)
         self.ac._call_mcp_tool_sync = other_chat_steps_meanwhile
         self.addCleanup(setattr, self.ac, "_call_mcp_tool_sync", real)
         _history, texts = self._run_agent_turn("build the set")

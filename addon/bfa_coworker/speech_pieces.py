@@ -9,13 +9,13 @@ Long audio in pieces that can't loop (#540).
 One whole-file request to whisper-server carries the text of each 30 s window into the next,
 and from about minute 6 of a 12.5 minute file that context looped: a four-word sequence came
 back about 250 times.  So the 16 kHz WAV is cut into pieces and each piece is its own request
-with no text context (``max_context=0``):
+with no text context (``max_context=0``: not even from one of its windows to the next):
 
 * :func:`wav_envelope` -- the loudness of the WAV, one dB value per 10 ms.
-* :func:`plan_pieces` -- pieces of at most :data:`PIECE_MAX_S` (one whisper window, so not
-  even a piece carries text from one window to the next), each cut in a pause near the end
-  of its window (the latest pause of 0.5 s or more wins; without one, the quietest 150 ms):
-  never mid-word.
+* :func:`plan_pieces` -- pieces of at most :data:`PIECE_MAX_S` (two whisper windows), each
+  cut in a pause near its end (the latest pause of 0.5 s or more wins; without one, the
+  quietest 150 ms): never mid-word.  Not one window each: a request costs about 7 s on top of
+  its windows (CPU build, probed), so 30 s pieces made a 12.5 minute file 50 % slower.
 * :func:`speech_span` -- the part of a piece that is sent: from just before its first loud
   frame to just after its last, so whisper gets no silent tail to "hear" words in.
 * :func:`has_speech` -- the no-speech gate: a piece without loud frames (digital silence),
@@ -63,9 +63,11 @@ from typing import Any
 
 HOP_S = 0.01                # one loudness value per 10 ms
 FLOOR_DB = -100.0           # digital silence
-# A piece is one whisper window (30 s) at most: no text carried from one window to the next.
-PIECE_MAX_S = 29.5
-PIECE_MIN_S = 12.0          # pieces aren't cut shorter (each one costs a whole window to encode)
+# A piece is two whisper windows (30 s each) at most -- whisper moves on to the next window at
+# the last word it heard, so 55 s leaves no short third window -- and no shorter than 20 s
+# (every request costs about 7 s on top of its windows, and each window a whole 30 s encode).
+PIECE_MAX_S = 55.0
+PIECE_MIN_S = 20.0
 # A frame this far below the file's speech level is a pause; never above -30 dBFS (a loud
 # file), never below -75 dBFS (a very quiet one still has pauses below its noise).
 PAUSE_BELOW_DB = 25.0
@@ -173,8 +175,8 @@ def quiet_level(db: list[float]) -> float:
 
 def _best_cut(db: list[float], lo: int, hi: int, quiet: float, hop_s: float) -> int:
     """The frame to cut at in ``[lo, hi)``: the middle of the best pause (a pause of
-    :data:`_GOOD_PAUSE_S` anywhere beats a shorter one; later beats earlier), else the middle
-    of the quietest 150 ms."""
+    :data:`_GOOD_PAUSE_S` or more anywhere beats any shorter one, a gap between two words;
+    among those, the later wins), else the middle of the quietest 150 ms."""
     best: tuple[float, int] | None = None
     min_run = max(1, int(round(_MIN_PAUSE_S / hop_s)))
     good = _GOOD_PAUSE_S / hop_s
@@ -188,7 +190,8 @@ def _best_cut(db: list[float], lo: int, hi: int, quiet: float, hop_s: float) -> 
         while j < hi and db[j] < quiet:
             j += 1
         if j - i >= min_run:
-            score = min(1.0, (j - i) / good) + (i - lo) / span
+            # A good pause (2..3) beats any shorter one (0..2); then the later one wins.
+            score = (2.0 if j - i >= good else (j - i) / good) + ((i + j) / 2.0 - lo) / span
             if best is None or score >= best[0]:
                 best = (score, (i + j) // 2)
         i = j

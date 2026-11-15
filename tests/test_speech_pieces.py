@@ -120,7 +120,7 @@ class TestPlan(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.samples, cls.pauses = _speech(70.0)
+        cls.samples, cls.pauses = _speech(130.0)
         cls.db = _db(cls.samples)
 
     def test_envelope_is_one_value_per_10_ms(self):
@@ -136,7 +136,9 @@ class TestPlan(unittest.TestCase):
         for (a, b), (c, _d) in zip(pieces, pieces[1:]):
             self.assertEqual(b, c, "back to back")
         for a, b in pieces:
-            self.assertLessEqual(b - a, sp.PIECE_MAX_S + 1e-6, "one whisper window at most")
+            self.assertLessEqual(b - a, sp.PIECE_MAX_S + 1e-6, "two whisper windows at most")
+        for a, b in pieces[:-1]:
+            self.assertGreaterEqual(b - a, sp.PIECE_MIN_S - 1e-6, "not cut shorter (but the last)")
         for _a, cut in pieces[:-1]:
             self.assertTrue(any(p0 < cut < p1 for p0, p1 in self.pauses), "cut {:.2f} s in a pause".format(cut))
 
@@ -146,17 +148,27 @@ class TestPlan(unittest.TestCase):
         later = [p for p in self.pauses if p[0] > cut and p[1] <= sp.PIECE_MAX_S]
         self.assertEqual(later, [], "no whole pause left between the cut and the window's end")
 
+    def test_a_long_silence_beats_a_gap_between_two_words_later(self):
+        # Speech, 30 s of silence, then speech up to the window's end: the cut goes in the
+        # silence, not in the 0.14 s gap between two words near the end (found on a test file).
+        a, _ = _speech(20.0)
+        samples = a + _silence(30.0) + _speech(40.0)[0]
+        db = _db(samples)
+        cut = sp.plan_pieces(db)[0][1]
+        speech_a = len(a) / RATE
+        self.assertTrue(speech_a < cut < speech_a + 30.0, cut)
+
     def test_short_sound_is_one_piece(self):
-        db = _db(_speech(20.0)[0])
+        db = _db(_speech(45.0)[0])
         self.assertEqual(sp.plan_pieces(db), [(0.0, round(len(db) * sp.HOP_S, 3))])
         self.assertEqual(sp.plan_pieces([]), [(0.0, 0.0)])
 
     def test_without_a_pause_it_cuts_at_the_quietest(self):
-        loud = [-10.0] * 7000
-        for i in range(2400, 2420):
+        loud = [-10.0] * 13000
+        for i in range(4400, 4420):
             loud[i] = -25.0               # a softer 0.2 s, not a pause (above -35 dB)
         pieces = sp.plan_pieces(loud)
-        self.assertTrue(2400 * sp.HOP_S <= pieces[0][1] <= 2420 * sp.HOP_S, pieces)
+        self.assertTrue(4400 * sp.HOP_S <= pieces[0][1] <= 4420 * sp.HOP_S, pieces)
         self.assertTrue(all(b - a <= sp.PIECE_MAX_S + 1e-6 for a, b in pieces))
 
     def test_speech_span_trims_the_silent_ends(self):
@@ -342,10 +354,10 @@ class _Files(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmp.name)
         self.addCleanup(self._tmp.cleanup)
-        # speech 22 s, digital silence 31 s, speech 44 s: about 97 s.
-        a, _ = _speech(22.0)
-        b, _ = _speech(44.0)
-        self.samples = a + _silence(31.0) + b
+        # speech 40 s, digital silence 60 s, speech 100 s: about 200 s.
+        a, _ = _speech(40.0)
+        b, _ = _speech(100.0)
+        self.samples = a + _silence(60.0) + b
         self.wav = _write(self.tmp / "0123456789abcdef.1.16k.wav", self.samples)
 
     def pieces_left(self):
@@ -421,7 +433,7 @@ class TestTranscribePieces(_Files):
         doc, _ = self.run_pieces(server)
         failed = doc["engine"]["pieces"]["failed"]
         self.assertEqual(len(failed), 1)
-        self.assertEqual(failed[0][2], "160 words in 20 s")
+        self.assertRegex(failed[0][2], r"^(160 words in \d+ s|a 4-word sequence repeated 40 times)$")
         self.assertNotIn("round", [w["w"] for w in doc["words"]])
         self.assertGreater(len(doc["words"]), 0, "the other pieces keep their words")
         out = speech.shape_result(doc, {"content_start": 1.0, "left": 1.0, "right": 1e6, "fps": 24.0}, "talk")

@@ -891,7 +891,7 @@ def inference_fields(language: str = "auto", prompt: str = "",
 # A piece of a long file (#540).  Probed on the CPU server build (Windows, 2026-11): one
 # request doesn't carry text into the next; inside a request ``max_context=0`` keeps no text
 # from one 30 s window to the next -- and drops the prompt too, so it is only sent without one
-# (:func:`piece_fields`; a piece is one window, so there is little to carry anyway).  Greedy
+# (:func:`piece_fields`; a piece is two windows at most, so the prompt matters more).  Greedy
 # at temperature 0 with whisper's own fallback (+0.2 when a window fails its entropy /
 # log-probability check); the segments report the temperature used.  The retry of a piece
 # that looped samples instead (5 candidates at 0.4), without the prompt (a prompt can feed a

@@ -10,7 +10,7 @@ On the main thread (the bridge runs tool-code there): find the strip and its med
 key it (:func:`transcripts.media_key`) and answer from the cache when the file was
 transcribed before.  Otherwise a worker thread reads the sound with Blender's ``aud`` and
 writes a 16 kHz mono WAV (no ffmpeg; the whole file, since the cache is per media file), starts
-whisper-server when needed, sends the WAV in pieces of up to 30 s cut in pauses, one request
+whisper-server when needed, sends the WAV in pieces of up to 55 s cut in pauses, one request
 each with no carried-over text (:func:`transcribe_pieces`, ``speech_pieces``, #540: one
 whole-file request looped) and stores the transcript.  The job says which piece it is on
 (``job_progress``: its job row, ``get_job_status``, Auto Captions' status line).  The tool answers
@@ -460,8 +460,8 @@ def transcribe_pieces(wav: str, key: str, size: int, p: dict[str, Any], prompt: 
                       build_label: str = "", version: str = "") -> dict[str, Any]:
     """The transcript of the 16 kHz mono *wav* on the running whisper-server, in pieces (#540).
 
-    The pieces (:func:`speech_pieces.plan_pieces`, cut in pauses, one whisper window each)
-    are sent one by one, with no text context (``PIECE_FIELDS``).  A piece without speech
+    The pieces (:func:`speech_pieces.plan_pieces`, cut in pauses, two whisper windows at
+    most) are sent one by one, with no text context (``piece_fields``).  A piece without speech
     (:func:`speech_pieces.has_speech`) isn't sent; one whose words loop
     (:func:`speech_pieces.degenerate`) is sent once more with ``RETRY_FIELDS`` and, if it still
     loops, left without words (``engine.pieces.failed``).  Word times come back in file time;

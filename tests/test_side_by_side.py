@@ -428,6 +428,35 @@ class TestExternalAgentSideBySide(unittest.TestCase):
         self.engine.drain()
         self.assertIn("still going", self._texts("t1"))
 
+    def test_stop_while_a_chats_session_opens_cancels_no_other_chat(self):
+        # #521: a helper stopped just after it started, while its session still opens.  The
+        # current session is then another chat's (the last one started): it must not be
+        # cancelled, and the stopped chat's prompt isn't sent at all.
+        for tag in ("t3", "t4"):
+            self.states[tag] = _acp_state()
+        gate, real_new = threading.Event(), self.client.new_session
+
+        def new_session(cwd, servers, timeout=None):
+            if any(e.get("value") == "t3" for s in servers for e in s.get("env") or []):
+                gate.wait(5)
+            return real_new(cwd, servers, timeout)
+        self.client.new_session = new_session
+        heard = []
+        self.engine.on_turn_end = lambda thread, reason, error: heard.append((thread, reason))
+        self.engine.submit(eng.Prompt(text="a helper's task", thread="t3"))
+        self.engine.submit(eng.Prompt(text="another chat", thread="t4"))
+        self.assertTrue(_wait_for(lambda: self.engine._running.get("t4", {}).get("session")))
+        self.assertEqual(self.engine.thread, "t4", "the last chat started is the current one")
+        self.engine.cancel_thread("t3")
+        self.assertEqual(self.client.cancelled, [], "not the current session: it is t4's")
+        gate.set()
+        self.assertTrue(_wait_for(lambda: not self.engine.busy_for("t3")), "t3's turn ends once its session is open")
+        self.assertTrue(self.engine.busy_for("t4"), "the other chat keeps working")
+        self.engine.drain()
+        self.assertIn(("t3", "cancelled"), heard)
+        self.client.release[self.engine._running["t4"]["session"]].set()
+        self.assertTrue(_wait_for(lambda: not self.engine.is_busy()))
+
     def test_cap_queues_beyond_and_starts_when_a_slot_frees(self):
         self.engine.cap = 1
         self.engine.submit(eng.Prompt(text="first", thread="t1"))

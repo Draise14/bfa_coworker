@@ -533,8 +533,8 @@ def remove_captions(scene: Any, keys: set[str], only: set[str] | None = None) ->
     lines = sum(1 for s in doomed if (tag_of(s) or {}).get("role") == "line")
     names = [s.name for s in doomed]
     top = _top(ed)
-    for s in doomed:
-        top.remove(s)
+    from .wand.prefetch import remove_strips    # the Sequencer's prefetch stopped first (#536)
+    remove_strips(top, doomed)
     _drop_fcurves(scene, names)
     return lines
 
@@ -961,8 +961,8 @@ def relayout_captions(scene: Any, old_res: tuple[int, int] | None = None) -> dic
         st, pieces = lay["style"], lay["pieces"]
         highlight = tuple(old_words[0].color) if old_words else st["highlight"]
         names = [w.name for w in old_words]
-        for w in old_words:
-            top.remove(w)
+        from .wand.prefetch import remove_strips    # the Sequencer's prefetch stopped first (#536)
+        remove_strips(top, old_words)
         if names:
             _drop_fcurves(scene, names)
         props = st["props"]
@@ -1043,8 +1043,8 @@ def text_changed(strip: Any, scene: Any = None) -> None:
     top = _top(ed)
     old = [s for s in top if (tag_of(s) or {}).get("line") == strip.name]
     names = [s.name for s in old]
-    for s in old:
-        top.remove(s)
+    from .wand.prefetch import remove_strips    # the Sequencer's prefetch stopped first (#536)
+    remove_strips(top, old)
     _drop_fcurves(scene, names)
     st = cap.resolve_style(key, scene.render.resolution_x, scene.render.resolution_y)
     text = " ".join(strip.text.split())

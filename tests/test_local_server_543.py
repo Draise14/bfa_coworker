@@ -499,7 +499,7 @@ class TestStartLocalLlama(unittest.TestCase):
             mock.patch.object(llm, "_llama_server_version", lambda _e: "version: 10154 (test)"),
             mock.patch.object(llm, "_server_supported_flags", lambda _e: None),
             mock.patch.object(llm, "_get_bundled_llama_dir", lambda: self.bundled),
-            mock.patch.object(llm, "autodetect_gpu_layers", lambda _p, _c: 99),
+            mock.patch.object(llm, "autodetect_gpu_layers", lambda *_a, **_k: 99),
             mock.patch.object(llm, "_find_free_port", lambda p: p),
             mock.patch.object(llm, "_show_llama_console", lambda: False),
             mock.patch.object(llm, "detect_free_vram_mib", lambda: self.free),

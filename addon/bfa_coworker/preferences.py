@@ -621,20 +621,8 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             self.local_max_tokens = preset.max_tokens
             # Clear existing model path -- using preset now.
             self.existing_model_path = ""
-            # Build info string for display.
-            self.model_preset_info = (
-                "Capability: {cap}  |  RAM: {ram}  |  Disk: {disk}\n"
-                "Hardware: {hw}\n"
-                "Why: {why}\n"
-                "{desc}"
-            ).format(
-                cap=preset.capability,
-                ram=preset.ram_gb,
-                disk=preset.disk_gb,
-                hw=preset.hardware_note,
-                why=preset.why,
-                desc=preset.description,
-            )
+            # Build info string for display (memory texts generated, #558).
+            self.model_preset_info = llm.preset_info_text(preset)
             # Sync to llm_manager config immediately.
             cfg = llm.get_config()
             cfg.model_repo_id = preset.repo_id
@@ -656,13 +644,9 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 return os.path.getsize(self.existing_model_path) / (1024 ** 3)
             except OSError:
                 pass
-        if preset is not None:
-            # "16-20 GB" -> use the low end of the range as the estimate.
-            try:
-                first = float(preset.disk_gb.split("-")[0].strip().split()[0])
-                return first
-            except (ValueError, IndexError, AttributeError):
-                pass
+        if preset is not None and getattr(preset, "file_bytes", 0):
+            # The model file's size, read from its header with the preset (#558).
+            return preset.file_bytes / (1024 ** 3)
         if self.model_filename:
             models_dir = Path(self.downloaded_models_dir) if self.downloaded_models_dir else (
                 Path.home() / "bfa_coworker_models")
@@ -689,6 +673,10 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 path = str(models_dir / self.model_filename)
         if path:
             kwargs["model_path"] = path
+        elif preset is not None and llm.preset_profile(preset) is not None:
+            # Not downloaded yet: the preset's own header numbers (#558).
+            kwargs["projector_bytes"] = float(preset.projector_bytes)
+            kwargs["profile"] = llm.preset_profile(preset)
         elif preset is not None and preset.vision:
             kwargs["projector_bytes"] = float(llm._FALLBACK_PROJECTOR_BYTES)
         if preset is not None:
@@ -1879,9 +1867,9 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         if self.show_more_models:
             more_presets = [p for p in all_presets if p.identifier not in primary_ids]
             _MORE_CATEGORIES = [
-                ("flagship", "Flagship (24 GB+ VRAM)", 'SORT_ASC'),
-                ("mid_range", "Mid-Range (16-20 GB VRAM)", 'VIEWZOOM'),
-                ("lightweight", "Lightweight (<= 8 GB VRAM)", 'LIGHT_SUN'),
+                ("flagship", "Flagship", 'SORT_ASC'),
+                ("mid_range", "Mid-Range", 'VIEWZOOM'),
+                ("lightweight", "Lightweight", 'LIGHT_SUN'),
             ]
             for cat_id, cat_label, cat_icon in _MORE_CATEGORIES:
                 cat_presets = [p for p in more_presets if p.category == cat_id]
@@ -1927,7 +1915,10 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         if self.model_preset != "_custom" and self.model_preset_info:
             info_box = local_box.box()
             info_box.label(text="Model Preset Information", icon='INFO')
-            for line in self.model_preset_info.split("\n"):
+            # Generated now, not the text saved when it was picked (#558).
+            _preset = llm.get_preset_by_id(self.model_preset)
+            _info = llm.preset_info_text(_preset) if _preset is not None else self.model_preset_info
+            for line in _info.split("\n"):
                 info_box.label(text=line)
         else:
             info_box = local_box.box()

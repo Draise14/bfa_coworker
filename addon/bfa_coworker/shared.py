@@ -233,21 +233,23 @@ def get_gen_controller():
 
 # -- Static EnumProperty Items --------------------------------------------
 
+def _llm_manager_module():
+    """llm_manager in the package, or by path when this file is loaded on its own (tests)."""
+    try:
+        from . import llm_manager as _m
+    except ImportError:
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location("bfacw_llm_manager_for_shared", Path(__file__).with_name("llm_manager.py"))
+        _m = _ilu.module_from_spec(_spec)  # type: ignore[arg-type]
+        _spec.loader.exec_module(_m)  # type: ignore[union-attr]
+    return _m
+
+
 # Static preset items for the model_preset EnumProperty.
 # Must be a module-level constant -- callbacks can fail during class registration.
-# Only the "custom" entry and a simple flat list -- the UI categorizes them visually.
-MODEL_PRESET_ITEMS: list[tuple[str, str, str]] = [
-    ("_custom", "Custom (manual entry)", "Manually specify repo ID and filename"),
-    ("gpt_oss_20b_q4", "GPT-OSS 20B (Q4_K_M)", "[Mid] 8-12 GB RAM, ~12 GB disk -- OpenAI reasoning, DEFAULT"),
-    ("qwen38_27b_q4", "Qwen3.8-27B (Q4_K_M)", "[Mid] 16-20 GB RAM, ~17 GB disk -- vision, 262K ctx"),
-    ("fable_fusion_27b_iq4", "Fable Fusion 27B (IQ4_XS)", "[Mid] 12-16 GB RAM, ~17 GB disk -- vision, top fine-tune"),
-    ("qwen38_27b_q8", "Qwen3.8-27B (Q8_0)", "[Flagship] 24-28 GB RAM, ~29 GB disk -- vision, best quality"),
-    ("fable_fusion_27b_q6", "Fable Fusion 27B (Q6_K)", "[Flagship] 20-24 GB RAM, ~24 GB disk -- vision, ARC-711"),
-    ("nail_35b_q4", "Nail 35B A3B (UD-Q4_K_XL)", "[Flagship] 16-20 GB RAM, ~22 GB disk -- MoE, vision, fast"),
-    ("gemma4_e4b_q4", "Gemma 4 E4B (Q4_K_M)", "[Light] 4-6 GB RAM, ~5 GB disk -- vision, function calling"),
-    ("qwen35_9b_dsv4_q4", "Qwen3.5-9B DeepSeek-V4-Flash (Q4_K_M)", "[Light] 4-6 GB RAM, ~6 GB disk -- vision, distilled reasoning"),
-    ("qwen35_9b_q8", "Qwen3.5-9B (Q8_0)", "[Light] 6-8 GB RAM, ~10 GB disk -- vision, highest quality light"),
-]
+# Built once at import from llm_manager.PRESET_MODELS (#558): the tooltips carry
+# the same generated VRAM and download texts as the preferences rows.
+MODEL_PRESET_ITEMS: list[tuple[str, str, str]] = _llm_manager_module().preset_enum_items()
 
 # Static preset items for the remote_provider EnumProperty.
 _REMOTE_PROVIDER_ITEMS: list[tuple[str, str, str]] = [

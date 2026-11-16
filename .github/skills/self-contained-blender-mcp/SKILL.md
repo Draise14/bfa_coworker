@@ -391,7 +391,7 @@ These files have **no upstream equivalent** — no merge conflicts expected:
    - Thread-safe state via threading.Lock with copy-on-read pattern.
    - `LLMConfig` dataclass: all config fields.
    - `LLMState` dataclass: runtime state (is_running, error, download_progress, etc.).
-   - `ModelPreset` dataclass: identifier, name, repo_id, filename, category, ram_gb, disk_gb, capability, context_window, max_tokens, description.
+   - `ModelPreset` dataclass: identifier, name, repo_id, filename, category, capability, context_window, max_tokens, description, and the header numbers the VRAM estimate needs (file_bytes, projector_bytes, kv_bytes_per_token, recurrent_bytes, block_count, sliding_window; refresh with `_misc/read_preset_headers.py`). `disk_gb`, `vram_note` and `hardware_note` are generated from them (`preset_memory_note`), never written by hand.
 
 2. Create operators in `operators_llm.py`:
 

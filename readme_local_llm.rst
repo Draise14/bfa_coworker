@@ -6,7 +6,7 @@ Prerequisites
 =============
 
 - This repository.
-- Blender 5.1+ (or Bforartists equivalent).
+- Blender 5.2+ (or Bforartists equivalent).
 
 ``llama.cpp`` is optional — the add-on can auto-download ``llama-server``
 for you from the preferences UI (see `Auto-Download`_ below).

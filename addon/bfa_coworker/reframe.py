@@ -102,15 +102,6 @@ class ReframeError(Exception):
 
 # -- The node group -------------------------------------------------------------------
 
-def supported() -> str:
-    """``""`` when this Blender can do it, else why not."""
-    if not hasattr(bpy.types, "SequencerCompositorModifierData"):
-        return "Make Vertical needs the Sequencer's compositor modifier (Blender 5.2 or later)."
-    if "properties" not in bpy.types.SequencerCompositorModifierData.bl_rna.properties:
-        return "Make Vertical needs per-strip modifier inputs (Blender 5.2 or later)."
-    return ""
-
-
 def _input_ids(ng: Any) -> dict[str, str]:
     return {item.name: item.identifier for item in ng.interface.items_tree
             if item.item_type == 'SOCKET' and item.in_out == 'INPUT'}
@@ -410,6 +401,12 @@ def reframe_strip(scene: Any, strip: Any, mode: str, reset: bool = False) -> str
 
 def _copy_scene(scene: Any) -> Any:
     copy = scene.copy()
+    # ID.copy() hands back a copy with no user (the caller is meant to assign it), and
+    # nothing counts as a scene's user -- not the window, not the workspace's Sequencer --
+    # so a 0-user copy is dropped on save (#537).  Give it the extra user Blender gives
+    # every scene it makes itself (bpy.data.scenes.new, Scene > New): not a fake user, so
+    # deleting the copy by hand still removes it and leaves nothing behind.
+    copy.use_extra_user = True
     copy.name = scene.name + " Vertical"
     copy[VERTICAL_TAG] = scene.name
     # scene.copy() shares the action: keyframes on the copy's modifiers would land in
@@ -423,9 +420,6 @@ def _copy_scene(scene: Any) -> Any:
 def make_vertical(scene: Any, mode: str = "CROP", in_copy: bool = True, resolution: str = "1080x1920",
                   reset: bool = False, names: Iterable[str] | None = None, window: Any = None) -> dict[str, Any]:
     """Make *scene*'s edit 9:16; returns what was done (see the MCP tool's Result)."""
-    why = supported()
-    if why:
-        raise ReframeError(why)
     if mode not in rm.MODES:
         raise ReframeError("mode must be CROP or BLUR_FILL, not {!r}.".format(mode))
     if scene is None or scene.sequence_editor is None:
@@ -457,7 +451,7 @@ def make_vertical(scene: Any, mode: str = "CROP", in_copy: bool = True, resoluti
     captions = relayout_captions(target, old_res)
     if copied and window is not None:
         ws = getattr(window, "workspace", None)
-        if ws is not None and hasattr(ws, "sequencer_scene"):
+        if ws is not None:
             if window.scene == scene:
                 window.scene = target
             ws.sequencer_scene = target
@@ -761,7 +755,7 @@ class BFACW_OT_reframe(Operator):
 
     @classmethod
     def poll(cls, context: Any) -> bool:
-        return _seq_poll(context, cls) and not supported()
+        return _seq_poll(context, cls)
 
     def execute(self, context: Any) -> set[str]:
         scene = sequencer_scene(context)
@@ -789,7 +783,7 @@ class BFACW_OT_reframe_follow_subject(Operator):
 
     @classmethod
     def poll(cls, context: Any) -> bool:
-        return _seq_poll(context, cls) and not supported()
+        return _seq_poll(context, cls)
 
     def execute(self, context: Any) -> set[str]:
         scene = sequencer_scene(context)

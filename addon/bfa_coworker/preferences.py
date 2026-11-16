@@ -674,13 +674,36 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                     pass
         return 0.0
 
+    def _model_sizing_kwargs(self, preset: "ModelPreset | None" = None) -> dict:
+        """What the memory plan needs about the chosen model (#543): the file
+        when it is on disk (its header and projector), else the preset's estimates."""
+        llm = get_llm_manager()
+        kwargs: dict = {"kv_q8_forced": bool(self.local_kv_cache_quant)}
+        path = ""
+        if self.existing_model_path and os.path.isfile(self.existing_model_path):
+            path = self.existing_model_path
+        elif self.model_filename:
+            models_dir = Path(self.downloaded_models_dir) if self.downloaded_models_dir else (
+                Path.home() / "bfa_coworker_models")
+            if (models_dir / self.model_filename).is_file():
+                path = str(models_dir / self.model_filename)
+        if path:
+            kwargs["model_path"] = path
+        elif preset is not None and preset.vision:
+            kwargs["projector_bytes"] = float(llm._FALLBACK_PROJECTOR_BYTES)
+        if preset is not None:
+            kwargs["ctx_cap"] = preset.context_window
+        return kwargs
+
     def _apply_recommended_ctx(self, preset: "ModelPreset | None" = None) -> None:
-        """Set the context window to a hardware-aware safe recommendation."""
+        """Set the context window to a recommendation from the free VRAM and the
+        model's own needs, never below the first request (#543)."""
         llm = get_llm_manager()
         model_gb = self._current_model_gb(preset)
         recommended = llm.recommend_context_size(
             model_gb=model_gb,
             backend=self.llama_backend,
+            **self._model_sizing_kwargs(preset),
         )
         cap = preset.context_window if preset is not None else 131072
         recommended = min(recommended, cap)
@@ -922,14 +945,21 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         subtype='UNSIGNED',
     )
 
+    def _update_server_pref(self, _context: bpy.types.Context) -> None:
+        """Sync the preferences that shape the server command line (#543)."""
+        llm = get_llm_manager()
+        llm.set_config(llm.apply_server_prefs(llm.get_config(), self, bpy.path.abspath))
+
     local_kv_cache_quant: BoolProperty(  # type: ignore[valid-type]
         name="Quantize KV Cache (q8_0)",
         description=(
-            "Store the KV cache in 8-bit instead of 16-bit -- roughly halves its "
-            "memory and lets you run a larger context on the same VRAM. "
-            "Slight quality cost. GPU backends only; applies on next server start."
+            "Always store the KV cache in 8-bit instead of 16-bit -- roughly halves "
+            "its memory. Off, Coworker still uses 8-bit when 16-bit would not fit "
+            "the free VRAM at start. Slight quality cost. GPU backends only; "
+            "applies on next server start."
         ),
         default=False,
+        update=_update_server_pref,
     )
 
     local_server_verbose: BoolProperty(  # type: ignore[valid-type]
@@ -940,6 +970,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             "quickly. Applies on next server start."
         ),
         default=False,
+        update=_update_server_pref,
     )
 
     lock_scene_while_working: BoolProperty(  # type: ignore[valid-type]
@@ -2001,15 +2032,18 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             _custom_row = ctx_box.row()
             _custom_row.enabled = not _model_loaded
             _custom_row.prop(self, "local_ctx_size")
-        model_gb = self._current_model_gb(llm.get_preset_by_id(self.model_preset))
+        _preset = llm.get_preset_by_id(self.model_preset)
+        model_gb = self._current_model_gb(_preset)
+        _sizing = self._model_sizing_kwargs(_preset)
         ctx_box.label(
-            text=llm.hardware_context_hint(model_gb, self.llama_backend),
+            text=llm.hardware_context_hint(model_gb, self.llama_backend, **_sizing),
             icon='INFO',
         )
         # Startup-only hardware validation (Tier 3 Phase 2, D4): warn when
-        # the chosen context cannot fit KV cache in the detected memory.
+        # the chosen context cannot hold the first request, or the server
+        # would not fit the free memory (#543).
         _ctx_warning = llm.validate_ctx_against_hardware(
-            model_gb, self.llama_backend, self.local_ctx_size)
+            model_gb, self.llama_backend, self.local_ctx_size, **_sizing)
         if _ctx_warning:
             ctx_box.label(text="Context may not fit your hardware:", icon='ERROR')
             for _wline in _ctx_warning.split("\n"):

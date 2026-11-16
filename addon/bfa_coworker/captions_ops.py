@@ -13,7 +13,10 @@ text strips, SRT in and out, and Translate for many captions at once.
   (:data:`captions.STYLES`).  *Word-by-word highlight* adds, per word, a strip on
   the channel above showing that word in the highlight colour exactly over the
   same word of the line (the line is measured with ``blf`` in the same font).
-  One undo step; running it again replaces that source's captions.
+  Every selected strip gets the captions of the part of its media it shows (#538: the pieces
+  of a cut clip, a clip used twice); muted and retimed strips and those with no speech are
+  skipped and named in the report.  One undo step; running it again replaces the captions
+  over those strips, but keeps the ones edited by hand (unless *Replace Edited Captions*).
 * **Export SRT** writes every caption line (and any text strip on the *Captions*
   channel, so hand edits go out too); **Import SRT** makes styled captions at the
   cue times.  ``sequencer.export_subtitles`` needs a window and there is no import
@@ -26,7 +29,9 @@ Every caption strip has the custom property :data:`captions.TAG`:
 ``{"source", "style", "role": "line"|"word", "chars", "lines"}`` (``"line"``: the
 caption's strip name, on a word strip); a line made since #497 also has ``"frame"`` (the
 output size it was laid out for) and ``"word_frames"`` (each word's first frame from the
-line's start), which Make Vertical uses to lay it out again (:func:`relayout_captions`).
+line's start), which Make Vertical uses to lay it out again (:func:`relayout_captions`); since
+#538 also ``"sig"`` (:func:`captions.caption_signature`: what it looked like when made, so a
+re-run tells a caption edited by hand).
 """
 
 from __future__ import annotations
@@ -66,7 +71,7 @@ from .wand import scene as _seq
 _NAME_RE = re.compile(r"^cap_(\d{4,})$")
 
 
-# -- the Sequencer's scene and strips (5.1 names as a fallback) -------------------------
+# -- the Sequencer's scene and strips ---------------------------------------------------
 
 def seq_scene(context: Any = None) -> Any:
     """The scene the Sequencer shows (``wand.scene``, #504), else the context scene (tools, timers)."""
@@ -75,23 +80,23 @@ def seq_scene(context: Any = None) -> Any:
 
 
 def _top(ed: Any) -> Any:
-    return ed.strips if hasattr(ed, "strips") else ed.sequences
+    return ed.strips
 
 
 def _all(ed: Any) -> Any:
-    return ed.strips_all if hasattr(ed, "strips_all") else ed.sequences_all
+    return ed.strips_all
 
 
 def _left(s: Any) -> int:
-    return s.left_handle if hasattr(s, "left_handle") else s.frame_final_start
+    return s.left_handle
 
 
 def _right(s: Any) -> int:
-    return s.right_handle if hasattr(s, "right_handle") else s.frame_final_end
+    return s.right_handle
 
 
 def _content_start(s: Any) -> float:
-    return s.content_start if hasattr(s, "content_start") else s.frame_start
+    return s.content_start
 
 
 def _fps(scene: Any) -> float:
@@ -110,6 +115,37 @@ def tag_of(strip: Any) -> dict | None:
 
 def _media_strips(strips: Any) -> list:
     return [s for s in strips if s.type in {'SOUND', 'MOVIE'}]
+
+
+def _muted(ed: Any, strip: Any) -> bool:
+    """The strip, or its channel, is muted: none of it is heard."""
+    if getattr(strip, "mute", False):
+        return True
+    channels = getattr(ed, "channels", None) or ()
+    return 0 <= strip.channel < len(channels) and bool(getattr(channels[strip.channel], "mute", False))
+
+
+def _retimed(strip: Any) -> bool:
+    """The strip has retiming keys (#538).  Its speed can't be read back reliably: the Python
+    API gives a key's timeline frame only, not the frame of the media it holds, so captions
+    couldn't be timed on it; Remove Silences refuses such strips too."""
+    keys = getattr(strip, "retiming_keys", None)
+    try:
+        return keys is not None and len(keys) > 0
+    except TypeError:
+        return False
+
+
+def _signature(strip: Any) -> str:
+    """A caption line as it is now (:func:`captions.caption_signature`)."""
+    return cap.caption_signature(strip.text, _right(strip) - _left(strip), strip.channel, tuple(strip.location))
+
+
+def _edited(strip: Any) -> bool:
+    """Changed since Coworker made it (text, length, channel or place); a caption made before
+    #538 has no signature and counts as not edited."""
+    sig = (tag_of(strip) or {}).get("sig")
+    return bool(sig) and sig != _signature(strip)
 
 
 def media_path(strip: Any) -> str:
@@ -301,7 +337,8 @@ def _tick_jobs() -> None:
 def transcribe_then_caption(scene: Any, sources: list, params: dict[str, Any], undo: bool = True) -> dict[str, Any]:
     """Start transcribing the untranscribed clips of *sources* (``transcribe_strip``'s job);
     the captions are made when the last one is done (:func:`_poll_pending`).
-    *params*: ``style``, ``language``, ``max_chars``, ``max_lines`` of :func:`add_captions`.
+    *params*: ``style``, ``language``, ``max_chars``, ``max_lines``, ``replace_edited`` of
+    :func:`add_captions`.
     *undo*: the captions push their own undo step when they come (False: the operator waiting
     for them does).  Returns the job: ``state`` "running" with ``message`` what to tell the
     artist now, or "done" when nothing had to wait (the captions are made; no undo step)."""
@@ -354,7 +391,8 @@ def _caption_job(job: dict[str, Any], results: list) -> str:
     p = job["params"]
     try:
         result = add_captions(scene, sources, p.get("style", "CLEAN"), p.get("language"), "",
-                              int(p.get("max_chars", 0) or 0), int(p.get("max_lines", 0) or 0))
+                              int(p.get("max_chars", 0) or 0), int(p.get("max_lines", 0) or 0),
+                              bool(p.get("replace_edited", False)))
     except CaptionsError as ex:
         raise CaptionsError(" ".join([str(ex)] + [e for e in errors if e and e not in str(ex)])) from None
     if job.get("undo", True):
@@ -364,7 +402,7 @@ def _caption_job(job: dict[str, Any], results: list) -> str:
             pass
     if errors:
         result["note"] = " ".join(errors + ([result["note"]] if "note" in result else []))
-    job["warn"] = bool(result.get("note"))
+    job["warn"] = _warn(result)
     return "Auto Captions: " + _summary(result)
 
 
@@ -465,14 +503,12 @@ def _drop_fcurves(scene: Any, names: list[str]) -> None:
     if action is None or not names:
         return
     prefixes = tuple('{:s}["{:s}"]'.format(base, bpy.utils.escape_identifier(n))
-                     for n in names for base in ("sequence_editor.strips_all", "sequence_editor.sequences_all"))
+                     for n in names for base in ("sequence_editor.strips_all",))
     bags = []
     for layer in getattr(action, "layers", ()):
         for strip in layer.strips:
             for bag in getattr(strip, "channelbags", ()):
                 bags.append(bag.fcurves)
-    if not bags and hasattr(action, "fcurves"):
-        bags.append(action.fcurves)
     for fcurves in bags:
         for fc in [fc for fc in fcurves if fc.data_path.startswith(prefixes)]:
             fcurves.remove(fc)
@@ -486,17 +522,19 @@ def _owned(ed: Any, keys: set[str]) -> list:
     return [s for s in _top(ed) if cap.owned_by(tag_of(s), keys)]
 
 
-def remove_captions(scene: Any, keys: set[str]) -> int:
-    """Remove the caption strips made from *keys* (and their animation); the number of lines."""
+def remove_captions(scene: Any, keys: set[str], only: set[str] | None = None) -> int:
+    """Remove the caption strips made from *keys* (and their animation); the number of lines.
+    *only*: just these caption lines (and their word strips) of those sources (#538)."""
     ed = scene.sequence_editor
     if ed is None:
         return 0
-    doomed = _owned(ed, keys)
+    doomed = [s for s in _owned(ed, keys) if only is None or s.name in only
+              or (tag_of(s) or {}).get("line") in only]
     lines = sum(1 for s in doomed if (tag_of(s) or {}).get("role") == "line")
     names = [s.name for s in doomed]
     top = _top(ed)
-    for s in doomed:
-        top.remove(s)
+    from .wand.prefetch import remove_strips    # the Sequencer's prefetch stopped first (#536)
+    remove_strips(top, doomed)
     _drop_fcurves(scene, names)
     return lines
 
@@ -512,10 +550,7 @@ def _next_number(ed: Any, skip: set[str]) -> int:
 
 def _text_strip(ed: Any, name: str, channel: int, fs: int, fe: int, text: str, style: dict, font: Any) -> Any:
     top = _top(ed)
-    try:
-        s = top.new_effect(name, 'TEXT', channel, fs, length=max(1, fe - fs))
-    except TypeError:                   # 5.1: frame_end
-        s = top.new_effect(name=name, type='TEXT', channel=channel, frame_start=fs, frame_end=fe)
+    s = top.new_effect(name, 'TEXT', channel, fs, length=max(1, fe - fs))
     s.text = text
     for key, value in style["props"].items():
         try:
@@ -577,22 +612,47 @@ def _occupied(ed: Any, skip: set[str]) -> dict[int, list[tuple[float, float]]]:
 
 
 def _place(scene: Any, groups: list[tuple[str, list[dict]]], style: dict, chars: int, lines: int,
-           above: int) -> dict[str, Any]:
+           above: int, targets: list[tuple] | None = None, replace_edited: bool = False) -> dict[str, Any]:
     """Text strips for framed captions: one per caption (and the word strips), on the
-    *Captions* channel above *above*; the earlier captions of the same sources go."""
+    *Captions* channel above *above*; the earlier captions of the same sources go.
+
+    *targets*: ``(key, left, right)`` of the strips captioned now (#538): then only the earlier
+    captions over those strips (or over no strip of their source any more) go, and one edited
+    by hand is kept unless *replace_edited* (no new caption is put over it)."""
     ed = scene.sequence_editor
-    framed_all = [c for _key, framed in groups for c in framed]
-    if not framed_all:
-        raise CaptionsError("No words fall inside the visible part of the strip.")
     keys = {key for key, _framed in groups}
-    doomed = {s.name for s in _owned(ed, keys)}
-    span = (min(c["frame_start"] for c in framed_all), max(c["frame_end"] for c in framed_all))
+    old = [s for s in _owned(ed, keys) if (tag_of(s) or {}).get("role") == "line"]
+    present = []
+    if targets is not None:
+        for s in _media_strips(_top(ed)):
+            path = media_path(s)
+            if path and source_key(path) in keys:
+                present.append((source_key(path), _left(s), _right(s)))
+    doomed_lines, kept = cap.replace_plan(
+        [{"name": s.name, "key": (tag_of(s) or {}).get("source"), "left": _left(s), "right": _right(s),
+          "edited": _edited(s)} for s in old], targets, present, replace_edited)
+    kept_spans = [(_left(s), _right(s)) for s in old if s.name in kept]
+    framed_all = [c for _key, framed in groups for c in framed]
+    under_kept = [c for c in framed_all if any(a < c["frame_end"] and c["frame_start"] < b for a, b in kept_spans)]
+    if under_kept:
+        ids = {id(c) for c in under_kept}
+        groups = [(key, [c for c in framed if id(c) not in ids]) for key, framed in groups]
+        framed_all = [c for c in framed_all if id(c) not in ids]
+    if not framed_all:
+        if kept:
+            raise CaptionsError("Every caption there was edited by hand and is kept ({:d}); turn on Replace "
+                                "Edited Captions to replace them.".format(len(kept)))
+        raise CaptionsError("No words fall inside the visible part of the strip.")
+    doomed = {s.name for s in _owned(ed, keys)
+              if s.name in doomed_lines or (tag_of(s) or {}).get("line") in doomed_lines}
+    spans = [(c["frame_start"], c["frame_end"]) for c in framed_all]
+    span = (min(a for a, _b in spans), max(b for _a, b in spans))
     need = 2 if style["highlight"] else 1
     names = {i: ch.name for i, ch in enumerate(ed.channels)}
-    channel = cap.pick_channel(_occupied(ed, doomed), names, above, span, need)
+    channel = cap.pick_channel(_occupied(ed, doomed), names, above, spans, need)
     if channel is None:
         raise CaptionsError("There's no free channel above the clip for the captions.")
-    replaced = remove_captions(scene, keys)
+    replaced = remove_captions(scene, keys, None if targets is None else doomed_lines)
     ed.channels[channel].name = cap.CHANNEL_NAME
     if need == 2:
         ed.channels[channel + 1].name = cap.HIGHLIGHT_CHANNEL_NAME
@@ -606,7 +666,8 @@ def _place(scene: Any, groups: list[tuple[str, list[dict]]], style: dict, chars:
             text = c["text"].upper() if style["uppercase"] else c["text"]
             s = _text_strip(ed, "cap_{:04d}".format(number), channel, c["frame_start"], c["frame_end"], text,
                             style, font)
-            s[cap.TAG] = _line_tag(key, style["key"], chars, lines, scene, c["frame_start"], c.get("words"))
+            s[cap.TAG] = dict(_line_tag(key, style["key"], chars, lines, scene, c["frame_start"], c.get("words")),
+                              sig=_signature(s))          # what it is now: a later run tells hand edits (#538)
             made += 1
             if style["highlight"]:
                 words += _add_highlights(scene, s, c, style, font, measure)
@@ -618,6 +679,8 @@ def _place(scene: Any, groups: list[tuple[str, list[dict]]], style: dict, chars:
                 s.keyframe_insert("font_size", frame=c["frame_start"] + 3)
     result = {"status": "ok", "lines_created": made, "highlight_strips": words, "channel": channel,
               "first_frame": span[0], "last_frame": span[1] - 1, "style": style["label"], "replaced": replaced}
+    if targets is not None:
+        result["kept_edited"] = len(kept)
     if style["highlight"] and measure is None:
         result["note"] = "The bundled font couldn't be measured here, so there are no word highlights."
     return result
@@ -629,44 +692,94 @@ def _limits(style: dict, scene: Any, max_chars: int, max_lines: int) -> tuple[in
     return int(chars), (1 if lines <= 1 else 2)
 
 
+def _strip_item(ed: Any, s: Any, path: str) -> dict[str, Any]:
+    """A media strip as :func:`captions.plan_strips` / :func:`captions.captions_for_strips` take it."""
+    return {"name": s.name, "type": s.type, "key": source_key(path), "path": path,
+            "left": _left(s), "right": _right(s), "content_start": float(_content_start(s)),
+            "offset": float(getattr(s, "sound_offset", 0.0) or 0.0) if s.type == 'SOUND' else 0.0,
+            "muted": _muted(ed, s), "retimed": _retimed(s)}
+
+
 def add_captions(scene: Any, sources: list, style: str = "CLEAN", language: str | None = None,
-                 transcript_path: str = "", max_chars: int = 0, max_lines: int = 0) -> dict[str, Any]:
-    """Caption *sources* (sound / movie strips) in *style*; the result for the artist / the tool."""
+                 transcript_path: str = "", max_chars: int = 0, max_lines: int = 0,
+                 replace_edited: bool = False) -> dict[str, Any]:
+    """Caption *sources* (sound / movie strips) in *style*; the result for the artist / the tool.
+
+    Every selected strip gets the captions of the part of its media it shows (#538); the
+    transcript is read once per media file.  A movie is heard through a selected sound strip of
+    the same file over its time; muted and retimed strips, and those with no speech or no
+    transcript, are skipped and named (``strips_skipped``).  Earlier captions over the strips
+    captioned now are replaced, except those edited by hand (``kept_edited``) unless
+    *replace_edited*."""
     ed = scene.sequence_editor
     if ed is None:
         raise CaptionsError("The scene “{:s}” has no strips.".format(scene.name))
     st = cap.resolve_style(style, scene.render.resolution_x, scene.render.resolution_y)
     chars, lines = _limits(st, scene, max_chars, max_lines)
-    unique: dict[str, tuple[Any, str]] = {}
+    items = []
     for s in _media_strips(sources):
         path = media_path(s)
         if path:
-            unique.setdefault(source_key(path), (s, path))     # a movie and its sound: once
-    if not unique:
+            items.append(_strip_item(ed, s, path))
+    if not items:
         raise CaptionsError("Select a sound or movie strip to caption.")
     notes = []
-    if transcript_path and len(unique) > 1:
-        active = ed.active_strip
-        key = next((k for k, (s, _p) in unique.items() if s == active), next(iter(unique)))
-        unique = {key: unique[key]}
-        notes.append("A transcript file captions one clip: {:s}.".format(unique[key][0].name))
+    only_key = None
+    keys = list(dict.fromkeys(it["key"] for it in items))
+    if transcript_path and len(keys) > 1:
+        active = getattr(ed.active_strip, "name", None)
+        only_key = next((it["key"] for it in items if it["name"] == active), keys[0])
+        notes.append("A transcript file captions one clip: {:s}.".format(
+            next(it["name"] for it in items if it["key"] == only_key)))
+    todo, outcome, partners = cap.plan_strips(items)
     groups, errors, langs = [], [], []
+    left_out = 0
     fps = _fps(scene)
-    for key, (s, path) in unique.items():
+    for key in dict.fromkeys(it["key"] for it in todo):
+        strips = [it for it in todo if it["key"] == key]
+        if only_key is not None and key != only_key:
+            outcome.update((it["name"], cap.SKIP_NO_TRANSCRIPT) for it in strips)
+            continue
         try:
-            words, lang = load_words(path, language, transcript_path)
+            words, lang = load_words(strips[0]["path"], language, transcript_path)   # once per file
         except CaptionsError as ex:
             errors.append(str(ex))
+            outcome.update((it["name"], cap.SKIP_NO_TRANSCRIPT) for it in strips)
             continue
-        caps = cap.build_captions(words, chars, lines)
-        groups.append((key, cap.to_frames(caps, fps, _content_start(s), _left(s), _right(s))))
-        langs.append(lang or language or "")
+        got = cap.captions_for_strips(words, strips, fps, chars, lines)
+        outcome.update((n, "captioned") for n in got["captioned"])
+        outcome.update((n, cap.SKIP_NO_SPEECH) for n in got["no_speech"])
+        left_out += got["left_out"]
+        if got["captions"]:
+            groups.append((key, got["captions"]))
+            langs.append(lang or language or "")
+    for movie, sounds in partners.items():
+        outcome[movie] = cap.partner_outcome([outcome.get(n, cap.SKIP_NO_SPEECH) for n in sounds])
+    # Two files heard at once (two speakers): their captions share the channel, so none overlaps.
+    flat, dropped = cap.separate([dict(c, key=key) for key, framed in groups for c in framed])
+    left_out += dropped
+    groups = [(key, [c for c in flat if c["key"] == key]) for key, _framed in groups]
+    groups = [(key, framed) for key, framed in groups if framed]
+    captioned = [it["name"] for it in items if outcome.get(it["name"]) == "captioned"]
+    skipped = [{"strip": it["name"], "reason": outcome.get(it["name"], cap.SKIP_NO_SPEECH)}
+               for it in items if outcome.get(it["name"]) != "captioned"]
     if not groups:
-        raise CaptionsError(errors[0] if errors else "There are no words to caption.")
+        if errors:
+            raise CaptionsError(errors[0])
+        raise CaptionsError("There's no speech to caption ({:s}).".format(
+            cap.strips_report(captioned, skipped).split("; ", 1)[-1]))
+    # The strips captioned now, or found silent now: earlier captions over them go.
+    captioned_keys = {k for k, _f in groups}
+    targets = [(it["key"], it["left"], it["right"]) for it in items if it["key"] in captioned_keys
+               and outcome.get(it["name"]) in ("captioned", cap.SKIP_NO_SPEECH)]
     above = max(s.channel for s in _media_strips(sources))      # above every selected clip, kept or not
-    result = _place(scene, groups, st, chars, lines, above)
-    result.update(sources=[s.name for s, _p in unique.values()], language=next((x for x in langs if x), None),
-                  max_chars=chars, max_lines=lines)
+    result = _place(scene, groups, st, chars, lines, above, targets, replace_edited)
+    firsts = [next(it["name"] for it in items if it["key"] == k) for k, _f in groups]
+    result.update(sources=firsts, language=next((x for x in langs if x), None), max_chars=chars, max_lines=lines,
+                  strips_captioned=captioned, strips_skipped=skipped)
+    if left_out:
+        notes.append("{:d} caption{:s} overlapped another strip's and {:s} left out.".format(
+            left_out, "" if left_out == 1 else "s", "was" if left_out == 1 else "were"))
     if errors or notes:
         result["note"] = " ".join(notes + errors + ([result["note"]] if "note" in result else []))
     return result
@@ -761,14 +874,12 @@ def _font_size_curves(scene: Any, name: str) -> list:
     if action is None:
         return []
     paths = {'{:s}["{:s}"].font_size'.format(base, bpy.utils.escape_identifier(name))
-             for base in ("sequence_editor.strips_all", "sequence_editor.sequences_all")}
+             for base in ("sequence_editor.strips_all",)}
     bags = []
     for layer in getattr(action, "layers", ()):
         for strip in layer.strips:
             for bag in getattr(strip, "channelbags", ()):
                 bags.append(bag.fcurves)
-    if not bags and hasattr(action, "fcurves"):
-        bags.append(action.fcurves)
     return [fc for fcurves in bags for fc in fcurves if fc.data_path in paths]
 
 
@@ -791,10 +902,7 @@ def _scale_font_keys(scene: Any, strip: Any, ratio: float) -> None:
 
 
 def _set_right(strip: Any, frame: int) -> None:
-    if hasattr(strip, "right_handle"):
-        strip.right_handle = frame
-    else:
-        strip.frame_final_end = frame
+    strip.right_handle = frame
 
 
 def _look_of(scene: Any, strip: Any) -> dict[str, Any]:
@@ -853,8 +961,8 @@ def relayout_captions(scene: Any, old_res: tuple[int, int] | None = None) -> dic
         st, pieces = lay["style"], lay["pieces"]
         highlight = tuple(old_words[0].color) if old_words else st["highlight"]
         names = [w.name for w in old_words]
-        for w in old_words:
-            top.remove(w)
+        from .wand.prefetch import remove_strips    # the Sequencer's prefetch stopped first (#536)
+        remove_strips(top, old_words)
         if names:
             _drop_fcurves(scene, names)
         props = st["props"]
@@ -886,8 +994,8 @@ def relayout_captions(scene: Any, old_res: tuple[int, int] | None = None) -> dic
                     s.keyframe_insert("font_size", frame=piece["frame_start"] + 3)
             s.location = props["location"]
             s.wrap_width = 1.0 if st["highlight"] else props["wrap_width"]
-            s[cap.TAG] = _line_tag(tag.get("source", ""), key, lay["chars"], lay["lines"], scene,
-                                   piece["frame_start"], piece["words"])
+            s[cap.TAG] = dict(_line_tag(tag.get("source", ""), key, lay["chars"], lay["lines"], scene,
+                                        piece["frame_start"], piece["words"]), sig=_signature(s))
             if st["highlight"] and old_words:
                 style = dict(st, uppercase=False, highlight=highlight)     # the text already is as shown
                 _add_highlights(scene, s, piece, style, font or _font(), _measure(font or _font()))
@@ -935,8 +1043,8 @@ def text_changed(strip: Any, scene: Any = None) -> None:
     top = _top(ed)
     old = [s for s in top if (tag_of(s) or {}).get("line") == strip.name]
     names = [s.name for s in old]
-    for s in old:
-        top.remove(s)
+    from .wand.prefetch import remove_strips    # the Sequencer's prefetch stopped first (#536)
+    remove_strips(top, old)
     _drop_fcurves(scene, names)
     st = cap.resolve_style(key, scene.render.resolution_x, scene.render.resolution_y)
     text = " ".join(strip.text.split())
@@ -989,7 +1097,7 @@ def _turn_owns_undo() -> bool:
 
 
 def tool_add_captions(strips: Any = None, style: str = "CLEAN", language: str | None = None,
-                      transcript_path: str | None = None) -> dict[str, Any]:
+                      transcript_path: str | None = None, replace_edited: bool = False) -> dict[str, Any]:
     """``add_captions`` (MCP): a result dict, ``status`` ``"ok"`` or ``"error"`` + ``message``."""
     try:
         names, key, lang = cap.check_tool_params(strips, style, language)
@@ -1010,9 +1118,12 @@ def tool_add_captions(strips: Any = None, style: str = "CLEAN", language: str | 
             found = [s for s in _media_strips(_top(ed)) if s.select]
             if not found:
                 raise CaptionsError("Name the sound or movie strips to caption (strips=[...]), or select them.")
-        result = add_captions(scene, found, key, lang, transcript_path or "")
-        result["message"] = "{:d} caption lines on channel {:d} ({:s}), frames {:d}-{:d}.".format(
-            result["lines_created"], result["channel"], result["style"], result["first_frame"], result["last_frame"])
+        result = add_captions(scene, found, key, lang, transcript_path or "", replace_edited=bool(replace_edited))
+        result["message"] = "{:d} caption lines on channel {:d} ({:s}), frames {:d}-{:d}, {:s}.".format(
+            result["lines_created"], result["channel"], result["style"], result["first_frame"], result["last_frame"],
+            cap.strips_report(result["strips_captioned"], result["strips_skipped"], result.get("kept_edited", 0)))
+        if result.get("note"):
+            result["message"] += " " + result["note"]
         try:
             if not _turn_owns_undo():       # from a chat turn its own step covers it (#501)
                 bpy.ops.ed.undo_push(message="Add Captions")
@@ -1059,6 +1170,10 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
     transcript_path: StringProperty(  # type: ignore[valid-type]
         name="Transcript", subtype='FILE_PATH', default="",
         description="A transcript file (.json, bfa_coworker.transcript/1) to caption from instead of transcribing")
+    replace_edited: BoolProperty(  # type: ignore[valid-type]
+        name="Replace Edited Captions", default=False,
+        description="Replace captions changed by hand since Auto Captions made them (reworded, moved, trimmed); "
+                    "off: they are kept")
 
     @classmethod
     def poll(cls, context: Any) -> bool:
@@ -1090,6 +1205,7 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
         sub.enabled = not cap.STYLES[self.style]["highlight"]
         sub.prop(self, "lines")
         layout.prop(self, "transcript_path")
+        layout.prop(self, "replace_edited")
         if not self.transcript_path and not transcription_available():
             col = layout.column(align=True)
             col.label(text="Transcription isn't in this build yet:", icon=safe_icon('INFO'))
@@ -1121,11 +1237,11 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
                 return self._transcribe_first(context, scene, sources, language)
         try:
             result = add_captions(scene, sources, self.style, language,
-                                  self.transcript_path, self.max_chars, _lines_value(self.lines))
+                                  self.transcript_path, self.max_chars, _lines_value(self.lines), self.replace_edited)
         except CaptionsError as ex:
             self.report({'ERROR'}, str(ex))
             return {'CANCELLED'}
-        self.report({'WARNING'} if result.get("note") else {'INFO'}, _summary(result))
+        self.report({'WARNING'} if _warn(result) else {'INFO'}, _summary(result))
         return {'FINISHED'}
 
     # -- transcribing first (#516) --
@@ -1135,7 +1251,7 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
         captions).  Without one (a script), or from Adjust Last Operation (no modal there), a
         timer makes them on its own."""
         params = {"style": self.style, "language": language, "max_chars": self.max_chars,
-                  "max_lines": _lines_value(self.lines)}
+                  "max_lines": _lines_value(self.lines), "replace_edited": self.replace_edited}
         # options.is_repeat: the redo panel.  Not Operator.is_repeat(), which is true whenever the
         # last operator run was Auto Captions too.
         options = getattr(self, "options", None)
@@ -1219,10 +1335,18 @@ def _dialog_state(context: Any, language: str) -> tuple[list[str], str]:
     return list(_DIALOG["todo"]), _DIALOG["problem"]
 
 
+def _warn(result: dict) -> bool:
+    """The report is a warning: a note, a strip skipped or a hand-edited caption kept (#538)."""
+    return bool(result.get("note") or result.get("strips_skipped") or result.get("kept_edited"))
+
+
 def _summary(result: dict) -> str:
     text = "{:d} captions on channel {:d}".format(result["lines_created"], result["channel"])
     if result.get("replaced"):
         text += " (replacing {:d})".format(result["replaced"])
+    if "strips_captioned" in result:            # Auto Captions: which strips, which skipped and why (#538)
+        text += " " + cap.strips_report(result["strips_captioned"], result.get("strips_skipped") or (),
+                                        result.get("kept_edited", 0))
     if result.get("skipped"):
         text += "; {:d} broken cues skipped".format(result["skipped"])
     if result.get("note"):

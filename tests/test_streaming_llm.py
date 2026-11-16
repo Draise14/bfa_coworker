@@ -42,6 +42,7 @@ Run with::
 
 __all__ = ()
 
+import http.client
 import io
 import json
 import os
@@ -138,6 +139,33 @@ _safe_request_messages = _extract_func(
 _stop_event = __import__("threading").Event()
 
 
+def _load_transport_module():
+    """The real llm_transport (no bpy, no relative imports at module level) -- the
+    stream function's watch helpers come from it (#544)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_lt_for_stream_tests", _LT_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_LT = _load_transport_module()
+# What the stream function reads besides the names each namespace sets (#544).
+_WATCH_GLOBALS = {
+    "threading": __import__("threading"),
+    "http": http,
+    "thinking_fields": _LT.thinking_fields,
+    "_StreamWatch": _LT._StreamWatch,
+    "_start_watcher": _LT._start_watcher,
+    "stream_limit_message": _LT.stream_limit_message,
+    "is_context_overflow": _LT.is_context_overflow,
+    "_FIRST_TOKEN_LIMIT_LOCAL": 180.0,
+    "_FIRST_TOKEN_LIMIT_REMOTE": 600.0,
+    "_PREFILL_LIMIT": 600.0,
+    "_stop": lambda: _stop_event,
+}
+
+
 def _quiet_print(*args, **kwargs):
     """Swallow the helper's console logging.
 
@@ -173,6 +201,7 @@ _openai_chat_completions_stream = _extract_func(
         "_agent_state": _STREAM_STATE,
         "_state": lambda: _STREAM_STATE,    # the turn's state (Threads 1, #357)
         "print": _quiet_print,
+        **_WATCH_GLOBALS,
     },
 )
 
@@ -864,6 +893,8 @@ class TestTurnLoopUsesStreamingWrapper(unittest.TestCase):
             "on_status": None,
             "on_stream_text": None,
             "on_stream_reasoning": None,
+            "llm_port_local": None,         # remote (#544: Local passes local=True)
+            **_WATCH_GLOBALS,
         }
         start = _SOURCE.find("def openai_chat_completions_stream(")
         end = _SOURCE.find("\ndef _mcp_tools_to_openai(", start)

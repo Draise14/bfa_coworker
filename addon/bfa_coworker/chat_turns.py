@@ -19,6 +19,7 @@ __all__ = (
     "group_turns",
     "is_system_note_msg",
     "split_turn",
+    "turn_notices",
 )
 
 
@@ -98,6 +99,12 @@ def split_turn(turn: list[dict]) -> tuple[dict | None, list[dict], dict | None]:
         elif role in ("reasoning", "tool", "user", "compaction") or is_system_note_msg(msg):
             process_msgs.append(msg)
         elif role == "assistant":
-            if not msg.get("tool_calls"):
+            if not msg.get("tool_calls") and not msg.get("notice"):
                 conclusion_msg = msg
     return user_msg, process_msgs, conclusion_msg
+
+
+def turn_notices(turn: list[dict]) -> list[dict]:
+    """The turn's notices (#544): lines the chat shows and the model never sees --
+    what a request left out to fit the context window, or why the turn stopped."""
+    return [msg for msg in turn if msg.get("role") == "assistant" and msg.get("notice")]

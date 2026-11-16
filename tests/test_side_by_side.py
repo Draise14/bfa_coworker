@@ -231,6 +231,9 @@ class _Conn:
     def sendall(self, _data):
         pass
 
+    def send(self, data):
+        return len(data)
+
     def close(self):
         pass
 

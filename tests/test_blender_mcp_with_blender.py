@@ -1115,7 +1115,7 @@ class TestInteractiveServer(_TestServerMixin, unittest.TestCase):
     _port = _PORT_INTERACTIVE
 
 
-BLENDER_VERSION_MIN = (5, 1)
+BLENDER_VERSION_MIN = (5, 2)
 
 
 def test_binaries_available() -> bool:

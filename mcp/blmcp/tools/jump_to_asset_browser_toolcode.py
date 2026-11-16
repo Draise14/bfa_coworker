@@ -56,9 +56,8 @@ def main(params: Params) -> Result:
     ]
 
     def _is_asset_ui(ui_type: str) -> bool:
-        # Blender 4.x+: 'ASSETS' (+ subgroups like 'ASSETS_OBJECTS').
-        # Blender 3.x: 'ASSET_BROWSER'.
-        return ui_type.startswith("ASSETS") or ui_type == "ASSET_BROWSER"
+        # 'ASSETS' (+ subgroups like 'ASSETS_OBJECTS').
+        return ui_type.startswith("ASSETS")
 
     # 1) Reuse an existing Asset Browser area in any workspace.
     for workspace in bpy.data.workspaces:
@@ -134,18 +133,16 @@ def _apply_filters(space, params: Params) -> tuple[str | None, str | None]:
 
     if params.library_name:
         try:
-            # Blender 4.x attribute name; 3.x used `asset_library_reference`.
-            ref_attr = "asset_library_ref" if hasattr(p, "asset_library_ref") else "asset_library_reference"
-            setattr(p, ref_attr, params.library_name)
+            p.asset_library_reference = params.library_name
             lib_set = params.library_name
         except Exception:
             lib_set = None
 
     if params.catalog_path:
-        # 4.x catalogs are addressed by UUID; 3.x browsed directories.
+        # Catalogs are addressed by UUID; anything else is a folder in the library.
         looks_uuid = len(params.catalog_path) == 36 and "-" in params.catalog_path
         try:
-            if looks_uuid and hasattr(p, "catalog_id"):
+            if looks_uuid:
                 p.catalog_id = params.catalog_path
                 cat_set = params.catalog_path
             elif hasattr(p, "directory"):

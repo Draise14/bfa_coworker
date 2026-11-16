@@ -302,6 +302,29 @@ _FORCE_COMPACT_KEEP_RECENT = 8
 # up the rest if it hits the limit.
 _MIN_REPLY_TOKENS = 256
 
+# -- Fitting a Local request, and room for a useful reply (#544) --------------
+# A reply needs room for its thinking AND for the answer itself (a tool call with
+# a short script, or a few paragraphs).  The A27 Local test's answers after the
+# thinking were up to ~1,000 tokens.  When the room left after the prompt is
+# smaller than thinking + this, the request's thinking is reduced (never below
+# ``_MIN_THINKING_TOKENS``) or switched off.
+_USEFUL_REPLY_TOKENS = 1024
+_MIN_THINKING_TOKENS = 256
+# Context sizes the Local preferences offer (the Context Window buttons).
+_CTX_SIZES = (8192, 16384, 32768, 65536, 131072, 262144)
+# The domains an editor's chat works in: ranked as related when a request has
+# to be made smaller (#544).  Bforartists and Blender share these editor kinds.
+_EDITOR_DOMAINS: dict[str, frozenset[str]] = {
+    "VIEW_3D": frozenset({"modeling"}),
+    "NODE_EDITOR": frozenset({"material", "geometry_nodes"}),
+    "SEQUENCE_EDITOR": frozenset({"vse"}),
+    "CLIP_EDITOR": frozenset({"vse"}),
+    "GRAPH_EDITOR": frozenset({"animation"}),
+    "DOPESHEET_EDITOR": frozenset({"animation"}),
+    "NLA_EDITOR": frozenset({"animation"}),
+    "IMAGE_EDITOR": frozenset({"material", "rendering"}),
+}
+
 # Conversation reserve for the domain-skill allowance.  The skill reference
 # is injected only into whatever space is genuinely SPARE after the messages,
 # the tool schema, and this reserve (room for the turn's own tool exchanges and
@@ -923,9 +946,13 @@ def _prompt_preflight(
     tools_tokens = _estimate_tools_tokens(tools)
     headroom = budget - tools_tokens
     if headroom <= 0:
-        # Degenerate (tool schema alone eats the budget): fall back to half
-        # the budget rather than trimming the prompt to nothing.
-        headroom = max(budget // 2, 1024)
+        # The tool schema alone is larger than the budget: the request cannot
+        # fit, whatever the history (#544).  This used to fall back to half the
+        # budget for the messages and report "fits", so an 18K-token request
+        # was sent to a 16K window; the caller now makes the tool set smaller.
+        return messages, (
+            "The tools alone (~{:d} tokens) are larger than the {:d}-token prompt "
+            "budget.".format(tools_tokens, budget))
     if _estimate_messages_tokens(messages) <= headroom:
         return messages, None
     fitted = _fit_history_to_budget(messages, headroom)
@@ -940,6 +967,128 @@ def _prompt_preflight(
                 _estimate_messages_tokens(fitted), tools_tokens, budget)
         )
     return fitted, None
+
+
+# -- #544: make a Local request fit, or say why it is not sent ----------------
+# The order a too-big request is made smaller in -- fixed, and what the chat
+# reports.  Never touched: the core tools (``_SURFACE_TOOLS`` + load_tools +
+# update_plan), the system prompt's own rules, the user's request.
+#   1. the domain-skill reference (the optional skill notes for the domains);
+#   2. tool domains not related to the request, least related first: those only
+#      found in the scene or the preferences (Bforartists' default asset
+#      libraries switch "assets" on) or left from earlier turns, then the chat's
+#      own editor's domains (``_EDITOR_DOMAINS``); the larger domain first when
+#      equally related;
+#   3. the built-in skill notes of the system prompt;
+#   4. older history: the sent copy is trimmed oldest first, and when that is
+#      not enough the turn loop compacts (checkpoint + summary) and tries again;
+#   5. the domains the user's message names, then those the model loaded this
+#      turn with load_tools -- the last thing left out before refusing.
+# What 1-3 and 5 left out is said in one line in the chat, with the Context
+# Window that would keep it.  When even 1-5 do not make it fit, nothing is sent
+# and the chat says so in full (:func:`_too_big_text`).
+
+def _domain_drop_order(
+    domains: set[str],
+    message_domains: set[str],
+    editor_domains: set[str] | frozenset[str],
+    turn_loaded: set[str],
+) -> tuple[list[str], list[str]]:
+    """``(before_history, after_history)``: the optional *domains* in the order
+    they are left out (steps 2 and 5 above)."""
+    known = [d for d in domains if d in _TOOL_DOMAINS]
+
+    def rank(d: str) -> tuple[int, int, str]:
+        related = 1 if d in editor_domains else 0
+        return (related, -len(_TOOL_DOMAINS[d]), d)
+    late = {d for d in known if d in message_domains or d in turn_loaded}
+    early = sorted((d for d in known if d not in late), key=rank)
+    later = sorted((d for d in late if d not in turn_loaded), key=rank) + \
+        sorted((d for d in late if d in turn_loaded), key=rank)
+    return early, later
+
+
+def _ctx_label(tokens: int) -> str:
+    return "{:d}K".format(max(1, int(tokens) // 1024))
+
+
+def _ctx_needed(prompt_tokens: int, thinking: int | None = None) -> int:
+    """The smallest Context Window size (of the preference's buttons) that holds a
+    prompt of *prompt_tokens* (estimated) with the usual margins and room for a
+    useful reply after *thinking*.  0 when even the largest is too small."""
+    reply = _USEFUL_REPLY_TOKENS + max(0, int(thinking or 0))
+    for size in _CTX_SIZES:
+        if size - max(int(size * 0.1), 256) - _TEMPLATE_OVERHEAD_TOKENS - reply >= prompt_tokens:
+            return size
+    return 0
+
+
+def _thinking_for_reply(room: int, budget: int | None) -> int | None:
+    """The thinking budget for one Local request with *room* tokens for the reply.
+
+    *budget*: the configured one (``None`` = no cap).  The answer after the
+    thinking needs ``_USEFUL_REPLY_TOKENS``; when the room cannot hold both, the
+    thinking is cut to what is left (at least ``_MIN_THINKING_TOKENS``) or
+    switched off (0).  A budget that fits is returned unchanged."""
+    spare = int(room) - _USEFUL_REPLY_TOKENS
+    if budget is not None and budget <= spare:
+        return budget
+    if spare >= _MIN_THINKING_TOKENS:
+        return spare
+    return 0
+
+
+def _fit_note_text(left_out: dict[str, Any], ctx: int, needed: int) -> str:
+    """One line: what a request left out to fit, and how to get it back."""
+    parts = []
+    domains = list(left_out.get("domains") or [])
+    if domains:
+        names = [d.replace("_", " ") for d in domains]
+        listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+        parts.append("the {:s} tools".format(listed))
+    if left_out.get("skills") or left_out.get("builtin"):
+        parts.append("the skill notes")
+    if not parts:
+        return ""
+    what = " and ".join(parts)
+    back = ("raise the Context Window to {:s}".format(_ctx_label(needed)) if needed > ctx
+            else "start a new chat or raise the Context Window")
+    return ("To fit the {:s} context window, this request left out {:s} (the model can load tools it "
+            "needs); to keep them, {:s}.".format(_ctx_label(ctx), what, back))
+
+
+def _too_big_text(sizes: dict[str, int], ctx: int, budget: int, local: bool) -> str:
+    """The full message when a request cannot be made to fit and is not sent."""
+    need = sizes.get("messages", 0) + sizes.get("tools", 0)
+    lines = ["**This request was not sent: it does not fit the model's context window.**", ""]
+    lines.append(
+        "Even without the optional tools and skill notes it needs about {:,d} tokens -- the system "
+        "prompt and the conversation about {:,d}, the core tools about {:,d} -- and the {:s} window "
+        "leaves {:,d} for the request (the rest is kept for the reply).".format(
+            need, sizes.get("messages", 0), sizes.get("tools", 0), _ctx_label(ctx), budget))
+    lines.append("")
+    if local:
+        needed = _ctx_needed(need)
+        lines.append("To fix it: raise the **Context Window** to **{:s}** (Preferences > Add-ons > Coworker, "
+                     "Local LLM; stop the model, pick the size, start it again), or start a new chat."
+                     .format(_ctx_label(needed) if needed else "a larger size"))
+    else:
+        lines.append("To fix it: choose a model with a larger context window, or start a new chat.")
+    return "\n".join(lines)
+
+
+def _add_notice(history: list[dict[str, Any]], text: str, kind: str = "info") -> None:
+    """A message the chat shows in the turn (#544) and the model never sees: a
+    line on what a request left out, or why a turn stopped.  Dropped from every
+    request by :func:`_strip_ui_only_from_history`."""
+    if not text:
+        return
+    for m in reversed(history):
+        if m.get("role") == "user" and not session_memory.is_system_note(m):
+            break
+        if m.get("notice") == kind and m.get("content") == text:
+            return          # already said in this turn
+    history.append({"role": "assistant", "content": text, "notice": kind})
 
 
 def _strip_think_tags(text: str) -> str:
@@ -1076,11 +1225,11 @@ def _strip_ui_only_from_history(messages: list[dict[str, Any]]) -> list[dict[str
     that makes the model answer the greeting instead of the user's request.
 
     The ``ui_only`` key is also dropped from the returned dicts so it never
-    reaches the API payload.
+    reaches the API payload.  The chat's notices (#544, :func:`_add_notice`) go too.
     """
     cleaned: list[dict[str, Any]] = []
     for m in messages:
-        if m.get("ui_only"):
+        if m.get("ui_only") or m.get("notice"):
             continue
         if "ui_only" in m:
             m = {k: v for k, v in m.items() if k != "ui_only"}
@@ -1531,6 +1680,75 @@ def _overflow_prompt_tokens(error_text: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+def _overflow_ctx(error_text: str) -> int:
+    """The server's context size from a context-overflow 400 (llama-server's
+    ``"n_ctx": 16384`` / "available context size (16384 tokens)"), or 0."""
+    m = re.search(r'"n_ctx"\s*:\s*(\d+)', error_text or "") or \
+        re.search(r"available context size \((\d+) tokens\)", error_text or "")
+    return int(m.group(1)) if m else 0
+
+
+def _payload_key(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None) -> str:
+    """What makes two requests the same request (#544: a refused one is never re-sent)."""
+    return json.dumps({"m": messages, "t": [t.get("function", {}).get("name", "") for t in (tools or [])]},
+                      sort_keys=True, default=str)
+
+
+def _refused_text(real: int, server_ctx: int, local: bool, thinking: int | None) -> str:
+    """The full message when the server refused a request as too big and the
+    smaller rebuild was the same request, so it is not sent again (#544)."""
+    lines = ["**The model server refused this request: it is larger than the context window.**", ""]
+    if real and server_ctx:
+        lines.append("The request has {:,d} tokens and the server's window holds {:,d}. Coworker made the "
+                     "request as small as it can and it stayed the same, so it was not sent again."
+                     .format(real, server_ctx))
+    else:
+        lines.append("Coworker made the request as small as it can and it stayed the same, so it was not "
+                     "sent again.")
+    lines.append("")
+    if local:
+        needed = _ctx_needed(real, thinking) if real else 0
+        lines.append("To fix it: raise the **Context Window** to **{:s}** (Preferences > Add-ons > Coworker, "
+                     "Local LLM; stop the model, pick the size, start it again), or start a new chat."
+                     .format(_ctx_label(needed) if needed else "a larger size"))
+    else:
+        lines.append("To fix it: choose a model with a larger context window, or start a new chat.")
+    return "\n".join(lines)
+
+
+def _no_answer_text(detail: str, kind: str, local: bool, ctx: int) -> str:
+    """The full message in the chat when a request got no answer (#544)."""
+    if kind == "stream_timeout":
+        lines = ["**No answer from the model.**", "", detail or "The model sent nothing.", ""]
+        if local:
+            lines.append("To fix it: stop the model, lower the **Context Window**{:s} (Preferences > Add-ons > "
+                         "Coworker, Local LLM) or choose a smaller model, close other programs that use the "
+                         "graphics card, then start it again.".format(
+                             " (now {:s})".format(_ctx_label(ctx)) if ctx > 0 else ""))
+        else:
+            lines.append("Try again in a moment, or choose another model.")
+        return "\n".join(lines)
+    return "**The request failed.**\n\n" + (detail or "No response from the model.")
+
+
+def _cut_off_text(room: int, thinking_off: bool, local: bool, prompt_tokens: int, thinking: int | None) -> str:
+    """The full message when a reply was cut off again after the one retry (#544)."""
+    lines = ["**The reply was cut off twice, so this turn stopped here.**", ""]
+    if local:
+        lines.append("The context window is nearly full: about {:,d} tokens were left for the model's reply{:s}, "
+                     "and one more try did not finish it. The work so far is kept.".format(
+                         room, " even with thinking switched off" if thinking_off else ""))
+        needed = _ctx_needed(prompt_tokens, thinking)
+        lines.append("")
+        lines.append("To fix it: start a new chat, or raise the **Context Window**{:s}; a lower Reasoning "
+                     "Effort also leaves more room for the answer.".format(
+                         " to **{:s}**".format(_ctx_label(needed)) if needed else ""))
+    else:
+        lines.append("The model's reply hit the reply limit ({:,d} tokens) and one more try did not finish it. "
+                     "The work so far is kept. Ask for the rest in smaller steps.".format(room))
+    return "\n".join(lines)
+
+
 def _drop_stale_notes(history: list[dict[str, Any]], kind: str) -> None:
     """Remove earlier injected notes of *kind* from the CURRENT turn.
 
@@ -1728,6 +1946,7 @@ def _detect_domain_from_scene() -> set[str]:
 def _build_tool_set(
     all_openai_tools: list[dict[str, Any]],
     domains: set[str] | None,
+    log: bool = True,
 ) -> list[dict[str, Any]]:
     """Build the tool set for local AND remote mode: surface + domains + load_tools.
 
@@ -1752,8 +1971,9 @@ def _build_tool_set(
     # their order).
     filtered.sort(key=lambda t: t.get("function", {}).get("name", ""))
 
-    print("[Coworker] _build_tool_set: {:d} -> {:d} tools (domains={:s})".format(
-        len(all_openai_tools), len(filtered), ",".join(sorted(domains)) if domains else "none"))
+    if log:
+        print("[Coworker] _build_tool_set: {:d} -> {:d} tools (domains={:s})".format(
+            len(all_openai_tools), len(filtered), ",".join(sorted(domains)) if domains else "none"))
     return filtered
 
 
@@ -1838,7 +2058,8 @@ class AgentState:
     thinking_dots: int = 0  # Monotonic tick; UI wraps it modulo the spinner frames
     # Pre-first-token activity phase so the UI can say "reading" / "warming up"
     # instead of showing "Thinking (0s)", which reads as frozen while a local
-    # model loads/warms.  Values: "" (idle) | "reading" | "warming" | "thinking".
+    # model loads/warms.  Values: "" (idle) | "reading" | "warming" | "waiting"
+    # (a Local request sent, no token yet, #544) | "thinking".
     turn_phase: str = ""
     # Status line for the chat panel, written from the turn WORKER thread (a
     # plain-Python field).  The main-thread timer mirrors it into the UI
@@ -2130,6 +2351,11 @@ def request_stop(thread: "threads.Thread | None" = None) -> None:
     thread_stop(thread).set()
     state.is_thinking = False
     state.thinking_start_time = 0.0
+    # An error left from an earlier run is not this Stop's (#544): after Stop
+    # the chat showed a stale "LLM stream failed" from the turn before.
+    state.error = ""
+    state.error_full = ""
+    state.error_kind = ""
 
 
 def clear_stop(thread: "threads.Thread | None" = None) -> None:
@@ -6140,7 +6366,8 @@ def _release_scene_lock() -> None:
         print("[Coworker] _release_scene_lock: no MCP port -- deferring unlock")
         return
     try:
-        raw = _call_internal(*co_work_guard.build_unlock_code())
+        with co_work_guard.releasing():     # #548: the bridge doesn't lift the lock around the unlock
+            raw = _call_internal(*co_work_guard.build_unlock_code())
         # Only forget the priors when the unlock actually SUCCEEDED.  A
         # returned error (the tool result, which does not raise) or an
         # unparseable body means some datablocks may still be locked --
@@ -6453,7 +6680,7 @@ def _memory_writer_factory(llm_url: str, api_key: str, model: str, max_tokens: i
         try:
             response = _transport.openai_chat_completions(
                 llm_url, messages, None, api_key, model,
-                max_tokens=max_tokens, thinking_budget_tokens=0,
+                max_tokens=max_tokens, thinking_budget_tokens=None,
             )
         finally:
             (_agent_state.error, _agent_state.error_full,
@@ -6860,13 +7087,17 @@ def _run_conversation_turn_inner(
     _agent_state.last_timings = {}
     # Fresh per-turn cost ledger (Tier 3i): prefill vs generation vs overhead.
     _agent_state.reset_turn_cost()
-    # Clear any warning from the previous turn.
+    # Clear any warning -- and error (#544) -- from the previous turn: a turn
+    # that ends by Stop or without a request must not show the last one's.
     _agent_state.warning = ""
+    _agent_state.error = ""
+    _agent_state.error_full = ""
+    _agent_state.error_kind = ""
 
     def _llm_request(
         send_messages: list[dict[str, Any]],
         send_tools: list[dict[str, Any]],
-        budget: int = 0,
+        budget: int | None = None,
     ) -> dict[str, Any] | None:
         """Run one LLM request with streaming and usage capture (issue #69).
 
@@ -6900,12 +7131,17 @@ def _run_conversation_turn_inner(
             if on_stream_reasoning:
                 on_stream_reasoning(text)
 
+        _local = llm_port_local is not None
+        if _local and _agent_state.turn_phase != "thinking":
+            # Until the first token: "Waiting for the model" (#544), not "Dreaming".
+            _agent_state.turn_phase = "waiting"
         response = openai_chat_completions_stream(
             llm_url, send_messages, send_tools, api_key, model,
             max_tokens, thinking_budget_tokens=budget, chat_mode=chat_mode,
             on_status=on_status,
             on_stream_text=_live_text,
             on_stream_reasoning=_live_reasoning,
+            local=_local,
         )
         if response is None:
             # Streaming not supported by this endpoint -- non-streaming fallback.
@@ -7031,11 +7267,13 @@ def _run_conversation_turn_inner(
     # `thinking_budget_tokens` is a llama-server parameter; strict
     # OpenAI-compatible endpoints reject unknown fields, so only send it
     # on the local path (llm_port_local is None in remote mode).
-    thinking_budget = (
-        getattr(_llm_cfg, 'thinking_budget_tokens', 0)
-        if llm_port_local is not None else 0
+    # ``None`` = no field (no cap: the preference's "Off", and every remote
+    # request); the transport sends 0 as "thinking off" (#544).
+    thinking_budget: int | None = (
+        int(getattr(_llm_cfg, 'thinking_budget_tokens', 0) or 0) or None
+        if llm_port_local is not None else None
     )
-    if thinking_budget > 0:
+    if thinking_budget:
         print("[Coworker] run_conversation_turn: thinking_budget_tokens={:d}".format(thinking_budget))
     print("[Coworker] run_conversation_turn: using max_tokens={:d}".format(max_tokens))
 
@@ -7117,6 +7355,15 @@ def _run_conversation_turn_inner(
         _loaded_domains.update(_detected_domains)
         openai_tools = _build_tool_set(_all_tools, _loaded_domains)
         _domain_skill_domains = set(_loaded_domains)
+    # #544: how related each domain is to THIS request, for making it fit (see
+    # _domain_drop_order): the ones the message names, the chat's editor's, and
+    # the ones the model loads during the turn.  ``_fit`` keeps what was left
+    # out this turn (for the one line in the chat) and the last sizes.
+    _message_domains: set[str] = _detect_domains(user_message) if openai_tools else set()
+    _editor_domains = _EDITOR_DOMAINS.get(str(getattr(thread, "editor", "") or ""), frozenset())
+    _turn_loaded_domains: set[str] = set()
+    _fit: dict[str, Any] = {"domains": [], "skills": False, "builtin": False, "full": 0,
+                            "sizes": {}, "said": ""}
 
     # -- Request payload builder ----------------------------------------
     # Extracted so the context-overflow recovery can rebuild the payload
@@ -7124,8 +7371,18 @@ def _run_conversation_turn_inner(
     # slice/strip/trim/inject/budget sequence.  Closes over ``history``,
     # ``openai_tools`` and ``prompt_budget``; returns ``(messages, error)``
     # where *error* is set only when even the pinned turn cannot fit.
-    def _build_send_messages() -> tuple[list[dict[str, Any]], str | None]:
+    # *reserve*: tokens to keep free beyond the budget's own reply floor, and
+    # *room_only*: a rebuild that only makes room for a useful reply -- it
+    # never leaves out the request's own domains (step 5 below) (#544).
+    def _build_send_messages(reserve: int = 0, room_only: bool = False) -> tuple[list[dict[str, Any]], str | None]:
         nonlocal openai_tools  # may be reduced below to fit the window
+        if _all_tools and chat_mode != "ASK":
+            # The full wanted set every time (#544): what a tight request left
+            # out comes back once there is room again.
+            openai_tools = _build_tool_set(_all_tools, _loaded_domains, log=False)
+        _budget = prompt_budget - max(0, int(reserve)) if prompt_budget > 0 else 0
+        if prompt_budget > 0 and _budget < 1024:
+            _budget = min(prompt_budget, 1024)
         # Slice history to avoid unbounded context growth.  Always keep the
         # system prompt (index 0) if present.  Must preserve tool-call pairs:
         # each "tool" role message MUST follow an "assistant" with tool_calls.
@@ -7335,78 +7592,108 @@ def _run_conversation_turn_inner(
                     {"type": "image_url", "image_url": {"url": _u}} for _u in _uris]
                 msgs[_pi] = _pic_msg
 
-        # -- Enforce the token budget, then preflight ------------------
-        # The message-count cap above is a blunt instrument: a few large tool
-        # results can still overflow a small local context window.  Trim
-        # oldest-first, then run the last-check preflight (counts history +
-        # tool schema) which re-trims or surfaces a friendly, actionable
-        # error instead of a raw server 400.
+        # -- Make the request fit (#544), then preflight ------------------
+        # The fixed order is documented above _domain_drop_order: the skill
+        # reference, the domains not related to this request, the built-in
+        # skill notes, older history, then the request's own domains.  Every
+        # step changes the SENT copy only.  Only when all of it is not enough
+        # is the request refused -- with the sizes and the fix, in full.
         if prompt_budget > 0:
+            _sys_ok = bool(msgs) and msgs[0].get("role") == "system"
+
+            def _over() -> bool:
+                return _estimate_messages_tokens(msgs) + _estimate_tools_tokens(openai_tools) > _budget
+            _fit["full"] = max(int(_fit["full"]),
+                               _estimate_messages_tokens(msgs) + _estimate_tools_tokens(openai_tools))
+            _early, _late = _domain_drop_order(
+                set(_loaded_domains), _message_domains, _editor_domains, _turn_loaded_domains)
+            _kept = set(_loaded_domains)
+            _left: dict[str, Any] = {"domains": [], "skills": False, "builtin": False}
+            # 1. The domain-skill reference.
+            if _over() and _domain_skills_text and _sys_ok:
+                _stripped = dict(msgs[0])
+                _stripped["content"] = str(_stripped.get("content") or "").replace(
+                    "\n\n" + _domain_skills_text, "")
+                msgs[0] = _stripped
+                _left["skills"] = True
+            # 2. Tool domains not related to this request, least related first.
+            for _d in _early:
+                if not _over():
+                    break
+                _kept.discard(_d)
+                _left["domains"].append(_d)
+                openai_tools = _build_tool_set(_all_tools, _kept, log=False)
+            # 3. The built-in skill notes of the system prompt.
+            if _over() and _sys_ok:
+                _base_text = str(msgs[0].get("content") or "")
+                _lean = _strip_builtin_skills(_base_text)
+                if _lean != _base_text:
+                    msgs[0] = {**msgs[0], "content": _lean}
+                    _left["builtin"] = True
+            # 4. Older history (oldest first, the sent copy); the preflight
+            # re-trims and is the last check.
             _before = _estimate_messages_tokens(msgs)
-            msgs = _fit_history_to_budget(msgs, prompt_budget)
-            # Trimming can cut a tool-call exchange in half -- repair again.
-            msgs = _repair_tool_call_pairs(msgs)
+            msgs, _err = _prompt_preflight(msgs, openai_tools, _budget)
             _after = _estimate_messages_tokens(msgs)
             if _after < _before:
                 print("[Coworker] run_conversation_turn: trimmed prompt "
                       "{:d} -> {:d} tokens ({:d} messages)".format(
                           _before, _after, len(msgs)))
-            msgs, _err = _prompt_preflight(msgs, openai_tools, prompt_budget)
-            # Last-resort degradation: if even the trimmed/pinned turn does not
-            # fit, drop the (optional) domain-skill reference and re-check.
-            # Only when THAT still fails do we surface the friendly error, so a
-            # turn is refused solely by genuinely unavoidable content.
-            if _err and _domain_skills_text and msgs and msgs[0].get("role") == "system":
-                _stripped = dict(msgs[0])
-                _stripped["content"] = str(_stripped.get("content") or "").replace(
-                    "\n\n" + _domain_skills_text, "")
-                msgs[0] = _stripped
-                print("[Coworker] run_conversation_turn: dropped domain skills to "
-                      "fit the context window")
-                msgs, _err = _prompt_preflight(msgs, openai_tools, prompt_budget)
+            # 5. The domains the request itself named or loaded.
+            for _d in _late:
+                if not _err or room_only:
+                    break
+                _kept.discard(_d)
+                _left["domains"].append(_d)
+                openai_tools = _build_tool_set(_all_tools, _kept, log=False)
+                msgs, _err = _prompt_preflight(msgs, openai_tools, _budget)
+            _fit["sizes"] = {"messages": _estimate_messages_tokens(msgs),
+                             "tools": _estimate_tools_tokens(openai_tools)}
+            if not _err:
+                for _d in _left["domains"]:
+                    if _d not in _fit["domains"]:
+                        _fit["domains"].append(_d)
+                _fit["skills"] = bool(_fit["skills"] or _left["skills"])
+                _fit["builtin"] = bool(_fit["builtin"] or _left["builtin"])
+            if _left["domains"] or _left["skills"] or _left["builtin"]:
+                print("[Coworker] run_conversation_turn: to fit the {:d}-token budget, left out "
+                      "domains={:s} skills={:s} built-in skills={:s} -> {:d} tools, ~{:d} tokens".format(
+                          _budget, ",".join(_left["domains"]) or "-", str(_left["skills"]),
+                          str(_left["builtin"]), len(openai_tools),
+                          _fit["sizes"]["messages"] + _fit["sizes"]["tools"]))
             if _err:
-                # Last resort: the fixed tool schema may be too large for the
-                # window (a small context, or a broad pre-detected domain set).
-                # Reduce it to the always-available surface tools plus
-                # ``load_tools`` -- the model can re-load domains on demand --
-                # and re-check before refusing the turn.  This keeps a first
-                # turn on a tight window working instead of failing outright.
-                _minimal_tools = [
-                    t for t in _all_tools
-                    if t.get("function", {}).get("name") in _SURFACE_TOOLS
-                ]
-                _minimal_tools.append(_LOAD_TOOLS_SCHEMA)
-                _minimal_tools.append(_PLAN_TOOL_SCHEMA)
-                _minimal_tools.sort(
-                    key=lambda t: t.get("function", {}).get("name", ""))
-                _msgs_min, _err_min = _prompt_preflight(
-                    msgs, _minimal_tools, prompt_budget)
-                if _err_min is None:
-                    openai_tools = _minimal_tools
-                    print("[Coworker] run_conversation_turn: reduced the tool schema "
-                          "to surface tools to fit the context window")
-                    msgs, _err = _msgs_min, _err_min
-            if _err and msgs and msgs[0].get("role") == "system":
-                # Final degradation: the built-in skills block is by far the
-                # largest part of the local system prompt.  Drop it from the
-                # SENT copy (never the stored one) alongside the minimal tool
-                # set, so a turn on a small window still runs instead of
-                # stopping.  The API-docs tools remain available for lookups.
-                _stripped = dict(msgs[0])
-                _stripped["content"] = _strip_builtin_skills(
-                    str(_stripped.get("content") or ""))
-                _msgs_sk, _err_sk = _prompt_preflight(
-                    [_stripped] + msgs[1:], _minimal_tools, prompt_budget)
-                if _err_sk is None:
-                    msgs = _msgs_sk
-                    openai_tools = _minimal_tools
-                    _err = None
-                    print("[Coworker] run_conversation_turn: dropped built-in "
-                          "skills to fit the context window")
+                print("[Coworker] run_conversation_turn: the request cannot fit -- {:s}".format(_err))
+                _err = _too_big_text(_fit["sizes"], ctx_size_used, _budget, local=True)
             # Drop addon bookkeeping keys (turn_start, system_note, ...)
             # from the wire copy LAST -- the steps above key on them.
             return _strip_internal_keys(msgs), _err
         return _strip_internal_keys(msgs), None
+
+    def _stop_turn_with(full: str, short: str, status: str) -> None:
+        """End the turn on an error the user must act on (#544): the whole text in
+        the chat (a notice the model never sees), a short line in the header."""
+        _agent_state.is_thinking = False
+        _agent_state.thinking_start_time = 0.0
+        _agent_state.turn_phase = ""
+        _add_notice(history, full, kind="error")
+        _agent_state.error = short
+        _agent_state.error_full = full
+        if on_status:
+            on_status(status)
+
+    def _say_what_was_left_out() -> None:
+        """One line in the chat when this turn's requests left something out (#544)."""
+        _line = _fit_note_text(_fit, ctx_size_used, _ctx_needed(int(_fit["full"]), thinking_budget))
+        if _line and _line != _fit["said"]:
+            _fit["said"] = _line
+            # A newer line replaces this turn's older one: one line per turn.
+            for _m in reversed(history):
+                if _m.get("role") == "user" and not session_memory.is_system_note(_m):
+                    break
+                if _m.get("notice") == "fit":
+                    _m["content"] = _line
+                    return
+            _add_notice(history, _line, kind="fit")
 
     iterations = 0
     _sees_images: bool | None = None    # the model takes pictures (asked at the first one, #487)
@@ -7569,23 +7856,51 @@ def _run_conversation_turn_inner(
                       "{:s}".format(str(_fc_ex)))
             history_to_send, _preflight_err = _build_send_messages()
         if _preflight_err:
-            _agent_state.is_thinking = False
-            _agent_state.thinking_start_time = 0.0
-            _agent_state.error = _preflight_err
-            if on_status:
-                on_status("Error: conversation too large for context window")
+            # Not sent (#544): the whole reason and the fix in the chat.
+            _stop_turn_with(_preflight_err,
+                            "This request is too big for the {:s} context window and was not sent "
+                            "(the chat says how to fix it).".format(_ctx_label(ctx_size_used)),
+                            "Error: request too big for the context window -- not sent")
             return history
+        _say_what_was_left_out()
 
         # -- Cap the reply allowance to the space the prompt left ------
         # The prompt now fits the window; give the model whatever is left for
         # the reply (never the whole configured max_tokens, which by default
-        # equals the context size and would overflow the server).
+        # equals the context size and would overflow the server).  #544: when
+        # that is less than a useful answer, the prompt is made smaller first
+        # (the same ladder, with the answer's room reserved), and the thinking
+        # of this request is reduced or switched off to leave the answer room.
+        _req_think = thinking_budget
+
+        def _room_for_reply() -> tuple[int, int, int | None]:
+            _est = _estimate_messages_tokens(history_to_send) + _estimate_tools_tokens(openai_tools)
+            _room = _cap_reply_tokens(ctx_size_used, _requested_max_tokens, _est)
+            # Only a reply the context cut short changes the thinking: a small
+            # Max Output Tokens the user chose is theirs to pair with it.
+            _short = _requested_max_tokens <= 0 or _room < _requested_max_tokens
+            _think = (_thinking_for_reply(_room, thinking_budget) if _short else thinking_budget) \
+                if llm_port_local is not None else None
+            return _est, _room, _think
         if ctx_size_used > 0:
-            _prompt_tokens_est = (
-                _estimate_messages_tokens(history_to_send)
-                + _estimate_tools_tokens(openai_tools)
-            )
-            max_tokens = _cap_reply_tokens(ctx_size_used, _requested_max_tokens, _prompt_tokens_est)
+            _prompt_tokens_est, max_tokens, _req_think = _room_for_reply()
+            if (llm_port_local is not None and max_tokens < _USEFUL_REPLY_TOKENS
+                    and _requested_max_tokens >= _USEFUL_REPLY_TOKENS):
+                # The prompt this much smaller leaves a useful answer room.
+                _target = _prompt_tokens_est - (_USEFUL_REPLY_TOKENS - max_tokens) - 64
+                _tight, _tight_err = _build_send_messages(reserve=prompt_budget - _target, room_only=True)
+                if _tight_err is None:
+                    history_to_send = _tight
+                    _say_what_was_left_out()
+                    _prompt_tokens_est, max_tokens, _req_think = _room_for_reply()
+                    print("[Coworker] run_conversation_turn: made the prompt smaller to leave "
+                          "{:d} tokens for the reply".format(max_tokens))
+                else:
+                    history_to_send, _ = _build_send_messages()     # the tool set of the first build
+            if _req_think != thinking_budget and (thinking_budget is not None or _req_think == 0):
+                print("[Coworker] run_conversation_turn: {:d} tokens left for the reply -- thinking {:s} "
+                      "for this request".format(max_tokens, "off" if _req_think == 0
+                                                else "cut to {:d}".format(_req_think or 0)))
 
         # -- Request-shape diagnostic ----------------------------------
         # Log exactly what is about to be sent.  This is the single most
@@ -7595,23 +7910,32 @@ def _run_conversation_turn_inner(
         print("[Coworker] run_conversation_turn: request shape:")
         print(_describe_history_for_log(history_to_send))
 
-        response = _llm_request(history_to_send, openai_tools, thinking_budget)
+        _sent_key = _payload_key(history_to_send, openai_tools)
+        response = _llm_request(history_to_send, openai_tools, _req_think)
 
         # -- Context-overflow recovery: compact, rebuild, retry once ---
         # The server rejected the request as larger than its context window.
         # Force an aggressive compaction, rebuild the payload from the now
         # smaller history, and retry -- instead of surfacing a raw HTTP 400
-        # the user cannot act on.  Bounded to a single retry; if the reduced
-        # window still does not fit, the preflight shows the friendly message.
+        # the user cannot act on.  Bounded to a single retry, and never with
+        # the same payload (#544): a request the server refused is refused
+        # again, so when the rebuild comes out the same the chat says why.
         if response is None and getattr(_agent_state, "error_kind", "") == "context_overflow":
             print("[Coworker] run_conversation_turn: context overflow -- forcing "
                   "compaction and retrying once")
             # Learn from the server's real count so the retry (and every
             # later request) budgets with the right ratio; the rebuilt
             # payload then sheds this turn's oldest bulk to fit.
-            _real = _overflow_prompt_tokens(
-                "{:s} {:s}".format(str(_agent_state.error_full or ""),
-                                   str(_agent_state.error or "")))
+            _refusal = "{:s} {:s}".format(str(_agent_state.error_full or ""), str(_agent_state.error or ""))
+            _real = _overflow_prompt_tokens(_refusal)
+            _server_ctx = _overflow_ctx(_refusal)
+            if llm_port_local is not None and _server_ctx and 0 < _server_ctx < ctx_size_used:
+                # The server's window is smaller than the one asked for: budget for it.
+                print("[Coworker] run_conversation_turn: the server's window is {:d}, not {:d} -- "
+                      "budgeting against it".format(_server_ctx, ctx_size_used))
+                ctx_size_used = _server_ctx
+                _base_prompt_budget = _compute_prompt_budget(_server_ctx, _requested_max_tokens)
+                prompt_budget = max(1024, int(_base_prompt_budget / _prompt_calibration))
             if _real and _base_prompt_budget > 0:
                 _est_sent = (_estimate_messages_tokens(history_to_send)
                              + _estimate_tools_tokens(openai_tools))
@@ -7630,21 +7954,24 @@ def _run_conversation_turn_inner(
                       "{:s}".format(str(_force_ex)))
             history_to_send, _preflight_err = _build_send_messages()
             if _preflight_err:
-                _agent_state.is_thinking = False
-                _agent_state.thinking_start_time = 0.0
-                _agent_state.error = _preflight_err
-                if on_status:
-                    on_status("Error: conversation too large for context window")
+                _stop_turn_with(_preflight_err,
+                                "This request is too big for the {:s} context window and was not sent "
+                                "(the chat says how to fix it).".format(_ctx_label(ctx_size_used)),
+                                "Error: request too big for the context window -- not sent")
                 return history
+            if _payload_key(history_to_send, openai_tools) == _sent_key:
+                print("[Coworker] run_conversation_turn: the rebuilt request is the one the server "
+                      "refused -- not sending it again")
+                _stop_turn_with(_refused_text(_real, _server_ctx, llm_port_local is not None, thinking_budget),
+                                "The model server refused this request as too big (the chat says how to "
+                                "fix it).", "Error: request too big for the context window")
+                return history
+            _say_what_was_left_out()
             print("[Coworker] run_conversation_turn: retry request shape:")
             print(_describe_history_for_log(history_to_send))
             if ctx_size_used > 0:
-                _prompt_tokens_est = (
-                    _estimate_messages_tokens(history_to_send)
-                    + _estimate_tools_tokens(openai_tools)
-                )
-                max_tokens = _cap_reply_tokens(ctx_size_used, _requested_max_tokens, _prompt_tokens_est)
-            response = _llm_request(history_to_send, openai_tools, thinking_budget)
+                _prompt_tokens_est, max_tokens, _req_think = _room_for_reply()
+            response = _llm_request(history_to_send, openai_tools, _req_think)
 
         # -- Abort check -----------------------------------------------
         # If the user stopped the turn, keep any partial streamed content
@@ -7681,6 +8008,11 @@ def _run_conversation_turn_inner(
             # the benchmark recorder see the real cause; the generic text is
             # only a last resort when the transport left no detail at all.
             _detail = _agent_state.error_full or _agent_state.error
+            # #544: the whole text in the chat as well -- the header only has
+            # room for its start ("Error: LLM stream failed: {"error":{...").
+            _add_notice(history, _no_answer_text(
+                str(_detail or ""), str(getattr(_agent_state, "error_kind", "") or ""),
+                llm_port_local is not None, ctx_size_used), kind="error")
             if _detail:
                 _agent_state.error = _detail[:500]
                 if on_status:
@@ -7725,14 +8057,38 @@ def _run_conversation_turn_inner(
 
         # Extract text content.
         content = msg.get("content") or ""
-        # Empty response: thinking budget cut off reasoning before output.
-        # Auto-retry with doubled budget (max 2 retries).
+        # #544: a reply cut off INSIDE its thinking (no text, no tool call,
+        # finish_reason "length") ran out of room, not of thinking budget: a
+        # bigger budget (the retry below used to double it, 1024 -> 2048 -> 4096,
+        # three cut-offs in a row in the Local test) cannot help.  On Local the
+        # same request goes once more with thinking OFF -- that is this cut-off's
+        # one retry; elsewhere the one auto-continue below takes it.
+        _cut_retried = False
+        if (not content and not msg.get("tool_calls") and finish_reason == "length"
+                and llm_port_local is not None and _req_think != 0):
+            _cut_retried = True
+            _agent_state.bump_turn_cost("continues")
+            print("[Coworker] run_conversation_turn: cut off inside the thinking ({:d} tokens for the "
+                  "reply) -- once more with thinking off".format(max_tokens))
+            _retry = _llm_request(history_to_send, openai_tools, 0)
+            if _retry is not None and not _stop_event.is_set():
+                response = _retry
+                choice = response.get("choices", [{}])[0]
+                msg = choice.get("message", {})
+                finish_reason = choice.get("finish_reason", "")
+                content = msg.get("content") or ""
+        # Empty response that was NOT cut off: the thinking budget ended the
+        # reasoning before any output.  Auto-retry with doubled budget (max 2
+        # retries) -- on Local never past the room the reply has (#544).
         empty_retries = 0
-        doubled_budget = thinking_budget
-        while not content and not msg.get("tool_calls") and empty_retries < 2:
+        doubled_budget = _req_think
+        while (not content and not msg.get("tool_calls") and finish_reason != "length"
+               and not _cut_retried and empty_retries < 2):
             empty_retries += 1
-            doubled_budget = min(doubled_budget * 2, 8192) if thinking_budget > 0 else 0
-            print("[Coworker] empty response, retrying with thinking_budget={:d}".format(doubled_budget))
+            doubled_budget = min(doubled_budget * 2, 8192) if doubled_budget else None
+            if doubled_budget and llm_port_local is not None and 0 < max_tokens < _requested_max_tokens:
+                doubled_budget = _thinking_for_reply(max_tokens, doubled_budget)
+            print("[Coworker] empty response, retrying with thinking_budget={:s}".format(str(doubled_budget)))
             response = _llm_request(history_to_send, openai_tools, doubled_budget)
             if response is None:
                 break
@@ -7745,13 +8101,16 @@ def _run_conversation_turn_inner(
         # -- Auto-continue on finish_reason=length ---------------------
         # Reasoning models (Qwen, DeepSeek, Gemma 4) can hit the token
         # limit mid-reasoning before emitting tool calls or text.
-        # We detect this and ask the model to continue.
-        continue_attempts = 0
-        while finish_reason == "length" and continue_attempts < 2:
+        # We detect this and ask the model to continue -- ONCE per cut-off
+        # (#544: two continues plus the doubling retries made up to six
+        # requests for one cut-off); a second cut-off ends the turn below with
+        # a clear message instead of looping.
+        continue_attempts = 1 if _cut_retried else 0
+        while finish_reason == "length" and continue_attempts < 1:
             continue_attempts += 1
             _agent_state.bump_turn_cost("continues")
             print("[Coworker] run_conversation_turn: finish_reason=length, "
-                  "auto-continue attempt {:d}/2".format(continue_attempts))
+                  "auto-continue (once)")
 
             # Append partial assistant message to history so the model
             # can pick up where it left off.
@@ -7808,12 +8167,13 @@ def _run_conversation_turn_inner(
                           "the context window -- stopping auto-continue")
                     _undo_continue_scaffold()
                     break
-            # Forward the thinking budget.  Without it the continuation can
+            # Forward a thinking budget.  Without one the continuation can
             # spend the entire max_tokens on chain-of-thought and leave
-            # nothing for the tool call, which then truncates mid-string and
-            # fails to parse (HTTP 500) -- the exact failure this path exists
-            # to recover from.
-            continue_response = _llm_request(_cont_send, openai_tools, thinking_budget)
+            # nothing for the tool call.  The continuation is the rest of a
+            # reply that already thought: on Local it goes with thinking OFF
+            # (#544), so the room the reply has goes to the answer.
+            _cont_think = 0 if llm_port_local is not None else _req_think
+            continue_response = _llm_request(_cont_send, openai_tools, _cont_think)
             if continue_response is None or _stop_event.is_set():
                 # Never leave the scaffold behind: a stray continuation note
                 # would render as a user turn and the partial would be
@@ -7849,6 +8209,19 @@ def _run_conversation_turn_inner(
             print("[Coworker] run_conversation_turn:   after continue: "
                   "finish_reason={:s}, content_len={:d}, tool_calls={:d}".format(
                       finish_reason, len(content), len(msg.get("tool_calls") or [])))
+
+        if finish_reason == "length" and not _stop_event.is_set() and (continue_attempts >= 1):
+            # Cut off again after its one retry (#544): stop here, keep what
+            # there is, and say why -- no third request for the same reply.
+            print("[Coworker] run_conversation_turn: cut off again after the retry -- ending the turn")
+            if content.strip():
+                history.append({"role": "assistant", "content": content})
+            _stop_turn_with(
+                _cut_off_text(max_tokens, llm_port_local is not None, llm_port_local is not None,
+                              int(_prompt_tokens_est if ctx_size_used > 0 else 0), thinking_budget),
+                "The reply was cut off twice; the turn stopped (the chat says why).",
+                "Stopped: the reply was cut off twice")
+            return history
 
         # -- End auto-continue -----------------------------------------
 
@@ -8033,7 +8406,15 @@ def _run_conversation_turn_inner(
                 # providers), so the gate is not local-only.
                 if tool_name == "load_tools":
                     domain = args.get("domain", "")
-                    if domain in _TOOL_DOMAINS and domain not in _loaded_domains:
+                    # A domain a tight request left out (#544) is not "already
+                    # loaded": the model asked for it, so it is kept from now on.
+                    _sent_names = {t.get("function", {}).get("name") for t in openai_tools}
+                    _have = {t.get("function", {}).get("name") for t in _all_tools}
+                    _left_out = (domain in _loaded_domains and domain in _TOOL_DOMAINS
+                                 and not (_TOOL_DOMAINS[domain] & _have) <= _sent_names)
+                    if domain in _TOOL_DOMAINS:
+                        _turn_loaded_domains.add(domain)
+                    if domain in _TOOL_DOMAINS and (domain not in _loaded_domains or _left_out):
                         _loaded_domains.add(domain)
                         _session_loaded_domains.add(domain)
                         # Rebuild with all loaded domains.

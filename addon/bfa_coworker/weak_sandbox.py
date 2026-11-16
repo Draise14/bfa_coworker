@@ -16,6 +16,15 @@ Notes:
 
 - If the LLM (or its user) is motivated these can be worked around.
   This is more of a slap on the wrist not to try some things.
+
+Two more things happen around the code it wraps (#548):
+
+- The co-work scene lock is lifted while the code runs and put back before it
+  returns (:func:`co_work_guard.lifted`): ``hide_select`` would otherwise make the
+  agent's own ``select_set()`` a no-op and its selection operators CANCELLED.
+- An operator that ends ``{'CANCELLED'}`` did nothing and raised nothing; the
+  call's output says so (once per operator), so the model doesn't take the step
+  for done.
 """
 
 __all__ = (
@@ -23,6 +32,7 @@ __all__ = (
 )
 
 import sys
+import threading
 from typing import Any, Self
 
 
@@ -73,11 +83,94 @@ _BLOCKED_OPS: tuple[tuple[str, str], ...] = (
 _BLOCKED_OPS_SET: frozenset[str] = frozenset(op for op, _reason in _BLOCKED_OPS)
 
 
+def _why_cancelled(module: str) -> str:
+    """The likely reason an ``object.*`` operator was cancelled ("" when none is seen)."""
+    if module != "object":
+        return ""
+    try:
+        import bpy  # noqa: WPS433
+        ob = bpy.context.view_layer.objects.active
+        if ob is None:
+            return "there is no active object"
+        if ob.hide_select:
+            return "the active object {!r} can't be selected (hide_select)".format(ob.name)
+        if not ob.visible_get():
+            return "the active object {!r} is hidden".format(ob.name)
+        if not ob.select_get():
+            return "the active object {!r} isn't selected".format(ob.name)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return ""
+
+
+class _SaysCancelled:
+    """An operator, called as before; when it ends ``{'CANCELLED'}`` the call's output says
+    so, once per operator (#548).  Everything else reads through to the operator."""
+    __slots__ = ("_op", "_name", "_module", "_said")
+
+    def __init__(self, op: Any, module: str, func: str, said: set[str]) -> None:
+        self._op, self._module, self._said = op, module, said
+        self._name = "bpy.ops.{:s}.{:s}".format(module, func)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        result = self._op(*args, **kwargs)
+        if result == {"CANCELLED"} and self._name not in self._said:
+            self._said.add(self._name)
+            why = _why_cancelled(self._module)
+            print("[Coworker] {:s}(...) returned {{'CANCELLED'}}: it did nothing{:s}. Don't report "
+                  "that step as done -- fix the cause and run it again.".format(
+                      self._name, " ({:s})".format(why) if why else ""))
+        return result
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._op, name)
+
+    def __dir__(self) -> list[str]:
+        return dir(self._op)
+
+    def __repr__(self) -> str:
+        return repr(self._op)
+
+    def __str__(self) -> str:
+        return str(self._op)
+
+    @property
+    def __doc__(self) -> Any:  # type: ignore[override]  # the operator's own (its signature)
+        return self._op.__doc__
+
+
+def _co_work_lift() -> Any:
+    """Lift the co-work scene lock for this call (#548); main thread only, and not while
+    the unlock is on its way (this sandbox runs the unlock code too)."""
+    if threading.current_thread() is not threading.main_thread():
+        return None
+    try:
+        from . import co_work_guard
+        if not co_work_guard.is_locked() or co_work_guard.is_releasing():
+            return None
+        import bpy  # noqa: WPS433
+        return co_work_guard.lift(bpy.data)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+
+
+def _co_work_relock(held: Any) -> None:
+    if not held:
+        return
+    try:
+        from . import co_work_guard
+        import bpy  # noqa: WPS433
+        co_work_guard.relock(bpy.data, held)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+
+
 class WeakSandboxForLLM:
     """Context manager wrapping ``exec()`` of LLM-generated code."""
     __slots__ = (
         "_store_attrs",
         "_store_ops",
+        "_lifted",
     )
 
     # -------------------------------------------------------------------------
@@ -110,6 +203,7 @@ class WeakSandboxForLLM:
         import bpy.ops as _bpy_ops  # noqa: WPS433
 
         original = _bpy_ops._op_create_function
+        said: set[str] = set()      # the cancelled operators this call already named (#548)
 
         def _filtered_op_create_function(module: str, func: str) -> Any:
             key = "{:s}.{:s}".format(module, func)
@@ -131,7 +225,7 @@ class WeakSandboxForLLM:
                     )
 
                 return _blocked
-            return original(module, func)
+            return _SaysCancelled(original(module, func), module, func, said)
 
         _bpy_ops._op_create_function = _filtered_op_create_function
         return (_bpy_ops, original)
@@ -148,6 +242,7 @@ class WeakSandboxForLLM:
     def __enter__(self) -> Self:
         self._store_attrs = self.override_store()
         self._store_ops = self.ops_blocked_store()
+        self._lifted = _co_work_lift()
         return self
 
     def __exit__(
@@ -157,5 +252,8 @@ class WeakSandboxForLLM:
         exc_tb: object,
     ) -> None:
         del exc_type, exc_val, exc_tb
-        self.ops_blocked_restore(self._store_ops)
-        self.override_restore(self._store_attrs)
+        try:
+            _co_work_relock(self._lifted)
+        finally:
+            self.ops_blocked_restore(self._store_ops)
+            self.override_restore(self._store_attrs)

@@ -35,6 +35,7 @@ import test_wand_remove_silences as W
 _ROOT = Path(__file__).resolve().parents[1]
 _TOOLS = _ROOT / "mcp" / "blmcp" / "tools"
 P = W._import("wand.cut_plan")
+CAP = W._import("captions")
 FPS = 30
 
 
@@ -169,6 +170,11 @@ class TestPlan(unittest.TestCase):
         self.assertEqual(P.piece_names("F", 3, {"F.001"}), ["F", "F.002", "F.003"])
         self.assertEqual(P.piece_names("F", 0, set()), [])
 
+    def test_stretch_edges(self):
+        self.assertEqual(P.stretch_edges(1, 301, [(285, 301)], 1, 302), (1, 302, [(285, 302)]))
+        self.assertEqual(P.stretch_edges(1, 301, [(100, 120)], 1, 302), (1, 302, [(100, 120)]))  # loud end kept
+        self.assertEqual(P.stretch_edges(2, 301, [(2, 20)], 1, 301), (1, 301, [(1, 20)]))
+
     def test_follow_end(self):
         self.assertEqual(P.follow_end(300, 301, 166), 165)      # at the end: follows
         self.assertEqual(P.follow_end(400, 301, 166), 165)      # past it: follows
@@ -198,7 +204,8 @@ class FakeStrip:
     def __init__(self, ed, name, kind, channel, left, right, path="", text=""):
         self.__dict__.update(_ed=ed, _name=None, type=kind, channel=channel, _left=left, _right=right,
                              _cs=float(left), select=False, lock=False, retiming_keys=[], sound_offset=0.0,
-                             filepath=path, text=text, props={}, removed=False, sound=None, input_1=None)
+                             filepath=path, text=text, props={}, removed=False, sound=None, input_1=None,
+                             location=(0.5, 0.08))
         if kind == "SOUND":
             self.__dict__["sound"] = types.SimpleNamespace(filepath=path, library=None, packed_file=None)
         if kind != "SOUND":
@@ -483,6 +490,63 @@ class TestWholeEdit(_Pipeline):
             if s.props["bfacw_caption"]["role"] == "word":
                 line = ed.items.get(s.props["bfacw_caption"]["line"])
                 self.assertEqual((s._left, s._right), (line._left, line._right))
+
+    def _signed(self, ed, name, left, right, channel=3, role="line", line=None):
+        c = ed.add(name, "TEXT", channel, left, right, text=name.upper())
+        c["bfacw_caption"] = {"role": role, **({"line": line} if line else {})}
+        c["bfacw_caption"]["sig"] = CAP.caption_signature(c.text, right - left, channel, c.location)
+        return c
+
+    def test_trimmed_captions_are_not_hand_edited_afterwards(self):
+        """#552: a re-run of Auto Captions keeps hand-edited captions; a trim by the cut isn't one."""
+        ed = FakeEditor()
+        ed.add("Cam", "MOVIE", 2, 1, 301, "cam.mp4")
+        ed.add("Cam_snd", "SOUND", 1, 1, 301, "cam.mp4")
+        across = self._signed(ed, "cap_0001", 61, 181)        # 2.0-6.0 s: over the 3.0-5.0 s pause
+        edited = self._signed(ed, "cap_0002", 181, 271)       # 6.0-9.0 s, then changed by hand
+        edited.text = "CHANGED BY HAND"
+        self.speech = {"Cam_snd": ([(0.8, 3.0), (5.0, 6.0), (8.0, 9.3)], 10.0)}
+        out = self.run_op(_scene(ed, 300), ["Cam", "Cam_snd"])
+        self.assertIn("cap_0001", out["captions_trimmed"])
+        self.assertIn("cap_0002", out["captions_trimmed"])
+        sig = lambda s: CAP.caption_signature(s.text, s._right - s._left, s.channel, s.location)  # noqa: E731
+        self.assertEqual(across.props["bfacw_caption"]["sig"], sig(across))      # still as Coworker made it
+        self.assertNotEqual(edited.props["bfacw_caption"]["sig"], sig(edited))   # still edited by hand
+
+    def test_gaps_left_word_strips_name_their_piece(self):
+        ed = FakeEditor()
+        ed.add("Cam", "MOVIE", 2, 1, 301, "cam.mp4")
+        ed.add("Cam_snd", "SOUND", 1, 1, 301, "cam.mp4")
+        line = self._signed(ed, "cap_0001", 61, 181)
+        w1 = self._signed(ed, "cap_0001_w01", 61, 100, channel=4, role="word", line="cap_0001")
+        w2 = self._signed(ed, "cap_0001_w02", 150, 181, channel=4, role="word", line="cap_0001")
+        self.speech = {"Cam_snd": ([(0.8, 3.0), (5.0, 6.0), (8.0, 9.3)], 10.0)}
+        out = self.run_op(_scene(ed, 300), ["Cam", "Cam_snd"], ripple=False)
+        names = out["new_names"]["cap_0001"]
+        self.assertEqual(names[0], "cap_0001")
+        self.assertEqual(len(names), 2)
+        self.assertEqual(w1.props["bfacw_caption"]["line"], "cap_0001")
+        self.assertEqual(w2.props["bfacw_caption"]["line"], names[1])
+        piece = ed.items.get(names[1])
+        sig = lambda s: CAP.caption_signature(s.text, s._right - s._left, s.channel, s.location)  # noqa: E731
+        for s in (line, piece, w1, w2):
+            self.assertEqual(s.props["bfacw_caption"]["sig"], sig(s), s.name)
+
+    def test_no_one_frame_picture_left_past_its_sound(self):
+        """The picture a frame longer than its own sound: the trailing silence takes that frame too."""
+        ed = FakeEditor()
+        ed.add("Cam", "MOVIE", 2, 1, 302, "cam.mp4")
+        snd = ed.add("Cam_snd", "SOUND", 1, 1, 301, "cam.mp4")
+        self.speech = {"Cam_snd": ([(0.8, 3.0), (5.0, 6.0), (8.0, 9.3)], 10.0)}
+        sc = _scene(ed, 301)
+        out = self.run_op(sc, ["Cam", "Cam_snd"])
+        self.assertEqual(out["status"], "ok")
+        movies = sorted((s._left, s._right) for s in ed.items if s.type == "MOVIE")
+        sounds = sorted((s._left, s._right) for s in ed.items if s.type == "SOUND")
+        self.assertEqual(movies, sounds)
+        self.assertGreaterEqual(min(b - a for a, b in movies), 10)
+        self.assertEqual(sc.frame_end, movies[-1][1] - 1)
+        del snd
 
     def test_an_hour_applies_quickly(self):
         ed = FakeEditor()

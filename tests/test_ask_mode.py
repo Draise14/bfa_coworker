@@ -240,7 +240,7 @@ class TestChatModeForwarding(unittest.TestCase):
         # wrapper, which forwards chat_mode to both request helpers.
         m = re.search(
             r'response = _llm_request\(history_to_send, openai_tools, '
-            r'thinking_budget\)',
+            r'_req_think\)',      # the request's own thinking (#544)
             _src,
         )
         self.assertIsNotNone(

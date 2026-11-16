@@ -25,7 +25,7 @@ Blender Add-on (chat UI + agent controller)
 ## Prerequisites
 
 - The `bfa_coworker` workspace with existing add-on and MCP server code.
-- Blender 5.1+ (with `bpy.app.online_access` support).
+- Blender 5.2+ (with `bpy.app.online_access` support).
 - Windows (paths/exe detection is Windows-native; adapt for macOS/Linux).
 
 ## Architecture & Components
@@ -609,3 +609,22 @@ anything the plan claims but the code does not contain.
 2. Only do pull requests, never approve them
 3. Have clear, pregnant commit messages and pull request information
 4. Periodically merge in the main to branches and automatically resolve conflicts
+
+## Pull request descriptions
+
+The maintainer directs the project from the PR page, so every PR description is
+layered from simple to deep. Use `.github/pull_request_template.md`:
+
+1. **🧭 In one paragraph**: the whole change in plain words for someone who doesn't
+   know the code: what was wrong, what it does now, the result that shows it worked.
+2. **🔍 How it works**: a few mid-level paragraphs: the cause, the idea of the fix,
+   what was weighed. Explain jargon.
+3. **A Mermaid diagram** of the flow (check that it renders).
+4. **🔧 The details**: files, functions, flags, tests (low level).
+5. **🧪 Tests**: automated, live, **by hand** (what to do → what you should see), and
+   not checked.
+6. **🔎 Review notes & follow-ups**: risks, interactions with other open PRs (trial-merge
+   them), follow-ups with the issue they went to.
+7. **🚦 Merge order**, then the full evidence in a collapsed `<details>` block.
+
+Keep `Closes #n` / `Refs #n` on the first line.

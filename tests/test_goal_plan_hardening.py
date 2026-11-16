@@ -448,19 +448,42 @@ class TestSmallWindowFit(_HardeningBase):
             self.assertTrue(any("why are the parts floating?" in u for u in users))
         self.assertGreater(self.ac._prompt_calibration, 1.0)
 
+    _OVERFLOW_16483 = json.dumps({"error": {
+        "code": 400, "type": "exceed_context_size_error",
+        "message": "request (16483 tokens) exceeds the available context size (16384 tokens)",
+        "n_prompt_tokens": 16483, "n_ctx": 16384}})
+
     def test_overflow_400_calibrates_and_retries(self):
         self._mk_server([{"content": "fits now"}], ctx=16384)
-        self.server.chat_error_specs = [{
-            "is_stream": None, "status": 400,
-            "body": json.dumps({"error": {
-                "code": 400, "type": "exceed_context_size_error",
-                "message": "request (16483 tokens) exceeds the available context size (16384 tokens)",
-                "n_prompt_tokens": 16483, "n_ctx": 16384}}),
-        }]
+        # Older turns the smaller (calibrated) budget can leave out: the retry
+        # is a different, smaller request (#544: never the refused one again).
+        self.state.conversation_history = [{"role": "system", "content": "You are a helpful agent."}]
+        for i in range(12):
+            self.state.conversation_history += [
+                {"role": "user", "content": "old {:d} ".format(i) + "x" * 2500},
+                {"role": "assistant", "content": "reply {:d} ".format(i) + "y" * 2500}]
+        self.server.chat_error_specs = [{"is_stream": None, "status": 400, "body": self._OVERFLOW_16483}]
         _hist, texts, _st = self._agent_turn("hello")
         self.assertEqual(self.state.error, "")
         self.assertIn("fits now", texts)
-        self.assertGreater(self.ac._prompt_calibration, 1.5)
+        self.assertGreater(self.ac._prompt_calibration, 1.2)     # learned from the server's count
+        sent = self._main_requests()
+        self.assertEqual(len(sent), 2)
+        self.assertNotEqual(json.dumps(sent[0]["messages"]), json.dumps(sent[1]["messages"]))
+
+    def test_overflow_400_never_resends_the_refused_request(self):
+        # #544: nothing to leave out -- the rebuilt request is the refused one.
+        # It is not sent again; the chat says why and how to fix it, in full.
+        self._mk_server([{"content": "never"}], ctx=16384)
+        self.server.chat_error_specs = [{"is_stream": None, "status": 400, "body": self._OVERFLOW_16483}]
+        hist, texts, _st = self._agent_turn("hello")
+        self.assertEqual(len(self._main_requests()), 1)
+        self.assertNotIn("never", texts)
+        self.assertEqual(hist[-1].get("notice"), "error")
+        self.assertIn("16,483 tokens", hist[-1]["content"])
+        self.assertIn("16,384", hist[-1]["content"])
+        self.assertIn("Context Window", hist[-1]["content"])
+        self.assertIn("refused", self.state.error)
 
 
 class TestEntityTextFilter(_HardeningBase):

@@ -26,15 +26,15 @@ _VSE_LIMIT_MAX = 500
 # Blender's channel range.
 _VSE_CHANNEL_MAX = 128
 
-# Strip frame properties: (5.2 name, older name).
+# Strip frame properties (the 5.2 names).
 _VSE_FRAME_NAMES = {
-    "start": ("left_handle", "frame_final_start"),
-    "end": ("right_handle", "frame_final_end"),
-    "duration": ("duration", "frame_final_duration"),
-    "content_start": ("content_start", "frame_start"),
-    "content_duration": ("content_duration", "frame_duration"),
-    "start_offset": ("left_handle_offset", "frame_offset_start"),
-    "end_offset": ("right_handle_offset", "frame_offset_end"),
+    "start": "left_handle",
+    "end": "right_handle",
+    "duration": "duration",
+    "content_start": "content_start",
+    "content_duration": "content_duration",
+    "start_offset": "left_handle_offset",
+    "end_offset": "right_handle_offset",
 }
 
 
@@ -220,16 +220,12 @@ def _vse_free_channel(rows: list[dict[str, Any]], name: str, meta: str, start: i
 # -- Blender helpers (import bpy inside) -------------------------------------------------
 
 def _vse_get(strip: Any, key: str, default: Any = None) -> Any:
-    """A frame property by its 5.2 name, else the older name."""
-    new, old = _VSE_FRAME_NAMES[key]
-    if hasattr(strip, new):
-        return getattr(strip, new)
-    return getattr(strip, old, default)
+    """A frame property by its 5.2 name."""
+    return getattr(strip, _VSE_FRAME_NAMES[key], default)
 
 
 def _vse_set(strip: Any, key: str, value: Any) -> None:
-    new, old = _VSE_FRAME_NAMES[key]
-    setattr(strip, new if hasattr(strip, new) else old, value)
+    setattr(strip, _VSE_FRAME_NAMES[key], value)
 
 
 def _vse_meta_name(strip: Any) -> str:
@@ -264,18 +260,12 @@ def _vse_rows(scene: Any) -> list[dict[str, Any]]:
 
 
 def _vse_all_strips(ed: Any) -> list[Any]:
-    """Every strip, metas' contents included (``strips_all``; ``sequences_all`` before 5.0)."""
-    seq = getattr(ed, "strips_all", None)
-    if seq is None:
-        seq = getattr(ed, "sequences_all", [])
-    return list(seq)
+    """Every strip, metas' contents included (``strips_all``)."""
+    return list(getattr(ed, "strips_all", []))
 
 
 def _vse_top_strips(ed: Any) -> list[Any]:
-    seq = getattr(ed, "strips", None)
-    if seq is None:
-        seq = getattr(ed, "sequences", [])
-    return list(seq)
+    return list(getattr(ed, "strips", []))
 
 
 def _vse_shown_scene() -> Any:

@@ -33,7 +33,10 @@ __all__ = (
     "_STREAM_TIMEOUT",
     "_STREAM_FIRST_TOKEN_TIMEOUT",
     "_STREAM_STALL_TIMEOUT",
+    "_FIRST_TOKEN_LIMIT_LOCAL",
+    "_FIRST_TOKEN_LIMIT_REMOTE",
     "bind",
+    "thinking_fields",
     "classify_llm_500",
     "is_context_overflow",
     "context_overflow_message",
@@ -44,6 +47,7 @@ __all__ = (
 )
 
 import contextlib
+import http.client
 import json
 import re
 import socket
@@ -85,6 +89,28 @@ _STREAM_TIMEOUT = 600.0
 # request, after it the partial reply is kept.
 _STREAM_FIRST_TOKEN_TIMEOUT = 120.0
 _STREAM_STALL_TIMEOUT = 90.0
+
+# Wall-clock limits (#544).  The per-read socket timeouts above cannot catch a
+# server that keeps the connection busy without producing anything: llama-server
+# (b10154, measured) sends an SSE comment line every 30 s while it reads a long
+# prompt, and every line restarts a per-read timeout -- a model that had spilled
+# out of VRAM was waited on for 908 s.  These limits run on the clock instead and
+# only real output (content, reasoning or a tool call) counts:
+#   * first output: Local 180 s from the send -- a healthy prefill is far shorter
+#     (18K tokens of the 27B preset: 9 s; a cold 27B on a loaded machine: over
+#     60 s; 2,000 tok/s reads 20K tokens in 10 s).  When llama-server reports its
+#     prompt progress (``return_progress``), each step forward restarts the limit,
+#     but a prefill whose measured speed puts its end beyond
+#     ``_PREFILL_LIMIT`` is stopped early (the model is crawling: 25 tok/s, as when
+#     it no longer fits in VRAM, reads 18K tokens in 12 minutes).
+#     Remote: ``_STREAM_TIMEOUT`` (the module's existing ceiling) -- providers send
+#     keep-alive comments too, so a stuck one was never given up on before.
+#   * between outputs: ``_STREAM_STALL_TIMEOUT``, also on the clock.
+_FIRST_TOKEN_LIMIT_LOCAL = 180.0
+_FIRST_TOKEN_LIMIT_REMOTE = _STREAM_TIMEOUT
+_PREFILL_LIMIT = _STREAM_TIMEOUT
+# How often the watcher looks at the clock (and at Stop).
+_WATCH_INTERVAL = 0.25
 
 # -- Shared state, injected by agent_controller at import time ------
 # The transport needs to flag non-fatal notices (mid-stream drops,
@@ -433,6 +459,24 @@ def _safe_request_messages(
     return safe
 
 
+def thinking_fields(budget: int | None) -> dict[str, Any]:
+    """The llama-server request fields for a thinking budget (#544).
+
+    ``None``: nothing (the server's default; what every remote request gets).
+    ``N > 0``: ``thinking_budget_tokens: N``.  ``0``: thinking OFF for this request.
+    Off is sent two ways, because neither alone works everywhere (measured on
+    llama-server b10154): the chat template's own switch
+    (``chat_template_kwargs.enable_thinking: false``, which the Qwen 3 templates
+    honour and others ignore) and a budget of 1 -- the server IGNORES a budget of
+    0 (the model then thinks without limit), while 1 ends the thinking at once.
+    """
+    if budget is None or budget < 0:
+        return {}
+    if budget == 0:
+        return {"thinking_budget_tokens": 1, "chat_template_kwargs": {"enable_thinking": False}}
+    return {"thinking_budget_tokens": int(budget)}
+
+
 def openai_chat_completions(
     url: str,
     messages: list[dict[str, Any]],
@@ -440,7 +484,7 @@ def openai_chat_completions(
     api_key: str | None = None,
     model: str | None = None,
     max_tokens: int | None = None,
-    thinking_budget_tokens: int = 0,
+    thinking_budget_tokens: int | None = None,
     chat_mode: str = "AGENT",
 ) -> dict[str, Any] | None:
     """POST to a chat completions endpoint and return the parsed JSON response.
@@ -452,6 +496,8 @@ def openai_chat_completions(
     remote APIs (OpenRouter, OpenAI, etc.). Omitted for local llama-server
     which auto-detects the model.
     *max_tokens* -- max output tokens per call. ``None`` uses 16384 default.
+    *thinking_budget_tokens* -- see :func:`thinking_fields` (``None`` sends nothing;
+    llama-server only).
     """
     # Start each call with a clean error classification so a stale overflow
     # from a previous call is never mistaken for the current failure.
@@ -466,8 +512,7 @@ def openai_chat_completions(
         "temperature": temperature,
         **_CHAT_SAMPLING,
     }
-    if thinking_budget_tokens > 0:
-        body["thinking_budget_tokens"] = thinking_budget_tokens
+    body.update(thinking_fields(thinking_budget_tokens))
     if model:
         body["model"] = model
     if tools:
@@ -1126,6 +1171,132 @@ def _set_stream_socket_timeout(resp: Any, seconds: float) -> bool:
         return False
 
 
+class _StreamWatch:
+    """The wall-clock limits of one streaming request (#544); pure, testable.
+
+    Only real output counts as progress of the reply (:meth:`output`: content,
+    reasoning or a tool call), never a keep-alive line.  Before the first output
+    the limit is *first_limit* from the send; a prompt-progress report that moves
+    forward (:meth:`progress`) restarts it, and once two reports give a speed, a
+    prefill projected to end more than *prefill_limit* after the send is stopped
+    early.  After the first output, *stall_limit* between outputs.
+    :meth:`check` returns ``""`` or the reason: ``"first_token"``,
+    ``"prefill_slow"`` or ``"stall"``.
+    """
+
+    def __init__(self, first_limit: float, stall_limit: float, prefill_limit: float,
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        self.clock = clock
+        self.start = clock()
+        self.first_limit = float(first_limit)
+        self.stall_limit = float(stall_limit)
+        self.prefill_limit = float(prefill_limit)
+        self.first_output: float | None = None
+        self.last_output: float | None = None
+        self.last_progress: float | None = None
+        self.prompt: tuple[int, int] | None = None      # (total, processed)
+        self._base: tuple[float, int] | None = None     # first report: (time, processed)
+        self.fired = ""
+
+    def output(self) -> None:
+        now = self.clock()
+        if self.first_output is None:
+            self.first_output = now
+        self.last_output = now
+
+    def progress(self, total: int, processed: int) -> None:
+        now = self.clock()
+        if self.prompt is None or processed > self.prompt[1]:
+            self.last_progress = now
+            if self._base is None:
+                self._base = (now, processed)
+        self.prompt = (int(total), int(processed))
+
+    def projected_prefill(self) -> float | None:
+        """Seconds from the send to the end of the prompt reading, at the speed seen so far."""
+        if self.prompt is None or self._base is None or self.last_progress is None:
+            return None
+        total, processed = self.prompt
+        t0, p0 = self._base
+        if processed <= p0 or self.last_progress <= t0:
+            return None
+        speed = (processed - p0) / (self.last_progress - t0)
+        return (self.last_progress - self.start) + max(0, total - processed) / speed
+
+    def waited(self) -> float:
+        return self.clock() - self.start
+
+    def check(self) -> str:
+        if self.fired:
+            return self.fired
+        now = self.clock()
+        if self.first_output is None:
+            since = self.start if self.last_progress is None else self.last_progress
+            projected = self.projected_prefill()
+            if projected is not None and projected > self.prefill_limit:
+                self.fired = "prefill_slow"
+            elif now - since > self.first_limit or now - self.start > max(self.first_limit, self.prefill_limit):
+                self.fired = "first_token"
+        elif self.last_output is not None and now - self.last_output > self.stall_limit:
+            self.fired = "stall"
+        return self.fired
+
+
+def _response_socket(resp: Any) -> Any:
+    try:
+        return resp.fp.raw._sock  # type: ignore[attr-defined]
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+
+
+def _start_watcher(watch: _StreamWatch, resp: Any, stop_event: threading.Event | None,
+                   done: threading.Event) -> threading.Thread:
+    """Watch *resp* on a helper thread: when a limit of *watch* passes or Stop is
+    pressed, shut the socket down so the blocked read returns at once.  Keep-alive
+    lines no longer decide how long a silent server is waited on, and Stop no
+    longer waits for the server's next line (#544)."""
+    sock = _response_socket(resp)
+
+    def _run() -> None:
+        while not done.wait(_WATCH_INTERVAL):
+            if stop_event is not None and stop_event.is_set():
+                watch.fired = watch.fired or "stop"
+            elif not watch.check():
+                continue
+            if sock is not None:
+                # Linux wakes the blocked read on shutdown(); Windows only when
+                # the OS socket itself is closed -- socket.close() waits while
+                # the response's file object still holds it, so the base
+                # class's close is called (measured on Windows 11, #544).
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                try:
+                    super(socket.socket, sock).close()
+                except OSError:
+                    pass
+            return
+    thread = threading.Thread(target=_run, daemon=True, name="coworker-stream-watch")
+    thread.start()
+    return thread
+
+
+def stream_limit_message(reason: str, waited: float, local: bool, prompt: tuple[int, int] | None = None) -> str:
+    """Why a streaming request was given up on, in words the user can act on."""
+    if reason == "prefill_slow" and prompt:
+        total, processed = prompt
+        return ("The model is reading the request far too slowly ({:,d} of {:,d} tokens after {:.0f} s), so "
+                "Coworker stopped waiting. It most likely does not fit in your graphics card's memory (VRAM) "
+                "any more and is running from system memory.".format(processed, total, waited))
+    if local:
+        return ("The model sent nothing for {:.0f} s after the request went out, so Coworker stopped "
+                "waiting. The model may not fit in your graphics card's memory (VRAM) at this context "
+                "size.".format(waited))
+    return ("The provider sent nothing for {:.0f} s after the request went out (the server may be busy), "
+            "so Coworker stopped waiting.".format(waited))
+
+
 def openai_chat_completions_stream(
     url: str,
     messages: list[dict[str, Any]],
@@ -1133,11 +1304,12 @@ def openai_chat_completions_stream(
     api_key: str | None = None,
     model: str | None = None,
     max_tokens: int | None = None,
-    thinking_budget_tokens: int = 0,
+    thinking_budget_tokens: int | None = None,
     chat_mode: str = "AGENT",
     on_status: Callable[[str], None] | None = None,
     on_stream_text: Callable[[str], None] | None = None,
     on_stream_reasoning: Callable[[str], None] | None = None,
+    local: bool = False,
 ) -> dict[str, Any] | None:
     """POST a *streaming* chat-completions request and reassemble the reply.
 
@@ -1146,6 +1318,10 @@ def openai_chat_completions_stream(
     600 s timeout) and Stop cannot cancel it.  Streaming gives live text
     and reasoning for the Workshop, honours ``_stop_event`` mid-stream,
     and captures ``usage`` from the final chunk for the token counters.
+
+    *local* (#544): the request goes to the add-on's own llama-server -- it is
+    asked for its prompt progress, the status says "Waiting for the model...",
+    and the Local first-output limit applies (see ``_FIRST_TOKEN_LIMIT_LOCAL``).
 
     Returns the response in the same ``choices[0].message`` shape as
     :func:`_openai_chat_completions` (with ``usage`` attached when the
@@ -1168,8 +1344,10 @@ def openai_chat_completions_stream(
         "temperature": temperature,
         **_CHAT_SAMPLING,
     }
-    if thinking_budget_tokens > 0:
-        body["thinking_budget_tokens"] = thinking_budget_tokens
+    body.update(thinking_fields(thinking_budget_tokens))
+    if local:
+        # llama-server: report the prompt reading as it goes (prompt_progress chunks).
+        body["return_progress"] = True
     if model:
         body["model"] = model
     if tools:
@@ -1191,8 +1369,9 @@ def openai_chat_completions_stream(
         len(messages), len(tools)))
 
     req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
+    waiting = "Waiting for the model..." if local else "Contacting {:s}...".format(model or "API")
     if on_status:
-        on_status("Contacting {:s}...".format(model or "API"))
+        on_status(waiting)
 
     acc: dict[str, Any] = {
         "content": "",
@@ -1206,22 +1385,30 @@ def openai_chat_completions_stream(
     got_first_token = False
     _content_seen = False
     _reasoning_since: float | None = None
+    first_limit = _FIRST_TOKEN_LIMIT_LOCAL if local else _FIRST_TOKEN_LIMIT_REMOTE
+    watch = _StreamWatch(first_limit, _STREAM_STALL_TIMEOUT, _PREFILL_LIMIT)
+    done = threading.Event()
+    stop_event = _stop()
+    _shown_pct = -1
     try:
         # First-token watchdog: urlopen covers connect + response headers, and
         # the first read below covers the wait for the first SSE chunk (i.e.
-        # the server's prompt prefill).  A tighter timeout here means a stalled
-        # or unreachable server aborts in ~2 min instead of the 10-min hard
-        # ceiling.  Once the first token arrives the socket timeout is lowered
+        # the server's prompt prefill).  The per-read timeout is only a
+        # backstop now: the watcher started below holds the wall-clock limits
+        # (#544).  Once the first token arrives the socket timeout is lowered
         # to the (shorter) inter-token stall value.
-        with urllib.request.urlopen(req, timeout=_STREAM_FIRST_TOKEN_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=first_limit if local else _STREAM_FIRST_TOKEN_TIMEOUT) as resp:
             if resp.status != 200:
                 raise urllib.error.URLError("HTTP {:d}".format(resp.status))
+            _start_watcher(watch, resp, stop_event, done)
             for raw_line in resp:
                 # Stop takes effect immediately, mid-generation: close the
                 # response, keep what has streamed so far as a partial.
                 if _stop_requested():
                     print("[Coworker] _openai_chat_completions_stream: "
                           "stop requested mid-stream -- aborting (partial kept)")
+                    break
+                if watch.fired:
                     break
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line or not line.startswith("data:"):
@@ -1240,6 +1427,21 @@ def openai_chat_completions_stream(
                         str(err.get("message", err)) if isinstance(err, dict) else str(err)
                     )
                     raise urllib.error.URLError("stream error: {:s}".format(_err_msg))
+                _progress = chunk.get("prompt_progress")
+                if isinstance(_progress, dict):
+                    # llama-server reading the prompt: no token yet.
+                    try:
+                        _total = int(_progress.get("total") or 0)
+                        _done = int(_progress.get("processed") or 0)
+                    except (TypeError, ValueError):
+                        _total = _done = 0
+                    if _total > 0:
+                        watch.progress(_total, _done)
+                        _pct = int(100 * _done / _total)
+                        if on_status and _pct != _shown_pct:
+                            _shown_pct = _pct
+                            on_status("{:s} (reading the request: {:d}%)".format(waiting, _pct))
+                    continue
                 if not got_first_token:
                     got_first_token = True
                     # First token arrived -- tighten the socket read timeout to
@@ -1248,7 +1450,12 @@ def openai_chat_completions_stream(
                     _set_stream_socket_timeout(resp, _STREAM_STALL_TIMEOUT)
                     if on_status:
                         on_status("Generating...")
+                _before = (len(acc["content"]), len(acc["reasoning"]), len(acc["tool_calls"]),
+                           sum(len(tc["function"]["arguments"]) for tc in acc["tool_calls"]))
                 _parse_sse_chunk(chunk, acc)
+                if (len(acc["content"]), len(acc["reasoning"]), len(acc["tool_calls"]),
+                        sum(len(tc["function"]["arguments"]) for tc in acc["tool_calls"])) != _before:
+                    watch.output()
                 # Per-phase elapsed status (issue #69).  Phases are tracked
                 # by what the CURRENT chunk carries (not the accumulator,
                 # which is cumulative): a reasoning-only delta keeps the
@@ -1274,6 +1481,7 @@ def openai_chat_completions_stream(
                 if on_stream_text and acc["content"]:
                     on_stream_text(acc["content"])
     except socket.timeout as ex:
+        done.set()
         # Liveness watchdog fired: the server sent no data for the first-token
         # or inter-token window.  This is the "sat there forever" case -- fail
         # fast (or keep the partial) instead of blocking on the hard ceiling.
@@ -1287,16 +1495,16 @@ def openai_chat_completions_stream(
             return _assemble_stream_result(acc)
         print("[Coworker] _openai_chat_completions_stream: no first token within "
               "{:.0f}s ({:.0f}s elapsed) -- falling back to non-streaming".format(
-                  _STREAM_FIRST_TOKEN_TIMEOUT, _elapsed))
+                  first_limit, _elapsed))
         if _state() is not None:
             _state().error_kind = "stream_timeout"
-            _state().error_full = (
-                "No response from the model within {:.0f}s (server may be busy "
-                "or the model may still be loading).".format(_STREAM_FIRST_TOKEN_TIMEOUT)
-            )
+            _state().error_full = stream_limit_message("first_token", _elapsed, local)
         return None
-    except (urllib.error.HTTPError, urllib.error.URLError, OSError) as ex:
-        if got_first_token:
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as ex:
+        done.set()
+        if watch.fired:
+            pass        # the watcher cut the connection: handled below
+        elif got_first_token:
             # Mid-stream drop: keep whatever arrived as a partial answer so
             # the user sees the content rather than a blank panel.
             print("[Coworker] _openai_chat_completions_stream: stream dropped "
@@ -1305,36 +1513,52 @@ def openai_chat_completions_stream(
                 "The response stream was interrupted; the reply may be incomplete."
             )
             return _assemble_stream_result(acc)
-        # A connect/header timeout is wrapped by urllib as ``URLError(reason)``
-        # where the reason is the ``socket.timeout`` -- classify it the same as
-        # a direct read timeout so the caller fails fast instead of retrying
-        # non-streaming against the same unresponsive server.
-        _is_timeout = isinstance(ex, socket.timeout) or isinstance(
-            getattr(ex, "reason", None), socket.timeout)
-        if _is_timeout and _state() is not None:
-            _state().error_kind = "stream_timeout"
-            _state().error_full = (
-                "No response from the model within {:.0f}s (server may be busy "
-                "or the model may still be loading).".format(_STREAM_FIRST_TOKEN_TIMEOUT)
-            )
-            print("[Coworker] _openai_chat_completions_stream: no first token "
-                  "within {:.0f}s -- falling back to non-streaming".format(
-                      _STREAM_FIRST_TOKEN_TIMEOUT))
+        else:
+            # A connect/header timeout is wrapped by urllib as ``URLError(reason)``
+            # where the reason is the ``socket.timeout`` -- classify it the same as
+            # a direct read timeout so the caller fails fast instead of retrying
+            # non-streaming against the same unresponsive server.
+            _is_timeout = isinstance(ex, socket.timeout) or isinstance(
+                getattr(ex, "reason", None), socket.timeout)
+            if _is_timeout and _state() is not None:
+                _state().error_kind = "stream_timeout"
+                _state().error_full = stream_limit_message(
+                    "first_token", time.monotonic() - _request_start, local)
+                print("[Coworker] _openai_chat_completions_stream: no first token "
+                      "within {:.0f}s -- falling back to non-streaming".format(first_limit))
+                return None
+            print("[Coworker] _openai_chat_completions_stream: failed before first "
+                  "token ({:s}) -- falling back to non-streaming".format(str(ex)))
+            # Record the reason so a caller that does not retry non-streaming can
+            # still report it (the error body is not re-readable once consumed).
+            if isinstance(ex, urllib.error.HTTPError):
+                try:
+                    _stream_body = ex.read().decode("utf-8", errors="replace")
+                except Exception:  # pylint: disable=broad-exception-caught
+                    _stream_body = ""
+                if _stream_body and is_context_overflow(_stream_body):
+                    if _state() is not None:
+                        _state().error_kind = "context_overflow"
+                if _stream_body and _state() is not None:
+                    _state().error_full = "LLM stream failed: {:s}".format(_stream_body[:500])
             return None
-        print("[Coworker] _openai_chat_completions_stream: failed before first "
-              "token ({:s}) -- falling back to non-streaming".format(str(ex)))
-        # Record the reason so a caller that does not retry non-streaming can
-        # still report it (the error body is not re-readable once consumed).
-        if isinstance(ex, urllib.error.HTTPError):
-            try:
-                _stream_body = ex.read().decode("utf-8", errors="replace")
-            except Exception:  # pylint: disable=broad-exception-caught
-                _stream_body = ""
-            if _stream_body and is_context_overflow(_stream_body):
-                if _state() is not None:
-                    _state().error_kind = "context_overflow"
-            if _stream_body and _state() is not None:
-                _state().error_full = "LLM stream failed: {:s}".format(_stream_body[:500])
+    finally:
+        done.set()
+
+    if watch.fired and watch.fired != "stop" and not _stop_requested():
+        # A wall-clock limit passed (#544): before any output the turn fails fast
+        # with the reason; after some output the partial reply is kept.
+        _waited = watch.waited()
+        if watch.fired == "stall" and watch.first_output is not None:
+            print("[Coworker] _openai_chat_completions_stream: no output for {:.0f}s mid-stream "
+                  "-- returning partial".format(_STREAM_STALL_TIMEOUT))
+            _state().warning = "The model stalled mid-response; the reply may be incomplete."
+            return _assemble_stream_result(acc)
+        print("[Coworker] _openai_chat_completions_stream: {:s} after {:.0f}s -- giving up "
+              "(keep-alive lines do not count)".format(watch.fired, _waited))
+        if _state() is not None:
+            _state().error_kind = "stream_timeout"
+            _state().error_full = stream_limit_message(watch.fired, _waited, local, watch.prompt)
         return None
 
     if not got_first_token:

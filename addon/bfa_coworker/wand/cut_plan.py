@@ -33,6 +33,7 @@ __all__ = (
     "overlapping",
     "piece_names",
     "plan",
+    "stretch_edges",
     "subtract",
 )
 
@@ -86,6 +87,19 @@ def common_cuts(listeners: Sequence[tuple]) -> list[tuple]:
     for left, right, silent in listeners:
         loud.extend(subtract([(left, right)], silent))
     return subtract(covered, loud)
+
+
+def stretch_edges(left: int, right: int, silent: Iterable[tuple], new_left: int, new_right: int) -> tuple:
+    """``(left, right, silent)`` of a sound stretched to its picture's span (a frame or two
+    longer, as a movie's picture often is): a silence that reaches the sound's start or end
+    reaches the picture's too, so no sliver of picture is left without its sound; frames
+    added next to sound are loud (kept)."""
+    out = [list(r) for r in _merge(silent)]
+    if out and new_right > right and out[-1][1] >= right:
+        out[-1][1] = new_right
+    if out and new_left < left and out[0][0] <= left:
+        out[0][0] = new_left
+    return min(left, new_left), max(right, new_right), [(a, b) for a, b in out]
 
 
 class Cuts:

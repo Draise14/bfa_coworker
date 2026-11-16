@@ -55,12 +55,9 @@ def _scene(name="Edit", strips=True):
 
 
 def _ctx(sequencer_scene=None, workspace="none", scene=None, view="SEQUENCER", tabs=None):
-    """A context: *workspace* "none" = no workspace, "old" = one without sequencer_scene (before
-    5.0), else the scene (or None) the workspace pins."""
+    """A context: *workspace* "none" = no workspace, else the scene (or None) the workspace pins."""
     if workspace == "none":
         ws = None
-    elif workspace == "old":
-        ws = SimpleNamespace()
     else:
         ws = SimpleNamespace(sequencer_scene=workspace)
     space = SimpleNamespace(view_type=view)
@@ -88,9 +85,8 @@ class TestSequencerScene(unittest.TestCase):
         # Blender: the Sequencer shows no scene; the window's scene is another one.
         self.assertIsNone(SC.sequencer_scene(_ctx(None, workspace=None, scene=_scene("Window"))))
 
-    def test_window_scene_only_without_sequencer_scenes(self):
+    def test_window_scene_only_without_a_workspace(self):
         window = _scene("Window")
-        self.assertIs(SC.sequencer_scene(_ctx(None, workspace="old", scene=window)), window)   # before 5.0
         self.assertIs(SC.sequencer_scene(_ctx(None, workspace="none", scene=window)), window)  # timer, background
 
     def test_problem_and_poll(self):

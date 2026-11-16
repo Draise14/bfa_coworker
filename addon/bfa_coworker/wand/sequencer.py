@@ -118,36 +118,30 @@ class _Problem(Exception):
     """A strip that can't be read: the message is for the artist."""
 
 
-# -- strips across Blender versions (5.2 renamed the timing properties) -----------
+# -- strip timing (the 5.2 names) -----------------------------------------------
 
 def _left(strip: Any) -> int:
-    return int(strip.left_handle if hasattr(strip, "left_handle") else strip.frame_final_start)
+    return int(strip.left_handle)
 
 
 def _right(strip: Any) -> int:
-    return int(strip.right_handle if hasattr(strip, "right_handle") else strip.frame_final_end)
+    return int(strip.right_handle)
 
 
 def _content_start(strip: Any) -> float:
-    return float(strip.content_start if hasattr(strip, "content_start") else strip.frame_start)
+    return float(strip.content_start)
 
 
 def _content_duration(strip: Any) -> float:
-    return float(strip.content_duration if hasattr(strip, "content_duration") else strip.frame_duration)
+    return float(strip.content_duration)
 
 
 def _move(strip: Any, delta: int) -> None:
-    if hasattr(strip, "content_start"):
-        strip.content_start = strip.content_start + delta
-    else:
-        strip.frame_start = strip.frame_start + delta
+    strip.content_start = strip.content_start + delta
 
 
 def _split(strip: Any, frame: int) -> Any:
-    try:
-        right = strip.split(frame=int(frame), split_method="SOFT", ignore_connections=True)
-    except TypeError:
-        right = strip.split(frame=int(frame), split_method="SOFT")
+    right = strip.split(frame=int(frame), split_method="SOFT", ignore_connections=True)
     if right is None:
         raise RuntimeError("could not split {!r} at frame {:d}".format(strip.name, int(frame)))
     return right
@@ -414,9 +408,35 @@ def _common(infos: list[dict], blocked: list[tuple], settings: tuple) -> tuple[l
         if info.get("all_quiet"):
             quiet.append(info["name"])
             continue
-        listeners.append((info["left"], info["right"], frames))
+        span = info.get("span")
+        if span:                            # its picture is a frame or two longer
+            listeners.append(cut_plan.stretch_edges(info["left"], info["right"], frames, span[0], span[1]))
+        else:
+            listeners.append((info["left"], info["right"], frames))
     listeners.extend((left, right, []) for left, right in blocked)
     return cut_plan.common_cuts(listeners), quiet
+
+
+OVERHANG = 2        # frames a movie's picture may run past its own sound (container rounding)
+
+
+def _overhang(infos: list[dict], every: list) -> None:
+    """Each sound's span stretched to the picture of its file when that is a frame or two
+    longer, so a trailing silence takes the picture's last frames too (no 1-frame piece)."""
+    facts = {s.name: _facts(s) for s in every if s.type in ("MOVIE", "SOUND")}
+    for info in infos:
+        mine = facts.get(info["name"])
+        if mine is None:
+            continue
+        left, right = info["left"], info["right"]
+        for other in every:
+            if other.type != "MOVIE" or not silences.is_partner(mine, facts[other.name]):
+                continue
+            l2, r2 = _left(other), _right(other)
+            if abs(l2 - info["left"]) <= OVERHANG and abs(r2 - info["right"]) <= OVERHANG:
+                left, right = min(left, l2), max(right, r2)
+        if (left, right) != (info["left"], info["right"]):
+            info["span"] = (left, right)
 
 
 # -- apply -------------------------------------------------------------------------
@@ -459,6 +479,10 @@ def _describe(every: list, channels: Any, fps: float) -> list[dict]:
 
 def _cut_member(strips: Any, strip: Any, frames: list[tuple]) -> list:
     """Remove *frames* from *strip* (split + remove); the pieces kept, in time order."""
+    # Strip.split() and strips.remove() free strips without stopping the Sequencer's
+    # prefetch first; it is stopped here, before the first split (#536).
+    from .prefetch import remove_strips, stop_prefetch
+    stop_prefetch(strip)
     piece, kept = strip, []
     for first, end in frames:
         if piece is None:
@@ -475,7 +499,7 @@ def _cut_member(strips: Any, strip: Any, frames: list[tuple]) -> list:
         else:
             middle = piece
         rest = _split(middle, end) if end < right else None
-        strips.remove(middle)
+        remove_strips(strips, [middle])
         piece = rest
     if piece is not None:
         kept.append(piece)
@@ -501,9 +525,9 @@ def _sweep(strips: Any, cuts: Any, text_too: bool) -> None:
 
 def _drop(scene: Any, strips: Any, doomed: list) -> list[str]:
     """Remove the text strips that keep too little to read, and their animation."""
+    from .prefetch import remove_strips
     names = [s.name for s in doomed]
-    for strip in doomed:
-        strips.remove(strip)
+    remove_strips(strips, doomed)         # with the prefetch stopped first (#536)
     if names:
         try:
             from ..captions_ops import _drop_fcurves  # #376: the evaluated action keeps them otherwise
@@ -511,6 +535,61 @@ def _drop(scene: Any, strips: Any, doomed: list) -> list[str]:
         except Exception:  # pylint: disable=broad-exception-caught
             pass
     return names
+
+
+def _signature(strip: Any) -> str:
+    """The caption's signature as it is now (#552: ``captions.caption_signature``)."""
+    from ..captions import caption_signature
+    return caption_signature(strip.text, _right(strip) - _left(strip), strip.channel, tuple(strip.location))
+
+
+def _unedited(strip: Any) -> bool:
+    """A caption still as Coworker made it (its signature matches): Remove Silences may re-sign it."""
+    tag = strip.get(_TAG) if strip.type == "TEXT" else None
+    sig = tag.get("sig") if tag is not None and hasattr(tag, "get") else None
+    if not sig:
+        return False
+    try:
+        return sig == _signature(strip)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return False
+
+
+def _resign(strip: Any) -> None:
+    """Trimmed or cut by Remove Silences is not a hand edit: the caption's signature follows (#552)."""
+    tag = strip.get(_TAG)
+    if tag is not None:
+        try:
+            tag["sig"] = _signature(strip)
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+
+
+def _text_pieces(every: list, pieces: dict, new_names: dict, fresh: set) -> None:
+    """Close the Gaps off: the pieces of a cut caption keep it unedited (re-signed), and its
+    word strips name the piece they are in, not the first one."""
+    lines = {}
+    for original, ps in pieces.items():
+        if original in fresh:
+            for piece in ps:
+                _resign(piece)
+        if len(ps) > 1:
+            lines[original] = [(_left(p), _right(p), n) for p, n in zip(ps, new_names.get(original, []))]
+    if not lines:
+        return
+    for strip in every:
+        tag = strip.get(_TAG) if strip.type == "TEXT" else None
+        if tag is None or not hasattr(tag, "get") or tag.get("role") != "word":
+            continue
+        spans = lines.get(str(tag.get("line", "")))
+        if not spans:
+            continue
+        home = next((n for a, b, n in spans if a <= _left(strip) < b), None)
+        if home and home != tag.get("line"):
+            fixed = _unedited(strip)
+            tag["line"] = home
+            if fixed:
+                _resign(strip)
 
 
 def _ripple(strips: Any, cuts: Any, trims: dict) -> None:
@@ -527,6 +606,7 @@ def _ripple(strips: Any, cuts: Any, trims: dict) -> None:
                 _move(strip, -shift)
             continue
         new_left, new_right = int(new[0]), int(new[1])
+        fresh = _unedited(strip)
         if new_right - new_left < _right(strip) - left:
             strip.right_handle = left + (new_right - new_left)
         if new_left != left:
@@ -538,6 +618,8 @@ def _ripple(strips: Any, cuts: Any, trims: dict) -> None:
                 tag["word_frames"] = [int(cuts.map(left + int(o))) - new_left for o in offsets]
             except (TypeError, ValueError, KeyError):
                 pass
+        if fresh:                           # trimmed by the cut, not by hand (#552)
+            _resign(strip)
 
 
 def _rename(editor: Any, pieces: dict) -> dict[str, list[str]]:
@@ -592,6 +674,7 @@ def remove_silences(scene: Any, settings: tuple, names: list[str] | None = None,
         return {"status": "nothing", "message": "Select one or more sound strips (or the movie strips that go with them)"}
     fps = _fps(scene)
     infos, problems, blocked = _analyse(scene, sounds, context, report_progress)
+    _overhang(infos, every)
     cuts, quiet = _common(infos, blocked, settings)
     notes = ["“{:s}” is quiet all the way through: not listened to".format(n) for n in quiet]
     base = {"problems": problems, "notes": notes, "listened": [s.name for s in sounds]}
@@ -611,6 +694,8 @@ def remove_silences(scene: Any, settings: tuple, names: list[str] | None = None,
     end0 = _content_end(editor.strips)
     by_name = {s.name: s for s in every}
     cuts_index = cut_plan.Cuts(the_plan["cuts"])
+    texts = {n for n in the_plan["cut"] if by_name[n].type == "TEXT"}  # read now: a cut may free the strip
+    fresh = {n for n in texts if _unedited(by_name[n])}               # captions cut with the gaps left
     try:
         pieces = {name: _cut_member(strips, by_name[name], ranges) for name, ranges in the_plan["cut"].items()}
         _sweep(strips, cuts_index, not ripple)
@@ -618,6 +703,8 @@ def remove_silences(scene: Any, settings: tuple, names: list[str] | None = None,
         if ripple:
             _ripple(strips, cuts_index, the_plan["trim"])
         new_names = _rename(editor, pieces)
+        if texts:
+            _text_pieces(list(strips), {n: ps for n, ps in pieces.items() if n in texts}, new_names, fresh)
     except Exception as ex:  # pylint: disable=broad-exception-caught
         return dict(base, status="error", changed=True, message=(
             "Remove Silences stopped part-way ({!s}): press Ctrl+Z to get the edit back".format(ex)))
@@ -699,6 +786,8 @@ class COWORKER_OT_sequencer_remove_silences(Operator):  # type: ignore[misc]
             if not problems:
                 self.report({"WARNING"}, "Nothing to read")
             return None
+        editor = _scene(context).sequence_editor
+        _overhang(infos, list(_level(editor)[0]))
         _PREVIEW["groups"] = infos
         _PREVIEW["blocked"] = blocked
         return infos
@@ -707,10 +796,7 @@ class COWORKER_OT_sequencer_remove_silences(Operator):  # type: ignore[misc]
         if self._prepare(context) is None:
             return {"CANCELLED"}
         wm = context.window_manager
-        try:
-            return wm.invoke_props_dialog(self, width=360, title=SPEC.label, confirm_text=SPEC.label)
-        except TypeError:                   # before 4.1: no title / confirm text
-            return wm.invoke_props_dialog(self, width=360)
+        return wm.invoke_props_dialog(self, width=360, title=SPEC.label, confirm_text=SPEC.label)
 
     def draw(self, _context):
         layout = self.layout

@@ -81,14 +81,11 @@ def main(params: Params) -> Result:
 
 
 def _socket_info(item: Any) -> dict[str, Any]:
-    """Serialize one ``NodeTreeInterfaceSocket`` (or a legacy socket)."""
+    """Serialize one ``NodeTreeInterfaceSocket``."""
     info: dict[str, Any] = {
         "name": item.name,
     }
-    try:
-        info["socket_type"] = item.socket_type
-    except AttributeError:
-        info["socket_type"] = getattr(item, "type", str(type(item).__name__))
+    info["socket_type"] = item.socket_type
     info["type"] = _short_socket_type(info["socket_type"])
     try:
         info["default"] = _jsonable(item.default_value)
@@ -136,11 +133,11 @@ def _short_socket_type(socket_type: str) -> str:
 
 
 def _interface_sockets(ng: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Return (inputs, outputs) from a node tree using either API generation."""
+    """Return (inputs, outputs) from a node tree's interface."""
     inputs: list[dict[str, Any]] = []
     outputs: list[dict[str, Any]] = []
 
-    # Blender 4.x+: interface.items_tree (NodeTreeInterfaceSocket + Panels).
+    # interface.items_tree (NodeTreeInterfaceSocket + Panels).
     # Socket classes are concrete subclasses (NodeTreeInterfaceSocketFloat,
     # ...), so match by the `in_out` attribute rather than class name;
     # panels simply have no `in_out`.
@@ -152,20 +149,6 @@ def _interface_sockets(ng: Any) -> tuple[list[dict[str, Any]], list[dict[str, An
                 inputs.append(_socket_info(item))
             elif direction == "OUTPUT":
                 outputs.append(_socket_info(item))
-        if inputs or outputs:
-            return inputs, outputs
-
-    # Legacy: ng.inputs / ng.outputs.
-    try:
-        for sock in ng.inputs:
-            inputs.append(_socket_info(sock))
-    except AttributeError:
-        pass
-    try:
-        for sock in ng.outputs:
-            outputs.append(_socket_info(sock))
-    except AttributeError:
-        pass
     return inputs, outputs
 
 

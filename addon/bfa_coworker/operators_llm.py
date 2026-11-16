@@ -323,6 +323,9 @@ class _BFACW_OT_confirm_model_download(bpy.types.Operator):  # type: ignore[misc
                     lambda e=err: setattr(props, "chat_status", "Error: " + e))
                 return
             if not llm.wait_until_ready(timeout=300.0, proc=proc):
+                if llm.stopped_by_user(proc):     # Stop while it loaded (#543)
+                    bpy.app.timers.register(lambda: setattr(props, "chat_status", "Stopped"))
+                    return
                 err = llm.get_state().error or "llama-server did not become ready"
                 bpy.app.timers.register(
                     lambda e=err: setattr(props, "chat_status", "Error: " + e))
@@ -364,12 +367,8 @@ class _BFACW_OT_start_llm(bpy.types.Operator):  # type: ignore[misc]
         prefs = context.preferences.addons[__package__].preferences
 
         cfg = llm.get_config()
-        cfg.llama_path = prefs.llama_path
-        cfg.model_repo_id = prefs.model_repo_id
-        cfg.model_filename = prefs.model_filename
-        cfg.downloaded_models_dir = prefs.downloaded_models_dir
-        cfg.local_ctx_size = prefs.local_ctx_size
-        cfg.hf_token = prefs.hf_token
+        # Every preference that shapes the command line (#543).
+        llm.apply_server_prefs(cfg, prefs, bpy.path.abspath)
         _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
         cfg.local_port = _llm_port
         llm.set_config(cfg)
@@ -396,9 +395,10 @@ class _BFACW_OT_start_llm(bpy.types.Operator):  # type: ignore[misc]
             if proc is None:
                 return  # Error already set by start_local_llama.
             # Wait for the server to become healthy and surface the result.
-            ready = llm.wait_until_ready(timeout=120.0, proc=proc)
+            # 300 s like the chat's Start: a cold 27B load took 115 s (#543).
+            ready = llm.wait_until_ready(timeout=300.0, proc=proc)
             state = llm.get_state()
-            if ready:
+            if ready or llm.stopped_by_user(proc):    # Stop while it loaded is no error (#543)
                 state_error = ""
             else:
                 state_error = state.error or "llama-server failed to start"

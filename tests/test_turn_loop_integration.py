@@ -1504,9 +1504,13 @@ class TestToolLoopIntegration(_TurnLoopTestBase):
                 model="fake-model", mcp_port=self.port)
         finally:
             self._unpin_fake_bpy()
-        self.assertIn("no longer fits the local context window",
-                      self.state.error)
-        self.assertIn("Checkpoint Now", self.state.error)
+        # #544: a short line in the header, the whole reason and the fix in
+        # the chat body (a notice the model never sees).
+        self.assertIn("was not sent", self.state.error)
+        self.assertEqual(history[-1].get("notice"), "error")
+        self.assertIn("This request was not sent", history[-1]["content"])
+        self.assertIn("Context Window", history[-1]["content"])
+        self.assertIn("This request was not sent", self.state.error_full)
         # No LLM request went out.
         self.assertEqual(len(self._main_requests()), 0)
         self.assertIs(history, self.state.conversation_history)
@@ -1631,13 +1635,24 @@ class TestBenchmarkErrorSurvival(_TurnLoopTestBase):
                 # Full context-overflow pair (stream + non-stream fallback).
                 self._inject(True, 400, "{\"error\": {\"message\": \"stream busy\"}}")
                 self._inject(False, 400, self._OVERFLOW_BODY)
+                sent_before = len(self._main_requests())
             history, texts = self._run_agent_turn(
                 "benchmark step {:d}".format(turn))
-            outcomes.append(bool(texts))
+            if turn == 2:
+                # #544: nothing older to compact, so the rebuilt request is the
+                # one the server refused -- it is NOT sent again (a real server
+                # refuses it again); the turn ends with the reason in the chat.
+                sent = self._main_requests()[sent_before:]
+                self.assertEqual(len(sent), 2, "the stream try and its fallback, no third")
+                self.assertEqual(history[-1].get("notice"), "error")
+                self.assertIn("not sent again", history[-1]["content"])
+                outcomes.append(True)
+            else:
+                outcomes.append(bool(texts))
             # A failing turn must never raise or leave the run wedged.
             self.assertIs(history, self.state.conversation_history)
 
-        # Every turn produced an answer; the run completed.
+        # Every other turn produced an answer; the run completed.
         self.assertTrue(all(outcomes), "every benchmark turn must complete")
         self.assertEqual(self.state.error, "")
 

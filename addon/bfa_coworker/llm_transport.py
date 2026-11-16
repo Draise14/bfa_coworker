@@ -486,6 +486,7 @@ def openai_chat_completions(
     max_tokens: int | None = None,
     thinking_budget_tokens: int | None = None,
     chat_mode: str = "AGENT",
+    timeout: float | None = None,
 ) -> dict[str, Any] | None:
     """POST to a chat completions endpoint and return the parsed JSON response.
 
@@ -498,6 +499,9 @@ def openai_chat_completions(
     *max_tokens* -- max output tokens per call. ``None`` uses 16384 default.
     *thinking_budget_tokens* -- see :func:`thinking_fields` (``None`` sends nothing;
     llama-server only).
+    *timeout* -- seconds for the whole call, retries included (#545: the memory
+    writer's limit); ``None`` keeps the per-attempt ``_STREAM_TIMEOUT``.  The
+    connection is closed when it passes, which also ends the server's work.
     """
     # Start each call with a clean error classification so a stale overflow
     # from a previous call is never mistaken for the current failure.
@@ -563,6 +567,7 @@ def openai_chat_completions(
     # across attempts so the final failure block can always surface the
     # real server reason (``ex.read()`` returns empty on a second call).
     _last_error_body = ""
+    _deadline = _time.monotonic() + float(timeout) if timeout is not None else None
     for attempt in range(max_retries + max_503_retries):
         # Honour Stop between attempts.  The streaming path checks
         # ``_stop_requested()`` mid-stream; without this the non-streaming
@@ -573,8 +578,17 @@ def openai_chat_completions(
             print("[Coworker] _openai_chat_completions: stop requested -- "
                   "aborting non-streaming request")
             return None
+        _attempt_timeout = _STREAM_TIMEOUT
+        if _deadline is not None:
+            _attempt_timeout = min(_STREAM_TIMEOUT, _deadline - _time.monotonic())
+            if _attempt_timeout <= 0.5:
+                print("[Coworker] _openai_chat_completions: no answer within {:.0f}s -- "
+                      "giving up".format(float(timeout)))
+                if _state() is not None:
+                    _state().error_kind = "timeout"
+                return None
         try:
-            with urllib.request.urlopen(req, timeout=_STREAM_TIMEOUT) as resp:
+            with urllib.request.urlopen(req, timeout=_attempt_timeout) as resp:
                 raw = resp.read().decode()
                 print("[Coworker] _openai_chat_completions: status={:d}, response={:d} bytes".format(
                     resp.status, len(raw)))
@@ -645,6 +659,13 @@ def openai_chat_completions(
                 _clear_stale_errors()
                 return result
         except (urllib.error.HTTPError, urllib.error.URLError, OSError, json.JSONDecodeError) as ex:
+            if _deadline is not None and _time.monotonic() >= _deadline - 0.5:
+                # The caller's time limit passed during this attempt (#545).
+                print("[Coworker] _openai_chat_completions: no answer within {:.0f}s ({:s}) -- "
+                      "giving up".format(float(timeout), str(ex)))
+                if _state() is not None:
+                    _state().error_kind = "timeout"
+                return None
             # -- Capture the error body ONCE for every HTTP error --------
             # ``ex.read()`` returns empty on a second call, so the body MUST
             # be read exactly once here and reused by the 500 classifier, the

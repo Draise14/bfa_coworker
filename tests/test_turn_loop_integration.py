@@ -1579,6 +1579,10 @@ class TestBenchmarkErrorSurvival(_TurnLoopTestBase):
         # Seed enough history that a forced compaction has something to
         # retire.
         self._seed_history(turns=30)
+        # #545: the client's estimate thinks this history fits its room (the
+        # server counts more): no compaction before the first send, so the
+        # overflow recovery is what is tested here.
+        self.sm.COMPACTION_TRIGGER_RATIO = 100.0
         # The stream attempt fails first (endpoint hiccup), so the
         # non-streaming fallback is the request that sees the overflow body.
         self._inject(True, 400, "{\"error\": {\"message\": \"stream busy\"}}")

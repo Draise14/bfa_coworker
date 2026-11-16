@@ -25,6 +25,10 @@ __all__ = (
     "MAX_WINDOW_TURNS",
     "MEMORY_TARGET_TOKENS",
     "COMPACTION_TRIGGER_RATIO",
+    "COMPACTION_MIN_ROOM_TOKENS",
+    "COMPACTION_TARGET_SHARE",
+    "compaction_threshold",
+    "memory_writer_max_tokens",
     "COMPACTION_ROLE",
     "CheckpointStore",
     "store",
@@ -76,9 +80,32 @@ MAX_WINDOW_TURNS = 20
 # by truncating bullet text.
 MEMORY_TARGET_TOKENS = 600
 
-# Compaction triggers when the estimated prompt reaches this fraction of the
-# safe prompt budget (see agent_controller._compute_prompt_budget).
+# Compaction triggers when the HISTORY reaches this share of the room the
+# history has (#545): the prompt budget (agent_controller._compute_prompt_budget)
+# minus the part compaction cannot shrink -- the system message with the memory
+# note, and the tool schema.  It used to be a share of the WHOLE budget, and on
+# Local the system prompt and 51 tools alone are ~20K of a 28.7K budget (32K
+# window): over 0.6 before anything was said, so it fired on every step.
 COMPACTION_TRIGGER_RATIO = 0.6
+# Floor for that room, so a window the fixed part nearly fills does not compact
+# after every short exchange: the history may then grow to this share of the
+# floor, and the request fitting trims the sent copy if it must.
+COMPACTION_MIN_ROOM_TOKENS = 4096
+# When the history is over that threshold, older turns are retired until the
+# recent messages kept fit in this share of it (the current turn is always kept
+# whole), so the next compaction comes only after the chat has grown by about
+# as much again -- not on every turn.
+COMPACTION_TARGET_SHARE = 0.5
+
+
+def compaction_threshold(prompt_budget: int, fixed_tokens: int) -> int:
+    """History tokens at which compaction starts (#545), or 0 when there is no
+    client-side budget (Remote).  *fixed_tokens*: the system message, memory
+    note and tool schema -- what compaction cannot make smaller."""
+    if prompt_budget <= 0:
+        return 0
+    room = max(int(prompt_budget) - max(0, int(fixed_tokens)), COMPACTION_MIN_ROOM_TOKENS)
+    return int(room * COMPACTION_TRIGGER_RATIO)
 
 # Approximate characters per token -- must match agent_controller._CHARS_PER_TOKEN.
 _CHARS_PER_TOKEN = 3.5
@@ -122,6 +149,15 @@ def set_memory_budget(ctx_tokens: int) -> int:
 def memory_max_chars() -> int:
     """Current (window-scaled) memory-note size cap, in characters."""
     return _memory_max_chars
+
+
+def memory_writer_max_tokens() -> int:
+    """The memory writer's own reply limit (#545): the note it is asked for
+    (window-scaled, 400..1500 tokens) with half again as margin, 512..2400.
+    It used to be the chat's limit capped at 1,024 -- less than the note a 32K
+    window asks for, and all of it went to thinking when thinking was not off."""
+    note_tokens = int(_memory_max_chars / _CHARS_PER_TOKEN)
+    return max(512, min(2400, int(note_tokens * 1.5)))
 
 # Hard cap on ``archive.jsonl`` length.  When a compaction appends past this
 # many messages the oldest lines are dropped (newest-N rotation), so a very

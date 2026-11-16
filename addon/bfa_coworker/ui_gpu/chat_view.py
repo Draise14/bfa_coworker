@@ -49,7 +49,7 @@ from typing import Any, Callable
 from .. import log, long_jobs
 from ..answer_envelope import readable
 from ..chat_status import fmt_duration, phase_text, spinner_char
-from ..chat_turns import NOTE_TITLES, group_turns, is_system_note_msg, split_turn
+from ..chat_turns import NOTE_TITLES, group_turns, is_system_note_msg, split_turn, turn_notices
 from .layout import Canvas, DrawCmd, InteractionState, Rect, TextLine
 from .markdown import Block, Span, parse
 from .selection import CHIP_PAD, ChatSelection, flow_tokens, highlight_rects, join_units, point_to_pos, word_bounds
@@ -562,6 +562,8 @@ class ChatView:
                                           unit=self._unit(canvas, idx, (USER, 0)))
             self._draw_thumbs(canvas, thumbs, box.x + pad + side + gap, text_top - pad, actions)
             top = box.y - pad
+        notices = turn_notices(turn)
+        top = self._draw_notices(canvas, notices, idx, x, top, width, actions, "fit")
         # The same spinner and words as the panel chat (chat_status), driven by
         # the state's thinking_dots tick.
         spinner = spinner_char(live) if active else ""
@@ -604,9 +606,34 @@ class ChatView:
                                  icon="LOOP_BACK"):
                     actions.append(("revert_turn", ""))
             top = self._draw_markdown(canvas, parse(reply), idx, x, top, width, actions, section=REPLY)
+        top = self._draw_notices(canvas, notices, idx, x, top, width, actions, "error")
         top = self._draw_jobs(canvas, idx, x, top, width)
         if conclusion is not None and idx == self._suggest_idx:
             top = self._draw_suggestions(canvas, message_text(conclusion.get("content")), x, top, width, actions)
+        return top
+
+    def _draw_notices(self, canvas: Canvas, notices: list[dict], idx: int, x: float, top: float,
+                      width: float, actions: list[tuple[str, str]], kind: str) -> float:
+        """The turn's notices of *kind* (#544): ``"fit"``, one line under your message on
+        what the request left out to fit the context window; ``"error"``, why the turn
+        stopped, in full (the header has room for its start only) with a Copy button."""
+        style = canvas.style
+        pad = style.pad
+        for n, note in enumerate(notices):
+            if note.get("notice") != kind:
+                continue
+            text = message_text(note.get("content"))
+            if kind == "fit":
+                top = self._icon_line(canvas, x, top - pad * 0.3, "INFO", text, _soft(style.text, 0.2),
+                                      width) - pad * 0.5
+                continue
+            side, gap = canvas.icon_size(), pad * 0.6
+            row_top = top - pad * 0.3
+            canvas.icon(self._first_line_icon(canvas, x, row_top, style.line_height), "ERROR", _ERROR)
+            copy_w = style.line_height
+            self._copy_button(canvas, x + width, row_top, "copynote:{:d}:{:d}".format(idx, n), text, actions)
+            top = self._draw_markdown(canvas, parse(text), idx, x + side + gap, row_top,
+                                      width - side - gap - copy_w - pad * 0.5, actions, interactive=False)
         return top
 
     def _draw_jobs(self, canvas: Canvas, idx: int, x: float, top: float, width: float,

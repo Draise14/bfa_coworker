@@ -1358,9 +1358,11 @@ class TestAutoContinueSanitizesRequest(unittest.TestCase):
         """
         src = _load_source()
         # The wrapper passes ``budget`` through as the thinking budget, and
-        # the continuation call site passes ``thinking_budget``.
+        # the continuation call site passes its own: thinking OFF on Local
+        # (#544: the reply already thought; the room goes to the answer).
         self.assertIn("thinking_budget_tokens=budget", src)
-        self.assertIn("_llm_request(_cont_send, openai_tools, thinking_budget)", src)
+        self.assertIn("_llm_request(_cont_send, openai_tools, _cont_think)", src)
+        self.assertIn("_cont_think = 0 if llm_port_local is not None else _req_think", src)
 
     def test_continue_prompt_caps_the_next_step(self):
         """A bare 'Continue.' invites another oversized tool call."""

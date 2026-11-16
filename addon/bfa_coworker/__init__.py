@@ -365,6 +365,7 @@ def _autostart_agent_timer() -> None:
         _llm_cfg.local_max_tokens = prefs.local_max_tokens
         _llm_cfg.thinking_budget_tokens = prefs.thinking_budget_tokens
         _llm_cfg.lock_scene_while_working = getattr(prefs, "lock_scene_while_working", True)
+        _llm.apply_server_prefs(_llm_cfg, prefs, bpy.path.abspath)  # KV quant, backend, slots... (#543)
         _llm_cfg.local_port = _llm_port
         _llm.set_config(_llm_cfg)
 

@@ -211,9 +211,26 @@ def _get_bundled_llama_dir() -> Path:
 _LLAMA_SERVER_LOG_NAME = "llama-server.log"
 
 
+_LLAMA_SERVER_PREV_LOG_NAME = "llama-server.prev.log"
+
+
 def _llama_server_log_path() -> Path:
     """Return the path of the llama-server log file (recreated each launch)."""
     return _get_bundled_llama_dir() / _LLAMA_SERVER_LOG_NAME
+
+
+def _rotate_llama_server_log() -> None:
+    """Keep the previous launch's log as ``llama-server.prev.log`` (one generation)."""
+    try:
+        log = _llama_server_log_path()
+        if log.is_file():
+            os.replace(str(log), str(log.with_name(_LLAMA_SERVER_PREV_LOG_NAME)))
+    except OSError as ex:
+        print("[Coworker] start_local_llama: could not keep the previous log -- {:s}".format(str(ex)))
+        try:
+            _llama_server_log_path().unlink()
+        except OSError:
+            pass
 
 
 def get_llama_server_log_tail(n_lines: int = 40, max_chars: int = 4000) -> str:
@@ -394,6 +411,41 @@ _REQUIRED_LLAMA_FLAGS: "frozenset[str]" = frozenset({
 })
 
 
+def build_server_tuning_args(*, gpu: bool, kv_q8: bool, slots: int = 1, projector: bool = False,
+                             verbose: bool = False, preset_extra: "tuple[str, ...]" = (),
+                             cache_ram_mib: "int | None" = None) -> list[str]:
+    """The flags after ``--n-gpu-layers`` that shape memory and speed (#543).
+
+    * ``--parallel``: one slot while Local chains chats (the server's auto is
+      4, each with its own recurrent state and checkpoints); more only with
+      Local Side by Side, then ``--kv-unified`` so the slots share one context
+      instead of splitting it (#399).
+    * ``--cache-ram``: a smaller host prompt cache than the server's 8 GB.
+    * ``--cache-reuse`` only without a projector: the server disables it for
+      multimodal models ("cache_reuse is not supported by multimodal").
+    * KV quantization and the batch sizes on GPU backends only.
+    Every flag still goes through the binary's own ``--help`` filter.
+    """
+    args: list[str] = []
+    if verbose:
+        # --verbose logs every prompt and token: a debug opt-in only.
+        args.append("--verbose")
+    args.extend(preset_extra)
+    if gpu:
+        if kv_q8:
+            args.extend(("--cache-type-k", "q8_0", "--cache-type-v", "q8_0"))
+        # A modest batch/ubatch avoids pathological prompt-processing slowdowns.
+        args.extend(("--batch-size", "2048", "--ubatch-size", "512"))
+    slots = max(1, int(slots or 1))
+    args.extend(("--parallel", str(slots)))
+    if slots > 1:
+        args.append("--kv-unified")
+    args.extend(("--cache-ram", str(int(LOCAL_CACHE_RAM_MIB if cache_ram_mib is None else cache_ram_mib))))
+    if not projector:
+        args.extend(("--cache-reuse", "256"))
+    return args
+
+
 _llama_server_version_cache: str = ""
 
 
@@ -424,44 +476,18 @@ def _llama_server_version(server_exe: str) -> str:
 #
 # The most common "llama-server crashes at startup" cause with local files is
 # a GGUF that was cut off mid-download or mid-copy -- llama-server fails with
-# ``missing tensor ...`` after loading a few dozen layers.  We compare the
-# local file size against the size on HuggingFace (for curated presets) and
-# surface an actionable hint.
-
-_hf_size_cache: dict[tuple[str, str], int | None] = {}
-
-
-def _hf_repo_file_size(repo_id: str, filename: str) -> int | None:
-    """Return the expected size (bytes) of a preset file on HuggingFace.
-
-    Uses a HEAD request to the HF ``resolve`` URL.  Cached per session.
-    Returns ``None`` when the size can't be determined (offline, gated repo,
-    network error) so callers can silently skip the check.
-    """
-    key = (repo_id, filename)
-    if key in _hf_size_cache:
-        return _hf_size_cache[key]
-    url = "https://huggingface.co/{:s}/resolve/main/{:s}".format(repo_id, filename)
-    req = urllib.request.Request(url, method="HEAD")
-    size: int | None = None
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            try:
-                size = int(resp.headers.get("Content-Length") or 0) or None
-            except (TypeError, ValueError):
-                size = None
-    except Exception:  # pylint: disable=broad-exception-caught
-        size = None
-    _hf_size_cache[key] = size
-    return size
+# ``missing tensor ...`` after loading a few dozen layers.  The GGUF header
+# says where its last tensor ends, so the file on disk is checked against its
+# own header, in bytes, with no network request (#543: the old check asked
+# Hugging Face on every launch and flagged a complete file whose upload had
+# since been replaced by a newer one).
 
 
 def check_model_file_integrity(model_path: Path | str | None) -> str:
-    """Return an actionable warning if a local model file looks truncated.
+    """Return an actionable warning if a local GGUF file is shorter than its header says.
 
-    Only checks curated presets (the repo ID + filename are known).  Compares
-    the local file size against the size on HuggingFace; returns an empty
-    string when the file is fine or the check can't run.
+    Any .gguf is checked (not only presets).  Returns an empty string when the
+    file is complete or cannot be read as GGUF.
     """
     if not model_path:
         return ""
@@ -469,22 +495,17 @@ def check_model_file_integrity(model_path: Path | str | None) -> str:
         model_path = Path(model_path)
     if not model_path.is_file():
         return ""
-    name = model_path.name.lower()
-    for preset in PRESET_MODELS:
-        if preset.filename.lower() != name:
-            continue
-        try:
-            local = model_path.stat().st_size
-        except OSError:
-            return ""
-        expected = _hf_repo_file_size(preset.repo_id, preset.filename)
-        if expected and local < expected * 0.995:
-            return (
-                "{:s} is likely truncated: it is {:.1f} GB on disk, but the file on "
-                "HuggingFace is {:.1f} GB. Delete it and re-download / re-copy the model "
-                "(a partial copy fails with \"missing tensor\")."
-            ).format(model_path.name, local / (1024 ** 3), expected / (1024 ** 3))
-        break
+    info = gguf_info(model_path)
+    if info is None or not info.get("data_end"):
+        return ""
+    local = int(info["file_bytes"])
+    expected = int(info["data_end"])
+    if local < expected:
+        return (
+            "{:s} is truncated: it is {:,d} bytes on disk, but its header says the data "
+            "ends at byte {:,d} ({:,d} bytes missing). Delete it and re-download / re-copy "
+            "the model (a partial copy fails with \"missing tensor\")."
+        ).format(model_path.name, local, expected, expected - local)
     return ""
 
 
@@ -663,6 +684,9 @@ class LLMConfig:
     llama_backend: str = "auto"  # "auto" | "cpu" | "cuda" | "vulkan"
     local_kv_cache_quant: bool = False  # Quantize KV cache to q8_0 (GPU backends only)
     local_server_verbose: bool = False  # Pass --verbose to llama-server (debug logging)
+    # Server slots (--parallel): 1 while Local chains chats; the chat count with
+    # Local Side by Side on (see threads.slots_for).  #543
+    local_parallel: int = 1
     # Soft co-work lock: while a turn runs, make the coworker's own objects
     # un-selectable in the UI so the user cannot re-target them mid-turn.
     # Restored when the turn ends.
@@ -857,7 +881,10 @@ PRESET_MODELS: list[ModelPreset] = [
         name="Qwen3.8-27B (Q4_K_M)",
         repo_id="unsloth/Qwen3.8-27B-GGUF",
         filename="Qwen3.8-27B-UD-Q4_K_M.gguf",
-        ram_gb="16-20 GB",
+        # Measured (#543, RTX 4090, one slot, with the projector): 18.9 GB of
+        # dedicated VRAM at 32K with 16-bit KV, 18.0 GB with 8-bit; llama-server
+        # commits 20-23 GB of RAM.
+        ram_gb="20-24 GB",
         disk_gb="~17 GB",
         capability="Excellent",
         category="mid_range",
@@ -865,13 +892,14 @@ PRESET_MODELS: list[ModelPreset] = [
         max_tokens=16384,
         vision=True,
         mmproj_filename="mmproj-F16.gguf",
-        hardware_note="RTX 3090/4090 -- 16 GB+ VRAM",
-        why="Latest Qwen3.8 at Q4 -- vision + agentic, fits 16 GB cards",
+        hardware_note="RTX 3090/4090/5090 -- 24 GB VRAM, ~19-20 GB of it free",
+        why="Latest Qwen3.8 at Q4 -- vision + agentic on one 24 GB card",
         extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
             "Qwen3.8-27B at Q4_K_M -- the latest Qwen generation. Native vision-language,\n"
             "thinking mode, and agentic tool calling. 262K context. Apache 2.0.\n"
-            "Fits 16 GB VRAM while keeping excellent quality."
+            "Needs ~18 GB of VRAM at 32K context with the vision projector (8-bit KV cache),\n"
+            "~19 GB with 16-bit, plus ~1 GB free: a 24 GB card with little else on it."
         ),
     ),
     ModelPreset(
@@ -1296,6 +1324,7 @@ def set_config(cfg: LLMConfig) -> None:
         _config.llama_backend = cfg.llama_backend
         _config.local_kv_cache_quant = cfg.local_kv_cache_quant
         _config.local_server_verbose = cfg.local_server_verbose
+        _config.local_parallel = cfg.local_parallel
         _config.lock_scene_while_working = cfg.lock_scene_while_working
         _config.auto_continue_rounds = cfg.auto_continue_rounds
         _config.remote_api_url = cfg.remote_api_url
@@ -1321,12 +1350,59 @@ def get_config() -> LLMConfig:
             llama_backend=_config.llama_backend,
             local_kv_cache_quant=_config.local_kv_cache_quant,
             local_server_verbose=_config.local_server_verbose,
+            local_parallel=_config.local_parallel,
             lock_scene_while_working=_config.lock_scene_while_working,
             auto_continue_rounds=_config.auto_continue_rounds,
             remote_api_url=_config.remote_api_url,
             remote_api_key=_config.remote_api_key,
             remote_model=_config.remote_model,
         )
+
+
+# The preferences that shape the llama-server command line (#543).  Every Start
+# path copies them through :func:`apply_server_prefs`; a test fails when
+# start_local_llama reads a config field that is neither here nor derived below.
+SERVER_PREF_FIELDS: tuple[str, ...] = (
+    "llama_source", "llama_path", "llama_backend", "model_repo_id", "model_filename",
+    "downloaded_models_dir", "local_ctx_size", "local_kv_cache_quant",
+    "local_server_verbose", "hf_token",
+)
+# Config fields start_local_llama reads that are not preferences: the port comes
+# from the effective ports, the slot count from the chat preferences.
+SERVER_DERIVED_FIELDS: tuple[str, ...] = ("local_port", "local_parallel")
+# llama-server's unified KV slots when Local Side by Side is on (threads.LOCAL_SLOTS_MAX).
+_LOCAL_SLOTS_MAX = 4
+
+
+def local_server_slots(chats_at_once: int, local_side_by_side: bool) -> int:
+    """``--parallel`` for the Local server: 1 while chats take turns (the default),
+    else the chats that may run at once, at most 4 (the same rule as
+    ``threads.slots_for("local", ...)``)."""
+    if not local_side_by_side:
+        return 1
+    return max(1, min(int(chats_at_once or 1), _LOCAL_SLOTS_MAX))
+
+
+def apply_server_prefs(cfg: LLMConfig, prefs: Any,
+                       abspath: "Callable[[str], str] | None" = None) -> LLMConfig:
+    """Copy the preferences that shape the server command line into *cfg*.
+
+    *prefs* is the add-on preferences (or any object with the same attributes);
+    *abspath* resolves a ``//`` path against the .blend (``bpy.path.abspath``).
+    Returns *cfg*.  The caller still calls :func:`set_config`.
+    """
+    for name in SERVER_PREF_FIELDS:
+        if not hasattr(prefs, name):
+            continue          # an older preferences class still registered
+        value = getattr(prefs, name)
+        if name == "llama_source":
+            value = str(value).lower()
+        elif name == "llama_path" and abspath is not None:
+            value = abspath(value) if value else value
+        setattr(cfg, name, value)
+    cfg.local_parallel = local_server_slots(
+        int(getattr(prefs, "chats_at_once", 1) or 1), bool(getattr(prefs, "local_side_by_side", False)))
+    return cfg
 
 
 # ---------------------------------------------------------------------------
@@ -1463,10 +1539,6 @@ def _check_llama_version(exe_path: str) -> None:
             "Use 'Download llama-server' in preferences to get the latest version."
             .format(build, _MIN_SUPPORTED_BUILD)
         )
-
-
-    _find_llama_server_cache = None
-    return None
 
 
 def invalidate_llama_server_cache() -> None:
@@ -1750,9 +1822,6 @@ def _detect_hardware_cached() -> tuple[float | None, float | None]:
 
 _RUNTIME_OVERHEAD_MB = 700
 _KV_MB_PER_1K_CTX = 70
-# Bytes of KV cache per token -- same ~70 MB/1K-ctx estimate as above,
-# expressed per token for validate_ctx_against_hardware.
-_KV_BYTES_PER_TOKEN = _KV_MB_PER_1K_CTX * 1024
 _TYPICAL_LAYERS = 33
 _FULL_OFFLOAD = 99
 
@@ -1914,105 +1983,433 @@ def autodetect_gpu_layers(model_path: Path, context_size: int) -> int:
     print("[Coworker] autodetect_gpu_layers: ngl={:d}/{:d} (gpu={:d}MB, model={:d}MB, kv={:d}MB, usable={:d}MB)".format(
         ngl, actual_layers, gpu_mb, model_mb, kv_mb, usable_mb))
     return ngl
+
+
+# ---------------------------------------------------------------------------
+# Local server memory plan (#543)
+#
+# What llama-server needs on the GPU, from the model's own GGUF header, against
+# what is free on the card when it starts.  Calibrated on an RTX 4090 with the
+# pinned build (b10154), one slot, dedicated MiB measured / estimated here:
+#   Qwen3.8-27B Q4_K_M + F16 projector  32K f16 KV 18,896 / 19,171
+#                                       32K q8_0   18,022 / 18,211
+#                                       16K f16    17,856 / 18,083
+#                                       64K q8_0   19,270 / 19,427
+#   the same without the projector      32K f16    17,760 / 18,030
+#   Qwen3.5-9B Q4_K_M + projector       32K f16     7,530 /  7,705
+#                                       64K f16     8,586 /  8,857
+# Each extra slot adds one recurrent state (150 MiB on the 27B: 4 slots measured
+# +450 MiB).  A load spilled into shared memory (prefill ~5 tokens/s, the chat
+# "hangs") when its need came within ~1 GB of the card's free memory: hence the
+# margin, the same as llama.cpp's own --fit-target default.
+
+_FIRST_REQUEST_TOKENS = 18432       # the first request on Bforartists: 18,359 tokens (#543; #544 trims it)
+_REPLY_ROOM_TOKENS = 4096           # a reply on top of it (--no-context-shift: both must fit)
+_VRAM_MARGIN_MIB = 1024
+_PROJECTOR_COMPUTE_MIB = 256        # the vision encoder's compute buffer on top of the projector file
+_KV_SCRATCH_BYTES_PER_TOKEN = 4096  # attention scratch that grows with the context
+_FALLBACK_KV_BYTES_PER_TOKEN = 128 * 1024  # f16 KV per token when the header can't be read (no file yet)
+_FALLBACK_PROJECTOR_BYTES = 1024 ** 3      # a vision preset's projector before it is downloaded
+_AUTO_CTX_MAX = 65536               # a recommendation never asks for more (Blender needs VRAM too)
+_Q8_0_BYTES_PER_ELEM = 34.0 / 32.0  # q8_0: 32 values in 34 bytes (f16: 2 bytes each)
+# --cache-ram: llama-server's host prompt cache (server default 8192 MiB).  With
+# one slot the cache only fills when a prompt shares little with the slot: two
+# chats switching reused the same tokens at 2048 as at 8192, but peak commit
+# over eight chats was 23.0 GB instead of 25.2 GB.
+LOCAL_CACHE_RAM_MIB = 2048
+_MIB = 1024 * 1024
+
+# ggml tensor types: (values per block, bytes per block).  An unknown type makes
+# the truncation check skip the file rather than guess.
+_GGML_TYPE_SIZES: dict[int, tuple[int, int]] = {
+    0: (1, 4), 1: (1, 2), 2: (32, 18), 3: (32, 20), 6: (32, 22), 7: (32, 24), 8: (32, 34),
+    9: (32, 36), 10: (256, 84), 11: (256, 110), 12: (256, 144), 13: (256, 176), 14: (256, 210),
+    15: (256, 292), 16: (256, 66), 17: (256, 74), 18: (256, 98), 19: (256, 50), 20: (32, 18),
+    21: (256, 110), 22: (256, 82), 23: (256, 136), 24: (1, 1), 25: (1, 2), 26: (1, 4),
+    27: (1, 8), 28: (1, 8), 29: (256, 56), 30: (1, 2), 34: (256, 54), 35: (256, 66), 39: (32, 17),
+}
+# GGUF metadata value types -> struct format.
+_GGUF_SCALARS: dict[int, str] = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f",
+                                 7: "<?", 10: "<Q", 11: "<q", 12: "<d"}
+_GGUF_STRING, _GGUF_ARRAY = 8, 9
+
+_gguf_info_cache: dict[tuple[str, int, int], "dict[str, Any] | None"] = {}
+
+
+def gguf_info(path: "Path | str | None") -> "dict[str, Any] | None":
+    """Facts from a GGUF header: ``meta`` (scalars and short numeric arrays),
+    ``data_end`` (the byte where the last tensor ends; 0 when a tensor type is
+    unknown) and ``file_bytes``.  ``None`` when *path* is not a readable GGUF.
+    Cached per path, size and mtime (the preferences draw this)."""
+    if not path:
+        return None
+    try:
+        st = os.stat(str(path))
+    except OSError:
+        return None
+    key = (str(path), int(st.st_size), int(st.st_mtime_ns))
+    if key in _gguf_info_cache:
+        return _gguf_info_cache[key]
+    info = None
+    try:
+        info = _read_gguf(str(path), int(st.st_size))
+    except (OSError, struct.error, ValueError, UnicodeDecodeError, OverflowError, MemoryError):
+        info = None
+    _gguf_info_cache[key] = info
+    return info
+
+
+def _read_gguf(path: str, file_bytes: int) -> "dict[str, Any] | None":
+    with open(path, "rb") as f:
+        if f.read(4) != b"GGUF":
+            return None
+        version, = struct.unpack("<I", f.read(4))
+        if version < 2:
+            return None
+        n_tensors, n_kv = struct.unpack("<QQ", f.read(16))
+
+        def rstr() -> str:
+            n, = struct.unpack("<Q", f.read(8))
+            return f.read(n).decode("utf-8", errors="replace")
+
+        def skip_or_read(vtype: int, keep: bool) -> Any:
+            if vtype in _GGUF_SCALARS:
+                fmt = _GGUF_SCALARS[vtype]
+                return struct.unpack(fmt, f.read(struct.calcsize(fmt)))[0]
+            if vtype == _GGUF_STRING:
+                n, = struct.unpack("<Q", f.read(8))
+                if keep and n <= 4096:
+                    return f.read(n).decode("utf-8", errors="replace")
+                f.seek(n, 1)
+                return None
+            if vtype == _GGUF_ARRAY:
+                atype, count = struct.unpack("<IQ", f.read(12))
+                if atype in _GGUF_SCALARS:
+                    fmt = _GGUF_SCALARS[atype]
+                    size = struct.calcsize(fmt)
+                    if keep and count <= 1024:
+                        return list(struct.unpack("<{:d}{:s}".format(count, fmt[1]), f.read(size * count)))
+                    f.seek(size * count, 1)
+                    return None
+                for _ in range(count):
+                    skip_or_read(atype, False)
+                return None
+            raise ValueError("unknown GGUF value type {:d}".format(vtype))
+
+        meta: dict[str, Any] = {}
+        for _ in range(n_kv):
+            k = rstr()
+            vtype, = struct.unpack("<I", f.read(4))
+            v = skip_or_read(vtype, not k.startswith("tokenizer."))
+            if v is not None:
+                meta[k] = v
+        end = 0
+        known = True
+        for _ in range(n_tensors):
+            rstr()
+            n_dims, = struct.unpack("<I", f.read(4))
+            dims = struct.unpack("<{:d}Q".format(n_dims), f.read(8 * n_dims))
+            ttype, offset = struct.unpack("<IQ", f.read(12))
+            sizes = _GGML_TYPE_SIZES.get(ttype)
+            if sizes is None:
+                known = False
+                continue
+            n = 1
+            for d in dims:
+                n *= int(d)
+            end = max(end, offset + (n // sizes[0]) * sizes[1])
+        align = int(meta.get("general.alignment") or 32)
+        data_start = (f.tell() + align - 1) // align * align
+    return {"meta": meta, "data_end": data_start + end if known else 0, "file_bytes": file_bytes}
+
+
+def model_memory_profile(info: "dict[str, Any] | None") -> dict[str, float]:
+    """Per-token KV bytes (f16) and per-sequence recurrent-state bytes from a
+    :func:`gguf_info` header; conservative fallbacks without one.
+
+    Attention layers hold the KV cache; on hybrid models (Qwen3.5/3.8:
+    ``full_attention_interval``) the others hold a fixed recurrent state per
+    server slot instead.  Sliding-window layers are counted as full (upper bound).
+    """
+    fallback = {"kv_bytes_per_token": float(_FALLBACK_KV_BYTES_PER_TOKEN), "recurrent_bytes": 0.0,
+                "from_header": 0.0}
+    meta = (info or {}).get("meta") or {}
+    arch = str(meta.get("general.architecture") or "")
+    if not arch:
+        return fallback
+
+    def m(key: str, default: Any = None) -> Any:
+        return meta.get("{:s}.{:s}".format(arch, key), default)
+
+    n_layer = int(m("block_count", 0) or 0) - int(m("nextn_predict_layers", 0) or 0)
+    n_head = m("attention.head_count", 0)
+    n_head_kv = m("attention.head_count_kv", n_head)
+    n_embd = int(m("embedding_length", 0) or 0)
+    if n_layer <= 0 or not n_head_kv:
+        return fallback
+    heads_first = n_head[0] if isinstance(n_head, list) and n_head else n_head
+    head_dim = n_embd // int(heads_first) if heads_first else 0
+    k_len = int(m("attention.key_length", head_dim) or head_dim)
+    v_len = int(m("attention.value_length", k_len) or k_len)
+    interval = int(m("full_attention_interval", 0) or 0)
+    if isinstance(n_head_kv, list):
+        kv_heads = [int(x) for x in n_head_kv[:n_layer]]
+    else:
+        kv_heads = [int(n_head_kv)] * n_layer
+    if interval > 0:
+        attn = [il for il in range(n_layer) if (il + 1) % interval == 0]
+    else:
+        attn = [il for il in range(n_layer) if il < len(kv_heads) and kv_heads[il] > 0]
+    kv_elems = sum(kv_heads[il] for il in attn if il < len(kv_heads)) * (k_len + v_len)
+    recurrent = 0.0
+    d_state = int(m("ssm.state_size", 0) or 0)
+    if d_state:
+        d_inner = int(m("ssm.inner_size", 0) or 0)
+        d_conv = int(m("ssm.conv_kernel", 0) or 0)
+        n_group = int(m("ssm.group_count", 0) or 0)
+        n_rec = n_layer - len(attn) if interval > 0 else n_layer
+        per_layer = (max(d_conv - 1, 0) * (d_inner + 2 * n_group * d_state) + d_inner * d_state) * 4
+        recurrent = float(n_rec * per_layer)
+    return {"kv_bytes_per_token": float(kv_elems * 2), "recurrent_bytes": recurrent, "from_header": 1.0}
+
+
+def estimate_server_vram_mib(model_bytes: float, projector_bytes: float, profile: dict[str, float],
+                             ctx: int, kv_q8: bool, slots: int = 1) -> int:
+    """Dedicated VRAM (MiB) llama-server needs with every layer on the GPU."""
+    kv = float(profile.get("kv_bytes_per_token") or _FALLBACK_KV_BYTES_PER_TOKEN)
+    if kv_q8:
+        kv *= _Q8_0_BYTES_PER_ELEM / 2.0
+    total = float(model_bytes) + max(int(slots), 1) * float(profile.get("recurrent_bytes") or 0.0)
+    if projector_bytes:
+        total += float(projector_bytes) + _PROJECTOR_COMPUTE_MIB * _MIB
+    total += int(ctx) * (kv + _KV_SCRATCH_BYTES_PER_TOKEN)
+    return int(-(-total // _MIB))
+
+
+def min_agent_ctx() -> int:
+    """The smallest standard context that holds the first request plus a reply."""
+    need = _FIRST_REQUEST_TOKENS + _REPLY_ROOM_TOKENS
+    return next((s for s in ctx_preset_sizes if s >= need), ctx_preset_sizes[-1])
+
+
+@dataclass
+class ServerMemoryPlan:
+    """What a Local server start will use, and whether it fits the free VRAM."""
+
+    ctx: int
+    kv_q8: bool
+    need_mib: int
+    free_mib: int | None        # what the plan was made against (None: unknown)
+    fits: bool | None           # None when the free memory is unknown
+
+
+def plan_server_memory(model_bytes: float, projector_bytes: float, profile: dict[str, float],
+                       free_mib: "int | None", *, ctx: int = 0, kv_q8_forced: bool = False,
+                       slots: int = 1, ctx_cap: int = 262144) -> ServerMemoryPlan:
+    """The sizing rule (#543).
+
+    *ctx* > 0 (a launch): keep that context; f16 KV when it fits in
+    ``free - 1 GB``, else q8_0.  *ctx* == 0 (a recommendation): the largest
+    standard size from :func:`min_agent_ctx` up to 64K (and the model's
+    *ctx_cap*) that fits with f16 KV; else the largest that fits with q8_0;
+    else the smallest one with q8_0, marked as not fitting.  *kv_q8_forced*
+    (the preference) skips f16.
+    """
+    avail = None if free_mib is None else int(free_mib) - _VRAM_MARGIN_MIB
+
+    def need(c: int, q8: bool) -> int:
+        return estimate_server_vram_mib(model_bytes, projector_bytes, profile, c, q8, slots)
+
+    if ctx > 0:
+        q8 = bool(kv_q8_forced) or (avail is not None and need(ctx, False) > avail)
+        fits = None if avail is None else need(ctx, q8) <= avail
+        return ServerMemoryPlan(int(ctx), q8, need(ctx, q8), free_mib, fits)
+    cap = max(int(ctx_cap or 0), ctx_preset_sizes[0])
+    floor = min(min_agent_ctx(), cap)
+    top = min(_AUTO_CTX_MAX, cap)
+    sizes = [s for s in ctx_preset_sizes if floor <= s <= top] or [floor]
+    if avail is None:
+        return ServerMemoryPlan(sizes[0], bool(kv_q8_forced), need(sizes[0], bool(kv_q8_forced)), None, None)
+    for q8 in ((True,) if kv_q8_forced else (False, True)):
+        fitting = [s for s in sizes if need(s, q8) <= avail]
+        if fitting:
+            return ServerMemoryPlan(fitting[-1], q8, need(fitting[-1], q8), free_mib, True)
+    return ServerMemoryPlan(sizes[0], True, need(sizes[0], True), free_mib, False)
+
+
+def detect_free_vram_mib() -> "int | None":
+    """Free memory (MiB) of the first NVIDIA GPU now, or ``None``."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5, creationflags=_CREATE_NO_WINDOW,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return int(float(result.stdout.strip().splitlines()[0].strip()))
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired, ValueError):
+        pass
+    return None
+
+
+_free_vram_cache: dict[str, Any] = {}
+# Free VRAM measured just before this window's server started: while it runs,
+# the card's free memory no longer includes what the server itself took.
+_launch_free_vram_mib: "int | None" = None
+
+
+def _detect_free_vram_cached() -> "int | None":
+    """:func:`detect_free_vram_mib`, cached briefly for UI redraws; the value
+    from the last launch while this window's server runs."""
+    import time as _time
+    if _launch_free_vram_mib is not None and _llama_process is not None and _llama_process.poll() is None:
+        return _launch_free_vram_mib
+    now = _time.monotonic()
+    if _free_vram_cache and now - float(_free_vram_cache.get("t", 0.0)) < _HARDWARE_CACHE_TTL:
+        return _free_vram_cache.get("v")
+    value = detect_free_vram_mib()
+    _free_vram_cache.clear()
+    _free_vram_cache.update(t=now, v=value)
+    return value
+
+
+def _plan_memory_budget(backend: str, ram_gb: "float | None", vram_gb: "float | None",
+                        free_vram_mib: "int | None") -> "tuple[int | None, bool]":
+    """``(free MiB to plan against, on the GPU?)`` for *backend*."""
+    if resolve_gpu_backend(backend) in ("cuda", "vulkan"):
+        if free_vram_mib is None:
+            free_vram_mib = _detect_free_vram_cached()
+        if free_vram_mib is None and vram_gb:
+            free_vram_mib = int(vram_gb * 1024) - 1024    # total only: leave the desktop ~1 GB
+        return free_vram_mib, True
+    if ram_gb:
+        return int(ram_gb * 1024) - 2048, False           # weights in RAM; 2 GB for the OS + Blender
+    return None, False
+
+
+_projector_bytes_cache: dict[str, tuple[float, float]] = {}
+
+
+def _projector_bytes(model_path: str) -> float:
+    """Size of the projector the server would load next to *model_path* (0: none);
+    cached briefly -- the preferences draw this."""
+    import time as _time
+    now = _time.monotonic()
+    hit = _projector_bytes_cache.get(model_path)
+    if hit is not None and now - hit[0] < _HARDWARE_CACHE_TTL:
+        return hit[1]
+    projector = _resolve_mmproj_path(model_path)
+    try:
+        size = float(os.path.getsize(str(projector))) if projector else 0.0
+    except OSError:
+        size = 0.0
+    _projector_bytes_cache[model_path] = (now, size)
+    return size
+
+
+def recommend_server_plan(
+    model_gb: float = 0.0,
+    backend: str = "auto",
+    ram_gb: "float | None" = None,
+    vram_gb: "float | None" = None,
+    *,
+    model_path: "Path | str | None" = None,
+    projector_bytes: "float | None" = None,
+    free_vram_mib: "int | None" = None,
+    kv_q8_forced: bool = False,
+    ctx_cap: int = 262144,
+    ctx: int = 0,
+) -> ServerMemoryPlan:
+    """:func:`plan_server_memory` for this machine and model.  *model_path*
+    (when the file exists) gives the real sizes and header; else *model_gb* and
+    *projector_bytes* estimate them."""
+    if ram_gb is None or vram_gb is None:
+        _ram, _vram = _detect_hardware_cached()
+        ram_gb = _ram if ram_gb is None else ram_gb
+        vram_gb = _vram if vram_gb is None else vram_gb
+    info = gguf_info(model_path) if model_path else None
+    model_bytes = float(info["file_bytes"]) if info else float(model_gb) * 1024 ** 3
+    if info is not None and projector_bytes is None:
+        projector_bytes = _projector_bytes(str(model_path))
+    free, _gpu = _plan_memory_budget(backend, ram_gb, vram_gb, free_vram_mib)
+    return plan_server_memory(model_bytes, float(projector_bytes or 0.0), model_memory_profile(info), free,
+                              ctx=ctx, kv_q8_forced=kv_q8_forced, ctx_cap=ctx_cap)
+
+
 def recommend_context_size(
     model_gb: float = 0.0,
     backend: str = "auto",
     ram_gb: float | None = None,
     vram_gb: float | None = None,
+    **kwargs: Any,
 ) -> int:
-    """Recommend a context size (tokens) that fits the detected hardware.
+    """Recommend a context size (tokens) for this machine: see :func:`plan_server_memory`.
 
-    Heuristic: assume ~256 KB of KV-cache memory per token of context (an
-    upper bound for 27B-class GQA models -- smaller models need far less),
-    i.e. ~4096 tokens per GB of budget.  The KV cache must fit in VRAM when
-    a GPU backend is used, otherwise in system RAM.  Returns one of
+    Free VRAM (not the card's total), the model's own KV and recurrent-state
+    needs, and never less than the first request plus a reply.  Returns one of
     :data:`ctx_preset_sizes`.
     """
-    if ram_gb is None or vram_gb is None:
-        _ram, _vram = _detect_hardware_cached()
-        if ram_gb is None:
-            ram_gb = _ram
-        if vram_gb is None:
-            vram_gb = _vram
-    resolved = resolve_gpu_backend(backend)
-    if resolved in ("cuda", "vulkan") and vram_gb:
-        # Weights + KV cache both live in VRAM; leave 1.5 GB headroom.
-        budget_gb = max(vram_gb - model_gb - 1.5, 1.5)
-    elif ram_gb:
-        # Weights in RAM; leave 2 GB for the OS + Blender.
-        budget_gb = max(ram_gb - model_gb - 2.0, 2.0)
-    else:
-        return 32768  # Hardware unknown -- safe mid-range default.
-    tokens = int(budget_gb * 4096)
-    tokens = max(4096, min(tokens, 131072))
-    # Snap down to the nearest standard preset size.
-    chosen = ctx_preset_sizes[0]
-    for size in ctx_preset_sizes:
-        if size <= tokens:
-            chosen = size
-        else:
-            break
-    return chosen
+    return recommend_server_plan(model_gb, backend, ram_gb, vram_gb, **kwargs).ctx
 
 
-def hardware_context_hint(model_gb: float = 0.0, backend: str = "auto") -> str:
-    """One-line hint for the preferences UI: recommended size for this machine."""
+def _gb(mib: float) -> str:
+    return "{:.1f}".format(mib / 1024.0)
+
+
+def hardware_context_hint(model_gb: float = 0.0, backend: str = "auto", **kwargs: Any) -> str:
+    """One-line hint for the preferences UI: the size recommended now, and why."""
     ram, vram = _detect_hardware_cached()
-    recommended = recommend_context_size(model_gb, backend, ram, vram)
-    parts: list[str] = []
-    if ram:
-        parts.append("{:.0f} GB RAM".format(ram))
-    if vram:
-        parts.append("{:.0f} GB VRAM".format(vram))
-    hw = " * ".join(parts) if parts else "unknown hardware"
-    return (
-        "Recommended for your hardware ({:s}): {:s} \u2014 larger sizes need much "
-        "more memory and can crash startup.".format(hw, ctx_preset_label(recommended))
-    )
+    plan = recommend_server_plan(model_gb, backend, ram, vram, **kwargs)
+    kv = "8-bit" if plan.kv_q8 else "16-bit"
+    gpu = resolve_gpu_backend(backend) in ("cuda", "vulkan")
+    where = "VRAM" if gpu else "RAM"
+    first = "the first request is ~{:d}K tokens".format(_FIRST_REQUEST_TOKENS // 1024)
+    label = ctx_preset_label(plan.ctx)
+    if plan.free_mib is None:
+        return "Recommended: {:s} ({:s}; free memory unknown).".format(label, first)
+    if plan.fits:
+        return "Recommended now: {:s} with {:s} KV cache -- ~{:s} of {:s} GB free {:s} ({:s}).".format(
+            label, kv, _gb(plan.need_mib), _gb(plan.free_mib), where, first)
+    return ("Recommended: {:s} with 8-bit KV cache ({:s}), but it needs ~{:s} GB {:s} and only {:s} GB "
+            "is free now -- close other GPU apps first.").format(
+                label, first, _gb(plan.need_mib), where, _gb(plan.free_mib))
 
 
 def validate_ctx_against_hardware(
     model_gb: float,
     backend: str,
     ctx: int,
+    **kwargs: Any,
 ) -> str | None:
-    """Return a warning string if *ctx* looks too large for the hardware.
+    """Return a warning string if *ctx* looks wrong for this model and machine.
 
     Pure recommendation check (D4: startup-only validation -- never restarts
-    or changes the running server). Compares the KV-cache requirement
-    (estimated with the same ~256 KB/token upper bound used by
-    :func:`recommend_context_size`) against free VRAM (GPU backends) or
-    free system RAM (CPU backend), leaving headroom for weights + runtime.
-    Returns ``None`` when the configuration looks safe.
+    or changes the running server).  Warns when *ctx* cannot hold the first
+    request, or when the server would not fit the free VRAM (GPU backends) or
+    RAM (CPU backend) even with an 8-bit KV cache.  ``None`` when it looks safe.
     """
     if ctx <= 0 or model_gb <= 0:
         return None
+    if ctx < _FIRST_REQUEST_TOKENS + _REPLY_ROOM_TOKENS:
+        return ("Context size {:,} is smaller than the first request (~{:,} tokens with the tools and "
+                "a reply) -- the first message fails. Use {:s} or more.").format(
+                    ctx, _FIRST_REQUEST_TOKENS + _REPLY_ROOM_TOKENS, ctx_preset_label(min_agent_ctx()))
     ram_gb, vram_gb = _detect_hardware_cached()
-    resolved = resolve_gpu_backend(backend)
-    kv_gb = (ctx * _KV_BYTES_PER_TOKEN) / (1024 ** 3)
-    if resolved in ("cuda", "vulkan"):
-        if not vram_gb:
-            return None  # No VRAM data -- do not guess.
-        free_gb = max(vram_gb - model_gb - 1.5, 0.0)  # 1.5 GB runtime headroom
-        if kv_gb > free_gb:
-            return (
-                "Context size {:,} needs ~{:.1f} GB of KV cache but only ~{:.1f} GB "
-                "of VRAM is left after the {:.1f} GB model -- lower Context Size or "
-                "enable KV-cache quantization to avoid an out-of-memory crash.".format(
-                    ctx, kv_gb, free_gb, model_gb)
-            )
-    else:
-        if not ram_gb:
-            return None
-        free_gb = max(ram_gb - model_gb - 2.0, 0.0)  # OS + Blender headroom
-        if kv_gb > free_gb:
-            return (
-                "Context size {:,} needs ~{:.1f} GB of KV cache in RAM but only "
-                "~{:.1f} GB is left after the {:.1f} GB model -- lower Context Size "
-                "to avoid swapping or an out-of-memory crash.".format(
-                    ctx, kv_gb, free_gb, model_gb)
-            )
-    return None
+    gpu = resolve_gpu_backend(backend) in ("cuda", "vulkan")
+    if gpu and not vram_gb:
+        return None  # No VRAM data -- do not guess.
+    if not gpu and not ram_gb:
+        return None
+    plan = recommend_server_plan(model_gb, backend, ram_gb, vram_gb, ctx=ctx, **kwargs)
+    if plan.fits is not False:
+        return None
+    if gpu:
+        return ("Context size {:,} needs ~{:s} GB of VRAM (model, projector and {:s} KV cache) but only "
+                "~{:s} GB is free now -- lower Context Size or close other GPU apps; past that it spills "
+                "into shared memory and gets very slow.").format(
+                    ctx, _gb(plan.need_mib), "8-bit" if plan.kv_q8 else "16-bit", _gb(plan.free_mib or 0))
+    return ("Context size {:,} needs ~{:s} GB of RAM for the model and KV cache but only ~{:s} GB is "
+            "left -- lower Context Size to avoid swapping or an out-of-memory crash.").format(
+                ctx, _gb(plan.need_mib), _gb(plan.free_mib or 0))
 
 
 # Cached runtime context size, invalidated per llama-server launch.
@@ -3042,6 +3439,23 @@ def get_llama_process() -> "subprocess.Popen | None":
     return _llama_process
 
 
+# The memory plan of the last launch (None before one, or on a CPU backend).
+_last_memory_plan: "ServerMemoryPlan | None" = None
+# Servers the user stopped (Stop pressed while they loaded or ran): their exit
+# is not a startup failure (#543: a late "exited during startup" error).
+_user_stopped_pids: set[int] = set()
+
+
+def get_last_memory_plan() -> "ServerMemoryPlan | None":
+    return _last_memory_plan
+
+
+def stopped_by_user(proc: "subprocess.Popen | None") -> bool:
+    """True when *proc* ended because the user pressed Stop."""
+    pid = getattr(proc, "pid", None)
+    return pid is not None and pid in _user_stopped_pids
+
+
 def start_local_llama(
     model_path: Path | str | None = None,
     port: int | None = None,
@@ -3070,7 +3484,9 @@ def start_local_llama(
     with _lock:
         if _llama_process is not None and _llama_process.poll() is None:
             print("[Coworker] start_local_llama: already running, returning None")
-            _set_error("llama-server is already running")
+            # Not _set_error(): it takes _lock again, and a threading.Lock is
+            # not re-entrant -- that deadlocked here (#543).
+            _state.error = "llama-server is already running"
             return None
 
     # A crashed Blender session may have left its llama-server running (it
@@ -3242,60 +3658,10 @@ def start_local_llama(
             '--ctx-size', str(ctx_size),
             '--n-gpu-layers', str(ngpu_layers),
         ]
-        # --verbose logs every prompt and token to the server log: steady disk
-        # I/O and a fast-growing file on every request.  Startup errors are
-        # logged without it, so it is a debug opt-in only.
-        with _lock:
-            if getattr(_config, "local_server_verbose", False):
-                args.append('--verbose')
-        # Model-specific extra flags (e.g. Qwen3 knobs), version-guarded
-        # against the pinned llama-server build so an unknown flag never
-        # crashes startup on an older binary.
-        with _lock:
-            preset_extra = _current_preset_extra_args()
-        if preset_extra:
-            extra = _filter_flags_for_build(preset_extra)
-            if extra:
-                args.extend(extra)
-                print("[Coworker] start_local_llama: preset extra args = {:s}".format(str(extra)))
-        # CPU backend: keep launch flags minimal -- no attention/KV knobs,
-        # they mainly benefit GPU paths and risk breaking exotic CPU builds.
-        if backend in ("cuda", "vulkan"):
-            # Flash-attention: deliberately NOT passed.
-            #
-            # In current llama.cpp `--flash-attn` takes an *optional* value
-            # (`[on|off|auto]`), which makes it a startup hazard:
-            #   * bare `--flash-attn` followed by another flag makes the
-            #     parser eat that flag as its value  ("unknown value for
-            #     --flash-attn: '--batch-size'");
-            #   * the `=` form is rejected outright by the pinned build
-            #     ("invalid argument: --flash-attn=on");
-            #   * the space form (`--flash-attn on`) works on the pinned
-            #     build but breaks on older boolean-only builds (stray `on`).
-            # llama-server already defaults flash-attention to 'auto' (enable
-            # it when the backend supports it), which is exactly what we want
-            # on GPU, so we rely on that default and sidestep the bug class.
-            #
-            # KV-cache quantization -- opt-in via preference.
-            with _lock:
-                kv_quant = getattr(_config, "local_kv_cache_quant", False)
-            if kv_quant:
-                kv_args = _filter_flags_for_build(
-                    ('--cache-type-k', 'q8_0', '--cache-type-v', 'q8_0'))
-                if kv_args:
-                    args.extend(kv_args)
-            # Batch/ubatch: modest default that avoids pathological prompt-
-            # processing slowdowns on some GGUFs.
-            args.extend(_filter_flags_for_build(
-                ('--batch-size', '2048', '--ubatch-size', '512')))
-        # Reuse the server's prompt cache across restarts within the same
-        # session (supported since ~b4xxx, well before the pinned build).
-        cache_reuse = _filter_flags_for_build(('--cache-reuse', '256'))
-        if cache_reuse:
-            args.extend(cache_reuse)
-        if use_hf:
-            args.extend(['--hf-repo', hf_repo, '--hf-file', hf_file])
-        else:
+        # The model and its projector first: the projector decides
+        # --cache-reuse, and both feed the memory plan below.
+        mmproj_path = None
+        if not use_hf:
             # Guard: launching with a missing/empty model file makes llama-server
             # exit 1 immediately ("failed to load model"), and on Windows that
             # error is not captured.  Fail early with an actionable message.
@@ -3305,23 +3671,75 @@ def start_local_llama(
                     "(or point at an existing .gguf) before starting the agent.".format(
                         str(model_path) if model_path else "(none selected)"))
                 return None
-            args.extend(['--model', str(model_path)])
-            # Add --mmproj if a projector file exists next to the model.
+            # A projector file next to the model makes it a vision model.
             mmproj_path = _resolve_mmproj_path(model_path)
+        with _lock:
+            verbose = bool(getattr(_config, "local_server_verbose", False))
+            kv_quant = bool(getattr(_config, "local_kv_cache_quant", False))
+            slots = int(getattr(_config, "local_parallel", 1) or 1)
+            # Model-specific extra flags (e.g. Qwen3 knobs), version-guarded
+            # against the pinned llama-server build so an unknown flag never
+            # crashes startup on an older binary.
+            preset_extra = _current_preset_extra_args()
+        if preset_extra:
+            preset_extra = _filter_flags_for_build(preset_extra)
+            print("[Coworker] start_local_llama: preset extra args = {:s}".format(str(preset_extra)))
+        # CPU backend: keep launch flags minimal -- no attention/KV knobs,
+        # they mainly benefit GPU paths and risk breaking exotic CPU builds.
+        #
+        # Flash-attention: deliberately NOT passed.  In current llama.cpp
+        # `--flash-attn` takes an *optional* value (`[on|off|auto]`), which makes
+        # it a startup hazard: bare `--flash-attn` followed by another flag makes
+        # the parser eat that flag as its value; the `=` form is rejected by the
+        # pinned build; the space form breaks on older boolean-only builds.
+        # llama-server already defaults flash-attention to 'auto', which is what
+        # we want on GPU, so we rely on that default.
+        gpu = backend in ("cuda", "vulkan")
+        kv_q8 = gpu and kv_quant
+        # -- Memory plan (#543): 16-bit KV cache when the server fits the free
+        # VRAM with it, else 8-bit (a spill into shared memory makes prefill
+        # crawl).  The context size stays the user's.
+        global _launch_free_vram_mib, _last_memory_plan
+        _launch_free_vram_mib = None
+        _last_memory_plan = None
+        if gpu and not use_hf and model_path:
+            free_mib = detect_free_vram_mib()
+            _launch_free_vram_mib = free_mib
+            try:
+                projector_bytes = os.path.getsize(str(mmproj_path)) if mmproj_path else 0
+            except OSError:
+                projector_bytes = 0
+            plan = plan_server_memory(model_bytes, projector_bytes, model_memory_profile(gguf_info(model_path)),
+                                      free_mib, ctx=ctx_size, kv_q8_forced=kv_quant, slots=slots)
+            _last_memory_plan = plan
+            print("[Coworker] start_local_llama: memory plan -- ctx {:d}, {:s} KV, {:d} slot(s), needs ~{:d} MiB "
+                  "VRAM, {:s} MiB free".format(ctx_size, "q8_0" if plan.kv_q8 else "f16", slots, plan.need_mib,
+                                               "?" if free_mib is None else str(free_mib)))
+            if plan.kv_q8 and not kv_quant:
+                print("[Coworker] start_local_llama: 16-bit KV would not fit the free VRAM -- using q8_0")
+            if plan.fits is False:
+                print("[Coworker][WARN] start_local_llama: ~{:d} MiB needed but only {:d} MiB free (1 GB kept "
+                      "free) -- part of it may spill into shared GPU memory and run slowly; close other GPU "
+                      "apps or lower Context Size".format(plan.need_mib, int(free_mib or 0)))
+            kv_q8 = plan.kv_q8
+        args.extend(_filter_flags_for_build(tuple(build_server_tuning_args(
+            gpu=gpu, kv_q8=kv_q8, slots=slots, projector=mmproj_path is not None, verbose=verbose,
+            preset_extra=tuple(preset_extra or ())))))
+        if use_hf:
+            args.extend(['--hf-repo', hf_repo, '--hf-file', hf_file])
+        else:
+            args.extend(['--model', str(model_path)])
             if mmproj_path:
                 args.extend(['--mmproj', str(mmproj_path)])
                 print("[Coworker] start_local_llama: using mmproj at {:s}".format(str(mmproj_path)))
 
         # -- Fresh, captureable server log ------------------------------
-        # Remove any previous log so the tail we read on failure reflects
-        # THIS launch.  The server's stdout/stderr are redirected to this
-        # file below (both platforms), so a startup crash is always visible.
-        try:
-            _logp = _llama_server_log_path()
-            if _logp.is_file():
-                _logp.unlink()
-        except OSError:
-            pass
+        # Start a new log so the tail we read on failure reflects THIS
+        # launch; the previous one is kept (one generation) so the evidence
+        # of a crash survives the restart that follows it (#543).  The
+        # server's stdout/stderr are redirected to this file below (both
+        # platforms), so a startup crash is always visible.
+        _rotate_llama_server_log()
 
         # -- Drop flags this binary does not accept ---------------------
         # A build that rejects a flag prints "unknown argument" and exits 1
@@ -3336,13 +3754,15 @@ def start_local_llama(
                 print("[Coworker][WARN] start_local_llama: dropping flags unsupported by this "
                       "build: {:s}".format(", ".join(sorted(set(_dropped)))))
 
-        # Redirect HF cache into models dir so all downloads are
-        # consolidated in the user's configured models directory.
-        hf_cache_dir = _get_models_dir() / ".hf_cache"
-        hf_cache_dir.mkdir(parents=True, exist_ok=True)
         env = os.environ.copy()
-        env["HF_HOME"] = str(hf_cache_dir)
-        env["HF_HUB_CACHE"] = str(hf_cache_dir)
+        if use_hf:
+            # A download: redirect the HF cache into the models dir so it lands
+            # in the user's configured models directory.  Only then -- a local
+            # model needs no folder there (#543).
+            hf_cache_dir = _get_models_dir() / ".hf_cache"
+            hf_cache_dir.mkdir(parents=True, exist_ok=True)
+            env["HF_HOME"] = str(hf_cache_dir)
+            env["HF_HUB_CACHE"] = str(hf_cache_dir)
         # Pass HF_TOKEN for gated models.
         with _lock:
             cfg_token = _config.hf_token
@@ -3465,6 +3885,10 @@ def stop_local_llama() -> None:
 
     # Try to terminate the tracked process first.
     if proc is not None:
+        # Marked before it dies: a start still waiting for it to load then
+        # ends as "Stopped", not as a startup failure (#543).
+        if getattr(proc, "pid", None) is not None:
+            _user_stopped_pids.add(proc.pid)
         try:
             print("[Coworker] stop_local_llama:   calling proc.terminate()")
             proc.terminate()
@@ -3562,15 +3986,24 @@ def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = No
 
     On failure, the llama-server log tail is included in the error so the
     real startup problem is visible instead of a generic message.
+
+    A server the user stopped (:func:`stopped_by_user`) returns ``False``
+    with no error: the caller shows "Stopped" (#543).
     """
     import time as _time
     deadline = _time.monotonic() + timeout
     poll = 0.5
     print("[Coworker] wait_until_ready: waiting up to {:.0f}s for llama-server...".format(timeout))
     while _time.monotonic() < deadline:
+        if stopped_by_user(proc):
+            print("[Coworker] wait_until_ready: stopped by the user before it was ready")
+            return False
         if health_check():
             print("[Coworker] wait_until_ready: server is ready")
             return True
+        if proc is not None and proc.poll() is not None and stopped_by_user(proc):
+            print("[Coworker] wait_until_ready: stopped by the user before it was ready")
+            return False
         if proc is not None and proc.poll() is not None:
             # The launched process reports as exited.  That is NOT necessarily
             # a startup failure: a server may already be answering on the port,

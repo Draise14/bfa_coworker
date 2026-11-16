@@ -3242,6 +3242,11 @@ def _kill_process_on_port(port: int, kind: str = "mcp-server") -> None:
                   "(another Blender window or another program) -- leaving it alone".format(port, pid))
 
 
+# How long Start waits for the MCP server's port (#558): 15 s was too short once on a loaded
+# machine.  The wait blocks the main thread, but ends at once when the server process exits.
+_MCP_PORT_WAIT = 45.0
+
+
 def _wait_for_port(
     host: str,
     port: int,
@@ -3285,6 +3290,14 @@ def _wait_for_port(
     print("[Coworker] _wait_for_port: TIMEOUT -- {:s}:{:d} not ready after {:.1f}s".format(
         host, port, timeout))
     return False
+
+
+def _mcp_wait_said(proc: Any, waited: float) -> str:
+    """How the MCP server's port wait ended, for the error (#558): it exited, or we gave up."""
+    rc = proc.poll() if proc is not None else None
+    if rc is not None:
+        return "the server exited after {:.0f} s with code {:d}".format(waited, rc)
+    return "waited {:.0f} s".format(waited)
 
 
 def check_ports_available(
@@ -3706,11 +3719,13 @@ def start_mcp_server(
         return None
 
     # Process is alive -- actively wait for the port to accept connections.
-    # FastMCP + Starlette imports can take 5-10s, so we poll up to 15s.
+    # FastMCP + Starlette imports can take 5-10s (more on a loaded machine), so we poll up to 45s.
     print("[Coworker] start_mcp_server: process alive, waiting for port {:d}...".format(port))
-    port_ready = _wait_for_port("127.0.0.1", port, timeout=15.0, interval=1.0, proc=proc)
+    wait_started = time.monotonic()
+    port_ready = _wait_for_port("127.0.0.1", port, timeout=_MCP_PORT_WAIT, interval=1.0, proc=proc)
 
     if not port_ready:
+        waited = time.monotonic() - wait_started
         # Port never came up -- collect drainer output for diagnostics.
         time.sleep(1.0)
         stderr_output = "\n".join(_stderr_lines[-100:])
@@ -3726,8 +3741,12 @@ def start_mcp_server(
             # #416: the PATH launcher died while starting -- same retry as above.
             return _retry_without_launcher(mcp_exe, summary, "start_mcp_server", lambda: start_mcp_server(
                 port=port, blender_host=blender_host, blender_port=blender_port, _retry_depth=_retry_depth))
-        _agent_state.error = "MCP server started but port {:d} never accepted connections: {:s}".format(
-            port, summary)
+        how_long = _mcp_wait_said(proc, waited)
+        # Still running but not answering: end it, or it runs on untracked (#558).
+        _end_process(proc, timeout=3)
+        _process_guard.forget(getattr(proc, "pid", None))
+        _agent_state.error = "MCP server started but port {:d} never accepted connections ({:s}): {:s}".format(
+            port, how_long, summary)
         _agent_state.error_full = full
         _agent_state.mcp_server_running = False
         _mcp_server_process = None
@@ -3908,8 +3927,10 @@ def start_mcp_server_network(
         _mcp_server_process = None
         return None
 
-    port_ready = _wait_for_port(host, port, timeout=15.0, interval=1.0, proc=proc)
+    wait_started = time.monotonic()
+    port_ready = _wait_for_port(host, port, timeout=_MCP_PORT_WAIT, interval=1.0, proc=proc)
     if not port_ready:
+        waited = time.monotonic() - wait_started
         time.sleep(1.0)
         stderr_output = "\n".join(_stderr_lines[-100:])
         stdout_output = "\n".join(_stdout_lines[-100:])
@@ -3918,8 +3939,12 @@ def start_mcp_server_network(
             print("[Coworker] start_mcp_server_network: stderr (tail) = {:s}".format(
                 stderr_output[-1500:]))
         summary, full = _summarize_mcp_failure(stderr_output, stdout_output)
-        _agent_state.error = "MCP server port {:d} never accepted connections: {:s}".format(
-            port, summary)
+        how_long = _mcp_wait_said(proc, waited)
+        # Still running but not answering: end it, or it runs on untracked (#558).
+        _end_process(proc, timeout=3)
+        _process_guard.forget(getattr(proc, "pid", None))
+        _agent_state.error = "MCP server port {:d} never accepted connections ({:s}): {:s}".format(
+            port, how_long, summary)
         _agent_state.error_full = full
         _agent_state.mcp_server_running = False
         _mcp_server_process = None

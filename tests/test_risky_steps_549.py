@@ -151,6 +151,24 @@ class TestOtherRulesAgainstBlenderCode(unittest.TestCase):
             with self.subTest(code=code):
                 self.assertEqual(_why(code), "")
 
+    def test_every_operator_that_writes_an_export_asks(self):
+        # #558: the operators of Blender 5.4 with "export" in their name that write a file.
+        for op in ("collection.export_all", "collection.exporter_export", "wm.collection_export_all",
+                   "wm.grease_pencil_export_svg", "wm.grease_pencil_export_pdf", "uv.export_layout",
+                   "sequencer.export_subtitles", "anim.keying_set_export", "preferences.keyconfig_export",
+                   "export_scene.fbx", "export_scene.gltf", "export_anim.bvh", "wm.obj_export",
+                   "wm.usd_export", "wm.alembic_export", "wm.stl_export", "wm.ply_export"):
+            with self.subTest(op=op):
+                self.assertEqual(_why("bpy.ops.{:s}(filepath=p)".format(op)), "export files")
+        self.assertEqual(_why("from bpy import ops\nops.uv.export_layout(filepath=p)"), "export files")
+
+    def test_exporter_list_and_import_operators_dont_ask(self):
+        for code in ("bpy.ops.collection.exporter_add(name='IO_FH_fbx')", "bpy.ops.collection.exporter_move(direction='UP')",
+                     "bpy.ops.collection.exporter_remove(index=0)", "bpy.ops.wm.usd_import(filepath=p)",
+                     "bpy.ops.import_scene.fbx(filepath=p)", "obj['exported'] = True"):
+            with self.subTest(code=code):
+                self.assertEqual(_why(code), "")
+
     def test_running_a_program_through_an_alias(self):
         for code in ("import subprocess\nsubprocess.run(['ls'])", "from subprocess import run\nrun(['ls'])",
                      "import subprocess as sp\nsp.Popen(['ls'])", "from os import system\nsystem('ls')",

@@ -1038,6 +1038,75 @@ def _thinking_for_reply(room: int, budget: int | None) -> int | None:
     return 0
 
 
+# -- Thinking where it pays, on Local (#545) ----------------------------------
+# On the 27B about two thirds of the generated tokens were thinking, most of it
+# on routine follow-up steps (the next call of a plan that already worked).
+# Each request of a turn gets the configured budget (the Reasoning Effort) when
+# the thinking pays, and a quarter of it on a routine step:
+#   * "first":   the first request of a turn (no tool call since the user spoke);
+#   * "error":   the last tool batch had a failed call (or the loop guard's note);
+#   * "plan":    the model has just set or rewritten the plan (update_plan steps);
+#   * "routine": any other follow-up step.
+# Effort on a routine step: Off (no cap) stays no cap -- the user chose it;
+# High 2,048 -> 512; Medium 1,024 -> 256; Low 512 -> off (a quarter is below
+# _MIN_THINKING_TOKENS); Custom N -> N // 4, off below 256.  Set to False to
+# send the configured budget on every step.
+_STEP_THINKING_POLICY = True
+_ROUTINE_THINKING_DIVISOR = 4
+
+
+def _routine_thinking(budget: int | None) -> int | None:
+    """The thinking budget of a routine follow-up step for a configured *budget*."""
+    if budget is None or budget <= 0:
+        return budget
+    share = int(budget) // _ROUTINE_THINKING_DIVISOR
+    return share if share >= _MIN_THINKING_TOKENS else 0
+
+
+def _thinking_for_step(budget: int | None, kind: str) -> int | None:
+    """The thinking budget for the next Local request of a turn (*kind*: see
+    :func:`_next_step_kind`)."""
+    if not _STEP_THINKING_POLICY or kind != "routine":
+        return budget
+    return _routine_thinking(budget)
+
+
+def _next_step_kind(history: list[dict[str, Any]]) -> str:
+    """``"first"``, ``"error"``, ``"plan"`` or ``"routine"`` for the request about
+    to be sent, from the current turn's messages in *history*."""
+    start = 0
+    for i in range(len(history) - 1, -1, -1):
+        m = history[i]
+        if m.get("role") == "user" and not session_memory.is_system_note(m):
+            start = i + 1
+            break
+    turn = history[start:]
+    last = -1
+    for i in range(len(turn) - 1, -1, -1):
+        if turn[i].get("role") == "assistant" and turn[i].get("tool_calls"):
+            last = i
+            break
+    if last < 0:
+        return "first"
+    for m in turn[last + 1:]:
+        if m.get("role") == "tool" and '"status": "error"' in str(m.get("content") or "")[:600]:
+            return "error"
+        if session_memory.is_system_note(m) and m.get(session_memory.SYSTEM_NOTE_KEY) == "spiral":
+            return "error"
+    for call in turn[last].get("tool_calls") or []:
+        fn = call.get("function") or {}
+        if fn.get("name") == "update_plan":
+            args = fn.get("arguments")
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args or "{}")
+                except ValueError:
+                    args = {}
+            if isinstance(args, dict) and args.get("steps"):
+                return "plan"
+    return "routine"
+
+
 def _fit_note_text(left_out: dict[str, Any], ctx: int, needed: int) -> str:
     """One line: what a request left out to fit, and how to get it back."""
     parts = []
@@ -6664,8 +6733,30 @@ def _progress_report_text(tools_executed: int) -> str:
     return " ".join(lines)
 
 
-def _memory_writer_factory(llm_url: str, api_key: str, model: str, max_tokens: int):
-    """Return a memory_writer callback using a small dedicated LLM call."""
+# The memory writer's time limit for both its tries together (#545).  The note
+# is a few hundred tokens: the 27B writes it in about 10-20 s with thinking off
+# (34.6 tokens/s measured), the 9B in a few.  Past this the heuristic note is
+# used and the turn goes on.
+_MEMORY_WRITER_TIME_LIMIT = 75.0
+
+
+def _memory_writer_factory(llm_url: str, api_key: str, model: str, max_tokens: int | None = None,
+                           local: bool = False):
+    """Return a memory_writer callback using a small dedicated LLM call.
+
+    #545: on Local the call goes with thinking OFF (``thinking_budget_tokens=0``,
+    which the transport sends as the template switch plus a budget of 1 -- the
+    budget is what ends the thinking on a template without the switch, as on
+    the 9B).  It used to send no field at all, so the model thought until
+    ``max_tokens`` and returned nothing (13 of 14 calls, 455 s in one session).
+    The call has its own reply limit (:func:`session_memory.memory_writer_max_tokens`
+    unless *max_tokens* is given) and a time limit for both tries; a reply that
+    is empty or cut off is tried once more with double the room, then the
+    heuristic note is used (the writer returns ``None``).  Remote sends no
+    thinking field (strict providers reject unknown ones)."""
+    limit = int(max_tokens) if max_tokens else session_memory.memory_writer_max_tokens()
+    think: int | None = 0 if local else None
+
     def _writer(retired_text: str, prior_memory: str) -> str | None:
         messages = session_memory.memory_writer_prompt(retired_text, prior_memory)
         # A writer failure is non-fatal (the heuristic fallback is used), so
@@ -6676,23 +6767,39 @@ def _memory_writer_factory(llm_url: str, api_key: str, model: str, max_tokens: i
         _agent_state = thread_state(threads.current())
         _saved_err = (_agent_state.error, _agent_state.error_full,
                       _agent_state.error_kind)
+        deadline = time.monotonic() + _MEMORY_WRITER_TIME_LIMIT
+        room = limit
         try:
-            response = _transport.openai_chat_completions(
-                llm_url, messages, None, api_key, model,
-                max_tokens=max_tokens, thinking_budget_tokens=None,
-            )
+            for attempt in (1, 2):
+                left = deadline - time.monotonic()
+                if left < 3.0:
+                    break
+                t0 = time.monotonic()
+                response = _transport.openai_chat_completions(
+                    llm_url, messages, None, api_key, model,
+                    max_tokens=room, thinking_budget_tokens=think, timeout=left,
+                )
+                if not response:
+                    print("[Coworker] memory writer: no answer (try {:d}, {:.1f}s) -- heuristic note".format(
+                        attempt, time.monotonic() - t0))
+                    return None
+                try:
+                    choice = response.get("choices", [{}])[0]
+                    text = str(choice.get("message", {}).get("content") or "").strip()
+                    finish = str(choice.get("finish_reason") or "")
+                except (IndexError, AttributeError):
+                    text, finish = "", ""
+                print("[Coworker] memory writer: try {:d}, {:.1f}s, finish={:s}, {:d} chars (max_tokens={:d}, "
+                      "thinking={:s})".format(attempt, time.monotonic() - t0, finish or "?", len(text), room,
+                                              "off" if think == 0 else "no field"))
+                if text and finish != "length":
+                    return text
+                room = min(room * 2, 4800)
+            print("[Coworker] memory writer: no usable note -- heuristic note")
+            return None
         finally:
             (_agent_state.error, _agent_state.error_full,
              _agent_state.error_kind) = _saved_err
-        if not response:
-            return None
-        try:
-            return (
-                response.get("choices", [{}])[0]
-                .get("message", {}).get("content") or None
-            )
-        except (IndexError, AttributeError):
-            return None
     return _writer
 
 
@@ -6703,13 +6810,15 @@ def _maybe_compact_session(
     on_status: Callable[[str], None] | None = None,
     memory_writer: Callable[[str, str], str | None] | None = None,
 ) -> None:
-    """Trigger session-memory compaction when the prompt approaches the budget.
+    """Trigger session-memory compaction when the history outgrows its room.
 
-    Retires turns beyond the verbatim window into ``session_memory.store``
-    (archive + memory block) when the estimated prompt (history + tool
-    schema) reaches :data:`COMPACTION_TRIGGER_RATIO` of the safe budget, or
-    when the history outgrows the verbatim window.    Visible status, automatic
-    checkpoint after compaction (D5/D6).  Never raises.
+    Retires older turns into ``session_memory.store`` (archive + memory block)
+    when the history reaches its share of the room it has
+    (:func:`session_memory.compaction_threshold`: the prompt budget minus what
+    compaction cannot shrink -- the system message with the memory note, and
+    the tool schema; #545), or when it outgrows the verbatim window.  Nothing
+    happens -- no status, no checkpoint -- when there is nothing to retire.
+    Visible status, automatic checkpoint after compaction (D5/D6).  Never raises.
 
     The turn counter is read here but incremented once per user turn (in
     ``_run_conversation_turn_inner``), not per tool-loop iteration -- this
@@ -6719,55 +6828,58 @@ def _maybe_compact_session(
     session_memory = _memory()         # the worker's thread (#357)
     _session_turn_count = _turn_index()
     st = session_memory.store
-    tools_tokens = _estimate_tools_tokens(tools)
-    # Compare consistently: ``estimated`` (messages + tool schema) against the
-    # *whole* prompt budget.  The previous code subtracted the tool schema from
-    # the budget AND added it to the estimate, so the trigger fired far too
-    # early -- on the first turn it fired with two messages and, because there
-    # was nothing old enough to retire, produced a no-op "Compacting..." status
-    # and an empty checkpoint.
-    # The prompt estimate must reflect what is actually SENT.  ``reasoning``
-    # (chain-of-thought) messages are stripped before every request, so a long
-    # CoT would otherwise over-inflate the estimate and trip the compaction
-    # trigger far too early (the meter then lies about real occupancy).
-    estimated = _estimate_messages_tokens(
-        [m for m in history if m.get("role") != "reasoning"]
-    ) + tools_tokens
-    # Fall back to the LAST real user message when the recent window has no
-    # user boundary (a long in-progress turn): older COMPLETE turns can still
-    # be retired while the current turn is always kept.  Without the fallback a
-    # long current turn could only grow until overflow.
-    _boundary = session_memory.find_retire_boundary(
-        history, fallback_to_last_user=True)
-    _can_retire = _boundary < len(history)
+    _has_sys = bool(history) and history[0].get("role") == "system"
+    # #545: only the history counts against the trigger.  The system prompt and
+    # the tool schema (~20K of a 28.7K budget on Local with 51 tools) cannot be
+    # made smaller by compacting, so counting them made it fire on every step --
+    # 117 times in one session, 100 of them with nothing to retire.  The history
+    # is counted as it is SENT: no reasoning, no UI-only entries, tool results
+    # trimmed (the stored ones are kept whole for the chat panel).
+    _sent = _trim_history_tool_results(
+        _strip_ui_only_from_history(_strip_reasoning_from_history(history[1 if _has_sys else 0:])))
+    history_tokens = _estimate_messages_tokens(_sent)
+    fixed_tokens = _estimate_tools_tokens(tools) + (
+        _estimate_messages_tokens([history[0]]) if _has_sys else 0) + (
+        int(len(st.memory_block or "") / _CHARS_PER_TOKEN) + 2 if st.memory_block else 0)
+    threshold = session_memory.compaction_threshold(prompt_budget, fixed_tokens)
+    _over_tokens = threshold > 0 and history_tokens >= threshold
     _over_window = (
         sum(1 for m in history if not m.get("ui_only"))
         > session_memory.MAX_WINDOW_TURNS + 1
     )
-    trigger = _can_retire and (
-        (
-            prompt_budget > 0
-            and estimated >= prompt_budget * session_memory.COMPACTION_TRIGGER_RATIO
-        )
-        or _over_window
-    )
-    if not trigger:
+    if not (_over_tokens or _over_window):
+        return
+    # Over its room the history is retired down to a short recent window (the
+    # 20-message verbatim window alone often holds more than the room); the
+    # current turn is always kept whole (fallback to the last user message).
+    _keep = session_memory.COMPACTION_KEEP_RECENT if _over_tokens else session_memory.MAX_WINDOW_TURNS
+    _boundary = session_memory.find_retire_boundary(
+        history, _keep, fallback_to_last_user=True)
+    _start = 1 if _has_sys else 0
+    if not any(not m.get("ui_only") for m in history[_start:_boundary]):
+        # Nothing to retire (one long turn, or only the greeting before it): no
+        # status, no checkpoint, no writer call -- this used to report a
+        # checkpoint on every step and save an empty one.
         return
     if on_status:
         on_status("Checkpoint: summarizing older turns...")
-    print("[Coworker] _maybe_compact_session: estimated {:d} / budget {:d} tokens "
-          "-- compacting".format(estimated, prompt_budget))
+    print("[Coworker] _maybe_compact_session: history {:d} tokens (threshold {:d}: budget {:d}, fixed "
+          "{:d}){:s} -- compacting".format(history_tokens, threshold, prompt_budget, fixed_tokens,
+                                           ", over the message window" if _over_window else ""))
     # Automatic checkpoint of the PRE-compaction state so restore can rewind
     # before the summary.  Taken before history/memory are mutated.
     with session_memory.store_lock:
         st.snapshot(history, reason="compaction", turn_index=_session_turn_count)
+    _t_compact = time.monotonic()
     kept, memory_block, retired = session_memory.compact_history(
         history,
         prior_memory=st.memory_block,
         memory_writer=memory_writer,
+        keep_recent=_keep,
         updated_turn=_session_turn_count,
         fallback_to_last_user=True,
     )
+    print("[Coworker] _maybe_compact_session: summary took {:.1f}s".format(time.monotonic() - _t_compact))
     with session_memory.store_lock:
         st.memory_block = memory_block
         st.memory_updated_turn = _session_turn_count
@@ -6833,6 +6945,7 @@ def _force_compact_session(
         on_status("Checkpoint: summarizing older turns...")
     # compact_history computes the new lists WITHOUT mutating *history*, so the
     # commit below can still snapshot the true pre-compaction state.
+    _t_compact = time.monotonic()
     kept, memory_block, retired = session_memory.compact_history(
         history,
         prior_memory=st.memory_block,
@@ -6841,6 +6954,7 @@ def _force_compact_session(
         updated_turn=_session_turn_count,
         fallback_to_last_user=True,
     )
+    print("[Coworker] _force_compact_session: summary took {:.1f}s".format(time.monotonic() - _t_compact))
     if not retired:
         # Nothing actually retirable (e.g. only ui_only messages): leave the
         # history untouched rather than mutating it to a near-empty state.
@@ -7831,7 +7945,7 @@ def _run_conversation_turn_inner(
             _maybe_compact_session(
                 history, openai_tools, prompt_budget, on_status=on_status,
                 memory_writer=_memory_writer_factory(
-                    llm_url, api_key, model, min(_requested_max_tokens, 1024)))
+                    llm_url, api_key, model, local=llm_port_local is not None))
         except Exception as _compact_ex:  # pylint: disable=broad-exception-caught
             print("[Coworker] run_conversation_turn: session compaction skipped -- {:s}".format(
                 str(_compact_ex)))
@@ -7849,7 +7963,7 @@ def _run_conversation_turn_inner(
                 _force_compact_session(
                     history, openai_tools, prompt_budget, on_status=on_status,
                     memory_writer=_memory_writer_factory(
-                        llm_url, api_key, model, min(_requested_max_tokens, 1024)))
+                        llm_url, api_key, model, local=llm_port_local is not None))
             except Exception as _fc_ex:  # pylint: disable=broad-exception-caught
                 print("[Coworker] run_conversation_turn: auto-compaction failed -- "
                       "{:s}".format(str(_fc_ex)))
@@ -7870,7 +7984,16 @@ def _run_conversation_turn_inner(
         # that is less than a useful answer, the prompt is made smaller first
         # (the same ladder, with the answer's room reserved), and the thinking
         # of this request is reduced or switched off to leave the answer room.
-        _req_think = thinking_budget
+        # #545: on Local the step's own budget first -- the full one where the
+        # thinking pays (first step, after an error, a new plan), less on a
+        # routine follow-up step (see _thinking_for_step).
+        _step_kind = _next_step_kind(history) if llm_port_local is not None else "first"
+        _step_think = _thinking_for_step(thinking_budget, _step_kind) if llm_port_local is not None \
+            else thinking_budget
+        if _step_think != thinking_budget:
+            print("[Coworker] run_conversation_turn: {:s} step -- thinking {:s}".format(
+                _step_kind, "off" if _step_think == 0 else "budget {:d}".format(_step_think or 0)))
+        _req_think = _step_think
 
         def _room_for_reply() -> tuple[int, int, int | None]:
             _est = _estimate_messages_tokens(history_to_send) + _estimate_tools_tokens(openai_tools)
@@ -7878,7 +8001,7 @@ def _run_conversation_turn_inner(
             # Only a reply the context cut short changes the thinking: a small
             # Max Output Tokens the user chose is theirs to pair with it.
             _short = _requested_max_tokens <= 0 or _room < _requested_max_tokens
-            _think = (_thinking_for_reply(_room, thinking_budget) if _short else thinking_budget) \
+            _think = (_thinking_for_reply(_room, _step_think) if _short else _step_think) \
                 if llm_port_local is not None else None
             return _est, _room, _think
         if ctx_size_used > 0:
@@ -7896,7 +8019,7 @@ def _run_conversation_turn_inner(
                           "{:d} tokens for the reply".format(max_tokens))
                 else:
                     history_to_send, _ = _build_send_messages()     # the tool set of the first build
-            if _req_think != thinking_budget and (thinking_budget is not None or _req_think == 0):
+            if _req_think != _step_think and (_step_think is not None or _req_think == 0):
                 print("[Coworker] run_conversation_turn: {:d} tokens left for the reply -- thinking {:s} "
                       "for this request".format(max_tokens, "off" if _req_think == 0
                                                 else "cut to {:d}".format(_req_think or 0)))
@@ -7947,7 +8070,7 @@ def _run_conversation_turn_inner(
                 _force_compact_session(
                     history, openai_tools, prompt_budget, on_status=on_status,
                     memory_writer=_memory_writer_factory(
-                        llm_url, api_key, model, min(_requested_max_tokens, 1024)))
+                        llm_url, api_key, model, local=llm_port_local is not None))
             except Exception as _force_ex:  # pylint: disable=broad-exception-caught
                 print("[Coworker] run_conversation_turn: forced compaction failed -- "
                       "{:s}".format(str(_force_ex)))

@@ -25,7 +25,7 @@ Blender Add-on (chat UI + agent controller)
 ## Prerequisites
 
 - The `bfa_coworker` workspace with existing add-on and MCP server code.
-- Blender 5.1+ (with `bpy.app.online_access` support).
+- Blender 5.2+ (with `bpy.app.online_access` support).
 - Windows (paths/exe detection is Windows-native; adapt for macOS/Linux).
 
 ## Architecture & Components

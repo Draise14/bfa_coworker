@@ -7,7 +7,7 @@ tagline = "Chat based coworker -- an MCP-powered agent with LLM support"
 maintainer = "Bforartists"
 type = "add-on"
 website = "https://github.com/bforartists/bfa_coworker"
-blender_version_min = "5.1.0"
+blender_version_min = "5.2.0"
 
 license = [
   "SPDX:GPL-3.0-or-later",

@@ -13,7 +13,7 @@ Covered:
   positioning, smart material-slot handling, editor-aware node groups.
 - ``wire_node_group`` — all four insert modes, deterministic socket
   auto-mapping (exact name -> fuzzy -> compatible type), type validation.
-- ``get_node_group_interface`` — interface serialization (new + legacy API).
+- ``get_node_group_interface`` — interface serialization.
 - ``get_active_node_tree`` — tree resolution by editor type + serialization.
 
 Run with::
@@ -1103,7 +1103,7 @@ class TestSocketAutoMapping(unittest.TestCase):
 
 
 class TestGetNodeGroupInterface(unittest.TestCase):
-    """`get_node_group_interface`: new + legacy interface serialization."""
+    """`get_node_group_interface`: interface serialization."""
 
     def setUp(self):
         _install_bpy(self)
@@ -1125,18 +1125,6 @@ class TestGetNodeGroupInterface(unittest.TestCase):
         self.assertEqual(len(result["outputs"]), 1)
         self.assertEqual(result["outputs"][0]["name"], "BSDF")
         self.assertEqual(result["outputs"][0]["type"], "SHADER")
-
-    def test_legacy_inputs_outputs(self):
-        ng = _NodeTree("Old", "CompositorNodeTree")
-        ng.inputs = _Sockets([_Socket("Image", "IMAGE")])
-        ng.outputs = _Sockets([_Socket("Image", "IMAGE")])
-        self.bpy.data.node_groups["Old"] = ng
-
-        result = _call("get_node_group_interface", group_name="Old")
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["editor_type"], "CompositorNodeTree")
-        self.assertEqual(result["inputs"][0]["name"], "Image")
-        self.assertEqual(result["inputs"][0]["type"], "IMAGE")
 
     def test_missing_group(self):
         result = _call("get_node_group_interface", group_name="Ghost")

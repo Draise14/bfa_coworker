@@ -66,7 +66,7 @@ from .wand import scene as _seq
 _NAME_RE = re.compile(r"^cap_(\d{4,})$")
 
 
-# -- the Sequencer's scene and strips (5.1 names as a fallback) -------------------------
+# -- the Sequencer's scene and strips ---------------------------------------------------
 
 def seq_scene(context: Any = None) -> Any:
     """The scene the Sequencer shows (``wand.scene``, #504), else the context scene (tools, timers)."""
@@ -75,23 +75,23 @@ def seq_scene(context: Any = None) -> Any:
 
 
 def _top(ed: Any) -> Any:
-    return ed.strips if hasattr(ed, "strips") else ed.sequences
+    return ed.strips
 
 
 def _all(ed: Any) -> Any:
-    return ed.strips_all if hasattr(ed, "strips_all") else ed.sequences_all
+    return ed.strips_all
 
 
 def _left(s: Any) -> int:
-    return s.left_handle if hasattr(s, "left_handle") else s.frame_final_start
+    return s.left_handle
 
 
 def _right(s: Any) -> int:
-    return s.right_handle if hasattr(s, "right_handle") else s.frame_final_end
+    return s.right_handle
 
 
 def _content_start(s: Any) -> float:
-    return s.content_start if hasattr(s, "content_start") else s.frame_start
+    return s.content_start
 
 
 def _fps(scene: Any) -> float:
@@ -465,14 +465,12 @@ def _drop_fcurves(scene: Any, names: list[str]) -> None:
     if action is None or not names:
         return
     prefixes = tuple('{:s}["{:s}"]'.format(base, bpy.utils.escape_identifier(n))
-                     for n in names for base in ("sequence_editor.strips_all", "sequence_editor.sequences_all"))
+                     for n in names for base in ("sequence_editor.strips_all",))
     bags = []
     for layer in getattr(action, "layers", ()):
         for strip in layer.strips:
             for bag in getattr(strip, "channelbags", ()):
                 bags.append(bag.fcurves)
-    if not bags and hasattr(action, "fcurves"):
-        bags.append(action.fcurves)
     for fcurves in bags:
         for fc in [fc for fc in fcurves if fc.data_path.startswith(prefixes)]:
             fcurves.remove(fc)
@@ -512,10 +510,7 @@ def _next_number(ed: Any, skip: set[str]) -> int:
 
 def _text_strip(ed: Any, name: str, channel: int, fs: int, fe: int, text: str, style: dict, font: Any) -> Any:
     top = _top(ed)
-    try:
-        s = top.new_effect(name, 'TEXT', channel, fs, length=max(1, fe - fs))
-    except TypeError:                   # 5.1: frame_end
-        s = top.new_effect(name=name, type='TEXT', channel=channel, frame_start=fs, frame_end=fe)
+    s = top.new_effect(name, 'TEXT', channel, fs, length=max(1, fe - fs))
     s.text = text
     for key, value in style["props"].items():
         try:
@@ -761,14 +756,12 @@ def _font_size_curves(scene: Any, name: str) -> list:
     if action is None:
         return []
     paths = {'{:s}["{:s}"].font_size'.format(base, bpy.utils.escape_identifier(name))
-             for base in ("sequence_editor.strips_all", "sequence_editor.sequences_all")}
+             for base in ("sequence_editor.strips_all",)}
     bags = []
     for layer in getattr(action, "layers", ()):
         for strip in layer.strips:
             for bag in getattr(strip, "channelbags", ()):
                 bags.append(bag.fcurves)
-    if not bags and hasattr(action, "fcurves"):
-        bags.append(action.fcurves)
     return [fc for fcurves in bags for fc in fcurves if fc.data_path in paths]
 
 
@@ -791,10 +784,7 @@ def _scale_font_keys(scene: Any, strip: Any, ratio: float) -> None:
 
 
 def _set_right(strip: Any, frame: int) -> None:
-    if hasattr(strip, "right_handle"):
-        strip.right_handle = frame
-    else:
-        strip.frame_final_end = frame
+    strip.right_handle = frame
 
 
 def _look_of(scene: Any, strip: Any) -> dict[str, Any]:

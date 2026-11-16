@@ -187,7 +187,7 @@ def _find_strip(name: str) -> tuple[Any, Any, str]:
         ed = scene.sequence_editor
         if ed is None:
             continue
-        strips = getattr(ed, "strips_all", None) or getattr(ed, "sequences_all", None) or []
+        strips = getattr(ed, "strips_all", None) or []
         strip = strips.get(name) if hasattr(strips, "get") else None
         if strip is not None:
             return scene, strip, ""
@@ -228,16 +228,16 @@ def strip_media(strip: Any) -> tuple[str, str]:
 
 
 def strip_timing(scene: Any, strip: Any) -> dict[str, float]:
-    """Where the media sits on the timeline (5.2 names, older ones as a fallback)."""
+    """Where the media sits on the timeline."""
     def first(*names: str) -> float:
         for n in names:
             if hasattr(strip, n):
                 return float(getattr(strip, n))
         return 0.0
     render = scene.render
-    return {"content_start": first("content_start", "frame_start"),
-            "left": first("left_handle", "frame_final_start"),
-            "right": first("right_handle", "frame_final_end"),
+    return {"content_start": first("content_start"),
+            "left": first("left_handle"),
+            "right": first("right_handle"),
             "fps": float(render.fps) / float(render.fps_base or 1.0)}
 
 

@@ -389,11 +389,7 @@ def main(params: Params) -> Result:
 
 
 def _socket_count(ng, direction: str) -> int:
-    """Count interface sockets in a direction, across API generations.
-
-    Blender 5.x removed the legacy ``node_tree.inputs/outputs`` shortcut
-    collections; the interface is read from ``ng.interface.items_tree``.
-    """
+    """Count interface sockets in a direction (``ng.interface.items_tree``)."""
     interface = getattr(ng, "interface", None)
     if interface is not None and hasattr(interface, "items_tree"):
         count = 0
@@ -403,10 +399,7 @@ def _socket_count(ng, direction: str) -> int:
             if getattr(item, "in_out", "") == direction:
                 count += 1
         return count
-    try:
-        return len(getattr(ng, "inputs" if direction == "INPUT" else "outputs"))
-    except (AttributeError, TypeError):
-        return 0
+    return 0
 
 
 def _get_preview_path(datablock) -> str:

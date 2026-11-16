@@ -3,15 +3,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-The Sequencer's scene (#504): the scene the Sequencer shows, which since Blender 5.0
-is the workspace's ``sequencer_scene``, not the window's scene.
+The Sequencer's scene (#504): the scene the Sequencer shows, which is the workspace's
+``sequencer_scene``, not the window's scene.
 
 * ``context.sequencer_scene`` first: Bforartists already gives the window's scene
   there while nothing is pinned (and its Sequencer shows that scene); Blender gives
   ``None`` when the Sequencer shows no scene.
 * Then ``workspace.sequencer_scene``: ``None`` means the Sequencer shows no scene.
-* Only where the workspace has no ``sequencer_scene`` at all (before 5.0) or there is
-  no workspace (a timer, the background): the window's scene.
+* Only where there is no workspace (a timer, the background): the window's scene.
 
 The Coworker video tools' polls and menus use :func:`sequencer_problem` so that with
 no Sequencer scene, or one without strips, they are greyed out with the reason.
@@ -45,7 +44,7 @@ def sequencer_scene(context: Any = None) -> Any:
     if scene is not None:
         return scene
     workspace = getattr(context, "workspace", None)
-    shown = getattr(workspace, "sequencer_scene", _MISSING) if workspace is not None else _MISSING
+    shown = workspace.sequencer_scene if workspace is not None else _MISSING
     if shown is not _MISSING:
         return shown
     return getattr(context, "scene", None)

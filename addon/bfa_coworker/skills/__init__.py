@@ -97,7 +97,7 @@ def get_always_loaded_skills(
         loaded.append(name)
         used += cost
 
-    # 1. Version-specific files (cumulative: 5.3 loads 5.0-5.1 + 5.2 + 5.3).
+    # 1. Version-specific files (cumulative: 5.3 loads 5.2 + 5.3).
     if bpy_version is not None:
         _major, _minor, _patch = bpy_version[:3]
         # The filenames encode major+minor (e.g. "blender_53.md" = 5.3), so
@@ -107,8 +107,8 @@ def get_always_loaded_skills(
         # Newest-first: the current version's drift file is the most relevant,
         # so a tight budget should keep it over an older one.
         for fname in sorted(skills_dir.glob("blender_*.md"), reverse=True):
-            # Parse version from filename like "blender_50_51.md" or "blender_52.md".
-            ver_part = fname.stem[len("blender_"):]  # e.g. "50_51" or "52"
+            # Parse version from filename like "blender_52.md" (or a range, "blender_52_53.md").
+            ver_part = fname.stem[len("blender_"):]  # e.g. "52" or "52_53"
             if _version_loaded(ver_part, _current):
                 _add(_read_skill(fname), fname.name)
 
@@ -179,13 +179,13 @@ def _version_loaded(ver_part: str, current_ver: int) -> bool:
     *current_ver* is ``major*10 + minor`` (5.3 -> 53).
 
     Examples:
-        "50_51" with current_ver=53 -> True
+        "52_53" with current_ver=53 -> True
         "52"     with current_ver=53 -> True
         "53"     with current_ver=53 -> True
         "54"     with current_ver=53 -> False
     """
     # Extract the highest version number from the filename.
-    # "50_51" -> 51, "52" -> 52, "53_preview" -> 53
+    # "52_53" -> 53, "52" -> 52, "53_preview" -> 53
     parts = ver_part.replace("_", " ").replace("-", " ").split()
     max_ver = 0
     for p in parts:

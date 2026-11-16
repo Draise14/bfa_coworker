@@ -734,22 +734,44 @@ class ModelPreset:
     name: str
     repo_id: str
     filename: str
-    ram_gb: str  # e.g. "16-20 GB"
-    disk_gb: str  # e.g. "~16 GB"
     capability: str  # "Excellent" | "Strong" | "Moderate"
     category: str  # "flagship" | "mid_range" | "lightweight"
-    description: str  # Longer tooltip text
+    description: str  # Longer tooltip text (no memory claims: those are generated)
     context_window: int = 131072  # Context window size in tokens
     max_tokens: int = 16384  # Max output tokens per API call
     vision: bool = False  # Whether the model supports image input
     mmproj_filename: str = ""  # Projector filename for vision (e.g. "mmproj-F16.gguf")
-    hardware_note: str = ""  # Hardware recommendation (RAM + GPU gen, e.g. "RTX 3090/4090/5090")
     why: str = ""  # One-line "why pick this" per sub-tier
     expected_sha256: str = ""  # SHA-256 hash for download verification (empty = skip check)
     # Extra llama-server CLI flags for this model (e.g. Qwen-specific
     # switches). Appended after the base flags when the pinned server build
     # is new enough for every flag in the tuple; silently skipped otherwise.
     extra_server_args: tuple[str, ...] = ()
+    # What the VRAM estimate needs (#558), read from the model's own GGUF header
+    # (see the note above PRESET_MODELS).  0 = not read: no memory text.
+    file_bytes: int = 0             # the model file
+    projector_bytes: int = 0        # its vision projector (0: none)
+    kv_bytes_per_token: int = 0     # 16-bit KV cache per token (model_memory_profile)
+    recurrent_bytes: int = 0        # recurrent state per server slot (hybrid models)
+    block_count: int = 0            # transformer blocks (--n-gpu-layers counts these)
+    sliding_window: int = 0         # > 0: sliding-window layers, counted as full (an upper bound)
+
+    @property
+    def disk_gb(self) -> str:
+        """The download (model and projector), e.g. ``"~16.2 GB"``; generated."""
+        if not self.file_bytes:
+            return ""
+        return "~{:s} GB".format(_gb_up((self.file_bytes + self.projector_bytes) / _MIB))
+
+    @property
+    def vram_note(self) -> str:
+        """What the model needs in VRAM: see :func:`preset_memory_note`."""
+        return preset_memory_note(self)[0]
+
+    @property
+    def hardware_note(self) -> str:
+        """The card it fits: see :func:`preset_memory_note`."""
+        return preset_memory_note(self)[1]
 
 
 # ---------------------------------------------------------------------------
@@ -786,22 +808,28 @@ _QWEN_EXTRA_SERVER_ARGS: tuple[str, ...] = (
     "--no-context-shift",
 )
 
+# Memory numbers (#558): ``file_bytes``, ``projector_bytes`` (the preset's own
+# projector) and, through model_memory_profile(), ``kv_bytes_per_token``,
+# ``recurrent_bytes``, ``block_count`` and ``sliding_window`` from each model's
+# GGUF header.  Read on 2026-11-16 with _misc/read_preset_headers.py:
+# Qwen3.8-27B-UD-Q4_K_M and Qwen3.5-9B-DeepSeek-V4-Flash-Q4_K_M (and their
+# projectors) from the files on disk, every other one from the start of its
+# header on Hugging Face (one 256 KB range request) and the sizes by HEAD.
+# Re-run that script when a preset's file changes.  The VRAM and card texts are
+# built from these numbers (preset_memory_note); no memory claim is hand-written.
 PRESET_MODELS: list[ModelPreset] = [
-    # -- Flagship (24 GB+ VRAM) --------------------------------------
+    # -- Flagship ----------------------------------------------------
     ModelPreset(
         identifier="qwen38_27b_q8",
         name="Qwen3.8-27B (Q8_0)",
         repo_id="unsloth/Qwen3.8-27B-GGUF",
         filename="Qwen3.8-27B-Q8_0.gguf",
-        ram_gb="24-28 GB",
-        disk_gb="~29 GB",
         capability="Excellent",
         category="flagship",
         context_window=262144,
         max_tokens=16384,
         vision=True,
         mmproj_filename="mmproj-F16.gguf",
-        hardware_note="RTX 3090/4090/5090 -- 24 GB+ VRAM",
         why="Latest Qwen3.8 -- best coding + vision + agentic reasoning at high precision",
         extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
@@ -809,21 +837,20 @@ PRESET_MODELS: list[ModelPreset] = [
             "thinking mode, and agentic tool calling. 262K context. Apache 2.0.\n"
             "Best quality flagship for complex multi-step Blender tasks."
         ),
+        file_bytes=29047086048, projector_bytes=927607488, kv_bytes_per_token=65536,
+        recurrent_bytes=156893184, block_count=65,
     ),
     ModelPreset(
         identifier="fable_fusion_27b_q6",
         name="Fable Fusion 27B (Q6_K)",
         repo_id="DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF",
         filename="Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-MTP-Q6_K.gguf",
-        ram_gb="20-24 GB",
-        disk_gb="~24 GB",
         capability="Excellent",
         category="flagship",
         context_window=262144,
         max_tokens=16384,
         vision=True,
         mmproj_filename="mmproj-F16.gguf",
-        hardware_note="RTX 3090/4090/5090 -- 24 GB+ VRAM",
         why="Top-ranked fine-tune -- ARC-711 benchmark, uncensored, vision-capable",
         extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
@@ -831,135 +858,129 @@ PRESET_MODELS: list[ModelPreset] = [
             "Vision-capable, 256K context, uncensored. Apache 2.0.\n"
             "The strongest open 27B fine-tune for agentic work."
         ),
+        file_bytes=24033705440, projector_bytes=927607360, kv_bytes_per_token=65536,
+        recurrent_bytes=156893184, block_count=65,
     ),
     ModelPreset(
         identifier="nail_35b_q4",
         name="Nail 35B A3B (UD-Q4_K_XL)",
         repo_id="peculiar-ragdoll/Nail-Qwen3.6-35B-A3B-GGUF",
         filename="Nail-Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
-        ram_gb="16-20 GB",
-        disk_gb="~22 GB",
         capability="Excellent",
         category="flagship",
         context_window=262144,
         max_tokens=16384,
         vision=True,
         mmproj_filename="mmproj-F16.gguf",
-        hardware_note="RTX 3090/4090/5090 -- 24 GB+ VRAM (MoE, ~3.4B active)",
         why="MoE efficiency -- 3.4B active params, fast inference, sharpened template",
         extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
             "Qwen3.6-35B-A3B with improved chat template and force-applied terseness prompt.\n"
-            "~3.4B active params -- runs fast on 24 GB cards. Vision-capable.\n"
+            "~3.4B active params (MoE) -- fast for its size. Vision-capable.\n"
             "Apache 2.0. Best throughput-to-quality ratio in flagship tier."
         ),
+        file_bytes=22360465312, projector_bytes=899283680, kv_bytes_per_token=20480,
+        recurrent_bytes=65863680, block_count=40,
     ),
-    # -- Mid-Range (16-20 GB VRAM) -----------------------------------
+    # -- Mid-Range ---------------------------------------------------
     ModelPreset(
         identifier="gpt_oss_20b_q4",
         name="GPT-OSS 20B (Q4_K_M)",
         repo_id="unsloth/gpt-oss-20b-GGUF",
         filename="gpt-oss-20b-Q4_K_M.gguf",
-        ram_gb="8-12 GB",
-        disk_gb="~12 GB",
         capability="Strong",
         category="mid_range",
         context_window=131072,
         max_tokens=16384,
         vision=False,
         mmproj_filename="",
-        hardware_note="RTX 3090/4090 -- 12 GB+ VRAM (MoE, 3.6B active)",
         why="OpenAI's open-weight reasoning model -- best Blender benchmarked default",
         description=(
-            "OpenAI's open-weight reasoning model. 21B params / 3.6B active.\n"
+            "OpenAI's open-weight reasoning model. 21B params / 3.6B active (MoE).\n"
             "Native function calling, structured outputs, and agentic capabilities.\n"
-            "Runs within 16 GB RAM. Apache 2.0. Best-tested default for Blender."
+            "Apache 2.0. Best-tested default for Blender."
         ),
+        file_bytes=11624759488, projector_bytes=0, kv_bytes_per_token=49152,
+        recurrent_bytes=0, block_count=24, sliding_window=128,
     ),
     ModelPreset(
         identifier="qwen38_27b_q4",
         name="Qwen3.8-27B (Q4_K_M)",
         repo_id="unsloth/Qwen3.8-27B-GGUF",
         filename="Qwen3.8-27B-UD-Q4_K_M.gguf",
-        # Measured (#543, RTX 4090, one slot, with the projector): 18.9 GB of
-        # dedicated VRAM at 32K with 16-bit KV, 18.0 GB with 8-bit; llama-server
-        # commits 20-23 GB of RAM.
-        ram_gb="20-24 GB",
-        disk_gb="~17 GB",
+        # Measured (#543, RTX 4090, one slot, with the projector): 18,896 MiB of
+        # dedicated VRAM at 32K with 16-bit KV, 18,022 MiB with 8-bit; the
+        # estimate from these numbers is 19,168 / 18,208 (tests pin it).
         capability="Excellent",
         category="mid_range",
         context_window=262144,
         max_tokens=16384,
         vision=True,
         mmproj_filename="mmproj-F16.gguf",
-        hardware_note="RTX 3090/4090/5090 -- 24 GB VRAM, ~19-20 GB of it free",
-        why="Latest Qwen3.8 at Q4 -- vision + agentic on one 24 GB card",
+        why="Latest Qwen3.8 at Q4 -- vision + agentic on one card",
         extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
             "Qwen3.8-27B at Q4_K_M -- the latest Qwen generation. Native vision-language,\n"
-            "thinking mode, and agentic tool calling. 262K context. Apache 2.0.\n"
-            "Needs ~18 GB of VRAM at 32K context with the vision projector (8-bit KV cache),\n"
-            "~19 GB with 16-bit, plus ~1 GB free: a 24 GB card with little else on it."
+            "thinking mode, and agentic tool calling. 262K context. Apache 2.0."
         ),
+        file_bytes=16464440224, projector_bytes=927607488, kv_bytes_per_token=65536,
+        recurrent_bytes=156893184, block_count=65,
     ),
     ModelPreset(
         identifier="fable_fusion_27b_iq4",
         name="Fable Fusion 27B (IQ4_XS)",
         repo_id="DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF",
         filename="Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-AMD-MTP-IQ4_XS.gguf",
-        ram_gb="12-16 GB",
-        disk_gb="~17 GB",
         capability="Excellent",
         category="mid_range",
         context_window=262144,
         max_tokens=16384,
         vision=True,
         mmproj_filename="mmproj-F16.gguf",
-        hardware_note="RTX 3090/4090 -- 16 GB+ VRAM",
-        why="Fable Fusion at IQ4 -- fits 16 GB, still top-tier reasoning",
+        why="Fable Fusion at IQ4 -- smaller than the Q6_K, still top-tier reasoning",
         extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
             "Fable Fusion 27B at IQ4_XS -- smaller quant that still outperforms base Qwen3.6.\n"
             "Vision-capable, 256K context. Apache 2.0.\n"
-            "Best mid-range choice for users with 16 GB cards."
+            "The mid-range way to run Fable Fusion."
         ),
+        file_bytes=16808074720, projector_bytes=927607360, kv_bytes_per_token=65536,
+        recurrent_bytes=156893184, block_count=65,
     ),
-    # -- Lightweight (<=8 GB VRAM) ------------------------------------
+    # -- Lightweight -------------------------------------------------
     ModelPreset(
         identifier="gemma4_e4b_q4",
         name="Gemma 4 E4B (Q4_K_M)",
         repo_id="unsloth/gemma-4-E4B-it-GGUF",
         filename="gemma-4-E4B-it-Q4_K_M.gguf",
-        ram_gb="4-6 GB",
-        disk_gb="~5 GB",
         capability="Strong",
         category="lightweight",
         context_window=131072,
         max_tokens=12288,
         vision=True,
         mmproj_filename="mmproj-F16.gguf",
-        hardware_note="Any GPU or integrated -- 4 GB+ VRAM",
-        why="Google's small agentic model -- vision + function calling, runs anywhere",
+        why="Google's small agentic model -- vision + function calling",
         description=(
             "Google's Gemma 4 E4B -- 4.5B effective params with native function calling,\n"
             "thinking mode, and vision. 128K context. Apache 2.0.\n"
-            "Best all-round light pick -- runs on almost any hardware."
+            "Best all-round light pick -- small and fast."
         ),
+        file_bytes=4977171584, projector_bytes=990372672, kv_bytes_per_token=172032,
+        recurrent_bytes=0, block_count=42, sliding_window=512,
     ),
     ModelPreset(
         identifier="qwen35_9b_dsv4_q4",
         name="Qwen3.5-9B DeepSeek-V4-Flash (Q4_K_M)",
         repo_id="Jackrong/Qwen3.5-9B-DeepSeek-V4-Flash-GGUF",
         filename="Qwen3.5-9B-DeepSeek-V4-Flash-Q4_K_M.gguf",
-        ram_gb="4-6 GB",
-        disk_gb="~6 GB",
+        # Measured (#543, with the projector): 7,530 MiB at 32K with 16-bit KV;
+        # the estimate from these numbers is 7,706.
         capability="Strong",
         category="lightweight",
         context_window=262144,
         max_tokens=12288,
         vision=True,
         mmproj_filename="mmproj.gguf",
-        hardware_note="Any GPU -- 4 GB+ VRAM",
         why="DeepSeek-V4 distilled reasoning -- best reasoning-per-GB in light tier",
         extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
@@ -967,28 +988,29 @@ PRESET_MODELS: list[ModelPreset] = [
             "Vision-capable, 262K context. Apache 2.0.\n"
             "Punches well above its weight for tool calling and reasoning."
         ),
+        file_bytes=5629105408, projector_bytes=921705376, kv_bytes_per_token=32768,
+        recurrent_bytes=52690944, block_count=32,
     ),
     ModelPreset(
         identifier="qwen35_9b_q8",
         name="Qwen3.5-9B (Q8_0)",
         repo_id="unsloth/Qwen3.5-9B-GGUF",
         filename="Qwen3.5-9B-Q8_0.gguf",
-        ram_gb="6-8 GB",
-        disk_gb="~10 GB",
         capability="Strong",
         category="lightweight",
         context_window=262144,
         max_tokens=12288,
         vision=True,
         mmproj_filename="mmproj-F16.gguf",
-        hardware_note="Any GPU -- 8 GB+ VRAM",
         why="Highest quality light quant -- Q8_0 precision, vision, 262K context",
         extra_server_args=_QWEN_EXTRA_SERVER_ARGS,
         description=(
             "Qwen3.5-9B at Q8_0 -- highest quality quantization for the light tier.\n"
             "Vision-capable, 262K context, thinking mode. Apache 2.0.\n"
-            "Best quality-to-size ratio for users with 8 GB+ VRAM."
+            "Best quality-to-size ratio in the light tier."
         ),
+        file_bytes=9527502048, projector_bytes=918166080, kv_bytes_per_token=32768,
+        recurrent_bytes=52690944, block_count=32,
     ),
 ]
 
@@ -1820,9 +1842,7 @@ def _detect_hardware_cached() -> tuple[float | None, float | None]:
 
 # ---- GPU auto-detection for --n-gpu-layers ----
 
-_RUNTIME_OVERHEAD_MB = 700
-_KV_MB_PER_1K_CTX = 70
-_TYPICAL_LAYERS = 33
+_TYPICAL_LAYERS = 33               # when a header has no block count
 _FULL_OFFLOAD = 99
 
 def _hardware_info() -> tuple[int | None, str | None, int | None]:
@@ -1862,126 +1882,74 @@ def _hardware_info() -> tuple[int | None, str | None, int | None]:
 
     return ram_mb, gpu_label, gpu_mb
 
-def _gguf_layer_count(model_path: Path) -> int | None:
-    """Read the number of transformer blocks from a GGUF file header.
-
-    Returns the layer count if found, or ``None`` if the file can't be
-    read or doesn't contain the expected metadata key.
-    The GGUF format stores ``<arch>.block_count`` in its metadata.
-    """
-    # GGUF type IDs (from llama.cpp gguf.h).
-    _GGUF_UINT8 = 0
-    _GGUF_INT8 = 1
-    _GGUF_UINT16 = 2
-    _GGUF_INT16 = 3
-    _GGUF_UINT32 = 4
-    _GGUF_UINT64 = 5
-    _GGUF_FLOAT32 = 6
-    _GGUF_FLOAT64 = 7
-    _GGUF_BOOL = 8
-    _GGUF_STRING = 9
-    _GGUF_ARRAY = 10
-    # Fixed-size byte widths for scalar types.
-    _FIXED_SIZES = {
-        _GGUF_UINT8: 1, _GGUF_INT8: 1,
-        _GGUF_UINT16: 2, _GGUF_INT16: 2,
-        _GGUF_UINT32: 4, _GGUF_FLOAT32: 4,
-        _GGUF_UINT64: 8, _GGUF_FLOAT64: 8,
-        _GGUF_BOOL: 1,
-    }
-
-    def _skip_value_bytes(fobj: "io.BufferedRandom | io.BufferedReader", vtype: int) -> None:
-        """Advance *fobj* past the value bytes for type *vtype*.
-
-        The type ID has already been read; this only skips the payload.
-        """
-        if vtype in _FIXED_SIZES:
-            fobj.read(_FIXED_SIZES[vtype])
-        elif vtype == _GGUF_STRING:
-            slen = int.from_bytes(fobj.read(8), "little")
-            fobj.read(slen)
-        elif vtype == _GGUF_ARRAY:
-            atype = int.from_bytes(fobj.read(4), "little")
-            alen = int.from_bytes(fobj.read(8), "little")
-            for _ in range(alen):
-                if atype in _FIXED_SIZES:
-                    fobj.read(_FIXED_SIZES[atype])
-                elif atype == _GGUF_STRING:
-                    elen = int.from_bytes(fobj.read(8), "little")
-                    fobj.read(elen)
-                else:
-                    break  # Unknown element type -- bail.
-
+def _gguf_layer_count(model_path: "Path | str") -> int | None:
+    """The model's transformer blocks (``<arch>.block_count``) from its GGUF
+    header, read by :func:`gguf_info`; ``None`` when the file can't be read or
+    has no such key.  Counts the MTP layers too: ``--n-gpu-layers`` does."""
+    meta = (gguf_info(model_path) or {}).get("meta") or {}
+    arch = meta.get("general.architecture")
     try:
-        with open(str(model_path), "rb") as f:
-            magic = f.read(4)
-            if magic != b"GGUF":
-                return None
-            version = int.from_bytes(f.read(4), "little")
-            if version < 2:
-                return None  # V1 format -- no standard metadata layout.
-            n_tensors = int.from_bytes(f.read(4), "little")
-            n_kv = int.from_bytes(f.read(4), "little")
-            # Read key-value metadata entries looking for block_count.
-            for _ in range(n_kv):
-                # Key: uint64 length-prefixed string.
-                key_len = int.from_bytes(f.read(8), "little")
-                key = f.read(key_len).decode("utf-8", errors="replace")
-                # Value type: uint32.
-                val_type = int.from_bytes(f.read(4), "little")
-
-                if val_type == _GGUF_UINT32 and "block_count" in key:
-                    lc = int.from_bytes(f.read(4), "little")
-                    if lc > 0:
-                        print("[Coworker] _gguf_layer_count: {:s} has {:d} layers".format(
-                            model_path.name, lc))
-                        return lc
-                    # Zero layer count -- skip.
-                    continue
-                if val_type == _GGUF_UINT64 and "block_count" in key:
-                    lc = int.from_bytes(f.read(8), "little")
-                    if lc > 0:
-                        print("[Coworker] _gguf_layer_count: {:s} has {:d} layers".format(
-                            model_path.name, lc))
-                        return lc
-                    continue
-                # Not block_count (or wrong type) -- skip the value.
-                _skip_value_bytes(f, val_type)
-            return None
-    except (OSError, struct.error, ValueError):
-        return None
+        layers = int(meta.get("{:s}.block_count".format(str(arch))) or 0) if arch else 0
+    except (TypeError, ValueError):
+        layers = 0
+    return layers if layers > 0 else None
 
 
-def autodetect_gpu_layers(model_path: Path, context_size: int) -> int:
-    """Calculate optimal --n-gpu-layers for the given model and hardware."""
+def plan_gpu_layers(model_bytes: float, projector_bytes: float, profile: dict[str, float], n_layers: int,
+                    free_mib: "int | None", ctx: int, kv_q8: bool, slots: int = 1) -> int:
+    """``--n-gpu-layers`` from the numbers of the memory plan (#543, #558).
+
+    Every layer when the whole server (:func:`estimate_server_vram_mib`) fits in
+    *free_mib* minus the plan's margin, or when the free memory is unknown.
+    Else as many layers as fit next to what stays on the GPU anyway (the
+    projector, its compute buffer and the context scratch), each layer taking
+    its share of the weights, the KV cache and the recurrent state.  The weight
+    share is the whole file over the layers: the embeddings and output head
+    stay on the CPU in a partial offload, so this errs towards fewer layers.
+    """
+    if free_mib is None:
+        return _FULL_OFFLOAD
+    avail = int(free_mib) - _VRAM_MARGIN_MIB
+    full = estimate_server_vram_mib(model_bytes, projector_bytes, profile, ctx, kv_q8, slots)
+    if full <= avail:
+        return _FULL_OFFLOAD
+    layers = max(int(n_layers or 0), 1)
+    fixed = int(ctx) * _KV_SCRATCH_BYTES_PER_TOKEN
+    if projector_bytes:
+        fixed += float(projector_bytes) + _PROJECTOR_COMPUTE_MIB * _MIB
+    fixed_mib = fixed / _MIB
+    per_layer = (full - fixed_mib) / layers
+    if per_layer <= 0:
+        return _FULL_OFFLOAD
+    return max(0, min(layers, int((avail - fixed_mib) // per_layer)))
+
+
+def autodetect_gpu_layers(model_path: Path, context_size: int, *, free_mib: "int | None" = None,
+                          projector_bytes: float = 0.0, kv_q8: bool = False, slots: int = 1) -> int:
+    """``--n-gpu-layers`` for *model_path* on this machine: :func:`plan_gpu_layers`
+    with the file's own header against the free VRAM (*free_mib*, else read
+    now; with only the card's total known, the total minus the desktop's share,
+    as :func:`_plan_memory_budget` does)."""
     backend = _detect_gpu_backend()
     if backend == "cpu":
         return 0
-
-    _, _, gpu_mb = _hardware_info()
-    if gpu_mb is None:
-        return _FULL_OFFLOAD  # Cannot detect -- try full offload
-
+    if free_mib is None:
+        free_mib = detect_free_vram_mib()
+    if free_mib is None:
+        _, _, gpu_mb = _hardware_info()
+        if gpu_mb is None:
+            return _FULL_OFFLOAD  # Cannot detect -- try full offload
+        free_mib = gpu_mb - _DESKTOP_VRAM_MIB
+    info = gguf_info(model_path)
     try:
-        model_mb = model_path.stat().st_size // (1024 * 1024)
+        model_bytes = float(info["file_bytes"]) if info else float(os.path.getsize(str(model_path)))
     except OSError:
         return _FULL_OFFLOAD
-
-    kv_mb = int((context_size / 1024) * _KV_MB_PER_1K_CTX)
-    usable_mb = gpu_mb - _RUNTIME_OVERHEAD_MB - kv_mb
-
-    if usable_mb <= 0:
-        return 0  # Not enough VRAM for GPU offload
-    if usable_mb >= model_mb * 1.05:
-        return _FULL_OFFLOAD  # Full GPU offload
-
-    # Try to read the actual layer count from the GGUF header so the
-    # per-layer estimate is accurate even for models with != 33 layers.
-    actual_layers = _gguf_layer_count(model_path) or _TYPICAL_LAYERS
-    per_layer = model_mb / actual_layers
-    ngl = max(0, min(actual_layers, int(usable_mb / per_layer)))
-    print("[Coworker] autodetect_gpu_layers: ngl={:d}/{:d} (gpu={:d}MB, model={:d}MB, kv={:d}MB, usable={:d}MB)".format(
-        ngl, actual_layers, gpu_mb, model_mb, kv_mb, usable_mb))
+    layers = _gguf_layer_count(model_path) or _TYPICAL_LAYERS
+    ngl = plan_gpu_layers(model_bytes, projector_bytes, model_memory_profile(info), layers, free_mib,
+                          context_size, kv_q8, slots)
+    print("[Coworker] autodetect_gpu_layers: ngl={:d}/{:d} (free={:d} MiB, model={:d} MiB, ctx={:d}, {:s} KV)".format(
+        ngl, layers, int(free_mib), int(model_bytes // _MIB), int(context_size), "q8_0" if kv_q8 else "f16"))
     return ngl
 
 
@@ -2006,7 +1974,8 @@ def autodetect_gpu_layers(model_path: Path, context_size: int) -> int:
 _FIRST_REQUEST_TOKENS = 18432       # the first request on Bforartists: 18,359 tokens (#543; #544 trims it)
 _REPLY_ROOM_TOKENS = 4096           # a reply on top of it (--no-context-shift: both must fit)
 _VRAM_MARGIN_MIB = 1024
-_PROJECTOR_COMPUTE_MIB = 256        # the vision encoder's compute buffer on top of the projector file
+_DESKTOP_VRAM_MIB = 1024            # the desktop and Blender, when only the card's total is known
+_PROJECTOR_COMPUTE_MIB = 256       # the vision encoder's compute buffer on top of the projector file
 _KV_SCRATCH_BYTES_PER_TOKEN = 4096  # attention scratch that grows with the context
 _FALLBACK_KV_BYTES_PER_TOKEN = 128 * 1024  # f16 KV per token when the header can't be read (no file yet)
 _FALLBACK_PROJECTOR_BYTES = 1024 ** 3      # a vision preset's projector before it is downloaded
@@ -2237,6 +2206,118 @@ def plan_server_memory(model_bytes: float, projector_bytes: float, profile: dict
     return ServerMemoryPlan(sizes[0], True, need(sizes[0], True), free_mib, False)
 
 
+# ---------------------------------------------------------------------------
+# Preset memory texts (#558): built from the header numbers in PRESET_MODELS
+# through the estimate above, so they can't drift from what a start plans.
+
+# Card sizes a text may name.  A card counts as fitting when the estimate plus
+# the plan's margin and the desktop's share (what _plan_memory_budget assumes
+# with only the total known) is within it.
+_PRESET_CARD_GB: tuple[int, ...] = (4, 6, 8, 10, 12, 16, 20, 24, 32, 48, 64, 80, 96)
+_PRESET_TIER_LABELS = {"flagship": "Flagship", "mid_range": "Mid", "lightweight": "Light"}
+# The Recommended Model list's order: its items are 3-tuples, so a saved
+# preference keeps the index -- never reorder, add new ids at the end.
+_PRESET_ENUM_ORDER: tuple[str, ...] = (
+    "gpt_oss_20b_q4", "qwen38_27b_q4", "fable_fusion_27b_iq4",
+    "qwen38_27b_q8", "fable_fusion_27b_q6", "nail_35b_q4",
+    "gemma4_e4b_q4", "qwen35_9b_dsv4_q4", "qwen35_9b_q8",
+)
+
+
+def _gb_up(mib: float) -> str:
+    """*mib* in GB (1024 MiB), one decimal, rounded up: a text never understates."""
+    tenths = int(-((-float(mib) * 10) // 1024))
+    return "{:d}.{:d}".format(tenths // 10, tenths % 10)
+
+
+def preset_profile(preset: "ModelPreset | None") -> "dict[str, float] | None":
+    """*preset*'s header numbers as a :func:`model_memory_profile`; ``None`` without them."""
+    if preset is None or not preset.file_bytes or not preset.kv_bytes_per_token:
+        return None
+    return {"kv_bytes_per_token": float(preset.kv_bytes_per_token),
+            "recurrent_bytes": float(preset.recurrent_bytes), "from_header": 1.0}
+
+
+def preset_vram_mib(preset: "ModelPreset", kv_q8: bool, ctx: int = 0, slots: int = 1) -> int:
+    """:func:`estimate_server_vram_mib` for *preset* from its header numbers
+    (0 when it has none); *ctx* 0 is :func:`min_agent_ctx`."""
+    profile = preset_profile(preset)
+    if profile is None:
+        return 0
+    return estimate_server_vram_mib(preset.file_bytes, preset.projector_bytes, profile,
+                                    ctx or min_agent_ctx(), kv_q8, slots)
+
+
+def _smallest_card_gb(need_mib: int) -> "int | None":
+    reserve = _VRAM_MARGIN_MIB + _DESKTOP_VRAM_MIB
+    return next((gb for gb in _PRESET_CARD_GB if need_mib + reserve <= gb * 1024), None)
+
+
+def preset_memory_note(preset: "ModelPreset") -> tuple[str, str]:
+    """``(vram line, card note)`` for *preset*, both from its header numbers.
+
+    At :func:`min_agent_ctx` (32K), one slot, every layer on the GPU, with the
+    projector; the 8-bit and 16-bit KV cache figures, rounded up.  A card size
+    is named only when the estimate plus the plan's 1 GB margin and ~1 GB for
+    the desktop fits in it.  With sliding-window layers the estimate counts
+    them in full, and the text says "at most".  ``("", "")`` without numbers.
+    """
+    q8 = preset_vram_mib(preset, True)
+    f16 = preset_vram_mib(preset, False)
+    if not q8:
+        return "", ""
+    ctx = ctx_preset_label(min_agent_ctx())
+    upto = "at most " if preset.sliding_window else ""
+    extras = ["every layer on the GPU"]
+    if preset.projector_bytes:
+        extras.append("vision projector included")
+    if preset.sliding_window:
+        extras.append("sliding-window layers counted in full")
+    vram = "VRAM at {:s} context: {:s}~{:s} GB with 8-bit KV, ~{:s} GB with 16-bit ({:s})".format(
+        ctx, upto, _gb_up(q8), _gb_up(f16), ", ".join(extras))
+    span = "{:s}~{:s}-{:s} GB VRAM at {:s}".format(upto, _gb_up(q8), _gb_up(f16), ctx)
+    c8, c16 = _smallest_card_gb(q8), _smallest_card_gb(f16)
+    if c8 is None:
+        card = "More than {:d} GB of VRAM".format(_PRESET_CARD_GB[-1])
+    elif c16 == c8:
+        card = "{:d} GB+ card".format(c8)
+    elif c16 is None:
+        card = "{:d} GB+ card with 8-bit KV".format(c8)
+    else:
+        card = "{:d} GB+ card with 8-bit KV, {:d} GB+ with 16-bit".format(c8, c16)
+    return vram, "{:s} -- {:s}".format(card, span)
+
+
+def preset_info_text(preset: "ModelPreset") -> str:
+    """The Model Preset Information box, one line per row."""
+    lines = ["Capability: {:s}  |  Download: {:s}".format(preset.capability, preset.disk_gb or "unknown")]
+    vram, card = preset_memory_note(preset)
+    if vram:
+        lines += [vram, "Card: {:s} (keeps 1 GB free, ~1 GB for the desktop)".format(card)]
+    lines += ["Why: {:s}".format(preset.why), preset.description]
+    return "\n".join(lines)
+
+
+def preset_tooltip(preset: "ModelPreset") -> str:
+    """The Recommended Model list's tooltip for *preset*."""
+    tier = _PRESET_TIER_LABELS.get(preset.category, preset.category)
+    memory = "; ".join(t for t in (preset.hardware_note, preset.disk_gb and preset.disk_gb + " download") if t)
+    return "[{:s}] {:s} -- {:s}".format(tier, memory, preset.why) if memory else "[{:s}] {:s}".format(
+        tier, preset.why)
+
+
+def preset_enum_items() -> list[tuple[str, str, str]]:
+    """Items for the ``model_preset`` preference (``shared.MODEL_PRESET_ITEMS``),
+    built from :data:`PRESET_MODELS` in :data:`_PRESET_ENUM_ORDER`."""
+    by_id = {p.identifier: p for p in PRESET_MODELS}
+    order = list(_PRESET_ENUM_ORDER) + [p.identifier for p in PRESET_MODELS if p.identifier not in _PRESET_ENUM_ORDER]
+    items = [("_custom", "Custom (manual entry)", "Manually specify repo ID and filename")]
+    for ident in order:
+        if ident in by_id:
+            items.append((ident, by_id[ident].name, preset_tooltip(by_id[ident])))
+    return items
+
+
 def detect_free_vram_mib() -> "int | None":
     """Free memory (MiB) of the first NVIDIA GPU now, or ``None``."""
     try:
@@ -2279,7 +2360,7 @@ def _plan_memory_budget(backend: str, ram_gb: "float | None", vram_gb: "float | 
         if free_vram_mib is None:
             free_vram_mib = _detect_free_vram_cached()
         if free_vram_mib is None and vram_gb:
-            free_vram_mib = int(vram_gb * 1024) - 1024    # total only: leave the desktop ~1 GB
+            free_vram_mib = int(vram_gb * 1024) - _DESKTOP_VRAM_MIB    # total only: leave the desktop ~1 GB
         return free_vram_mib, True
     if ram_gb:
         return int(ram_gb * 1024) - 2048, False           # weights in RAM; 2 GB for the OS + Blender
@@ -2318,10 +2399,12 @@ def recommend_server_plan(
     kv_q8_forced: bool = False,
     ctx_cap: int = 262144,
     ctx: int = 0,
+    profile: "dict[str, float] | None" = None,
 ) -> ServerMemoryPlan:
     """:func:`plan_server_memory` for this machine and model.  *model_path*
-    (when the file exists) gives the real sizes and header; else *model_gb* and
-    *projector_bytes* estimate them."""
+    (when the file exists) gives the real sizes and header; else *model_gb*,
+    *projector_bytes* and *profile* (a preset's header numbers, #558; the
+    fallback profile without one) estimate them."""
     if ram_gb is None or vram_gb is None:
         _ram, _vram = _detect_hardware_cached()
         ram_gb = _ram if ram_gb is None else ram_gb
@@ -2331,7 +2414,9 @@ def recommend_server_plan(
     if info is not None and projector_bytes is None:
         projector_bytes = _projector_bytes(str(model_path))
     free, _gpu = _plan_memory_budget(backend, ram_gb, vram_gb, free_vram_mib)
-    return plan_server_memory(model_bytes, float(projector_bytes or 0.0), model_memory_profile(info), free,
+    if info is not None or not profile:
+        profile = model_memory_profile(info)
+    return plan_server_memory(model_bytes, float(projector_bytes or 0.0), profile, free,
                               ctx=ctx, kv_q8_forced=kv_q8_forced, ctx_cap=ctx_cap)
 
 
@@ -2404,8 +2489,8 @@ def validate_ctx_against_hardware(
         return None
     if gpu:
         return ("Context size {:,} needs ~{:s} GB of VRAM (model, projector and {:s} KV cache) but only "
-                "~{:s} GB is free now -- lower Context Size or close other GPU apps; past that it spills "
-                "into shared memory and gets very slow.").format(
+                "~{:s} GB is free now -- lower Context Size or close other GPU apps; otherwise only part of "
+                "the model goes on the GPU and the rest runs on the CPU, much slower.").format(
                     ctx, _gb(plan.need_mib), "8-bit" if plan.kv_q8 else "16-bit", _gb(plan.free_mib or 0))
     return ("Context size {:,} needs ~{:s} GB of RAM for the model and KV cache but only ~{:s} GB is "
             "left -- lower Context Size to avoid swapping or an out-of-memory crash.").format(
@@ -3646,18 +3731,6 @@ def start_local_llama(
             else:
                 print("[Coworker] start_local_llama: vulkan-1.dll found at {:s}".format(vulkan_dll))
 
-        if backend in ("cuda", "vulkan") and model_path and os.path.isfile(str(model_path)):
-            ngpu_layers = autodetect_gpu_layers(Path(str(model_path)), ctx_size)
-        else:
-            ngpu_layers = 99 if backend in ("cuda", "vulkan") else 0
-        args = [
-            server_exe,
-            '--jinja',
-            '--host', '127.0.0.1',
-            '--port', str(port),
-            '--ctx-size', str(ctx_size),
-            '--n-gpu-layers', str(ngpu_layers),
-        ]
         # The model and its projector first: the projector decides
         # --cache-reuse, and both feed the memory plan below.
         mmproj_path = None
@@ -3702,6 +3775,7 @@ def start_local_llama(
         global _launch_free_vram_mib, _last_memory_plan
         _launch_free_vram_mib = None
         _last_memory_plan = None
+        projector_bytes = 0
         if gpu and not use_hf and model_path:
             free_mib = detect_free_vram_mib()
             _launch_free_vram_mib = free_mib
@@ -3719,9 +3793,24 @@ def start_local_llama(
                 print("[Coworker] start_local_llama: 16-bit KV would not fit the free VRAM -- using q8_0")
             if plan.fits is False:
                 print("[Coworker][WARN] start_local_llama: ~{:d} MiB needed but only {:d} MiB free (1 GB kept "
-                      "free) -- part of it may spill into shared GPU memory and run slowly; close other GPU "
-                      "apps or lower Context Size".format(plan.need_mib, int(free_mib or 0)))
+                      "free) -- only the layers that fit go on the GPU, the rest run on the CPU (slower); close "
+                      "other GPU apps or lower Context Size".format(plan.need_mib, int(free_mib or 0)))
             kv_q8 = plan.kv_q8
+        # GPU layers from the same numbers as the plan (#558): every layer when
+        # the server fits the free VRAM, else as many as fit.
+        if gpu and model_path and os.path.isfile(str(model_path)):
+            ngpu_layers = autodetect_gpu_layers(Path(str(model_path)), ctx_size, free_mib=_launch_free_vram_mib,
+                                                projector_bytes=projector_bytes, kv_q8=kv_q8, slots=slots)
+        else:
+            ngpu_layers = 99 if gpu else 0
+        args = [
+            server_exe,
+            '--jinja',
+            '--host', '127.0.0.1',
+            '--port', str(port),
+            '--ctx-size', str(ctx_size),
+            '--n-gpu-layers', str(ngpu_layers),
+        ]
         args.extend(_filter_flags_for_build(tuple(build_server_tuning_args(
             gpu=gpu, kv_q8=kv_q8, slots=slots, projector=mmproj_path is not None, verbose=verbose,
             preset_extra=tuple(preset_extra or ())))))

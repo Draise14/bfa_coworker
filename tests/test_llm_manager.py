@@ -30,18 +30,19 @@ def load_llm_manager_module() -> object:
 # Helpers for building synthetic GGUF files
 # ---------------------------------------------------------------------------
 
-# GGUF value type IDs (from llama.cpp gguf.h).
+# GGUF value type IDs (enum gguf_type in llama.cpp's gguf.h).  #558: these
+# were wrong (UINT64 = 5, STRING = 9, ...) and so was the reader that shared them.
 _GGUF_TYPE_UINT8 = 0
 _GGUF_TYPE_INT8 = 1
 _GGUF_TYPE_UINT16 = 2
 _GGUF_TYPE_INT16 = 3
 _GGUF_TYPE_UINT32 = 4
-_GGUF_TYPE_UINT64 = 5
+_GGUF_TYPE_INT32 = 5
 _GGUF_TYPE_FLOAT32 = 6
-_GGUF_TYPE_FLOAT64 = 7
-_GGUF_TYPE_BOOL = 8
-_GGUF_TYPE_STRING = 9
-_GGUF_TYPE_ARRAY = 10
+_GGUF_TYPE_BOOL = 7
+_GGUF_TYPE_STRING = 8
+_GGUF_TYPE_ARRAY = 9
+_GGUF_TYPE_UINT64 = 10
 
 
 def _gguf_write_kv_uint32(key: str, value: int) -> bytes:
@@ -77,11 +78,11 @@ def _gguf_write_kv_string(key: str, value: str) -> bytes:
 
 
 def _build_gguf_header(n_tensors: int, n_kv: int, kv_data: bytes) -> bytes:
-    """Build a minimal GGUF v3 header with the given metadata."""
+    """Build a minimal GGUF v3 header with the given metadata (the counts are uint64)."""
     header = b"GGUF"
     header += struct.pack("<I", 3)  # version 3
-    header += struct.pack("<I", n_tensors)
-    header += struct.pack("<I", n_kv)
+    header += struct.pack("<Q", n_tensors)
+    header += struct.pack("<Q", n_kv)
     header += kv_data
     return header
 
@@ -108,17 +109,28 @@ class TestGGUFLayerCount(unittest.TestCase):
 
     def test_valid_uint32_block_count(self) -> None:
         """A GGUF v3 file with UINT32 block_count=33 returns 33."""
-        kv = _gguf_write_kv_uint32("llama.block_count", 33)
-        header = _build_gguf_header(n_tensors=100, n_kv=1, kv_data=kv)
+        kv = _gguf_write_kv_string("general.architecture", "llama")
+        kv += _gguf_write_kv_uint32("llama.block_count", 33)
+        header = _build_gguf_header(n_tensors=0, n_kv=2, kv_data=kv)
         path = self._write_gguf("model.gguf", header)
         self.assertEqual(self.llm_manager._gguf_layer_count(path), 33)
 
     def test_valid_uint64_block_count(self) -> None:
         """A GGUF v3 file with UINT64 block_count=80 returns 80."""
-        kv = _gguf_write_kv_uint64("qwen3.block_count", 80)
-        header = _build_gguf_header(n_tensors=200, n_kv=1, kv_data=kv)
+        kv = _gguf_write_kv_string("general.architecture", "qwen3")
+        kv += _gguf_write_kv_uint64("qwen3.block_count", 80)
+        header = _build_gguf_header(n_tensors=0, n_kv=2, kv_data=kv)
         path = self._write_gguf("model.gguf", header)
         self.assertEqual(self.llm_manager._gguf_layer_count(path), 80)
+
+    def test_another_architectures_block_count_is_not_used(self) -> None:
+        """Only ``<general.architecture>.block_count`` counts (a projector's
+        ``clip.vision.block_count`` is not the model's)."""
+        kv = _gguf_write_kv_string("general.architecture", "qwen35")
+        kv += _gguf_write_kv_uint32("clip.vision.block_count", 27)
+        header = _build_gguf_header(n_tensors=0, n_kv=2, kv_data=kv)
+        path = self._write_gguf("model.gguf", header)
+        self.assertIsNone(self.llm_manager._gguf_layer_count(path))
 
     def test_block_count_among_multiple_kv_entries(self) -> None:
         """block_count is found when it's not the first metadata entry."""
@@ -128,14 +140,14 @@ class TestGGUFLayerCount(unittest.TestCase):
         kv += _gguf_write_kv_uint32("qwen3.embedding_length", 3584)
         kv += _gguf_write_kv_uint32("qwen3.block_count", 48)
         kv += _gguf_write_kv_uint32("qwen3.attention.head_count", 32)
-        header = _build_gguf_header(n_tensors=150, n_kv=5, kv_data=kv)
+        header = _build_gguf_header(n_tensors=0, n_kv=5, kv_data=kv)
         path = self._write_gguf("model.gguf", header)
         self.assertEqual(self.llm_manager._gguf_layer_count(path), 48)
 
     def test_zero_block_count_returns_none(self) -> None:
         """block_count=0 should return None (can't use 0 for per-layer calc)."""
         kv = _gguf_write_kv_uint32("llama.block_count", 0)
-        header = _build_gguf_header(n_tensors=10, n_kv=1, kv_data=kv)
+        header = _build_gguf_header(n_tensors=0, n_kv=1, kv_data=kv)
         path = self._write_gguf("model.gguf", header)
         self.assertIsNone(self.llm_manager._gguf_layer_count(path))
 
@@ -156,7 +168,7 @@ class TestGGUFLayerCount(unittest.TestCase):
     def test_no_block_count_key_returns_none(self) -> None:
         """A valid GGUF with no block_count entry returns None."""
         kv = _gguf_write_kv_string("general.architecture", "llama")
-        header = _build_gguf_header(n_tensors=10, n_kv=1, kv_data=kv)
+        header = _build_gguf_header(n_tensors=0, n_kv=1, kv_data=kv)
         path = self._write_gguf("model.gguf", header)
         self.assertIsNone(self.llm_manager._gguf_layer_count(path))
 
@@ -414,7 +426,7 @@ class TestGGUFLayerCountIntegration(unittest.TestCase):
         kv += _gguf_write_kv_uint32("qwen3.attention.head_count_kv", 8)
         kv += _gguf_write_kv_uint32("qwen3.feed_forward_length", 19200)
         kv += _gguf_write_kv_uint32("qwen3.context_length", 131072)
-        header = _build_gguf_header(n_tensors=300, n_kv=8, kv_data=kv)
+        header = _build_gguf_header(n_tensors=0, n_kv=8, kv_data=kv)
 
         path = self._tmp / "qwen3.5-9b.gguf"
         path.write_bytes(header)
@@ -428,7 +440,7 @@ class TestGGUFLayerCountIntegration(unittest.TestCase):
         kv += _gguf_write_kv_string("general.name", "gemma-4-26B")
         kv += _gguf_write_kv_uint32("gemma3.block_count", 46)
         kv += _gguf_write_kv_uint32("gemma3.embedding_length", 4608)
-        header = _build_gguf_header(n_tensors=400, n_kv=4, kv_data=kv)
+        header = _build_gguf_header(n_tensors=0, n_kv=4, kv_data=kv)
 
         path = self._tmp / "gemma-4-26b.gguf"
         path.write_bytes(header)

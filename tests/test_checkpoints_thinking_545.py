@@ -163,6 +163,19 @@ class TestMaybeCompact(_TurnLoopTestBase):
         self.assertEqual((statuses, calls), ([], []))
         self.assertEqual(self.sm.store.list_checkpoints(), [])
 
+    def test_one_turn_over_its_room_with_no_earlier_turn_is_left_alone(self):
+        # The A27 caption task (req_0075): one turn of tool calls, history over the
+        # threshold, nothing before it -- the boundary is the end of the history.
+        h = [_a27_like_system(), {"role": "user", "content": "Transcribe this clip and add captions."}]
+        for i in range(6):
+            h.append({"role": "assistant", "content": "step", "tool_calls": [
+                {"id": "c{:d}".format(i), "type": "function", "function": {"name": "x", "arguments": "{}"}}]})
+            h.append({"role": "tool", "tool_call_id": "c{:d}".format(i), "content": "r" * 1900})
+        h.append(self.sm.make_system_note("Tool results are above.", kind="followup"))
+        statuses, calls = self._run(h, tools=_big_tools(51, 1300))
+        self.assertEqual((statuses, calls), ([], []))
+        self.assertEqual(self.sm.store.list_checkpoints(), [])
+
     def test_the_tool_results_are_counted_as_sent(self):
         # Stored tool results are kept whole for the panel; the request trims them.
         h = self._turns(2)

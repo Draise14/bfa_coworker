@@ -6857,7 +6857,7 @@ def _maybe_compact_session(
     _boundary = session_memory.find_retire_boundary(
         history, _keep, fallback_to_last_user=True)
     _start = 1 if _has_sys else 0
-    if not any(not m.get("ui_only") for m in history[_start:_boundary]):
+    if _boundary >= len(history) or not any(not m.get("ui_only") for m in history[_start:_boundary]):
         # Nothing to retire (one long turn, or only the greeting before it): no
         # status, no checkpoint, no writer call -- this used to report a
         # checkpoint on every step and save an empty one.

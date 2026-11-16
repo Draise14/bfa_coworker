@@ -129,6 +129,7 @@ SPEC = OperatorSpec(
 | `id` | `"<editor>.<name>"`; `bl_idname` is `"coworker.<editor>_<name>"` (the `coworker.` prefix is for these operators only; the add-on's own UI operators stay `bfacw.`) |
 | `label`, `description` | Menu text and tooltip: conventional words, no brand |
 | `icon`, `fallback_icon` | The wand icon's name (§3.3) and the Blender icon drawn when it can't load |
+| *(a new icon)* | Drawn to the §3.3 style guide: built from Bforartists source SVGs (listed in `icons/wand/SOURCES.md`), a filled silhouette in its family's colour, the wand badge only if the tool needs Coworker's AI (`model` is not `none`), checked at 16/32/64 px on both themes |
 | `places` | `Place.menu(target, after)`, `Place.toolshelf(space, category, panel)` (Bforartists, only where `show_toolshelf_tabs` exists), `Place.sidebar(space, category, panel)` (Blender, and Bforartists with the tabs off). A context menu only when that's the native place |
 | `kind` | **tool** deterministic · **macro** recorded replay · **hybrid** code + one engine decision · **wizard** question cards around tools |
 | `model` | `none` works with no engine running · `small` one short structured call to the **active engine** · `full` an agent turn |
@@ -172,14 +173,89 @@ A bad engine answer falls back to the heuristic; nothing is ever half-applied.
 
 ### 3.3 Icons — self-contained (Wand 0/1)
 
-- **Set**: each operator's icon = a familiar base glyph + a small **wand badge** in the
-  bottom-right corner. Shipped as **SVG sources + PNG renders** (32/64 px, light and dark
-  variants) in `addon/bfa_coworker/icons/wand/`, loaded with `bpy.utils.previews` and
-  drawn with `icon_value`. Works in plain Blender; no dependency on Bforartists icons.
-- **Base glyphs**: drawn by us, matching the Blender/Bforartists icon style (flat,
-  2-px strokes, theme-neutral), so they sit well in both apps. Bforartists' own icons
-  are GPL (compatible) but we keep the add-on self-contained; offering the badge set to
-  Bforartists later is optional.
+- **Set**: each operator's icon = a familiar base glyph, with a small **wand badge** in the
+  bottom-right corner when the tool needs Coworker's AI (below). Shipped as **SVG sources +
+  PNG renders** (32/64 px, light and dark variants) in `addon/bfa_coworker/icons/wand/`,
+  loaded with `bpy.utils.previews` and drawn with `icon_value`, so it works in plain
+  Blender. The first set (#483) was outlines; this style guide (#563) replaced it under
+  the same file names.
+- **Style guide (#563)**. Measured on Bforartists' 2,160 icon SVGs
+  (`release/datafiles/icons_svg`); the numbers are what they do, so ours match:
+  - **Built from Bforartists source SVGs.** Every icon starts from Bforartists' own icons:
+    their shapes, palette and construction, moved, scaled, recoloured, clipped or combined.
+    The copies used live in `icons/wand/bfa_src/` (the sources stay self-contained;
+    `build_addon.py` leaves the folder out of the zip), and `icons/wand/SOURCES.md` lists,
+    per icon, which files its shapes came from, under GPL-3.0-or-later, used with the
+    Bforartists icon maintainer's permission. A part no source icon has is drawn with the
+    same rules and marked "(ours)" in the SVG. `_misc/compose_wand_icons.py` composes the
+    SVGs; once one is edited by hand in Inkscape, stop composing that one.
+  - **Grid and sizes.** Bforartists draws on a **16-unit grid** (2,078 files: a 1600 x 1600
+    canvas with the art scaled x100), whole units, sometimes half. Ours are 32 x 32 files
+    with that 16-unit grid inside (`scale(2)`), so one unit is 1 px at 16 px, 2 px at 32 and
+    4 px at 64; half units are detail that only shows from 32 px up. Rendered at 32 and 64
+    px; checked at 16, 32 and 64.
+  - **Silhouette first.** Each icon reads first by a **filled silhouette** in its family's
+    colour, not by lines: flat fills only (gradients in 3 of 2,160 files, partial opacity
+    in 25). Text glyphs (`small_caps`, `seq_text`) may be plain white fills without outline.
+  - **Outline.** A separate filled shape **1 unit larger** than the fill, behind it (not a
+    stroke; 2,027 files have no stroke at all): `#323232` around white or grey objects,
+    `#000000` around coloured ones (`image`, `shaderfx`, `question`'s disc), or a dark tint
+    of the fill (`#320000` around the orange strip, `#003265` around the blue "?"; sparkles
+    get a `#fecb32` rim instead of a dark one).
+  - **Light and shade: one flat step.** A lit main colour and one darker step for the
+    shaded side or lower third, no gradients: `#fefefe`/`#cbcbcb`, `#fecb32`/`#fe9832`,
+    `#98cbfe`/`#6598fe`, `#fefe00`/`#fecb32`, plus a white core or highlight.
+  - **Palette.** Bforartists' own: steps of 0x33 written `00 32 65 98 cb fe`. Most used
+    fills: `#fefefe` (1,442 files), `#323232` (1,056), `#000000` (514), `#98cbfe` (346),
+    `#fecb32` (310), `#fe0000` (303), `#cbcbcb` (291), `#fefe00` (252), `#fe9832` (226),
+    `#989898`, `#656565`, `#00fe00`. One **main colour per tool family**, taken from the
+    Bforartists icons of that family:
+
+    | Family | Icons | Main / shade / outline | From |
+    |---|---|---|---|
+    | Sequencer / video | `remove_silences`, `vertical` | `#fecb32` / `#fe9832` / `#320000`, join green `#00fe00` | `seq_strip`, `seq_remove_gaps` |
+    | Text / language | `captions`, `transcribe`, `translate` | white `#fefefe` / `#cbcbcb` / `#323232`, type `#323232` | `file_text`, `small_caps`, `font_data` |
+    | Nodes | `tidy_nodes` | body `#65a4fe`, header `#c5c5c5`, socket `#f3fe00`, link `#3265fe`, outline `#000000` | `node_top`, `nodetree` |
+    | Help | `explain` | `#6598fe` / ring `#98cbfe` / `#000000`, "?" white with `#003265` | `question` |
+    | Wand (brand) | `wand`, the badge | stick `#656565` (lit edge `#989898`), tip `#fefefe`, outline `#000000`; sparkle **wizard purple** `#9865cb` / rim `#653298` / core `#fefefe` | `shaderfx`, `particles`; the purple of `wizard` (`#9a80d4`, the agent's icon in the chat) on the palette steps |
+
+    The purple is the magic colour (the maintainer's call), so it is kept for the wand:
+    no family uses it. Of three candidates (`#9865cb`, `#9832fe`, `#cb98fe`) it is the one
+    that reads at 16 px on both themes: the brighter one fades on light grey, the deeper
+    one sinks into dark grey.
+
+  - **Lines** only for inner detail (text lines, a waveform, a node link), at least 1 unit
+    wide, in the family's outline or type colour.
+  - **Corners** square; the traced outlines round them by about 0.1 unit, nothing larger
+    (only 19 `rx` corners in the whole set).
+  - **The wand badge marks the tools that need Coworker's AI.** A tool whose work is done
+    by a Coworker engine or a language / vision model call gets the badge; a tool that runs
+    on its own, even if it comes with Coworker, gets none (the maintainer: "for all wands
+    that require work with coworker, use the wand ... a standalone operator ... no wand
+    sub-icon"). An option that calls a model inside an otherwise standalone tool (Make
+    Vertical's Follow Subject) does not make it a badged tool. The local speech model
+    (whisper) is not the Coworker engine, so Auto Captions and Transcribe have none: the
+    borderline case, flip it in `BADGED` if wanted. Today: `translate`, `explain`,
+    `tidy_nodes` (Tidy & Explain Tree, §4.2: the engine groups and labels the nodes) have
+    it; `remove_silences`, `vertical`, `captions`, `transcribe` do not; `wand` is the mark.
+  - **The badge** is the same on every icon that has one: the `wand` mark (`shaderfx`'s
+    stick thickened 1.6x across, white tip, one `particles` sparkle in purple) at 0.55 scale
+    in the bottom-right 8.8 x 8.8 units (`translate(7.2,7.2) scale(0.55)`). The base is cut
+    away under it by a mask of the badge's own silhouette grown 0.77 unit, so the badge reads
+    on any base colour. Keep the base's key shape out of that corner. At 16 px the badge is a
+    grey stroke with a purple dot: a mark you learn, the wand itself shows from 32 px.
+  - **Themes.** Bforartists ships one icon palette for every theme: the dark outline holds
+    a white or coloured fill on light grey and on dark grey alike. Ours do the same, the
+    wand's stick too: a mid grey with a lit edge and a black outline, because a light theme
+    still has dark buttons (the toolbar, `#434343` in *Blender Light*) while the add-on picks
+    the theme variant from the menu text. `_misc/build_icons.py` still writes a dark and a
+    light PNG (`LIGHT_SWAP` is empty, so they are the same picture), so a per-theme colour
+    can come back without touching the add-on. Checked on Bforartists' default theme (panel
+    `#4d4d4d`, button `#595959`, menu `#191919`) and the shipped *Blender Light* preset
+    (panel `#cccccc`, button `#dbdbdb`, menu `#c0c0c0`, toolbar `#434343`).
+  - **Told apart at 16 px.** No two icons of a set may share a silhouette: check the row of
+    16-px renders side by side before asking for review.
+- Offering the set to Bforartists itself later stays optional (Tier 5 below).
 - **Drawing — no dropdown**: menus use `layout.operator(…, icon_value=…)`. In Bforartists'
   tabbed toolshelf the buttons are the **same square icon buttons** as the native ones
   (text buttons when the shelf is wide). Checked in Bforartists' source
@@ -189,7 +265,7 @@ A bad engine answer falls back to the heuristic; nothing is ever half-applied.
   ships a small `CoworkerEntry` with the same two members that draws with `icon_value`.
   Nothing in Bforartists has to change.
 - **Plain Blender**: no tabbed toolshelf: operators appear in menus, and (Wand 0) in a
-  *Coworker* tab of the editor's sidebar (the menu icons still show the badge).
+  *Coworker* tab of the editor's sidebar, with the same icons.
 - **Tier 5 (logged)**: migrate the icon set into Bforartists so the operators can use
   native icon names there (faster drawing, theme-aware), keeping the add-on's own copies
   for plain Blender.

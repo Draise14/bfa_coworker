@@ -3,16 +3,21 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Render the Coworker operators' wand icons to PNG (Tier 4m, Wand 0, #331).
+Render Coworker's operator icons to PNG (Tier 4m, Wand 0 #331; Bforartists style #563).
 
-The sources are our own SVGs in ``addon/bfa_coworker/icons/wand/``: a familiar
-base glyph with a small wand badge in the bottom-right corner.  Each SVG is
-drawn in its dark-theme colours; this script renders it at 32 and 64 px for a
-dark theme, then swaps the glyph and star colours and renders the light-theme
-variant, next to the source::
+The sources are the SVGs in ``addon/bfa_coworker/icons/wand/``, composed from
+Bforartists' own icon SVGs by ``_misc/compose_wand_icons.py`` (see ``SOURCES.md``
+there).  This script renders each at 32 and 64 px, in a dark-theme and a
+light-theme variant, next to the source::
 
     remove_silences.svg -> remove_silences_dark_32.png, remove_silences_dark_64.png,
                            remove_silences_light_32.png, remove_silences_light_64.png
+
+The icons are filled with a dark outline, so one palette serves both themes, as
+Bforartists' own icons do (style guide: plan 4m section 3.3): ``LIGHT_SWAP`` is
+empty and the two variants are the same picture.  The add-on still loads the
+variant that fits the theme, so a colour that has to change per theme can be
+added to ``LIGHT_SWAP`` later without touching the add-on.
 
 No Blender needed.  The renderer is Inkscape (as ``_misc/build_chat_icons.py``),
 found on PATH or in its usual Windows folder; ``--inkscape`` overrides that.
@@ -25,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -33,19 +39,18 @@ import tempfile
 _REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 ICON_DIR = os.path.join(_REPO, "addon", "bfa_coworker", "icons", "wand")
 SIZES = (32, 64)
-# Dark-theme colour -> light-theme colour.  The accents (blue, green, orange,
-# purple) read on both, so they stay.
-LIGHT_SWAP = {
-    "#e6e6e6": "#3d3d3d",       # the glyph and the wand's stick
-    "#ffc93c": "#d18f00",       # the wand's star: deeper so it shows on light grey
-}
+# Dark-theme colour -> light-theme colour.  Empty: one palette for both themes (#563).
+LIGHT_SWAP: dict[str, str] = {}
 
 
-def light_variant(svg_text: str) -> str:
-    """*svg_text* with the dark-theme colours swapped for the light theme's."""
-    for dark, light in LIGHT_SWAP.items():
-        svg_text = svg_text.replace(dark, light)
-    return svg_text
+def light_variant(svg_text: str, swap: dict[str, str] | None = None) -> str:
+    """*svg_text* with the dark-theme colours swapped for the light theme's (all at once,
+    so a swap's result is never swapped again)."""
+    swap = {k.lower(): v for k, v in (LIGHT_SWAP if swap is None else swap).items()}
+    if not swap:
+        return svg_text
+    pattern = re.compile("|".join(re.escape(k) for k in swap), re.IGNORECASE)
+    return pattern.sub(lambda m: swap[m.group(0).lower()], svg_text)
 
 
 def _inkscape(given: str | None) -> str:

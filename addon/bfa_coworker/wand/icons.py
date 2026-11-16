@@ -3,11 +3,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-The wand icons of Coworker's operators (Tier 4m section 3.3, Wand 0, #331).
+The icons of Coworker's operators (Tier 4m section 3.3, Wand 0 #331, Bforartists style #563).
 
-Our own drawings (``icons/wand/<name>.svg``, rendered by ``_misc/build_icons.py``)
-as PNGs in two variants: ``<name>_dark_<size>.png`` for a dark theme (light
-strokes) and ``<name>_light_<size>.png`` for a light theme, at 32 and 64 px.
+Built from Bforartists' own icon SVGs (``icons/wand/<name>.svg``, see ``SOURCES.md``
+there; rendered by ``_misc/build_icons.py``) as PNGs in two variants:
+``<name>_dark_<size>.png`` for a dark theme and ``<name>_light_<size>.png`` for a
+light theme, at 32 and 64 px (one palette today, so the two are the same picture).
+The wand badge in the corner marks the tools that need Coworker's AI.
 They are loaded with ``bpy.utils.previews`` and drawn with ``icon_value``, so
 they work in plain Blender as in Bforartists.  The variant follows the theme's
 menu text (light text = dark theme); the size follows the UI scale.  When the
@@ -34,7 +36,7 @@ import os
 from typing import Any
 
 ICON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "icons", "wand")
-# The first set: a familiar base glyph with the wand badge; "wand" is the generic one.
+# A familiar base glyph, with the wand badge when the tool needs Coworker's AI; "wand" is the mark.
 ICON_NAMES = ("remove_silences", "captions", "vertical", "transcribe", "tidy_nodes", "explain",
               "translate", "wand")
 THEMES = ("dark", "light")

@@ -29,6 +29,7 @@ __all__ = ()
 import importlib
 import importlib.util
 import os
+import re
 import sys
 import types
 import unittest
@@ -215,7 +216,15 @@ class TestIcons(unittest.TestCase):
         cls.icons = _import("wand.icons")
         cls.png = _import("ui_gpu.png")
 
+    @staticmethod
+    def _misc(name):
+        spec = importlib.util.spec_from_file_location("bfacw_" + name, _ROOT / "_misc" / (name + ".py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
     def test_every_icon_has_its_files(self):
+        build = self._misc("build_icons")
         for name in self.icons.ICON_NAMES:
             self.assertTrue(os.path.isfile(os.path.join(self.icons.ICON_DIR, name + ".svg")), name)
             renders = []
@@ -228,7 +237,11 @@ class TestIcons(unittest.TestCase):
                     self.assertEqual((width, height), (size, size), path)
                     self.assertGreater(sum(1 for a in rgba[3::4] if a > 0), size * size // 20, path)
                     renders.append(rgba)
-            self.assertNotEqual(renders[0], renders[2], name + ": the light render is the dark one")
+            # one palette for both themes (#563): the light render is the dark one unless the
+            # build swaps a colour this icon uses
+            text = Path(self.icons.ICON_DIR, name + ".svg").read_text(encoding="utf-8").lower()
+            swapped = any(k.lower() in text for k in build.LIGHT_SWAP)
+            self.assertEqual(renders[0] != renders[2], swapped, name)
 
     def test_eight_icons(self):
         self.assertEqual(len(self.icons.ICON_NAMES), 8)
@@ -240,21 +253,51 @@ class TestIcons(unittest.TestCase):
         self.assertEqual(self.icons.size_for(1.0), 32)
         self.assertEqual(self.icons.size_for(2.0), 64)
 
-    def test_svgs_are_ours(self):
+    def test_svgs_are_built_from_bforartists_sources(self):
+        # #563: every icon is composed from copies of Bforartists' icon SVGs, listed in SOURCES.md
+        folder = Path(self.icons.ICON_DIR)
+        sources = (folder / "SOURCES.md").read_text(encoding="utf-8")
+        self.assertIn("GPL-3.0-or-later", sources)
+        self.assertIn("permission", sources)
+        for name in self.icons.ICON_NAMES:
+            text = (folder / (name + ".svg")).read_text(encoding="utf-8")
+            self.assertIn("composed by _misc/compose_wand_icons.py from Bforartists", text, name)
+            self.assertIn("`{}`".format(name), sources, name)
+            self.assertNotIn("<image", text, name)
+            used = set(re.findall(r'data-src="([a-z_]+)#', text))
+            self.assertTrue(used, name)
+            for src in used:
+                self.assertTrue((folder / "bfa_src" / (src + ".svg")).is_file(), name + ": " + src)
+                self.assertIn(src + ".svg", sources, name + ": " + src)
+
+    def test_badge_marks_the_ai_tools(self):
+        # The wand badge only on the tools that need Coworker's AI (plan 4m section 3.3)
+        comp = self._misc("compose_wand_icons")
+        self.assertEqual(set(comp.BADGED), {"translate", "explain", "tidy_nodes"})
         for name in self.icons.ICON_NAMES:
             text = Path(self.icons.ICON_DIR, name + ".svg").read_text(encoding="utf-8")
-            self.assertIn("Original drawing for the Coworker add-on", text, name)
-            self.assertNotIn("<image", text, name)
+            self.assertEqual('inkscape:label="wand badge"' in text, name in comp.BADGED, name)
+        # remove_silences is a tool with no model: no badge
+        self.assertNotIn("remove_silences", comp.BADGED)
+        # the purple sits on Bforartists' palette steps
+        steps = {"00", "32", "65", "98", "cb", "fe"}
+        for colour in comp.PURPLES[comp.PURPLE]:
+            self.assertTrue(all(colour[i:i + 2] in steps for i in (1, 3, 5)), colour)
 
     def test_build_script_light_swap(self):
-        spec = importlib.util.spec_from_file_location("bfacw_build_icons", _ROOT / "_misc" / "build_icons.py")
-        build = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(build)
-        light = build.light_variant('<path stroke="#e6e6e6"/><path fill="#ffc93c"/><path fill="#4c9bd9"/>')
-        self.assertNotIn("#e6e6e6", light)
-        self.assertNotIn("#ffc93c", light)
-        self.assertIn("#4c9bd9", light)
+        build = self._misc("build_icons")
+        self.assertEqual(build.light_variant('<path fill="#656565"/>'), '<path fill="#656565"/>')
+        # a swap is done at once: #666666 -> #323232 is not swapped again by #999999 -> #666666
+        light = build.light_variant('<path fill="#999999"/><path fill="#666666"/>',
+                                    {"#666666": "#323232", "#999999": "#666666"})
+        self.assertEqual(light, '<path fill="#666666"/><path fill="#323232"/>')
         self.assertEqual(Path(build.ICON_DIR).resolve(), Path(self.icons.ICON_DIR).resolve())
+
+    def test_zip_leaves_out_the_bforartists_copies(self):
+        text = (_ROOT / "build_addon.py").read_text(encoding="utf-8")
+        self.assertIn('SOURCE_ONLY = ("icons/wand/bfa_src/",)', text)
+        self.assertIn("orig_name.startswith(SOURCE_ONLY)", text)
+        self.assertTrue(Path(self.icons.ICON_DIR, "bfa_src").is_dir())
 
     def test_build_keeps_the_pngs(self):
         manifest = (_ADDON / "blender_manifest.toml").read_text(encoding="utf-8")

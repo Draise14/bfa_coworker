@@ -399,7 +399,11 @@ class TestLongRequests(_HardeningBase):
         with self.server.lock:
             mcp_calls = json.dumps(self.server.mcp_requests)
         self.assertNotIn("update_plan", mcp_calls, "the plan tool never reaches MCP")
-        last_sys = self._main_requests()[-1]["messages"][0]["content"]
+        # #546: the goal & plan travel at the end of the request, not in the
+        # system message (the same bytes for every request).
+        last = self._main_requests()[-1]["messages"]
+        self.assertNotIn("[Goal & plan", last[0]["content"])
+        last_sys = str(last[-1]["content"])
         self.assertIn("[Goal & plan", last_sys)
         self.assertIn("Session goal: make it match the reference", last_sys)
         self.assertIn("[x] 3. fix posts", last_sys)

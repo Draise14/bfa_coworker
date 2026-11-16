@@ -501,6 +501,18 @@ class _FakeLLMHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
+def _after_system(request):
+    """The text a request carries after its system message (#546: the session
+    memory, the goal & plan and the other chats travel there, not in it)."""
+    out = []
+    for m in (request.get("messages") or [])[1:]:
+        c = m.get("content")
+        if isinstance(c, list):
+            c = " ".join(str(b.get("text", "")) for b in c if isinstance(b, dict))
+        out.append(str(c or ""))
+    return "\n".join(out)
+
+
 def _start_fake_server(script, mcp_tools=None):
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeLLMHandler)
     server.scripted_responses = list(script)
@@ -717,12 +729,14 @@ class TestTurnLoopIntegration(_TurnLoopTestBase):
         self.assertLess(total_chars, 8192 * 3.5,
                         "preflight/budget-fit must keep the prompt inside ctx")
 
-        # ── 4. Memory block injected into the sent system message ────
+        # ── 4. Memory block sent with the request (#546: after the tools) ─
         sent_system = main["messages"][0]["content"]
         mem_block = self.sm.store.memory_block
         self.assertTrue(mem_block, "compaction must produce a memory block")
-        self.assertIn(mem_block, sent_system,
-                      "the memory block must be injected into the system prompt")
+        self.assertIn(mem_block, _after_system(main),
+                      "the memory block must be sent with the request")
+        self.assertNotIn(mem_block, sent_system,
+                         "the memory block is not in the system message (#546)")
 
         # ── 5. Stored history was compacted and reasoning-pruned ─────
         stored = self.state.conversation_history
@@ -805,9 +819,10 @@ class TestTurnLoopIntegration(_TurnLoopTestBase):
                          "turn 2 must not re-compact or call the memory writer")
         main = [r for r in turn2_requests if r not in turn2_writers]
         self.assertEqual(len(main), 1)
-        # Turn 2's system message carries the block exactly once...
-        self.assertEqual(main[0]["messages"][0]["content"].count(
-            mem_after_turn1), 1)
+        # Turn 2's request carries the block exactly once, after the system
+        # message (#546)...
+        self.assertEqual(_after_system(main[0]).count(mem_after_turn1), 1)
+        self.assertNotIn(mem_after_turn1, main[0]["messages"][0]["content"])
         # ...and the STORED system prompt is free of the block.
         stored_sys = self.state.conversation_history[0]["content"]
         self.assertNotIn(mem_after_turn1, stored_sys,
@@ -1281,8 +1296,10 @@ class TestToolLoopIntegration(_TurnLoopTestBase):
         self.assertGreaterEqual(len(main), 2)
         for req in main:
             self.assertEqual(
-                req["messages"][0]["content"].count(mem_block), 1,
+                _after_system(req).count(mem_block), 1,
                 "memory block must appear exactly once per request")
+            self.assertNotIn(mem_block, req["messages"][0]["content"],
+                             "and not in the system message (#546)")
         # ...and the STORED system prompt stays block-free.
         self.assertNotIn(
             mem_block, self.state.conversation_history[0]["content"])
@@ -1472,8 +1489,10 @@ class TestToolLoopIntegration(_TurnLoopTestBase):
         self.assertEqual(len(main), 1,
                          "one main LLM request; the writer call is separate")
         self.assertEqual(
-            main[0]["messages"][0]["content"].count("build a lighthouse"), 1,
+            _after_system(main[0]).count("build a lighthouse"), 1,
             "the writer note must reach the model exactly once per request")
+        self.assertNotIn("build a lighthouse", main[0]["messages"][0]["content"],
+                         "the note travels after the system message (#546)")
         self.assertNotIn("build a lighthouse",
                          self.state.conversation_history[0]["content"],
                          "stored system prompt must not accumulate the note")

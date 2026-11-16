@@ -186,7 +186,9 @@ class TestTwoChatsOnRemote(_tli._TurnLoopTestBase):
         with self.server.lock:
             sent = [r for r in self.server.requests if r not in self.server.memory_writer_calls]
         system = sent[-1]["messages"][0]["content"]
-        self.assertIn("Other chats working now: the All editors chat", system)
+        self.assertNotIn("Other chats working now", system, "#546: not in the system message")
+        self.assertIn("Other chats working now: the All editors chat", str(sent[-1]["messages"][-1]["content"]),
+                      "with the request's context, at its end")
         stored = self.node.state.conversation_history[0]["content"]
         self.assertNotIn("Other chats working now", stored, "this request only, not the stored prompt")
 

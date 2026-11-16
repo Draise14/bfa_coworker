@@ -1331,17 +1331,28 @@ class TestAutoContinueSanitizesRequest(unittest.TestCase):
     must be sanitized exactly like the main request.
     """
 
+    # #546: the continuation request is built like every request of the turn
+    # (_build_send_messages), so it is sanitized the same way and starts with
+    # the same bytes as the request before it.
+    def _builder(self, src):
+        start = src.find("    def _build_send_messages(")
+        self.assertGreater(start, 0, "_build_send_messages not found")
+        return src[start:src.find("\n    def ", start + 40)]
+
     def test_continue_path_strips_reasoning(self):
         src = _load_source()
-        self.assertIn("_cont_send = _strip_reasoning_from_history(history)", src)
+        self.assertIn("_cont_send, _cont_err = _build_send_messages()", src)
+        self.assertIn("msgs = _strip_reasoning_from_history(msgs)", self._builder(src))
 
     def test_continue_path_strips_ui_only(self):
         src = _load_source()
-        self.assertIn("_cont_send = _strip_ui_only_from_history(_cont_send)", src)
+        self.assertIn("_cont_send, _cont_err = _build_send_messages()", src)
+        self.assertIn("msgs = _strip_ui_only_from_history(msgs)", self._builder(src))
 
     def test_continue_path_sanitizes_roles(self):
         src = _load_source()
-        self.assertIn("_cont_send = _sanitize_message_roles(_cont_send)", src)
+        self.assertIn("_cont_send, _cont_err = _build_send_messages()", src)
+        self.assertIn("msgs = _sanitize_message_roles(msgs)", self._builder(src))
 
     def test_continue_call_uses_sanitized_copy(self):
         # The continuation request goes through the stream-aware wrapper

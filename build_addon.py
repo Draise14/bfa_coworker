@@ -44,6 +44,9 @@ VENDOR_BLMCP_DIR = os.path.join(VENDOR_DIR, "blmcp")
 # Old layout — kept for cleanup.
 VENDOR_VENV_DIR = os.path.join(VENDOR_DIR, "python_env")
 DIST_DIR = os.path.join(SCRIPT_DIR, "releases")
+# Folders of the add-on that stay out of the built zip: the copies of Bforartists' icon
+# SVGs the operator icons are composed from (#563; the composed SVGs and PNGs ship).
+SOURCE_ONLY = ("icons/wand/bfa_src/",)
 
 # Find Blender executable.
 def find_blender() -> str:
@@ -318,6 +321,8 @@ def main() -> int:
                     continue
                 if "__pycache__" in orig_name or orig_name.endswith(".pyc"):
                     continue
+                if orig_name.startswith(SOURCE_ONLY):
+                    continue        # kept in the repo for whoever edits them, not shipped
                 try:
                     data = zin.read(orig_name)
                 except Exception:

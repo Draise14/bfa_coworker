@@ -38,6 +38,8 @@ __all__ = (
     "wrap",
 )
 
+import ast
+import functools
 import re
 from typing import Any, Callable
 
@@ -58,15 +60,84 @@ _SKIP_MARK = "# blmcp-toolcode-skip-preflight"
 # Tools whose code the model wrote (#347): the skip marker in it is never honoured,
 # or a model -- or text planted in a scene -- could switch the checks off.
 MODEL_CODE_TOOLS = frozenset(("execute_blender_code", "execute_blender_plan"))
-_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("save the .blend file", re.compile(r"\bwm\.save_(?:as_)?mainfile\b")),
+
+# Deleting or moving files, and running another program: read from the text (so code inside a
+# string that is run later counts too), plus the same calls through an import alias or a plain
+# assignment (#549: ``import os as o``, ``from shutil import rmtree``, ``rm = os.remove``).
+_FILE_FUNCS = frozenset(("os.remove", "os.unlink", "os.rmdir", "os.removedirs", "os.rename", "os.replace",
+                         "shutil.rmtree", "shutil.move"))
+_PROGRAM_FUNCS = frozenset(("os.system", "os.popen", "os.startfile"))     # and every ``subprocess.<name>``
+_FILE_CALL = re.compile(r"\b(?:os\.(?:remove|unlink|rmdir|removedirs|rename|replace)|shutil\.(?:rmtree|move))\s*\(|"
+                        r"\.rmdir\s*\(")
+_PROGRAM_CALL = re.compile(r"\b(?:subprocess\.\w+|os\.system|os\.popen|os\.startfile)\s*\(")
+_UNLINK = re.compile(r"\.unlink\s*\(")
+# Blender's own unlinks touch nothing on disk (#549): an object or a child collection out of a
+# collection (``coll.objects.unlink(ob)``, ``scene.collection.children.unlink(c)``) and an
+# operator (``bpy.ops.text.unlink()``).  Every other ``.unlink(`` -- ``Path(p).unlink()``, a
+# variable holding a path, or one that can't be told -- still asks.
+_BLENDER_UNLINK = re.compile(r"(?:\.objects|\.children|\bops\.\w+)\s*$")
+
+
+def _dotted(node: ast.AST) -> str:
+    """``a.b.c`` for a name / attribute chain, "" for anything else."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return ""
+    parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
+@functools.lru_cache(maxsize=8)
+def _called(code: str) -> frozenset[str]:
+    """The full names of the functions *code* calls, import aliases and plain assignments
+    followed (``import os as o`` / ``o.remove(p)`` -> ``os.remove``).  Empty when it doesn't
+    parse: it can't run then, and the text rules still see it."""
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return frozenset()
+    names: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update((alias.asname, alias.name) for alias in node.names if alias.asname)
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            names.update((alias.asname or alias.name, node.module + "." + alias.name) for alias in node.names)
+
+    def full(node: ast.AST) -> str:
+        root, dot, rest = _dotted(node).partition(".")
+        return names.get(root, root) + dot + rest if root else ""
+
+    for node in sorted((n for n in ast.walk(tree) if isinstance(n, ast.Assign)),
+                       key=lambda n: (n.lineno, n.col_offset)):
+        value = full(node.value)
+        for target in node.targets:
+            if value and isinstance(target, ast.Name):
+                names[target.id] = value
+    return frozenset(full(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)) - {""}
+
+
+def _deletes_files(code: str) -> bool:
+    if _FILE_CALL.search(code) or _called(code) & _FILE_FUNCS:
+        return True
+    return any(not _BLENDER_UNLINK.search(code[max(0, hit.start() - 200):hit.start()])
+               for hit in _UNLINK.finditer(code))
+
+
+def _runs_program(code: str) -> bool:
+    return bool(_PROGRAM_CALL.search(code)) or any(
+        name in _PROGRAM_FUNCS or name.startswith("subprocess.") for name in _called(code))
+
+
+_RULES: tuple[tuple[str, Callable[[str], Any]], ...] = (
+    ("save the .blend file", re.compile(r"\bwm\.save_(?:as_)?mainfile\b").search),
     ("open, reload or quit -- unsaved work is lost",
-     re.compile(r"\bwm\.(?:open_mainfile|read_homefile|read_factory_settings|quit_blender|revert_mainfile)\b")),
-    ("delete or move files",
-     re.compile(r"\b(?:os\.(?:remove|unlink|rmdir|removedirs|rename|replace)|shutil\.(?:rmtree|move))\s*\(|"
-                r"\.unlink\s*\(|\.rmdir\s*\(")),
-    ("export files", re.compile(r"\bbpy\.ops\.(?:export_\w+|wm\.\w+_export)\b")),
-    ("run another program", re.compile(r"\b(?:subprocess\.\w+|os\.system|os\.popen|os\.startfile)\s*\(")),
+     re.compile(r"\bwm\.(?:open_mainfile|read_homefile|read_factory_settings|quit_blender|revert_mainfile)\b").search),
+    ("delete or move files", _deletes_files),
+    ("export files", re.compile(r"\bbpy\.ops\.(?:export_\w+|wm\.\w+_export)\b").search),
+    ("run another program", _runs_program),
 )
 
 
@@ -106,7 +177,7 @@ def reason(code: str, blend_path: str | None = None) -> str:
     .blend, whose folder is the project folder (None: ask Blender; "" = not saved)."""
     if not code or is_toolcode(code):
         return ""
-    found = [what for what, rule in _RULES if rule.search(code)]
+    found = [what for what, rule in _RULES if rule(code)]
     # Security 3 (#347): writes outside the project folder, and the internet (syntax tree).
     from . import code_guard
     try:

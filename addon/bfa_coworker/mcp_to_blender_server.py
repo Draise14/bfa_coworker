@@ -878,6 +878,21 @@ def _preflight_check(code: str) -> list[tuple[str, str]]:
 
     return issues
 
+def _stop_prefetch_for(code: str) -> int:
+    """#558: before agent-written *code* that may remove or split Sequencer strips runs, stop
+    the Sequencer prefetch of every scene with strips (``strips.remove()`` and ``split()``
+    free strips before they stop it, which crashed Blender; see :mod:`wand.prefetch`).  The
+    scenes stopped; never raises, so it can't keep the code from running."""
+    try:
+        from .wand import prefetch
+        if not prefetch.may_free_strips(code):
+            return 0
+        import bpy  # pylint: disable=import-error
+        return prefetch.stop_every_prefetch(bpy.data.scenes)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return 0
+
+
 def _execute_code(
         code: str,
         strict_json: bool,
@@ -979,6 +994,8 @@ def _execute_code(
                 # Trusted toolcode and any bpy-touching code run inline so
                 # bpy.context (window / screen / active object) is populated
                 # and Blender's context counter stays balanced.
+                if not is_toolcode:
+                    _stop_prefetch_for(code)    # #558: before agent code removes or splits strips
                 try:
                     exec(code, namespace)
                 except Exception as _e:

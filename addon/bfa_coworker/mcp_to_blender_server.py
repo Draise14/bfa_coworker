@@ -18,6 +18,7 @@ __all__ = (
     "is_running",
     "poll",
     "poll_blocking",
+    "send_answer",
     "start",
     "stop",
     "timer_idle_interval",
@@ -165,8 +166,11 @@ def timer_idle_interval() -> float:
     Return the appropriate timer interval, decrementing the idle countdown.
 
     Returns ``TIMER_INTERVAL_ACTIVE`` while the countdown is positive,
-    then ``_TIMER_INTERVAL_IDLE`` once it reaches zero.
+    then ``_TIMER_INTERVAL_IDLE`` once it reaches zero.  While a chat's turn
+    runs (any engine), at most ``_TIMER_INTERVAL_TURN`` (#547).
     """
+    if side_by_side.working_chats():
+        return min(_timer.interval_active, _TIMER_INTERVAL_TURN)
     if _timer.idle_countdown > 0:
         _timer.idle_countdown -= 1
         return _timer.interval_active
@@ -181,7 +185,19 @@ log_level: str = "OFF"
 _MAX_REQUEST_BYTES = 10 * 1024 * 1024  # 10 MiB.
 # Maximum number of queued incoming connections.
 _LISTEN_BACKLOG = 5
-_RECV_BUFFER_SIZE = 4096
+# #547: a tick reads all that has arrived (``recv`` until it would block), in pieces of this size,
+# and at most ``_RECV_MAX_BYTES_PER_TICK`` per client per tick (a client that floods can't hold
+# the UI; the rest is read at the next tick, which comes at the active interval).  One 4 KB
+# ``recv`` per tick made a 120 KB tool call take 30 ticks (30 s at the idle interval).
+_RECV_BUFFER_SIZE = 65536
+_RECV_MAX_BYTES_PER_TICK = 4 * 1024 * 1024
+# The same for answers (#547): what the socket takes now, at most this much per client per tick;
+# the rest at the next ticks.  ``sendall`` on a non-blocking socket gave up when the send
+# buffer was full, losing the rest of a large answer (an image, a timeline overview).
+_SEND_MAX_BYTES_PER_TICK = 4 * 1024 * 1024
+# #547: the tick interval while a chat's turn runs: its next call can come any moment, and the
+# idle interval (1 s) was the wait of every call a model sent after thinking for a while.
+_TIMER_INTERVAL_TURN = 0.05
 # Seconds before a client that has not sent a complete request is closed.
 _CLIENT_TIMEOUT = 10.0
 # How often `poll_blocking` checks for shutdown.
@@ -225,6 +241,7 @@ class _Client:
         "conn",
         "buffer",
         "timeout",
+        "outbox",
     )
 
     def __init__(self, conn: socket.socket) -> None:
@@ -233,6 +250,8 @@ class _Client:
         self.buffer: bytearray = bytearray()
         # Poll ticks remaining before this client is evicted.
         self.timeout: int = _timer.client_timeout_countdown
+        # The part of its answer not sent yet (#547); ``None`` until it is answered.
+        self.outbox: memoryview | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1601,33 +1620,130 @@ def _close_client(client: _Client) -> None:
 # ---------------------------------------------------------------------------
 # Polling (called from the execution modules).
 
-def _accept_clients() -> None:
+def _accept_clients() -> bool:
     """
     Accept all pending connections on the listening socket.
+
+    Return ``True`` if one was accepted (its request follows: the next tick comes soon, #547).
     """
     if _state.sock is None:
-        return
+        return False
+    accepted = False
     while True:
         try:
             conn, _addr = _state.sock.accept()
             conn.setblocking(False)
             _state.clients.append(_Client(conn))
+            accepted = True
         except BlockingIOError:
             break
         except OSError:
             break
+    return accepted
+
+
+def _read_available(client: _Client) -> tuple[int, bool]:
+    """
+    Read what has arrived from *client* (#547): ``recv`` until it would block, the request
+    is complete (its null byte), it is over the size limit or this tick's cap is reached.
+
+    Return ``(bytes read, still connected)``.
+    """
+    got = 0
+    while got < _RECV_MAX_BYTES_PER_TICK:
+        try:
+            chunk = client.conn.recv(_RECV_BUFFER_SIZE)
+        except BlockingIOError:
+            # Nothing more has arrived yet.
+            break
+        except OSError:
+            return got, False
+        if not chunk:
+            # Client disconnected.
+            return got, False
+        client.buffer.extend(chunk)
+        got += len(chunk)
+        # One request per connection: what follows its null byte is not read.
+        if b"\0" in chunk or len(client.buffer) > _MAX_REQUEST_BYTES:
+            break
+    return got, True
+
+
+def _send_pending(client: _Client) -> bool:
+    """
+    Send what the socket takes now of *client*'s answer, at most ``_SEND_MAX_BYTES_PER_TICK``
+    (#547); close the client once all of it is out, or when the connection fails.
+
+    Return ``True`` if anything was sent.
+    """
+    sent = 0
+    out = client.outbox
+    while out is not None and len(out) and sent < _SEND_MAX_BYTES_PER_TICK:
+        try:
+            n = client.conn.send(out[:_SEND_MAX_BYTES_PER_TICK - sent])
+        except BlockingIOError:
+            break
+        except OSError:
+            out = None
+            break
+        if not n:
+            break
+        out = out[n:]
+        sent += n
+    if out is None or not len(out):
+        # All of it is out, or the client is gone.
+        client.outbox = None
+        _close_client(client)
+        return sent > 0
+    client.outbox = out
+    if sent:
+        # Progress: the time-out counts from the last piece that went out.
+        client.timeout = _timer.client_timeout_countdown
+    return sent > 0
+
+
+def _answer(client: _Client, response: dict[str, object]) -> bool:
+    """
+    Answer *client* with *response* and close it once the answer is out: what the socket takes
+    now, the rest at the next ticks (#547).  Return ``True`` if anything was sent.
+    """
+    client.outbox = memoryview(_encode_response(response))
+    client.timeout = _timer.client_timeout_countdown
+    return _send_pending(client)
+
+
+def send_answer(conn: socket.socket, response: dict[str, object]) -> None:
+    """
+    Answer a connection that is not in the client list (a deferred call, ``deferred_tool``)
+    the same way: what the socket takes now, the rest at the next ticks, then closed (#547).
+    """
+    client = _Client(conn)
+    _answer(client, response)
+    if client.outbox is not None:
+        _state.clients.append(client)
 
 
 def _service_clients() -> bool:
     """
-    Read from all connected clients, execute complete requests.
+    Read from all connected clients, execute complete requests, send answers.
 
-    Return ``True`` if at least one request was executed.
+    Return ``True`` if a request was executed or anything was read or sent (#547: the next
+    tick then comes at the active interval, not the idle one).
     """
     did_work = False
     ready: list[tuple[_Client, str]] = []
     # Iterate over a copy since clients may be removed during the loop.
     for client in _state.clients[:]:
+        if client.outbox is not None:
+            # Answered: the rest of its answer goes out (#547).
+            if _send_pending(client):
+                did_work = True
+            elif client in _state.clients:
+                did_work = True         # still to send: the next tick comes soon
+                client.timeout -= 1
+                if client.timeout <= 0:
+                    _close_client(client)
+            continue
         if b"\0" in client.buffer:
             # Complete, waiting for its chat's turn on the main thread (#359).
             ready.append((client, side_by_side.request_thread(bytes(client.buffer))))
@@ -1635,44 +1751,22 @@ def _service_clients() -> bool:
         # Evict clients that have not sent a complete request in time.
         client.timeout -= 1
         if client.timeout <= 0:
-            try:
-                err: dict[str, object] = {
-                    "status": "error",
-                    "message": "Client timed out",
-                }
-                client.conn.sendall(_encode_response(err))
-            except OSError:
-                pass
-            _close_client(client)
+            _answer(client, {"status": "error", "message": "Client timed out"})
             continue
 
-        try:
-            chunk = client.conn.recv(_RECV_BUFFER_SIZE)
-        except BlockingIOError:
-            # No data available yet.
-            continue
-        except OSError:
+        got, connected = _read_available(client)
+        if got:
+            did_work = True
+        if not connected:
             _close_client(client)
             continue
-
-        if not chunk:
-            # Client disconnected.
-            _close_client(client)
-            continue
-
-        client.buffer.extend(chunk)
 
         # Guard against unbounded input from a misbehaving client.
         if len(client.buffer) > _MAX_REQUEST_BYTES:
-            try:
-                err = {
-                    "status": "error",
-                    "message": "Request exceeds {:d} byte limit".format(_MAX_REQUEST_BYTES),
-                }
-                client.conn.sendall(_encode_response(err))
-            except OSError:
-                pass
-            _close_client(client)
+            _answer(client, {
+                "status": "error",
+                "message": "Request exceeds {:d} byte limit".format(_MAX_REQUEST_BYTES),
+            })
             continue
 
         if b"\0" not in client.buffer:
@@ -1710,11 +1804,7 @@ def _service_clients() -> bool:
             except ValueError:
                 pass
         else:
-            try:
-                client.conn.sendall(_encode_response(exec_result.response))
-            except OSError:
-                pass
-            _close_client(client)
+            _answer(client, exec_result.response)
         did_work = True
 
     return did_work
@@ -1728,8 +1818,8 @@ def poll() -> bool:
     Return ``True`` if work was done or deferred clients are pending.
     """
     from . import coworker_api, deferred_tool
-    _accept_clients()
-    did_work = _service_clients()
+    accepted = _accept_clients()
+    did_work = _service_clients() or accepted
     # Long jobs first, so a get_job_status waiting below sees a job that just ended.
     if coworker_api.jobs_tick():
         did_work = True

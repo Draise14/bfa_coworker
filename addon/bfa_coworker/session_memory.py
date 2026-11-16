@@ -26,7 +26,7 @@ __all__ = (
     "MEMORY_TARGET_TOKENS",
     "COMPACTION_TRIGGER_RATIO",
     "COMPACTION_MIN_ROOM_TOKENS",
-    "COMPACTION_KEEP_RECENT",
+    "COMPACTION_TARGET_SHARE",
     "compaction_threshold",
     "memory_writer_max_tokens",
     "COMPACTION_ROLE",
@@ -91,13 +91,11 @@ COMPACTION_TRIGGER_RATIO = 0.6
 # after every short exchange: the history may then grow to this share of the
 # floor, and the request fitting trims the sent copy if it must.
 COMPACTION_MIN_ROOM_TOKENS = 4096
-# When the history is over its share of the room, older turns are retired down
-# to this many recent messages (the current turn is always kept whole).  The
-# 20-message verbatim window often holds more than the room on Local, so
-# retiring only beyond it would leave nothing to retire.  Kept above the
-# overflow recovery's window (agent_controller._FORCE_COMPACT_KEEP_RECENT, 8) so
-# that recovery can still go further.
-COMPACTION_KEEP_RECENT = 12
+# When the history is over that threshold, older turns are retired until the
+# recent messages kept fit in this share of it (the current turn is always kept
+# whole), so the next compaction comes only after the chat has grown by about
+# as much again -- not on every turn.
+COMPACTION_TARGET_SHARE = 0.5
 
 
 def compaction_threshold(prompt_budget: int, fixed_tokens: int) -> int:

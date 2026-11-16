@@ -1049,9 +1049,12 @@ def _thinking_for_reply(room: int, budget: int | None) -> int | None:
 #   * "routine": any other follow-up step.
 # Effort on a routine step: Off (no cap) stays no cap -- the user chose it;
 # High 2,048 -> 512; Medium 1,024 -> 256; Low 512 -> off (a quarter is below
-# _MIN_THINKING_TOKENS); Custom N -> N // 4, off below 256.  Set to False to
-# send the configured budget on every step.
-_STEP_THINKING_POLICY = True
+# _MIN_THINKING_TOKENS); Custom N -> N // 4, off below 256.
+# OFF until measured: #545 asks for the 12-task Local suite on the 27B before and
+# after, and the change ships only if the score does not drop.  That run could
+# not be made yet (the GPU was in use), so every step still gets the configured
+# budget, as before.  True turns the policy on.
+_STEP_THINKING_POLICY = False
 _ROUTINE_THINKING_DIVISOR = 4
 
 
@@ -6850,10 +6853,21 @@ def _maybe_compact_session(
     )
     if not (_over_tokens or _over_window):
         return
-    # Over its room the history is retired down to a short recent window (the
-    # 20-message verbatim window alone often holds more than the room); the
-    # current turn is always kept whole (fallback to the last user message).
-    _keep = session_memory.COMPACTION_KEEP_RECENT if _over_tokens else session_memory.MAX_WINDOW_TURNS
+    # Over its room the history is retired down to the recent messages that fit
+    # in COMPACTION_TARGET_SHARE of the threshold (the 20-message verbatim
+    # window alone often holds more than the room, and keeping a fixed count of
+    # large messages left it over the threshold, so it compacted again on every
+    # turn); the current turn is always kept whole (fallback to the last user).
+    _keep = session_memory.MAX_WINDOW_TURNS
+    if _over_tokens:
+        _target = int(threshold * session_memory.COMPACTION_TARGET_SHARE)
+        _keep, _acc = 0, 0
+        for _m in reversed(history[1 if _has_sys else 0:]):
+            if not (_m.get("ui_only") or _m.get("role") == "reasoning"):
+                _acc += _estimate_messages_tokens(_trim_history_tool_results([_m]))
+                if _acc > _target:
+                    break
+            _keep += 1
     _boundary = session_memory.find_retire_boundary(
         history, _keep, fallback_to_last_user=True)
     _start = 1 if _has_sys else 0

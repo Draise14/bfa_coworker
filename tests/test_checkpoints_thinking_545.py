@@ -15,7 +15,8 @@ thinking where it pays.  bpy-free.
 * the thinking policy (``_next_step_kind`` / ``_thinking_for_step``): full
   budget on the first step, after an error and after a new plan, a quarter on
   routine steps; the four Reasoning Effort levels stay distinct; and the real
-  turn loop sends it that way.
+  turn loop sends it that way.  It ships OFF until the 27B suite has measured
+  it (``TestShippedDefault``); the other tests switch it on.
 
 Run with::
 
@@ -146,9 +147,27 @@ class TestMaybeCompact(_TurnLoopTestBase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(h[0]["role"], "system")
         self.assertEqual(h[-1]["content"], "the current request")
-        self.assertLessEqual(len(h), 1 + self.sm.COMPACTION_KEEP_RECENT + 1)
+        # What is kept fits in half the threshold: room to grow before the next one.
+        fixed = self.ac._estimate_tools_tokens(_big_tools()) + self.ac._estimate_messages_tokens([h[0]]) + \
+            int(len(self.sm.store.memory_block) / 3.5) + 2
+        kept = self.ac._estimate_messages_tokens(h[1:])
+        self.assertLessEqual(kept, self.sm.compaction_threshold(_A27_BUDGET, fixed) * self.sm.COMPACTION_TARGET_SHARE)
         self.assertIn("the note", self.sm.store.memory_block)
         self.assertEqual([c.get("reason") for c in self.sm.store.list_checkpoints()], ["compaction"])
+
+    def test_large_turns_do_not_compact_on_every_turn(self):
+        # Turns of ~1,800 tokens each (the in-app fake run): keeping a fixed number
+        # of messages left the history over its threshold, so every turn compacted.
+        big = "Notes for this step: the table, the chairs and the lamp go in the dining area. " * 80
+        h = [_a27_like_system()]
+        fired = []
+        for i in range(10):
+            h.append({"role": "user", "content": "Step {:d}. ".format(i) + big})
+            statuses, _calls = self._run(h)
+            fired.append(bool(statuses))
+            h.append({"role": "assistant", "content": "ok {:d}".format(i)})
+        self.assertTrue(any(fired))
+        self.assertFalse(any(a and b for a, b in zip(fired, fired[1:])), fired)   # never two turns in a row
 
     def test_nothing_to_retire_means_no_status_and_no_checkpoint(self):
         # One long current turn (A27: 100 of 117 "compactions" retired 0 messages).
@@ -372,7 +391,23 @@ class TestStepKind(_TurnLoopTestBase):
         self.assertEqual(self.ac._next_step_kind(tick), "routine")
 
 
-class TestThinkingForStep(_TurnLoopTestBase):
+class _PolicyOn(_TurnLoopTestBase):
+    """The policy as it would ship once measured (it is off by default for now)."""
+
+    def setUp(self):
+        super().setUp()
+        self.ac._STEP_THINKING_POLICY = True
+
+
+class TestShippedDefault(_TurnLoopTestBase):
+
+    def test_off_until_measured_every_step_keeps_the_configured_budget(self):
+        self.assertFalse(self.ac._STEP_THINKING_POLICY)
+        for budget in (None, 512, 1024, 2048):
+            self.assertEqual(self.ac._thinking_for_step(budget, "routine"), budget)
+
+
+class TestThinkingForStep(_PolicyOn):
 
     def test_full_budget_where_it_pays(self):
         for kind in ("first", "error", "plan"):
@@ -399,15 +434,11 @@ class TestThinkingForStep(_TurnLoopTestBase):
         self.assertEqual(as_num, sorted(as_num, reverse=True))
 
     def test_policy_can_be_switched_off(self):
-        saved = self.ac._STEP_THINKING_POLICY
-        try:
-            self.ac._STEP_THINKING_POLICY = False
-            self.assertEqual(self.ac._thinking_for_step(1024, "routine"), 1024)
-        finally:
-            self.ac._STEP_THINKING_POLICY = saved
+        self.ac._STEP_THINKING_POLICY = False
+        self.assertEqual(self.ac._thinking_for_step(1024, "routine"), 1024)
 
 
-class TestTurnLoopThinking(_TurnLoopTestBase):
+class TestTurnLoopThinking(_PolicyOn):
     """The real turn loop against the harness's fake server."""
 
     def tearDown(self):

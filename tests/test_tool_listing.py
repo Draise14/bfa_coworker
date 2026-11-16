@@ -1749,10 +1749,10 @@ EXPECTED_TOOLS = [
 "          assign_material_to_objects, get_active_node_tree, get_node_group_interface,\n"
 "          wire_node_group)\n"
 "        - vse: Video Sequencer strips: list, read, move / trim, preview a frame, speech to text,\n"
-"          captions and a vertical 9:16 version with editable framing (get_vse_timeline_overview,\n"
-"          get_vse_strips_summary, get_vse_strip_detail, set_strip_frame_range, render_vse_preview,\n"
-"          transcribe_strip, add_captions, reframe_vertical, jump_to_tab_by_name,\n"
-"          jump_to_tab_by_space_type)\n"
+"          remove silences, captions and a vertical 9:16 version with editable framing\n"
+"          (get_vse_timeline_overview, get_vse_strips_summary, get_vse_strip_detail,\n"
+"          set_strip_frame_range, render_vse_preview, transcribe_strip, remove_silences,\n"
+"          add_captions, reframe_vertical, jump_to_tab_by_name, jump_to_tab_by_space_type)\n"
 "\n"
 "        Load only what the request needs; the basic tools (scene, code, docs,\n"
 "        screenshots, plan, questions, bake_textures, render_viewport_to_path,\n"
@@ -2002,6 +2002,91 @@ EXPECTED_TOOLS = [
                 }
             },
             "title": "reframe_verticalArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "remove_silences",
+        "description": "\n"
+"        Cut the quiet parts out of the Sequencer's edit (Remove Silences), one undo step.\n"
+"\n"
+"        Listens to the named sound strips (a movie strip brings its own sound). With\n"
+"        sounds from several files, only the time where all of them are quiet goes. The\n"
+"        same cuts go through every strip at that level, selected or not (picture,\n"
+"        voice-over, music, titles, captions), so nothing drifts; captions over a cut\n"
+"        are trimmed, and one left too short to read is removed. When a locked,\n"
+"        retimed, scene or meta strip is in the way nothing changes: ``refused`` says\n"
+"        which strip and why. Strips cut in pieces keep their name on the first piece;\n"
+"        ``new_names`` lists every piece. A second call with the same settings finds\n"
+"        nothing more to cut.\n"
+"\n"
+"        Args:\n"
+"            strips: Sound or movie strips to listen to (empty: the selected ones; nothing\n"
+"                selected: every sound strip).\n"
+"            threshold_db: Quieter than this (dB below full scale, -120..0) counts as silence.\n"
+"            min_silence: Only quiet stretches at least this long (seconds) are cut.\n"
+"            padding: Quiet time (seconds) kept before and after the sound, so words aren't clipped.\n"
+"            min_keep: What's left between two cuts goes too when shorter than this (seconds).\n"
+"            close_gaps: Move everything after each cut left (ripple); off leaves gaps.\n"
+"            update_scene_end: When the scene ended at the end of the edit, it ends at the new end\n"
+"                (and the preview range).\n"
+"\n"
+"        Returns:\n"
+"            ``status`` (ok / refused / error), ``message``, ``cuts``, ``seconds_removed``,\n"
+"            ``cut_ranges`` (frames before the cut), ``new_names`` (original strip -> its pieces;\n"
+"            [] when all of it went), ``end_frame`` (the scene's end now), ``content_end``,\n"
+"            ``refused`` ([{strip, reason}]), ``problems``, ``captions_trimmed``,\n"
+"            ``captions_dropped``.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "strips": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Strips"
+                },
+                "threshold_db": {
+                    "default": -40.0,
+                    "title": "Threshold Db",
+                    "type": "number"
+                },
+                "min_silence": {
+                    "default": 0.4,
+                    "title": "Min Silence",
+                    "type": "number"
+                },
+                "padding": {
+                    "default": 0.15,
+                    "title": "Padding",
+                    "type": "number"
+                },
+                "min_keep": {
+                    "default": 0.1,
+                    "title": "Min Keep",
+                    "type": "number"
+                },
+                "close_gaps": {
+                    "default": True,
+                    "title": "Close Gaps",
+                    "type": "boolean"
+                },
+                "update_scene_end": {
+                    "default": True,
+                    "title": "Update Scene End",
+                    "type": "boolean"
+                }
+            },
+            "title": "remove_silencesArguments",
             "type": "object"
         }
     },

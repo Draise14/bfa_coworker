@@ -50,7 +50,7 @@ EXPECTED_TOOLS = [
 "        Returns:\n"
 "            ``lines_created``, ``channel``, ``first_frame`` / ``last_frame``, the style,\n"
 "            ``strips_captioned`` (names), ``strips_skipped`` (``{strip, reason}``: \"no speech\",\n"
-"            \"retimed\", \"no transcript\" or \"muted\") and ``kept_edited``; ``message`` says it all\n"
+"            \"silent\", \"retimed\", \"no transcript\" or \"muted\") and ``kept_edited``; ``message`` says it all\n"
 "            in a sentence.  ``status`` \"error\" with a ``message`` saying what's wrong.\n"
 "        ",
         "inputSchema": {

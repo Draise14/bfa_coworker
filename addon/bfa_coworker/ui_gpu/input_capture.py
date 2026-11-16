@@ -543,7 +543,11 @@ def _autosave_tick() -> None:
     _AUTOSAVE["since"] = now
     if step == "write":
         try:        # Blender's own autosave write; it restarts Blender's autosave timer too
-            bpy.ops.wm.save_auto_save()
+            from .. import co_work_guard
+            # #558: an autosave runs no save handlers, so lift the co-work lock here (put
+            # back also when the write fails): the file keeps the objects' own hide_select.
+            with co_work_guard.lifted(bpy.data):
+                bpy.ops.wm.save_auto_save()
         except RuntimeError as ex:
             print("[Coworker] autosave failed: {:s}".format(str(ex)))
 

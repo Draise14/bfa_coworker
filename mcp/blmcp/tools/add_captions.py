@@ -59,7 +59,7 @@ def register(mcp: FastMCP) -> None:
         Returns:
             ``lines_created``, ``channel``, ``first_frame`` / ``last_frame``, the style,
             ``strips_captioned`` (names), ``strips_skipped`` (``{strip, reason}``: "no speech",
-            "retimed", "no transcript" or "muted") and ``kept_edited``; ``message`` says it all
+            "silent", "retimed", "no transcript" or "muted") and ``kept_edited``; ``message`` says it all
             in a sentence.  ``status`` "error" with a ``message`` saying what's wrong.
         """
         return send_code(

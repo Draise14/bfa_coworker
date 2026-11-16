@@ -136,7 +136,9 @@ _RULES: tuple[tuple[str, Callable[[str], Any]], ...] = (
     ("open, reload or quit -- unsaved work is lost",
      re.compile(r"\bwm\.(?:open_mainfile|read_homefile|read_factory_settings|quit_blender|revert_mainfile)\b").search),
     ("delete or move files", _deletes_files),
-    ("export files", re.compile(r"\bbpy\.ops\.(?:export_\w+|wm\.\w+_export)\b").search),
+    # Any operator with "export" as a word of its name (#558): export_scene.fbx, wm.obj_export,
+    # uv.export_layout, collection.exporter_export, ...; not collection.exporter_add / _move / _remove.
+    ("export files", re.compile(r"\bops\.(?:export_\w+\.\w+|\w+\.(?:\w+_)?export(?:_\w+)?)\b").search),
     ("run another program", _runs_program),
 )
 

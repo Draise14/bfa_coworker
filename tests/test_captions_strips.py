@@ -229,6 +229,9 @@ class TestReplacePlan(unittest.TestCase):
         self.assertIn("skipped 1, retimed", text)
         self.assertIn("“Fast”", text)
         self.assertIn("kept 1 caption edited by hand", text)
+        # #558: a clip whose transcript has no words at all says so, not "in the part it shows".
+        silent = cap.strips_report([], [{"strip": "Music", "reason": cap.SKIP_SILENT}])
+        self.assertEqual(silent, "for 0 strips; skipped 1, no speech in the clip: “Music”")
         many = [{"strip": "s{:d}".format(i), "reason": cap.SKIP_MUTED} for i in range(6)]
         self.assertIn("skipped 6, muted", cap.strips_report([], many))
         self.assertIn("and 2 more", cap.strips_report([], many))
@@ -304,8 +307,19 @@ class TestEveryStrip(_OpsCase):
         self.pair("Quiet", 9.5, 12.5, 1)
         with self.assertRaises(self.ops.CaptionsError) as ctx:
             self.run_captions()
-        self.assertIn("no speech", str(ctx.exception))
+        self.assertIn("no speech in the part it shows", str(ctx.exception))
         self.assertIn("“Quiet_snd”", str(ctx.exception))
+
+    def test_a_clip_with_no_words_at_all_says_it_has_no_speech(self):
+        # #558: a transcript with no words (music only): the clip has no speech.
+        Path(self.made_up).write_text(json.dumps({"schema": cap.SCHEMA, "language": "en", "words": []}),
+                                      encoding="utf-8")
+        self.pair("Music", 0, 10, 1)
+        with self.assertRaises(self.ops.CaptionsError) as ctx:
+            self.run_captions()
+        self.assertEqual(str(ctx.exception),
+                         "There's no speech to caption (skipped 2, no speech in the clip: “Music”, “Music_snd”).")
+        self.assertNotIn("the part it shows", str(ctx.exception))
 
     def test_a_slipped_sound_follows_its_offset(self):
         s = _clip(self.scene, "Slipped", "//media/talk.wav", left=1, right=601)

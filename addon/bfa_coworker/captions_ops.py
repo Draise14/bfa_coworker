@@ -748,7 +748,7 @@ def add_captions(scene: Any, sources: list, style: str = "CLEAN", language: str 
             continue
         got = cap.captions_for_strips(words, strips, fps, chars, lines)
         outcome.update((n, "captioned") for n in got["captioned"])
-        outcome.update((n, cap.SKIP_NO_SPEECH) for n in got["no_speech"])
+        outcome.update((n, cap.SKIP_NO_SPEECH if words else cap.SKIP_SILENT) for n in got["no_speech"])
         left_out += got["left_out"]
         if got["captions"]:
             groups.append((key, got["captions"]))

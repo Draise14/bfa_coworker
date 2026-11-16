@@ -46,6 +46,7 @@ __all__ = (
     "SKIP_NO_SPEECH",
     "SKIP_NO_TRANSCRIPT",
     "SKIP_RETIMED",
+    "SKIP_SILENT",
     "SKIP_TEXT",
     "STYLES",
     "TAG",
@@ -504,8 +505,10 @@ SKIP_NO_SPEECH = "no speech"
 SKIP_RETIMED = "retimed"
 SKIP_NO_TRANSCRIPT = "no transcript"
 SKIP_MUTED = "muted"
+SKIP_SILENT = "silent"          # the transcript has no words at all (#558)
 SKIP_TEXT = {
     SKIP_NO_SPEECH: "no speech in the part it shows",
+    SKIP_SILENT: "no speech in the clip",
     SKIP_RETIMED: "retimed: its speed changed, so captions would be out of sync (reset its retiming to caption it)",
     SKIP_NO_TRANSCRIPT: "no transcript",
     SKIP_MUTED: "muted: none of it is heard",

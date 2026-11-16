@@ -2489,8 +2489,8 @@ def validate_ctx_against_hardware(
         return None
     if gpu:
         return ("Context size {:,} needs ~{:s} GB of VRAM (model, projector and {:s} KV cache) but only "
-                "~{:s} GB is free now -- lower Context Size or close other GPU apps; past that it spills "
-                "into shared memory and gets very slow.").format(
+                "~{:s} GB is free now -- lower Context Size or close other GPU apps; otherwise only part of "
+                "the model goes on the GPU and the rest runs on the CPU, much slower.").format(
                     ctx, _gb(plan.need_mib), "8-bit" if plan.kv_q8 else "16-bit", _gb(plan.free_mib or 0))
     return ("Context size {:,} needs ~{:s} GB of RAM for the model and KV cache but only ~{:s} GB is "
             "left -- lower Context Size to avoid swapping or an out-of-memory crash.").format(

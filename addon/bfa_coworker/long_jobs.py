@@ -185,9 +185,12 @@ def start(kind: str, label: str, check_fn: Callable[[], dict[str, Any] | None],
         _jobs[job_id] = {
             "id": job_id, "kind": str(kind), "label": str(label) or str(kind).lower(),
             "state": "running", "started": now, "ended": 0.0, "deadline": now + float(timeout),
-            "progress": None, "progress_text": "", "result": None, "message": "",
+            "progress": None, "progress_text": "", "progress_short": "", "result": None, "message": "",
             "cancel_requested": "",
             "check_fn": check_fn, "on_finish": on_finish,
+            # #540: a checker's own progress, ``job_progress() -> (fraction or None, text, short)``
+            # (a transcription's "piece 3 of 26"); read when the status or the job row is asked for.
+            "progress_fn": getattr(check_fn, "job_progress", None),
         }
         _prune()
     return job_id
@@ -204,7 +207,7 @@ def _end(job: dict[str, Any], state: str, result: dict[str, Any] | None = None, 
     with _lock:
         if job["state"] != "running":
             return
-        job.update(state=state, ended=_clock(), result=result, message=message, check_fn=None)
+        job.update(state=state, ended=_clock(), result=result, message=message, check_fn=None, progress_fn=None)
         if state == "done":
             job["progress"] = 1.0
         on_finish, job["on_finish"] = job["on_finish"], None
@@ -262,6 +265,22 @@ def note_progress(kind: str, text: str) -> None:
                     job["progress"] = frac
 
 
+def _read_progress(job: dict[str, Any]) -> None:
+    """A running job's own progress (its checker's ``job_progress``), under ``_lock``."""
+    fn = job.get("progress_fn")
+    if fn is None or job["state"] != "running":
+        return
+    try:
+        frac, text, short = fn()
+    except Exception:  # pylint: disable=broad-exception-caught
+        return
+    if text:
+        job["progress_text"] = str(text)[:120]
+    job["progress_short"] = str(short or "")[:40]
+    if frac is not None:
+        job["progress"] = max(0.0, min(1.0, float(frac)))
+
+
 def cancelled(kind: str) -> None:
     """Blender cancelled its job of *kind* (Esc or the job bar's X).
 
@@ -307,6 +326,7 @@ def status(job_id: str) -> dict[str, Any]:
                 "There is no job '{:s}'. {:s}Long jobs come from render_viewport_to_path(background=True), "
                 "bake_textures and transcribe_strip, which return the job_id.".format(
                     str(job_id), "Known jobs: {:s}. ".format(known) if known else ""))}
+        _read_progress(job)
         out: dict[str, Any] = {
             "status": "error" if job["state"] == "error" else "ok",
             "job_id": job["id"], "state": job["state"], "kind": job["kind"], "label": job["label"],
@@ -316,6 +336,8 @@ def status(job_id: str) -> dict[str, Any]:
             out["progress_percent"] = int(round(job["progress"] * 100))
         if job["progress_text"] and job["state"] == "running":
             out["progress_text"] = job["progress_text"]
+        if job.get("progress_short") and job["state"] == "running":
+            out["progress_step"] = job["progress_short"]
         if job["result"] is not None:
             out["result"] = {k: v for k, v in job["result"].items() if k != "status"}
         if job["message"]:
@@ -329,15 +351,18 @@ def row_text(job: dict[str, Any]) -> str:
     """One line for the Workshop: "Baking 40%" or "Rendering, 35 s"."""
     verb = _KIND_VERBS.get(job["kind"], job["kind"].replace("_", " ").title())
     if job["state"] == "running":
+        short = ", " + job["progress_short"] if job.get("progress_short") else ""
         if job["progress"] is not None:
-            return "{:s} {:d}%".format(verb, int(round(job["progress"] * 100)))
-        return "{:s}, {:d} s".format(verb, _elapsed(job))
+            return "{:s} {:d}%{:s}".format(verb, int(round(job["progress"] * 100)), short)
+        return "{:s}, {:d} s{:s}".format(verb, _elapsed(job), short)
     return "{:s}: {:s} after {:d} s".format(verb, job["state"], _elapsed(job))
 
 
 def running() -> list[dict[str, Any]]:
     """Snapshots of the running jobs (plus their ``text`` line) for the UI."""
     with _lock:
+        for j in _jobs.values():
+            _read_progress(j)
         jobs = [dict(j) for j in _jobs.values() if j["state"] == "running"]
     for job in jobs:
         job["text"] = row_text(job)

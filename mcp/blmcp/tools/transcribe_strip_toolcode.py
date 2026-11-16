@@ -49,6 +49,7 @@ class Result(NamedTuple):
     text: str | None = None
     transcript_path: str | None = None
     seconds: float | None = None
+    pieces: Any = None
 
 
 # @include_begin: _coworker_api_shared.py

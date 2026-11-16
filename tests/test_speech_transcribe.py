@@ -110,7 +110,8 @@ class _TempData(unittest.TestCase):
 def _doc(words=None, key="0123456789abcdef", model="small", language="en"):
     return {"schema": tr.SCHEMA,
             "media": {"path": "C:/clips/a.mp4", "key": key, "size": 10, "duration_s": 3.0},
-            "engine": {"name": "whisper.cpp", "model": model, "timing": "dtw"},
+            "engine": {"name": "whisper.cpp", "model": model, "timing": "dtw",
+                       "pieces": {"scheme": tr.PIECES_SCHEME, "count": 1, "failed": []}},
             "language": language, "created": "2026-11-14T00:00:00+00:00",
             "words": words if words is not None else [
                 {"w": "Hello,", "start": 0.5, "end": 0.9, "p": 0.9},
@@ -239,13 +240,14 @@ class TestVerboseJson(unittest.TestCase):
         self.assertEqual(len(texts), len(nonempty))             # one word per non-empty segment
         self.assertEqual(texts[:5], ["Hello,", "and", "welcome", "to", "this"])
         self.assertIn("sequencer.", texts)                      # punctuation stays with its word
-        # The spike's own converter on the full answer (sample_transcript.json).
-        self.assertEqual(self.words[0], {"w": "Hello,", "start": 1.44, "end": 2.24, "p": 0.884})
+        # The spike's own converter on the full answer (sample_transcript.json), but #540: a word
+        # ends at most word_cap() after its start ("Hello," 0.70 s), not at the next word's start.
+        self.assertEqual(self.words[0], {"w": "Hello,", "start": 1.44, "end": 2.14, "p": 0.884})
         self.assertEqual(self.words[1], {"w": "and", "start": 2.24, "end": 2.58, "p": 0.958})
         starts = [w["start"] for w in self.words]
         self.assertEqual(starts, sorted(starts))
         for a, b in zip(self.words, self.words[1:]):
-            self.assertEqual(a["end"], min(b["start"], round(a["start"] + tr.MAX_WORD_S, 3)))
+            self.assertEqual(a["end"], min(b["start"], round(a["start"] + tr.word_cap(a["w"]), 3)))
 
     def test_start_error_against_the_synthesizer(self):
         import difflib
@@ -276,7 +278,7 @@ class TestVerboseJson(unittest.TestCase):
         words, timing = tr.verbose_json_words(vj)
         self.assertEqual(timing, "dtw")
         self.assertEqual(words, [{"w": "Yes!", "start": 0.5, "end": 1.0, "p": 0.5},
-                                 {"w": "no", "start": 1.0, "end": 2.0, "p": 0.8}])
+                                 {"w": "no", "start": 1.0, "end": 1.43, "p": 0.8}])     # #540: capped
 
     def test_without_dtw_the_token_times_are_used(self):
         vj = {"duration": 2.0, "segments": [

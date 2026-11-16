@@ -11,8 +11,10 @@ section 6.4).  One file per media file, model and language::
 
     <blend dir>/coworker_transcripts/<media key>.<model>.<language>.json
 
-(an unsaved .blend uses the add-on's cache folder).  The media key is the first 16 hex of
-sha1(size + first MiB + last MiB): fast on multi-GB movies, the same after a rename or move.
+(an unsaved .blend uses the add-on's cache folder, and a saved one keeps a copy there too, so
+the transcript is still found after the .blend moves, #541).  The media key is the first 16
+hex of sha1(size + first MiB + last MiB): fast on multi-GB movies, the same after a rename or
+move.  A local transcript made before the pieces of #540 (:data:`PIECES_SCHEME`) isn't used.
 
 Times are **seconds in the media file**, not the timeline: :func:`media_to_frame` turns one
 into a timeline frame for a strip.  Captions (#376), Remove Silences and Suggest read the
@@ -33,11 +35,13 @@ __all__ = (
     "SCHEMA",
     "DTW_OFFSET_S",
     "MAX_WORD_S",
+    "PIECES_SCHEME",
     "cache_dir",
     "cache_path",
     "find_cached",
     "from_openai",
     "from_verbose_json",
+    "is_current",
     "language_code",
     "load_for_media",
     "media_key",
@@ -46,6 +50,7 @@ __all__ = (
     "strip_words",
     "validate",
     "verbose_json_words",
+    "word_cap",
     "words",
     "write",
 )
@@ -63,8 +68,16 @@ CACHE_FOLDER = "coworker_transcripts"
 
 # DTW onsets lag the speech by ~0.24 s (base, small and large-v3-turbo alike, spike #374).
 DTW_OFFSET_S = -0.24
-# A word's end is the next word's start, at most this long after its own start.
+# A word ends at the next word's start, at most word_cap() after its own start (#540: never
+# longer than this, and shorter for a short word, so the last word of a phrase isn't
+# stretched across the pause after it).
 MAX_WORD_S = 1.0
+_CAP_BASE_S = 0.25
+_CAP_PER_LETTER_S = 0.09
+# Local transcripts made in pieces (#540) say so in their engine block ("pieces": {"scheme":
+# 2, ...}); one made before -- a single whole-file request, which could loop -- isn't used
+# from the cache: the file is transcribed again.  Remote and imported transcripts are kept.
+PIECES_SCHEME = 2
 _MIB = 1 << 20
 _KEY_RE = re.compile(r"^[0-9a-f]{16}$")
 _NAME_PART_RE = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -145,11 +158,23 @@ def find_cached(key: str, model: str | None = None, language: str | None = None,
             continue
     for _mtime, path in sorted(found, reverse=True):
         try:
-            if not validate(read(path)):
+            doc = read(path)
+            if not validate(doc) and is_current(doc):
                 return path
         except (OSError, ValueError):
             continue
     return None
+
+
+def is_current(doc: dict[str, Any]) -> bool:
+    """False for a local (whisper.cpp) transcript made before the pieces (#540, see
+    :data:`PIECES_SCHEME`); every other one is current."""
+    engine = doc.get("engine") if isinstance(doc, dict) else None
+    if not isinstance(engine, dict) or engine.get("name") != "whisper.cpp":
+        return True
+    pieces = engine.get("pieces")
+    scheme = pieces.get("scheme") if isinstance(pieces, dict) else None
+    return _is_number(scheme) and scheme >= PIECES_SCHEME
 
 
 # -- The format ---------------------------------------------------------------------------
@@ -262,14 +287,22 @@ def _has_letters(text: str) -> bool:
     return any(ch.isalnum() for ch in text)
 
 
+def word_cap(text: str) -> float:
+    """The longest a word may last (#540): 0.25 s + 0.09 s per letter or digit, at most
+    :data:`MAX_WORD_S` -- "a" 0.34 s, "the" 0.52 s, "world" 0.70 s, eight letters or more 1 s."""
+    letters = sum(1 for ch in str(text or "") if ch.isalnum())
+    return min(MAX_WORD_S, _CAP_BASE_S + _CAP_PER_LETTER_S * max(1, letters))
+
+
 def _finish(raw: list[list[Any]], duration: float) -> list[dict[str, Any]]:
-    """Monotonic starts; end = the next start, at most MAX_WORD_S after the start."""
+    """Monotonic starts; end = the next start, at most :func:`word_cap` after the start."""
     for i in range(1, len(raw)):
         raw[i][0] = max(raw[i][0], raw[i - 1][0] + 0.01)
     out = []
     for i, (start, _end, text, p) in enumerate(raw):
-        nxt = raw[i + 1][0] if i + 1 < len(raw) else (duration or start + MAX_WORD_S)
-        word = {"w": text, "start": round(start, 3), "end": round(min(nxt, start + MAX_WORD_S), 3)}
+        cap = word_cap(text)
+        nxt = raw[i + 1][0] if i + 1 < len(raw) else (duration or start + cap)
+        word = {"w": text, "start": round(start, 3), "end": round(max(start, min(nxt, start + cap)), 3)}
         if p is not None:
             word["p"] = round(p, 3)
         out.append(word)

@@ -20,7 +20,8 @@ The route was frozen by the Video 0 spike (#374, plan 4v section 6.3):
   ``GET /health`` answers 200 (the connection is refused until the model is loaded).
 * **Request**: ``POST /inference`` with a 16 kHz mono WAV, ``response_format=verbose_json``,
   ``max_len=1``, ``split_on_word=true``, ``language``, optional ``prompt``.  No whisper VAD:
-  it breaks the DTW times.
+  it breaks the DTW times (and needs a VAD model).  A long file goes in pieces, each with
+  :data:`PIECE_FIELDS` (#540, ``speech.transcribe_pieces``).
 * **Remote**: an OpenAI-compatible ``/v1/audio/transcriptions`` with the Remote API key.
 
 Files live in ``~/.cache/bfa_coworker_whisper/`` (next to llama-server's
@@ -45,6 +46,8 @@ __all__ = (
     "BUILDS",
     "BUILD_PATTERNS",
     "MODEL_PRESETS",
+    "PIECE_FIELDS",
+    "RETRY_FIELDS",
     "STOPPED",
     "Stopped",
     "WhisperState",
@@ -64,6 +67,7 @@ __all__ = (
     "nvidia_found",
     "model_status",
     "pick_release",
+    "piece_fields",
     "platform_problem",
     "resolve_build",
     "resolve_model",
@@ -872,23 +876,52 @@ def _multipart(fields: list[tuple[str, str]], file_field: str, file_path: str | 
     return b"".join(parts), "multipart/form-data; boundary=" + boundary
 
 
-def inference_fields(language: str = "auto", prompt: str = "") -> list[tuple[str, str]]:
-    """The frozen request (no VAD: it breaks the DTW times)."""
+def inference_fields(language: str = "auto", prompt: str = "",
+                     extra: list[tuple[str, str]] | tuple = ()) -> list[tuple[str, str]]:
+    """The frozen request (no VAD: it breaks the DTW times), plus *extra* fields (a piece's,
+    #540: see :data:`PIECE_FIELDS`)."""
     fields = [("response_format", "verbose_json"), ("max_len", "1"), ("split_on_word", "true"),
               ("language", (language or "auto").strip() or "auto")]
     if prompt:
         fields.append(("prompt", prompt))
+    fields.extend((str(k), str(v)) for k, v in extra)
+    return fields
+
+
+# A piece of a long file (#540).  Probed on the CPU server build (Windows, 2026-11): one
+# request doesn't carry text into the next; inside a request ``max_context=0`` keeps no text
+# from one 30 s window to the next -- and drops the prompt too, so it is only sent without one
+# (:func:`piece_fields`; a piece is two windows at most, so the prompt matters more).  Greedy
+# at temperature 0 with whisper's own fallback (+0.2 when a window fails its entropy /
+# log-probability check); the segments report the temperature used.  The retry of a piece
+# that looped samples instead (5 candidates at 0.4), without the prompt (a prompt can feed a
+# loop).  ``no_speech_prob`` comes back about 0 for speech, silence and music alike, and
+# ``no_speech_thold`` / ``suppress_nst`` changed nothing: the no-speech gate is the add-on's
+# own (``speech_pieces.has_speech``).
+PIECE_FIELDS: tuple[tuple[str, str], ...] = (("max_context", "0"), ("temperature", "0.0"),
+                                             ("temperature_inc", "0.2"))
+RETRY_FIELDS: tuple[tuple[str, str], ...] = (("max_context", "0"), ("temperature", "0.4"),
+                                             ("temperature_inc", "0.2"), ("best_of", "5"))
+
+
+def piece_fields(prompt: str = "", retry: bool = False) -> tuple[tuple[str, str], ...]:
+    """The extra fields of a piece's request: :data:`PIECE_FIELDS` (:data:`RETRY_FIELDS`), less
+    ``max_context`` when a *prompt* goes with it (``max_context=0`` would drop the prompt)."""
+    fields = RETRY_FIELDS if retry else PIECE_FIELDS
+    if prompt and not retry:
+        fields = tuple(f for f in fields if f[0] != "max_context")
     return fields
 
 
 def transcribe_wav(wav_path: str | os.PathLike, language: str = "auto", prompt: str = "",
-                   port: int | None = None, timeout: float = 3600.0) -> dict[str, Any]:
+                   port: int | None = None, timeout: float = 3600.0,
+                   extra: list[tuple[str, str]] | tuple = ()) -> dict[str, Any]:
     """POST the WAV to this window's whisper-server; returns its ``verbose_json``."""
     stops = stop_count()
     port = port or running_port()
     if not port:
         raise RuntimeError("whisper-server isn't running")
-    body, ctype = _multipart(inference_fields(language, prompt), "file", wav_path)
+    body, ctype = _multipart(inference_fields(language, prompt, extra), "file", wav_path)
     req = urllib.request.Request("http://127.0.0.1:{:d}/inference".format(int(port)), data=body,
                                  headers={"Content-Type": ctype}, method="POST")
     try:

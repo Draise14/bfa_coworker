@@ -2601,9 +2601,12 @@ EXPECTED_TOOLS = [
 "            ``words``: one row per word, ``[w, start, end, frame_start, frame_end]``\n"
 "            (``columns``): start / end in seconds of the media file, frames on the\n"
 "            timeline. Also ``word_count``, ``next_offset`` when there are more,\n"
-"            ``language``, ``model``, ``cached``, ``transcript_path``; or ``job_id``\n"
-"            while a long clip is transcribed; or a ``message`` saying what is missing\n"
-"            (e.g. the speech server isn't downloaded).\n"
+"            ``language``, ``model``, ``cached``, ``transcript_path``, ``pieces`` (a long\n"
+"            clip is transcribed in pieces of up to 55 s: ``count``, ``no_speech`` pieces\n"
+"            that gave no words, ``failed`` [start, end] stretches left without words\n"
+"            because whisper kept repeating itself); or ``job_id`` while a long clip is\n"
+"            transcribed (``get_job_status`` shows ``progress_step``, \"piece 3 of 26\"); or a\n"
+"            ``message`` saying what is missing (e.g. the speech server isn't downloaded).\n"
 "        ",
         "inputSchema": {
             "properties": {

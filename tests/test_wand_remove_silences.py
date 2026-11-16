@@ -29,6 +29,7 @@ __all__ = ()
 import importlib
 import importlib.util
 import os
+import re
 import sys
 import types
 import unittest
@@ -255,6 +256,24 @@ class TestIcons(unittest.TestCase):
         self.assertNotIn("#ffc93c", light)
         self.assertIn("#4c9bd9", light)
         self.assertEqual(Path(build.ICON_DIR).resolve(), Path(self.icons.ICON_DIR).resolve())
+
+    def test_second_set_sources(self):
+        # #563: drafts beside the loaded set, each built from Bforartists SVGs listed in SOURCES.md
+        spec = importlib.util.spec_from_file_location("bfacw_build_icons", _ROOT / "_misc" / "build_icons.py")
+        build = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(build)
+        v2 = Path(build.V2_DIR)
+        self.assertNotEqual(v2.resolve(), Path(self.icons.ICON_DIR).resolve())
+        sources = (v2 / "SOURCES.md").read_text(encoding="utf-8")
+        for name in self.icons.ICON_NAMES:
+            text = (v2 / (name + ".svg")).read_text(encoding="utf-8")
+            self.assertIn("`{}`".format(name), sources, name)
+            self.assertNotIn("<image", text, name)
+            for src in set(re.findall(r'data-src="([a-z_]+)#', text)):
+                self.assertTrue((v2 / "bfa_src" / (src + ".svg")).is_file(), name + ": " + src)
+        # the light swap is done at once: the stick's #666666 -> #323232 is not swapped again
+        light = build.light_variant('<path fill="#999999"/><path fill="#666666"/>', build.V2_LIGHT_SWAP)
+        self.assertEqual(light, '<path fill="#666666"/><path fill="#323232"/>')
 
     def test_build_keeps_the_pngs(self):
         manifest = (_ADDON / "blender_manifest.toml").read_text(encoding="utf-8")

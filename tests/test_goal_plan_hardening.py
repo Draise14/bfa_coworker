@@ -463,6 +463,9 @@ class TestSmallWindowFit(_HardeningBase):
                 {"role": "user", "content": "old {:d} ".format(i) + "x" * 2500},
                 {"role": "assistant", "content": "reply {:d} ".format(i) + "y" * 2500}]
         self.server.chat_error_specs = [{"is_stream": None, "status": 400, "body": self._OVERFLOW_16483}]
+        # #545: the estimate thinks the history fits its room (the server counts
+        # more), so it is not compacted before the first send.
+        self.sm.COMPACTION_TRIGGER_RATIO = 100.0
         _hist, texts, _st = self._agent_turn("hello")
         self.assertEqual(self.state.error, "")
         self.assertIn("fits now", texts)

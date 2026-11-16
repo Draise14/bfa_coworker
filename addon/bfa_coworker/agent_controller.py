@@ -6139,7 +6139,8 @@ def _release_scene_lock() -> None:
         print("[Coworker] _release_scene_lock: no MCP port -- deferring unlock")
         return
     try:
-        raw = _call_internal(*co_work_guard.build_unlock_code())
+        with co_work_guard.releasing():     # #548: the bridge doesn't lift the lock around the unlock
+            raw = _call_internal(*co_work_guard.build_unlock_code())
         # Only forget the priors when the unlock actually SUCCEEDED.  A
         # returned error (the tool result, which does not raise) or an
         # unparseable body means some datablocks may still be locked --

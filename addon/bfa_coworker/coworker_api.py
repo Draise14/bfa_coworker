@@ -290,7 +290,9 @@ def _undo(push_message: str = "", to_item: int = -1) -> bool:
     try:
         with bpy.context.temp_override(window=window):
             if push_message:
-                bpy.ops.ed.undo_push(message=push_message)
+                from . import co_work_guard
+                with co_work_guard.lifted(bpy.data):    # #548: the step never holds the co-work lock
+                    bpy.ops.ed.undo_push(message=push_message)
             elif to_item >= 0:
                 bpy.ops.ed.undo_history(item=to_item)
             else:
@@ -484,12 +486,31 @@ def _on_load_pre(*_args: Any) -> None:
     long_jobs.file_loading()
 
 
+# What the co-work lock lifted for a save (#548): the file keeps the objects' own
+# hide_select, never the lock of a turn that is running.
+_save_lifted: list[Any] = [None]
+
+
+def _on_save_pre(*_args: Any) -> None:
+    import bpy  # pylint: disable=import-error
+    from . import co_work_guard
+    _save_lifted[0] = co_work_guard.lift(bpy.data)
+
+
+def _on_save_post(*_args: Any) -> None:
+    import bpy  # pylint: disable=import-error
+    from . import co_work_guard
+    held, _save_lifted[0] = _save_lifted[0], None
+    co_work_guard.relock(bpy.data, held)
+
+
 def _handlers() -> list[tuple[Any, Any]]:
     import bpy  # pylint: disable=import-error
     h = bpy.app.handlers
     return [(h.depsgraph_update_post, _count_edit), (h.render_stats, _on_render_stats),
             (h.render_cancel, _on_render_cancel), (h.object_bake_cancel, _on_bake_cancel),
-            (h.load_pre, _on_load_pre)]
+            (h.load_pre, _on_load_pre), (h.save_pre, _on_save_pre), (h.save_post, _on_save_post),
+            (h.save_post_fail, _on_save_post)]
 
 
 def register() -> None:

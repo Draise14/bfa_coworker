@@ -49,6 +49,12 @@ For long jobs, start them and check with `get_job_status`; don't loop faster tha
 
 ## Video Sequencer
 
+- `remove_silences(strips, threshold_db=-40, min_silence=0.4, padding=0.15, min_keep=0.1, close_gaps=True,
+  update_scene_end=True)` — Cut the quiet parts out of the edit; one undo step. With sounds from several files
+  only the time where all of them are quiet goes; the same cuts go through every strip (picture, voice-over,
+  titles, captions), so nothing drifts. A locked or retimed strip in the way: nothing changes, `refused` names
+  it. Strips cut in pieces keep their name on the first piece: use `new_names` (original -> pieces) and
+  `end_frame` from the answer, not the names you read before. Captions made before are trimmed with the edit.
 - `reframe_vertical(strips, mode)` — Make the edit vertical (9:16): each movie / image / scene strip gets
   an editable "Reframe" modifier, `CROP` (centre crop) or `BLUR_FILL` (the whole shot over a blurred copy).
   Works in a copy of the scene by default (`in_copy`); one undo step. Change a shot's framing afterwards

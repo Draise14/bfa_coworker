@@ -603,7 +603,10 @@ class InputBox:
         h = min(rect.h, self.height(canvas, rect.w))
         box = Rect(rect.x, rect.y, rect.w, h)
         self.rect, self._measure, self._size, self._drawn = box, canvas.measure, style.font_size, []
-        hovered = canvas.state.hovered(box)
+        # While its top edge is dragged the box counts as hovered (#532): the mouse rides the edge
+        # and the box's height snaps to whole lines, so the mouse was in the box on one frame and
+        # just above it on the next -- the ring (and the scroll hint) flickered on and off.
+        hovered = canvas.state.hovered(box) or self.resizing
         canvas.box(box, colors=style.text_field, selected=self.focused)
         if self.focused or hovered:          # ready to type: the theme's text-cursor colour
             ring = style.cursor if self.focused else (style.cursor[0], style.cursor[1], style.cursor[2], 0.45)

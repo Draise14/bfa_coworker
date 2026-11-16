@@ -35,12 +35,18 @@ def register(mcp: FastMCP) -> None:
         style: str = "CLEAN",
         language: str | None = None,
         transcript_path: str | None = None,
+        replace_edited: bool = False,
     ) -> dict[str, object]:
         """
         Caption sound or movie strips in the Video Sequencer: their speech becomes styled
         text strips (one per caption line, in sync) on a channel named "Captions".
 
-        Running it again on the same clip replaces its captions; it is one undo step.
+        Every given strip gets the captions of the part of its media it shows (each piece of a
+        cut clip, a clip used twice).  A movie strip is heard through the sound strip of the same
+        file over its time.  Muted and retimed strips, and strips with no speech or no
+        transcript, are skipped and named in ``strips_skipped``.  Running it again replaces the
+        captions over those strips, but keeps captions edited by hand (``kept_edited``) unless
+        ``replace_edited``; it is one undo step.
 
         Args:
             strips: Names of the sound / movie strips to caption (none: the selected ones).
@@ -48,10 +54,13 @@ def register(mcp: FastMCP) -> None:
             language: Spoken language code ("en", "es"...) or "auto".
             transcript_path: A transcript JSON file (bfa_coworker.transcript/1) to use
                 instead of transcribing.
+            replace_edited: Also replace captions changed by hand since they were made.
 
         Returns:
-            ``lines_created``, ``channel``, ``first_frame`` / ``last_frame`` and the style;
-            ``status`` "error" with a ``message`` saying what's wrong.
+            ``lines_created``, ``channel``, ``first_frame`` / ``last_frame``, the style,
+            ``strips_captioned`` (names), ``strips_skipped`` (``{strip, reason}``: "no speech",
+            "retimed", "no transcript" or "muted") and ``kept_edited``; ``message`` says it all
+            in a sentence.  ``status`` "error" with a ``message`` saying what's wrong.
         """
         return send_code(
             toolcode_format_call(
@@ -61,6 +70,7 @@ def register(mcp: FastMCP) -> None:
                     style=style,
                     language=language,
                     transcript_path=transcript_path,
+                    replace_edited=bool(replace_edited),
                 ),
             ),
             strict_json=True,

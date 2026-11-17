@@ -507,7 +507,9 @@ def _on_save_post(*_args: Any) -> None:
 def _handlers() -> list[tuple[Any, Any]]:
     import bpy  # pylint: disable=import-error
     h = bpy.app.handlers
-    return [(h.depsgraph_update_post, _count_edit), (h.render_stats, _on_render_stats),
+    from . import ui_activity
+    return [(h.depsgraph_update_post, _count_edit), (h.depsgraph_update_post, ui_activity.note_update),
+            (h.render_stats, _on_render_stats),
             (h.render_cancel, _on_render_cancel), (h.object_bake_cancel, _on_bake_cancel),
             (h.load_pre, _on_load_pre), (h.save_pre, _on_save_pre), (h.save_post, _on_save_post),
             (h.save_post_fail, _on_save_post)]

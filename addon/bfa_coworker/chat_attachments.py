@@ -292,7 +292,10 @@ def _image_editor(context):
             with context.temp_override(window=window, area=area, region=region):
                 yield space
         finally:
-            space.image, space.use_image_pin = shown, pinned
+            try:
+                space.image, space.use_image_pin = shown, pinned
+            except (ReferenceError, RuntimeError):      # the image or the editor went meanwhile
+                pass
     finally:
         if borrowed is not None:
             area.ui_type = borrowed
@@ -313,6 +316,13 @@ def paste_clipboard_image(context=None):
     if paste is None:
         return None
     pasted = None
+    try:
+        from . import ui_activity
+        busy = ui_activity.busy_reason(context.window_manager)
+    except ImportError:         # the module loaded on its own (the paste tests)
+        busy = ""
+    if busy:
+        return None         # #576: no area is switched under a drag or a running tool
     try:
         with _image_editor(context) as space:
             if space is None or not paste.poll():

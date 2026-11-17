@@ -1421,7 +1421,17 @@ def _execute_code_from_request(
         return run
 
     def _execute(c: str, s: bool) -> _ExecResult:
-        result = _for_thread(_execute_code)(c, strict_json=s, **_data_kw)
+        # #576: the agent's code is on disk (redacted) before it runs, so a crash leaves it to read.
+        from . import step_code_log
+        _logged = None if _internal else step_code_log.begin(_tool, c, _thread)
+        try:
+            from . import ui_activity
+            with ui_activity.stepping():
+                result = _for_thread(_execute_code)(c, strict_json=s, **_data_kw)
+        except BaseException:
+            step_code_log.end(_logged, "raised")
+            raise
+        step_code_log.end(_logged, "error" if result.response.get("status") == "error" else "finished")
         return result if result.check_fn is None else _ExecResult(result.response, _for_thread(result.check_fn))
 
     def _run() -> _ExecResult:
@@ -1436,7 +1446,7 @@ def _execute_code_from_request(
         """Threads 3 (#359): a write to what another running chat claimed waits or asks."""
         if _internal:
             return _run()
-        return _claim_gate(_thread, _tool, request.get("args"), str(code), _run)
+        return _drag_gate(_thread, _tool, lambda: _claim_gate(_thread, _tool, request.get("args"), str(code), _run))
 
     exec_result = None
     # Runtime 1 (#310): the same call again and again asks, then is refused.  The local
@@ -1496,6 +1506,48 @@ def _execute_code_from_request(
             print("response: {:s}".format(json.dumps(exec_result.response, indent=2)), file=sys.stderr)
 
     return exec_result, strict_json
+
+
+def _drag_gate(thread: str, tool: str, run: Callable[[], _ExecResult]) -> _ExecResult:
+    """A scene-changing step does not run while the user drags a slider or a modal tool runs (#576).
+
+    Agent code that rewrites a modifier's node tree or removes the object while its slider
+    is being dragged crashed Blender.  The step waits (deferred, polled each tick) until
+    :mod:`ui_activity` says the mouse work is over, at most :data:`ui_activity.WAIT_LIMIT`
+    seconds, then answers that nothing was changed.  Reads, views and plans run at once."""
+    from . import claims, ui_activity
+    from .engine import PLAN_SAFE_TOOLS
+    if not claims.writes(tool, PLAN_SAFE_TOOLS):
+        return run()
+    try:
+        import bpy  # pylint: disable=import-error
+        wm = bpy.context.window_manager
+    except Exception:  # pylint: disable=broad-exception-caught
+        return run()
+    reason = ui_activity.busy_reason(wm)
+    if not reason:
+        return run()
+    print("[Coworker] bridge: {:s}'s {:s} waits, {:s}".format(thread or "main", tool, reason))
+    state: dict[str, Any] = {"since": time.monotonic(), "inner": None}
+
+    def check() -> dict[str, object] | None:
+        if state["inner"] is not None:          # it ran, and its own answer is deferred
+            return state["inner"]()
+        if _stop_pressed(thread):
+            return {"status": "error", "message": "Stopped by the user while the step waited for the mouse "
+                                                  "to be released. Nothing was changed."}
+        now_reason = ui_activity.busy_reason(wm)
+        if now_reason:
+            waited = time.monotonic() - state["since"]
+            if waited > ui_activity.WAIT_LIMIT:
+                return {"status": "error", "message": ui_activity.refusal(now_reason, waited)}
+            return None
+        result = run()
+        if result.check_fn is not None:
+            state["inner"] = result.check_fn
+            return None
+        return result.response
+    return _ExecResult({}, check)
 
 
 def _claim_gate(thread: str, tool: str, args: Any, code: str, run: Callable[[], _ExecResult]) -> _ExecResult:

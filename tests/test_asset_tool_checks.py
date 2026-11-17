@@ -8,6 +8,9 @@ Unit tests for three small asset-tool checks (#535), bpy-free.
 - ``jump_to_asset_browser._apply_filters`` reads ``asset_library_reference``
   (``asset_library_ref`` does not exist on Blender 5.2+), so a browser left on
   "Current File" never gets a library folder written into it.
+- ``jump_to_asset_browser.main`` finds an open Asset Browser by the
+  ``FILE_BROWSER`` area type (``FILE`` is not an ``Area.type`` value, so
+  reusing one never matched).
 - ``asset_selftests.build_fixture_library`` sets the fixture's
   ``preferred_import_method`` without a guard.
 
@@ -275,3 +278,52 @@ class TestSelftestFixture(unittest.TestCase):
         with self.assertRaises(TypeError):
             ast.build_fixture_library(bpy)
         self.assertEqual(libs, [])
+
+
+# ---------------------------------------------------------------------------
+# jump_to_asset_browser: an open Asset Browser is found by the FILE_BROWSER area type.
+
+
+class _Area:
+    """Area stand-in with the real Area.type identifiers."""
+
+    def __init__(self, area_type, ui_type, width=100, height=100):
+        self.type = area_type
+        self.ui_type = ui_type
+        self.width = width
+        self.height = height
+        self.spaces = types.SimpleNamespace(active=types.SimpleNamespace(params=None))
+
+
+class TestJumpAreaType(unittest.TestCase):
+
+    def setUp(self):
+        self._saved_bpy = sys.modules.get("bpy")
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        if self._saved_bpy is None:
+            sys.modules.pop("bpy", None)
+        else:
+            sys.modules["bpy"] = self._saved_bpy
+
+    def _bpy(self, areas):
+        screen = types.SimpleNamespace(areas=areas)
+        workspace = types.SimpleNamespace(name="Layout", screens=[screen])
+        window = types.SimpleNamespace(workspace=workspace)
+        bpy = types.ModuleType("bpy")
+        bpy.app = types.SimpleNamespace(background=False)
+        bpy.context = types.SimpleNamespace(
+            window=window, screen=screen,
+            preferences=types.SimpleNamespace(filepaths=types.SimpleNamespace(asset_libraries=[])))
+        bpy.data = types.SimpleNamespace(workspaces=[workspace])
+        sys.modules["bpy"] = bpy
+        return bpy
+
+    def test_reuses_an_open_asset_browser(self):
+        self._bpy([_Area("VIEW_3D", "VIEW_3D"), _Area("FILE_BROWSER", "ASSETS")])
+        mod = _toolcode("jump_to_asset_browser")
+        res = mod.main(mod.Params(allow_edits=False))
+        self.assertEqual(res.status, "ok")
+        self.assertEqual(res.area_ui_type, "ASSETS")
+        self.assertIsNone(res.created)

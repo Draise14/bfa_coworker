@@ -63,7 +63,7 @@ def main(params: Params) -> Result:
     for workspace in bpy.data.workspaces:
         for screen in workspace.screens:
             for area in screen.areas:
-                if area.type == "FILE" and _is_asset_ui(area.ui_type):
+                if area.type == "FILE_BROWSER" and _is_asset_ui(area.ui_type):
                     bpy.context.window.workspace = workspace
                     space = area.spaces.active
                     lib_name, cat_name = _apply_filters(space, params)

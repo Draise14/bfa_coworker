@@ -34,6 +34,8 @@ __all__ = (
     "get_gen_controller",
     "icon",
     "is_bforartists",
+    "mark_preferences_changed",
+    "set_user_pref",
 )
 
 import os
@@ -103,6 +105,42 @@ DEFAULT_MCP_PORT = 9191
 DEFAULT_LLM_PORT = 8081
 # whisper-server, speech to text (#375).  Clear of the others plus their offsets (0-100).
 DEFAULT_WHISPER_PORT = 8481
+
+# -- Your choices, kept on quit (#575) --------------------------------------
+def mark_preferences_changed(preferences=None) -> None:
+    """Tell Blender the preferences changed, so "Auto-Save Preferences" writes them on quit (#575).
+
+    Blender sets this flag itself when you change a setting with a button, and when Python
+    changes one of Blender's own settings, but not when Python changes an add-on's setting.
+    With Auto-Save Preferences off it only marks them unsaved (Save Preferences), as for any
+    other change.  *preferences* is ``context.preferences``; default ``bpy.context``'s.
+    """
+    try:
+        if preferences is None:
+            import bpy  # pylint: disable=import-error
+            preferences = bpy.context.preferences
+        preferences.is_dirty = True
+    except (AttributeError, TypeError, ImportError):
+        pass
+
+
+def set_user_pref(prefs, name: str, value, preferences=None) -> bool:
+    """Store a choice YOU made in one of Coworker's settings from code, kept on quit (#575).
+
+    Only where a user's action is behind it (an operator, a menu, a drag); never for start-up
+    or timer bookkeeping: that would make Blender save the preferences when you changed
+    nothing, and with two windows open the one quitting last writes its older copy over the
+    other's.  Marks the preferences changed only when the value really changed; returns
+    True then.
+    """
+    missing = object()
+    old = getattr(prefs, name, missing)
+    setattr(prefs, name, value)
+    changed = old is missing or getattr(prefs, name, missing) != old
+    if changed:
+        mark_preferences_changed(preferences)
+    return changed
+
 
 # Debug mode: controlled by user-facing preference toggle.
 # Previously a hardcoded constant; now reads from preferences at runtime.

@@ -520,7 +520,10 @@ class BFACW_OT_translate_swap(Operator):  # type: ignore[misc]
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         prefs = context.preferences.addons[__package__].preferences
-        prefs.translate_from, prefs.translate_language = prefs.translate_language, prefs.translate_from
+        was_from, was_to = prefs.translate_from, prefs.translate_language
+        from .shared import set_user_pref
+        set_user_pref(prefs, "translate_from", was_to, context.preferences)     # your swap, kept on quit (#575)
+        set_user_pref(prefs, "translate_language", was_from, context.preferences)
         return {'FINISHED'}
 
 

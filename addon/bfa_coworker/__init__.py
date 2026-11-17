@@ -436,10 +436,17 @@ def _restore_settings_backup() -> None:
         addon = bpy.context.preferences.addons.get(__package__)
         if addon is None or addon.preferences is None:
             return None
+        before = settings_transfer.dump(addon.preferences)
         applied = settings_transfer.restore_once(addon.preferences, _settings_config_dir())
         if applied:
-            print("[Coworker] restored {:d} setting(s) from the previous install".format(len(applied)))
-            bpy.context.preferences.is_dirty = True
+            after = settings_transfer.dump(addon.preferences)
+            changed = [key for key in applied if before.get(key) != after.get(key)]
+            # Saved on quit only when a value really changed: no write (which could cover
+            # another window's newer copy) for nothing.  Unchanged, it may come again next
+            # start (the flag is not saved either): it then changes nothing again (#575).
+            if changed:
+                print("[Coworker] restored {:d} setting(s) from the previous install".format(len(changed)))
+                bpy.context.preferences.is_dirty = True
     except Exception as ex:  # pylint: disable=broad-exception-caught
         print("[Coworker] settings restore skipped: {:s}".format(str(ex)))
     return None

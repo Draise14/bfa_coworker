@@ -456,11 +456,8 @@ def _remember_input_lines(lines: int, compact: bool) -> None:
     name = _input_lines_pref(compact)
     if prefs is None or getattr(prefs, name, lines) == lines:
         return
-    setattr(prefs, name, lines)
-    try:
-        bpy.context.preferences.is_dirty = True
-    except (AttributeError, TypeError):
-        pass
+    from .shared import set_user_pref
+    set_user_pref(prefs, name, lines)       # your drag, kept on quit (#575)
 
 
 def _live_lengths(state: Any) -> tuple[int, int, int]:

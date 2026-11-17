@@ -411,6 +411,21 @@ class TestRestoreAfterRegister(unittest.TestCase):
         self.assertTrue(self.timers.is_registered(self.autostart))
         self.assertEqual(self.st.restore_once.call_count, 1)
 
+    def test_a_restore_that_changed_settings_is_saved_on_quit(self):
+        # Blender saves its preferences on quit only when they are marked changed (#575).
+        self.st.dump.side_effect = [{"operating_mode": "LOCAL_LLM"}, {"operating_mode": "REMOTE_API"}]
+        self.mod.register()
+        self.timers.fire(self.mod._after_register_timer)
+        self.assertTrue(sys.modules["bpy"].context.preferences.is_dirty)
+
+    def test_a_restore_that_changed_nothing_marks_nothing(self):
+        # Same values (the restore came again after a session that did not save): no write on
+        # quit for nothing, which with two windows open could cover the other's copy (#575).
+        self.st.dump.side_effect = [{"operating_mode": "REMOTE_API"}, {"operating_mode": "REMOTE_API"}]
+        self.mod.register()
+        self.timers.fire(self.mod._after_register_timer)
+        self.assertFalse(sys.modules["bpy"].context.preferences.is_dirty)
+
     def test_quitting_before_the_restore_keeps_the_backup(self):
         # Background mode never runs timers: the defaults must not replace the backup.
         self.mod.register()

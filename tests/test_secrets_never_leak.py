@@ -494,7 +494,7 @@ class TestSavedChatsHaveNoKey(_Case):
             {"__name__": _PKG + ".ui_chat", "__package__": _PKG, "json": json, "Path": Path, "bpy": bpy,
              "agent_controller": fake_ac, "_log": log, "_CHAT": {"id": "", "blend": ""},
              "_history_save_lock": threading.Lock(), "_chat_engine_label": lambda: "Local",
-             "_operating_mode": lambda: "LOCAL_LLM"})
+             "_operating_mode": lambda: "LOCAL_LLM", "_USER_TITLES": {}})
         # The shared session memory: what the model was told, and a checkpoint of the chat.
         store = self.sm.store
         saved = store.to_payload()

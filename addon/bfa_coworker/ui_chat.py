@@ -833,7 +833,7 @@ def _thread_title(thread) -> str:
     from . import threads
     if thread.is_default:
         return "All editors"
-    return thread.title or threads.short_name(thread.editor) or "Thread"
+    return _user_title(thread) or thread.title or threads.short_name(thread.editor) or "Thread"     # #573
 
 
 def _approvals_new_turn(thread=None) -> None:
@@ -1934,7 +1934,8 @@ def _save_chat_history() -> None:
             # Chat 7: the chat list knows it (title, when, engine, .blend).
             _chat_index().touch(_CHAT["id"], history,
                                 blend=_CHAT["blend"], engine=_chat_engine_label(),
-                                blend_path=bpy.data.filepath, mode=_operating_mode())
+                                blend_path=bpy.data.filepath, mode=_operating_mode(),
+                                user_title=_log.redact(_USER_TITLES.get(_CHAT["id"], "")))       # #573
         except OSError:
             pass
 
@@ -1962,7 +1963,8 @@ def _save_thread_chat(thread) -> None:
             with open(str(index.memory_path(thread.chat_id)), "w", encoding="utf-8") as fh:
                 json.dump(_log.redact_data(payload), fh, indent=2)
             index.touch(thread.chat_id, history, blend=_blend_key(), engine=_chat_engine_label(),
-                        blend_path=bpy.data.filepath, mode=_operating_mode(), editor=thread.editor)
+                        blend_path=bpy.data.filepath, mode=_operating_mode(), editor=thread.editor,
+                        user_title=_log.redact(_USER_TITLES.get(thread.chat_id, "")))          # #573
         except OSError:
             pass
 
@@ -2575,18 +2577,31 @@ class BFACW_OT_chat_rename(Operator):  # type: ignore[misc]
 
     chat_id: StringProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
     title: StringProperty(name="Name", options={'SKIP_SAVE'})  # type: ignore[valid-type]
+    auto: StringProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
 
     def invoke(self, context: bpy.types.Context, _event) -> set[str]:
         entry = _chat_index().get(self.chat_id)
         if entry is None:
             return {"CANCELLED"}
         self.title = entry.get("title", "")
-        return context.window_manager.invoke_props_dialog(self)
+        self.auto = "" if entry.get("renamed") else self.title
+        return context.window_manager.invoke_props_dialog(self, width=320)
+
+    def draw(self, _context: bpy.types.Context) -> None:
+        layout = self.layout
+        layout.prop(self, "title", text="")
+        sub = layout.row()
+        sub.scale_y = 0.8
+        sub.label(text="Empty: its automatic name (the first message) again")
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        if not _chat_index().rename(self.chat_id, self.title):
+        from .chat_history import clean_name
+        if self.auto and clean_name(self.title) == clean_name(self.auto):
+            return {"CANCELLED"}        # left as it was: it keeps its automatic title
+        if not _chat_index().rename(self.chat_id, self.title):     # empty: its automatic title (#573)
             return {"CANCELLED"}
-        _redraw_areas(context)
+        _USER_TITLES[self.chat_id] = clean_name(_log.redact(self.title))         # its open tab shows it at once
+        _redraw_all_chats()
         return {"FINISHED"}
 
 
@@ -2875,9 +2890,14 @@ class BFACW_OT_chat_stop(Operator):  # type: ignore[misc]
     bl_label = "Stop"
     bl_description = "Stop the current generation"
 
+    # The tab it was drawn for (a tab's right-click menu, #573); "" is the chat of the area in context.
+    thread_id: StringProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
+
     def execute(self, context: bpy.types.Context) -> set[str]:
         from . import coworker_api, threads
-        thread = _ui_thread(context)
+        thread = agent_controller.THREADS.get(self.thread_id) if self.thread_id else _ui_thread(context)
+        if thread is None:              # its tab was closed meanwhile
+            return {"CANCELLED"}
         tag = threads.tag(thread)           # only this chat's thread stops (#357, #358)
         coworker_api.cancel_questions(tag)  # a question waiting for you is answered "cancelled"
         if thread.auto["run"] is not None:
@@ -2893,9 +2913,8 @@ class BFACW_OT_chat_stop(Operator):  # type: ignore[misc]
         from . import speech
         speech.stop_chat_jobs(tag)          # a transcription this chat's turn started (#522)
         agent_controller.thread_state(thread).status_text = "Stopped"
-        wm = context.window_manager
-        props = wm.bfacw_chat_props  # type: ignore[attr-defined]
-        props.chat_status = "Stopped"
+        if not self.thread_id or thread is _ui_thread(context):     # the shown chat's status line only
+            context.window_manager.bfacw_chat_props.chat_status = "Stopped"  # type: ignore[attr-defined]
         _redraw_areas(context)
         return {"FINISHED"}
 
@@ -4879,10 +4898,60 @@ def _tab_kind(context) -> str:
 def _tab_label(thread) -> str:
     from . import helper_chats, threads
     from .chat_history import title_of
+    user_title = _user_title(thread)        # a name you gave it wins over the automatic one (#573)
+    if user_title:
+        return threads.tab_title(thread, user_title=user_title)
     helper_title = helper_chats.tab_label(thread)       # a helper chat: its title (#479)
     if helper_title:
         return threads.tab_title(thread, helper_title)
     return threads.tab_title(thread, title_of(agent_controller.thread_state(thread).conversation_history))
+
+
+# The names you gave chats (Rename, #573), by chat id; "" = its automatic title.  Read from
+# History once per chat, so a tab's label doesn't read the index at every redraw.
+_USER_TITLES: dict = {}
+
+
+def _user_title(thread) -> str:
+    """The name you gave *thread*'s chat, "" for none (its tab shows the automatic title)."""
+    chat_id = _current_chat_of(thread) if thread is not None else ""
+    if not chat_id:
+        return ""
+    if chat_id not in _USER_TITLES:
+        try:
+            entry = _chat_index().get(chat_id)
+        except (OSError, ValueError):
+            entry = None
+        _USER_TITLES[chat_id] = str(entry.get("title") or "") if entry and entry.get("renamed") else ""
+    return _USER_TITLES[chat_id]
+
+
+def _set_user_title(thread, title: str) -> str:
+    """*thread*'s chat is called *title* from now on ("" = its automatic title again): its tab
+    at once, History now when the chat is in it, else from its first save on (#573)."""
+    from .chat_history import clean_name
+    title = clean_name(_log.redact(title))      # no key on disk
+    if thread.is_default:
+        chat_id = _current_chat_id()
+    else:
+        if not thread.chat_id:
+            thread.chat_id = _chat_index().new_id()
+        chat_id = thread.chat_id
+    _USER_TITLES[chat_id] = title
+    try:
+        _chat_index().rename(chat_id, title)    # False: not in History yet; its save keeps the name
+    except OSError:
+        pass
+    return title
+
+
+def _tab_full_title(thread) -> str:
+    """The tab's title, not shortened: what Rename starts from (#573)."""
+    from . import helper_chats, threads
+    from .chat_history import title_of
+    return _log.redact(_user_title(thread) or helper_chats.tab_label(thread)
+                       or title_of(agent_controller.thread_state(thread).conversation_history)
+                       or threads.tab_title(thread))
 
 
 def _tab_icon(thread) -> tuple[str, bool]:
@@ -4967,6 +5036,44 @@ def draw_new_chat_entries(layout, context) -> None:
                    icon=safe_icon('FILE_REFRESH')).thread_id = thread.id
 
 
+def tab_busy(thread) -> bool:
+    """*thread*'s turn runs: its tab can't close or start fresh, and Stop is offered (#573)."""
+    from . import threads
+    return bool(threads.close_refused(agent_controller.THREADS, thread,
+                                      agent_controller.thread_state(thread).turn_active))
+
+
+def draw_tab_entries(layout, context, thread) -> None:
+    """One tab's entries, acting on *thread* wherever they are drawn: the tab's right-click
+    menu (any tab, shown or not) and the tabs drop-down (the shown tab) (#573).  What its
+    running turn refuses is greyed out, not hidden; Stop shows only while it runs."""
+    from . import threads
+    busy = tab_busy(thread)
+    layout.operator_context = 'INVOKE_DEFAULT'      # Rename opens its dialog
+    layout.operator("bfacw.tab_rename", text="Rename...", icon='GREASEPENCIL').thread_id = thread.id
+    row = layout.row()
+    row.enabled = not busy
+    row.operator("bfacw.tab_close", text="Close", icon='X').thread_id = thread.id
+    row = layout.row()
+    row.enabled = bool(threads.others_to_close(agent_controller.THREADS, thread, tab_busy)[0])
+    row.operator("bfacw.tab_close_others", text="Close Other Tabs",
+                 icon=safe_icon('PANEL_CLOSE')).thread_id = thread.id
+    layout.separator()
+    row = layout.row()
+    row.enabled = not busy
+    row.operator("bfacw.chat_clear", text="Start This Chat Fresh",
+                 icon=safe_icon('FILE_REFRESH')).thread_id = thread.id
+    if busy:
+        layout.operator("bfacw.chat_stop", text="Stop", icon='PAUSE').thread_id = thread.id
+    op = layout.operator("bfacw.chat_context_copy", text="Copy Whole Chat", icon='COPYDOWN')
+    op.what, op.thread_id = "CHAT", thread.id
+    layout.separator()
+    layout.operator("bfacw.tab_new", text="New Chat", icon='ADD')
+    label = new_chat_for_label(context)
+    if label:
+        layout.operator("bfacw.tab_new", text=label, icon=_editor_icon(_tab_kind(context))).scope = 'EDITOR'
+
+
 def draw_chat_tabs(layout, context, units: float = 0.0) -> None:
     """The tab strip (see :func:`tab_strip`)."""
     from . import threads
@@ -5002,6 +5109,7 @@ class BFACW_MT_chat_tabs(bpy.types.Menu):  # type: ignore[misc]
     bl_label = "Chat Tabs"
 
     def draw(self, context: bpy.types.Context) -> None:
+        from . import threads
         shown = _ui_thread(context)
         for thread in agent_controller.THREADS.live():
             word, _icon = _thread_status(thread)
@@ -5012,6 +5120,13 @@ class BFACW_MT_chat_tabs(bpy.types.Menu):  # type: ignore[misc]
             op.thread_id = thread.id
         self.layout.separator()
         draw_new_chat_entries(self.layout, context)         # #466
+        # The shown tab's Rename and Close Other Tabs, without a right-click (#573).
+        self.layout.operator_context = 'INVOKE_DEFAULT'
+        self.layout.operator("bfacw.tab_rename", text="Rename...", icon='GREASEPENCIL').thread_id = shown.id
+        row = self.layout.row()
+        row.enabled = bool(threads.others_to_close(agent_controller.THREADS, shown, tab_busy)[0])
+        row.operator("bfacw.tab_close_others", text="Close Other Tabs",
+                     icon=safe_icon('PANEL_CLOSE')).thread_id = shown.id
         if _running_now():                                  # #359
             self.layout.separator()
             self.layout.operator("bfacw.chat_stop_all", icon=safe_icon("CANCEL"))
@@ -5080,32 +5195,106 @@ class BFACW_OT_tab_close(Operator):  # type: ignore[misc]
         return "Close (stays in History)"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        from . import threads
-        reg = agent_controller.THREADS
-        thread = reg.get(self.thread_id)
+        thread = agent_controller.THREADS.get(self.thread_id)
         if thread is None:
             return {"CANCELLED"}
-        why = threads.close_refused(reg, thread, agent_controller.thread_state(thread).turn_active)
+        why = _close_tab(thread)
         if why:
             self.report({"WARNING"}, why)
             return {"CANCELLED"}
-        from . import helper_chats
-        helper_chats.tab_closed(thread)     # a helper counts as stopped; a parent's helpers go on (#479)
-        if thread.is_default:
-            _fresh_default_chat()
-            _redraw_all_chats()
-            return {"FINISHED"}
-        if thread.auto["run"] is not None:
-            _auto_toggle(thread, False)
-        _save_thread_chat(thread)
-        for key in [k for k, v in _AREA_PINS.items() if v == thread.id]:
-            del _AREA_PINS[key]             # those areas show All editors again
-        if _socket().focus == thread.id:
-            _focus_thread(reg.default)
-        if _acp is not None and _acp.connected:
-            _acp.forget_thread(threads.tag(thread))
-        reg.remove(thread.id)
         _save_tabs()
+        _redraw_all_chats()
+        return {"FINISHED"}
+
+
+def _close_tab(thread) -> str:
+    """Close *thread*'s tab: its chat stays in History (All editors starts fresh instead).
+    Why not, when its turn runs; "" when it closed (its X and Close Other Tabs, #573)."""
+    from . import helper_chats, threads
+    reg = agent_controller.THREADS
+    why = threads.close_refused(reg, thread, agent_controller.thread_state(thread).turn_active)
+    if why:
+        return why
+    helper_chats.tab_closed(thread)     # a helper counts as stopped; a parent's helpers go on (#479)
+    if thread.is_default:
+        _fresh_default_chat()
+        return ""
+    if thread.auto["run"] is not None:
+        _auto_toggle(thread, False)
+    _save_thread_chat(thread)
+    for key in [k for k, v in _AREA_PINS.items() if v == thread.id]:
+        del _AREA_PINS[key]             # those areas show All editors again
+    if _socket().focus == thread.id:
+        _focus_thread(reg.default)
+    if _acp is not None and _acp.connected:
+        _acp.forget_thread(threads.tag(thread))
+    reg.remove(thread.id)
+    return ""
+
+
+class BFACW_OT_tab_close_others(Operator):  # type: ignore[misc]
+    """Close every other tab, as their X does: All editors starts fresh, every chat stays in History; a tab whose turn runs stays open"""
+    bl_idname = "bfacw.tab_close_others"
+    bl_label = "Close Other Tabs"
+    bl_options = {'INTERNAL'}
+
+    thread_id: StringProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]  # the tab kept
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        from . import threads
+        reg = agent_controller.THREADS
+        keep = reg.get(self.thread_id) if self.thread_id else _ui_thread(context)
+        if keep is None:
+            return {"CANCELLED"}
+        close, stay = threads.others_to_close(reg, keep, tab_busy)
+        closed = sum(1 for thread in close if not _close_tab(thread))
+        _save_tabs()
+        _redraw_all_chats()
+        text = threads.close_others_report(closed, len(stay))
+        self.report({"WARNING"} if stay else {"INFO"}, text)
+        return {"FINISHED"} if closed else {"CANCELLED"}
+
+
+class BFACW_OT_tab_rename(Operator):  # type: ignore[misc]
+    """Give this chat a name of your own: its tab and History show it, and its first message no longer names it (empty: its automatic name again)"""
+    bl_idname = "bfacw.tab_rename"
+    bl_label = "Rename Chat"
+    bl_options = {'INTERNAL'}
+
+    thread_id: StringProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
+    title: StringProperty(name="Name", options={'SKIP_SAVE'})  # type: ignore[valid-type]
+    # The automatic name the dialog started from: left as it is, the chat keeps its automatic name.
+    auto: StringProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
+
+    def _thread(self, context):
+        return agent_controller.THREADS.get(self.thread_id) if self.thread_id else _ui_thread(context)
+
+    def invoke(self, context: bpy.types.Context, _event) -> set[str]:
+        thread = self._thread(context)
+        if thread is None:
+            return {"CANCELLED"}
+        self.thread_id = thread.id
+        self.title = _tab_full_title(thread)
+        self.auto = "" if _user_title(thread) else self.title
+        return context.window_manager.invoke_props_dialog(self, width=320, title="Rename Chat",
+                                                          confirm_text="Rename")
+
+    def draw(self, _context: bpy.types.Context) -> None:
+        layout = self.layout
+        layout.activate_init = True     # type at once, no click into the field first
+        layout.prop(self, "title", text="")
+        sub = layout.row()
+        sub.scale_y = 0.8
+        sub.label(text="Empty: its automatic name (the first message) again")
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        from .chat_history import clean_name
+        thread = self._thread(context)
+        if thread is None:              # its tab was closed meanwhile
+            return {"CANCELLED"}
+        if self.auto and clean_name(self.title) == clean_name(self.auto):
+            return {"CANCELLED"}        # left as it was: it keeps its automatic name
+        _set_user_title(thread, self.title)
         _redraw_all_chats()
         return {"FINISHED"}
 
@@ -5408,7 +5597,7 @@ def _auto_toggle(thread, on: bool, context=None) -> None:
         risky_steps.auto_threads.add(tag)
         if _acp is not None:
             _acp.auto_threads.add(tag)
-        print("[Coworker] Auto mode on ({:s})".format(_thread_title(thread)))
+        print("[Coworker] Auto mode on ({:s})".format(_log.redact(_thread_title(thread))))
     elif not on and auto["run"] is not None:
         auto["run"].stopped = auto["run"].stopped or "you turned it off"
         _auto_finish(thread)
@@ -6539,6 +6728,8 @@ _classes = (
     BFACW_OT_tab_show,
     BFACW_OT_tab_new,
     BFACW_OT_tab_close,
+    BFACW_OT_tab_close_others,      # #573
+    BFACW_OT_tab_rename,            # #573
     BFACW_OT_thread_open_editor,
     BFACW_OT_thread_focus,
     BFACW_PT_chat_status,

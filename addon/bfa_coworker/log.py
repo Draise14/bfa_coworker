@@ -161,11 +161,17 @@ _named_secrets: dict[str, str] = {}
 _secrets: tuple[str, ...] = ()          # longest first, swapped whole (read from any thread)
 # Secrets we were not told about but recognise: an Authorization header (in any quoting),
 # a bare bearer token, OpenAI-style "sk-..." keys and Hugging Face "hf_..." tokens.
+# Each starts where no letter or digit is right before it (#528): "\b" missed one glued to
+# an underscore ("out_sk-...", "HTTP_AUTHORIZATION: Basic ..."), while "task-..." stays a word.
+_START = r"(?<![^\W_])"
 _SECRET_PATTERNS = (
-    re.compile(r"(?i)(\bauthorization[\"']?\s*[:=]\s*[\"']?(?:bearer|basic|token)\s+)[^\s\"',;]+"),
-    re.compile(r"(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]{8,}"),
-    re.compile(r"()\bsk-[A-Za-z0-9_-]{20,}"),
-    re.compile(r"()\bhf_[A-Za-z0-9]{20,}"),
+    re.compile(_START + r"(authorization[\"']?\s*[:=]\s*[\"']?(?:bearer|basic|token)\s+)[^\s\"',;]+",
+               re.IGNORECASE),
+    re.compile(_START + r"(bearer\s+)[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE),
+    re.compile(_START + r"()sk-[A-Za-z0-9_-]{20,}"),
+    # Key shapes no word has ("sk-or-v1-", "sk-ant-api03-") are hidden glued to a letter too.
+    re.compile(r"()sk-(?:or-v\d+|ant-[a-z]+\d\d)-[A-Za-z0-9_-]{20,}"),
+    re.compile(_START + r"()hf_[A-Za-z0-9]{20,}"),
 )
 
 
@@ -219,11 +225,12 @@ def redact(text: str) -> str:
 
 def redact_data(value: Any) -> Any:
     """A copy of *value* (JSON-like: dicts, lists, strings) with :func:`redact` applied
-    to every string in it.  For what is written to disk: chats and session memory (#418)."""
+    to every string in it, the dicts' keys too.  For what is written to disk: chats, session
+    memory (#418) and ``operations.jsonl`` (#528)."""
     if isinstance(value, str):
         return redact(value)
     if isinstance(value, dict):
-        return {k: redact_data(v) for k, v in value.items()}
+        return {(redact(k) if isinstance(k, str) else k): redact_data(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [redact_data(v) for v in value]
     return value

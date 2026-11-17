@@ -4436,8 +4436,12 @@ def _start_again(with_local_model: bool) -> None:
     try:
         result = bpy.ops.bfacw.agent_start(with_local_model=with_local_model)
     except Exception as ex:  # pylint: disable=broad-exception-caught
+        # An operator that reports an error raises here ("Error: <its report>"); the start
+        # has usually set the status to that error already.
         result = {"CANCELLED"}
-        props.chat_status = "Error: Coworker did not start again: {:s}".format(str(ex))
+        if not props.chat_status.startswith("Error"):
+            props.chat_status = "Error: Coworker did not start again: {:s}".format(
+                re.sub(r"^\s*Error:\s*", "", str(ex)).strip())
     if "CANCELLED" in result:
         if not props.chat_status.startswith(("Error", "Waiting")):
             props.chat_status = "Error: Coworker did not start again: {:s}".format(

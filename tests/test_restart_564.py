@@ -236,7 +236,7 @@ class _Blender:
             "bpy": bpy, "Operator": object,
             "BoolProperty": lambda **kw: dict(kw, _prop="bool"),
             "agent_controller": self.ac, "llm_manager": self.llm, "mcp_to_blender_server": self.bridge,
-            "effective_ports": self.shared.effective_ports, "os": os,
+            "effective_ports": self.shared.effective_ports, "os": os, "re": re,
             "threading": types.SimpleNamespace(Thread=_SyncThread),
             "_acp": None, "_sync_prefs_to_config": _sync,
             "_restore_chat_history": lambda: None,
@@ -259,9 +259,18 @@ class _Blender:
         for name, prop in getattr(cls, "__annotations__", {}).items():
             if isinstance(prop, dict) and prop.get("_prop"):
                 setattr(op, name, kwargs.get(name, prop.get("default")))
-        op.report = lambda kind, text: self.reports.append((sorted(kind)[0], text))
+        errors: list = []
+
+        def report(kind, text):
+            self.reports.append((sorted(kind)[0], text))
+            if "ERROR" in kind:
+                errors.append(text)
+        op.report = report
         self.ops_calls.append(class_name)
-        return op.execute(self.context)
+        result = op.execute(self.context)
+        if errors:      # what bpy.ops does when an operator reports an error
+            raise RuntimeError("Error: " + errors[-1] + "\n")
+        return result
 
     def _start_llm(self) -> set:
         self.ops_calls.append("start_llm")
@@ -340,6 +349,7 @@ class TestRestartStatus(_RestartCase):
         b.restart()
         self.assertTrue(b.props.chat_status.startswith("Error"), b.props.chat_status)
         self.assertIn("made-up reason", b.props.chat_status)
+        self.assertEqual(b.props.chat_status.count("Error"), 1, b.props.chat_status)    # said once
 
     def test_a_failed_bridge_start_shows_the_error(self):
         b = self.blender("REMOTE_API")
@@ -351,6 +361,7 @@ class TestRestartStatus(_RestartCase):
                 pass        # main raised out of its timer; the status is what counts
         self.assertTrue(b.props.chat_status.startswith("Error"), b.props.chat_status)
         self.assertIn("made-up bind failure", b.props.chat_status)
+        self.assertEqual(b.props.chat_status.count("Error"), 1, b.props.chat_status)
         self.assertEqual(b.ac.launches[1:], [])     # no MCP server without a bridge
 
     def test_a_failing_start_is_never_reported_connected(self):

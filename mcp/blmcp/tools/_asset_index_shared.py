@@ -175,8 +175,18 @@ def _entry(datablock, asset_type, blend_rel):
             entry["frame_range"] = [frame for frame in getattr(datablock, "frame_range", (0.0, 0.0))]
         except Exception:
             entry["frame_range"] = [0.0, 0.0]
-        entry["fcurves_count"] = len(getattr(datablock, "fcurves", ()))
+        entry["fcurves_count"] = _action_fcurve_count(datablock)
     return entry
+
+
+def _action_fcurve_count(action):
+    # F-Curves of the action, counted through layers / strips / channelbags (layered actions of 5.x).
+    return sum(
+        len(cb.fcurves)
+        for layer in getattr(action, "layers", ())
+        for strip in layer.strips
+        for cb in getattr(strip, "channelbags", ())
+    )
 
 
 def _load_and_collect(blend_path, base_dir):

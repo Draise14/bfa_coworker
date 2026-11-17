@@ -141,17 +141,26 @@ class _AssetParams:
 
 
 class TestJumpCurrentFileCheck(unittest.TestCase):
+    """A catalog path is looked up where the browser really is: no library folder is ever written (#589)."""
+
+    UUID = "12345678-1234-4234-8234-123456789abc"
 
     def setUp(self):
         self._saved_bpy = sys.modules.get("bpy")
+        self._tmp = tempfile.mkdtemp(prefix="t589_lib_")
+        self.addCleanup(shutil.rmtree, self._tmp, True)
+        with open(os.path.join(self._tmp, "blender_assets.cats.txt"), "w", encoding="utf-8") as fh:
+            fh.write("VERSION 1\n\n{}:rocks:rocks\n".format(self.UUID))
         libs = [
-            types.SimpleNamespace(name="Props", path="/libs/props"),
+            types.SimpleNamespace(name="Props", path=self._tmp),
             # Registered, but the browser cannot select it (folder missing / disabled).
-            types.SimpleNamespace(name="Offline", path="/libs/offline"),
+            types.SimpleNamespace(name="Offline", path=os.path.join(self._tmp, "offline")),
         ]
         bpy = types.ModuleType("bpy")
         bpy.context = types.SimpleNamespace(preferences=types.SimpleNamespace(
             filepaths=types.SimpleNamespace(asset_libraries=libs)))
+        bpy.data = types.SimpleNamespace(filepath="")
+        bpy.path = types.SimpleNamespace(abspath=lambda p: p)
         sys.modules["bpy"] = bpy
         self.mod = _toolcode("jump_to_asset_browser")
 
@@ -163,32 +172,63 @@ class TestJumpCurrentFileCheck(unittest.TestCase):
 
     def _apply(self, reference, library_name, catalog_path="rocks"):
         params = _AssetParams(reference, selectable=("ALL", "LOCAL", "ESSENTIALS", "Props"))
+        params.catalog_id = ""
         space = types.SimpleNamespace(params=params)
-        lib_set, cat_set = self.mod._apply_filters(
+        applied = self.mod._apply_filters(
             space, self.mod.Params(library_name=library_name, catalog_path=catalog_path))
-        return params, lib_set, cat_set
+        return params, applied
 
-    def test_current_file_browser_gets_no_library_folder(self):
-        params, lib_set, cat_set = self._apply("LOCAL", "Offline")
-        self.assertIsNone(lib_set)
-        self.assertIsNone(cat_set)
+    def test_unselectable_library_keeps_the_browser_and_says_so(self):
+        params, applied = self._apply("LOCAL", "Offline")
+        self.assertIsNone(applied.library)
+        self.assertIsNone(applied.catalog)
         self.assertEqual(params.asset_library_reference, "LOCAL")
+        self.assertEqual(params.catalog_id, "")
         self.assertEqual(params.directory, "//start/")
+        self.assertTrue(any("Offline" in n and "could not be selected" in n for n in applied.notes))
 
-    def test_selected_library_gets_its_folder(self):
-        params, lib_set, cat_set = self._apply("LOCAL", "Props")
-        self.assertEqual(lib_set, "Props")
-        self.assertEqual(cat_set, "rocks")
-        self.assertEqual(params.directory, os.path.join("/libs/props", "rocks"))
+    def test_catalog_path_becomes_its_uuid(self):
+        params, applied = self._apply("LOCAL", "Props")
+        self.assertEqual(applied.library, "Props")
+        self.assertEqual(applied.catalog, "rocks")
+        self.assertEqual(applied.catalog_id, self.UUID)
+        self.assertEqual(params.catalog_id, self.UUID)
+        self.assertEqual(params.directory, "//start/")      # the folder is never written
+        self.assertEqual(applied.notes, [])
+
+    def test_unknown_path_is_not_set_and_names_the_nearest(self):
+        params, applied = self._apply("LOCAL", "Props", "rock")
+        self.assertEqual(applied.catalog, None)
+        self.assertEqual(params.catalog_id, "")
+        self.assertEqual(applied.nearest, ["rocks"])
+        self.assertTrue(any("not found" in n and "rocks" in n for n in applied.notes))
+
+    def test_no_cats_file_says_so(self):
+        os.remove(os.path.join(self._tmp, "blender_assets.cats.txt"))
+        _params, applied = self._apply("LOCAL", "Props")
+        self.assertIsNone(applied.catalog)
+        self.assertTrue(any("blender_assets.cats.txt" in n for n in applied.notes))
 
     def test_catalog_uuid_is_set_directly(self):
         uuid = "12345678-1234-1234-1234-123456789abc"
         params = _AssetParams("LOCAL", selectable=("LOCAL",))
         params.catalog_id = ""
         space = types.SimpleNamespace(params=params)
-        _lib, cat_set = self.mod._apply_filters(space, self.mod.Params(catalog_path=uuid))
-        self.assertEqual(cat_set, uuid)
+        applied = self.mod._apply_filters(space, self.mod.Params(catalog_path=uuid))
+        self.assertEqual(applied.catalog, uuid)
         self.assertEqual(params.catalog_id, uuid)
+
+    def test_a_refused_catalog_write_is_reported(self):
+        class Refusing(_AssetParams):
+            def __setattr__(self, key, value):
+                if key == "catalog_id":
+                    raise TypeError("nope")
+                super().__setattr__(key, value)
+        params = Refusing("LOCAL", selectable=("LOCAL", "Props"))
+        applied = self.mod._apply_filters(
+            types.SimpleNamespace(params=params), self.mod.Params(library_name="Props", catalog_path="rocks"))
+        self.assertIsNone(applied.catalog)
+        self.assertTrue(any("not accepted" in n and "TypeError" in n for n in applied.notes))
 
 
 # ---------------------------------------------------------------------------

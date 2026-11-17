@@ -584,6 +584,8 @@ def _restore_tabs() -> None:
     from . import threads
     index = _chat_index()
     for tab in index.tabs_for_blend(blend):
+        if tab["chat"] == _CHAT["id"]:
+            continue            # that is the All editors chat: never in two tabs (#579)
         threads.reopen(agent_controller.THREADS, tab["chat"], tab.get("editor", ""), make=_editor_thread)
     try:
         _restore_area_tabs(index, blend)
@@ -1937,7 +1939,8 @@ def _save_chat_history() -> None:
             _chat_index().touch(_CHAT["id"], history,
                                 blend=_CHAT["blend"], engine=_chat_engine_label(),
                                 blend_path=bpy.data.filepath, mode=_operating_mode(),
-                                user_title=_log.redact(_USER_TITLES.get(_CHAT["id"], "")))       # #573
+                                user_title=_log.redact(_USER_TITLES.get(_CHAT["id"], "")),       # #573
+                                default=True)                                                    # #579
         except OSError:
             pass
 
@@ -1966,7 +1969,8 @@ def _save_thread_chat(thread) -> None:
                 json.dump(_log.redact_data(payload), fh, indent=2)
             index.touch(thread.chat_id, history, blend=_blend_key(), engine=_chat_engine_label(),
                         blend_path=bpy.data.filepath, mode=_operating_mode(), editor=thread.editor,
-                        user_title=_log.redact(_USER_TITLES.get(thread.chat_id, "")))          # #573
+                        user_title=_log.redact(_USER_TITLES.get(thread.chat_id, "")),          # #573
+                        default=False)                                                         # #579
         except OSError:
             pass
 

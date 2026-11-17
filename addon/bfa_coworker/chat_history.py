@@ -210,8 +210,17 @@ class ChatIndex:
         return (blend or "default") + ("|" + editor if editor else "")
 
     def last_for_blend(self, blend: str, editor: str = "") -> str:
-        """The chat last used in *blend* (by the *editor* kind's thread, #358)."""
-        chat_id = self._read()["last_for_blend"].get(self._blend_key(blend, editor), "")
+        """The chat last used in *blend* (by the *editor* kind's thread, #358).
+
+        For All editors (*editor* "") a chat that is also one of the file's saved tabs is
+        not it: older versions let an extra All editors tab (+) take this place (#579); the
+        tab keeps the chat and All editors starts its own."""
+        data = self._read()
+        chat_id = data["last_for_blend"].get(self._blend_key(blend, editor), "")
+        if chat_id and not editor:
+            tabs = data.get("tabs_for_blend", {}).get(blend or "default") or []
+            if any(isinstance(t, dict) and t.get("chat") == chat_id for t in tabs):
+                return ""
         return chat_id if chat_id and self.chat_path(chat_id).exists() else ""
 
     @staticmethod
@@ -220,14 +229,20 @@ class ChatIndex:
 
     # -- writing ---------------------------------------------------------------------
     def touch(self, chat_id: str, history: list[dict[str, Any]], blend: str = "", engine: str = "",
-              blend_path: str = "", mode: str = "", editor: str = "", user_title: str = "") -> None:
+              blend_path: str = "", mode: str = "", editor: str = "", user_title: str = "",
+              default: bool | None = None) -> None:
         """The chat was saved: keep its entry current (a chat with no message isn't listed).
 
         *blend_path* (the saved file it is in now) lets History open it again; *mode* is
         the operating mode, shown as its icon (#239); *editor* is the editor kind whose
         thread it is (#358; "" = the shared "All editors" thread).  *user_title* is the
         name you gave the chat (#573), also before it was first saved: it is kept, marked
-        ``renamed``, and the automatic title (your first message) never replaces it."""
+        ``renamed``, and the automatic title (your first message) never replaces it.
+        *default* says it is the All editors tab's own chat (the default thread): only that
+        chat becomes the file's All editors chat (``last_for_blend``), not an extra tab made
+        with + (#579).  ``None`` (not told): an empty *editor* means the default thread."""
+        if default is None:
+            default = not editor
         title = title_of(history)
         user_title = clean_name(user_title)
         with self._lock:
@@ -252,7 +267,8 @@ class ChatIndex:
                 entry["editor"] = editor
             if blend_path:
                 entry["blend"], entry["blend_path"] = blend, blend_path
-            data["last_for_blend"][self._blend_key(blend, editor)] = chat_id
+            if default or editor:
+                data["last_for_blend"][self._blend_key(blend, editor)] = chat_id
             self._write(data)
 
     def tabs_for_blend(self, blend: str) -> list[dict[str, str]]:

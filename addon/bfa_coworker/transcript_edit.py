@@ -16,13 +16,19 @@ Editing that text edits the video.
   in timeline order; rendered to lines ``[0:05.2] Hello there, this is a sentence.``.  Every
   token of the text knows its word (by its index in the transcript), so the text can be
   rebuilt from the timeline at any time.
-* **The edit** (:func:`compute_edit`): the last applied text (its tokens) against the text as
-  it is now.  Deleted words are *cut*; changed words (a typo, punctuation, "alot" -> "a lot")
-  are *retext*: their timing stays and only the captions change; a block of words that moved
-  is a *move*.  Text with no audio behind it (typed in, or a line rewritten so it no longer
-  matches what is said) is *flagged* on its line and never cut or placed by guessing: the
-  words it replaced stay as they are.  The time marks may be edited or deleted: the parser
-  ignores them.
+* **The edit** (:func:`compute_edit`): the last applied text against the text as it is now,
+  line by line.  Nothing is cut by guessing: a cut comes only from text the user took out,
+  mapped with certainty to the words it came from.  Every line carries its own time mark; a line
+  with the mark of one line of the last text IS that line, wherever it stands (this tells the
+  second of three identical takes from the first, and makes a moved line certain); a line
+  without a usable mark matches a line only by the same words (the only one that fits) or by
+  nearly the same.  Inside a pair of lines: words deleted are *cut*; changed words (a typo,
+  punctuation) are *retext*: their timing stays and only the captions change; n words written as
+  m words are one retext of the block, the words stay; words added are flagged and the line is
+  left as it was.  A line that moved is a *move*.  Everything uncertain (typed text, a rewritten
+  line, a repeated word or line the text can't tell apart) is *flagged* on its line and changes
+  nothing; the words it might be the rest of stay too.  A line nothing stands for is cut whole.
+  The time marks are all different, so each line can be told.
 * **The timeline** (:func:`cut_ranges`, :func:`plan_moves`, :func:`move_ranges`): the cut
   words become timeline frame ranges, padded and placed in the pause between words, so the
   Sequencer side (``transcript_edit_ops``) can cut them with Remove Silences' split / ripple
@@ -62,6 +68,7 @@ __all__ = (
     "line_of_word",
     "line_words",
     "move_ranges",
+    "move_span",
     "norm",
     "parse",
     "parse_mark",
@@ -360,6 +367,7 @@ class Edit(dict):
     the order of the kept words changed; ``flags``: ``[{"line", "text", "reason", "message"}]``
     (0-based lines of the new text); ``ops``: the edit list (cut / retext / move; a cut has
     ``seconds``, the media time it takes with its padding); ``seconds``: the total of the cuts;
+    ``lines_cut``: how many whole lines of the last text go (Live waits longer before those);
     ``fraction``: the share of the words (and of the time) cut, the larger of the two;
     ``needs_confirm``: more than half goes (:data:`LARGE_CUT`): ask before applying;
     ``changed``: anything to apply."""
@@ -1027,6 +1035,7 @@ def compute_edit(base_tokens: Sequence[Sequence[Any]], base_order: Sequence[int]
                 tokens_of.setdefault(extra, [])
     seen_final = set(final)
     cut = [w for w in order0 if w not in seen_final]
+    lines_cut = sum(1 for b in bl if b.words and not any(w in seen_final for w in b.words))
 
     new_retext: dict[str, str] = {}
     for key, value in (retext or {}).items():
@@ -1059,7 +1068,7 @@ def compute_edit(base_tokens: Sequence[Sequence[Any]], base_order: Sequence[int]
     frac_words = len(cut) / len(order0) if order0 else 0.0
     frac_secs = min(1.0, seconds / total_s) if total_s > 0 else 0.0
     return Edit(order=final, cut=cut, retext=new_retext, retexted=retexted, moved=moved, flags=flags, ops=ops,
-                changed=bool(cut or retexted or moved), seconds=round(seconds, 2), fraction=round(
+                changed=bool(cut or retexted or moved), seconds=round(seconds, 2), lines_cut=lines_cut, fraction=round(
                     max(frac_words, frac_secs), 3),
                 needs_confirm=bool(cut) and (frac_words > LARGE_CUT or frac_secs > LARGE_CUT))
 
@@ -1284,6 +1293,40 @@ def move_ranges(occurrences: Sequence[dict], block: Sequence[int], after: int | 
 
 
 # -- lines, captions and filler words -----------------------------------------------------------
+
+def move_span(occurrences: Sequence[dict], target: Sequence[int], words: Sequence[Any], pieces: Iterable[dict],
+              fps: float) -> tuple[int, int] | None:
+    """The timeline frames ``(first, end)`` a reordering to *target* may split and move: from the
+    middle of the pause before the first word out of place to the middle of the pause after the
+    last (the stretches :func:`move_ranges` cuts at), a little wider.  None when nothing moves.
+    Asked before anything changes, so a locked strip in the way refuses the whole Apply."""
+    fps = float(fps) or 24.0
+    info = {p["name"]: p for p in pieces}
+    occs = sorted(occurrences, key=lambda o: o["frame"])
+    current = [o["i"] for o in occs]
+    on = set(current)
+    want = [w for w in target if w in on]
+    kept = [w for w in current if w in set(want)]
+    differs = [k for k, w in enumerate(kept) if want[k] != w]
+    if not differs:
+        return None
+    where = {o["i"]: o for o in occs}
+    lo = hi = None
+    for k in (differs[0], differs[-1]):
+        for w in (kept[k], want[k]):
+            o = where[w]
+            p = info.get(o["piece"])
+            if p is None:
+                continue
+            mine = [x for x in occs if x["piece"] == o["piece"]]
+            n = next(n for n, x in enumerate(mine) if x["i"] == w)
+            a, b = _boundary(words, mine, n, p, fps), _boundary(words, mine, n + 1, p, fps)
+            lo = a if lo is None else min(lo, a)
+            hi = b if hi is None else max(hi, b)
+    if lo is None or hi is None:
+        return None
+    return int(lo) - 2, int(hi) + 2
+
 
 def line_words(base_tokens: Sequence[Sequence[Any]], text: str, base_lines: Any = None,
                base_order: Sequence[int] | None = None) -> dict[int, list[int]]:

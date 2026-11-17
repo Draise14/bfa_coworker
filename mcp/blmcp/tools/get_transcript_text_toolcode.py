@@ -31,6 +31,7 @@ class Result(NamedTuple):
     pending_edits: bool = False
     lines: list[Any] | None = None
     text: str | None = None
+    version: str | None = None
 
 
 def _module() -> Any:

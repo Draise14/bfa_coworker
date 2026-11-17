@@ -117,23 +117,33 @@ EXPECTED_TOOLS = [
 "        (picture, sound and every other track together, the gap closed, captions trimmed);\n"
 "        lines moved to another place move their clips; a changed word changes only the\n"
 "        captions. Text with no audio behind it (new words, a line rewritten so it no longer\n"
-"        matches what is said) cuts nothing and is listed in ``flags``. A locked strip in the\n"
-"        way: nothing changes, ``refused`` names it.\n"
+"        matches what is said, a repeated word or line the text can't tell apart) cuts nothing\n"
+"        and is listed in ``flags``. A locked strip in the way: nothing changes, ``refused``\n"
+"        names it. Nothing is cut by guessing: only text you removed, matched to its words.\n"
 "\n"
 "        Args:\n"
 "            strip: The sound or movie strip (none: the active strip, or the only clip with\n"
 "                a transcript).\n"
 "            cut_lines: Line numbers (from get_transcript_text) to cut whole. Simplest for\n"
-"                \"cut the part about ...\".\n"
+"                \"cut the part about ...\". Send it with ``version`` (get_transcript_text's\n"
+"                ``version``) or give ``lines`` instead; if the text changed since you read it\n"
+"                the answer is ``refused`` with the current ``text_now``. Not together with ``text``.\n"
 "            text: Or the whole edited text (get_transcript_text's ``text``, changed): delete\n"
-"                words or lines, move lines, fix words. Time marks may be left or dropped.\n"
-"            dry_run: Only say what would change (``ops``), change nothing.\n"
+"                words or lines, move lines, fix words. Keep each line's time mark: it tells the\n"
+"                line (a repeated sentence) apart. Not together with ``cut_lines``.\n"
+"            dry_run: Only say what would change (``ops``, ``seconds``), change nothing, create nothing.\n"
+"            version: The ``version`` of the text you read (see cut_lines).\n"
+"            lines: Lines to cut with what you read: ``[{\"line\": 3, \"text\": \"...\"}]`` (the same\n"
+"                check as ``version``, line by line).\n"
+"            confirm_large_cut: An edit that cuts more than half of the words or the time is\n"
+"                ``refused`` (``needs_confirm``) unless this is true: only after the user agreed.\n"
 "\n"
 "        Returns:\n"
 "            ``status`` (ok / nothing / refused / error), ``message``, ``cut_words``,\n"
-"            ``seconds_removed``, ``moved``, ``retexted``, ``captions_updated``, ``flags``\n"
-"            ([{line, text, reason, message}]), ``ops`` (the edit list), ``new_names`` (strip ->\n"
-"            its pieces), ``text_now`` (the transcript as it plays now).\n"
+"            ``seconds`` (what the edit takes out), ``seconds_removed``, ``moved``, ``retexted``,\n"
+"            ``captions_updated``, ``flags`` ([{line, text, reason, message}]), ``ops`` (the edit\n"
+"            list), ``needs_confirm``, ``new_names`` (strip ->\n"
+"            its pieces), ``text_now`` and ``version`` (the transcript as it plays now).\n"
 "        ",
         "inputSchema": {
             "properties": {
@@ -179,6 +189,39 @@ EXPECTED_TOOLS = [
                 "dry_run": {
                     "default": False,
                     "title": "Dry Run",
+                    "type": "boolean"
+                },
+                "version": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Version"
+                },
+                "lines": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "additionalProperties": True,
+                                "type": "object"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Lines"
+                },
+                "confirm_large_cut": {
+                    "default": False,
+                    "title": "Confirm Large Cut",
                     "type": "boolean"
                 }
             },

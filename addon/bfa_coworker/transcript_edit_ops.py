@@ -19,11 +19,14 @@ Text Editor; editing the text edits the video.
   captions trimmed, locked strips refusing before anything changes, strip removals with the
   prefetch stopped, #536); moves through ``wand.sequencer.move_frames``; a retext changes the
   captions over those words only (Auto Captions' captions, #376, still as Coworker made them).
-  One undo step.  Text with no audio behind it is flagged on its line and changes nothing.
+  One undo step.  Text with no audio behind it is flagged on its line and changes nothing; a cut
+  of more than half the clip asks first (Apply's dialog, the tool's ``confirm_large_cut``).
 * **Both ways**: a click on a line moves the playhead to it (*Follow*), Jump to Playhead
   moves the cursor to the line playing, the line playing is highlighted, and a cut made in the
   Sequencer shows in the text (it is rebuilt from the timeline when it has no edits pending).
-* **Live** (opt-in): applies by itself after a pause in typing.
+* **Live** (opt-in): applies by itself after a pause in typing (longer for whole lines), never
+  while a render runs or a clip plays, never a cut whose words are on the clipboard (Ctrl+X: the
+  paste comes next), never a cut of more than half the clip.
 * **Wands**: Remove Filler Words (lists what it found first), Remove Silences, Make Captions.
 * **Tools**: :func:`tool_get_transcript_text` and :func:`tool_apply_transcript_edit`.
 """
@@ -39,6 +42,7 @@ __all__ = (
     "unregister",
 )
 
+import bisect
 import hashlib
 import json
 import os
@@ -56,6 +60,8 @@ from .wand import scene as _seq_scene
 CATEGORY = "Coworker"
 WHAT = "Edit by Transcript"
 LIVE_PAUSE_S = 1.5          # Live applies this long after the last key
+LIVE_LINE_PAUSE_S = 4.0     # ... a cut of whole lines this long: a line cut to be pasted elsewhere gets its paste first
+HOLD_RETRY_S = 0.5          # a held back Live edit looks again this often
 CHECK_PAUSE_S = 0.4         # the panel's preview of the edit, this long after the last key
 _TICK_S = 0.25
 NOT_TRANSCRIBED = ("“{:s}” hasn't been transcribed yet: run Auto Captions on it (it transcribes first) or ask "
@@ -243,16 +249,36 @@ def _set_body(text: Any, body: str) -> None:
         pass
 
 
-def _store(text: Any, state: dict, got: dict, write: bool, flags: list | None = None) -> None:
-    """The view *got* as the last applied state; with *write* the text becomes it."""
+def _state_from_view(state: dict, got: dict, flags: list | None = None) -> None:
+    """Put the view *got* into *state* (a dict: nothing in Blender is written)."""
     view = got["view"]
     state["tokens"] = json.dumps(view["tokens"])
     state["order"] = json.dumps(view["order"])
     state["lines"] = json.dumps([[ln["line"], ln["frame"]] for ln in view["lines"]])
+    state["base_lines"] = json.dumps([[ln["mark"], ln["first"], ln["count"]] for ln in view["lines"]])
     state["frames"] = json.dumps({str(o["i"]): o["frame"] for o in got["occ"]})
     state["sig"] = _signature(got["pieces"])
     state["fps"] = float(got["fps"])
     state["flags"] = json.dumps(flags or [])
+
+
+class _Virtual:
+    """A transcript text that is no data-block: what a dry run reads, so it creates and writes nothing."""
+
+    def __init__(self, name: str, state: dict, body: str) -> None:
+        self.name, self._state, self._body = name, state, body
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._state if key == te.PROP else default
+
+    def as_string(self) -> str:
+        return self._body
+
+
+def _store(text: Any, state: dict, got: dict, write: bool, flags: list | None = None) -> None:
+    """The view *got* as the last applied state; with *write* the text becomes it."""
+    view = got["view"]
+    _state_from_view(state, got, flags)
     if write:
         _set_body(text, view["text"])
     state["applied"] = _hash(text.as_string())
@@ -387,10 +413,11 @@ def _update_captions(scene: Any, state: dict, words: list, occ: list, retext: di
     return updated, kept
 
 
-def _moves(scene: Any, state: dict, words: list, target: list[int], fps: float) -> dict[str, Any]:
+def _moves(scene: Any, state: dict, words: list, target: list[int], fps: float, progress: dict) -> dict[str, Any]:
     """Reorder the clips so the words play in the *target* order, one block at a time."""
     seq = _seq()
     spans: list[tuple[int, int]] = []
+    pieces_named: dict[str, list[str]] = {}
     count = 0
     for _step in range(200):
         pieces = [_piece(s) for s in source_strips(scene, state["source"])]
@@ -399,7 +426,7 @@ def _moves(scene: Any, state: dict, words: list, target: list[int], fps: float) 
         on = set(current)
         blocks = te.plan_moves(current, [w for w in target if w in on])
         if not blocks:
-            return {"status": "ok", "moves": count, "spans": spans}
+            return {"status": "ok", "moves": count, "spans": spans, "new_names": pieces_named}
         block, after = blocks[0]
         where = {o["i"]: o["piece"] for o in occ}
         sub = [block[0]]
@@ -410,68 +437,128 @@ def _moves(scene: Any, state: dict, words: list, target: list[int], fps: float) 
         rng = te.move_ranges(occ, sub, after, words, pieces, fps)
         if rng is None:
             return {"status": "error", "message": "Couldn't place a moved block on the timeline", "moves": count,
-                    "spans": spans, "changed": count > 0}
+                    "spans": spans, "changed": count > 0, "new_names": pieces_named}
         out = seq.move_frames(scene, *rng, what=WHAT)
+        if out.get("changed"):
+            progress["changed"] = True
         if out["status"] != "ok":
-            out.update(moves=count, spans=spans, changed=count > 0 or out.get("changed", False))
+            out.update(moves=count, spans=spans, changed=count > 0 or out.get("changed", False),
+                       new_names=pieces_named)
             return out
+        progress["changed"] = True
         count += 1
+        pieces_named.update(out.get("new_names") or {})
         spans.append((out["to"], out["to"] + out["frames"]))
         spans.append((min(rng), max(rng)))
     return {"status": "error", "message": "The moves didn't settle", "moves": count, "spans": spans,
-            "changed": True}
+            "changed": True, "new_names": pieces_named}
 
 
-def _move_region(occ: list, edit: dict) -> tuple[int, int] | None:
-    """The frames a move may touch: from the first word out of place to the end of the last."""
-    current = [o["i"] for o in occ]
-    on = set(current)
-    target = [w for w in edit["order"] if w in on]
-    kept = [w for w in current if w in set(target)]
-    if kept == target:
-        return None
-    frames = {o["i"]: (o["frame"], o["end_frame"]) for o in occ}
-    out = [frames[w] for k, w in enumerate(kept) if target[k] != w]
-    out += [frames[w] for k, w in enumerate(target) if kept[k] != w]
-    if not out:
-        return None
-    return int(min(a for a, _b in out)) - 2, int(max(b for _a, b in out)) + 2
+def _refit_captions(scene: Any, new_names: dict) -> None:
+    """After a move: the captions split on the way get Remove Silences' refit (their animation
+    fits the new length), when the add-on has it (#542)."""
+    try:
+        from . import captions_ops
+    except Exception:  # pylint: disable=broad-exception-caught
+        return
+    refit = getattr(captions_ops, "refit_captions", None)
+    if refit is None:
+        return
+    strips = scene.sequence_editor.strips_all
+    names = []
+    for pieces in (new_names or {}).values():
+        for name in pieces:
+            strip = strips.get(name)
+            if strip is not None and strip.type == 'TEXT' and name not in names:
+                names.append(name)
+    if names:
+        try:
+            refit(scene, names)
+        except Exception as ex:  # pylint: disable=broad-exception-caught
+            print("[Coworker] {:s}: caption refit: {!s}".format(WHAT, ex))
 
 
 def apply_text(text: Any, body: str | None = None, keep_text: bool = False, dry_run: bool = False,
-               padding: float = te.PADDING_S) -> dict[str, Any]:
+               padding: float = te.PADDING_S, confirm: bool = False) -> dict[str, Any]:
     """Apply the transcript text *text* (or *body* as its new text) to the timeline: cuts,
     moves and caption fixes; no undo step of its own.  *keep_text*: the artist's text stays as
-    it is (Live, while typing).  *dry_run*: only say what would happen."""
+    it is (Live, while typing).  *dry_run*: only say what would happen (nothing is written).
+    *confirm*: an edit that would cut more than half of the clip (``needs_confirm``) goes ahead;
+    without it the answer is ``status`` "confirm" and nothing changes.
+
+    An exception inside leaves what it had changed as it is, and says so: ``changed`` is true and
+    the caller's undo step (the operator's, the tool's) takes it all back with one Ctrl+Z; before
+    any change it leaves the timeline as it was."""
+    progress = {"changed": False}
+    try:
+        return _apply_text(text, body, keep_text, dry_run, padding, confirm, progress)
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        name = getattr(text, "name", "")
+        if progress["changed"]:
+            return {"status": "error", "changed": True, "text": name, "message":
+                    "{:s} stopped part-way ({!s}): it is one undo step, press Ctrl+Z to get the edit back".format(
+                        WHAT, ex)}
+        return {"status": "error", "changed": False, "text": name,
+                "message": "{:s} couldn't apply ({!s}): nothing was changed".format(WHAT, ex)}
+
+
+def _plan(state: dict, body: str, padding: float = te.PADDING_S) -> dict[str, Any]:
+    """What *body* (as the text now) asks of the timeline: the core's edit, the cuts as frames
+    and the numbers the artist sees (words, seconds, share of the clip).  Reads the timeline;
+    changes nothing.  Raises :class:`_Problem`."""
+    got = view_now(state)
+    words, occ, fps = got["words"], got["occ"], got["fps"]
+    tokens = _j(state, "tokens", [])
+    order = _j(state, "order", [])
+    if not tokens and not order:
+        tokens, order = got["view"]["tokens"], got["view"]["order"]
+        base_lines = [[ln["mark"], ln["first"], ln["count"]] for ln in got["view"]["lines"]]
+    else:
+        base_lines = _j(state, "base_lines", [])
+    timeline_s = sum(max(0, p["right"] - p["left"]) for p in got["pieces"]) / fps
+    edit = te.compute_edit(tokens, order, body, words, _j(state, "retext", {}), base_lines=base_lines,
+                           timeline_s=timeline_s)
+    on = {o["i"] for o in occ}
+    cut = [w for w in edit["cut"] if w in on]
+    gone = [w for w in edit["order"] if w not in on]
+    frames = te.cut_ranges(occ, cut, words, got["pieces"], fps, padding) if cut else []
+    seconds = sum(b - a for a, b in frames) / fps
+    share = max(len(cut) / len(on) if on else 0.0, seconds / timeline_s if timeline_s > 0 else 0.0)
+    needs_confirm = bool(cut) and (share > te.LARGE_CUT or bool(edit["needs_confirm"]))
+    summary = {"cut_words": len(cut), "retexted": len(edit["retexted"]), "moved": bool(edit["moved"]),
+               "flags": [dict(f, line=f["line"] + 1) for f in edit["flags"]], "ops": edit["ops"],
+               "seconds": round(seconds, 2), "percent": int(round(100 * share)), "needs_confirm": needs_confirm,
+               "lines_cut": edit["lines_cut"]}
+    if gone:
+        summary["not_on_timeline"] = len(gone)
+    return {"got": got, "edit": edit, "cut": cut, "frames": frames, "seconds": seconds, "summary": summary,
+            "needs_confirm": needs_confirm}
+
+
+def _apply_text(text: Any, body: str | None, keep_text: bool, dry_run: bool, padding: float, confirm: bool,
+                progress: dict) -> dict[str, Any]:
     state = state_of(text)
     if state is None:
         return {"status": "error", "message": "“{:s}” isn't a transcript text".format(getattr(text, "name", ""))}
     if body is None:
         body = text.as_string()
     try:
-        got = view_now(state)
+        plan = _plan(state, body, padding)
     except _Problem as ex:
         return {"status": "error", "message": str(ex)}
+    got, edit, cut, frames, seconds = plan["got"], plan["edit"], plan["cut"], plan["frames"], plan["seconds"]
     words, occ, scene, fps = got["words"], got["occ"], got["scene"], got["fps"]
-    tokens = _j(state, "tokens", [])
-    order = _j(state, "order", [])
-    if not tokens and not order:
-        tokens, order = got["view"]["tokens"], got["view"]["order"]
-    edit = te.compute_edit(tokens, order, body, words, _j(state, "retext", {}))
-    on = {o["i"] for o in occ}
-    cut = [w for w in edit["cut"] if w in on]
-    gone = [w for w in edit["order"] if w not in on]
-    flags = edit["flags"]
-    summary = {"cut_words": len(cut), "retexted": len(edit["retexted"]), "moved": bool(edit["moved"]),
-               "flags": [dict(f, line=f["line"] + 1) for f in flags], "ops": edit["ops"]}
-    if gone:
-        summary["not_on_timeline"] = len(gone)
+    summary, needs_confirm, flags = plan["summary"], plan["needs_confirm"], edit["flags"]
     if dry_run or not (cut or edit["retexted"] or edit["moved"]):
         status = "ok" if dry_run else "nothing"
         message = _message(summary, None, None, 0, 0, dry_run=dry_run)
         return dict(summary, status=status, message=message, text=text.name)
-    region = _move_region(occ, edit) if edit["moved"] else None
-    if region is not None:
+    if needs_confirm and not confirm:
+        return dict(summary, status="confirm", text=text.name, message=(
+            "This cuts {:.1f} s ({:d}% of the clip, {:s}): confirm it (Apply asks; the tool needs "
+            "confirm_large_cut) or edit less".format(seconds, summary["percent"], _plural(len(cut), "word"))))
+    region = te.move_span(occ, edit["order"], words, got["pieces"], fps) if edit["moved"] else None
+    if region is not None:                              # everything the moves touch is checked before the cuts
         blocked = _seq().blocked_in(scene, *region)
         if blocked:
             listed = "; ".join("“{:s}” {:s}".format(n, r) for n, r in blocked[:4])
@@ -482,10 +569,12 @@ def apply_text(text: Any, body: str | None = None, keep_text: bool = False, dry_
     names: set[str] = set()
     spans: list[tuple[int, int]] = []
     if cut:
-        frames = te.cut_ranges(occ, cut, words, got["pieces"], fps, padding)
         cut_out = seq.apply_cuts(scene, frames, True, True, WHAT)
         if cut_out["status"] != "ok":
+            if cut_out.get("changed"):
+                progress["changed"] = True
             return dict(summary, **cut_out, text=text.name)
+        progress["changed"] = True
         names.update(cut_out.get("captions_trimmed") or ())
         cuts_index = _cuts_index(cut_out.get("cut_ranges") or ())
         for a, _b in cut_out.get("cut_ranges") or ():
@@ -493,12 +582,14 @@ def apply_text(text: Any, body: str | None = None, keep_text: bool = False, dry_
             spans.append((landed - 1, landed + 1))
     move_out = None
     if edit["moved"]:
-        move_out = _moves(scene, state, words, edit["order"], fps)
+        move_out = _moves(scene, state, words, edit["order"], fps, progress)
         spans.extend(move_out.get("spans") or ())
         if move_out["status"] != "ok":
             changed = bool(cut_out) or move_out.get("changed")
             return dict(summary, status="error", changed=changed, text=text.name,
                         message=move_out.get("message", "") + (": press Ctrl+Z to get the edit back" if changed else ""))
+        if move_out.get("moves"):
+            _refit_captions(scene, move_out.get("new_names") or {})
     state["retext"] = json.dumps(edit["retext"])
     try:
         after = view_now(state)
@@ -550,7 +641,7 @@ def _message(summary: dict, cut_out: dict | None, move_out: dict | None, updated
              dry_run: bool = False) -> str:
     parts = []
     if summary["cut_words"]:
-        secs = cut_out["seconds_removed"] if cut_out else None
+        secs = cut_out["seconds_removed"] if cut_out else summary.get("seconds")
         parts.append("cut {:s}{:s}".format(_plural(summary["cut_words"], "word"),
                                            " ({:.1f} s)".format(secs) if secs is not None else ""))
     if summary["moved"]:
@@ -572,6 +663,8 @@ def _message(summary: dict, cut_out: dict | None, move_out: dict | None, updated
         return flag_text or "Nothing to apply: the text matches the timeline"
     head = ("Would " if dry_run else "") + "; ".join(parts)
     head = head[0].upper() + head[1:]
+    if dry_run and summary.get("needs_confirm"):
+        head += ", {:d}% of the clip: applying asks first".format(summary.get("percent", 0))
     return head + (". " + flag_text if flag_text else "")
 
 
@@ -591,20 +684,37 @@ def refresh_text(text: Any) -> dict[str, Any]:
 
 # -- lines and the playhead -------------------------------------------------------------------------
 
+def _cached_hash(text: Any) -> str:
+    """The hash of the text as the timer last saw it (read once here when it hasn't): drawing the
+    panel or the overlay never reads the whole text again."""
+    seen = _SEEN.setdefault(text.name, {})
+    h = seen.get("view_hash")
+    if h is None:
+        h = seen["view_hash"] = _hash(text.as_string())
+    return h
+
+
+def _is_pending(text: Any, state: dict | None = None) -> bool:
+    state = state or state_of(text)
+    return bool(state) and _cached_hash(text) != state.get("applied", "")
+
+
 def line_frames(text: Any, state: dict | None = None) -> dict[int, int]:
-    """``{0-based line: frame}`` of the text as it is now (cached per text and content)."""
+    """``{0-based line: frame}`` of the text as it is now (cached per text and content: the lines
+    sorted for the playhead too, ``_SEEN[name]["sorted"]``)."""
     state = state or state_of(text)
     if not state:
         return {}
-    body = text.as_string()
-    h = _hash(body)
     seen = _SEEN.setdefault(text.name, {})
-    if seen.get("lines_for") == (h, state.get("applied"), state.get("sig")):
+    key = (_cached_hash(text), state.get("applied"), state.get("sig"))
+    if seen.get("lines_for") == key:
         return seen["line_frames"]
-    if h == state.get("applied"):
+    body = text.as_string()
+    if key[0] == state.get("applied"):
         frames = {int(a): int(b) for a, b in _j(state, "lines", [])}
     else:
-        frames = te.line_frames(_j(state, "tokens", []), body, _j(state, "frames", {}))
+        frames = te.line_frames(_j(state, "tokens", []), body, _j(state, "frames", {}),
+                                _j(state, "base_lines", []))
     scene = bpy.data.scenes.get(state.get("scene", ""))
     if scene is not None:
         fps = _fps(scene)
@@ -613,8 +723,12 @@ def line_frames(text: Any, state: dict | None = None) -> dict[int, int]:
                 t = te.parse_mark(line)
                 if t is not None and line[te.MARK_RE.match(line).end():].strip():
                     frames[n] = int(round(scene.frame_start + t * fps))
-    seen["lines_for"] = (h, state.get("applied"), state.get("sig"))
+    ends = [int(f) for f in _j(state, "frames", {}).values()]
+    seen["lines_for"] = key
     seen["line_frames"] = frames
+    seen["sorted"] = sorted((f, n) for n, f in frames.items())
+    seen["sorted_frames"] = [f for f, _n in seen["sorted"]]
+    seen["last_frame"] = max(ends) if ends else None
     return frames
 
 
@@ -623,21 +737,17 @@ def playing_line(text: Any, state: dict | None = None) -> int | None:
     scene = bpy.data.scenes.get(state.get("scene", "")) if state else None
     if scene is None:
         return None
-    frames = line_frames(text, state)
-    if not frames:
+    if not line_frames(text, state):
         return None
+    seen = _SEEN[text.name]
     current = scene.frame_current
-    best = None
-    for line, frame in frames.items():
-        if frame <= current and (best is None or frame > frames[best] or (frame == frames[best] and line > best)):
-            best = line
-    if best is None:
+    k = bisect.bisect_right(seen["sorted_frames"], current) - 1
+    if k < 0:
         return None
-    last = _j(state, "frames", {})
-    end = max((int(f) for f in last.values()), default=None)
+    end = seen.get("last_frame")
     if end is not None and current > end + 3 * _fps(scene):
         return None
-    return best
+    return seen["sorted"][k][1]
 
 
 def seek_line(text: Any, line: int) -> bool:
@@ -745,11 +855,27 @@ class BFACW_OT_transcript_apply(_TextOp, Operator):  # type: ignore[misc]
     bl_label = "Apply"
     bl_options = {'REGISTER', 'UNDO'}
 
+    confirmed: BoolProperty(name="Confirmed", default=False, options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
+
+    def invoke(self, context, event):
+        text = self.text(context)
+        if text is not None and not self.confirmed:
+            out = apply_text(text, dry_run=True)
+            if out.get("needs_confirm"):
+                self.confirmed = True
+                return context.window_manager.invoke_confirm(
+                    self, event, title="Cut most of the clip?",
+                    message="This cuts {:.1f} s ({:d}% of the clip, {:s}). One Ctrl+Z brings it back. Go on?".format(
+                        out.get("seconds", 0.0), out.get("percent", 0), _plural(out.get("cut_words", 0), "word")),
+                    confirm_text="Cut")
+        return self.execute(context)
+
     def execute(self, context):
         text = self.text(context)
         if text is None:
             return {'CANCELLED'}
-        out = apply_text(text)
+        out = apply_text(text, confirm=bool(self.confirmed))
+        self.confirmed = False
         status = out["status"]
         for flag in out.get("flags") or ():
             self.report({'WARNING'}, "Line {:d}: “{:s}”: {:s}".format(flag["line"], flag["text"][:40], flag["message"]))
@@ -867,20 +993,32 @@ class BFACW_OT_transcript_toggle(_TextOp, Operator):  # type: ignore[misc]
 
 
 def _pending_edit(text: Any, state: dict) -> dict | None:
-    """The edit the text holds now (cached until it changes), or None when it can't be read."""
+    """The edit the text holds now (cached until it changes: ``_SEEN[name]["edit"]``, its numbers in
+    ``["preview"]``), or None when it can't be read.  Reads the whole text: the timer calls it, the
+    panel only looks at what is cached."""
     seen = _SEEN.setdefault(text.name, {})
-    h = _hash(text.as_string())
+    body = text.as_string()
+    h = _hash(body)
+    seen["view_hash"] = h
     if seen.get("edit_for") == (h, state.get("applied")):
         return seen.get("edit")
     try:
-        words = load_words(state.get("transcript", ""))
-        edit = te.compute_edit(_j(state, "tokens", []), _j(state, "order", []), text.as_string(), words,
-                               _j(state, "retext", {}))
-    except (OSError, ValueError):
-        edit = None
+        plan = _plan(dict(state), body)
+        edit, preview = plan["edit"], plan["summary"]
+    except (OSError, ValueError, _Problem):
+        edit, preview = None, None
     seen["edit_for"] = (h, state.get("applied"))
     seen["edit"] = edit
+    seen["preview"] = preview
     return edit
+
+
+def _cached_edit(text: Any, state: dict) -> tuple[dict | None, dict | None]:
+    """``(edit, preview)`` as the timer last made them for the text as it is: no work, for drawing."""
+    seen = _SEEN.get(text.name) or {}
+    if seen.get("edit_for") == (_cached_hash(text), state.get("applied")):
+        return seen.get("edit"), seen.get("preview")
+    return None, None
 
 
 _FILLERS: dict[str, Any] = {"found": [], "text": ""}
@@ -904,18 +1042,21 @@ class BFACW_OT_transcript_remove_fillers(_TextOp, Operator):  # type: ignore[mis
         except _Problem as ex:
             self.report({'WARNING'}, str(ex))
             return []
-        edit = _pending_edit(text, state)
-        keep = set(edit["order"]) if edit else None
-        occ = [o for o in got["occ"] if keep is None or o["i"] in keep]
-        found = te.find_fillers(occ, got["words"], edit["retext"] if edit else _j(state, "retext", {}), self.phrases)
+        found = te.find_fillers(got["occ"], got["words"], _j(state, "retext", {}), self.phrases)
         lines = got["view"]["lines"]
         for f in found:
             f["line"] = te.line_of_word(lines, f["words"][0])
         _FILLERS.update(found=found, text=text.name)
         return found
 
+    PENDING = "Apply or undo your text edits first: the filler words are listed from the timeline, and this would apply them too"
+
     def invoke(self, context, _event):
-        if self.text(context) is None:
+        text = self.text(context)
+        if text is None:
+            return {'CANCELLED'}
+        if pending(text):
+            self.report({'ERROR'}, self.PENDING)
             return {'CANCELLED'}
         found = self._find(context)
         return context.window_manager.invoke_props_dialog(self, width=420, title=self.bl_label,
@@ -950,6 +1091,9 @@ class BFACW_OT_transcript_remove_fillers(_TextOp, Operator):  # type: ignore[mis
         text = self.text(context)
         if text is None:
             return {'CANCELLED'}
+        if pending(text):
+            self.report({'ERROR'}, self.PENDING)
+            return {'CANCELLED'}
         found = self._find(context)
         if not found:
             self.report({'INFO'}, "No filler words found: speech-to-text usually leaves out “um” and “uh”")
@@ -957,7 +1101,7 @@ class BFACW_OT_transcript_remove_fillers(_TextOp, Operator):  # type: ignore[mis
         state = state_of(text)
         doomed = [w for f in found for w in f["words"]]
         body = te.remove_tokens(text.as_string(), _j(state, "tokens", []), doomed)
-        out = apply_text(text, body)
+        out = apply_text(text, body, confirm=True)
         if out["status"] == "ok":
             self.report({'INFO'}, "Removed {:s}: {:s}".format(_plural(len(found), "filler word"), out["message"]))
             return {'FINISHED'}
@@ -1068,21 +1212,29 @@ class BFACW_PT_transcript(Panel):  # type: ignore[misc]
         col = layout.column(align=True)
         col.label(text=os.path.basename(state.get("path", "")), icon=safe_icon('FILE_MOVIE'))
         col.label(text="Scene: {:s}".format(state.get("scene", "")), icon=safe_icon('SEQUENCE'))
-        edit = _pending_edit(text, state) if pending(text, state) else None
+        is_pending = _is_pending(text, state)
+        edit, preview = _cached_edit(text, state) if is_pending else (None, None)       # cached: no work per redraw
         box = layout.box()
-        if edit is None:
+        if not is_pending:
             box.label(text="The text matches the timeline", icon=safe_icon('CHECKMARK'))
+        elif edit is None or preview is None:
+            box.label(text="Checking your edit...", icon=safe_icon('TIME'))
         elif edit["changed"]:
             bits = []
-            if edit["cut"]:
-                bits.append("{:d} cut".format(len(edit["cut"])))
-            if edit["retexted"]:
-                bits.append("{:d} changed".format(len(edit["retexted"])))
-            if edit["moved"]:
+            if preview["cut_words"]:
+                bits.append("{:d} cut ({:.1f} s)".format(preview["cut_words"], preview["seconds"]))
+            if preview["retexted"]:
+                bits.append("{:d} changed".format(preview["retexted"]))
+            if preview["moved"]:
                 bits.append("moved")
             box.label(text="To apply: " + ", ".join(bits), icon=safe_icon('MODIFIER'))
+            if preview["needs_confirm"]:
+                box.label(text="{:d}% of the clip: Apply asks first".format(preview["percent"]), icon=safe_icon('ERROR'))
         else:
             box.label(text="Nothing to apply", icon=safe_icon('INFO'))
+        note = (_SEEN.get(text.name) or {}).get("live_note") if is_pending else None
+        if note:
+            box.label(text=note, icon=safe_icon('TIME'))
         row = layout.row(align=True)
         row.scale_y = 1.4
         row.operator(BFACW_OT_transcript_apply.bl_idname, icon=safe_icon('CHECKMARK'))
@@ -1095,8 +1247,8 @@ class BFACW_PT_transcript(Panel):  # type: ignore[misc]
         col.operator(BFACW_OT_transcript_jump_to_playhead.bl_idname, icon=safe_icon('PLAY'))
         col.operator(BFACW_OT_transcript_seek.bl_idname, icon=safe_icon('TIME'))
         col.operator(BFACW_OT_transcript_refresh.bl_idname, icon=safe_icon('FILE_REFRESH'))
-        flags = (edit or {}).get("flags") if edit is not None else [
-            dict(f, line=f["line"] - 1) for f in _j(state, "flags", [])]
+        flags = edit.get("flags") if edit is not None else ([] if is_pending else [
+            dict(f, line=f["line"] - 1) for f in _j(state, "flags", [])])
         if flags:
             _draw_flags(layout, text, flags)
         layout.separator()
@@ -1155,7 +1307,7 @@ def _draw_overlay() -> None:
             return
         region = context.region
         flagged: dict[int, str] = {}
-        if pending(text, state):
+        if _is_pending(text, state):
             edit = _SEEN.get(text.name, {}).get("edit")
             for f in (edit or {}).get("flags") or ():
                 flagged.setdefault(f["line"], f["reason"])
@@ -1245,6 +1397,39 @@ def _push_undo(window: Any, name: str) -> None:
         pass
 
 
+def _tokens_in(small: list[str], big: list[str]) -> bool:
+    n = len(small)
+    return n > 0 and any(big[k:k + n] == small for k in range(len(big) - n + 1))
+
+
+def _live_hold(window: Any, edit: dict | None) -> str:
+    """Why Live must wait now ("" when it can go): a render is running (or a clip is playing), or
+    the words the text lost are on the clipboard (Ctrl+X: the paste comes next, a line cut to be
+    moved must not be cut before it is pasted)."""
+    try:
+        if bpy.app.is_job_running("RENDER"):
+            return "Live waits: a render is running"
+    except (AttributeError, TypeError, ValueError):
+        pass
+    if getattr(getattr(window, "screen", None), "is_animation_playing", False):
+        return "Live waits: the timeline is playing"
+    if not edit or not edit.get("cut"):
+        return ""
+    try:
+        clip = str(bpy.context.window_manager.clipboard or "")
+    except (AttributeError, RuntimeError):
+        clip = ""
+    if not clip.strip():
+        return ""
+    on_clip: list[str] = []
+    for line in clip.splitlines():
+        on_clip.extend(te.norm(t) for t in te.MARK_RE.sub("", line, count=1).split())
+    for op in edit.get("ops") or ():
+        if op.get("op") == "cut" and _tokens_in([te.norm(t) for t in str(op.get("text", "")).split()], on_clip):
+            return "Live waits: the text you cut is on the clipboard (paste it, or press Apply)"
+    return ""
+
+
 def _tick() -> float:
     try:
         return _tick_inner()
@@ -1266,9 +1451,10 @@ def _tick_inner() -> float:
         state = state_of(text)
         seen = _SEEN.setdefault(text.name, {})
         body_hash = _hash(text.as_string())
+        seen["view_hash"] = body_hash                   # what the panel and the overlay read, so they never hash the text
         line = int(text.current_line_index)
         if seen.get("hash") != body_hash:
-            seen.update(hash=body_hash, changed_at=now, cursor=line)
+            seen.update(hash=body_hash, changed_at=now, cursor=line, live_note=None)
             continue
         changed_at = seen.get("changed_at", 0.0)
         is_pending = body_hash != state.get("applied")
@@ -1277,20 +1463,31 @@ def _tick_inner() -> float:
             _pending_edit(text, state)
             seen["drawn_for"] = body_hash
             area.tag_redraw()
-        # Live: apply after a pause
-        if state.get("live") and is_pending and now - changed_at >= LIVE_PAUSE_S \
-                and seen.get("live_tried") != body_hash:
-            seen["live_tried"] = body_hash
+        # Live: apply after a pause (longer for whole lines), never mid-render, never a cut the clipboard still holds
+        if state.get("live") and is_pending and seen.get("live_tried") != body_hash:
             edit = _pending_edit(text, state)
-            if edit and edit["changed"]:
-                with bpy.context.temp_override(window=window, area=area):
-                    out = apply_text(text, keep_text=True)
-                if out["status"] == "ok" or out.get("changed"):
-                    _push_undo(window, WHAT)
-                print("[Coworker] {:s} (Live): {:s}".format(WHAT, out.get("message", "")))
-                seen = _SEEN.setdefault(text.name, {})
-                seen.update(hash=_hash(text.as_string()), cursor=int(text.current_line_index))
-                area.tag_redraw()
+            wait = LIVE_LINE_PAUSE_S if edit and edit.get("lines_cut") else LIVE_PAUSE_S
+            if now - changed_at >= wait:
+                held = _live_hold(window, edit)
+                if held:
+                    if seen.get("live_note") != held:
+                        seen["live_note"] = held
+                        area.tag_redraw()
+                    continue
+                seen["live_tried"] = body_hash
+                if edit and edit["changed"]:
+                    with bpy.context.temp_override(window=window, area=area):
+                        out = apply_text(text, keep_text=True)
+                    if out["status"] == "ok" or out.get("changed"):
+                        _push_undo(window, WHAT)
+                    if out["status"] == "confirm":
+                        seen["live_note"] = "Live won't cut {:d}% of the clip: press Apply".format(out.get("percent", 0))
+                    else:
+                        seen["live_note"] = None
+                    print("[Coworker] {:s} (Live): {:s}".format(WHAT, out.get("message", "")))
+                    seen = _SEEN.setdefault(text.name, {})
+                    seen.update(hash=_hash(text.as_string()), cursor=int(text.current_line_index))
+                    area.tag_redraw()
             continue
         # Follow: a click on another line (the text unchanged) moves the playhead
         if line != seen.get("cursor"):
@@ -1378,7 +1575,8 @@ def _tool_strip(scene: Any, name: str | None) -> tuple[Any, str]:
 def tool_get_transcript_text(strip: str | None = None) -> dict[str, Any]:
     """``get_transcript_text`` (MCP): the transcript of a clip as it plays on the timeline now,
     one line per sentence, with line numbers and times (the same lines ``cut_lines`` of
-    :func:`tool_apply_transcript_edit` counts).  Changes nothing."""
+    :func:`tool_apply_transcript_edit` counts) and a ``version`` (a hash of the text: ``cut_lines``
+    must come with it, so a cut never lands on lines that moved).  Changes nothing."""
     scene = _tool_scene()
     try:
         s, _note = _tool_strip(scene, strip)
@@ -1405,14 +1603,34 @@ def tool_get_transcript_text(strip: str | None = None) -> dict[str, Any]:
     except _Problem as ex:
         return {"status": "error", "message": str(ex)}
     return {"status": "ok", "strip": s.name, "scene": scene.name, "media": os.path.basename(media),
-            "text_block": name, "pending_edits": is_pending, "lines": lines, "text": body,
+            "text_block": name, "pending_edits": is_pending, "lines": lines, "text": body, "version": _hash(body),
             "message": "{:s} of “{:s}”; edit it with apply_transcript_edit".format(_plural(len(lines), "line"),
                                                                                  os.path.basename(media))}
 
 
+def _plain_line(row: str) -> str:
+    """A line of the text as the tool compares it: no time mark, one space between words."""
+    return " ".join(te.MARK_RE.sub("", row, count=1).split())
+
+
+def _stale(body: str, block_name: str, why: str) -> dict[str, Any]:
+    return {"status": "refused", "message": "{:s}: read it again (the current text is in text_now) and send the "
+            "edit for that".format(why), "text_now": body, "version": _hash(body), "text_block": block_name}
+
+
 def tool_apply_transcript_edit(strip: str | None = None, text: str | None = None, cut_lines: Any = None,
-                               dry_run: bool = False) -> dict[str, Any]:
-    """``apply_transcript_edit`` (MCP): edit the clip by editing its transcript text, one undo step."""
+                               dry_run: bool = False, version: str | None = None, lines: Any = None,
+                               confirm_large_cut: bool = False) -> dict[str, Any]:
+    """``apply_transcript_edit`` (MCP): edit the clip by editing its transcript text, one undo step.
+
+    ``cut_lines`` (or ``lines``) cut whole lines and must come with what the caller saw: the
+    ``version`` ``get_transcript_text`` returned, or ``lines`` = ``[{"line", "text"}]`` for the
+    lines to cut; if the text isn't the one they were read from the answer is ``refused`` with the
+    current text.  ``cut_lines`` with ``text`` is refused.  A dry run creates nothing and writes
+    nothing.  An edit that cuts more than half the clip needs ``confirm_large_cut``."""
+    if (cut_lines or lines) and text is not None:
+        return {"status": "error", "message": "Give either the edited text (text) or the lines to cut (cut_lines / "
+                "lines), not both: nothing was changed"}
     scene = _tool_scene()
     try:
         s, _note = _tool_strip(scene, strip)
@@ -1421,36 +1639,73 @@ def tool_apply_transcript_edit(strip: str | None = None, text: str | None = None
         if block is not None and pending(block):
             raise _Problem("The transcript text “{:s}” has edits that aren't applied yet: Apply or Refresh it in "
                            "the Text Editor first".format(block.name))
-        block, _note = open_transcript(scene, s)
+        if dry_run:                                 # the text as the timeline shows it now, in memory only
+            if block is not None:
+                state = dict(state_of(block))
+            else:
+                path = find_transcript(media)
+                if not path:
+                    raise _Problem(NOT_TRANSCRIBED.format(s.name))
+                state = {"source": _norm(media), "path": media, "scene": scene.name, "transcript": path,
+                         "retext": "{}"}
+            got = view_now(state)
+            _state_from_view(state, got)
+            target: Any = _Virtual(block.name if block is not None else "", state, got["view"]["text"])
+        else:
+            target, _note = open_transcript(scene, s)
     except _Problem as ex:
         return {"status": "error", "message": str(ex)}
-    body = block.as_string()
-    if cut_lines:
-        if isinstance(cut_lines, (int, str)):
-            cut_lines = [cut_lines]
+    body = target.as_string()
+    now_version = _hash(body)
+    if version and version != now_version:
+        return _stale(body, target.name, "The transcript changed since you read it")
+    if cut_lines or lines:
+        wanted: set[int] = set()
+        shown: dict[int, str] = {}
         try:
-            doomed = {int(n) - 1 for n in cut_lines}
-        except (TypeError, ValueError):
-            return {"status": "error", "message": "cut_lines are line numbers (1 = the first line)"}
-        lines = body.splitlines()
-        bad = sorted(n + 1 for n in doomed if not 0 <= n < len(lines))
+            if isinstance(cut_lines, (int, str)):
+                cut_lines = [cut_lines]
+            wanted.update(int(n) for n in (cut_lines or ()))
+            for item in lines or ():
+                wanted.add(int(item["line"]))
+                shown[int(item["line"])] = str(item.get("text", ""))
+        except (TypeError, ValueError, KeyError, AttributeError):
+            return {"status": "error", "message": "cut_lines are line numbers (1 = the first line); lines are "
+                    "[{\"line\": 3, \"text\": \"...\"}]"}
+        rows = body.splitlines()
+        bad = sorted(n for n in wanted if not 1 <= n <= len(rows))
         if bad:
             return {"status": "error", "message": "No line {:s}: the text has {:d} lines".format(
-                ", ".join(str(n) for n in bad), len(lines))}
-        body = "\n".join(ln for n, ln in enumerate(lines) if n not in doomed) + "\n"
+                ", ".join(str(n) for n in bad), len(rows))}
+        if not version:
+            unchecked = sorted(n for n in wanted if n not in shown)
+            if unchecked:
+                return {"status": "error", "message": "Give the version get_transcript_text returned, or lines with "
+                        "the text of line {:s} as you read it: cutting by number alone could cut the wrong "
+                        "lines. Nothing was changed".format(", ".join(str(n) for n in unchecked)),
+                        "version": now_version}
+        for n, said in shown.items():
+            if " ".join(said.split()).casefold() != _plain_line(rows[n - 1]).casefold():
+                return _stale(body, target.name, "Line {:d} isn't what you read".format(n))
+        body = "\n".join(r for n, r in enumerate(rows, 1) if n not in wanted) + "\n"
     elif text is not None:
         body = str(text)
     else:
-        return {"status": "error", "message": "Give the edited text (text) or the lines to cut (cut_lines)"}
-    out = apply_text(block, body, keep_text=False, dry_run=bool(dry_run))
+        return {"status": "error", "message": "Give the edited text (text) or the lines to cut (cut_lines with the "
+                "version of get_transcript_text, or lines)"}
+    out = apply_text(target, body, keep_text=False, dry_run=bool(dry_run), confirm=bool(confirm_large_cut))
+    if out["status"] == "confirm":
+        out.update(status="refused", needs_confirm=True)
+        out["message"] += " (nothing was changed)"
     if not dry_run and (out["status"] == "ok" or out.get("changed")):
         _seq()._push_undo(WHAT)  # pylint: disable=protected-access
         if out.get("flags"):
-            refresh_text(block)
+            refresh_text(target)
             out["note"] = "The flagged text wasn't applied; the transcript text shows the timeline now"
-    if not dry_run and block is not None and out["status"] in ("ok", "nothing"):
-        out["text_now"] = block.as_string()
-    out.update(strip=s.name, scene=scene.name, text_block=block.name)
+    if not dry_run and out["status"] in ("ok", "nothing"):
+        out["text_now"] = target.as_string()
+        out["version"] = _hash(out["text_now"])
+    out.update(strip=s.name, scene=scene.name, text_block=target.name)
     return out
 
 

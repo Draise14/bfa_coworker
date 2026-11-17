@@ -22,6 +22,9 @@ class Params(NamedTuple):
     cut_lines: tuple[int, ...] = ()
     text: str | None = None
     dry_run: bool = False
+    version: str | None = None
+    lines: tuple[Any, ...] = ()
+    confirm_large_cut: bool = False
 
 
 class Result(NamedTuple):
@@ -31,6 +34,10 @@ class Result(NamedTuple):
     scene: str | None = None
     text_block: str | None = None
     cut_words: int = 0
+    seconds: float = 0.0
+    percent: int = 0
+    needs_confirm: bool = False
+    version: str | None = None
     seconds_removed: float = 0.0
     moved: bool = False
     moves: int = 0
@@ -60,5 +67,6 @@ def main(params: Params) -> Result:
     if mod is None or not hasattr(mod, "tool_apply_transcript_edit"):
         return Result(status="error", message="Coworker's Edit by Transcript isn't loaded in this Blender.")
     out = mod.tool_apply_transcript_edit(params.strip or None, params.text, list(params.cut_lines or ()),
-                                         bool(params.dry_run))
+                                         bool(params.dry_run), params.version or None, list(params.lines or ()),
+                                         bool(params.confirm_large_cut))
     return Result(**{k: v for k, v in out.items() if k in Result._fields})

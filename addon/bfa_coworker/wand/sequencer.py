@@ -1050,12 +1050,12 @@ class CoworkerEntry:
 
 
 # Coworker's other video operators, in the same Video panel and Strip-menu section when
-# their modules are registered (#376 Auto Captions, #333 Make Vertical, #498 Open Transcript):
+# their modules are registered (#376 Auto Captions, #333 Make Vertical, #498 Edit Transcript):
 # (operator, its class name in bpy.types, text, wand icon, Blender fallback icon).
 OTHERS = (
     ("bfacw.auto_captions", "BFACW_OT_auto_captions", "Auto Captions", "captions", "FONT_DATA"),
     ("bfacw.make_vertical", "BFACW_OT_make_vertical", "Make Vertical", "vertical", "SEQ_PREVIEW"),
-    ("bfacw.open_transcript", "BFACW_OT_open_transcript", "Open Transcript", "transcribe", "TEXT"),
+    ("bfacw.open_transcript", "BFACW_OT_open_transcript", "Edit Transcript", "transcribe", "TEXT"),
 )
 # Of those, the ones that open no dialog (no "..." in the Strip menu).
 NO_DIALOG = frozenset({"bfacw.open_transcript"})

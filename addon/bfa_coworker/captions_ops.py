@@ -796,15 +796,17 @@ def _add_highlights(scene: Any, line: Any, framed: dict, style: dict, font: Any,
     x0, y0 = line.location[0], line.location[1]
     made = 0
     tag = tag_of(line) or {}
+    line_name, line_channel = line.name, line.channel      # read once: no strip is held across the new ones (#593)
+    del line
     for i, a, b in cap.highlight_windows(framed):
         prefix = lead + (" ".join(words[:i]) + " " if i else "")
         x = cap.highlight_left(x0, width, measure(prefix, px) if prefix else 0.0, scene.render.resolution_x)
-        h = _text_strip(ed, "{:s}_w{:02d}".format(line.name, i + 1), line.channel + 1, a, b, words[i], style, font)
+        h = _text_strip(ed, "{:s}_w{:02d}".format(line_name, i + 1), line_channel + 1, a, b, words[i], style, font)
         h.color = tuple(style["highlight"])
         h.anchor_x, h.alignment_x = 'LEFT', 'LEFT'
         h.location = (x, y0)
         h.wrap_width = 1.0
-        h[cap.TAG] = {"source": tag.get("source", ""), "style": style["key"], "role": "word", "line": line.name}
+        h[cap.TAG] = {"source": tag.get("source", ""), "style": style["key"], "role": "word", "line": line_name}
         made += 1
     return made
 
@@ -1378,8 +1380,13 @@ def text_changed(strip: Any, scene: Any = None) -> None:
     old = [s for s in top if (tag_of(s) or {}).get("line") == strip.name]
     names = [s.name for s in old]
     from .wand.prefetch import remove_strips    # the Sequencer's prefetch stopped first (#536)
+    line_name = strip.name
     remove_strips(top, old)
+    del old, top
     _drop_fcurves(scene, names)
+    strip = _all(ed).get(line_name)         # the line looked up again: nothing is held across a removal (#593)
+    if strip is None:
+        return
     st = cap.resolve_style(key, scene.render.resolution_x, scene.render.resolution_y)
     text = " ".join(strip.text.split())
     if strip.text != text:
@@ -1688,6 +1695,11 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
         except CaptionsError as ex:
             self.report({'ERROR'}, str(ex))
             return {'CANCELLED'}
+        try:
+            from . import transcript_edit_ops    # a transcript's changed words follow its captions (#595)
+            transcript_edit_ops.captions_made(scene, self.transcript_path)
+        except Exception as ex:  # pylint: disable=broad-exception-caught
+            print("[Coworker] Auto Captions: the transcript's words not applied: {!s}".format(ex))
         self.report({'WARNING'} if _warn(result) else {'INFO'}, _summary(result))
         return {'FINISHED'}
 

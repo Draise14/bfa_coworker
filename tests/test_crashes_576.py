@@ -49,9 +49,13 @@ br = _load("mcp_to_blender_server")
 att = _load("chat_attachments")
 
 
+def _op(ident, pointer=1):
+    return types.SimpleNamespace(bl_idname=ident, as_pointer=lambda: pointer)
+
+
 def _wm(modal=(), playing=False):
     window = types.SimpleNamespace(
-        modal_operators=[types.SimpleNamespace(bl_idname=i) for i in modal],
+        modal_operators=[_op(i, n + 1) for n, i in enumerate(modal)],
         screen=types.SimpleNamespace(is_animation_playing=playing))
     return types.SimpleNamespace(windows=[window])
 
@@ -62,7 +66,7 @@ class StepCodeLog(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         scl.reset(self.tmp.name)
         self.addCleanup(scl.reset)
-        self.path = Path(self.tmp.name) / scl.FILE_NAME
+        self.path = scl.file_path()
 
     def test_code_is_on_disk_before_the_step_ends_and_marked_running(self):
         token = scl.begin("execute_blender_code", "import bpy\nbpy.data.objects.remove(o)", "main")
@@ -106,18 +110,48 @@ class StepCodeLog(unittest.TestCase):
         scl.begin("t", "a" * (scl.MAX_CHARS - 10) + " " + key)
         self.assertNotIn("sk-Z", self.path.read_text(encoding="utf-8"))
 
-    def test_the_file_of_the_session_before_is_kept_as_prev(self):
-        scl.begin("t", "crashed_script()")
-        scl.reset(self.tmp.name)                    # a new session
-        scl.begin("t", "new_script()")
-        prev = (Path(self.tmp.name) / scl.PREV_NAME).read_text(encoding="utf-8")
-        self.assertIn("crashed_script()", prev)
-        self.assertIn("RUNNING", prev)
-        self.assertNotIn("crashed_script()", self.path.read_text(encoding="utf-8"))
+    def test_a_key_registered_after_the_step_began_is_hidden_in_the_next_write(self):
+        token = scl.begin("t", "x = 'late-registered-secret-576'")
+        self.assertIn("late-registered-secret-576", self.path.read_text(encoding="utf-8"))
+        log.set_secret("t576b", "late-registered-secret-576")
+        self.addCleanup(log.set_secret, "t576b", "")
+        scl.end(token, "finished")
+        self.assertNotIn("late-registered-secret-576", self.path.read_text(encoding="utf-8"))
+
+    def test_the_file_name_has_the_process_id(self):
+        import os
+        self.assertEqual(self.path.name, "steps_%d.txt" % os.getpid())
+
+    def test_files_of_other_processes_older_than_a_few_days_are_removed(self):
+        import os
+        import time
+        old = Path(self.tmp.name) / "steps_1.txt"
+        new = Path(self.tmp.name) / "steps_2.txt"
+        old.write_text("x")
+        new.write_text("y")
+        past = time.time() - (scl.KEEP_DAYS + 1) * 86400
+        os.utime(old, (past, past))
+        scl.begin("t", "code")
+        self.assertFalse(old.exists())
+        self.assertTrue(new.exists())
+
+    def test_a_failed_write_adds_no_entry_and_leaves_no_false_running(self):
+        with mock.patch.object(scl, "_write", side_effect=OSError("disk")):
+            self.assertIsNone(scl.begin("t", "never_written()"))
+        scl.begin("t", "second()")
+        text = self.path.read_text(encoding="utf-8")
+        self.assertNotIn("never_written()", text)
+        self.assertEqual(text.count("=== step "), 1)
+
+    def test_a_failed_end_removes_the_file_instead_of_leaving_running(self):
+        token = scl.begin("t", "code()")
+        with mock.patch.object(scl, "_write", side_effect=OSError("disk")):
+            scl.end(token, "finished")
+        self.assertFalse(self.path.exists())
 
     def test_never_raises(self):
-        scl.reset(str(Path(self.tmp.name) / "file.txt" / "nested"))
         (Path(self.tmp.name) / "file.txt").write_text("x")      # a file where a folder is needed
+        scl.reset(str(Path(self.tmp.name) / "file.txt" / "nested"))
         self.assertIsNone(scl.begin("t", "code"))
         scl.end(None)
         scl.end("not a token")
@@ -173,13 +207,13 @@ class DragGate(unittest.TestCase):
         return br._ExecResult({"status": "ok", "result": "done"})
 
     def test_nothing_in_the_way_runs_at_once(self):
-        res = br._drag_gate("", "execute_blender_code", self._run)
+        res = br._drag_gate("", "execute_blender_code", "code", self._run)
         self.assertEqual(self.ran, [1])
         self.assertIsNone(res.check_fn)
 
     def test_a_write_waits_for_the_drag_then_runs(self):
         ua.note_update()
-        res = br._drag_gate("", "execute_blender_code", self._run)
+        res = br._drag_gate("", "execute_blender_code", "code", self._run)
         self.assertEqual(self.ran, [])
         self.assertIsNotNone(res.check_fn)
         self.assertIsNone(res.check_fn())              # still dragging
@@ -189,10 +223,10 @@ class DragGate(unittest.TestCase):
         self.assertEqual(self.ran, [1])
 
     def test_waiting_is_bounded_and_answers_that_nothing_changed(self):
-        self.wm.windows[0].modal_operators = [types.SimpleNamespace(bl_idname="TRANSFORM_OT_rotate")]
+        self.wm.windows[0].modal_operators = [_op("TRANSFORM_OT_rotate")]
         t0 = 1000.0
         with mock.patch.object(br.time, "monotonic", return_value=t0):
-            res = br._drag_gate("", "execute_blender_code", self._run)
+            res = br._drag_gate("", "execute_blender_code", "code", self._run)
         with mock.patch.object(br.time, "monotonic", return_value=t0 + ua.WAIT_LIMIT + 1):
             answer = res.check_fn()
         self.assertEqual(self.ran, [])
@@ -202,13 +236,13 @@ class DragGate(unittest.TestCase):
 
     def test_reads_and_plans_never_wait(self):
         ua.note_update()
-        res = br._drag_gate("", "get_scene_info", self._run)
+        res = br._drag_gate("", "get_scene_info", "code", self._run)
         self.assertEqual(self.ran, [1])
         self.assertIsNone(res.check_fn)
 
     def test_stop_ends_the_wait_without_running(self):
         ua.note_update()
-        res = br._drag_gate("t1", "execute_blender_code", self._run)
+        res = br._drag_gate("t1", "execute_blender_code", "code", self._run)
         with mock.patch.object(br, "_stop_pressed", return_value=True):
             answer = res.check_fn()
         self.assertEqual(self.ran, [])
@@ -220,7 +254,7 @@ class DragGate(unittest.TestCase):
 
         def run():
             return br._ExecResult({}, inner)
-        res = br._drag_gate("", "execute_blender_code", run)
+        res = br._drag_gate("", "execute_blender_code", "code", run)
         ua._last_update[0] -= 1.0
         self.assertIsNone(res.check_fn())              # ran, its own answer not there yet
         self.assertIsNone(res.check_fn())
@@ -260,6 +294,135 @@ class PasteGuards(unittest.TestCase):
         context.window = window
         with att._image_editor(context) as got:
             self.assertIs(got, space)               # leaving the block must not raise
+
+
+class LongModalsAndOwnChanges(unittest.TestCase):
+    def setUp(self):
+        ua.reset()
+        self.addCleanup(ua.reset)
+
+    def test_a_modal_running_longer_than_the_limit_is_no_drag(self):
+        wm = _wm(["WM_OT_some_file_browser"])
+        self.assertEqual(ua.check(wm, now=100.0)[0], "modal")
+        self.assertEqual(ua.check(wm, now=100.0 + ua.LONG_MODAL - 1)[0], "modal")
+        self.assertEqual(ua.check(wm, now=100.0 + ua.LONG_MODAL + 1), ("", ""))
+
+    def test_a_new_modal_of_the_same_type_is_held_again(self):
+        wm = _wm(["TRANSFORM_OT_translate"])
+        ua.check(wm, now=100.0)
+        wm.windows[0].modal_operators = []
+        self.assertEqual(ua.check(wm, now=200.0), ("", ""))          # it ended: forgotten
+        wm.windows[0].modal_operators = [_op("TRANSFORM_OT_translate", 9)]
+        self.assertEqual(ua.check(wm, now=201.0)[0], "modal")
+
+    def test_the_sampler_stamps_a_modal_before_any_step_asks(self):
+        wm = _wm(["VIEW3D_OT_walk"])
+        ua.sample(wm, now=10.0)
+        self.assertEqual(ua.check(wm, now=10.0 + ua.LONG_MODAL + 1), ("", ""))
+
+    def test_the_refusal_names_the_tool_and_has_no_mouse_wording_for_a_modal(self):
+        text = ua.refusal(ua.busy_reason(_wm(["TRANSFORM_OT_rotate"])), 8.0, "modal")
+        self.assertIn("TRANSFORM_OT_rotate", text)
+        self.assertIn("Esc", text)
+        self.assertNotIn("let go of the mouse", text)
+        self.assertIn("let go of the mouse", ua.refusal("x", 8.0, "drag"))
+
+    def test_own_changes_are_not_a_drag(self):
+        ua.own(1.0)
+        ua.note_update()
+        self.assertEqual(ua.busy_reason(_wm()), "")
+
+    def test_a_slow_evaluation_after_a_long_step_is_still_its_own(self):
+        with mock.patch.object(ua.time, "monotonic", side_effect=[100.0, 103.0, 103.0]):
+            with ua.stepping():
+                pass                              # the step took 3 s
+        with mock.patch.object(ua.time, "monotonic", return_value=105.0):
+            ua.note_update()                      # its evaluation arrives 2 s later
+        self.assertEqual(ua._last_update[0], 0.0)
+        with mock.patch.object(ua.time, "monotonic", return_value=109.0):
+            ua.note_update()                      # later still: the user's
+        self.assertEqual(ua._last_update[0], 109.0)
+
+    def test_own_change_of_the_api_marks_it(self):
+        cw = _load("coworker_api")
+        cw.own_change()
+        ua.note_update()
+        self.assertEqual(ua._last_update[0], 0.0)
+
+    def test_two_chats_waiting_for_the_same_drag_both_run_after_it(self):
+        wm = _wm()
+        bpy = types.SimpleNamespace(context=types.SimpleNamespace(window_manager=wm))
+        ran = []
+        with mock.patch.dict(sys.modules, {"bpy": bpy}):
+            ua.note_update()
+            parent = br._drag_gate("", "execute_blender_code", "a", lambda: ran.append("parent") or br._ExecResult({"status": "ok"}))
+            helper = br._drag_gate("h1", "execute_blender_code", "b", lambda: ran.append("helper") or br._ExecResult({"status": "ok"}))
+            self.assertEqual(ran, [])
+            ua._last_update[0] -= 1.0
+            self.assertEqual(parent.check_fn()["status"], "ok")
+            self.assertEqual(helper.check_fn()["status"], "ok")
+        self.assertEqual(sorted(ran), ["helper", "parent"])
+
+    def test_playback_running_does_not_hold_a_step(self):
+        wm = _wm(playing=True)
+        bpy = types.SimpleNamespace(context=types.SimpleNamespace(window_manager=wm))
+        with mock.patch.dict(sys.modules, {"bpy": bpy}):
+            ua.note_update()
+            res = br._drag_gate("", "execute_blender_code", "a", lambda: br._ExecResult({"status": "ok"}))
+        self.assertIsNone(res.check_fn)
+
+    def test_jump_to_tools_are_gated_like_writes(self):
+        wm = _wm(["TRANSFORM_OT_translate"])
+        bpy = types.SimpleNamespace(context=types.SimpleNamespace(window_manager=wm))
+        with mock.patch.dict(sys.modules, {"bpy": bpy}):
+            res = br._drag_gate("", "jump_to_asset_browser", "a", lambda: br._ExecResult({"status": "ok"}))
+        self.assertIsNotNone(res.check_fn)
+        self.assertTrue(br._changes_scene("jump_to_asset_browser"))
+        self.assertFalse(br._changes_scene("get_scene_digest"))
+
+    def test_a_step_that_waited_for_an_approval_card_is_checked_again_when_it_runs(self):
+        src = (_ADDON / "mcp_to_blender_server.py").read_text(encoding="utf-8")
+        body = src[src.index("    def _execute(c: str, s: bool)"):src.index("    def _run() -> _ExecResult")]
+        self.assertIn("_drag_gate(", body)          # the gate sits in _execute, after card and claim waits
+        self.assertNotIn("_drag_gate(", src[src.index("    def _gated_run()"):src.index("    exec_result = None")])
+
+    def test_internal_code_is_not_held(self):
+        src = (_ADDON / "mcp_to_blender_server.py").read_text(encoding="utf-8")
+        self.assertIn("if _internal:\n            return _run_code_step(c, s)", src.replace("\r\n", "\n"))
+
+
+class PasteRefusal(unittest.TestCase):
+    def setUp(self):
+        ua.reset()
+        self.addCleanup(ua.reset)
+
+    def _context(self, areas):
+        window = types.SimpleNamespace(screen=types.SimpleNamespace(areas=areas))
+        wm = _wm(["TRANSFORM_OT_translate"])
+        wm.windows = [window]
+        window.modal_operators = [_op("TRANSFORM_OT_translate")]
+        context = mock.MagicMock()
+        context.window = window
+        context.window_manager = wm
+        return context
+
+    def test_busy_blocks_only_when_an_area_would_be_borrowed(self):
+        space = types.SimpleNamespace(image=None, use_image_pin=False)
+        editor = types.SimpleNamespace(type="IMAGE_EDITOR", spaces=types.SimpleNamespace(active=space), regions=[],
+                                       ui_type="IMAGE_EDITOR", width=1, height=1)
+        with att._image_editor(self._context([editor])) as got:
+            self.assertIs(got, space)               # an open Image Editor is used, drag or not
+        other = types.SimpleNamespace(type="TIMELINE", spaces=types.SimpleNamespace(active=space), regions=[],
+                                      ui_type="TIMELINE", width=1, height=1)
+        with att._image_editor(self._context([other])) as got:
+            self.assertIsNone(got)
+        self.assertIn("tool", att.take_refusal())
+        self.assertEqual(att.take_refusal(), "")    # read once
+
+    def test_the_editor_reports_the_wait_and_pastes_no_text(self):
+        src = (_ADDON / "chat_editor.py").read_text(encoding="utf-8")
+        self.assertIn("Paste Image waits while a tool is running", src)
+        self.assertIn("chat_attachments.take_refusal()", src)
 
 
 if __name__ == "__main__":

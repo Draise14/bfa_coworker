@@ -58,6 +58,7 @@ __all__ = (
     "load_image_file",
     "paste_clipboard_image",
     "prune_attachments",
+    "take_refusal",
 )
 
 import base64
@@ -261,6 +262,25 @@ def image_path_from_text(text: str) -> str:
     return path if os.path.isfile(path) else ""
 
 
+_refusal = [""]
+
+
+def _busy_reason(context) -> str:
+    """Why an area must not be switched now (a drag or a running tool), or ``""``."""
+    try:
+        from . import ui_activity
+        return ui_activity.busy_reason(context.window_manager)
+    except ImportError:         # the module loaded on its own (the paste tests)
+        return ""
+
+
+def take_refusal() -> str:
+    """Why the last :func:`paste_clipboard_image` did nothing because Blender was busy, or
+    ``""`` (read once)."""
+    reason, _refusal[0] = _refusal[0], ""
+    return reason
+
+
 @contextlib.contextmanager
 def _image_editor(context):
     """An Image Editor to run ``image.clipboard_paste`` in, with the context set to it.
@@ -280,6 +300,11 @@ def _image_editor(context):
     area = next((a for a in areas if a.type == "IMAGE_EDITOR"), None)
     borrowed = None
     if area is None:
+        busy = _busy_reason(context)
+        if busy:                # #576: no area is switched under a drag or a running tool
+            _refusal[0] = busy
+            yield None
+            return
         chat = getattr(context, "area", None)
         area = min(areas, key=lambda a: (a.type == "VIEW_3D", a == chat, a.width * a.height))
         borrowed = area.ui_type
@@ -316,13 +341,7 @@ def paste_clipboard_image(context=None):
     if paste is None:
         return None
     pasted = None
-    try:
-        from . import ui_activity
-        busy = ui_activity.busy_reason(context.window_manager)
-    except ImportError:         # the module loaded on its own (the paste tests)
-        busy = ""
-    if busy:
-        return None         # #576: no area is switched under a drag or a running tool
+    _refusal[0] = ""
     try:
         with _image_editor(context) as space:
             if space is None or not paste.poll():

@@ -1036,6 +1036,17 @@ def _box_override(box: InputBox) -> dict:
     return _window_override(_region_for_box(box))
 
 
+def _status_note(context: Any, message: str) -> None:
+    """A short note in the status bar (Ctrl V has no operator to report through)."""
+    print("[Coworker] " + message)
+    try:
+        workspace = context.workspace
+        workspace.status_text_set(message)
+        bpy.app.timers.register(lambda: workspace.status_text_set(None), first_interval=4.0)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+
+
 def _paste_image(context: Any, text: str, thread: Any, op: Any = None, force: bool = False) -> bool:
     """Attach what the clipboard holds to *thread*'s chat (#450): the image file its text
     names, else its picture (with no text, or *force*).  False: nothing image-like, and
@@ -1048,6 +1059,13 @@ def _paste_image(context: Any, text: str, thread: Any, op: Any = None, force: bo
         print("[Coworker] paste image: {:s}".format(str(ex)))
         return False
     if image is None:
+        if chat_attachments.take_refusal():       # #576: Blender is busy: say so, paste nothing
+            message = "Paste Image waits while a tool is running"
+            if op is not None:
+                op.report({"WARNING"}, message)
+            else:
+                _status_note(context, message)
+            return True
         return False
     ui_chat._attach_to_socket(context, op, image, thread)
     _tag_chat_regions()

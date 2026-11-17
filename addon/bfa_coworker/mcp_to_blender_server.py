@@ -1421,11 +1421,20 @@ def _execute_code_from_request(
         return run
 
     def _execute(c: str, s: bool) -> _ExecResult:
-        # #576: the agent's code is on disk (redacted) before it runs, so a crash leaves it to read.
-        from . import step_code_log
-        _logged = None if _internal else step_code_log.begin(_tool, c, _thread)
+        # #576: every path to running code ends here (after an approval card or a claim wait too),
+        # so the drag / modal check sits here, once.
+        if _internal:
+            return _run_code_step(c, s)
+        return _drag_gate(_thread, _tool, c, lambda: _run_code_step(c, s))
+
+    def _run_code_step(c: str, s: bool) -> _ExecResult:
+        # The agent's code is on disk (redacted) before it runs, so a crash leaves it to read.
+        from . import step_code_log, ui_activity
+        from .risky_steps import is_toolcode
+        _logged = None
+        if not _internal and (not is_toolcode(c) or _changes_scene(_tool)):
+            _logged = step_code_log.begin(_tool, c, _thread)
         try:
-            from . import ui_activity
             with ui_activity.stepping():
                 result = _for_thread(_execute_code)(c, strict_json=s, **_data_kw)
         except BaseException:
@@ -1446,7 +1455,7 @@ def _execute_code_from_request(
         """Threads 3 (#359): a write to what another running chat claimed waits or asks."""
         if _internal:
             return _run()
-        return _drag_gate(_thread, _tool, lambda: _claim_gate(_thread, _tool, request.get("args"), str(code), _run))
+        return _claim_gate(_thread, _tool, request.get("args"), str(code), _run)
 
     exec_result = None
     # Runtime 1 (#310): the same call again and again asks, then is refused.  The local
@@ -1508,39 +1517,48 @@ def _execute_code_from_request(
     return exec_result, strict_json
 
 
-def _drag_gate(thread: str, tool: str, run: Callable[[], _ExecResult]) -> _ExecResult:
+def _changes_scene(tool: str) -> bool:
+    """*tool* may change the scene or the screen: a write tool, or one that switches a workspace
+    or an area (``jump_to_*``)."""
+    from . import claims
+    from .engine import PLAN_SAFE_TOOLS
+    return claims.writes(tool, PLAN_SAFE_TOOLS) or str(tool or "").startswith("jump_to_")
+
+
+def _drag_gate(thread: str, tool: str, code: str, run: Callable[[], _ExecResult]) -> _ExecResult:
     """A scene-changing step does not run while the user drags a slider or a modal tool runs (#576).
 
     Agent code that rewrites a modifier's node tree or removes the object while its slider
     is being dragged crashed Blender.  The step waits (deferred, polled each tick) until
     :mod:`ui_activity` says the mouse work is over, at most :data:`ui_activity.WAIT_LIMIT`
-    seconds, then answers that nothing was changed.  Reads, views and plans run at once."""
-    from . import claims, ui_activity
-    from .engine import PLAN_SAFE_TOOLS
-    if not claims.writes(tool, PLAN_SAFE_TOOLS):
+    seconds, then answers that nothing was changed (the answer is the step's result, so the
+    Workshop shows it).  Reads and plans run at once."""
+    from . import ui_activity
+    if not _changes_scene(tool):
         return run()
     try:
         import bpy  # pylint: disable=import-error
         wm = bpy.context.window_manager
     except Exception:  # pylint: disable=broad-exception-caught
         return run()
-    reason = ui_activity.busy_reason(wm)
-    if not reason:
+    kind, _what = ui_activity.check(wm)
+    if not kind:
         return run()
-    print("[Coworker] bridge: {:s}'s {:s} waits, {:s}".format(thread or "main", tool, reason))
+    print("[Coworker] bridge: {:s}'s {:s} waits, {:s}".format(thread or "main", tool, ui_activity.busy_reason(wm)))
     state: dict[str, Any] = {"since": time.monotonic(), "inner": None}
 
     def check() -> dict[str, object] | None:
         if state["inner"] is not None:          # it ran, and its own answer is deferred
             return state["inner"]()
         if _stop_pressed(thread):
-            return {"status": "error", "message": "Stopped by the user while the step waited for the mouse "
-                                                  "to be released. Nothing was changed."}
-        now_reason = ui_activity.busy_reason(wm)
-        if now_reason:
+            return {"status": "error", "message": "Stopped by the user while the step waited for Blender's "
+                                                  "tool or mouse work to end. Nothing was changed."}
+        now_kind, _ = ui_activity.check(wm)
+        if now_kind:
             waited = time.monotonic() - state["since"]
             if waited > ui_activity.WAIT_LIMIT:
-                return {"status": "error", "message": ui_activity.refusal(now_reason, waited)}
+                return {"status": "error",
+                        "message": ui_activity.refusal(ui_activity.busy_reason(wm), waited, now_kind)}
             return None
         result = run()
         if result.check_fn is not None:

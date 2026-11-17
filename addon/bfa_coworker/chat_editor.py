@@ -110,9 +110,10 @@ def _status(context: Any) -> TopBar:
     props = _props()
     if _is_harness(prefs):
         running = mcp_to_blender_server.is_running()
+        failed = _start_error(props) if not running else ""        # why the start failed (#564)
         return TopBar(mode_label="External MCP", mode_icon=_mode_icon("EXTERNAL_HARNESS"),
-                      status="Bridge Running" if running else "Bridge Offline",
-                      status_icon="CHECKMARK" if running else "CANCEL",
+                      status="Bridge Running" if running else failed or "Bridge Offline",
+                      status_icon="CHECKMARK" if running else "ERROR" if failed else "CANCEL",
                       running=running, start_label="Start Bridge")
     if prefs is not None and prefs.operating_mode == "EXTERNAL_AGENT":
         engine = ui_chat._acp
@@ -141,7 +142,7 @@ def _status(context: Any) -> TopBar:
         status = "{:s} {:s} ({:s})".format(ui_chat._phase_text(state), ui_chat._spinner_char(state),
                                            ui_chat._fmt_duration(elapsed))
     elif not services.mcp_server_running:
-        status = "Offline"
+        status = _start_error(props) or "Offline"       # a failed start says why (#564)
     elif state.error:
         status = "Error: {:s}".format(state.error)
     waiting = _helpers_waiting(context, state) if services.mcp_server_running else ""
@@ -149,12 +150,18 @@ def _status(context: Any) -> TopBar:
         status = waiting
     ok = services.mcp_server_running
     icon = ("TIME" if waiting else "CHECKMARK" if ok and not state.is_thinking and not state.error else
-            "SORTTIME" if state.is_thinking else "ERROR" if state.error else "CANCEL")
+            "SORTTIME" if state.is_thinking else "ERROR" if state.error or status.startswith("Error") else "CANCEL")
     return TopBar(mode_label="Local LLM" if local else "Remote API",
                   mode_icon=_mode_icon("LOCAL_LLM" if local else "REMOTE_API"),
                   status=status, status_icon=icon, running=ok, error=bool(state.error),
                   chat_modes=tuple((item[0], item[1], item[3]) for item in CHAT_MODE_ITEMS),
                   chat_mode=getattr(props, "chat_mode", ""))
+
+
+def _start_error(props: Any) -> str:
+    """The status a failed Start / Restart left ("Error: ..."), else "" (#564)."""
+    status = str(getattr(props, "chat_status", "") or "")
+    return status if status.startswith("Error") else ""
 
 
 def _helpers_waiting(context: Any, state: Any) -> str:

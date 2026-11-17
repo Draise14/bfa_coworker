@@ -104,30 +104,76 @@ def get_actual_host() -> str:
     return _actual_host
 
 
-def _find_available_port(preferred: int, max_offset: int = 100) -> int:
-    """Return the first available port starting at *preferred*.
+# How far start() looks past the wanted port for a free one.
+_PORT_SEARCH = 100
+# Why the last start() did not get the wanted port ("" when it did), for the UI (#558).
+_port_note: str = ""
 
-    Tries ``preferred``, ``preferred + 1``, ... up to ``preferred + max_offset``.
-    Returns the first port that can be bound, or 0 if none are available.
-    """
-    for offset in range(max_offset + 1):
-        candidate = preferred + offset
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            if sys.platform == "win32":
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-            s.bind(("127.0.0.1", candidate))
-            s.close()
-            if offset > 0:
-                print("[Coworker] _find_available_port: port {:d} in use, shuffled to {:d}".format(
-                    preferred, candidate))
-            return candidate
-        except (OSError, socket.error):
-            s.close()
-            continue
-    print("[Coworker] _find_available_port: no port available in range {:d}-{:d}".format(
-        preferred, preferred + max_offset))
-    return 0
+
+def port_note() -> str:
+    """Why the bridge is not on the port it was asked for ("" when it is), naming who has it."""
+    return _port_note
+
+
+def _address_in_use(ex: OSError) -> bool:
+    """*ex* says the port is taken.  Windows gives 10048, or 10013 when another socket
+    holds it exclusively."""
+    import errno
+    return (getattr(ex, "winerror", None) in (10048, 10013)
+            or ex.errno in (errno.EADDRINUSE, errno.EACCES, 10048, 10013))
+
+
+def _listener_answers(host: str, port: int) -> bool:
+    """True when something accepts a connection on *port*.  Only a "yes" counts: a refused,
+    timed-out or reset connect proves nothing (a busy Blender with a full backlog does not
+    answer in time), so the bind below decides (#558)."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.settimeout(0.5)
+        probe.connect((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
+def _bind_listener(host: str, port: int) -> socket.socket:
+    """The bridge's listening socket on *port*, or ``OSError``.  The same socket is kept,
+    so the port check and the bind can't disagree."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if sys.platform == "win32":
+            # SO_EXCLUSIVEADDRUSE prevents a second process from binding
+            # the same port, even with SO_REUSEADDR.  Without this, a
+            # second Blender instance would silently share port 9876 and
+            # the OS would non-deterministically route code-execution
+            # requests to the wrong instance.  With it, the bind fails
+            # whenever anyone else holds the port: the bind is the check.
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setblocking(False)
+        sock.bind((host, port))
+        sock.listen(_LISTEN_BACKLOG)
+    except OSError:
+        sock.close()
+        raise
+    return sock
+
+
+def _who_has(port: int) -> str:
+    """The other Coworker window on *port*, as the user knows it; else a plain guess."""
+    try:
+        from . import session_identity
+        for other in session_identity.other_live_sessions():
+            if int(other.get("bridge_port", 0) or 0) == int(port):
+                return "{:s} - {:s} (PID {:d})".format(
+                    str(other.get("app", "") or "Blender"), str(other.get("file", "") or "unsaved file"),
+                    int(other.get("pid", 0) or 0))
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return "another Blender / Bforartists window or another program"
 
 
 def timer_internal_vars_calc(
@@ -1946,65 +1992,57 @@ def start(host: str, port: int) -> None:
 
     If *port* is in use, the function automatically tries the next
     available port (``port + 1``, ``port + 2``, ... up to +100) and
-    stores the actual port in ``_actual_port``.
+    stores the actual port in ``_actual_port``; :func:`port_note` then
+    says which window has the wanted one.
+
+    The port is chosen by binding it (#558): the socket that passed is the
+    one kept.  A connect probe alone was fooled by another Blender whose
+    listener did not answer in time (busy, full backlog): it read the port
+    as free, and the bind then failed with WinError 10048.
 
     Callers should catch ``Exception`` broadly rather than specific types,
     since failures may be:
     - ``RuntimeError``, e.g. server already running.
-    - ``OSError``, e.g. address already in use.
+    - ``OSError``, e.g. no free port, or a host that can't be bound.
     ...other exceptions that are difficult to predict exhaustively.
     """
 
     # Track the actual port we end up binding.
-    global _actual_port, _actual_host
-    _actual_port = port
-    _actual_host = host
-
+    global _actual_port, _actual_host, _port_note
     if is_running():
+        # Refuse before touching anything: the running bridge keeps its real port.
         raise RuntimeError("Server is already running")
 
-    # Pre-bind conflict detection: try connecting to the target port first.
-    # If it succeeds, another Blender instance (or another process) already
-    # owns this port.  We check *before* binding so we can give a clear
-    # error message instead of silently sharing the port (which happens
-    # with SO_REUSEADDR on Windows).
-    _probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        _probe.settimeout(0.5)
-        _probe.connect((host, port))
-        _probe.close()
-        # Port is in use -- auto-shuffle to the next available port.
-        new_port = _find_available_port(port)
-        if new_port == 0:
-            raise OSError(
-                "Port {:d} is in use and no subsequent port is available. "
-                "Increase port_offset in Preferences (Advanced tab) to use a "
-                "different set of ports.".format(port)
-            )
-        print("[Coworker] start: port {:d} in use -- shuffled to {:d}".format(port, new_port))
-        port = new_port
-        _actual_port = port
-    except (ConnectionRefusedError, TimeoutError, OSError):
-        # Expected -- port is free (connection refused or timed out).
-        _probe.close()
-
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        if sys.platform == "win32":
-            # SO_EXCLUSIVEADDRUSE prevents a second process from binding
-            # the same port, even with SO_REUSEADDR.  Without this, a
-            # second Blender instance would silently share port 9876 and
-            # the OS would non-deterministically route code-execution
-            # requests to the wrong instance.
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        else:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.setblocking(False)
-        sock.bind((host, port))
-        sock.listen(_LISTEN_BACKLOG)
-    except OSError:
-        sock.close()
-        raise
+    _actual_port = port
+    _actual_host = host
+    _port_note = ""
+    wanted = port
+    sock = None
+    for candidate in range(wanted, min(wanted + _PORT_SEARCH, 65535) + 1):
+        # Windows: the exclusive bind fails whenever anyone holds the port, so
+        # it alone decides.  Elsewhere SO_REUSEADDR can let a bind share a port
+        # another program listens on (other address), so a listener that
+        # answers counts as taken too.
+        if sys.platform != "win32" and _listener_answers(host, candidate):
+            continue
+        try:
+            sock = _bind_listener(host, candidate)
+        except OSError as ex:
+            if not _address_in_use(ex):
+                raise           # not a port conflict (a bad host...): say so as it is
+            continue
+        port = candidate
+        break
+    if sock is None:
+        raise OSError(
+            "Port {:d} is used by {:s}, and ports {:d}-{:d} are taken too. Close the "
+            "other window, or raise port_offset in Preferences (Advanced tab).".format(
+                wanted, _who_has(wanted), wanted + 1, min(wanted + _PORT_SEARCH, 65535)))
+    if port != wanted:
+        _port_note = "Port {:d} is used by {:s}, so this window's bridge is on port {:d}".format(
+            wanted, _who_has(wanted), port)
+        print("[Coworker] start: " + _port_note)
+    _actual_port = port
 
     _state.sock = sock
 

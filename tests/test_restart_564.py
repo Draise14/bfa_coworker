@@ -565,5 +565,28 @@ class TestAgentSideFollowsTheRealPort(unittest.TestCase):
         self.assertTrue(re.search(r"external_agent_server_entry\(\s*blender_host=host, blender_port=bridge_port", ext))
 
 
+class TestChatBarShowsTheError(unittest.TestCase):
+    """The Coworker editor's top bar: a failed start shows its error, not a bare "Offline"."""
+
+    def setUp(self) -> None:
+        self.src = (_ADDON / "chat_editor.py").read_text(encoding="utf-8")
+        start = self.src.index("def _start_error(")
+        ns: dict = {"Any": object}
+        end = self.src.index("\n\n\n", start)
+        exec(compile(self.src[start:end], "chat_editor.py", "exec"), ns)  # noqa: S102
+        self.start_error = ns["_start_error"]
+
+    def test_only_an_error_status_counts(self):
+        self.assertEqual(self.start_error(types.SimpleNamespace(chat_status="Error: Bridge server failed: x")),
+                         "Error: Bridge server failed: x")
+        self.assertEqual(self.start_error(types.SimpleNamespace(chat_status="Stopped")), "")
+        self.assertEqual(self.start_error(None), "")
+
+    def test_the_bar_uses_it_when_nothing_runs(self):
+        body = self.src[self.src.index("def _status("):self.src.index("def _start_error(")]
+        self.assertIn('status = _start_error(props) or "Offline"', body)
+        self.assertIn('failed or "Bridge Offline"', body)
+
+
 if __name__ == "__main__":
     unittest.main()

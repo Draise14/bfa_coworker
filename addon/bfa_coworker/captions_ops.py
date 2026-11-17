@@ -190,6 +190,23 @@ def _font() -> Any:
 
 
 _BLF_IDS: dict[str, int] = {}
+_BLF_KEEP = 8                       # fonts kept loaded for measuring: the least recently used are unloaded
+
+
+def _blf_forget(all_: bool = False) -> None:
+    """Unload measured fonts beyond :data:`_BLF_KEEP` (all of them with *all_*: unregister, file load)."""
+    try:
+        import blf  # pylint: disable=import-error
+    except ImportError:
+        _BLF_IDS.clear()
+        return
+    while _BLF_IDS and (all_ or len(_BLF_IDS) > _BLF_KEEP):
+        path = next(iter(_BLF_IDS))
+        _BLF_IDS.pop(path)
+        try:
+            blf.unload(path)
+        except (RuntimeError, ValueError, TypeError):
+            pass
 
 
 def _measure(font: Any) -> Any:
@@ -203,10 +220,11 @@ def _measure(font: Any) -> Any:
         import blf  # pylint: disable=import-error
     except ImportError:
         return None
-    fid = _BLF_IDS.get(path)
+    fid = _BLF_IDS.pop(path, None)
     if fid is None:
         fid = blf.load(path)
-        _BLF_IDS[path] = fid
+    _BLF_IDS[path] = fid            # most recently used last
+    _blf_forget()
     if fid is None or fid < 0:
         return None
 
@@ -845,20 +863,28 @@ def _label_words(tag: dict) -> int:
     return len(str(tag.get("label") or "").split())
 
 
-def _layout_of(scene: Any, line: Any, tag: dict, animated: Any = ()) -> tuple[str, list[dict[str, Any]], Any]:
-    """``(signature, word positions, the line's measure)`` of a caption *line* as its strip is now
-    (:func:`captions.word_layout`, :func:`captions.layout_signature`); positions are empty when the
-    font can't be measured.  *animated*: the line's animated property paths (left out of the signature)."""
+def _signature_of(scene: Any, line: Any, tag: dict, animated: Any = ()) -> str:
+    """The layout signature of a caption *line* as its strip is now (:func:`captions.layout_signature`).
+    Reads properties only: no font is measured or loaded.  *animated*: the property paths its preset keys
+    (left out)."""
     render = scene.render
     tr = getattr(line, "transform", None)
     trans = tuple(None if "transform." + p in animated else round(float(getattr(tr, p)), 4)
                   for p in _TRANSFORM_PATHS) if tr is not None else ()
     font = line.font
-    sig = cap.layout_signature(str(line.text), font.filepath if font else "", bool(line.use_bold),
-                               bool(line.use_italic), float(line.font_size), str(line.anchor_x),
-                               str(line.anchor_y), str(line.alignment_x), float(line.wrap_width),
-                               tuple(line.location)[:2], trans, int(render.resolution_x),
-                               int(render.resolution_y), str(tag.get("label") or ""))
+    return cap.layout_signature(str(line.text), font.filepath if font else "", bool(line.use_bold),
+                                bool(line.use_italic), float(line.font_size), str(line.anchor_x),
+                                str(line.anchor_y), str(line.alignment_x), float(line.wrap_width),
+                                tuple(line.location)[:2], trans, int(render.resolution_x),
+                                int(render.resolution_y), str(tag.get("label") or ""))
+
+
+def _layout_of(scene: Any, line: Any, tag: dict, animated: Any = ()) -> tuple[str, list[dict[str, Any]], Any]:
+    """``(signature, word positions, the line's measure)`` of a caption *line* as its strip is now
+    (:func:`captions.word_layout`); positions are empty when the font can't be measured.  This measures
+    every word: :func:`refit_words` only calls it for a line whose :func:`_signature_of` changed."""
+    render = scene.render
+    sig = _signature_of(scene, line, tag, animated)
     measure = _line_measure(line)
     if measure is None:
         return sig, [], None
@@ -1506,11 +1532,7 @@ def _rebuild_words(scene: Any, name: str, even: bool = False) -> bool:
         return False
     st = cap.resolve_style(key, scene.render.resolution_x, scene.render.resolution_y, tag.get("position", "BOTTOM"),
                            float(tag.get("margin") or 0.0), tag.get("choices") or None)
-    text = str(line.text)
-    if st["highlight"] and "\n" in text:
-        text = " ".join(text.split())       # a one-line style: one line, or the words sit off their words
-        line.text = text
-        line = pool.get(name)
+    text = str(line.text)               # a line break the artist typed stays: the layout handles lines
     left, right = _left(line), _right(line)
     words = text.split()[_label_words(tag):]
     frames = [left + int(v) for v in tag.get("word_frames") or ()]
@@ -1546,28 +1568,18 @@ def _reposition_words(scene: Any, name: str, word_names: list[str], pos: list[di
             _sync_word(word, line, p, animated)
 
 
-def _words_fit(scene: Any, name: str, word_names: list[str], pos: list[dict[str, Any]]) -> bool:
-    """Caption line *name*'s word strips already sit where *pos* says (within a pixel) and wear their line's
-    font, bold, italic and size: a caption made before #594 whose line was not changed since."""
-    pool = _all(scene.sequence_editor)
-    line = pool.get(name)
-    if line is None:
-        return False
-    res_x, res_y = scene.render.resolution_x, scene.render.resolution_y
-    for n, p in zip(sorted(word_names), pos):
-        word = pool.get(n)
-        if word is None or word.font != line.font or bool(word.use_bold) != bool(line.use_bold)                 or bool(word.use_italic) != bool(line.use_italic) or abs(word.font_size - line.font_size) > 0.5                 or abs(word.location[0] - p["x"]) * res_x > 1.0 or abs(word.location[1] - p["y"]) * res_y > 1.0:
-            return False
-    return True
-
-
-def refit_words(scene: Any, names: Any = None, force: bool = False) -> int:
+def refit_words(scene: Any, names: Any = None, force: bool = False, rebuild: bool = False) -> int:
     """Word strips laid out again where their caption line's settings changed (#594): its font, bold,
     italic, size, alignment, wrap width, place, transform or text, or the frame size.  *names*: only
     these caption lines (None: all of *scene*); *force*: also those whose settings did not change.
+
     The words are moved and restyled in place when there are as many as the text has words (their own
-    frames stay), made again when the words changed.  How many captions were fitted again.  Cheap when
-    nothing changed: one signature per caption with word strips."""
+    frames stay).  When the words changed, the strips are made again only with *rebuild* (the Refit
+    operator; ``text_changed`` does it by itself): the automatic path never adds or removes a strip,
+    so it leaves such a caption as it is.  A caption with no signature (made before #594) only has its
+    signature noted, unless *force*: its word strips are not touched by opening the file.  How many
+    captions were fitted again.  Cheap when nothing changed: one signature per caption with word strips,
+    and no font is measured or loaded."""
     ed = scene.sequence_editor
     if ed is None:
         return 0
@@ -1586,16 +1598,20 @@ def refit_words(scene: Any, names: Any = None, force: bool = False) -> int:
         if tag.get("role") != "line":
             continue
         animated = _preset_paths(tag)
-        sig, pos, _measure_line = _layout_of(scene, line, tag, animated)
+        sig = _signature_of(scene, line, tag, animated)
         if not force and tag.get("lay") == sig:
             continue
-        if not pos:
-            continue                    # the font can't be measured: nothing to place by
+        if not force and tag.get("lay") is None:
+            _remember_layout(ed, name, sig)         # made before #594: just note it
+            continue
         words = str(line.text).split()[_label_words(tag):]
-        if len(words) == len(by_line[name]) == len(pos):
-            if not force and tag.get("lay") is None and _words_fit(scene, name, by_line[name], pos):
-                _remember_layout(ed, name, sig)     # made before #594 and still on their words: just note it
-                continue
+        same = len(words) == len(by_line[name])
+        if not same and not rebuild:
+            continue                                # needs strips added or removed: not from a timer
+        if same:
+            _sig, pos, _measure_line = _layout_of(scene, line, tag, animated)
+            if not pos or len(pos) != len(words):
+                continue                            # the font can't be measured: nothing to place by
             _reposition_words(scene, name, by_line[name], pos, animated)
             _remember_layout(ed, name, sig)
         elif not _rebuild_words(scene, name, even=False):
@@ -1606,7 +1622,8 @@ def refit_words(scene: Any, names: Any = None, force: bool = False) -> int:
 
 # The word strips follow their line by themselves: a cheap depsgraph handler notes that something
 # changed, a timer a moment later (debounced) compares each caption's layout signature, and never
-# while playing, rendering or an agent step runs.
+# while playing, rendering, a modal operator runs, or an agent turn is open; the timer only moves and
+# restyles existing word strips, it never adds or removes one.
 _WATCH: dict[str, Any] = {"dirty": set(), "t": 0.0}
 DEBOUNCE_S = 0.4
 RETRY_S = 1.5
@@ -1623,9 +1640,14 @@ def _playing() -> bool:
 
 def _busy() -> str:
     """Why captions must not be touched now ("" when they can): playback, a render, or the co-work
-    lock of an agent step."""
+    lock or an open turn of an agent, or a modal operator (a drag) running in a window."""
     if _playing():
         return "playing"
+    try:
+        if any(len(win.modal_operators) for win in bpy.context.window_manager.windows):
+            return "a modal operator"
+    except (AttributeError, ReferenceError, RuntimeError):
+        pass
     try:
         if bpy.app.is_job_running('RENDER'):
             return "rendering"
@@ -1635,6 +1657,12 @@ def _busy() -> str:
         from . import co_work_guard
         if co_work_guard.is_locked():
             return "an agent step"
+    except ImportError:
+        pass
+    try:
+        from . import coworker_api
+        if coworker_api.any_turn_open():
+            return "an agent turn"
     except ImportError:
         pass
     return ""
@@ -1673,11 +1701,11 @@ def _watch_tick() -> float | None:
 
 @bpy.app.handlers.persistent
 def _on_depsgraph(scene: Any, _depsgraph: Any = None) -> None:
-    """``depsgraph_update_post``: a scene with strips changed.  Nothing is looked at here (the update of
-    every frame of a playback is skipped at once); the timer, a moment after the last change, compares
-    each caption's signature."""
+    """``depsgraph_update_post``: a scene with strips changed.  Nothing is looked at here; the scene is
+    only noted (also while playing: the timer holds it back, so a change during playback is not lost)
+    and the timer, a moment after the last change, compares each caption's signature."""
     try:
-        if scene.sequence_editor is None or _playing():
+        if scene.sequence_editor is None:
             return
         _WATCH["dirty"].add(scene.name)
         _WATCH["t"] = _clock()
@@ -1701,6 +1729,7 @@ def _watch_stop() -> None:
     except (AttributeError, ValueError):
         pass
     _WATCH["dirty"] = set()
+    _blf_forget(all_=True)
 
 
 # -- Translate (#42 for many captions) ---------------------------------------------------
@@ -2408,7 +2437,7 @@ class BFACW_OT_captions_refit_words(Operator):  # type: ignore[misc]
     def execute(self, context: Any) -> set[str]:
         scene = seq_scene(context)
         names = _selected_caption_names(scene)
-        done = refit_words(scene, names or None, force=True)
+        done = refit_words(scene, names or None, force=True, rebuild=True)
         self.report({'INFO'}, "Word highlights fitted again on {:d} caption{:s}".format(done, "" if done == 1 else "s"))
         return {'FINISHED'}
 

@@ -451,28 +451,44 @@ class TestWordStripsFollowTheLine(_OpsCase):
         tag = self.line.get("bfacw_caption")
         del tag["lay"]
 
-    def test_a_caption_from_before_is_read_and_left_alone_when_its_words_are_in_place(self):
+    def test_a_caption_from_before_only_has_its_signature_noted(self):
+        """Word strips placed or deleted by hand in a 1.1.44 file are not changed by opening it."""
         self.drop_signature()
-        before = [(w.location, w.font_size) for w in self.mine()]
-        with mock.patch.object(self.ops, "_reposition_words") as moved:
-            self.assertEqual(self.ops.refit_words(self.scene), 0)
-        moved.assert_not_called()
-        self.assertEqual([(w.location, w.font_size) for w in self.mine()], before)
-        self.assertTrue(self.line.get("bfacw_caption")["lay"], "the signature is noted now")
-        self.assertNotIn("choices", self.line.get("bfacw_caption"))
-
-    def test_a_caption_from_before_whose_line_changed_since_gets_its_words_back(self):
-        self.drop_signature()
-        self.line.use_bold = True
-        self.assertEqual(self.ops.refit_words(self.scene), 1)
-        self.assertTrue(all(w.use_bold for w in self.mine()))
-
-    def test_nothing_changed_costs_no_layout(self):
+        self.line.use_bold = True                   # even a line that differs from its words
+        before = [(w.location, w.use_bold) for w in self.mine()]
+        names = [w.name for w in self.mine()]
         with mock.patch.object(self.ops, "_reposition_words") as moved, mock.patch.object(self.ops, "_rebuild_words") as rebuilt:
-            for _ in range(5):
-                self.assertEqual(self.ops.refit_words(self.scene), 0)
+            self.assertEqual(self.ops.refit_words(self.scene, rebuild=True), 0)
         moved.assert_not_called()
         rebuilt.assert_not_called()
+        self.assertEqual([(w.location, w.use_bold) for w in self.mine()], before)
+        self.assertEqual([w.name for w in self.mine()], names)
+        self.assertTrue(self.line.get("bfacw_caption")["lay"], "the signature is noted now")
+        self.assertNotIn("choices", self.line.get("bfacw_caption"))
+        self.line.use_italic = True                 # the first real change refits
+        self.assertEqual(self.ops.refit_words(self.scene), 1)
+        self.assertTrue(all(w.use_bold and w.use_italic for w in self.mine()))
+
+    def test_the_operator_refits_a_caption_from_before(self):
+        self.drop_signature()
+        self.line.use_bold = True
+        self.assertEqual(self.ops.refit_words(self.scene, [self.line.name], force=True, rebuild=True), 1)
+        self.assertTrue(all(w.use_bold for w in self.mine()))
+
+    def test_a_typed_line_break_survives_a_rebuild(self):
+        self.line.text = "Delta echo\nfoxtrot"
+        self.assertEqual(self.ops.refit_words(self.scene, rebuild=True), 1)
+        self.assertEqual(self.line.text, "Delta echo\nfoxtrot")
+        ys = {round(w.location[1], 4) for w in self.mine()}
+        self.assertEqual(len(ys), 2)
+
+    def test_nothing_changed_costs_no_layout_and_no_measure(self):
+        """The signature is compared first: no word is measured and no font is looked up or loaded."""
+        with mock.patch.object(self.ops, "_reposition_words") as moved, mock.patch.object(self.ops, "_rebuild_words") as rebuilt,                 mock.patch.object(self.ops, "_line_measure") as measure, mock.patch.object(self.ops, "_font") as font,                 mock.patch.object(self.ops, "_measure") as base:
+            for _ in range(5):
+                self.assertEqual(self.ops.refit_words(self.scene), 0)
+        for mocked in (moved, rebuilt, measure, font, base):
+            mocked.assert_not_called()
 
     def test_bold_italic_font_and_size_are_taken_over_and_the_words_move(self):
         before = [w.location[0] for w in self.mine()]
@@ -518,7 +534,10 @@ class TestWordStripsFollowTheLine(_OpsCase):
     def test_the_words_of_the_text_decide_the_strips(self):
         count = len(self.mine())
         self.line.text = "Delta echo foxtrot"
-        self.assertEqual(self.ops.refit_words(self.scene), 1)
+        before = [w.name for w in self.mine()]
+        self.assertEqual(self.ops.refit_words(self.scene), 0, "a timer never adds or removes a strip")
+        self.assertEqual([w.name for w in self.mine()], before)
+        self.assertEqual(self.ops.refit_words(self.scene, rebuild=True), 1)
         words = self.mine()
         self.assertEqual([w.text for w in words], ["Delta", "echo", "foxtrot"])
         self.assertLess(len(words), count)
@@ -536,7 +555,7 @@ class TestWordStripsFollowTheLine(_OpsCase):
 
     def test_names_only_and_force(self):
         self.assertEqual(self.ops.refit_words(self.scene, ["nobody"], force=True), 0)
-        self.assertEqual(self.ops.refit_words(self.scene, [self.line.name], force=True), 1)
+        self.assertEqual(self.ops.refit_words(self.scene, [self.line.name], force=True, rebuild=True), 1)
         self.line.use_bold = True
         self.assertEqual(self.ops.refit_words(self.scene, ["nobody"]), 0)
         self.assertEqual(self.ops.refit_words(self.scene, [self.line.name]), 1)
@@ -563,7 +582,7 @@ class TestWordStripsFollowTheLine(_OpsCase):
 
     def test_the_words_follow_a_new_frame_size(self):
         self.scene.render.resolution_x, self.scene.render.resolution_y = 1080, 1920
-        self.assertEqual(self.ops.refit_words(self.scene), len(self.lines()))
+        self.assertEqual(self.ops.refit_words(self.scene, rebuild=True), len(self.lines()))
         self.assertEqual([w.location[0] for w in self.mine()][0], cap.word_layout(
             self.line.text, self.ops._line_measure(self.line), self.line.font_size, 1080, 1920,
             tuple(self.line.location), self.line.anchor_x, self.line.anchor_y, self.line.alignment_x,
@@ -590,6 +609,7 @@ class TestTheHandler(_OpsCase):
         self.now = [100.0]
         self.busy = ""
         self.refits = []
+        self.real_busy = self.ops._busy
         for name, value in (("_clock", lambda: self.now[0]), ("_busy", lambda: self.busy),
                             ("_visible_scenes", lambda: {"Scene"}),
                             ("refit_words", lambda scene, *a, **k: self.refits.append(scene.name) or 0)):
@@ -613,14 +633,44 @@ class TestTheHandler(_OpsCase):
         self.ops._on_depsgraph(bare)
         self.assertEqual((self.ops._WATCH["dirty"], self.timers), (set(), []))
 
-    def test_every_update_of_a_playback_is_skipped_at_once(self):
+    def test_a_change_during_playback_is_noted_and_held_back(self):
         self.playing = True
-        for _ in range(100):
-            self.ops._on_depsgraph(self.scene)
-        self.assertEqual((self.ops._WATCH["dirty"], self.timers), (set(), []))
-        self.playing = False
-        self.ops._on_depsgraph(self.scene)             # the first update after it: looked at once
+        self.ops._on_depsgraph(self.scene)
         self.assertEqual(self.ops._WATCH["dirty"], {"Scene"})
+        self.now[0] += 1.0
+        self.busy = "playing"
+        self.assertEqual(self.timers[0](), self.ops.RETRY_S)
+        self.assertEqual(self.refits, [])
+        self.assertEqual(self.ops._WATCH["dirty"], {"Scene"}, "not lost")
+        self.busy, self.playing = "", False
+        self.assertIsNone(self.timers[0]())
+        self.assertEqual(self.refits, ["Scene"])
+
+    def test_a_refit_request_during_a_modal_operator_waits_until_it_ends(self):
+        modal = [object()]
+        win = SimpleNamespace(modal_operators=modal)
+        self.ops.bpy.context.window_manager = SimpleNamespace(windows=[win])
+        self.ops.bpy.app.is_job_running = lambda kind: False
+        with mock.patch.object(self.ops, "_busy", self.real_busy):
+            self.ops._on_depsgraph(self.scene)
+            self.now[0] += 1.0
+            self.assertEqual(self.ops._busy(), "a modal operator")
+            self.assertEqual(self.timers[0](), self.ops.RETRY_S)
+            self.assertEqual(self.refits, [])
+            modal.clear()
+            self.assertEqual(self.ops._busy(), "")
+            self.assertIsNone(self.timers[0]())
+        self.assertEqual(self.refits, ["Scene"])
+
+    def test_an_open_agent_turn_holds_it_back(self):
+        api = SimpleNamespace(any_turn_open=lambda: True)
+        self.ops.bpy.context.window_manager = SimpleNamespace(windows=[])
+        self.ops.bpy.app.is_job_running = lambda kind: False
+        pkg = __import__("sys").modules[test_captions._PKG]
+        with mock.patch.dict("sys.modules", {test_captions._PKG + ".coworker_api": api}),                 mock.patch.object(pkg, "coworker_api", api, create=True):
+            self.assertEqual(self.real_busy(), "an agent turn")
+            api.any_turn_open = lambda: False
+            self.assertEqual(self.real_busy(), "")
 
     def test_the_timer_waits_until_nothing_has_changed_for_a_moment(self):
         self.ops._on_depsgraph(self.scene)

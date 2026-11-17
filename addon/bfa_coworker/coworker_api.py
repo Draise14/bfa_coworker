@@ -231,6 +231,11 @@ def turn_open(thread: str = "") -> bool:
     return bool(turn and turn["before"])
 
 
+def any_turn_open() -> bool:
+    """Some chat's turn has started and not ended yet (#594: captions are not touched meanwhile)."""
+    return any(t["before"] for t in list(_turns.values()))
+
+
 def turn_owns_undo() -> bool:
     """The bridge runs this call for a chat whose turn is open (#501): the turn's own undo
     step covers what the call changes, so a tool pushes no step of its own.  Outside a

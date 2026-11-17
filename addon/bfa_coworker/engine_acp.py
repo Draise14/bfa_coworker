@@ -228,9 +228,11 @@ class AcpEngine:
             self._fresh_process()
             # The current chat is the default one now: *resume* is its session (#572: it
             # isn't the last chat started's).
-            self.session_id = self._open_session(client, info.load_session, resume, cwd, self._servers_for(""))
-            if not self.session_id:
+            # Filed as the default chat's, also when a prompt for another chat starts while it opens.
+            sid = self._open_session(client, info.load_session, resume, cwd, self._servers_for(""), thread="")
+            if not sid:
                 raise AcpError("the agent did not open a session")
+            self._set_session("", sid)
             self.client = client
             self.caps = EngineCaps(label="External Agent", images=info.image, cancel=True,
                                    load_session=info.load_session, own_loop=True)
@@ -258,10 +260,11 @@ class AcpEngine:
         thread = self.thread if thread is None else thread
         self.resumed = self.resume_failed = False
         session_id, result = "", {}
+        refused = False
         if resume and self._session_owner(resume, thread) is not None:
             # Another chat works in that session already (two tabs on one stored chat): one
             # session with one chat's tools, or each chat's questions show in the other (#572).
-            resume = ""
+            resume, refused = "", True
         if resume and can_load:
             try:
                 result = client.load_session(resume, cwd, servers)    # its replay is ignored: no turn runs
@@ -274,7 +277,9 @@ class AcpEngine:
         self.config_options = list(result.get("configOptions") or [])
         if session_id:
             self._apply_preferred(client, session_id)
-        if session_id and self.on_session is not None and not thread:
+        if refused:
+            pass        # the chat that holds the old session stays its record's owner (#572)
+        elif session_id and self.on_session is not None and not thread:
             self.on_session(session_id)     # the default thread's session, filed under its chat
         elif session_id and self.on_thread_session is not None and thread:
             self.on_thread_session(session_id, thread)      # a tab's, under its chat (#431)

@@ -192,6 +192,34 @@ class TestSwitchWhileATabStarts(_Chats):
         self.assertEqual(prompts["two third"], prompts["two"])
 
 
+class TestStartWhileAPromptForAnotherChat(_Chats):
+
+    def test_submit_for_another_thread_while_start_opens_its_session(self):
+        class _Slow(_Agent):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.slow_open = 0.4
+
+        self.engine.disconnect()
+        self.saved.clear()
+        self.engine._client_factory = _Slow
+        self.engine.connect(["fake"], _MCP_ENTRY, _CWD, wait=False)      # Start: the first session opens slowly
+        time.sleep(0.1)
+        self.engine.submit(eng.Prompt(text="too early", thread="t2"))   # helper_chats.submit, not the UI
+        self.assertTrue(_wait_for(lambda: self.engine.connected and not self.engine.connecting, 5.0))
+        self.engine.drain()
+        self.states["t2"].error = ""
+        self._turn("main", "")
+        self._turn("two", "t2")
+        first = self.engine.client.sessions[0][0]
+        prompts = {text: sid for sid, text in self.engine.client.prompts}
+        self.assertEqual(prompts["main"], first, "the default chat holds the first session")
+        self.assertNotEqual(prompts["two"], first, "t2 gets its own")
+        self.assertEqual(self._ran_as(), {"main": _NO_THREAD, "two": "t2"})
+        self.assertEqual(self.saved[""], first)
+        self.assertEqual(self.saved["t2"], prompts["two"])
+
+
 class TestOneSessionOneChat(_Chats):
 
     def test_two_tabs_on_one_stored_chat(self):
@@ -203,6 +231,9 @@ class TestOneSessionOneChat(_Chats):
         self.assertNotEqual(prompts["two"], main_sid, "t2 gets a session of its own")
         self.assertEqual(self._ran_as(), {"main": _NO_THREAD, "two": "t2"})
         self.assertNotIn(main_sid, self.engine.client.loaded)
+        self.assertEqual(self.saved[""], main_sid, "the stored record stays with the chat that holds it")
+        self.assertNotEqual(self.saved.get("t2"), prompts["two"], "the refused tab's fresh id isn't filed over it")
+        self.assertNotIn("t2", self.saved)
         self._turn("main again", "")
         self.assertEqual(self._ran_as()["main again"], _NO_THREAD)
 
@@ -235,6 +266,23 @@ class TestPermissionAsksInItsOwnChat(_Chats):
         self._turn("three", "t3")
         self._ask("s-nobody-knows")
         self.assertIsNotNone(self.engine.approvals.current("t3"), "as before: the current chat")
+
+
+class TestPermissionFromAClosedTab(_Chats):
+
+    def test_a_session_nobody_owns_falls_back_and_is_not_decided(self):
+        self._turn("three", "t3")
+        answers = []
+        self.engine.ask_coworker_tools = True
+        self.engine.auto_approve = False
+        self.engine.never_ask = False
+        self.engine.forget_thread("t2")
+        self.engine._on_permission({"sessionId": "s-closed-tab",
+                                    "toolCall": {"title": "mcp__bfa-coworker__execute_blender_code"},
+                                    "options": [{"kind": "allow_once", "optionId": "o"},
+                                                {"kind": "reject_once", "optionId": "r"}]}, answers.append)
+        self.assertEqual(answers, [], "neither approved automatically nor dropped")
+        self.assertIsNotNone(self.engine.approvals.current("t3"), "the current chat is asked")
 
 
 class TestQuestionEndToEnd(_Chats):

@@ -135,7 +135,7 @@ class TestExternalAgent(_Home):
             def initialize(self):
                 return types.SimpleNamespace(load_session=False, image=False, name="", version="")
 
-        def _open_session(_client, _load, _resume, cwd, servers):
+        def _open_session(_client, _load, _resume, cwd, servers, thread=None):
             seen["session_cwd"], seen["server"] = cwd, servers[0]
             raise ea.AcpError("stop here")
 

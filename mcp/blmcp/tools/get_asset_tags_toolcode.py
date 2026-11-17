@@ -389,12 +389,16 @@ def main(params: Params) -> Result:
 
 
 def _socket_count(ng, direction: str) -> int:
-    """Count interface sockets in a direction (``ng.interface.items_tree``)."""
+    """Count interface sockets in a direction (``ng.interface.items_tree``).
+
+    Sockets are per-type subclasses (``NodeTreeInterfaceSocketFloat``, ...),
+    so ``item_type`` tells them from panels, not the class name.
+    """
     interface = getattr(ng, "interface", None)
     if interface is not None and hasattr(interface, "items_tree"):
         count = 0
         for item in interface.items_tree:
-            if type(item).__name__ != "NodeTreeInterfaceSocket":
+            if item.item_type != "SOCKET":
                 continue
             if getattr(item, "in_out", "") == direction:
                 count += 1

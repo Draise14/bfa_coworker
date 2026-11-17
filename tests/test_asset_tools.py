@@ -187,7 +187,9 @@ class _NodeTree:
 
 
 class NodeTreeInterfaceSocket:
-    """Blender 4.x style interface item (name matters: the toolcode checks it)."""
+    """Blender 4.x+ style interface socket item."""
+
+    item_type = "SOCKET"
 
     def __init__(self, name, socket_type, in_out, default=None, description=""):
         self.name = name

@@ -211,11 +211,8 @@ def build_fixture_library(bpy):
     ob.asset_data.tags.new("prop")
     ob.asset_data.tags.new("wood")
     ob.asset_data.description = "A wooden crate prop"
-    try:
-        ob.asset_data.preferred_import_method = "APPEND"
-        ob.asset_data.use_preferred_import_method = True
-    except Exception:
-        pass  # older builds may not expose preferred_import_method
+    ob.asset_data.preferred_import_method = "APPEND"
+    ob.asset_data.use_preferred_import_method = True
 
     mat = bpy.data.materials.new("Brick_Mat")
     mat.asset_mark()

@@ -1601,6 +1601,7 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
                 layout.prop(self, "speaker_labels")
                 col = layout.column(align=True)
                 col.use_property_split = False
+                col.label(text="Each speaker: name, style, position")
                 for item in self.speaker_list:
                     r = col.row(align=True)
                     r.prop(item, "name", text="")

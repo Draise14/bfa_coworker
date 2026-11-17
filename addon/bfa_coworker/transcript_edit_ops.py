@@ -7,7 +7,7 @@
 Edit by Transcript in Blender (Tier 4, Video 7, #498): the transcript of a clip as text in the
 Text Editor; editing the text edits the video.
 
-* **Open Transcript** (Sequencer: the Coworker Video panel and the Strip menu): the active sound
+* **Edit Transcript** (Sequencer: the Coworker Video panel and the Strip menu): the active sound
   or movie strip's transcript (``transcripts.py``) becomes a text data-block, one line per
   sentence with a time mark, shown in a Text Editor (the Sequencer's area is split when the
   screen has none).  The text carries :data:`transcript_edit.PROP` (the media file, its
@@ -65,7 +65,7 @@ HOLD_RETRY_S = 0.5          # a held back Live edit looks again this often
 CHECK_PAUSE_S = 0.4         # the panel's preview of the edit, this long after the last key
 _TICK_S = 0.25
 NOT_TRANSCRIBED = ("“{:s}” hasn't been transcribed yet: run Auto Captions on it (it transcribes first) or ask "
-                   "Coworker to transcribe it, then Open Transcript again")
+                   "Coworker to transcribe it, then Edit Transcript again")
 
 # Per text (by name): what the timer last saw and the preview of the pending edit.
 _SEEN: dict[str, dict[str, Any]] = {}
@@ -405,6 +405,10 @@ def _update_captions(scene: Any, state: dict, words: list, occ: list, retext: di
     tag_name = getattr(captions_ops.cap, "TAG", "bfacw_caption")
     key = _caption_key(state["source"])
     updated = kept = 0
+    # Names first: setting a Word-by-word caption's text removes and adds its word strips, and a
+    # strip taken before that is dead after it (#593).  Each strip is looked up again, by name,
+    # right before it is used, and skipped when it is gone.
+    candidates = []
     for strip in list(scene.sequence_editor.strips):
         if strip.type != 'TEXT':
             continue
@@ -414,6 +418,13 @@ def _update_captions(scene: Any, state: dict, words: list, occ: list, retext: di
         left, right = int(strip.left_handle), int(strip.right_handle)
         if strip.name not in names and not any(a < right and left < b for a, b in spans):
             continue
+        candidates.append(strip.name)
+    del strip
+    for name in candidates:
+        strip = scene.sequence_editor.strips.get(name)
+        if strip is None:
+            continue
+        left, right = int(strip.left_handle), int(strip.right_handle)
         want = te.caption_text(occ, words, retext, left, right)
         if not want or " ".join(want.split()).casefold() == " ".join(strip.text.split()).casefold():
             continue
@@ -421,7 +432,8 @@ def _update_captions(scene: Any, state: dict, words: list, occ: list, retext: di
             kept += 1
             continue
         captions_ops.set_caption_text(scene, strip, want)
-        if strip.get(tag_name) is not None:
+        strip = scene.sequence_editor.strips.get(name)      # its word strips were made again: look it up again
+        if strip is not None and strip.get(tag_name) is not None:
             seq._resign(strip)  # pylint: disable=protected-access
         updated += 1
     return updated, kept
@@ -810,10 +822,10 @@ def _source_strip(context: Any) -> Any:
 
 
 class BFACW_OT_open_transcript(Operator):  # type: ignore[misc]
-    """Open the transcript of the active sound or movie strip as text in the Text Editor: edit the text to edit the video"""
+    """Edit the video by its words: the transcript of the active sound or movie strip opens as text in the Text Editor"""
 
     bl_idname = "bfacw.open_transcript"
-    bl_label = "Open Transcript"
+    bl_label = "Edit Transcript"
     bl_options = {'REGISTER', 'UNDO'}
 
     transcript_path: StringProperty(name="Transcript File", subtype='FILE_PATH', options={'SKIP_SAVE'},  # type: ignore[valid-type]
@@ -857,7 +869,7 @@ class _TextOp:
     @classmethod
     def poll(cls, context):
         if _context_text(context) is None:
-            cls.poll_message_set("Show a transcript text (Sequencer > Strip > Open Transcript)")
+            cls.poll_message_set("Show a transcript text (Sequencer > Strip > Edit Transcript)")
             return False
         return True
 

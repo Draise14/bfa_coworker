@@ -11,9 +11,17 @@
 #   * the longest edge at most _PREVIEW_MAX_EDGE px (resolution % folded in, never upscaled);
 #   * Cycles and EEVEE samples at most _PREVIEW_MAX_SAMPLES, a Cycles time limit;
 #   * Simplify on, subdivision at most _PREVIEW_SIMPLIFY_SUBDIV;
+#   * Cycles loads image textures at most _PREVIEW_TEXTURE_LIMIT px (``texture_limit_render``,
+#     #527: less memory for big textures; a 1024 px image doesn't show the difference);
 #   * compositing, the Sequencer pass, motion blur and persistent data off;
 #   * written as a PNG image (a movie output format makes a still render fail).
 # Adaptive sampling, denoising and the device stay as the user set them.
+#
+# #527: a Sequencer render (render_vse_preview, Reframe's Follow subject samples) renders each
+# scene a scene strip pulls in with that scene's own settings: the same caps go on those scenes
+# (``_preview_profile_apply_strip_scenes``), except their size (the Sequencer places the strip's
+# picture by its scene's resolution: a smaller scene shows smaller in the frame, probed on
+# 5.2.4), their own Sequencer pass and their output format.
 #
 # Every change is recorded as ``(owner, attr, previous)`` in the order it was made.  Restoring
 # walks that list in the same order (an output's media type before its file format, the format
@@ -31,11 +39,13 @@ _PREVIEW_MAX_EDGE = 1024          # px; a vision model gets no more out of a big
 _PREVIEW_MAX_SAMPLES = 32         # Cycles samples, EEVEE render samples
 _PREVIEW_TIME_LIMIT_S = 30.0      # Cycles stops sampling after this (EEVEE has no time limit)
 _PREVIEW_SIMPLIFY_SUBDIV = 2      # Simplify > Max Subdivision (render)
+_PREVIEW_TEXTURE_LIMIT = 2048     # Cycles Simplify > Texture Limit (render), px (#527)
 
 # The thumbnail: the same profile, smaller.
 _THUMB_MAX_EDGE = 320
 _THUMB_MAX_SAMPLES = 16
 _THUMB_SIMPLIFY_SUBDIV = 1
+_THUMB_TEXTURE_LIMIT = 1024
 
 # Passes a look at the scene does without: (render attribute, its name in the answer).
 _PREVIEW_OFF = (
@@ -86,12 +96,15 @@ def _preview_profile_apply(
         max_samples: int = _PREVIEW_MAX_SAMPLES,
         simplify_subdiv: int = _PREVIEW_SIMPLIFY_SUBDIV,
         time_limit: float = _PREVIEW_TIME_LIMIT_S,
+        strip_scene: bool = False,
+        texture_limit: int = _PREVIEW_TEXTURE_LIMIT,
 ) -> tuple[list[tuple[Any, str, Any]], dict[str, Any]]:
     """Put the preview profile on *scene*: ``(saved, caps)``.
 
     *saved* is the undo list for :func:`_preview_profile_restore`; *caps* says what the render
     runs with (for the tool's answer).  Best-effort: a setting the build or engine lacks is
-    skipped.
+    skipped.  *strip_scene*: *scene* is rendered by a Sequencer scene strip (#527): its size,
+    its own Sequencer pass and its output format stay.
     """
     saved: list[tuple[Any, str, Any]] = []
     caps: dict[str, Any] = {}
@@ -99,15 +112,16 @@ def _preview_profile_apply(
     if rd is None:
         return saved, caps
 
-    width, height = _preview_output_size(rd)
-    longest = max(width, height)
-    if longest > max_edge:
-        scale = max_edge / float(longest)
-        width, height = max(1, round(width * scale)), max(1, round(height * scale))
-        _preview_set(saved, rd, "resolution_x", width)
-        _preview_set(saved, rd, "resolution_y", height)
-        _preview_set(saved, rd, "resolution_percentage", 100)
-    caps["resolution"] = [width, height]
+    if not strip_scene:
+        width, height = _preview_output_size(rd)
+        longest = max(width, height)
+        if longest > max_edge:
+            scale = max_edge / float(longest)
+            width, height = max(1, round(width * scale)), max(1, round(height * scale))
+            _preview_set(saved, rd, "resolution_x", width)
+            _preview_set(saved, rd, "resolution_y", height)
+            _preview_set(saved, rd, "resolution_percentage", 100)
+        caps["resolution"] = [width, height]
 
     _preview_set(saved, rd, "use_simplify", True)
     subdiv = getattr(rd, "simplify_subdivision_render", None)
@@ -118,6 +132,8 @@ def _preview_profile_apply(
 
     off = []
     for attr, name in _PREVIEW_OFF:
+        if strip_scene and attr == "use_sequencer":
+            continue
         if hasattr(rd, attr):
             _preview_set(saved, rd, attr, False)
             off.append(name)
@@ -131,6 +147,12 @@ def _preview_profile_apply(
         limit = getattr(cycles, "time_limit", None)
         if isinstance(limit, (int, float)) and (not limit or limit > time_limit):
             _preview_set(saved, cycles, "time_limit", float(time_limit))
+        # #527: Cycles loads image textures at most this big (an enum: "OFF", "128" ... "8192").
+        tex = getattr(cycles, "texture_limit_render", None)
+        if isinstance(tex, str) and texture_limit:
+            if not tex.isdigit() or int(tex) > texture_limit:
+                _preview_set(saved, cycles, "texture_limit_render", str(int(texture_limit)))
+            caps["texture_limit_px"] = min(int(tex), texture_limit) if tex.isdigit() else int(texture_limit)
     eevee = getattr(scene, "eevee", None)
     if eevee is not None:
         taa = getattr(eevee, "taa_render_samples", None)
@@ -138,6 +160,8 @@ def _preview_profile_apply(
             _preview_set(saved, eevee, "taa_render_samples", max_samples)
     caps["samples_max"] = max_samples
     caps["cycles_time_limit_s"] = float(time_limit)
+    if strip_scene:
+        return saved, caps
 
     ims = getattr(rd, "image_settings", None)
     if ims is not None and (getattr(ims, "file_format", "PNG") != "PNG"
@@ -155,6 +179,53 @@ def _preview_profile_apply(
         saved.extend(keep)
     caps["format"] = "PNG"
     return saved, caps
+
+
+def _preview_strip_scenes(scene: Any) -> list[Any]:
+    """Every scene a scene strip in *scene*'s Sequencer pulls in (inside metas too, and the
+    scenes their own scene strips pull in), each once; never *scene* itself."""
+    found: list[Any] = []
+    todo = [scene]
+    while todo:
+        ed = getattr(todo.pop(0), "sequence_editor", None)
+        try:
+            strips = list(getattr(ed, "strips_all", None) or ()) if ed is not None else []
+        except (TypeError, ReferenceError, RuntimeError):
+            strips = []
+        for strip in strips:
+            if getattr(strip, "type", "") != "SCENE":
+                continue
+            other = getattr(strip, "scene", None)
+            if other is None or other is scene or any(other is s for s in found):
+                continue
+            found.append(other)
+            todo.append(other)
+    return found
+
+
+def _preview_profile_apply_strip_scenes(
+        scene: Any,
+        max_samples: int = _PREVIEW_MAX_SAMPLES,
+        simplify_subdiv: int = _PREVIEW_SIMPLIFY_SUBDIV,
+        time_limit: float = _PREVIEW_TIME_LIMIT_S,
+) -> tuple[list[tuple[Any, str, Any]], list[str]]:
+    """The preview profile on every scene a scene strip of *scene* pulls in (#527):
+    ``(saved, scene names)``.
+
+    A Sequencer render renders those scenes with their own settings (a 4096-sample Cycles
+    shot inside a quick look).  Their picture goes into the Sequencer, not into a file, so
+    their output format, their own Sequencer pass and their size stay (the Sequencer sizes
+    the strip); samples, the time limit, Simplify and the passes are capped as for any
+    preview.  One undo list for :func:`_preview_profile_restore`.
+    """
+    saved: list[tuple[Any, str, Any]] = []
+    names = []
+    for other in _preview_strip_scenes(scene):
+        part, _caps = _preview_profile_apply(other, max_samples=max_samples, simplify_subdiv=simplify_subdiv,
+                                             time_limit=time_limit, strip_scene=True)
+        saved.extend(part)
+        names.append(str(getattr(other, "name", "")))
+    return saved, names
 
 
 def _preview_profile_restore(saved: list[tuple[Any, str, Any]]) -> None:
@@ -183,6 +254,8 @@ def _preview_caps_text(caps: dict[str, Any]) -> str:
             caps["samples_max"], caps.get("cycles_time_limit_s", 0.0)))
     if "simplify_subdivision_max" in caps:
         parts.append("Simplify on (subdivision at most {:d})".format(caps["simplify_subdivision_max"]))
+    if caps.get("texture_limit_px"):
+        parts.append("Cycles textures at most {:d} px".format(caps["texture_limit_px"]))
     if caps.get("off"):
         parts.append(", ".join(caps["off"]) + " off")
     if caps.get("format"):

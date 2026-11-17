@@ -129,6 +129,54 @@ def _is_disconnected(conn: socket.socket) -> bool:
         return True
 
 
+def _carry_on(dc: _DeferredClient) -> None:
+    """Nobody waits for *dc*'s answer any more (its caller hung up, or the bridge stopped):
+    a render goes on as a long job, so it still puts back the settings it changed (the
+    preview profile, the output path) when it is over (#524, #527)."""
+    if getattr(dc.check_fn, "job_kind", "") and getattr(dc.check_fn, "job_on_finish", None):
+        from . import long_jobs
+        long_jobs.start(str(dc.check_fn.job_kind),
+                        str(getattr(dc.check_fn, "job_label", "") or dc.check_fn.job_kind),
+                        dc.check_fn, dc.check_fn.job_on_finish)
+
+
+# Without the bridge (stopped), its timer no longer checks the long jobs: this one does, until
+# none runs or the bridge runs again (#527).
+_JOBS_TICK_SECONDS = 0.5
+
+
+def _jobs_tick_without_bridge() -> float | None:
+    """Check the running jobs while the bridge is stopped, so each one's end puts its
+    settings back.  Ends when none runs, or when a running bridge's timer checks them."""
+    try:
+        from . import long_jobs
+        from .mcp_to_blender_server import is_running
+        if is_running():
+            return None
+        try:
+            from . import coworker_api
+            coworker_api.jobs_tick()
+        except ImportError:
+            long_jobs.poll()
+        return _JOBS_TICK_SECONDS if long_jobs.has_running() else None
+    except Exception:  # pylint: disable=broad-exception-caught  # never a timer that raises each tick
+        traceback.print_exc()
+        return None
+
+
+def _keep_jobs_checked() -> None:
+    """The bridge stops: keep its long jobs checked (:func:`_jobs_tick_without_bridge`)."""
+    from . import long_jobs
+    if not long_jobs.has_running():
+        return
+    try:
+        import bpy  # pylint: disable=import-error,import-outside-toplevel
+        if not bpy.app.timers.is_registered(_jobs_tick_without_bridge):
+            bpy.app.timers.register(_jobs_tick_without_bridge, first_interval=_JOBS_TICK_SECONDS, persistent=True)
+    except (ImportError, AttributeError, ValueError):
+        pass
+
+
 def _hand_off(dc: _DeferredClient) -> None:
     """Answer *dc* with a job id; ``long_jobs`` keeps checking the job."""
     from . import long_jobs
@@ -178,13 +226,7 @@ def poll() -> bool:
             except OSError:
                 pass
             _answered(dc, {"status": "error", "message": "The client hung up before Blender answered."})
-            # #524: a render goes on without its caller; its job still puts the settings it
-            # changed back (the preview profile, the output path) when it is over.
-            if getattr(dc.check_fn, "job_kind", "") and getattr(dc.check_fn, "job_on_finish", None):
-                from . import long_jobs
-                long_jobs.start(str(dc.check_fn.job_kind),
-                                str(getattr(dc.check_fn, "job_label", "") or dc.check_fn.job_kind),
-                                dc.check_fn, dc.check_fn.job_on_finish)
+            _carry_on(dc)
             try:
                 _deferred_clients.remove(dc)
             except ValueError:
@@ -264,6 +306,9 @@ def has_pending() -> bool:
 def close_all() -> None:
     """
     Close all deferred client connections without sending responses.
+
+    A render among them goes on as a long job (#527): it still puts its settings back when it
+    ends, and the jobs stay checked without the bridge's timer.
     """
     for dc in _deferred_clients:
         try:
@@ -271,4 +316,6 @@ def close_all() -> None:
         except OSError:
             pass
         _answered(dc, {"status": "error", "message": "The bridge stopped before Blender answered."})
+        _carry_on(dc)
     _deferred_clients.clear()
+    _keep_jobs_checked()

@@ -33,6 +33,8 @@ Dedicated tools are pre-tested and version-safe. Raw code is the last resort.
 - `render_viewport_to_path(output_path)` — Render the camera view to a file as a quick preview (default
   `quality="preview"`: at most 1024 px, few samples); `quality="viewport"` for solid shading in a second;
   `quality="final"` (the scene's own settings) only when the user asks for the real render.
+  `status: "stopped"` means the user stopped it in Blender (`partial`: the image is unfinished): don't render
+  again unless they ask.
 
 ## Long Jobs (Renders, Bakes)
 

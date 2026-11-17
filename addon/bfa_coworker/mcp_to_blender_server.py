@@ -1410,6 +1410,12 @@ def _execute_code_from_request(
                                          can_ask=_engine != "EXTERNAL_HARNESS")
         if _repeat is not None:
             exec_result = _ExecResult(*_repeat)
+        else:
+            # #527: a render that failed makes its retry under another file name a repeat.
+            exec_result = _gated_run()
+            exec_result = exec_result._replace(check_fn=loop_guard.bridge_watch(
+                loop_guard.BRIDGE, _tool, {"code": code}, str(request.get("session") or ""), _thread,
+                exec_result.response, exec_result.check_fn))
     if exec_result is None:
         exec_result = _gated_run()
     try:

@@ -45,7 +45,8 @@ def preview_content(response: dict[str, object]) -> tuple[dict[str, object], byt
     if not isinstance(result, dict):
         return {"status": "error", "message": "Blender answered without a result."}, None
     path = result.get("filepath")
-    if result.get("status") != "ok" or result.get("job_id") or not isinstance(path, str):
+    # A stopped render (#527) still shows the part it got to, when Blender wrote it.
+    if result.get("status") not in ("ok", "stopped") or result.get("job_id") or not isinstance(path, str):
         return result, None
     try:
         if os.path.getsize(path) > _IMAGE_SIZE_LIMIT_IN_BYTES:
@@ -76,7 +77,8 @@ def register(mcp: FastMCP) -> None:
 
         Use it to check an edit: a title's position, what plays at a cut, a colour. The
         scene's render settings are left as they were; the image is a JPEG in Coworker's
-        temp folder (``filepath``).
+        temp folder (``filepath``). A scene strip's 3D scene renders with few samples
+        (a preview), so judge framing and timing from it, not render quality.
 
         Args:
             frame: The frame to render (default: the current frame).
@@ -86,7 +88,8 @@ def register(mcp: FastMCP) -> None:
         Returns:
             The image, and ``status``, ``scene``, ``frame``, ``filepath``, ``width`` /
             ``height``, ``message`` (a ``job_id`` instead when the render takes long:
-            wait with ``get_job_status``).
+            wait with ``get_job_status``). ``status`` is ``"stopped"`` when the user
+            stopped the render in Blender (``partial``: the image is unfinished).
         """
         p = Params(frame=frame, max_size=int(max_size or 0), scene_name=scene_name)
         result, image = preview_content(send_code(toolcode_format_call(_TOOL_CALL, p), strict_json=True))

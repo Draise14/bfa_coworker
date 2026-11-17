@@ -176,7 +176,7 @@ def start(kind: str, label: str, check_fn: Callable[[], dict[str, Any] | None],
     """Register a running job; returns its id.
 
     *check_fn* returns ``None`` while running, then the result dict (its ``status``
-    "ok" means done, "cancelled" cancelled, anything else an error).  *on_finish*
+    "ok" means done, "cancelled" or "stopped" cancelled, anything else an error).  *on_finish*
     runs once when the job ends however it ends (restore settings, drop handlers).
     """
     now = _clock()
@@ -225,7 +225,15 @@ def poll() -> bool:
     ended = False
     for job in jobs:
         if job.get("cancel_requested"):
-            _end(job, "cancelled", message=job["cancel_requested"])
+            # #527: what the job left (a stopped render's partial image) when it is over already.
+            result = None
+            if job["check_fn"] is not None:
+                try:
+                    result = job["check_fn"]()
+                except Exception:  # pylint: disable=broad-exception-caught
+                    result = None
+            _end(job, "cancelled", result=result if isinstance(result, dict) else None,
+                 message=job["cancel_requested"])
             ended = True
             continue
         if _clock() > job["deadline"]:
@@ -248,7 +256,9 @@ def poll() -> bool:
         if not isinstance(result, dict):
             result = {"status": "error", "message": "The job's checker returned {:s}, not a dict".format(
                 type(result).__name__)}
-        state = {"ok": "done", "cancelled": "cancelled"}.get(str(result.get("status", "")), "error")
+        # A render stopped in Blender answers "stopped" (#527): the job was cancelled.
+        state = {"ok": "done", "cancelled": "cancelled", "stopped": "cancelled"}.get(
+            str(result.get("status", "")), "error")
         _end(job, state, result=result, message=str(result.get("message", "") or ""))
         ended = True
     return ended

@@ -505,10 +505,14 @@ def apply_reframe(scene: Any, strip: Any, action: str, step: float = 0.1) -> str
 # -- Follow subject ------------------------------------------------------------------------
 
 def render_samples(strip: Any, frames: list[int], outdir: str, width: int = 384) -> list[tuple[int, str]]:
-    """Render *strip*'s own picture (no Reframe, the whole frame) at *frames*, small, to PNGs."""
+    """Render *strip*'s own picture (no Reframe, the whole frame) at *frames*, small, to PNGs.
+
+    A scene strip's 3D scene renders under the preview profile's caps (samples, time limit,
+    Simplify, the passes; #527), put back when the samples are done."""
     sw, sh = source_size(strip)
     tmp = bpy.data.scenes.new("Coworker Reframe Sample")
     out = []
+    capped: list[Any] = []
     try:
         r = tmp.render
         r.resolution_x, r.resolution_y = width, max(2, int(round(width * sh / sw)))
@@ -527,6 +531,7 @@ def render_samples(strip: Any, frames: list[int], outdir: str, width: int = 384)
             src = ed.strips.new_scene("src", strip.scene, 1, 1)
             src.transform.scale_x = src.transform.scale_y = width / float(sw)
         src.right_handle = max(src.right_handle, 2 + max(int(f - strip.content_start) for f in frames))
+        capped = _cap_strip_scenes(tmp)
         for f in frames:
             tmp.frame_set(1 + int(f - strip.content_start))
             path = os.path.join(outdir, "{:s}_{:05d}.png".format(bpy.path.clean_name(strip.name), f))
@@ -537,8 +542,29 @@ def render_samples(strip: Any, frames: list[int], outdir: str, width: int = 384)
             if os.path.isfile(path):
                 out.append((f, path))
     finally:
+        _uncap(capped)
         bpy.data.scenes.remove(tmp)
     return out
+
+
+def _cap_strip_scenes(scene: Any) -> list[Any]:
+    """The preview profile on the scenes *scene*'s scene strips pull in (#527); the undo list
+    for :func:`_uncap`.  The profile is the tool-code's own file (``chat_attachments`` reads
+    it); without it nothing is capped and the render runs as before."""
+    from . import chat_attachments
+    apply = chat_attachments._preview_profile().get("_preview_profile_apply_strip_scenes")
+    if apply is None:
+        return []
+    saved, _names = apply(scene)
+    return saved
+
+
+def _uncap(saved: list[Any]) -> None:
+    """Put back what :func:`_cap_strip_scenes` changed."""
+    from . import chat_attachments
+    restore = chat_attachments._preview_profile().get("_preview_profile_restore")
+    if restore is not None:
+        restore(saved)
 
 
 # A running Follow subject: one at a time.

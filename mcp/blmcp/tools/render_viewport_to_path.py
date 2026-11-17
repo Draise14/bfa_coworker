@@ -57,7 +57,9 @@ def register(mcp: FastMCP) -> None:
             ``status``; ``filepath`` (where the image is, or will be, written); a
             ``job_id`` when the render goes on in the background; ``quality`` and
             ``caps`` (what the preview limited); ``message`` (also on an error: the
-            quality and limits it ran with).
+            quality and limits it ran with). ``status`` is ``"stopped"`` when the user
+            stopped the render in Blender (``partial``: ``filepath`` holds the unfinished
+            image); don't render again unless they ask.
         """
         p = Params(output_path=output_path, background=bool(background), quality=str(quality or "preview"))
         code = toolcode_format_call(_TOOL_CALL, p)

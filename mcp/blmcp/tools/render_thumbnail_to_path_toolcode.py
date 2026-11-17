@@ -45,7 +45,7 @@ def _deferred_tool_check_for_file_output(
 
 # @include_begin: _template_render_preview_profile.py
 from blmcp.tools._template_render_preview_profile import (  # noqa: E402  (the real helpers, inlined in Blender)
-    _PREVIEW_NO_CAMERA_MESSAGE, _THUMB_MAX_EDGE, _THUMB_MAX_SAMPLES, _THUMB_SIMPLIFY_SUBDIV,
+    _PREVIEW_NO_CAMERA_MESSAGE, _THUMB_MAX_EDGE, _THUMB_MAX_SAMPLES, _THUMB_SIMPLIFY_SUBDIV, _THUMB_TEXTURE_LIMIT,
     _preview_busy_message, _preview_caps_text, _preview_no_camera, _preview_profile_apply,
     _preview_profile_restore,
 )
@@ -78,7 +78,8 @@ def main(params: Params) -> Result | Callable[[], dict[str, object] | None]:
 
     # The profile and `filepath` in one undo list, put back when the render is over.
     saved, caps = _preview_profile_apply(
-        scene, max_edge=_THUMB_MAX_EDGE, max_samples=_THUMB_MAX_SAMPLES, simplify_subdiv=_THUMB_SIMPLIFY_SUBDIV)
+        scene, max_edge=_THUMB_MAX_EDGE, max_samples=_THUMB_MAX_SAMPLES, simplify_subdiv=_THUMB_SIMPLIFY_SUBDIV,
+        texture_limit=_THUMB_TEXTURE_LIMIT)
     saved.append((rd, "filepath", rd.filepath))
     rd.filepath = output_path
     text = "Thumbnail: {:s}.".format(_preview_caps_text(caps))
@@ -105,11 +106,12 @@ def main(params: Params) -> Result | Callable[[], dict[str, object] | None]:
                 return None
             result = dict(result)
             result["caps"] = caps
+            # "stopped" (#527) and errors keep their own sentence first.
             result["message"] = text if result.get("status") == "ok" else "{:s} {:s}".format(
                 str(result.get("message") or ""), text)
             return result
 
-        for attr in ("job_kind", "job_label", "job_on_finish"):
+        for attr in ("job_kind", "job_label", "job_on_finish", "job_stopped"):
             setattr(check, attr, getattr(base, attr, None))
         return check
 

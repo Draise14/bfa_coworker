@@ -21,6 +21,10 @@ minutes, tokens and sometimes the scene.  One rule for every engine:
   installed files: :data:`_CONTEXT_MODULES`) is counted with that state, so
   a call made after it changed is a new call -- transcribing a strip again
   after setting speech up or picking another model is not a loop (#499);
+- a render that failed counts like any repeat when it is tried again with only
+  another file name (``output_path``): the render is the same, and so is its
+  cost (#527).  :meth:`LoopGuard.note_result` hears how each render ended; one
+  that worked doesn't count toward a render to another file;
 - in Auto mode nobody can answer: the 3rd call is declined at once;
 - an External Harness client has its chat outside Blender, so nobody is at
   the card either: the 3rd call is refused at once with a plain text instead
@@ -44,6 +48,7 @@ __all__ = (
     "REFUSE",
     "RUN",
     "LoopGuard",
+    "bridge_watch",
     "bridge_wrap",
     "decide",
     "repeat_request",
@@ -51,9 +56,11 @@ __all__ = (
     "wait_answer",
 )
 
+import functools
 import hashlib
 import importlib
 import json
+import re
 import threading
 import time
 from typing import Any, Callable
@@ -112,6 +119,43 @@ def _context(tool: str) -> str:
         return ""
 
 
+# Render tools and the arguments that only name the file (#527): a render that failed, tried
+# again under another name, is the same render.
+_RENDER_TOOLS: dict[str, tuple[str, ...]] = {
+    "render_viewport_to_path": ("output_path",),
+    "render_thumbnail_to_path": ("output_path",),
+}
+# The bridge counts a tool's code, its arguments written in as ``Params(output_path='...', ...)``.
+_PATH_IN_CODE = re.compile(r"""\boutput_path=(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")""")
+_ERROR_IN_TEXT = re.compile(r'"status"\s*:\s*"error"')
+
+
+def _render_identity(tool: str, args: Any) -> str:
+    """A render's input without its file name ("" for other tools)."""
+    names = _RENDER_TOOLS.get(tool)
+    if not names or not isinstance(args, dict):
+        return ""
+    if set(args) == {"code"} and isinstance(args["code"], str):
+        return signature(tool, {"code": _PATH_IN_CODE.sub("output_path=?", args["code"])})
+    return signature(tool, {k: v for k, v in args.items() if k not in names})
+
+
+def _failed(result: Any) -> bool:
+    """Did the call fail?  *result* is the answer (the bridge's envelope or the tool's own
+    dict), or its JSON text (the local loop's).  A stopped render is not a failure."""
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except ValueError:
+            return bool(_ERROR_IN_TEXT.search(result[:600]))
+    if not isinstance(result, dict):
+        return False
+    if result.get("status") == "error":
+        return True
+    inner = result.get("result")
+    return isinstance(inner, dict) and inner.get("status") == "error"
+
+
 class LoopGuard:
     """Counts identical calls per key (a session) until the turn ends."""
 
@@ -124,6 +168,8 @@ class LoopGuard:
         self._lock = threading.Lock()
         self._counts: dict[str, dict[str, int]] = {}
         self._last: dict[str, float] = {}
+        # key -> {a render's input without its file name -> how often it failed} (#527)
+        self._failures: dict[str, dict[str, int]] = {}
 
     def new_turn(self, key: str | None = None) -> None:
         """A new turn: every count starts again (only *key*'s when given)."""
@@ -131,9 +177,21 @@ class LoopGuard:
             if key is None:
                 self._counts.clear()
                 self._last.clear()
+                self._failures.clear()
             else:
                 self._counts.pop(key, None)
                 self._last.pop(key, None)
+                self._failures.pop(key, None)
+
+    def note_result(self, tool: str, args: Any, result: Any, key: str = "") -> None:
+        """How a call ended (#527): a render that failed makes the next render with the same
+        input but another file name a repeat.  Other tools and answers change nothing."""
+        ident = _render_identity(str(tool or ""), args)
+        if not ident or not _failed(result):
+            return
+        with self._lock:
+            per = self._failures.setdefault(key, {})
+            per[ident] = per.get(ident, 0) + 1
 
     def check(self, tool: str, args: Any, key: str = "") -> tuple[str, int]:
         """Count this call: ``(verdict, nth)``, *verdict* one of RUN / ASK / REFUSE."""
@@ -143,10 +201,12 @@ class LoopGuard:
         read = _is_read(tool)
         context = _context(tool)
         sig = signature(tool, {"input": args, "context": context} if context else args)
+        ident = _render_identity(tool, args)
         with self._lock:
             now = self._clock()
             if self.idle_reset > 0 and now - self._last.get(key, now) > self.idle_reset:
                 self._counts.pop(key, None)
+                self._failures.pop(key, None)
             self._last[key] = now
             counts = self._counts.setdefault(key, {})
             if not read:
@@ -155,6 +215,9 @@ class LoopGuard:
                     del counts[other]
             nth = counts.get(sig, (read, 0))[1] + 1
             counts[sig] = (read, nth)
+            if ident:
+                # The same render after it failed, under another file name, is a repeat too.
+                nth = max(nth, self._failures.get(key, {}).get(ident, 0) + 1)
         limit = self.read_ask_at if read else self.ask_at
         if nth < limit:
             return RUN, nth
@@ -274,6 +337,30 @@ def bridge_wrap(guard: LoopGuard, approvals: Approvals, auto: bool, tool: str, a
             return None
         return response
     return {}, check
+
+
+def bridge_watch(guard: LoopGuard, tool: str, args: Any, key: str, thread: str, response: dict[str, object],
+                 check_fn: Callable[[], dict[str, object] | None] | None,
+                 ) -> Callable[[], dict[str, object] | None] | None:
+    """Tell *guard* how a render call that went through ended (#527), counted as in
+    :func:`bridge_wrap`.  Returns the checker to use: *check_fn* itself for other tools,
+    else one that notes the answer when it comes (with *check_fn*'s attributes: the job
+    kind, label and end a long render needs)."""
+    if not _render_identity(str(tool or ""), args):
+        return check_fn
+    count_key = key + "/" + thread if thread else key
+    if check_fn is None:
+        guard.note_result(tool, args, response, count_key)
+        return None
+    inner = check_fn
+
+    @functools.wraps(inner)
+    def watched() -> dict[str, object] | None:
+        result = inner()
+        if result is not None:
+            guard.note_result(tool, args, result, count_key)
+        return result
+    return watched
 
 
 # External Agent / External Harness calls, counted at the bridge.

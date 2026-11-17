@@ -2137,7 +2137,9 @@ EXPECTED_TOOLS = [
 "            ``status``; ``filepath`` (where the image is, or will be, written); a\n"
 "            ``job_id`` when the render goes on in the background; ``quality`` and\n"
 "            ``caps`` (what the preview limited); ``message`` (also on an error: the\n"
-"            quality and limits it ran with).\n"
+"            quality and limits it ran with). ``status`` is ``\"stopped\"`` when the user\n"
+"            stopped the render in Blender (``partial``: ``filepath`` holds the unfinished\n"
+"            image); don't render again unless they ask.\n"
 "        ",
         "inputSchema": {
             "properties": {
@@ -2170,7 +2172,8 @@ EXPECTED_TOOLS = [
 "\n"
 "        Use it to check an edit: a title's position, what plays at a cut, a colour. The\n"
 "        scene's render settings are left as they were; the image is a JPEG in Coworker's\n"
-"        temp folder (``filepath``).\n"
+"        temp folder (``filepath``). A scene strip's 3D scene renders with few samples\n"
+"        (a preview), so judge framing and timing from it, not render quality.\n"
 "\n"
 "        Args:\n"
 "            frame: The frame to render (default: the current frame).\n"
@@ -2180,7 +2183,8 @@ EXPECTED_TOOLS = [
 "        Returns:\n"
 "            The image, and ``status``, ``scene``, ``frame``, ``filepath``, ``width`` /\n"
 "            ``height``, ``message`` (a ``job_id`` instead when the render takes long:\n"
-"            wait with ``get_job_status``).\n"
+"            wait with ``get_job_status``). ``status`` is ``\"stopped\"`` when the user\n"
+"            stopped the render in Blender (``partial``: the image is unfinished).\n"
 "        ",
         "inputSchema": {
             "properties": {

@@ -2192,7 +2192,7 @@ class BFACW_OT_chat_send(Operator):  # type: ignore[misc]
         message = (self.text or thread.draft).strip()
         if not message:
             return {"CANCELLED"}
-        if _answer_typed(message, context):     # an open question (ask_user) takes it as its answer
+        if _answer_typed(message, context, thread):     # its chat's open question (ask_user) takes it
             if not self.text:
                 thread.draft = ""
             _redraw_areas(context)
@@ -3115,10 +3115,11 @@ def _revert_choice_popup(context, thread, choice) -> None:
     context.window_manager.popup_menu(draw, title="Revert This Turn?", icon='QUESTION')
 
 
-def _answer_typed(message: str, context=None) -> bool:
-    """An open question that takes text gets your message as its answer."""
+def _answer_typed(message: str, context=None, thread=None) -> bool:
+    """An open question that takes text gets your message as its answer: the question of
+    the chat the message goes to (*thread*; default: the area's), never another's (#572)."""
     from . import coworker_api, threads
-    open_question = coworker_api.current_question(threads.tag(_ui_thread(context)))
+    open_question = coworker_api.current_question(threads.tag(thread if thread is not None else _ui_thread(context)))
     if open_question is None or not open_question[1]["allow_text"]:
         return False
     return coworker_api.answer_question(message, open_question[0])

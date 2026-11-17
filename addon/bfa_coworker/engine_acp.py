@@ -225,7 +225,10 @@ class AcpEngine:
                                       [store_paths.real_path(a) for a in mcp_entry.get("args") or []],
                                       dict(mcp_entry.get("env") or {}))
             self._cwd, self._servers = cwd, [server]
-            self.session_id = self._open_session(client, info.load_session, resume, cwd, [server])
+            self._fresh_process()
+            # The current chat is the default one now: *resume* is its session (#572: it
+            # isn't the last chat started's).
+            self.session_id = self._open_session(client, info.load_session, resume, cwd, self._servers_for(""))
             if not self.session_id:
                 raise AcpError("the agent did not open a session")
             self.client = client
@@ -255,6 +258,10 @@ class AcpEngine:
         thread = self.thread if thread is None else thread
         self.resumed = self.resume_failed = False
         session_id, result = "", {}
+        if resume and self._session_owner(resume, thread) is not None:
+            # Another chat works in that session already (two tabs on one stored chat): one
+            # session with one chat's tools, or each chat's questions show in the other (#572).
+            resume = ""
         if resume and can_load:
             try:
                 result = client.load_session(resume, cwd, servers)    # its replay is ignored: no turn runs
@@ -274,6 +281,32 @@ class AcpEngine:
         return session_id
 
     # -- threads (#357) ----------------------------------------------------------------
+    def _fresh_process(self) -> None:
+        """A new agent process (Start, also after Stop or a crash) knows none of the old
+        one's sessions (#572).  The first session it opens is the default chat's, and every
+        other chat's next turn opens -- or continues, by its saved id -- a session of its
+        own, with its own thread id for its tools.  Before, the last chat started kept the
+        default chat's session, whose tools say no thread: its questions, approvals and
+        plan showed in All editors, and the other chats kept ids the agent didn't know."""
+        with self._lock:
+            self.use_thread("")
+            self.session_id = ""
+            self._threads = {tag: ("", state, applier) for tag, (_s, state, applier) in self._threads.items()}
+
+    def _session_owner(self, session: str, but: str | None = None) -> str | None:
+        """The chat (tag) whose session *session* is -- its running turn's or its kept
+        one -- other than *but*; None when no chat has it (#572)."""
+        if not session:
+            return None
+        with self._lock:
+            owners = [tag for tag, slot in self._running.items() if slot.get("session") == session]
+            # The current chat's kept entry may be old: its session is *session_id*.
+            owners += [tag for tag, (sid, _state, _applier) in self._threads.items()
+                       if sid == session and tag != self.thread]
+            if self.session_id == session:
+                owners.append(self.thread)
+        return next((tag for tag in owners if tag != but), None)
+
     def use_thread(self, thread: str) -> None:
         """Turns from now on run in *thread*'s own session and write its chat (between turns)."""
         with self._lock:
@@ -430,8 +463,9 @@ class AcpEngine:
 
         def work() -> None:
             try:
-                self.session_id = self._open_session(client, self.caps.load_session, resume, self._cwd,
-                                                     self._servers_for(self.thread))
+                # The default chat's, also when another chat's turn starts while it opens (#572).
+                self._set_session("", self._open_session(client, self.caps.load_session, resume, self._cwd,
+                                                         self._servers_for(""), thread=""))
             except AcpError as ex:
                 self.status = "Couldn't switch the conversation: {:s}".format(str(ex).splitlines()[0])
             self._changed()
@@ -774,8 +808,11 @@ class AcpEngine:
             respond(str(pick.get("optionId")) if pick else None)
 
         # Whose turn asks (#359): the request's session's chat; without one, the current.
-        found, slot = self._slot_for_session(str(params.get("sessionId") or ""))
-        thread = found if slot is not None else self.thread
+        session = str(params.get("sessionId") or "")
+        found, slot = self._slot_for_session(session)
+        owner = self._session_owner(session) if slot is None else None
+        # A session no turn runs in (a turn let go after Stop) still has its own chat (#572).
+        thread = found if slot is not None else owner if owner is not None else self.thread
         turn = str(slot.get("turn", "")) if slot is not None else ""
         mode = str(slot.get("mode", "AGENT")) if slot is not None else self._turn_mode
         # OpenCode: "bfa-coworker_<tool>"; Claude Code: "mcp__bfa-coworker__<tool>".

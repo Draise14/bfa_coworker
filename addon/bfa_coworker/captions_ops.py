@@ -1644,7 +1644,9 @@ def _busy() -> str:
     if _playing():
         return "playing"
     try:
-        if any(len(win.modal_operators) for win in bpy.context.window_manager.windows):
+        # Coworker's own chat input is a modal operator that is always running: not that one.
+        if any(not str(op.bl_idname).startswith("BFACW_OT_") for win in bpy.context.window_manager.windows
+               for op in win.modal_operators):
             return "a modal operator"
     except (AttributeError, ReferenceError, RuntimeError):
         pass

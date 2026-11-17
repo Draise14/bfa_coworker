@@ -647,8 +647,9 @@ class TestTheHandler(_OpsCase):
         self.assertEqual(self.refits, ["Scene"])
 
     def test_a_refit_request_during_a_modal_operator_waits_until_it_ends(self):
-        modal = [object()]
-        win = SimpleNamespace(modal_operators=modal)
+        modal = [SimpleNamespace(bl_idname="TRANSFORM_OT_translate")]
+        always = SimpleNamespace(bl_idname="BFACW_OT_gpu_input")      # Coworker's chat input: always running
+        win = SimpleNamespace(modal_operators=modal + [always])
         self.ops.bpy.context.window_manager = SimpleNamespace(windows=[win])
         self.ops.bpy.app.is_job_running = lambda kind: False
         with mock.patch.object(self.ops, "_busy", self.real_busy):
@@ -657,7 +658,7 @@ class TestTheHandler(_OpsCase):
             self.assertEqual(self.ops._busy(), "a modal operator")
             self.assertEqual(self.timers[0](), self.ops.RETRY_S)
             self.assertEqual(self.refits, [])
-            modal.clear()
+            win.modal_operators = [always]
             self.assertEqual(self.ops._busy(), "")
             self.assertIsNone(self.timers[0]())
         self.assertEqual(self.refits, ["Scene"])

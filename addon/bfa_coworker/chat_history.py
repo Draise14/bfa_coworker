@@ -67,6 +67,16 @@ def clean_name(title: Any) -> str:
     return " ".join(_log.redact(str(title or "")).split())[:_NAME_CHARS]     # no key in the index
 
 
+def _redact_agent_title(text: str) -> str:
+    """The title of a chat whose first message Coworker wrote itself (a helper chat's task):
+    no key in it, in the tab, History or its index file (#528).  Your own words stay as typed."""
+    try:
+        from . import log, magic_wording
+    except ImportError:             # loaded on its own (the unit tests)
+        return text
+    return log.redact(text) if magic_wording.is_agent_written(text) else text
+
+
 def title_of(history: list[dict[str, Any]]) -> str:
     """The first thing you asked, short; "" for a chat without a message yet."""
     for msg in history:
@@ -77,6 +87,7 @@ def title_of(history: list[dict[str, Any]]) -> str:
             text = re.sub(r"\[attached:[^\]]*\]", "", str(content or ""))
             text = " ".join(text.split())
             if text:
+                text = _redact_agent_title(text)
                 return text if len(text) <= _TITLE_CHARS else text[:_TITLE_CHARS - 3].rstrip() + "..."
     return ""
 

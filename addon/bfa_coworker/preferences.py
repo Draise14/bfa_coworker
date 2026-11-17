@@ -1246,6 +1246,14 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default=4, min=1, max=12,
     )
 
+    magic_wording: BoolProperty(  # type: ignore[valid-type]
+        name="Magic Wording",
+        description=("Show helper chats as mages, wizards and magicians, and a word about magic while "
+                     "the model thinks. Only what you see changes: what is sent to the model stays "
+                     "as it is. Off: plain \"Helper\" and \"Thinking\""),
+        default=True,
+    )
+
     external_agent_tools_on_demand: BoolProperty(  # type: ignore[valid-type]
         name="Load Tools When Needed",
         description=("Give the agent Coworker's basic tools first (scene, code, docs, screenshots, "
@@ -2685,6 +2693,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             text="Long requests keep going in rounds while the plan makes progress.",
             icon='INFO',
         )
+        chat_box.prop(self, "magic_wording")
         chat_box.prop(self, "helpers_per_turn")
         chat_box.label(
             text="A chat can hand parts of a job to helper chats; on Local they run one after another.",

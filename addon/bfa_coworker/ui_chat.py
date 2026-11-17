@@ -64,6 +64,7 @@ from . import agent_controller
 from . import chat_attachments
 from . import llm_manager
 from . import log as _log
+from . import magic_wording as _magic
 from . import mcp_to_blender_server
 from .engine import EngineCaps, Prompt
 from .engine_loop import LoopConfig, LoopEngine
@@ -831,11 +832,22 @@ def _thread_status(thread) -> tuple[str, str]:
     return "Idle", "DOT"
 
 
+def _thread_status_shown(thread) -> tuple[str, str]:
+    """:func:`_thread_status` as drawn: "Thinking" is a word about magic with the magic
+    wording (#528).  Only for display: the logic keeps comparing the plain word."""
+    word, icon = _thread_status(thread)
+    if word == "Thinking":
+        from . import magic_wording
+        if magic_wording.enabled():
+            word = magic_wording.thinking_word(agent_controller.thread_state(thread).thinking_start_time)
+    return word, icon
+
+
 def _thread_title(thread) -> str:
     from . import threads
     if thread.is_default:
         return "All editors"
-    return _user_title(thread) or thread.title or threads.short_name(thread.editor) or "Thread"     # #573
+    return _user_title(thread) or _log.redact(thread.title or "") or threads.short_name(thread.editor) or "Thread"     # #573
 
 
 def _approvals_new_turn(thread=None) -> None:
@@ -4938,7 +4950,8 @@ def _tab_label(thread) -> str:
     helper_title = helper_chats.tab_label(thread)       # a helper chat: its title (#479)
     if helper_title:
         return threads.tab_title(thread, helper_title)
-    return threads.tab_title(thread, title_of(agent_controller.thread_state(thread).conversation_history))
+    first = title_of(agent_controller.thread_state(thread).conversation_history)
+    return threads.tab_title(thread, _magic.shown_agent_text(first))
 
 
 # The names you gave chats (Rename, #573), by chat id; "" = its automatic title.  Read from
@@ -4983,8 +4996,8 @@ def _tab_full_title(thread) -> str:
     """The tab's title, not shortened: what Rename starts from (#573)."""
     from . import helper_chats, threads
     from .chat_history import title_of
-    return _log.redact(_user_title(thread) or helper_chats.tab_label(thread)
-                       or title_of(agent_controller.thread_state(thread).conversation_history)
+    return _log.redact(_user_title(thread) or helper_chats.tab_label(thread, named=False)
+                       or _magic.shown_agent_text(title_of(agent_controller.thread_state(thread).conversation_history))
                        or threads.tab_title(thread))
 
 
@@ -5146,7 +5159,7 @@ class BFACW_MT_chat_tabs(bpy.types.Menu):  # type: ignore[misc]
         from . import threads
         shown = _ui_thread(context)
         for thread in agent_controller.THREADS.live():
-            word, _icon = _thread_status(thread)
+            word, _icon = _thread_status_shown(thread)
             icon, _alert = _tab_icon(thread)
             text = "{:s}  --  {:s}".format(_tab_label(thread), word)
             op = self.layout.operator("bfacw.tab_show", text=("\u25cf " if thread is shown else "") + text,
@@ -5182,7 +5195,7 @@ class BFACW_OT_tab_show(Operator):  # type: ignore[misc]
         where = "All editors" if not thread.editor else _EDITOR_NAMES.get(thread.editor, thread.editor)
         from . import helper_chats
         return "{:s}{:s} ({:s}): {:s}".format(helper_chats.tab_tip(thread), _tab_label(thread), where,
-                                              _thread_status(thread)[0])
+                                              _thread_status_shown(thread)[0])
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         thread = agent_controller.THREADS.get(self.thread_id)

@@ -5159,6 +5159,10 @@ _TOOL_FRIENDLY_NAMES: dict[str, str] = {
 def _friendly_tool_status(tool_name: str) -> str:
     """Return a user-friendly status string for a tool name."""
     friendly = _TOOL_FRIENDLY_NAMES.get(tool_name)
+    if tool_name == "delegate_task":
+        from . import magic_wording     # on screen only (#528); the tool and its name stay as they are
+        if magic_wording.enabled():
+            friendly = "Handing a part to a mage"
     if friendly:
         return "{:s}...".format(friendly)
     # Fallback: convert camelCase/snake_case to readable text.

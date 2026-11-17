@@ -430,6 +430,14 @@ class _Scene:
         return self.sequence_editor
 
 
+class _Rows(list):
+    """An operator's CollectionProperty."""
+
+    def add(self):
+        self.append(SimpleNamespace(strip="", name="", style="SAME", position="SAME"))
+        return self[-1]
+
+
 class _Layout:
     """Records what a dialog's draw puts in it."""
 
@@ -463,10 +471,11 @@ def _fake_bpy(state):
     bpy.context = SimpleNamespace(scene=None, sequencer_scene=None, workspace=None)
     bpy.ops = SimpleNamespace(ed=SimpleNamespace(undo_push=lambda message="": state["undo"].append(message)))
     props = types.ModuleType("bpy.props")
-    for n in ("BoolProperty", "EnumProperty", "IntProperty", "StringProperty"):
+    for n in ("BoolProperty", "CollectionProperty", "EnumProperty", "IntProperty", "StringProperty"):
         setattr(props, n, lambda **_k: None)
     bpy.props = props
-    bpy.types = SimpleNamespace(Operator=type("Operator", (), {}), Menu=type("Menu", (), {}))
+    bpy.types = SimpleNamespace(Operator=type("Operator", (), {}), Menu=type("Menu", (), {}),
+                                PropertyGroup=type("PropertyGroup", (), {}))
     extras = types.ModuleType("bpy_extras")
     io_utils = types.ModuleType("bpy_extras.io_utils")
     io_utils.ExportHelper = io_utils.ImportHelper = type("Helper", (), {})
@@ -605,6 +614,8 @@ class TestCaptionStrips(_OpsCase):
         op = self.ops.BFACW_OT_auto_captions()
         op.style, op.language, op.max_chars, op.lines, op.transcript_path = "CLEAN", "auto", 0, "STYLE", ""
         op.replace_edited = False
+        op.animation, op.position, op.margin, op.speakers, op.speaker_labels = "STYLE", "BOTTOM", 0, False, False
+        op.speaker_list = _Rows()
         reports = []
         op.report = lambda kind, msg: reports.append((sorted(kind)[0], msg))
         return op, reports
@@ -1080,15 +1091,25 @@ class TestTool(_OpsCase):
         out = toolcode.main(toolcode.Params(strips=("x",)))
         self.assertEqual(out.status, "error")                      # the add-on isn't loaded under its name
         fake = types.ModuleType("bl_ext.user_default.bfa_coworker.captions_ops")
-        fake.tool_add_captions = lambda strips, style, language, path, replace_edited=False: {
-            "status": "ok", "message": "m", "lines_created": 3, "channel": 4, "first_frame": 1, "last_frame": 9,
-            "style": "Clean", "extra_key": "dropped"}
+        calls = []
+
+        def tool(strips, style, language, path, replace_edited=False, *look):
+            calls.append(look)
+            return {"status": "ok", "message": "m", "lines_created": 3, "channel": 4, "first_frame": 1,
+                    "last_frame": 9, "style": "Clean", "extra_key": "dropped", "animation": "Fade"}
+        fake.tool_add_captions = tool
         sys.modules[fake.__name__] = fake
         try:
             out = toolcode.main(toolcode.Params(strips=("speech",), style="CLEAN"))
+            toolcode.main(toolcode.Params(strips=("speech",), animation="FADE", position="TOP", margin=12,
+                                          speakers=True, speaker_labels=True,
+                                          speaker_settings=({"strip": "speech", "name": "Ana"},)))
         finally:
             del sys.modules[fake.__name__]
-        self.assertEqual((out.status, out.lines_created, out.channel), ("ok", 3, 4))
+        self.assertEqual((out.status, out.lines_created, out.channel, out.animation), ("ok", 3, 4, "Fade"))
+        # #542: the defaults are today's look; the new arguments reach the add-on in order.
+        self.assertEqual(calls[0], ("STYLE", "BOTTOM", 0, False, False, []))
+        self.assertEqual(calls[1], ("FADE", "TOP", 12, True, True, [{"strip": "speech", "name": "Ana"}]))
         self.assertEqual(set(out._asdict()), set(toolcode.Result._fields))
 
     def test_in_the_vse_domain(self):

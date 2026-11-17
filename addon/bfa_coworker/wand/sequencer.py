@@ -565,6 +565,18 @@ def _resign(strip: Any) -> None:
             pass
 
 
+def _refit(scene: Any, names: list[str]) -> None:
+    """Captions trimmed or cut here, still as Coworker made them: their animation preset fits
+    their frames again (#542: a fade-out at the new end, not past it)."""
+    if not names:
+        return
+    try:
+        from ..captions_ops import refit_captions
+        refit_captions(scene, names)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+
+
 def _text_pieces(every: list, pieces: dict, new_names: dict, fresh: set) -> None:
     """Close the Gaps off: the pieces of a cut caption keep it unedited (re-signed), and its
     word strips name the piece they are in, not the first one."""
@@ -696,6 +708,7 @@ def remove_silences(scene: Any, settings: tuple, names: list[str] | None = None,
     cuts_index = cut_plan.Cuts(the_plan["cuts"])
     texts = {n for n in the_plan["cut"] if by_name[n].type == "TEXT"}  # read now: a cut may free the strip
     fresh = {n for n in texts if _unedited(by_name[n])}               # captions cut with the gaps left
+    trimmed = [n for n in the_plan["trim"] if n in by_name and by_name[n].type == "TEXT" and _unedited(by_name[n])]
     try:
         pieces = {name: _cut_member(strips, by_name[name], ranges) for name, ranges in the_plan["cut"].items()}
         _sweep(strips, cuts_index, not ripple)
@@ -705,6 +718,7 @@ def remove_silences(scene: Any, settings: tuple, names: list[str] | None = None,
         new_names = _rename(editor, pieces)
         if texts:
             _text_pieces(list(strips), {n: ps for n, ps in pieces.items() if n in texts}, new_names, fresh)
+        _refit(scene, [p for n in sorted(fresh) for p in new_names.get(n, [n])] + trimmed)
     except Exception as ex:  # pylint: disable=broad-exception-caught
         return dict(base, status="error", changed=True, message=(
             "Remove Silences stopped part-way ({!s}): press Ctrl+Z to get the edit back".format(ex)))

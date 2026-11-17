@@ -28,6 +28,13 @@ class Params(NamedTuple):
     speakers: bool = False
     speaker_labels: bool = False
     speaker_settings: tuple[dict[str, str], ...] = ()
+    case: str = "STYLE"
+    font: str | None = None
+    bold: bool | None = None
+    italic: bool | None = None
+    size: float = 1.0
+    text_color: str | tuple[float, ...] | None = None
+    highlight_color: str | tuple[float, ...] | None = None
 
 
 class Result(NamedTuple):
@@ -65,5 +72,7 @@ def main(params: Params) -> Result:
         return Result(status="error", message="Coworker's captions aren't loaded in this Blender.")
     out = ops.tool_add_captions(list(params.strips or ()), params.style, params.language, params.transcript_path,
                                 params.replace_edited, params.animation, params.position, params.margin,
-                                params.speakers, params.speaker_labels, list(params.speaker_settings or ()))
+                                params.speakers, params.speaker_labels, list(params.speaker_settings or ()),
+                                params.case, params.font, params.bold, params.italic, params.size,
+                                params.text_color, params.highlight_color)
     return Result(**{k: v for k, v in out.items() if k in Result._fields})

@@ -37,7 +37,7 @@ EXPECTED_TOOLS = [
 "        file over its time.  Muted and retimed strips, and strips with no speech or no\n"
 "        transcript, are skipped and named in ``strips_skipped``.  Running it again replaces the\n"
 "        captions over those strips, but keeps captions edited by hand (``kept_edited``) unless\n"
-"        ``replace_edited``; it is one undo step.  Animation and position work with every style.\n"
+"        ``replace_edited``; it is one undo step.  Animation, position and the style choices (case, font, bold, italic, size, colours) work with every style. Word highlights follow the caption's font, bold, italic, size and position by themselves.\n"
 "\n"
 "        Args:\n"
 "            strips: Names of the sound / movie strips to caption (none: the selected ones).\n"
@@ -57,6 +57,16 @@ EXPECTED_TOOLS = [
 "            speaker_labels: Each caption starts with its speaker's name (\"Ana: ...\").\n"
 "            speaker_settings: Per speaker ``{\"strip\": a strip of theirs, \"name\", \"style\",\n"
 "                \"position\"}`` (each but \"strip\" optional); turns ``speakers`` on.\n"
+"            case: Letter case of the caption text: STYLE (the style's own: capitals for BOLD_POP,\n"
+"                as spoken for the others), AS_SPOKEN, UPPER, LOWER or TITLE.\n"
+"            font: A font already in this file (its name) or the path of a font file; none: the\n"
+"                style's own (Blender's bundled Inter).\n"
+"            bold: True / False; none: as the style has it (bold only for BOLD_POP).\n"
+"            italic: True / False; none: as the style has it (upright).\n"
+"            size: A scale of the style's own text size, 0.25-4 (1: as the style has it).\n"
+"            text_color: The text colour: \"#RRGGBB\" as seen on screen, or 3-4 numbers 0-1 (Blender's\n"
+"                own values); none: the style's.\n"
+"            highlight_color: The same for the spoken word of WORD_HIGHLIGHT; none: the style's.\n"
 "\n"
 "        Returns:\n"
 "            ``lines_created``, ``channel``, ``first_frame`` / ``last_frame``, the style,\n"
@@ -158,6 +168,88 @@ EXPECTED_TOOLS = [
                     ],
                     "default": None,
                     "title": "Speaker Settings"
+                },
+                "case": {
+                    "default": "STYLE",
+                    "title": "Case",
+                    "type": "string"
+                },
+                "font": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Font"
+                },
+                "bold": {
+                    "anyOf": [
+                        {
+                            "type": "boolean"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Bold"
+                },
+                "italic": {
+                    "anyOf": [
+                        {
+                            "type": "boolean"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Italic"
+                },
+                "size": {
+                    "default": 1.0,
+                    "title": "Size",
+                    "type": "number"
+                },
+                "text_color": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "items": {
+                                "type": "number"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Text Color"
+                },
+                "highlight_color": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "items": {
+                                "type": "number"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Highlight Color"
                 }
             },
             "title": "add_captionsArguments",

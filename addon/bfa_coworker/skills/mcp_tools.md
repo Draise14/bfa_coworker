@@ -58,9 +58,13 @@ For long jobs, start them and check with `get_job_status`; don't loop faster tha
   it. Strips cut in pieces keep their name on the first piece: use `new_names` (original -> pieces) and
   `end_frame` from the answer, not the names you read before. Captions made before are trimmed with the edit.
 - `add_captions(strips, style="CLEAN", animation="STYLE", position="BOTTOM", margin=0, speakers=False,
-  speaker_labels=False, speaker_settings=None)` — Captions from the strips' speech; one undo step. Animation
+  speaker_labels=False, speaker_settings=None, case="STYLE", font=None, bold=None, italic=None, size=1.0,
+  text_color=None, highlight_color=None)` — Captions from the strips' speech; one undo step. Animation
   (NONE, FADE, SLIDE_UP, TYPEWRITER, POP) and position (BOTTOM, TOP, MIDDLE; `margin` in % of the height) go
-  with any style. Several speakers, each on their own sound file: `speakers=True` gives each a caption channel;
+  with any style. Style choices, each "as the style has it" when left out: `case` (AS_SPOKEN, UPPER, LOWER,
+  TITLE), `font` (a font's name in the file, or a font file's path), `bold`, `italic`, `size` (a scale of the
+  style's), `text_color` / `highlight_color` ("#RRGGBB"); they stay with the captions. WORD_HIGHLIGHT's word
+  strips follow their caption's font, bold, italic, size and position by themselves. Several speakers, each on their own sound file: `speakers=True` gives each a caption channel;
   `speaker_settings` sets a speaker's `name`, `style`, `position`; `speaker_labels` puts "Name:" in front.
   Running it again replaces the captions over those strips but keeps the ones edited by hand.
 - `reframe_vertical(strips, mode)` — Make the edit vertical (9:16): each movie / image / scene strip gets

@@ -26,6 +26,7 @@ from __future__ import annotations
 __all__ = (
     "ChatIndex",
     "area_key",
+    "clean_name",
     "match_area_tabs",
     "relative_time",
 )
@@ -40,6 +41,7 @@ from pathlib import Path
 from typing import Any
 
 _TITLE_CHARS = 60
+_NAME_CHARS = 120       # a name you give a chat (Rename)
 # Files in the history folder that aren't per-.blend chats.
 _NOT_CHATS = re.compile(r"^(agent_sessions|default_session_memory|.*_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})\.json$")
 
@@ -57,6 +59,12 @@ def relative_time(when: float, now: float | None = None) -> str:
     if age < 2 * 86400:
         return "yesterday"
     return time.strftime("%d %b", time.localtime(when)).lstrip("0")
+
+
+def clean_name(title: Any) -> str:
+    """A name you give a chat (#573): one line, at most 120 characters ("" = none)."""
+    from . import log as _log
+    return " ".join(_log.redact(str(title or "")).split())[:_NAME_CHARS]     # no key in the index
 
 
 def title_of(history: list[dict[str, Any]]) -> str:
@@ -212,13 +220,16 @@ class ChatIndex:
 
     # -- writing ---------------------------------------------------------------------
     def touch(self, chat_id: str, history: list[dict[str, Any]], blend: str = "", engine: str = "",
-              blend_path: str = "", mode: str = "", editor: str = "") -> None:
+              blend_path: str = "", mode: str = "", editor: str = "", user_title: str = "") -> None:
         """The chat was saved: keep its entry current (a chat with no message isn't listed).
 
         *blend_path* (the saved file it is in now) lets History open it again; *mode* is
         the operating mode, shown as its icon (#239); *editor* is the editor kind whose
-        thread it is (#358; "" = the shared "All editors" thread)."""
+        thread it is (#358; "" = the shared "All editors" thread).  *user_title* is the
+        name you gave the chat (#573), also before it was first saved: it is kept, marked
+        ``renamed``, and the automatic title (your first message) never replaces it."""
         title = title_of(history)
+        user_title = clean_name(user_title)
         with self._lock:
             data = self._read()
             entry = data["chats"].get(chat_id)
@@ -227,7 +238,9 @@ class ChatIndex:
                     return
                 entry = data["chats"][chat_id] = {"title": title, "created": time.time(), "blend": blend,
                                                   "pinned": False, "renamed": False}
-            if not entry.get("renamed") and title:
+            if user_title:
+                entry["title"], entry["renamed"] = user_title, True
+            elif not entry.get("renamed") and title:
                 entry["title"] = title
             entry["updated"] = time.time()
             entry["messages"] = len(history)
@@ -283,12 +296,21 @@ class ChatIndex:
             self._write(data)
 
     def rename(self, chat_id: str, title: str) -> bool:
+        """*chat_id* is called *title* from now on, marked ``renamed`` so the automatic title
+        doesn't replace it; an empty *title* gives it its automatic title (your first message)
+        back (#573).  False when the chat isn't in the index (yet)."""
+        title = clean_name(title)
         with self._lock:
             data = self._read()
             entry = data["chats"].get(chat_id)
-            if entry is None or not title.strip():
+            if entry is None:
                 return False
-            entry["title"], entry["renamed"] = title.strip()[:120], True
+            if title:
+                entry["title"], entry["renamed"] = title, True
+            else:
+                history = self._read_json(self.chat_path(chat_id))
+                auto = title_of(history) if isinstance(history, list) else ""
+                entry["title"], entry["renamed"] = auto or entry.get("title", ""), False
             self._write(data)
             return True
 

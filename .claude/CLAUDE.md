@@ -1,1 +1,1 @@
-Plans are made in the main session. Implementation goes to the opus-executor subagent.
+Plans are made in the main session. Implementation goes to the sonnet-executor subagent. Each finished pull request gets one review by the opus-reviewer subagent before it is handed to the maintainer.

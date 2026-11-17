@@ -83,7 +83,8 @@ class TestLocalLoop(unittest.TestCase):
 
     def test_instruction_tools_guard_and_no_auto_continue(self):
         self.assertIn("_PLAN_MODE_PROMPT_ADDENDUM = (", _AC)
-        self.assertIn('if chat_mode == "PLAN" and _PLAN_MODE_PROMPT_ADDENDUM not in history[0]["content"]', _AC)
+        # #546: the turn's system text carries the current mode's addendum only (_static_system_text).
+        self.assertIn('elif chat_mode == "PLAN":\n        text += _PLAN_MODE_PROMPT_ADDENDUM', _AC.replace("\r\n", "\n"))
         self.assertIn('if chat_mode == "PLAN":     # #194: only the tools that look', _AC)
         self.assertIn('if chat_mode == "PLAN" and raw_tool_calls:', _AC)
         self.assertIn('if chat_mode in ("ASK", "PLAN") or not openai_tools or _auto_round >= _max_auto_rounds:', _AC)

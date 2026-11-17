@@ -1163,6 +1163,87 @@ def _add_notice(history: list[dict[str, Any]], text: str, kind: str = "info") ->
     history.append({"role": "assistant", "content": text, "notice": kind})
 
 
+# -- #546: one prefix for every request, so Local keeps its prompt cache ----------
+# The system message and the tool list are the same bytes in every request of a
+# session (for one engine, chat mode and build): the server keeps a checkpoint at
+# the end of that prefix (llama-server b10154 makes one where the system turn
+# ends and one where the last user message starts), so a step, a plan update, a
+# checkpoint or another chat re-reads only what follows it.  What changes travels
+# in two blocks after the tools, placed by how often it changes:
+#   * the chat's notes -- the domain skill notes and the session memory, which
+#     change with the domains and at a checkpoint (when the history changes from
+#     its start anyway) -- right after the system message, before the history;
+#   * the request's context -- goal and plan, other chats working now, where the
+#     user is, an empty scene -- at the end, so a change re-reads only that block
+#     (the server's checkpoint at the start of the last user message).
+# Both are user-side blocks: the Qwen3.8 template rejects a later system message
+# ("System message must be at the beginning").  A block joins the neighbouring
+# user message when there is one (some templates reject two user turns in a row).
+_CHAT_NOTES_HEAD = "[Coworker's notes for this chat -- written by Coworker, not by the user]"
+_REQUEST_CONTEXT_HEAD = ("[Coworker's context for this request -- written by Coworker, not by the user; "
+                         "the latest one is current]")
+_WHERE_USER_IS = "\n\n# Where the user is\n"        # ui_chat adds it to the prefetched prompt (#291)
+_EMPTY_SCENE_NOTE = (
+    "[Note: The Blender scene is currently empty — no objects exist. "
+    "You must create objects before using mode-dependent operators "
+    "like bpy.ops.object.mode_set().]"
+)
+# Older builds wrote the empty-scene note into the stored system message.
+_LEGACY_EMPTY_SCENE_RE = re.compile(r"\n*\[Note: The Blender scene is currently empty[^\]]*\]")
+
+
+def _static_system_text(prompt: str, chat_mode: str = "AGENT") -> tuple[str, str]:
+    """``(system text, where the user is)`` for *chat_mode* from a built system prompt (#546).
+
+    The system text is the same for every chat and request of a session: the
+    per-chat "Where the user is" section is split off (it goes with the request's
+    context), and the Ask / Plan addendum is the current mode's only -- older
+    builds appended them to the stored prompt for good, with the empty-scene note."""
+    text = str(prompt or "")
+    where = ""
+    if _WHERE_USER_IS in text:
+        text, _sep, where = text.partition(_WHERE_USER_IS)
+    for addendum in (_ASK_MODE_PROMPT_ADDENDUM, _PLAN_MODE_PROMPT_ADDENDUM):
+        text = text.replace(addendum, "")
+    text = _LEGACY_EMPTY_SCENE_RE.sub("", text).rstrip()
+    if chat_mode == "ASK":
+        text += _ASK_MODE_PROMPT_ADDENDUM
+    elif chat_mode == "PLAN":
+        text += _PLAN_MODE_PROMPT_ADDENDUM
+    return text, where.strip()
+
+
+def _join_blocks(*parts: str) -> str:
+    return "\n\n".join(p.strip() for p in parts if p and p.strip())
+
+
+def _place_context(messages: list[dict[str, Any]], notes: str, context: str) -> list[dict[str, Any]]:
+    """*messages* (the system message first) with the chat's *notes* right after the
+    system message and the request's *context* at the end (#546).  Returns a new list;
+    the messages given are not changed."""
+    out = list(messages)
+    start = 1 if out and out[0].get("role") == "system" else 0
+
+    def _plain_user(m: dict[str, Any] | None) -> bool:
+        return bool(m) and m.get("role") == "user" and isinstance(m.get("content"), str)
+
+    if notes:
+        block = _CHAT_NOTES_HEAD + "\n" + notes
+        first = out[start] if len(out) > start else None
+        if _plain_user(first):
+            out[start] = {**first, "content": block + "\n\n" + str(first["content"])}
+        else:
+            out.insert(start, {"role": "user", "content": block})
+    if context:
+        block = _REQUEST_CONTEXT_HEAD + "\n" + context
+        last = out[-1] if len(out) > start else None
+        if _plain_user(last):
+            out[-1] = {**last, "content": str(last["content"]).rstrip() + "\n\n" + block}
+        else:
+            out.append({"role": "user", "content": block})
+    return out
+
+
 def _strip_think_tags(text: str) -> str:
     """Strip ``<think>`` / ``</think>`` wrapper tags from Qwen-style reasoning.
 
@@ -2017,6 +2098,24 @@ def _detect_domain_from_scene() -> set[str]:
     return domains
 
 
+# The order of the domains' tools in a request (#546): smaller domains first, the
+# larger ones last -- the order _domain_drop_order leaves unrelated domains out
+# in (larger first; by name when equally large), reversed.
+_DOMAIN_TOOL_ORDER: tuple[str, ...] = tuple(sorted(
+    sorted(_TOOL_DOMAINS, reverse=True), key=lambda d: len(_TOOL_DOMAINS[d])))
+
+
+def _tool_order_key(name: str, domains: set[str] | None) -> tuple[int, str]:
+    """Where tool *name* goes in a request offering *domains* (#546): the always-
+    offered tools (group 0), then the first of the offered domains that has it."""
+    if name in _SURFACE_TOOLS or name in (_LOAD_TOOLS_SCHEMA["function"]["name"], _PLAN_TOOL_NAME):
+        return (0, name)
+    for i, domain in enumerate(_DOMAIN_TOOL_ORDER, 1):
+        if domains and domain in domains and name in _TOOL_DOMAINS[domain]:
+            return (i, name)
+    return (len(_DOMAIN_TOOL_ORDER) + 1, name)
+
+
 def _build_tool_set(
     all_openai_tools: list[dict[str, Any]],
     domains: set[str] | None,
@@ -2040,10 +2139,12 @@ def _build_tool_set(
     # Always include the load_tools and update_plan meta-tools.
     filtered.append(_LOAD_TOOLS_SCHEMA)
     filtered.append(_PLAN_TOOL_SCHEMA)
-    # Sort by name: a stable, deterministic tool order keeps the provider's
-    # prompt-cache prefix valid across turns (only the tool SET changes, never
-    # their order).
-    filtered.sort(key=lambda t: t.get("function", {}).get("name", ""))
+    # A fixed order, the same for every chat with these domains (#546): the
+    # always-offered tools first by name, then each domain's own tools, by name,
+    # in _DOMAIN_TOOL_ORDER -- the larger domains last, the ones a request that
+    # must be made smaller leaves out first (#544), so dropping or adding one
+    # changes the end of the list and the start stays the server's cached prefix.
+    filtered.sort(key=lambda t: _tool_order_key(t.get("function", {}).get("name", ""), domains))
 
     if log:
         print("[Coworker] _build_tool_set: {:d} -> {:d} tools (domains={:s})".format(
@@ -2532,7 +2633,8 @@ def _memory(thread: "threads.Thread | None" = None) -> Any:
 
 
 def _is_helper_thread(thread: "threads.Thread | None") -> bool:
-    """True for a helper chat (#479): it isn't offered delegate_task."""
+    """True for a helper chat (#479).  It is offered the same tools as every chat
+    (#546); its delegate_task calls are refused (helpers.HELPERS.refusal)."""
     try:
         from .helpers import HELPERS
     except ImportError:
@@ -7083,6 +7185,14 @@ def _run_conversation_turn_inner(
         history.insert(0, {"role": "system", "content": system_text})
         print("[Coworker] run_conversation_turn: inserted system prompt ({:d} chars)".format(
             len(system_text)))
+    # #546: the system message is the same bytes for every chat and request of the
+    # session (this engine, mode and build): this turn's prompt as just prefetched
+    # (an older chat keeps no text of an earlier one), the current mode's addendum
+    # only; "Where the user is" goes with the request's context instead.
+    _system_text, _where_line = _static_system_text(
+        _agent_state.prefetched_system_prompt or str(history[0].get("content") or ""), chat_mode)
+    if history[0].get("content") != _system_text:
+        history[0] = {**history[0], "content": _system_text}
 
     # Install this turn's user image attachments (issue #88 / Tier 3k).
     # Captured and encoded on the MAIN thread by the send path before the
@@ -7103,43 +7213,22 @@ def _run_conversation_turn_inner(
     # -- Pre-flight empty-scene check ----------------------------------
     # Small local models often call mode-dependent operators (mode_set, etc.)
     # on an empty scene, which fails with "Context missing active object".
-    # Warn the LLM upfront so it creates objects first.
-    # NOTE: We append to the existing system prompt (position 0) rather than
-    # creating a new message -- Qwen's Jinja template requires ALL system
-    # messages at the beginning and rejects any mid-conversation system role.
+    # Warn the LLM upfront so it creates objects first.  It is about THIS turn's
+    # scene, so it goes with the request's context (#546), not into the system
+    # prompt where it stayed after the scene had objects.
     _preflight_note = ""
     try:
         import bpy as _bpy  # pylint: disable=import-error
         if len(_bpy.data.objects) == 0:
-            _preflight_note = (
-                "\n\n[Note: The Blender scene is currently empty \u2014 no objects exist. "
-                "You must create objects before using mode-dependent operators "
-                "like bpy.ops.object.mode_set().]"
-            )
+            _preflight_note = _EMPTY_SCENE_NOTE
             print("[\U0001f6e0\ufe0fCoworker] run_conversation_turn: empty scene detected, injected pre-flight note")
     except Exception:
         pass  # Best-effort; don't break the agent loop.
 
-    # Inject the preflight note into the system prompt (not a separate message)
-    # so the message sequence stays: [system, user, ...].
-    # Guard: only inject once -- don't duplicate on subsequent turns.
-    _preflight_marker = "[Note: The Blender scene is currently empty"
-    if _preflight_note and _preflight_marker not in history[0]["content"]:
-        history[0]["content"] += _preflight_note
-
-    # -- Ask-mode system prompt addendum (issue #66) ------------------
-    # In Ask mode the system prompt must NOT invite tool use -- the default
-    # prompt tells the model it can "inspect and modify the scene", which
-    # actively encourages tool calls in a mode that must be informational
-    # only.  Append a read-only instruction to the (cached) system prompt.
-    # Appended per-turn, not baked into the cache, so switching between
-    # Agent and Ask modes mid-session stays correct.  Marker-guarded so
-    # it is not duplicated on subsequent Ask-mode turns.
-    if chat_mode == "ASK" and _ASK_MODE_PROMPT_ADDENDUM not in history[0]["content"]:
-        history[0]["content"] += _ASK_MODE_PROMPT_ADDENDUM
-    # Plan mode (#194): look, plan with update_plan, don't change anything.
-    if chat_mode == "PLAN" and _PLAN_MODE_PROMPT_ADDENDUM not in history[0]["content"]:
-        history[0]["content"] += _PLAN_MODE_PROMPT_ADDENDUM
+    # -- Ask / Plan mode addendum (issues #66, #194) -------------------
+    # Ask mode must NOT invite tool use and Plan mode only looks and plans: the
+    # system text above carries the current mode's addendum, and only that one
+    # (_static_system_text), so switching modes mid-session stays correct.
 
     # Append the user message.  Image attachments appear here as a
     # plain-text marker only: the data URIs live on the agent state for
@@ -7225,8 +7314,9 @@ def _run_conversation_turn_inner(
         if chat_mode == "PLAN":     # #194: only the tools that look (update_plan is the loop's own)
             from .engine import PLAN_SAFE_TOOLS as _plan_safe
             openai_tools = [t for t in openai_tools if t.get("function", {}).get("name") in _plan_safe]
-        if thread is not None and _is_helper_thread(thread):     # #479: helpers can't start helpers
-            openai_tools = [t for t in openai_tools if t.get("function", {}).get("name") != "delegate_task"]
+        # #479: helpers can't start helpers -- refused when called (helpers.HELPERS.refusal),
+        # not left out of the list: a helper's tools are the same bytes as the chat
+        # that asked, so its first request reuses the server's cached prefix (#546).
 
     # The message has been received; we are assembling the prompt.  This is
     # the very first instant after Send, so show a friendly "reading" state
@@ -7521,6 +7611,11 @@ def _run_conversation_turn_inner(
     _turn_loaded_domains: set[str] = set()
     _fit: dict[str, Any] = {"domains": [], "skills": False, "builtin": False, "full": 0,
                             "sizes": {}, "said": ""}
+    # #546: what this turn's requests left out to fit stays out until the turn
+    # ends (unless the model loads it again), and the skill notes are chosen once
+    # per turn: a request that changed its tools or notes from one step to the
+    # next made the server re-read everything after the change.
+    _sticky: dict[str, Any] = {"domains": set(), "skills": False, "builtin": False, "skills_text": None}
 
     # -- Request payload builder ----------------------------------------
     # Extracted so the context-overflow recovery can rebuild the payload
@@ -7534,9 +7629,10 @@ def _run_conversation_turn_inner(
     def _build_send_messages(reserve: int = 0, room_only: bool = False) -> tuple[list[dict[str, Any]], str | None]:
         nonlocal openai_tools  # may be reduced below to fit the window
         if _all_tools and chat_mode != "ASK":
-            # The full wanted set every time (#544): what a tight request left
-            # out comes back once there is room again.
-            openai_tools = _build_tool_set(_all_tools, _loaded_domains, log=False)
+            # The wanted set (#544), less what an earlier request of this turn
+            # left out to fit (#546: it comes back at the next turn, when there
+            # is room again, instead of changing the tools from step to step).
+            openai_tools = _build_tool_set(_all_tools, _loaded_domains - _sticky["domains"], log=False)
         _budget = prompt_budget - max(0, int(reserve)) if prompt_budget > 0 else 0
         if prompt_budget > 0 and _budget < 1024:
             _budget = min(prompt_budget, 1024)
@@ -7585,27 +7681,20 @@ def _run_conversation_turn_inner(
         # Sanitize any remaining non-standard roles to "user".
         msgs = _sanitize_message_roles(msgs)
 
-        # -- Inject the session memory block into the system prompt --
-        # The block is small (bounded) and carries retired context; Qwen's
-        # Jinja template requires system content up front, so it is appended
-        # to message 0 like the domain skills.
-        _mem_block = session_memory.store.memory_block
-        if _mem_block and msgs and msgs[0].get("role") == "system":
-            _sys0 = msgs[0]
-            _base = str(_sys0.get("content") or "")
-            if _mem_block not in _base:
-                # Copy before mutating: msgs[0] is usually the SAME dict as
-                # history[0] (no slice happened), so writing in place would
-                # accumulate the block in the stored history and double it on
-                # every subsequent request.
-                _sys0 = dict(_sys0)
-                _sys0["content"] = _base.rstrip() + "\n\n" + _mem_block
-                msgs[0] = _sys0
-
-        # -- Inject the pinned goal & plan block ----------------------
-        # Appended after the memory note and never trimmed: it is what keeps
-        # a long or compacted turn on task.
-        # Bounded to ~4% of the window (local) or a flat cap (remote).
+        # -- The request's moving parts (#546) ----------------------------
+        # The session memory, the pinned goal & plan, other chats working now,
+        # where the user is, an empty scene and the domain skill notes.  While
+        # the request is fitted they are counted with the system message (so
+        # they are pinned like it and never trimmed, and every size is what it
+        # was), then the system message goes back to its static text and they
+        # travel after the tools (_laid_out, at the end of this build).
+        _sys_ok0 = bool(msgs) and msgs[0].get("role") == "system"
+        _sys_text = str(msgs[0].get("content") or "") if _sys_ok0 else ""
+        if _sticky["builtin"] and _sys_ok0:
+            _sys_text = _strip_builtin_skills(_sys_text)     # left out earlier this turn
+        _mem_block = str(session_memory.store.memory_block or "")
+        # Goal & plan: never trimmed, it is what keeps a long or compacted turn
+        # on task.  Bounded to ~4% of the window (local) or a flat cap (remote).
         try:
             with session_memory.store_lock:
                 _goal_text = session_memory.store.goal.render_block(
@@ -7616,56 +7705,58 @@ def _run_conversation_turn_inner(
                 )
         except Exception:  # pylint: disable=broad-exception-caught
             _goal_text = ""
-        if _goal_text and msgs and msgs[0].get("role") == "system":
-            _sys0 = dict(msgs[0])
-            _sys0["content"] = str(_sys0.get("content") or "").rstrip() + "\n\n" + _goal_text
-            msgs[0] = _sys0
-
-        # -- Other chats working now (#359): one line, this request only --
+        # Other chats working now (#359): one line, this request only.
         try:
             _others_line = other_chats_line(thread)
         except Exception:  # pylint: disable=broad-exception-caught
             _others_line = ""
-        if _others_line and msgs and msgs[0].get("role") == "system":
-            _sys0 = dict(msgs[0])
-            _sys0["content"] = str(_sys0.get("content") or "").rstrip() + "\n\n" + _others_line
-            msgs[0] = _sys0
+        _context_text = _join_blocks(
+            _goal_text, _others_line, ("Where the user is: " + _where_line) if _where_line else "",
+            _preflight_note)
+        if _sys_ok0:
+            msgs[0] = {**msgs[0], "content": _join_blocks(
+                _sys_text, _CHAT_NOTES_HEAD if (_mem_block or _domain_skill_domains) else "", _mem_block,
+                _REQUEST_CONTEXT_HEAD if _context_text else "", _context_text)}
 
-        # -- Inject domain-skill reference (send copy, self-tuning) ----
-        # Appended to the system copy like the memory block (Qwen's Jinja
-        # template needs all system content up front).  In LOCAL mode the
-        # allowance is whatever is genuinely SPARE after the messages, the
-        # tool schema, and a conversation reserve -- so it tunes itself to the
-        # window and the conversation with no ratio/ceiling to configure.  In
-        # REMOTE mode there is no client-side window (prompt_budget == 0), so
-        # a conservative flat cap is used.  Only WHOLE files are included
-        # (never truncated); unmatched files are skipped and the API-docs
-        # tools remain the fallback.
+        # -- Domain-skill reference (send copy, chosen once per turn) ----
+        # In LOCAL mode the allowance is whatever is genuinely SPARE after the
+        # messages, the tool schema, and a conversation reserve -- so it tunes
+        # itself to the window and the conversation with no ratio/ceiling to
+        # configure.  In REMOTE mode there is no client-side window
+        # (prompt_budget == 0), so a conservative flat cap is used.  Only WHOLE
+        # files are included (never truncated); unmatched files are skipped and
+        # the API-docs tools remain the fallback.  #546: chosen at the turn's
+        # first request and kept for the turn -- chosen again at every step, the
+        # notes changed with the history's size, and with them the request.
         _domain_skills_text = ""
-        if _domain_skill_domains and msgs and msgs[0].get("role") == "system":
-            if prompt_budget > 0:
-                _spare = (
-                    prompt_budget
-                    - _estimate_messages_tokens(msgs)
-                    - _estimate_tools_tokens(openai_tools)
-                )
-                _reserve = max(
-                    _SKILLS_RESERVE_TOKENS,
-                    int(prompt_budget * _SKILLS_RESERVE_RATIO),
-                )
-                _allow_tokens = _spare - _reserve
-            else:
-                # Remote: no window to compute spare from -- use the flat cap.
-                _allow_tokens = _SKILLS_REMOTE_MAX_TOKENS
-            if _allow_tokens > 0:
-                try:
-                    from . import skills as _skills_mod  # pylint: disable=import-error
-                    _domain_skills_text = _skills_mod.get_domain_skills(
-                        _domain_skill_domains,
-                        max_chars=int(_allow_tokens * _CHARS_PER_TOKEN),
-                    ) or ""
-                except Exception:  # pylint: disable=broad-exception-caught
-                    _domain_skills_text = ""
+        if _domain_skill_domains and _sys_ok0 and not _sticky["skills"]:
+            if _sticky["skills_text"] is None:
+                _choice = ""
+                if prompt_budget > 0:
+                    _spare = (
+                        prompt_budget
+                        - _estimate_messages_tokens(msgs)
+                        - _estimate_tools_tokens(openai_tools)
+                    )
+                    _reserve = max(
+                        _SKILLS_RESERVE_TOKENS,
+                        int(prompt_budget * _SKILLS_RESERVE_RATIO),
+                    )
+                    _allow_tokens = _spare - _reserve
+                else:
+                    # Remote: no window to compute spare from -- use the flat cap.
+                    _allow_tokens = _SKILLS_REMOTE_MAX_TOKENS
+                if _allow_tokens > 0:
+                    try:
+                        from . import skills as _skills_mod  # pylint: disable=import-error
+                        _choice = _skills_mod.get_domain_skills(
+                            _domain_skill_domains,
+                            max_chars=int(_allow_tokens * _CHARS_PER_TOKEN),
+                        ) or ""
+                    except Exception:  # pylint: disable=broad-exception-caught
+                        _choice = ""
+                _sticky["skills_text"] = _choice
+            _domain_skills_text = str(_sticky["skills_text"] or "")
             if _domain_skills_text:
                 _cand = dict(msgs[0])
                 _cand["content"] = str(_cand.get("content") or "").rstrip() + "\n\n" + _domain_skills_text
@@ -7683,6 +7774,16 @@ def _run_conversation_turn_inner(
                     msgs[0] = _cand
                 else:
                     _domain_skills_text = ""  # Safety net; reserve should prevent this.
+
+        def _laid_out(sent: list[dict[str, Any]], builtin_left: bool, skills_left: bool) -> list[dict[str, Any]]:
+            """*sent* (fitted, the moving parts counted with its system message) in
+            the request's order (#546): the static system message, the chat's notes
+            after it, the request's context at the end."""
+            _final_sys = _strip_builtin_skills(_sys_text) if builtin_left else _sys_text
+            _notes = _join_blocks("" if skills_left else _domain_skills_text, _mem_block)
+            if not (sent and sent[0].get("role") == "system"):
+                return _place_context(sent, _notes, _context_text)
+            return _place_context([{**sent[0], "content": _final_sys}] + list(sent[1:]), _notes, _context_text)
 
         # -- Inject this turn's user attachments into the turn's user
         # message (issue #88 / Tier 3k).  Like the pending screenshot
@@ -7762,9 +7863,10 @@ def _run_conversation_turn_inner(
                 return _estimate_messages_tokens(msgs) + _estimate_tools_tokens(openai_tools) > _budget
             _fit["full"] = max(int(_fit["full"]),
                                _estimate_messages_tokens(msgs) + _estimate_tools_tokens(openai_tools))
+            # Those an earlier request of this turn left out are out already (#546).
+            _kept = set(_loaded_domains) - _sticky["domains"]
             _early, _late = _domain_drop_order(
-                set(_loaded_domains), _message_domains, _editor_domains, _turn_loaded_domains)
-            _kept = set(_loaded_domains)
+                set(_kept), _message_domains, _editor_domains, _turn_loaded_domains)
             _left: dict[str, Any] = {"domains": [], "skills": False, "builtin": False}
             # 1. The domain-skill reference.
             if _over() and _domain_skills_text and _sys_ok:
@@ -7812,6 +7914,10 @@ def _run_conversation_turn_inner(
                         _fit["domains"].append(_d)
                 _fit["skills"] = bool(_fit["skills"] or _left["skills"])
                 _fit["builtin"] = bool(_fit["builtin"] or _left["builtin"])
+                # #546: and they stay out for the rest of the turn.
+                _sticky["domains"].update(_left["domains"])
+                _sticky["skills"] = bool(_sticky["skills"] or _left["skills"])
+                _sticky["builtin"] = bool(_sticky["builtin"] or _left["builtin"])
             if _left["domains"] or _left["skills"] or _left["builtin"]:
                 print("[Coworker] run_conversation_turn: to fit the {:d}-token budget, left out "
                       "domains={:s} skills={:s} built-in skills={:s} -> {:d} tools, ~{:d} tokens".format(
@@ -7823,8 +7929,9 @@ def _run_conversation_turn_inner(
                 _err = _too_big_text(_fit["sizes"], ctx_size_used, _budget, local=True)
             # Drop addon bookkeeping keys (turn_start, system_note, ...)
             # from the wire copy LAST -- the steps above key on them.
-            return _strip_internal_keys(msgs), _err
-        return _strip_internal_keys(msgs), None
+            return _strip_internal_keys(_laid_out(
+                msgs, _left["builtin"], bool(_left["skills"] or _sticky["skills"]))), _err
+        return _strip_internal_keys(_laid_out(msgs, False, False)), None
 
     def _stop_turn_with(full: str, short: str, status: str) -> None:
         """End the turn on an error the user must act on (#544): the whole text in
@@ -8309,30 +8416,20 @@ def _run_conversation_turn_inner(
                     history.pop()
 
             # Re-request with the same max_tokens.
-            # Send a *sanitized* copy, not the raw history: the live history
-            # carries UI-only entries (the startup greeting) and non-standard
-            # ``reasoning`` messages, and a strict Jinja template rejects both
-            # with 400 "Unexpected message role".  The main request path
-            # already strips them; this path must too.
-            _cont_send = _strip_reasoning_from_history(history)
-            _cont_send = _strip_ui_only_from_history(_cont_send)
-            _cont_send = _sanitize_message_roles(_cont_send)
-            _cont_send = _strip_internal_keys(_cont_send)
-            # Budget the continuation request too: it re-sends the full
-            # history (plus the appended partial + "Continue." turn), so it
-            # can exceed the window even when the trimmed request before it
-            # fit.  Re-trim and preflight; stop auto-continue if it still
-            # cannot fit rather than clashing with the server's 400.
-            if prompt_budget > 0:
-                _cont_send = _fit_history_to_budget(_cont_send, prompt_budget)
-                _cont_send = _repair_tool_call_pairs(_cont_send)
-                _cont_send, _cont_err = _prompt_preflight(
-                    _cont_send, openai_tools, prompt_budget)
-                if _cont_err:
-                    print("[Coworker] run_conversation_turn: continuation cannot fit "
-                          "the context window -- stopping auto-continue")
-                    _undo_continue_scaffold()
-                    break
+            # Built like every request of the turn (#546): the sanitized copy
+            # (no UI-only entries, no ``reasoning`` messages -- a strict Jinja
+            # template rejects both with 400 "Unexpected message role"), the
+            # same slice, pictures and layout, so it starts with the same bytes
+            # as the request before it; budgeted the same way too -- it re-sends
+            # the history plus the appended partial + "Continue." turn, so it can
+            # exceed the window even when the request before it fit.  Stop
+            # auto-continue if it cannot fit rather than clash with the server's 400.
+            _cont_send, _cont_err = _build_send_messages()
+            if _cont_err:
+                print("[Coworker] run_conversation_turn: continuation cannot fit "
+                      "the context window -- stopping auto-continue")
+                _undo_continue_scaffold()
+                break
             # Forward a thinking budget.  Without one the continuation can
             # spend the entire max_tokens on chain-of-thought and leave
             # nothing for the tool call.  The continuation is the rest of a
@@ -8583,18 +8680,9 @@ def _run_conversation_turn_inner(
                     if domain in _TOOL_DOMAINS and (domain not in _loaded_domains or _left_out):
                         _loaded_domains.add(domain)
                         _session_loaded_domains.add(domain)
-                        # Rebuild with all loaded domains.
-                        _combined = set(_SURFACE_TOOLS)
-                        for d in _loaded_domains:
-                            _combined.update(_TOOL_DOMAINS.get(d, set()))
-                        openai_tools = [
-                            t for t in _all_tools
-                            if t.get("function", {}).get("name") in _combined
-                        ]
-                        openai_tools.append(_LOAD_TOOLS_SCHEMA)
-                        openai_tools.append(_PLAN_TOOL_SCHEMA)
-                        openai_tools.sort(
-                            key=lambda t: t.get("function", {}).get("name", ""))
+                        _sticky["domains"].discard(domain)      # asked for: back in (#546)
+                        # Rebuild with all loaded domains, in the one order (#546).
+                        openai_tools = _build_tool_set(_all_tools, _loaded_domains - _sticky["domains"], log=False)
                         print("[Coworker] run_conversation_turn: load_tools '{:s}' -- now {:d} tools".format(
                             domain, len(openai_tools)))
                         history.append({

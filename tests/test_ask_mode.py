@@ -217,19 +217,19 @@ class TestAskModeSystemPrompt(unittest.TestCase):
         self.assertIn("Do NOT", text)
 
     def test_addendum_appended_only_in_ask_mode(self):
+        # #546: the system text is rebuilt for the turn's mode
+        # (_static_system_text): any earlier addendum is taken out and the Ask
+        # one appended in Ask mode only -- never twice, never left from an Ask turn.
         inner = self._extract_inner()
-        # Guarded against duplication: only appended when not already present.
-        self.assertIn(
-            'if chat_mode == "ASK" and _ASK_MODE_PROMPT_ADDENDUM not in '
-            'history[0]["content"]:',
-            inner.replace("\n        ", " ").replace("\n    ", " "),
-            "Ask-mode addendum must be marker-guarded against duplication",
-        )
-        self.assertIn(
-            'history[0]["content"] += _ASK_MODE_PROMPT_ADDENDUM',
-            inner,
-            "Ask-mode addendum must be appended to the system prompt",
-        )
+        self.assertIn("_static_system_text(", inner)
+        self.assertIn("chat_mode)", inner.split("_static_system_text(", 1)[1][:200])
+        start = _src.find("\ndef _static_system_text(")
+        self.assertGreater(start, 0, "_static_system_text not found")
+        func = _src[start:_src.find("\ndef ", start + 10)].replace("\r\n", "\n")
+        self.assertIn('text = text.replace(addendum, "")', func,
+                      "an earlier mode's addendum must be taken out")
+        self.assertIn('if chat_mode == "ASK":\n        text += _ASK_MODE_PROMPT_ADDENDUM', func,
+                      "Ask-mode addendum must be appended to the system prompt in Ask mode")
 
 
 class TestChatModeForwarding(unittest.TestCase):

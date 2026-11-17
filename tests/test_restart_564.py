@@ -412,6 +412,49 @@ class TestRestartLocalServer(_RestartCase):
         self.assertEqual(b.llm.starts, [])
 
 
+class TestRestartTimer(_RestartCase):
+    """Review: one pending Restart timer at most; removed with the add-on."""
+
+    def press(self, b: _Blender) -> None:
+        b._run_op("BFACW_OT_agent_restart", {})
+
+    def test_a_double_press_starts_once_and_the_local_server_comes_back(self):
+        b = self.blender("LOCAL_LLM")
+        b.start()
+        self.press(b)
+        self.press(b)       # the first press already stopped the Local server
+        self.assertEqual(b.timers.queue.count(b.ns["_restart_timer"]), 1)     # ONE restart timer
+        b.run_timers()
+        self.assertEqual(b.ops_calls.count("BFACW_OT_agent_start"), 2)      # Start, then one restart
+        self.assertEqual(len(b.llm.starts), 2)
+        self.assertIsNotNone(b.llm.proc)
+        self.assertEqual(b.props.chat_status, "Connected")
+
+    def test_the_timer_is_removed_when_the_add_on_is_unregistered(self):
+        b = self.blender("REMOTE_API")
+        b.start()
+        self.press(b)
+        self.assertTrue(b.timers.is_registered(b.ns["_restart_timer"]))
+        b.ns["_cancel_restart"]()
+        self.assertFalse(b.timers.is_registered(b.ns["_restart_timer"]))
+        b.ns["_cancel_restart"]()       # nothing pending: no error
+        src = (_ADDON / "ui_chat.py").read_text(encoding="utf-8")
+        unregister = src[src.rindex("\ndef unregister("):]
+        self.assertIn("_cancel_restart()", unregister)
+
+
+class TestStaleError(_RestartCase):
+
+    def test_stop_clears_an_old_error(self):
+        b = self.blender("REMOTE_API")
+        b.start()
+        b.ac._agent_state.error = "an old, unrelated error"
+        b.ac._agent_state.error_full = "old full"
+        b._run_op("BFACW_OT_agent_stop", {})
+        self.assertEqual(b.ac._agent_state.error, "")
+        self.assertEqual(b.ac._agent_state.error_full, "")
+
+
 class TestStopStillStops(_RestartCase):
 
     def test_stop_ends_everything(self):
@@ -523,6 +566,49 @@ class TestBridgePortChoice(unittest.TestCase):
                 self.bridge.start("127.0.0.1", _free_port())
         self.assertIn("made-up", str(caught.exception))
 
+    def test_a_second_start_keeps_the_real_port(self):
+        holder = socket.socket()
+        if sys.platform == "win32":
+            holder.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        holder.bind(("127.0.0.1", 0))
+        holder.listen(1)
+        self.addCleanup(holder.close)
+        port = holder.getsockname()[1]
+        self.bridge.start("127.0.0.1", port)
+        moved = self.bridge.get_actual_port()
+        self.assertNotEqual(moved, port)
+        with self.assertRaises(RuntimeError):
+            self.bridge.start("127.0.0.1", port)
+        self.assertEqual(self.bridge.get_actual_port(), moved)
+
+    def test_the_search_stops_at_the_last_port(self):
+        with mock.patch.object(self.bridge, "_bind_listener",
+                               side_effect=OSError(98, "in use")) as bind:
+            with mock.patch.object(self.bridge, "_address_in_use", return_value=True):
+                with self.assertRaises(OSError) as caught:       # no OverflowError
+                    self.bridge.start("127.0.0.1", 65530)
+        tried = [call.args[1] for call in bind.call_args_list]
+        self.assertEqual(tried, list(range(65530, 65536)))
+        self.assertIn("65530", str(caught.exception))
+
+    def test_off_windows_a_listener_that_answers_counts_as_taken(self):
+        holder = socket.socket()
+        holder.bind(("127.0.0.1", 0))      # plain: a bind with SO_REUSEADDR could share it
+        holder.listen(5)
+        self.addCleanup(holder.close)
+        port = holder.getsockname()[1]
+        self.assertTrue(self.bridge._listener_answers("127.0.0.1", port))
+        self.assertFalse(self.bridge._listener_answers("127.0.0.1", _free_port()))
+        with mock.patch.object(sys, "platform", "linux"):
+            self.bridge.start("127.0.0.1", port)
+        self.assertNotEqual(self.bridge.get_actual_port(), port)
+
+    def test_start_bridge_server_reports_the_real_port(self):
+        # operators_server needs bpy: the report is checked in its source.
+        src = (_ADDON / "operators_server.py").read_text(encoding="utf-8")
+        self.assertIn("mcp_to_blender_server.port_note() or", src)
+        self.assertIn("mcp_to_blender_server.get_actual_port() or _bridge_port", src)
+
     def test_in_use_errors_are_recognised(self):
         import errno
         self.assertTrue(self.bridge._address_in_use(OSError(errno.EADDRINUSE, "in use")))
@@ -546,9 +632,15 @@ class TestAgentSideFollowsTheRealPort(unittest.TestCase):
         holder.listen(1)
         self.addCleanup(holder.close)
         port = holder.getsockname()[1]
-        with mock.patch.dict(os.environ, {"LOCALAPPDATA": tempfile.mkdtemp()}):
-            bridge.start("127.0.0.1", port)
-            self.addCleanup(bridge.stop)
+        # The live-session file lives under LOCALAPPDATA: the stop at the end must still
+        # see the temp folder (cleanups run last-in first-out), never the real file.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        patcher = mock.patch.dict(os.environ, {"LOCALAPPDATA": tmp.name})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        bridge.start("127.0.0.1", port)
+        self.addCleanup(lambda: bridge.is_running() and bridge.stop())
         prefs = types.SimpleNamespace(port_offset=0, bridge_port=port, mcp_port=0, llm_port=0)
         self.assertEqual(shared.effective_ports(prefs)[0], bridge.get_actual_port())
         self.assertNotEqual(bridge.get_actual_port(), port)

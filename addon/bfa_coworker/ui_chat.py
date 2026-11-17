@@ -4416,12 +4416,30 @@ def _stop_coworker() -> None:
     # accounting so the context bar does not stay pinned at its old value.
     agent_controller._agent_state.reset_usage()
     agent_controller.clear_session_scene_lock()
+    # An old error must not be shown as the reason of the next start (#564).
+    agent_controller._agent_state.error = ""
+    agent_controller._agent_state.error_full = ""
+    agent_controller._agent_state.error_kind = ""
 
 
 def _local_server_running() -> bool:
     """This window's llama-server is alive (launched and not exited)."""
     proc = llm_manager.get_llama_process()
     return proc is not None and proc.poll() is None
+
+
+# Restart's pending second half: one timer function, so a second press can't queue
+# another start and the add-on can remove it when disabled (#564).
+_restart_state = {"local_was_running": False}
+
+
+def _restart_timer() -> None:
+    return _start_again(_restart_state["local_was_running"])
+
+
+def _cancel_restart() -> None:
+    if bpy.app.timers.is_registered(_restart_timer):
+        bpy.app.timers.unregister(_restart_timer)
 
 
 class BFACW_OT_agent_restart(Operator):  # type: ignore[misc]
@@ -4434,13 +4452,19 @@ class BFACW_OT_agent_restart(Operator):  # type: ignore[misc]
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
 
+        if bpy.app.timers.is_registered(_restart_timer):
+            # A restart is already pending: its start is the one that runs, and it keeps
+            # the first press's answer about the Local server (now stopped, so a second
+            # look would say "was not running").
+            return {"FINISHED"}
+
         # What ran before, so the start brings back exactly that (#564).
-        local_was_running = _local_server_running()
+        _restart_state["local_was_running"] = _local_server_running()
         props.chat_status = "Stopping..."
         _stop_coworker()
 
         # Start again after a brief delay (the UI shows "Stopping..." meanwhile).
-        bpy.app.timers.register(lambda: _start_again(local_was_running), first_interval=0.5)
+        bpy.app.timers.register(_restart_timer, first_interval=0.5)
         _redraw_areas(context)
         return {"FINISHED"}
 
@@ -6802,6 +6826,7 @@ def unregister() -> None:
 
     if bpy.app.timers.is_registered(chat_timer_update):
         bpy.app.timers.unregister(chat_timer_update)
+    _cancel_restart()
 
     if hasattr(bpy.types.WindowManager, "bfacw_chat_props"):
         del bpy.types.WindowManager.bfacw_chat_props  # type: ignore[attr-defined]

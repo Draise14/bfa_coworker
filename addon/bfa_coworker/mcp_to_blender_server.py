@@ -2000,16 +2000,16 @@ def start(host: str, port: int) -> None:
 
     # Track the actual port we end up binding.
     global _actual_port, _actual_host, _port_note
-    _actual_port = port
-    _actual_host = host
-
     if is_running():
+        # Refuse before touching anything: the running bridge keeps its real port.
         raise RuntimeError("Server is already running")
 
+    _actual_port = port
+    _actual_host = host
     _port_note = ""
     wanted = port
     sock = None
-    for candidate in range(wanted, wanted + _PORT_SEARCH + 1):
+    for candidate in range(wanted, min(wanted + _PORT_SEARCH, 65535) + 1):
         # Windows: the exclusive bind fails whenever anyone holds the port, so
         # it alone decides.  Elsewhere SO_REUSEADDR can let a bind share a port
         # another program listens on (other address), so a listener that
@@ -2028,7 +2028,7 @@ def start(host: str, port: int) -> None:
         raise OSError(
             "Port {:d} is used by {:s}, and ports {:d}-{:d} are taken too. Close the "
             "other window, or raise port_offset in Preferences (Advanced tab).".format(
-                wanted, _who_has(wanted), wanted + 1, wanted + _PORT_SEARCH))
+                wanted, _who_has(wanted), wanted + 1, min(wanted + _PORT_SEARCH, 65535)))
     if port != wanted:
         _port_note = "Port {:d} is used by {:s}, so this window's bridge is on port {:d}".format(
             wanted, _who_has(wanted), port)

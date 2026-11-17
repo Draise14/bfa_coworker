@@ -22,6 +22,13 @@ def _load():
     turns = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(turns)
     ns["_is_system_note_msg"] = turns.is_system_note_msg
+    import importlib, sys, types
+    pkg = "bfacw_session_ux_pkg"
+    if pkg not in sys.modules:
+        mod = types.ModuleType(pkg)
+        mod.__path__ = [os.path.dirname(_UI)]
+        sys.modules[pkg] = mod
+    ns["_magic"] = importlib.import_module(pkg + ".magic_wording")      # #528
     exec(src[src.index("# Human-readable display helpers"):src.index("def _wrap_text(")], ns)
     return ns, src
 

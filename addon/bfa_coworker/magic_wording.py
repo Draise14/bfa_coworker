@@ -29,6 +29,7 @@ __all__ = (
     "helper_label",
     "helper_name",
     "helper_tip",
+    "redacted_agent_text",
     "rewrite_agent_text",
     "shown_agent_text",
     "is_agent_written",
@@ -53,10 +54,14 @@ THINKING_WORDS: tuple[str, ...] = (
     "Reading the stars", "Drawing sigils", "Gathering mana", "Forging a charm", "Waving the wand",
 )
 
-# The agent-written messages (helpers.py's FRAMING_PREFIX / RESULTS_PREFIX; kept here as plain
-# text so this module needs no import of it).
-RESULTS_PREFIX = "[Helpers]"
-FRAME_PREFIX = "[Helper for"
+# The two prefixes are defined once, in helpers.py (what framing() and results_text() write).
+from .helpers import FRAMING_PREFIX as FRAME_PREFIX, RESULTS_PREFIX     # noqa: E402
+
+# The exact headings the code writes: "[Helper for "<parent>"] <task>" and
+# "[Helpers] Your N helper(s) finished (...)".  A message you typed that merely starts like
+# them is yours (#418).
+_FRAME_HEAD = re.compile(re.escape(FRAME_PREFIX) + r' ".*?"\] ')
+_RESULTS_HEAD = re.compile(re.escape(RESULTS_PREFIX) + r" Your (\d+) helpers? finished")
 
 _flag: bool | None = None          # the preference as last read on the main thread
 _forced: bool | None = None        # tests
@@ -138,30 +143,40 @@ def helper_tip(helper: Any) -> str:
 
 
 # -- the agent-written messages on screen ----------------------------------------------
-def is_agent_written(text: str) -> bool:
+def is_agent_written(text: str, loose: bool = False) -> bool:
     """True for a message Coworker writes itself (a helper's first message, the "[Helpers]"
-    results): not typed by you, so it is redacted on screen like any agent text."""
-    return text.startswith(FRAME_PREFIX) or text.startswith(RESULTS_PREFIX)
+    results): not typed by you, so it is redacted on screen like any agent text.  *loose*:
+    for a text cut short (a title, a memory line) whose heading may be cut: its start is
+    enough."""
+    text = str(text or "")
+    if loose:
+        return text.startswith(FRAME_PREFIX) or text.startswith(RESULTS_PREFIX)
+    return bool(_FRAME_HEAD.match(text) or _RESULTS_HEAD.match(text))
 
 
-def shown_agent_text(text: str) -> str:
+def redacted_agent_text(text: str, loose: bool = False) -> str:
+    """*text* with keys as ``***`` when Coworker wrote it itself, else as it is."""
+    if not is_agent_written(text, loose):
+        return text
+    from . import log
+    return log.redact(text)
+
+
+def shown_agent_text(text: str, loose: bool = False) -> str:
     """*text* as the chat shows it, when Coworker wrote it itself: no key in it (#528), the
     magic heading when that wording is on.  Anything else is returned as it is (what you
     typed stays as typed, #418)."""
-    if not is_agent_written(text):
+    if not is_agent_written(text, loose):
         return text
     from . import log
-    return log.redact(rewrite_agent_text(text))
+    return log.redact(rewrite_agent_text(text, loose))
 
 
-_RESULTS_HEAD = re.compile(r"^\[Helpers\] Your (\d+) helpers? finished")
-
-
-def rewrite_agent_text(text: str) -> str:
+def rewrite_agent_text(text: str, loose: bool = False) -> str:
     """*text* as shown with the magic wording: the heading of the helper's first message
     and of the results message.  The rest (the task, the answers) is untouched; the history
     keeps the original."""
-    if not enabled():
+    if not enabled() or not is_agent_written(text, loose):
         return text
     if text.startswith(FRAME_PREFIX):
         from .helpers import HELPERS
@@ -171,13 +186,11 @@ def rewrite_agent_text(text: str) -> str:
                 name = helper.name
                 break
         return _frame(text, name)
-    if text.startswith(RESULTS_PREFIX):
-        match = _RESULTS_HEAD.match(text)
-        if match:
-            count = int(match.group(1))
-            return "[Mages] Your {:d} {:s} finished".format(count, group_noun(count)) + text[match.end():]
-        return "[Mages]" + text[len(RESULTS_PREFIX):]
-    return text
+    match = _RESULTS_HEAD.match(text)
+    if match:
+        count = int(match.group(1))
+        return "[Mages] Your {:d} {:s} finished".format(count, group_noun(count)) + text[match.end():]
+    return "[Mages]" + text[len(RESULTS_PREFIX):]
 
 
 def _frame(text: str, name: str) -> str:

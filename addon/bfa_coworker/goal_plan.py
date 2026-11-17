@@ -131,6 +131,38 @@ def _clip(text: str, limit: int) -> str:
     return text[: max(0, limit - 3)].rstrip() + "..."
 
 
+_HIDDEN = "***"
+
+
+def restore_hidden(new: str, old: str, shown: Any) -> str:
+    """*new* is what the plan text showed for *old* (``shown(old)``), maybe edited.  Unchanged:
+    *old* itself.  Edited but with the same number of ``***`` as *old* has hidden keys: those
+    ``***`` get the keys back, in order.  Anything else: *new*, as typed."""
+    hidden = shown(old)
+    if new == hidden:
+        return old
+    parts = hidden.split(_HIDDEN)
+    count = len(parts) - 1
+    if count < 1 or new.count(_HIDDEN) != count or not old.startswith(parts[0]):
+        return new
+    keys: list[str] = []
+    pos = len(parts[0])
+    for n in range(1, len(parts)):
+        sep = parts[n]
+        if n == len(parts) - 1:
+            if not old.endswith(sep) or len(old) - len(sep) < pos + 1:
+                return new
+            keys.append(old[pos:len(old) - len(sep)])
+        else:
+            at = old.find(sep, pos + 1) if sep else -1
+            if at < 0:
+                return new
+            keys.append(old[pos:at])
+            pos = at + len(sep)
+    pieces = new.split(_HIDDEN)
+    return "".join(pieces[i] + (keys[i] if i < len(keys) else "") for i in range(len(pieces)))
+
+
 class GoalPlan:
     """Pinned goal + plan state for one chat thread."""
 
@@ -449,31 +481,44 @@ class GoalPlan:
 
     # -- editable text mirror ---------------------------------------------
 
-    def render_markdown(self) -> str:
-        """Editable mirror written to the ``Coworker Plan.md`` text block."""
+    def render_markdown(self, shown: Any = None, shown_step: Any = None) -> str:
+        """Editable mirror written to the ``Coworker Plan.md`` text block.  *shown*
+        (text -> text) is how the text block shows the goals and the steps: keys as ``***``
+        (#528).  :meth:`parse_markdown` takes it back the same way."""
+        show = shown or (lambda text: text)
+        show_step = shown_step or show
         out = [
             "# Coworker Plan",
             "<!-- Edit freely: the goal, the steps ([ ] todo, [>] doing, [x] done)",
             "     and the notes are sent to the coworker on its next request. -->",
             "",
             "## Session goal",
-            self.session_goal or "(set by your first request)",
+            show(self.session_goal) or "(set by your first request)",
             "",
             "## Current request",
-            self.turn_goal or "(none yet)",
+            show(self.turn_goal) or "(none yet)",
             "",
             "## Steps",
         ]
         if self.steps:
             for s in self.steps:
-                out.append("- [{:s}] {:s}".format(_MARK[s["status"]], s["text"]))
+                out.append("- [{:s}] {:s}".format(_MARK[s["status"]], show_step(s["text"])))
         else:
             out.append("(no plan yet -- the coworker creates one for multi-step requests)")
         out += ["", "## Notes", self.user_notes or ""]
         return "\n".join(out).rstrip() + "\n"
 
-    def parse_markdown(self, text: str) -> bool:
-        """Apply the user's edits from the text mirror.  Returns True if changed."""
+    def parse_markdown(self, text: str, shown: Any = None, shown_step: Any = None) -> bool:
+        """Apply the user's edits from the text mirror.  Returns True if changed.
+
+        *shown*: how :meth:`render_markdown` showed the goals and steps (keys as ``***``).
+        A text you did not change keeps the stored one; an edited one that still has the
+        same number of ``***`` as the stored one has keys gets them back in order; any other
+        text is taken as typed (#528)."""
+        keep = (lambda new, old: restore_hidden(new, old, shown)) if shown else (lambda new, _old: new)
+        keep_step = ((lambda new, old: restore_hidden(new, old, shown_step or shown)) if shown or shown_step
+                     else (lambda new, _old: new))
+        old_steps = [dict(s) for s in self.steps]
         sections: dict[str, list[str]] = {}
         current = None
         for raw in str(text or "").splitlines():
@@ -495,9 +540,9 @@ class GoalPlan:
 
         before = json.dumps(self.to_dict(), sort_keys=True)
         if "session goal" in sections:
-            self.session_goal = _clip(_body("session goal"), _SESSION_GOAL_CHARS)
+            self.session_goal = keep(_clip(_body("session goal"), _SESSION_GOAL_CHARS), self.session_goal)
         if "current request" in sections:
-            self.turn_goal = _clip(_body("current request"), _TURN_GOAL_CHARS)
+            self.turn_goal = keep(_clip(_body("current request"), _TURN_GOAL_CHARS), self.turn_goal)
         if "steps" in sections:
             steps: list[dict[str, str]] = []
             for ln in sections["steps"]:
@@ -508,6 +553,8 @@ class GoalPlan:
                 elif ln.strip().startswith(("- ", "* ")) and ln.strip()[2:].strip():
                     steps.append({"text": _clip(ln.strip()[2:], _STEP_CHARS), "status": "todo"})
             self.steps = steps[:_MAX_STEPS]
+            for step, old in zip(self.steps, old_steps):        # by position
+                step["text"] = keep_step(step["text"], old.get("text", ""))
         if "notes" in sections:
             self.user_notes = _clip(_body("notes"), _NOTES_CHARS)
         changed = json.dumps(self.to_dict(), sort_keys=True) != before

@@ -281,6 +281,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         from . import session_identity
         session_identity.set_token_required(self.require_session_token)
 
+    def _update_magic_wording(self, _context: bpy.types.Context) -> None:
+        """Turning the magic wording on or off shows at once in every chat (#528)."""
+        from . import ui_chat
+        ui_chat._redraw_all_chats()
+
     def _update_approval_mode(self, _context: bpy.types.Context) -> None:
         from . import ui_chat
         ui_chat.apply_approval_mode(self.approval_mode)
@@ -1252,6 +1257,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                      "the model thinks. Only what you see changes: what is sent to the model stays "
                      "as it is. Off: plain \"Helper\" and \"Thinking\""),
         default=True,
+        update=_update_magic_wording,
     )
 
     external_agent_tools_on_demand: BoolProperty(  # type: ignore[valid-type]

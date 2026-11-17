@@ -21,6 +21,7 @@ Run with::
 __all__ = ()
 
 import importlib
+import importlib.util
 import re
 import sys
 import types
@@ -167,7 +168,7 @@ class TestHelperNames(_Case):
         shown = mw.rewrite_agent_text(helper.message)
         self.assertTrue(shown.startswith('[{:s} for "Build"]'.format(word)), shown)
         cut = " ".join(helper.message.split())[:57]        # a title cut from it (History, the tab)
-        self.assertTrue(mw.rewrite_agent_text(cut).startswith("[" + word + " for"))
+        self.assertTrue(mw.rewrite_agent_text(cut, loose=True).startswith("[" + word + " for"))
 
     def test_the_results_heading_says_mages(self):
         a = hp.Helper(id="a", parent="p", title="A", status=hp.DONE, answer="ok")
@@ -312,6 +313,209 @@ class TestNothingMagicForTheModel(_Case):
         self.assertIsNotNone(match)
         self.assertIn("default=True", match.group(1))
         self.assertIn('chat_box.prop(self, "magic_wording")', source)
+
+
+
+# -- the review's follow-ups (#528) ---------------------------------------------------------------
+gp = _load("goal_plan")
+_UI_SRC = (_ADDON / "ui_chat.py").read_text(encoding="utf-8")
+
+
+class _FakeLayout:
+    """A layout that records the labels and multi-line texts drawn into it."""
+
+    def __init__(self, log):
+        self.log = log
+
+    def __getattr__(self, name):
+        def call(*args, **kw):
+            if name == "label" and kw.get("text"):
+                self.log.append(kw["text"])
+            return _FakeLayout(self.log) if name in ("box", "row", "column") else types.SimpleNamespace()
+        return call
+
+
+def _slice(start, end):
+    return _UI_SRC[_UI_SRC.index(start):_UI_SRC.index(end, _UI_SRC.index(start))]
+
+
+def _ns(log, items):
+    chat_history = _load("chat_history")
+    sys.modules[_PKG + ".chat_history"] = chat_history
+    return {
+        "__name__": _PKG + ".ui_chat", "__package__": _PKG,
+        "bpy": types.SimpleNamespace(app=types.SimpleNamespace(background=False), types=types.SimpleNamespace(
+            Context=object, UILayout=object, AddonPreferences=object)),
+        "Panel": object, "Operator": object, "_CHAT_PANEL_CATEGORY": "Coworker",
+        "_ui_state": lambda _c: types.SimpleNamespace(is_thinking=False),
+        "_queued_messages": lambda _c=None: items,
+        "_draw_multiline": lambda _layout, text, **kw: log.append(text),
+        "CHAT_MODE_ITEMS": [("AGENT", "Coworker", "", "GHOST_ENABLED", 0)],
+        "_magic": mw, "_log": log_mod,
+    }
+
+
+log_mod = log
+KEY_TASK = "Use the key " + FAKE_KEY + " now."
+
+
+class TestQueueMemoryAndHeader(_Case):
+
+    def _queued(self):
+        return [{"message": hp.framing("Build", KEY_TASK, ""), "chat_mode": "AGENT"},
+                {"message": "[Helpers] Your 1 helper finished (1 done). Their results:\n\n1. A (All editors) — done\n"
+                            + FAKE_KEY, "chat_mode": "AGENT"},
+                {"message": "typed by you: " + FAKE_KEY, "chat_mode": "AGENT"}]
+
+    def test_the_queue_panel_hides_a_queued_helper_task(self):
+        drawn = []
+        ns = _ns(drawn, self._queued())
+        exec(_slice("class BFACW_PT_chat_queue(Panel)", "def _draw_window_link"), ns)
+        panel = ns["BFACW_PT_chat_queue"]
+        panel.layout = _FakeLayout(drawn)
+        panel.draw(panel, None)
+        text = "\n".join(drawn)
+        self.assertEqual(text.count(FAKE_KEY[:12]), 1, "only the message you typed keeps its key")
+        self.assertIn("typed by you: " + FAKE_KEY, text)
+        self.assertIn("Use the key ***", text)
+
+    def test_the_show_queue_popup_hides_it_too(self):
+        shown = []
+        ns = _ns(shown, self._queued())
+        exec(_slice("class BFACW_OT_queue_show(Operator)", "class BFACW_OT_export_session_log"), ns)
+        op = ns["BFACW_OT_queue_show"]()
+        op.report = lambda *a, **k: None
+
+        def popup(draw, **_kw):
+            draw(types.SimpleNamespace(layout=_FakeLayout(shown)), None)
+        ctx = types.SimpleNamespace(window_manager=types.SimpleNamespace(popup_menu=popup))
+        op.execute(ctx)
+        text = "\n".join(shown)
+        self.assertIn("Use the key ***", text)
+        self.assertEqual(text.count(FAKE_KEY[:12]), 1)       # the typed one (cut at 60 characters)
+
+    def test_the_memory_panel_and_checkpoint_titles_hide_a_key(self):
+        spec = importlib.util.spec_from_file_location("ux528", str(_ADDON.parent.parent / "tests" / "test_session_ux.py"))
+        ux = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ux)
+        ns = ux._NS
+        task = hp.framing("Build", KEY_TASK, "")
+        lines = ns["_humanize_memory"]("[Session memory]\nEarlier request: " + task + "\nRecent context:\n- user: "
+                                      + task + "\n- user: [Helpers] Your 1 helper finished " + FAKE_KEY)
+        self.assertGreaterEqual(len(lines), 5)
+        self.assertNotIn(FAKE_KEY[:12], "\n".join(lines))
+        # A cut memory line (the heading's end is gone) is still recognised by its start.
+        cut = ns["_humanize_memory"]("Recent context:\n- user: " + task[:30] + " " + FAKE_KEY)
+        self.assertNotIn(FAKE_KEY[:12], "\n".join(cut))
+        typed = ns["_humanize_memory"]("Recent context:\n- user: say " + FAKE_KEY)
+        self.assertIn(FAKE_KEY[:12], "\n".join(typed), "what you typed is not touched")
+        title, _detail = ns["_checkpoint_title"]({"timestamp": "2026-01-01 10:00:00", "history": [
+            {"role": "user", "content": task}]}, 1)
+        self.assertNotIn(FAKE_KEY[:12], title)
+
+    def test_the_editor_header_uses_the_shown_status(self):
+        source = (_ADDON / "chat_editor.py").read_text(encoding="utf-8")
+        self.assertIn("ui_chat._thread_status_shown(ui_chat._ui_thread(context))[0]", source)
+        self.assertNotIn("ui_chat._thread_status(", source)
+
+    def test_the_preference_redraws_every_chat(self):
+        source = (_ADDON / "preferences.py").read_text(encoding="utf-8")
+        self.assertIn("update=_update_magic_wording", source)
+        body = source[source.index("def _update_magic_wording"):source.index("def _update_approval_mode")]
+        calls = []
+        fake = types.ModuleType(_PKG + ".ui_chat")
+        fake._redraw_all_chats = lambda: calls.append("redraw")
+        saved = sys.modules.get(_PKG + ".ui_chat")
+        sys.modules[_PKG + ".ui_chat"] = fake
+        setattr(sys.modules[_PKG], "ui_chat", fake)
+        self.addCleanup(lambda: sys.modules.__setitem__(_PKG + ".ui_chat", saved) if saved else
+                        sys.modules.pop(_PKG + ".ui_chat", None))
+        ns = {"__package__": _PKG, "bpy": types.SimpleNamespace(types=types.SimpleNamespace(Context=object))}
+        exec(__import__("textwrap").dedent(body), ns)
+        ns["_update_magic_wording"](None, None)
+        self.assertEqual(calls, ["redraw"])
+
+    def test_a_reopened_helper_chat_renames_from_the_plain_title(self):
+        self.assertIn("_magic.redacted_agent_text(title_of(", _UI_SRC)      # _tab_full_title: no magic word
+        plain = mw.redacted_agent_text(hp.framing("Build", KEY_TASK, "")[:60], loose=True)
+        self.assertTrue(plain.startswith('[Helper for "Build"]'), plain)
+
+
+class TestExactHeadings(_Case):
+
+    def test_only_the_headings_the_code_writes_are_agent_written(self):
+        self.assertTrue(mw.is_agent_written(hp.framing("Build", "x", "")))
+        self.assertTrue(mw.is_agent_written(hp.results_text([hp.Helper(id="a", parent="p", title="A", status=hp.DONE)])))
+        self.assertTrue(mw.is_agent_written(hp.results_text([hp.Helper(id="a", parent="p", title="A"),
+                                                              hp.Helper(id="b", parent="p", title="B")])))
+        for typed in ("[Helpers] are great, my key is " + FAKE_KEY, "[Helper for me] " + FAKE_KEY,
+                      "[Helper for", "[Helpers]", "[Helper for \"x\"]no space"):
+            self.assertFalse(mw.is_agent_written(typed), typed)
+            self.assertEqual(mw.shown_agent_text(typed), typed)
+        self.assertTrue(mw.is_agent_written("[Helper for", loose=True), "a cut text: its start is enough")
+
+    def test_one_definition_of_the_prefixes(self):
+        self.assertIs(mw.FRAME_PREFIX, hp.FRAMING_PREFIX)
+        self.assertIs(mw.RESULTS_PREFIX, hp.RESULTS_PREFIX)
+        self.assertEqual(hp.framing("a", "b", "")[:len(mw.FRAME_PREFIX)], mw.FRAME_PREFIX)
+        self.assertTrue(hp.results_text([]).startswith(mw.RESULTS_PREFIX))
+
+
+class TestPlanText(_Case):
+    """Edit Plan shows the goal redacted and reads it back without losing the key."""
+
+    def goal(self):
+        g = gp.GoalPlan()
+        g.set_request(hp.framing("Build", KEY_TASK, ""))
+        g.apply_update({"steps": [{"text": "Call it with " + FAKE_KEY, "status": "todo"}]})
+        return g
+
+    def shown(self):
+        return (lambda t: mw.redacted_agent_text(t, loose=True), lambda t: log.redact(t))
+
+    def test_the_text_shows_stars_and_an_untouched_round_trip_keeps_the_goal(self):
+        g = self.goal()
+        before = g.to_dict()
+        md = g.render_markdown(*self.shown())
+        self.assertNotIn(FAKE_KEY[:12], md)
+        self.assertIn("Use the key ***", md)
+        g.parse_markdown(md, *self.shown())
+        self.assertEqual(g.to_dict(), before, "the model still gets the real goal and steps")
+        self.assertIn(FAKE_KEY, g.turn_goal)
+        self.assertIn(FAKE_KEY, g.steps[0]["text"])
+
+    def test_an_edited_goal_with_the_same_stars_gets_its_keys_back_in_order(self):
+        g = self.goal()
+        head = hp.framing("Build", "x", "").split("x")[0]
+        g.turn_goal = head + 'Task one ' + FAKE_KEY + ' and two ' + FAKE_KEY + "-second"
+        md = g.render_markdown(*self.shown())
+        self.assertNotIn(FAKE_KEY[:12], md)
+        edited = md.replace("Task one", "Do the first").replace("and two", "then the second")
+        g.parse_markdown(edited, *self.shown())
+        self.assertEqual(g.turn_goal, head + "Do the first " + FAKE_KEY + " then the second " + FAKE_KEY + "-second")
+
+    def test_any_other_edit_is_taken_as_typed(self):
+        g = self.goal()
+        md = g.render_markdown(*self.shown())
+        # one *** removed: the count differs
+        fewer = md.replace("Use the key *** now.", "Use the new thing now.")
+        g.parse_markdown(fewer, *self.shown())
+        self.assertEqual(g.turn_goal.replace("\n", " ").split("] ")[-1].strip().split("You are")[0].strip(),
+                         "Use the new thing now.")
+        # one *** added
+        g2 = self.goal()
+        more = g2.render_markdown(*self.shown()).replace("Use the key *** now.", "Use *** and *** now.")
+        g2.parse_markdown(more, *self.shown())
+        self.assertIn("Use *** and *** now.", g2.turn_goal)
+        self.assertNotIn(FAKE_KEY[:12], g2.turn_goal)
+
+    def test_without_a_shown_function_nothing_changes(self):
+        g = self.goal()
+        md = g.render_markdown()
+        self.assertIn(FAKE_KEY, md)
+        before = g.to_dict()
+        g.parse_markdown(md)
+        self.assertEqual(g.to_dict(), before)
 
 
 if __name__ == "__main__":

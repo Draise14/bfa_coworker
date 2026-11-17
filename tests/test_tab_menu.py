@@ -170,7 +170,7 @@ class _UiBase(unittest.TestCase):
             "_fresh_default_chat": lambda: self.fresh_default.append(True), "_auto_toggle": lambda *_a: None,
             "_AREA_PINS": {}, "_socket": lambda: types.SimpleNamespace(focus=""), "_focus_thread": lambda _t: None,
             "_acp": None, "safe_icon": lambda name: name, "_thread_status": lambda _t: ("Idle", "DOT"), "_thread_status_shown": lambda _t: ("Idle", "DOT"),
-            "_magic": types.SimpleNamespace(shown_agent_text=lambda text: text),
+            "_magic": types.SimpleNamespace(shown_agent_text=lambda text, loose=False: text, redacted_agent_text=lambda text, loose=False: text),
             "_tab_icon": lambda _t: ("WORLD", False), "_running_now": lambda: False,
             "draw_new_chat_entries": lambda layout, _ctx: layout.log.append(("new_chat_entries",)),
             "new_chat_for_label": lambda _ctx: self.editor_label, "_tab_kind": lambda _ctx: "VIEW_3D",

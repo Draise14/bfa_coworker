@@ -1400,7 +1400,10 @@ def _execute_code_from_request(
 
         def _proceed() -> tuple[dict[str, object], Any]:
             _inner = _gated_run()
-            return _inner.response, _inner.check_fn
+            # #527: a render the card let through is watched like any other.
+            return _inner.response, loop_guard.bridge_watch(
+                loop_guard.BRIDGE, _tool, {"code": code}, str(request.get("session") or ""), _thread,
+                _inner.response, _inner.check_fn)
 
         _repeat = loop_guard.bridge_wrap(loop_guard.BRIDGE, risky_steps.APPROVALS, risky_steps.auto_on(_thread),
                                          _tool, {"code": code}, str(request.get("session") or ""), _proceed,
@@ -1410,6 +1413,12 @@ def _execute_code_from_request(
                                          can_ask=_engine != "EXTERNAL_HARNESS")
         if _repeat is not None:
             exec_result = _ExecResult(*_repeat)
+        else:
+            # #527: a render that failed makes its retry under another file name a repeat.
+            exec_result = _gated_run()
+            exec_result = exec_result._replace(check_fn=loop_guard.bridge_watch(
+                loop_guard.BRIDGE, _tool, {"code": code}, str(request.get("session") or ""), _thread,
+                exec_result.response, exec_result.check_fn))
     if exec_result is None:
         exec_result = _gated_run()
     try:

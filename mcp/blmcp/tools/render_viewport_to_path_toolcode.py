@@ -10,7 +10,8 @@ Tool-code for rendering the current scene.
 (``_template_render_preview_profile.py``: small, few samples, no compositing...);
 ``"final"`` with the scene's own settings; ``"viewport"`` is a quick solid-shaded
 OpenGL render from the scene camera, under the same size cap.  Whatever the profile
-changed goes back when the render is over: done, failed or cancelled.
+changed goes back when the render is over: done, failed or cancelled.  A render stopped
+in Blender answers ``status`` "stopped" with the partial image, if any (#527).
 """
 
 __all__ = (
@@ -169,6 +170,8 @@ def main(params: Params) -> Result | Callable[[], dict[str, object] | None]:
             result["caps"] = caps or None
             if result.get("status") == "ok":
                 result["message"] = text
+            elif result.get("status") == "stopped":      # #527: stopped in Blender, maybe a partial image
+                result["message"] = "{:s} {:s}".format(str(result.get("message") or ""), text)
             else:
                 result["message"] = "{:s} {:s}{:s}".format(str(result.get("message") or ""), text,
                                                           _failure_hint(quality))

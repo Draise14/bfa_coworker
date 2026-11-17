@@ -8832,6 +8832,8 @@ def _run_conversation_turn_inner(
                         result_text = _take_tool_pictures(
                             tool_name, tool_id, result_text, _tool_pics, _pic_file, _sees_images,
                             _agent_state.tool_images, _batch_pictures)
+                # #527: a render that failed makes its retry under another file name a repeat.
+                _repeat_guard.note_result(tool_name, args, result_text)
                 _agent_state.bump_turn_cost("tools")
                 from .engine import PLAN_SAFE_TOOLS as _plan_safe
                 if tool_name == "execute_blender_code":

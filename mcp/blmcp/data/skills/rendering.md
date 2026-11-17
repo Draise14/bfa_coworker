@@ -37,6 +37,8 @@ scene.render.image_settings.file_format = 'PNG'
 Use `render_viewport_to_path(output_path)` to look at your work — a preview by default (at most 1024 px,
 few samples, no compositing; the scene's settings are put back). `quality="viewport"` is solid shading in
 a second. `quality="final"` uses the current render settings: only when the user asks for the real render.
+A render the user stopped in Blender answers `status: "stopped"` (`partial`: the image is unfinished): don't
+start it again unless they ask.
 
 Use `render_thumbnail_to_path(output_path)` — for quick low-quality previews.
 

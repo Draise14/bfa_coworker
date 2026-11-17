@@ -63,7 +63,8 @@ def relative_time(when: float, now: float | None = None) -> str:
 
 def clean_name(title: Any) -> str:
     """A name you give a chat (#573): one line, at most 120 characters ("" = none)."""
-    return " ".join(str(title or "").split())[:_NAME_CHARS]
+    from . import log as _log
+    return " ".join(_log.redact(str(title or "")).split())[:_NAME_CHARS]     # no key in the index
 
 
 def title_of(history: list[dict[str, Any]]) -> str:

@@ -53,6 +53,7 @@ _pkg.__path__ = []
 sys.modules[_PKG] = _pkg
 threads = _module("threads")
 chat_history = _module("chat_history")
+log = _module("log")      # the real redaction: no stand-in
 
 
 def _slice(src, name):
@@ -111,7 +112,7 @@ class _UiBase(unittest.TestCase):
 
     NAMES = ("_current_chat_of", "_tab_label", "_user_title", "_set_user_title", "_tab_full_title",
              "_save_thread_chat", "tab_busy", "draw_tab_entries", "_close_tab", "BFACW_OT_tab_close",
-             "BFACW_OT_tab_close_others", "BFACW_OT_tab_rename", "BFACW_OT_chat_rename", "BFACW_MT_chat_tabs")
+             "BFACW_OT_tab_close_others", "BFACW_OT_tab_rename", "BFACW_OT_chat_rename", "BFACW_MT_chat_tabs", "BFACW_OT_chat_stop")
 
     def setUp(self):
         self.base = Path(tempfile.mkdtemp())
@@ -138,13 +139,21 @@ class _UiBase(unittest.TestCase):
             return self.chat["id"]
 
         self.ac = types.SimpleNamespace(THREADS=reg, thread_state=thread_state)
+        self.stopped, self.status, self.helper_closed = [], [], []
         helper_chats = types.SimpleNamespace(tab_label=lambda t: self.helper_titles.get(t.id, ""),
-                                             tab_closed=lambda _t: None)
+                                             tab_closed=lambda t: self.helper_closed.append(t.id), stop_helpers=lambda t: self.stopped.append(t.id))
+        approvals = types.SimpleNamespace(cancel_all=lambda _tag: None)
+        for name, mod in (("coworker_api", types.SimpleNamespace(cancel_questions=lambda _tag: None)),
+                          ("risky_steps", types.SimpleNamespace(APPROVALS=approvals)),
+                          ("speech", types.SimpleNamespace(stop_chat_jobs=lambda _tag: None))):
+            setattr(_pkg, name, mod)
+            sys.modules[_PKG + "." + name] = mod
         session_memory = types.SimpleNamespace(store_lock=threading.Lock())
         for name, mod in (("threads", threads), ("chat_history", chat_history), ("helper_chats", helper_chats),
                           ("session_memory", session_memory)):
             setattr(_pkg, name, mod)
             sys.modules[_PKG + "." + name] = mod
+        setattr(_pkg, "log", log)
         self.shown = reg.default
         bpy = types.SimpleNamespace(data=types.SimpleNamespace(filepath=""),
                                     types=types.SimpleNamespace(Menu=object, Context=object))
@@ -154,7 +163,7 @@ class _UiBase(unittest.TestCase):
             "StringProperty": prop, "EnumProperty": prop, "BoolProperty": prop,
             "agent_controller": self.ac, "_CHAT": self.chat, "_current_chat_id": current_chat_id,
             "_chat_index": lambda: index, "_USER_TITLES": {}, "_history_save_lock": threading.Lock(),
-            "_log": types.SimpleNamespace(redact_data=lambda data: data), "json": __import__("json"),
+            "_log": log, "json": __import__("json"),
             "_blend_key": lambda: "", "_chat_engine_label": lambda: "Local", "_operating_mode": lambda: "LOCAL_LLM",
             "_save_chat_history": lambda: None, "_ui_thread": lambda _ctx=None: self.shown,
             "_redraw_all_chats": lambda: None, "_save_tabs": lambda: None,
@@ -164,8 +173,11 @@ class _UiBase(unittest.TestCase):
             "_tab_icon": lambda _t: ("WORLD", False), "_running_now": lambda: False,
             "draw_new_chat_entries": lambda layout, _ctx: layout.log.append(("new_chat_entries",)),
             "new_chat_for_label": lambda _ctx: self.editor_label, "_tab_kind": lambda _ctx: "VIEW_3D",
-            "_editor_icon": lambda kind: "VIEW3D",
+            "_editor_icon": lambda kind: "VIEW3D", "_is_external_agent": lambda _ctx=None: False,
+            "_thread_engine": lambda t: types.SimpleNamespace(cancel=lambda: self.cancelled.append(t.id)),
+            "_redraw_areas": lambda _ctx: None,
         }
+        self.cancelled = []
         self.editor_label = ""
         code = "\n\n\n".join(_slice(src, name) for name in self.NAMES)
         exec(compile(code, "ui_chat.py", "exec"), self.ns)  # noqa: S102
@@ -276,10 +288,10 @@ class TestRename(_UiBase):
         tab = self.tab("light the scene")
         self.ns["_save_thread_chat"](tab)
         self.assertEqual(self.label(tab), "light the scene")
-        op = self.op("BFACW_OT_chat_rename", chat_id=tab.chat_id, title="Lighting")
+        op = self.op("BFACW_OT_chat_rename", chat_id=tab.chat_id, title="Lighting", auto="")
         self.assertEqual(op.execute(None), {"FINISHED"})
         self.assertEqual(self.label(tab), "Lighting")
-        op = self.op("BFACW_OT_chat_rename", chat_id=tab.chat_id, title="")
+        op = self.op("BFACW_OT_chat_rename", chat_id=tab.chat_id, title="", auto="")
         self.assertEqual(op.execute(None), {"FINISHED"}, "empty: the automatic title")
         self.assertEqual(self.label(tab), "light the scene")
 
@@ -295,6 +307,16 @@ class TestCloseOthers(_UiBase):
         self.assertEqual(self.fresh_default, [True], "All editors starts fresh, as its X does")
         self.assertEqual(self.reports, ["Closed 2 tabs; 1 tab stayed open: its turn is running"])
         self.assertIsNotNone(self.index.get(a.chat_id), "the closed chat is in History")
+
+    def test_a_helper_chat_closes_like_any_other_tab(self):
+        keep, helper, busy = self.tab("one"), self.tab("do a part"), self.tab("three")
+        self.helper_titles[helper.id] = "Helper: part"
+        self.ac.thread_state(busy).turn_active = True
+        op = self.op("BFACW_OT_tab_close_others", thread_id=keep.id)
+        self.assertEqual(op.execute(None), {"FINISHED"})
+        self.assertEqual(self.reg.live(), [self.reg.default, keep, busy])
+        self.assertIn(helper.id, self.helper_closed, "it is told, so a waiting helper counts as stopped")
+        self.assertEqual(self.reports, ["Closed 2 tabs; 1 tab stayed open: its turn is running"])
 
     def test_nothing_to_close(self):
         keep = self.tab("one")
@@ -492,3 +514,147 @@ class TestTabTitle(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestNoKeyInAName(_UiBase):
+    """A chat's name goes to chats/index.json: never with a key in it (the first message may hold one)."""
+
+    KEY = "sk-" + "abcdefghijklmnopqrstuvwx"       # made up
+
+    def _index_text(self):
+        return (self.base / "chats" / "index.json").read_text(encoding="utf-8")
+
+    def test_the_dialog_is_filled_from_the_redacted_title(self):
+        tab = self.tab("use my key {:s} for this".format(self.KEY))
+        self.assertNotIn(self.KEY, self.ns["_tab_full_title"](tab))
+
+    def test_renaming_never_writes_the_key_to_the_index(self):
+        tab = self.tab("use my key {:s} for this".format(self.KEY))
+        ctx = types.SimpleNamespace(window_manager=types.SimpleNamespace(invoke_props_dialog=lambda *a, **k: {"RUNNING_MODAL"}))
+        op = self.op("BFACW_OT_tab_rename", thread_id=tab.id, title="", auto="")
+        op.invoke(ctx, None)
+        op.title = op.title + "x"
+        op.execute(ctx)
+        self.ns["_save_thread_chat"](tab)
+        self.ns["_set_user_title"](tab, "my " + self.KEY)
+        self.say(tab, "more")
+        self.ns["_save_thread_chat"](tab)
+        self.assertNotIn(self.KEY, self._index_text())
+        self.assertNotIn(self.KEY, self.label(tab))
+
+    def test_historys_rename_and_the_save_path_never_write_the_key(self):
+        tab = self.tab("hello")
+        self.ns["_save_thread_chat"](tab)
+        self.op("BFACW_OT_chat_rename", chat_id=tab.chat_id, title="name " + self.KEY, auto="").execute(None)
+        self.assertNotIn(self.KEY, self._index_text())
+        self.ns["_USER_TITLES"][tab.chat_id] = "again " + self.KEY      # a name already in memory
+        self.say(tab, "more")
+        self.ns["_save_thread_chat"](tab)
+        self.assertNotIn(self.KEY, self._index_text())
+
+
+class TestHistoryRenameUnchanged(_UiBase):
+
+    def test_confirming_the_same_title_does_not_mark_it_renamed(self):
+        tab = self.tab("light the scene")
+        self.ns["_save_thread_chat"](tab)
+        ctx = types.SimpleNamespace(window_manager=types.SimpleNamespace(invoke_props_dialog=lambda *a, **k: {"RUNNING_MODAL"}))
+        op = self.op("BFACW_OT_chat_rename", chat_id=tab.chat_id, title="", auto="")
+        op.invoke(ctx, None)
+        self.assertEqual(op.title, "light the scene")
+        self.assertEqual(op.execute(ctx), {"CANCELLED"})
+        self.assertFalse(self.index.get(tab.chat_id)["renamed"])
+        op.title = "Lighting"
+        self.assertEqual(op.execute(ctx), {"FINISHED"})
+        again = self.op("BFACW_OT_chat_rename", chat_id=tab.chat_id, title="", auto="")
+        again.invoke(ctx, None)
+        self.assertEqual(again.auto, "", "a name of yours: any confirm counts")
+
+    def test_the_dialog_says_what_empty_does(self):
+        log_ = []
+        op = self.op("BFACW_OT_chat_rename", chat_id="x", title="", auto="")
+        op.layout = _Layout(log_)
+        op.draw(None)
+        self.assertTrue(any(e[0] == "label" and "Empty" in e[1] for e in log_))
+
+
+class TestStopTab(_UiBase):
+
+    def _stop(self, thread_id=""):
+        props = {"thread_id": thread_id}
+        wm = types.SimpleNamespace(bfacw_chat_props=types.SimpleNamespace(chat_status="Ready"))
+        op = self.op("BFACW_OT_chat_stop", **props)
+        result = op.execute(types.SimpleNamespace(window_manager=wm, area=None, preferences=None))
+        return result, wm.bfacw_chat_props.chat_status
+
+    def test_a_valid_thread_id_stops_that_tab_and_the_shown_status_stays(self):
+        shown, other = self.tab("one"), self.tab("two")
+        self.shown = shown
+        result, status = self._stop(thread_id=other.id)
+        self.assertEqual((result, self.cancelled), ({"FINISHED"}, [other.id]))
+        self.assertEqual(self.ac.thread_state(other).status_text, "Stopped")
+        self.assertEqual(status, "Ready", "the shown chat's status line is not about the stopped tab")
+
+    def test_the_shown_tab_updates_the_status_line(self):
+        shown = self.tab("one")
+        self.shown = shown
+        self.assertEqual(self._stop(thread_id=shown.id), ({"FINISHED"}, "Stopped"))
+
+    def test_no_thread_id_is_the_shown_chat_as_before(self):
+        self.shown = self.tab("one")
+        result, status = self._stop()
+        self.assertEqual((result, status, self.cancelled), ({"FINISHED"}, "Stopped", [self.shown.id]))
+
+    def test_a_wrong_or_closed_thread_id_is_cancelled(self):
+        self.shown = self.tab("one")
+        self.assertEqual(self._stop(thread_id="nope"), ({"CANCELLED"}, "Ready"))
+        closed = self.tab("two")
+        self.reg.remove(closed.id)
+        self.assertEqual(self._stop(thread_id=closed.id), ({"CANCELLED"}, "Ready"))
+        self.assertEqual(self.cancelled, [])
+
+
+class TestContextCopy(unittest.TestCase):
+    """Copy Whole Chat from a tab's menu (chat_editor.BFACW_OT_chat_context_copy)."""
+
+    KEY = "sk-" + "abcdefghijklmnopqrstuvwx"
+
+    def setUp(self):
+        src = (_ADDON / "chat_editor.py").read_text(encoding="utf-8")
+        self.reg = threads.ThreadRegistry(make_state=_State, make_store=_Store, default_objects=True)
+        states = {}
+        ac = types.SimpleNamespace(
+            THREADS=self.reg, thread_state=lambda t: states.setdefault(t.id, _State()),
+            _memory=lambda _t: types.SimpleNamespace(store=types.SimpleNamespace(retired_history=[])))
+        self.states = states
+        view = types.ModuleType(_PKG + ".ui_gpu.chat_view")
+        view.transcript = lambda h: "\n".join(str(m.get("content", "")) for m in h)
+        sys.modules[_PKG + ".ui_gpu"] = types.ModuleType(_PKG + ".ui_gpu")
+        sys.modules[_PKG + ".ui_gpu.chat_view"] = view
+        setattr(_pkg, "log", log)
+        prop = lambda **kw: kw.get("default", "")       # noqa: E731
+        bpy = types.SimpleNamespace(types=types.SimpleNamespace(Operator=object),
+                                    props=types.SimpleNamespace(EnumProperty=prop, StringProperty=prop))
+        self.ns = {"__name__": _PKG + ".chat_editor", "__package__": _PKG, "bpy": bpy, "agent_controller": ac,
+                   "_COPY_WHAT": [("CHAT", "Whole Chat", "d"), ("MESSAGE", "Message", "d")], "Any": object,
+                   "input_capture": types.SimpleNamespace(menu_target=lambda: {"turn": None, "surface": None})}
+        code = "\n\n\n".join(_slice(src, n) for n in ("_history", "BFACW_OT_chat_context_copy"))
+        exec(compile("from __future__ import annotations\n" + code, "chat_editor.py", "exec"), self.ns)  # noqa: S102
+
+    def _copy(self, thread_id):
+        wm = types.SimpleNamespace(clipboard="")
+        op = self.ns["BFACW_OT_chat_context_copy"]()
+        op.what, op.thread_id = "CHAT", thread_id
+        return op.execute(types.SimpleNamespace(window_manager=wm, area=None)), wm.clipboard
+
+    def test_the_right_tab_a_wrong_id_and_redaction(self):
+        a, b = self.reg.create(editor="", title="a"), self.reg.create(editor="", title="b")
+        self.states.setdefault(a.id, _State()).conversation_history.append(
+            {"role": "user", "content": "tab a key {:s}".format(self.KEY)})
+        self.states.setdefault(b.id, _State()).conversation_history.append({"role": "user", "content": "tab b"})
+        result, text = self._copy(a.id)
+        self.assertEqual(result, {"FINISHED"})
+        self.assertIn("tab a", text)
+        self.assertNotIn("tab b", text)
+        self.assertNotIn(self.KEY, text)
+        self.assertEqual(self._copy("gone"), ({"CANCELLED"}, ""))

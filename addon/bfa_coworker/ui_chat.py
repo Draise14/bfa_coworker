@@ -1935,7 +1935,7 @@ def _save_chat_history() -> None:
             _chat_index().touch(_CHAT["id"], history,
                                 blend=_CHAT["blend"], engine=_chat_engine_label(),
                                 blend_path=bpy.data.filepath, mode=_operating_mode(),
-                                user_title=_USER_TITLES.get(_CHAT["id"], ""))       # #573
+                                user_title=_log.redact(_USER_TITLES.get(_CHAT["id"], "")))       # #573
         except OSError:
             pass
 
@@ -1964,7 +1964,7 @@ def _save_thread_chat(thread) -> None:
                 json.dump(_log.redact_data(payload), fh, indent=2)
             index.touch(thread.chat_id, history, blend=_blend_key(), engine=_chat_engine_label(),
                         blend_path=bpy.data.filepath, mode=_operating_mode(), editor=thread.editor,
-                        user_title=_USER_TITLES.get(thread.chat_id, ""))          # #573
+                        user_title=_log.redact(_USER_TITLES.get(thread.chat_id, "")))          # #573
         except OSError:
             pass
 
@@ -2577,19 +2577,30 @@ class BFACW_OT_chat_rename(Operator):  # type: ignore[misc]
 
     chat_id: StringProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
     title: StringProperty(name="Name", options={'SKIP_SAVE'})  # type: ignore[valid-type]
+    auto: StringProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
 
     def invoke(self, context: bpy.types.Context, _event) -> set[str]:
         entry = _chat_index().get(self.chat_id)
         if entry is None:
             return {"CANCELLED"}
         self.title = entry.get("title", "")
-        return context.window_manager.invoke_props_dialog(self)
+        self.auto = "" if entry.get("renamed") else self.title
+        return context.window_manager.invoke_props_dialog(self, width=320)
+
+    def draw(self, _context: bpy.types.Context) -> None:
+        layout = self.layout
+        layout.prop(self, "title", text="")
+        sub = layout.row()
+        sub.scale_y = 0.8
+        sub.label(text="Empty: its automatic name (the first message) again")
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         from .chat_history import clean_name
+        if self.auto and clean_name(self.title) == clean_name(self.auto):
+            return {"CANCELLED"}        # left as it was: it keeps its automatic title
         if not _chat_index().rename(self.chat_id, self.title):     # empty: its automatic title (#573)
             return {"CANCELLED"}
-        _USER_TITLES[self.chat_id] = clean_name(self.title)         # its open tab shows it at once
+        _USER_TITLES[self.chat_id] = clean_name(_log.redact(self.title))         # its open tab shows it at once
         _redraw_all_chats()
         return {"FINISHED"}
 
@@ -2902,9 +2913,8 @@ class BFACW_OT_chat_stop(Operator):  # type: ignore[misc]
         from . import speech
         speech.stop_chat_jobs(tag)          # a transcription this chat's turn started (#522)
         agent_controller.thread_state(thread).status_text = "Stopped"
-        wm = context.window_manager
-        props = wm.bfacw_chat_props  # type: ignore[attr-defined]
-        props.chat_status = "Stopped"
+        if not self.thread_id or thread is _ui_thread(context):     # the shown chat's status line only
+            context.window_manager.bfacw_chat_props.chat_status = "Stopped"  # type: ignore[attr-defined]
         _redraw_areas(context)
         return {"FINISHED"}
 
@@ -4887,7 +4897,7 @@ def _set_user_title(thread, title: str) -> str:
     """*thread*'s chat is called *title* from now on ("" = its automatic title again): its tab
     at once, History now when the chat is in it, else from its first save on (#573)."""
     from .chat_history import clean_name
-    title = clean_name(title)
+    title = clean_name(_log.redact(title))      # no key on disk
     if thread.is_default:
         chat_id = _current_chat_id()
     else:
@@ -4906,8 +4916,9 @@ def _tab_full_title(thread) -> str:
     """The tab's title, not shortened: what Rename starts from (#573)."""
     from . import helper_chats, threads
     from .chat_history import title_of
-    return (_user_title(thread) or helper_chats.tab_label(thread)
-            or title_of(agent_controller.thread_state(thread).conversation_history) or threads.tab_title(thread))
+    return _log.redact(_user_title(thread) or helper_chats.tab_label(thread)
+                       or title_of(agent_controller.thread_state(thread).conversation_history)
+                       or threads.tab_title(thread))
 
 
 def _tab_icon(thread) -> tuple[str, bool]:
@@ -5553,7 +5564,7 @@ def _auto_toggle(thread, on: bool, context=None) -> None:
         risky_steps.auto_threads.add(tag)
         if _acp is not None:
             _acp.auto_threads.add(tag)
-        print("[Coworker] Auto mode on ({:s})".format(_thread_title(thread)))
+        print("[Coworker] Auto mode on ({:s})".format(_log.redact(_thread_title(thread))))
     elif not on and auto["run"] is not None:
         auto["run"].stopped = auto["run"].stopped or "you turned it off"
         _auto_finish(thread)

@@ -494,7 +494,8 @@ class TestSavedChatsHaveNoKey(_Case):
             {"__name__": _PKG + ".ui_chat", "__package__": _PKG, "json": json, "Path": Path, "bpy": bpy,
              "agent_controller": fake_ac, "_log": log, "_CHAT": {"id": "", "blend": ""},
              "_history_save_lock": threading.Lock(), "_chat_engine_label": lambda: "Local",
-             "_operating_mode": lambda: "LOCAL_LLM", "_USER_TITLES": {}})
+             "_operating_mode": lambda: "LOCAL_LLM",
+             "_USER_TITLES": {"unused": "a name of its own"}})
         # The shared session memory: what the model was told, and a checkpoint of the chat.
         store = self.sm.store
         saved = store.to_payload()
@@ -537,6 +538,23 @@ class TestSavedChatsHaveNoKey(_Case):
         for name, text in files.items():
             self.assertNoSecret(text, name)
         self.assertIn(HF_TOKEN, store.memory_block)
+
+    def test_a_name_you_gave_a_chat_has_no_key_in_the_chat_list(self):
+        """Rename (#573): a title taken from the first message may hold a key; the index never does."""
+        title = "my key " + API_KEY
+        self.ns["_save_chat_history"]()
+        self.ns["_USER_TITLES"][self.ns["_CHAT"]["id"]] = title
+        self.ns["_save_chat_history"]()
+        store = self.sm.CheckpointStore()
+        thread = types.SimpleNamespace(is_default=False, chat_id="", editor="VIEW_3D", store=store,
+                                       state=types.SimpleNamespace(conversation_history=self.history))
+        self.ns["_save_thread_chat"](thread)
+        self.ns["_USER_TITLES"][thread.chat_id] = title
+        self.ns["_save_thread_chat"](thread)
+        files = self._files()
+        for name, text in files.items():
+            self.assertNoSecret(text, name)
+        self.assertIn("my key", files["chats/index.json"])
 
     def test_an_old_chat_with_a_plain_key_still_opens(self):
         path = self.ns["_chat_history_path"]()

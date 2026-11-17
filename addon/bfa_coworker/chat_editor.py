@@ -102,6 +102,16 @@ class BFACW_CoworkerTree(bpy.types.NodeTree):
 # -- State shown by the header and the compact top bar --------------------------------
 
 def _status(context: Any) -> TopBar:
+    """Mode, status and Start / Stop (:func:`_mode_status`); in External Harness also the
+    Permissions setting, as it has no input box to carry it (#385)."""
+    top = _mode_status(context)
+    prefs = _prefs(context)
+    if _is_harness(prefs):
+        top.approval = _approval_shown(prefs)
+    return top
+
+
+def _mode_status(context: Any) -> TopBar:
     """Mode, status and Start / Stop, worded like the panel chat."""
     from . import ui_chat
     prefs = _prefs(context)
@@ -173,6 +183,15 @@ def _helpers_waiting(context: Any, state: Any) -> str:
     return helpers.waiting_text(count) if count else ""
 
 
+def _approval_shown(prefs: Any) -> tuple[str, str]:
+    """The Permissions setting as its button shows it, (label, icon): "Permissive", UNLOCKED
+    (#240).  The input box carries it; External Harness has no input, so its card, the
+    sidebar's top bar and the editor's header do (#385)."""
+    from .shared import APPROVAL_MODE_ITEMS
+    mode = getattr(prefs, "approval_mode", "ASK") if prefs is not None else "ASK"
+    return next(((name, icon) for ident, name, _d, icon, _n in APPROVAL_MODE_ITEMS if ident == mode), ("", ""))
+
+
 def _mode_icon(mode: str) -> str:
     """The mode's icon, as on its tab (OPERATING_MODE_ITEMS): one icon per mode everywhere."""
     from .shared import OPERATING_MODE_ITEMS
@@ -204,7 +223,8 @@ def _harness_notice(prefs: Any) -> Notice:
     return Notice(title="External Harness", icon="WORLD", lines=lines, buttons=(
         ("copy_log", "Copy Log", "COPYDOWN"),
         ("configure", "Configure", "PREFERENCES"),
-    ), rows=rows, rows_title="What your client did in Blender")
+    ), rows=rows, rows_title="What your client did in Blender",
+        approval=_approval_shown(prefs))            # how much your client's tools may do (#385)
 
 
 def _history(context: Any = None, thread: Any = None) -> list[dict]:
@@ -337,11 +357,7 @@ def _sync_box(surface: ChatSurface, props: Any, busy: bool, running: bool, harne
     surface.attachment_pinned = not (thread.attachment_once if thread is not None
                                      else getattr(props, "chat_image_send_once", True))
     surface.attachment_note = "Your client can look at it (get_attached_image)" if harness else ""
-    from .shared import APPROVAL_MODE_ITEMS
-    prefs = _prefs()
-    mode = getattr(prefs, "approval_mode", "ASK") if prefs is not None else "ASK"
-    box.approval = next(((name, icon) for ident, name, _d, icon, _n in APPROVAL_MODE_ITEMS if ident == mode),
-                        ("", ""))
+    box.approval = _approval_shown(_prefs())
     if surface.compact:     # the sidebar chat: a button column; the attach icons go there (#214)
         from . import coworker_api
         box.attach_buttons = False
@@ -1506,7 +1522,11 @@ def _draw_header(self: Any, context: Any) -> None:
         start_text = "Stop Bridge" if info.start_label == "Start Bridge" else "Stop"
     else:
         start_text = info.start_label
+    # External Harness has no input box to carry Permissions: it sits where the chat mode
+    # sits in the other modes (#385).
+    approval = getattr(info, "approval", ("", ""))
     fixed = (2.0 + _text_w("Chat", False) + _text_w("View", False)          # editor type, menus
+             + (_text_w(approval[0]) + 0.6 + 0.5 if approval[1] else 0.0)   # its dropdown
              + _text_w(info.mode_label) + 0.6 + (_ICON_W + _PAD_W if info.error else 0.0)
              + _text_w(start_text) + 2.0 + _ICON_W + _PAD_W                # display dropdown, prefs
              + 2.0)                                                         # gaps between the groups
@@ -1525,6 +1545,9 @@ def _draw_header(self: Any, context: Any) -> None:
     layout.separator_spacer()
     if modes:
         layout.prop(props, "chat_mode", expand=True, icon_only=icon_only)
+        layout.separator()
+    if approval[1]:     # the same dropdown as the button by Send
+        layout.popover("BFACW_PT_approval_popover", text=approval[0], icon=approval[1])
         layout.separator()
     status = layout.row(align=True)
     # The mode opens the same popover as the sidebar chat's mode button (#235).

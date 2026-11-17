@@ -877,6 +877,9 @@ class BFACW_PT_approval_popover(Panel):  # type: ignore[misc]
         hint = layout.column()
         hint.scale_y = 0.8
         _draw_multiline(hint, next(d for i, _n, d, _ic, _x in APPROVAL_MODE_ITEMS if i == prefs.approval_mode))
+        if prefs.operating_mode == "EXTERNAL_HARNESS":     # what it means for a client's calls (#385)
+            _draw_multiline(hint, "External Harness: your client asks before its tools itself. Here Strict "
+                                  "and Permissive ask only before risky steps; Auto never asks")
         hint.label(text="Applies at once, also while it runs", icon='INFO')
 
 

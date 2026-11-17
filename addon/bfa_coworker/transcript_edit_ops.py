@@ -1116,6 +1116,12 @@ def _wand(layout: Any, idname: str, text: str, icon: str, fallback: str) -> None
         layout.operator(idname, text=text, icon=safe_icon(fallback))
 
 
+def _header_menus() -> Any:
+    """Where the header buttons go: right after the Text Editor's menus (View ... Templates), so
+    they show even when the header is too narrow for all of it; the header itself as a fallback."""
+    return getattr(bpy.types, "TEXT_MT_editor_menus", None) or getattr(bpy.types, "TEXT_HT_header", None)
+
+
 def _draw_header(self: Any, context: Any) -> None:
     text = _context_text(context)
     if text is None:
@@ -1124,6 +1130,10 @@ def _draw_header(self: Any, context: Any) -> None:
     layout = self.layout
     layout.separator()
     row = layout.row(align=True)
+    try:
+        row.emboss = 'NORMAL'               # buttons, not menu titles, among the header's menus
+    except (AttributeError, TypeError):
+        pass
     row.operator(BFACW_OT_transcript_apply.bl_idname, text="Apply", icon=safe_icon('CHECKMARK'))
     row.operator(BFACW_OT_transcript_toggle.bl_idname, text="Live", icon=safe_icon('REC'),
                  depress=bool(state.get("live"))).option = "live"
@@ -1456,7 +1466,7 @@ def register() -> None:
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
         _REGISTERED.append(cls)
-    header = getattr(bpy.types, "TEXT_HT_header", None)
+    header = _header_menus()
     if header is not None:
         header.append(_draw_header)
     space = getattr(bpy.types, "SpaceTextEditor", None)
@@ -1483,7 +1493,7 @@ def unregister() -> None:
             space.draw_handler_remove(handle, 'WINDOW')
         except (ValueError, RuntimeError, AttributeError):
             pass
-    header = getattr(bpy.types, "TEXT_HT_header", None)
+    header = _header_menus()
     if header is not None:
         try:
             header.remove(_draw_header)

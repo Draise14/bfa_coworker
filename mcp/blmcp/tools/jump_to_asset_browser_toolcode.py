@@ -63,7 +63,7 @@ def main(params: Params) -> Result:
     for workspace in bpy.data.workspaces:
         for screen in workspace.screens:
             for area in screen.areas:
-                if area.type == "FILE" and _is_asset_ui(area.ui_type):
+                if area.type == "FILE_BROWSER" and _is_asset_ui(area.ui_type):
                     bpy.context.window.workspace = workspace
                     space = area.spaces.active
                     lib_name, cat_name = _apply_filters(space, params)
@@ -147,7 +147,9 @@ def _apply_filters(space, params: Params) -> tuple[str | None, str | None]:
                 cat_set = params.catalog_path
             elif hasattr(p, "directory"):
                 lib_path = _library_path(params.library_name) if params.library_name else None
-                if lib_path and getattr(p, "asset_library_ref", "") not in ("LOCAL",):
+                # Never write a library folder into a browser left on "Current File"
+                # (the library could not be selected above).
+                if lib_path and p.asset_library_reference != "LOCAL":
                     import os
                     p.directory = os.path.join(lib_path, params.catalog_path)
                     cat_set = params.catalog_path

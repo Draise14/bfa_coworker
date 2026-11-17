@@ -971,18 +971,51 @@ class BFACW_OT_transcript_jump_to_playhead(_TextOp, Operator):  # type: ignore[m
         return {'FINISHED'}
 
 
+def _sequencer_area(context: Any) -> tuple[Any, Any, Any]:
+    """``(window, area, region)`` of the biggest Sequencer of the window (``(None, None, None)`` when there is none)."""
+    window = getattr(context, "window", None)
+    screen = getattr(window, "screen", None) or getattr(context, "screen", None)
+    areas = [a for a in getattr(screen, "areas", ()) if a.type == 'SEQUENCE_EDITOR']
+    if not areas:
+        return window, None, None
+    area = max(areas, key=lambda a: a.width * a.height)
+    region = next((r for r in area.regions if r.type == 'WINDOW'), None)
+    return window, area, region
+
+
+def _toggle_playback(context: Any) -> bool:
+    """Start (or stop) playback with the Sequencer as the area the operator sees: the Text Editor
+    stays the active area (#595).  False when it couldn't."""
+    window, area, region = _sequencer_area(context)
+    try:
+        if area is not None and region is not None:
+            with context.temp_override(window=window, area=area, region=region):
+                bpy.ops.screen.animation_play()
+        else:
+            bpy.ops.screen.animation_play()
+    except RuntimeError:
+        return False
+    return True
+
+
 class BFACW_OT_transcript_seek(_TextOp, Operator):  # type: ignore[misc]
-    """Move the playhead to the start of the text cursor's line"""
+    """Play from the start of the text cursor's line; press again to stop"""
 
     bl_idname = "bfacw.transcript_seek"
     bl_label = "Play from Line"
 
     line: IntProperty(name="Line", default=-1, options={'SKIP_SAVE'})  # type: ignore[valid-type]
+    play: BoolProperty(name="Play", default=True, options={'SKIP_SAVE'},  # type: ignore[valid-type]
+                       description="Start playback from the line (off: only move the playhead)")
 
     def execute(self, context):
         text = self.text(context)
         if text is None:
             return {'CANCELLED'}
+        playing = bool(getattr(getattr(context, "screen", None), "is_animation_playing", False))
+        if self.play and playing:                       # a second press stops
+            _toggle_playback(context)
+            return {'FINISHED'}
         line = self.line if self.line >= 0 else int(text.current_line_index)
         if self.line >= 0:
             try:
@@ -992,6 +1025,8 @@ class BFACW_OT_transcript_seek(_TextOp, Operator):  # type: ignore[misc]
         if not seek_line(text, line):
             self.report({'INFO'}, "Line {:d} has no audio behind it".format(line + 1))
             return {'CANCELLED'}
+        if self.play and not playing and not _toggle_playback(context):
+            self.report({'INFO'}, "The playhead moved, but playback couldn't start here")
         return {'FINISHED'}
 
 
@@ -1188,6 +1223,28 @@ class BFACW_OT_transcript_make_captions(_TextOp, Operator):  # type: ignore[misc
     bl_label = "Make Captions"
     bl_options = {'REGISTER', 'UNDO'}
 
+    def invoke(self, context, _event):
+        """The dialog of Strip > Auto Captions (style, animation, position), for this transcript's clip (#595)."""
+        text = self.text(context)
+        state = state_of(text) if text is not None else None
+        scene = bpy.data.scenes.get(state.get("scene", "")) if state else None
+        if scene is None or scene.sequence_editor is None:
+            return {'CANCELLED'}
+        window, area, region = _sequencer_area(context)
+        if area is None:
+            self.report({'WARNING'}, "Open a Sequencer in this window to make captions")
+            return {'CANCELLED'}
+        sources = {s.name for s in source_strips(scene, state["source"])}
+        for strip in scene.sequence_editor.strips:
+            strip.select = strip.name in sources
+        try:
+            with context.temp_override(window=window, area=area, region=region):
+                bpy.ops.bfacw.auto_captions('INVOKE_DEFAULT', transcript_path=state.get("transcript", ""))
+        except RuntimeError as ex:
+            self.report({'WARNING'}, str(ex).strip().splitlines()[-1] if str(ex).strip() else "Auto Captions can't run here")
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
     def execute(self, context):
         text = self.text(context)
         state = state_of(text) if text is not None else None
@@ -1224,6 +1281,7 @@ def _draw_flags(layout: Any, text: Any, flags: list) -> None:
         op = row.operator(BFACW_OT_transcript_seek.bl_idname, text="Line {:d}".format(f["line"] + 1),
                           icon=safe_icon('TRIA_RIGHT'), emboss=False)
         op.line = f["line"]
+        op.play = False                     # a flagged line: the playhead goes there, nothing plays
         op.text_name = text.name
         row.label(text="“{:s}”".format(f["text"][:28] + ("..." if len(f["text"]) > 28 else "")))
     if flags:

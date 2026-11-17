@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Tests for #593: a strip taken before another strip is added or removed is dead afterwards (reading
+Tests for #593 (a strip taken before another strip is added or removed is dead afterwards (reading
 it crashes Blender).  Stand-in strips here go invalid on *any* add or remove, and reading an
 invalid one raises, so a loop that holds a strip across such a change fails in the test.
 
@@ -241,6 +241,104 @@ class TestCaptionsOpsHoldNoDeadStrip(C._OpsCase):
         for line in self.lines():
             mine = [w.text for w in self.words() if w.get("bfacw_caption")["line"] == line.name]
             self.assertEqual(mine, line.text.split())
+
+
+class TestPlayFromLineAndMakeCaptions(R._Rig):
+    """#595: Play from Line starts playback (a second press stops it); Make Captions opens the dialog."""
+
+    def setUp(self):
+        super().setUp()
+        self.log = []
+        sequencer = types.SimpleNamespace(type='SEQUENCE_EDITOR', width=900, height=500,
+                                          regions=[types.SimpleNamespace(type='HEADER'),
+                                                   types.SimpleNamespace(type='WINDOW')])
+        self.screen = types.SimpleNamespace(is_animation_playing=False, areas=[
+            types.SimpleNamespace(type='TEXT_EDITOR', width=500, height=500, regions=[]), sequencer])
+        self.window = types.SimpleNamespace(screen=self.screen)
+        self.sequencer = sequencer
+
+        def play():
+            self.log.append(("play", self.overridden))
+            self.screen.is_animation_playing = not self.screen.is_animation_playing
+            return {'FINISHED'}
+
+        self.overridden = None
+        self.ctx = types.SimpleNamespace(
+            window=self.window, screen=self.screen,
+            temp_override=self._override)
+        self.ops.bpy.ops = types.SimpleNamespace(
+            screen=types.SimpleNamespace(animation_play=play),
+            bfacw=types.SimpleNamespace(auto_captions=lambda *a, **k: self.log.append(("captions", a, k, self.overridden))
+                                        or {'RUNNING_MODAL'}))
+        self.ops.seek_line = lambda text, line: self.log.append(("seek", line)) or True
+        self.ops.state_of = lambda text: {"scene": "Scene", "source": "c:/talk.mp4", "transcript": "t.json"}
+
+    def _override(self, **kw):
+        outer = self
+
+        class _Ctx:
+            def __enter__(self_):
+                outer.overridden = kw.get("area")
+
+            def __exit__(self_, *a):
+                outer.overridden = None
+                return False
+
+        return _Ctx()
+
+    def _seek(self, **kw):
+        op = self.ops.BFACW_OT_transcript_seek()
+        op.line, op.play, op.text_name = kw.get("line", 1), kw.get("play", True), ""
+        op.text = lambda ctx: self.text
+        op.report = lambda *a: self.log.append(("report", a))
+        return op
+
+    def test_play_from_line_moves_the_playhead_and_starts_playback_through_the_sequencer(self):
+        self.assertEqual(self._seek().execute(self.ctx), {'FINISHED'})
+        self.assertEqual(self.log, [("seek", 1), ("play", self.sequencer)])
+        self.assertTrue(self.screen.is_animation_playing)
+
+    def test_a_second_press_stops_playback_and_does_not_seek(self):
+        self._seek().execute(self.ctx)
+        self.log.clear()
+        self.assertEqual(self._seek(line=2).execute(self.ctx), {'FINISHED'})
+        self.assertEqual(self.log, [("play", self.sequencer)])
+        self.assertFalse(self.screen.is_animation_playing)
+
+    def test_a_flagged_line_only_moves_the_playhead(self):
+        self._seek(play=False).execute(self.ctx)
+        self.assertEqual(self.log, [("seek", 1)])
+
+    def test_a_line_without_audio_plays_nothing(self):
+        self.ops.seek_line = lambda text, line: False
+        self.assertEqual(self._seek().execute(self.ctx), {'CANCELLED'})
+        self.assertFalse(self.screen.is_animation_playing)
+
+    def _captions_op(self):
+        scene = types.SimpleNamespace(sequence_editor=types.SimpleNamespace(strips=[]))
+        strips = [types.SimpleNamespace(name="talk", select=False), types.SimpleNamespace(name="other", select=True)]
+        scene.sequence_editor.strips = strips
+        self.ops.bpy.data.scenes = {"Scene": scene}
+        self.ops.source_strips = lambda sc, source: [strips[0]]
+        op = self.ops.BFACW_OT_transcript_make_captions()
+        op.text_name = ""
+        op.text = lambda ctx: self.text
+        op.report = lambda *a: self.log.append(("report", a))
+        return op, strips
+
+    def test_make_captions_opens_the_auto_captions_dialog_over_the_sequencer(self):
+        op, strips = self._captions_op()
+        self.assertEqual(op.invoke(self.ctx, None), {'FINISHED'})
+        self.assertEqual([(s.name, s.select) for s in strips], [("talk", True), ("other", False)])
+        (kind, args, kwargs, area), = self.log
+        self.assertEqual((kind, args, kwargs["transcript_path"], area), ("captions", ('INVOKE_DEFAULT',), "t.json",
+                                                                          self.sequencer))
+
+    def test_make_captions_without_a_sequencer_says_so(self):
+        op, _strips = self._captions_op()
+        self.screen.areas = [a for a in self.screen.areas if a.type != 'SEQUENCE_EDITOR']
+        self.assertEqual(op.invoke(self.ctx, None), {'CANCELLED'})
+        self.assertEqual(self.log[0][0], "report")
 
 
 if __name__ == "__main__":

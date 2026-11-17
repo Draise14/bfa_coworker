@@ -917,9 +917,9 @@ class BFACW_OT_transcript_remove_fillers(_TextOp, Operator):  # type: ignore[mis
     def invoke(self, context, _event):
         if self.text(context) is None:
             return {'CANCELLED'}
-        self._find(context)
+        found = self._find(context)
         return context.window_manager.invoke_props_dialog(self, width=420, title=self.bl_label,
-                                                          confirm_text=self.bl_label)
+                                                          confirm_text=self.bl_label if found else "Close")
 
     def check(self, context):
         self._find(context)
@@ -1272,9 +1272,10 @@ def _tick_inner() -> float:
             continue
         changed_at = seen.get("changed_at", 0.0)
         is_pending = body_hash != state.get("applied")
-        # the panel's preview, once the typing stops
-        if is_pending and now - changed_at >= CHECK_PAUSE_S and seen.get("edit_for", (None,))[0] != body_hash:
+        # the panel's preview, once the typing stops; then one redraw, so the flagged lines are marked
+        if is_pending and now - changed_at >= CHECK_PAUSE_S and seen.get("drawn_for") != body_hash:
             _pending_edit(text, state)
+            seen["drawn_for"] = body_hash
             area.tag_redraw()
         # Live: apply after a pause
         if state.get("live") and is_pending and now - changed_at >= LIVE_PAUSE_S \

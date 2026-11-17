@@ -195,7 +195,7 @@ class TestTools(unittest.TestCase):
 
     def test_open_transcript_is_in_the_video_section(self):
         seq = W._load_sequencer(W._fake_bpy(False))
-        self.assertIn(("bfacw.open_transcript", "BFACW_OT_open_transcript", "Open Transcript", "transcribe", "TEXT"),
+        self.assertIn(("bfacw.open_transcript", "BFACW_OT_open_transcript", "Edit Transcript", "transcribe", "TEXT"),
                       seq.OTHERS)
         self.assertIn("bfacw.open_transcript", seq.NO_DIALOG)
 

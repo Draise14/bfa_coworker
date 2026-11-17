@@ -1188,8 +1188,9 @@ def _draw_flags(layout: Any, text: Any, flags: list) -> None:
         op.text_name = text.name
         row.label(text="“{:s}”".format(f["text"][:28] + ("..." if len(f["text"]) > 28 else "")))
     if flags:
-        col.label(text="No audio behind it" if flags[0]["reason"] == "no_audio" else
-                  "It no longer matches what is said")
+        col.label(text={"no_audio": "No audio behind it",
+                        "ambiguous": "The same words more than once: which one?"}.get(
+                            flags[0]["reason"], "It no longer matches what is said"))
 
 
 class BFACW_PT_transcript(Panel):  # type: ignore[misc]
@@ -1343,7 +1344,7 @@ def _draw_overlay() -> None:
                 bottom = band(line, 0, 4 * context.preferences.system.ui_scale, _FLAG_RGBA)
                 if bottom is None:
                     continue
-                note = "no audio" if reason == "no_audio" else "doesn't match"
+                note = {"no_audio": "no audio", "ambiguous": "which one?"}.get(reason, "doesn't match")
                 blf.size(0, 11 * context.preferences.system.ui_scale)
                 w, _h = blf.dimensions(0, note)
                 blf.color(0, *_FLAG_RGBA)

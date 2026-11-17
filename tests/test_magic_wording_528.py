@@ -301,6 +301,11 @@ class TestNothingMagicForTheModel(_Case):
         for word in mw.THINKING_WORDS:
             self.assertNotIn(word + "...", skills)
 
+    def test_the_sidebar_plan_goal_is_redacted(self):
+        source = (_ADDON / "ui_chat.py").read_text(encoding="utf-8")
+        self.assertIn("_draw_multiline(layout, _magic.shown_agent_text(goal)", source)
+        self.assertIn("_log.redact(step.get(", source)
+
     def test_the_preference_exists_and_is_on_by_default(self):
         source = (_ADDON / "preferences.py").read_text(encoding="utf-8")
         match = re.search(r"magic_wording: BoolProperty\((.*?)\n    \)", source, re.S)

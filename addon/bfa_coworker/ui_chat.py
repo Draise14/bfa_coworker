@@ -5561,13 +5561,13 @@ def _draw_plan_minimal(layout) -> None:
                                 "they're done.", icon='INFO')
         return
     if goal:
-        _draw_multiline(layout, goal, icon='USER')
+        _draw_multiline(layout, _magic.shown_agent_text(goal), icon='USER')  # a helper's task: no key (#528)
     icons = {"done": 'CHECKBOX_HLT', "doing": 'PLAY', "todo": 'CHECKBOX_DEHLT'}
     col = layout.column(align=True)
     for i, step in enumerate(steps, 1):
         row = col.row()
         row.label(text="", icon=icons.get(step.get("status"), 'CHECKBOX_DEHLT'))
-        _draw_multiline(row, "{:d}. {:s}".format(i, step.get("text", "")))
+        _draw_multiline(row, "{:d}. {:s}".format(i, _log.redact(step.get("text", ""))))
     row = layout.row(align=True)
     row.scale_y = 0.9
     row.operator("bfacw.plan_open", text="Edit", icon='TEXT')

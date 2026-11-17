@@ -4635,15 +4635,17 @@ def _log_operation(tool_name: str, params: dict, result: str) -> None:
     from . import log as _log
     log_path = Path.home() / ".cache" / "bfa_coworker" / "operations.jsonl"
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    # The values are redacted, not the finished line (#528): JSON escapes a key's quotes,
+    # backslashes and non-ASCII letters, and a pattern cut there would break the line.
     entry = {
         "timestamp": _time.time(),
-        "tool": tool_name,
-        "params": params,
+        "tool": _log.redact(tool_name),
+        "params": _log.redact_data(params),
         "result": _log.redact(result)[:500],  # Truncate for log size (after redacting: no half key).
     }
     try:
         with open(str(log_path), "a", encoding="utf-8") as f:
-            f.write(_log.redact(json.dumps(entry)) + "\n")
+            f.write(json.dumps(entry) + "\n")
     except OSError:
         pass  # Best-effort logging.
 

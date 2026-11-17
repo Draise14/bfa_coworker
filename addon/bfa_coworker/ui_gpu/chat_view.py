@@ -517,7 +517,9 @@ class ChatView:
             key = (idx, len(turn), sum(len(message_text(m.get("content"))) for m in turn),
                    round(width), canvas.style.scale, f"t{idx}" in self.expanded, compact, self.thumb_size,
                    idx == self._suggest_idx,
-                   tuple(sorted(k for k in self.expanded if k.startswith("x{:d}:".format(idx)))))
+                   tuple(sorted(k for k in self.expanded if k.startswith("x{:d}:".format(idx)))),
+                   # A key set or cleared changes what the Workshop shows as *** (#511), so its height (#528).
+                   log._secrets)    # pylint: disable=protected-access
             cached = self._heights.get(key)
             if cached is not None:
                 return cached

@@ -40,7 +40,9 @@ __all__ = (
     "ThreadRegistry",
     "current",
     "label",
+    "close_others_report",
     "close_refused",
+    "others_to_close",
     "pick",
     "reopen",
     "tab_modes",
@@ -365,9 +367,10 @@ class AttachmentSocket:
 TAB_TITLE_CHARS = 18
 
 
-def tab_title(thread: Thread, first_message: str = "") -> str:
-    """A tab's short title: the first thing asked in it, else its editor's name."""
-    text = " ".join(str(first_message or "").split())
+def tab_title(thread: Thread, first_message: str = "", user_title: str = "") -> str:
+    """A tab's short title: the name you gave it (#573), else the first thing asked in it,
+    else its editor's name."""
+    text = " ".join(str(user_title or first_message or "").split())
     if text:
         return text if len(text) <= TAB_TITLE_CHARS else text[:TAB_TITLE_CHARS - 1].rstrip() + "\u2026"
     if thread.is_default:
@@ -381,6 +384,31 @@ def close_refused(registry: "ThreadRegistry", thread: Thread, busy: bool = False
     if busy or registry.is_running(thread):
         return "Its turn is running: stop it first"
     return ""
+
+
+def others_to_close(registry: "ThreadRegistry", keep: Thread,
+                    busy: Callable[[Thread], bool] | None = None) -> tuple[list[Thread], list[Thread]]:
+    """Close Other Tabs (#573): ``(close, stay)`` -- every tab but *keep* that
+    :func:`close_refused` lets close, and the ones it refuses (their turn runs;
+    *busy(thread)* is that thread's own turn flag)."""
+    close: list[Thread] = []
+    stay: list[Thread] = []
+    for thread in registry.live():
+        if thread is keep:
+            continue
+        refused = close_refused(registry, thread, bool(busy(thread)) if busy is not None else False)
+        (stay if refused else close).append(thread)
+    return close, stay
+
+
+def close_others_report(closed: int, stayed: int) -> str:
+    """What Close Other Tabs says it did (#573)."""
+    def tabs(n: int) -> str:
+        return "{:d} tab{:s}".format(n, "" if n == 1 else "s")
+    text = "Closed {:s}".format(tabs(closed)) if closed else "No tab closed"
+    if stayed:
+        text += "; {:s} stayed open: {:s} turn is running".format(tabs(stayed), "its" if stayed == 1 else "their")
+    return text
 
 
 def reopen(registry: "ThreadRegistry", chat_id: str, editor: str = "",

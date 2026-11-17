@@ -29,6 +29,7 @@ import time
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import test_wand_remove_silences as W
 
@@ -512,6 +513,25 @@ class TestWholeEdit(_Pipeline):
         sig = lambda s: CAP.caption_signature(s.text, s._right - s._left, s.channel, s.location)  # noqa: E731
         self.assertEqual(across.props["bfacw_caption"]["sig"], sig(across))      # still as Coworker made it
         self.assertNotEqual(edited.props["bfacw_caption"]["sig"], sig(edited))   # still edited by hand
+
+    def test_remove_silences_asks_the_captions_to_fit_their_animation_again(self):
+        """#542: after the cut the unedited captions it trimmed are refitted (captions_ops.refit_captions)."""
+        ed = FakeEditor()
+        ed.add("Cam", "MOVIE", 2, 1, 301, "cam.mp4")
+        ed.add("Cam_snd", "SOUND", 1, 1, 301, "cam.mp4")
+        self._signed(ed, "cap_0001", 61, 181)             # over the 3.0-5.0 s pause: trimmed
+        edited = self._signed(ed, "cap_0002", 181, 271)
+        edited.text = "CHANGED BY HAND"                   # edited: not refitted
+        self.speech = {"Cam_snd": ([(0.8, 3.0), (5.0, 6.0), (8.0, 9.3)], 10.0)}
+        asked = []
+        fake = types.ModuleType(W._PKG + ".captions_ops")
+        fake.refit_captions = lambda scene, names: asked.append(list(names)) or len(names)
+        with mock.patch.dict(sys.modules, {W._PKG + ".captions_ops": fake}):
+            out = self.run_op(_scene(ed, 300), ["Cam", "Cam_snd"])
+        self.assertIn("cap_0001", out["captions_trimmed"])
+        self.assertEqual(len(asked), 1, asked)
+        self.assertIn("cap_0001", asked[0])
+        self.assertNotIn("cap_0002", asked[0])
 
     def test_gaps_left_word_strips_name_their_piece(self):
         ed = FakeEditor()

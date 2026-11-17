@@ -26,6 +26,12 @@ Auto Captions (Tier 4, Video 2, #376): the parts that need no Blender.
 * **Another frame** (Make Vertical, #497): :func:`relayout` lays a caption out again for
   a new output size by the same rules (splitting it in time where its words no longer fit
   the style's lines), :func:`hand_edits` tells a caption moved or resized by hand.
+* **Animation and position** (#542): :data:`ANIMATIONS` (None, Fade, Slide Up, Typewriter,
+  Pop) on any style, as a description of keyframes (:func:`animation_tracks`: which property,
+  which values at which frames, clamped to the caption's own time) that ``captions_ops``
+  applies; :data:`POSITIONS` (Bottom, Top, Middle) and a margin (:func:`placement`).
+* **Speakers** (#542): :func:`plan_speakers` gives each speaker (one sound file each) its own
+  channel name, and optionally style, position and a name label (:func:`speaker_name`).
 * **SRT**: :func:`format_srt` and the tolerant :func:`parse_srt`.
 * **Translate**: :func:`batch_text` / :func:`parse_batch_reply` (many captions in one
   question, written back one strip each).
@@ -36,11 +42,17 @@ Auto Captions (Tier 4, Video 2, #376): the parts that need no Blender.
 from __future__ import annotations
 
 __all__ = (
+    "ANIMATED_PATHS",
+    "ANIMATIONS",
+    "ANIM_STYLE",
     "CHANNEL_NAME",
+    "CaptionsError",
     "HIGHLIGHT_CHANNEL_NAME",
     "LANGUAGE_RE",
+    "MAX_MARGIN",
     "NOT_TRANSCRIBED",
     "NO_TRANSCRIPTION",
+    "POSITIONS",
     "SCHEMA",
     "SKIP_MUTED",
     "SKIP_NO_SPEECH",
@@ -51,13 +63,19 @@ __all__ = (
     "STYLES",
     "TAG",
     "TRANSLATE_PREFIX",
-    "CaptionsError",
+    "animation_key",
+    "animation_tracks",
+    "animation_window",
     "batch_text",
     "build_captions",
     "caption_signature",
     "captions_for_strip",
     "captions_for_strips",
+    "channel_names",
+    "check_look_params",
+    "check_speakers",
     "check_tool_params",
+    "default_margin",
     "default_max_chars",
     "even_words",
     "format_srt",
@@ -65,28 +83,38 @@ __all__ = (
     "hand_edits",
     "highlight_left",
     "highlight_windows",
+    "label_chars",
     "layout_lines",
     "media_frame",
     "normalise_words",
+    "one_line",
     "owned_by",
     "parse_batch_reply",
     "parse_srt",
     "partner_outcome",
     "pick_channel",
+    "placement",
+    "plan_speakers",
     "plan_strips",
+    "pop_middle",
+    "position_key",
     "relayout",
     "relayout_limits",
     "relayout_report",
     "replace_plan",
     "resolve_style",
+    "reveal_crops",
     "safe_area",
     "separate",
+    "speaker_name",
     "srt_time",
     "strip_tags",
     "strips_report",
     "style_key",
     "to_frames",
     "transcript_words",
+    "with_label",
+    "without_label",
     "words_in_strip",
 )
 
@@ -464,24 +492,27 @@ def highlight_left(x_center: float, line_width: float, prefix_width: float, fram
 
 def pick_channel(occupied: dict[int, list[tuple[float, float]]], names: dict[int, str], above: int,
                  span: tuple[float, float] | Sequence[tuple[float, float]], need: int = 1,
-                 max_channel: int = MAX_CHANNEL) -> int | None:
-    """The channel for the captions: a channel already named *Captions* above *above* if it
-    (and the *need* - 1 above it) is free over *span*, else the first such free channel above
-    *above*; None when there's no room.  *occupied* = channel -> (start, end) of its strips.
+                 max_channel: int = MAX_CHANNEL, name: str = CHANNEL_NAME,
+                 skip: Iterable[int] = ()) -> int | None:
+    """The channel for the captions: a channel already named *name* (*Captions*) above *above*
+    if it (and the *need* - 1 above it) is free over *span*, else the first such free channel
+    above *above*; None when there's no room.  *occupied* = channel -> (start, end) of its strips.
     *span* may also be a list of ``(start, end)``: each caption's own frames (#538), so a caption
-    kept between them doesn't push the new ones onto another channel."""
+    kept between them doesn't push the new ones onto another channel.  *skip*: channels not to
+    use (another speaker's, #542)."""
     spans = list(span) if span and isinstance(span[0], (tuple, list)) else [span]
+    skip = set(skip)
 
     def free(ch: int) -> bool:
         for c in range(ch, ch + need):
-            if c > max_channel:
+            if c > max_channel or c in skip:
                 return False
             for a, b in occupied.get(c, ()):
                 if any(a < s1 and s0 < b for s0, s1 in spans):
                     return False
         return True
 
-    named = sorted(c for c, n in names.items() if n == CHANNEL_NAME and c > above)
+    named = sorted(c for c, n in names.items() if n == name and c > above)
     for c in named:
         if free(c):
             return c
@@ -769,10 +800,59 @@ def default_max_chars(name: str, res_x: float, res_y: float) -> int:
     return max(10, min(42, chars))
 
 
-def resolve_style(name: str, res_x: float, res_y: float) -> dict[str, Any]:
+# -- position (#542) ---------------------------------------------------------------------
+
+# Where a caption sits: ``anchor_y`` of the text strip and how its height is measured.
+POSITIONS: dict[str, dict[str, str]] = {
+    "BOTTOM": {"label": "Bottom", "description": "Near the bottom of the frame (above the margin)"},
+    "TOP": {"label": "Top", "description": "Near the top of the frame (below the margin), e.g. off the UI a "
+                                           "tutorial shows at the bottom"},
+    "MIDDLE": {"label": "Middle", "description": "In the middle of the frame"},
+}
+# The margin when none is given (0): the safe area's own.  At the top a vertical frame keeps
+# about 12 % free (the platforms' top bar).
+_TOP_MARGIN = {"WIDE": 0.09, "VERTICAL": 0.12}
+MAX_MARGIN = 0.45
+_POSITION_ALIASES = {"": "BOTTOM", "DEFAULT": "BOTTOM", "LOWER": "BOTTOM", "DOWN": "BOTTOM", "UPPER": "TOP",
+                     "UP": "TOP", "CENTER": "MIDDLE", "CENTRE": "MIDDLE", "MID": "MIDDLE"}
+
+
+def position_key(name: Any) -> str | None:
+    """``"top"``, ``"Bottom"``, ``"centre"``... -> ``"TOP"`` / ``"BOTTOM"`` / ``"MIDDLE"``; None if unknown."""
+    key = re.sub(r"[^A-Z]+", "_", str(name or "").upper()).strip("_")
+    key = _POSITION_ALIASES.get(key, key)
+    return key if key in POSITIONS else None
+
+
+def default_margin(position: str, kind: str) -> float:
+    """The margin (fraction of the frame's height) a position uses when none is given."""
+    if position == "TOP":
+        return _TOP_MARGIN.get(kind, _TOP_MARGIN["WIDE"])
+    if position == "MIDDLE":
+        return 0.0
+    return safe_area(kind)["bottom"]
+
+
+def placement(position: str, margin: float, res_x: float, res_y: float) -> tuple[str, tuple[float, float]]:
+    """``(anchor_y, location)`` of a caption at *position* with *margin* (fraction of the frame's
+    height from that edge; 0: the safe area's) in a *res_x* x *res_y* frame.  Bottom: the
+    caption's bottom edge on the margin; Top: its top edge; Middle: centred (no margin)."""
+    key = position_key(position) or "BOTTOM"
+    kind = frame_kind(res_x, res_y)
+    m = float(margin or 0.0)
+    m = default_margin(key, kind) if m <= 0.0 else min(m, MAX_MARGIN)
+    if key == "TOP":
+        return "TOP", (0.5, round(1.0 - m, 6))
+    if key == "MIDDLE":
+        return "CENTER", (0.5, 0.5)
+    return "BOTTOM", (0.5, round(m, 6))
+
+
+def resolve_style(name: str, res_x: float, res_y: float, position: str = "BOTTOM",
+                  margin: float = 0.0) -> dict[str, Any]:
     """The text-strip properties for style *name* at *res_x* x *res_y* (``"props"``), and how
     captions are made with it (``"uppercase"``, ``"max_lines"``, ``"pop"``, ``"highlight"``,
-    ``"font_file"``, ``"kind"``)."""
+    ``"font_file"``, ``"kind"``); placed at *position* with *margin* (:func:`placement`)."""
     key = style_key(name)
     if key is None:
         raise CaptionsError("Unknown caption style {!r}: pick one of {:s}.".format(
@@ -780,18 +860,286 @@ def resolve_style(name: str, res_x: float, res_y: float) -> dict[str, Any]:
     s = STYLES[key]
     kind = frame_kind(res_x, res_y)
     safe = safe_area(kind)
+    pos = position_key(position) or "BOTTOM"
+    anchor_y, location = placement(pos, margin, res_x, res_y)
     props = {
         "font_size": _font_px(s, res_x, res_y), "color": tuple(s["color"]), "use_bold": s["use_bold"],
         "use_italic": False, "use_outline": s["use_outline"], "outline_color": tuple(s["outline_color"]),
         "outline_width": s["outline_width"], "use_shadow": s["use_shadow"], "shadow_color": tuple(s["shadow_color"]),
         "shadow_offset": s["shadow_offset"], "shadow_blur": s["shadow_blur"], "use_box": s["use_box"],
-        "anchor_x": "CENTER", "anchor_y": "BOTTOM", "alignment_x": "CENTER",
-        "location": (0.5, safe["bottom"]), "wrap_width": safe["width"],
+        "anchor_x": "CENTER", "anchor_y": anchor_y, "alignment_x": "CENTER",
+        "location": location, "wrap_width": safe["width"],
     }
     if s["use_box"]:
         props.update(box_color=tuple(s["box_color"]), box_margin=s["box_margin"], box_roundness=s["box_roundness"])
     return {"key": key, "label": s["label"], "kind": kind, "props": props, "uppercase": s["uppercase"],
-            "max_lines": s["max_lines"], "pop": s["pop"], "highlight": s["highlight"], "font_file": FONT_FILE}
+            "max_lines": s["max_lines"], "pop": s["pop"], "highlight": s["highlight"], "font_file": FONT_FILE,
+            "position": pos, "margin": max(0.0, min(float(margin or 0.0), MAX_MARGIN))}
+
+
+# -- animation presets (#542) -----------------------------------------------------------------
+
+ANIM_STYLE = "STYLE"        # the style's own: Bold Pop pops its font size, the others don't move
+ANIMATIONS: dict[str, dict[str, str]] = {
+    ANIM_STYLE: {"label": "Style's", "description": "The style's own: Bold Pop pops in, the others don't move"},
+    "NONE": {"label": "None", "description": "No animation: each caption is just there"},
+    "FADE": {"label": "Fade", "description": "Each caption fades in and out"},
+    "SLIDE_UP": {"label": "Slide Up", "description": "Each caption rises into place as it fades in, and fades out"},
+    "TYPEWRITER": {"label": "Typewriter", "description": "Each caption is typed out letter by letter (one line "
+                                                         "per caption)"},
+    "POP": {"label": "Pop", "description": "Each caption pops in: it grows into place with a small overshoot"},
+}
+_ANIM_ALIASES = {"": ANIM_STYLE, "DEFAULT": ANIM_STYLE, "STYLES": ANIM_STYLE, "OFF": "NONE", "NO": "NONE",
+                 "STATIC": "NONE", "FADE_IN": "FADE", "FADE_IN_OUT": "FADE", "SLIDE": "SLIDE_UP", "SLIDEUP": "SLIDE_UP",
+                 "TYPE": "TYPEWRITER", "TYPE_WRITER": "TYPEWRITER", "TYPING": "TYPEWRITER", "SCALE": "POP",
+                 "POP_IN": "POP"}
+# The text-strip properties the presets key (relative to the strip).  Never ``location``, the
+# text, the length or the channel: those are the caption's signature (#552), so an animation
+# Coworker sets never reads as an edit by hand.
+ANIMATED_PATHS = ("blend_alpha", "transform.offset_y", "transform.scale_x", "transform.scale_y", "crop.max_x",
+                  "font_size")
+# Timing (seconds) and amounts.
+FADE_IN_S = 0.25
+FADE_OUT_S = 0.2
+SLIDE_DISTANCE = 0.035      # of the frame's height
+POP_FROM = 0.6              # Pop: the scale it starts at, its overshoot, when the overshoot is
+POP_OVER = 1.08
+POP_OVER_AT = 0.6
+TYPE_CPS = 30.0             # Typewriter: characters a second ...
+TYPE_MAX_S = 1.0            # ... and at most this long
+STYLE_POP_FROM = 0.78       # Bold Pop's own font-size pop (as before #542): 78 % to full in 3 frames
+STYLE_POP_FRAMES = 3
+MIN_ANIMATED = 4            # a caption shorter than this many frames isn't animated
+
+
+def animation_key(name: Any) -> str | None:
+    """``"slide up"``, ``"Fade"``, ``"style"``, ``None``... -> an :data:`ANIMATIONS` key; None if unknown."""
+    key = re.sub(r"[^A-Z]+", "_", str(name or "").upper()).strip("_")
+    key = _ANIM_ALIASES.get(key, key)
+    return key if key in ANIMATIONS else None
+
+
+def one_line(animation: Any) -> bool:
+    """The animation lays each caption out on one line (Typewriter reveals one line)."""
+    return animation_key(animation) == "TYPEWRITER"
+
+
+def _windows(length: int, fps: float) -> tuple[int, int]:
+    """Frames for the way in and the way out of a caption *length* frames long: about
+    :data:`FADE_IN_S` / :data:`FADE_OUT_S`, at most a third / a quarter of the caption; 0 when
+    that leaves fewer than 2 frames (no animation that way)."""
+    fps = max(1.0, float(fps))
+    n_in = min(int(round(FADE_IN_S * fps)), length // 3)
+    n_out = min(int(round(FADE_OUT_S * fps)), length // 4)
+    return (n_in if n_in >= 2 else 0), (n_out if n_out >= 2 else 0)
+
+
+def reveal_crops(text: str, measure: Callable[[str, float], float], font_px: float, res_x: float,
+                 x_center: float = 0.5) -> list[tuple[int, int]]:
+    """Typewriter: ``(characters shown, crop from the right in pixels)`` for a line of *text*
+    centred at *x_center* (0-1 of the frame width), one entry per visible character (spaces
+    join the next one); the last one shows it all (crop 0)."""
+    text = str(text or "")
+    if not text.strip() or res_x <= 0:
+        return []
+    width = float(measure(text, font_px))
+    left = float(x_center) * res_x - width / 2.0
+    out: list[tuple[int, int]] = []
+    for k in range(1, len(text) + 1):
+        if text[k - 1].isspace():
+            continue
+        right = left + float(measure(text[:k], font_px))
+        out.append((k, max(0, int(math.floor(res_x - right)))))
+    if out:
+        out[-1] = (len(text), 0)
+    return out
+
+
+def animation_tracks(animation: Any, style: str, frame_start: int, frame_end: int, fps: float,
+                     res_x: float, res_y: float, font_size: float = 0.0, lines: int = 1,
+                     anchor_y: str = "BOTTOM", location: Sequence[float] = (0.5, 0.09),
+                     reveal: Sequence[tuple[int, int]] | None = None) -> list[dict[str, Any]]:
+    """The keyframes of animation *animation* for a caption in style *style* shown from
+    *frame_start* to *frame_end* (end exclusive) -- a description, applied by ``captions_ops``.
+
+    Each track: ``{"path"`` (relative to the text strip, one of :data:`ANIMATED_PATHS`),
+    ``"keys": [(frame, value)]``, ``"interpolation"`` ("BEZIER" or "CONSTANT"), ``"steady"``
+    (the value once the caption is up)``}``.  Keys lie on the caption's own frames, except the last key of a way out,
+    on *frame_end* (the first frame after it).  A caption too short for an animation gets none
+    (:data:`MIN_ANIMATED`); the way in takes at most a third of it, the way out a quarter.
+    *font_size*, *lines*, *anchor_y* and *location*: the caption's layout (Pop grows around its
+    middle, :func:`pop_middle`; Bold Pop's own pop scales its font size).  *reveal*: :func:`reveal_crops` of its
+    line, for Typewriter (none: no typewriter)."""
+    key = animation_key(animation) or ANIM_STYLE
+    fs, fe = int(frame_start), int(frame_end)
+    length = fe - fs
+    if key == ANIM_STYLE:
+        st = STYLES.get(style_key(style) or "", {})
+        if not st.get("pop") or length < STYLE_POP_FRAMES + 2 or font_size <= 0:
+            return []
+        return [{"path": "font_size", "interpolation": "BEZIER", "steady": float(font_size),
+                 "keys": [(fs, float(font_size) * STYLE_POP_FROM), (fs + STYLE_POP_FRAMES, float(font_size))]}]
+    if key == "NONE" or length < MIN_ANIMATED:
+        return []
+    n_in, n_out = _windows(length, fps)
+    tracks: list[dict[str, Any]] = []
+
+    def fade(with_in: bool = True) -> None:
+        keys: list[tuple[int, float]] = []
+        if with_in and n_in:
+            keys += [(fs, 0.0), (fs + n_in, 1.0)]
+        if n_out:
+            keys += [(fe - n_out, 1.0), (fe, 0.0)]
+        if keys:
+            tracks.append({"path": "blend_alpha", "interpolation": "BEZIER", "steady": 1.0, "keys": keys})
+
+    if key == "FADE":
+        fade()
+    elif key == "SLIDE_UP":
+        fade()
+        if n_in:
+            rise = round(SLIDE_DISTANCE * float(res_y), 2)
+            tracks.append({"path": "transform.offset_y", "interpolation": "BEZIER", "steady": 0.0,
+                           "keys": [(fs, -rise), (fs + n_in, 0.0)]})
+    elif key == "POP" and n_in:
+        over = max(fs + 1, min(fs + n_in - 1, fs + int(round(n_in * POP_OVER_AT))))
+        keys = [(fs, POP_FROM), (over, POP_OVER), (fs + n_in, 1.0)]
+        for axis in ("transform.scale_x", "transform.scale_y"):
+            tracks.append({"path": axis, "interpolation": "BEZIER", "steady": 1.0, "keys": list(keys)})
+        # A strip scales around the frame's centre (its transform origin, 0.5 / 0.5): an offset
+        # that follows the scale keeps the caption's own middle where it is.  (The origin can't
+        # be set to the caption instead: on a text strip it is measured on the text's box, live
+        # check #542.)  Captions are centred across, so only the height moves.
+        middle = pop_middle(lines, font_size, res_y, anchor_y, location)
+        shift = (middle - 0.5) * float(res_y)
+        tracks.append({"path": "transform.offset_y", "interpolation": "BEZIER", "steady": 0.0,
+                       "keys": [(f, round(shift * (1.0 - v), 3)) for f, v in keys]})
+    elif key == "TYPEWRITER" and reveal:
+        steps = list(reveal)
+        span = min(len(steps) / TYPE_CPS * max(1.0, float(fps)), TYPE_MAX_S * max(1.0, float(fps)), length * 0.5)
+        keys: list[tuple[int, float]] = []
+        n = len(steps)
+        for i, (_chars, crop) in enumerate(steps):
+            f = fs + int(math.floor(span * i / n))
+            if keys and keys[-1][0] == f:
+                keys[-1] = (f, float(crop))         # several characters on one frame: the last of them
+            else:
+                keys.append((f, float(crop)))
+        if len(keys) >= 2:
+            tracks.append({"path": "crop.max_x", "interpolation": "CONSTANT", "steady": 0.0, "keys": keys})
+        fade(with_in=False)
+    return tracks
+
+
+def animation_paths(animation: Any, style: str) -> tuple[str, ...]:
+    """The properties (:data:`ANIMATED_PATHS`) animation *animation* keys on a caption in
+    *style*, for a caption long enough to have all of it; empty when it keys none (None, or
+    the style's own on a style that doesn't pop)."""
+    tracks = animation_tracks(animation, style, 0, 600, 30.0, 1920, 1080, 50.0, 1, "BOTTOM", (0.5, 0.09),
+                              [(1, 10), (2, 0)])
+    return tuple(t["path"] for t in tracks)
+
+
+def pop_middle(lines: int, font_size: float, res_y: float, anchor_y: str, location: Sequence[float]) -> float:
+    """The middle of a caption (0-1 of the frame's height, from the bottom): *lines* lines of
+    *font_size* px from its anchor at *location*."""
+    height = max(1.0, float(lines)) * float(font_size) * LINE_HEIGHT / max(1.0, float(res_y))
+    y = float(location[1])
+    middle = y + height / 2.0 if anchor_y == "BOTTOM" else (y - height / 2.0 if anchor_y == "TOP" else y)
+    return min(1.0, max(0.0, middle))
+
+
+def animation_window(tracks: Sequence[dict]) -> tuple[int, int] | None:
+    """The first and last keyed frame of *tracks* (None: no keys)."""
+    frames = [f for t in tracks for f, _v in t["keys"]]
+    return (min(frames), max(frames)) if frames else None
+
+
+# -- speakers (#542) ---------------------------------------------------------------------------
+
+_DUP_SUFFIX = re.compile(r"\.\d{3,}$")
+_MEDIA_EXT = re.compile(r"\.(?:wav|mp3|flac|ogg|oga|aac|m4a|opus|aif|aiff|wma|mp4|mov|mkv|avi|webm|m4v|mpg|mpeg)$",
+                        re.IGNORECASE)
+
+
+def speaker_name(strip_name: Any) -> str:
+    """A speaker's name from their strip's: ``"ana_mic.wav.001"`` -> ``"Ana mic"`` (no
+    ``.001`` copy number, no file extension, ``_`` and ``-`` as spaces, a capital first)."""
+    name = _DUP_SUFFIX.sub("", str(strip_name or "").strip())
+    name = _MEDIA_EXT.sub("", name)
+    name = " ".join(re.sub(r"[_\-]+", " ", name).split())
+    if not name:
+        return "Speaker"
+    return name[0].upper() + name[1:]
+
+
+CHANNEL_NAME_BYTES = 63         # Blender's limit for a channel's name, in UTF-8 bytes
+SPEAKER_NAME_CHARS = 40
+
+
+def _fit_bytes(name: str, limit: int = CHANNEL_NAME_BYTES) -> str:
+    """*name* cut so its UTF-8 encoding fits *limit* bytes (never inside a character)."""
+    return name.encode("utf-8")[:limit].decode("utf-8", "ignore")
+
+
+def channel_names(speaker: str | None) -> tuple[str, str]:
+    """The names of a speaker's caption channel and its highlight channel (``"Captions: Ana"``);
+    the plain ones without a speaker."""
+    if not speaker:
+        return CHANNEL_NAME, HIGHLIGHT_CHANNEL_NAME
+    return (_fit_bytes("{:s}: {:s}".format(CHANNEL_NAME, speaker)),
+            _fit_bytes("{:s}: {:s}".format(HIGHLIGHT_CHANNEL_NAME, speaker)))
+
+
+def plan_speakers(todo: Sequence[dict], style: str, position: str, settings: Sequence[dict] = (),
+                  labels: bool = False) -> dict[str, dict[str, Any]]:
+    """One speaker per media file of *todo* (the strips to caption, as :func:`plan_strips`
+    gives them: ``{"name", "key"}``), in that order: ``{key: {"name", "style", "position",
+    "label", "channel", "highlight_channel", "strips"}}``.
+
+    *settings*: per speaker ``{"strip": a strip of theirs, "name", "style", "position"}``
+    (each optional; empty: the run's *style* / *position*, the name from the strip,
+    :func:`speaker_name`).  *labels*: each caption starts with ``"Name:"``."""
+    by_strip = {str(s.get("strip") or ""): s for s in settings or () if s.get("strip")}
+    out: dict[str, dict[str, Any]] = {}
+    used: set[str] = set()
+    for it in todo:
+        key = it["key"]
+        if key in out:
+            out[key]["strips"].append(it["name"])
+            continue
+        mine = next((by_strip[n] for n in [it["name"]] + [x["name"] for x in todo if x["key"] == key]
+                     if n in by_strip), {})
+        name = " ".join(str(mine.get("name") or "").split())[:SPEAKER_NAME_CHARS] or speaker_name(it["name"])
+        base, n = name, 2
+        while name.lower() in used:             # two files of "Ana": Ana, Ana 2
+            name = "{:s} {:d}".format(base, n)
+            n += 1
+        used.add(name.lower())
+        # An unset style / position is the run's ("" would read as Clean / Bottom).
+        st = (style_key(mine["style"]) if mine.get("style") else None) or style_key(style) or "CLEAN"
+        pos = (position_key(mine["position"]) if mine.get("position") else None) or position_key(position) or "BOTTOM"
+        chan, hl = channel_names(name)
+        out[key] = {"name": name, "style": st, "position": pos, "label": (name + ":") if labels else "",
+                    "channel": chan, "highlight_channel": hl, "strips": [it["name"]]}
+    return out
+
+
+def label_chars(chars: int, label: str) -> int:
+    """Characters per line left for the words when every caption starts with *label* (at least 10)."""
+    return max(10, int(chars) - (len(label) + 1 if label else 0))
+
+
+def with_label(text: str, label: str) -> str:
+    """*text* with the speaker's *label* in front (on its first line)."""
+    return "{:s} {:s}".format(label, text) if label else text
+
+
+def without_label(text: str, label: str) -> str:
+    """*text* without the speaker's *label* in front (as :func:`with_label` put it, any case)."""
+    if label and text[:len(label)].lower() == label.lower():
+        return text[len(label):].lstrip(" ")
+    return text
 
 
 # -- SRT ----------------------------------------------------------------------------
@@ -920,6 +1268,57 @@ def check_tool_params(strips: Any, style: Any, language: Any) -> tuple[list[str]
     return names, key, lang
 
 
+def check_look_params(animation: Any, position: Any, margin: Any) -> tuple[str, str, float]:
+    """``add_captions``' look (#542) checked: ``(animation key, position key, margin as a
+    fraction of the frame's height)``.  *margin* is in percent (0 or none: the safe area's);
+    raises :class:`CaptionsError` with what's wrong."""
+    anim = animation_key(animation)
+    if anim is None:
+        raise CaptionsError("Unknown animation {!r}: use one of {:s}.".format(
+            animation, ", ".join("{:s} ({:s})".format(k, a["label"]) for k, a in ANIMATIONS.items())))
+    pos = position_key(position)
+    if pos is None:
+        raise CaptionsError("Unknown position {!r}: use BOTTOM, TOP or MIDDLE.".format(position))
+    try:
+        pct = float(margin or 0.0)
+    except (TypeError, ValueError):
+        raise CaptionsError("margin is a percentage of the frame's height (0-45), not {!r}".format(margin)) from None
+    if math.isnan(pct) or pct < 0 or pct > MAX_MARGIN * 100:
+        raise CaptionsError("margin is a percentage of the frame's height, 0-45 (0: the safe area's), not {!r}".format(
+            margin))
+    return anim, pos, pct / 100.0
+
+
+def check_speakers(speakers: Any, settings: Any) -> tuple[bool, list[dict[str, str]]]:
+    """``add_captions``' *speakers* (one channel per speaker) and *speaker_settings* (a list of
+    ``{"strip", "name", "style", "position"}``) checked: ``(on, settings)``.  Settings turn
+    speakers on; a style or position must be known."""
+    out: list[dict[str, str]] = []
+    if settings:
+        if isinstance(settings, dict):
+            settings = [settings]
+        if not isinstance(settings, (list, tuple)):
+            raise CaptionsError("speaker_settings is a list of {\"strip\", \"name\", \"style\", \"position\"}")
+        for item in settings:
+            if not isinstance(item, dict) or not str(item.get("strip") or "").strip():
+                raise CaptionsError("each of speaker_settings needs the \"strip\" of that speaker")
+            row = {"strip": str(item["strip"]).strip()}
+            if str(item.get("name") or "").strip():
+                row["name"] = " ".join(str(item["name"]).split())[:SPEAKER_NAME_CHARS]
+            if item.get("style"):
+                if style_key(item["style"]) is None:
+                    raise CaptionsError("Unknown style {!r} for {:s}: use one of {:s}.".format(
+                        item["style"], row["strip"], ", ".join(STYLES)))
+                row["style"] = style_key(item["style"]) or "CLEAN"
+            if item.get("position"):
+                if position_key(item["position"]) is None:
+                    raise CaptionsError("Unknown position {!r} for {:s}: use BOTTOM, TOP or MIDDLE.".format(
+                        item["position"], row["strip"]))
+                row["position"] = position_key(item["position"]) or "BOTTOM"
+            out.append(row)
+    return bool(speakers) or bool(out), out
+
+
 def measure_fallback(text: str, font_px: float) -> float:
     """A rough text width when the font can't be measured (only for the safe-area checks)."""
     return len(text) * font_px * 0.54
@@ -953,18 +1352,21 @@ def relayout_limits(name: str, chars: int, lines: int, old_res: Sequence[float] 
     return new_chars, new_lines
 
 
-def hand_edits(look: dict[str, Any], name: str, res_x: float, res_y: float) -> list[str]:
+def hand_edits(look: dict[str, Any], name: str, res_x: float, res_y: float, position: str = "BOTTOM",
+               margin: float = 0.0) -> list[str]:
     """What of a caption line's layout differs from what style *name* gives at *res_x* x *res_y*
-    (the frame it was made for); empty when it is as the style made it.
+    (the frame it was made for) at *position* / *margin* (#542); empty when it is as the style
+    made it.
 
     *look*: ``location``, ``font_size`` (the steady size, not a pop key's), ``wrap_width``,
     ``anchor_x`` / ``anchor_y`` and, if the strip has one, ``transform``
-    (``offset_x, offset_y, scale_x, scale_y, rotation``).  Text, colours and timing are not
-    layout: a caption whose words were changed by hand is still laid out again."""
+    (``offset_x, offset_y, scale_x, scale_y, rotation``; the steady values, not an animation's
+    keys).  Text, colours and timing are not layout: a caption whose words were changed by hand
+    is still laid out again."""
     key = style_key(name)
     if key is None:
         return ["style"]
-    props = resolve_style(key, res_x, res_y)["props"]
+    props = resolve_style(key, res_x, res_y, position, margin)["props"]
     out = []
     loc = tuple(look.get("location") or (0.0, 0.0))
     if len(loc) < 2 or abs(loc[0] - props["location"][0]) > 1e-3 or abs(loc[1] - props["location"][1]) > 1e-3:
@@ -986,11 +1388,13 @@ def hand_edits(look: dict[str, Any], name: str, res_x: float, res_y: float) -> l
 
 def relayout(text: str, name: str, res_x: float, res_y: float, frame_start: int, frame_end: int,
              chars: int = 0, lines: int = 0, old_res: Sequence[float] | None = None,
-             word_frames: Sequence[float] | None = None) -> dict[str, Any]:
+             word_frames: Sequence[float] | None = None, position: str = "BOTTOM", margin: float = 0.0,
+             label: str = "") -> dict[str, Any]:
     """A caption (its *text* as shown, from *frame_start* to *frame_end*, end exclusive) laid
     out again in style *name* for a *res_x* x *res_y* frame, by the same rules Auto Captions
-    uses there: the style's size and place (:func:`resolve_style`), its characters per line
-    (:func:`relayout_limits`) and lines.
+    uses there: the style's size and place (:func:`resolve_style`, at the caption's own
+    *position* / *margin*, #542), its characters per line (:func:`relayout_limits`) and lines.
+    A speaker's *label* (``"Ana:"``) stays in front of each piece and isn't a word.
 
     Words that don't fit the style's lines in the new frame are split into several captions
     inside the same time, where :func:`build_captions` would split them; each word keeps its
@@ -999,9 +1403,10 @@ def relayout(text: str, name: str, res_x: float, res_y: float, frame_start: int,
 
     Returns ``{"style": resolve_style(...), "chars", "lines", "pieces": [{"text", "lines",
     "frame_start", "frame_end", "words": [{"w", "frame"}]}]}`` (one piece when it fits)."""
-    st = resolve_style(name, res_x, res_y)
+    st = resolve_style(name, res_x, res_y, position, margin)
     chars, lines = relayout_limits(st["key"], chars, lines, old_res, (res_x, res_y))
     frame_start, frame_end = int(frame_start), int(max(frame_end, frame_start + 1))
+    text = without_label(" ".join(str(text or "").split()), label) if label else text
     words = str(text or "").split()
     if word_frames is not None and len(word_frames) == len(words) and words:
         starts, prev = [], float(frame_start)
@@ -1014,13 +1419,19 @@ def relayout(text: str, name: str, res_x: float, res_y: float, frame_start: int,
     timed = [{"w": w, "start": s, "end": starts[i + 1] if i + 1 < len(words) else float(frame_end)}
              for i, (w, s) in enumerate(zip(words, starts))]
 
+    fit = label_chars(chars, label) if label else chars     # the label takes room on the first line
+
     def piece(group: list[dict], fs: int, fe: int) -> dict[str, Any]:
-        ln = layout_lines([w["w"] for w in group], chars, lines, force=True) or []
+        ln = layout_lines([w["w"] for w in group], fit, lines, force=True) or []
+        if label and ln:
+            ln[0] = with_label(ln[0], label)
+            if st["uppercase"]:
+                ln[0] = ln[0].upper()           # the label in the style's case, as _place writes it
         return {"text": "\n".join(ln), "lines": ln, "frame_start": fs, "frame_end": fe,
-                "words": [{"w": w["w"], "frame": int(round(w["start"]))} for w in group]}
+                "words": [{"w": w["w"], "frame": int(round(w["start"]))} for w in group], "label": label}
 
     whole = [piece(timed, frame_start, frame_end)]
-    if len(words) < 2 or layout_lines(words, chars, lines) is not None:
+    if len(words) < 2 or layout_lines(words, fit, lines) is not None:
         return {"style": st, "chars": chars, "lines": lines, "pieces": whole}
     # build_captions' split, without its clean-up of the words (they are kept exactly as shown):
     # at sentence ends first, then where a stretch reads best.
@@ -1029,7 +1440,7 @@ def relayout(text: str, name: str, res_x: float, res_y: float, frame_start: int,
         if is_sentence_end(prev["w"]):
             stretches.append([])
         stretches[-1].append(w)
-    groups = [g for seg in stretches for g in _split(seg, chars, lines, math.inf)]
+    groups = [g for seg in stretches for g in _split(seg, fit, lines, math.inf)]
     bounds = [frame_start] + [int(round(g[0]["start"])) for g in groups[1:]] + [frame_end]
     if any(b >= a_next for b, a_next in zip(bounds, bounds[1:])):
         return {"style": st, "chars": chars, "lines": lines, "pieces": whole}     # no frame for a piece

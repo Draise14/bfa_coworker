@@ -22,6 +22,12 @@ class Params(NamedTuple):
     language: str | None = None
     transcript_path: str | None = None
     replace_edited: bool = False
+    animation: str = "STYLE"
+    position: str = "BOTTOM"
+    margin: float = 0
+    speakers: bool = False
+    speaker_labels: bool = False
+    speaker_settings: tuple[dict[str, str], ...] = ()
 
 
 class Result(NamedTuple):
@@ -39,6 +45,9 @@ class Result(NamedTuple):
     strips_captioned: list[str] | None = None
     strips_skipped: list[dict[str, str]] | None = None
     kept_edited: int = 0
+    animation: str | None = None
+    position: str | None = None
+    speakers: list[dict[str, Any]] | None = None
     note: str | None = None
 
 
@@ -55,5 +64,6 @@ def main(params: Params) -> Result:
     if ops is None:
         return Result(status="error", message="Coworker's captions aren't loaded in this Blender.")
     out = ops.tool_add_captions(list(params.strips or ()), params.style, params.language, params.transcript_path,
-                                params.replace_edited)
+                                params.replace_edited, params.animation, params.position, params.margin,
+                                params.speakers, params.speaker_labels, list(params.speaker_settings or ()))
     return Result(**{k: v for k, v in out.items() if k in Result._fields})

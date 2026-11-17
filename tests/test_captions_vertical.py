@@ -311,7 +311,12 @@ class TestRelayoutStrips(_OpsCase):
                 self.assertEqual(w.font_size, px)
 
     def test_bold_pop_keys_follow_the_new_size(self):
+        """A caption made before #542 (no "anim" in its tag): its own keys are scaled."""
         self.caption("BOLD_POP")
+        for s in self.lines():
+            tag = dict(s.get("bfacw_caption"))
+            tag.pop("anim")
+            s["bfacw_caption"] = tag
         old_names = {s.name for s in self.lines()}
         first = self.lines()[0]
         wide = cap.resolve_style("BOLD_POP", *WIDE)["props"]["font_size"]

@@ -36,6 +36,12 @@ def register(mcp: FastMCP) -> None:
         language: str | None = None,
         transcript_path: str | None = None,
         replace_edited: bool = False,
+        animation: str = "STYLE",
+        position: str = "BOTTOM",
+        margin: float = 0,
+        speakers: bool = False,
+        speaker_labels: bool = False,
+        speaker_settings: list[dict[str, str]] | None = None,
     ) -> dict[str, object]:
         """
         Caption sound or movie strips in the Video Sequencer: their speech becomes styled
@@ -46,7 +52,7 @@ def register(mcp: FastMCP) -> None:
         file over its time.  Muted and retimed strips, and strips with no speech or no
         transcript, are skipped and named in ``strips_skipped``.  Running it again replaces the
         captions over those strips, but keeps captions edited by hand (``kept_edited``) unless
-        ``replace_edited``; it is one undo step.
+        ``replace_edited``; it is one undo step.  Animation and position work with every style.
 
         Args:
             strips: Names of the sound / movie strips to caption (none: the selected ones).
@@ -55,11 +61,23 @@ def register(mcp: FastMCP) -> None:
             transcript_path: A transcript JSON file (bfa_coworker.transcript/1) to use
                 instead of transcribing.
             replace_edited: Also replace captions changed by hand since they were made.
+            animation: STYLE (the style's own: BOLD_POP pops, the others don't move), NONE,
+                FADE, SLIDE_UP, TYPEWRITER (typed out letter by letter, one line per caption)
+                or POP.
+            position: BOTTOM, TOP (e.g. off the UI a tutorial shows at the bottom) or MIDDLE.
+            margin: Distance from that edge in percent of the frame's height, 0-45 (0: the
+                safe area of a wide or vertical frame).
+            speakers: One caption channel per sound file (one file per speaker), named after
+                the speaker; their captions may overlap in time.
+            speaker_labels: Each caption starts with its speaker's name ("Ana: ...").
+            speaker_settings: Per speaker ``{"strip": a strip of theirs, "name", "style",
+                "position"}`` (each but "strip" optional); turns ``speakers`` on.
 
         Returns:
             ``lines_created``, ``channel``, ``first_frame`` / ``last_frame``, the style,
             ``strips_captioned`` (names), ``strips_skipped`` (``{strip, reason}``: "no speech",
-            "silent", "retimed", "no transcript" or "muted") and ``kept_edited``; ``message`` says it all
+            "silent", "retimed", "no transcript" or "muted") and ``kept_edited``; with speakers
+            ``speakers`` (``{name, channel, lines_created, style, position}``); ``message`` says it all
             in a sentence.  ``status`` "error" with a ``message`` saying what's wrong.
         """
         return send_code(
@@ -71,6 +89,12 @@ def register(mcp: FastMCP) -> None:
                     language=language,
                     transcript_path=transcript_path,
                     replace_edited=bool(replace_edited),
+                    animation=animation,
+                    position=position,
+                    margin=margin,
+                    speakers=bool(speakers),
+                    speaker_labels=bool(speaker_labels),
+                    speaker_settings=tuple(dict(s) for s in (speaker_settings or ()) if isinstance(s, dict)),
                 ),
             ),
             strict_json=True,

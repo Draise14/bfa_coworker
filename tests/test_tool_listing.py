@@ -37,7 +37,7 @@ EXPECTED_TOOLS = [
 "        file over its time.  Muted and retimed strips, and strips with no speech or no\n"
 "        transcript, are skipped and named in ``strips_skipped``.  Running it again replaces the\n"
 "        captions over those strips, but keeps captions edited by hand (``kept_edited``) unless\n"
-"        ``replace_edited``; it is one undo step.\n"
+"        ``replace_edited``; it is one undo step.  Animation and position work with every style.\n"
 "\n"
 "        Args:\n"
 "            strips: Names of the sound / movie strips to caption (none: the selected ones).\n"
@@ -46,11 +46,23 @@ EXPECTED_TOOLS = [
 "            transcript_path: A transcript JSON file (bfa_coworker.transcript/1) to use\n"
 "                instead of transcribing.\n"
 "            replace_edited: Also replace captions changed by hand since they were made.\n"
+"            animation: STYLE (the style's own: BOLD_POP pops, the others don't move), NONE,\n"
+"                FADE, SLIDE_UP, TYPEWRITER (typed out letter by letter, one line per caption)\n"
+"                or POP.\n"
+"            position: BOTTOM, TOP (e.g. off the UI a tutorial shows at the bottom) or MIDDLE.\n"
+"            margin: Distance from that edge in percent of the frame's height, 0-45 (0: the\n"
+"                safe area of a wide or vertical frame).\n"
+"            speakers: One caption channel per sound file (one file per speaker), named after\n"
+"                the speaker; their captions may overlap in time.\n"
+"            speaker_labels: Each caption starts with its speaker's name (\"Ana: ...\").\n"
+"            speaker_settings: Per speaker ``{\"strip\": a strip of theirs, \"name\", \"style\",\n"
+"                \"position\"}`` (each but \"strip\" optional); turns ``speakers`` on.\n"
 "\n"
 "        Returns:\n"
 "            ``lines_created``, ``channel``, ``first_frame`` / ``last_frame``, the style,\n"
 "            ``strips_captioned`` (names), ``strips_skipped`` (``{strip, reason}``: \"no speech\",\n"
-"            \"silent\", \"retimed\", \"no transcript\" or \"muted\") and ``kept_edited``; ``message`` says it all\n"
+"            \"silent\", \"retimed\", \"no transcript\" or \"muted\") and ``kept_edited``; with speakers\n"
+"            ``speakers`` (``{name, channel, lines_created, style, position}``); ``message`` says it all\n"
 "            in a sentence.  ``status`` \"error\" with a ``message`` saying what's wrong.\n"
 "        ",
         "inputSchema": {
@@ -103,6 +115,49 @@ EXPECTED_TOOLS = [
                     "default": False,
                     "title": "Replace Edited",
                     "type": "boolean"
+                },
+                "animation": {
+                    "default": "STYLE",
+                    "title": "Animation",
+                    "type": "string"
+                },
+                "position": {
+                    "default": "BOTTOM",
+                    "title": "Position",
+                    "type": "string"
+                },
+                "margin": {
+                    "default": 0,
+                    "title": "Margin",
+                    "type": "number"
+                },
+                "speakers": {
+                    "default": False,
+                    "title": "Speakers",
+                    "type": "boolean"
+                },
+                "speaker_labels": {
+                    "default": False,
+                    "title": "Speaker Labels",
+                    "type": "boolean"
+                },
+                "speaker_settings": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Speaker Settings"
                 }
             },
             "title": "add_captionsArguments",

@@ -596,8 +596,11 @@ class TestTheHandler(_OpsCase):
             patcher = mock.patch.object(self.ops, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
-        self.ops._WATCH.update(dirty=set(), t=0.0, frames={})
-        self.scene.frame_current = 1
+        self.ops._WATCH.update(dirty=set(), t=0.0)
+        self.playing = False
+        patcher = mock.patch.object(self.ops, "_playing", lambda: self.playing)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_the_handler_only_notes_a_change(self):
         self.ops._on_depsgraph(self.scene)
@@ -610,14 +613,14 @@ class TestTheHandler(_OpsCase):
         self.ops._on_depsgraph(bare)
         self.assertEqual((self.ops._WATCH["dirty"], self.timers), (set(), []))
 
-    def test_a_frame_change_edits_nothing(self):
-        self.ops._on_depsgraph(self.scene)
-        self.ops._WATCH["dirty"].clear()
-        self.timers.clear()
-        for frame in range(2, 20):
-            self.scene.frame_current = frame
+    def test_every_update_of_a_playback_is_skipped_at_once(self):
+        self.playing = True
+        for _ in range(100):
             self.ops._on_depsgraph(self.scene)
         self.assertEqual((self.ops._WATCH["dirty"], self.timers), (set(), []))
+        self.playing = False
+        self.ops._on_depsgraph(self.scene)             # the first update after it: looked at once
+        self.assertEqual(self.ops._WATCH["dirty"], {"Scene"})
 
     def test_the_timer_waits_until_nothing_has_changed_for_a_moment(self):
         self.ops._on_depsgraph(self.scene)

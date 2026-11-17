@@ -25,6 +25,14 @@ text strips, SRT in and out, and Translate for many captions at once.
   the existing Translate dialog; each translated line is written back into its own
   strip (same timing, style and tag).
 
+Word strips follow their caption line (#594): :func:`refit_words` lays them out again, from the line
+strip's own font, bold, italic, size, alignment, wrap width, place, transform and text
+(:func:`captions.word_layout`), whenever the layout signature kept in the line's tag (``"lay"``) no longer
+matches the strip: a depsgraph handler notes a change and a debounced timer looks, never while playing,
+rendering or an agent step holds the co-work lock; *Refit Word Highlights* is the manual way.  The style
+choices of the dialog and the tool (letter case, font, bold, italic, size, text and highlight colour) are
+kept in the tag as ``"choices"``.
+
 Every caption strip has the custom property :data:`captions.TAG`:
 ``{"source", "style", "role": "line"|"word", "chars", "lines"}`` (``"line"``: the
 caption's strip name, on a word strip); a line made since #497 also has ``"frame"`` (the
@@ -1599,19 +1607,25 @@ def refit_words(scene: Any, names: Any = None, force: bool = False) -> int:
 # The word strips follow their line by themselves: a cheap depsgraph handler notes that something
 # changed, a timer a moment later (debounced) compares each caption's layout signature, and never
 # while playing, rendering or an agent step runs.
-_WATCH: dict[str, Any] = {"dirty": set(), "t": 0.0, "frames": {}}
+_WATCH: dict[str, Any] = {"dirty": set(), "t": 0.0}
 DEBOUNCE_S = 0.4
 RETRY_S = 1.5
+
+
+def _playing() -> bool:
+    """A window is playing the animation."""
+    try:
+        return any(win.screen is not None and win.screen.is_animation_playing
+                   for win in bpy.context.window_manager.windows)
+    except (AttributeError, ReferenceError, RuntimeError):
+        return False
 
 
 def _busy() -> str:
     """Why captions must not be touched now ("" when they can): playback, a render, or the co-work
     lock of an agent step."""
-    wm = bpy.context.window_manager
-    for win in getattr(wm, "windows", ()):
-        screen = getattr(win, "screen", None)
-        if screen is not None and screen.is_animation_playing:
-            return "playing"
+    if _playing():
+        return "playing"
     try:
         if bpy.app.is_job_running('RENDER'):
             return "rendering"
@@ -1659,15 +1673,11 @@ def _watch_tick() -> float | None:
 
 @bpy.app.handlers.persistent
 def _on_depsgraph(scene: Any, _depsgraph: Any = None) -> None:
-    """``depsgraph_update_post``: a scene with strips changed.  Nothing is looked at here; a frame change
-    (scrubbing, playback) edits no caption and is skipped; the timer does the rest."""
+    """``depsgraph_update_post``: a scene with strips changed.  Nothing is looked at here (the update of
+    every frame of a playback is skipped at once); the timer, a moment after the last change, compares
+    each caption's signature."""
     try:
-        if scene.sequence_editor is None:
-            return
-        frame = scene.frame_current
-        last = _WATCH["frames"].get(scene.name)
-        _WATCH["frames"][scene.name] = frame
-        if last is not None and last != frame:
+        if scene.sequence_editor is None or _playing():
             return
         _WATCH["dirty"].add(scene.name)
         _WATCH["t"] = _clock()
@@ -1691,7 +1701,6 @@ def _watch_stop() -> None:
     except (AttributeError, ValueError):
         pass
     _WATCH["dirty"] = set()
-    _WATCH["frames"] = {}
 
 
 # -- Translate (#42 for many captions) ---------------------------------------------------
@@ -1866,7 +1875,7 @@ def _lines_items(self: Any, _context: Any) -> list[tuple]:
 
 def _language_items() -> list[tuple[str, str, str]]:
     from .preferences import _LANGUAGES
-    items = [("auto", "Detect", "Let the transcription find the language")]
+    items = [("auto", "Detect Automatically", "Let the transcription find the language that is spoken")]
     items += [(code, name, "Spoken in " + name) for code, name in _LANGUAGES]
     return items
 
@@ -1985,7 +1994,7 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
                     "off: they are kept")
     animation: EnumProperty(  # type: ignore[valid-type]
         name="Animation", items=_ANIM_ITEMS, default=cap.ANIM_STYLE,
-        description="How each caption moves in and out (the Style's: as the style has it)")
+        description="How each caption moves in and out (As the Style: Bold Pop pops in, the others stand still)")
     position: EnumProperty(  # type: ignore[valid-type]
         name="Position", items=_POSITION_ITEMS, default="BOTTOM",
         description="Where the captions sit in the frame: near the bottom, near the top or in the middle")

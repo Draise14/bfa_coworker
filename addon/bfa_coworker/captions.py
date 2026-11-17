@@ -1184,7 +1184,7 @@ def resolve_style(name: str, res_x: float, res_y: float, position: str = "BOTTOM
 
 ANIM_STYLE = "STYLE"        # the style's own: Bold Pop pops its font size, the others don't move
 ANIMATIONS: dict[str, dict[str, str]] = {
-    ANIM_STYLE: {"label": "Style's", "description": "The style's own: Bold Pop pops in, the others don't move"},
+    ANIM_STYLE: {"label": "As the Style", "description": "The style's own: Bold Pop pops in, the others don't move"},
     "NONE": {"label": "None", "description": "No animation: each caption is just there"},
     "FADE": {"label": "Fade", "description": "Each caption fades in and out"},
     "SLIDE_UP": {"label": "Slide Up", "description": "Each caption rises into place as it fades in, and fades out"},

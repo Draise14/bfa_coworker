@@ -139,6 +139,67 @@ class TestRenderFailuresCount(unittest.TestCase):
             self.assertEqual(g.check("execute_blender_code", args), (lg.RUN, 1))
             g.note_result("execute_blender_code", args, _FAILED)
 
+    def test_a_write_in_between_clears_the_failures(self):
+        g = lg.LoopGuard()
+        for i in range(2):
+            args = {"output_path": "look_{:d}.png".format(i)}
+            g.check("render_viewport_to_path", args)
+            g.note_result("render_viewport_to_path", args, _FAILED)
+        g.check("execute_blender_code", {"code": "add_camera()"})
+        self.assertEqual(g.check("render_viewport_to_path", {"output_path": "new.png"}), (lg.RUN, 1))
+
+    def test_a_success_clears_the_failures(self):
+        g = lg.LoopGuard()
+        for i in range(2):
+            args = {"output_path": "look_{:d}.png".format(i)}
+            g.check("render_viewport_to_path", args)
+            g.note_result("render_viewport_to_path", args, _FAILED)
+        args = {"output_path": "ok.png"}
+        self.assertEqual(g.check("render_viewport_to_path", args)[0], lg.ASK)
+        g.note_result("render_viewport_to_path", args, {"status": "ok", "result": _OK})
+        self.assertEqual(g.check("render_viewport_to_path", {"output_path": "next.png"}), (lg.RUN, 1))
+
+    def test_three_failures_in_a_row_are_still_refused(self):
+        g = lg.LoopGuard()
+        for i in range(3):
+            args = {"output_path": "look_{:d}.png".format(i)}
+            g.check("render_viewport_to_path", args)
+            g.note_result("render_viewport_to_path", args, _FAILED)
+        self.assertEqual(g.check("render_viewport_to_path", {"output_path": "x.png"}), (lg.REFUSE, 4))
+
+    def test_the_card_released_render_is_watched(self):
+        server = (_ADDON / "mcp_to_blender_server.py").read_text(encoding="utf-8")
+        block = server[server.index("def _proceed()"):]
+        block = block[:block.index("_repeat = loop_guard.bridge_wrap(")]
+        self.assertIn("loop_guard.bridge_watch(", block)
+
+    def test_the_card_released_render_failure_is_counted(self):
+        g = lg.LoopGuard()
+        approvals = mock.Mock()
+        approvals.allowed_always.return_value = False
+        asked = []
+        approvals.ask.side_effect = lambda req, cb: asked.append(cb)
+        code = _bridge_code("c.png")
+        for i in range(2):
+            c = _bridge_code("f{:d}.png".format(i))
+            g.check("render_viewport_to_path", c, "s")
+            g.note_result("render_viewport_to_path", c, _FAILED, "s")
+        state = [None]
+
+        def inner():
+            return state[0]
+        inner.job_kind = "RENDER"
+
+        def proceed():
+            return {}, lg.bridge_watch(g, "render_viewport_to_path", code, "s", "", {}, inner)
+        wrapped = lg.bridge_wrap(g, approvals, False, "render_viewport_to_path", code, "s", proceed)
+        _response, check = wrapped
+        asked[0]("allow")
+        self.assertIsNone(check())
+        state[0] = dict(_FAILED)
+        check()
+        self.assertEqual(g.check("render_viewport_to_path", _bridge_code("d.png"), "s")[0], lg.REFUSE)
+
     def test_bridge_watch_notes_a_direct_answer(self):
         g = lg.LoopGuard()
         code = _bridge_code("a.png")
@@ -645,7 +706,6 @@ class TestStoppedRender(unittest.TestCase):
         self.assertIn("stopped in Blender", result["message"])
         self.assertIn("Quality: preview", result["message"])
         self.assertNotIn("trying again won't help", result["message"])
-        self.assertTrue(check.job_stopped())
 
     def test_viewport_stopped_without_an_image(self):
         result, _check = self._run("render_viewport_to_path", {"output_path": "look.png", "quality": "final"},
@@ -653,10 +713,24 @@ class TestStoppedRender(unittest.TestCase):
         self.assertEqual((result["status"], result["partial"], result["filepath"]), ("stopped", False, None))
         self.assertIn("wrote no image", result["message"])
 
+    def test_an_object_named_cancel_is_not_a_stop(self):
+        scene = self._scene()
+        fake = _ViewBpy(scene, self._tmp.name)
+        sys.modules["bpy"] = fake
+        mod = _load("render_viewport_to_path_toolcode")
+        check = mod.main(mod.Params(output_path="look.png"))
+        for fn in list(fake.handlers.render_stats):
+            fn("Remaining: 00:05 | Mem: 43M | Synchronizing object | CancelButton")
+        fake.finish_job(write=True, stop="")
+        self.assertEqual(check()["status"], "ok")
+
+    def test_a_cancelled_status_line_is_a_stop(self):
+        result, _check = self._run("render_viewport_to_path", {"output_path": "look.png"}, stop="x", write=True)
+        self.assertEqual(result["status"], "stopped")
+
     def test_a_render_that_finished_is_still_ok(self):
         result, check = self._run("render_viewport_to_path", {"output_path": "look.png"}, stop="", write=True)
         self.assertEqual(result["status"], "ok")
-        self.assertFalse(check.job_stopped())
 
     def test_thumbnail_stopped(self):
         result, _check = self._run("render_thumbnail_to_path", {"output_path": "t.png"}, stop="x", write=True)

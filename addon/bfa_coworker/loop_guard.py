@@ -187,9 +187,13 @@ class LoopGuard:
         """How a call ended (#527): a render that failed makes the next render with the same
         input but another file name a repeat.  Other tools and answers change nothing."""
         ident = _render_identity(str(tool or ""), args)
-        if not ident or not _failed(result):
+        if not ident:
             return
         with self._lock:
+            if not _failed(result):
+                # It worked: the earlier failures no longer count against this render.
+                self._failures.get(key, {}).pop(ident, None)
+                return
             per = self._failures.setdefault(key, {})
             per[ident] = per.get(ident, 0) + 1
 
@@ -213,6 +217,9 @@ class LoopGuard:
                 # Something else ran: the scene may have changed, re-reading is fair again.
                 for other in [s for s, (r, _n) in counts.items() if r]:
                     del counts[other]
+                if not ident:
+                    # ... and a render that failed for want of it (a camera) may work now.
+                    self._failures.pop(key, None)
             nth = counts.get(sig, (read, 0))[1] + 1
             counts[sig] = (read, nth)
             if ident:

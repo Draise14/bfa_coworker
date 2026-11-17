@@ -227,6 +227,9 @@ def main(params: Params) -> Result | Callable[[], dict[str, object] | None]:
             ret = bpy.ops.render.render(write_still=True, scene=scene.name)
     except RuntimeError as ex:
         error = str(ex)
+    except Exception:
+        restore()           # whatever went wrong, the scene gets its own settings back
+        raise
     finally:
         if ctx_frame is not None:
             try:
@@ -261,5 +264,4 @@ def main(params: Params) -> Result | Callable[[], dict[str, object] | None]:
     check_is_finished.job_kind = getattr(base, "job_kind", 'RENDER')  # type: ignore[attr-defined]
     check_is_finished.job_on_finish = on_finish  # type: ignore[attr-defined]  # also when cancelled
     check_is_finished.job_label = "Sequencer preview, frame {:d}".format(frame)  # type: ignore[attr-defined]
-    check_is_finished.job_stopped = getattr(base, "job_stopped", None)  # type: ignore[attr-defined]
     return check_is_finished

@@ -177,7 +177,7 @@ def main(params: Params) -> Result | Callable[[], dict[str, object] | None]:
                                                           _failure_hint(quality))
             return result
 
-        for attr in ("job_kind", "job_label", "job_on_finish", "job_stopped"):
+        for attr in ("job_kind", "job_label", "job_on_finish"):
             setattr(check, attr, getattr(base, attr, None))
         if not params.background:
             # Held open; a render still going after a while gets a job id (deferred_tool).

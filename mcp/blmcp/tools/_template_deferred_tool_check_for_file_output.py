@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blender Authors
+# (Bforartists-maintained fork)
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -59,7 +60,9 @@ def _deferred_tool_check_for_file_output(
 
     def on_stats(*args: object) -> None:
         text = args[0] if args and isinstance(args[0], str) else ""
-        if "Cancel" in text:            # Cycles: "... | Cancelled" once a stop reached it
+        # Cycles: "... | Cancelled" once a stop reached it.  Only the last segment counts, and all
+        # of it: an object named "CancelButton" shows in "Synchronizing object | CancelButton".
+        if text.rsplit("|", 1)[-1].strip() == "Cancelled":
             stopped[0] = True
 
     hooked: list[tuple[object, object]] = []
@@ -107,5 +110,4 @@ def _deferred_tool_check_for_file_output(
     check_is_finished.job_on_finish = restore  # type: ignore[attr-defined]  # also when cancelled
     check_is_finished.job_label = "{:s} {:s}".format(  # type: ignore[attr-defined]
         job_type.replace("_", " ").title(), os.path.basename(output_path))
-    check_is_finished.job_stopped = lambda: stopped[0]  # type: ignore[attr-defined]
     return check_is_finished

@@ -111,7 +111,7 @@ def main(params: Params) -> Result | Callable[[], dict[str, object] | None]:
                 str(result.get("message") or ""), text)
             return result
 
-        for attr in ("job_kind", "job_label", "job_on_finish", "job_stopped"):
+        for attr in ("job_kind", "job_label", "job_on_finish"):
             setattr(check, attr, getattr(base, attr, None))
         return check
 

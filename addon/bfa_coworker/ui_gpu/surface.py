@@ -83,6 +83,7 @@ TIPS: dict[str, str] = {
     "notice:configure": "External Harness settings",
     "notice:bridge": "Start or stop the bridge your outside client talks to",
     "notice:copy_config": "Copy your client's config, to paste into its MCP settings",
+    "notice:approval_menu": "Permissions: Strict, Permissive or Auto -- how much freedom your client's tools get",
     "input": "Your message: Enter sends, Shift+Enter is a new line, @ mentions, / runs an agent command",
     "queue": "Queue this message: it goes when the running turn ends",
     "resize": "Drag to make the chat taller or shorter",
@@ -161,6 +162,9 @@ class TopBar:
     error: bool = False
     chat_modes: tuple[tuple[str, ...], ...] = ()   # (id, label[, icon]); empty hides the row
     chat_mode: str = ""
+    # (label, icon) of the Permissions setting: a square button that opens its dropdown, where
+    # the chat has no input box to carry it (External Harness, #385); ("", "") hides it.
+    approval: tuple[str, str] = ("", "")
 
 
 @dataclass
@@ -174,6 +178,9 @@ class Notice:
     # Agent 9: a live list under the card, newest first: (icon, title, detail).
     rows: tuple[tuple[str, str, str], ...] = ()
     rows_title: str = ""
+    # #385: (label, icon) of the Permissions setting, a row on the card whose button opens the
+    # input box's dropdown (action "approval_menu"); ("", "") hides it.
+    approval: tuple[str, str] = ("", "")
 
 
 @dataclass
@@ -529,7 +536,7 @@ class ChatSurface:
         widget = (self.hit(*self.mouse) if self.mouse is not None and self.pressed is None and not quiet
                   else None)
         tip = tip_for(widget)
-        if widget == "approval_menu" and self.box.approval[0]:     # icon only: say which one is on
+        if widget in ("approval_menu", "notice:approval_menu") and self.box.approval[0]:   # say which one is on
             tip = "Permissions: {:s} (click to change)".format(self.box.approval[0])
         if not tip:
             self._tip = None
@@ -568,7 +575,10 @@ class ChatSurface:
         # Buttons from the right: settings, open the editor, Start/Stop (square icons: #238).
         bw = u
         x = row.right
-        for widget_id, icon, label in (("prefs", "PREFERENCES", ""), ("open_editor", "FULLSCREEN_ENTER", "")):
+        buttons = [("prefs", "PREFERENCES", ""), ("open_editor", "FULLSCREEN_ENTER", "")]
+        if top.approval[1]:          # External Harness: Permissions up here too (#385)
+            buttons.append(("approval_menu", top.approval[1], ""))
+        for widget_id, icon, label in buttons:
             x -= bw
             if canvas.button(Rect(x, row.y, bw, u), widget_id, label, icon=icon):
                 actions.append((widget_id, ""))
@@ -801,7 +811,9 @@ class ChatSurface:
                  for _id, label, _icon in notice.buttons]
         side_by_side = sum(needs) + pad * 0.5 * len(needs) <= width - 2 * pad
         rows = 1 if side_by_side else len(notice.buttons)
-        h = u + lines_h + (rows * u * 1.25 if notice.buttons else 0.0) + 3 * pad
+        beside = _permissions_beside(canvas, width - 2 * pad, notice.approval[0])
+        permissions_h = (u * 1.25 + (0.0 if beside else style.line_height)) if notice.approval[1] else 0.0
+        h = u + lines_h + (rows * u * 1.25 if notice.buttons else 0.0) + permissions_h + 3 * pad
         card = Rect(x, max(rect.y, rect.top - pad - h), width, h)
         canvas.box(card, colors=style.box)
         side = canvas.icon_size()
@@ -811,6 +823,10 @@ class ChatSurface:
         top = head.y - pad * 0.5
         for line in notice.lines:
             top = canvas.wrapped(card.x + pad, top, card.w - 2 * pad, line, _soft(style.text, 0.1))
+        if permissions_h:
+            buttons_top = card.y + pad + (rows * u * 1.25 if notice.buttons else 0.0)
+            self._draw_notice_permissions(canvas, Rect(card.x + pad, buttons_top, card.w - 2 * pad, u * 1.1),
+                                          notice.approval, beside, actions)
         if notice.buttons:
             bx, by = card.x + pad, card.y + pad + (rows - 1) * u * 1.25
             for (widget_id, label, icon), need in zip(notice.buttons, needs):
@@ -823,6 +839,31 @@ class ChatSurface:
                     by -= u * 1.25
         if notice.rows_title:
             self._draw_notice_rows(canvas, Rect(x, rect.y, width, card.y - pad - rect.y), notice)
+
+    @staticmethod
+    def _draw_notice_permissions(canvas: Canvas, row: Rect, approval: tuple[str, str], beside: bool,
+                                 actions: list[tuple[str, str]]) -> None:
+        """#385: "Permissions  [icon Permissive]" on the harness card: the setting at a glance,
+        and a click opens the dropdown of the input box's button (``approval_menu``).  *row* is
+        the button's row; a narrow card (a sidebar: not *beside*) has the word on its own line
+        above it and the button as wide as Copy Log / Configure under it."""
+        style = canvas.style
+        pad = style.pad
+        label, icon = approval
+        word_w = canvas.measure(_PERMISSIONS, "ui", style.font_size) + pad
+        if beside:
+            canvas.label(Rect(row.x, row.y, word_w, row.h), _PERMISSIONS, _soft(style.text, 0.1))
+            button = Rect(row.x + word_w, row.y, _permissions_button_w(canvas, label), row.h)
+        else:
+            line = style.line_height
+            canvas.label(Rect(row.x, row.top + pad * 0.15, row.w, line), _fit(canvas, _PERMISSIONS, row.w),
+                         _soft(style.text, 0.1))
+            button = Rect(row.x, row.y, row.w, row.h)
+            label = _fit(canvas, label, row.w - canvas.icon_size() - 2.0 * pad)
+        # Its own widget id (the sidebar's top bar has an "approval_menu" too: one click, one
+        # dropdown); the same action as the button by Send.
+        if canvas.button(button, "notice:approval_menu", label, icon=icon):
+            actions.append(("approval_menu", ""))
 
     def _draw_notice_rows(self, canvas: Canvas, room: Rect, notice: Notice) -> None:
         """The live list under a notice: a title, then two lines per row while they fit."""
@@ -859,6 +900,24 @@ class ChatSurface:
             canvas.label(Rect(text_x, top - 2 * line, room.right - text_x, line),
                          _fit(canvas, detail, room.right - text_x), _soft(style.text, 0.4))
             top -= line * 2.3
+
+
+_PERMISSIONS = "Permissions"     # the harness card's word before the setting (#385)
+
+
+def _permissions_button_w(canvas: Canvas, label: str) -> float:
+    """The harness card's Permissions button: its icon and *label*, at least as wide as the
+    card's other buttons."""
+    style = canvas.style
+    return max(canvas.icon_size() + canvas.measure(label, "ui", style.font_size) + 3.0 * style.pad,
+               style.unit * 4.5)
+
+
+def _permissions_beside(canvas: Canvas, width: float, label: str) -> bool:
+    """Do the word and the button fit on one row of *width* (else the word goes above it)?"""
+    style = canvas.style
+    return canvas.measure(_PERMISSIONS, "ui", style.font_size) + style.pad + _permissions_button_w(canvas, label) \
+        <= width
 
 
 def _fit(canvas: Canvas, text: str, width: float) -> str:

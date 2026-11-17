@@ -268,7 +268,7 @@ def _register() -> None:
     # Make Vertical / Reframe (#333): in the Sequencer's Coworker section and Video panel (wand).
     from . import reframe
     reframe.register()
-    # Edit by Transcript (#498): Open Transcript in the Video panel / Strip menu, the Text Editor's panel.
+    # Edit by Transcript (#498): Edit Transcript in the Video panel / Strip menu, the Text Editor's panel.
     from . import transcript_edit_ops
     transcript_edit_ops.register()
 

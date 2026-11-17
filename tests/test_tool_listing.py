@@ -165,6 +165,126 @@ EXPECTED_TOOLS = [
         }
     },
     {
+        "name": "apply_transcript_edit",
+        "description": "\n"
+"        Edit a Sequencer clip by editing its transcript (Edit by Transcript), one undo step.\n"
+"        Read it first with get_transcript_text. Words taken out are cut from the whole edit\n"
+"        (picture, sound and every other track together, the gap closed, captions trimmed);\n"
+"        lines moved to another place move their clips; a changed word changes only the\n"
+"        captions. Text with no audio behind it (new words, a line rewritten so it no longer\n"
+"        matches what is said, a repeated word or line the text can't tell apart) cuts nothing\n"
+"        and is listed in ``flags``. A locked strip in the way: nothing changes, ``refused``\n"
+"        names it. Nothing is cut by guessing: only text you removed, matched to its words.\n"
+"\n"
+"        Args:\n"
+"            strip: The sound or movie strip (none: the active strip, or the only clip with\n"
+"                a transcript).\n"
+"            cut_lines: Line numbers (from get_transcript_text) to cut whole. Simplest for\n"
+"                \"cut the part about ...\". Send it with ``version`` (get_transcript_text's\n"
+"                ``version``) or give ``lines`` instead; if the text changed since you read it\n"
+"                the answer is ``refused`` with the current ``text_now``. Not together with ``text``.\n"
+"            text: Or the whole edited text (get_transcript_text's ``text``, changed): delete\n"
+"                words or lines, move lines, fix words. Keep each line's time mark: it tells the\n"
+"                line (a repeated sentence) apart. Not together with ``cut_lines``.\n"
+"            dry_run: Only say what would change (``ops``, ``seconds``), change nothing, create nothing.\n"
+"            version: The ``version`` of the text you read (see cut_lines).\n"
+"            lines: Lines to cut with what you read: ``[{\"line\": 3, \"text\": \"...\"}]`` (the same\n"
+"                check as ``version``, line by line).\n"
+"            confirm_large_cut: An edit that cuts more than half of the words or the time is\n"
+"                ``refused`` (``needs_confirm``) unless this is true: only after the user agreed.\n"
+"\n"
+"        Returns:\n"
+"            ``status`` (ok / nothing / refused / error), ``message``, ``cut_words``,\n"
+"            ``seconds`` (what the edit takes out), ``seconds_removed``, ``moved``, ``retexted``,\n"
+"            ``captions_updated``, ``flags`` ([{line, text, reason, message}]), ``ops`` (the edit\n"
+"            list), ``needs_confirm``, ``new_names`` (strip ->\n"
+"            its pieces), ``text_now`` and ``version`` (the transcript as it plays now).\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "strip": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Strip"
+                },
+                "cut_lines": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "integer"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Cut Lines"
+                },
+                "text": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Text"
+                },
+                "dry_run": {
+                    "default": False,
+                    "title": "Dry Run",
+                    "type": "boolean"
+                },
+                "version": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Version"
+                },
+                "lines": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "additionalProperties": True,
+                                "type": "object"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Lines"
+                },
+                "confirm_large_cut": {
+                    "default": False,
+                    "title": "Confirm Large Cut",
+                    "type": "boolean"
+                }
+            },
+            "title": "apply_transcript_editArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "ask_user",
         "description": "\n"
 "        Ask the user a short question in Coworker's chat, with buttons; waits for the answer.\n"
@@ -1350,6 +1470,42 @@ EXPECTED_TOOLS = [
         }
     },
     {
+        "name": "get_transcript_text",
+        "description": "\n"
+"        Read a Sequencer clip's transcript as text: what it says, as it plays on the\n"
+"        timeline now (cuts already made are left out), one line per sentence with a\n"
+"        line number and its time. Use it to find a part (\"the bit about pricing\") before\n"
+"        apply_transcript_edit. The clip must have been transcribed (transcribe_strip).\n"
+"\n"
+"        Args:\n"
+"            strip: The sound or movie strip (none: the active strip, or the only clip\n"
+"                with a transcript).\n"
+"\n"
+"        Returns:\n"
+"            ``lines`` ([{line, time, frame, text}]), ``text`` (the whole text, each line\n"
+"            starting with its time mark), ``strip``, ``media``, ``text_block`` (the Text\n"
+"            Editor text of it, if open) and ``pending_edits`` (it has edits not applied).\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "strip": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Strip"
+                }
+            },
+            "title": "get_transcript_textArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "get_vse_strip_detail",
         "description": "\n"
 "        Everything about one Video Sequencer strip.\n"
@@ -1804,10 +1960,11 @@ EXPECTED_TOOLS = [
 "          assign_material_to_objects, get_active_node_tree, get_node_group_interface,\n"
 "          wire_node_group)\n"
 "        - vse: Video Sequencer strips: list, read, move / trim, preview a frame, speech to text,\n"
-"          remove silences, captions and a vertical 9:16 version with editable framing\n"
-"          (get_vse_timeline_overview, get_vse_strips_summary, get_vse_strip_detail,\n"
+"          remove silences, captions, edit by transcript and a vertical 9:16 version with editable\n"
+"          framing (get_vse_timeline_overview, get_vse_strips_summary, get_vse_strip_detail,\n"
 "          set_strip_frame_range, render_vse_preview, transcribe_strip, remove_silences,\n"
-"          add_captions, reframe_vertical, jump_to_tab_by_name, jump_to_tab_by_space_type)\n"
+"          add_captions, get_transcript_text, apply_transcript_edit, reframe_vertical,\n"
+"          jump_to_tab_by_name, jump_to_tab_by_space_type)\n"
 "\n"
 "        Load only what the request needs; the basic tools (scene, code, docs,\n"
 "        screenshots, plan, questions, bake_textures, render_viewport_to_path,\n"

@@ -47,6 +47,7 @@ __all__ = (
     "COWORKER_PT_sequencer_sidebar",
     "COWORKER_PT_sequencer_toolshelf",
     "CoworkerEntry",
+    "NO_DIALOG",
     "OTHERS",
     "PANEL",
     "RATE",
@@ -54,6 +55,9 @@ __all__ = (
     "SUBMENUS",
     "VIEWS",
     "WINDOW_S",
+    "apply_cuts",
+    "blocked_in",
+    "move_frames",
     "register",
     "remove_silences",
     "tool_remove_silences",
@@ -670,7 +674,7 @@ def remove_silences(scene: Any, settings: tuple, names: list[str] | None = None,
     editor = scene.sequence_editor
     if editor is None:
         return {"status": "nothing", "message": "The scene “{:s}” has no strips".format(scene.name)}
-    strips, channels = _level(editor)
+    strips, _channels = _level(editor)
     every = list(strips)
     if names:
         pool = {s.name: s for s in every}
@@ -684,7 +688,6 @@ def remove_silences(scene: Any, settings: tuple, names: list[str] | None = None,
     sounds = _listen(every, chosen)
     if not sounds:
         return {"status": "nothing", "message": "Select one or more sound strips (or the movie strips that go with them)"}
-    fps = _fps(scene)
     infos, problems, blocked = _analyse(scene, sounds, context, report_progress)
     _overhang(infos, every)
     cuts, quiet = _common(infos, blocked, settings)
@@ -695,14 +698,45 @@ def remove_silences(scene: Any, settings: tuple, names: list[str] | None = None,
             "Nothing is quiet enough to remove (below {:.0f} dB for {:.2f} s or more{:s}): try a higher threshold "
             "or a shorter minimum silence".format(settings[0], settings[1],
                                                   ", in every sound at once" if len(sounds) > 1 else "")))
+    out = apply_cuts(scene, cuts, ripple, update_end, "Remove Silences")
+    if out["status"] != "ok":
+        return dict(base, **out)
+    seconds = out["seconds_removed"]
+    message = "Removed {:d} silence{:s} ({:s}) from the edit{:s}".format(
+        out["cuts"], "" if out["cuts"] == 1 else "s", silences.format_duration(seconds),
+        "" if ripple else ", gaps left open")
+    dropped = out["captions_dropped"]
+    if dropped:
+        message += "; {:d} caption{:s} too short to read went".format(len(dropped), "" if len(dropped) == 1 else "s")
+    if out["scene_end_changed"]:
+        message += "; the scene now ends at frame {:d}".format(scene.frame_end)
+    return dict(base, **dict(out, message=message))
+
+
+def apply_cuts(scene: Any, cuts: list[tuple], ripple: bool = True, update_end: bool = True,
+               what: str = "Remove Silences") -> dict[str, Any]:
+    """Remove the timeline frames *cuts* (``[(first, end)]``) from every strip at the level the
+    artist is looking at, with Remove Silences' plan (#539): picture and sound together, every
+    other track in step, captions trimmed (one too short to read goes), locked / retimed /
+    scene / meta strips over a cut refusing the whole edit before anything changes, the first
+    piece keeping its name, the gaps closed (*ripple*) and the scene end following.  Edit by
+    Transcript (#498) cuts words with it.  No undo step of its own.
+
+    ``status``: ``ok``, ``nothing``, ``refused`` or ``error`` (``changed``: press Ctrl+Z)."""
+    editor = scene.sequence_editor
+    if editor is None or not cuts:
+        return {"status": "nothing", "message": "Nothing to cut", "refused": []}
+    strips, channels = _level(editor)
+    every = list(strips)
+    fps = _fps(scene)
     the_plan = cut_plan.plan(_describe(every, channels, fps), cuts, ripple, fps)
     if the_plan["refused"]:
         refused = [{"strip": n, "reason": r} for n, r in the_plan["refused"]]
         listed = "; ".join("“{:s}” {:s}".format(n, r) for n, r in the_plan["refused"][:4])
         more = len(the_plan["refused"]) - 4
-        return dict(base, status="refused", refused=refused, message=(
+        return {"status": "refused", "refused": refused, "message": (
             "Nothing was cut, so the edit stays in sync: {:s}{:s}".format(
-                listed, " (and {:d} more)".format(more) if more > 0 else "")))
+                listed, " (and {:d} more)".format(more) if more > 0 else ""))}
     end0 = _content_end(editor.strips)
     by_name = {s.name: s for s in every}
     cuts_index = cut_plan.Cuts(the_plan["cuts"])
@@ -720,8 +754,8 @@ def remove_silences(scene: Any, settings: tuple, names: list[str] | None = None,
             _text_pieces(list(strips), {n: ps for n, ps in pieces.items() if n in texts}, new_names, fresh)
         _refit(scene, [p for n in sorted(fresh) for p in new_names.get(n, [n])] + trimmed)
     except Exception as ex:  # pylint: disable=broad-exception-caught
-        return dict(base, status="error", changed=True, message=(
-            "Remove Silences stopped part-way ({!s}): press Ctrl+Z to get the edit back".format(ex)))
+        return {"status": "error", "changed": True, "refused": [], "message": (
+            "{:s} stopped part-way ({!s}): press Ctrl+Z to get the edit back".format(what, ex))}
     end1 = _content_end(editor.strips)
     end_changed = False
     if update_end and end1 < end0:
@@ -736,18 +770,95 @@ def remove_silences(scene: Any, settings: tuple, names: list[str] | None = None,
     frames = silences.removed_frames(the_plan["cuts"])
     seconds = frames / fps
     changed = sorted(n for n, ps in new_names.items() if ps != [n])
-    message = "Removed {:d} silence{:s} ({:s}) from the edit{:s}".format(
-        len(the_plan["cuts"]), "" if len(the_plan["cuts"]) == 1 else "s", silences.format_duration(seconds),
-        "" if ripple else ", gaps left open")
-    if dropped:
-        message += "; {:d} caption{:s} too short to read went".format(len(dropped), "" if len(dropped) == 1 else "s")
-    if end_changed:
-        message += "; the scene now ends at frame {:d}".format(scene.frame_end)
-    return dict(base, status="ok", message=message, cuts=len(the_plan["cuts"]), frames_removed=frames,
+    return dict(status="ok", message="", cuts=len(the_plan["cuts"]), frames_removed=frames,
                 seconds_removed=round(seconds, 2), cut_ranges=[list(r) for r in the_plan["cuts"]],
                 new_names=new_names, renamed=changed, captions_trimmed=sorted(the_plan["trim"]),
                 captions_dropped=dropped, end_frame=scene.frame_end, content_end=end1 - 1,
                 scene_end_changed=end_changed, refused=[])
+
+
+def blocked_in(scene: Any, lo: int, hi: int) -> list[tuple[str, str]]:
+    """``[(strip, why)]`` of the strips at the level over frames ``lo..hi`` that can't be cut or
+    moved (locked, retimed, scene, meta, transition, effect): asked before an edit starts."""
+    editor = scene.sequence_editor
+    if editor is None:
+        return []
+    strips, channels = _level(editor)
+    out = []
+    for row in _describe(list(strips), channels, _fps(scene)):
+        if row["right"] <= lo or row["left"] >= hi:
+            continue
+        if row["locked"]:
+            out.append((row["name"], "is locked"))
+        elif row["refuse"]:
+            out.append((row["name"], row["refuse"]))
+        elif row["kind"] == "follow":
+            out.append((row["name"], "is an effect strip: move it by hand"))
+    return out
+
+
+def move_frames(scene: Any, first: int, end: int, to: int, what: str = "Edit by Transcript") -> dict[str, Any]:
+    """Move the frames ``first..end`` of every strip at the level to frame *to* (#498: a
+    paragraph moved in the transcript), the time between closing up behind them: picture,
+    sound, captions and every other track move together, so nothing drifts and the edit keeps
+    its length.  Strips are split (prefetch stopped first, #536) at the three frames; the first
+    piece of each keeps its name; captions split on the way stay Coworker's (re-signed).
+
+    A locked, retimed, scene, meta, transition or effect strip in the frames that change
+    refuses before anything changes.  ``status``: ``ok``, ``nothing``, ``refused``, ``error``."""
+    editor = scene.sequence_editor
+    first, end, to = int(first), int(end), int(to)
+    if editor is None or end <= first or first <= to <= end:
+        return {"status": "nothing", "message": "Nothing to move", "refused": []}
+    strips, _channels = _level(editor)
+    every = list(strips)
+    lo, hi = min(first, to), max(end, to)
+    width = end - first
+    refused = blocked_in(scene, lo, hi)
+    if refused:
+        listed = "; ".join("“{:s}” {:s}".format(n, r) for n, r in refused[:4])
+        return {"status": "refused", "refused": [{"strip": n, "reason": r} for n, r in refused],
+                "message": "Nothing was moved, so the edit stays in sync: {:s}".format(listed)}
+    from .prefetch import stop_prefetch
+    texts = {s.name for s in every if s.type == "TEXT"}
+    fresh = {s.name for s in every if s.type == "TEXT" and _unedited(s)}
+    try:
+        if every:
+            stop_prefetch(every[0])
+        pieces: dict[str, list] = {}
+        for strip in every:
+            parts = [strip]
+            for frame in sorted({first, end, to}):
+                last = parts[-1]
+                if _left(last) < frame < _right(last):
+                    parts.append(_split(last, frame))
+            if len(parts) > 1:
+                pieces[strip.name] = parts
+        now = list(strips)
+        block = [s for s in now if first <= _left(s) and _right(s) <= end]
+        if to < first:
+            between = sorted((s for s in now if to <= _left(s) and _right(s) <= first), key=_left, reverse=True)
+            shift, dest = width, to
+        else:
+            between = sorted((s for s in now if end <= _left(s) and _right(s) <= to), key=_left)
+            shift, dest = -width, to - width
+        far = max(_content_end(now), hi) + width + 10 - first
+        for s in block:
+            _move(s, far)
+        for s in between:
+            _move(s, shift)
+        for s in block:
+            _move(s, dest - first - far)
+        for parts in pieces.values():
+            parts.sort(key=_left)
+        new_names = _rename(editor, pieces)
+        if texts & set(pieces):
+            _text_pieces(list(strips), {n: ps for n, ps in pieces.items() if n in texts}, new_names, fresh)
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        return {"status": "error", "changed": True, "refused": [], "message": (
+            "{:s} stopped part-way ({!s}): press Ctrl+Z to get the edit back".format(what, ex))}
+    return {"status": "ok", "message": "", "first": first, "end": end, "to": dest, "frames": width,
+            "new_names": new_names, "refused": []}
 
 
 # -- the operator ------------------------------------------------------------------
@@ -939,12 +1050,15 @@ class CoworkerEntry:
 
 
 # Coworker's other video operators, in the same Video panel and Strip-menu section when
-# their modules are registered (#376 Auto Captions, #333 Make Vertical):
+# their modules are registered (#376 Auto Captions, #333 Make Vertical, #498 Open Transcript):
 # (operator, its class name in bpy.types, text, wand icon, Blender fallback icon).
 OTHERS = (
     ("bfacw.auto_captions", "BFACW_OT_auto_captions", "Auto Captions", "captions", "FONT_DATA"),
     ("bfacw.make_vertical", "BFACW_OT_make_vertical", "Make Vertical", "vertical", "SEQ_PREVIEW"),
+    ("bfacw.open_transcript", "BFACW_OT_open_transcript", "Open Transcript", "transcribe", "TEXT"),
 )
+# Of those, the ones that open no dialog (no "..." in the Strip menu).
+NO_DIALOG = frozenset({"bfacw.open_transcript"})
 # Their submenus in the section: (menu, wand icon or "", Blender icon).
 SUBMENUS = (("BFACW_MT_captions", "captions", "FONT_DATA"), ("BFACW_MT_reframe", "", "VIEW_PAN"))
 
@@ -1040,7 +1154,8 @@ def _draw_strip_menu(self: Any, context: Any) -> None:
     icons.operator(layout, SPEC.bl_idname, name=SPEC.icon, fallback=SPEC.fallback_icon, text=SPEC.label + "...")
     for idname, cls_name, text, icon, fallback in OTHERS:
         if _registered(cls_name):
-            icons.operator(layout, idname, name=icon, fallback=fallback, text=text + "...")
+            icons.operator(layout, idname, name=icon, fallback=fallback,
+                           text=text + ("" if idname in NO_DIALOG else "..."))
     for menu_id, icon, fallback in SUBMENUS:
         if _registered(menu_id):
             if icon:

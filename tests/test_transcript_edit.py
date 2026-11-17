@@ -82,7 +82,7 @@ def indices(sentence_no):
 
 
 def edit(text, v, words=WORDS, retext=None):
-    return TE.compute_edit(v["tokens"], v["order"], text, words, retext)
+    return TE.compute_edit(v["tokens"], v["order"], text, words, retext, base_lines=v["lines"])
 
 
 # -- 1. the view ------------------------------------------------------------------------------------
@@ -156,7 +156,9 @@ class TestEdit(unittest.TestCase):
         self.assertFalse(e["moved"])
         self.assertEqual(e["flags"], [])
         self.assertEqual(e["ops"], [{"op": "cut", "words": [indices(2)[0], indices(2)[-1]], "count": 7,
-                                     "text": "The price of pears went up again."}])
+                                     "seconds": 3.42, "text": "The price of pears went up again."}])
+        self.assertEqual(e["seconds"], 3.42)
+        self.assertFalse(e["needs_confirm"])
 
     def test_delete_one_word(self):
         _occ, v = view()
@@ -199,10 +201,11 @@ class TestEdit(unittest.TestCase):
         e = edit(v["text"].replace("went up", "wentup"), v)
         v2 = TE.render(occ, WORDS, e["retext"], FPS)
         self.assertIn("wentup again.", v2["text"])
-        again = TE.compute_edit(v2["tokens"], v2["order"], v2["text"], WORDS, e["retext"])
+        again = TE.compute_edit(v2["tokens"], v2["order"], v2["text"], WORDS, e["retext"], base_lines=v2["lines"])
         self.assertFalse(again["changed"])
         # cutting the joined word's owner cuts both
-        e3 = TE.compute_edit(v2["tokens"], v2["order"], v2["text"].replace("wentup ", ""), WORDS, e["retext"])
+        e3 = TE.compute_edit(v2["tokens"], v2["order"], v2["text"].replace("wentup ", ""), WORDS, e["retext"],
+                             base_lines=v2["lines"])
         self.assertEqual(sorted(e3["cut"]), [indices(2)[4], indices(2)[5]])
         self.assertEqual(e3["retext"], {})
 
@@ -263,17 +266,24 @@ class TestEdit(unittest.TestCase):
         self.assertEqual(e["order"][:6], indices(4))
         self.assertEqual(e["flags"], [])
 
-    def test_repeated_word_cuts_exactly_one(self):
+    def test_one_of_two_repeated_words_is_flagged_not_cut(self):
+        # "the the" -> "the": the text can't say which "the" went, so nothing is cut and the line is flagged
         _occ, v = view()
         e = edit(v["text"].replace("the the show", "the show"), v)
-        self.assertEqual(len(e["cut"]), 1)
-        self.assertIn(e["cut"][0], indices(4)[3:5])
+        self.assertEqual(e["cut"], [])
+        self.assertFalse(e["changed"])
+        self.assertEqual([(f["line"], f["reason"]) for f in e["flags"]], [(5, "ambiguous")])
+        # both of them taken out is certain
+        e = edit(v["text"].replace("the the ", ""), v)
+        self.assertEqual(e["cut"], indices(4)[3:5])
 
     def test_delete_and_fix_a_typo_side_by_side(self):
         _occ, v = view()
         e = edit(v["text"].replace("apples and pears", "aples pears"), v)
-        self.assertEqual(e["cut"], [indices(1)[4]])                  # "and"
-        self.assertEqual(e["retext"], {str(indices(1)[3]): "aples"})
+        # "apples and" written as "aples": a block of 2 words as 1 is one retext of the block, the
+        # words stay on the timeline ("and" is joined to "apples", not cut: nothing is cut by guessing)
+        self.assertEqual(e["cut"], [])
+        self.assertEqual(e["retext"], {str(indices(1)[3]): "aples", str(indices(1)[4]): ""})
         self.assertEqual(e["flags"], [])
 
     def test_filler_words(self):
@@ -313,9 +323,10 @@ class TestFrames(unittest.TestCase):
         self.assertLessEqual(f0, first_cut)                 # the cut word goes whole
         self.assertLess(f1, next_start)                     # padding before the next word
         self.assertAlmostEqual(f0, first_cut - 0.12 * FPS, delta=1)
-        self.assertAlmostEqual(f1, next_start - 0.12 * FPS, delta=1)
-        # the pause before the sentence stays as it was: the rhythm is kept
-        self.assertAlmostEqual((f0 - last_kept_end) + (next_start - f1), first_cut - last_kept_end, delta=1)
+        # the pause after the sentence is 1.3 s: the cut takes 0.6 s of it, the rest stays
+        last_cut_end = 1 + WORDS[indices(2)[-1]]["end"] * FPS
+        self.assertAlmostEqual(f1, last_cut_end + TE.PAUSE_LIMIT_S * FPS, delta=1)
+        self.assertGreater(next_start - f1, 0.5 * FPS)
 
     def test_short_pause_is_split_in_half(self):
         words = made_up_words([(1.0, "one two three four")], step=0.34, length=0.3)
@@ -324,24 +335,29 @@ class TestFrames(unittest.TestCase):
         self.assertAlmostEqual(f0, 1 + (words[1]["start"] - 0.02) * FPS, delta=1)
         self.assertAlmostEqual(f1, 1 + (words[2]["start"] - 0.02) * FPS, delta=1)
 
-    def test_first_and_last_words_go_to_the_strip_edges(self):
+    def test_first_and_last_words_end_at_the_word_plus_padding_not_at_the_strip_edge(self):
         occ, _v = view()
         p = piece()
         frames = TE.cut_ranges(occ, indices(0) + indices(4), WORDS, [p], FPS)
-        self.assertEqual(frames[0][0], p["left"])
-        self.assertEqual(frames[-1][1], p["right"])
+        self.assertAlmostEqual(frames[0][0], 1 + (WORDS[0]["start"] - TE.PADDING_S) * FPS, delta=1)
+        self.assertGreater(frames[0][0], p["left"])
+        last = WORDS[indices(4)[-1]]
+        self.assertAlmostEqual(frames[-1][1], 1 + (last["end"] + TE.PADDING_S) * FPS, delta=1)
+        self.assertLess(frames[-1][1], p["right"])
 
     def test_cuts_over_two_strips(self):
         p1 = piece("talk", 1, 1 + 9 * FPS, cs=1.0)                  # 0-9 s
         p2 = piece("talk.001", 1 + 9 * FPS, 1 + 20 * FPS, cs=1.0)   # 9-20 s
         occ = TE.timeline_words(WORDS, [p1, p2], FPS)
         frames = TE.cut_ranges(occ, [indices(1)[-1], indices(2)[0]], WORDS, [p1, p2], FPS)
-        # the last word of talk goes to its end, the first of talk.001 from its start: one range across the edit
-        self.assertEqual(len(frames), 1)
-        self.assertLess(frames[0][0], 1 + 9 * FPS)
-        self.assertGreater(frames[0][1], 1 + 9 * FPS)
-        self.assertLessEqual(frames[0][0], 1 + WORDS[indices(1)[-1]]["start"] * FPS)
-        self.assertGreater(frames[0][1], 1 + WORDS[indices(2)[0]]["end"] * FPS)
+        # the last word of talk ends at the word plus padding, the first of talk.001 starts a padding
+        # before it: two ranges, one in each strip, neither running to the strip's edge
+        self.assertEqual(len(frames), 2)
+        (a0, a1), (b0, b1) = frames
+        self.assertLessEqual(a0, 1 + WORDS[indices(1)[-1]]["start"] * FPS)
+        self.assertLess(a1, 1 + 9 * FPS)
+        self.assertGreater(b0, 1 + 9 * FPS)
+        self.assertGreater(b1, 1 + WORDS[indices(2)[0]]["end"] * FPS)
 
     def test_plan_moves(self):
         self.assertEqual(TE.plan_moves([1, 2, 3, 4, 5], [1, 2, 3, 4, 5]), [])

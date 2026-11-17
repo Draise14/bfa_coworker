@@ -86,7 +86,7 @@ class TestCutBySentence(_Edit):
         occ = self.occ()
         v = TE.render(occ, T.WORDS, None, FPS)
         text = T.drop_line(v["text"], T.line_with(v["text"], "The price"))
-        edit = TE.compute_edit(v["tokens"], v["order"], text, T.WORDS)
+        edit = TE.compute_edit(v["tokens"], v["order"], text, T.WORDS, base_lines=v["lines"])
         frames = TE.cut_ranges(occ, edit["cut"], T.WORDS, self.pieces(), FPS)
         before_end = max(s._right for s in self.ed.items)
         out = self.seq.apply_cuts(self.scene, frames, True, True, "Edit by Transcript")

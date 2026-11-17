@@ -29,7 +29,7 @@ import os
 import threading
 from pathlib import Path
 
-from .shared import effective_ports, get_llm_manager, set_user_pref
+from .shared import effective_ports, get_llm_manager, mark_preferences_changed, set_user_pref
 
 import webbrowser
 
@@ -700,6 +700,11 @@ def _scan_poll_timer(context: bpy.types.Context):
 # ---------------------------------------------------------------------------
 # Select Preset
 
+# The fields `_update_model_preset` fills in from the chosen preset.
+_PRESET_DERIVED = ("model_repo_id", "model_filename", "local_ctx_size", "local_ctx_preset",
+                   "local_max_tokens", "existing_model_path", "model_preset_info")
+
+
 class _BFACW_OT_select_preset(bpy.types.Operator):  # type: ignore[misc]
     """Select a model preset from the categorized visual list."""
     bl_idname = "bfacw.select_preset"
@@ -717,7 +722,12 @@ class _BFACW_OT_select_preset(bpy.types.Operator):  # type: ignore[misc]
             set_user_pref(prefs, "model_preset", self.preset_id, context.preferences)   # kept on quit (#575)
             # Trigger the update handler manually since EnumProperty
             # assignment doesn't always fire the callback on all platforms.
+            # Picking the same preset again leaves model_preset as is but resets the fields
+            # derived from it: those resets are kept on quit too (#575).
+            before = [getattr(prefs, k, None) for k in _PRESET_DERIVED]
             prefs._update_model_preset(context)
+            if [getattr(prefs, k, None) for k in _PRESET_DERIVED] != before:
+                mark_preferences_changed(context.preferences)
         return {"FINISHED"}
 
 

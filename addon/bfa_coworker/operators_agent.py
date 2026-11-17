@@ -38,7 +38,7 @@ import bpy  # pylint: disable=import-error
 import threading
 
 from .shared import effective_ports, get_llm_manager, get_agent_controller, HARNESS_PRESET_ITEMS
-from .shared import mark_preferences_changed, set_user_pref
+from .shared import set_user_pref
 from . import agent_controller as _ac_mod
 from . import mcp_to_blender_server
 
@@ -1311,8 +1311,8 @@ class BFACW_OT_save_provider(bpy.types.Operator):  # type: ignore[misc]
         # Replace existing profile with same name.
         providers = [p for p in providers if p.get("name") != name]
         providers.append(profile)
-        prefs._set_saved_providers(providers)
-        mark_preferences_changed(context.preferences)      # kept on quit (#575)
+        import json as _json
+        set_user_pref(prefs, "saved_providers_json", _json.dumps(providers), context.preferences)   # kept on quit (#575)
 
         self.report({"INFO"}, "Saved provider profile '{:s}'".format(name))
         return {"FINISHED"}
@@ -1333,8 +1333,8 @@ class BFACW_OT_delete_provider(bpy.types.Operator):  # type: ignore[misc]
         prefs = context.preferences.addons[__package__].preferences
         providers = prefs._get_saved_providers()
         providers = [p for p in providers if p.get("name") != self.profile_name]
-        prefs._set_saved_providers(providers)
-        mark_preferences_changed(context.preferences)      # kept on quit (#575)
+        import json as _json
+        set_user_pref(prefs, "saved_providers_json", _json.dumps(providers), context.preferences)   # kept on quit (#575)
         self.report({"INFO"}, "Deleted provider profile '{:s}'".format(self.profile_name))
         return {"FINISHED"}
 

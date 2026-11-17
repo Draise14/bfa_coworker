@@ -21,7 +21,9 @@ says "restored" is itself a preference, so after a session that ended in a crash
 or a kill the next start restores again (#575).  That is safe because a restore
 only fills settings that still hold their defaults: when this install holds any
 setting that is neither its default nor the backup's value (newer than the
-backup), nothing is restored.
+backup), nothing is restored.  The limit: a setting you deliberately set back to its
+default, while the backup holds another value and no other setting differs, is
+restored to the backup's value.
 
 Values are set like any setting (``setattr``): since Blender 5.0 the property
 storage (``prefs[key] = value``) no longer reaches ``bpy.props`` values (#396).
@@ -244,7 +246,10 @@ def restore_once(prefs: Any, config_dir: str) -> list[str]:
     so they are never overwritten by an older backup.  The flag is a preference
     too, kept only when Blender saves them (not after a crash or a kill), so the
     restore may come again: it then restores nothing when any setting is newer
-    than the backup (:func:`newer_than_backup`), so it never undoes your changes (#575).
+    than the backup (:func:`newer_than_backup`).  So it never overwrites a setting that differs
+    from both its default and the backup (#575).  It cannot tell a setting you set back to its
+    default from one never touched: with no other setting differing, the backup's value is
+    written back.
     """
     try:
         if getattr(prefs, RESTORED_FLAG, True):

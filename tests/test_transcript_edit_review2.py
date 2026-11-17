@@ -591,6 +591,155 @@ class TestPlainEditsAreApplied(unittest.TestCase):
                 done += 1
 
 
+class TestAfterAMove(unittest.TestCase):
+    """The review of the round after: once a move is applied the timeline is out of source order, and a plain edit
+    was refused as "overlap" (39 % of the line deletes).  Each strip is checked on its own."""
+
+    LINES = [(1.0, "Alpha bravo."), (4.0, "Charlie delta."), (8.0, "Echo foxtrot."), (12.0, "Golf hotel.")]
+
+    def moved_view(self, live):
+        words, _occ, v, _p = mk(self.LINES)
+        lines = rows(v)
+        e1 = ed(v, text_of([lines[3], lines[0], lines[1], lines[2]]), words)         # the last line to the top
+        self.assertEqual((e1["moved"], e1["cut"], e1["flags"], e1["order"]), (True, [], [], [6, 7, 0, 1, 2, 3, 4, 5]))
+        if live:                                                    # the text stays as typed, with its old marks
+            return words, carried(words, v, e1), [lines[3], lines[0], lines[1], lines[2]], e1
+        _occ2, view = applied(words, v, e1)
+        return words, view, rows(view), e1
+
+    def test_move_then_delete_each_line_is_cut_exactly(self):
+        for live in (False, True):
+            words, v, lines, e1 = self.moved_view(live)
+            for gone, cut in enumerate([[6, 7], [0, 1], [2, 3], [4, 5]]):
+                e = ed(v, text_of([ln for n, ln in enumerate(lines) if n != gone]), words, e1["retext"])
+                self.assertEqual((e["cut"], e["flags"], e["moved"]), (cut, [], False), (live, gone))
+
+    @staticmethod
+    def drop(line, first, count):
+        """*line* without the words *first* .. *first* + *count* - 1 of its text (its mark stays)."""
+        mark = mark_of(line)
+        toks = strip(line).split()
+        return " ".join([mark] + toks[:first] + toks[first + count:])
+
+    def test_move_then_delete_a_word_is_cut_exactly(self):
+        for live in (False, True):
+            words, v, lines, e1 = self.moved_view(live)
+            # (line, word of it) -> the word of the transcript
+            for n, k, cut in ((0, 0, [6]), (0, 1, [7]), (1, 0, [0]), (1, 1, [1]), (2, 0, [2]), (2, 1, [3]),
+                              (3, 0, [4]), (3, 1, [5])):
+                text = text_of([self.drop(ln, k, 1) if i == n else ln for i, ln in enumerate(lines)])
+                e = ed(v, text, words, e1["retext"])
+                self.assertEqual((e["cut"], e["flags"]), (cut, []), (live, n, k))
+
+    def test_move_then_delete_two_adjacent_words_is_cut_exactly(self):
+        words0, _o, v0, _p = mk([(1.0, "Alpha bravo charlie."), (5.0, "Delta echo foxtrot."), (9.0, "Golf hotel india.")])
+        lines0 = rows(v0)
+        e0 = ed(v0, text_of([lines0[2], lines0[0], lines0[1]]), words0)
+        for live in (False, True):
+            v = carried(words0, v0, e0) if live else applied(words0, v0, e0)[1]
+            lines = [lines0[2], lines0[0], lines0[1]] if live else rows(v)
+            for n, k, cut in ((0, 0, [6, 7]), (0, 1, [7, 8]), (1, 0, [0, 1]), (1, 1, [1, 2]), (2, 0, [3, 4]),
+                              (2, 1, [4, 5])):
+                text = text_of([self.drop(ln, k, 2) if i == n else ln for i, ln in enumerate(lines)])
+                e = ed(v, text, words0, e0["retext"])
+                self.assertEqual((e["cut"], e["flags"]), (cut, []), (live, n, k))
+
+    def test_every_plain_edit_after_an_applied_move_is_exact_and_not_flagged(self):
+        for live in (False, True):
+            for op_name in ("delete_line", "delete_word", "delete_two", "typo", "split", "join"):
+                rng = random.Random((hash(op_name) + 11) & 0xffff)
+                done = 0
+                while done < 120:
+                    words = F.make_transcript(rng, repeats=False, odd=False)
+                    occ, v = F.view(words, [F.piece()])
+                    m0 = F.Model(v["text"], occ, words)
+                    m1 = copy.deepcopy(m0)
+                    if not F.op_move(m1, rng):
+                        continue
+                    e1 = F.compute(v, m1.text(), words)
+                    if e1["flags"] or not e1["moved"]:
+                        continue
+                    occ2, v2 = applied(words, v, e1)
+                    if live:
+                        base, mb = carried(words, v, e1), m1
+                    else:
+                        base, mb = v2, F.Model(v2["text"], occ2, words, e1["retext"])
+                    for n, ln in enumerate(mb.lines):
+                        ln["origin"] = {n} if ln["toks"] else set()
+                    m = _plain(op_name, rng, words, base, mb)
+                    if m is None:
+                        continue
+                    e = F.compute(base, m.text(), words, e1["retext"])
+                    what = "after a move (%s): %s\n%s\n--\n%s" % ("Live" if live else "rewritten", op_name, base["text"], m.text())
+                    expect = mb.wordset() - m.wordset()
+                    self.assertEqual(e["flags"], [], what)
+                    self.assertEqual(set(e["cut"]), expect, what)
+                    self.assertFalse(e["moved"], what)
+                    if op_name == "typo":
+                        self.assertEqual(len(e["retexted"]), 1, what)
+                    elif op_name in ("split", "join"):
+                        self.assertFalse(e["changed"], what)
+                    done += 1
+
+    def test_a_cut_still_never_reaches_into_a_kept_word_after_a_move(self):
+        # words that overlap in time inside one stretch of the source stay protected (E); a move does not change that
+        words, _occ, v, _p = mk([(1.0, "Alpha bravo."), (4.0, "Charlie delta."), (8.0, "Echo foxtrot.")])
+        words[3]["end"] = words[3]["start"] + 0.2
+        words[2]["end"] = words[3]["end"] + 0.5                   # "charlie" lasts past the whole of "delta"
+        occ = TE.timeline_words(words, [T.piece(right=1 + 400 * FPS)], FPS)
+        v = TE.render(occ, words, None, FPS)
+        lines = rows(v)
+        e = ed(v, text_of([lines[2], lines[0], lines[1]]), words)
+        _occ2, view = applied(words, v, e)
+        lines2 = rows(view)
+        e2 = ed(view, text_of(lines2[:2] + [lines2[2].replace(" delta.", "")]), words, e["retext"])
+        self.assertEqual((e2["cut"], [f["reason"] for f in e2["flags"]]), ([], ["overlap"]))
+
+
+class TestAnOrphanLineNextToADeletion(unittest.TestCase):
+    """A new line nothing stands for right behind a line whose tail was deleted (or before one whose beginning was):
+    pressing Enter after the kept words must flag, as retyping the words inside the line does."""
+
+    def setUp(self):
+        self.words, _occ, self.v, _p = mk([(1.0, "Alpha bravo charlie delta."), (6.0, "Echo foxtrot golf.")])
+        self.lines = rows(self.v)
+
+    def flags(self, e):
+        return [(f["line"], f["reason"]) for f in e["flags"]]
+
+    def test_the_tail_cut_off_and_the_words_below_on_a_new_line(self):
+        a, b = self.lines
+        e = ed(self.v, text_of([mark_of(a) + " Alpha bravo", "Xray yankee.", b]), self.words)
+        self.assertEqual(e["cut"], [])
+        self.assertFalse(e["changed"])
+        self.assertEqual(self.flags(e), [(0, "no_match"), (1, "no_audio")])
+
+    def test_the_same_words_typed_inside_the_line_are_flagged_the_same(self):
+        a, b = self.lines
+        e = ed(self.v, text_of([mark_of(a) + " Alpha bravo Xray yankee.", b]), self.words)
+        self.assertEqual((e["cut"], self.flags(e)), ([], [(0, "no_match")]))
+
+    def test_the_beginning_cut_off_and_the_words_above_on_a_new_line(self):
+        a, b = self.lines
+        e = ed(self.v, text_of(["Xray yankee.", mark_of(a) + " Charlie delta.", b]), self.words)
+        self.assertEqual(e["cut"], [])
+        self.assertEqual(self.flags(e), [(0, "no_audio"), (1, "no_match")])
+
+    def test_the_last_line_with_its_tail_cut_and_a_new_line_behind(self):
+        a, b = self.lines
+        e = ed(self.v, text_of([a, mark_of(b) + " Echo foxtrot", "Xray yankee."]), self.words)
+        self.assertEqual((e["cut"], self.flags(e)), ([], [(1, "no_match"), (2, "no_audio")]))
+
+    def test_a_plain_tail_delete_with_no_new_line_next_to_it_still_cuts(self):
+        a, b = self.lines
+        e = ed(self.v, text_of([mark_of(a) + " Alpha bravo", b]), self.words)
+        self.assertEqual((e["cut"], e["flags"]), ([2, 3], []))
+        e = ed(self.v, text_of([a, mark_of(b) + " Golf."]), self.words)
+        self.assertEqual((e["cut"], e["flags"]), ([4, 5], []))
+        e = ed(self.v, text_of([mark_of(a) + " Alpha bravo", b, "Xray yankee."]), self.words)
+        self.assertEqual((e["cut"], self.flags(e)), ([2, 3], [(2, "no_audio")]))          # not next to it: still cut
+
+
 # -- what the property tests take for granted --------------------------------------------------------------
 
 class TestMore(unittest.TestCase):

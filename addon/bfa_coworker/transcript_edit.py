@@ -1145,6 +1145,24 @@ def _compute_edit(base_tokens: Sequence[Sequence[Any]], base_order: Sequence[int
             if nts[j][3] != bts[i][2] and nts[j][3] in free_words:
                 res["flags"].append((nts[j][0], nts[j][1], nts[j][2], "no_match"))
                 break
+    # a new line nothing stands for right behind a line whose tail was deleted (or right before one whose beginning was):
+    # the Enter may have split the line, and the words cut off are then the new line's, so nothing of that line is cut
+    orphan = [li for li, nl in enumerate(lines) if li not in span_of and nl.toks]
+    if orphan:
+        by_edge: dict[tuple[str, int], tuple] = {}
+        for g, bts, nts, res in results:
+            if res["flags"] or not nts or not g["new"]:
+                continue
+            if any(i2 == len(bts) for _i1, i2, _j1 in res["deletes"]):
+                by_edge[("tail", g["new"][-1])] = (res, nts[-1])
+            if any(i1 == 0 for i1, _i2, _j1 in res["deletes"]):
+                by_edge[("head", g["new"][0])] = (res, nts[0])
+        for li in orphan:
+            for edge, at in (("tail", li - 1), ("head", li + 1)):
+                hit = by_edge.get((edge, at))
+                if hit and not hit[0]["flags"]:
+                    n, k, tok, _nm = hit[1]
+                    hit[0]["flags"].append((n, k, tok, "no_match"))
     protect: set[int] = set()
     pool: set[str] = set()                            # text that is not on the timeline: words may have been moved there
     for li, nl in enumerate(lines):
@@ -1401,14 +1419,29 @@ def _ops(base_order, cut, final, retexted, words, old_retext, new_retext, moved)
     cut_set = set(cut)
     latest: list[float | None] = []                     # latest end of the kept words before each place
     top: float | None = None
-    for w in base_order:
+    # after an applied move the timeline is out of source order: a word that starts earlier in the source than the one
+    # before it on the timeline begins another strip (another stretch of the source), so the checks start again there
+    brk = [False] * len(base_order)
+    for k in range(1, len(base_order)):
+        a, b = base_order[k - 1], base_order[k]
+        brk[k] = 0 <= a < len(words) and 0 <= b < len(words) and _start(words[b]) < _start(words[a])
+    for k, w in enumerate(base_order):
+        if brk[k]:
+            top = None
         latest.append(top)
         if w not in cut_set and 0 <= w < len(words):
             top = _end(words[w]) if top is None else max(top, _end(words[w]))
+    runs: list[list[int]] = []
     for run in _runs(pos[w] for w in cut if w in pos):
+        for k in run:
+            if runs and runs[-1][-1] == k - 1 and not brk[k]:
+                runs[-1].append(k)
+            else:
+                runs.append([k])
+    for run in runs:
         ws = [base_order[k] for k in run]
-        prev = base_order[run[0] - 1] if run[0] > 0 else None
-        nxt = base_order[run[-1] + 1] if run[-1] + 1 < len(base_order) else None
+        prev = base_order[run[0] - 1] if run[0] > 0 and not brk[run[0]] else None
+        nxt = base_order[run[-1] + 1] if run[-1] + 1 < len(base_order) and not brk[run[-1] + 1] else None
         secs = 0.0
         if all(0 <= w < len(words) for w in ws) and (prev is None or 0 <= prev < len(words)) \
                 and (nxt is None or 0 <= nxt < len(words)):

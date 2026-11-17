@@ -19,25 +19,33 @@ words the model says were removed are compared with what ``compute_edit`` cuts:
 * ``FLAG_AND_CUT``: a line is flagged and a word of the line it came from is cut;
 * ``REAPPLY_NOT_EMPTY``: the timeline after the edit, rendered again, asks for something;
 * ``STALE_CUT_KEPT`` / ``STALE2_CUT_KEPT``: the same after an Apply that leaves the text as the artist typed
-  it (Live, or flags: ``carry_base`` is the base the next diff uses), and after a second edit on that text.
+  it (Live, or flags: ``carry_base`` is the base the next diff uses), and after a second edit on that text;
+* ``VISIBLE_LOSS`` / ``STALE_VISIBLE_LOSS`` / ``STALE2_VISIBLE_LOSS``: a token the typed text shows is on the
+  timeline fewer times than typed.
 
-Compared with the review's original, the oracle accepts three things the rule of the module itself makes
-equal (each one is stated here, so a reader can judge it):
+What the oracle accepts (every case, the first edit, the Live / flagged re-diff and a second edit on that text):
 
+* no cut of a word the text keeps (``CUT_KEPT``), counting by word, not by spelling: a cut of another word that
+  is spelled the same is a fault unless the text can't tell the two apart (below);
+* **visible loss** (``VISIBLE_LOSS``): after the cut, every token the typed text shows (lines not flagged) is on
+  the timeline at least as many times as typed;
 * **runs**: the very same token twice in a row in one line ("I I think" -> "I think"): the kept text is the
   same whichever word goes, the module cuts the earliest (:func:`transcript_edit._delete_only`), the
   model's word is the other: they count as one word (``run_canon``);
-* **identical takes**: words at the same place of lines with the very same words are one choice (the text of
-  an edit where a line was copied and the copy edited, a mark moved onto an identical line: both histories
-  leave the very same text and marks, so no implementation can tell them apart; ``twin_canon``).  An edit
-  that mixes the tails of two lines (a selection from inside one line to inside a later one, deleted)
-  counts as right when the timeline shows exactly the words typed (``realized``), and so does a second edit
-  on text whose first edit read a trimmed line as a copy (the same text either way);
+* **identical takes** (``twin_canon``): words at the same place of lines with the very same words are one choice
+  only when the marks of the typed text can't tell the takes apart: a mark gone, or edited onto the other take.  When
+  the typed text keeps a take's own mark once, on a line that holds that take's words, that take is the one that
+  must stay, and cutting the other twin's words instead is a ``CUT_KEPT``;
+* an edit that mixes the tails of two lines (a selection from inside one line to inside a later one, deleted)
+  counts as right when the timeline shows, line by line under the marks, the words typed (``realized``: under
+  each typed mark the base line's words that are left read as the line does, and no word of a line whose mark
+  isn't typed is left; only a text whose marks are missing, repeated or unknown is compared as one flat
+  list of words);
 * a second edit may cut every word of the timeline the text no longer carries, also those an earlier
   edit left on it (a copied line the first edit could not tell from its original).
 
-Everything else is as the review had it: a word that is cut and the text still carries, a flagged line
-that cuts, a second edit after an Apply that cuts, an edit that is not empty after it is applied.
+Everything else is as the review had it: a flagged line that cuts (``FLAG_AND_CUT``), a second edit after an
+Apply that cuts, an edit that is not empty after it is applied (``REAPPLY_NOT_EMPTY``).
 
 Run with::
 
@@ -60,6 +68,7 @@ TE = T.TE
 FPS = 30
 
 MARK = re.compile(r"^\[(\d+:)?\d+:\d\d\.\d+\] ")   # my own mark parser (the renderer's format only)
+MARK_ALONE = re.compile(r"^\[(\d+:)?\d+:\d\d\.\d+\](\s|$)")   # the same, also on a line that has only the mark
 
 # ---------------------------------------------------------------- transcripts
 PLAIN = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet", "kilo",
@@ -503,9 +512,30 @@ def run_canon(model):
     return c
 
 
-def twin_canon(model, *more, suffix=False):
-    """run classes plus: words at the same position of lines with the very same words (identical takes) are one class"""
+def twin_canon(model, *more, suffix=False, typed=None):
+    """run classes plus: words at the same position of lines with the very same words (identical takes) are one class,
+    when the marks of the typed text can't tell them apart (*typed*: the model after the edit).  A take whose own
+    mark (the mark it had in *model*) the typed text keeps, once, on a line that holds that take's own words, is told
+    apart: that take is the one that must stay, it is joined with nothing.  A mark gone, or edited onto the other take
+    (the typed text has the mark on the other take's line), tells nothing: the takes are one choice."""
     parent = {}
+    own = {}
+    for ln in model.lines:
+        for _t, w in ln["toks"]:
+            if w is not None:
+                own.setdefault(w, ln["mark"])
+    kept = collections.Counter(ln["mark"] for ln in (typed.lines if typed is not None else []) if ln["mark"])
+    typed_words = {}
+    if typed is not None:
+        for ln in typed.lines:
+            if ln["mark"]:
+                typed_words.setdefault(ln["mark"], []).append(tuple(w for _t, w in ln["toks"]))
+
+    def told_apart(ws, norms):
+        if typed is None:
+            return False
+        mark = own.get(ws[0])
+        return bool(mark) and kept[mark] == 1 and typed_words[mark] == [tuple(ws)]
 
     def find(x):
         while parent.setdefault(x, x) != x:
@@ -515,13 +545,14 @@ def twin_canon(model, *more, suffix=False):
 
     def union(a, b):
         parent[find(a)] = find(b)
-    by = collections.defaultdict(list)
     for mdl in (model,) + more:
         by = collections.defaultdict(list)
         for ln in mdl.lines:
             ws = [w for _t, w in ln["toks"]]
             if ws and all(w is not None for w in ws):
-                by[tuple(TE.norm(t) for t, _w in ln["toks"])].append(ws)
+                norms = tuple(TE.norm(t) for t, _w in ln["toks"])
+                if not told_apart(ws, norms):
+                    by[norms].append(ws)
         for group in (by.values()):
             for ws in group[1:]:
                 for a, b in zip(group[0], ws):
@@ -541,15 +572,62 @@ def twin_canon(model, *more, suffix=False):
     return {w: find(w) for w in list(parent)}
 
 
-def realized(words, e, typed_text):
-    """After the edit the timeline shows exactly the words the typed text has (marks aside): whichever words of the
-    same text were meant, the result is what the user typed."""
-    shown = [tok for w in e["order"] for tok in TE.display(w, words, e["retext"]).split()]
-    typed = []
+def _typed_lines(typed_text):
+    out = []
     for raw in typed_text.splitlines():
-        m = MARK.match(raw)
-        typed.extend((raw[m.end():] if m else raw).split())
-    return shown == typed
+        m = MARK_ALONE.match(raw)
+        toks = (raw[m.end():] if m else raw).split()
+        if toks:
+            out.append((m.group(0).strip() if m else None, toks))
+    return out
+
+
+def _owner_of_words(view):
+    """word -> the mark of the base line it stands in (a joined word, one without a token, goes with the word before)."""
+    lines = view["lines"]
+    owner, tokens = {}, view["tokens"]
+    for ln in lines:
+        mark, first, count = (ln["mark"], ln["first"], ln["count"]) if isinstance(ln, dict) else ln
+        for w, _t in tokens[first:first + count]:
+            owner[int(w)] = mark
+    last = None
+    for w in view["order"]:
+        if w in owner:
+            last = owner[w]
+        else:
+            owner[w] = last
+    return owner
+
+
+def shown_tokens(words, e, order=None):
+    return [tok for w in (e["order"] if order is None else order) for tok in TE.display(w, words, e["retext"]).split()]
+
+
+def realized(words, e, typed_text, view=None):
+    """After the edit the timeline shows what the typed text has, line by line: under each mark the words of that
+    base line that are left show exactly the tokens typed on the line with that mark, and no word of a line whose
+    mark was not typed is left.  (Text where a mark is missing, repeated or not a base line's: the words as one
+    flat list, marks aside.)  Whichever words of the same text were meant, the result is what the user typed."""
+    typed = _typed_lines(typed_text)
+    marks = [m for m, _t in typed]
+    owner = _owner_of_words(view) if view is not None else {}
+    if view is not None and typed and None not in marks and len(set(marks)) == len(marks) \
+            and set(marks) <= set(owner.values()):
+        if any(owner.get(w) not in marks for w in e["order"]):
+            return False
+        return all(shown_tokens(words, e, [w for w in e["order"] if owner[w] == m]) == toks for m, toks in typed)
+    return shown_tokens(words, e) == [tok for _m, toks in typed for tok in toks]
+
+
+def visible_loss(words, e, typed_text, flagged_lines):
+    """The tokens the typed text shows (lines not flagged) that the timeline after the cut shows fewer times."""
+    want = collections.Counter()
+    for n, raw in enumerate(typed_text.splitlines()):
+        if n in flagged_lines:
+            continue
+        m = MARK_ALONE.match(raw)
+        want.update((raw[m.end():] if m else raw).split())
+    return want - collections.Counter(shown_tokens(words, e))
 
 
 def covered(cut, expect, canon):
@@ -565,13 +643,16 @@ def check(words, v, model_before, model_after, e, expect_removed, ops, case, res
     ok = True
     canon = run_canon(model_before)
     if not covered(cut, expect_removed, canon):
-        nc = sorted(TE.norm(words[w]["w"]) for w in cut - expect_removed)
-        ne = sorted(TE.norm(words[w]["w"]) for w in expect_removed - cut)
         tails = "cross_line_del" in ops
-        kind = "TAKE_SWAP" if nc == ne or covered(cut, expect_removed, twin_canon(model_before, suffix=tails)) \
-            or (tails and realized(words, e, model_after.text())) else "CUT_KEPT"
+        kind = "TAKE_SWAP" if covered(cut, expect_removed, twin_canon(model_before, suffix=tails, typed=model_after)) \
+            or (tails and realized(words, e, model_after.text(), v)) else "CUT_KEPT"
         results.append(Result(kind + stage, case, ops, v["text"], model_after.text(), sorted(cut),
                               sorted(expect_removed), e["flags"], sorted(cut - expect_removed)))
+        ok = False
+    lost = visible_loss(words, e, model_after.text(), flagged)
+    if lost:
+        results.append(Result("VISIBLE_LOSS" + stage, case, ops, v["text"], model_after.text(), sorted(cut),
+                              sorted(expect_removed), e["flags"], sorted(lost.elements())))
         ok = False
     # a flagged line never produces a cut: no cut word comes from a base line the flagged line came from
     base_line_of = {}
@@ -585,7 +666,7 @@ def check(words, v, model_before, model_after, e, expect_removed, ops, case, res
         origin = model_after.lines[n]["origin"]
         hit = [w for w in cut if base_line_of.get(w, set()) & origin]
         if hit:
-            results.append(Result(("FLAG_AND_CUT" if not covered(set(hit), expect_removed, twin_canon(model_before, suffix="cross_line_del" in ops)) else "flag_and_cut_removed") + stage, case, ops, v["text"], model_after.text(), sorted(cut),
+            results.append(Result(("FLAG_AND_CUT" if not covered(set(hit), expect_removed, twin_canon(model_before, suffix="cross_line_del" in ops, typed=model_after)) else "flag_and_cut_removed") + stage, case, ops, v["text"], model_after.text(), sorted(cut),
                                   sorted(expect_removed), e["flags"], hit))
             ok = False
             break
@@ -663,11 +744,15 @@ def run(seed, cases, opnames, repeats=True, odd=True, pairs=True, stale=True, re
         _cn = run_canon(m0)
         allowed = collections.Counter(_cn.get(w, w) for w in expect) - collections.Counter(_cn.get(w, w) for w in e["cut"])
         cut2 = set(e2["cut"])
-        _tc = twin_canon(m0, m, suffix="cross_line_del" in done)
+        _tc = twin_canon(m0, m, suffix="cross_line_del" in done, typed=m)
         allowed_t = collections.Counter(_tc.get(w, w) for w in expect) - collections.Counter(_tc.get(w, w) for w in e["cut"])
         if not covered(cut2, allowed_t, _tc):
             results.append(Result("STALE_CUT_KEPT", case, done, v2["text"], m.text(), sorted(cut2), sorted(allowed.elements()),
                                   e2["flags"], sorted(cut2)))
+        lost2 = visible_loss(words, e2, m.text(), {f["line"] for f in e2["flags"]})
+        if lost2:
+            results.append(Result("STALE_VISIBLE_LOSS", case, done, v2["text"], m.text(), sorted(cut2), [], e2["flags"],
+                                  sorted(lost2.elements())))
         stats["stale", "n"] += 1
         if e2["flags"] and not e["flags"]:
             stats["stale", "new_flags"] += 1
@@ -689,8 +774,12 @@ def run(seed, cases, opnames, repeats=True, odd=True, pairs=True, stale=True, re
         stats["stale2", "n"] += 1
         if e3["flags"]:
             stats["stale2", "flagged"] += 1
-        if not covered(set(e3["cut"]), expect2, twin_canon(m0, m, mm_before, suffix="cross_line_del" in done + [op2])) \
-                and not realized(words, e3, mm.text()):
+        lost3 = visible_loss(words, e3, mm.text(), {f["line"] for f in e3["flags"]})
+        if lost3:
+            results.append(Result("STALE2_VISIBLE_LOSS", case, done + ["|"] + [op2], v2["text"], mm.text(),
+                                  sorted(e3["cut"]), sorted(expect2), e3["flags"], sorted(lost3.elements())))
+        if not covered(set(e3["cut"]), expect2, twin_canon(m0, m, mm_before, suffix="cross_line_del" in done + [op2], typed=mm)) \
+                and not realized(words, e3, mm.text(), vb):
             results.append(Result("STALE2_CUT_KEPT", case, done + ["|"] + [op2], v2["text"], mm.text(),
                                   sorted(e3["cut"]), sorted(expect2), e3["flags"], sorted(set(e3["cut"]) - expect2)))
     return results, stats
@@ -709,7 +798,8 @@ class TestFuzz(unittest.TestCase):
         self.assertGreaterEqual(stats["stale", "n"], 4000)
         self.assertGreaterEqual(stats["stale2", "n"], 4000)
         bad = [r for r in results if r.kind in ("CUT_KEPT", "FLAG_AND_CUT", "STALE_CUT_KEPT", "STALE2_CUT_KEPT",
-                                                 "REAPPLY_NOT_EMPTY", "EXCEPTION")]
+                                                 "REAPPLY_NOT_EMPTY", "EXCEPTION", "VISIBLE_LOSS",
+                                                 "STALE_VISIBLE_LOSS", "STALE2_VISIBLE_LOSS")]
         self.assertEqual([(r.kind, r.ops) for r in bad[:5]], [], [r._replace(base="", text="") for r in bad[:2]])
         self.assertEqual(stats["stale", "carry_none"], 0)           # every Apply could keep the artist's lines
         self.assertLess(took, 30.0)
@@ -728,6 +818,76 @@ class TestFuzz(unittest.TestCase):
         bogus = dict(e, cut=sorted(set(e["cut"]) | {sorted(m.wordset())[0]}))
         self.assertFalse(check(words, v, m0, m, bogus, expect, ["del_word"], 0, out))
         self.assertEqual([r.kind for r in out], ["CUT_KEPT"])
+
+    def test_the_oracle_sees_a_visible_loss(self):
+        words = T.made_up_words([(1.0, "alpha bravo."), (4.0, "charlie delta.")])
+        occ, v = view(words, [piece()])
+        m0 = Model(v["text"], occ, words)
+        m = copy.deepcopy(m0)
+        self.assertTrue(op_del_word(m, random.Random(1)))
+        e = compute(v, m.text(), words)
+        self.assertEqual(visible_loss(words, e, m.text(), set()), collections.Counter())
+        gone = dict(e, order=e["order"][1:])                      # a word the text keeps dropped from the timeline
+        self.assertEqual(sum(visible_loss(words, gone, m.text(), set()).values()), 1)
+        self.assertEqual(sum(visible_loss(words, gone, m.text(), {0, 1}).values()), 0)   # unless its line is flagged
+        out = []
+        self.assertFalse(check(words, v, m0, m, dict(gone, cut=e["order"][:1] + list(e["cut"])), set(e["cut"]),
+                               ["del_word"], 0, out))
+        self.assertIn("VISIBLE_LOSS", [r.kind for r in out])
+
+    def test_identical_takes_are_one_choice_only_when_the_marks_cannot_tell_them_apart(self):
+        words = T.made_up_words([(1.0, "alpha bravo"), (4.0, "alpha bravo"), (8.0, "charlie")])
+        occ, v = view(words, [piece()])
+        m0 = Model(v["text"], occ, words)
+        k0, k1 = m0.textual()[:2]
+        both = copy.deepcopy(m0)
+        both.lines[k1]["toks"] = []                                # the second take deleted, the first keeps its mark
+        keeps = twin_canon(m0, typed=both)
+        self.assertNotEqual(keeps.get(0, 0), keeps.get(2, 2))     # the first take's own mark stays: it must stay
+        gone = copy.deepcopy(both)
+        gone.lines[k0]["mark"] = None                              # the mark gone: the text can't say which take
+        self.assertEqual(twin_canon(m0, typed=gone)[0], twin_canon(m0, typed=gone)[2])
+        onto = copy.deepcopy(m0)                                  # the second take's mark edited onto the first take
+        onto.lines[k1]["mark"] = onto.lines[k0]["mark"]
+        onto.lines[k0]["toks"] = []
+        self.assertEqual(twin_canon(m0, typed=onto)[0], twin_canon(m0, typed=onto)[2])
+        # and through the check: cutting the take whose mark the text keeps is a fault, not a swap
+        order = [2, 3, 4]
+        wrong = {"order": order, "cut": [0, 1], "retext": {}, "flags": []}
+        out = []
+        check(words, v, m0, both, wrong, {2, 3}, ["del_line"], 0, out)
+        self.assertIn("CUT_KEPT", [r.kind for r in out])
+        self.assertNotIn("TAKE_SWAP", [r.kind for r in out])
+        out = []
+        check(words, v, m0, gone, wrong, {2, 3}, ["del_line"], 0, out)
+        self.assertIn("TAKE_SWAP", [r.kind for r in out])
+        self.assertNotIn("CUT_KEPT", [r.kind for r in out])
+
+    def test_realized_compares_line_by_line_under_the_marks(self):
+        # [A] alpha bravo / [B] bravo charlie / ...: A's bravo deleted with a cross-line delete elsewhere
+        words = T.made_up_words([(1.0, "alpha bravo"), (4.0, "bravo charlie"), (8.0, "delta echo"), (12.0, "foxtrot golf")])
+        occ, v = view(words, [piece()])
+        lines = [ln for ln in v["text"].splitlines() if ln.strip()]
+        mark = [ln.split(" ")[0] for ln in lines]
+        typed = "\n".join([mark[0] + " alpha", lines[1], mark[2] + " delta", mark[3] + " golf"]) + "\n"
+        right = {"order": [0, 2, 3, 4, 7], "retext": {}}          # A's bravo, echo and foxtrot cut
+        wrong = {"order": [0, 1, 3, 4, 7], "retext": {}}          # B's bravo cut instead: the same words in a row
+        self.assertEqual(shown_tokens(words, right), shown_tokens(words, wrong))
+        self.assertTrue(realized(words, right, typed, v))
+        self.assertFalse(realized(words, wrong, typed, v))
+        # without the line view (or a text whose marks can't be read) the flat list is all there is
+        self.assertTrue(realized(words, wrong, typed))
+        m0 = Model(v["text"], occ, words)
+        m = copy.deepcopy(m0)
+        ks = m.textual()
+        m.lines[ks[0]]["toks"] = m.lines[ks[0]]["toks"][:1]       # alpha
+        m.lines[ks[2]]["toks"] = m.lines[ks[2]]["toks"][:1]       # delta
+        m.lines[ks[3]]["toks"] = m.lines[ks[3]]["toks"][1:]       # golf
+        self.assertEqual(m.text().replace("\n\n", "\n"), typed)
+        out = []
+        check(words, v, m0, m, dict(wrong, cut=[2, 5, 6], flags=[]), {1, 5, 6}, ["cross_line_del"], 0, out)
+        self.assertIn("CUT_KEPT", [r.kind for r in out])
+        self.assertNotIn("TAKE_SWAP", [r.kind for r in out])
 
 
 if __name__ == "__main__":

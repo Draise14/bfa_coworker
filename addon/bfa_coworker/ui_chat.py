@@ -3975,6 +3975,9 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
     bl_label = "Start Coworker"
     bl_description = "Start the Coworker agent: MCP bridge, MCP server, and LLM backend"
 
+    # Restart (#564) brings the Local server back only if it ran before; Start always loads it.
+    with_local_model: BoolProperty(default=True, options={'HIDDEN', 'SKIP_SAVE'})  # type: ignore[valid-type]
+
     def execute(self, context: bpy.types.Context) -> set[str]:
         prefs = context.preferences.addons[__package__].preferences
 
@@ -4098,6 +4101,7 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         try:
             mcp_to_blender_server.start(prefs.host, _bridge_port)
         except Exception as ex:  # pylint: disable=broad-exception-caught
+            props.chat_status = "Error: Bridge server failed: {:s}".format(str(ex))     # #564
             self.report({"ERROR"}, "Bridge server failed: {:s}".format(str(ex)))
             return {"CANCELLED"}
 
@@ -4111,7 +4115,9 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         actual = mcp_to_blender_server.get_actual_port()
         if actual:
             props.chat_status = "External Harness -- Bridge on port {:d}".format(actual)
-            self.report({"INFO"}, "Bridge server started on port {:d}".format(actual))
+            # Another window had the wanted port (#558): say who, and where this one is.
+            self.report({"INFO"}, mcp_to_blender_server.port_note()
+                        or "Bridge server started on port {:d}".format(actual))
         else:
             props.chat_status = "External Harness -- Bridge running"
             self.report({"INFO"}, "Bridge server started")
@@ -4126,7 +4132,8 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         # download.  If the configured model is not on disk (and not cached),
         # stall the launch and ask the user to confirm the download first.
         _prefs = context.preferences.addons[__package__].preferences
-        if _prefs.operating_mode == "LOCAL_LLM" and not llm_manager.get_state().is_running:
+        if (_prefs.operating_mode == "LOCAL_LLM" and self.with_local_model
+                and not llm_manager.get_state().is_running):
             _sync_prefs_to_config(_prefs)
             _existing = _prefs.existing_model_path
             _ready, _info = llm_manager.check_local_model_ready(
@@ -4152,6 +4159,8 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
             try:
                 mcp_to_blender_server.start(prefs.host, _bridge_port)
             except Exception as ex:  # pylint: disable=broad-exception-caught
+                # The status says it too (#564): Restart had left "Connected" standing.
+                props.chat_status = "Error: Bridge server failed: {:s}".format(str(ex))
                 self.report({"ERROR"}, "Bridge server failed: {:s}".format(str(ex)))
                 return {"CANCELLED"}
             # Register timer.
@@ -4163,9 +4172,11 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
             )
             actual_bridge = mcp_to_blender_server.get_actual_port()
             if actual_bridge and actual_bridge != _bridge_port:
-                # Issue #85: say plainly that this window got its own port.
-                self.report({"INFO"}, "Another Blender window uses port {:d} -- this window's "
-                            "Coworker is linked to port {:d}".format(_bridge_port, actual_bridge))
+                # Issue #85: say plainly that this window got its own port, and who has
+                # the wanted one (#558).
+                self.report({"INFO"}, mcp_to_blender_server.port_note() or (
+                    "Another Blender window uses port {:d} -- this window's "
+                    "Coworker is linked to port {:d}".format(_bridge_port, actual_bridge)))
             elif actual_bridge:
                 self.report({"INFO"}, "Bridge server started on port {:d}".format(actual_bridge))
             else:
@@ -4177,7 +4188,9 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
             _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
             proc = agent_controller.start_mcp_server(port=_mcp_port, blender_port=_bridge_port)
             if proc is None:
-                self.report({"ERROR"}, agent_controller._agent_state.error)
+                _err = agent_controller._agent_state.error or "the MCP server did not start"
+                props.chat_status = "Error: " + _err        # #564
+                self.report({"ERROR"}, _err)
                 return {"CANCELLED"}
             actual_mcp = agent_controller._agent_state.mcp_port_actual
             if actual_mcp:
@@ -4195,6 +4208,14 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
         _bridge_port, _mcp_port, _llm_port = effective_ports(prefs)
         llm_cfg.local_port = _llm_port
         llm_manager.set_config(llm_cfg)
+
+        if llm_cfg.mode == "local" and not self.with_local_model and not llm_manager.get_state().is_running:
+            # Restart (#564) brings back what ran: the Local server was off, so it stays off.
+            _restore_chat_history()
+            props.chat_status = ("Local model off: it was not running before Restart. "
+                                 "Stop and Start Coworker to load it")
+            _redraw_areas(context)
+            return {"FINISHED"}
 
         if llm_cfg.mode == "local":
             llm_state = llm_manager.get_state()
@@ -4346,32 +4367,42 @@ class BFACW_OT_agent_stop(Operator):  # type: ignore[misc]
     def execute(self, context: bpy.types.Context) -> set[str]:
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
-
-        # External Agent: close the agent app's session.
-        if _acp is not None and (_acp.connected or _acp.connecting):
-            _acp.disconnect()
-
-        # Stop LLM.
-        llm_manager.stop_local_llama()
-
-        # Stop MCP server.
-        agent_controller.stop_mcp_server()
-
-        # Stop bridge server.
-        if mcp_to_blender_server.is_running():
-            from . import execute_interactive
-            mcp_to_blender_server.stop()
-            if bpy.app.timers.is_registered(execute_interactive.run):
-                bpy.app.timers.unregister(execute_interactive.run)
-
+        _stop_coworker()
         props.chat_status = "Stopped"
-        agent_controller._agent_state.mcp_server_running = False
-        # Stopping the agent ends the working session -- clear the token
-        # accounting so the context bar does not stay pinned at its old value.
-        agent_controller._agent_state.reset_usage()
-        agent_controller.clear_session_scene_lock()
         _redraw_areas(context)
         return {"FINISHED"}
+
+
+def _stop_coworker() -> None:
+    """Everything Stop ends; Restart ends the same (#564)."""
+    # External Agent: close the agent app's session.
+    if _acp is not None and (_acp.connected or _acp.connecting):
+        _acp.disconnect()
+
+    # Stop LLM.
+    llm_manager.stop_local_llama()
+
+    # Stop MCP server.
+    agent_controller.stop_mcp_server()
+
+    # Stop bridge server.
+    if mcp_to_blender_server.is_running():
+        from . import execute_interactive
+        mcp_to_blender_server.stop()
+        if bpy.app.timers.is_registered(execute_interactive.run):
+            bpy.app.timers.unregister(execute_interactive.run)
+
+    agent_controller._agent_state.mcp_server_running = False
+    # Stopping the agent ends the working session -- clear the token
+    # accounting so the context bar does not stay pinned at its old value.
+    agent_controller._agent_state.reset_usage()
+    agent_controller.clear_session_scene_lock()
+
+
+def _local_server_running() -> bool:
+    """This window's llama-server is alive (launched and not exited)."""
+    proc = llm_manager.get_llama_process()
+    return proc is not None and proc.poll() is None
 
 
 class BFACW_OT_agent_restart(Operator):  # type: ignore[misc]
@@ -4384,46 +4415,44 @@ class BFACW_OT_agent_restart(Operator):  # type: ignore[misc]
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
 
-        # Stop first.
+        # What ran before, so the start brings back exactly that (#564).
+        local_was_running = _local_server_running()
         props.chat_status = "Stopping..."
+        _stop_coworker()
+
+        # Start again after a brief delay (the UI shows "Stopping..." meanwhile).
+        bpy.app.timers.register(lambda: _start_again(local_was_running), first_interval=0.5)
         _redraw_areas(context)
-
-        llm_manager.stop_local_llama()
-        agent_controller.stop_mcp_server()
-        if mcp_to_blender_server.is_running():
-            from . import execute_interactive
-            mcp_to_blender_server.stop()
-            if bpy.app.timers.is_registered(execute_interactive.run):
-                bpy.app.timers.unregister(execute_interactive.run)
-
-        agent_controller._agent_state.mcp_server_running = False
-        # Fresh agent session -- clear stale token accounting and the
-        # session-created entity set.
-        agent_controller._agent_state.reset_usage()
-        agent_controller.clear_session_scene_lock()
-
-        # Start again after a brief delay.
-        def _deferred_start():
-            props.chat_status = "Starting..."
-            _redraw_areas_safe()
-            # Re-register the bridge timer.
-            if not mcp_to_blender_server.is_running():
-                from . import execute_interactive
-                prefs = context.preferences.addons[__package__].preferences
-                _bridge_port, _, _ = effective_ports(prefs)
-                mcp_to_blender_server.start(prefs.host, _bridge_port)
-                bpy.app.timers.register(
-                    execute_interactive.run,
-                    first_interval=mcp_to_blender_server.TIMER_INTERVAL_ACTIVE,
-                    persistent=True)
-            # Start MCP server.
-            agent_controller.start_mcp_server()
-            props.chat_status = "Connected"
-            _redraw_areas_safe()
-            return None  # Don't repeat timer.
-
-        bpy.app.timers.register(_deferred_start, first_interval=0.5)
         return {"FINISHED"}
+
+
+def _start_again(with_local_model: bool) -> None:
+    """Restart's second half (#564): the Start button's own path, so the ports (port offset
+    and overrides), the status and the Local server follow the same rules as a Start.
+    The status ends on the start's real result: an error when it failed, never an
+    unchecked "Connected"."""
+    props = bpy.context.window_manager.bfacw_chat_props  # type: ignore[attr-defined]
+    props.chat_status = "Starting..."
+    try:
+        result = bpy.ops.bfacw.agent_start(with_local_model=with_local_model)
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        result = {"CANCELLED"}
+        props.chat_status = "Error: Coworker did not start again: {:s}".format(str(ex))
+    if "CANCELLED" in result:
+        if not props.chat_status.startswith(("Error", "Waiting")):
+            props.chat_status = "Error: Coworker did not start again: {:s}".format(
+                agent_controller._agent_state.error or "see the Info editor for the reason")
+    elif with_local_model and not _local_server_running():
+        prefs = bpy.context.preferences.addons[__package__].preferences
+        if prefs.operating_mode != "LOCAL_LLM":
+            # Not part of this mode's Start (Local mode's Start loads it itself): the
+            # Local server's own Start, with the model and settings in the preferences.
+            try:
+                bpy.ops.bfacw.start_llm()
+            except Exception as ex:  # pylint: disable=broad-exception-caught
+                props.chat_status = "Error: the Local server did not start again: {:s}".format(str(ex))
+    _redraw_areas_safe()
+    return None  # Don't repeat timer.
 
 
 # ---------------------------------------------------------------------------

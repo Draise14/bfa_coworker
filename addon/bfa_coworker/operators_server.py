@@ -58,7 +58,9 @@ class _BFACW_OT_server_start(bpy.types.Operator):  # type: ignore[misc]
             first_interval=mcp_to_blender_server.TIMER_INTERVAL_ACTIVE,
             persistent=True)
         _prepare_harness(prefs)
-        self.report({"INFO"}, "Bridge server started on {:s}:{:d}".format(prefs.host, _bridge_port))
+        # The port it really got: another window may hold the wanted one (#558).
+        self.report({"INFO"}, mcp_to_blender_server.port_note() or "Bridge server started on {:s}:{:d}".format(
+            prefs.host, mcp_to_blender_server.get_actual_port() or _bridge_port))
         return {"FINISHED"}
 
 

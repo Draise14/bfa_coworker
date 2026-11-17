@@ -207,7 +207,8 @@ def _load_and_collect(blend_path, base_dir):
             try:
                 with bpy.data.libraries.load(blend_path) as (data_from_src, data_to):
                     setattr(data_to, _COLLECTION_ATTR[asset_type], [name_i])
-                    loaded = getattr(data_to, _COLLECTION_ATTR[asset_type])[0]
+                # The datablocks are only loaded once the block has closed.
+                loaded = getattr(data_to, _COLLECTION_ATTR[asset_type])[0]
                 if loaded is None:
                     continue
                 entry = _entry(loaded, asset_type, blend_rel)

@@ -357,6 +357,43 @@ class TestFcurveCount(unittest.TestCase):
         entry = self.ix._entry(action, "ACTION", "x.blend")
         self.assertEqual(entry["fcurves_count"], 4)
 
+    def test_the_index_reads_loaded_datablocks_after_the_load_block_closes(self):
+        """Blender fills ``data_to`` only when the ``with`` block exits; inside it holds the names."""
+        strip = types.SimpleNamespace(channelbags=[self._bag(3)])
+        action = types.SimpleNamespace(
+            name="Act", layers=[types.SimpleNamespace(strips=[strip])], frame_range=(1.0, 10.0))
+
+        class DataFrom:
+            actions = ["Act"]
+            materials = node_groups = objects = collections = worlds = []
+
+        class DataTo:
+            pass
+
+        class Load:
+            def __enter__(self_inner):
+                return DataFrom(), DataTo_holder[0]
+
+            def __exit__(self_inner, *exc):
+                to = DataTo_holder[0]
+                names = getattr(to, "actions", None)
+                if names:
+                    to.actions = [action]
+                return False
+
+        DataTo_holder = [None]
+
+        def load(_path):
+            DataTo_holder[0] = DataTo()
+            return Load()
+
+        self.ix.bpy = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                libraries=types.SimpleNamespace(load=load),
+                actions=types.SimpleNamespace(remove=lambda a: None, __contains__=lambda s, a: False)))
+        entries = self.ix._load_and_collect(os.path.join("lib", "a.blend"), "lib")
+        self.assertEqual(entries["Act"]["fcurves_count"], 3)
+
     def test_no_layers_is_zero(self):
         self.assertEqual(self.ix._action_fcurve_count(types.SimpleNamespace()), 0)
         self.assertEqual(self.ix._action_fcurve_count(types.SimpleNamespace(layers=[])), 0)

@@ -73,6 +73,11 @@ RUN, ASK, REFUSE = "run", "ask", "refuse"
 REPEAT_ASK = 3          # the 3rd identical call asks; the 4th is refused
 READ_REPEAT_ASK = 5     # reads that change nothing get more room
 
+# #591: a model that polls get_job_status and keeps getting the same answer (same state, same
+# progress) is waiting on a job that goes nowhere.  Polls wait 15-25 s each, so this many in a row
+# is a couple of minutes; the next one is refused.
+STALE_POLLS = 8
+
 _BRIDGE_IDLE_RESET = 60.0
 _ORDINALS = {1: "1st", 2: "2nd", 3: "3rd"}
 
@@ -156,6 +161,23 @@ def _failed(result: Any) -> bool:
     return isinstance(inner, dict) and inner.get("status") == "error"
 
 
+def _poll_answer(result: Any) -> dict[str, Any] | None:
+    """The job status inside a status poll's answer (the bridge's envelope, the tool's own
+    dict, or their JSON text), or None when it is no status."""
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except ValueError:
+            return None
+    for _ in range(2):
+        if not isinstance(result, dict):
+            return None
+        if "state" in result:
+            return result
+        result = result.get("result")
+    return None
+
+
 class LoopGuard:
     """Counts identical calls per key (a session) until the turn ends."""
 
@@ -170,6 +192,8 @@ class LoopGuard:
         self._last: dict[str, float] = {}
         # key -> {a render's input without its file name -> how often it failed} (#527)
         self._failures: dict[str, dict[str, int]] = {}
+        # key -> {job id -> (what its last status poll said, polls in a row that said it)} (#591)
+        self._polls: dict[str, dict[str, tuple[str, int]]] = {}
 
     def new_turn(self, key: str | None = None) -> None:
         """A new turn: every count starts again (only *key*'s when given)."""
@@ -178,14 +202,19 @@ class LoopGuard:
                 self._counts.clear()
                 self._last.clear()
                 self._failures.clear()
+                self._polls.clear()
             else:
                 self._counts.pop(key, None)
                 self._last.pop(key, None)
                 self._failures.pop(key, None)
+                self._polls.pop(key, None)
 
     def note_result(self, tool: str, args: Any, result: Any, key: str = "") -> None:
         """How a call ended (#527): a render that failed makes the next render with the same
         input but another file name a repeat.  Other tools and answers change nothing."""
+        if _is_exempt(str(tool or "")):
+            self._note_poll(args, result, key)
+            return
         ident = _render_identity(str(tool or ""), args)
         if not ident:
             return
@@ -197,11 +226,35 @@ class LoopGuard:
             per = self._failures.setdefault(key, {})
             per[ident] = per.get(ident, 0) + 1
 
+    def _note_poll(self, args: Any, result: Any, key: str) -> None:
+        """A status poll's answer (#591): the same state and progress as the poll before it
+        counts one more; any change (or the job being over) starts the count again."""
+        answer = _poll_answer(result)
+        job_id = str((args or {}).get("job_id", "")) if isinstance(args, dict) else ""
+        if answer is None or answer.get("kind") != "RENDER":
+            return      # a bake shows no progress by design: identical polls are its normal wait
+        fingerprint = json.dumps([answer.get("state"), answer.get("progress_percent"),
+                                  answer.get("progress_text"), answer.get("progress_step")], default=str)
+        with self._lock:
+            per = self._polls.setdefault(key, {})
+            if answer.get("state") not in ("running", "stuck"):
+                per.pop(job_id, None)
+                return
+            last, count = per.get(job_id, ("", 0))
+            per[job_id] = (fingerprint, count + 1 if fingerprint == last else 1)
+
+    def stale_polls(self, args: Any, key: str = "") -> int:
+        """How many status polls of this job in a row said the same (#591)."""
+        job_id = str((args or {}).get("job_id", "")) if isinstance(args, dict) else ""
+        with self._lock:
+            return self._polls.get(key, {}).get(job_id, ("", 0))[1]
+
     def check(self, tool: str, args: Any, key: str = "") -> tuple[str, int]:
         """Count this call: ``(verdict, nth)``, *verdict* one of RUN / ASK / REFUSE."""
         tool = str(tool or "")
         if _is_exempt(tool):
-            return RUN, 0
+            stale = self.stale_polls(_poll_args(args), key)
+            return (REFUSE, stale) if stale >= STALE_POLLS else (RUN, 0)
         read = _is_read(tool)
         context = _context(tool)
         sig = signature(tool, {"input": args, "context": context} if context else args)
@@ -238,6 +291,11 @@ def _error(message: str) -> dict[str, object]:
 
 
 def refused(tool: str, nth: int) -> dict[str, object]:
+    if _is_exempt(tool):
+        return _error("Refused: get_job_status has answered the same {:d} times in a row (no progress), so the "
+                      "job is stuck or too slow. Stop polling and don't start another render or bake: tell the "
+                      "user it looks stuck and that they can stop it with Esc or the X on the job bar in the "
+                      "status bar. Looking at the scene with other tools still works.".format(nth))
     return _error("Refused: this is the {:s} call to {:s} with the same input in this turn, and it isn't "
                   "getting anywhere. Don't repeat it: change the approach, or stop and tell the user "
                   "what blocks you.".format(_ordinal(nth), tool or "this tool"))
@@ -346,6 +404,18 @@ def bridge_wrap(guard: LoopGuard, approvals: Approvals, auto: bool, tool: str, a
     return {}, check
 
 
+_JOB_ID_IN_CODE = re.compile(r"""\bjob_id=(?:'([^'\\]*)'|"([^"\\]*)")""")
+
+
+def _poll_args(args: Any) -> dict[str, Any]:
+    """``{"job_id": ...}`` of a bridge status poll, whose *args* is ``{"code": "...Params(job_id='x', ...)"}``."""
+    if isinstance(args, dict) and "job_id" in args:
+        return {"job_id": args["job_id"]}
+    code = str(args.get("code", "")) if isinstance(args, dict) else ""
+    m = _JOB_ID_IN_CODE.search(code)
+    return {"job_id": (m.group(1) or m.group(2)) if m else ""}
+
+
 def bridge_watch(guard: LoopGuard, tool: str, args: Any, key: str, thread: str, response: dict[str, object],
                  check_fn: Callable[[], dict[str, object] | None] | None,
                  ) -> Callable[[], dict[str, object] | None] | None:
@@ -353,6 +423,22 @@ def bridge_watch(guard: LoopGuard, tool: str, args: Any, key: str, thread: str, 
     :func:`bridge_wrap`.  Returns the checker to use: *check_fn* itself for other tools,
     else one that notes the answer when it comes (with *check_fn*'s attributes: the job
     kind, label and end a long render needs)."""
+    if _is_exempt(str(tool or "")):
+        # #591: its answer is counted as a status poll; the bridge's args are the call's code, so the
+        # job id comes out of it.
+        poll_args = _poll_args(args)
+        if check_fn is None:
+            guard.note_result(tool, poll_args, response, key + "/" + thread if thread else key)
+            return None
+        inner_poll = check_fn
+
+        @functools.wraps(inner_poll)
+        def watched_poll() -> dict[str, object] | None:
+            result = inner_poll()
+            if result is not None:
+                guard.note_result(tool, poll_args, result, key + "/" + thread if thread else key)
+            return result
+        return watched_poll
     if not _render_identity(str(tool or ""), args):
         return check_fn
     count_key = key + "/" + thread if thread else key

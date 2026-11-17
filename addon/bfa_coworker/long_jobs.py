@@ -58,6 +58,7 @@ __all__ = (
     "poll_is_waiting",
     "row_text",
     "running",
+    "scene_busy_message",
     "start",
     "status",
     "wait_in_slices",
@@ -85,6 +86,12 @@ STATUS_POLL_TOOLS = frozenset({"get_job_status"})
 JOB_TIMEOUT = 60.0 * 60.0
 # Finished jobs kept for get_job_status (oldest dropped first).
 _KEEP_FINISHED = 20
+
+# #591: a render whose status line (the sample count) did not change for this long is reported
+# as stuck.  A Cycles / EEVEE render updates it about every second; a render that never got to
+# its first sample shows no line at all, so the wait counts from the start.  Patched by tests.
+STUCK_AFTER = 180.0
+_STUCK_KINDS = frozenset({"RENDER"})
 
 _KIND_VERBS = {"RENDER": "Rendering", "OBJECT_BAKE": "Baking", "TRANSCRIBE": "Transcribing"}
 
@@ -186,6 +193,7 @@ def start(kind: str, label: str, check_fn: Callable[[], dict[str, Any] | None],
             "id": job_id, "kind": str(kind), "label": str(label) or str(kind).lower(),
             "state": "running", "started": now, "ended": 0.0, "deadline": now + float(timeout),
             "progress": None, "progress_text": "", "progress_short": "", "result": None, "message": "",
+            "last_change": now,         # #591: when the progress last changed (stuck detection)
             "cancel_requested": "",
             "check_fn": check_fn, "on_finish": on_finish,
             # #540: a checker's own progress, ``job_progress() -> (fraction or None, text, short)``
@@ -270,7 +278,10 @@ def note_progress(kind: str, text: str) -> None:
     with _lock:
         for job in _jobs.values():
             if job["state"] == "running" and job["kind"] == kind:
-                job["progress_text"] = str(text or "")[:120]
+                new_text = str(text or "")[:120]
+                if new_text != job["progress_text"] or (frac is not None and frac != job["progress"]):
+                    job["last_change"] = _clock()
+                job["progress_text"] = new_text
                 if frac is not None:
                     job["progress"] = frac
 
@@ -284,11 +295,14 @@ def _read_progress(job: dict[str, Any]) -> None:
         frac, text, short = fn()
     except Exception:  # pylint: disable=broad-exception-caught
         return
+    old = (job["progress_text"], job["progress_short"], job["progress"])
     if text:
         job["progress_text"] = str(text)[:120]
     job["progress_short"] = str(short or "")[:40]
     if frac is not None:
         job["progress"] = max(0.0, min(1.0, float(frac)))
+    if old != (job["progress_text"], job["progress_short"], job["progress"]):
+        job["last_change"] = _clock()
 
 
 def cancelled(kind: str) -> None:
@@ -325,6 +339,15 @@ def _elapsed(job: dict[str, Any]) -> int:
     return int((job["ended"] or _clock()) - job["started"])
 
 
+def stuck_seconds(job: dict[str, Any]) -> int:
+    """How long a running job of a kind that reports progress has shown none (#591): 0 while
+    it is within :data:`STUCK_AFTER` (or is not that kind, or is over), else the seconds."""
+    if job["state"] != "running" or job["kind"] not in _STUCK_KINDS:
+        return 0
+    quiet = _clock() - job.get("last_change", job["started"])
+    return int(quiet) if quiet > STUCK_AFTER else 0
+
+
 def status(job_id: str) -> dict[str, Any]:
     """What get_job_status answers: ``state`` running / done / error / cancelled."""
     with _lock:
@@ -342,10 +365,24 @@ def status(job_id: str) -> dict[str, Any]:
             "job_id": job["id"], "state": job["state"], "kind": job["kind"], "label": job["label"],
             "elapsed_seconds": _elapsed(job),
         }
+        stuck = stuck_seconds(job)
+        if stuck:
+            # #591: not "running": the model must stop waiting.  The job itself may still end.
+            out["status"] = "error"
+            out["state"] = "stuck"
+            out["stuck_seconds"] = stuck
         if job["progress"] is not None:
             out["progress_percent"] = int(round(job["progress"] * 100))
         if job["progress_text"] and job["state"] == "running":
             out["progress_text"] = job["progress_text"]
+        if stuck:
+            out["message"] = (
+                "The {:s} has shown no progress for {:d} s ({:d} s since it started): it is stuck, or the "
+                "machine is too busy for it. Stop waiting: don't call get_job_status again and don't start "
+                "another render. Tell the user it looks stuck and that they can stop it with Esc or the X on "
+                "the job bar in the status bar; looking at the scene with other tools still works."
+                .format(_KIND_VERBS.get(job["kind"], job["kind"].lower()).lower(), stuck, _elapsed(job)))
+            return out
         if job.get("progress_short") and job["state"] == "running":
             out["progress_step"] = job["progress_short"]
         if job["result"] is not None:
@@ -362,6 +399,9 @@ def row_text(job: dict[str, Any]) -> str:
     verb = _KIND_VERBS.get(job["kind"], job["kind"].replace("_", " ").title())
     if job["state"] == "running":
         short = ", " + job["progress_short"] if job.get("progress_short") else ""
+        quiet = stuck_seconds(job)
+        if quiet:
+            return "{:s}, no progress for {:d} s".format(verb, quiet)
         if job["progress"] is not None:
             return "{:s} {:d}%{:s}".format(verb, int(round(job["progress"] * 100)), short)
         return "{:s}, {:d} s{:s}".format(verb, _elapsed(job), short)
@@ -377,6 +417,58 @@ def running() -> list[dict[str, Any]]:
     for job in jobs:
         job["text"] = row_text(job)
     return jobs
+
+
+_BUSY_KINDS = ("RENDER", "OBJECT_BAKE")
+_BUSY_WHAT = {"RENDER": "render", "OBJECT_BAKE": "bake"}
+# What Coworker's own code does to the scene that must not run while a job reads it:
+# the undo / redo of a step's recovery and the removal of its datablocks.
+_INTERNAL_RISKY = ("ed.undo()", "ed.redo()", ".remove(")
+
+
+def _job_running(kind: str) -> bool:
+    try:
+        import bpy  # pylint: disable=import-error,import-outside-toplevel
+        return bool(bpy.app.is_job_running(kind))
+    except Exception:  # pylint: disable=broad-exception-caught  # outside Blender: nothing runs
+        return False
+
+
+def scene_busy_message(tool: str, code: str = "", internal: bool = False,
+                       is_running: Callable[[str], bool] | None = None) -> str:
+    """#591: why a step that changes the scene must not run now ("" when it may).
+
+    Blender's render and bake jobs read the scene on their own thread; a script that adds or
+    removes objects meanwhile, or an undo, can crash Blender (access violation in the job's
+    thread).  So while a render or bake runs, a step that may change the scene is refused with
+    an answer the model can act on.  What only looks (get_* tools, a script that only reads)
+    goes through.  *internal*: Coworker's own code, refused only for undo / redo / removals."""
+    running_kind = ""
+    for kind in _BUSY_KINDS:
+        if (is_running or _job_running)(kind):
+            running_kind = kind
+            break
+    if not running_kind:
+        return ""
+    if internal:
+        if not any(m in str(code or "") for m in _INTERNAL_RISKY):
+            return ""
+    else:
+        from . import claims, turn_undo
+        from .engine import PLAN_SAFE_TOOLS
+        if not claims.writes(tool, PLAN_SAFE_TOOLS) or not turn_undo.call_changes(tool, code, PLAN_SAFE_TOOLS):
+            return ""
+    ours = [j for j in running() if j["kind"] == running_kind]
+    which = " ({:s})".format(ours[0]["id"]) if ours else ""
+    return (
+        "Not run: a {:s} is running in Blender{:s}, and changing the scene while it runs can crash Blender. "
+        "Nothing was changed. {:s}Looking at the scene (get_* tools, a script that only reads) still works; "
+        "try this step again once the {:s} is over.".format(
+            _BUSY_WHAT[running_kind], which,
+            "Wait for it with get_job_status(job_id) (it ends by itself), or ask the user to stop it with Esc "
+            "or the X on the job bar in the status bar. " if ours else
+            "Wait for it to end, or ask the user to stop it with Esc or the X on the job bar in the status "
+            "bar. ", _BUSY_WHAT[running_kind]))
 
 
 def clear() -> None:

@@ -5437,6 +5437,13 @@ def _trim_tool_result(result_text: str, max_chars: int = _MAX_TOOL_RESULT_CHARS)
         status, result_text[:max_chars - 40] + "...")
 
 
+def _step_may_still_run(error_text: str) -> bool:
+    """#591: the step ended by a time limit, so its code may still be running on Blender's main
+    thread: no undo or scene restore may run now (they would act on a scene it is changing)."""
+    low = str(error_text or "").lower()
+    return "timed out" in low or "timeout" in low or "may still be busy" in low
+
+
 def _error_is_code_bug(error_text: str) -> bool:
     """Return ``True`` if *error_text* is a pure code bug with no side effects.
 
@@ -6588,8 +6595,15 @@ def _release_scene_lock() -> None:
             co_work_guard.clear()
             _active_lock_mcp_port = 0
         else:
-            print("[Coworker] _release_scene_lock: unlock reported an error -- "
-                  "keeping priors for a later retry (scene may stay protected)")
+            # #591: say why.  The usual cause is no Blender behind the port (it crashed, closed or
+            # the bridge stopped: "connection refused"), so there is no scene left to unlock; else the
+            # answer is the bridge's own error text.
+            _why = str(raw or "").strip().replace("
+", " ")[:160] or "no answer"
+            if "10061" in _why or "refused" in _why.lower() or "Cannot connect" in _why:
+                _why = "the bridge cannot be reached (Blender closed or its server stopped): " + _why
+            print("[Coworker] _release_scene_lock: unlock was not confirmed ({:s}) -- keeping the priors "
+                  "for a later retry (the scene may stay protected until then)".format(_why))
     except Exception as _ex:  # pylint: disable=broad-exception-caught
         print("[Coworker] _release_scene_lock: unlock failed, keeping priors "
               "for a later retry -- {:s}".format(str(_ex)))
@@ -8731,7 +8745,10 @@ def _run_conversation_turn_inner(
                     should_undo = False
                     reason = ""
                     if _prev_code_errored:
-                        if _error_is_code_bug(_prev_code_error):
+                        if _step_may_still_run(_prev_code_error):
+                            print("[Coworker] run_conversation_turn: smart undo SKIPPED -- the step timed out and may "
+                                  "still be running (#591)")
+                        elif _error_is_code_bug(_prev_code_error):
                             print("[Coworker] run_conversation_turn: smart undo SKIPPED -- code-bug error, no side effects")
                         else:
                             should_undo = True
@@ -8936,7 +8953,8 @@ def _run_conversation_turn_inner(
                 # -- Track code execution for smart undo ----------------
                 if tool_name == "execute_blender_code":
                     _prev_code = args.get("code", "")
-                    _prev_code_errored = '"status": "error"' in result_text
+                    _prev_code_errored = '"status": "error"' in result_text or (
+                        result_text.startswith("Error executing tool") and _step_may_still_run(result_text))
                     _prev_code_error = result_text if _prev_code_errored else ""
 
                     # -- The step's entity snapshot (no undo step, #501) -

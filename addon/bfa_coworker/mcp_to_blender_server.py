@@ -1439,6 +1439,16 @@ def _execute_code_from_request(
         return _claim_gate(_thread, _tool, request.get("args"), str(code), _run)
 
     exec_result = None
+    # #591: a render / bake job reads the scene on its own thread: a step that changes the scene (or
+    # an undo, a removal) meanwhile can crash Blender.  Refused with an answer the model can act on.
+    try:
+        from . import long_jobs
+        _busy = long_jobs.scene_busy_message(_tool, str(code), internal=_internal)
+    except Exception:  # pylint: disable=broad-exception-caught
+        _busy = ""
+    if _busy:
+        print("[Coworker] bridge: refused {:s} -- a render or bake is running (#591)".format(_tool or "a step"))
+        return _ExecResult({"status": "error", "message": _busy}), strict_json
     # Runtime 1 (#310): the same call again and again asks, then is refused.  The local
     # loop counts its own calls (its bookkeeping code repeats here on purpose).
     if _tool and not _internal and _engine in ("EXTERNAL_AGENT", "EXTERNAL_HARNESS"):

@@ -11,7 +11,8 @@ Two places:
 * **The button menu** (right-click on any property or operator button):
   ``UI_MT_button_context_menu``.  The draw reads what was clicked from the
   context -- ``button_pointer`` + ``button_prop`` for a property,
-  ``button_operator`` for an operator button.
+  ``button_operator`` for an operator button.  A chat tab (a ``bfacw.tab_show``
+  button) gets its own entries first, for that tab (#573).
 * **The editors' own menus** (right-click in the 3D View, the node editor, the
   sequencer...): "Explain This Editor".
 
@@ -27,6 +28,7 @@ __all__ = (
     "chat_ready",
     "clicked",
     "register",
+    "tab_under_mouse",
     "unregister",
 )
 
@@ -618,6 +620,35 @@ def _draw_button_menu(self: Any, context: Any) -> None:
             print("[Coworker] context menu entry failed: {!s}".format(ex))
 
 
+# A chat tab is a button of this operator (ui_chat.draw_chat_tabs, the tabs drop-down).
+_TAB_BUTTON = "BFACW_OT_tab_show"
+
+
+def tab_under_mouse(context: Any) -> str:
+    """The thread id of the chat tab the button menu was opened on, "" for any other button (#573)."""
+    op = getattr(context, "button_operator", None)
+    if getattr(getattr(op, "bl_rna", None), "identifier", "") != _TAB_BUTTON:
+        return ""
+    return str(getattr(op, "thread_id", "") or "")
+
+
+def _draw_tab_menu(self: Any, context: Any) -> None:
+    """A chat tab's own entries, for that tab (shown or not), above Coworker's others (#573)."""
+    thread_id = tab_under_mouse(context)
+    if not thread_id:
+        return          # any other button: its menu stays as it was
+    from . import agent_controller, ui_chat
+    thread = agent_controller.THREADS.get(thread_id)
+    if thread is None:
+        return
+    layout = self.layout
+    layout.separator()
+    try:
+        ui_chat.draw_tab_entries(layout, context, thread)
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] chat tab menu failed: {!s}".format(ex))
+
+
 def _draw_editor_menu(self: Any, context: Any) -> None:
     from .chat_editor import is_coworker_space
     if is_coworker_space(getattr(context, "space_data", None)):
@@ -653,6 +684,8 @@ def register() -> None:
             _HOOKED.append((menu, draw))
     menu = getattr(bpy.types, "UI_MT_button_context_menu", None)
     if menu is not None:
+        menu.prepend(_draw_tab_menu)        # a chat tab's entries first (#573)
+        _HOOKED.append((menu, _draw_tab_menu))
         menu.append(_draw_button_menu)
         _HOOKED.append((menu, _draw_button_menu))
     for name in _EDITOR_MENUS:

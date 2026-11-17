@@ -200,10 +200,10 @@ def _harness_notice(prefs: Any) -> Notice:
     ), rows=rows, rows_title="What your client did in Blender")
 
 
-def _history(context: Any = None) -> list[dict]:
-    """The shown thread's whole conversation, retired turns first (like the panel chat)."""
+def _history(context: Any = None, thread: Any = None) -> list[dict]:
+    """The shown thread's (or *thread*'s) whole conversation, retired turns first (like the panel chat)."""
     from . import ui_chat
-    thread = ui_chat._ui_thread(context)
+    thread = thread if thread is not None else ui_chat._ui_thread(context)
     store = agent_controller._memory(thread).store
     return list(store.retired_history) + list(agent_controller.thread_state(thread).conversation_history)
 
@@ -1315,6 +1315,8 @@ class BFACW_OT_chat_context_copy(bpy.types.Operator):
     bl_options = {"INTERNAL"}
 
     what: bpy.props.EnumProperty(items=_COPY_WHAT, default="MESSAGE", options={"SKIP_SAVE"})  # type: ignore[valid-type]
+    # Whole Chat from a tab's right-click menu (#573): that tab's chat; "" is the one shown.
+    thread_id: bpy.props.StringProperty(options={"SKIP_SAVE", "HIDDEN"})  # type: ignore[valid-type]
 
     @classmethod
     def description(cls, _context, properties):
@@ -1323,6 +1325,13 @@ class BFACW_OT_chat_context_copy(bpy.types.Operator):
     def execute(self, context):
         from . import log
         from .ui_gpu.chat_view import transcript
+        if self.what == "CHAT" and self.thread_id:
+            thread = agent_controller.THREADS.get(self.thread_id)
+            text = transcript(_history(context, thread)) if thread is not None else ""
+            if not text:
+                return {"CANCELLED"}
+            context.window_manager.clipboard = log.redact(text)    # keys and tokens as *** (#346)
+            return {"FINISHED"}
         target = input_capture.menu_target()
         turn = target["turn"] or {}
         surface = target["surface"]

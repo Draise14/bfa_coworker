@@ -1049,10 +1049,11 @@ EXPECTED_TOOLS = [
 "            wait_seconds: How long to wait for the job to finish (0 = answer now, at most 240).\n"
 "\n"
 "        Returns:\n"
-"            ``status``, ``job_id``, ``state`` (\"running\", \"done\", \"error\" or \"cancelled\"),\n"
+"            ``status``, ``job_id``, ``state`` (\"running\", \"done\", \"error\", \"cancelled\" or \"stuck\"),\n"
 "            ``kind``, ``label``, ``elapsed_seconds``, ``progress_percent`` (when Blender\n"
 "            reports it), ``result`` once done (e.g. the ``filepath`` or baked images),\n"
-"            and a ``message``.\n"
+"            and a ``message``.  ``state`` \"stuck\" (a render with no progress for a few\n"
+"            minutes): stop polling, don't start another render, tell the user.\n"
 "        ",
         "inputSchema": {
             "properties": {

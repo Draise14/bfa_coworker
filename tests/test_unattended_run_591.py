@@ -215,6 +215,30 @@ class TestStalePolls(unittest.TestCase):
         self.assertEqual(guard.check("get_job_status", code, "s")[0], lg.REFUSE)
 
 
+class TestStatusResultType(unittest.TestCase):
+    """The tool's Result must take every key ``long_jobs.status`` can give (a missing one was a TypeError)."""
+
+    def test_result_takes_all_status_keys(self):
+        import importlib.util
+        path = Path(__file__).resolve().parents[1] / "mcp" / "blmcp" / "tools" / "get_job_status_toolcode.py"
+        spec = importlib.util.spec_from_file_location("gjs_591", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        clock = _Clock()
+        saved, jobs._clock = jobs._clock, clock
+        try:
+            jobs.clear()
+            job_id = jobs.start("RENDER", "r", lambda: None)
+            jobs.note_progress("RENDER", "Sample 1/9")
+            clock.now += jobs.STUCK_AFTER + 5
+            for st in (jobs.status(job_id), jobs.status("nope")):
+                mod.Result(**st)
+            self.assertEqual(jobs.status(job_id)["state"], "stuck")
+        finally:
+            jobs._clock = saved
+            jobs.clear()
+
+
 class TestTimedOutStep(unittest.TestCase):
 
     def test_a_timeout_may_still_run(self):

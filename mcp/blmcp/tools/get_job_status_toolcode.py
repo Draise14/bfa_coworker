@@ -33,6 +33,8 @@ class Result(NamedTuple):
     elapsed_seconds: int | None = None
     progress_percent: int | None = None
     progress_text: str | None = None
+    progress_step: str | None = None
+    stuck_seconds: int | None = None
     result: Any = None
     message: str | None = None
 

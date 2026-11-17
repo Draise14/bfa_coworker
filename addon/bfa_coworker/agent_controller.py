@@ -6598,8 +6598,7 @@ def _release_scene_lock() -> None:
             # #591: say why.  The usual cause is no Blender behind the port (it crashed, closed or
             # the bridge stopped: "connection refused"), so there is no scene left to unlock; else the
             # answer is the bridge's own error text.
-            _why = str(raw or "").strip().replace("
-", " ")[:160] or "no answer"
+            _why = str(raw or "").strip().replace(chr(10), " ")[:160] or "no answer"
             if "10061" in _why or "refused" in _why.lower() or "Cannot connect" in _why:
                 _why = "the bridge cannot be reached (Blender closed or its server stopped): " + _why
             print("[Coworker] _release_scene_lock: unlock was not confirmed ({:s}) -- keeping the priors "

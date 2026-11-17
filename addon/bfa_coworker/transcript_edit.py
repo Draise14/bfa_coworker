@@ -28,7 +28,15 @@ Editing that text edits the video.
   left as it was.  A line that moved is a *move*.  Everything uncertain (typed text, a rewritten
   line, a repeated word or line the text can't tell apart) is *flagged* on its line and changes
   nothing; the words it might be the rest of stay too.  A line nothing stands for is cut whole.
-  The time marks are all different, so each line can be told.
+  The time marks are all different, so each line can be told.  A mark has exactly the shape the
+  renderer writes (``[0:05.2]``); anything else in brackets is a word.  Text the timeline has no
+  words for (flagged lines, words added to a line, a changed word that is also a word of a line
+  the text has no mark for) makes every line that has one of its words stay, and the end of a
+  line that could be the end of the line below it (a selection deleted from the middle of one line
+  to the middle of the next) is flagged, so a line is never cut while some of its words are still
+  in the text.  Words that overlap in time are never cut into a kept word (flag ``overlap``).
+* **After an Apply that leaves the text as typed** (Live, or flags): :func:`carry_base` makes the
+  artist's own lines, with the marks in the text, the base of the next diff.
 * **The timeline** (:func:`cut_ranges`, :func:`plan_moves`, :func:`move_ranges`): the cut
   words become timeline frame ranges, padded and placed in the pause between words, so the
   Sequencer side (``transcript_edit_ops``) can cut them with Remove Silences' split / ripple
@@ -56,6 +64,7 @@ __all__ = (
     "STRIP_PROP",
     "Edit",
     "caption_text",
+    "carry_base",
     "compute_edit",
     "cut_ranges",
     "display",
@@ -70,6 +79,7 @@ __all__ = (
     "move_ranges",
     "move_span",
     "norm",
+    "only_listed",
     "parse",
     "parse_mark",
     "plan_moves",
@@ -102,13 +112,16 @@ LINE_PAUSE_S = 0.8      # a pause this long starts a new line
 PARAGRAPH_S = 2.0       # ... and this long a new paragraph (a blank line)
 MAX_LINE_WORDS = 28     # a line longer than this breaks after a comma, or at 1.5 times this
 SIMILAR = 0.6           # how alike a changed word must be to count as the same word (a typo)
-BLOCK_SIMILAR = 0.5     # how alike (letters only) a block of n words written as m words must stay ("it is" -> "it's")
+BLOCK_SIMILAR = 0.5     # how alike (letters only) a block of n words written as m words must stay ("it is" -> "it's") ...
+BLOCK_PREFIX = 2        # ... and how many letters it must start with the same ("going to" -> "gonna"); one word for one word
+                        # needs SIMILAR; a block that is not clearly the same words is flagged, not retexted
 CLOSE_LINE = 0.85       # how alike a line without a time mark must be to a line of the text (its words)
 
-# A time mark at the start of a line: "[0:05.2]", "[1:02:03.4]".  Edited or deleted marks are
-# fine: anything in brackets made of digits, colons, dots, commas and spaces at the start of a
-# line is not text.
-MARK_RE = re.compile(r"^\s*\[[\d\s:.,;'\-]*\]\s?")
+# A time mark at the start of a line has exactly the shape the renderer writes: "[0:05.2]",
+# "[1:02:03.4]" (minutes:seconds.fraction).  Anything else in brackets ("[2.5]", "[1]", "[laughs]")
+# is a word of the text.  A mark the artist changed or broke is a word too: the line is flagged
+# (nothing is cut by it), never read as a mark.
+MARK_RE = re.compile(r"^\s*\[(?:\d+:)?\d+:\d\d\.\d+\]\s?")
 _EDGE = re.compile(r"^[^\w]+|[^\w]+$", re.UNICODE)
 
 _SENTENCE_END = (".", "!", "?", "…", "。", "！", "？")
@@ -356,7 +369,12 @@ def parse(text: str) -> list[tuple[int, str]]:
 #      words changed are retext (timing kept), a block of n words written as m words is one
 #      retext of the block (the words stay), words added are flagged and the line is left as it
 #      was;
-#   D. a base line nothing in the text stands for, and no flagged line could be the rest of, is cut.
+#   D. a base line nothing in the text stands for, and no word of text that stands for no line (flagged
+#      lines, words added) is also a word of it, is cut.
+#
+# A mark and the words can disagree (a mark typed onto another line, that other line deleted): when the
+# words of a line with one line's mark are exactly the words of a base line the text has no mark for,
+# which line it is can't be told: flagged "ambiguous", both base lines stay.
 
 class Edit(dict):
     """What changed (a dict, JSON-ready).
@@ -370,7 +388,8 @@ class Edit(dict):
     ``lines_cut``: how many whole lines of the last text go (Live waits longer before those);
     ``fraction``: the share of the words (and of the time) cut, the larger of the two;
     ``needs_confirm``: more than half goes (:data:`LARGE_CUT`): ask before applying;
-    ``changed``: anything to apply."""
+    ``changed``: anything to apply; ``carry``: the lines of the text as typed, in the order of
+    ``order``: ``[{"mark", "words", "line"}]`` (:func:`carry_base`)."""
 
     @property
     def flags(self) -> list[dict]:
@@ -383,6 +402,16 @@ def _ratio(a: str, b: str) -> float:
     if not a or not b:
         return 0.0
     return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
+
+
+def _one_letter(a: str, b: str) -> bool:
+    """Two words of the same length (four letters or more) that differ in one letter: a typo, however short."""
+    return len(a) == len(b) >= 4 and sum(1 for x, y in zip(a, b) if x != y) == 1
+
+
+def _similar(a: str, b: str) -> bool:
+    """*a* and *b* are one word with a typo."""
+    return _ratio(a, b) >= SIMILAR or _one_letter(a, b)
 
 
 def _list_ratio(a: Sequence[str], b: Sequence[str]) -> float:
@@ -438,7 +467,7 @@ def _dp_ops(x: Sequence[str], y: Sequence[str], offset: int) -> list[tuple[str, 
                 weight[(i, j)] = 3.0
             else:
                 r = _ratio(x[i], y[j])
-                if r >= SIMILAR:
+                if r >= SIMILAR or _one_letter(x[i], y[j]):
                     weight[(i, j)] = 1.0 + r * 1e-3
     best = [[0.0] * (ny + 1) for _ in range(nx + 1)]
     for i in range(nx - 1, -1, -1):
@@ -483,12 +512,21 @@ def _alike(a: Sequence[str], b: Sequence[str]) -> bool:
     return bool(sa and sb) and len(sa & sb) >= 0.5 * max(len(sa), len(sb))
 
 
-def _alike_part(x: set[str], b: Sequence[str]) -> bool:
-    """The words *x* (text that is not on the timeline) hold most of the line or words *b* (taken
-    out of the text): they may have been moved there by hand (a typo allowed)."""
-    sb = set(b)
-    shared = sum(1 for t in sb if t in x or any(_ratio(t, u) >= SIMILAR for u in x))
-    return shared >= 2 or (shared >= 1 and len(sb) <= 2)
+def _same_block(old: Sequence[str], new: Sequence[str]) -> bool:
+    """Several words written as other words (or one) that are clearly the same words: "it is very" -> "it's"."""
+    a, b = "".join(old), "".join(new)
+    k = 0
+    while k < min(len(a), len(b)) and a[k] == b[k]:
+        k += 1
+    return k >= min(BLOCK_PREFIX, len(a), len(b)) and _ratio(a, b) >= BLOCK_SIMILAR
+
+
+def _shares(norms: Iterable[str], pool: set[str]) -> bool:
+    """One of the words *norms* is a word of *pool* (or a typo of one): text that holds it may be where it went."""
+    for t in norms:
+        if t in pool or any(_similar(t, u) for u in pool):
+            return True
+    return False
 
 
 def _matches(a: Sequence[str], b: Sequence[str]) -> int:
@@ -499,7 +537,7 @@ def _matches(a: Sequence[str], b: Sequence[str]) -> int:
     for tag, i1, i2, j1, j2 in _opcodes(a, b):
         if tag == "equal":
             total += i2 - i1
-        elif tag == "replace" and i2 - i1 == j2 - j1 and all(_ratio(a[i1 + k], b[j1 + k]) >= SIMILAR
+        elif tag == "replace" and i2 - i1 == j2 - j1 and all(_similar(a[i1 + k], b[j1 + k])
                                                               for k in range(i2 - i1)):
             total += i2 - i1
     return total
@@ -541,6 +579,111 @@ def _deleted_certain(a: Sequence[str], b: Sequence[str], gone: set[int]) -> bool
     return not any(a[i] == b[j] and f[i][j] + 1 + g[i + 1][j + 1] == best for i in gone for j in range(m))
 
 
+_DELETE_LIMIT = 40_000    # token pairs at most for the exact check of words taken out of a line
+
+
+def _delete_only(a: Sequence[str], ar: Sequence[str], al: Sequence[int], b: Sequence[str],
+                 br: Sequence[str]) -> list[tuple[int, int]] | None:
+    """Which words of a line (or the few lines of a group) were taken out to get *b*, when the text
+    left is *a* (norms; *ar* the tokens as written, *al* the base line of each) minus some words and
+    nothing else: the kept words as pairs ``(index in a, index in b)``, or None when the text can't
+    say.  Where several words are the same, the written form tells ("Okay, okay" -> "okay": the
+    second one stays), and a run of the very same token in one line ("I I think" -> "I think") is
+    one choice whichever it is: the earliest of the run goes.  Any other way of taking out the
+    same text (a repeated phrase, the same word in two places) is no certainty: None."""
+    n, m = len(a), len(b)
+    big = 1000
+    neg = -10 ** 9
+    f = [[neg] * (m + 1) for _ in range(n + 1)]
+    g = [[neg] * (m + 1) for _ in range(n + 1)]
+    f[0][0] = 0
+    for i in range(n):
+        for j in range(min(i, m) + 1):
+            cur = f[i][j]
+            if cur < 0 and not (i == 0 and j == 0):
+                continue
+            if f[i + 1][j] < cur:
+                f[i + 1][j] = cur
+            if j < m and a[i] == b[j]:
+                v = cur + big + (1 if ar[i] == br[j] else 0)
+                if f[i + 1][j + 1] < v:
+                    f[i + 1][j + 1] = v
+    g[n][m] = 0
+    for i in range(n - 1, -1, -1):
+        for j in range(m + 1):
+            best = g[i + 1][j]
+            if j < m and a[i] == b[j] and g[i + 1][j + 1] >= 0:
+                best = max(best, g[i + 1][j + 1] + big + (1 if ar[i] == br[j] else 0))
+            g[i][j] = best if best >= 0 else neg
+    total = f[n][m]
+    if total < 0 or g[0][0] != total:
+        return None
+    run_of = [0] * n                                    # the run of the very same token (as written) in one line
+    for i in range(1, n):
+        run_of[i] = run_of[i - 1] if (ar[i] == ar[i - 1] and al[i] == al[i - 1]) else run_of[i - 1] + 1
+    base = n + 2
+    reach: dict[tuple[int, int], set[int]] = {(0, 0): {0}}
+    for i in range(n):
+        for j in range(min(i, m) + 1):
+            sigs = reach.get((i, j))
+            if not sigs:
+                continue
+            if len(sigs) > 1:
+                return None
+            sig = next(iter(sigs))
+            if f[i][j] + g[i][j] != total:
+                continue
+            if g[i + 1][j] >= 0 and f[i][j] + g[i + 1][j] == total:             # a[i] taken out
+                reach.setdefault((i + 1, j), set()).add(sig + base ** run_of[i])
+            if j < m and a[i] == b[j]:
+                w = big + (1 if ar[i] == br[j] else 0)
+                if g[i + 1][j + 1] >= 0 and f[i][j] + w + g[i + 1][j + 1] == total:     # a[i] stands for b[j]
+                    reach.setdefault((i + 1, j + 1), set()).add(sig)
+    if len(reach.get((n, m), ())) != 1:
+        return None
+    # one walk through the best lining-up, then the kept words of each run moved to the end of it
+    pairs: list[tuple[int, int]] = []
+    i = j = 0
+    while i < n:
+        if j < m and a[i] == b[j] and g[i + 1][j + 1] >= 0 \
+                and f[i][j] + big + (1 if ar[i] == br[j] else 0) + g[i + 1][j + 1] == total:
+            pairs.append((i, j))
+            i, j = i + 1, j + 1
+        else:
+            i += 1
+    out: list[tuple[int, int]] = []
+    k = 0
+    while k < len(pairs):
+        r = run_of[pairs[k][0]]
+        e = k
+        while e + 1 < len(pairs) and run_of[pairs[e + 1][0]] == r:
+            e += 1
+        end = max(x for x in range(n) if run_of[x] == r)         # the last word of the run
+        count = e - k + 1
+        for q in range(count):
+            out.append((end - count + 1 + q, pairs[k + q][1]))
+        k = e + 1
+    return out
+
+
+def _pair_opcodes(pairs: Sequence[tuple[int, int]], n: int, m: int) -> list[tuple[str, int, int, int, int]]:
+    """``get_opcodes``-style rows for a lining-up that takes words out only."""
+    ops: list[tuple[str, int, int, int, int]] = []
+    i = j = 0
+    for pi, pj in pairs:
+        if pi > i:
+            ops.append(("delete", i, pi, j, j))
+        if ops and ops[-1][0] == "equal" and ops[-1][2] == pi and ops[-1][4] == pj:
+            last = ops.pop()
+            ops.append(("equal", last[1], pi + 1, last[3], pj + 1))
+        else:
+            ops.append(("equal", pi, pi + 1, pj, pj + 1))
+        i, j = pi + 1, pj + 1
+    if i < n:
+        ops.append(("delete", i, n, j, j))
+    return ops
+
+
 def _split_lines(text: str) -> list[str]:
     """The lines of a text as the Text Editor counts them (CRLF is one break)."""
     out = str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
@@ -566,38 +709,28 @@ class _Base:
 
 
 class _New:
-    """A line of the text now: its mark, tokens and (when its first bracket might be a word) the
-    tokens with it."""
+    """A line of the text now: its mark (None when it has none), its tokens and their norms."""
 
-    __slots__ = ("n", "key", "toks", "norms", "alt", "alt_norms")
+    __slots__ = ("n", "key", "toks", "norms")
 
-    def __init__(self, n: int, key: str | None, toks: list[str], alt: list[str] | None) -> None:
+    def __init__(self, n: int, key: str | None, toks: list[str]) -> None:
         self.n, self.key, self.toks = n, key, toks
         self.norms = [norm(t) for t in toks]
-        self.alt = alt
-        self.alt_norms = [norm(t) for t in alt] if alt else None
-
-    def use_alt(self) -> None:
-        if self.alt is not None:
-            self.toks, self.norms = self.alt, self.alt_norms or []
-            self.alt = None
 
 
 def _read_lines(text: str) -> list[_New]:
     out: list[_New] = []
     for n, raw in enumerate(_split_lines(text)):
         m = MARK_RE.match(raw)
-        key, alt = None, None
+        key = None
         body = raw
         if m:
             key = _mark_key(m.group(0))
             body = raw[m.end():]
-            if ":" not in m.group(0):                   # "[1]": a mark has minutes and seconds: maybe a word
-                alt = raw.split()
         toks = body.split()
         if not toks and key is None:
             continue                                    # a blank line
-        out.append(_New(n, key, toks, alt))
+        out.append(_New(n, key, toks))
     return out
 
 
@@ -683,17 +816,26 @@ def _match_lines(bl: list[_Base], lines: list[_New]) -> tuple[list[dict], dict[i
             pair[li] = by_mark[nl.key].idx
             used.add(by_mark[nl.key].idx)
 
+    # a mark and the words can disagree: a line that carries one line's mark but has exactly the words of
+    # another line the text has no mark for (a mark typed onto another line, a line deleted): which one?
+    ambiguous: dict[int, list[int]] = {}
+    free_norms: dict[tuple, list[int]] = {}
+    for b in bl:
+        if b.idx not in used:
+            free_norms.setdefault(tuple(b.norms), []).append(b.idx)
+    for li in sorted(pair):
+        nl, b = lines[li], bl[pair[li]]
+        if nl.toks and nl.norms != b.norms and tuple(nl.norms) in free_norms:
+            ambiguous[li] = [b.idx] + free_norms[tuple(nl.norms)]
+    for li in ambiguous:
+        used.discard(pair.pop(li))
+
     # B. the same words
-    todo = [li for li, nl in enumerate(lines) if li not in pair and nl.toks]
+    todo = [li for li, nl in enumerate(lines) if li not in pair and li not in ambiguous and nl.toks]
     by_norm: dict[tuple, list[int]] = {}
     for b in bl:
         if b.idx not in used:
             by_norm.setdefault(tuple(b.norms), []).append(b.idx)
-    for li in todo:
-        nl = lines[li]
-        if nl.alt is not None and tuple(nl.norms) not in by_norm and tuple(nl.alt_norms or ()) in by_norm:
-            nl.use_alt()
-    ambiguous: dict[int, list[int]] = {}
 
     def bounds(li: int) -> tuple[int, int]:
         p, n = -1, nb
@@ -768,17 +910,9 @@ def _match_lines(bl: list[_Base], lines: list[_New]) -> tuple[list[dict], dict[i
         cand: dict[int, list[int]] = {}
         for li in rest:
             nl = lines[li]
-            best_alt = False
             for b in free:
-                r = _list_ratio(b.norms, nl.norms)
-                if nl.alt_norms is not None:
-                    ra = _list_ratio(b.norms, nl.alt_norms)
-                    if ra > r:
-                        r, best_alt = ra, True
-                if r >= CLOSE_LINE:
+                if _list_ratio(b.norms, nl.norms) >= CLOSE_LINE:
                     cand.setdefault(li, []).append(b.idx)
-            if best_alt and li in cand:
-                nl.use_alt()
         claimants: dict[int, list[int]] = {}
         for li, cs in cand.items():
             for c in cs:
@@ -835,8 +969,8 @@ def _match_lines(bl: list[_Base], lines: list[_New]) -> tuple[list[dict], dict[i
     return out, ambiguous
 
 
-def _align_group(bts: Sequence[tuple[int, str, str]], nts: Sequence[tuple[int, int, str, str]]) -> dict[str, Any]:
-    """One line (or a split / joined few) against its base: *bts* ``(word, token, norm)``, *nts*
+def _align_group(bts: Sequence[tuple[int, str, str, int]], nts: Sequence[tuple[int, int, str, str]]) -> dict[str, Any]:
+    """One line (or a split / joined few) against its base: *bts* ``(word, token, norm, base line)``, *nts*
     ``(line, position in the line, token, norm)``.  ``emit``: ``[(base token, [new tokens])]`` in
     the new order; ``flags``: ``[(line, position, token, reason)]`` (then nothing here changes);
     ``pairs``: ``[(new token, base token)]`` for the tokens that stand for one."""
@@ -846,7 +980,16 @@ def _align_group(bts: Sequence[tuple[int, str, str]], nts: Sequence[tuple[int, i
     flags: list[tuple[int, int, str, str]] = []
     pairs: list[tuple[int, int]] = []
     deletes: list[tuple[int, int, int]] = []
-    for tag, i1, i2, j1, j2 in _opcodes(a, b):
+    ops = _opcodes(a, b)
+    certain = None
+    if nts and all(op[0] in ("equal", "delete") for op in ops) and any(op[0] == "delete" for op in ops) \
+            and len(a) * len(b) <= _DELETE_LIMIT:
+        # words taken out and nothing else: where the written form or a run of the same token tells, no flag
+        kept = _delete_only(a, [x[1] for x in bts], [x[3] for x in bts], b, [x[2] for x in nts])
+        if kept is not None:
+            ops = _pair_opcodes(kept, len(a), len(b))
+            certain = True
+    for tag, i1, i2, j1, j2 in ops:
         if tag == "equal":
             for k in range(i2 - i1):
                 emit.append((i1 + k, [nts[j1 + k][2]]))
@@ -858,11 +1001,11 @@ def _align_group(bts: Sequence[tuple[int, str, str]], nts: Sequence[tuple[int, i
                 flags.append((nts[j][0], nts[j][1], nts[j][2], "no_audio"))
         else:
             old, new = a[i1:i2], b[j1:j2]
-            if len(old) == len(new) and all(_ratio(x, y) >= SIMILAR for x, y in zip(old, new)):
+            if len(old) == len(new) and all(_similar(x, y) for x, y in zip(old, new)):
                 for k in range(len(old)):
                     emit.append((i1 + k, [nts[j1 + k][2]]))
                     pairs.append((j1 + k, i1 + k))
-            elif _ratio("".join(old), "".join(new)) >= BLOCK_SIMILAR:
+            elif (len(old) > 1 or len(new) > 1) and _same_block(old, new):
                 emit.append((i1, [nts[j][2] for j in range(j1, j2)]))
                 pairs.append((j1, i1))
                 for i in range(i1 + 1, i2):
@@ -871,38 +1014,50 @@ def _align_group(bts: Sequence[tuple[int, str, str]], nts: Sequence[tuple[int, i
                 for j in range(j1, j2):
                     flags.append((nts[j][0], nts[j][1], nts[j][2], "no_match"))
     gone = {i for i1, i2, _j in deletes for i in range(i1, i2)}
-    if nts and gone and not _deleted_certain(a, b, gone):
+    if nts and gone and not certain and not _deleted_certain(a, b, gone):
         n, k, tok, _nm = nts[min(deletes[0][2], len(nts) - 1)]
         flags.append((n, k, tok, "ambiguous"))
-    return {"emit": emit, "flags": flags, "pairs": pairs, "deletes": deletes}
+    own = {j: i for j, i in pairs}                      # which base token each new token stands for (a block: its first)
+    for tag, i1, i2, j1, j2 in ops:
+        if tag == "replace" and j1 in own:
+            for j in range(j1 + 1, j2):
+                own.setdefault(j, i1)
+    return {"emit": emit, "flags": flags, "pairs": pairs, "deletes": deletes, "own": own}
 
 
 def _group_tokens(bl: list[_Base], lines: list[_New], g: dict) -> tuple[list, list]:
-    bts = [(w, t, bl[bi].norms[k]) for bi in g["base"] for k, (w, t) in enumerate(bl[bi].tokens)]
+    bts = [(w, t, bl[bi].norms[k], bi) for bi in g["base"] for k, (w, t) in enumerate(bl[bi].tokens)]
     nts = [(lines[li].n, k, lines[li].toks[k], lines[li].norms[k]) for li in g["new"]
            for k in range(len(lines[li].toks))]
     return bts, nts
 
 
 def _cut_extent(words: Sequence[Any], prev: int | None, first: int, last: int, nxt: int | None,
-                padding: float = PADDING_S, limit: float = PAUSE_LIMIT_S) -> tuple[float, float]:
+                padding: float = PADDING_S, limit: float = PAUSE_LIMIT_S,
+                before_end: float | None = None) -> tuple[float, float]:
     """Media seconds ``(start, end)`` a cut of the words *first* .. *last* takes: the words with
     *padding* before the first (at most half the pause there) and, after the last, the pause up
     to the next kept word less *padding* but never more than *limit* seconds.  *prev* / *nxt*: the
     words kept around the cut (None at a strip's edge: then the cut ends at the word plus the
-    padding, not at the edge)."""
+    padding, not at the edge); *before_end*: the latest end of any word kept before the cut.  The
+    cut never reaches into a kept word: it starts after the kept words before it end and stops where
+    the next kept word starts, so words that overlap in time are not clipped (``end <= start``, or a
+    start after the first word's start: the cut words lie inside a kept word's time, nothing of them
+    can be cut)."""
     ws, we = _start(words[first]), _end(words[last])
     if prev is None:
         s = ws - padding
     else:
         pe = _end(words[prev])
+        if before_end is not None:
+            pe = max(pe, before_end)
         s = max(pe, ws - min(padding, max(0.0, ws - pe) / 2.0))
     if nxt is None:
         e = we + padding
     else:
         ns = _start(words[nxt])
-        e = max(we, ns - min(padding, max(0.0, ns - we) / 2.0))
-    return s, max(we, min(e, we + limit))
+        e = min(max(we, ns - min(padding, max(0.0, ns - we) / 2.0)), ns)
+    return s, min(e, we + limit)
 
 
 def compute_edit(base_tokens: Sequence[Sequence[Any]], base_order: Sequence[int], text: str,
@@ -914,7 +1069,25 @@ def compute_edit(base_tokens: Sequence[Sequence[Any]], base_order: Sequence[int]
     *base_order*: its word order (with the joined words); *retext*: its retexts; *base_lines*:
     its lines with their time marks (``render(...)["lines"]``: the marks tell the lines apart);
     *timeline_s*: the seconds the source plays on the timeline (the guard against a cut of
-    more than half; estimated from the words when not given)."""
+    more than half; estimated from the words when not given).
+
+    Words whose time lies inside a kept word's time can't be cut apart from it (a cut never reaches into a
+    kept word): their line is flagged ``overlap`` and nothing of it changes."""
+    blocked: frozenset[int] = frozenset()
+    edit = None
+    for _round in range(4):
+        edit, dead = _compute_edit(base_tokens, base_order, text, words, retext, base_lines, timeline_s, blocked)
+        if not dead or dead <= blocked:
+            break
+        blocked = blocked | dead
+    return edit
+
+
+def _compute_edit(base_tokens: Sequence[Sequence[Any]], base_order: Sequence[int], text: str,
+                  words: Sequence[Any], retext: dict | None, base_lines: Any, timeline_s: float | None,
+                  blocked: frozenset[int]) -> tuple[Edit, frozenset[int]]:
+    """:func:`compute_edit` once; *blocked*: base lines that stay as they are, flagged ``overlap``; the second
+    answer: the base lines whose cut would be empty (:func:`_cut_extent`)."""
     base = [(int(i), str(t)) for i, t in base_tokens]
     order0 = [int(w) for w in base_order]
     bl = _base_lines(base, order0, base_lines)
@@ -948,12 +1121,36 @@ def compute_edit(base_tokens: Sequence[Sequence[Any]], base_order: Sequence[int]
         if li in span_of:
             run = span_of[li][0]
     free = [b for b in range(nb) if b not in in_group]
+    free_set = set(free)
+    for g, _bts, nts, res in results:
+        # a selection from the middle of one line to the middle of a later one, deleted, leaves the first part of
+        # the line and the end of a line below it: the end of this line may be that other line's end, not its own
+        if res["flags"] or not res["deletes"] or not nts:
+            continue
+        kept = [x[3] for x in nts]
+        k = max(g["base"]) + 1
+        while k in free_set:
+            tail = bl[k].norms
+            if any(kept[-s:] == tail[-s:] for s in range(1, min(len(kept), len(tail)) + 1)):
+                n, p, tok, _nm = nts[-1]
+                res["flags"].append((n, p, tok, "ambiguous"))
+                break
+            k += 1
+    free_words = {t for b in free for t in bl[b].norms}
+    for _g, bts, nts, res in results:
+        # a word changed into another that a line the text has no mark for holds: a typo, or that line's word?
+        if res["flags"]:
+            continue
+        for j, i in sorted(res["own"].items()):
+            if nts[j][3] != bts[i][2] and nts[j][3] in free_words:
+                res["flags"].append((nts[j][0], nts[j][1], nts[j][2], "no_match"))
+                break
     protect: set[int] = set()
-    pool: list[set[str]] = []                           # text that is not on the timeline: words may have been moved there
+    pool: set[str] = set()                            # text that is not on the timeline: words may have been moved there
     for li, nl in enumerate(lines):
         if li in span_of or not nl.toks:
             continue
-        pool.append(set(nl.norms))
+        pool.update(nl.norms)
         if li in ambiguous:
             reason = "ambiguous"
             protect.update(ambiguous[li])
@@ -968,23 +1165,38 @@ def compute_edit(base_tokens: Sequence[Sequence[Any]], base_order: Sequence[int]
             protect.update(near)
         for k, tok in enumerate(nl.toks):
             flag_items.append((nl.n, k, tok, reason))
-    for _g, _bts, _nts, res in results:
-        added = {norm(f[2]) for f in res["flags"] if f[3] != "ambiguous"}
-        if added:                                       # words added to a line may be a line taken from elsewhere
-            pool.append(added)
-            protect.update(b for b in free if _alike_part(added, bl[b].norms))
-    for g, bts, nts, res in results:                    # words taken out of a line may have been moved into text nobody said
-        if res["flags"]:
-            continue
-        for i1, i2, j1 in res["deletes"]:
-            gone = {bts[i][2] for i in range(i1, i2)}
-            if any(_alike_part(x, gone) for x in pool):
-                if nts:
-                    n, k, tok, _nm = nts[min(j1, len(nts) - 1)]
-                else:
-                    n, k, tok = lines[g["new"][0]].n, 0, bts[i1][1]
-                res["flags"].append((n, k, tok, "no_match"))
-                break
+    for _g, _bts, nts, res in results:
+        if res["flags"]:                                # a line the text can't place: its words may be moved ones
+            pool.update(x[3] for x in nts)
+    # every word the text holds that no line of the timeline certainly stands for: a base line that has it stays
+    # (computed last, after every flag above), and so does a deletion of it elsewhere
+    if pool:
+        protect.update(b for b in free if _shares(bl[b].norms, pool))
+        for g, bts, nts, res in results:                # words taken out of a line may have been moved into text nobody said
+            if res["flags"]:
+                continue
+            for i1, i2, j1 in res["deletes"]:
+                if _shares([bts[i][2] for i in range(i1, i2)], pool):
+                    if nts:
+                        n, k, tok, _nm = nts[min(j1, len(nts) - 1)]
+                    else:
+                        n, k, tok = lines[g["new"][0]].n, 0, bts[i1][1]
+                    res["flags"].append((n, k, tok, "no_match"))
+                    break
+    for bi in sorted(blocked):                          # words inside a kept word's time: nothing of their line is cut
+        if bi in in_group:
+            for g, bts, nts, res in results:
+                if bi in g["base"] and not res["flags"]:
+                    n, k, tok = (nts[0][0], 0, nts[0][2]) if nts else (lines[g["new"][0]].n, 0, bts[0][1])
+                    res["flags"].append((n, k, tok, "overlap"))
+        else:
+            protect.add(bi)
+            anchor = next((li for li in range(len(lines)) if li in span_of and span_of[li][0] > bi), None)
+            if anchor is None:
+                anchor = max((li for li in span_of), default=None)
+            n = lines[anchor].n if anchor is not None else 0
+            flag_items.append((n, 0, lines[anchor].toks[0] if anchor is not None and lines[anchor].toks else "",
+                               "overlap"))
     items: list[dict[str, Any]] = []
     where: dict[int, dict] = {}
     for g, bts, _nts, res in results:
@@ -992,14 +1204,27 @@ def compute_edit(base_tokens: Sequence[Sequence[Any]], base_order: Sequence[int]
             flag_items.extend(res["flags"])
             stay.update(g["base"])
             continue
-        item = {"bases": list(g["base"]), "words": [(bts[i][0], toks) for i, toks in res["emit"]]}
+        item = {"bases": list(g["base"]), "words": [(bts[i][0], toks) for i, toks in res["emit"]], "carry": []}
+        off = 0
+        for li in g["new"]:                             # the lines as typed, each with the words its tokens stand for
+            seen_words: list[int] = []
+            for j in range(off, off + len(lines[li].toks)):
+                i = res["own"].get(j)
+                if i is not None and bts[i][0] not in seen_words:
+                    seen_words.append(bts[i][0])
+            off += len(lines[li].toks)
+            if seen_words:
+                item["carry"].append({"mark": lines[li].key, "words": seen_words, "line": lines[li].n})
         items.append(item)
         for bi in g["base"]:
             where[bi] = item
     protect = {b for b in protect if b not in in_group}
     stay.update(protect)
+    typed_line = {bi: lines[g["new"][0]].n for g, _bts, _nts, _res in results for bi in g["base"] if g["new"]}
     for bi in sorted(stay):
-        item = {"bases": [bi], "words": [(w, [t]) for w, t in bl[bi].tokens]}
+        words_of = list(dict.fromkeys(w for w, _t in bl[bi].tokens))
+        item = {"bases": [bi], "words": [(w, [t]) for w, t in bl[bi].tokens],
+                "carry": [{"mark": bl[bi].mark, "words": words_of, "line": typed_line.get(bi)}]}
         q = bi - 1
         while q >= 0 and q not in where:
             q -= 1
@@ -1063,14 +1288,74 @@ def compute_edit(base_tokens: Sequence[Sequence[Any]], base_order: Sequence[int]
     moved = kept_base != final
 
     flags = _flags(flag_items)
-    ops, seconds = _ops(order0, cut, final, retexted, words, retext, new_retext, moved)
+    ops, seconds, dead = _ops(order0, cut, final, retexted, words, retext, new_retext, moved)
+    dead_lines = frozenset(b.idx for b in bl if any(w in dead for w in b.words)) if dead else frozenset()
     total_s = float(timeline_s) if timeline_s else _timeline_seconds(words, order0)
     frac_words = len(cut) / len(order0) if order0 else 0.0
     frac_secs = min(1.0, seconds / total_s) if total_s > 0 else 0.0
-    return Edit(order=final, cut=cut, retext=new_retext, retexted=retexted, moved=moved, flags=flags, ops=ops,
+    carry = [c for item in items for c in item["carry"]]
+    edit = Edit(order=final, cut=cut, retext=new_retext, retexted=retexted, moved=moved, flags=flags, ops=ops,
+                carry=carry,
                 changed=bool(cut or retexted or moved), seconds=round(seconds, 2), lines_cut=lines_cut, fraction=round(
                     max(frac_words, frac_secs), 3),
                 needs_confirm=bool(cut) and (frac_words > LARGE_CUT or frac_secs > LARGE_CUT))
+    return edit, dead_lines
+
+
+def only_listed(edit: dict, wanted: Iterable[int], on: Iterable[int]) -> str:
+    """"" when *edit* does exactly one thing, cut the words *wanted*; else a sentence for the artist saying what
+    else it would do.  *on*: the words on the timeline (a word that is not there is nothing to cut).  Remove
+    Filler Words checks its plan with this before it goes ahead (it asks for no further confirmation)."""
+    on = set(on)
+    wanted = set(wanted) & on
+    cut = set(edit["cut"]) & on
+    problems = []
+    if cut - wanted:
+        problems.append("cut {:d} other word{:s}".format(len(cut - wanted), "" if len(cut - wanted) == 1 else "s"))
+    if wanted - cut and not edit["flags"]:
+        problems.append("leave {:d} of the filler words in".format(len(wanted - cut)))
+    if edit["retexted"]:
+        problems.append("change {:d} word{:s}".format(len(edit["retexted"]), "" if len(edit["retexted"]) == 1 else "s"))
+    if edit["moved"]:
+        problems.append("move words")
+    if edit["flags"]:
+        problems.append("flag {:d} line{:s}".format(len(edit["flags"]), "" if len(edit["flags"]) == 1 else "s"))
+    return "; ".join(problems)
+
+
+def carry_base(edit: dict, view: dict) -> dict | None:
+    """The last-applied state for an Apply that leaves the artist's text as typed (Live, or an Apply
+    with flags): the view of the timeline *view* (``render``'s answer), but its lines are the artist's
+    own lines, with the time marks they carry in the text, each holding the words its text stood for
+    (a line the edit left flagged stays the base line it was pending against, mark and all).  The next
+    :func:`compute_edit` then sees marks in the text and in the base that agree.  ``{"tokens",
+    "order", "lines": [[mark, first, count]], "text_lines": [line of the text or None]}``; None when the
+    lines don't fit the view's tokens (the caller then takes the view's own lines)."""
+    carry = edit.get("carry")
+    if not carry:
+        return None
+    owner: dict[int, int] = {}
+    for k, c in enumerate(carry):
+        for w in c["words"]:
+            if w in owner:
+                return None
+            owner[w] = k
+    rows: list[list[int]] = []
+    done: set[int] = set()
+    for first, (w, _t) in enumerate(view["tokens"]):
+        k = owner.get(int(w))
+        if k is None:
+            return None
+        if rows and rows[-1][0] == k:
+            rows[-1][2] += 1
+            continue
+        if k in done:
+            return None
+        done.add(k)
+        rows.append([k, first, 1])
+    return {"tokens": view["tokens"], "order": view["order"],
+            "lines": [[carry[k]["mark"], first, count] for k, first, count in rows],
+            "text_lines": [carry[k]["line"] for k, _first, _count in rows]}
 
 
 def _timeline_seconds(words: Sequence[Any], order: Sequence[int]) -> float:
@@ -1091,6 +1376,7 @@ _REASONS = {
     "no_audio": "no audio behind this text: nothing is added to the video",
     "no_match": "this no longer matches what is said: nothing here is cut or changed",
     "ambiguous": "can't tell which of the same words or lines you meant: nothing here is cut or changed",
+    "overlap": "these words overlap the words next to them in time, so they can't be cut apart: nothing here is cut or changed",
 }
 
 
@@ -1107,10 +1393,18 @@ def _flags(items: Sequence[tuple[int, int, str, str]]) -> list[dict[str, Any]]:
     return out
 
 
-def _ops(base_order, cut, final, retexted, words, old_retext, new_retext, moved) -> tuple[list[dict[str, Any]], float]:
+def _ops(base_order, cut, final, retexted, words, old_retext, new_retext, moved)         -> tuple[list[dict[str, Any]], float, list[int]]:
     ops: list[dict[str, Any]] = []
     seconds = 0.0
+    dead: list[int] = []                                # words of a cut that has no frames (inside a kept word's time)
     pos = {w: k for k, w in enumerate(base_order)}
+    cut_set = set(cut)
+    latest: list[float | None] = []                     # latest end of the kept words before each place
+    top: float | None = None
+    for w in base_order:
+        latest.append(top)
+        if w not in cut_set and 0 <= w < len(words):
+            top = _end(words[w]) if top is None else max(top, _end(words[w]))
     for run in _runs(pos[w] for w in cut if w in pos):
         ws = [base_order[k] for k in run]
         prev = base_order[run[0] - 1] if run[0] > 0 else None
@@ -1118,8 +1412,10 @@ def _ops(base_order, cut, final, retexted, words, old_retext, new_retext, moved)
         secs = 0.0
         if all(0 <= w < len(words) for w in ws) and (prev is None or 0 <= prev < len(words)) \
                 and (nxt is None or 0 <= nxt < len(words)):
-            s, e = _cut_extent(words, prev, ws[0], ws[-1], nxt)
+            s, e = _cut_extent(words, prev, ws[0], ws[-1], nxt, before_end=latest[run[0]])
             secs = max(0.0, e - s)
+            if e <= s or s > _start(words[ws[0]]):     # no frames, or the first word starts before the cut does
+                dead.extend(ws)
         seconds += secs
         ops.append({"op": "cut", "words": [ws[0], ws[-1]], "count": len(ws), "seconds": round(secs, 2),
                     "text": " ".join(t for t in (display(w, words, old_retext) for w in ws) if t)})
@@ -1130,7 +1426,7 @@ def _ops(base_order, cut, final, retexted, words, old_retext, new_retext, moved)
         kept = [w for w in base_order if w in set(final)]
         for block, after in plan_moves(kept, final):
             ops.append({"op": "move", "words": [block[0], block[-1]], "count": len(block), "after": after})
-    return ops, seconds
+    return ops, seconds, dead
 
 
 # -- moves ---------------------------------------------------------------------------------------
@@ -1214,8 +1510,11 @@ def cut_ranges(occurrences: Sequence[dict], cut: Iterable[int], words: Sequence[
         cs, off = float(p["content_start"]), float(p.get("offset") or 0.0)
         left, right = int(p["left"]), int(p["right"])
         k = 0
+        top: float | None = None                        # the latest end of the kept words before the cut
         while k < len(occs):
             if occs[k]["i"] not in cut:
+                end = _end(words[occs[k]["i"]])
+                top = end if top is None else max(top, end)
                 k += 1
                 continue
             first = k
@@ -1223,7 +1522,7 @@ def cut_ranges(occurrences: Sequence[dict], cut: Iterable[int], words: Sequence[
                 k += 1
             prev = occs[first - 1]["i"] if first > 0 else None
             nxt = occs[k + 1]["i"] if k + 1 < len(occs) else None
-            s, e = _cut_extent(words, prev, occs[first]["i"], occs[k]["i"], nxt, padding, pause_limit)
+            s, e = _cut_extent(words, prev, occs[first]["i"], occs[k]["i"], nxt, padding, pause_limit, top)
             f0 = int(round(cs + (s - off) * fps))
             f1 = int(round(cs + (e - off) * fps))
             f0, f1 = max(f0, left), min(f1, right)

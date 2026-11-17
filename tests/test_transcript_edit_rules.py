@@ -92,16 +92,28 @@ class TestFaults(unittest.TestCase):
         e = ed(v, text_of([lines[0], lines[2], lines[3]]), words)        # take 3 kept (marked), take 2 (bare) gone
         self.assertEqual((e["cut"], e["flags"]), (take(1), []))
 
-    def test_1_the_second_of_three_okay_is_not_guessed(self):
+    def test_1_one_of_three_okay_in_a_row_cuts_the_first_of_them(self):
+        # the very same token in a row in one line: which one goes can't be seen in the text, the earliest does
         words, _occ, v, _p = mk([(1.0, "okay okay okay let us start.")])
         e = ed(v, v["text"].replace("okay okay okay", "okay okay", 1), words)
-        self.assertEqual(e["cut"], [])
-        self.assertEqual([(f["line"], f["reason"]) for f in e["flags"]], [(0, "ambiguous")])
+        self.assertEqual((e["cut"], e["flags"]), ([0], []))
         e = ed(v, v["text"].replace("okay okay okay ", "", 1), words)     # all three: certain
         self.assertEqual(e["cut"], [0, 1, 2])
-        e = ed(v, v["text"].replace("okay okay okay ", "okay ", 1), words)     # two of three: still one is kept, which?
+        e = ed(v, v["text"].replace("okay okay okay ", "okay ", 1), words)     # two of three: the first two
+        self.assertEqual((e["cut"], e["flags"]), ([0, 1], []))
+
+    def test_1_the_written_form_tells_which_of_two_repeated_words_went(self):
+        words, _occ, v, _p = mk([(1.0, "Okay, okay let us go."), (5.0, "Next one.")])
+        for gone, kept, cut in (("Okay, okay", "okay", [0]), ("Okay, okay", "Okay,", [1])):
+            e = ed(v, v["text"].replace(gone, kept, 1), words)
+            self.assertEqual((e["cut"], e["flags"], e["retexted"]), (cut, [], []), kept)
+
+    def test_1_a_repeated_phrase_is_still_flagged(self):
+        # "so we go so we go" -> "so we go": the first or the second phrase: no run of one token, no certainty
+        words, _occ, v, _p = mk([(1.0, "so we go so we go now."), (6.0, "Next one.")])
+        e = ed(v, v["text"].replace("so we go so we go", "so we go", 1), words)
         self.assertEqual(e["cut"], [])
-        self.assertEqual(len(e["flags"]), 1)
+        self.assertEqual([(f["line"], f["reason"]) for f in e["flags"]], [(0, "ambiguous")])
 
     def test_1_two_identical_sentences_apart_delete_the_second(self):
         words, _occ, v, _p = mk([(1.0, "Yes indeed."), (4.0, "Something else here."), (7.0, "Yes indeed.")])
@@ -371,29 +383,43 @@ class TestLines(unittest.TestCase):
 
 VOCAB = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "kilo", "lima",
          "the", "and", "we", "is"]
-OPS = ("delete_line", "delete_word", "swap", "move", "letter", "delete_mark", "join", "split", "insert")
+UNIQUE = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet", "kilo", "lima",
+          "mike", "november", "oscar", "papa", "quebec", "romeo", "sierra", "tango", "uniform", "victor", "whiskey",
+          "xray", "yankee", "zulu", "[2.5]", "[1]", "3.5", "café", "日本", "x[1]", "well-known", "50%", "(sic)", "#2",
+          "naïve", "Straße", "don't", "e-mail"]
+OPS = ("delete_line", "delete_word", "delete_two", "swap", "move", "letter", "delete_mark", "join", "split", "insert")
+# on text where no two lines or words are alike, these have one right answer too (copy, paste, rewrite, edit a mark)
+BROAD_OPS = ("cross_line", "copy_line", "copy_and_delete", "replace_line", "mark_to_other", "mark_to_other_del")
 
 
-def _transcript(rng):
+def _transcript(rng, unique=False):
     while True:
         sentences = []
+        pool = list(UNIQUE)
+        rng.shuffle(pool)
         for _ in range(rng.randint(5, 9)):
-            n = rng.randint(3, 7)
-            toks = [rng.choice(VOCAB) for _ in range(n)]
-            if rng.random() < 0.3:
-                toks[rng.randrange(n)] += ","
+            n = rng.choice((1, 2, 3, 4, 5, 6, 7)) if unique else rng.randint(3, 7)
+            if unique:
+                toks = [pool.pop() for _ in range(min(n, len(pool)))]
+            else:
+                toks = [rng.choice(VOCAB) for _ in range(n)]
+            if not toks:
+                break
+            if rng.random() < 0.3 and len(toks) > 1:
+                toks[rng.randrange(len(toks) - 1)] += ","
             toks[-1] += "."
             sentences.append(toks)
-        sentences.insert(rng.randrange(len(sentences) + 1), list(rng.choice(sentences)))      # an identical pair
-        if rng.random() < 0.4:
-            sentences.insert(rng.randrange(len(sentences) + 1), list(rng.choice(sentences)))  # or a third take
+        if not unique:
+            sentences.insert(rng.randrange(len(sentences) + 1), list(rng.choice(sentences)))      # an identical pair
+            if rng.random() < 0.4:
+                sentences.insert(rng.randrange(len(sentences) + 1), list(rng.choice(sentences)))  # or a third take
         total = sum(len(s) for s in sentences)
-        if 20 <= total <= 60:
+        if (6 if unique else 20) <= total <= 60 and len(sentences) >= 4:
             break
     t, timed = 1.0, []
     for toks in sentences:
         timed.append((t, " ".join(toks)))
-        t += len(toks) * 0.4 + rng.uniform(0.3, 1.4)
+        t += len(toks) * 0.4 + rng.choice((0.3, 0.8, 1.4, 2.6))             # 2.6 s: a blank line (a new paragraph)
     return timed
 
 
@@ -435,6 +461,37 @@ class _Model:
             if k is None:
                 return False
             del lines[k]["toks"][rng.randrange(len(lines[k]["toks"]))]
+        elif op == "delete_two":
+            cands = [k for k in range(n) if len(lines[k]["toks"]) >= 3]
+            if not cands:
+                return False
+            k = rng.choice(cands)
+            j = rng.randrange(len(lines[k]["toks"]) - 1)
+            del lines[k]["toks"][j:j + 2]
+        elif op == "cross_line" and n > 1:
+            a = rng.randrange(n - 1)
+            la, lb = lines[a], lines[a + 1]
+            if not la["toks"] or not lb["toks"]:
+                return False
+            j = rng.randint(1, len(la["toks"]))
+            jj = rng.randrange(len(lb["toks"]))
+            la["toks"] = la["toks"][:j] + lb["toks"][jj:]
+            del lines[a + 1]
+        elif op in ("copy_line", "copy_and_delete") and n > 1:
+            k = rng.randrange(n)
+            twin = {"mark": lines[k]["mark"], "toks": list(lines[k]["toks"])}
+            p = rng.choice([q for q in range(n + 1) if q not in (k, k + 1)])
+            lines.insert(p, twin)
+            if op == "copy_and_delete":
+                del lines[k if p > k else k + 1]
+        elif op == "replace_line" and n > 1:
+            a, b = rng.sample(range(n), 2)
+            lines[a]["toks"] = list(lines[b]["toks"])
+        elif op in ("mark_to_other", "mark_to_other_del") and n > 2:
+            a, b = rng.sample(range(n), 2)
+            lines[a]["mark"] = lines[b]["mark"]
+            if op == "mark_to_other_del":
+                del lines[b]
         elif op == "swap" and n > 1:
             a, b = rng.sample(range(n), 2)
             lines[a], lines[b] = lines[b], lines[a]
@@ -511,6 +568,13 @@ def _ambiguous_delete(model):
     return False
 
 
+def _shifted(words, a, b):
+    """The words *a* and *b* are the same text: a word of a run of the very same token in a row in one line
+    (the module cuts the earliest, the model's word is another)."""
+    key = lambda ws: sorted(TE.norm(words[w]["w"]) for w in ws)       # noqa: E731
+    return key(a) == key(b)
+
+
 class TestProperty(unittest.TestCase):
 
     CASES = 2400
@@ -522,26 +586,33 @@ class TestProperty(unittest.TestCase):
         self.assertGreaterEqual(self.CASES, 2000)
         self.assertGreater(stats["clean"], self.CASES // 3, stats)           # most cases are certain, not flagged
         self.assertGreater(stats["single"], self.CASES // 3, stats)
+        self.assertGreater(stats["broad"], self.CASES // 6, stats)           # cross-line, copy, rewrite, mark edits
         self.assertLess(took, 20.0)
 
     def run_cases(self, seed, cases):
         rng = random.Random(seed)
-        stats = {"clean": 0, "flagged": 0, "single": 0}
+        stats = {"clean": 0, "flagged": 0, "single": 0, "broad": 0}
         for case in range(cases):
-            words = T.made_up_words(_transcript(rng))
+            unique = case % 2 == 1                    # no two words alike: the broad operations have one answer
+            words = T.made_up_words(_transcript(rng, unique))
             occ = TE.timeline_words(words, [T.piece(right=1 + 600 * FPS)], FPS)
             v = TE.render(occ, words, None, FPS)
             model = _Model(v)
-            ops = [] if case % 25 == 0 else [rng.choice(OPS) for _ in range(rng.choice((1, 1, 2)))]
+            pick = OPS + BROAD_OPS if unique else OPS
+            ops = [] if case % 25 == 0 else [rng.choice(pick) for _ in range(rng.choice((1, 1, 2)))]
             done = [op for op in ops if model.apply(rng, op)]
+            broad = any(op in BROAD_OPS for op in done)
+            stats["broad"] += broad
             what = "case %d %s\n%s\n--\n%s" % (case, done, v["text"], model.text())
             e = TE.compute_edit(v["tokens"], v["order"], model.text(), words, None, base_lines=v["lines"])
             everything = set(range(len(words)))
             truth_kept = set(model.truth_order())
             truth_cut = everything - truth_kept
             cut = set(e["cut"])
-            # 1. no word is cut that the operation did not remove
-            self.assertLessEqual(cut, truth_cut, what)
+            # 1. no word is cut that the operation did not remove (but the earliest of a run of the same word)
+            if not cut <= truth_cut:
+                self.assertTrue(_shifted(words, cut - truth_cut, truth_cut - cut), what)
+                self.assertFalse(broad, what)
             # 2. a flagged line never causes a cut: the words on a flagged line, and the words of a line
             #    that was flagged because it holds text nobody said, are kept
             flagged_lines = {f["line"] for f in e["flags"]}
@@ -557,26 +628,30 @@ class TestProperty(unittest.TestCase):
                     while w - 1 in swallowed:
                         w -= 1
                     swallowed.add(w - 1)
-                self.assertLessEqual(truth_cut - cut, swallowed, what)
-                if not swallowed:
-                    self.assertEqual(cut, truth_cut, what)
-                self.assertEqual([w for w in e["order"] if w in truth_kept], model.truth_order(), what)
+                self.assertTrue(truth_cut - cut <= swallowed or _shifted(words, cut - truth_cut, truth_cut - cut),
+                                what)
+                if not swallowed and cut == truth_cut:
+                    self.assertEqual([w for w in e["order"] if w in truth_kept], model.truth_order(), what)
                 self.assertTrue(all(w in set(e["order"]) for w in truth_cut & swallowed), what)
                 changed = {w for ln in model.lines for t, w in ln["toks"] if w is not None and t != model.original(w)}
-                if not swallowed:
+                if not swallowed and cut == truth_cut:
                     self.assertEqual(set(e["retexted"]), changed, what)
             else:
                 stats["flagged"] += 1
             # 4. a single plain operation is certain: no flag unless the text can't tell which words went
-            if len(done) == 1:
+            if len(done) == 1 and not broad:
                 stats["single"] += 1
                 if done[0] == "insert":
                     self.assertEqual(len(e["flags"]), 1, what)
                     self.assertEqual(e["flags"][0]["reason"], "no_audio", what)
                     self.assertEqual(cut, set(), what)
                     self.assertFalse(e["changed"], what)
-                elif done[0] == "delete_word" and _ambiguous_delete(model):
-                    self.assertEqual(cut, set(), what)
+                elif done[0] in ("delete_word", "delete_two") and _ambiguous_delete(model):
+                    # which of the same words went: a run of the very same token (the earliest goes, the text is
+                    # the same) or no certainty (a repeated phrase: flagged, nothing cut)
+                    self.assertTrue(cut == set() or _shifted(words, cut, truth_cut), what)
+                    if not cut:
+                        self.assertEqual(len(e["flags"]), 1, what)
                 else:
                     self.assertEqual(e["flags"], [], what)
                     self.assertEqual(cut, truth_cut, what)

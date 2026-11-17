@@ -105,8 +105,8 @@ class TestView(unittest.TestCase):
 
     def test_marks_are_not_words(self):
         toks = TE.parse("[0:01.0] Hello there\n[0:0x.1] still text\n[] plain\nno mark at all\n")
-        self.assertEqual([t for _n, t in toks], ["Hello", "there", "[0:0x.1]", "still", "text", "plain",
-                                                 "no", "mark", "at", "all"])
+        self.assertEqual([t for _n, t in toks], ["Hello", "there", "[0:0x.1]", "still", "text", "[]",
+                                                 "plain", "no", "mark", "at", "all"])
         self.assertEqual(TE.parse_mark("[1:02.5] x"), 62.5)
         self.assertEqual(TE.parse_mark("[1:00:02.0] x"), 3602.0)
         self.assertIsNone(TE.parse_mark("Hello"))
@@ -266,14 +266,14 @@ class TestEdit(unittest.TestCase):
         self.assertEqual(e["order"][:6], indices(4))
         self.assertEqual(e["flags"], [])
 
-    def test_one_of_two_repeated_words_is_flagged_not_cut(self):
-        # "the the" -> "the": the text can't say which "the" went, so nothing is cut and the line is flagged
+    def test_one_of_two_repeated_words_in_a_row_cuts_the_first(self):
+        # "the the" -> "the": the same token twice in a row in one line is one choice, whichever goes the
+        # text is the same; the earliest of the run is cut (#498, review 2)
         _occ, v = view()
         e = edit(v["text"].replace("the the show", "the show"), v)
-        self.assertEqual(e["cut"], [])
-        self.assertFalse(e["changed"])
-        self.assertEqual([(f["line"], f["reason"]) for f in e["flags"]], [(5, "ambiguous")])
-        # both of them taken out is certain
+        self.assertEqual(e["cut"], [indices(4)[3]])
+        self.assertEqual(e["flags"], [])
+        # both of them taken out is certain too
         e = edit(v["text"].replace("the the ", ""), v)
         self.assertEqual(e["cut"], indices(4)[3:5])
 

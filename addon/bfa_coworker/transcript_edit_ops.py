@@ -249,13 +249,26 @@ def _set_body(text: Any, body: str) -> None:
         pass
 
 
-def _state_from_view(state: dict, got: dict, flags: list | None = None) -> None:
-    """Put the view *got* into *state* (a dict: nothing in Blender is written)."""
+def _state_from_view(state: dict, got: dict, flags: list | None = None, carried: dict | None = None) -> None:
+    """Put the view *got* into *state* (a dict: nothing in Blender is written).  *carried*
+    (:func:`transcript_edit.carry_base`): the text stays as the artist typed it, so the last applied lines
+    are the artist's own lines, with the marks that are in the text."""
     view = got["view"]
     state["tokens"] = json.dumps(view["tokens"])
     state["order"] = json.dumps(view["order"])
-    state["lines"] = json.dumps([[ln["line"], ln["frame"]] for ln in view["lines"]])
-    state["base_lines"] = json.dumps([[ln["mark"], ln["first"], ln["count"]] for ln in view["lines"]])
+    if carried:
+        frames = {o["i"]: o["frame"] for o in got["occ"]}
+        rows, lines = [], []
+        for (mark, first, count), n in zip(carried["lines"], carried["text_lines"]):
+            rows.append([mark, first, count])
+            at = [frames[int(w)] for w, _t in view["tokens"][first:first + count] if int(w) in frames]
+            if n is not None and at:
+                lines.append([n, min(at)])
+        state["lines"] = json.dumps(lines)
+        state["base_lines"] = json.dumps(rows)
+    else:
+        state["lines"] = json.dumps([[ln["line"], ln["frame"]] for ln in view["lines"]])
+        state["base_lines"] = json.dumps([[ln["mark"], ln["first"], ln["count"]] for ln in view["lines"]])
     state["frames"] = json.dumps({str(o["i"]): o["frame"] for o in got["occ"]})
     state["sig"] = _signature(got["pieces"])
     state["fps"] = float(got["fps"])
@@ -275,10 +288,11 @@ class _Virtual:
         return self._body
 
 
-def _store(text: Any, state: dict, got: dict, write: bool, flags: list | None = None) -> None:
+def _store(text: Any, state: dict, got: dict, write: bool, flags: list | None = None,
+           carried: dict | None = None) -> None:
     """The view *got* as the last applied state; with *write* the text becomes it."""
     view = got["view"]
-    _state_from_view(state, got, flags)
+    _state_from_view(state, got, flags, carried)
     if write:
         _set_body(text, view["text"])
     state["applied"] = _hash(text.as_string())
@@ -601,7 +615,10 @@ def _apply_text(text: Any, body: str | None, keep_text: bool, dry_run: bool, pad
             spans.append((frames_of[w], frames_of[w] + 1))
     updated, kept = _update_captions(scene, state, words, after["occ"], edit["retext"], names, spans)
     write = not keep_text and not flags
-    _store(text, state, after, write=write, flags=summary["flags"])
+    # the text stays as typed (Live; flagged lines): the base is then the artist's own lines, so the marks in the
+    # text and in the base agree and flagged lines stay pending against the words they were pending against
+    carried = None if write else te.carry_base(edit, after["view"])
+    _store(text, state, after, write=write, flags=summary["flags"], carried=carried)
     _record(state, edit, after)
     message = _message(summary, cut_out, move_out, updated, kept)
     out = dict(summary, status="ok", message=message, text=text.name, captions_updated=updated,
@@ -1101,6 +1118,16 @@ class BFACW_OT_transcript_remove_fillers(_TextOp, Operator):  # type: ignore[mis
         state = state_of(text)
         doomed = [w for f in found for w in f["words"]]
         body = te.remove_tokens(text.as_string(), _j(state, "tokens", []), doomed)
+        try:
+            plan = _plan(state, body)
+        except _Problem as ex:
+            self.report({'ERROR'}, str(ex))
+            return {'CANCELLED'}
+        extra = te.only_listed(plan["edit"], doomed, {o["i"] for o in plan["got"]["occ"]})
+        if extra:                                       # it asks for no confirmation: it may only cut what it listed
+            self.report({'ERROR'}, "Remove Filler Words would also {:s}: nothing was changed (edit the text, or "
+                        "cut them by hand)".format(extra))
+            return {'CANCELLED'}
         out = apply_text(text, body, confirm=True)
         if out["status"] == "ok":
             self.report({'INFO'}, "Removed {:s}: {:s}".format(_plural(len(found), "filler word"), out["message"]))
@@ -1426,7 +1453,12 @@ def _live_hold(window: Any, edit: dict | None) -> str:
     for line in clip.splitlines():
         on_clip.extend(te.norm(t) for t in te.MARK_RE.sub("", line, count=1).split())
     for op in edit.get("ops") or ():
-        if op.get("op") == "cut" and _tokens_in([te.norm(t) for t in str(op.get("text", "")).split()], on_clip):
+        if op.get("op") != "cut":
+            continue
+        cut_tokens = [te.norm(t) for t in str(op.get("text", "")).split()]
+        # the cut is (or is part of) what is on the clipboard, or the clipboard is part of the cut: two lines cut
+        # side by side, one of them Ctrl+X'd to be pasted elsewhere, are one cut of both
+        if _tokens_in(cut_tokens, on_clip) or _tokens_in(on_clip, cut_tokens):
             return "Live waits: the text you cut is on the clipboard (paste it, or press Apply)"
     return ""
 
@@ -1640,20 +1672,19 @@ def tool_apply_transcript_edit(strip: str | None = None, text: str | None = None
         if block is not None and pending(block):
             raise _Problem("The transcript text “{:s}” has edits that aren't applied yet: Apply or Refresh it in "
                            "the Text Editor first".format(block.name))
-        if dry_run:                                 # the text as the timeline shows it now, in memory only
-            if block is not None:
-                state = dict(state_of(block))
-            else:
-                path = find_transcript(media)
-                if not path:
-                    raise _Problem(NOT_TRANSCRIBED.format(s.name))
-                state = {"source": _norm(media), "path": media, "scene": scene.name, "transcript": path,
-                         "retext": "{}"}
-            got = view_now(state)
-            _state_from_view(state, got)
-            target: Any = _Virtual(block.name if block is not None else "", state, got["view"]["text"])
+        # the text as the timeline shows it now, in memory only: everything is checked on it first, so a call
+        # that is refused creates, refreshes and drops nothing (the artist's text block stays as it is)
+        if block is not None:
+            state = dict(state_of(block))
         else:
-            target, _note = open_transcript(scene, s)
+            path = find_transcript(media)
+            if not path:
+                raise _Problem(NOT_TRANSCRIBED.format(s.name))
+            state = {"source": _norm(media), "path": media, "scene": scene.name, "transcript": path,
+                     "retext": "{}"}
+        got = view_now(state)
+        _state_from_view(state, got)
+        target: Any = _Virtual(block.name if block is not None else "", state, got["view"]["text"])
     except _Problem as ex:
         return {"status": "error", "message": str(ex)}
     body = target.as_string()
@@ -1694,7 +1725,28 @@ def tool_apply_transcript_edit(strip: str | None = None, text: str | None = None
     else:
         return {"status": "error", "message": "Give the edited text (text) or the lines to cut (cut_lines with the "
                 "version of get_transcript_text, or lines)"}
+    snapshot = None
+    if not dry_run:
+        try:
+            plan = _plan(state, body)                   # what it would do, before anything is touched
+        except _Problem as ex:
+            return {"status": "error", "message": str(ex)}
+        if plan["needs_confirm"] and not confirm_large_cut and (plan["cut"] or plan["edit"]["cut"]):
+            out = dict(plan["summary"], status="refused", needs_confirm=True, text=target.name)
+            out["message"] = ("This cuts {:.1f} s ({:d}% of the clip): confirm it with confirm_large_cut or edit "
+                              "less (nothing was changed)").format(plan["seconds"], plan["summary"]["percent"])
+            out.update(strip=s.name, scene=scene.name, text_block=target.name)
+            return out
+        if block is not None:
+            snapshot = (block, block.as_string(), dict(state_of(block)))
+        try:
+            target, _note = open_transcript(scene, s)
+        except _Problem as ex:
+            return {"status": "error", "message": str(ex)}
     out = apply_text(target, body, keep_text=False, dry_run=bool(dry_run), confirm=bool(confirm_large_cut))
+    if not dry_run and out["status"] in ("refused", "confirm", "error") and not out.get("changed"):
+        _undo_open(scene, s, target, snapshot)           # nothing was applied: the text block is as it was
+        out.update(note="Nothing was changed")
     if out["status"] == "confirm":
         out.update(status="refused", needs_confirm=True)
         out["message"] += " (nothing was changed)"
@@ -1708,6 +1760,27 @@ def tool_apply_transcript_edit(strip: str | None = None, text: str | None = None
         out["version"] = _hash(out["text_now"])
     out.update(strip=s.name, scene=scene.name, text_block=target.name)
     return out
+
+
+def _undo_open(scene: Any, strip: Any, target: Any, snapshot: tuple | None) -> None:
+    """A tool call that applied nothing leaves the transcript text as it was before the call: the text block it
+    made is removed, the one it refreshed gets its text and link back."""
+    try:
+        if snapshot is None:
+            for st in source_strips(scene, state_of(target)["source"]) if state_of(target) else ():
+                try:
+                    del st[te.STRIP_PROP]
+                except (KeyError, TypeError, AttributeError):
+                    pass
+            _SEEN.pop(target.name, None)
+            bpy.data.texts.remove(target)
+        else:
+            block, body, state = snapshot
+            block.from_string(body)
+            block[te.PROP] = state
+            _SEEN.pop(block.name, None)
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] {:s}: couldn't put the text back: {!s}".format(WHAT, ex))
 
 
 # -- placement -------------------------------------------------------------------------------------

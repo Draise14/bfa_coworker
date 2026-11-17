@@ -599,14 +599,16 @@ def _key_tracks(scene: Any, strips: list, tracks: list[dict]) -> int:
     return made
 
 
-def _clear_animation(scene: Any, strips: list) -> None:
-    """The presets' animation (:data:`captions.ANIMATED_PATHS`) off *strips*, each property
-    back at rest (the font size at its steady size)."""
+def _clear_animation(scene: Any, strips: list, paths: Any = None) -> None:
+    """The presets' animation off *strips*, each property back at rest (the font size at its
+    steady size).  *paths*: only these of :data:`captions.ANIMATED_PATHS` (the ones a preset
+    keys); the others, and what the user set on them, are left as they are."""
+    paths = set(cap.ANIMATED_PATHS if paths is None else paths)
     rest = {"blend_alpha": 1.0, "transform.offset_y": 0.0, "transform.scale_x": 1.0, "transform.scale_y": 1.0,
             "crop.max_x": 0.0}
     for s in strips:
-        size = _steady_size(scene, s) if hasattr(s, "font_size") else None
-        for rel, fcurves in _strip_curves(scene, s.name, set(cap.ANIMATED_PATHS)).items():
+        size = _steady_size(scene, s) if hasattr(s, "font_size") and "font_size" in paths else None
+        for rel, fcurves in _strip_curves(scene, s.name, paths).items():
             for fc in fcurves:
                 try:
                     fc.id_data  # noqa: B018 -- still there
@@ -614,6 +616,8 @@ def _clear_animation(scene: Any, strips: list) -> None:
                 except (AttributeError, ReferenceError, RuntimeError):
                     pass
         for rel, value in rest.items():
+            if rel not in paths:
+                continue
             owner, prop = _owner(s, rel)
             if owner is not None:
                 try:
@@ -660,29 +664,59 @@ def _animate(scene: Any, line: Any, style: dict, animation: str, words: list | N
                                   render.resolution_x, render.resolution_y, float(line.font_size), len(lines),
                                   str(getattr(line, "anchor_y", "BOTTOM")), tuple(line.location), reveal)
     if not tracks:
+        _remember_keys(scene, line, ())
         return 0
     targets = [line] + list(words or ())
     # Bold Pop's own pop is the line's font size: the word strips (none in that style) keep theirs.
     if any(t["path"] == "font_size" for t in tracks):
         targets = [line]
-    return _key_tracks(scene, targets, tracks)
+    made = _key_tracks(scene, targets, tracks)
+    _remember_keys(scene, line, {t["path"] for t in tracks})
+    return made
 
 
 def reanimate(scene: Any, line: Any) -> bool:
     """A caption line's animation made again over its frames now (trimmed or cut by Remove
     Silences, laid out again by Make Vertical): its preset's keys and its word strips'.  A
-    caption made before #542 (no ``"anim"`` in its tag) is left as it is; False then."""
+    caption made before #542 (no ``"anim"`` in its tag) is left as it is; False then.  So is a
+    caption whose preset keys nothing (None, or the style's own on a style that doesn't pop):
+    what the user set on it stays; and a caption whose keys the user added to or removed from
+    (not as many as Coworker wrote, ``"keys"`` in its tag): Blender moves them with the strip."""
     tag = tag_of(line) or {}
     anim = tag.get("anim")
     if tag.get("role") != "line" or anim is None:
         return False
     key = cap.style_key(tag.get("style")) or "CLEAN"
+    paths = cap.animation_paths(anim, key)
+    if not paths:
+        return False
+    written = tag.get("keys")
+    if isinstance(written, dict):
+        have = _key_counts(scene, line, paths)
+        if any(have.get(p, 0) != int(written.get(p, 0)) for p in paths):
+            return False
     st = cap.resolve_style(key, scene.render.resolution_x, scene.render.resolution_y,
                            tag.get("position", "BOTTOM"), float(tag.get("margin") or 0.0))
     words = _words_of(scene.sequence_editor, line)
-    _clear_animation(scene, [line] + words)
+    _clear_animation(scene, [line] + words, paths)
     _animate(scene, line, st, anim, words)
     return True
+
+
+def _key_counts(scene: Any, line: Any, paths: Any) -> dict[str, int]:
+    """How many keys *line* has on each of *paths*."""
+    return {rel: sum(len(getattr(fc, "keyframe_points", ())) for fc in fcurves)
+            for rel, fcurves in _strip_curves(scene, line.name, set(paths)).items()}
+
+
+def _remember_keys(scene: Any, line: Any, paths: Any) -> None:
+    """The number of keys Coworker wrote on *line* into its tag (not into the signature of
+    #552), so a later refit can tell keys the user added or removed."""
+    tag = tag_of(line)
+    if tag is None:
+        return
+    tag["keys"] = _key_counts(scene, line, paths)
+    line[cap.TAG] = tag
 
 
 def refit_captions(scene: Any, names: Any) -> int:
@@ -834,8 +868,15 @@ def _place(scene: Any, groups: list[tuple[str, list[dict]]], style: dict, chars:
         [{"name": s.name, "key": (tag_of(s) or {}).get("source"), "left": _left(s), "right": _right(s),
           "edited": _edited(s)} for s in old], targets, present, replace_edited)
     kept_spans = [(_left(s), _right(s)) for s in old if s.name in kept]
+    if lanes is not None:       # a channel per speaker (#542): a speaker's edited caption only holds their own place
+        kept_by: dict[str, list[tuple[float, float]]] = {}
+        for s in old:
+            if s.name in kept:
+                kept_by.setdefault((tag_of(s) or {}).get("source"), []).append((_left(s), _right(s)))
     framed_all = [c for _key, framed in groups for c in framed]
-    under_kept = [c for c in framed_all if any(a < c["frame_end"] and c["frame_start"] < b for a, b in kept_spans)]
+    under_kept = [c for key, framed in groups for c in framed
+                  if any(a < c["frame_end"] and c["frame_start"] < b
+                         for a, b in (kept_spans if lanes is None else kept_by.get(key, ())))]
     if under_kept:
         ids = {id(c) for c in under_kept}
         groups = [(key, [c for c in framed if id(c) not in ids]) for key, framed in groups]
@@ -1241,7 +1282,11 @@ def relayout_captions(scene: Any, old_res: tuple[int, int] | None = None) -> dic
             frames = [fs + int(v) for v in tag["word_frames"]]
         lay = cap.relayout(line.text, key, res[0], res[1], fs, fe, int(tag.get("chars") or 0),
                            int(tag.get("lines") or 0), made_for, frames, position, margin, label)
-        animated = tag.get("anim") is not None         # #542: made again below, over each piece
+        # #542: made again below, over each piece; a caption whose preset keys nothing keeps
+        # what the user set on it (and a Bold Pop split piece gets its pop only before #542).
+        paths = cap.animation_paths(tag["anim"], key) if tag.get("anim") is not None else ()
+        animated = bool(paths)
+        pre_542 = tag.get("anim") is None
         st, pieces = lay["style"], lay["pieces"]
         highlight = tuple(old_words[0].color) if old_words else st["highlight"]
         names = [w.name for w in old_words]
@@ -1259,7 +1304,7 @@ def relayout_captions(scene: Any, old_res: tuple[int, int] | None = None) -> dic
                     _set_right(s, piece["frame_end"])
                 s.text = piece["text"]
                 if animated:
-                    _clear_animation(scene, [s])        # its keys (a pop's sizes) are for the old frame
+                    _clear_animation(scene, [s], paths)   # its keys (a pop's sizes) are for the old frame
                 s.font_size = props["font_size"]
                 if old_size > 0 and not animated:
                     _scale_font_keys(scene, s, props["font_size"] / old_size)
@@ -1272,7 +1317,7 @@ def relayout_captions(scene: Any, old_res: tuple[int, int] | None = None) -> dic
                         setattr(s, attr, getattr(line, attr))
                     except (AttributeError, TypeError, ValueError):
                         pass
-                if st["pop"] and not animated and piece["frame_end"] - piece["frame_start"] >= 5:
+                if st["pop"] and pre_542 and piece["frame_end"] - piece["frame_start"] >= 5:
                     size = s.font_size
                     s.font_size = size * 0.78
                     s.keyframe_insert("font_size", frame=piece["frame_start"])
@@ -1652,7 +1697,7 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
         if self.speakers:
             _fill_speakers(self, scene, sources)
             for it in self.speaker_list:
-                row = {"strip": it.strip, "name": it.name}
+                row = {"strip": it.strip, "name": " ".join(it.name.split())[:cap.SPEAKER_NAME_CHARS]}
                 if it.style != "SAME":
                     row["style"] = it.style
                 if it.position != "SAME":

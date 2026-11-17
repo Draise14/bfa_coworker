@@ -1031,6 +1031,15 @@ def animation_tracks(animation: Any, style: str, frame_start: int, frame_end: in
     return tracks
 
 
+def animation_paths(animation: Any, style: str) -> tuple[str, ...]:
+    """The properties (:data:`ANIMATED_PATHS`) animation *animation* keys on a caption in
+    *style*, for a caption long enough to have all of it; empty when it keys none (None, or
+    the style's own on a style that doesn't pop)."""
+    tracks = animation_tracks(animation, style, 0, 600, 30.0, 1920, 1080, 50.0, 1, "BOTTOM", (0.5, 0.09),
+                              [(1, 10), (2, 0)])
+    return tuple(t["path"] for t in tracks)
+
+
 def pop_middle(lines: int, font_size: float, res_y: float, anchor_y: str, location: Sequence[float]) -> float:
     """The middle of a caption (0-1 of the frame's height, from the bottom): *lines* lines of
     *font_size* px from its anchor at *location*."""
@@ -1064,12 +1073,22 @@ def speaker_name(strip_name: Any) -> str:
     return name[0].upper() + name[1:]
 
 
+CHANNEL_NAME_BYTES = 63         # Blender's limit for a channel's name, in UTF-8 bytes
+SPEAKER_NAME_CHARS = 40
+
+
+def _fit_bytes(name: str, limit: int = CHANNEL_NAME_BYTES) -> str:
+    """*name* cut so its UTF-8 encoding fits *limit* bytes (never inside a character)."""
+    return name.encode("utf-8")[:limit].decode("utf-8", "ignore")
+
+
 def channel_names(speaker: str | None) -> tuple[str, str]:
     """The names of a speaker's caption channel and its highlight channel (``"Captions: Ana"``);
     the plain ones without a speaker."""
     if not speaker:
         return CHANNEL_NAME, HIGHLIGHT_CHANNEL_NAME
-    return "{:s}: {:s}".format(CHANNEL_NAME, speaker)[:60], "{:s}: {:s}".format(HIGHLIGHT_CHANNEL_NAME, speaker)[:60]
+    return (_fit_bytes("{:s}: {:s}".format(CHANNEL_NAME, speaker)),
+            _fit_bytes("{:s}: {:s}".format(HIGHLIGHT_CHANNEL_NAME, speaker)))
 
 
 def plan_speakers(todo: Sequence[dict], style: str, position: str, settings: Sequence[dict] = (),
@@ -1091,7 +1110,7 @@ def plan_speakers(todo: Sequence[dict], style: str, position: str, settings: Seq
             continue
         mine = next((by_strip[n] for n in [it["name"]] + [x["name"] for x in todo if x["key"] == key]
                      if n in by_strip), {})
-        name = " ".join(str(mine.get("name") or "").split()) or speaker_name(it["name"])
+        name = " ".join(str(mine.get("name") or "").split())[:SPEAKER_NAME_CHARS] or speaker_name(it["name"])
         base, n = name, 2
         while name.lower() in used:             # two files of "Ana": Ana, Ana 2
             name = "{:s} {:d}".format(base, n)
@@ -1285,7 +1304,7 @@ def check_speakers(speakers: Any, settings: Any) -> tuple[bool, list[dict[str, s
                 raise CaptionsError("each of speaker_settings needs the \"strip\" of that speaker")
             row = {"strip": str(item["strip"]).strip()}
             if str(item.get("name") or "").strip():
-                row["name"] = " ".join(str(item["name"]).split())[:40]
+                row["name"] = " ".join(str(item["name"]).split())[:SPEAKER_NAME_CHARS]
             if item.get("style"):
                 if style_key(item["style"]) is None:
                     raise CaptionsError("Unknown style {!r} for {:s}: use one of {:s}.".format(
@@ -1406,6 +1425,8 @@ def relayout(text: str, name: str, res_x: float, res_y: float, frame_start: int,
         ln = layout_lines([w["w"] for w in group], fit, lines, force=True) or []
         if label and ln:
             ln[0] = with_label(ln[0], label)
+            if st["uppercase"]:
+                ln[0] = ln[0].upper()           # the label in the style's case, as _place writes it
         return {"text": "\n".join(ln), "lines": ln, "frame_start": fs, "frame_end": fe,
                 "words": [{"w": w["w"], "frame": int(round(w["start"]))} for w in group], "label": label}
 

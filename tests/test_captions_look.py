@@ -25,7 +25,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from test_captions import _ROOT, _TOOLS, TestCaptionStrips, _Layout, _OpsCase, _clip, _Strips, cap
+import test_captions        # the module, not its test class: unittest would run that class twice here
+from test_captions import _ROOT, _TOOLS, _Layout, _OpsCase, _clip, _Strips, cap
 
 WIDE = (1920, 1080)
 TALL = (1080, 1920)
@@ -149,8 +150,8 @@ class TestClamping(unittest.TestCase):
                     frames = [f for f, _v in t["keys"]]
                     self.assertGreaterEqual(min(frames), 200, (anim, length))
                     self.assertLessEqual(max(frames), 200 + length, (anim, length))   # the last key may be the end
-                    ins = [f for f, v in t["keys"] if f < 200 + length - 1]
-                    self.assertTrue(all(f <= 200 + length for f in ins))
+                    # Only the last key of a way out may sit on the end (the first frame after the caption).
+                    self.assertTrue(all(f < 200 + length for f in frames[:-1]), (anim, length, t["path"]))
                 win = cap.animation_window(tracks)
                 if win:
                     self.assertGreaterEqual(win[0], 200)
@@ -303,8 +304,28 @@ class TestSpeakers(unittest.TestCase):
         lay = cap.relayout(text, "BOLD_POP", *TALL, 0, 300, old_res=WIDE, label="Ana:")
         self.assertGreater(len(lay["pieces"]), 1)
         for p in lay["pieces"]:
-            self.assertTrue(p["text"].startswith("Ana: "), p["text"])
+            self.assertTrue(p["text"].startswith("ANA: "), p["text"])      # Bold Pop's case, label included
             self.assertNotIn("Ana:", [w["w"] for w in p["words"]])
+
+    def test_a_label_keeps_the_styles_case_in_9_16(self):
+        lay = cap.relayout("ANA: MADE UP WORDS", "BOLD_POP", *TALL, 0, 60, old_res=WIDE, label="Ana:")
+        self.assertTrue(lay["pieces"][0]["text"].startswith("ANA: "), lay["pieces"][0]["text"])
+        lay = cap.relayout("Ana: made up words", "CLEAN", *TALL, 0, 60, old_res=WIDE, label="Ana:")
+        self.assertTrue(lay["pieces"][0]["text"].startswith("Ana: "), lay["pieces"][0]["text"])
+
+    def test_long_non_ascii_names_fit_blenders_channel_name(self):
+        name = "Éléonore-Ñandú " * 5
+        todo = [{"name": name + ".wav", "key": "a"}]
+        row = cap.plan_speakers(todo, "CLEAN", "BOTTOM", [{"strip": todo[0]["name"], "name": name}])["a"]
+        self.assertLessEqual(len(row["name"]), 40)
+        for chan in (row["channel"], row["highlight_channel"]):
+            self.assertLessEqual(len(chan.encode("utf-8")), 63, chan)
+            self.assertEqual(chan, chan.encode("utf-8").decode("utf-8"))
+        # Cut inside a two-byte character: the name stays whole characters, and the same on the next run.
+        again = cap.channel_names(row["name"])
+        self.assertEqual((row["channel"], row["highlight_channel"]), again)
+        self.assertEqual(len(cap.channel_names("é" * 40)[1].encode("utf-8")), 62)
+        self.assertEqual(cap.check_speakers(True, [{"strip": "a", "name": "x" * 60}])[1][0]["name"], "x" * 40)
 
     def test_pick_channel_skips_another_speakers(self):
         occupied = {3: [(0, 100)]}
@@ -501,6 +522,113 @@ class TestAnimatedStrips(_LookCase):
         self.assertEqual(self.ops.refit_captions(self.scene, [line.name]), 0)
         self.assertEqual(line.keys, [])
 
+    # -- what the user set is not Coworker's to reset (Remove Silences, Make Vertical) -------------
+
+    def _curves(self):
+        """``_strip_curves`` over the stand-in: one F-curve per property a strip has keys on, with
+        as many keys as it has; and a recorder for ``_remove_fcurve``."""
+        strips = self.scene.sequence_editor.strips
+        removed = []
+
+        def curves(scene, name, paths=None):
+            strip = strips.get(name)
+            out = {}
+            for path, _frame, _value in (strip.keys if strip is not None else ()):
+                out.setdefault(path, 0)
+                out[path] += 1
+            return {p: [SimpleNamespace(keyframe_points=[SimpleNamespace(interpolation="") for _ in range(n)], data_path=p, id_data=None)] for p, n in out.items()
+                    if paths is None or p in paths}
+
+        stack = mock.patch.multiple(self.ops, _strip_curves=curves, _remove_fcurve=removed.append)
+        stack.start()
+        self.addCleanup(stack.stop)
+        return removed
+
+    def test_a_plain_caption_keeps_what_the_user_set_when_refitted(self):
+        for anim, style in (("NONE", "CLEAN"), ("NONE", "BOLD_POP"), (cap.ANIM_STYLE, "CLEAN"),
+                            (cap.ANIM_STYLE, "BOXED")):
+            self.setUp()
+            removed = self._curves()
+            clip = _clip(self.scene, right=1 + 12 * 30)
+            self.run_captions([clip], style, animation=anim)
+            line = self.lines()[0]
+            line.blend_alpha, line.transform.offset_y = 0.8, 25.0
+            line.keys.append(("blend_alpha", line.left_handle + 5, 0.8))       # the user's own key
+            line.right_handle -= 10
+            self.assertEqual(self.ops.refit_captions(self.scene, [line.name]), 0, (anim, style))
+            self.assertEqual((line.blend_alpha, line.transform.offset_y), (0.8, 25.0), (anim, style))
+            self.assertEqual(removed, [], (anim, style))
+            self.assertIn(("blend_alpha", line.left_handle + 5, 0.8), line.keys)
+
+    def test_a_plain_caption_keeps_what_the_user_set_in_make_vertical(self):
+        for anim, style in (("NONE", "CLEAN"), (cap.ANIM_STYLE, "CLEAN")):
+            self.setUp()
+            removed = self._curves()
+            clip = _clip(self.scene, right=1 + 12 * 30)
+            self.run_captions([clip], style, animation=anim)
+            line = self.lines()[0]
+            line.blend_alpha = 0.8
+            line.keys.append(("blend_alpha", line.left_handle + 5, 0.8))
+            self.scene.render.resolution_x, self.scene.render.resolution_y = TALL
+            result = self.ops.relayout_captions(self.scene, WIDE)
+            self.assertEqual(result["left"], 0)
+            for s in self.lines():
+                if s.name == line.name:
+                    self.assertEqual(s.blend_alpha, 0.8, (anim, style))
+                    self.assertIn(("blend_alpha", line.left_handle + 5, 0.8), s.keys)
+            self.assertEqual(removed, [], (anim, style))
+
+    def test_an_animation_clears_only_the_paths_its_preset_keys(self):
+        removed = self._curves()
+        clip = _clip(self.scene, right=1 + 12 * 30)
+        self.run_captions([clip], "CLEAN", animation="FADE")
+        line = self.lines()[0]
+        line.transform.offset_y = 25.0                  # the user's: Fade doesn't key it
+        line.right_handle -= 10
+        self.assertEqual(self.ops.refit_captions(self.scene, [line.name]), 1)
+        self.assertEqual(line.transform.offset_y, 25.0)
+        self.assertEqual({fc.data_path for fc in removed}, {"blend_alpha"})
+
+    def test_keys_the_user_added_or_removed_are_left_alone(self):
+        removed = self._curves()
+        clip = _clip(self.scene, right=1 + 12 * 30)
+        self.run_captions([clip], "CLEAN", animation="FADE")
+        line = self.lines()[0]
+        self.assertEqual(line.get("bfacw_caption")["keys"], {"blend_alpha": 4})     # what Coworker wrote
+        self.assertFalse(self.ops._edited(line))                                     # not in the signature
+        line.right_handle -= 10
+        self.assertEqual(self.ops.refit_captions(self.scene, [line.name]), 1)        # as made: fitted again
+        self.assertTrue(removed)
+        self.assertEqual(line.get("bfacw_caption")["keys"], {"blend_alpha": len(self.keyed(line)["blend_alpha"])})
+        # The user adds a key: the caption's animation is theirs now.
+        removed.clear()
+        line.keys.append(("blend_alpha", line.left_handle + 20, 0.5))
+        before = list(line.keys)
+        line.right_handle -= 5
+        self.assertEqual(self.ops.refit_captions(self.scene, [line.name]), 0)
+        self.assertEqual((removed, line.keys), ([], before))
+
+    def test_a_removed_key_is_left_alone_too(self):
+        removed = self._curves()
+        clip = _clip(self.scene, right=1 + 12 * 30)
+        self.run_captions([clip], "CLEAN", animation="FADE")
+        line = self.lines()[0]
+        line.keys.pop()                                 # the user deleted a key
+        self.assertEqual(self.ops.refit_captions(self.scene, [line.name]), 0)
+        self.assertEqual(removed, [])
+
+    def test_a_caption_made_before_the_counts_is_fitted_as_before(self):
+        removed = self._curves()
+        clip = _clip(self.scene, right=1 + 12 * 30)
+        self.run_captions([clip], "CLEAN", animation="FADE")
+        line = self.lines()[0]
+        tag = dict(line.get("bfacw_caption"))
+        tag.pop("keys")
+        line["bfacw_caption"] = tag
+        line.keys.append(("blend_alpha", line.left_handle + 20, 0.5))
+        self.assertEqual(self.ops.refit_captions(self.scene, [line.name]), 1)
+        self.assertTrue(removed)
+
     def test_the_tool(self):
         _clip(self.scene, right=1 + 12 * 30)
         r = self.ops.tool_add_captions(["speech"], "clean", "en", self.made_up, animation="typewriter",
@@ -567,6 +695,20 @@ class TestSpeakerStrips(_LookCase):
         self.assertEqual((again["replaced"], again["kept_edited"]), (r["lines_created"], 0))
         self.assertEqual({s["name"]: s["channel"] for s in again["speakers"]}, ch)
 
+    def test_one_speakers_edited_caption_keeps_only_their_own_place(self):
+        a, b = self.two()
+        r = self.run_captions([a, b], "CLEAN", speakers=True)
+        ch = {s["name"]: s["channel"] for s in r["speakers"]}
+        ana = [s for s in self.lines() if s.channel == ch["Ana"]]
+        ben_before = len([s for s in self.lines() if s.channel == ch["Ben"]])
+        ana[1].location = (0.3, 0.6)                    # edited by hand
+        again = self.run_captions([a, b], "CLEAN", speakers=True)
+        self.assertGreater(again["lines_created"], 0)
+        self.assertIn(ana[1].name, [s.name for s in self.lines()])
+        ben = [s for s in self.lines() if s.channel == ch["Ben"]]
+        self.assertEqual(len(ben), ben_before)          # Ben says the same at the same time: still made
+        self.assertEqual(len([s for s in self.lines() if s.channel == ch["Ana"]]), len(ana))
+
     def test_word_highlight_per_speaker_with_a_label(self):
         a, b = self.two()
         with self._measured():
@@ -584,7 +726,7 @@ class TestSpeakerStrips(_LookCase):
         a, b = self.two()
         rows = self.ops.speaker_rows(self.scene, [a, b])
         self.assertEqual(rows, [("ana.wav", "Ana"), ("ben.wav", "Ben")])
-        op, _reports = TestCaptionStrips._operator(self)
+        op, _reports = test_captions.TestCaptionStrips._operator(self)
         self.ops._fill_speakers(op, self.scene, [a, b])
         op.speaker_list[1].name = "Benny"
         self.ops._fill_speakers(op, self.scene, [a, b])          # the same strips: kept
@@ -600,13 +742,26 @@ class TestOperator(_LookCase):
     def test_dialog_and_execute_pass_the_look(self):
         _clip(self.scene, "ana.wav", "//media/ana.wav", channel=1, right=1 + 12 * 30)
         _clip(self.scene, "ben.wav", "//media/ben.wav", channel=2, right=1 + 12 * 30)
-        op, reports = TestCaptionStrips._operator(self)
+        op, reports = test_captions.TestCaptionStrips._operator(self)
         op.animation, op.position, op.margin, op.speakers, op.speaker_labels = "FADE", "TOP", 15, True, True
         self.assertEqual(op.execute(SimpleNamespace(scene=self.scene)), {'FINISHED'}, reports)
         self.assertEqual([it.name for it in op.speaker_list], ["Ana", "Ben"])
         self.assertTrue(all(s.get("bfacw_caption")["anim"] == "FADE" and tuple(s.location) == (0.5, 0.85)
                             for s in self.lines()))
         self.assertIn("Speakers:", reports[-1][1])
+
+    def test_a_long_speaker_name_in_the_dialog_is_cut_to_the_tools_40(self):
+        a = _clip(self.scene, "ana.wav", "//media/ana.wav", channel=1, right=1 + 12 * 30)
+        op, _reports = test_captions.TestCaptionStrips._operator(self)
+        op.speakers = True
+        self.ops._fill_speakers(op, self.scene, [a])
+        op.speaker_list[0].name = "Éléonore " * 10
+        self.assertEqual(op.execute(SimpleNamespace(scene=self.scene)), {'FINISHED'})
+        names = {s.get("bfacw_caption")["speaker"] for s in self.lines()}
+        self.assertEqual(len(names), 1)
+        self.assertLessEqual(len(names.pop()), 40)
+        for s in self.scene.sequence_editor.channels:
+            self.assertLessEqual(len(s.name.encode("utf-8")), 63)
         layout = _Layout()
         op.layout = layout
         op.draw(SimpleNamespace(scene=self.scene, workspace=SimpleNamespace(sequencer_scene=self.scene)))

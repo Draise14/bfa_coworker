@@ -58,6 +58,9 @@ __all__ = (
     "poll_is_waiting",
     "row_text",
     "running",
+    "SCENE_TOUCHING_READS",
+    "busy_kind",
+    "changes_scene_while_busy",
     "scene_busy_message",
     "start",
     "status",
@@ -421,9 +424,21 @@ def running() -> list[dict[str, Any]]:
 
 _BUSY_KINDS = ("RENDER", "OBJECT_BAKE")
 _BUSY_WHAT = {"RENDER": "render", "OBJECT_BAKE": "bake"}
-# What Coworker's own code does to the scene that must not run while a job reads it:
-# the undo / redo of a step's recovery and the removal of its datablocks.
-_INTERNAL_RISKY = ("ed.undo()", "ed.redo()", ".remove(")
+# What Coworker's own code does to the scene that must not run while a job reads it: the undo /
+# redo of a step's recovery, removals and creations, an undo push, and the co-work lock
+# (``hide_select``), selection, active object and mode.
+_INTERNAL_RISKY = ("ed.undo()", "ed.redo()", "undo_push(", ".remove(", ".new(", "hide_select", "select_set",
+                   "objects.active", "mode_set")
+# Tools classed read-only (by name prefix or ``PLAN_SAFE_TOOLS``) that still write to ``bpy.data`` or
+# the UI while they run (#591): a scratch node group made and removed, an asset appended and
+# removed again, a mode / selection / workspace / editor change.  Treated as scene changes.
+SCENE_TOUCHING_READS = frozenset({
+    "get_node_tree_as_code",        # a temporary node group (``.coworker_scratch_*``)
+    "get_asset_tags",               # appends the asset to read its tags, removes it again
+    "search_assets",                # same, while it builds the asset index
+    "jump_to_asset_browser", "jump_to_tab_by_name", "jump_to_tab_by_space_type",
+    "jump_to_view3d_object_by_name", "jump_to_view3d_object_data_by_name",
+})
 
 
 def _job_running(kind: str) -> bool:
@@ -434,36 +449,46 @@ def _job_running(kind: str) -> bool:
         return False
 
 
+def busy_kind(is_running: Callable[[str], bool] | None = None) -> str:
+    """"RENDER" or "OBJECT_BAKE" while Blender runs such a job (it reads the scene on its own
+    thread), else ""."""
+    for kind in _BUSY_KINDS:
+        if (is_running or _job_running)(kind):
+            return kind
+    return ""
+
+
+def changes_scene_while_busy(tool: str, code: str = "", internal: bool = False) -> bool:
+    """Would *tool* (its bridge *code*) touch the scene in a way a running job must not see?"""
+    if internal:
+        return any(m in str(code or "") for m in _INTERNAL_RISKY)
+    tool = str(tool or "")
+    if tool in SCENE_TOUCHING_READS or tool.startswith("jump_to_"):
+        return True
+    from . import claims, turn_undo
+    from .engine import PLAN_SAFE_TOOLS
+    return claims.writes(tool, PLAN_SAFE_TOOLS) and turn_undo.call_changes(tool, code, PLAN_SAFE_TOOLS)
+
+
 def scene_busy_message(tool: str, code: str = "", internal: bool = False,
                        is_running: Callable[[str], bool] | None = None) -> str:
     """#591: why a step that changes the scene must not run now ("" when it may).
 
     Blender's render and bake jobs read the scene on their own thread; a script that adds or
-    removes objects meanwhile, or an undo, can crash Blender (access violation in the job's
-    thread).  So while a render or bake runs, a step that may change the scene is refused with
-    an answer the model can act on.  What only looks (get_* tools, a script that only reads)
-    goes through.  *internal*: Coworker's own code, refused only for undo / redo / removals."""
-    running_kind = ""
-    for kind in _BUSY_KINDS:
-        if (is_running or _job_running)(kind):
-            running_kind = kind
-            break
-    if not running_kind:
+    removes objects meanwhile, an undo, the co-work lock's ``hide_select``, or a tool that makes
+    a scratch datablock can crash Blender (access violation in the job's thread).  So while a
+    render or bake runs, such a step is refused with an answer the model can act on.  What only
+    looks (get_* tools that write nothing, a script that only reads) goes through.  *internal*:
+    Coworker's own code, refused only for undo / redo / removals / lock / selection."""
+    running_kind = busy_kind(is_running)
+    if not running_kind or not changes_scene_while_busy(tool, code, internal):
         return ""
-    if internal:
-        if not any(m in str(code or "") for m in _INTERNAL_RISKY):
-            return ""
-    else:
-        from . import claims, turn_undo
-        from .engine import PLAN_SAFE_TOOLS
-        if not claims.writes(tool, PLAN_SAFE_TOOLS) or not turn_undo.call_changes(tool, code, PLAN_SAFE_TOOLS):
-            return ""
     ours = [j for j in running() if j["kind"] == running_kind]
     which = " ({:s})".format(ours[0]["id"]) if ours else ""
     return (
         "Not run: a {:s} is running in Blender{:s}, and changing the scene while it runs can crash Blender. "
-        "Nothing was changed. {:s}Looking at the scene (get_* tools, a script that only reads) still works; "
-        "try this step again once the {:s} is over.".format(
+        "Nothing was changed. {:s}Looking at the scene (get_scene_digest, get_objects_summary, a script that "
+        "only reads) still works; try this step again once the {:s} is over.".format(
             _BUSY_WHAT[running_kind], which,
             "Wait for it with get_job_status(job_id) (it ends by itself), or ask the user to stop it with Esc "
             "or the X on the job bar in the status bar. " if ours else

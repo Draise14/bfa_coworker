@@ -73,10 +73,10 @@ RUN, ASK, REFUSE = "run", "ask", "refuse"
 REPEAT_ASK = 3          # the 3rd identical call asks; the 4th is refused
 READ_REPEAT_ASK = 5     # reads that change nothing get more room
 
-# #591: a model that polls get_job_status and keeps getting the same answer (same state, same
-# progress) is waiting on a job that goes nowhere.  Polls wait 15-25 s each, so this many in a row
-# is a couple of minutes; the next one is refused.
-STALE_POLLS = 8
+# #591: a model that goes on polling get_job_status after being told "stuck" this many times in a
+# row is waiting on a job that goes nowhere: the next poll is refused.  Only "stuck" answers count
+# (a render quiet for a while but "running" is never refused).
+STALE_POLLS = 3
 
 _BRIDGE_IDLE_RESET = 60.0
 _ORDINALS = {1: "1st", 2: "2nd", 3: "3rd"}
@@ -227,21 +227,20 @@ class LoopGuard:
             per[ident] = per.get(ident, 0) + 1
 
     def _note_poll(self, args: Any, result: Any, key: str) -> None:
-        """A status poll's answer (#591): the same state and progress as the poll before it
-        counts one more; any change (or the job being over) starts the count again."""
+        """A status poll's answer (#591): counts the polls in a row that already said "stuck" (the
+        answer that tells the model to stop waiting).  A render that is merely quiet (kernel
+        compile, BVH build, denoise, saving) says "running" and is never counted; any other answer
+        starts the count again."""
         answer = _poll_answer(result)
         job_id = str((args or {}).get("job_id", "")) if isinstance(args, dict) else ""
         if answer is None or answer.get("kind") != "RENDER":
-            return      # a bake shows no progress by design: identical polls are its normal wait
-        fingerprint = json.dumps([answer.get("state"), answer.get("progress_percent"),
-                                  answer.get("progress_text"), answer.get("progress_step")], default=str)
+            return      # a bake shows no progress by design
         with self._lock:
             per = self._polls.setdefault(key, {})
-            if answer.get("state") not in ("running", "stuck"):
+            if answer.get("state") != "stuck":
                 per.pop(job_id, None)
                 return
-            last, count = per.get(job_id, ("", 0))
-            per[job_id] = (fingerprint, count + 1 if fingerprint == last else 1)
+            per[job_id] = ("stuck", per.get(job_id, ("", 0))[1] + 1)
 
     def stale_polls(self, args: Any, key: str = "") -> int:
         """How many status polls of this job in a row said the same (#591)."""
@@ -292,7 +291,7 @@ def _error(message: str) -> dict[str, object]:
 
 def refused(tool: str, nth: int) -> dict[str, object]:
     if _is_exempt(tool):
-        return _error("Refused: get_job_status has answered the same {:d} times in a row (no progress), so the "
+        return _error("Refused: get_job_status has said \"stuck\" {:d} times in a row, so the "
                       "job is stuck or too slow. Stop polling and don't start another render or bake: tell the "
                       "user it looks stuck and that they can stop it with Esc or the X on the job bar in the "
                       "status bar. Looking at the scene with other tools still works.".format(nth))

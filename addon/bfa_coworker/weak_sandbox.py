@@ -145,9 +145,11 @@ def _co_work_lift() -> Any:
     if threading.current_thread() is not threading.main_thread():
         return None
     try:
-        from . import co_work_guard
+        from . import co_work_guard, long_jobs
         if not co_work_guard.is_locked() or co_work_guard.is_releasing():
             return None
+        if long_jobs.busy_kind():
+            return None     # #591: a render / bake reads the scene: no ``hide_select`` toggling, reads included
         import bpy  # noqa: WPS433
         return co_work_guard.lift(bpy.data)
     except Exception:  # pylint: disable=broad-exception-caught

@@ -4020,24 +4020,28 @@ def stop_local_llama() -> None:
 # ---------------------------------------------------------------------------
 # Health checks
 
-def health_check(url: str | None = None) -> bool:
+def health_check(url: str | None = None, quiet: bool = False) -> bool:
     """
     Ping the LLM backend to confirm it is ready.
 
     *url* -- defaults to ``http://127.0.0.1:{port}/health`` using the configured port.
+    *quiet* -- no log line (the ready wait polls every few seconds for up to 20 minutes, #591).
     """
     if url is None:
         with _lock:
             port = _config.local_port
         url = _LOCAL_LLM_HEALTH_URL.format(port)
-    print("[Coworker] health_check: pinging {:s} ...".format(url))
+    if not quiet:
+        print("[Coworker] health_check: pinging {:s} ...".format(url))
     try:
         with urllib.request.urlopen(url, timeout=5) as resp:
             ok = resp.status == 200
-            print("[Coworker] health_check: status={:d} -> {:s}".format(resp.status, "OK" if ok else "FAIL"))
+            if not quiet:
+                print("[Coworker] health_check: status={:d} -> {:s}".format(resp.status, "OK" if ok else "FAIL"))
             return ok
     except (urllib.error.URLError, OSError) as ex:
-        print("[Coworker] health_check: connection failed -- {:s}".format(str(ex)))
+        if not quiet:
+            print("[Coworker] health_check: connection failed -- {:s}".format(str(ex)))
         return False
 
 
@@ -4108,7 +4112,7 @@ def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = No
         if stopped_by_user(proc):
             print("[Coworker] wait_until_ready: stopped by the user before it was ready")
             return False
-        if health_check():
+        if health_check(quiet=True):
             print("[Coworker] wait_until_ready: server is ready")
             return True
         if proc is not None and proc.poll() is not None and stopped_by_user(proc):

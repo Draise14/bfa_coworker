@@ -38,15 +38,19 @@ def register(mcp: FastMCP) -> None:
         Switch to (or create) the Asset Browser editor.
 
         If an Asset Browser area is already open in any workspace it is
-        reused.  Otherwise, with *allow_edits* (default), the largest area of
-        the current workspace (not the Coworker chat) is turned into an Asset
-        Browser.  No workspace is created, renamed or switched; the result's
+        reused.  Otherwise, with *allow_edits* (default), the largest free area
+        of the current workspace is turned into an Asset Browser.  Not taken:
+        the Coworker editor, and editors whose sidebar is open (the compact
+        chat may sit there).  With no free area, or while a render, a bake or
+        another operation is running, nothing is changed and the answer says
+        why.  No workspace is created, renamed or switched; the result's
         ``changed_area`` and message name the editor that was replaced, so it
         can be set back.
 
         *library_name* optionally preselects the asset library shown in the
         browser (best-effort: if the name matches a configured library or a
-        built-in reference such as ``"LOCAL"`` / ``"USER"`` it is applied).
+        built-in reference ``"LOCAL"`` (Current File), ``"ESSENTIALS"`` or
+        ``"ALL"`` it is applied).
         *catalog_path* optionally selects a catalog: a path such as
         ``"Props/Chairs"`` (looked up in the library's ``blender_assets.cats.txt``;
         for ``"LOCAL"`` the one next to the saved .blend) or a catalog UUID.

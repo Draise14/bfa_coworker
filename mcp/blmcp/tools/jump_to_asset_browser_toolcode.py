@@ -13,6 +13,7 @@ __all__ = (
     "main",
 )
 
+import re
 from typing import NamedTuple
 
 
@@ -45,12 +46,31 @@ class Applied(NamedTuple):
     notes: list[str] = []
 
 
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+# The editors with a right sidebar, which can show Coworker's compact chat (ui_chat.SIDEBAR_SPACES).
+_SIDEBAR_TYPES = frozenset((
+    "VIEW_3D", "IMAGE_EDITOR", "NODE_EDITOR", "SEQUENCE_EDITOR", "CLIP_EDITOR",
+    "DOPESHEET_EDITOR", "GRAPH_EDITOR", "NLA_EDITOR", "TEXT_EDITOR", "SPREADSHEET",
+))
+# Coworker's own always-running input operator (ui_gpu/input_capture.py): not a reason to wait.
+_OWN_MODAL_PREFIXES = ("BFACW_OT_gpu_input", "bfacw.gpu_input")
+_NO_FREE_AREA = (
+    "No free editor to turn into an Asset Browser: open one, or split an area. Nothing was changed.")
+
+
+def is_uuid(text: str) -> bool:
+    """True for a real UUID (8-4-4-4-12 hexadecimal), not just any 36-character text."""
+    return bool(_UUID_RE.match(text))
+
+
 def main(params: Params):
     """Switch to (or create) the Asset Browser editor.
 
     Reuses an existing Asset Browser area if one is open in any workspace.
-    Otherwise, when *allow_edits* is True, the largest area of the current
-    workspace (not the Coworker chat) is converted into an Asset Browser; no
+    Otherwise, when *allow_edits* is True, the largest free area of the current
+    workspace (not the Coworker chat, nor an editor whose sidebar is open: the
+    compact chat may sit there) is converted into an Asset Browser; no
     workspace is created, renamed or switched, and the result names the area
     that was changed so it can be set back.  The library is selected by name;
     a catalog by path (``Props/Chairs``, read from the library's
@@ -110,14 +130,28 @@ def main(params: Params):
     # 2) Create one by converting an area of the current workspace. Nothing is
     # duplicated or switched: converting an area of a workspace Blender is still
     # switching to crashes it (access violation in ED_workspace_change).
-    workspace = bpy.context.window.workspace
-    area = _pick_area(bpy.context.screen.areas)
-    if area is None:
+    busy = _busy_reason(bpy)
+    if busy:
         return Result(
             status="error",
-            message="No area available to convert; nothing was changed",
+            message="Not now: {:s}. Nothing was changed; try again when it is finished.".format(busy),
             available_libraries=available_libraries,
         )
+    window = _main_window(bpy)
+    if window is None:
+        return Result(
+            status="error", message="No window with a normal screen. Nothing was changed.",
+            available_libraries=available_libraries)
+    workspace = window.workspace
+    area = _pick_area(window.screen.areas)
+    if area is None:
+        return Result(status="error", message=_NO_FREE_AREA, available_libraries=available_libraries)
+
+    # The catalog file is read before any area is touched, so a bad file cannot leave a converted area.
+    cache: dict = {}
+    if params.catalog_path and not is_uuid(params.catalog_path):
+        _catalogs_for(params.library_name or "LOCAL", cache)
+
     before = {"type": area.type, "ui_type": area.ui_type, "width": area.width, "height": area.height}
     try:
         area.type = "FILE_BROWSER"
@@ -126,20 +160,20 @@ def main(params: Params):
         reason = "{:s}: {:s}".format(type(ex).__name__, str(ex))
         try:
             area.ui_type = before["ui_type"]
+            restored = "the area was set back to '{:s}'".format(before["ui_type"])
         except Exception as ex2:  # pylint: disable=broad-except
-            reason += "; setting the area back to '{:s}' also failed ({:s})".format(
+            restored = "setting the area back to '{:s}' also failed ({:s}); set its editor type by hand".format(
                 before["ui_type"], str(ex2))
         return Result(
             status="error",
-            message="Could not turn an area into an Asset Browser ({:s}); the area was set back to '{:s}'.".format(
-                reason, before["ui_type"]),
+            message="Could not turn an area into an Asset Browser ({:s}); {:s}.".format(reason, restored),
             available_libraries=available_libraries,
         )
 
     changed = {"was": before["ui_type"], "workspace": workspace.name,
                "size": [before["width"], before["height"]]}
     message = (
-        "Turned the largest area ({:d}x{:d} px, was '{:s}') of workspace '{:s}' into an Asset Browser; "
+        "Turned the largest free area ({:d}x{:d} px, was '{:s}') of workspace '{:s}' into an Asset Browser; "
         "no workspace was created or renamed. To undo, set that area's editor type back to '{:s}'.".format(
             before["width"], before["height"], before["ui_type"], workspace.name, before["ui_type"]))
     ws_name = workspace.name
@@ -147,12 +181,21 @@ def main(params: Params):
     if getattr(area.spaces.active, "params", None) is None and (params.library_name or params.catalog_path):
         # A new file browser gets its parameters when it is first drawn, so the library and
         # catalog are set from the tool's checker (the bridge answers once it returns), on a
-        # later tick. The area is looked up again then: it may be gone by then.
+        # later tick. The area is looked up again then: it may be gone, or the window may show
+        # another workspace or another file by then.
         import time
         deadline = time.monotonic() + 3.0
+        filepath0 = bpy.data.filepath
 
         def check_is_ready() -> dict[str, object] | None:
-            space = _find_browser_space()
+            if bpy.data.filepath != filepath0:
+                return Result(
+                    status="error", workspace=ws_name, created=True,
+                    message="A different file was loaded before the Asset Browser's library/catalog could be "
+                            "set; nothing was applied to the new file.",
+                    available_libraries=available_libraries,
+                )._asdict()
+            space = _find_browser_space(ws_name)
             if space is None:
                 return Result(
                     status="error", workspace=ws_name, created=True, changed_area=changed,
@@ -161,32 +204,78 @@ def main(params: Params):
                 )._asdict()
             if getattr(space, "params", None) is None and time.monotonic() < deadline:
                 return None
-            return _result(ws_name, "ASSETS", _apply_filters(space, params), True, message
+            applied = _apply_filters(space, params, cache)
+            note = ""
+            shown = _main_window(bpy)
+            if shown is not None and shown.workspace.name != ws_name:
+                note = " The browser was made in workspace '{:s}'; the window now shows '{:s}'.".format(
+                    ws_name, shown.workspace.name)
+            return _result(ws_name, "ASSETS", applied, True, message + note
                            )._replace(changed_area=changed)._asdict()
         return check_is_ready
 
-    return _result(ws_name, area.ui_type, _apply_filters(area.spaces.active, params), True, message
+    return _result(ws_name, area.ui_type, _apply_filters(area.spaces.active, params, cache), True, message
                    )._replace(changed_area=changed)
 
 
-def _find_browser_space():
-    """The space of an open Asset Browser area (any window), or None."""
+def _busy_reason(bpy) -> str:
+    """Why the editors must not be changed now ("" when they may be): a modal operator of the user's
+    is running, or a render or bake job is."""
+    try:
+        for window in bpy.context.window_manager.windows:
+            for op in window.modal_operators:
+                if not str(op.bl_idname).startswith(_OWN_MODAL_PREFIXES):
+                    return "another operation ('{:s}') is running".format(str(op.bl_idname))
+    except (AttributeError, ReferenceError):
+        pass
+    is_job_running = getattr(bpy.app, "is_job_running", None)
+    if is_job_running is not None:
+        for job, what in (("RENDER", "a render"), ("OBJECT_BAKE", "a bake"), ("COMPOSITE", "the compositor")):
+            try:
+                if is_job_running(job):
+                    return "{:s} is running".format(what)
+            except (TypeError, ValueError):
+                continue
+    return ""
+
+
+def _main_window(bpy):
+    """The current window, or the first one with a normal screen (not a maximized area's temporary one)."""
+    window = bpy.context.window
+    if window is not None and not getattr(window.screen, "is_temporary", False):
+        return window
+    try:
+        for other in bpy.context.window_manager.windows:
+            if not getattr(other.screen, "is_temporary", False):
+                return other
+    except AttributeError:
+        pass
+    return None
+
+
+def _find_browser_space(workspace_name: str):
+    """The space of an open Asset Browser area, preferring workspace *workspace_name*, or None."""
     import bpy  # pylint: disable=import-error,no-name-in-module
 
-    for window in bpy.context.window_manager.windows:
-        for area in window.screen.areas:
-            if area.type == "FILE_BROWSER" and area.ui_type.startswith("ASSETS"):
-                return area.spaces.active
+    workspaces = sorted(bpy.data.workspaces, key=lambda w: w.name != workspace_name)
+    for workspace in workspaces:
+        for screen in workspace.screens:
+            for area in screen.areas:
+                if area.type == "FILE_BROWSER" and area.ui_type.startswith("ASSETS"):
+                    return area.spaces.active
     return None
 
 
 def _pick_area(areas):
-    """The largest area that is not the Coworker chat editor."""
-    def _is_chat(area):
+    """The largest area that is free: not the Coworker chat editor and not an editor whose sidebar is
+    open (the compact chat sits in the sidebar of the editors in ``_SIDEBAR_TYPES``)."""
+    def _taken(area):
         space = getattr(area.spaces, "active", None)
-        return str(getattr(space, "tree_type", "")).startswith("BFACW")
+        if str(getattr(space, "tree_type", "")).startswith("BFACW"):
+            return True
+        return area.type in _SIDEBAR_TYPES and bool(getattr(space, "show_region_ui", False))
 
-    candidates = [a for a in areas if not _is_chat(a)]
+    candidates = [a for a in areas if not _taken(a)]
     return max(candidates, key=lambda a: a.width * a.height, default=None)
 
 
@@ -242,28 +331,87 @@ def match_catalog(catalogs: dict[str, str], query: str) -> tuple[str | None, lis
     return None, nearest[:5]
 
 
-def _catalog_files(reference: str) -> list[str]:
-    """Catalog definition files for the Asset Browser's library *reference*."""
+def _library_roots(reference: str) -> tuple[list[str], str]:
+    """Folders that hold the catalog file(s) for the Asset Browser's library *reference*, and a reason
+    when there are none ("" otherwise)."""
     import bpy  # pylint: disable=import-error
     import os
 
-    roots = []
     libs = bpy.context.preferences.filepaths.asset_libraries
+    roots: list[str] = []
+
+    def _local():
+        if bpy.data.filepath:
+            roots.extend(_local_catalog_dirs(os.path.dirname(bpy.path.abspath(bpy.data.filepath))))
+
+    def _essentials():
+        try:
+            path = bpy.utils.system_resource("DATAFILES", path="assets")
+        except Exception:  # pylint: disable=broad-except
+            path = ""
+        if path and os.path.isdir(path):
+            roots.append(path)
+
     if reference == "LOCAL":
-        if bpy.data.filepath:
-            roots.append(os.path.dirname(bpy.data.filepath))
+        if not bpy.data.filepath:
+            return [], "the current file is not saved, so it has no catalog file"
+        _local()
     elif reference == "ALL":
-        if bpy.data.filepath:
-            roots.append(os.path.dirname(bpy.data.filepath))
-        roots.extend(str(lib.path) for lib in libs if lib.path)
+        _local()
+        roots.extend(bpy.path.abspath(str(lib.path)) for lib in libs if lib.path)
+        _essentials()
+    elif reference == "ESSENTIALS":
+        _essentials()
+        if not roots:
+            return [], "the built-in Essentials library was not found"
     else:
-        roots.extend(str(lib.path) for lib in libs if lib.name == reference and lib.path)
-    return [os.path.join(bpy.path.abspath(root), _CATS_FILE) for root in roots]
+        roots.extend(bpy.path.abspath(str(lib.path)) for lib in libs if lib.name == reference and lib.path)
+        if not roots:
+            return [], "'{:s}' is not a known library".format(reference)
+    return roots, ""
 
 
-def _apply_filters(space, params: Params) -> Applied:
-    """Library + catalog selection on *space*; every miss is reported in ``notes``."""
+def _local_catalog_dirs(blend_dir: str) -> list[str]:
+    """Folders whose catalog file Blender uses for a saved file in *blend_dir* ("Current File")."""
+    return [blend_dir]
+
+
+def _catalogs_for(reference: str, cache: dict) -> tuple[dict[str, str], list[str]]:
+    """``({path: UUID}, notes)`` for *reference*, read once into *cache*. Never raises."""
+    if reference in cache:
+        return cache[reference]
+    import os
+
+    catalogs: dict[str, str] = {}
     notes: list[str] = []
+    try:
+        roots, reason = _library_roots(reference)
+    except Exception as ex:  # pylint: disable=broad-except
+        roots, reason = [], "{:s}: {:s}".format(type(ex).__name__, str(ex))
+    if reason:
+        notes.append("No catalogs for '{:s}': {:s}.".format(reference, reason))
+    for root in roots:
+        cats_path = os.path.join(root, _CATS_FILE)
+        if not os.path.isfile(cats_path):
+            continue
+        try:
+            with open(cats_path, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except (OSError, ValueError) as ex:
+            notes.append("Could not read '{:s}' ({:s}).".format(cats_path, str(ex)))
+            continue
+        for path, uuid in parse_catalogs(text).items():
+            catalogs.setdefault(path, uuid)
+    cache[reference] = (catalogs, notes)
+    return cache[reference]
+
+
+def _apply_filters(space, params: Params, cache: dict | None = None) -> Applied:
+    """Library + catalog selection on *space*; every miss is reported in ``notes``.
+
+    *cache* holds catalog files already read (``_catalogs_for``)."""
+    notes: list[str] = []
+    cache = {} if cache is None else cache
     lib_set = cat_set = cat_id = None
     nearest = None
     p = getattr(space, "params", None)
@@ -282,41 +430,32 @@ def _apply_filters(space, params: Params) -> Applied:
 
     if params.catalog_path:
         wanted = params.catalog_path
-        looks_uuid = len(wanted) == 36 and wanted.count("-") == 4
-        if looks_uuid:
-            try:
-                p.catalog_id = wanted
-                cat_set = cat_id = wanted
-            except Exception as ex:  # pylint: disable=broad-except
-                notes.append("Catalog id '{:s}' was not accepted ({:s}: {:s}).".format(
-                    wanted, type(ex).__name__, str(ex)))
+        uuid = None
+        if is_uuid(wanted):
+            uuid = wanted
         else:
-            import os
-
             reference = str(p.asset_library_reference)
-            catalogs: dict[str, str] = {}
-            for cats_path in _catalog_files(reference):
-                if os.path.isfile(cats_path):
-                    try:
-                        with open(cats_path, "r", encoding="utf-8") as fh:
-                            for path, uuid in parse_catalogs(fh.read()).items():
-                                catalogs.setdefault(path, uuid)
-                    except OSError as ex:
-                        notes.append("Could not read '{:s}' ({:s}).".format(cats_path, str(ex)))
+            catalogs, read_notes = _catalogs_for(reference, cache)
+            notes.extend(read_notes)
             uuid, nearest = match_catalog(catalogs, wanted)
             if uuid is None:
-                where = "'{:s}'".format(reference)
                 if not catalogs:
-                    notes.append("No catalogs were found for {:s} (no {:s} to read); catalog '{:s}' was not set.".format(
-                        where, _CATS_FILE, wanted))
+                    notes.append("No catalogs were found for '{:s}' (no {:s} to read); catalog '{:s}' was not set.".format(
+                        reference, _CATS_FILE, wanted))
                 else:
-                    notes.append("Catalog '{:s}' was not found in {:s}; nearest: {:s}.".format(
-                        wanted, where, ", ".join(nearest) if nearest else "(none close)"))
+                    notes.append("Catalog '{:s}' was not found in '{:s}'; nearest: {:s}.".format(
+                        wanted, reference, ", ".join(nearest) if nearest else "(none close)"))
+        if uuid is not None:
+            try:
+                p.catalog_id = uuid
+                took = str(p.catalog_id).lower() == uuid.lower()
+            except Exception as ex:  # pylint: disable=broad-except
+                took = False
+                notes.append("Catalog '{:s}' ({:s}) was not accepted ({:s}: {:s}).".format(
+                    wanted, uuid, type(ex).__name__, str(ex)))
             else:
-                try:
-                    p.catalog_id = uuid
-                    cat_set, cat_id, nearest = wanted, uuid, None
-                except Exception as ex:  # pylint: disable=broad-except
-                    notes.append("Catalog '{:s}' ({:s}) was not accepted ({:s}: {:s}).".format(
-                        wanted, uuid, type(ex).__name__, str(ex)))
+                if not took:
+                    notes.append("Catalog '{:s}' ({:s}) was set but the browser did not keep it.".format(wanted, uuid))
+            if took:
+                cat_set, cat_id, nearest = wanted, uuid, None
     return Applied(lib_set, cat_set, cat_id, nearest, notes)

@@ -317,6 +317,242 @@ class TestCreatePath(unittest.TestCase):
         self.assertIn("not found", res.message)
 
 
+class TestCreateGuards(unittest.TestCase):
+    """The review's items: free-area choice, busy refusals, catalog file, UUID read-back, truthful answers."""
+
+    def setUp(self):
+        self._saved_bpy = sys.modules.get("bpy")
+        self.addCleanup(self._restore)
+        self.duplicated = []
+        self.tmp = __import__("tempfile").mkdtemp(prefix="t589_guard_")
+        self.addCleanup(__import__("shutil").rmtree, self.tmp, True)
+
+    def _restore(self):
+        if self._saved_bpy is None:
+            sys.modules.pop("bpy", None)
+        else:
+            sys.modules["bpy"] = self._saved_bpy
+
+    def _bpy(self, areas, libs=()):
+        bpy = TestCreatePath._bpy(self, areas)
+        bpy.context.window.modal_operators = []
+        bpy.context.window.screen.is_temporary = False
+        bpy.context.window_manager = types.SimpleNamespace(windows=[bpy.context.window])
+        bpy.app.is_job_running = lambda job: False
+        bpy.context.preferences.filepaths.asset_libraries.extend(libs)
+        return bpy
+
+    def _write_cats(self, folder, text):
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "blender_assets.cats.txt"), "w", encoding="utf-8", errors="replace") as fh:
+            fh.write(text)
+
+    # -- 1: never take the chat's area
+    def test_an_editor_with_its_sidebar_open_is_not_taken(self):
+        view = _Area("VIEW_3D", 1200, 700)
+        view.spaces.active.show_region_ui = True      # the compact chat can be in this sidebar
+        outliner = _Area("OUTLINER", 300, 300)
+        self._bpy([view, outliner])
+        mod = _jump()
+        res = mod.main(mod.Params())
+        self.assertEqual(res.status, "ok")
+        self.assertEqual(view.ui_type, "VIEW_3D")
+        self.assertEqual(outliner.ui_type, "ASSETS")
+
+    def test_an_editor_with_its_sidebar_closed_can_be_taken(self):
+        view = _Area("VIEW_3D", 1200, 700)
+        view.spaces.active.show_region_ui = False
+        self._bpy([view, _Area("OUTLINER", 300, 300)])
+        mod = _jump()
+        self.assertEqual(mod.main(mod.Params()).status, "ok")
+        self.assertEqual(view.ui_type, "ASSETS")
+
+    def test_no_free_area_changes_nothing_and_says_so(self):
+        view = _Area("VIEW_3D", 1200, 700)
+        view.spaces.active.show_region_ui = True
+        self._bpy([view])
+        mod = _jump()
+        res = mod.main(mod.Params())
+        self.assertEqual(res.status, "error")
+        self.assertIn("No free editor to turn into an Asset Browser", res.message)
+        self.assertIn("split an area", res.message)
+        self.assertEqual(view.ui_type, "VIEW_3D")
+
+    # -- 4: busy
+    def test_another_modal_operator_refuses(self):
+        big = _Area("OUTLINER", 1200, 700)
+        bpy = self._bpy([big])
+        bpy.context.window.modal_operators = [
+            types.SimpleNamespace(bl_idname="BFACW_OT_gpu_input"),
+            types.SimpleNamespace(bl_idname="TRANSFORM_OT_translate")]
+        mod = _jump()
+        res = mod.main(mod.Params())
+        self.assertEqual(res.status, "error")
+        self.assertIn("TRANSFORM_OT_translate", res.message)
+        self.assertEqual(big.ui_type, "OUTLINER")
+
+    def test_only_the_chats_own_modal_operator_does_not_block(self):
+        big = _Area("OUTLINER", 1200, 700)
+        bpy = self._bpy([big])
+        bpy.context.window.modal_operators = [
+            types.SimpleNamespace(bl_idname="BFACW_OT_gpu_input"),
+            types.SimpleNamespace(bl_idname="bfacw.gpu_input_native")]
+        mod = _jump()
+        self.assertEqual(mod.main(mod.Params()).status, "ok")
+
+    def test_a_running_render_or_bake_refuses(self):
+        for job, word in (("RENDER", "render"), ("OBJECT_BAKE", "bake")):
+            big = _Area("OUTLINER", 1200, 700)
+            bpy = self._bpy([big])
+            bpy.app.is_job_running = lambda name, job=job: name == job
+            mod = _jump()
+            res = mod.main(mod.Params())
+            self.assertEqual(res.status, "error")
+            self.assertIn(word, res.message)
+            self.assertEqual(big.ui_type, "OUTLINER")
+
+    def test_a_temporary_screen_is_skipped_for_the_main_window(self):
+        big = _Area("OUTLINER", 1200, 700)
+        bpy = self._bpy([big])
+        main_window = bpy.context.window
+        temp = types.SimpleNamespace(
+            workspace=main_window.workspace, screen=types.SimpleNamespace(areas=[_Area("OUTLINER", 9, 9)], is_temporary=True))
+        bpy.context.window = temp
+        bpy.context.window_manager = types.SimpleNamespace(windows=[temp, main_window])
+        mod = _jump()
+        res = mod.main(mod.Params())
+        self.assertEqual(res.status, "ok")
+        self.assertEqual(big.ui_type, "ASSETS")
+
+    # -- 5: the catalog file
+    def test_a_catalog_file_that_is_not_utf8_cannot_break_the_tool(self):
+        folder = os.path.join(self.tmp, "lib")
+        os.makedirs(folder)
+        with open(os.path.join(folder, "blender_assets.cats.txt"), "wb") as fh:
+            fh.write(b"VERSION 1" + bytes([10, 10]) + ("%s:Props/Ch" % U1).encode() + bytes([0xff, 0xfe]) + b"airs:x" + bytes([10]))
+        big = _Area("OUTLINER", 1200, 700)
+        self._bpy([big], libs=[types.SimpleNamespace(name="Lib", path=folder)])
+        mod = _jump()
+        res = mod.main(mod.Params(library_name="Lib", catalog_path="Props/Chairs"))
+        self.assertEqual(res.status, "ok")
+        self.assertEqual(big.ui_type, "ASSETS")             # converted, with a clear answer either way
+        self.assertIsNone(res.catalog_set)
+        self.assertIn("not found", res.message)
+
+    def test_the_catalog_file_is_read_before_the_area_is_converted(self):
+        folder = os.path.join(self.tmp, "lib")
+        self._write_cats(folder, "VERSION 1" + chr(10) + chr(10) + "%s:Props/Chairs:x" % U1 + chr(10))
+        big = _Area("OUTLINER", 1200, 700)
+        self._bpy([big], libs=[types.SimpleNamespace(name="Lib", path=folder)])
+        order = []
+        mod = _jump()
+        real = mod._catalogs_for
+        mod._catalogs_for = lambda ref, cache: (order.append(("read", big.ui_type)), real(ref, cache))[1]
+        mod.main(mod.Params(library_name="Lib", catalog_path="Props/Chairs"))
+        self.assertEqual(order[0], ("read", "OUTLINER"))
+
+    def test_current_file_uses_the_catalog_file_beside_the_blend(self):
+        folder = os.path.join(self.tmp, "proj")
+        self._write_cats(folder, "VERSION 1" + chr(10) + chr(10) + "%s:Local/Cat:x" % U2 + chr(10))
+        big = _Area("OUTLINER", 1200, 700)
+        bpy = self._bpy([big])
+        bpy.data.filepath = os.path.join(folder, "scene.blend")
+        mod = _jump()
+        res = mod.main(mod.Params(library_name="LOCAL", catalog_path="Local/Cat"))
+        self.assertEqual(res.catalog_id, U2)
+
+    def test_an_unsaved_file_has_no_catalog_file_and_says_so(self):
+        big = _Area("OUTLINER", 1200, 700)
+        self._bpy([big])
+        mod = _jump()
+        res = mod.main(mod.Params(library_name="LOCAL", catalog_path="Local/Cat"))
+        self.assertIsNone(res.catalog_set)
+        self.assertIn("not saved", res.message)
+
+    # -- 6: UUID read-back
+    def test_a_catalog_id_the_browser_does_not_keep_is_not_reported(self):
+        big = _Area("OUTLINER", 1200, 700)
+        self._bpy([big])
+        space = big.spaces.active
+
+        class Params:
+            asset_library_reference = "LOCAL"
+            _id = ""
+
+            @property
+            def catalog_id(self):
+                return self._id
+
+            @catalog_id.setter
+            def catalog_id(self, value):
+                pass                                    # silently ignored
+        space.params = Params()
+        mod = _jump()
+        applied = mod._apply_filters(space, mod.Params(catalog_path=U1))
+        self.assertIsNone(applied.catalog)
+        self.assertTrue(any("did not keep" in n for n in applied.notes))
+
+    def test_a_36_character_name_that_is_not_a_uuid_goes_through_the_path_lookup(self):
+        name = "Props/" + "x" * 30                      # 36 characters, with a "-" free of the UUID shape
+        self.assertEqual(len(name), 36)
+        mod = _jump()
+        self.assertFalse(mod.is_uuid(name))
+        self.assertFalse(mod.is_uuid("12345678-1234-1234-1234-12345678zzzz"))
+        self.assertFalse(mod.is_uuid("a" * 8 + "-" * 4 + "b" * 24))
+        self.assertTrue(mod.is_uuid(U1))
+        folder = os.path.join(self.tmp, "lib")
+        self._write_cats(folder, "VERSION 1" + chr(10) + chr(10) + "%s:%s:x" % (U3, name) + chr(10))
+        big = _Area("OUTLINER", 1200, 700)
+        self._bpy([big], libs=[types.SimpleNamespace(name="Lib", path=folder)])
+        res = mod.main(mod.Params(library_name="Lib", catalog_path=name))
+        self.assertEqual(res.catalog_id, U3)
+
+    # -- 7: truthful answers
+    def test_a_failed_set_back_is_reported_as_such(self):
+        big = _Area("VIEW_3D", 1200, 700)
+        self._bpy([big])
+
+        def always_fail(self, key, value):
+            if key == "ui_type":
+                raise TypeError("refused " + value)
+            object.__setattr__(self, key, value)
+        big.__class__ = type("StuckArea", (_Area,), {"__setattr__": always_fail})
+        mod = _jump()
+        res = mod.main(mod.Params())
+        self.assertEqual(res.status, "error")
+        self.assertIn("also failed", res.message)
+        self.assertNotIn("the area was set back", res.message)
+
+    def _deferred(self, switch=None, newfile=False):
+        folder = os.path.join(self.tmp, "lib")
+        self._write_cats(folder, "VERSION 1" + chr(10) + chr(10) + "%s:Props/Chairs:x" % U1 + chr(10))
+        big = _Area("VIEW_3D", 1200, 700)
+        bpy = self._bpy([big], libs=[types.SimpleNamespace(name="Lib", path=folder)])
+        real_params = big.spaces.active.params
+        big.spaces.active.params = None
+        mod = _jump()
+        check = mod.main(mod.Params(library_name="Lib", catalog_path="Props/Chairs"))
+        self.assertTrue(callable(check))
+        big.spaces.active.params = real_params
+        if switch:
+            bpy.context.window.workspace = types.SimpleNamespace(name=switch, screens=[])
+        if newfile:
+            bpy.data.filepath = os.path.join(self.tmp, "other.blend")
+        return check(), real_params
+
+    def test_the_workspace_switched_before_the_answer_is_said(self):
+        res, params = self._deferred(switch="Shading")
+        self.assertEqual(res["status"], "ok")
+        self.assertIn("made in workspace 'Layout'", res["message"])
+        self.assertIn("now shows 'Shading'", res["message"])
+
+    def test_a_file_loaded_before_the_answer_gets_nothing(self):
+        res, params = self._deferred(newfile=True)
+        self.assertEqual(res["status"], "error")
+        self.assertIn("nothing was applied to the new file", res["message"])
+        self.assertEqual(params.catalog_id, "")
+
+
 # ---------------------------------------------------------------------------
 # The indexer's F-curve counter.
 
@@ -387,12 +623,64 @@ class TestFcurveCount(unittest.TestCase):
             DataTo_holder[0] = DataTo()
             return Load()
 
+        class Coll(list):
+            """Like bpy_prop_collection: ``in`` wants a name, an ID raises TypeError; remove takes the ID."""
+            removed = []
+
+            def __contains__(self, item):
+                if not isinstance(item, str):
+                    raise TypeError("bpy_prop_collection.__contains__ expected a string")
+                return super().__contains__(item)
+
+            def remove(self, item):
+                self.removed.append(item)
+
+        coll = Coll()
+        purged = []
         self.ix.bpy = types.SimpleNamespace(
             data=types.SimpleNamespace(
-                libraries=types.SimpleNamespace(load=load),
-                actions=types.SimpleNamespace(remove=lambda a: None, __contains__=lambda s, a: False)))
+                libraries=types.SimpleNamespace(load=load), actions=coll,
+                orphans_purge=lambda **kw: purged.append(kw)))
         entries = self.ix._load_and_collect(os.path.join("lib", "a.blend"), "lib")
         self.assertEqual(entries["Act"]["fcurves_count"], 3)
+        self.assertEqual(coll.removed, [action])             # the loaded datablock is dropped again
+        self.assertEqual(purged, [{"do_recursive": True}])   # and what it pulled in
+
+    def test_schema_one_index_is_stale(self):
+        """Indexes written before the load-order fix are empty; they must be rebuilt."""
+        import json
+        import shutil
+        import tempfile
+        shared = _load_path(os.path.join(_TOOLS, "_asset_index_shared.py"), "shared2")
+        tmp = tempfile.mkdtemp(prefix="t589_idx_")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        os.environ["BFACW_ASSET_INDEX_DIR"] = tmp
+        self.addCleanup(os.environ.pop, "BFACW_ASSET_INDEX_DIR", None)
+        bpy = types.SimpleNamespace()
+        lib = os.path.join(tmp, "lib")
+        os.makedirs(lib)
+        index = {"schema": 1, "library_path": lib, "built_at": 1.0, "files": {}, "assets": {}}
+        with open(shared._blmcp_index_path(lib, bpy), "w", encoding="utf-8") as fh:
+            json.dump(index, fh)
+        self.assertIsNone(shared._blmcp_index_read(lib, bpy))
+        index["schema"] = shared._BLMCP_INDEX_SCHEMA
+        with open(shared._blmcp_index_path(lib, bpy), "w", encoding="utf-8") as fh:
+            json.dump(index, fh)
+        self.assertIsNotNone(shared._blmcp_index_read(lib, bpy))
+        self.assertGreaterEqual(shared._BLMCP_INDEX_SCHEMA, 2)
+
+    def test_the_build_script_keeps_its_marker_fresh(self):
+        import shutil
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="t589_marker_")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        marker = os.path.join(tmp, "m.building")
+        with open(marker, "w", encoding="utf-8") as fh:
+            fh.write("x")
+        os.utime(marker, (1.0, 1.0))
+        self.ix._MARKER[0] = marker
+        self.ix._touch_marker()
+        self.assertGreater(os.path.getmtime(marker), 1000.0)
 
     def test_no_layers_is_zero(self):
         self.assertEqual(self.ix._action_fcurve_count(types.SimpleNamespace()), 0)

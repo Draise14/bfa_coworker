@@ -145,6 +145,11 @@ class TestUpdateCaptionsHoldsNoDeadStrip(R._Rig):
         self.assertEqual(self.resigned, self.calls)
         self.assertEqual(sum(1 for r in self.strips.records if r["name"].endswith("_w03")), 4)
 
+    def test_update_captions_with_no_strips_at_all(self):
+        self._rig(lines=0)
+        self.assertEqual(self.ops._update_captions(self.scene, {"source": "c:/talk.mp4"}, [], [], {}, set(), [(1, 9)]),
+                         (0, 0))
+
     def test_a_caption_that_went_away_meanwhile_is_skipped(self):
         self._rig(lines=2)
         fake = sys.modules[self.ops.__package__ + ".captions_ops"]
@@ -315,7 +320,7 @@ class TestPlayFromLineAndMakeCaptions(R._Rig):
         self.assertFalse(self.screen.is_animation_playing)
 
     def _captions_op(self):
-        scene = types.SimpleNamespace(sequence_editor=types.SimpleNamespace(strips=[]))
+        scene = types.SimpleNamespace(name="Scene", sequence_editor=types.SimpleNamespace(strips=[]))
         strips = [types.SimpleNamespace(name="talk", select=False), types.SimpleNamespace(name="other", select=True)]
         scene.sequence_editor.strips = strips
         self.ops.bpy.data.scenes = {"Scene": scene}
@@ -339,6 +344,86 @@ class TestPlayFromLineAndMakeCaptions(R._Rig):
         self.screen.areas = [a for a in self.screen.areas if a.type != 'SEQUENCE_EDITOR']
         self.assertEqual(op.invoke(self.ctx, None), {'CANCELLED'})
         self.assertEqual(self.log[0][0], "report")
+
+    # -- review fixes ------------------------------------------------------------------------------------------
+
+    def _other_scene(self):
+        self.ctx.workspace = types.SimpleNamespace(sequencer_scene=types.SimpleNamespace(name="Other"))
+        self.scene_named = types.SimpleNamespace(name="Scene")
+
+    def test_make_captions_changes_nothing_when_the_sequencer_shows_another_scene(self):
+        op, strips = self._captions_op()
+        self.ops.bpy.data.scenes["Scene"].name = "Scene"
+        self._other_scene()
+        self.assertEqual(op.invoke(self.ctx, None), {'CANCELLED'})
+        self.assertEqual([(s.name, s.select) for s in strips], [("talk", False), ("other", True)])
+        kind, args = self.log[0]
+        self.assertEqual(kind, "report")
+        self.assertIn("another scene: switch it to Scene", args[1])
+        self.assertEqual(len(self.log), 1)
+        self.assertEqual(self.ops._ASKED, {})
+
+    def test_play_from_line_reports_another_scene_and_does_nothing(self):
+        self._captions_op()
+        self.ops.bpy.data.scenes["Scene"].name = "Scene"
+        self._other_scene()
+        self.assertEqual(self._seek().execute(self.ctx), {'CANCELLED'})
+        self.assertEqual(len(self.log), 1)
+        self.assertIn("another scene", self.log[0][1][1])
+
+    def test_play_from_line_with_the_sequencer_in_another_window_needs_this_window_on_the_scene(self):
+        self._captions_op()
+        scene = self.ops.bpy.data.scenes["Scene"]
+        scene.name = "Scene"
+        self.screen.areas = [a for a in self.screen.areas if a.type != 'SEQUENCE_EDITOR']
+        self.window.scene = types.SimpleNamespace(name="Elsewhere")
+        self.assertEqual(self._seek().execute(self.ctx), {'CANCELLED'})
+        self.assertFalse(self.screen.is_animation_playing)
+        self.assertEqual([k for k, *_ in self.log], ["report"])
+        self.log.clear()
+        self.window.scene = scene
+        self.assertEqual(self._seek().execute(self.ctx), {'FINISHED'})
+        self.assertEqual(self.log, [("seek", 1), ("play", None)])
+
+    def test_play_from_line_says_so_when_playback_cannot_start(self):
+        def boom():
+            raise RuntimeError("context is incorrect")
+        self.ops.bpy.ops.screen.animation_play = boom
+        self.assertEqual(self._seek().execute(self.ctx), {'FINISHED'})
+        self.assertEqual([k for k, *_ in self.log], ["seek", "report"])
+
+    def test_the_words_changed_in_the_text_follow_the_dialogs_captions(self):
+        op, strips = self._captions_op()
+        scene = self.ops.bpy.data.scenes["Scene"]
+        scene.name = "Scene"
+        state = {"scene": "Scene", "source": "c:/talk.mp4", "transcript": "t.json", "retext": "{}"}
+        self.ops.bpy.data.texts = [types.SimpleNamespace(name="tt")]
+        self.ops.state_of = lambda text: state
+        applied = []
+        self.ops._apply_retext = lambda sc, st: applied.append((sc.name, st["transcript"]))
+        self.ops.captions_made(scene, "t.json")                  # not asked: nothing
+        self.assertEqual(applied, [])
+        op.invoke(self.ctx, None)
+        self.ops.captions_made(scene, "other.json")              # another transcript's dialog: nothing
+        self.assertEqual(applied, [])
+        op.invoke(self.ctx, None)
+        self.ops.captions_made(scene, "t.json")
+        self.assertEqual(applied, [("Scene", "t.json")])
+        self.ops.captions_made(scene, "t.json")                  # once
+        self.assertEqual(len(applied), 1)
+
+    def test_the_header_has_a_make_captions_button_next_to_apply(self):
+        seen = []
+
+        class _Row:
+            def __getattr__(self_, name):
+                return lambda *a, **k: seen.append((name, a, k)) or types.SimpleNamespace()
+
+        layout = types.SimpleNamespace(separator=lambda: None, row=lambda align=False: _Row())
+        self.ops._context_text = lambda ctx: self.text
+        self.ops._draw_header(types.SimpleNamespace(layout=layout), self.ctx)
+        ids = [a[0] for n, a, k in seen if n == "operator"]
+        self.assertEqual(ids[:2], ["bfacw.transcript_apply", "bfacw.transcript_make_captions"])
 
 
 if __name__ == "__main__":

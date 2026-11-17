@@ -419,7 +419,6 @@ def _update_captions(scene: Any, state: dict, words: list, occ: list, retext: di
         if strip.name not in names and not any(a < right and left < b for a, b in spans):
             continue
         candidates.append(strip.name)
-    del strip
     for name in candidates:
         strip = scene.sequence_editor.strips.get(name)
         if strip is None:
@@ -983,6 +982,43 @@ def _sequencer_area(context: Any) -> tuple[Any, Any, Any]:
     return window, area, region
 
 
+def _scene_problem(context: Any, scene: Any) -> str:
+    """"" when the Sequencer shows *scene*; else what to tell the artist (nothing may change then)."""
+    shown = _seq_scene.sequencer_scene(context)
+    if shown is not None and getattr(shown, "name", None) != getattr(scene, "name", None):
+        return "the Sequencer shows another scene: switch it to {:s}".format(scene.name)
+    return ""
+
+
+def _apply_retext(scene: Any, state: dict) -> None:
+    """The words changed in the text go into the captions of this transcript's clip (holds no strip)."""
+    retext = _j(state, "retext", {})
+    if not retext:
+        return
+    try:
+        got = view_now(state)
+        spans = [(o["frame"], o["frame"] + 1) for o in got["occ"] if str(o["i"]) in retext]
+        _update_captions(scene, state, got["words"], got["occ"], retext, set(), spans)
+    except _Problem:
+        pass
+
+
+_ASKED: dict[str, str] = {}      # scene name -> transcript path: Make Captions opened the dialog and waits for OK
+
+
+def captions_made(scene: Any, transcript_path: str) -> None:
+    """Auto Captions' dialog (opened by Make Captions) made its captions: the transcript's changed words follow (#595)."""
+    name = getattr(scene, "name", "")
+    asked = _ASKED.pop(name, None)
+    if asked is None or asked != (transcript_path or ""):
+        return
+    for text in bpy.data.texts:
+        state = state_of(text)
+        if state and state.get("scene") == name and state.get("transcript", "") == asked:
+            _apply_retext(scene, state)
+            return
+
+
 def _toggle_playback(context: Any) -> bool:
     """Start (or stop) playback with the Sequencer as the area the operator sees: the Text Editor
     stays the active area (#595).  False when it couldn't."""
@@ -999,7 +1035,7 @@ def _toggle_playback(context: Any) -> bool:
 
 
 class BFACW_OT_transcript_seek(_TextOp, Operator):  # type: ignore[misc]
-    """Play from the start of the text cursor's line; press again to stop"""
+    """Start or stop playback: plays from the start of the text cursor's line, and a second press stops it"""
 
     bl_idname = "bfacw.transcript_seek"
     bl_label = "Play from Line"
@@ -1016,6 +1052,15 @@ class BFACW_OT_transcript_seek(_TextOp, Operator):  # type: ignore[misc]
         if self.play and playing:                       # a second press stops
             _toggle_playback(context)
             return {'FINISHED'}
+        state = state_of(text)
+        scene = bpy.data.scenes.get(state.get("scene", "")) if state else None
+        if self.play and scene is not None:
+            problem = _scene_problem(context, scene)
+            if not problem and _sequencer_area(context)[1] is None and                     getattr(getattr(context, "window", None), "scene", scene) is not scene:
+                problem = "this window plays another scene: switch it to {:s}".format(scene.name)
+            if problem:
+                self.report({'WARNING'}, problem[0].upper() + problem[1:])
+                return {'CANCELLED'}
         line = self.line if self.line >= 0 else int(text.current_line_index)
         if self.line >= 0:
             try:
@@ -1230,6 +1275,10 @@ class BFACW_OT_transcript_make_captions(_TextOp, Operator):  # type: ignore[misc
         scene = bpy.data.scenes.get(state.get("scene", "")) if state else None
         if scene is None or scene.sequence_editor is None:
             return {'CANCELLED'}
+        problem = _scene_problem(context, scene)
+        if problem:
+            self.report({'WARNING'}, problem[0].upper() + problem[1:])
+            return {'CANCELLED'}
         window, area, region = _sequencer_area(context)
         if area is None:
             self.report({'WARNING'}, "Open a Sequencer in this window to make captions")
@@ -1237,10 +1286,12 @@ class BFACW_OT_transcript_make_captions(_TextOp, Operator):  # type: ignore[misc
         sources = {s.name for s in source_strips(scene, state["source"])}
         for strip in scene.sequence_editor.strips:
             strip.select = strip.name in sources
+        _ASKED[scene.name] = state.get("transcript", "")
         try:
             with context.temp_override(window=window, area=area, region=region):
                 bpy.ops.bfacw.auto_captions('INVOKE_DEFAULT', transcript_path=state.get("transcript", ""))
         except RuntimeError as ex:
+            _ASKED.pop(scene.name, None)
             self.report({'WARNING'}, str(ex).strip().splitlines()[-1] if str(ex).strip() else "Auto Captions can't run here")
             return {'CANCELLED'}
         return {'FINISHED'}
@@ -1258,14 +1309,7 @@ class BFACW_OT_transcript_make_captions(_TextOp, Operator):  # type: ignore[misc
         except Exception as ex:  # pylint: disable=broad-exception-caught
             self.report({'WARNING'}, str(ex))
             return {'CANCELLED'}
-        retext = _j(state, "retext", {})
-        if retext:
-            try:
-                got = view_now(state)
-                spans = [(o["frame"], o["frame"] + 1) for o in got["occ"] if str(o["i"]) in retext]
-                _update_captions(scene, state, got["words"], got["occ"], retext, set(), spans)
-            except _Problem:
-                pass
+        _apply_retext(scene, state)
         self.report({'INFO'}, "{:s} made".format(_plural(int(out.get("lines_created", 0)), "caption")))
         return {'FINISHED'}
 
@@ -1385,6 +1429,7 @@ def _draw_header(self: Any, context: Any) -> None:
     except (AttributeError, TypeError):
         pass
     row.operator(BFACW_OT_transcript_apply.bl_idname, text="Apply", icon=safe_icon('CHECKMARK'))
+    row.operator(BFACW_OT_transcript_make_captions.bl_idname, text="", icon=safe_icon('FONT_DATA'))   # #595
     row.operator(BFACW_OT_transcript_toggle.bl_idname, text="Live", icon=safe_icon('REC'),
                  depress=bool(state.get("live"))).option = "live"
     row.operator(BFACW_OT_transcript_jump_to_playhead.bl_idname, text="", icon=safe_icon('PLAY'))

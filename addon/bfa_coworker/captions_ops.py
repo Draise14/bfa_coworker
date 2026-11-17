@@ -1695,6 +1695,11 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
         except CaptionsError as ex:
             self.report({'ERROR'}, str(ex))
             return {'CANCELLED'}
+        try:
+            from . import transcript_edit_ops    # a transcript's changed words follow its captions (#595)
+            transcript_edit_ops.captions_made(scene, self.transcript_path)
+        except Exception as ex:  # pylint: disable=broad-exception-caught
+            print("[Coworker] Auto Captions: the transcript's words not applied: {!s}".format(ex))
         self.report({'WARNING'} if _warn(result) else {'INFO'}, _summary(result))
         return {'FINISHED'}
 

@@ -60,6 +60,11 @@ For long jobs, start them and check with `get_job_status`; don't loop faster tha
   Works in a copy of the scene by default (`in_copy`); one undo step. Change a shot's framing afterwards
   through that modifier's inputs (Properties > Strip Modifiers: Offset X / Y -1..1, Zoom, Blur Fill), not the
   strip transform.
+- `get_transcript_text(strip)` — A transcribed clip's words as they play now, one numbered line per sentence
+  with its time. `apply_transcript_edit(strip, cut_lines=[...] | text=..., dry_run=False)` — Edit the clip by its
+  text; one undo step: lines / words taken out are cut from the whole edit (gap closed, captions trimmed), moved
+  lines move their clips, a changed word changes only the captions. New text with no audio behind it cuts
+  nothing (`flags`). For "cut the part about X": read the lines, then `cut_lines`; `dry_run` shows the `ops`.
 - Deleting strips: use `remove_silences` for cuts and `add_captions` again to replace captions. In your own
   code, select the strips and run `bpy.ops.sequencer.delete()` in a `temp_override` of a Sequencer area; avoid
   `strips.remove()` / `split()` loops, which can free a strip while the preview is still rendering it.

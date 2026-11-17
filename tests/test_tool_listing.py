@@ -110,6 +110,83 @@ EXPECTED_TOOLS = [
         }
     },
     {
+        "name": "apply_transcript_edit",
+        "description": "\n"
+"        Edit a Sequencer clip by editing its transcript (Edit by Transcript), one undo step.\n"
+"        Read it first with get_transcript_text. Words taken out are cut from the whole edit\n"
+"        (picture, sound and every other track together, the gap closed, captions trimmed);\n"
+"        lines moved to another place move their clips; a changed word changes only the\n"
+"        captions. Text with no audio behind it (new words, a line rewritten so it no longer\n"
+"        matches what is said) cuts nothing and is listed in ``flags``. A locked strip in the\n"
+"        way: nothing changes, ``refused`` names it.\n"
+"\n"
+"        Args:\n"
+"            strip: The sound or movie strip (none: the active strip, or the only clip with\n"
+"                a transcript).\n"
+"            cut_lines: Line numbers (from get_transcript_text) to cut whole. Simplest for\n"
+"                \"cut the part about ...\".\n"
+"            text: Or the whole edited text (get_transcript_text's ``text``, changed): delete\n"
+"                words or lines, move lines, fix words. Time marks may be left or dropped.\n"
+"            dry_run: Only say what would change (``ops``), change nothing.\n"
+"\n"
+"        Returns:\n"
+"            ``status`` (ok / nothing / refused / error), ``message``, ``cut_words``,\n"
+"            ``seconds_removed``, ``moved``, ``retexted``, ``captions_updated``, ``flags``\n"
+"            ([{line, text, reason, message}]), ``ops`` (the edit list), ``new_names`` (strip ->\n"
+"            its pieces), ``text_now`` (the transcript as it plays now).\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "strip": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Strip"
+                },
+                "cut_lines": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "integer"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Cut Lines"
+                },
+                "text": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Text"
+                },
+                "dry_run": {
+                    "default": False,
+                    "title": "Dry Run",
+                    "type": "boolean"
+                }
+            },
+            "title": "apply_transcript_editArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "ask_user",
         "description": "\n"
 "        Ask the user a short question in Coworker's chat, with buttons; waits for the answer.\n"
@@ -1295,6 +1372,42 @@ EXPECTED_TOOLS = [
         }
     },
     {
+        "name": "get_transcript_text",
+        "description": "\n"
+"        Read a Sequencer clip's transcript as text: what it says, as it plays on the\n"
+"        timeline now (cuts already made are left out), one line per sentence with a\n"
+"        line number and its time. Use it to find a part (\"the bit about pricing\") before\n"
+"        apply_transcript_edit. The clip must have been transcribed (transcribe_strip).\n"
+"\n"
+"        Args:\n"
+"            strip: The sound or movie strip (none: the active strip, or the only clip\n"
+"                with a transcript).\n"
+"\n"
+"        Returns:\n"
+"            ``lines`` ([{line, time, frame, text}]), ``text`` (the whole text, each line\n"
+"            starting with its time mark), ``strip``, ``media``, ``text_block`` (the Text\n"
+"            Editor text of it, if open) and ``pending_edits`` (it has edits not applied).\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "strip": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Strip"
+                }
+            },
+            "title": "get_transcript_textArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "get_vse_strip_detail",
         "description": "\n"
 "        Everything about one Video Sequencer strip.\n"
@@ -1749,10 +1862,11 @@ EXPECTED_TOOLS = [
 "          assign_material_to_objects, get_active_node_tree, get_node_group_interface,\n"
 "          wire_node_group)\n"
 "        - vse: Video Sequencer strips: list, read, move / trim, preview a frame, speech to text,\n"
-"          remove silences, captions and a vertical 9:16 version with editable framing\n"
-"          (get_vse_timeline_overview, get_vse_strips_summary, get_vse_strip_detail,\n"
+"          remove silences, captions, edit by transcript and a vertical 9:16 version with editable\n"
+"          framing (get_vse_timeline_overview, get_vse_strips_summary, get_vse_strip_detail,\n"
 "          set_strip_frame_range, render_vse_preview, transcribe_strip, remove_silences,\n"
-"          add_captions, reframe_vertical, jump_to_tab_by_name, jump_to_tab_by_space_type)\n"
+"          add_captions, get_transcript_text, apply_transcript_edit, reframe_vertical,\n"
+"          jump_to_tab_by_name, jump_to_tab_by_space_type)\n"
 "\n"
 "        Load only what the request needs; the basic tools (scene, code, docs,\n"
 "        screenshots, plan, questions, bake_textures, render_viewport_to_path,\n"

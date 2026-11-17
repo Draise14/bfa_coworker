@@ -1606,6 +1606,8 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "add_captions",
         "reframe_vertical",
         "remove_silences",            # #539
+        "get_transcript_text",        # #498: Edit by Transcript
+        "apply_transcript_edit",
     }),
     "geometry_nodes": frozenset({
         "jump_to_view3d_object_by_name",

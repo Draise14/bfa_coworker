@@ -172,8 +172,9 @@ def register() -> None:
 def _rollback(registered: list[type]) -> None:
     """Undo a failed ``_register()`` without ``unregister()``'s side effects: nothing
     saved, so the settings backup and the saved chat are left alone (#400)."""
-    from . import captions_ops, chat_editor, reframe, ui_chat, ui_context_menus, wand
-    for step in (reframe.unregister, captions_ops.unregister, wand.unregister, ui_context_menus.unregister,
+    from . import captions_ops, chat_editor, reframe, transcript_edit_ops, ui_chat, ui_context_menus, wand
+    for step in (transcript_edit_ops.unregister, reframe.unregister, captions_ops.unregister, wand.unregister,
+                 ui_context_menus.unregister,
                  chat_editor.unregister, ui_chat.unregister,
                  coworker_api.unregister, mcp_to_blender_server.stop):
         try:
@@ -267,6 +268,9 @@ def _register() -> None:
     # Make Vertical / Reframe (#333): in the Sequencer's Coworker section and Video panel (wand).
     from . import reframe
     reframe.register()
+    # Edit by Transcript (#498): Open Transcript in the Video panel / Strip menu, the Text Editor's panel.
+    from . import transcript_edit_ops
+    transcript_edit_ops.register()
 
     # Discover generative plugins (Tier 5).
     # This scans gen_plugins/ and populates the registry.
@@ -488,6 +492,8 @@ def unregister() -> None:
         pass
 
     # Unregister chat UI (the Coworker editor first: it builds on ui_chat's panels).
+    from . import transcript_edit_ops
+    transcript_edit_ops.unregister()
     from . import reframe
     reframe.unregister()
     from . import captions_ops

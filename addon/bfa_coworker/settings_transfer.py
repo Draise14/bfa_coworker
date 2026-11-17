@@ -16,6 +16,13 @@ So the preferences are written to a small JSON file in Blender's user config
 folder whenever the add-on is disabled (upgrade, uninstall, quit), and a fresh
 install with untouched preferences reads them back once.
 
+"Once" holds only when Blender saves its preferences afterwards: the flag that
+says "restored" is itself a preference, so after a session that ended in a crash
+or a kill the next start restores again (#575).  That is safe because a restore
+only fills settings that still hold their defaults: when this install holds any
+setting that is neither its default nor the backup's value (newer than the
+backup), nothing is restored.
+
 Values are set like any setting (``setattr``): since Blender 5.0 the property
 storage (``prefs[key] = value``) no longer reaches ``bpy.props`` values (#396).
 Some update callbacks auto-fill *other* fields (model presets, provider URLs),
@@ -47,6 +54,7 @@ __all__ = (
     "apply",
     "save",
     "load",
+    "newer_than_backup",
     "restore_once",
 )
 
@@ -188,17 +196,68 @@ def load(config_dir: str) -> dict[str, Any]:
         return {}
 
 
+_UNKNOWN = object()
+
+
+def _same(prop: Any, a: Any, b: Any) -> bool:
+    if prop.type == "FLOAT":
+        try:
+            return abs(float(a) - float(b)) <= 1e-6
+        except (TypeError, ValueError):
+            return False
+    return a == b
+
+
+def newer_than_backup(prefs: Any, data: dict[str, Any]) -> list[str]:
+    """Settings in *data* that this install holds with a value that is neither the backup's
+    nor the setting's default: someone set them after the backup was written (#575).
+
+    A setting whose default can't be read (no ``default``, an enum whose items come from a
+    function) is left out: it can't tell "untouched" from "changed"."""
+    out: list[str] = []
+    for prop in _props(prefs):
+        key = prop.identifier
+        if key not in data:
+            continue
+        default = getattr(prop, "default", _UNKNOWN)
+        if default is _UNKNOWN:
+            continue
+        if prop.type == "ENUM":
+            if getattr(prop, "is_enum_flag", False):
+                continue
+            if default not in {item.identifier for item in getattr(prop, "enum_items", ())}:
+                continue        # dynamic items: no fixed default
+        try:
+            value = getattr(prefs, key)
+        except Exception:  # pylint: disable=broad-exception-caught
+            continue
+        if not _same(prop, value, data[key]) and not _same(prop, value, default):
+            out.append(key)
+    return out
+
+
 def restore_once(prefs: Any, config_dir: str) -> list[str]:
     """Restore the backup into a FRESH install, once.
 
     A fresh install is one whose ``settings_restored`` flag is still False.
     Upgrades in place keep their preferences and already have the flag set,
-    so they are never overwritten by an older backup.
+    so they are never overwritten by an older backup.  The flag is a preference
+    too, kept only when Blender saves them (not after a crash or a kill), so the
+    restore may come again: it then restores nothing when any setting is newer
+    than the backup (:func:`newer_than_backup`), so it never undoes your changes (#575).
     """
     try:
         if getattr(prefs, RESTORED_FLAG, True):
             return []
-        applied = apply(prefs, load(config_dir))
+        data = load(config_dir)
+        newer = newer_than_backup(prefs, data) if data else []
+        if newer:
+            setattr(prefs, RESTORED_FLAG, True)
+            # Names only: a secret's value is never printed (#346).
+            print("[Coworker] settings restore skipped: {:d} setting(s) are newer than the backup ({:s})".format(
+                len(newer), ", ".join(sorted(newer)[:6]) + (", ..." if len(newer) > 6 else "")))
+            return []
+        applied = apply(prefs, data)
         setattr(prefs, RESTORED_FLAG, True)
         return applied
     except Exception as ex:  # pylint: disable=broad-exception-caught

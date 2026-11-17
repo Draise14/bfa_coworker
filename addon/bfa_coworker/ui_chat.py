@@ -932,7 +932,9 @@ def _remote_model_get(_self):
 def _remote_model_set(_self, index):
     from . import operators_agent as _oa
     if 0 <= index < len(_oa.REMOTE_MODEL_IDS):
-        bpy.context.preferences.addons[__package__].preferences.remote_model = _oa.REMOTE_MODEL_IDS[index]
+        from .shared import set_user_pref       # your pick in the chat's Model row, kept on quit (#575)
+        set_user_pref(bpy.context.preferences.addons[__package__].preferences, "remote_model",
+                      _oa.REMOTE_MODEL_IDS[index])
 
 
 def _installs_file() -> Path:

@@ -29,7 +29,7 @@ import os
 import threading
 from pathlib import Path
 
-from .shared import effective_ports, get_llm_manager
+from .shared import effective_ports, get_llm_manager, set_user_pref
 
 import webbrowser
 
@@ -714,7 +714,7 @@ class _BFACW_OT_select_preset(bpy.types.Operator):  # type: ignore[misc]
     def execute(self, context: bpy.types.Context) -> set[str]:
         prefs = context.preferences.addons[__package__].preferences
         if self.preset_id:
-            prefs.model_preset = self.preset_id
+            set_user_pref(prefs, "model_preset", self.preset_id, context.preferences)   # kept on quit (#575)
             # Trigger the update handler manually since EnumProperty
             # assignment doesn't always fire the callback on all platforms.
             prefs._update_model_preset(context)
@@ -740,12 +740,13 @@ class _BFACW_OT_set_ctx_preset(bpy.types.Operator):  # type: ignore[misc]
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         prefs = context.preferences.addons[__package__].preferences
+        # Your pick: kept on quit (#575).
         if self.value > 0:
-            prefs.local_ctx_size = self.value
-            prefs.local_ctx_preset = str(self.value)
+            set_user_pref(prefs, "local_ctx_size", self.value, context.preferences)
+            set_user_pref(prefs, "local_ctx_preset", str(self.value), context.preferences)
         else:
             # Custom: keep the current value, just reveal the manual slider.
-            prefs.local_ctx_preset = "custom"
+            set_user_pref(prefs, "local_ctx_preset", "custom", context.preferences)
         return {"FINISHED"}
 
 
@@ -771,11 +772,11 @@ class _BFACW_OT_select_existing_model(bpy.types.Operator):  # type: ignore[misc]
             return {"CANCELLED"}
 
         # Set the existing model path and clear preset selection.
-        prefs.existing_model_path = self.model_path
-        prefs.model_preset = "_custom"
+        set_user_pref(prefs, "existing_model_path", self.model_path, context.preferences)   # kept on quit (#575)
+        set_user_pref(prefs, "model_preset", "_custom", context.preferences)
         # Keep repo_id/filename so the model is identifiable.
         # model_filename is always the basename.
-        prefs.model_filename = os.path.basename(self.model_path)
+        set_user_pref(prefs, "model_filename", os.path.basename(self.model_path), context.preferences)
         # Sync to llm_manager config immediately.
         cfg = llm.get_config()
         cfg.model_filename = os.path.basename(self.model_path)
@@ -831,14 +832,14 @@ class _BFACW_OT_download_custom_model(bpy.types.Operator):  # type: ignore[misc]
         dest = models_dir / filename
 
         if dest.exists():
-            prefs.existing_model_path = str(dest)
+            set_user_pref(prefs, "existing_model_path", str(dest), context.preferences)   # kept on quit (#575)
             self.report({"INFO"}, "Model already exists: {:s}".format(filename))
             return {"FINISHED"}
 
         # Set as active model config and trigger download.
-        prefs.model_repo_id = repo_id
-        prefs.model_filename = filename
-        prefs.existing_model_path = ""
+        set_user_pref(prefs, "model_repo_id", repo_id, context.preferences)     # kept on quit (#575)
+        set_user_pref(prefs, "model_filename", filename, context.preferences)
+        set_user_pref(prefs, "existing_model_path", "", context.preferences)
 
         # Reuse the existing download operator.
         bpy.ops.bfacw.download_model()

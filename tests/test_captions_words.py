@@ -473,6 +473,19 @@ class TestMotionStrips(_MotionCase):
         self.assertIn("channels", str(raised.exception))
         self.assertEqual([(s.name, s.channel) for s in self.all_strips()], before)
 
+    def test_a_speakers_label_is_a_word_strip_too_since_the_anchor_draws_nothing(self):
+        result = self.make(animate="WORD", word_animation="HIGHLIGHT_RISE", speakers=True, speaker_labels=True)
+        self.assertEqual(result["speakers"][0]["name"], "Speech")
+        line = self.lines()[0]
+        words = self.words_of(line)
+        self.assertEqual([w.text for w in words], line.text.split())
+        self.assertEqual(words[0].text, "Speech:")
+        self.assertEqual(len({w.channel for w in words}), len(words))
+        self.assertEqual(self.ops.refit_words(self.scene), 0)
+        line.use_bold = True
+        self.assertEqual(self.ops.refit_words(self.scene), 1)
+        self.assertTrue(all(w.use_bold for w in self.words_of(self.scene.sequence_editor.strips.get(line.name))))
+
     def test_the_old_animation_argument_still_animates_the_line_as_before(self):
         self.make("CLEAN", animation="FADE")
         line = self.lines()[0]

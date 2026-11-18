@@ -32,6 +32,7 @@ from typing import Callable
 from .layout import Rect
 
 __all__ = (
+    "AGENT_ICON",
     "IMAGE_ICONS",
     "NAMES",
     "icon_pixels",
@@ -55,6 +56,8 @@ IMAGE_ICONS = (
     # The job row (#423): a bake, and where Blender's job bar is.
     "TEXTURE", "STATUSBAR",
 )
+# The agent's icon with Magic Wording on (#608): the shipped full-colour wizard, in every build.
+AGENT_ICON = "WIZARD"
 _IMAGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
 _IMAGE_SIZES = (16, 24, 32, 48, 64)
 

@@ -20,11 +20,18 @@ thread that words a status line never touches Blender's data.
 from __future__ import annotations
 
 __all__ = (
+    "AGENT_WORD",
+    "AGENT_ICON_NAME",
     "FRAME_PREFIX",
     "RESULTS_PREFIX",
     "THINKING_WORDS",
     "HELPER_WORDS",
+    "agent_icon",
+    "agent_icon_args",
+    "agent_label",
+    "agent_word",
     "enabled",
+    "free_agent_icon",
     "group_noun",
     "helper_label",
     "helper_name",
@@ -44,6 +51,11 @@ from typing import Any
 
 # What a helper chat can be called on screen; used interchangeably.
 HELPER_WORDS: tuple[str, ...] = ("Mage", "Wizard", "Magician")
+
+# The main agent, on screen (#608): one fixed word (the helpers rotate through three).
+AGENT_WORD = "Wizard"
+# Bforartists' wizard icon; the GPU chat draws its shipped full-colour PNG in every build.
+from .ui_gpu.icons import AGENT_ICON as AGENT_ICON_NAME     # noqa: E402  "WIZARD", the GPU chat's own name
 
 # One word per thinking stretch ("Conjuring...").  Short, friendly, fit for work; written for
 # Coworker.
@@ -106,6 +118,75 @@ def thinking_word(start: Any) -> str:
         seed = 0
     # A hash that spreads neighbouring starts (zlib.crc32 of the decimal text).
     return THINKING_WORDS[zlib.crc32(str(seed).encode("ascii")) % len(THINKING_WORDS)]
+
+
+# -- the main agent (#608) -----------------------------------------------------------
+# What a friendly label calls Coworker's own agent today, longest first.  Only labels that
+# go through agent_label() change; engine and mode names ("External Agent", "Coworker" mode)
+# and every error message never do.
+_AGENT_PHRASES = (
+    (re.compile(r"\bthe Coworker agent\b"), "the " + AGENT_WORD),
+    (re.compile(r"\b([Tt])he Coworker\b"), lambda m: m.group(1) + "he " + AGENT_WORD),
+    (re.compile(r"\b([Tt])he agent\b"), lambda m: m.group(1) + "he " + AGENT_WORD),
+    (re.compile(r"\bCoworker\b"), AGENT_WORD),
+)
+
+
+def agent_word(plain: str = "Coworker") -> str:
+    """"Wizard" with the wording on (always the same word), else *plain*."""
+    return AGENT_WORD if enabled() else plain
+
+
+def agent_label(text: str) -> str:
+    """*text*, a friendly label that names Coworker's own agent ("Start Coworker", "the
+    agent"), as it is shown: with the wording on the agent is the Wizard ("Start Wizard"),
+    off it is returned as it is.  Shown only: never use it on what the model gets."""
+    if not enabled() or not text:
+        return text
+    for pattern, repl in _AGENT_PHRASES:
+        text = pattern.sub(repl, text)
+    return text
+
+
+def agent_icon(plain: str) -> str:
+    """The icon name for the agent in the GPU chat: the wizard with the wording on (its
+    PNG ships, so it is the same in Blender), else *plain* (as today)."""
+    return AGENT_ICON_NAME if enabled() else plain
+
+
+_preview: dict[str, Any] = {"set": None}
+
+
+def agent_icon_args(plain: str) -> dict[str, Any]:
+    """Keyword arguments for a ``UILayout`` call: ``{"icon": plain}`` (as today), or with the
+    wording on the wizard: Bforartists' own icon, else (Blender has none) the shipped
+    full-colour PNG as an ``icon_value``, else *plain*."""
+    if not enabled():
+        return {"icon": plain}
+    from .shared import icon as safe_icon
+    if safe_icon(AGENT_ICON_NAME) == AGENT_ICON_NAME:
+        return {"icon": AGENT_ICON_NAME}
+    try:
+        import bpy.utils.previews  # pylint: disable=import-error,import-outside-toplevel
+        import os
+        if _preview["set"] is None:
+            previews = bpy.utils.previews.new()
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_gpu", "icons", "wizard_32.png")
+            previews.load(AGENT_ICON_NAME, path, "IMAGE")
+            _preview["set"] = previews
+        return {"icon_value": _preview["set"][AGENT_ICON_NAME].icon_id}
+    except Exception:  # pylint: disable=broad-exception-caught
+        return {"icon": plain}
+
+
+def free_agent_icon() -> None:
+    previews, _preview["set"] = _preview["set"], None
+    if previews is not None:
+        try:
+            import bpy.utils.previews  # pylint: disable=import-error,import-outside-toplevel
+            bpy.utils.previews.remove(previews)
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
 
 
 # -- helpers -----------------------------------------------------------------------------

@@ -43,6 +43,7 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
+from .. import magic_wording
 from .chat_view import ChatView, _soft, choice_height, draw_choice
 from .input_box import InputBox
 from .layout import Canvas, InteractionState, Rect, TextLine, row_corners
@@ -121,12 +122,18 @@ TIP_DELAY = 0.5      # seconds the mouse rests before a tooltip shows: Blender's
 TYPING_QUIET = 2.0   # no tooltips this long after a key in the input (#388)
 
 
+# Tooltips that name Coworker's own agent: the wizard with Magic Wording on (#608).  Not the
+# ones that name the editor, the settings or a mode ("Coworker mode"): those are names.
+AGENT_TIPS = frozenset({"start", "stop_agent", "jobs"})
+
+
 def tip_for(widget_id: str | None) -> str:
     """The tooltip for a chat widget, or "" (#237)."""
     if not widget_id:
         return ""
     if widget_id in TIPS:
-        return TIPS[widget_id]
+        tip = TIPS[widget_id]
+        return magic_wording.agent_label(tip) if widget_id in AGENT_TIPS else tip
     return next((tip for prefix, tip in TIP_PREFIXES if widget_id.startswith(prefix)), "")
 
 __all__ = (

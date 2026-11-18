@@ -215,7 +215,7 @@ def _editor_ns():
     import time
     ns = {"Any": object, "__name__": _PKG + ".chat_editor", "__package__": _PKG, "time": time,
           "mcp_to_blender_server": bridge, "HARNESS_PRESET_ITEMS": shared.HARNESS_PRESET_ITEMS,
-          "CHAT_MODE_ITEMS": shared.CHAT_MODE_ITEMS, "Notice": sf.Notice, "TopBar": sf.TopBar,
+          "CHAT_MODE_ITEMS": shared.CHAT_MODE_ITEMS, "magic_wording": types.SimpleNamespace(agent_icon=lambda i: i), "Notice": sf.Notice, "TopBar": sf.TopBar,
           "agent_controller": types.SimpleNamespace(_agent_state=types.SimpleNamespace(mcp_server_running=False)),
           "_props": lambda: types.SimpleNamespace(chat_mode="AGENT", chat_status="Ready"),
           "_helpers_waiting": lambda _ctx, _state: ""}
